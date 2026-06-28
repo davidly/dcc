@@ -11,6 +11,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_ast.h"
 void emit_load_float_bits(unsigned long bits)
 {
     if (!scan_mode) {
@@ -1044,6 +1045,65 @@ void gen_expr_no_comma(void)
 
 void gen_expr(void)
 {
+    static int depth = 0;
+
+    /*
+     * Phase 1 AST hook (off by default; see dcc_ast_build.c).  At the
+     * outermost expression only, build a function-local AST for the upcoming
+     * expression and immediately discard it, snapshotting and restoring the
+     * lexer so the streaming codegen below sees an identical token stream and
+     * emits byte-for-byte identical output.  Nested gen_expr calls (depth > 0,
+     * e.g. a parenthesised sub-expression reached through gen_primary) skip the
+     * build so each top-level expression is walked exactly once.
+     */
+    if (g_ast_build_enabled && !scan_mode && depth == 0) {
+        long sv_pos = posi;
+        long sv_tok_start = tok_start_pos;
+        int sv_line = line_no;
+        int sv_tok_line = tok_line;
+        struct Token sv_tok = tok;
+        int report = getenv("DCC_AST_REPORT") != NULL;
+        struct AstNode *n = ast_build_expr(&g_ast_arena);
+
+        /*
+         * Phase 2: if AST-driven codegen is enabled and the whole expression
+         * is within the supported subset, emit from the AST.  The build above
+         * already advanced the lexer past the expression, so we deliberately do
+         * NOT restore the snapshot - the AST emit consumes the same tokens the
+         * streaming path would have.  Output must stay byte-for-byte identical.
+         */
+        if (g_ast_gen_enabled && ast_gen_supported(n)) {
+            depth++;
+            ast_gen_expr(n);
+            depth--;
+            if (g_ast_gen_enabled == 2)
+                fprintf(stderr, "; AST-emit %s\n", ast_kind_name(n->kind));
+            ast_arena_reset(&g_ast_arena);
+            return;
+        }
+
+        if (g_ast_build_enabled == 2) {
+            fprintf(stderr, "; AST gen_expr:\n");
+            ast_dump(n, 1);
+        }
+        if (report) {
+            if (n == NULL) {
+                fprintf(stderr, "; AST-fallback expr build token=%d text='%s' line=%d\n",
+                        sv_tok.kind, sv_tok.text, sv_tok_line);
+            } else {
+                fprintf(stderr, "; AST-fallback expr gate kind=%s line=%d\n",
+                        ast_kind_name(n->kind), sv_tok_line);
+            }
+        }
+        posi = sv_pos;
+        tok_start_pos = sv_tok_start;
+        line_no = sv_line;
+        tok_line = sv_tok_line;
+        tok = sv_tok;
+        ast_arena_reset(&g_ast_arena);
+    }
+
+    depth++;
     gen_assign();
     /* comma operator: evaluate and discard left, then evaluate right.
      * DCC has no struct-valued expression temporary model, so reject
@@ -1056,5 +1116,6 @@ void gen_expr(void)
         if (type_is_struct_object(g_expr_type))
             error_here("unsupported struct comma expression");
     }
+    depth--;
 }
 

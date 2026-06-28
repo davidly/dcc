@@ -13,6 +13,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_ast.h"
 long file_size(FILE *f)
 {
     long n;
@@ -892,6 +893,7 @@ int main(int argc, char **argv)
     max_function_local_bytes = 0;
 
     add_define("_DCC_", "1");
+    ast_build_init();
 
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-ffloatio") || !strcmp(argv[i], "-f")) {

@@ -42,6 +42,9 @@ set(DCC_SOURCES
     dcc_stmt.c
     dcc_func.c
     dcc_data.c
+    dcc_ast.c           # function-local AST (arena + nodes); migration in progress
+    dcc_ast_build.c     # function-local AST: non-emitting expression builder (Phase 1)
+    dcc_ast_gen.c       # function-local AST: AST-driven codegen walker (Phase 2)
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h)

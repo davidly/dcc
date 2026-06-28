@@ -10,6 +10,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_ast.h"
 
 /* Switch context stack: allows case/default labels to be emitted by
  * gen_statement() when they appear inside nested loop bodies (Duff's device). */
@@ -1934,6 +1935,9 @@ void gen_do_while(void)
 
 void gen_statement(void)
 {
+    if (ast_try_emit_statement())
+        return;
+
     if (tok.kind == '{') {
         gen_compound();
     } else if (tok.kind == TOK_DO) {

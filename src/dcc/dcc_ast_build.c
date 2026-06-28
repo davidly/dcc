@@ -1,0 +1,854 @@
+/*
+ * dcc_ast_build.c - Phase 1 non-emitting expression AST builder.
+ *
+ * dcc is a single-pass, syntax-directed translator: the parser emits Z80
+ * assembly as it consumes tokens.  This module introduces the FIRST consumer
+ * of the function-local AST (see dcc_ast.h) without changing code generation.
+ *
+ * ast_build_expr() is a recursive-descent expression parser that mirrors the
+ * grammar the streaming front end accepts (including dcc's C99 conveniences -
+ * it operates purely on the token stream, so for-init/mid-block expressions
+ * and // comments are handled transparently by the shared lexer).  It builds
+ * an AstNode tree from the current lexer position by calling next_token(); it
+ * never emits, interns strings, or allocates symbols, so the only global state
+ * it touches is the lexer cursor.
+ *
+ * The streaming front end calls this (via the gated hook in gen_expr) by
+ * snapshotting the lexer, building the AST, then restoring the snapshot before
+ * the real codegen runs.  Because the snapshot is restored, generated output
+ * is byte-for-byte identical whether or not the build runs - which is exactly
+ * what lets us exercise the builder over the whole test corpus while the
+ * migration proceeds construct by construct.
+ */
+#include "dcc.h"
+#include "dcc_ast.h"
+#include <stdlib.h>
+#include <string.h>
+
+int g_ast_build_enabled = 0;
+struct AstArena g_ast_arena;
+
+static int ast_num_text_plain_decimal(const char *s)
+{
+    const char *p;
+    int digits = 0;
+    if (s == NULL || *s == '\0')
+        return 0;
+    for (p = s; *p != '\0'; ++p) {
+        if ((*p == 'u' || *p == 'U') && p[1] == '\0')
+            break;
+        if (*p < '0' || *p > '9')
+            return 0;
+        digits++;
+    }
+    if (digits == 0)
+        return 0;
+    if (s[0] == '0' && digits > 1)
+        return 0;
+    return 1;
+}
+
+/* Forward declarations (mutually recursive grammar). */
+static struct AstNode *p_assign(struct AstArena *ar);
+
+/* Copy the current token's text into the arena. */
+static char *cur_text(struct AstArena *ar)
+{
+    return ast_arena_strdup(ar, tok.text);
+}
+
+/* Consume a balanced parenthesised group starting at the current '('. Used to
+ * skip the type-name of a cast or sizeof(type) without a full type parser;
+ * Phase 1 records the construct's shape, and later phases will parse the type
+ * precisely. */
+static void skip_paren_group(void)
+{
+    int depth = 0;
+    if (tok.kind != '(')
+        return;
+    do {
+        if (tok.kind == '(')
+            depth++;
+        else if (tok.kind == ')')
+            depth--;
+        else if (tok.kind == TOK_EOF)
+            return;
+        next_token();
+    } while (depth > 0);
+}
+
+static struct AstNode *p_primary(struct AstArena *ar)
+{
+    struct AstNode *n;
+
+    switch (tok.kind) {
+    case TOK_NUM:
+    case TOK_CHARLIT:
+        {
+            long v = tok.val;
+            int ty;
+            /* Mirror gen_primary's literal classification so the codegen
+             * walker can reproduce its emit exactly. */
+            int is_long = (v > 0xffffL || v < -32768L ||
+                           (tok.kind == TOK_NUM && g_tok_long_suffix));
+            ty = is_long ? TYPE_LONG : TYPE_INT;
+            if (tok.kind == TOK_NUM && g_tok_unsigned_suffix)
+                ty |= TYPE_UNSIGNED;
+            n = ast_int_lit(ar, v, ty);
+            if (tok.kind == TOK_CHARLIT)
+                n->uval = AST_INT_UVAL_CHARLIT;
+            else if (ast_num_text_plain_decimal(tok.text))
+                n->uval = AST_INT_UVAL_PLAIN_DECIMAL;
+            next_token();
+            return n;
+        }
+    case TOK_FLOATLIT:
+        n = ast_float_lit(ar, parse_float_literal_bits(tok.text), TYPE_FLOAT);
+        next_token();
+        return n;
+    case TOK_STR:
+    case TOK_WSTR:
+        {
+            /* Concatenate adjacent string literals exactly like gen_primary;
+             * this also advances the lexer past every piece.  Interning is a
+             * codegen side effect, so it is deferred to the walker (the build
+             * must stay free of codegen side effects); ival carries is_wide. */
+            int is_wide = 0;
+            char *lit = read_adjacent_string_literals_ex(&is_wide);
+            n = ast_new(ar, AST_STR_LIT);
+            n->sval = ast_arena_strdup(ar, lit);
+            n->ival = is_wide;
+            n->type = TYPE_CHAR | TYPE_PTR;
+            free(lit);
+            return n;
+        }
+    case TOK_ID:
+        n = ast_new(ar, AST_IDENT);
+        n->sval = cur_text(ar);
+        /* read-only resolution; both lookups only scan existing tables */
+        n->sym = find_local_decl(tok.text);
+        if (n->sym == NULL)
+            n->sym = find_global(tok.text);
+        next_token();
+        return n;
+    case '(':
+        next_token();
+        n = ast_build_expr(ar);          /* comma operator allowed in parens */
+        if (tok.kind == ')')
+            next_token();
+        return n;
+    default:
+        return NULL;
+    }
+}
+
+static struct AstNode *p_postfix(struct AstArena *ar)
+{
+    struct AstNode *n = p_primary(ar);
+    if (n == NULL)
+        return NULL;
+
+    for (;;) {
+        if (tok.kind == '[') {
+            struct AstNode *m = ast_new(ar, AST_INDEX);
+            next_token();
+            m->a = n;
+            m->b = ast_build_expr(ar);
+            if (tok.kind == ']')
+                next_token();
+            n = m;
+        } else if (tok.kind == '(') {
+            struct AstNode *call = ast_call(ar, n, 0);
+            next_token();
+            if (tok.kind != ')') {
+                for (;;) {
+                    struct AstNode *arg = p_assign(ar);
+                    if (arg != NULL)
+                        ast_list_push(ar, call, arg);
+                    if (tok.kind == ',') {
+                        next_token();
+                        continue;
+                    }
+                    break;
+                }
+            }
+            if (tok.kind == ')')
+                next_token();
+            n = call;
+        } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+            struct AstNode *m = ast_new(ar, AST_MEMBER);
+            m->op = tok.kind;
+            m->a = n;
+            next_token();
+            if (tok.kind == TOK_ID) {
+                m->sval = cur_text(ar);
+                next_token();
+            }
+            n = m;
+        } else if (tok.kind == TOK_INC || tok.kind == TOK_DEC) {
+            struct AstNode *m = ast_new(ar, AST_POSTFIX);
+            m->op = tok.kind;
+            m->a = n;
+            next_token();
+            n = m;
+        } else {
+            break;
+        }
+    }
+    return n;
+}
+
+static struct AstNode *p_unary(struct AstArena *ar)
+{
+    int k = tok.kind;
+
+    if (k == '-' || k == '+' || k == '!' || k == '~' ||
+        k == '*' || k == '&' || k == TOK_INC || k == TOK_DEC) {
+        struct AstNode *operand;
+        next_token();
+        operand = p_unary(ar);
+        return ast_unary(ar, k, operand, 0);
+    }
+
+    if (k == TOK_SIZEOF) {
+        next_token();
+        if (tok.kind == '(' && paren_starts_cast()) {
+            struct AstNode *n = ast_new(ar, AST_SIZEOF_TYPE);
+            int ty;
+            int sz;
+            next_token();
+            parse_type_name_decl(&ty, &sz);
+            expect(')');
+            n->type = TYPE_INT;
+            n->ival = sz;
+            return n;
+        } else {
+            struct AstNode *n = ast_new(ar, AST_SIZEOF_EXPR);
+            n->a = p_unary(ar);
+            return n;
+        }
+    }
+
+    if (k == '(' && paren_starts_cast()) {
+        struct AstNode *operand;
+        skip_paren_group();              /* consume ( type-name ) */
+        operand = p_unary(ar);
+        return ast_cast(ar, 0, operand);
+    }
+
+    return p_postfix(ar);
+}
+
+/* Binary precedence: higher binds tighter; 0 means "not a binary operator". */
+static int binop_level(int k)
+{
+    switch (k) {
+    case '*': case '/': case '%':       return 10;
+    case '+': case '-':                 return 9;
+    case TOK_SHL: case TOK_SHR:         return 8;
+    case '<': case '>':
+    case TOK_LE: case TOK_GE:           return 7;
+    case TOK_EQ: case TOK_NE:           return 6;
+    case '&':                           return 5;
+    case '^':                           return 4;
+    case '|':                           return 3;
+    case TOK_ANDAND:                    return 2;
+    case TOK_OROR:                      return 1;
+    default:                            return 0;
+    }
+}
+
+static struct AstNode *p_binary(struct AstArena *ar, int min_level)
+{
+    struct AstNode *lhs = p_unary(ar);
+    if (lhs == NULL)
+        return NULL;
+
+    for (;;) {
+        int k = tok.kind;
+        int lev = binop_level(k);
+        struct AstNode *rhs;
+        int peek = 0;
+        if (lev == 0 || lev < min_level)
+            break;
+        next_token();
+        /*
+         * For ordinary binary operators the streaming code generator selects
+         * its arithmetic conversion branch from peek_simple_unary_type() taken
+         * at the RHS position.  The lexer is at exactly that position now, so
+         * capture the same value (with all its quirks) into the node; the AST
+         * walker reuses it to compute an identical common type.  && / || are
+         * short-circuit control flow and do not consult the peek.
+         */
+        if (k != TOK_ANDAND && k != TOK_OROR)
+            peek = peek_simple_unary_type();
+        rhs = p_binary(ar, lev + 1);     /* left-associative */
+        if (k == TOK_ANDAND)
+            lhs = ast_binary(ar, AST_LOGAND, k, lhs, rhs, 0);
+        else if (k == TOK_OROR)
+            lhs = ast_binary(ar, AST_LOGOR, k, lhs, rhs, 0);
+        else {
+            lhs = ast_binary(ar, AST_BINARY, k, lhs, rhs, 0);
+            lhs->peek_type = peek;
+        }
+    }
+    return lhs;
+}
+
+static struct AstNode *p_conditional(struct AstArena *ar)
+{
+    struct AstNode *c = p_binary(ar, 1);
+    if (tok.kind == '?') {
+        struct AstNode *then_e;
+        struct AstNode *else_e;
+        next_token();
+        then_e = ast_build_expr(ar);     /* full expression before ':' */
+        if (tok.kind == ':')
+            next_token();
+        else_e = p_conditional(ar);
+        return ast_cond(ar, c, then_e, else_e, 0);
+    }
+    return c;
+}
+
+static int is_assign_op(int k)
+{
+    return k == '=' ||
+           k == TOK_ADDEQ || k == TOK_SUBEQ || k == TOK_MULEQ ||
+           k == TOK_DIVEQ || k == TOK_MODEQ || k == TOK_ANDEQ ||
+           k == TOK_OREQ  || k == TOK_XOREQ || k == TOK_SHLEQ ||
+           k == TOK_SHREQ;
+}
+
+static struct AstNode *p_assign(struct AstArena *ar)
+{
+    struct AstNode *lhs = p_conditional(ar);
+    if (is_assign_op(tok.kind)) {
+        int op = tok.kind;
+        struct AstNode *rhs;
+        next_token();
+        rhs = p_assign(ar);              /* right-associative */
+        return ast_assign(ar, op, lhs, rhs, 0);
+    }
+    return lhs;
+}
+
+struct AstNode *ast_build_expr(struct AstArena *ar)
+{
+    struct AstNode *n = p_assign(ar);
+    while (tok.kind == ',') {
+        struct AstNode *rhs;
+        next_token();
+        rhs = p_assign(ar);
+        n = ast_binary(ar, AST_COMMA, ',', n, rhs, 0);
+    }
+    return n;
+}
+
+/* Build a `return [expr] ;` statement node.  The caller guarantees the current
+ * token is TOK_RETURN.  Consumes the keyword, an optional expression, and the
+ * terminating ';'.  Returns NULL (declining, lexer left mid-statement for the
+ * caller to restore) if the closing ';' is missing. */
+static struct AstNode *ast_build_return_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *val = NULL;
+
+    next_token();                        /* consume 'return' */
+    if (tok.kind != ';')
+        val = ast_build_expr(ar);
+    if (tok.kind != ';')
+        return NULL;                     /* malformed: decline */
+    next_token();                        /* consume ';' */
+
+    n = ast_new(ar, AST_RETURN);
+    n->a = val;
+    return n;
+}
+
+/* Build a bare `break ;` / `continue ;` jump.  The caller guarantees the
+ * leading keyword.  Declines (NULL) if the ';' is missing. */
+static struct AstNode *ast_build_jump_stmt(struct AstArena *ar, int kind)
+{
+    next_token();                        /* consume 'break' / 'continue' */
+    if (tok.kind != ';')
+        return NULL;
+    next_token();                        /* consume ';' */
+    return ast_new(ar, kind);
+}
+
+/* Build `goto label ;`.  The caller guarantees the leading TOK_GOTO.  Stores
+ * the label name in sval.  Declines (NULL) if the name or ';' is missing. */
+static struct AstNode *ast_build_goto_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    char *name;
+
+    next_token();                        /* consume 'goto' */
+    if (tok.kind != TOK_ID)
+        return NULL;
+    name = ast_arena_strdup(ar, tok.text);
+    next_token();                        /* consume label name */
+    if (tok.kind != ';')
+        return NULL;
+    next_token();                        /* consume ';' */
+
+    n = ast_new(ar, AST_GOTO);
+    n->sval = name;
+    return n;
+}
+
+/* Build an ordinary expression statement `expr ;`.  The caller has positioned
+ * the lexer at the start of the expression.  Declines (NULL) if the expression
+ * is malformed or not terminated by ';' (the outer caller restores the lexer). */
+static struct AstNode *ast_build_expr_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *e;
+
+    e = ast_build_expr(ar);
+    if (e == NULL || tok.kind != ';')
+        return NULL;
+    next_token();                        /* consume ';' */
+
+    n = ast_new(ar, AST_EXPR_STMT);
+    n->a = e;
+    return n;
+}
+
+/* Build a labeled statement `name : stmt`.  The caller has verified the current
+ * token is TOK_ID.  Peeks for the ':' ; if absent this is an ordinary
+ * expression statement, so we rewind and build that instead. */
+static struct AstNode *ast_build_label_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *body;
+    char *name;
+    long save_posi;
+    long save_tok_start_pos;
+    int save_line_no;
+    int save_tok_line;
+    struct Token save_tok;
+
+    save_posi = posi;
+    save_tok_start_pos = tok_start_pos;
+    save_line_no = line_no;
+    save_tok_line = tok_line;
+    save_tok = tok;
+
+    name = ast_arena_strdup(ar, tok.text);
+    next_token();                        /* consume the identifier */
+    if (tok.kind != ':') {
+        /* Not a label: rewind to the identifier and build an expression
+         * statement starting there. */
+        posi = save_posi;
+        tok_start_pos = save_tok_start_pos;
+        line_no = save_line_no;
+        tok_line = save_tok_line;
+        tok = save_tok;
+        return ast_build_expr_stmt(ar);
+    }
+    next_token();                        /* consume ':' */
+
+    body = ast_build_stmt(ar);
+    if (body == NULL)
+        return NULL;                     /* unsupported labeled statement */
+
+    n = ast_new(ar, AST_LABEL);
+    n->sval = name;
+    n->b = body;
+    return n;
+}
+
+/* Build `if ( cond ) then [else else] `.  The caller guarantees TOK_IF.
+ * Declines (NULL) on malformed syntax or when a branch statement is itself
+ * unsupported, leaving the lexer for the outer caller to restore. */
+static struct AstNode *ast_build_if_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *cond;
+    struct AstNode *then_s;
+    struct AstNode *else_s = NULL;
+
+    next_token();                        /* consume 'if' */
+    if (tok.kind != '(')
+        return NULL;
+    next_token();                        /* consume '(' */
+
+    cond = ast_build_expr(ar);
+    if (cond == NULL || tok.kind != ')')
+        return NULL;
+    next_token();                        /* consume ')' */
+
+    then_s = ast_build_stmt(ar);
+    if (then_s == NULL)
+        return NULL;
+
+    if (tok.kind == TOK_ELSE) {
+        next_token();                    /* consume 'else' */
+        else_s = ast_build_stmt(ar);
+        if (else_s == NULL)
+            return NULL;
+    }
+
+    n = ast_new(ar, AST_IF);
+    n->a = cond;
+    n->b = then_s;
+    n->c = else_s;
+    return n;
+}
+
+/* Build `while ( cond ) body`.  The caller guarantees TOK_WHILE.  Declines
+ * (NULL) on malformed syntax or an unsupported body statement. */
+static struct AstNode *ast_build_while_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *cond;
+    struct AstNode *body;
+
+    next_token();                        /* consume 'while' */
+    if (tok.kind != '(')
+        return NULL;
+    next_token();                        /* consume '(' */
+
+    cond = ast_build_expr(ar);
+    if (cond == NULL || tok.kind != ')')
+        return NULL;
+    next_token();                        /* consume ')' */
+
+    body = ast_build_stmt(ar);
+    if (body == NULL)
+        return NULL;
+
+    n = ast_new(ar, AST_WHILE);
+    n->a = cond;
+    n->b = body;
+    return n;
+}
+
+/* Build `do body while ( cond ) ;`.  The caller guarantees TOK_DO.  Declines
+ * (NULL) on malformed syntax or an unsupported body statement. */
+static struct AstNode *ast_build_do_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *cond;
+    struct AstNode *body;
+
+    next_token();                        /* consume 'do' */
+
+    body = ast_build_stmt(ar);
+    if (body == NULL)
+        return NULL;
+
+    if (tok.kind != TOK_WHILE)
+        return NULL;
+    next_token();                        /* consume 'while' */
+    if (tok.kind != '(')
+        return NULL;
+    next_token();                        /* consume '(' */
+
+    cond = ast_build_expr(ar);
+    if (cond == NULL || tok.kind != ')')
+        return NULL;
+    next_token();                        /* consume ')' */
+    if (tok.kind != ';')
+        return NULL;
+    next_token();                        /* consume ';' */
+
+    n = ast_new(ar, AST_DOWHILE);
+    n->a = cond;
+    n->b = body;
+    return n;
+}
+
+/* Build a narrow structural `for` slice: for ([init] ; [cond] ; [inc]) body.
+ * Init is later gated to non-transform call expressions only; this avoids the
+ * C99 for-init rename machinery, do-while transform, and byte-array-cycle fast
+ * path.  Increment is gated like a dead-result expression statement so snippet
+ * fast-path shapes still defer. */
+static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *init = NULL;
+    struct AstNode *cond = NULL;
+    struct AstNode *inc = NULL;
+    struct AstNode *body;
+
+    next_token();                        /* consume 'for' */
+    if (tok.kind != '(')
+        return NULL;
+    next_token();                        /* consume '(' */
+
+    if (starts_type())
+        return NULL;
+    if (tok.kind != ';')
+        init = ast_build_expr(ar);
+    if (tok.kind != ';')
+        return NULL;
+    next_token();                        /* consume first ';' */
+
+    if (tok.kind != ';')
+        cond = ast_build_expr(ar);
+    if (tok.kind != ';')
+        return NULL;
+    next_token();                        /* consume second ';' */
+
+    if (tok.kind != ')')
+        inc = ast_build_expr(ar);
+    if (tok.kind != ')')
+        return NULL;
+    next_token();                        /* consume ')' */
+
+    body = ast_build_stmt(ar);
+    if (body == NULL)
+        return NULL;
+
+    n = ast_new(ar, AST_FOR);
+    n->a = init;
+    n->b = cond;
+    n->c = inc;
+    n->d = body;
+    return n;
+}
+
+/* Build a conservative switch body as a list of case/default sections.  Each
+ * section owns a list of ordinary statements up to the next top-level label.
+ * Declines on declarations, nested switches, duplicate/default-invalid labels,
+ * pre-label statements, and case values outside the non-negative table-scan
+ * range so codegen can reproduce streaming's label pre-scans. */
+static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+    struct AstNode *ctrl;
+    struct AstNode *section;
+    int have_default;
+    int vals[MAX_SWITCH_CASES];
+    int nvals;
+
+    next_token();                        /* consume 'switch' */
+    if (tok.kind != '(')
+        return NULL;
+    next_token();                        /* consume '(' */
+
+    ctrl = ast_build_expr(ar);
+    if (ctrl == NULL || tok.kind != ')')
+        return NULL;
+    next_token();                        /* consume ')' */
+    if (tok.kind != '{')
+        return NULL;
+    next_token();                        /* consume '{' */
+
+    n = ast_new(ar, AST_SWITCH);
+    n->a = ctrl;
+    have_default = 0;
+    nvals = 0;
+    section = NULL;
+
+    while (tok.kind != TOK_EOF && tok.kind != '}') {
+        if (tok.kind == TOK_CASE) {
+            long cv;
+            int i;
+            next_token();
+            cv = parse_const_long_expr();
+            if (cv < 0 || cv > 32767 || tok.kind != ':')
+                return NULL;
+            if (nvals >= MAX_SWITCH_CASES)
+                return NULL;
+            for (i = 0; i < nvals; ++i)
+                if (vals[i] == (int)cv)
+                    return NULL;
+            vals[nvals++] = (int)cv;
+            next_token();                /* consume ':' */
+
+            section = ast_new(ar, AST_CASE);
+            section->ival = cv;
+            ast_list_push(ar, n, section);
+        } else if (tok.kind == TOK_DEFAULT) {
+            if (have_default)
+                return NULL;
+            have_default = 1;
+            next_token();
+            if (tok.kind != ':')
+                return NULL;
+            next_token();                /* consume ':' */
+
+            section = ast_new(ar, AST_DEFAULT);
+            ast_list_push(ar, n, section);
+        } else {
+            struct AstNode *child;
+            if (section == NULL)
+                return NULL;
+            if (tok.kind == TOK_TYPEDEF || starts_type() || tok.kind == TOK_SWITCH)
+                return NULL;
+            child = ast_build_stmt(ar);
+            if (child == NULL)
+                return NULL;
+            ast_list_push(ar, section, child);
+        }
+    }
+
+    if (tok.kind != '}')
+        return NULL;
+    next_token();                        /* consume '}' */
+    return n;
+}
+
+/* Build a brace-delimited block `{ stmt* }`.  Declines (NULL) if the block
+ * contains a typedef or a declaration (those need the not-yet-built
+ * declaration parser / scope machinery) or any unsupported child statement.
+ * An empty block `{}` is accepted (emits only a balanced enter/leave scope). */
+static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
+{
+    struct AstNode *n;
+
+    next_token();                        /* consume '{' */
+    n = ast_new(ar, AST_COMPOUND);
+
+    while (tok.kind != '}' && tok.kind != TOK_EOF) {
+        struct AstNode *child;
+
+        /* A typedef or any declaration defers the whole block: the AST has
+         * no declaration node/parser yet, and emitting only some children
+         * would desync the symbol scope the streaming path maintains. */
+        if (tok.kind == TOK_TYPEDEF || starts_type())
+            return NULL;
+
+        child = ast_build_stmt(ar);
+        if (child == NULL)
+            return NULL;
+        ast_list_push(ar, n, child);
+    }
+
+    if (tok.kind != '}')
+        return NULL;
+    next_token();                        /* consume '}' */
+    return n;
+}
+
+/* Build one statement from the current lexer position.  Returns NULL (without
+ * committing to a partial parse for unrecognised leads) so the caller can fall
+ * back to the streaming statement codegen.  The supported set is widened one
+ * construct at a time; each addition is gated to byte-identical output. */
+struct AstNode *ast_build_stmt(struct AstArena *ar)
+{
+    switch (tok.kind) {
+    case '{':          return ast_build_compound_stmt(ar);
+    case ';':          next_token(); return ast_new(ar, AST_EMPTY);
+    case TOK_RETURN:   return ast_build_return_stmt(ar);
+    case TOK_BREAK:    return ast_build_jump_stmt(ar, AST_BREAK);
+    case TOK_CONTINUE: return ast_build_jump_stmt(ar, AST_CONTINUE);
+    case TOK_GOTO:     return ast_build_goto_stmt(ar);
+    case TOK_IF:       return ast_build_if_stmt(ar);
+    case TOK_WHILE:    return ast_build_while_stmt(ar);
+    case TOK_DO:       return ast_build_do_stmt(ar);
+    case TOK_FOR:      return ast_build_for_stmt(ar);
+    case TOK_SWITCH:   return ast_build_switch_stmt(ar);
+    case TOK_ID:       return ast_build_label_stmt(ar);
+    /* Expression statements that do not begin with an identifier: a deref
+     * store `*p = x;`, a parenthesised expression `(expr);`, an address-of or
+     * unary-led expression, or a prefix ++/-- statement.  ast_build_expr_stmt
+     * declines (NULL) on anything that is not a complete `expr ;`, and the
+     * outer ast_try_emit_statement restores the lexer snapshot on NULL, so
+     * mis-routing a non-expression lead is harmless. */
+    case '*': case '(': case '&': case '-': case '+': case '!': case '~':
+    case TOK_INC: case TOK_DEC:
+                       return ast_build_expr_stmt(ar);
+    default:           return NULL;
+    }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Initialisation + debug dump.
+ * ------------------------------------------------------------------------- */
+void ast_build_init(void)
+{
+    const char *e = getenv("DCC_AST_BUILD");
+    const char *g = getenv("DCC_AST_GEN");
+    if (e != NULL && e[0] != '\0')
+        g_ast_build_enabled = (e[0] == '2') ? 2 : 1;
+    else
+        g_ast_build_enabled = 0;
+
+    /* AST-driven codegen implies building the AST. */
+    if (g != NULL && g[0] != '\0') {
+        g_ast_gen_enabled = (g[0] == '2') ? 2 : 1;
+        if (g_ast_build_enabled == 0)
+            g_ast_build_enabled = 1;
+    } else {
+        g_ast_gen_enabled = 0;
+    }
+
+    ast_arena_init(&g_ast_arena);
+}
+
+const char *ast_kind_name(int kind)
+{
+    switch (kind) {
+    case AST_NONE:        return "none";
+    case AST_INT_LIT:     return "int";
+    case AST_FLOAT_LIT:   return "float";
+    case AST_STR_LIT:     return "str";
+    case AST_IDENT:       return "ident";
+    case AST_CALL:        return "call";
+    case AST_INDEX:       return "index";
+    case AST_MEMBER:      return "member";
+    case AST_UNARY:       return "unary";
+    case AST_POSTFIX:     return "postfix";
+    case AST_BINARY:      return "binary";
+    case AST_LOGAND:      return "logand";
+    case AST_LOGOR:       return "logor";
+    case AST_ASSIGN:      return "assign";
+    case AST_COND:        return "cond";
+    case AST_CAST:        return "cast";
+    case AST_COMMA:       return "comma";
+    case AST_SIZEOF_EXPR: return "sizeof-expr";
+    case AST_SIZEOF_TYPE: return "sizeof-type";
+    case AST_EXPR_STMT:   return "expr-stmt";
+    case AST_COMPOUND:    return "compound";
+    case AST_DECL:        return "decl";
+    case AST_IF:          return "if";
+    case AST_WHILE:       return "while";
+    case AST_DOWHILE:     return "do-while";
+    case AST_FOR:         return "for";
+    case AST_SWITCH:      return "switch";
+    case AST_CASE:        return "case";
+    case AST_DEFAULT:     return "default";
+    case AST_RETURN:      return "return";
+    case AST_BREAK:       return "break";
+    case AST_CONTINUE:    return "continue";
+    case AST_GOTO:        return "goto";
+    case AST_LABEL:       return "label";
+    case AST_EMPTY:       return "empty";
+    default:              return "?";
+    }
+}
+
+void ast_dump(const struct AstNode *n, int depth)
+{
+    int i;
+    if (n == NULL) {
+        for (i = 0; i < depth; i++)
+            fputs("  ", stderr);
+        fputs("<null>\n", stderr);
+        return;
+    }
+    for (i = 0; i < depth; i++)
+        fputs("  ", stderr);
+    fprintf(stderr, "%s", ast_kind_name(n->kind));
+    if (n->kind == AST_INT_LIT)
+        fprintf(stderr, " %ld", n->ival);
+    else if (n->kind == AST_FLOAT_LIT)
+        fprintf(stderr, " 0x%08lx", n->uval);
+    else if (n->sval != NULL)
+        fprintf(stderr, " '%s'", n->sval);
+    if (n->op != 0)
+        fprintf(stderr, " op=%d", n->op);
+    fputc('\n', stderr);
+
+    ast_dump(n->a, depth + 1);
+    ast_dump(n->b, depth + 1);
+    ast_dump(n->c, depth + 1);
+    ast_dump(n->d, depth + 1);
+    for (i = 0; i < n->list_len; i++)
+        ast_dump(n->list[i], depth + 1);
+}
