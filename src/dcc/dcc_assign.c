@@ -1040,7 +1040,61 @@ void gen_expr_no_comma(void)
      *
      *     int a = (0, 1);
      */
+    static int depth = 0;
+
+    /*
+     * Phase 1/2 AST hook, mirroring gen_expr()'s outermost-expression hook but
+     * for the no-comma (declaration-initializer) grammar.  Function-scope
+     * declaration initializers reach here via emit_store_expr_to_local_offset
+     * (the destination address is already pushed); when the whole initializer
+     * expression is in the supported subset we emit it from the AST, otherwise
+     * we restore the lexer and fall back to the byte-identical streaming path.
+     * ast_gen_expr is stack-neutral and leaves the same value/type in HL as
+     * gen_assign, so the surrounding push/convert/store is unaffected.
+     */
+    if (g_ast_build_enabled && !scan_mode && depth == 0) {
+        long sv_pos = posi;
+        long sv_tok_start = tok_start_pos;
+        int sv_line = line_no;
+        int sv_tok_line = tok_line;
+        struct Token sv_tok = tok;
+        int report = getenv("DCC_AST_REPORT") != NULL;
+        struct AstNode *n = ast_build_assign_expr(&g_ast_arena);
+
+        if (g_ast_gen_enabled && ast_gen_supported(n)) {
+            depth++;
+            ast_gen_expr(n);
+            depth--;
+            if (g_ast_gen_enabled == 2)
+                fprintf(stderr, "; AST-emit %s\n", ast_kind_name(n->kind));
+            ast_arena_reset(&g_ast_arena);
+            return;
+        }
+
+        if (g_ast_build_enabled == 2) {
+            fprintf(stderr, "; AST gen_expr_no_comma:\n");
+            ast_dump(n, 1);
+        }
+        if (report) {
+            if (n == NULL) {
+                fprintf(stderr, "; AST-fallback expr build token=%d text='%s' line=%d\n",
+                        sv_tok.kind, sv_tok.text, sv_tok_line);
+            } else {
+                fprintf(stderr, "; AST-fallback expr gate kind=%s line=%d\n",
+                        ast_kind_name(n->kind), sv_tok_line);
+            }
+        }
+        posi = sv_pos;
+        tok_start_pos = sv_tok_start;
+        line_no = sv_line;
+        tok_line = sv_tok_line;
+        tok = sv_tok;
+        ast_arena_reset(&g_ast_arena);
+    }
+
+    depth++;
     gen_assign();
+    depth--;
 }
 
 void gen_expr(void)

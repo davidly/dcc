@@ -65,7 +65,8 @@ enum AstKind {
     /* ---- statements ---- */
     AST_EXPR_STMT,      /* a = expression (may be NULL for empty ';')      */
     AST_COMPOUND,       /* { ... }: list = ordered child statements/decls  */
-    AST_DECL,           /* local declaration: sym; a = initializer or NULL */
+    AST_DECL,           /* local declaration: aux = lexer span re-emitted by  */
+                        /* the streaming declaration codegen (offset parity)  */
     AST_IF,             /* a = cond, b = then, c = else (or NULL)          */
     AST_WHILE,          /* a = cond, b = body                              */
     AST_DOWHILE,        /* b = body, a = cond                              */
@@ -103,6 +104,8 @@ struct AstNode {
     int list_len;
     int list_cap;
 
+    void *aux;              /* AST_DECL: opaque lexer-span snapshot          */
+
     int peek_type;          /* AST_BINARY: peek_simple_unary_type() of the   */
                             /* rhs, captured at build time so the walker     */
                             /* reproduces the streaming common-type choice   */
@@ -132,6 +135,11 @@ void ast_arena_free(struct AstArena *ar);    /* release everything          */
 
 /* ---- node construction (all allocate from `ar`) ---- */
 struct AstNode *ast_new(struct AstArena *ar, int kind);
+
+/* Re-emit a captured local-declaration span through the streaming declaration
+ * codegen (so the local symbol table / frame offsets are rebuilt exactly as
+ * the frame-sizing scan built them).  Defined in dcc_ast_build.c. */
+void ast_emit_decl_span(const struct AstNode *n);
 struct AstNode *ast_int_lit(struct AstArena *ar, long value, int type);
 struct AstNode *ast_float_lit(struct AstArena *ar, unsigned long bits, int type);
 struct AstNode *ast_str_lit(struct AstArena *ar, int str_index, int type);
@@ -174,6 +182,7 @@ extern struct AstArena g_ast_arena; /* shared function-local build arena      */
 
 void ast_build_init(void);
 struct AstNode *ast_build_expr(struct AstArena *ar);  /* full expression       */
+struct AstNode *ast_build_assign_expr(struct AstArena *ar); /* no-comma expr    */
 struct AstNode *ast_build_stmt(struct AstArena *ar);  /* one statement, or NULL */
 const char *ast_kind_name(int kind);
 void ast_dump(const struct AstNode *n, int depth);

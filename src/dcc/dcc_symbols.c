@@ -441,6 +441,16 @@ void emit_runtime_extrn_if_needed(const char *name)
     static int nemitted;
     int i;
 
+    /*
+     * During a suppressed scan/replay (scan_mode), do not emit the EXTRN and,
+     * crucially, do not record it as emitted.  Otherwise a runtime helper first
+     * "used" inside a suppressed gate replay would be marked emitted while its
+     * EXTRN line went nowhere, so the real emission would skip it and leave the
+     * helper undefined at link time.
+     */
+    if (scan_mode)
+        return;
+
     for (i = 0; i < nemitted; ++i) {
         if (!strcmp(emitted[i], name))
             return;
@@ -449,8 +459,7 @@ void emit_runtime_extrn_if_needed(const char *name)
     if (nemitted >= 64)
         fatal("too many runtime extrns");
 
-    if (!scan_mode)
-        fprintf(outf, "\textrn %s\n", name);
+    fprintf(outf, "\textrn %s\n", name);
     emitted[nemitted++] = name;
 }
 

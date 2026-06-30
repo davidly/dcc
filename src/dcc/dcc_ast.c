@@ -126,6 +126,7 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->list = NULL;
     n->list_len = 0;
     n->list_cap = 0;
+    n->aux = NULL;
     n->peek_type = 0;
     n->line = 0;
     return n;
