@@ -18,6 +18,7 @@ void gen_int_lit(const struct AstNode *n)
         fprintf(outf, "\tld hl,%ld\n", n->ival & 0xffffL);
     }
     g_expr_type = n->type;
+    g_long_from16 = 0;
 }
 
 /* Cast `(type)expr` to a 16-bit integer target (float/long/pointer targets
@@ -26,6 +27,7 @@ void gen_int_lit(const struct AstNode *n)
 void gen_cast_ast(const struct AstNode *n)
 {
     int t = n->type;
+    int from16 = 0;
     ast_gen_expr(n->a);
     if (type_is_float(t)) {
         if (!type_is_float(g_expr_type))
@@ -37,10 +39,12 @@ void gen_cast_ast(const struct AstNode *n)
     if (type_is_long(t)) {
         if (type_is_float(g_expr_type))
             emit_convert_float_to_intlike(t);
-        else if (!type_is_long(g_expr_type))
+        else if (!type_is_long(g_expr_type)) {
             emit_extend_to_long_typed(g_expr_type);
+            from16 = g_long_from16;
+        }
         g_expr_type = t;
-        g_long_from16 = 0;
+        g_long_from16 = from16;
         return;
     }
     if (type_is_bool(t)) {
@@ -445,12 +449,53 @@ void gen_pointer_diff_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+static int emit_signed_long_const_cmp_ast(int op, long c)
+{
+    unsigned long threshold;
+    unsigned long biased;
+    unsigned int lo;
+    unsigned int hi;
+    int true_label;
+    int end_label;
+    int true_on_carry;
+
+    threshold = ((unsigned long)c) & 0xffffffffUL;
+    if (op == '>' || op == TOK_LE) {
+        if (threshold == 0x7fffffffUL) {
+            emit(op == '>' ? "\tld hl,0\n" : "\tld hl,1\n");
+            return 1;
+        }
+        threshold = (threshold + 1UL) & 0xffffffffUL;
+    }
+
+    biased = (threshold ^ 0x80000000UL) & 0xffffffffUL;
+    lo = (unsigned int)(biased & 0xffffUL);
+    hi = (unsigned int)((biased >> 16) & 0xffffUL);
+    true_on_carry = (op == '<' || op == TOK_LE);
+    true_label = new_label();
+    end_label = new_label();
+
+    emit("\tld a,d\n\txor 80h\n\tld d,a\n");
+    fprintf(outf, "\tld bc,%u\n", lo);
+    emit("\tor a\n\tsbc hl,bc\n\tex de,hl\n");
+    fprintf(outf, "\tld bc,%u\n", hi);
+    emit("\tsbc hl,bc\n");
+    emit_jp_label(true_on_carry ? "jp c," : "jp nc,", true_label);
+    emit("\tld hl,0\n");
+    emit_jp_label("jp", end_label);
+    emit_label(true_label);
+    emit("\tld hl,1\n");
+    emit_label(end_label);
+    return 1;
+}
+
 
 void gen_long_cmp_ast(const struct AstNode *n)
 {
     int lhs_type;
     int rhs_type;
     int common_type;
+    long rhs_const;
 
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
@@ -470,6 +515,15 @@ void gen_long_cmp_ast(const struct AstNode *n)
         return;
     }
 
+    common_type = common_arith_type(lhs_type, n->b->type);
+    if ((n->op == '<' || n->op == '>' || n->op == TOK_LE || n->op == TOK_GE) &&
+        !(common_type & TYPE_UNSIGNED) && ast_const_scalar_fold(n->b, &rhs_const) &&
+        emit_signed_long_const_cmp_ast(n->op, rhs_const)) {
+        g_expr_type = TYPE_INT;
+        g_long_from16 = 0;
+        return;
+    }
+
     emit("\tpush de\n\tpush hl\n");
     ast_gen_expr(n->b);
     rhs_type = promote_int_type(g_expr_type);
@@ -484,14 +538,25 @@ void gen_long_arith_ast(const struct AstNode *n)
 {
     int lhs_type;
     int common_type;
+    int lhs_from16;
+    int rhs_from16;
 
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
     common_type = common_arith_type(lhs_type, n->peek_type);
     emit_cast_16_to_common(lhs_type, common_type);
+    lhs_from16 = g_long_from16;
     emit("\tpush de\n\tpush hl\n");
     ast_gen_expr(n->b);
     emit_cast_16_to_common(g_expr_type, common_type);
+    rhs_from16 = g_long_from16;
+    if (n->op == '*' && lhs_from16 != 0 && lhs_from16 == rhs_from16) {
+        emit("\tpop bc\n\tpop de\n");
+        emit_runtime_call(lhs_from16 == 2 ? "__m1u" : "__m1s");
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
     gen_binop32_typed(n->op, common_type);
     g_expr_type = common_type;
     g_long_from16 = 0;
