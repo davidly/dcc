@@ -1968,6 +1968,8 @@ void gen_call_ast(const struct AstNode *n)
             arg_bytes += 4;
         } else if (have_want && !type_is_long(want_type) &&
                    !type_is_float(want_type)) {
+            if (type_is_float(actual_type))
+                emit_convert_float_to_intlike(want_type);
             emit("\tpush hl\n");
             arg_bytes += 2;
         } else if (type_is_long(actual_type) || type_is_float(actual_type)) {
@@ -2034,6 +2036,8 @@ void gen_struct_return_call_assign_ast(const struct AstNode *lhs,
             arg_bytes += 4;
         } else if (have_want && !type_is_long(want_type) &&
                    !type_is_float(want_type)) {
+            if (type_is_float(actual_type))
+                emit_convert_float_to_intlike(want_type);
             emit("\tpush hl\n");
             arg_bytes += 2;
         } else if (type_is_long(actual_type) || type_is_float(actual_type)) {

@@ -1,6 +1,6 @@
 ---
 name: dcc-project
-description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89 -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (ma.ps1), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the c89-cpm-z80 skill for that.'
+description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89/C99/C11 front end -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (ma.ps1), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
 argument-hint: 'Describe the dcc-project task (change codegen, run the test suite, build a single app, rebuild host tools)'
 ---
 
@@ -10,7 +10,7 @@ dcc is a **cross** toolchain: the host programs `dcc`, `dccpeep`, and
 `dccrtlstrip` compile with a modern compiler and run on your desktop. They emit
 Z80 assembly and CP/M 2.2 `.COM` files that run under an emulator such as
 **ntvcm**. This skill is about changing and validating *those tools and the
-runtime*, not about authoring CP/M apps (use `c89-cpm-z80` for that).
+runtime*, not about authoring CP/M apps (use `dcc-cpm-z80` for that).
 
 ## When to use
 

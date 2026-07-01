@@ -12,6 +12,20 @@
  */
 
 #include "dcc.h"
+
+#define MACRO_PLACEMARKER '\002'
+
+#define MAX_MACRO_PUSH 64
+
+struct MacroPushEntry {
+    char name[64];
+    int was_defined;
+    struct Def def;
+};
+
+static struct MacroPushEntry macro_push_stack[MAX_MACRO_PUSH];
+static int nmacro_push_stack;
+
 int find_define(const char *name)
 {
     int i;
@@ -500,6 +514,104 @@ void remove_define(const char *name)
     ndefs--;
 }
 
+static int parse_pragma_macro_name(const char *line, const char *op, char *name, int namesz)
+{
+    int oi;
+
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    while (*op) {
+        if (*line++ != *op++)
+            return 0;
+    }
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    if (*line++ != '(')
+        return 0;
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    if (*line++ != '"')
+        return 0;
+
+    oi = 0;
+    while (*line && *line != '"' && oi < namesz - 1)
+        name[oi++] = *line++;
+    name[oi] = 0;
+    if (*line != '"')
+        return 0;
+    line++;
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    return name[0] && *line == ')';
+}
+
+static void pp_push_macro(const char *name)
+{
+    int di;
+    struct MacroPushEntry *e;
+
+    if (nmacro_push_stack >= MAX_MACRO_PUSH)
+        fatal("too many pushed macros");
+
+    e = &macro_push_stack[nmacro_push_stack++];
+    memset(e, 0, sizeof(*e));
+    strncpy(e->name, name, sizeof(e->name) - 1);
+
+    di = find_define(name);
+    if (di >= 0) {
+        e->was_defined = 1;
+        e->def = defs[di];
+    }
+}
+
+static void pp_pop_macro(const char *name)
+{
+    int si;
+    int di;
+    int j;
+    struct MacroPushEntry saved;
+
+    for (si = nmacro_push_stack - 1; si >= 0; --si) {
+        if (!strcmp(macro_push_stack[si].name, name))
+            break;
+    }
+    if (si < 0)
+        return;
+
+    saved = macro_push_stack[si];
+    for (j = si; j + 1 < nmacro_push_stack; ++j)
+        macro_push_stack[j] = macro_push_stack[j + 1];
+    nmacro_push_stack--;
+
+    if (!saved.was_defined) {
+        remove_define(name);
+        return;
+    }
+
+    di = find_define(name);
+    if (di >= 0) {
+        defs[di] = saved.def;
+    } else {
+        if (ndefs >= MAX_DEFINES)
+            fatal("too many defines");
+        defs[ndefs++] = saved.def;
+    }
+}
+
+static void handle_pragma_line(const char *line)
+{
+    char name[64];
+
+    if (parse_pragma_macro_name(line, "push_macro", name, sizeof(name))) {
+        pp_push_macro(name);
+        return;
+    }
+    if (parse_pragma_macro_name(line, "pop_macro", name, sizeof(name))) {
+        pp_pop_macro(name);
+        return;
+    }
+}
+
 void pp_recompute_active(void)
 {
     if (if_sp <= 0) {
@@ -795,8 +907,16 @@ void parse_preprocessor_line(void)
                     current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
                     line_no, val);
         }
-    } else if (!strcmp(word, "pragma") || word[0] == 0) {
-        /* #pragma and null directive (#) are silently ignored */
+    } else if (!strcmp(word, "pragma")) {
+        if (pp_active) {
+            i = 0;
+            while ((c = peekc()) != 0 && c != '\n' && i < (int)sizeof(val) - 1)
+                val[i++] = (char)getc_src();
+            val[i] = 0;
+            handle_pragma_line(val);
+        }
+    } else if (word[0] == 0) {
+        /* null directive (#) is silently ignored */
     } else {
         /* Any other unrecognised directive is an error when active.
          * In an inactive block it is silently skipped so that unknown
@@ -893,6 +1013,52 @@ int keyword_kind(const char *s)
     if (!strcmp(s, "do")) return TOK_DO;
     if (!strcmp(s, "inline")) return TOK_INLINE;
     return TOK_ID;
+}
+
+static void skip_gnu_attribute(void)
+{
+    int depth;
+    int c;
+
+    while (isspace((unsigned char)peekc()))
+        getc_src();
+    if (peekc() != '(')
+        return;
+
+    depth = 0;
+    while ((c = getc_src()) != 0) {
+        if (c == '"') {
+            while (peekc() && peekc() != '"') {
+                if (peekc() == '\\') {
+                    getc_src();
+                    if (peekc()) getc_src();
+                } else {
+                    getc_src();
+                }
+            }
+            if (peekc() == '"') getc_src();
+            continue;
+        }
+        if (c == '\'') {
+            while (peekc() && peekc() != '\'') {
+                if (peekc() == '\\') {
+                    getc_src();
+                    if (peekc()) getc_src();
+                } else {
+                    getc_src();
+                }
+            }
+            if (peekc() == '\'') getc_src();
+            continue;
+        }
+        if (c == '(')
+            depth++;
+        else if (c == ')') {
+            depth--;
+            if (depth <= 0)
+                break;
+        }
+    }
 }
 
 int read_escape(void)
@@ -1612,17 +1778,36 @@ void paste_tokens_in_text(char *s)
     char tmp[MAX_MACRO_TEXT];
     int i;
     int o;
+    int had_placemarker;
 
     i = 0;
     o = 0;
 
     while (s[i] && o < (int)sizeof(tmp) - 1) {
+        if (s[i] == MACRO_PLACEMARKER) {
+            i++;
+            continue;
+        }
+
         if (s[i] == '#' && s[i + 1] == '#') {
             while (o > 0 && isspace((unsigned char)tmp[o - 1]))
+                --o;
+            if (o > 0 && tmp[o - 1] == MACRO_PLACEMARKER)
                 --o;
             i += 2;
             while (s[i] && isspace((unsigned char)s[i]))
                 ++i;
+            had_placemarker = 0;
+            if (s[i] == MACRO_PLACEMARKER) {
+                had_placemarker = 1;
+                i++;
+                while (s[i] && isspace((unsigned char)s[i]))
+                    ++i;
+            }
+            if (had_placemarker && o > 0 && s[i] &&
+                !isspace((unsigned char)tmp[o - 1]) &&
+                !isspace((unsigned char)s[i]))
+                tmp[o++] = ' ';
             continue;
         }
 
@@ -1741,8 +1926,13 @@ void expand_function_macro(int di, char args[8][128], char *out, int outsz)
                 else
                     a = expanded_args[matched];
 
-                while (*a && oi < outsz - 1)
-                    out[oi++] = *a++;
+                if (*a == 0 && replacement_param_raw_context(defs[di].value, ident_start, ident_end)) {
+                    if (oi < outsz - 1)
+                        out[oi++] = MACRO_PLACEMARKER;
+                } else {
+                    while (*a && oi < outsz - 1)
+                        out[oi++] = *a++;
+                }
             } else {
                 for (j = 0; ident[j] && oi < outsz - 1; ++j)
                     out[oi++] = ident[j];
@@ -1879,6 +2069,28 @@ int macro_number_should_expand_textually(const char *s)
     return v > 0xffffUL || (is_nondecimal && v > 32767UL);
 }
 
+static int macro_value_is_integer_literal(const char *s)
+{
+    char *endp;
+
+    while (*s && isspace((unsigned char)*s))
+        s++;
+
+    if (!isdigit((unsigned char)*s) &&
+        !((s[0] == '-' || s[0] == '+') && isdigit((unsigned char)s[1])))
+        return 0;
+
+    (void)strtoul(s, &endp, 0);
+
+    while (*endp == 'u' || *endp == 'U' || *endp == 'l' || *endp == 'L')
+        endp++;
+
+    while (*endp && isspace((unsigned char)*endp))
+        endp++;
+
+    return *endp == 0;
+}
+
 int define_number_value(const char *name, long *out, int depth)
 {
     int di;
@@ -1907,8 +2119,7 @@ int define_number_value(const char *name, long *out, int depth)
         v = v + 1;
     }
 
-    if (isdigit((unsigned char)v[0]) ||
-        ((v[0] == '-' || v[0] == '+') && isdigit((unsigned char)v[1]))) {
+    if (macro_value_is_integer_literal(v)) {
         out[0] = parse_number_string(v);
         return 1;
     }
@@ -2026,6 +2237,12 @@ void next_token(void)
         while (is_ident_char(peekc()) && i < MAX_TOK_TEXT - 1)
             tok.text[i++] = (char)getc_src();
         tok.text[i] = 0;
+
+        if (!strcmp(tok.text, "__attribute__")) {
+            skip_gnu_attribute();
+            next_token();
+            return;
+        }
 
         /* C89 predefined macros.  These are handled by the lexer so
          * __FILE__ and __LINE__ reflect the logical source location after

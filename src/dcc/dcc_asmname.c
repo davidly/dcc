@@ -12,12 +12,37 @@
  */
 
 #include "dcc.h"
+
+static int asm_prefix_eq_ci(const char *a, const char *b, int n)
+{
+    int i;
+    for (i = 0; i < n; ++i) {
+        if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i]))
+            return 0;
+        if (a[i] == 0 || b[i] == 0)
+            return a[i] == b[i];
+    }
+    return 1;
+}
+
 int asm_name_must_mangle(const char *cname)
 {
     struct Sym *s;
+    static const char *runtime_names[] = {
+        "printf", "fprintf", "sprintf", "vprintf", "vfprintf", "vsprintf",
+        NULL
+    };
+    int i;
 
     if (strncmp(cname, "fake_", 5) == 0)
         return 1;
+
+    for (i = 0; runtime_names[i] != NULL; ++i) {
+        if (!strcmp(cname, runtime_names[i]))
+            return 0;
+        if (asm_prefix_eq_ci(cname, runtime_names[i], 5))
+            return 1;
+    }
 
     /*
      * M80/L80 have short external-name significance, so file-scope static

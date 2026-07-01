@@ -460,8 +460,10 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
         emit_runtime_call("__stchk");
 }
 
-void emit_function_epilogue(void)
+void emit_function_epilogue(int implicit_zero_return)
 {
+    if (implicit_zero_return)
+        emit("\tld hl,0\n");
     emit_label(current_return_label);
     /* Always emit ld sp,ix so returns from nested control flow restore the
      * caller stack reliably. pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra
@@ -672,6 +674,8 @@ void scan_local_decl_after_type(int base)
 
         bytes = type_size(type);
         if (total_elems > 0) bytes *= total_elems;
+        if (g_last_array_had_vla)
+            bytes = 2;
 
         /* A name already present in the innermost open block is a redefinition.
          * find_local_decl() only searches the current scope (and ignores
@@ -690,8 +694,13 @@ void scan_local_decl_after_type(int base)
                                      arrlen != 0 || g_last_array_dim_count != 0);
 
         if (!s) {
-            s = add_local_alloc(name, type, bytes);
-            if (arrlen > 0 || g_last_array_dim_count > 0) {
+            s = add_local_alloc(name, g_last_array_had_vla ? type_add_ptr(type) : type, bytes);
+            if (g_last_array_had_vla) {
+                s->is_array = 0;
+                s->array_len = 0;
+                s->elem_size = type_size(type);
+                if (s->elem_size <= 0) s->elem_size = 2;
+            } else if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;
                 s->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
@@ -1241,6 +1250,7 @@ void parse_global_init_type(struct Sym *s, int type, int size);
 void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_size)
 {
     int n;
+    int had_brace;
 
     if (elem_size <= 0) elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
@@ -1258,10 +1268,16 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
         return;
     }
 
-    if (tok.kind == '{')
+    had_brace = 0;
+    if (tok.kind == '{') {
         next_token();
+        had_brace = 1;
+    }
     n = 0;
-    while (tok.kind != TOK_EOF && tok.kind != '}') {
+    while (tok.kind != TOK_EOF && (had_brace || count <= 0 || n < count) &&
+           (had_brace || tok.kind != '}')) {
+        if (had_brace && tok.kind == '}')
+            break;
         if (count > 0 && n >= count) {
             error_here("too many initializer elements");
             skip_initializer_or_decl_tail();
@@ -1269,10 +1285,13 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
         }
         parse_global_init_type(s, elem_type, elem_size);
         n++;
+        if (!had_brace && count > 0 && n >= count)
+            break;
         if (!accept(',')) break;
-        if (tok.kind == '}') break;
+        if (had_brace && tok.kind == '}') break;
     }
-    expect('}');
+    if (had_brace)
+        expect('}');
 
     while (count > 0 && n < count) {
         append_global_zero_bytes(s, elem_size);
@@ -1438,10 +1457,13 @@ void parse_global_init_struct(struct Sym *s, int type)
             parse_global_init_type(s, fd->type, fd->size);
 
         used = fd->offset + fd->size;
+        if (!had_brace && next_parent_field_index(sid, i + 1) < 0)
+            break;
         if (!accept(',')) break;
         if (tok.kind == '}') break;
     }
-    expect('}');
+    if (had_brace)
+        expect('}');
 
     if (total > used)
         append_global_zero_bytes(s, total - used);
@@ -1907,7 +1929,9 @@ void parse_function_or_global(int base_type)
                 emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                 gen_compound();
                 check_undefined_user_labels();
-                emit_function_epilogue();
+                emit_function_epilogue(strcmp(name, "main") == 0 &&
+                                       (type & 15) == TYPE_INT &&
+                                       type_ptr_depth(type) == 0);
 
                 /* Emit the __mrun shim that start: dispatches to.  When main has
                  * no args the shim omits any reference to __build_argv/__argc/argv

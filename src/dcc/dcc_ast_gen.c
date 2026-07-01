@@ -1916,8 +1916,13 @@ int ast_address_of_value_type(const struct AstNode *n, int *out_type)
         return 0;
     if (n->kind == AST_IDENT) {
         s = find_sym(n->sval);
-        if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
+        if (s == NULL || s->is_const_value)
             return 0;
+        if (s->storage == SC_FUNC) {
+            if (out_type)
+                *out_type = s->type;
+            return 1;
+        }
         if (out_type)
             *out_type = s->type;
         return ident_supported(n->sval);

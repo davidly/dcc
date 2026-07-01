@@ -422,6 +422,7 @@ extern int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-
 extern int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
 extern int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
 extern int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
+extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum */
 
 /* Pending #asm block output buffered to avoid duplicate emission from posi save/restore */
 extern char pending_asm_buf[8192];
@@ -458,6 +459,8 @@ extern int g_funcptr_is_funcret_decl;
 extern int g_ptr_array_dim_count;
 extern int g_ptr_array_dims[8];
 extern int g_ptr_array_elem_size;
+extern int g_last_array_had_vla;
+extern char g_last_array_vla_bound_name[64];
 extern int g_last_array_dim_count;
 extern int g_last_array_dims[8];
 
@@ -787,7 +790,7 @@ void parse_param_list(void);
 int current_function_param_count(void);
 int current_function_safe_to_omit_ix(int return_type, int local_bytes);
 void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
-void emit_function_epilogue(void);
+void emit_function_epilogue(int implicit_zero_return);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
 void scan_local_decl_after_type(int base);

@@ -25,7 +25,8 @@ During a docs build, `hooks/copy_assets.py` copies it to
 From this directory:
 
 ```sh
-python3 -m pip install -r requirements.txt
+python3 -m venv ../../.env
+../../.env/bin/python -m pip install -r requirements.txt
 ```
 
 ## Build the site
@@ -33,7 +34,7 @@ python3 -m pip install -r requirements.txt
 From this directory:
 
 ```sh
-mkdocs build --strict
+../../.env/bin/mkdocs build --strict
 ```
 
 The generated site is written to `../site` (`docs/site` from the repo root),
@@ -44,7 +45,7 @@ which is ignored by git.
 From this directory:
 
 ```sh
-mkdocs serve
+../../.env/bin/mkdocs serve
 ```
 
 MkDocs prints the local URL, usually `http://127.0.0.1:8000/`.
@@ -62,7 +63,7 @@ analyses `DCCRTL.MAC` directly. There is nothing to regenerate by hand: edit the
 runtime and rebuild the docs, and the tables update themselves. To preview:
 
 ```sh
-mkdocs build --strict
+../../.env/bin/mkdocs build --strict
 ```
 
 ## Updating generated standard-library tables

@@ -1,22 +1,38 @@
 ---
-name: c89-cpm-z80
-description: 'Write, build, test, and debug C89 code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, ma.sh, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus a few C99 conveniences (for-init decls, // comments, block scope, inline-ignored) EXCEPT for the deviations this skill documents: no double (32-bit float is the only floating type), 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library (no atof/strtod; no locale/signal/time). Full library/printf/scanf inventory and pitfalls are in the reference files.'
-argument-hint: 'Describe the C89/CP-M task (write code, build, run under ntvcm, debug a failure)'
+name: dcc-cpm-z80
+description: 'Write, build, test, and debug C89/C99/C11-targeted code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, C89, C99, C11, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, ma.sh, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus target-appropriate C99/C11 front-end compatibility EXCEPT for the Z80/CP/M deviations this skill documents: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full library/printf/scanf inventory and pitfalls are in the reference files.'
+argument-hint: 'Describe the C89/C99/C11 CP/M-Z80 task (write code, build, run under ntvcm, debug a failure)'
 ---
 
-# C89 for dcc (CP/M 2.2 / Z80)
+# dcc C for CP/M 2.2 / Z80
 
 dcc is a cross-compiler (runs on the host) that emits Z80 assembly for CP/M 2.2.
 The runtime is [DCCRTL.MAC](DCCRTL.MAC); programs run on real hardware or an
 emulator such as **ntvcm** (Altair 8800).
 
-**Assume standard C89 plus the C99 conveniences listed below.** This skill
-documents only where dcc *deviates* from what an experienced C programmer
-expects — anything not listed here behaves as standard C89/C99.
+**Assume standard C89 plus target-appropriate C99/C11 front-end compatibility.**
+dcc is not a hosted desktop C implementation: the CP/M 2.2 runtime, Z80 data
+model, and DCCRTL library subset are part of the compiler contract. Anything not
+listed here should be treated as ordinary C89/C99/C11, but CP/M/Z80 limits always
+win over host ABI expectations.
+
+## Compiler conformance level
+
+- C89 is the baseline language, except where the Z80 data model makes a hosted
+  assumption impossible (`double`, `long long`, host-sized `int`, and host ABI
+  macros are not part of the target contract).
+- Target-appropriate C99/C11 front-end compatibility is supported when tested and
+  documented below.
+- Not-yet-implemented C99/C11/GNU front-end features are candidates for future
+  support, not permanent target exclusions.
+- True target/runtime exceptions are: `double`/`long double`, `long long`/64-bit
+  integers, host ABI assumptions, host-sized integer expectations, hosted
+  byte-stream stdio behavior, wide-character Unicode runtime behavior, POSIX,
+  locale, signal, time, threads, and atomics.
 
 ## When to use
 
-- Writing, porting, or reviewing C compiled by `dcc`.
+- Writing, porting, or reviewing C89/C99/C11 code compiled by `dcc`.
 - Building/running/debugging a dcc program (`ma.sh`, `ntvcm`).
 - CP/M file I/O, VT100/ANSI console UIs, or DCCRTL work.
 
@@ -29,7 +45,7 @@ expects — anything not listed here behaves as standard C89/C99.
 | `int` / `short` | 16-bit | overflow at ±32767; use `long` + `%ld` for range |
 | `long` | 32-bit | |
 | `float` | 32-bit | **the only floating type** |
-| `double` / `long double` | — | **not a keyword; using it is a compile error** |
+| `double` / `long double` | — | **not supported as a distinct type; use `float`** |
 | pointer / `size_t` / `ptrdiff_t` / `wchar_t` | 16-bit | flat 64 KB space |
 | `char` | 8-bit **signed** | use `unsigned char` for bytes ≥ 0x80 / table indices |
 | `FILE` | `int` | |
@@ -71,7 +87,7 @@ you see that error.
 `"..."` header is fatal. If standard calls compile but misbehave, check that
 `-I` actually resolves the dcc headers.
 
-## C99 conveniences dcc accepts (beyond C89)
+## C99/C11 front-end compatibility dcc accepts (beyond C89)
 
 These behave as standard C99: `for`-init declarations with loop scope, `//` line
 comments, block-scoped declarations (inner blocks shadow outer names), and
@@ -79,8 +95,28 @@ comments, block-scoped declarations (inner blocks shadow outer names), and
 but inert (`const` constant-folds initializers only — not read-only memory).
 K&R function definitions are still accepted; prefer prototypes for new code.
 
-Not present: any other C99/C11 feature (`restrict`, `_Bool`, VLAs, compound
-literals, designated initializers).
+dcc also accepts practical front-end compatibility used by common C99-era code:
+forward enum declarations are parsed as `int`-sized enum types, including inside
+function prototypes and function-pointer declarators such as
+`int (*member)(enum E value)`. C11 anonymous struct/union members are accepted,
+including aggregate initialization through the anonymous member. GNU
+`__attribute__((...))` annotations are skipped when they appear in supported
+declaration positions.
+
+Not implemented yet, but plausible front-end scope: C99 designated initializers,
+C99 array designators, C99 compound literals, C99 variadic macros, GNU statement
+expressions, `__builtin_expect`, and C11 `_Generic` for target-supported types.
+
+Target-inapplicable or runtime-inapplicable exceptions: `double`/`long double`,
+`long long`, 64-bit integer typedefs/operations, host ABI checks,
+host-sized-int expectations, hosted byte-stream stdio behavior, wide-character
+Unicode library behavior, POSIX services, locale, signal, time, C11 threads, and
+C11 atomics.
+
+Automatic one-dimensional VLAs with a simple identifier bound, such as
+`char buf[n]`, are supported by reserving stack space at runtime. Keep them
+small: heap and stack still share the CP/M transient program area and have no
+guard beyond explicit stack checking.
 
 **Identifiers:** full internal significance; externals stay distinct well past
 C89's 6-char minimum (verified to ~13 chars), and only ~16+ identical leading

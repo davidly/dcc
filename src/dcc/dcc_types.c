@@ -349,15 +349,21 @@ void parse_struct_definition(int struct_id)
         ftype = parse_type();
 
         for (;;) {
+            int is_funcptr_field;
             while (accept('*')) { skip_type_qualifiers(); ftype = type_add_ptr(ftype); }
 
-            if (tok.kind != TOK_ID) {
-                error_here("field name expected");
-                break;
-            }
+            is_funcptr_field = 0;
+            if (parse_funcptr_declarator(&ftype, fname, sizeof(fname))) {
+                is_funcptr_field = 1;
+            } else {
+                if (tok.kind != TOK_ID) {
+                    error_here("field name expected");
+                    break;
+                }
 
-            dcc_copy_str(fname, sizeof(fname), tok.text);
-            next_token();
+                dcc_copy_str(fname, sizeof(fname), tok.text);
+                next_token();
+            }
 
             if (tok.kind == ':') {
                 int bw;
@@ -393,7 +399,7 @@ void parse_struct_definition(int struct_id)
                 dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
                 if ((ftype & 15) != TYPE_INT || type_ptr_depth(ftype) != 0)
                     error_here("bitfield type must be int or unsigned int");
-                field_defs[nfield_defs].type = (ftype & TYPE_UNSIGNED) ?
+                field_defs[nfield_defs].type = ((ftype & TYPE_UNSIGNED) || g_parse_type_was_enum) ?
                     (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
                 field_defs[nfield_defs].parent_struct_id = struct_id;
                 field_defs[nfield_defs].offset = bit_unit_offset;
@@ -426,6 +432,14 @@ void parse_struct_definition(int struct_id)
 
             field_defs[nfield_defs].elem_type = ftype;
             field_defs[nfield_defs].elem_size = bytes;
+
+            if (is_funcptr_field && g_funcptr_decl_array_len > 0) {
+                field_defs[nfield_defs].is_array = 1;
+                field_defs[nfield_defs].array_len = g_funcptr_decl_array_len;
+                field_defs[nfield_defs].dims[0] = g_funcptr_decl_array_len;
+                field_defs[nfield_defs].dim_count = 1;
+                bytes *= g_funcptr_decl_array_len;
+            }
 
             while (accept('[')) {
                 int flen;
@@ -516,6 +530,7 @@ int parse_base_type(void)
     g_typedef_is_func = 0;
     decl_is_register = 0;
     decl_is_const = 0;
+    g_parse_type_was_enum = 0;
 
     /* C89 declaration specifiers are order-independent. */
     for (;;) {
@@ -605,6 +620,7 @@ int parse_base_type(void)
                 expect('}');
             }
             t = TYPE_INT;
+            g_parse_type_was_enum = 1;
             saw_any = 1;
             break;
         }

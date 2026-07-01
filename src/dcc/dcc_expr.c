@@ -474,6 +474,8 @@ void parse_array_declarator_dims(int base_type,
     int inner;
 
     ndims = 0;
+    g_last_array_had_vla = 0;
+    g_last_array_vla_bound_name[0] = 0;
     g_last_array_dim_count = 0;
     memset(g_last_array_dims, 0, sizeof(g_last_array_dims));
 
@@ -484,8 +486,16 @@ void parse_array_declarator_dims(int base_type,
                     ? char_array_string_initializer_size(base_type)
                     : 0;
         } else {
-            n = parse_const_int_expr();
-            expect(']');
+            if (ndims == 0 && tok.kind == TOK_ID && find_enum_const(tok.text) < 0) {
+                g_last_array_had_vla = 1;
+                dcc_copy_str(g_last_array_vla_bound_name, sizeof(g_last_array_vla_bound_name), tok.text);
+                next_token();
+                expect(']');
+                n = 0;
+            } else {
+                n = parse_const_int_expr();
+                expect(']');
+            }
         }
 
         if (n < 0)

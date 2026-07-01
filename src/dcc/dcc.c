@@ -768,10 +768,18 @@ char *filter_active_preprocessor_source(long *lenp)
             continue;
         }
 
+        if (!strcmp(word, "pragma")) {
+            if (active)
+                append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
+            else
+                append_mem(&out, &out_len, &out_cap, "\n", 1);
+            continue;
+        }
+
         /* Unknown directives in inactive code are silently dropped.
-         * In active code, #pragma and the null directive are silently ignored;
-         * anything else is a hard error. */
-        if (active && word[0] != 0 && strcmp(word, "pragma") != 0) {
+         * In active code, the null directive is silently ignored; anything
+         * else is a hard error. */
+        if (active && word[0] != 0) {
             char filebuf[256];
             int lno;
             source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
@@ -1032,8 +1040,8 @@ int main(int argc, char **argv)
         add_define("EOF", "-1");
 
     parse_translation_unit();
-    emit_deferred_extrns();
     emit_data();
+    emit_deferred_extrns();
     emit("\n\tend\n");
 
     if (outf != stdout)

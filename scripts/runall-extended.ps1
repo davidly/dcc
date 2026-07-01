@@ -123,6 +123,7 @@ $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
 
 $ignoredTests = @{}
+$expectedExitCodes = @{}
 $resolvedSkipFile = $null
 foreach ($candidate in @($SkipFile, (Join-Path $repoRoot $SkipFile), (Join-Path $repoRoot $defaultSkipFile))) {
     if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
@@ -136,6 +137,9 @@ if ($resolvedSkipFile) {
         $skipName = if ($skipEntry.name) { $skipEntry.name.ToString() } else { "" }
         if ($skipName -and $skipEntry.ignore) {
             $ignoredTests[$skipName.ToLowerInvariant()] = if ($skipEntry.reason) { $skipEntry.reason.ToString() } else { "ignored" }
+        }
+        if ($skipName -and $null -ne $skipEntry.expected_exit_code) {
+            $expectedExitCodes[$skipName.ToLowerInvariant()] = [int]$skipEntry.expected_exit_code
         }
     }
 }
@@ -321,7 +325,7 @@ function Invoke-ExtendedTest {
             continue
         }
 
-        if ($runExitCode -ne 0) {
+        if ($runExitCode -ne $Case.ExpectedExitCode) {
             $lines.Add("    ERROR: emulator exited with code $runExitCode")
             $casePassed = $false
         }
@@ -397,6 +401,7 @@ foreach ($source in @(Get-ChildItem -LiteralPath $SuiteDir -Filter "*.c" -File |
         SourcePath   = $source.FullName
         ExpectedPath = (Join-Path $SuiteDir "$name.c.expected")
         Tags         = ($tags -join ",")
+        ExpectedExitCode = if ($expectedExitCodes.ContainsKey($ignoreKey)) { $expectedExitCodes[$ignoreKey] } else { 0 }
     })
 }
 

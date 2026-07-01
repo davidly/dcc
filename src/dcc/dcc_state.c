@@ -149,6 +149,7 @@ int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int lit
 int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
 int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
 int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
+int g_parse_type_was_enum;
 
 /* Pending #asm block output: buffered until a safe flush point (function
  * epilogue or end of translation unit) to avoid duplication from the
@@ -186,5 +187,7 @@ int g_funcptr_is_funcret_decl;
 int g_ptr_array_dim_count;
 int g_ptr_array_dims[8];
 int g_ptr_array_elem_size;
+int g_last_array_had_vla;
+char g_last_array_vla_bound_name[64];
 int g_last_array_dim_count;
 int g_last_array_dims[8];
