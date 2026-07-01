@@ -1146,11 +1146,15 @@ void emit_pre_incdec_lvalue(int type, int op)
 {
     if (type_is_long(type)) {
         /* Address is in HL.  Save it, load DE:HL, update full 32-bit value,
-         * then store DE:HL back through saved address. */
+         * store through the saved address, and leave the new value in DE:HL. */
         emit("\tpush hl\n");
         emit_load_from_hl(type);
         emit_incdec_value_in_dehl(type, op);
-        emit_store_de_to_addr_hl(type);
+        emit("\tpop bc\n");
+        emit("\tld a,l\n\tld (bc),a\n\tinc bc\n");
+        emit("\tld a,h\n\tld (bc),a\n\tinc bc\n");
+        emit("\tld a,e\n\tld (bc),a\n\tinc bc\n");
+        emit("\tld a,d\n\tld (bc),a\n");
     } else {
         emit("\tpush hl\n");
         emit_load_from_hl(type);

@@ -1802,6 +1802,8 @@ int ast_preincdec_plain_int(const struct AstNode *n)
     if (n->a->kind == AST_INDEX) {
         if (!ast_index_lvalue_elem_type(n->a, &val_type))
             return 0;
+        if (type_is_long(val_type))
+            return 1;
         if (!ast_is_plain_int_type(val_type))
             return 0;
         sz = type_size(val_type);
@@ -1810,13 +1812,19 @@ int ast_preincdec_plain_int(const struct AstNode *n)
     if (n->a->kind == AST_MEMBER) {
         if (!ast_member_lvalue_type(n->a, &val_type))
             return 0;
+        if (type_is_long(val_type))
+            return 1;
         if (!ast_is_plain_int_type(val_type))
             return 0;
         sz = type_size(val_type);
         return sz == 1 || sz == 2;
     }
     if (n->a->kind == AST_UNARY && n->a->op == '*') {
-        if (!ast_deref_lvalue_plain_int_type(n->a, &val_type))
+        if (!ast_deref_lvalue_type(n->a, &val_type))
+            return 0;
+        if (type_is_long(val_type))
+            return 1;
+        if (!ast_is_plain_int_type(val_type))
             return 0;
         sz = type_size(val_type);
         return sz == 1 || sz == 2;
@@ -1826,6 +1834,8 @@ int ast_preincdec_plain_int(const struct AstNode *n)
     s = find_sym(n->a->sval);
     if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
         return 0;
+    if (type_is_long(s->type))
+        return 1;
     if (!ast_is_plain_int_type(s->type))
         return 0;
     sz = type_size(s->type);

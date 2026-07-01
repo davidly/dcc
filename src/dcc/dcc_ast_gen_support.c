@@ -921,6 +921,45 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
     g_long_from16 = 0;
 }
 
+static int ast_update_lvalue_long_type(const struct AstNode *n, int *out_type)
+{
+    struct Sym *s;
+    int val_type;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_INDEX) {
+        if (!ast_index_lvalue_elem_type(n, &val_type) || !type_is_long(val_type))
+            return 0;
+        if (out_type)
+            *out_type = val_type;
+        return 1;
+    }
+    if (n->kind == AST_MEMBER) {
+        if (!ast_member_lvalue_type(n, &val_type) || !type_is_long(val_type))
+            return 0;
+        if (out_type)
+            *out_type = val_type;
+        return 1;
+    }
+    if (n->kind == AST_UNARY && n->op == '*') {
+        if (!ast_deref_lvalue_type(n, &val_type) || !type_is_long(val_type))
+            return 0;
+        if (out_type)
+            *out_type = val_type;
+        return 1;
+    }
+    if (n->kind != AST_IDENT)
+        return 0;
+    s = find_sym(n->sval);
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC ||
+        s->is_array || !type_is_long(s->type))
+        return 0;
+    if (out_type)
+        *out_type = s->type;
+    return 1;
+}
+
 int ast_value_is_long_word(const struct AstNode *arg)
 {
     struct Sym *s;
@@ -935,6 +974,8 @@ int ast_value_is_long_word(const struct AstNode *arg)
             return 1;
         if (arg->op == '*')
             return ast_deref_long_read(arg);
+        if ((arg->op == TOK_INC || arg->op == TOK_DEC) && arg->a != NULL)
+            return ast_update_lvalue_long_type(arg->a, NULL);
         if ((arg->op == '-' || arg->op == '~' || arg->op == '+') &&
             arg->a != NULL && ast_value_is_long_word(arg->a))
             return 1;
@@ -945,17 +986,7 @@ int ast_value_is_long_word(const struct AstNode *arg)
         /* `ul++` / `ul--` as a long-word value (e.g. `old = ul++`).  The
          * postfix emitter now updates the full 32-bit word with carry and
          * returns the old value in DE:HL. */
-        if (arg->a->kind == AST_MEMBER) {
-            int member_type;
-            return ast_member_lvalue_type(arg->a, &member_type) &&
-                   type_is_long(member_type);
-        }
-        if (arg->a->kind != AST_IDENT)
-            return 0;
-        s = find_sym(arg->a->sval);
-        if (s != NULL && !s->is_const_value && s->storage != SC_FUNC &&
-            !s->is_array && type_is_long(s->type))
-            return 1;
+        return ast_update_lvalue_long_type(arg->a, NULL);
     }
     if (!ast_gen_supported(arg))
         return 0;
@@ -1030,27 +1061,12 @@ int ast_long_word_type(const struct AstNode *arg, int *out_type)
         if (out_type)
             *out_type = rhs_sym->type;
         return 1;
+    case AST_UNARY:
+        if (arg->op != TOK_INC && arg->op != TOK_DEC)
+            return 0;
+        return ast_update_lvalue_long_type(arg->a, out_type);
     case AST_POSTFIX:
-        if (arg->a == NULL)
-            return 0;
-        if (arg->a->kind == AST_MEMBER) {
-            int member_type;
-            if (!ast_member_lvalue_type(arg->a, &member_type) ||
-                !type_is_long(member_type))
-                return 0;
-            if (out_type)
-                *out_type = member_type;
-            return 1;
-        }
-        if (arg->a->kind != AST_IDENT)
-            return 0;
-        rhs_sym = find_sym(arg->a->sval);
-        if (rhs_sym == NULL || rhs_sym->is_const_value || rhs_sym->storage == SC_FUNC ||
-            rhs_sym->is_array || !type_is_long(rhs_sym->type))
-            return 0;
-        if (out_type)
-            *out_type = rhs_sym->type;
-        return 1;
+        return ast_update_lvalue_long_type(arg->a, out_type);
     case AST_CALL:
         if (arg->a == NULL || arg->a->kind != AST_IDENT)
             return 0;
