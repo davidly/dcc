@@ -769,6 +769,7 @@ function Invoke-ExtendedSuite {
         "-Emulator", $Emulator,
         "-RunTimeout", $RunTimeout,
         "-BuildDir", $extendedBuildDir,
+        "-All",
         "-ThrottleLimit", $ThrottleLimit
     )
     if (-not $StackCheck) { $extendedArgs += "-NoStackCheck" }
