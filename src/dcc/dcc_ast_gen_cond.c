@@ -1097,7 +1097,7 @@ int ast_stmt_supported(const struct AstNode *n)
              * record its own fresh count from the just-reset slot rather
              * than validate against a stale/zero one. */
             if (sink == NULL)
-                sink = fopen("/dev/null", "w");
+                sink = fopen(DCC_NULL_DEVICE, "w");
             if (sink != NULL)
                 outf = sink;
             scan_mode = 1;
@@ -1209,7 +1209,7 @@ int ast_stmt_supported(const struct AstNode *n)
             static FILE *sink = NULL;
 
             if (sink == NULL)
-                sink = fopen("/dev/null", "w");
+                sink = fopen(DCC_NULL_DEVICE, "w");
             if (sink != NULL)
                 outf = sink;
             scan_mode = 1;

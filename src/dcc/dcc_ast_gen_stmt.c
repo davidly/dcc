@@ -442,7 +442,7 @@ int ast_scan_for_stmt(void)
     s_outf = outf;
     s_scan_mode = scan_mode;
     if (sink == NULL)
-        sink = fopen("/dev/null", "w");
+        sink = fopen(DCC_NULL_DEVICE, "w");
     if (sink != NULL)
         outf = sink;
     scan_mode = 1;

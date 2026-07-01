@@ -53,6 +53,22 @@
 #include <ctype.h>
 #include <time.h>
 
+/*
+ * Portable null-device path for throwaway fopen() sinks (used to suppress
+ * output during speculative/frame-sizing AST replay passes - see
+ * ast_scan_for_stmt and the AST_FOR/AST_COMPOUND probes in
+ * dcc_ast_gen_cond.c).  "/dev/null" does not exist on native Windows: MSVC's
+ * fopen() there fails on it (it looks for a "dev" subdirectory), silently
+ * leaving the caller's `outf` pointed at the real output file instead of a
+ * sink - so the replay's speculative emission leaks into real output.  The
+ * Windows null device is "NUL".
+ */
+#ifdef _WIN32
+#define DCC_NULL_DEVICE "NUL"
+#else
+#define DCC_NULL_DEVICE "/dev/null"
+#endif
+
 /* ------------------------------------------------------------------------- *
  * Capacity / translation-limit macros.
  * ------------------------------------------------------------------------- */
