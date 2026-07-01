@@ -1,2 +1,2 @@
-<source>:1: error: bad include syntax
+<source>:1: error: expected "FILENAME" or <FILENAME>
 dcc: 1 error(s)

@@ -1,2 +1,2 @@
-<source>:3: error: wrong number of macro arguments near 'F'
+<source>:3: error: too few arguments provided to function-like macro invocation near 'F'
 dcc: 1 error(s)

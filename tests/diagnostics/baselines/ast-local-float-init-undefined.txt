@@ -1,2 +1,2 @@
-<source>:3: error: undefined symbol 'missing_symbol'
+<source>:3: error: use of undeclared identifier 'missing_symbol'
 dcc: 1 error(s)

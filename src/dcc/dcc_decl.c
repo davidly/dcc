@@ -591,7 +591,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
         if (tok.kind == '.') {
             next_token();
             if (tok.kind != TOK_ID) {
-                error_here("field name expected in initializer designator");
+                error_here("expected a field designator, such as '.field = value'");
                 skip_initializer_or_decl_tail();
                 break;
             }

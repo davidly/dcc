@@ -282,7 +282,7 @@ int try_parse_include(const char *line, long n, const char *file, int src_line,
         i++;
 
     if (i >= n || (line[i] != '"' && line[i] != '<'))
-        return report_include_error(file, src_line, "bad include syntax");
+        return report_include_error(file, src_line, "expected \"FILENAME\" or <FILENAME>");
 
     if (line[i] == '<') {
         endch = '>';

@@ -1002,7 +1002,11 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
                 return 1;
             }
         }
-        error_here("undefined symbol");
+        {
+            char msg[96];
+            sprintf(msg, "use of undeclared identifier '%s'", tok.text);
+            error_here(msg);
+        }
         next_token();
         *typep = TYPE_INT;
         *sizep = 2;

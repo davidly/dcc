@@ -50,7 +50,16 @@ long parse_const_long_primary(void)
             }
             expect(')');
         } else {
-            error_here("'(' expected after sizeof in constant expression");
+            if (starts_type()) {
+                int t;
+                int sz;
+                error_here("expected an expression");
+                parse_type_name_decl(&t, &sz);
+                (void)t;
+                (void)sz;
+            } else {
+                error_here("'(' expected after sizeof in constant expression");
+            }
             v = 2;
         }
         return sign * v;

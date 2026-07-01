@@ -2362,8 +2362,9 @@ void next_token(void)
                 save_pos = posi;
                 if (read_macro_call_args(args, &nargs)) {
                     if (nargs != defs[di].nargs) {
-                        error_here(macro_call_args_too_many ? "too many macro arguments" :
-                                   "wrong number of macro arguments");
+                        error_here(macro_call_args_too_many ?
+                                   "too many arguments provided to function-like macro invocation" :
+                                   "too few arguments provided to function-like macro invocation");
                         replace_source_range(tok_start_pos, posi, "0");
                         next_token();
                         return;
