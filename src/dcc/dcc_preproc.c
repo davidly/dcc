@@ -55,6 +55,9 @@ void add_define_ex(const char *name, const char *value, int is_func, int nargs, 
         strncpy(defs[i].params[j], params[j], sizeof(defs[i].params[j]) - 1);
         defs[i].params[j][sizeof(defs[i].params[j]) - 1] = 0;
     }
+    /* C99 variadic macro: the parameter-list parser appends "__VA_ARGS__" as
+     * the last param when it sees `...`, so that marks the macro variadic. */
+    defs[i].is_variadic = nargs > 0 && !strcmp(defs[i].params[nargs - 1], "__VA_ARGS__");
 
     strncpy(defs[i].value, value, sizeof(defs[i].value) - 1);
     defs[i].value[sizeof(defs[i].value) - 1] = 0;
@@ -866,6 +869,28 @@ void parse_preprocessor_line(void)
                     if (peekc() == ')')
                         break;
 
+                    /* C99 variadic marker `...`: none of the identifier,
+                     * whitespace, comma, or ')' cases above consume a '.',
+                     * so without this the loop would spin on it forever.
+                     * Bind the trailing arguments to the implicit name
+                     * __VA_ARGS__, which the rest of the macro engine then
+                     * treats as an ordinary parameter. */
+                    if (peekc() == '.' && posi + 2 < src_len &&
+                        src[posi + 1] == '.' && src[posi + 2] == '.') {
+                        getc_src();
+                        getc_src();
+                        getc_src();
+                        if (nargs < 7) {
+                            strcpy(params[nargs], "__VA_ARGS__");
+                            nargs++;
+                        }
+                        while (isspace((unsigned char)peekc()) && peekc() != '\n')
+                            getc_src();
+                        if (peekc() == ',')
+                            getc_src();
+                        continue;
+                    }
+
                     pp = 0;
                     while (is_ident_char(peekc()) && pp < 31)
                         params[nargs][pp++] = (char)getc_src();
@@ -1458,7 +1483,7 @@ void strip_macro_replacement_comments(char *s)
 
 static int macro_call_args_too_many;
 
-int read_macro_call_args(char args[8][128], int *nargs)
+int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count)
 {
     int c;
     int depth;
@@ -1533,6 +1558,12 @@ int read_macro_call_args(char args[8][128], int *nargs)
         }
 
         if (c == ',' && depth == 0) {
+            if (variadic_named_count >= 0 && ai >= variadic_named_count) {
+                /* Inside the variadic tail: this comma belongs to the
+                 * __VA_ARGS__ text itself, not an argument separator. */
+                if (ap < 127) args[ai][ap++] = (char)c;
+                continue;
+            }
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
@@ -1557,8 +1588,15 @@ int read_macro_call_args(char args[8][128], int *nargs)
             args[ai][ap++] = (char)c;
     }
 
-    if (ai == 1 && args[0][0] == 0)
+    if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
         ai = 0;
+
+    /* A variadic macro always has an argument slot for __VA_ARGS__, even
+     * when the call supplies none beyond the named parameters. See the
+     * matching comment in read_macro_call_args_text. */
+    if (variadic_named_count >= 0 && ai == variadic_named_count)
+        ai++;
+
     *nargs = ai;
     return 1;
 }
@@ -1627,7 +1665,16 @@ int macro_param_index(int di, const char *ident)
 
 void expand_function_macro(int di, char args[8][128], char *out, int outsz);
 
-int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs)
+/* variadic_named_count: -1 for an ordinary macro (every top-level comma
+ * starts a new argument, as before); for a variadic macro, the count of
+ * named (non "...") parameters. Once that many arguments have been
+ * collected, further top-level commas stop splitting and are kept as
+ * literal text in the final slot instead, so `FOO(a, b, c)` bound to
+ * `#define FOO(x, ...)` yields args = { "a", "b, c" } - the source's own
+ * comma/space formatting flows through unchanged since nothing is
+ * synthesized here, matching how the C99 __VA_ARGS__ argument reads. */
+int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
+                                     int variadic_named_count)
 {
     const char *p;
     int c;
@@ -1703,6 +1750,12 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs)
         }
 
         if (c == ',' && depth == 0) {
+            if (variadic_named_count >= 0 && ai >= variadic_named_count) {
+                /* Inside the variadic tail: this comma belongs to the
+                 * __VA_ARGS__ text itself, not an argument separator. */
+                if (ap < 127) args[ai][ap++] = (char)c;
+                continue;
+            }
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
@@ -1716,8 +1769,17 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs)
             args[ai][ap++] = (char)c;
     }
 
-    if (ai == 1 && args[0][0] == 0)
+    if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
         ai = 0;
+
+    /* A variadic macro always has an argument slot for __VA_ARGS__, even
+     * when the call supplies none beyond the named parameters (e.g.
+     * `ZERO_1_VAR(1)` against `#define ZERO_1_VAR(A, ...)`). In that case
+     * the loop above only ever finalised the named slots, so args[ai] is
+     * still exactly as the memset at the top of this function left it -
+     * "" - and just needs to be counted in. */
+    if (variadic_named_count >= 0 && ai == variadic_named_count)
+        ai++;
 
     *nargs = ai;
     *pp = p;
@@ -1814,7 +1876,8 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
                     int nargs;
 
                     after_ident = p;
-                    if (read_macro_call_args_text(&after_ident, args, &nargs)) {
+                    if (read_macro_call_args_text(&after_ident, args, &nargs,
+                            defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                         char tmp[MAX_MACRO_TEXT];
                         char tmp2[MAX_MACRO_TEXT];
                         if (nargs != defs[di].nargs)
@@ -2349,7 +2412,8 @@ void next_token(void)
                 char expbuf[512];
 
                 save_pos = posi;
-                if (read_macro_call_args(args, &nargs)) {
+                if (read_macro_call_args(args, &nargs,
+                        defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                     if (nargs != defs[di].nargs) {
                         error_here(macro_call_args_too_many ?
                                    "too many arguments provided to function-like macro invocation" :

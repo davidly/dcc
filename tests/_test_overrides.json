@@ -43,7 +43,6 @@
     { "name": "toffset", "host": true },
     { "name": "too", "host": true },
     { "name": "tcnstfld", "host": true },
-    { "name": "tc99varm", "ignore": true },
     { "name": "tgnuexpr", "ignore": true },
     { "name": "tcmp", "host": true },
     { "name": "tpromo", "host": true },

@@ -811,6 +811,23 @@ char *filter_active_preprocessor_source(long *lenp)
                 while (s < e && *s != ')') {
                     while (s < e && (*s == ' ' || *s == '\t')) s++;
                     if (s >= e || *s == ')') break;
+
+                    /* C99 variadic marker `...`: nothing else in this loop
+                     * consumes a '.', so without this it would spin on it
+                     * forever (see the matching fix and comment in
+                     * dcc_preproc.c's #define parameter-list parser, which
+                     * this one duplicates for the #if/#ifdef pre-scan). */
+                    if (s + 2 < e && s[0] == '.' && s[1] == '.' && s[2] == '.') {
+                        s += 3;
+                        if (nargs < 7) {
+                            strcpy(params[nargs], "__VA_ARGS__");
+                            nargs++;
+                        }
+                        while (s < e && (*s == ' ' || *s == '\t')) s++;
+                        if (s < e && *s == ',') s++;
+                        continue;
+                    }
+
                     pi = 0;
                     while (s < e && is_ident_char((unsigned char)*s) && pi < 31)
                         params[nargs][pi++] = *s++;
