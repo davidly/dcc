@@ -508,7 +508,7 @@ int ast_try_emit_statement(void)
     struct AstNode *n;
     int report;
 
-    if (!g_ast_gen_enabled || scan_mode)
+    if (scan_mode)
         return 0;
 
     report = getenv("DCC_AST_REPORT") != NULL;
@@ -527,8 +527,6 @@ int ast_try_emit_statement(void)
         if (g_ast_build_enabled == 2)
             ast_dump(n, 0);
         ast_gen_stmt(n);
-        if (g_ast_gen_enabled == 2)
-            fprintf(stderr, "; AST-emit %s\n", ast_kind_name(n->kind));
         ast_arena_reset(&g_ast_arena);
         return 1;
     }

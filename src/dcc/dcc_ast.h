@@ -176,10 +176,9 @@ void ast_dump(const struct AstNode *n, int depth);
 /* ------------------------------------------------------------------------- *
  * AST-driven code generation.
  *
- * AST codegen is enabled by default.  DCC_AST_GEN=2 keeps verbose emit reports.
+ * AST codegen is the compiler's only codegen path.  Set DCC_AST_REPORT to log
+ * per-statement emit/unsupported diagnostics to stderr.
  * ------------------------------------------------------------------------- */
-extern int g_ast_gen_enabled;       /* 0 internal suppress, 1 emit, 2 report */
-
 int ast_gen_supported(const struct AstNode *n);
 void ast_gen_expr(const struct AstNode *n);   /* emit; sets g_expr_type        */
 

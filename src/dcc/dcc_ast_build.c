@@ -1094,13 +1094,8 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
  * ------------------------------------------------------------------------- */
 void ast_build_init(void)
 {
-    const char *g = getenv("DCC_AST_GEN");
     const char *e = getenv("DCC_AST_BUILD");
     g_ast_build_enabled = (e != NULL && e[0] == '2') ? 2 : 1;
-
-    /* AST-driven codegen is the compiler's normal codegen path.  The env var
-     * is retained only for verbose reporting (`DCC_AST_GEN=2`). */
-    g_ast_gen_enabled = (g != NULL && g[0] == '2') ? 2 : 1;
 
     ast_arena_init(&g_ast_arena);
     ast_arena_init(&g_ast_init_arena);

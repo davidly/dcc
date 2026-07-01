@@ -80,6 +80,11 @@ are compiler errors. Expression nodes carry the result type that codegen needs,
 so mixed-width decisions such as `float`, `long`, pointer arithmetic, casts,
 array decay, and `?:` lowering come directly from the AST.
 
+Two stderr-only debugging knobs are available: `DCC_AST_REPORT=1` logs the
+`; AST-unsupported ...` statement/initializer that a support gate declined (it
+prints just before the `unsupported AST statement` fatal), and `DCC_AST_BUILD=2`
+dumps each built AST tree before it is emitted. Neither affects codegen.
+
 The AST walker uses the low-level emit helpers in modules such
 as [`dcc_expr.c`](dcc_expr.c), [`dcc_ops.c`](dcc_ops.c),
 [`dcc_cmp.c`](dcc_cmp.c), [`dcc_symbols.c`](dcc_symbols.c), and

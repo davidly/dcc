@@ -22,8 +22,6 @@
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
 
-int g_ast_gen_enabled = 1;
-
 int ident_supported(const char *name)
 {
     int ei;

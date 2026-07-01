@@ -110,7 +110,10 @@ pwsh ./scripts/ma.ps1 <name> nopeep     # unoptimized CP/M Z80 binary
 compare a suspected optimizer bug, build both ways and diff the run output or
 the generated `BUILD/<NAME>.MAC`. Useful env vars: `DCC_STACK_SIZE` (stack
 reserve), `DCC_FORCE_STACK_CHECK=1`, and `DCC`/`DCCPEEP`/`DCCRTLSTRIP`/`NTVCM`/
-`M80`/`L80` to pin tool paths.
+`M80`/`L80` to pin tool paths. For AST codegen debugging: `DCC_AST_REPORT=1`
+logs `; AST-unsupported ...` for the statement/initializer a support gate
+declined (this immediately precedes the `unsupported AST statement` fatal), and
+`DCC_AST_BUILD=2` dumps each built AST tree to stderr before it is emitted.
 
 ## Rebuild the host tools after a source change
 
