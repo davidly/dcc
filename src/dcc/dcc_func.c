@@ -54,6 +54,8 @@ static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
     case AST_LOGOR:
     case AST_INDEX:
         return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
+    case AST_ASSIGN:
+        return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
     case AST_MEMBER:
         return inline_expr_is_simple(fn, n->a);
     case AST_COND:
@@ -146,8 +148,9 @@ static void record_inline_function_if_simple(struct Sym *s)
 
     if (s == NULL || !s->is_static || !s->is_inline || tok.kind != '{')
         return;
-    if (!(type_size(s->type) == 2 || type_size(s->type) == 4) ||
-        type_is_bool(s->type) || type_is_struct_object(s->type))
+    if ((s->type & 15) != TYPE_VOID &&
+        (!(type_size(s->type) == 2 || type_size(s->type) == 4) ||
+         type_is_bool(s->type) || type_is_struct_object(s->type)))
         return;
 
     nparams = 0;
@@ -181,12 +184,21 @@ static void record_inline_function_if_simple(struct Sym *s)
     tok_line = sv_tok_line;
     tok = sv_tok;
 
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+        s->inline_param_use_count[i] = 0;
+
+    if ((s->type & 15) == TYPE_VOID && body != NULL && body->kind == AST_COMPOUND &&
+        body->list_len == 1 && body->list[0] != NULL &&
+        body->list[0]->kind == AST_EXPR_STMT && body->list[0]->a != NULL) {
+        if (!inline_expr_is_simple(s, body->list[0]->a))
+            return;
+        s->inline_stmt_expr = body->list[0]->a;
+        return;
+    }
+
     ret_expr = inline_return_expr_from_seq(body, 0);
     if (ret_expr == NULL)
         return;
-
-    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
-        s->inline_param_use_count[i] = 0;
     if (!inline_expr_is_simple(s, ret_expr))
         return;
 
@@ -195,7 +207,8 @@ static void record_inline_function_if_simple(struct Sym *s)
 
 static int static_inline_body_can_be_buffered(struct Sym *s)
 {
-    return s != NULL && s->is_static && s->is_inline && s->inline_return_expr != NULL;
+    return s != NULL && s->is_static && s->is_inline &&
+           (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL);
 }
 
 static void inline_temp_name(char *dst, int dstsz, int index)
@@ -208,7 +221,8 @@ static int inline_function_has_multiuse_param(struct Sym *s)
 {
     int i;
 
-    if (s == NULL || !s->is_static || !s->is_inline || s->inline_return_expr == NULL)
+    if (s == NULL || !s->is_static || !s->is_inline ||
+        (s->inline_return_expr == NULL && s->inline_stmt_expr == NULL))
         return 0;
     for (i = 0; i < s->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
         if (s->inline_param_use_count[i] > 1)

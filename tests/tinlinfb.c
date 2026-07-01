@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 int counter = 0;
+int slots[5];
 
 struct Pair {
     int left;
@@ -47,6 +48,11 @@ static inline float half_plus_one(float x)
     return x * 0.5 + 1.0;
 }
 
+static inline void store_add(int *dst, int v)
+{
+    *dst = *dst + v;
+}
+
 int main(void)
 {
     struct Pair pair;
@@ -59,6 +65,7 @@ int main(void)
     int wide_ok;
     float fwide;
     int float_ok;
+    int stored;
 
     pair.left = 44;
     pair.right = 77;
@@ -72,6 +79,9 @@ int main(void)
     wide_ok = (wide == 142000L);
     fwide = half_plus_one(13.0);
     float_ok = (fwide > 7.4 && fwide < 7.6);
-    printf("inline temps: %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, counter);
+    slots[4] = 30;
+    store_add(&slots[bump()], 12);
+    stored = slots[4];
+    printf("inline temps: %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, counter);
     return 0;
 }
