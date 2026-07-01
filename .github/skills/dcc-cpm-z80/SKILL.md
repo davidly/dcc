@@ -92,10 +92,22 @@ you see that error.
 ## C99/C11 front-end compatibility dcc accepts (beyond C89)
 
 These behave as standard C99: `for`-init declarations with loop scope, `//` line
-comments, block-scoped declarations (inner blocks shadow outer names), and
-`inline` (parsed, ignored). `const`/`volatile`/`register`/`auto` are accepted
-but inert (`const` constant-folds initializers only — not read-only memory).
+comments, and block-scoped declarations (inner blocks shadow outer names).
+`const`/`volatile`/`register`/`auto` are accepted but mostly inert (`const`
+constant-folds initializers only — not read-only memory).
 K&R function definitions are still accepted; prefer prototypes for new code.
+
+`static inline` is the supported inline form for small helper functions. dcc can
+inline simple return-expression helpers, early-return `if` chains lowered to
+conditional expressions, simple struct/pointer member accessors, and scalar
+`int`/pointer/`long`/`float` expression helpers. When every call site inlines,
+the private out-of-line static helper body is removed; if a call cannot be
+inlined safely, dcc keeps and calls that private fallback body. Hidden
+caller-frame temporaries preserve single evaluation for multi-use 16-bit
+parameters such as `max(i++, j++)`; multi-use `long`/`float` parameters with
+side-effecting arguments fall back. Plain externally linked `inline` is parsed
+for source compatibility but does not yet have C99 external-inline linkage
+semantics or call-site inlining.
 
 dcc has a first-class C99-style `_Bool` scalar type: it is 1 byte wide, and
 nonzero values normalize to `1` on `_Bool` stores, casts, initializers,

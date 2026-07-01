@@ -413,6 +413,11 @@ void emit_runtime_extrn_if_needed(const char *name)
     if (scan_mode)
         return;
 
+    if (g_inline_body_buffering) {
+        fprintf(outf, "\textrn %s\n", name);
+        return;
+    }
+
     for (i = 0; i < nemitted; ++i) {
         if (!strcmp(emitted[i], name))
             return;

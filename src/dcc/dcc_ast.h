@@ -174,6 +174,7 @@ char *ast_arena_strdup(struct AstArena *ar, const char *s);
 extern int g_ast_build_enabled;     /* 0 internal suppress, 1 build, 2 dump  */
 extern struct AstArena g_ast_arena; /* shared function-local build arena      */
 extern struct AstArena g_ast_init_arena; /* isolated decl-initializer arena   */
+extern struct AstArena g_ast_inline_arena; /* persistent inline function arena */
 
 void ast_build_init(void);
 struct AstNode *ast_build_expr(struct AstArena *ar);  /* full expression       */

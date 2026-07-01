@@ -11,6 +11,293 @@
  */
 
 #include "dcc.h"
+#include "dcc_ast.h"
+
+static int inline_param_index(struct Sym *s, const char *name)
+{
+    int i;
+    if (s == NULL || name == NULL)
+        return -1;
+    for (i = 0; i < s->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
+        if (!strcmp(s->inline_param_names[i], name))
+            return i;
+    return -1;
+}
+
+static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_INT_LIT:
+    case AST_FLOAT_LIT:
+    case AST_STR_LIT:
+    case AST_SIZEOF_EXPR:
+    case AST_SIZEOF_TYPE:
+        return 1;
+    case AST_IDENT:
+        i = inline_param_index(fn, n->sval);
+        if (i >= 0) {
+            if (i < MAX_PROTO_PARAMS)
+                fn->inline_param_use_count[i]++;
+            return 1;
+        }
+        return find_global(n->sval) != NULL;
+    case AST_UNARY:
+        if (n->op == TOK_INC || n->op == TOK_DEC)
+            return 0;
+        return inline_expr_is_simple(fn, n->a);
+    case AST_BINARY:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_INDEX:
+        return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
+    case AST_MEMBER:
+        return inline_expr_is_simple(fn, n->a);
+    case AST_COND:
+        return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b) &&
+               inline_expr_is_simple(fn, n->c);
+    case AST_CAST:
+        return inline_expr_is_simple(fn, n->a);
+    case AST_CALL:
+        if (n->a == NULL || n->a->kind != AST_IDENT)
+            return 0;
+        for (i = 0; i < n->list_len; ++i)
+            if (!inline_expr_is_simple(fn, n->list[i]))
+                return 0;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static struct AstNode *inline_stmt_return_expr(struct AstNode *n)
+{
+    if (n == NULL)
+        return NULL;
+    if (n->kind == AST_RETURN)
+        return n->a;
+    if (n->kind == AST_COMPOUND && n->list_len == 1 && n->list[0] != NULL &&
+        n->list[0]->kind == AST_RETURN)
+        return n->list[0]->a;
+    return NULL;
+}
+
+static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int index)
+{
+    struct AstNode *stmt;
+    struct AstNode *then_expr;
+    struct AstNode *else_expr;
+    struct AstNode *rest_expr;
+    struct AstNode *cond;
+
+    if (body == NULL || body->kind != AST_COMPOUND || index >= body->list_len)
+        return NULL;
+
+    stmt = body->list[index];
+    if (stmt == NULL)
+        return NULL;
+
+    if (stmt->kind == AST_RETURN)
+        return (index == body->list_len - 1) ? stmt->a : NULL;
+
+    if (stmt->kind != AST_IF)
+        return NULL;
+
+    then_expr = inline_stmt_return_expr(stmt->b);
+    if (then_expr == NULL)
+        return NULL;
+
+    if (stmt->c != NULL) {
+        if (index != body->list_len - 1)
+            return NULL;
+        else_expr = inline_stmt_return_expr(stmt->c);
+        if (else_expr == NULL)
+            return NULL;
+    } else {
+        rest_expr = inline_return_expr_from_seq(body, index + 1);
+        if (rest_expr == NULL)
+            return NULL;
+        else_expr = rest_expr;
+    }
+
+    cond = ast_new(&g_ast_inline_arena, AST_COND);
+    cond->a = stmt->a;
+    cond->b = then_expr;
+    cond->c = else_expr;
+    cond->type = 0;
+    return cond;
+}
+
+static void record_inline_function_if_simple(struct Sym *s)
+{
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    struct AstNode *body;
+    struct AstNode *ret_expr;
+    int i;
+    int nparams;
+
+    if (s == NULL || !s->is_static || !s->is_inline || tok.kind != '{')
+        return;
+    if (!(type_size(s->type) == 2 || type_size(s->type) == 4) ||
+        type_is_bool(s->type) || type_is_struct_object(s->type))
+        return;
+
+    nparams = 0;
+    for (i = 0; i < nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
+        if (locals[i].storage == SC_PARAM) {
+            if (!(type_size(locals[i].type) == 2 || type_size(locals[i].type) == 4) ||
+                type_is_struct_object(locals[i].type))
+                return;
+            strncpy(s->inline_param_names[nparams], locals[i].name,
+                    sizeof(s->inline_param_names[nparams]) - 1);
+            s->inline_param_names[nparams][sizeof(s->inline_param_names[nparams]) - 1] = 0;
+            nparams++;
+        }
+    }
+    if (nparams != s->proto_nargs || s->proto_variadic)
+        return;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    body = ast_build_stmt(&g_ast_inline_arena);
+
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
+
+    ret_expr = inline_return_expr_from_seq(body, 0);
+    if (ret_expr == NULL)
+        return;
+
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+        s->inline_param_use_count[i] = 0;
+    if (!inline_expr_is_simple(s, ret_expr))
+        return;
+
+    s->inline_return_expr = ret_expr;
+}
+
+static int static_inline_body_can_be_buffered(struct Sym *s)
+{
+    return s != NULL && s->is_static && s->is_inline && s->inline_return_expr != NULL;
+}
+
+static void inline_temp_name(char *dst, int dstsz, int index)
+{
+    sprintf(dst, "#itmp%d", index);
+    (void)dstsz;
+}
+
+static int inline_function_has_multiuse_param(struct Sym *s)
+{
+    int i;
+
+    if (s == NULL || !s->is_static || !s->is_inline || s->inline_return_expr == NULL)
+        return 0;
+    for (i = 0; i < s->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
+        if (s->inline_param_use_count[i] > 1)
+            return 1;
+    return 0;
+}
+
+static int function_body_mentions_multiuse_inline_call(void)
+{
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    int depth;
+    int result;
+
+    if (tok.kind != '{')
+        return 0;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    depth = 1;
+    result = 0;
+    next_token();
+    while (tok.kind != TOK_EOF && depth > 0) {
+        if (tok.kind == TOK_ID) {
+            char name[64];
+            struct Sym *s;
+
+            strncpy(name, tok.text, sizeof(name) - 1);
+            name[sizeof(name) - 1] = 0;
+            next_token();
+            if (tok.kind == '(') {
+                s = find_global(name);
+                if (inline_function_has_multiuse_param(s)) {
+                    result = 1;
+                    break;
+                }
+            }
+            continue;
+        }
+        if (tok.kind == '{')
+            depth++;
+        else if (tok.kind == '}')
+            depth--;
+        next_token();
+    }
+
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
+    return result;
+}
+
+static void reserve_inline_temp_locals(void)
+{
+    int i;
+
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i) {
+        char name[64];
+        inline_temp_name(name, sizeof(name), i);
+        add_local_alloc(name, TYPE_INT, 2);
+    }
+}
+
+void emit_needed_inline_bodies(void)
+{
+    int i;
+
+    for (i = 0; i < nglobals; ++i) {
+        struct Sym *s;
+        int c;
+
+        s = &globals[i];
+        if (s->inline_body_file == NULL)
+            continue;
+        if (s->inline_body_needed) {
+            rewind(s->inline_body_file);
+            while ((c = fgetc(s->inline_body_file)) != EOF)
+                fputc(c, outf);
+        }
+        fclose(s->inline_body_file);
+        s->inline_body_file = NULL;
+    }
+}
 
 int current_void_is_empty_param_list(void)
 {
@@ -1021,6 +1308,8 @@ void scan_function_body(void)
                     int old_for_decl_rename_index;
                     int old_for_decl_recording;
                     decl_is_extern = 0;
+                    decl_is_static = 0;
+                    decl_is_inline = 0;
                     decl_is_const = 0;
                     t = parse_base_type();
 
@@ -1085,6 +1374,9 @@ void scan_function_body(void)
             int t;
             int is_static_local;
             decl_is_extern = 0;
+            decl_is_static = 0;
+            decl_is_inline = 0;
+            decl_is_const = 0;
             is_static_local = (tok.kind == TOK_STATIC);
             t = parse_base_type();
             if (tok.kind == ';') {
@@ -2283,6 +2575,7 @@ void parse_function_or_global(int base_type)
          * fn_t *fp have already cleared base_is_func_typedef above. */
         if (base_is_func_typedef && g_funcptr_decl_array_len == 0) {
             s = add_global(name, type, SC_FUNC);
+            s->is_inline |= decl_is_inline;
             parse_function_return_type = type;
             if (decl_is_static) {
                 s->is_static = 1;
@@ -2298,6 +2591,7 @@ void parse_function_or_global(int base_type)
         /* Function declarator or definition. */
         if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
             s = add_global(name, type, SC_FUNC);
+            s->is_inline |= decl_is_inline;
             parse_function_return_type = type;
             if (decl_is_static) {
                 s->is_static = 1;
@@ -2317,6 +2611,10 @@ void parse_function_or_global(int base_type)
                 parse_old_style_param_declarations();
 
             if (tok.kind == '{') {
+                record_inline_function_if_simple(s);
+                if (function_body_mentions_multiuse_inline_call())
+                    reserve_inline_temp_locals();
+
                 saved_pos = posi;
                 saved_tok_start = tok_start_pos;
                 saved_line = line_no;
@@ -2388,12 +2686,29 @@ void parse_function_or_global(int base_type)
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;
                 g_compound_literal_seq = 0;
-                emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
-                gen_compound();
-                check_undefined_user_labels();
-                emit_function_epilogue(strcmp(name, "main") == 0 &&
-                                       (type & 15) == TYPE_INT &&
-                                       type_ptr_depth(type) == 0);
+                if (static_inline_body_can_be_buffered(s)) {
+                    FILE *saved_outf;
+
+                    s->inline_body_file = tmpfile();
+                    if (s->inline_body_file == NULL)
+                        fatal("cannot create inline body temp file");
+                    saved_outf = outf;
+                    outf = s->inline_body_file;
+                    g_inline_body_buffering++;
+                    emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
+                    gen_compound();
+                    check_undefined_user_labels();
+                    emit_function_epilogue(0);
+                    g_inline_body_buffering--;
+                    outf = saved_outf;
+                } else {
+                    emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
+                    gen_compound();
+                    check_undefined_user_labels();
+                    emit_function_epilogue(strcmp(name, "main") == 0 &&
+                                           (type & 15) == TYPE_INT &&
+                                           type_ptr_depth(type) == 0);
+                }
                 nenum_consts = saved_nenum_consts;
 
                 /* Emit the __mrun shim that start: dispatches to.  When main has
@@ -2625,6 +2940,7 @@ void parse_translation_unit(void)
             int t;
             decl_is_extern = 0;
             decl_is_static = 0;
+            decl_is_inline = 0;
             decl_is_const = 0;
             t = parse_type();
             if (tok.kind == ';') {
@@ -2636,6 +2952,7 @@ void parse_translation_unit(void)
             /* C89: implicit int return type for function definition/declaration. */
             decl_is_extern = 0;
             decl_is_static = 0;
+            decl_is_inline = 0;
             decl_is_const = 0;
             parse_function_or_global(TYPE_INT);
         } else {

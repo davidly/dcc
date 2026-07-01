@@ -100,6 +100,7 @@ int current_local_bytes;
 int max_function_local_bytes;
 int current_omit_ix_frame;
 int current_function_has_call;
+int g_inline_body_buffering;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];
@@ -140,6 +141,7 @@ int errors;
 int scan_mode;
 int decl_is_extern;
 int decl_is_static;
+int decl_is_inline;
 int decl_is_const;      /* current declaration used const qualifier */
 int decl_is_register;   /* current decl used 'register' keyword */
 int expr_result_dead;

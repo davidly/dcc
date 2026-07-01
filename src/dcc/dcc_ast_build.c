@@ -25,6 +25,7 @@ struct AstArena g_ast_arena;
  * ast_emit_decl_span (which runs inside the surrounding AST statement walk)
  * never resets the arena still holding that walk's pending nodes. */
 struct AstArena g_ast_init_arena;
+struct AstArena g_ast_inline_arena;
 
 static int ast_num_text_plain_decimal(const char *s)
 {
@@ -1086,6 +1087,7 @@ void ast_build_init(void)
 
     ast_arena_init(&g_ast_arena);
     ast_arena_init(&g_ast_init_arena);
+    ast_arena_init(&g_ast_inline_arena);
 }
 
 const char *ast_kind_name(int kind)

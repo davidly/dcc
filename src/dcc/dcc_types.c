@@ -540,14 +540,16 @@ int parse_base_type(void)
     g_typedef_is_func = 0;
     decl_is_register = 0;
     decl_is_const = 0;
+    decl_is_inline = 0;
     g_parse_type_was_enum = 0;
 
     /* C89 declaration specifiers are order-independent. */
     for (;;) {
         if (tok.kind == TOK_REGISTER) { decl_is_register = 1; next_token(); continue; }
         if (tok.kind == TOK_CONST) { decl_is_const = 1; next_token(); continue; }
+        if (tok.kind == TOK_INLINE) { decl_is_inline = 1; next_token(); continue; }
         if (tok.kind == TOK_VOLATILE ||
-            tok.kind == TOK_AUTO || tok.kind == TOK_INLINE) {
+            tok.kind == TOK_AUTO) {
             next_token();
             continue;
         }

@@ -1105,6 +1105,7 @@ int main(int argc, char **argv)
         add_define("EOF", "-1");
 
     parse_translation_unit();
+    emit_needed_inline_bodies();
     emit_data();
     emit_deferred_extrns();
     emit("\n\tend\n");

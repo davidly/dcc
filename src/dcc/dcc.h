@@ -200,6 +200,8 @@ struct Token {
     char file[256];
 };
 
+struct AstNode;
+
 struct Sym {
     char name[64];
     char link_name[64];
@@ -221,6 +223,12 @@ struct Sym {
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
+    int is_inline;   /* function declared with inline specifier */
+    struct AstNode *inline_return_expr; /* simple static inline body, if captured */
+    int inline_param_use_count[MAX_PROTO_PARAMS];
+    char inline_param_names[MAX_PROTO_PARAMS][64];
+    FILE *inline_body_file; /* buffered out-of-line body for dead static inline elimination */
+    int inline_body_needed;
     int has_proto;
     int proto_nargs;
     int proto_variadic;
@@ -374,6 +382,7 @@ extern int current_local_bytes;
 extern int max_function_local_bytes;
 extern int current_omit_ix_frame;
 extern int current_function_has_call;
+extern int g_inline_body_buffering;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -415,6 +424,7 @@ extern int errors;
 extern int scan_mode;
 extern int decl_is_extern;
 extern int decl_is_static;
+extern int decl_is_inline;     /* current declaration used inline specifier */
 extern int decl_is_const;      /* current declaration used const qualifier */
 extern int decl_is_register;   /* current decl used 'register' keyword */
 extern int expr_result_dead;
@@ -798,6 +808,7 @@ int current_function_param_count(void);
 int current_function_safe_to_omit_ix(int return_type, int local_bytes);
 void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
 void emit_function_epilogue(int implicit_zero_return);
+void emit_needed_inline_bodies(void);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
 void scan_local_decl_after_type(int base);

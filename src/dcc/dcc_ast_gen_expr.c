@@ -2085,6 +2085,191 @@ void gen_call_star_indirect_ast(const struct AstNode *n)
  * The gate guarantees a direct (non function pointer) callee, all-plain-int
  * arguments and no prototype-driven widening, so each argument pushes exactly
  * one word and none of the builtin fast paths apply. */
+static int inline_arg_reusable(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 0;
+    return n->kind == AST_INT_LIT || n->kind == AST_STR_LIT ||
+           n->kind == AST_SIZEOF_EXPR || n->kind == AST_SIZEOF_TYPE ||
+           n->kind == AST_IDENT;
+}
+
+static int inline_param_index_for_call(struct Sym *fn, const char *name)
+{
+    int i;
+    if (fn == NULL || name == NULL)
+        return -1;
+    for (i = 0; i < fn->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
+        if (!strcmp(fn->inline_param_names[i], name))
+            return i;
+    return -1;
+}
+
+static void inline_temp_name_for_call(char *dst, int dstsz, int index)
+{
+    sprintf(dst, "#itmp%d", index);
+    (void)dstsz;
+}
+
+static int inline_expr_contains_call(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_CALL)
+        return 1;
+    if (inline_expr_contains_call(n->a) || inline_expr_contains_call(n->b) ||
+        inline_expr_contains_call(n->c) || inline_expr_contains_call(n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (inline_expr_contains_call(n->list[i]))
+            return 1;
+    return 0;
+}
+
+static int inline_call_needs_arg_temps(const struct AstNode *n, struct Sym *fn)
+{
+    int i;
+
+    for (i = 0; i < n->list_len; ++i)
+        if (fn->inline_param_use_count[i] > 1 && !inline_arg_reusable(n->list[i]))
+            return 1;
+    return 0;
+}
+
+static void emit_inline_arg_temp_store(struct Sym *tmp, const struct AstNode *arg,
+                                       int want_type)
+{
+    int actual_type;
+    int ptr_type;
+    int no_deref;
+
+    tmp->type = want_type;
+    if (ast_pointer_expr_type(arg, &ptr_type, &no_deref))
+        gen_pointer_expr_ast(arg, &ptr_type, &no_deref);
+    else
+        ast_gen_expr(arg);
+
+    actual_type = g_expr_type;
+    if (type_is_float(actual_type))
+        emit_convert_float_to_intlike(want_type);
+    else if (type_size(want_type) > 1 && !type_is_long(actual_type))
+        emit_promote_byte_to_int(actual_type);
+    emit_store_hl_to_sym_direct(tmp);
+}
+
+static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
+                                 const char **temp_names,
+                                 char temp_name_buf[MAX_PROTO_PARAMS][64])
+{
+    int i;
+
+    if (inline_expr_contains_call(fn->inline_return_expr))
+        return 0;
+
+    for (i = 0; i < n->list_len; ++i) {
+        struct Sym *tmp;
+        int want_type;
+
+        inline_temp_name_for_call(temp_name_buf[i], 64, i);
+        tmp = find_local(temp_name_buf[i]);
+        if (tmp == NULL)
+            return 0;
+        want_type = fn->proto_types[i] ? fn->proto_types[i] : TYPE_INT;
+        if (type_size(want_type) != 2 || type_is_float(want_type) || type_is_long(want_type))
+            return 0;
+        tmp->type = want_type;
+        temp_names[i] = temp_name_buf[i];
+    }
+
+    for (i = n->list_len - 1; i >= 0; --i) {
+        struct Sym *tmp;
+        int want_type;
+
+        tmp = find_local(temp_name_buf[i]);
+        want_type = fn->proto_types[i] ? fn->proto_types[i] : TYPE_INT;
+        emit_inline_arg_temp_store(tmp, n->list[i], want_type);
+    }
+    return 1;
+}
+
+static struct AstNode *clone_inline_expr(struct AstArena *ar, struct Sym *fn,
+                                         const struct AstNode *src,
+                                         const struct AstNode *call,
+                                         const char **temp_names)
+{
+    struct AstNode *dst;
+    int i;
+
+    if (src == NULL)
+        return NULL;
+    if (src->kind == AST_IDENT) {
+        i = inline_param_index_for_call(fn, src->sval);
+        if (i >= 0 && i < call->list_len && temp_names != NULL && temp_names[i] != NULL) {
+            dst = ast_new(ar, AST_IDENT);
+            dst->type = src->type;
+            dst->sval = ast_arena_strdup(ar, temp_names[i]);
+            dst->line = src->line;
+            return dst;
+        }
+        if (i >= 0 && i < call->list_len)
+            return call->list[i];
+    }
+
+    dst = ast_new(ar, src->kind);
+    dst->type = src->type;
+    dst->op = src->op;
+    dst->ival = src->ival;
+    dst->uval = src->uval;
+    dst->str_index = src->str_index;
+    dst->sym = src->sym;
+    dst->sval = src->sval ? ast_arena_strdup(ar, src->sval) : NULL;
+    dst->peek_type = src->peek_type;
+    dst->line = src->line;
+
+    dst->a = clone_inline_expr(ar, fn, src->a, call, temp_names);
+    dst->b = clone_inline_expr(ar, fn, src->b, call, temp_names);
+    dst->c = clone_inline_expr(ar, fn, src->c, call, temp_names);
+    dst->d = clone_inline_expr(ar, fn, src->d, call, temp_names);
+    for (i = 0; i < src->list_len; ++i)
+        ast_list_push(ar, dst, clone_inline_expr(ar, fn, src->list[i], call, temp_names));
+    return dst;
+}
+
+static int g_inline_expand_depth;
+
+static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
+{
+    struct AstNode *expr;
+    const char *temp_names[MAX_PROTO_PARAMS];
+    char temp_name_buf[MAX_PROTO_PARAMS][64];
+    int i;
+
+    if (fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
+        fn_sym->inline_return_expr == NULL)
+        return 0;
+    if (g_inline_expand_depth >= 8)
+        return 0;
+    if (n->list_len != fn_sym->proto_nargs || n->list_len > MAX_PROTO_PARAMS)
+        return 0;
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+        temp_names[i] = NULL;
+
+    if (inline_call_needs_arg_temps(n, fn_sym) &&
+        !emit_inline_arg_temps(n, fn_sym, temp_names, temp_name_buf))
+        return 0;
+
+    g_inline_expand_depth++;
+    expr = clone_inline_expr(&g_ast_arena, fn_sym, fn_sym->inline_return_expr, n,
+                             temp_names);
+    ast_gen_expr(expr);
+    g_inline_expand_depth--;
+    g_expr_type = fn_sym->type;
+    g_long_from16 = 0;
+    return 1;
+}
+
 void gen_call_ast(const struct AstNode *n)
 {
     const char *name;
@@ -2134,6 +2319,9 @@ void gen_call_ast(const struct AstNode *n)
     name = n->a->sval;
     fn_sym = find_global(name);
 
+    if (try_gen_inline_call_ast(n, fn_sym))
+        return;
+
     /* va_start(ap, last) / va_end(ap) builtins: emit the __va_start /
      * __va_end address arithmetic.  va_start sets ap to the
      * address just past the last fixed parameter; va_end clears ap. */
@@ -2165,6 +2353,9 @@ void gen_call_ast(const struct AstNode *n)
         fn_sym = add_global(name, TYPE_INT, SC_FUNC);
         fn_sym->needs_extrn = 1;
     }
+
+    if (fn_sym->is_static && fn_sym->is_inline)
+        fn_sym->inline_body_needed = 1;
 
     /* Push arguments right-to-left, one 16-bit word each (prototype-16-bit /
      * default-int push), with call arguments forced live across evaluation. */

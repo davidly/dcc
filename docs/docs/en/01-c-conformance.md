@@ -68,7 +68,10 @@ generation:
 - `register` - accepted as a hint only; it does not force register allocation.
 - `auto` - accepted; since it is already the default storage for locals, it is a
   no-op.
-- `inline` - accepted and ignored; functions are emitted normally.
+
+`inline` is accepted as a function specifier. The supported optimization form is
+`static inline`; plain externally linked `inline` is parsed but emitted as a
+normal externally linked function.
 
 ## Supported post-C89 front-end features
 
@@ -103,6 +106,36 @@ for (int i = 0; i < 3; i++)
   initialization through the anonymous member.
 - GNU `__attribute__((...))` annotations are skipped in supported declaration
   positions.
+- `static inline` functions are supported for small helper functions. dcc can
+  inline simple return-expression bodies, early-return `if` chains lowered to
+  conditional expressions, simple struct/pointer member accessors, and scalar
+  `int`/pointer/`long`/`float` expression helpers. When all call sites inline,
+  dcc removes the private out-of-line static function body; if a call cannot be
+  inlined safely, it keeps and calls the private static fallback body. Hidden
+  caller-frame temporaries preserve single evaluation for multi-use 16-bit
+  parameters such as `max(i++, j++)`. Multi-use `long`/`float` parameters with
+  side-effecting arguments fall back to the out-of-line body. Plain `inline`
+  without `static` is accepted for source compatibility but does not yet receive
+  C99 external-inline linkage semantics or call-site inlining.
+
+  ```c
+  static inline int max_int(int a, int b)
+  {
+    return a > b ? a : b;
+  }
+
+  static inline int clamp8(int x)
+  {
+    if (x < 0)
+      return 0;
+    if (x > 255)
+      return 255;
+    return x;
+  }
+
+  value = max_int(i++, limit);    /* i++ is evaluated once */
+  byte = clamp8(sample + bias);   /* helper body can be removed if all calls inline */
+  ```
 
 ### C99 aggregate initializers and compound literals
 
