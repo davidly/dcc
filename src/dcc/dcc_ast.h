@@ -1,19 +1,15 @@
 /*
  * dcc_ast.h - function-local abstract syntax tree for dcc.
  *
- * dcc has historically been a single-pass, syntax-directed translator with no
- * AST: the parser emits Z80 assembly as it goes.  This module introduces an
- * OPTIONAL, FUNCTION-LOCAL AST that the front end can build for a single
- * function body and then hand to a codegen walker.  It is being introduced
- * incrementally: while migration is in progress the streaming code generator
- * remains the fallback, and the AST is built/walked only for the constructs
- * that have been ported.  Nothing outside a function is represented here
- * (top-level declarations, types, structs and the preprocessor keep using the
- * existing tables) - hence "function-local".
+ * dcc now lowers function bodies through a function-local AST.  The parser
+ * builds one statement/expression tree at a time, then hands it to the AST
+ * codegen walker.  Nothing outside a function is represented here (top-level
+ * declarations, types, structs and the preprocessor keep using the existing
+ * tables) - hence "function-local".
  *
  * Design constraints:
  *   - C89 source (the host compiler builds dcc as -std=c89).
- *   - Must be able to drive the SAME emit_* helpers the streaming path uses,
+ *   - Must be able to drive the shared emit_* helpers,
  *     so the AST records exactly the information those helpers need (resolved
  *     struct Sym*, dcc type codes, operator token kinds, folded literals).
  *   - Arena-allocated and reset per function so there is no per-node free and
@@ -65,8 +61,8 @@ enum AstKind {
     /* ---- statements ---- */
     AST_EXPR_STMT,      /* a = expression (may be NULL for empty ';')      */
     AST_COMPOUND,       /* { ... }: list = ordered child statements/decls  */
-    AST_DECL,           /* local declaration: aux = lexer span re-emitted by  */
-                        /* the streaming declaration codegen (offset parity)  */
+    AST_DECL,           /* local declaration: aux = lexer span replayed       */
+                        /* through declaration codegen (offset parity)        */
     AST_IF,             /* a = cond, b = then, c = else (or NULL)          */
     AST_WHILE,          /* a = cond, b = body                              */
     AST_DOWHILE,        /* b = body, a = cond                              */
@@ -136,9 +132,9 @@ void ast_arena_free(struct AstArena *ar);    /* release everything          */
 /* ---- node construction (all allocate from `ar`) ---- */
 struct AstNode *ast_new(struct AstArena *ar, int kind);
 
-/* Re-emit a captured local-declaration span through the streaming declaration
- * codegen (so the local symbol table / frame offsets are rebuilt exactly as
- * the frame-sizing scan built them).  Defined in dcc_ast_build.c. */
+/* Re-emit a captured local-declaration span through declaration codegen so the
+ * local symbol table / frame offsets are rebuilt exactly as the frame-sizing
+ * scan built them.  Defined in dcc_ast_build.c. */
 void ast_emit_decl_span(const struct AstNode *n);
 struct AstNode *ast_int_lit(struct AstArena *ar, long value, int type);
 struct AstNode *ast_float_lit(struct AstArena *ar, unsigned long bits, int type);
@@ -164,20 +160,12 @@ void ast_list_push(struct AstArena *ar, struct AstNode *parent,
 char *ast_arena_strdup(struct AstArena *ar, const char *s);
 
 /* ------------------------------------------------------------------------- *
- * Phase 1: non-emitting builder + debug dump.
+ * AST builder + debug dump.
  *
- * ast_build_init() reads the DCC_AST_BUILD environment variable once.  When it
- * is set, a gated hook in the streaming front end (gen_expr) builds - and then
- * discards - a function-local expression AST alongside the existing codegen.
- * The hook snapshots and restores the lexer around the build, so generated
- * output is byte-for-byte identical whether or not the build runs; this lets
- * the builder be exercised over real source while the migration proceeds.
- *
- *   DCC_AST_BUILD unset / empty  -> disabled (default; zero overhead, no-op)
- *   DCC_AST_BUILD=1              -> build the AST and discard it
- *   DCC_AST_BUILD=2              -> build the AST and dump it to stderr
+ * ast_build_init() enables AST construction by default.  DCC_AST_BUILD=2 dumps
+ * built trees to stderr for debugging.
  * ------------------------------------------------------------------------- */
-extern int g_ast_build_enabled;     /* 0 off (default), 1 build, 2 build+dump */
+extern int g_ast_build_enabled;     /* 0 internal suppress, 1 build, 2 dump  */
 extern struct AstArena g_ast_arena; /* shared function-local build arena      */
 
 void ast_build_init(void);
@@ -188,25 +176,18 @@ const char *ast_kind_name(int kind);
 void ast_dump(const struct AstNode *n, int depth);
 
 /* ------------------------------------------------------------------------- *
- * Phase 2: AST-driven code generation (off by default).
+ * AST-driven code generation.
  *
- * When DCC_AST_GEN is set, the gen_expr hook emits a top-level expression from
- * the AST - calling the SAME helpers the streaming path uses - whenever the
- * built tree is within the supported subset (ast_gen_supported), and falls
- * back to the streaming path otherwise.  Because the AST build has already
- * advanced the lexer past the expression, the AST emit path consumes exactly
- * the same tokens; output is required to stay byte-for-byte identical, so the
- * subset is widened one construct at a time under that gate.
+ * AST codegen is enabled by default.  DCC_AST_GEN=2 keeps verbose emit reports.
  * ------------------------------------------------------------------------- */
-extern int g_ast_gen_enabled;       /* 0 off (default), 1 emit from AST       */
+extern int g_ast_gen_enabled;       /* 0 internal suppress, 1 emit, 2 report */
 
 int ast_gen_supported(const struct AstNode *n);
 void ast_gen_expr(const struct AstNode *n);   /* emit; sets g_expr_type        */
 
-/* Phase 4 statement hook.  Called from gen_statement when AST codegen is
- * enabled: if the upcoming statement is within the supported subset, build it
- * from the token stream, emit it from the AST, and return 1 (tokens consumed);
- * otherwise restore the lexer and return 0 so the streaming path runs. */
+/* Statement hook.  Called from gen_statement to build the next statement from
+ * the token stream and emit it from the AST.  Returns 0 only in scanner/debug
+ * paths that deliberately bypass AST codegen. */
 int ast_try_emit_statement(void);
 
 #endif /* DCC_AST_H */

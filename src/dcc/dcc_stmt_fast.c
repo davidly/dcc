@@ -690,34 +690,5 @@ no:
     return 0;
 }
 
-
-void gen_expr_statement(void)
-{
-    int old_dead;
-
-    if (tok.kind != ';') {
-        if (try_gen_incdec_statement())
-            return;
-
-        if (try_fast_global_char_array_store()) {
-            expect(';');
-            return;
-        }
-
-        if (try_fast_local_self_add_statement())
-            return;
-
-        if (try_fast_crc_update_byte_statement())
-            return;
-
-        old_dead = expr_result_dead;
-        expr_result_dead = 1;
-        gen_expr();
-        expr_result_dead = old_dead;
-    }
-    expect(';');
-}
-
-
 void skip_initializer_or_decl_tail(void);
 

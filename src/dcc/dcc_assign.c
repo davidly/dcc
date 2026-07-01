@@ -1042,16 +1042,7 @@ void gen_expr_no_comma(void)
      */
     static int depth = 0;
 
-    /*
-     * Phase 1/2 AST hook, mirroring gen_expr()'s outermost-expression hook but
-     * for the no-comma (declaration-initializer) grammar.  Function-scope
-     * declaration initializers reach here via emit_store_expr_to_local_offset
-     * (the destination address is already pushed); when the whole initializer
-     * expression is in the supported subset we emit it from the AST, otherwise
-     * we restore the lexer and fall back to the byte-identical streaming path.
-     * ast_gen_expr is stack-neutral and leaves the same value/type in HL as
-     * gen_assign, so the surrounding push/convert/store is unaffected.
-     */
+    /* AST-only assignment-expression path for declaration initializers. */
     if (g_ast_build_enabled && !scan_mode && depth == 0) {
         long sv_pos = posi;
         long sv_tok_start = tok_start_pos;
@@ -1077,10 +1068,10 @@ void gen_expr_no_comma(void)
         }
         if (report) {
             if (n == NULL) {
-                fprintf(stderr, "; AST-fallback expr build token=%d text='%s' line=%d\n",
+                fprintf(stderr, "; AST-unsupported expr build token=%d text='%s' line=%d\n",
                         sv_tok.kind, sv_tok.text, sv_tok_line);
             } else {
-                fprintf(stderr, "; AST-fallback expr gate kind=%s line=%d\n",
+                fprintf(stderr, "; AST-unsupported expr gate kind=%s line=%d\n",
                         ast_kind_name(n->kind), sv_tok_line);
             }
         }
@@ -1090,6 +1081,7 @@ void gen_expr_no_comma(void)
         tok_line = sv_tok_line;
         tok = sv_tok;
         ast_arena_reset(&g_ast_arena);
+        fatal("unsupported AST assignment expression");
     }
 
     depth++;
@@ -1101,15 +1093,8 @@ void gen_expr(void)
 {
     static int depth = 0;
 
-    /*
-     * Phase 1 AST hook (off by default; see dcc_ast_build.c).  At the
-     * outermost expression only, build a function-local AST for the upcoming
-     * expression and immediately discard it, snapshotting and restoring the
-     * lexer so the streaming codegen below sees an identical token stream and
-     * emits byte-for-byte identical output.  Nested gen_expr calls (depth > 0,
-     * e.g. a parenthesised sub-expression reached through gen_primary) skip the
-     * build so each top-level expression is walked exactly once.
-     */
+    /* AST-only top-level expression path.  Nested calls still use the shared
+     * recursive expression helpers used by the AST emitter itself. */
     if (g_ast_build_enabled && !scan_mode && depth == 0) {
         long sv_pos = posi;
         long sv_tok_start = tok_start_pos;
@@ -1119,13 +1104,6 @@ void gen_expr(void)
         int report = getenv("DCC_AST_REPORT") != NULL;
         struct AstNode *n = ast_build_expr(&g_ast_arena);
 
-        /*
-         * Phase 2: if AST-driven codegen is enabled and the whole expression
-         * is within the supported subset, emit from the AST.  The build above
-         * already advanced the lexer past the expression, so we deliberately do
-         * NOT restore the snapshot - the AST emit consumes the same tokens the
-         * streaming path would have.  Output must stay byte-for-byte identical.
-         */
         if (g_ast_gen_enabled && ast_gen_supported(n)) {
             depth++;
             ast_gen_expr(n);
@@ -1142,10 +1120,10 @@ void gen_expr(void)
         }
         if (report) {
             if (n == NULL) {
-                fprintf(stderr, "; AST-fallback expr build token=%d text='%s' line=%d\n",
+                fprintf(stderr, "; AST-unsupported expr build token=%d text='%s' line=%d\n",
                         sv_tok.kind, sv_tok.text, sv_tok_line);
             } else {
-                fprintf(stderr, "; AST-fallback expr gate kind=%s line=%d\n",
+                fprintf(stderr, "; AST-unsupported expr gate kind=%s line=%d\n",
                         ast_kind_name(n->kind), sv_tok_line);
             }
         }
@@ -1155,6 +1133,7 @@ void gen_expr(void)
         tok_line = sv_tok_line;
         tok = sv_tok;
         ast_arena_reset(&g_ast_arena);
+        fatal("unsupported AST expression");
     }
 
     depth++;

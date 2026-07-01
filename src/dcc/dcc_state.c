@@ -5,12 +5,11 @@
  * file-scope globals; every other module references them through the matching
  * `extern` declarations in the umbrella header dcc.h.
  *
- * Why dcc keeps so much shared state: it is a single-pass, syntax-directed
- * compiler with no AST. Parser and code generator share a large amount of
- * "current position" state (the source buffer, the lookahead token, the
- * symbol tables, per-function codegen flags, ...). Keeping all of it in one
- * place, declared once in dcc.h, lets the modules cooperate without threading
- * the state through every call.
+ * Why dcc keeps so much shared state: parser, AST builder, and codegen helpers
+ * share a large amount of "current position" state (the source buffer, the
+ * lookahead token, the symbol tables, per-function codegen flags, ...).
+ * Keeping all of it in one place, declared once in dcc.h, lets the modules
+ * cooperate without threading the state through every call.
  *
  * Intentionally NOT here (kept private/static to one module for locality):
  *   - pp_expr_p / pp_expr_depth        -> dcc_preproc.c (#if expression cursor)

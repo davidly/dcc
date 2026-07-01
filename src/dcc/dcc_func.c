@@ -463,9 +463,8 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
 void emit_function_epilogue(void)
 {
     emit_label(current_return_label);
-    /* Always emit ld sp,ix so that gen_switch_chain's push/pop of the switch
-     * value does not corrupt the stack when a return fires inside a case body.
-     * pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra
+    /* Always emit ld sp,ix so returns from nested control flow restore the
+     * caller stack reliably. pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra
      * instruction for functions that never actually need the stack restore. */
     if (!current_omit_ix_frame) {
         emit("\tld sp,ix\n");

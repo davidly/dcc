@@ -2,11 +2,12 @@
  * dcc.h - umbrella header for the modularised dcc compiler.
  *
  * dcc is a tiny bootstrap C89 compiler that targets Z80 assembly for the
- * Microsoft M80 / LINK-80 toolchain on CP/M-80. It is a single-pass,
- * syntax-directed translator (no AST): the parser and code generator share a
- * large amount of file-scope state. Because of that tight coupling, the
- * separate-compilation layout uses ONE shared header (this file) included by
- * every module's .c, in the spirit of a classic single-binary C compiler.
+ * Microsoft M80 / LINK-80 toolchain on CP/M-80. Function bodies are lowered
+ * through a function-local AST, while the parser, AST builder, and codegen
+ * helpers still share a large amount of file-scope state. Because of that
+ * tight coupling, the separate-compilation layout uses ONE shared header (this
+ * file) included by every module's .c, in the spirit of a classic
+ * single-binary C compiler.
  *
  * This header declares everything the modules agree on:
  *   1. System headers used across the compiler.
@@ -773,7 +774,6 @@ int try_gen_const_times(void);
 int type_is_unsigned(int t);
 int type_is_arith(int t);
 int promote_int_type(int t);
-int typeof_conditional_arm(void);
 int common_arith_type(int a, int b);
 void emit_cast_16_to_common(int from_type, int common_type);
 int peek_simple_unary_type(void);
@@ -826,7 +826,6 @@ void emit_load_simple_byte_to_c(struct Sym *s, long val, int is_const);
 void emit_and_mask_byte_direct(struct Sym *mask_sym, int byte_index);
 int try_fast_crc_update_byte_simple_args(struct Sym *dst);
 int try_fast_crc_update_byte_statement(void);
-void gen_expr_statement(void);
 
 /* ---- decl ---- */
 int parse_float_init_literal(unsigned long *bits);
@@ -860,38 +859,11 @@ void gen_local_decl_after_type(int base);
 
 /* ---- stmt ---- */
 void gen_compound(void);
-void gen_if(void);
-void emit_load_sym_word_to_bc(struct Sym *s);
-void emit_store_de_to_sym_word(struct Sym *s);
-void emit_store_bc_to_sym_word(struct Sym *s);
-void emit_bc_add_const_small(int n);
-int parse_while_deref_nonzero_id(char *name, int namesz, struct Sym **sp, int *elemp);
-void emit_load_bc_pointee_to_hl_or_a(int elem);
-void emit_test_loaded_pointee_zero(int elem);
-void emit_compare_loaded_pointee_to_sym(int elem, struct Sym *csym);
-int try_gen_bc_pointer_copy_while(void);
-int try_gen_bc_pointer_find_while(void);
-int try_gen_bc_pointer_rfind_while(void);
-int try_gen_bc_pointer_scan_while(void);
-void gen_while(void);
 char *copy_range(long a, long b);
 void gen_snippet_expr(const char *snippet);
 void gen_snippet_lvalue_addr(const char *snippet, int *ptype);
-void skip_expr_until_rparen(long *startp, long *endp);
-void skip_for_cond(long *startp, long *endp);
-void gen_snippet_cond_true(const char *snippet, int ltrue);
-int for_init_always_enters_loop(void);
-int try_gen_bc_byte_array_cycle_for(void);
-void gen_for(void);
-void gen_return(void);
-void gen_switch_chain(void);
-int scan_switch_cases_for_table(int *case_vals, int *case_labs, int *case_countp, int *default_labp, int *minp, int *maxp);
-int scan_switch_cases_for_chain(int *case_vals, int *case_labs, int *case_countp, int *default_labp);
 int switch_label_for_value(int value, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
 void emit_switch_jump_table(int minv, int maxv, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
-void gen_switch_table(void);
-void gen_switch(void);
-void gen_do_while(void);
 void gen_statement(void);
 
 /* ---- func ---- */

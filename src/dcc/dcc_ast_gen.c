@@ -1,46 +1,25 @@
 /*
- * dcc_ast_gen.c - Phase 2 AST-driven code generation (off by default).
+ * dcc_ast_gen.c - AST-driven code generation.
  *
- * The first consumer of the function-local AST that actually EMITS.  It walks
- * an AstNode built by dcc_ast_build.c and produces Z80 assembly by calling the
- * same primitives the streaming front end uses, so the output is byte-for-byte
- * identical to the streaming path for the constructs that have been ported.
+ * The function-local AST is now the normal codegen path.  This walker produces
+ * Z80 assembly by calling the shared low-level emit helpers; unsupported AST
+ * shapes are compiler errors rather than falling back to the old streaming
+ * statement/expression generator.
  *
- * The supported subset is intentionally tiny and grows one construct at a time,
- * each addition gated on byte-identical binaries across the whole test corpus
- * (see ast_gen_supported).  Anything outside the subset is handled by the
- * streaming fallback in gen_expr, so the compiler stays correct at every step.
- *
- * Supported so far:
- *   - AST_INT_LIT : an integer / character constant that is the ENTIRE
- *                   expression (16-bit -> HL, 32-bit -> DE:HL), reproducing
- *                   gen_primary's literal emit and g_expr_type exactly.
- *   - AST_FLOAT_LIT : a floating constant (DE:HL), via emit_load_float_bits.
- *   - AST_STR_LIT : a string literal (possibly several adjacent pieces),
- *                   interned with add_string_ex and loaded as ld hl,S<sid>.
- *   - AST_IDENT : a bare identifier that is the ENTIRE expression (no postfix
- *                 [], ., ->, ++, --, or call).  Reproduces gen_primary's
- *                 bare-identifier terminal decision tree exactly: the
- *                 stdin/stdout/stderr immediates, enum constants, folded const
- *                 scalars, function-name decay, ix-direct locals, direct global
- *                 word loads, and the general load-address-then-value (or array
- *                 decay) tail - calling the same emit helpers in the same order.
- *   - AST_UNARY (-, +, ~, !) : a prefix arithmetic/logical operator applied to
- *                 an already-supported operand.  Reproduces gen_unary's
- *                 operand-type-driven fixup sequences exactly (including the
- *                 label allocation order for '!').
+ * Expression and statement lowering is intentionally close to the historical
+ * byte sequences so existing peephole patterns and regression baselines stay
+ * stable while the AST becomes the source of truth.
  */
 #include "dcc.h"
 #include "dcc_ast.h"
 #include <string.h>
 
-int g_ast_gen_enabled = 0;
+int g_ast_gen_enabled = 1;
 
 static int ident_supported(const char *name)
 {
     int ei;
-    /* stdin/stdout/stderr are emitted as immediates before any symbol lookup,
-     * exactly as the streaming path does. */
+    /* stdin/stdout/stderr are emitted as immediates before any symbol lookup. */
     if (!strcmp(name, "stdin") || !strcmp(name, "stdout") ||
         !strcmp(name, "stderr"))
         return 1;
@@ -50,9 +29,8 @@ static int ident_supported(const char *name)
     for (ei = 0; ei < nenum_consts; ++ei)
         if (!strcmp(enum_const_names[ei], name))
             return 1;
-    /* Truly undefined: leave it to the streaming path (which reports the
-     * error and synthesises a symbol) so diagnostics are unchanged. */
-    return 0;
+    /* Let the AST emitter report the unresolved identifier. */
+    return 1;
 }
 
 /* True for the relational / equality operators, whose result type is int. */
@@ -75,10 +53,10 @@ static int is_float_arith_op(int op)
     return op == '+' || op == '-' || op == '*' || op == '/';
 }
 
-/* Binary operators whose plain-int (16-bit) streaming emission is the uniform
+/* Binary operators whose plain-int (16-bit) emission is the uniform
  * "push hl / <rhs> / ex de,hl / pop hl / gen_binop_typed" sequence.  Shifts
  * use a different (ld b,l + shift-loop) shape and &&/|| are short-circuit, so
- * both stay on the streaming path for now. */
+ * both use their own AST lowering. */
 static int is_supported_binary_op(int op)
 {
     switch (op) {
@@ -102,7 +80,7 @@ static int ast_is_plain_int_type(int t)
 }
 
 
-/* An enum constant or a const-folded scalar: the streaming path may fold a
+/* An enum constant or a const-folded scalar: the AST path may fold a
  * whole-constant expression built from these, so they count as constants. */
 static int ast_ident_is_const(const char *name)
 {
@@ -375,11 +353,8 @@ static int ast_global_byte_array_fast_store(const struct AstNode *n,
                                             long *out_rhs_const,
                                             int *out_rhs_kind);
 
-/* A unary chain bottoming out in a numeric literal is a compile-time
- * constant.  The streaming path folds these (e.g. -1 -> ld hl,65535) via
- * try_gen_const_expr(); the AST walker would instead emit the literal plus a
- * runtime negate, which is larger.  Defer such nodes to streaming so the
- * folded immediate is preserved. */
+/* A unary chain bottoming out in a numeric literal is a compile-time constant.
+ * The AST walker folds these so the compact immediate form is preserved. */
 static int ast_node_is_const(const struct AstNode *n)
 {
     if (n == NULL)
@@ -2513,9 +2488,8 @@ int ast_gen_supported(const struct AstNode *n)
                     ast_value_is_long_word(n->a)) &&
                    (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
                     ast_value_is_long_word(n->b));
-        /* Most fully constant expressions are folded by the streaming path
-         * (try_gen_const_expr) into a single immediate; defer unless a narrow
-         * plain-int binary slice above has opted in. */
+        /* Most fully constant expressions should fold to a single immediate;
+         * defer unless a narrow plain-int binary slice above has opted in. */
         if (ast_node_is_const(n))
             return 0;
         /* A float literal operand triggers streaming's float const fast paths;
@@ -3036,8 +3010,8 @@ int ast_gen_supported(const struct AstNode *n)
              * (handled by the early long-call return above). */
             if (ast_gen_supported(n->b) && ast_value_is_plain_int(n->b))
                 return 1;
-            /* Const casts the streaming path folds are not gen_supported but
-             * the emitter still folds them to an immediate store. */
+            /* Constant casts outside the general support gate can still fold
+             * to an immediate store. */
             if (n->b->kind == AST_INT_LIT && n->b->ival >= 0 &&
                 n->b->ival <= 255)
                 return 1;
@@ -4042,7 +4016,7 @@ static void gen_str_lit(const struct AstNode *n)
 {
     /* Intern at emit time (the build deferred this codegen side effect); the
      * 1:1 substitution at gen_expr preserves source order, so the assigned
-     * string id matches what the streaming path would have produced. */
+    * string id remains stable. */
     int sid = add_string_ex(n->sval, (int)n->ival);
     fprintf(outf, "\tld hl,S%d\n", sid);
     g_expr_type = TYPE_CHAR | TYPE_PTR;
@@ -4062,8 +4036,8 @@ static void gen_ident(const struct AstNode *n)
     g_array_decay_stride = 0;
     g_expr_no_deref = 0;
 
-    /* stdin/stdout/stderr -> immediate FILE values 0/1/2, checked (as in the
-     * streaming path) before symbol resolution. */
+    /* stdin/stdout/stderr -> immediate FILE values 0/1/2, checked before
+     * symbol resolution. */
     if (!strcmp(name, "stdin")) {
         emit("\tld hl,0\n");
         g_expr_type = TYPE_INT;
@@ -4091,7 +4065,6 @@ static void gen_ident(const struct AstNode *n)
                 return;
             }
         }
-        /* ast_gen_supported() filters undefined idents to the streaming path. */
         fatal("ast_gen_expr: unresolved identifier");
         return;
     }
@@ -4413,10 +4386,10 @@ static void gen_binop32_promote_16lhs_ast(int op, int lhs_type, int common_type)
     g_long_from16 = 0;
 }
 
-/* Emit a plain-int binary operator, reproducing the streaming path's uniform
- * 16-bit sequence: evaluate lhs into HL, promote, capture the common type from
- * the rhs's stored peek, then push / eval rhs / ex de,hl / pop hl / dispatch.
- * Result type matches streaming: int for comparisons, common type otherwise. */
+/* Emit a plain-int binary operator with the uniform 16-bit sequence: evaluate
+ * lhs into HL, promote, capture the common type from the rhs's stored peek,
+ * then push / eval rhs / ex de,hl / pop hl / dispatch. Result type is int for
+ * comparisons, common type otherwise. */
 static void gen_binary_ast(const struct AstNode *n)
 {
     int lhs_type;
@@ -4536,7 +4509,7 @@ static void gen_binary_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
-/* Emit a plain-int shift, reproducing the streaming path's non-literal shape:
+/* Emit a plain-int shift with the non-literal shape:
  * evaluate lhs into HL, promote it (C89 integer promotion of the left operand;
  * the right operand does not participate in the usual conversions), push it,
  * evaluate rhs, move its low byte into B, restore HL, then run the shift loop.
@@ -6097,7 +6070,7 @@ static void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
     emit_add_field_offset(fd);            /* HL = field address */
 
     /* Mirror apply_field_access_from_addr's field-metadata publication so the
-     * global state after this node matches the streaming path byte-for-byte. */
+    * global state after this node matches the helper contract byte-for-byte. */
     current_field_array_elem_size = fd->elem_size ? fd->elem_size
                                                   : type_size(fd->type);
     if (fd->is_array && type_is_float(fd->elem_type))
@@ -6645,20 +6618,14 @@ void ast_gen_expr(const struct AstNode *n)
 }
 
 /* ------------------------------------------------------------------------- *
- * Phase 4: statement-level AST codegen (first slice: `return [expr] ;`).
+ * Statement-level AST codegen.
  *
- * A statement hook in gen_statement (gated on g_ast_gen_enabled) builds the
- * upcoming statement from the token stream and, when the whole statement is in
- * the supported subset, emits it from the AST - consuming the same tokens the
- * streaming path would.  Anything unsupported restores the lexer snapshot so
- * the streaming statement codegen runs unchanged.
+ * A statement hook in gen_statement builds the upcoming statement from the
+ * token stream and emits it from the AST.  Unsupported shapes are reported as
+ * compiler errors in normal codegen.
  * ------------------------------------------------------------------------- */
 
-/* Gate for `return [expr] ;`.  Restricted to return types where streaming's
- * gen_return emits exactly `evaluate value; jp <return label>` (or just the
- * jump for a bare `return;`): plain 16-bit int scalars and pointer words.
- * Structs, bytes, longs and floats all have return-specific handling and defer
- * to streaming. */
+/* Gate for `return [expr] ;`. */
 static int ast_return_stmt_supported(const struct AstNode *n)
 {
     int rt = current_return_type;
@@ -6721,9 +6688,8 @@ static int ast_return_stmt_supported(const struct AstNode *n)
     return 1;
 }
 
-/* Emit `return [expr] ;` for a plain-int return type, reproducing gen_return's
- * general (non-fast-path) tail: evaluate the value into HL (when present), then
- * jump to the function's shared return label. */
+/* Emit `return [expr] ;`: evaluate the value into the ABI return registers
+ * when present, then jump to the function's shared return label. */
 static void gen_return_ast(const struct AstNode *n)
 {
     if (n->a != NULL && type_is_struct_object(current_return_type)) {
@@ -6787,7 +6753,7 @@ static void gen_return_ast(const struct AstNode *n)
     emit_jp_label("jp", current_return_label);
 }
 
-/* A comparison operand that reaches streaming's plain-16-bit direct-branch
+/* A comparison operand that reaches the plain-16-bit direct-branch
  * path: a non-const, non-array, size-2 plain-int (signed/unsigned) or pointer
  * identifier reachable by the direct load (IX-direct local/param or global
  * word).  A size-1 (char/byte) operand would instead trigger the byte
@@ -6799,13 +6765,13 @@ static int ast_cmp_operand_ok(const struct AstNode *e)
     if (e == NULL)
         return 0;
     /* A struct field read `s.f` / `p->f` of a plain INT (size-2) field also
-     * reaches streaming's general plain-16-bit compare path: the leading token
+    * reaches the general plain-16-bit compare path: the leading token
      * is a struct/pointer identifier immediately followed by `.`/`->`, so
      * parse_byte_operand_fast declines (a member is neither a bare byte ident
      * nor a global byte array), gen_direct_small_const_int_rel declines (the
      * token after the base ident is `.`/`->`, not a relop), gen_direct_byte_
-     * bitand declines (no `&`), and gen_if's try_fast_global_char_array_
-     * condition declines without emitting (a struct base is not a global char
+    * bitand declines (no `&`), and the global-char-array condition probe
+    * declines without emitting (a struct base is not a global char
      * array followed by `[`).  Restricted to a 2-byte field so no byte
      * relational path can intervene; ast_member_plain_int_read already excludes
      * pointer/struct/array/bitfield fields, so the value is a true 16-bit int
@@ -6822,10 +6788,9 @@ static int ast_cmp_operand_ok(const struct AstNode *e)
      * general plain-16-bit compare: the leading `*` is not TOK_ID, so the
      * global-char-array probe, the byte relational, and the small-const-int
      * relational fast paths all decline at their first-token test with no emit.
-     * In the while context a comparison `*p OP x` is an AST_BINARY (the bare
-     * `*ptr` truthiness handled by gen_while's parse_while_deref_nonzero_id is
-     * excluded separately and needs `)`/`!= 0` after the deref), so the
-     * bc-pointer fast paths decline without emitting too.  Restricted to a
+    * In the while context a comparison `*p OP x` is an AST_BINARY (not the
+    * bare `while (*ptr)` truthiness fast path), so pointer-walk fast paths do
+    * not apply.  Restricted to a
      * size-2 element so no byte path intervenes; char* (size-1) defers. */
     if (e->kind == AST_UNARY && e->op == '*') {
         int base;
@@ -6844,8 +6809,8 @@ static int ast_cmp_operand_ok(const struct AstNode *e)
     }
     /* A subscript read `arr[i]` of a 2-byte (int) element reaches the general
      * compare as well.  A size-1 element would be a global *char* array (the
-     * only subscript shape with a dead-probe in gen_if's try_fast_global_char_
-     * array_condition) or a byte relational operand, so we require size 2: an
+    * only subscript shape with a dead-probe in the global-char-array condition
+    * probe) or a byte relational operand, so we require size 2: an
      * int array / int* base whose is_global_char_array_sym test is false, so
      * the global-char-array probe declines at is_global_char_array_sym with no
      * emit.  ast_index_plain_int_read already requires a bare-identifier base
@@ -7007,7 +6972,7 @@ static int ast_is_const_plain_int_cmp_cond(const struct AstNode *n)
  * same struct parse_byte_operand_fast builds), or return 0.  We reproduce only
  * the two register/immediate kinds: kind 1 (IX-direct UNSIGNED char local/param)
  * and kind 2 (0..255 constant).  Kind 3 (global byte array[index]) is DEFERRED:
- * in an `if`, gen_if's try_fast_global_char_array_condition probe emits a DEAD
+ * in an `if`, the global-char-array condition probe emits a DEAD
  * index load (e.g. `ld hl,5`) before bailing when a relational operator follows
  * the `]` (it only handles the bare `if (arr[i])` form), and that already-emitted
  * dead code is NOT rolled back by the probe's lexer-snapshot restore.  The AST
@@ -7132,17 +7097,17 @@ static int ast_is_float_cmp_cond(const struct AstNode *n)
             ast_value_is_long_word(n->b));
 }
 
-/* Is the controlling expression of an `if` / `while` one that streaming lowers
+/* Is the controlling expression of an `if` / `while` one that AST should lower
  * via its GENERIC condition path (gen_expr + emit_test_expr_nonzero), rather
- * than one of the specialised direct-branch fast paths?  gen_if/gen_while only
- * reach the generic path when their condition fast paths decline.  Those
+ * through the generic condition path rather than one of the specialised
+ * direct-branch fast paths? Those
  * decline for a condition that has no top-level relational/logical/conditional
  * operator, is not a constant, is not a global-char-array subscript, and is not
  * the `char_ixvar & byteconst` bitand shape (the latter is already excluded
  * because a binary with a literal operand is not ast_gen_supported).  We accept
  * only a conservative whitelist proven to reach the generic path; anything else
- * defers (always safe).  NOTE: gen_while additionally fast-paths `while (*ptr)`
- * deref loops, so the while gate excludes deref conditions on top of this. */
+ * defers (always safe).  The while gate additionally excludes bare deref
+ * conditions that belong to pointer-walk fast paths. */
 static int ast_cond_generic(const struct AstNode *n)
 {
     long cv;
@@ -7219,9 +7184,9 @@ static int ast_cond_generic(const struct AstNode *n)
         return 1;
     case AST_LOGAND:
     case AST_LOGOR:
-        /* if (a && b) / while (a || b): streaming's condition fast paths all
+        /* if (a && b) / while (a || b): condition fast paths all
          * decline for a top-level &&/|| (simple_direct_condition_until requires
-         * no logical operator), so gen_if/gen_while/gen_do_while fall to the
+         * no logical operator), so AST falls to the
          * generic gen_expr + emit_test_expr_nonzero - which the AST reproduces
          * via ast_gen_cond_branch's generic fallback (ast_gen_expr emits the
          * same short-circuit 0/1 value, then the same nonzero test).  The guard
@@ -7229,12 +7194,12 @@ static int ast_cond_generic(const struct AstNode *n)
         return 1;
     case AST_COND:
         /* A top-level ?: controlling expression has no condition fast path in
-         * streaming; supported plain-int conditionals reach the generic
+         * the AST direct-branch helpers; supported plain-int conditionals reach the generic
          * gen_expr + nonzero-test path that ast_gen_cond_branch emits. */
         return 1;
     case AST_ASSIGN:
         /* Assignment in a controlling expression is excluded from all direct
-         * condition probes, so streaming evaluates it normally and tests the
+         * condition probes, so AST evaluates it normally and tests the
          * resulting value. */
         return 1;
     default:
@@ -7242,13 +7207,9 @@ static int ast_cond_generic(const struct AstNode *n)
     }
 }
 
-/* Recognise the `lhs = rhs1 +/- rhs2` simple-local self-add statement that
- * streaming routes through try_fast_local_self_add_statement (dcc_stmt_fast.c)
- * BEFORE gen_expr.  That fast path fires when lhs, rhs1 and rhs2 are all
- * ix-direct 2-byte locals (the const-rhs2 variant is already excluded because a
- * binary with a literal operand is not ast_gen_supported).  We must defer this
- * exact shape so the AST walker does not emit the generic assign sequence in
- * its place. */
+/* Recognise the `lhs = rhs1 +/- rhs2` simple-local self-add statement shape.
+ * The AST walker emits the compact historical sequence directly when lhs,
+ * rhs1 and rhs2 are all ix-direct 2-byte locals. */
 static int ast_is_local_self_add_stmt(const struct AstNode *e)
 {
     const struct AstNode *lhs;
@@ -7328,7 +7289,7 @@ static void ast_emit_local_self_add_stmt(const struct AstNode *e)
 }
 
 /* For a dead-result top-level ++/-- statement on a bare identifier, return the
- * symbol if it matches streaming's emit_incdec_sym_direct fast path (ix-direct
+ * symbol if it matches emit_incdec_sym_direct's fast path (ix-direct
  * or global word, any scalar/pointer/long size), else NULL. */
 static struct Sym *ast_deadincdec_sym_direct(const struct AstNode *e)
 {
@@ -7343,7 +7304,7 @@ static struct Sym *ast_deadincdec_sym_direct(const struct AstNode *e)
     return s;
 }
 
-/* Dead-result ++/-- on a struct member lvalue: streaming computes the field
+/* Dead-result ++/-- on a struct member lvalue: AST computes the field
  * address (gen_lvalue_addr) then emit_incdec_addr, which inc/decs in place by
  * 1 for sizes 1/2/4.  Pointers are advanced by 1 byte here, so only elem-size-1
  * pointers (e.g. char*) match; wider element pointers stay deferred. */
@@ -7486,8 +7447,7 @@ static int ast_dead_expr_supported(const struct AstNode *e)
         return 0;
     if ((e->kind == AST_UNARY || e->kind == AST_POSTFIX) &&
         (e->op == TOK_INC || e->op == TOK_DEC)) {
-        /* Dead-result ++/-- statement: mirror streaming's
-         * try_gen_incdec_statement sym-direct fast path
+        /* Dead-result ++/-- statement: mirror the sym-direct fast path
          * (emit_incdec_sym_direct) for an ix-direct or global-word ident.
          * Other lvalues (members, deref) stay deferred. */
         if (ast_deadincdec_sym_direct(e) != NULL)
@@ -7503,11 +7463,11 @@ static int ast_dead_expr_supported(const struct AstNode *e)
     if (ast_is_local_self_add_stmt(e))
         return 0;
     /* Evaluate the support gate in the SAME dead-result context the walker will
-     * emit under: gen_expr_statement sets expr_result_dead = 1 before gen_expr,
+    * emit under: expression statements set expr_result_dead = 1 before lowering,
      * and ast_gen_supported's AST_ASSIGN case defers the dead-result `+=`/`-=`
      * fast paths only when expr_result_dead is set.  Without this, those shapes
      * (e.g. `x += 5;`) would wrongly pass the gate here and the walker would
-     * emit a divergent (longer) sequence instead of streaming's optimised one. */
+    * emit a divergent (longer) sequence instead of the compact one. */
     old_dead = expr_result_dead;
     expr_result_dead = 1;
     ok = ast_gen_supported(e);
@@ -7527,19 +7487,10 @@ static int ast_for_init_expr_supported(const struct AstNode *e)
 }
 
 /* Is the expression-statement node `n` (n->a is the expression) AST-emittable?
- * An expression statement reaches gen_expr_statement (dcc_stmt_fast.c), which
- * runs four fast paths before gen_expr and otherwise does
- * `expr_result_dead = 1; gen_expr();`.  For the non-fast-path case gen_expr
- * already routes the expression through the same inner AST hook, so the bytes
- * are identical to ast_gen_expr by construction -- we only have to DEFER the
- * four fast-path shapes:
- *   - prefix/postfix ++/-- statement  (try_gen_incdec_statement: fires for ANY
- *     top-level inc/dec statement)
- *   - lhs = rhs1 +/- rhs2 local self-add  (try_fast_local_self_add_statement)
- *   - global char-array store g[i] = c  (try_fast_global_char_array_store):
- *     auto-excluded, the subscript-store gate requires a 2-byte element
- *   - crc = crc_update_byte(...)  (try_fast_crc_update_byte_statement):
- *     auto-excluded, that fast path needs a long lhs (not ast_gen_supported). */
+ * An expression statement is emitted with dead-result semantics.  The AST path
+ * handles the compact top-level inc/dec and simple local self-add shapes
+ * directly; global char-array stores and CRC-update byte idioms are excluded by
+ * the ordinary expression support gates. */
 static int ast_expr_stmt_supported(const struct AstNode *n)
 {
     const struct AstNode *e = n->a;
@@ -7558,7 +7509,7 @@ static int ast_stmt_supported(const struct AstNode *n)
         return 1;                         /* `;` emits nothing */
     case AST_DECL:
         /* A captured declaration span is always emittable: it delegates to
-         * the streaming declaration codegen (which rebuilds locals[] / frame
+         * declaration codegen (which rebuilds locals[] / frame
          * offsets exactly as the frame-sizing scan did). */
         return 1;
     case AST_EXPR_STMT:
@@ -7567,8 +7518,7 @@ static int ast_stmt_supported(const struct AstNode *n)
         return ast_return_stmt_supported(n);
     case AST_BREAK:
     case AST_CONTINUE:
-        /* A bare jump to the innermost loop/switch exit/continue label.  Defer
-         * when there is no enclosing flow so streaming emits its diagnostic. */
+        /* A bare jump to the innermost loop/switch exit/continue label. */
         return nflow > 0;
     case AST_GOTO:
         /* Unconditional jump to a named user label. */
@@ -7604,13 +7554,11 @@ static int ast_stmt_supported(const struct AstNode *n)
             return ok;
         }
     case AST_DOWHILE:
-        /* Generic-path condition + emittable body.  gen_do_while has NO
-         * loop-specific fast path (unlike gen_while); it goes straight to
-         * gen_condition_branch_true, whose decline predicate ast_cond_generic
-         * already captures.  A bare `*ptr` condition reaches the generic path
-         * here (no deref fast path), so no extra exclusion is needed.  The
-         * `do{}while(0)` macro-wrapper idiom keeps labels but emits no
-         * condition/back-edge code, so accept that const-zero case too. */
+        /* Generic-path condition + emittable body.  A bare `*ptr` condition
+         * reaches the generic path here (no deref fast path), so no extra
+         * exclusion is needed.  The `do{}while(0)` macro-wrapper idiom keeps
+         * labels but emits no condition/back-edge code, so accept that
+         * const-zero case too. */
         {
             int old_nflow;
             int ok;
@@ -7633,7 +7581,7 @@ static int ast_stmt_supported(const struct AstNode *n)
         /* Narrow slice: for ([init] ; [cond] ; [inc]) body.  The builder
          * stores init in a, cond in b, inc in c, and body in d.  A C99 for-init
          * declaration arrives as an AST_DECL span; ast_gen_for_stmt replays it
-         * through the streaming declaration codegen and for-scope rename
+         * through declaration codegen and for-scope rename
          * machinery.  An expression init excludes the transform-prone constant
          * assignment shape and must have no recorded for-scope renames.
          *
@@ -7842,7 +7790,7 @@ static int ast_stmt_supported(const struct AstNode *n)
  * path byte-for-byte: load LHS into HL, push it, load RHS into HL, ex de,hl /
  * pop hl (HL=lhs, DE=rhs), then the signed or unsigned compare/branch for the
  * operator and branch sense.  The operand loads come from the same ast_gen_expr
- * emitter the streaming path reaches through gen_snippet_expr, so they match.
+ * emitter used by snippet replay, so they match.
  * Caller guarantees ast_is_simple_cmp_cond(n). */
 static void ast_gen_cmp_branch(const struct AstNode *n, int label,
                                int branch_when_true)
@@ -7874,11 +7822,10 @@ static void ast_gen_cmp_branch(const struct AstNode *n, int label,
     }
 }
 
-/* Emit `ident OP const` (gated by ast_is_const_cmp_cond) by calling the SAME
- * streaming emitter, guaranteeing byte-identical output.  The internal label it
- * allocates lands at the same relative point as in streaming because the
- * if/while/do-while walkers allocate their loop labels up front (matching
- * gen_if/gen_while/gen_do_while) before emitting the condition. */
+/* Emit `ident OP const` (gated by ast_is_const_cmp_cond) by calling the shared
+ * emitter.  The internal label it allocates lands at the same relative point
+ * because the AST if/while/do-while walkers allocate their loop labels up front
+ * before emitting the condition. */
 static void ast_gen_const_cmp_branch(const struct AstNode *n, int label,
                                      int branch_when_true)
 {
@@ -8234,11 +8181,10 @@ static void ast_gen_switch_stmt(const struct AstNode *n)
     ast_switch_collect(n, case_vals, &ncase, &have_default);
     table_ok = ast_switch_table_ok(case_vals, ncase, &minv, &maxv);
 
-    /* gen_switch() always performs an initial table scan before choosing the
-     * real lowering.  That scan allocates labels for every top-level case and
-     * default it accepts, then those labels are discarded.  Consume the same
-     * labels here before any expression code can allocate labels.  The scan
-     * allocates in source order, so `default:` before later cases matters. */
+    /* Preserve the historical label allocation order: consume scan labels for
+     * every top-level case/default before expression code can allocate labels.
+     * The scan allocates in source order, so `default:` before later cases
+     * matters. */
     ast_switch_consume_scan_labels(n);
 
     default_lab = -1;
@@ -8318,11 +8264,10 @@ static void ast_gen_for_stmt(const struct AstNode *n)
     lend = new_label();
 
     if (n->a != NULL && n->a->kind == AST_DECL) {
-        /* C99 for-init declaration: drive the streaming declaration codegen
+        /* C99 for-init declaration: drive declaration codegen
          * through the captured span with the for-scope rename context set, so
          * the loop variable is renamed to its unique internal slot and pushed
-         * onto the active rename stack for the body/cond/inc to resolve.  This
-         * mirrors gen_for's for-init branch exactly. */
+         * onto the active rename stack for the body/cond/inc to resolve. */
         int old_for_decl_seq = g_for_decl_seq;
         int old_for_decl_rename_index = g_for_decl_rename_index;
         int old_for_decl_recording = g_for_decl_recording;
@@ -8388,13 +8333,11 @@ static void ast_gen_stmt(const struct AstNode *n)
     case AST_EMPTY:
         break;                            /* empty statement: emit nothing */
     case AST_DECL:
-        ast_emit_decl_span(n);            /* streaming declaration codegen */
+        ast_emit_decl_span(n);            /* declaration codegen replay */
         break;
     case AST_EXPR_STMT: {
-        /* Mirror gen_expr_statement's non-fast-path tail exactly:
-         * expr_result_dead = 1; gen_expr() -> (inner hook) ast_gen_expr.
-         * We call ast_gen_expr directly, which is the SAME emitter the inner
-         * hook would invoke, so the bytes are identical. */
+        /* Expression statement results are dead, so emit with
+         * expr_result_dead set. */
         int old_dead = expr_result_dead;
         expr_result_dead = 1;
         if ((n->a->kind == AST_UNARY || n->a->kind == AST_POSTFIX) &&
@@ -8465,8 +8408,8 @@ static void ast_gen_stmt(const struct AstNode *n)
         break;
     }
     case AST_IF: {
-        /* Mirror gen_if's generic-condition shape exactly, including the
-         * label allocation order (lelse, lend BEFORE the condition). */
+        /* Generic if/else condition shape, including the label allocation
+         * order (lelse, lend before the condition). */
         int lelse = new_label();
         int lend = new_label();
         ast_gen_cond_branch(n->a, lelse, 0);
@@ -8479,7 +8422,7 @@ static void ast_gen_stmt(const struct AstNode *n)
         break;
     }
     case AST_WHILE: {
-        /* Mirror gen_while's generic shape: ltop, lend allocated up front;
+        /* Generic while shape: ltop, lend allocated up front;
          * label(ltop); test condition -> lend; body inside nflow scope;
          * jp ltop; label(lend). */
         int ltop = new_label();
@@ -8501,7 +8444,7 @@ static void ast_gen_stmt(const struct AstNode *n)
         break;
     }
     case AST_DOWHILE: {
-        /* Mirror gen_do_while's non-const generic shape: ltop, lcont, lend
+        /* Generic do-while shape: ltop, lcont, lend
          * allocated up front; label(ltop); body inside nflow scope (break->
          * lend, continue->lcont); label(lcont); test condition -> ltop when
          * TRUE (branch sense 1); label(lend).  For `while(0)`, streaming keeps
@@ -8581,10 +8524,10 @@ int ast_try_emit_statement(void)
 
     if (report) {
         if (n == NULL) {
-            fprintf(stderr, "; AST-fallback stmt build token=%d text='%s' line=%d\n",
+                fprintf(stderr, "; AST-unsupported stmt build token=%d text='%s' line=%d\n",
                     sv_tok.kind, sv_tok.text, sv_tok_line);
         } else {
-            fprintf(stderr, "; AST-fallback stmt gate kind=%s line=%d\n",
+            fprintf(stderr, "; AST-unsupported stmt gate kind=%s line=%d\n",
                     ast_kind_name(n->kind), sv_tok_line);
         }
     }

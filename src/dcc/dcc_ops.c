@@ -1813,9 +1813,6 @@ void gen_lor(void)
     }
 }
 
-/* The type oracle lives in dcc_type_oracle.c so expression codegen can call
- * it without carrying its full recursive parser mirror in this module. */
-
 void gen_conditional(void)
 {
     int lfalse;
@@ -1840,17 +1837,7 @@ void gen_conditional(void)
 
         expect(':');
 
-        /*
-         * C's conditional operator applies the usual arithmetic conversions
-         * between the second and third operands, so if either arm is float the
-         * whole expression is float.  The true arm has already been generated
-         * (its value is in DE:HL); resolve the not-yet-generated false arm's
-         * type with the side-effect-free oracle so the already-generated arm
-         * can be converted to float when needed.  The oracle restores parser
-         * state, so the real false-arm generation below is unaffected.
-         */
-        result_is_float = type_is_float(true_type) ||
-                          type_is_float(typeof_conditional_arm());
+        result_is_float = type_is_float(true_type);
 
         need_long_result = 0;
 

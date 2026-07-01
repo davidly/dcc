@@ -1,0 +1,41 @@
+{
+  "notes": [
+    "No pthreads, C11 threads, POSIX process, signal, time, locale, or atomic tests were found in the imported single-exec corpus.",
+    "Ignored tests below are outside dcc's documented CP/M 2.2/Z80 target model rather than ordinary compiler/runtime failures."
+  ],
+  "tests": [
+    { "name": "00046", "ignore": true, "reason": "C11 anonymous struct/union members are outside the dcc C89-plus-limited-C99 dialect." },
+    { "name": "00048", "ignore": true, "reason": "C99 designated initializers are outside the dcc target dialect." },
+    { "name": "00049", "ignore": true, "reason": "C99 designated initializers are outside the dcc target dialect." },
+    { "name": "00050", "ignore": true, "reason": "C11 anonymous aggregate initialization is outside the dcc target dialect." },
+    { "name": "00081", "ignore": true, "reason": "Uses long long; dcc has 16-bit int, 32-bit long, and no 64-bit integer type." },
+    { "name": "00082", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
+    { "name": "00083", "ignore": true, "reason": "Uses C99 variadic macros, which are outside dcc's documented preprocessor dialect." },
+    { "name": "00084", "ignore": true, "reason": "Uses C99 variadic macros, which are outside dcc's documented preprocessor dialect." },
+    { "name": "00085", "ignore": true, "reason": "Uses C99 variadic macros, which are outside dcc's documented preprocessor dialect." },
+    { "name": "00092", "ignore": true, "reason": "Uses C99 array designators, which are outside the dcc target dialect." },
+    { "name": "00097", "ignore": true, "reason": "Uses variadic macro redefinition behavior outside dcc's documented preprocessor dialect." },
+    { "name": "00104", "ignore": true, "reason": "Uses int64_t; dcc has no 64-bit integer type." },
+    { "name": "00119", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
+    { "name": "00123", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
+    { "name": "00128", "ignore": true, "reason": "Uses long long and unsigned long long; dcc has no 64-bit integer type." },
+    { "name": "00135", "ignore": true, "reason": "Uses long long and unsigned long long; dcc has no 64-bit integer type." },
+    { "name": "00147", "ignore": true, "reason": "Uses C99 designated initializers, which are outside the dcc target dialect." },
+    { "name": "00148", "ignore": true, "reason": "Uses C99 designated initializers, which are outside the dcc target dialect." },
+    { "name": "00149", "ignore": true, "reason": "Uses C99 compound literals, which are outside the dcc target dialect." },
+    { "name": "00150", "ignore": true, "reason": "Uses C99 compound literals and designated initializers, which are outside the dcc target dialect." },
+    { "name": "00151", "ignore": true, "reason": "Uses nested C99 array designators, which are outside the dcc target dialect." },
+    { "name": "00166", "ignore": true, "reason": "Assumes host-sized int can hold large octal/hex constants; dcc int is 16-bit on Z80." },
+    { "name": "00178", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
+    { "name": "00187", "ignore": true, "reason": "Assumes hosted byte-stream stdio semantics; CP/M text files use Ctrl-Z EOF and dcc's stdio subset lacks fgetc/ungetc." },
+    { "name": "00195", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
+    { "name": "00200", "ignore": true, "reason": "Uses long long generic-selection cases; dcc has no 64-bit integer type." },
+    { "name": "00203", "ignore": true, "reason": "Uses long long constants; dcc has no 64-bit integer type." },
+    { "name": "00204", "ignore": true, "reason": "Tests host ABI details with double, long double, long long, uint64_t, and int64_t; those are outside dcc's CP/M/Z80 model." },
+    { "name": "00212", "ignore": true, "reason": "Checks LLP64/LP64/ILP32 host data models; dcc is a 16-bit-pointer CP/M/Z80 target." },
+    { "name": "00213", "ignore": true, "reason": "Uses GNU statement expressions and labels into dead statement-expression blocks, outside the dcc target dialect." },
+    { "name": "00217", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
+    { "name": "00219", "ignore": true, "reason": "Uses C11 _Generic and long long associations, outside the dcc target dialect." },
+    { "name": "00220", "ignore": true, "reason": "Uses wchar.h and wide-character Unicode literals, outside the dcc CP/M runtime/header set." }
+  ]
+}

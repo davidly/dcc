@@ -35,16 +35,15 @@ set(DCC_SOURCES
     dcc_expr.c
     dcc_cmp.c
     dcc_ops.c
-    dcc_type_oracle.c
     dcc_assign.c
     dcc_stmt_fast.c
     dcc_decl.c
     dcc_stmt.c
     dcc_func.c
     dcc_data.c
-    dcc_ast.c           # function-local AST (arena + nodes); migration in progress
-    dcc_ast_build.c     # function-local AST: non-emitting expression builder (Phase 1)
-    dcc_ast_gen.c       # function-local AST: AST-driven codegen walker (Phase 2)
+    dcc_ast.c           # function-local AST (arena + nodes)
+    dcc_ast_build.c     # function-local AST builder
+    dcc_ast_gen.c       # AST-driven codegen walker
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h)

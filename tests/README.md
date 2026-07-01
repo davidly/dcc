@@ -13,6 +13,8 @@ tests/
   E.PAS, E.COB, ... # fixture input files consumed by some interpreters
   baselines/
     <name>.txt      # expected stdout for tests/<name>.c
+  extended-tests/
+    c-testsuite/    # imported c89/c99/c11 single-exec corpus
 ```
 
 ## How tests and baselines relate
@@ -73,6 +75,51 @@ A test **passes** when its program builds, runs, and its stdout matches the
 corresponding `baselines/<name>.txt` byte-for-byte (line endings normalized to
 LF). A test with no baseline file is still built and run, but reported as
 "no baseline" rather than verified.
+
+## Running the extended c-testsuite corpus
+
+The imported c-testsuite single-exec cases live under
+`tests/extended-tests/c-testsuite/tests/single-exec/`. Each case keeps the
+upstream trio of files: `<id>.c`, `<id>.c.tags`, and `<id>.c.expected`.
+
+Target-inapplicable cases are listed in
+`tests/extended-tests/_extended_test_overrides.json`. These are tests whose
+premise conflicts with dcc's CP/M 2.2/Z80 target model or documented C dialect
+(for example `long long`, `double`, wide-character headers, GNU statement
+expressions, or C99/C11 features that dcc intentionally does not provide). The
+extended runner reports them as skipped instead of failures.
+
+Use `scripts/runall-extended.ps1` to build those cases with the same dcc,
+dccpeep, M80, dccrtlstrip, M80, and L80 pipeline as the main suite, then run the
+resulting `.COM` files under `ntvcm` and compare stdout+stderr with the matching
+`.expected` file.
+
+```pwsh
+# C89-tagged tests (default when no standard flag is supplied)
+pwsh ./scripts/runall-extended.ps1 -C89
+
+# C99 target-standard set; c89-tagged tests are included by c-testsuite rules
+pwsh ./scripts/runall-extended.ps1 -C99
+
+# C11 target-standard set; c89 and c99 tests are included by c-testsuite rules
+pwsh ./scripts/runall-extended.ps1 -C11
+
+# Every imported single-exec case, including any case without a standard tag
+pwsh ./scripts/runall-extended.ps1 -All
+
+# Smoke-test one case
+pwsh ./scripts/runall-extended.ps1 -C89 -Test 00001
+
+# Bound each build pass and emulator run to 30 seconds
+pwsh ./scripts/runall-extended.ps1 -C89 -RunTimeout 30
+
+# Use an alternate skip file, or an empty/nonexistent one to run everything
+pwsh ./scripts/runall-extended.ps1 -C89 -SkipFile tests/extended-tests/_extended_test_overrides.json
+```
+
+The runner defaults to `-Mode fast` and parallel execution, matching the main
+`runall.ps1` runner's current default behavior. Use `-Mode nopeep`, `-Mode full`,
+or `-Serial` when you need a different pass or easier debugging.
 
 ## Placeholders for volatile output
 

@@ -32,7 +32,7 @@ ntvcm.
 
 | Path | What |
 | ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`/`dcc_type_oracle.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. |
+| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`, `dcc_ast.c`/`dcc_ast_build.c`/`dcc_ast_gen.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. |
 | `src/dccpeep/` | Peephole optimizer (`-Ot` time / `-Os` size). |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |

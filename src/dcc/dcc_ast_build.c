@@ -1,31 +1,23 @@
 /*
- * dcc_ast_build.c - Phase 1 non-emitting expression AST builder.
+ * dcc_ast_build.c - function-local AST builder.
  *
- * dcc is a single-pass, syntax-directed translator: the parser emits Z80
- * assembly as it consumes tokens.  This module introduces the FIRST consumer
- * of the function-local AST (see dcc_ast.h) without changing code generation.
+ * dcc lowers function bodies through a function-local AST (see dcc_ast.h).
  *
  * ast_build_expr() is a recursive-descent expression parser that mirrors the
- * grammar the streaming front end accepts (including dcc's C99 conveniences -
+ * source grammar (including dcc's C99 conveniences -
  * it operates purely on the token stream, so for-init/mid-block expressions
  * and // comments are handled transparently by the shared lexer).  It builds
  * an AstNode tree from the current lexer position by calling next_token(); it
  * never emits, interns strings, or allocates symbols, so the only global state
- * it touches is the lexer cursor.
- *
- * The streaming front end calls this (via the gated hook in gen_expr) by
- * snapshotting the lexer, building the AST, then restoring the snapshot before
- * the real codegen runs.  Because the snapshot is restored, generated output
- * is byte-for-byte identical whether or not the build runs - which is exactly
- * what lets us exercise the builder over the whole test corpus while the
- * migration proceeds construct by construct.
+ * it touches is the lexer cursor.  The AST emitter consumes the built tree;
+ * unsupported shapes are compiler errors in normal codegen.
  */
 #include "dcc.h"
 #include "dcc_ast.h"
 #include <stdlib.h>
 #include <string.h>
 
-int g_ast_build_enabled = 0;
+int g_ast_build_enabled = 1;
 struct AstArena g_ast_arena;
 
 static int ast_num_text_plain_decimal(const char *s)
@@ -799,9 +791,8 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
     if (starts_type()) {
         /* C99 for-init declaration `for (int i = 0; ...)`: capture it as an
          * AST_DECL span (consumes through the first ';') and let
-         * ast_gen_for_stmt replay it via the streaming declaration codegen and
-         * for-scope rename machinery.  Mirrors gen_for, which does NOT
-         * expect(';') after the declaration. */
+         * ast_gen_for_stmt replay it via declaration codegen and for-scope
+         * rename machinery. */
         init = ast_build_decl_span(ar);
         if (init == NULL)
             return NULL;
@@ -920,10 +911,10 @@ static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
 }
 
 /* A captured local-declaration token span.  The AST records where a local
- * declaration begins so the emitter can re-seek the lexer and let the proven
- * streaming declaration codegen run (rebuilding locals[] / frame offsets
- * exactly as the frame-sizing scan did), instead of re-implementing the
- * declaration parser in the AST walker. */
+ * declaration begins so the emitter can re-seek the lexer and replay the
+ * declaration parser/codegen (rebuilding locals[] / frame offsets exactly as
+ * the frame-sizing scan did), instead of duplicating declaration lowering in
+ * the AST walker. */
 struct DeclSpan {
     long posi;
     long tok_start_pos;
@@ -974,9 +965,9 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
 }
 
 /* Re-emit a captured local-declaration span (see ast_build_decl_span).  The
- * lexer is transiently re-seeked to the declaration, the streaming
- * declaration codegen runs (mirroring gen_compound's declaration branch
- * exactly, so locals[] / frame offsets match the frame-sizing scan), then the
+ * lexer is transiently re-seeked to the declaration, declaration codegen runs
+ * (mirroring gen_compound's declaration branch exactly, so locals[] / frame
+ * offsets match the frame-sizing scan), then the
  * lexer is restored - leaving no net cursor movement for the surrounding AST
  * walk. */
 void ast_emit_decl_span(const struct AstNode *n)
@@ -996,12 +987,12 @@ void ast_emit_decl_span(const struct AstNode *n)
     tok_line = sp->tok_line;
     tok = sp->tok;
 
-    /* Drive the declaration through pure streaming codegen.  The depth-0
+    /* Drive the declaration through the existing declaration codegen.  The depth-0
      * gen_expr AST hook resets the shared g_ast_arena after each expression;
      * if a declaration initializer triggered it here, it would wipe the arena
      * that still holds the surrounding AST statement's pending sibling nodes
      * (corrupting them mid-walk).  Disabling the hook keeps the same
-     * byte-identical streaming output without touching the arena. */
+    * initializer output without touching the arena. */
     g_ast_build_enabled = 0;
     g_ast_gen_enabled = 0;
 
@@ -1033,7 +1024,7 @@ void ast_emit_decl_span(const struct AstNode *n)
 
 /* Build a brace-delimited block `{ stmt* }`.  Local declarations (and
  * typedefs) are captured as AST_DECL span nodes that the emitter re-runs
- * through the streaming declaration codegen, so the symbol scope/frame the
+ * through declaration codegen, so the symbol scope/frame the
  * frame-sizing scan built is reproduced exactly.  Declines (NULL) on any
  * unsupported child statement or a truncated declaration.  An empty block
  * `{}` is accepted (emits only a balanced enter/leave scope). */
@@ -1048,7 +1039,7 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
         struct AstNode *child;
 
         /* A typedef or any declaration is captured as a span and re-emitted
-         * by the streaming declaration codegen at emit time (which rebuilds
+         * by declaration codegen at emit time (which rebuilds
          * locals[] / frame offsets identically to the frame-sizing scan). */
         if (tok.kind == TOK_TYPEDEF || starts_type()) {
             child = ast_build_decl_span(ar);
@@ -1071,9 +1062,8 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
 }
 
 /* Build one statement from the current lexer position.  Returns NULL (without
- * committing to a partial parse for unrecognised leads) so the caller can fall
- * back to the streaming statement codegen.  The supported set is widened one
- * construct at a time; each addition is gated to byte-identical output. */
+ * committing to a partial parse for unrecognised leads).  In normal codegen a
+ * NULL result is reported as an unsupported AST shape. */
 struct AstNode *ast_build_stmt(struct AstArena *ar)
 {
     switch (tok.kind) {
@@ -1109,21 +1099,13 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
  * ------------------------------------------------------------------------- */
 void ast_build_init(void)
 {
-    const char *e = getenv("DCC_AST_BUILD");
     const char *g = getenv("DCC_AST_GEN");
-    if (e != NULL && e[0] != '\0')
-        g_ast_build_enabled = (e[0] == '2') ? 2 : 1;
-    else
-        g_ast_build_enabled = 0;
+    const char *e = getenv("DCC_AST_BUILD");
+    g_ast_build_enabled = (e != NULL && e[0] == '2') ? 2 : 1;
 
-    /* AST-driven codegen implies building the AST. */
-    if (g != NULL && g[0] != '\0') {
-        g_ast_gen_enabled = (g[0] == '2') ? 2 : 1;
-        if (g_ast_build_enabled == 0)
-            g_ast_build_enabled = 1;
-    } else {
-        g_ast_gen_enabled = 0;
-    }
+    /* AST-driven codegen is the compiler's normal codegen path.  The env var
+     * is retained only for verbose reporting (`DCC_AST_GEN=2`). */
+    g_ast_gen_enabled = (g != NULL && g[0] == '2') ? 2 : 1;
 
     ast_arena_init(&g_ast_arena);
 }

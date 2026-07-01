@@ -144,14 +144,14 @@ static long cond_lf(int c)            { return (long)(c ? 16777216L : 3.5f); }
 static long cond_compound(int c, float f) { return (long)(c ? 2 : (f + 1.0f)); }
 static long cond_nested(int a, int b) { return (long)(a ? 1 : b ? 2 : 3.5f); }
 
-/* The type oracle resolves a float reachable only through a struct member or a
- * cast buried inside a NESTED ternary arm - shapes a shallow token scan misses
- * but a full type walk catches.  s->f / (float)y make the whole expression
- * float, so the selected integer arm is converted. */
+/* AST typing resolves a float reachable only through a struct member or a cast
+ * buried inside a nested ternary arm - shapes a shallow token scan misses but a
+ * full typed expression tree catches.  s->f / (float)y make the whole
+ * expression float, so the selected integer arm is converted. */
 static long cond_nmemb(int a, int b, struct flt_box *s) { return (long)(a ? 1 : b ? 2 : s->f); }
 static long cond_ncast(int a, int b, int y) { return (long)(a ? 1 : b ? 2 : (float)y); }
 
-/* A bare float ARRAY expression decays to float* in value context; the oracle
+/* A bare float ARRAY expression decays to float* in value context; AST typing
  * must report the conditional arm as pointer, not float, or a ternary of float
  * arrays passed to a float* parameter pushes float bits instead of the pointer. */
 static float cflt_a[4];

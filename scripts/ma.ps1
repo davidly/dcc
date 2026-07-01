@@ -35,6 +35,10 @@ parameters below are forwarded to Invoke-MaBuild.
 .PARAMETER Emulator
   Emulator command for running ntvcm (default: "ntvcm").
 
+.PARAMETER SourcePath
+    Optional explicit C source file path. When omitted, the driver searches the
+    normal dcc test locations by app name.
+
 .EXAMPLE
   pwsh ./scripts/ma.ps1 triangle
   pwsh ./scripts/ma.ps1 sieve nopeep
@@ -61,7 +65,8 @@ param(
     [string]$Mode = "full",
 
     [string]$BuildDir = "build",
-    [string]$Emulator = "ntvcm"
+    [string]$Emulator = "ntvcm",
+    [string]$SourcePath = ""
 )
 
 # CRLF conversion helper for M80. Reads as text, normalizes all line endings to
@@ -94,6 +99,7 @@ function Invoke-MaBuild {
         [string]$Mode = "fast",
         [string]$BuildDir = "build",
         [string]$Emulator = "ntvcm",
+        [string]$SourcePath = "",
         [int]$StackSize = 0,
         [switch]$Quiet
     )
@@ -106,8 +112,8 @@ function Invoke-MaBuild {
     # Normalize mode
     $modeLower = $Mode.ToLower()
     if ($modeLower -eq "full") {
-        $fastOk = Invoke-MaBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -StackSize $StackSize -Quiet:$Quiet
-        $nopeepOk = Invoke-MaBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -StackSize $StackSize -Quiet:$Quiet
+        $fastOk = Invoke-MaBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -Quiet:$Quiet
+        $nopeepOk = Invoke-MaBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -Quiet:$Quiet
         return ($fastOk -and $nopeepOk)
     }
     $usePeep = @("fast", "peep", "opt", "optimized", "o", "1", "yes", "true") -contains $modeLower
@@ -118,24 +124,36 @@ function Invoke-MaBuild {
     $upperBase = $base.ToUpper()
 
     $sourceFile = ""
-    foreach ($candidate in @(
-        (Join-Path "tests" "$base.c"),
-        (Join-Path "tests" "$base.C"),
-        (Join-Path "tests" "$lowerBase.c"),
-        (Join-Path "tests" "$upperBase.C"),
-        "$base.c",
-        "$base.C",
-        "$lowerBase.c",
-        "$upperBase.C"
-    )) {
-        if (Test-Path $candidate -PathType Leaf) {
-            $sourceFile = $candidate
-            break
+    if ($SourcePath) {
+        if (Test-Path -LiteralPath $SourcePath -PathType Leaf) {
+            $sourceFile = (Resolve-Path -LiteralPath $SourcePath).ProviderPath
+        }
+    }
+    else {
+        foreach ($candidate in @(
+            (Join-Path "tests" "$base.c"),
+            (Join-Path "tests" "$base.C"),
+            (Join-Path "tests" "$lowerBase.c"),
+            (Join-Path "tests" "$upperBase.C"),
+            "$base.c",
+            "$base.C",
+            "$lowerBase.c",
+            "$upperBase.C"
+        )) {
+            if (Test-Path $candidate -PathType Leaf) {
+                $sourceFile = $candidate
+                break
+            }
         }
     }
 
     if (-not $sourceFile) {
-        Write-Error "Source file not found for: $Name"
+        if ($SourcePath) {
+            Write-Error "Source file not found: $SourcePath"
+        }
+        else {
+            Write-Error "Source file not found for: $Name"
+        }
         return $false
     }
 
@@ -295,6 +313,6 @@ if ($MyInvocation.InvocationName -ne '.') {
         Write-Error "Name is required. Usage: ma.ps1 <name> [full|fast|nopeep]"
         exit 1
     }
-    $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator
+    $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath
     if (-not $ok) { exit 1 }
 }
