@@ -176,6 +176,7 @@ long pp_expr_bitxor(void);
 long pp_expr_bitor(void);
 long pp_expr_andand(void);
 long pp_expr_oror(void);
+long pp_expr_cond(void);
 
 long pp_expr_defined(void)
 {
@@ -220,7 +221,7 @@ long pp_expr_primary(void)
 
     if (*pp_expr_p == '(') {
         pp_expr_p++;
-        v = pp_expr_oror();
+        v = pp_expr_cond();
         pp_expr_skip_ws();
         if (*pp_expr_p == ')')
             pp_expr_p++;
@@ -242,12 +243,15 @@ long pp_expr_primary(void)
             name[i++] = *pp_expr_p++;
         name[i] = 0;
 
+        if (!strcmp(name, "__LINE__"))
+            return line_no;
+
         di = find_define(name);
         if (di >= 0 && !defs[di].is_func && pp_expr_depth < 16) {
             savep = pp_expr_p;
             pp_expr_p = defs[di].value;
             pp_expr_depth++;
-            v = pp_expr_oror();
+            v = pp_expr_cond();
             pp_expr_depth--;
             pp_expr_p = savep;
             return v;
@@ -493,11 +497,31 @@ long pp_expr_oror(void)
     return v;
 }
 
+long pp_expr_cond(void)
+{
+    long v;
+    long t;
+    long f;
+
+    v = pp_expr_oror();
+    pp_expr_skip_ws();
+    if (*pp_expr_p == '?') {
+        pp_expr_p++;
+        t = pp_expr_cond();
+        pp_expr_skip_ws();
+        if (*pp_expr_p == ':')
+            pp_expr_p++;
+        f = pp_expr_cond();
+        v = v ? t : f;
+    }
+    return v;
+}
+
 int pp_eval_simple_expr(const char *s)
 {
     pp_expr_p = s;
     pp_expr_depth = 0;
-    return pp_expr_oror() != 0;
+    return pp_expr_cond() != 0;
 }
 
 void remove_define(const char *name)
@@ -621,6 +645,8 @@ void pp_recompute_active(void)
     }
 }
 
+void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
+
 void parse_preprocessor_line(void)
 {
     char word[32];
@@ -732,29 +758,39 @@ void parse_preprocessor_line(void)
     } else if (!strcmp(word, "line")) {
         int lno;
         int qi;
+        char expanded[MAX_MACRO_TEXT];
+        const char *lp;
 
         while (isspace((unsigned char)peekc()) && peekc() != '\n')
             getc_src();
 
+        i = 0;
+        while ((c = peekc()) != 0 && c != '\n' && i < (int)sizeof(val) - 1)
+            val[i++] = (char)getc_src();
+        val[i] = 0;
+        macro_expand_argument_text(val, expanded, sizeof(expanded), 0);
+
+        lp = expanded;
+        while (*lp && isspace((unsigned char)*lp))
+            lp++;
+
         lno = 0;
-        while (isdigit((unsigned char)peekc()))
-            lno = lno * 10 + getc_src() - '0';
+        while (isdigit((unsigned char)*lp))
+            lno = lno * 10 + *lp++ - '0';
 
         if (lno > 0)
             line_no = lno - 1;
 
-        while (isspace((unsigned char)peekc()) && peekc() != '\n')
-            getc_src();
+        while (*lp && isspace((unsigned char)*lp))
+            lp++;
 
-        if (peekc() == '"') {
-            getc_src();
+        if (*lp == '"') {
+            lp++;
             qi = 0;
-            while (peekc() && peekc() != '"' && peekc() != '\n' &&
+            while (*lp && *lp != '"' && *lp != '\n' &&
                    qi < (int)sizeof(current_file_name) - 1)
-                current_file_name[qi++] = (char)getc_src();
+                current_file_name[qi++] = *lp++;
             current_file_name[qi] = 0;
-            if (peekc() == '"')
-                getc_src();
         }
     } else if (!strcmp(word, "include")) {
         /* #include directives are expanded before tokenisation by
@@ -1712,7 +1748,7 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
 
             if (!strcmp(ident, "__LINE__")) {
                 char numbuf[32];
-                sprintf(numbuf, "%d", tok_line);
+                sprintf(numbuf, "%d", line_no);
                 for (ii = 0; numbuf[ii] && oi < outsz - 1; ++ii)
                     out[oi++] = numbuf[ii];
                 continue;
@@ -2280,8 +2316,7 @@ void next_token(void)
         }
 
         di = find_define(tok.text);
-        if (di >= 0 && (macro_disabled_here(tok.text, tok_start_pos) ||
-                        macro_suppressed_member_name_at(tok_start_pos)))
+        if (di >= 0 && macro_disabled_here(tok.text, tok_start_pos))
             di = -1;
         if (di >= 0) {
             long dv;

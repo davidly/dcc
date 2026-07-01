@@ -837,35 +837,6 @@ void emit_init_auto_array_from_list(struct Sym *s, int elem_type)
     }
 }
 
-void emit_alloc_auto_vla(struct Sym *s, int elem_type)
-{
-    struct Sym *bound;
-    int elem_size;
-
-    if (!s || g_last_array_vla_bound_name[0] == 0)
-        return;
-
-    bound = find_sym(g_last_array_vla_bound_name);
-    if (!bound) {
-        error_here("unknown VLA bound");
-        return;
-    }
-
-    elem_size = type_size(elem_type);
-    if (elem_size <= 0)
-        elem_size = 2;
-
-    emit_load_sym_addr(bound);
-    emit("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n");
-    scale_hl_by_elem_size(elem_size);
-    emit("\tld d,h\n\tld e,l\n");
-    emit("\tpush sp\n\tpop hl\n");
-    emit("\tor a\n\tsbc hl,de\n\tld sp,hl\n");
-    emit("\tld e,l\n\tld d,h\n");
-    emit_load_sym_addr(s);
-    emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
-}
-
 void gen_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
@@ -892,6 +863,13 @@ void gen_local_decl_after_type(int base)
 
         strncpy(source_name, name, sizeof(source_name) - 1);
         source_name[sizeof(source_name) - 1] = 0;
+
+        if (tok.kind == '(') {
+            skip_prototype_function_suffix();
+            if (!accept(','))
+                break;
+            continue;
+        }
 
         if (g_for_decl_seq >= 0) {
             const char *rn;
@@ -978,16 +956,9 @@ void gen_local_decl_after_type(int base)
             bytes = type_size(type);
             if (total_elems > 0)
                 bytes = object_array_size(type, total_elems);
-            if (g_last_array_had_vla)
-                bytes = 2;
 
-            s = add_local_alloc(name, g_last_array_had_vla ? type_add_ptr(type) : type, bytes);
-            if (g_last_array_had_vla) {
-                s->is_array = 0;
-                s->array_len = 0;
-                s->elem_size = type_size(type);
-                if (s->elem_size <= 0) s->elem_size = 2;
-            } else if (arrlen > 0 || g_last_array_dim_count > 0) {
+            s = add_local_alloc(name, type, bytes);
+            if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;
                 s->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
@@ -1003,9 +974,6 @@ void gen_local_decl_after_type(int base)
         }
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
-
-        if (g_last_array_had_vla && s && !s->is_const_value)
-            emit_alloc_auto_vla(s, type);
 
         if (s->is_const_value) {
             if (accept('=')) {

@@ -11,6 +11,32 @@
 #include "dcc.h"
 #include "dcc_ast.h"
 
+static int current_identifier_starts_label(void)
+{
+    long save_pos;
+    long save_tok_start;
+    int save_line;
+    int save_tok_line;
+    struct Token save_tok;
+    int is_label;
+
+    if (tok.kind != TOK_ID)
+        return 0;
+    save_pos = posi;
+    save_tok_start = tok_start_pos;
+    save_line = line_no;
+    save_tok_line = tok_line;
+    save_tok = tok;
+    next_token();
+    is_label = (tok.kind == ':');
+    posi = save_pos;
+    tok_start_pos = save_tok_start;
+    line_no = save_line;
+    tok_line = save_tok_line;
+    tok = save_tok;
+    return is_label;
+}
+
 void gen_compound(void)
 {
     expect('{');
@@ -19,6 +45,8 @@ void gen_compound(void)
     while (tok.kind != TOK_EOF && tok.kind != '}') {
         if (tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
+        } else if (current_identifier_starts_label()) {
+            gen_statement();
         } else if (starts_type()) {
             int t;
             int is_static_local;

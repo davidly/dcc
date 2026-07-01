@@ -435,6 +435,7 @@ char *filter_active_preprocessor_source(long *lenp)
     int sp;
     int active;
     int in_asm;
+    int logical_line;
 
     out = NULL;
     out_len = 0;
@@ -443,12 +444,14 @@ char *filter_active_preprocessor_source(long *lenp)
     sp = 0;
     active = 1;
     in_asm = 0;
+    logical_line = 1;
 
     while (p < src_len) {
         const char *s;
         const char *e;
         char word[32];
         int is_directive;
+        int next_logical_line;
 
         line_start = p;
         while (p < src_len && src[p] != '\n')
@@ -456,6 +459,8 @@ char *filter_active_preprocessor_source(long *lenp)
         line_end = p;
         if (p < src_len && src[p] == '\n')
             p++;
+        line_no = logical_line;
+        next_logical_line = logical_line + 1;
 
         s = src + line_start;
         e = src + line_end;
@@ -476,7 +481,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 if (!strcmp(ww, "endasm")) {
                     in_asm = 0;
                     append_mem(&out, &out_len, &out_cap, "\n", 1);
-                    continue;
+                    goto next_filter_line;
                 }
             }
             /* Pass asm content to tokenizer as a pseudo-directive.
@@ -488,7 +493,7 @@ char *filter_active_preprocessor_source(long *lenp)
             } else {
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
             }
-            continue;
+            goto next_filter_line;
         }
 
         if (!is_directive) {
@@ -496,7 +501,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
             else
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         s++;
@@ -522,13 +527,35 @@ char *filter_active_preprocessor_source(long *lenp)
             errors++;
             if (errors > 40) fatal("too many errors");
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "line")) {
-            if (active)
+            if (active) {
+                char line_expr[MAX_MACRO_TEXT];
+                char expanded[MAX_MACRO_TEXT];
+                const char *lp;
+                int ei;
+                int lno;
+
+                while (s < e && (*s == ' ' || *s == '\t'))
+                    s++;
+                ei = 0;
+                while (s < e && ei < (int)sizeof(line_expr) - 1)
+                    line_expr[ei++] = *s++;
+                line_expr[ei] = 0;
+                macro_expand_argument_text(line_expr, expanded, sizeof(expanded), 0);
+                lp = expanded;
+                while (*lp && isspace((unsigned char)*lp))
+                    lp++;
+                lno = 0;
+                while (isdigit((unsigned char)*lp))
+                    lno = lno * 10 + *lp++ - '0';
+                if (lno > 0)
+                    next_logical_line = lno;
                 append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
-            continue;
+            }
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "ifdef") || !strcmp(word, "ifndef")) {
@@ -551,7 +578,7 @@ char *filter_active_preprocessor_source(long *lenp)
             active = active && cond;
             sp++;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "if")) {
@@ -564,6 +591,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 expr[ei++] = *s++;
             expr[ei] = 0;
             strip_macro_replacement_comments(expr);
+            line_no = logical_line;
             cond = pp_eval_simple_expr(expr);
             if (sp >= MAX_IFSTACK)
                 fatal("too many nested #if");
@@ -573,7 +601,7 @@ char *filter_active_preprocessor_source(long *lenp)
             active = active && cond;
             sp++;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "elif")) {
@@ -594,6 +622,7 @@ char *filter_active_preprocessor_source(long *lenp)
                         expr[ei++] = *s++;
                     expr[ei] = 0;
                     strip_macro_replacement_comments(expr);
+                        line_no = logical_line;
                     cond = pp_eval_simple_expr(expr);
                     active = parent && cond;
                     if (active)
@@ -601,7 +630,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 }
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "else")) {
@@ -619,7 +648,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 }
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "endif")) {
@@ -628,12 +657,12 @@ char *filter_active_preprocessor_source(long *lenp)
                 active = active_stack[sp];
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!active) {
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "error")) {
@@ -656,7 +685,7 @@ char *filter_active_preprocessor_source(long *lenp)
             if (errors > 40)
                 fatal("too many errors");
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "undef")) {
@@ -674,7 +703,7 @@ char *filter_active_preprocessor_source(long *lenp)
              * The mutation above is only for this filtering pass.
              */
             append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "define")) {
@@ -732,20 +761,20 @@ char *filter_active_preprocessor_source(long *lenp)
              * for evaluating later conditionals during this filtering pass.
              */
             append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "asm")) {
             if (active)
                 in_asm = 1;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "endasm")) {
             /* #endasm without matching #asm - ignore */
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "warning")) {
@@ -765,7 +794,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 fprintf(stderr, "%s:%d: warning: #warning %s\n", filebuf, lno, msg);
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "pragma")) {
@@ -773,7 +802,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
             else
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         /* Unknown directives in inactive code are silently dropped.
@@ -789,6 +818,9 @@ char *filter_active_preprocessor_source(long *lenp)
             if (errors > 40) fatal("too many errors");
         }
         append_mem(&out, &out_len, &out_cap, "\n", 1);
+
+next_filter_line:
+        logical_line = next_logical_line;
     }
 
     if (!out) {

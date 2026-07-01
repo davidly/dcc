@@ -873,19 +873,14 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
     return n;
 }
 
-/* Build a conservative switch body as a list of case/default sections.  Each
- * section owns a list of ordinary statements up to the next top-level label.
- * Declines on declarations, duplicate/default-invalid labels,
- * pre-label statements, and case values outside the non-negative table-scan
- * range that the switch codegen's label pre-scan supports. */
+/* Build `switch (expr) statement`.  The statement may be a brace block or any
+ * single statement; case/default labels may be nested inside the body, as C
+ * permits.  Switch codegen scans the body recursively for labels. */
 static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
 {
     struct AstNode *n;
     struct AstNode *ctrl;
-    struct AstNode *section;
-    int have_default;
-    int vals[MAX_SWITCH_CASES];
-    int nvals;
+    struct AstNode *body;
 
     next_token();                        /* consume 'switch' */
     if (tok.kind != '(')
@@ -896,62 +891,14 @@ static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
     if (ctrl == NULL || tok.kind != ')')
         return NULL;
     next_token();                        /* consume ')' */
-    if (tok.kind != '{')
+
+    body = ast_build_stmt(ar);
+    if (body == NULL)
         return NULL;
-    next_token();                        /* consume '{' */
 
     n = ast_new(ar, AST_SWITCH);
     n->a = ctrl;
-    have_default = 0;
-    nvals = 0;
-    section = NULL;
-
-    while (tok.kind != TOK_EOF && tok.kind != '}') {
-        if (tok.kind == TOK_CASE) {
-            long cv;
-            int i;
-            next_token();
-            cv = parse_const_long_expr();
-            if (tok.kind != ':')
-                return NULL;
-            if (nvals >= MAX_SWITCH_CASES)
-                return NULL;
-            for (i = 0; i < nvals; ++i)
-                if ((vals[i] & 0xffff) == ((int)cv & 0xffff))
-                    return NULL;
-            vals[nvals++] = (int)cv;
-            next_token();                /* consume ':' */
-
-            section = ast_new(ar, AST_CASE);
-            section->ival = cv;
-            ast_list_push(ar, n, section);
-        } else if (tok.kind == TOK_DEFAULT) {
-            if (have_default)
-                return NULL;
-            have_default = 1;
-            next_token();
-            if (tok.kind != ':')
-                return NULL;
-            next_token();                /* consume ':' */
-
-            section = ast_new(ar, AST_DEFAULT);
-            ast_list_push(ar, n, section);
-        } else {
-            struct AstNode *child;
-            if (section == NULL)
-                return NULL;
-            if (tok.kind == TOK_TYPEDEF || starts_type())
-                return NULL;
-            child = ast_build_stmt(ar);
-            if (child == NULL)
-                return NULL;
-            ast_list_push(ar, section, child);
-        }
-    }
-
-    if (tok.kind != '}')
-        return NULL;
-    next_token();                        /* consume '}' */
+    n->b = body;
     return n;
 }
 
@@ -1123,7 +1070,7 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
      * outer ast_try_emit_statement restores the lexer snapshot on NULL, so
      * mis-routing a non-expression lead is harmless. */
     case '*': case '(': case '&': case '-': case '+': case '!': case '~':
-    case TOK_INC: case TOK_DEC:
+    case TOK_INC: case TOK_DEC: case TOK_SIZEOF:
                        return ast_build_expr_stmt(ar);
     default:           return NULL;
     }

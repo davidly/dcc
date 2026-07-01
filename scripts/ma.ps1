@@ -109,6 +109,11 @@ function Invoke-MaBuild {
         if (-not $Quiet) { Write-Host $Message -ForegroundColor $Color }
     }
 
+    function Write-BuildError {
+        param([string]$Message)
+        Write-Error -Message $Message -ErrorAction Continue
+    }
+
     # Normalize mode
     $modeLower = $Mode.ToLower()
     if ($modeLower -eq "full") {
@@ -149,10 +154,10 @@ function Invoke-MaBuild {
 
     if (-not $sourceFile) {
         if ($SourcePath) {
-            Write-Error "Source file not found: $SourcePath"
+            Write-BuildError "Source file not found: $SourcePath"
         }
         else {
-            Write-Error "Source file not found for: $Name"
+            Write-BuildError "Source file not found for: $Name"
         }
         return $false
     }
@@ -193,7 +198,7 @@ function Invoke-MaBuild {
     $rootRtlSrc = "DCCRTL.MAC"
 
     if (-not (Test-Path $rootRtlSrc)) {
-        Write-Error "Runtime not found: $rootRtlSrc"
+        Write-BuildError "Runtime not found: $rootRtlSrc"
         return $false
     }
 
@@ -230,10 +235,16 @@ function Invoke-MaBuild {
 
     Write-Step "  Compiling with: $DCC $($dccArgs -join ' ')"
     $dccOut = & $DCC @($dccArgs | Where-Object { $_ }) 2>&1
+    $dccExit = $LASTEXITCODE
     if (-not $Quiet) { $dccOut | Write-Host }
 
+    if ($dccExit -ne 0) {
+        Write-BuildError "Compilation failed for $Name (dcc exit code $dccExit)"
+        return $false
+    }
+
     if (-not (Test-Path $appMac)) {
-        Write-Error "Compilation failed, no .MAC produced for $Name"
+        Write-BuildError "Compilation failed, no .MAC produced for $Name"
         return $false
     }
 
@@ -291,7 +302,7 @@ function Invoke-MaBuild {
     $buildWarnings = $allBuildOut | Where-Object { $_ -match '%Mult\. Def\.|%Phase error|%Undefined' }
     if ($buildWarnings) {
         $buildWarnings | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
-        Write-Error "Build warnings treated as errors for $Name"
+        Write-BuildError "Build warnings treated as errors for $Name"
         return $false
     }
 
@@ -300,7 +311,7 @@ function Invoke-MaBuild {
         return $true
     }
     else {
-        Write-Error "Build failed: .COM file not produced for $Name"
+        Write-BuildError "Build failed: .COM file not produced for $Name"
         return $false
     }
 }

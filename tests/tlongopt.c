@@ -35,6 +35,7 @@ static int br_lt32768(int x) { if (x < 32768) return 1; return 0; }
 static int br_lt65535(int x) { if (x < 65535) return 1; return 0; }
 static int br_lt_hex_u(int x) { if (x < 0xffff) return 1; return 0; }
 static int br_ult_hex_u(unsigned int x) { if (x < 0xffff) return 1; return 0; }
+static int clamp_int_min(long a) { if (a < -32768L) return -32768; return (int)a; }
 
 /* Compound long expressions that peek_simple_unary_type cannot predict: the
  * first term is 16-bit but the whole RHS is long.  The operator must still
@@ -360,6 +361,8 @@ static void test_long_const_compare_edges(void)
     chk(br_lt_hex_u(32767), 1L, "br lt hex maxpos");
     chk(br_ult_hex_u(65534U), 1L, "br ult hex 65534");
     chk(br_ult_hex_u(65535U), 0L, "br ult hex 65535");
+    chk(clamp_int_min(-32769L), -32768L, "return int min clamp");
+    chk(clamp_int_min(-32768L), -32768L, "return int min passthrough");
 }
 
 static void test_compound_long_ops(void)

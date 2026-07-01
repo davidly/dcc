@@ -1,7 +1,7 @@
 /*
  * dcc_expr.c - expression code generation (core).
  *
- * Shared low-level expression-lowering helpers for the AST emitter: load/store
+    if (!accept('*')) {
  * through HL, struct copies, cast detection and numeric conversions
  * (byte/int/long/float), bitfield extract/insert, pre/post increment-decrement,
  * and function-call stack cleanup. Also holds declaration-side parsing helpers
@@ -224,7 +224,67 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     save_tok = tok;
 
     next_token();
-    if (!accept('*') || tok.kind != TOK_ID) {
+    if (!accept('*')) {
+        posi = save_pos;
+        tok_start_pos = save_tok_start;
+        line_no = save_line;
+        tok_line = save_tok_line;
+        tok = save_tok;
+        return 0;
+    }
+
+    if (tok.kind == '(') {
+        int depth;
+        next_token();
+        if (!accept('*') || tok.kind != TOK_ID) {
+            posi = save_pos;
+            tok_start_pos = save_tok_start;
+            line_no = save_line;
+            tok_line = save_tok_line;
+            tok = save_tok;
+            return 0;
+        }
+        strncpy(name, tok.text, namesz - 1);
+        name[namesz - 1] = 0;
+        next_token();
+        if (!accept(')')) {
+            posi = save_pos;
+            tok_start_pos = save_tok_start;
+            line_no = save_line;
+            tok_line = save_tok_line;
+            tok = save_tok;
+            return 0;
+        }
+        if (accept('(')) {
+            depth = 1;
+            while (tok.kind != TOK_EOF && depth > 0) {
+                if (tok.kind == '(') depth++;
+                else if (tok.kind == ')') depth--;
+                next_token();
+            }
+        }
+        if (!accept(')')) {
+            posi = save_pos;
+            tok_start_pos = save_tok_start;
+            line_no = save_line;
+            tok_line = save_tok_line;
+            tok = save_tok;
+            return 0;
+        }
+        if (accept('(')) {
+            depth = 1;
+            while (tok.kind != TOK_EOF && depth > 0) {
+                if (tok.kind == '(') depth++;
+                else if (tok.kind == ')') depth--;
+                next_token();
+            }
+        }
+        type = type_add_ptr(ptype[0]);
+        ptype[0] = type;
+        return 1;
+    }
+
+    if (tok.kind != TOK_ID) {
         posi = save_pos;
         tok_start_pos = save_tok_start;
         line_no = save_line;
@@ -254,13 +314,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         if (tok.kind == '(') {
             int depth;
             next_token(); /* consume opening '(' of param list */
-            depth = 1;
-            while (tok.kind != TOK_EOF && depth > 0) {
-                if (tok.kind == '(') depth++;
-                else if (tok.kind == ')') depth--;
-                next_token();
-            }
-            /* tok is now ')' closing (*name(...)) — consume it */
+            parse_param_list();
             if (tok.kind != ')') {
                 posi = save_pos;
                 tok_start_pos = save_tok_start;
@@ -273,7 +327,19 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
                 return 0;
             }
-            next_token(); /* consume ')' of (*name(...)) */
+            next_token(); /* consume ')' of name(...) */
+            if (!accept(')')) {
+                posi = save_pos;
+                tok_start_pos = save_tok_start;
+                line_no = save_line;
+                tok_line = save_tok_line;
+                tok = save_tok;
+                g_funcptr_decl_array_len = 0;
+                g_ptr_array_dim_count = 0;
+                g_ptr_array_elem_size = 0;
+                memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
+                return 0;
+            }
             /* Skip the trailing (...) describing the pointed-to function's params */
             if (accept('(')) {
                 depth = 1;
@@ -493,8 +559,6 @@ void parse_array_declarator_dims(int base_type,
     int inner;
 
     ndims = 0;
-    g_last_array_had_vla = 0;
-    g_last_array_vla_bound_name[0] = 0;
     g_last_array_dim_count = 0;
     memset(g_last_array_dims, 0, sizeof(g_last_array_dims));
 
@@ -505,10 +569,12 @@ void parse_array_declarator_dims(int base_type,
                     ? char_array_string_initializer_size(base_type)
                     : 0;
         } else {
-            if (ndims == 0 && tok.kind == TOK_ID && find_enum_const(tok.text) < 0) {
-                g_last_array_had_vla = 1;
-                dcc_copy_str(g_last_array_vla_bound_name, sizeof(g_last_array_vla_bound_name), tok.text);
+            if (tok.kind == TOK_ID && find_enum_const(tok.text) < 0) {
+                if (asm_suppress_depth == 0)
+                    error_here("variable length arrays are not supported; use malloc and an explicit pointer");
                 next_token();
+                while (tok.kind != ']' && tok.kind != TOK_EOF)
+                    next_token();
                 expect(']');
                 n = 0;
             } else {

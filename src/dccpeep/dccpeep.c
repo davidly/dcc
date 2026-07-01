@@ -4628,6 +4628,117 @@ static int pass_signed_cmp_const_bias_fold(void)
     return changed;
 }
 
+static int signed_zero_branch_emit(char out[][160], int *nout,
+                                   const char *cond, const char *label,
+                                   int *last_test)
+{
+    char jump_cond[8];
+    int test_kind;
+
+    if (!strcmp(cond, "z") || !strcmp(cond, "nz")) {
+        test_kind = 1;
+        strcpy(jump_cond, cond);
+    } else if (!strcmp(cond, "c")) {
+        test_kind = 2;
+        strcpy(jump_cond, "nz");
+    } else if (!strcmp(cond, "nc")) {
+        test_kind = 2;
+        strcpy(jump_cond, "z");
+    } else {
+        return 0;
+    }
+
+    if (*last_test != test_kind) {
+        if (test_kind == 1) {
+            strcpy(out[(*nout)++], "ld a,h");
+            strcpy(out[(*nout)++], "or l");
+        } else {
+            strcpy(out[(*nout)++], "bit 7,h");
+        }
+        *last_test = test_kind;
+    }
+
+    sprintf(out[(*nout)++], "jp %s, %s", jump_cond, label);
+    return 1;
+}
+
+/*
+ * After pass_signed_cmp_const_bias_fold, a signed comparison against zero is:
+ *
+ *   ld de,32768
+ *   ld a,h
+ *   xor 80h
+ *   ld h,a
+ *   or a
+ *   sbc hl,de
+ *   jp cc,L
+ *
+ * The subtract's useful facts are just: Z iff HL was zero, C iff signed HL
+ * was negative.  Use a direct zero test for z/nz branches and a sign-bit test
+ * for c/nc branches.  Handle up to two adjacent conditional jumps because DCC
+ * commonly emits combined relation tests such as z+c for <=.
+ */
+static int pass_signed_zero_branch(void)
+{
+    int i;
+    int changed;
+
+    changed = 0;
+
+    for (i = 0; i + 6 < nlines; ++i) {
+        char cond1[16];
+        char cond2[16];
+        char lab1[128];
+        char lab2[128];
+        char unused_lab[128];
+        char out[6][160];
+        int ncond;
+        int nout;
+        int last_test;
+        int k;
+
+        if (!eq(i, "ld de,32768"))
+            continue;
+        if (!eq(i + 1, "ld a,h"))
+            continue;
+        if (!eq(i + 2, "xor 80h"))
+            continue;
+        if (!eq(i + 3, "ld h,a"))
+            continue;
+        if (!eq(i + 4, "or a"))
+            continue;
+        if (!eq(i + 5, "sbc hl,de"))
+            continue;
+        if (!peep_parse_any_cond_jump(lines[i + 6], cond1, lab1))
+            continue;
+
+        ncond = 1;
+        if (i + 7 < nlines && peep_parse_any_cond_jump(lines[i + 7], cond2, lab2)) {
+            ncond = 2;
+            if (i + 8 < nlines && peep_parse_any_cond_jump(lines[i + 8], cond2, unused_lab))
+                continue;
+        }
+
+        nout = 0;
+        last_test = 0;
+        if (!signed_zero_branch_emit(out, &nout, cond1, lab1, &last_test))
+            continue;
+        if (ncond == 2 && !signed_zero_branch_emit(out, &nout, cond2, lab2, &last_test))
+            continue;
+
+        replace1_tagged(i, out[0], "signed_zero_branch");
+        for (k = 1; k < nout; ++k)
+            replace1(i + k, out[k]);
+        delete_n(i + nout, 6 + ncond - nout);
+
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
 static int pass_inline_simple_call_hl_from_loaded_pointer(void)
 {
     int i;
@@ -8253,6 +8364,61 @@ static int pass_double_de_before_add(void)
 }
 
 /*
+ * Fold a constant left shift emitted as repeated HL doublings:
+ *
+ *     ld hl,N
+ *     add hl,hl
+ *     ...
+ *     add hl,hl
+ *     push hl      ; or ex de,hl
+ *
+ * The folded load has the same 16-bit value.  Restrict the rewrite to the two
+ * immediate successors DCC uses for argument/address setup, neither of which
+ * consumes the carry/half-carry flags produced by ADD HL,HL.
+ */
+static int pass_const_hl_doubles(void)
+{
+    int i;
+    int changed;
+
+    changed = 0;
+    for (i = 0; i + 2 < nlines; i++) {
+        char imm_text[64];
+        char line[64];
+        int value;
+        int count;
+        unsigned int folded;
+
+        if (!parse_ld_hl_imm(lines[i], imm_text))
+            continue;
+        if (!parse_nonneg_int(imm_text, &value))
+            continue;
+        if (!eq(i + 1, "add hl,hl"))
+            continue;
+
+        folded = (unsigned int)value & 0xffffu;
+        count = 0;
+        while (i + 1 + count < nlines && eq(i + 1 + count, "add hl,hl")) {
+            folded = (folded << 1) & 0xffffu;
+            count++;
+        }
+        if (i + 1 + count >= nlines)
+            continue;
+        if (!eq(i + 1 + count, "push hl") && !eq(i + 1 + count, "ex de,hl"))
+            continue;
+
+        sprintf(line, "ld hl,%u", folded);
+        replace1_tagged(i, line, "const_hl_doubles");
+        delete_n(i + 1, count);
+        changed = 1;
+        if (i > 0)
+            i--;
+    }
+
+    return changed;
+}
+
+/*
  * pass_ix_frame_ptr_load:
  *
  * Collapse the indirect-via-IX idiom for loading a 16-bit local variable
@@ -10387,6 +10553,7 @@ int main(int argc, char **argv)
         if (pass_global_ptr_word_postinc_store_setup()) changed = 1;
         if (pass_elim_redundant_pop_push()) changed = 1;
         if (pass_double_de_before_add()) changed = 1;
+        if (pass_const_hl_doubles()) changed = 1;
         if (pass_deref_byte_cmp()) changed = 1;
         if (pass_cpir()) changed = 1;
         if (pass_reg_bc_deref_byte_cmp()) changed = 1;
@@ -10442,6 +10609,8 @@ int main(int argc, char **argv)
      * fold to -Ot where trading shared code size for fewer inline instructions
      * is the goal. */
     if (!opt_size && pass_signed_cmp_const_bias_fold())
+        pass_labels();
+    if (!opt_size && pass_signed_zero_branch())
         pass_labels();
 
     /* Run frame elimination after all other passes have converged, then

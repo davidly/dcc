@@ -73,6 +73,8 @@ int ast_return_stmt_supported(const struct AstNode *n)
         return 0;
 
     if (n->a != NULL) {
+        if (ast_value_is_long_word(n->a))
+            return 1;
         if (!ast_gen_supported(n->a) || !ast_value_is_plain_int(n->a))
             return 0;
     }
@@ -1072,28 +1074,12 @@ int ast_stmt_supported(const struct AstNode *n)
         if (n->a == NULL || !ast_gen_supported(n->a) ||
             (!ast_value_is_plain_int(n->a) && !ast_value_is_long_word(n->a)))
             return 0;
-        if (n->list_len <= 0)
+        if (n->b == NULL)
             return 0;
         old_nflow = nflow;
         nflow++;
         ast_switch_gate_depth++;
-        ok = 1;
-        for (i = 0; i < n->list_len; ++i) {
-            const struct AstNode *sec = n->list[i];
-            int j;
-            if (sec == NULL || (sec->kind != AST_CASE && sec->kind != AST_DEFAULT)) {
-                ok = 0;
-                break;
-            }
-            for (j = 0; j < sec->list_len; ++j) {
-                if (!ast_stmt_supported(sec->list[j])) {
-                    ok = 0;
-                    break;
-                }
-            }
-            if (!ok)
-                break;
-        }
+        ok = ast_stmt_supported(n->b);
         ast_switch_gate_depth--;
         nflow = old_nflow;
         return ok;

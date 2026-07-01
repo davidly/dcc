@@ -253,11 +253,27 @@ long parse_const_long_bitor(void)
 long parse_const_long_andand(void)
 {
     long v;
+    long r;
 
     v = parse_const_long_bitor();
     while (tok.kind == TOK_ANDAND) {
         next_token();
-        v = (v && parse_const_long_bitor());
+        r = parse_const_long_bitor();
+        v = (v && r);
+    }
+    return v;
+}
+
+long parse_const_long_oror(void)
+{
+    long v;
+    long r;
+
+    v = parse_const_long_andand();
+    while (tok.kind == TOK_OROR) {
+        next_token();
+        r = parse_const_long_andand();
+        v = (v || r);
     }
     return v;
 }
@@ -265,11 +281,16 @@ long parse_const_long_andand(void)
 long parse_const_long_expr(void)
 {
     long v;
+    long t;
+    long f;
 
-    v = parse_const_long_andand();
-    while (tok.kind == TOK_OROR) {
+    v = parse_const_long_oror();
+    if (tok.kind == '?') {
         next_token();
-        v = (v || parse_const_long_andand());
+        t = parse_const_long_expr();
+        expect(':');
+        f = parse_const_long_expr();
+        v = v ? t : f;
     }
     return v;
 }

@@ -22,6 +22,8 @@
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
 
+static int ast_preincdec_pointer_type(const struct AstNode *n, int *out_type);
+
 int ident_supported(const char *name)
 {
     int ei;
@@ -1058,6 +1060,13 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         return 1;
 
     case AST_UNARY:
+        if (n->op == TOK_INC || n->op == TOK_DEC) {
+            if (!ast_preincdec_pointer_type(n, &ptr_type))
+                return 0;
+            *out_type = ptr_type;
+            *out_no_deref = 0;
+            return 1;
+        }
         if (n->op == '&') {
             int elem;
             if (n->a == NULL)
@@ -1157,12 +1166,21 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         return 0;
 
     case AST_CALL:
-        if (!ast_gen_supported(n) || n->a == NULL || n->a->kind != AST_IDENT)
+        if (!ast_gen_supported(n) || n->a == NULL)
             return 0;
-        s = find_global(n->a->sval);
-        if (s == NULL || type_ptr_depth(s->type) <= 0 || type_size(s->type) != 2)
+        if (n->a->kind == AST_IDENT) {
+            s = find_global(n->a->sval);
+            if (s == NULL || type_ptr_depth(s->type) <= 0 || type_size(s->type) != 2)
+                return 0;
+            *out_type = s->type;
+            *out_no_deref = 0;
+            return 1;
+        }
+        if (n->a->kind == AST_INDEX)
             return 0;
-        *out_type = s->type;
+        if (!ast_call_indirect_supported(n) && !ast_call_star_indirect_supported(n))
+            return 0;
+        *out_type = TYPE_INT | TYPE_PTR;
         *out_no_deref = 0;
         return 1;
 
@@ -1203,15 +1221,21 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         int false_type;
         int true_no_deref;
         int false_no_deref;
+        int true_ptr;
+        int false_ptr;
         if (n->a == NULL || !ast_gen_supported(n->a) ||
             (!ast_value_is_plain_int(n->a) && !ast_value_is_pointer_word(n->a)))
             return 0;
-        if (!ast_pointer_expr_type(n->b, &true_type, &true_no_deref))
+        true_ptr = ast_pointer_expr_type(n->b, &true_type, &true_no_deref);
+        false_ptr = ast_pointer_expr_type(n->c, &false_type, &false_no_deref);
+        if (!true_ptr && !ast_null_pointer_const(n->b))
             return 0;
-        if (!ast_pointer_expr_type(n->c, &false_type, &false_no_deref))
+        if (!false_ptr && !ast_null_pointer_const(n->c))
             return 0;
-        *out_type = type_ptr_depth(true_type) > 0 ? true_type : false_type;
-        *out_no_deref = true_no_deref && false_no_deref;
+        if (!true_ptr && !false_ptr)
+            return 0;
+        *out_type = true_ptr ? true_type : false_type;
+        *out_no_deref = true_ptr && false_ptr && true_no_deref && false_no_deref;
         return 1;
     }
 
@@ -1563,8 +1587,16 @@ int ast_member_lvalue_type(const struct AstNode *n, int *out_type)
         return 0;
     if (n->a == NULL)
         return 0;
-    if (!ast_member_base_type(n, &cur_type))
+    if (!ast_member_base_type(n, &cur_type)) {
+        if (n->op == TOK_ARROW && n->a->kind == AST_CALL) {
+            fd = ast_unique_field_by_name(n->sval);
+            if (fd == NULL || fd->is_array || fd->bit_width > 0)
+                return 0;
+            *out_type = fd->type;
+            return 1;
+        }
         return 0;
+    }
     if (n->op == TOK_ARROW) {
         if (type_ptr_depth(cur_type) != 1)
             return 0;
@@ -1573,10 +1605,30 @@ int ast_member_lvalue_type(const struct AstNode *n, int *out_type)
     }
     sid = base_struct_id_from_type(cur_type);
     fd = find_field_def(sid, n->sval);
+    if (fd == NULL && n->op == TOK_ARROW && n->a->kind == AST_CALL)
+        fd = ast_unique_field_by_name(n->sval);
     if (fd == NULL || fd->is_array || fd->bit_width > 0)
         return 0;
     *out_type = fd->type;
     return 1;
+}
+
+struct FieldDef *ast_unique_field_by_name(const char *name)
+{
+    struct FieldDef *match;
+    int i;
+
+    if (name == NULL)
+        return NULL;
+    match = NULL;
+    for (i = 0; i < nfield_defs; ++i) {
+        if (!strcmp(field_defs[i].name, name)) {
+            if (match != NULL)
+                return NULL;
+            match = &field_defs[i];
+        }
+    }
+    return match;
 }
 
 /* A pointer deref read `*p` that codegen leaves in HL as a plain int value.
@@ -1614,11 +1666,17 @@ int ast_deref_plain_int_read(const struct AstNode *n)
         return 1;
     }
     s = find_sym(n->a->sval);
-    if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
         return 0;
-    if (type_ptr_depth(s->type) != 1)
-        return 0;
-    base = type_decay_ptr(s->type);
+    if (s->is_array) {
+        if (s->dim_count > 1)
+            return 0;
+        base = s->type;
+    } else {
+        if (type_ptr_depth(s->type) != 1)
+            return 0;
+        base = type_decay_ptr(s->type);
+    }
     if (!ast_is_plain_int_type(base))
         return 0;
     if (type_size(base) != 1 && type_size(base) != 2)
@@ -1841,6 +1899,68 @@ int ast_preincdec_plain_int(const struct AstNode *n)
     sz = type_size(s->type);
     if (sz != 1 && sz != 2)
         return 0;
+    return 1;
+}
+
+int ast_preincdec_pointer_word(const struct AstNode *n)
+{
+    struct Sym *s;
+    int val_type;
+
+    if (n == NULL || n->kind != AST_UNARY)
+        return 0;
+    if (n->op != TOK_INC && n->op != TOK_DEC)
+        return 0;
+    if (n->a == NULL)
+        return 0;
+    if (n->a->kind == AST_INDEX) {
+        if (!ast_index_lvalue_elem_type(n->a, &val_type))
+            return 0;
+        return type_ptr_depth(val_type) > 0 && type_size(val_type) == 2;
+    }
+    if (n->a->kind == AST_MEMBER) {
+        if (!ast_member_lvalue_type(n->a, &val_type))
+            return 0;
+        return type_ptr_depth(val_type) > 0 && type_size(val_type) == 2;
+    }
+    if (n->a->kind == AST_UNARY && n->a->op == '*') {
+        if (!ast_deref_lvalue_type(n->a, &val_type))
+            return 0;
+        return type_ptr_depth(val_type) > 0 && type_size(val_type) == 2;
+    }
+    if (n->a->kind != AST_IDENT)
+        return 0;
+    s = find_sym(n->a->sval);
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
+        return 0;
+    return type_ptr_depth(s->type) > 0 && type_size(s->type) == 2;
+}
+
+static int ast_preincdec_pointer_type(const struct AstNode *n, int *out_type)
+{
+    struct Sym *s;
+    int val_type;
+
+    if (!ast_preincdec_pointer_word(n) || n->a == NULL)
+        return 0;
+    if (n->a->kind == AST_INDEX) {
+        if (!ast_index_lvalue_elem_type(n->a, &val_type))
+            return 0;
+    } else if (n->a->kind == AST_MEMBER) {
+        if (!ast_member_lvalue_type(n->a, &val_type))
+            return 0;
+    } else if (n->a->kind == AST_UNARY && n->a->op == '*') {
+        if (!ast_deref_lvalue_type(n->a, &val_type))
+            return 0;
+    } else if (n->a->kind == AST_IDENT) {
+        s = find_sym(n->a->sval);
+        if (s == NULL)
+            return 0;
+        val_type = s->type;
+    } else {
+        return 0;
+    }
+    *out_type = val_type;
     return 1;
 }
 

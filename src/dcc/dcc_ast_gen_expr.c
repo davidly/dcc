@@ -271,7 +271,9 @@ void gen_unary_ast(const struct AstNode *n)
             return;
         }
         s = find_sym(n->a->sval);
-        if (is_global_word_sym(s)) {
+        if (s->is_array) {
+            emit_load_sym_addr(s);
+        } else if (is_global_word_sym(s)) {
             emit_load_global_word_direct(s);
         } else {
             emit_load_sym_addr(s);
@@ -1987,7 +1989,17 @@ void gen_call_star_indirect_ast(const struct AstNode *n)
 
     old_dead = expr_result_dead;
     expr_result_dead = 0;
-    ast_gen_expr(base);
+    if (base->kind == AST_INDEX) {
+        int elem_type;
+        if (!ast_index_lvalue_elem_type(base, &elem_type) ||
+            type_ptr_depth(elem_type) <= 0 || type_size(elem_type) != 2)
+            elem_type = TYPE_INT | TYPE_PTR;
+        gen_index_addr_ast(base, &elem_type);
+        emit_load_from_hl(elem_type);
+        g_expr_type = elem_type;
+    } else {
+        ast_gen_expr(base);
+    }
     emit("\tpush hl\n");
     for (i = n->list_len - 1; i >= 0; --i) {
         int actual_type;
@@ -2112,12 +2124,21 @@ void gen_call_ast(const struct AstNode *n)
         int have_want;
         int ptr_type;
         int no_deref;
+        struct Sym *arg_sym;
 
         have_want = expected_arg_type(fn_sym, i, &want_type);
         if (have_want && type_is_struct_object(want_type)) {
             gen_call_struct_arg_ast(n->list[i], want_type);
             arg_bytes += type_size(want_type);
             continue;
+        }
+        if (!have_want && n->list[i]->kind == AST_IDENT) {
+            arg_sym = find_sym(n->list[i]->sval);
+            if (arg_sym != NULL && type_is_struct_object(arg_sym->type)) {
+                gen_call_struct_arg_ast(n->list[i], arg_sym->type);
+                arg_bytes += type_size(arg_sym->type);
+                continue;
+            }
         }
 
         if (ast_pointer_expr_type(n->list[i], &ptr_type, &no_deref))
@@ -2342,6 +2363,8 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
 
     sid = base_struct_id_from_type(cur_type);
     fd = find_field_def(sid, n->sval);
+    if (fd == NULL && arrow && n->a->kind == AST_CALL)
+        fd = ast_unique_field_by_name(n->sval);
     emit_add_field_offset(fd);            /* HL = field address */
 
     /* Mirror apply_field_access_from_addr's field-metadata publication so the
@@ -2441,6 +2464,13 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
         return;
     }
 
+    if (n->kind == AST_UNARY && (n->op == TOK_INC || n->op == TOK_DEC)) {
+        ast_gen_expr(n);
+        *out_type = g_expr_type;
+        *out_no_deref = 0;
+        return;
+    }
+
     if (n->kind == AST_CAST && type_ptr_depth(n->type) > 0) {
         if (ast_pointer_expr_type(n->a, &ptr_type, &no_deref))
             gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
@@ -2460,17 +2490,27 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
         int false_type;
         int true_no_deref;
         int false_no_deref;
+        int true_ptr;
+        int false_ptr;
         ast_gen_expr(n->a);
         emit_test_expr_nonzero(g_expr_type, lfalse, 0);
-        gen_pointer_expr_ast(n->b, &true_type, &true_no_deref);
+        true_ptr = ast_pointer_expr_type(n->b, &true_type, &true_no_deref);
+        if (true_ptr)
+            gen_pointer_expr_ast(n->b, &true_type, &true_no_deref);
+        else
+            ast_gen_expr(n->b);
         emit_jp_label("jp", lend);
         emit_label(lfalse);
-        gen_pointer_expr_ast(n->c, &false_type, &false_no_deref);
+        false_ptr = ast_pointer_expr_type(n->c, &false_type, &false_no_deref);
+        if (false_ptr)
+            gen_pointer_expr_ast(n->c, &false_type, &false_no_deref);
+        else
+            ast_gen_expr(n->c);
         emit_label(lend);
-        g_expr_type = type_ptr_depth(true_type) > 0 ? true_type : false_type;
+        g_expr_type = true_ptr ? true_type : false_type;
         g_long_from16 = 0;
         *out_type = g_expr_type;
-        *out_no_deref = true_no_deref && false_no_deref;
+        *out_no_deref = true_ptr && false_ptr && true_no_deref && false_no_deref;
         return;
     }
 
@@ -2615,7 +2655,9 @@ void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type)
 
     s = find_sym(n->a->sval);
 
-    if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
+    if (s->is_array) {
+        emit_load_sym_addr(s);
+    } else if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
         emit_load_sym_value_direct(s);
     } else {
         emit_load_sym_addr(s);

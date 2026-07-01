@@ -179,6 +179,16 @@ $Mode = $requestedMode
 $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
 
+function New-RunBuildId {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-ffff"
+    $rand = Get-Random -Minimum 100000 -Maximum 1000000
+    return "run-$stamp-$rand"
+}
+
+if ($Parallel) {
+    $BuildDir = Join-Path $BuildDir (New-RunBuildId)
+}
+
 # Get machine name for reporting (platform-specific)
 $machineName = $null
 
@@ -642,6 +652,7 @@ Write-Host "STARTING BUILD AND RUN SUITE" -ForegroundColor Cyan
 Write-Host "Mode: $optimisationSummary" -ForegroundColor Cyan
 if ($Parallel) {
     Write-Host "(parallel, throttle = $ThrottleLimit)" -ForegroundColor Cyan
+    Write-Host "Build root: $BuildDir" -ForegroundColor Cyan
 }
 Write-Host "========================================" -ForegroundColor Cyan
 

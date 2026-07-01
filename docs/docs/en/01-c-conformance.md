@@ -117,22 +117,6 @@ for (int i = 0; i < 3; i++)
   `&(struct S){ 1, 2 }` are supported by creating hidden automatic storage for
   the enclosing function.
 
-### Variable-length arrays
-
-Automatic one-dimensional VLAs with a simple identifier bound are supported:
-
-```c
-void f(int n)
-{
-    char buf[n];
-    buf[0] = 0;
-}
-```
-
-dcc reserves the storage on the C stack at runtime and restores the stack from
-the function frame on return. Keep VLAs small: the CP/M transient program area
-is shared by code, data, heap, and stack.
-
 ## Unsupported or target-inapplicable features
 
 The table below separates target-model limits from front-end compatibility gaps.
@@ -144,6 +128,7 @@ become supportable later, but code should not depend on them today.
 | C89 | `double` / `long double` | Target-inapplicable. dcc has single-precision `float` as its only floating type. |
 | C89 hosted library | Hosted stdio, locale, signal, time, process, and wide-character runtime behavior | Runtime-inapplicable or absent in DCCRTL. |
 | C99 | `long long` and 64-bit integer typedefs/operations | Target-inapplicable. The Z80 model uses 16-bit `int`/pointers and 32-bit `long`. |
+| C99 | Variable-length arrays | Not implemented. Use `malloc` and an explicit pointer when runtime-sized storage is required. |
 | C99 | `restrict` | Not implemented. |
 | C99 | `_Complex` | Not implemented. |
 | C99 | Variadic macros | Not implemented; includes `__VA_ARGS__` and empty-argument behavior. |

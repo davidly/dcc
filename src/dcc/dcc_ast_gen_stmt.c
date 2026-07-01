@@ -50,19 +50,9 @@ void ast_switch_collect_stmt(const struct AstNode *n, int *case_vals,
 void ast_switch_collect(const struct AstNode *n, int *case_vals,
                                int *ncasep, int *have_defaultp)
 {
-    int i;
-    int j;
     *ncasep = 0;
     *have_defaultp = 0;
-    for (i = 0; i < n->list_len; ++i) {
-        const struct AstNode *sec = n->list[i];
-        if (sec->kind == AST_CASE)
-            case_vals[(*ncasep)++] = (int)sec->ival;
-        else if (sec->kind == AST_DEFAULT)
-            *have_defaultp = 1;
-        for (j = 0; j < sec->list_len; ++j)
-            ast_switch_collect_stmt(sec->list[j], case_vals, ncasep, have_defaultp);
-    }
+    ast_switch_collect_stmt(n->b, case_vals, ncasep, have_defaultp);
 }
 
 void ast_switch_consume_scan_labels_stmt(const struct AstNode *n)
@@ -100,14 +90,7 @@ void ast_switch_consume_scan_labels_stmt(const struct AstNode *n)
 
 void ast_switch_consume_scan_labels(const struct AstNode *n)
 {
-    int i;
-    int j;
-    for (i = 0; i < n->list_len; ++i) {
-        const struct AstNode *sec = n->list[i];
-        (void)new_label();
-        for (j = 0; j < sec->list_len; ++j)
-            ast_switch_consume_scan_labels_stmt(sec->list[j]);
-    }
+    ast_switch_consume_scan_labels_stmt(n->b);
 }
 
 void ast_switch_assign_labels_stmt(const struct AstNode *n, int *case_vals,
@@ -157,21 +140,7 @@ void ast_switch_assign_labels(const struct AstNode *n, int *case_vals,
                                      int *case_labs, int ncase,
                                      int *default_labp)
 {
-    int i;
-    int j;
-    for (i = 0; i < n->list_len; ++i) {
-        const struct AstNode *sec = n->list[i];
-        if (sec->kind == AST_CASE) {
-            int ci = ast_switch_find_case((int)sec->ival, case_vals, ncase);
-            if (ci >= 0)
-                case_labs[ci] = new_label();
-        } else {
-            *default_labp = new_label();
-        }
-        for (j = 0; j < sec->list_len; ++j)
-            ast_switch_assign_labels_stmt(sec->list[j], case_vals, case_labs,
-                                          ncase, default_labp);
-    }
+    ast_switch_assign_labels_stmt(n->b, case_vals, case_labs, ncase, default_labp);
 }
 
 void ast_gen_switch_stmt(const struct AstNode *n)
@@ -232,21 +201,7 @@ void ast_gen_switch_stmt(const struct AstNode *n)
         ast_sw_depth++;
     }
 
-    for (i = 0; i < n->list_len; ++i) {
-        const struct AstNode *sec = n->list[i];
-        int lab;
-        int j;
-        if (sec->kind == AST_CASE) {
-            int ci = ast_switch_find_case((int)sec->ival, case_vals, ncase);
-            lab = ci >= 0 ? case_labs[ci] : -1;
-        } else {
-            lab = default_lab;
-        }
-        if (lab >= 0)
-            emit_label(lab);
-        for (j = 0; j < sec->list_len; ++j)
-            ast_gen_stmt(sec->list[j]);
-    }
+    ast_gen_stmt(n->b);
 
     if (ast_sw_depth > 0)
         ast_sw_depth--;

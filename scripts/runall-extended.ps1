@@ -125,6 +125,16 @@ $Mode = $requestedMode
 $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
 
+function New-RunBuildId {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-ffff"
+    $rand = Get-Random -Minimum 100000 -Maximum 1000000
+    return "run-$stamp-$rand"
+}
+
+if ($Parallel) {
+    $BuildDir = Join-Path $BuildDir (New-RunBuildId)
+}
+
 $ignoredTests = @{}
 $expectedExitCodes = @{}
 $resolvedSkipFile = $null
@@ -476,6 +486,7 @@ if ($ignoredTests.Count -gt 0) {
 }
 if ($Parallel) {
     Write-Host "(parallel, throttle = $ThrottleLimit)" -ForegroundColor Cyan
+    Write-Host "Build root: $BuildDir" -ForegroundColor Cyan
 }
 
 $suiteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()

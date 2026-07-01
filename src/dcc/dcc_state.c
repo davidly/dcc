@@ -188,7 +188,5 @@ int g_funcptr_is_funcret_decl;
 int g_ptr_array_dim_count;
 int g_ptr_array_dims[8];
 int g_ptr_array_elem_size;
-int g_last_array_had_vla;
-char g_last_array_vla_bound_name[64];
 int g_last_array_dim_count;
 int g_last_array_dims[8];

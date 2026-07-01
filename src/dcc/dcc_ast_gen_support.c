@@ -111,7 +111,7 @@ int ast_gen_supported(const struct AstNode *n)
             return ast_deref_plain_int_read(n) || ast_deref_pointer_word_read(n) ||
                    ast_deref_long_read(n) || ast_deref_float_read(n);
         if (n->op == TOK_INC || n->op == TOK_DEC)
-            return ast_preincdec_plain_int(n);
+            return ast_preincdec_plain_int(n) || ast_preincdec_pointer_word(n);
         return 0;
     case AST_BINARY:
         if (!is_supported_binary_op(n->op) && !is_shift_op(n->op))
@@ -1127,6 +1127,7 @@ int ast_call_arg_supported(struct Sym *fn_sym, int arg_index,
     int want_type;
     int ptr_type;
     int no_deref;
+    struct Sym *arg_sym;
 
     if (arg == NULL)
         return 0;
@@ -1142,6 +1143,11 @@ int ast_call_arg_supported(struct Sym *fn_sym, int arg_index,
             return ast_value_is_long_word(arg) || ast_call_arg_word_supported(arg);
         return ast_call_arg_word_supported(arg) || ast_value_is_long_word(arg) ||
                ast_value_is_float_word(arg);
+    }
+    if (arg->kind == AST_IDENT) {
+        arg_sym = find_sym(arg->sval);
+        if (arg_sym != NULL && type_is_struct_object(arg_sym->type))
+            return 1;
     }
     return ast_call_arg_word_supported(arg) || ast_value_is_long_word(arg) ||
            ast_value_is_float_word(arg);
@@ -1220,16 +1226,31 @@ int ast_call_star_indirect_supported(const struct AstNode *n)
 {
     const struct AstNode *base;
     struct Sym *s;
+    int callee_type;
+    int no_deref;
     int i;
 
     base = ast_call_star_indirect_base(n);
-    if (base == NULL || base->kind != AST_IDENT)
+    if (base == NULL)
         return 0;
-    s = find_sym(base->sval);
-    if (s == NULL || s->is_const_value || s->is_array)
-        return 0;
-    if (s->storage != SC_FUNC && type_ptr_depth(s->type) <= 0)
-        return 0;
+    if (base->kind == AST_IDENT) {
+        s = find_sym(base->sval);
+        if (s == NULL || s->is_const_value || s->is_array)
+            return 0;
+        if (s->storage != SC_FUNC && type_ptr_depth(s->type) <= 0)
+            return 0;
+    } else {
+        if (base->kind == AST_INDEX) {
+            if (!ast_index_lvalue_elem_type(base, &callee_type) ||
+                type_ptr_depth(callee_type) <= 0 || type_size(callee_type) != 2)
+                callee_type = TYPE_INT | TYPE_PTR;
+            no_deref = 0;
+        } else if (!ast_pointer_expr_type(base, &callee_type, &no_deref) || no_deref) {
+                return 0;
+        }
+        if (type_ptr_depth(callee_type) <= 0 || type_size(callee_type) != 2)
+            return 0;
+    }
     for (i = 0; i < n->list_len; ++i) {
         if (!ast_call_arg_supported(NULL, i, n->list[i]))
             return 0;

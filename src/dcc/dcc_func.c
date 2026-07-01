@@ -11,6 +11,7 @@
  */
 
 #include "dcc.h"
+
 int current_void_is_empty_param_list(void)
 {
     long save_pos;
@@ -97,6 +98,11 @@ void skip_prototype_array_suffixes(int *ptype)
 void skip_prototype_function_suffix(void)
 {
     int depth;
+    long save_pos;
+    long save_tok_start;
+    int save_line;
+    int save_tok_line;
+    struct Token save_tok;
 
     if (!accept('('))
         return;
@@ -108,6 +114,25 @@ void skip_prototype_function_suffix(void)
         else if (tok.kind == ')')
             depth--;
         next_token();
+    }
+
+    while (tok.kind == '(')
+        skip_prototype_function_suffix();
+
+    if (tok.kind == ')') {
+        save_pos = posi;
+        save_tok_start = tok_start_pos;
+        save_line = line_no;
+        save_tok_line = tok_line;
+        save_tok = tok;
+        next_token();
+        if (tok.kind != ',') {
+            posi = save_pos;
+            tok_start_pos = save_tok_start;
+            line_no = save_line;
+            tok_line = save_tok_line;
+            tok = save_tok;
+        }
     }
 }
 
@@ -316,6 +341,10 @@ void parse_param_list(void)
         }
 
         type = parse_type();
+        if (g_typedef_array_len > 0) {
+            type = type_add_ptr(type);
+            g_typedef_array_len = 0;
+        }
         unnamed_id = 0;
 
         while (accept('*')) {
@@ -501,6 +530,8 @@ static int scan_compound_literal_if_present(void)
     long save_tok_start;
     int save_line;
     int save_tok_line;
+    int save_long_suffix;
+    int save_unsigned_suffix;
     struct Token save_tok;
     int type;
     int size;
@@ -513,7 +544,38 @@ static int scan_compound_literal_if_present(void)
     save_tok_start = tok_start_pos;
     save_line = line_no;
     save_tok_line = tok_line;
+    save_long_suffix = g_tok_long_suffix;
+    save_unsigned_suffix = g_tok_unsigned_suffix;
     save_tok = tok;
+
+    depth = 1;
+    next_token();
+    while (tok.kind != TOK_EOF && depth > 0) {
+        if (tok.kind == '(')
+            depth++;
+        else if (tok.kind == ')')
+            depth--;
+        next_token();
+    }
+
+    if (tok.kind != '{') {
+        posi = save_pos;
+        tok_start_pos = save_tok_start;
+        line_no = save_line;
+        tok_line = save_tok_line;
+        g_tok_long_suffix = save_long_suffix;
+        g_tok_unsigned_suffix = save_unsigned_suffix;
+        tok = save_tok;
+        return 0;
+    }
+
+    posi = save_pos;
+    tok_start_pos = save_tok_start;
+    line_no = save_line;
+    tok_line = save_tok_line;
+    g_tok_long_suffix = save_long_suffix;
+    g_tok_unsigned_suffix = save_unsigned_suffix;
+    tok = save_tok;
 
     next_token();
     parse_type_name_decl(&type, &size);
@@ -677,6 +739,13 @@ void scan_local_decl_after_type(int base)
         strncpy(source_name, name, sizeof(source_name) - 1);
         source_name[sizeof(source_name) - 1] = 0;
 
+        if (tok.kind == '(') {
+            skip_prototype_function_suffix();
+            if (!accept(','))
+                break;
+            continue;
+        }
+
         if (g_for_decl_seq >= 0) {
             const char *rn;
             rn = enter_for_decl_rename(name);
@@ -744,8 +813,6 @@ void scan_local_decl_after_type(int base)
 
         bytes = type_size(type);
         if (total_elems > 0) bytes *= total_elems;
-        if (g_last_array_had_vla)
-            bytes = 2;
 
         /* A name already present in the innermost open block is a redefinition.
          * find_local_decl() only searches the current scope (and ignores
@@ -764,13 +831,8 @@ void scan_local_decl_after_type(int base)
                                      arrlen != 0 || g_last_array_dim_count != 0);
 
         if (!s) {
-            s = add_local_alloc(name, g_last_array_had_vla ? type_add_ptr(type) : type, bytes);
-            if (g_last_array_had_vla) {
-                s->is_array = 0;
-                s->array_len = 0;
-                s->elem_size = type_size(type);
-                if (s->elem_size <= 0) s->elem_size = 2;
-            } else if (arrlen > 0 || g_last_array_dim_count > 0) {
+            s = add_local_alloc(name, type, bytes);
+            if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;
                 s->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
@@ -2175,11 +2237,14 @@ void parse_function_or_global(int base_type)
         int saved_nlocals;
         int saved_local_size;
         int saved_param_offset;
+        int saved_nenum_consts;
 
         int base_is_func_typedef;
+        int is_funcret_funcptr_decl;
 
         type = base_type;
         base_is_func_typedef = g_typedef_is_func;
+        is_funcret_funcptr_decl = 0;
         name[0] = 0;
 
         /* Each declarator starts again from the shared declaration-specifier
@@ -2205,23 +2270,9 @@ void parse_function_or_global(int base_type)
             next_token();
         }
 
-        /* C89: return_type (*func_name(params))(fp_params) — a function that
-         * returns a pointer to function.  parse_funcptr_declarator sets
-         * g_funcptr_is_funcret_decl and consumes both param lists; the return
-         * type is already recorded as a pointer in `type`. */
         if (g_funcptr_is_funcret_decl) {
             g_funcptr_is_funcret_decl = 0;
-            s = add_global(name, type, SC_FUNC);
-            parse_function_return_type = type;
-            if (decl_is_static) {
-                s->is_static = 1;
-                s->needs_extrn = 0;
-            } else if (!s->is_defined)
-                s->needs_extrn = 1;
-            if (accept(','))
-                continue;
-            expect(';');
-            return;
+            is_funcret_funcptr_decl = 1;
         }
 
         /* A typedef-name that denotes a function type can declare a function
@@ -2245,16 +2296,18 @@ void parse_function_or_global(int base_type)
         }
 
         /* Function declarator or definition. */
-        if (g_funcptr_decl_array_len == 0 && accept('(')) {
+        if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
             s = add_global(name, type, SC_FUNC);
             parse_function_return_type = type;
             if (decl_is_static) {
                 s->is_static = 1;
                 s->needs_extrn = 0;
             }
-            parse_param_list();
+            if (!is_funcret_funcptr_decl)
+                parse_param_list();
             copy_parsed_prototype_to_sym(s);
-            expect(')');
+            if (!is_funcret_funcptr_decl)
+                expect(')');
 
             /* Snapshot nlocals after prototype params are registered but before
              * K&R declarations: used to detect main() with no parameters. */
@@ -2272,6 +2325,7 @@ void parse_function_or_global(int base_type)
                 saved_nlocals = nlocals;
                 saved_local_size = local_size;
                 saved_param_offset = param_offset;
+                saved_nenum_consts = nenum_consts;
 
                 current_function_has_call = 0;
                 g_static_local_func_index = (int)(s - globals);
@@ -2296,6 +2350,7 @@ void parse_function_or_global(int base_type)
                 nlocals = saved_nlocals;
                 local_size = saved_local_size;
                 param_offset = saved_param_offset;
+                nenum_consts = saved_nenum_consts;
 
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;
@@ -2308,6 +2363,7 @@ void parse_function_or_global(int base_type)
                 line_no = saved_line;
                 tok_line = saved_tok_line;
                 tok = saved_tok;
+                nenum_consts = saved_nenum_consts;
 
                 s->is_defined = 1;
                 s->needs_extrn = 0;
@@ -2338,6 +2394,7 @@ void parse_function_or_global(int base_type)
                 emit_function_epilogue(strcmp(name, "main") == 0 &&
                                        (type & 15) == TYPE_INT &&
                                        type_ptr_depth(type) == 0);
+                nenum_consts = saved_nenum_consts;
 
                 /* Emit the __mrun shim that start: dispatches to.  When main has
                  * no args the shim omits any reference to __build_argv/__argc/argv
