@@ -515,6 +515,42 @@ else {
     }
 }
 
+if ($Parallel) {
+    $failedForRetry = @($results | Where-Object { -not $_.Passed })
+    if ($failedForRetry.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Retrying $($failedForRetry.Count) failed extended test(s) serially to confirm failures..." -ForegroundColor Yellow
+        foreach ($failedResult in $failedForRetry) {
+            $case = @($allCases | Where-Object { $_.Name -eq $failedResult.Name } | Select-Object -First 1)
+            if ($case.Count -eq 0) { continue }
+
+            $retryBuildDir = Join-Path $BuildDir $case[0].Name
+            $retryResult = Invoke-ExtendedTest -Case $case[0] -Modes $modes -BuildDir $retryBuildDir -RepoRoot $repoRoot `
+                -BuildScriptPath $buildScriptPath -Emulator $Emulator -EmulatorRunArgs $emulatorRunArgs `
+                -RunTimeout $RunTimeout
+
+            $retryStatus = if ($retryResult.Passed) { "PASS" } else { "FAIL" }
+            $retryColor = if ($retryResult.Passed) { "Green" } else { "Red" }
+            Write-Host ("  RETRY {0}  {1,-8}" -f $retryStatus, $retryResult.Name) -ForegroundColor $retryColor
+            if (-not $retryResult.Passed) {
+                foreach ($detail in $retryResult.Lines) {
+                    if ($detail -match 'FAILED|MISMATCH|WARNING|ERROR|TIMEOUT|^    DIFF-|^    DIFF\+') {
+                        $color = if ($detail -match '^    DIFF\+') { "Green" } else { "Red" }
+                        Write-Host "        $($detail.Trim())" -ForegroundColor $color
+                    }
+                }
+            }
+
+            for ($ri = 0; $ri -lt $results.Count; $ri++) {
+                if ($results[$ri].Name -eq $retryResult.Name) {
+                    $results[$ri] = $retryResult
+                    break
+                }
+            }
+        }
+    }
+}
+
 $passed = 0
 $failed = 0
 $failedCases = @()

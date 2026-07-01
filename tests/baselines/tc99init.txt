@@ -1,0 +1,1 @@
+test tc99init completed with great success

@@ -412,6 +412,7 @@ void emit_init_auto_struct_scalar(struct Sym *s, int off, int type)
 void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int count, int elem_size)
 {
     int n;
+    int maxn;
     int total_bytes;
 
     if (elem_size <= 0) elem_size = type_size(elem_type);
@@ -434,7 +435,14 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
         next_token();
 
     n = 0;
+    maxn = 0;
     while (tok.kind != TOK_EOF && tok.kind != '}') {
+        if (tok.kind == '[') {
+            next_token();
+            n = parse_const_int_expr();
+            expect(']');
+            expect('=');
+        }
         if (count > 0 && n >= count) {
             error_here("too many initializer elements");
             skip_initializer_or_decl_tail();
@@ -447,11 +455,13 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
             emit_init_auto_struct_scalar(s, baseoff + n * elem_size, elem_type);
 
         n++;
+        if (n > maxn) maxn = n;
         if (!accept(',')) break;
         if (tok.kind == '}') break;
     }
     expect('}');
 
+    if (maxn > n) n = maxn;
     if (count > 0 && n < count) {
         total_bytes = (count - n) * elem_size;
         emit_zero_local_bytes(s, baseoff + n * elem_size, total_bytes);
@@ -508,6 +518,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
     int total;
     int is_union;
     int had_brace;
+    int end_used;
 
     sid = type_struct_id(type);
     total = type_size(type);
@@ -563,9 +574,27 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
 
     for (i = 0; i < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}'; ++i) {
         struct FieldDef *fd;
-        fd = &field_defs[i];
-        if (fd->parent_struct_id != sid)
-            continue;
+        if (tok.kind == '.') {
+            next_token();
+            if (tok.kind != TOK_ID) {
+                error_here("field name expected in initializer designator");
+                skip_initializer_or_decl_tail();
+                break;
+            }
+            fd = find_field_def(sid, tok.text);
+            if (fd == NULL) {
+                error_here("unknown field initializer designator");
+                skip_initializer_or_decl_tail();
+                break;
+            }
+            i = (int)(fd - field_defs);
+            next_token();
+            expect('=');
+        } else {
+            fd = &field_defs[i];
+            if (fd->parent_struct_id != sid)
+                continue;
+        }
 
         if (fd->offset > used)
             emit_zero_local_bytes(s, baseoff + used, fd->offset - used);
@@ -613,7 +642,8 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
                 k = next;
             }
             emit_store_const_bitfield_unit_to_local(s, baseoff + unit_off, unit);
-            used = unit_off + 2;
+            end_used = unit_off + 2;
+            if (end_used > used) used = end_used;
             if (k > i)
                 i = k - 1;
             if (stop)
@@ -628,9 +658,11 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
         else
             emit_init_auto_struct_scalar(s, baseoff + fd->offset, fd->type);
 
-        used = fd->offset + fd->size;
+        end_used = fd->offset + fd->size;
+        if (end_used > used) used = end_used;
         if (!accept(',')) break;
         if (tok.kind == '}') break;
+        if (tok.kind == '.') i = -1;
     }
     expect('}');
 
@@ -728,6 +760,7 @@ void emit_init_auto_array_level(struct Sym *s, int elem_type, int *np, int level
 {
     int start;
     int limit;
+    int maxn;
 
     if (!accept('{')) {
         emit_init_auto_array_scalar(s, elem_type, np);
@@ -736,12 +769,29 @@ void emit_init_auto_array_level(struct Sym *s, int elem_type, int *np, int level
 
     start = np[0];
     limit = start + sym_array_elems_from_level(s, level);
+    maxn = np[0];
 
     while (tok.kind != TOK_EOF && tok.kind != '}') {
+        if (tok.kind == '[') {
+            int idx;
+            int span;
+
+            next_token();
+            idx = parse_const_int_expr();
+            expect(']');
+            expect('=');
+            span = sym_array_elems_from_level(s, level + 1);
+            if (span <= 0) span = 1;
+            if (idx < 0)
+                error_here("negative array initializer designator");
+            else
+                np[0] = start + idx * span;
+        }
         if (tok.kind == '{' && s->dim_count > 0 && level + 1 < s->dim_count)
             emit_init_auto_array_level(s, elem_type, np, level + 1);
         else
             emit_init_auto_array_scalar(s, elem_type, np);
+        if (np[0] > maxn) maxn = np[0];
 
         if (!accept(','))
             break;
@@ -750,6 +800,8 @@ void emit_init_auto_array_level(struct Sym *s, int elem_type, int *np, int level
     }
     expect('}');
 
+    if (maxn > np[0])
+        np[0] = maxn;
     while (np[0] < limit) {
         emit_store_const_to_local_array_elem(s, elem_type, np[0], 0);
         np[0] = np[0] + 1;

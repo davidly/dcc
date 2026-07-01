@@ -83,6 +83,17 @@ for (int i = 0; i < 3; i++)
 - GNU `__attribute__((...))` annotations are skipped in supported declaration
   positions.
 
+### C99 aggregate initializers and compound literals
+
+- Struct/union field designators such as `.field = value` are supported in
+  global and automatic aggregate initializers.
+- Array designators such as `[index] = value` are supported, including nested
+  array designators in multidimensional aggregate initializers. GNU range
+  designators such as `[0 ... 3] = value` are not supported.
+- File-scope compound literals used in global constant initializers are
+  supported, including address-taking forms such as `&(struct S){ 1, 2 }`.
+  Automatic/block-scope compound literal objects are not supported yet.
+
 ### Variable-length arrays
 
 Automatic one-dimensional VLAs with a simple identifier bound are supported:
@@ -107,10 +118,11 @@ but they are not implemented today.
 
 | Feature | Notes |
 | --- | --- |
-| C99 designated initializers | Includes `.field = value` initializers. |
-| C99 array designators | Includes `[index] = value`, including nested designators. |
-| C99 compound literals | Includes address-taking forms such as `&(struct S){...}`. |
 | C99 variadic macros | Includes `__VA_ARGS__` and related empty-argument behavior. |
+| Block-scope compound literals | Automatic compound literal objects inside function bodies are not implemented yet. File-scope initializer forms are supported as described above. |
+| GNU range designators | Includes `[first ... last] = value` initializer ranges. |
+| Flexible-array initialization | Initializing storage for a flexible array member is not implemented. |
+| Empty structs | Empty `struct {}` is a compiler extension and is not implemented. |
 | C11 `_Generic` | Not implemented; some tests also require `long long`, which remains target-inapplicable. |
 | GNU statement expressions | Includes `({ ... })`; `__builtin_expect` is also not recognized. |
 

@@ -1063,6 +1063,48 @@ void parse_typedef_decl(void)
     }
 }
 
+static void parse_global_init_type_at(struct Sym *s, int type, int size, int baseoff);
+static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, int elem_size, int baseoff);
+static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff);
+
+static int global_compound_literal_seq;
+
+static int parse_global_compound_literal_address(char *label, int labelsz)
+{
+    int type;
+    int size;
+    char name[64];
+    struct Sym *lit;
+
+    if (tok.kind != '(' || !paren_starts_cast())
+        return 0;
+
+    next_token();
+    parse_type_name_decl(&type, &size);
+    expect(')');
+
+    if (tok.kind != '{') {
+        error_here("compound literal initializer expected");
+        return 1;
+    }
+
+    sprintf(name, "__clit%d", global_compound_literal_seq++);
+    lit = add_global(name, type, SC_GLOBAL);
+    lit->is_defined = 1;
+    lit->is_static = 1;
+    lit->needs_extrn = 0;
+    lit->has_init = 1;
+    lit->init_count = 0;
+    lit->size = size;
+    parse_global_init_type_at(lit, type, size, 0);
+
+    if (label && labelsz > 0) {
+        strncpy(label, name, labelsz - 1);
+        label[labelsz - 1] = 0;
+    }
+    return 1;
+}
+
 int parse_global_init_atom(long *val, char *label, int labelsz)
 {
     int sign;
@@ -1164,6 +1206,8 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
 
     if (tok.kind == '&') {
         next_token();
+        if (parse_global_compound_literal_address(label, labelsz))
+            return 2;
         if (tok.kind == TOK_ID) {
             if (label && labelsz > 0) {
                 struct Sym *ls;
@@ -1222,6 +1266,169 @@ void append_global_zero_bytes(struct Sym *s, int bytes)
     }
 }
 
+static int global_init_used_bytes(struct Sym *s)
+{
+    int i;
+    int used;
+
+    used = 0;
+    for (i = 0; i < s->init_count; ++i)
+        used += s->init_sizes[i] ? s->init_sizes[i] : 2;
+    return used;
+}
+
+static int global_init_entry_at_offset(struct Sym *s, int off, int *startp)
+{
+    int i;
+    int cur;
+    int sz;
+
+    cur = 0;
+    for (i = 0; i < s->init_count; ++i) {
+        sz = s->init_sizes[i] ? s->init_sizes[i] : 2;
+        if (cur == off) {
+            if (startp) startp[0] = cur;
+            return i;
+        }
+        if (off > cur && off < cur + sz) {
+            if (startp) startp[0] = cur;
+            return -2;
+        }
+        cur += sz;
+    }
+
+    if (cur == off) {
+        if (startp) startp[0] = cur;
+        return s->init_count;
+    }
+
+    if (startp) startp[0] = cur;
+    return -1;
+}
+
+static void global_init_pad_to_offset(struct Sym *s, int off)
+{
+    while (global_init_used_bytes(s) < off)
+        append_global_init(s, NULL, 0, 1, 0);
+}
+
+static void global_init_write_byte_at(struct Sym *s, int off, unsigned int v)
+{
+    int idx;
+    int start;
+
+    if (off < 0) {
+        error_here("negative initializer offset");
+        return;
+    }
+
+    global_init_pad_to_offset(s, off);
+    idx = global_init_entry_at_offset(s, off, &start);
+    if (idx == s->init_count) {
+        append_global_init(s, NULL, (long)(v & 255U), 1, 0);
+        return;
+    }
+
+    if (idx < 0 || s->init_sizes[idx] != 1) {
+        error_here("initializer designator overlaps address constant");
+        return;
+    }
+
+    sprintf(s->init_labels[idx], "%u", v & 255U);
+    s->init_sizes[idx] = 1;
+}
+
+static void global_init_insert_entry_at(struct Sym *s, int idx, const char *label, long v, int bytes, int is_label)
+{
+    grow_init_cap(s, s->init_count + 1);
+    if (idx < s->init_count) {
+        memmove(&s->init_labels[idx + 1], &s->init_labels[idx],
+                (size_t)(s->init_count - idx) * sizeof(s->init_labels[0]));
+        memmove(&s->init_sizes[idx + 1], &s->init_sizes[idx],
+                (size_t)(s->init_count - idx) * sizeof(s->init_sizes[0]));
+    }
+    if (is_label) {
+        strncpy(s->init_labels[idx], label, sizeof(s->init_labels[0]) - 1);
+        s->init_labels[idx][sizeof(s->init_labels[0]) - 1] = 0;
+    } else {
+        sprintf(s->init_labels[idx], "%ld", v);
+    }
+    s->init_sizes[idx] = bytes;
+    s->init_count++;
+}
+
+static void global_init_remove_entries(struct Sym *s, int idx, int count)
+{
+    if (count <= 0) return;
+    if (idx + count < s->init_count) {
+        memmove(&s->init_labels[idx], &s->init_labels[idx + count],
+                (size_t)(s->init_count - idx - count) * sizeof(s->init_labels[0]));
+        memmove(&s->init_sizes[idx], &s->init_sizes[idx + count],
+                (size_t)(s->init_count - idx - count) * sizeof(s->init_sizes[0]));
+    }
+    s->init_count -= count;
+}
+
+static void global_init_write_label_at(struct Sym *s, int off, const char *label, int bytes)
+{
+    int idx;
+    int start;
+    int consumed;
+    int count;
+    int i;
+
+    if (bytes <= 0) bytes = 2;
+    if (off < 0) {
+        error_here("negative initializer offset");
+        return;
+    }
+
+    global_init_pad_to_offset(s, off);
+    idx = global_init_entry_at_offset(s, off, &start);
+    if (idx == s->init_count) {
+        append_global_init(s, label, 0, bytes, 1);
+        return;
+    }
+    if (idx < 0) {
+        error_here("initializer designator overlaps address constant");
+        return;
+    }
+
+    consumed = 0;
+    count = 0;
+    for (i = idx; i < s->init_count && consumed < bytes; ++i) {
+        if (s->init_sizes[i] != 1) {
+            error_here("initializer designator overlaps address constant");
+            return;
+        }
+        consumed++;
+        count++;
+    }
+    while (consumed < bytes) {
+        append_global_init(s, NULL, 0, 1, 0);
+        consumed++;
+        count++;
+    }
+    global_init_remove_entries(s, idx, count);
+    global_init_insert_entry_at(s, idx, label, 0, bytes, 1);
+}
+
+static void global_init_write_value_at(struct Sym *s, int off, const char *label, long v, int bytes, int is_label)
+{
+    int i;
+    unsigned long uv;
+
+    if (bytes <= 0) bytes = 2;
+    if (is_label) {
+        global_init_write_label_at(s, off, label, bytes);
+        return;
+    }
+
+    uv = (unsigned long)v;
+    for (i = 0; i < bytes; ++i)
+        global_init_write_byte_at(s, off + i, (unsigned int)((uv >> (8 * i)) & 255UL));
+}
+
 void append_global_char_array_string(struct Sym *s, int count, const char *str)
 {
     int i;
@@ -1247,13 +1454,42 @@ void append_global_char_array_string(struct Sym *s, int count, const char *str)
 
 void parse_global_init_type(struct Sym *s, int type, int size);
 
-void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_size)
+static void global_init_write_char_array_string_at(struct Sym *s, int baseoff, int count, const char *str)
+{
+    int i;
+    int n;
+
+    n = (int)strlen(str);
+    if (count <= 0)
+        return;
+
+    if (n > count) {
+        error_here("string initializer too long for char array field");
+        n = count;
+    }
+
+    for (i = 0; i < n; ++i)
+        global_init_write_value_at(s, baseoff + i, NULL, (unsigned char)str[i], 1, 0);
+    while (i < count) {
+        global_init_write_value_at(s, baseoff + i, NULL, 0, 1, 0);
+        i++;
+    }
+}
+
+static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, int elem_size, int baseoff)
 {
     int n;
+    int maxn;
     int had_brace;
+    int parse_elem_size;
 
     if (elem_size <= 0) elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
+    parse_elem_size = elem_size;
+    if (count <= 0 && s->is_array && s->dim_count > 1 && s->dims[0] == 0) {
+        parse_elem_size = type_size(elem_type);
+        if (parse_elem_size <= 0) parse_elem_size = 2;
+    }
 
     if ((elem_type & 15) == TYPE_CHAR && type_ptr_depth(elem_type) == 0 &&
         tok.kind == TOK_STR) {
@@ -1263,7 +1499,7 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
         if (is_wide)
             error_here("wide string cannot initialize char array field");
         else
-            append_global_char_array_string(s, count, lit);
+            global_init_write_char_array_string_at(s, baseoff, count, lit);
         free(lit);
         return;
     }
@@ -1274,17 +1510,25 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
         had_brace = 1;
     }
     n = 0;
+    maxn = 0;
     while (tok.kind != TOK_EOF && (had_brace || count <= 0 || n < count) &&
            (had_brace || tok.kind != '}')) {
         if (had_brace && tok.kind == '}')
             break;
+        if (had_brace && tok.kind == '[') {
+            next_token();
+            n = parse_const_int_expr();
+            expect(']');
+            expect('=');
+        }
         if (count > 0 && n >= count) {
             error_here("too many initializer elements");
             skip_initializer_or_decl_tail();
             break;
         }
-        parse_global_init_type(s, elem_type, elem_size);
+        parse_global_init_type_at(s, elem_type, parse_elem_size, baseoff + n * parse_elem_size);
         n++;
+        if (n > maxn) maxn = n;
         if (!had_brace && count > 0 && n >= count)
             break;
         if (!accept(',')) break;
@@ -1292,12 +1536,6 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
     }
     if (had_brace)
         expect('}');
-
-    while (count > 0 && n < count) {
-        append_global_zero_bytes(s, elem_size);
-        n++;
-    }
-
     /*
      * Omitted first dimension on an array of structs, e.g.
      *     static const Instr prog[] = { {..}, {..}, {..} };
@@ -1316,7 +1554,7 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
         inner = sym_array_inner_count_from(s, 1);
         if (inner <= 0)
             inner = 1;
-        rows = (n + inner - 1) / inner;
+        rows = (maxn + inner - 1) / inner;
         stride = elem_size;
         if (stride <= 0) {
             int base = type_size(elem_type);
@@ -1332,7 +1570,19 @@ void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_s
     }
 }
 
-void parse_global_init_struct(struct Sym *s, int type)
+void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_size)
+{
+    parse_global_init_array_at(s, elem_type, count, elem_size, global_init_used_bytes(s));
+}
+
+static int field_def_index(struct FieldDef *fd)
+{
+    if (fd == NULL)
+        return -1;
+    return (int)(fd - field_defs);
+}
+
+static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
 {
     int sid;
     int i;
@@ -1364,9 +1614,9 @@ void parse_global_init_struct(struct Sym *s, int type)
 
         if (first && tok.kind != TOK_EOF && tok.kind != '}') {
             if (first->is_array)
-                parse_global_init_array(s, first->elem_type, first->array_len, first->elem_size);
+                parse_global_init_array_at(s, first->elem_type, first->array_len, first->elem_size, baseoff);
             else
-                parse_global_init_type(s, first->type, first->size);
+                parse_global_init_type_at(s, first->type, first->size, baseoff);
             used = first->size;
 
             /* Braceless union element in an array (static U a[] = {1,2,3})
@@ -1386,19 +1636,32 @@ void parse_global_init_struct(struct Sym *s, int type)
 
         if (had_brace)
             expect('}');
-        if (total > used)
-            append_global_zero_bytes(s, total - used);
         return;
     }
 
     for (i = 0; i < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}'; ++i) {
         struct FieldDef *fd;
-        fd = &field_defs[i];
-        if (fd->parent_struct_id != sid)
-            continue;
-
-        if (fd->offset > used)
-            append_global_zero_bytes(s, fd->offset - used);
+        if (tok.kind == '.') {
+            next_token();
+            if (tok.kind != TOK_ID) {
+                error_here("field name expected in initializer designator");
+                skip_initializer_or_decl_tail();
+                break;
+            }
+            fd = find_field_def(sid, tok.text);
+            if (fd == NULL) {
+                error_here("unknown field initializer designator");
+                skip_initializer_or_decl_tail();
+                break;
+            }
+            i = field_def_index(fd);
+            next_token();
+            expect('=');
+        } else {
+            fd = &field_defs[i];
+            if (fd->parent_struct_id != sid)
+                continue;
+        }
 
         if (fd->bit_width > 0) {
             int unit_off;
@@ -1442,7 +1705,7 @@ void parse_global_init_struct(struct Sym *s, int type)
                 }
                 k = next;
             }
-            append_global_init(s, NULL, (long)(unit & 0xffffU), 2, 0);
+            global_init_write_value_at(s, baseoff + unit_off, NULL, (long)(unit & 0xffffU), 2, 0);
             used = unit_off + 2;
             if (k > i)
                 i = k - 1;
@@ -1452,38 +1715,42 @@ void parse_global_init_struct(struct Sym *s, int type)
         }
 
         if (fd->is_array)
-            parse_global_init_array(s, fd->elem_type, fd->array_len, fd->elem_size);
+            parse_global_init_array_at(s, fd->elem_type, fd->array_len, fd->elem_size,
+                                       baseoff + fd->offset);
         else
-            parse_global_init_type(s, fd->type, fd->size);
+            parse_global_init_type_at(s, fd->type, fd->size, baseoff + fd->offset);
 
         used = fd->offset + fd->size;
         if (!had_brace && next_parent_field_index(sid, i + 1) < 0)
             break;
         if (!accept(',')) break;
         if (tok.kind == '}') break;
+        if (tok.kind == '.') i = -1;
     }
     if (had_brace)
         expect('}');
-
-    if (total > used)
-        append_global_zero_bytes(s, total - used);
 }
 
-void parse_global_init_type(struct Sym *s, int type, int size)
+void parse_global_init_struct(struct Sym *s, int type)
+{
+    parse_global_init_struct_at(s, type, global_init_used_bytes(s));
+}
+
+static void parse_global_init_type_at(struct Sym *s, int type, int size, int baseoff)
 {
     long v;
     char label[64];
     int k;
 
     if ((type & TYPE_STRUCT) && type_ptr_depth(type) == 0) {
-        parse_global_init_struct(s, type);
+        parse_global_init_struct_at(s, type, baseoff);
         return;
     }
 
     if ((type & 15) == TYPE_FLOAT && type_ptr_depth(type) == 0) {
         unsigned long bits;
         if (parse_float_init_literal(&bits))
-            append_global_init(s, NULL, (long)bits, 4, 0);
+            global_init_write_value_at(s, baseoff, NULL, (long)bits, 4, 0);
         else {
             error_here("float initializer must be constant");
             if (tok.kind != ',' && tok.kind != '}') next_token();
@@ -1493,11 +1760,16 @@ void parse_global_init_type(struct Sym *s, int type, int size)
 
     k = parse_global_init_atom(&v, label, sizeof(label));
     if (k == 1)
-        append_global_init(s, NULL, v, size, 0);
+        global_init_write_value_at(s, baseoff, NULL, v, size, 0);
     else if (k == 2)
-        append_global_init(s, label, 0, size, 1);
+        global_init_write_value_at(s, baseoff, label, 0, size, 1);
     else
         next_token();
+}
+
+void parse_global_init_type(struct Sym *s, int type, int size)
+{
+    parse_global_init_type_at(s, type, size, global_init_used_bytes(s));
 }
 
 void parse_global_scalar_array_init_scalar(struct Sym *s, int *np)
@@ -1574,6 +1846,27 @@ void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level)
     limit = start + sym_array_elems_from_level(s, level);
 
     while (tok.kind != TOK_EOF && tok.kind != '}') {
+        if (tok.kind == '[') {
+            int idx;
+            int span;
+
+            next_token();
+            idx = parse_const_int_expr();
+            expect(']');
+            expect('=');
+            span = sym_array_elems_from_level(s, level + 1);
+            if (span <= 0) span = 1;
+            if (idx < 0)
+                error_here("negative array initializer designator");
+            else {
+                int target;
+                target = start + idx * span;
+                if (target > np[0])
+                    parse_global_scalar_array_zero_to(s, np, target);
+                else
+                    np[0] = target;
+            }
+        }
         if (tok.kind == '{' && s->dim_count > 0 && level + 1 < s->dim_count)
             parse_global_scalar_array_init_level(s, np, level + 1);
         else
@@ -1594,6 +1887,7 @@ void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level)
 void parse_global_init_list(struct Sym *s)
 {
     int n;
+    int maxn;
     long v;
     int k;
 
@@ -1711,11 +2005,35 @@ void parse_global_init_list(struct Sym *s)
     }
 
     n = 0;
+    maxn = 0;
     while (tok.kind != TOK_EOF && tok.kind != '}') {
+        if (tok.kind == '[') {
+            int idx;
+            int span;
+            int target;
+
+            next_token();
+            idx = parse_const_int_expr();
+            expect(']');
+            expect('=');
+
+            span = sym_array_elems_from_level(s, 1);
+            if (span <= 0) span = 1;
+            if (idx < 0) {
+                error_here("negative array initializer designator");
+            } else {
+                target = idx * span;
+                if (target > n)
+                    parse_global_scalar_array_zero_to(s, &n, target);
+                else
+                    n = target;
+            }
+        }
         if (tok.kind == '{' && s->dim_count > 1)
             parse_global_scalar_array_init_level(s, &n, 1);
         else
             parse_global_scalar_array_init_scalar(s, &n);
+        if (n > maxn) maxn = n;
         if (!accept(','))
             break;
         if (tok.kind == '}')
@@ -1723,6 +2041,8 @@ void parse_global_init_list(struct Sym *s)
     }
 
     expect('}');
+    if (maxn > n)
+        n = maxn;
     if (s->is_array && s->array_len > 0) {
         int total;
         total = sym_array_total_elems(s);

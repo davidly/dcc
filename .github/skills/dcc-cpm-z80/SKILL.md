@@ -103,9 +103,19 @@ including aggregate initialization through the anonymous member. GNU
 `__attribute__((...))` annotations are skipped when they appear in supported
 declaration positions.
 
-Not implemented yet, but plausible front-end scope: C99 designated initializers,
-C99 array designators, C99 compound literals, C99 variadic macros, GNU statement
-expressions, `__builtin_expect`, and C11 `_Generic` for target-supported types.
+C99 aggregate initializer compatibility includes `.field = value` struct/union
+field designators and `[index] = value` array designators, including nested
+array designators in multidimensional aggregate initializers. GNU range
+designators (`[0 ... 3] = value`) are not supported. File-scope compound
+literals used in global constant initializers are supported, including
+address-taking forms such as `&(struct S){1, 2}`; automatic/block-scope compound
+literal objects inside functions are not supported yet.
+
+Not implemented yet, but plausible front-end scope: C99 variadic macros
+(`__VA_ARGS__` and empty-argument behavior), block-scope compound literals, GNU
+range designators, flexible-array initialization, empty `struct {}` extension
+syntax, GNU statement expressions, `__builtin_expect`, and C11 `_Generic` for
+target-supported types.
 
 Target-inapplicable or runtime-inapplicable exceptions: `double`/`long double`,
 `long long`, 64-bit integer typedefs/operations, host ABI checks,

@@ -4,19 +4,11 @@
     "Ignored tests below are either not-yet-implemented C99/C11/GNU front-end compatibility candidates or true CP/M 2.2/Z80 target-model/runtime mismatches. Target-model reasons are called out explicitly."
   ],
   "tests": [
-    { "name": "00048", "ignore": true, "reason": "C99 designated initializer support is not implemented yet." },
-    { "name": "00049", "ignore": true, "reason": "C99 designated initializer support is not implemented yet." },
     { "name": "00083", "ignore": true, "reason": "C99 variadic macro support is not implemented yet." },
     { "name": "00084", "ignore": true, "reason": "C99 variadic macro support is not implemented yet." },
     { "name": "00085", "ignore": true, "reason": "C99 variadic macro support is not implemented yet." },
-    { "name": "00092", "ignore": true, "reason": "C99 array designator support is not implemented yet." },
     { "name": "00097", "ignore": true, "reason": "C99 variadic macro redefinition/empty-argument behavior is not implemented yet." },
     { "name": "00123", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
-    { "name": "00147", "ignore": true, "reason": "C99 designated initializer support is not implemented yet." },
-    { "name": "00148", "ignore": true, "reason": "C99 array designator support for aggregate elements is not implemented yet." },
-    { "name": "00149", "ignore": true, "reason": "C99 compound literal support is not implemented yet." },
-    { "name": "00150", "ignore": true, "reason": "C99 compound literal and designated initializer support is not implemented yet." },
-    { "name": "00151", "ignore": true, "reason": "Nested C99 array designator support is not implemented yet." },
     { "name": "00166", "ignore": true, "reason": "Assumes host-sized int can hold large octal/hex constants; dcc int is 16-bit on Z80." },
     { "name": "00168", "ignore": true, "reason": "Expected output assumes int can hold 10!; dcc int is 16-bit on Z80 and wraps by the target data model." },
     { "name": "00174", "ignore": true, "reason": "Expected output depends on C double precision for unsuffixed floating constants; dcc has float as its only floating type." },
@@ -29,6 +21,7 @@
     { "name": "00212", "ignore": true, "reason": "Checks LLP64/LP64/ILP32 host data models; dcc is a 16-bit-pointer CP/M/Z80 target." },
     { "name": "00213", "ignore": true, "reason": "GNU statement-expression support is not implemented yet." },
     { "name": "00214", "ignore": true, "reason": "GNU statement-expression and __builtin_expect support is not implemented yet." },
+    { "name": "00216", "ignore": true, "reason": "Uses GNU range designators, flexible-array initialization, empty structs, and block-scope compound literals outside current dcc support." },
     { "name": "00217", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
     { "name": "00219", "ignore": true, "reason": "C11 _Generic support is not implemented yet, and the test also includes long long associations outside dcc's Z80 target model." },
     { "name": "00220", "ignore": true, "reason": "Uses wchar.h and wide-character Unicode literals, outside the dcc CP/M runtime/header set." }
