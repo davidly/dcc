@@ -7,6 +7,7 @@
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
 
+static const struct AstNode *inline_substitution_body(struct Sym *fn);
 
 void gen_int_lit(const struct AstNode *n)
 {
@@ -145,7 +146,9 @@ void gen_ident(const struct AstNode *n)
 
     /* A function name used as a value decays to its address. */
     if (s->storage == SC_FUNC) {
-        fprintf(outf, "\tld hl,%s\n", asm_name_for(name));
+        if (s->is_static && s->is_inline && inline_substitution_body(s) != NULL)
+            s->inline_body_needed = 1;
+        fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
         g_expr_type = type_add_ptr(s->type);
         return;
     }
@@ -2206,6 +2209,17 @@ static const struct AstNode *inline_body_expr(struct Sym *fn)
     return fn->inline_stmt_expr;
 }
 
+static const struct AstNode *inline_substitution_body(struct Sym *fn)
+{
+    if (fn == NULL)
+        return NULL;
+    if (fn->inline_return_expr != NULL)
+        return fn->inline_return_expr;
+    if (fn->inline_stmt_expr != NULL)
+        return fn->inline_stmt_expr;
+    return fn->inline_stmt_body;
+}
+
 static int inline_expr_contains_inline_call(const struct AstNode *n)
 {
     int i;
@@ -2215,7 +2229,7 @@ static int inline_expr_contains_inline_call(const struct AstNode *n)
     if (n->kind == AST_CALL && n->a != NULL && n->a->kind == AST_IDENT) {
         struct Sym *s;
         s = find_global(n->a->sval);
-        if (s != NULL && s->is_static && s->is_inline && inline_body_expr(s) != NULL)
+        if (s != NULL && s->is_static && s->is_inline && inline_substitution_body(s) != NULL)
             return 1;
     }
     if (inline_expr_contains_inline_call(n->a) || inline_expr_contains_inline_call(n->b) ||
@@ -2264,7 +2278,7 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
 {
     int i;
 
-    if (inline_expr_contains_inline_call(inline_body_expr(fn)))
+    if (inline_expr_contains_inline_call(inline_substitution_body(fn)))
         return 0;
 
     for (i = 0; i < n->list_len; ++i) {
@@ -2341,15 +2355,17 @@ static int g_inline_expand_depth;
 static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
 {
     struct AstNode *expr;
+    struct AstNode *stmt;
     const struct AstNode *src_expr;
     const char *temp_names[MAX_PROTO_PARAMS];
     char temp_name_buf[MAX_PROTO_PARAMS][64];
     int i;
 
     if (fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
-        inline_body_expr(fn_sym) == NULL)
+        inline_substitution_body(fn_sym) == NULL)
         return 0;
-    if (fn_sym->inline_stmt_expr != NULL && !expr_result_dead)
+    if ((fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL) &&
+        !expr_result_dead)
         return 0;
     if (g_inline_expand_depth >= 8)
         return 0;
@@ -2363,11 +2379,17 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
         return 0;
 
     g_inline_expand_depth++;
-    src_expr = inline_body_expr(fn_sym);
-    expr = clone_inline_expr(&g_ast_arena, fn_sym, src_expr, n, temp_names);
-    ast_gen_expr(expr);
+    src_expr = inline_substitution_body(fn_sym);
+    if (fn_sym->inline_stmt_body != NULL) {
+        stmt = clone_inline_expr(&g_ast_arena, fn_sym, src_expr, n, temp_names);
+        ast_gen_stmt(stmt);
+    } else {
+        expr = clone_inline_expr(&g_ast_arena, fn_sym, src_expr, n, temp_names);
+        ast_gen_expr(expr);
+    }
     g_inline_expand_depth--;
-    g_expr_type = fn_sym->inline_stmt_expr != NULL ? TYPE_VOID : fn_sym->type;
+    g_expr_type = (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL) ?
+                  TYPE_VOID : fn_sym->type;
     g_long_from16 = 0;
     return 1;
 }

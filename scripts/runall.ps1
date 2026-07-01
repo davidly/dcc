@@ -72,6 +72,12 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
 .PARAMETER ReportClockHz
     ntvcm clock speed used for measured app runs in -Report mode (default: 400000000).
 
+.PARAMETER KeepBuild
+    In parallel mode the suite builds into a per-invocation folder
+    (build/run-<pid>-<rand>) so concurrent runs stay isolated, and removes it on
+    exit to keep build/ from accumulating run-* folders. Pass -KeepBuild to
+    retain that folder (e.g. to inspect failing build artifacts).
+
 .EXAMPLE
   pwsh ./scripts/runall.ps1
     pwsh ./scripts/runall.ps1 -Help
@@ -109,6 +115,7 @@ param(
     [switch]$Report,
     [string]$ReportFile = "perf_results.csv",
     [long]$ReportClockHz = 400000000,
+    [switch]$KeepBuild,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -162,8 +169,24 @@ function Restore-TerminalState {
     }
 }
 
+# Per-run isolation directory (parallel mode only). Recorded here so it can be
+# removed on exit, keeping the build/ tree from accumulating one run-* folder
+# per invocation. Pass -KeepBuild to retain it for debugging.
+$script:RunBuildRoot = $null
+
+function Remove-RunBuildDir {
+    if ($KeepBuild) { return }
+    if ($script:RunBuildRoot -and (Test-Path $script:RunBuildRoot -PathType Container)) {
+        try {
+            Remove-Item -LiteralPath $script:RunBuildRoot -Recurse -Force -ErrorAction Stop
+        }
+        catch { }
+    }
+}
+
 trap {
     Restore-TerminalState
+    Remove-RunBuildDir
     throw
 }
 
@@ -180,13 +203,16 @@ $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
 
 function New-RunBuildId {
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-ffff"
     $rand = Get-Random -Minimum 100000 -Maximum 1000000
-    return "run-$stamp-$rand"
+    return "run-$PID-$rand"
 }
 
 if ($Parallel) {
+    # Isolate this invocation so concurrent runs never clobber each other's
+    # per-app build dirs. The folder is removed on exit (see Remove-RunBuildDir)
+    # unless -KeepBuild is set, so build/ does not fill up with run-* folders.
     $BuildDir = Join-Path $BuildDir (New-RunBuildId)
+    $script:RunBuildRoot = $BuildDir
 }
 
 # Get machine name for reporting (platform-specific)
@@ -928,9 +954,14 @@ if ($null -ne $_savedStty) { stty $_savedStty 2>$null }
 if ($failed -eq 0) {
     Write-Host ">>> SUCCESS: All tests passed <<<" -ForegroundColor Green
     Restore-TerminalState
+    Remove-RunBuildDir
     exit 0
 } else {
     Write-Host ">>> FAILURE: $failed test(s) failed <<<" -ForegroundColor Red
+    if ($script:RunBuildRoot -and -not $KeepBuild) {
+        Write-Host "  (build artifacts removed; re-run with -KeepBuild to retain them for debugging)" -ForegroundColor DarkGray
+    }
     Restore-TerminalState
+    Remove-RunBuildDir
     exit 1
 }

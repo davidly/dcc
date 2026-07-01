@@ -19,6 +19,11 @@ static inline int twice(int x)
     return x + x;
 }
 
+static inline int plus5(int x)
+{
+    return x + 5;
+}
+
 static inline int max2(int a, int b)
 {
     return a > b ? a : b;
@@ -48,9 +53,22 @@ static inline float half_plus_one(float x)
     return x * 0.5 + 1.0;
 }
 
+static inline int local_helper(int x)
+{
+    int y;
+    y = x + 4;
+    return y;
+}
+
 static inline void store_add(int *dst, int v)
 {
     *dst = *dst + v;
+}
+
+static inline void store_pair(int *dst, int a, int b)
+{
+    dst[0] = dst[0] + a;
+    dst[1] = dst[1] + b;
 }
 
 int main(void)
@@ -66,6 +84,10 @@ int main(void)
     float fwide;
     int float_ok;
     int stored;
+    int stored2;
+    int (*fp)(int);
+    int via_ptr;
+    int local_ok;
 
     pair.left = 44;
     pair.right = 77;
@@ -82,6 +104,13 @@ int main(void)
     slots[4] = 30;
     store_add(&slots[bump()], 12);
     stored = slots[4];
-    printf("inline temps: %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, counter);
+    slots[1] = 9;
+    slots[2] = 20;
+    store_pair(&slots[1], 3, 4);
+    stored2 = slots[1] + slots[2];
+    fp = plus5;
+    via_ptr = fp(6);
+    local_ok = local_helper(8);
+    printf("inline temps: %d %d %d %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, stored2, via_ptr, local_ok, counter);
     return 0;
 }

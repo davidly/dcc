@@ -228,10 +228,11 @@ Notes specific to the 16-bit model:
   inline simple return-expression helpers, early-return `if` chains lowered to
   conditional expressions, simple struct/pointer member accessors, scalar
   `int`/pointer/`long`/`float` expression helpers, and statement-context
-  `void` helpers whose body is one expression statement such as `*dst = value`.
-  When every call site inlines, the private out-of-line static helper body is
-  removed; if a call cannot be inlined safely, dcc keeps the private fallback
-  body. Plain externally linked `inline` is accepted for source compatibility
+  `void` helpers whose body is one or more expression statements such as
+  `*dst = value`. When every call site inlines and the function address is not
+  taken, the private out-of-line static helper body is removed; if a call cannot
+  be inlined safely, or if the function address is used, dcc keeps the private
+  fallback body. Plain externally linked `inline` is accepted for source compatibility
   but does not yet have C99 external-inline linkage semantics or call-site
   inlining. No other C99/C11 keywords (`restrict`, `_Complex`, and so on) are
   recognized here unless documented elsewhere. The native `_Bool` keyword is a
