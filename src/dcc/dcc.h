@@ -261,6 +261,7 @@ struct Def {
     int is_func;
     int nargs;
     char params[8][32];
+    int is_variadic;  /* C99 `...`: params[nargs-1] is "__VA_ARGS__" */
 };
 
 struct AsmName {
@@ -561,10 +562,11 @@ int parse_charlit_string_value(const char *s, long *out);
 void replace_source_range(long start, long end, const char *text);
 void trim_arg(char *s);
 void strip_macro_replacement_comments(char *s);
-int read_macro_call_args(char args[8][128], int *nargs);
+int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count);
 void append_macro_string_literal(const char *arg, char *out, int *oip, int outsz);
 int macro_param_index(int di, const char *ident);
-int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs);
+int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
+                                     int variadic_named_count);
 void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
 void paste_tokens_in_text(char *s);
 int replacement_param_raw_context(const char *start, const char *param_start, const char *param_end);
