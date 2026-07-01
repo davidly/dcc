@@ -551,11 +551,13 @@ function Get-Baseline {
 #   {{DATE}}  - C __DATE__ value, e.g. "Jun 16 2026"
 #   {{TIME}}  - C __TIME__ value, e.g. "20:01:50"
 #   {{SEP}}   - path separator, "/" (Unix) or "\" (Windows)
+#   {{UINT}}  - unsigned decimal integer
 #   {{HEX4}}  - four uppercase hex digits, e.g. "0040"
 $Placeholders = [ordered]@{
     '{{DATE}}' = '[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}'
     '{{TIME}}' = '\d{2}:\d{2}:\d{2}'
     '{{SEP}}'  = '[/\\]'
+    '{{UINT}}' = '\d+'
     '{{HEX4}}' = '[0-9A-F]{4}'
 }
 

@@ -108,8 +108,12 @@ for (int i = 0; i < 3; i++)
   positions.
 - `static inline` functions are supported for small helper functions. dcc can
   inline simple return-expression bodies, early-return `if` chains lowered to
-  conditional expressions, simple struct/pointer member accessors, and scalar
-  `int`/pointer/`long`/`float` expression helpers. When all call sites inline,
+  conditional expressions, simple struct/pointer member accessors, single
+  expression-statement `void` helpers such as `*dst = value`, and scalar
+  `int`/pointer/`long`/`float` expression helpers. `void` helpers inline only
+  when called as a statement; their assignment/store expression may contain
+  ordinary helper calls, for example `*dst = clamp((long)*dst + v)`. When all
+  call sites inline,
   dcc removes the private out-of-line static function body; if a call cannot be
   inlined safely, it keeps and calls the private static fallback body. Hidden
   caller-frame temporaries preserve single evaluation for multi-use 16-bit
@@ -133,8 +137,14 @@ for (int i = 0; i < 3; i++)
     return x;
   }
 
+  static inline void add_int(int *dst, int v)
+  {
+    *dst = clamp8(*dst + v);
+  }
+
   value = max_int(i++, limit);    /* i++ is evaluated once */
   byte = clamp8(sample + bias);   /* helper body can be removed if all calls inline */
+  add_int(&total, delta);         /* statement-context helper */
   ```
 
 ### C99 aggregate initializers and compound literals

@@ -7,6 +7,7 @@
     { "name": "adaint", "args": "e.ada" },
     { "name": "bint", "args": "e.bas" },
     { "name": "fint", "args": "e.f" },
+    { "name": "attnc99", "host": true, "stack_size": 512 },
     { "name": "cint", "args": "eu.cin" },
     { "name": "a1", "args": "-l:HELLO.BAS" },
     { "name": "wumpus", "args": "-c" },

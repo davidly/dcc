@@ -225,6 +225,7 @@ struct Sym {
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
     int is_inline;   /* function declared with inline specifier */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
+    struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
     int inline_param_use_count[MAX_PROTO_PARAMS];
     char inline_param_names[MAX_PROTO_PARAMS][64];
     FILE *inline_body_file; /* buffered out-of-line body for dead static inline elimination */

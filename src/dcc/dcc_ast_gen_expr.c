@@ -2128,6 +2128,36 @@ static int inline_expr_contains_call(const struct AstNode *n)
     return 0;
 }
 
+static const struct AstNode *inline_body_expr(struct Sym *fn)
+{
+    if (fn == NULL)
+        return NULL;
+    if (fn->inline_return_expr != NULL)
+        return fn->inline_return_expr;
+    return fn->inline_stmt_expr;
+}
+
+static int inline_expr_contains_inline_call(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_CALL && n->a != NULL && n->a->kind == AST_IDENT) {
+        struct Sym *s;
+        s = find_global(n->a->sval);
+        if (s != NULL && s->is_static && s->is_inline && inline_body_expr(s) != NULL)
+            return 1;
+    }
+    if (inline_expr_contains_inline_call(n->a) || inline_expr_contains_inline_call(n->b) ||
+        inline_expr_contains_inline_call(n->c) || inline_expr_contains_inline_call(n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (inline_expr_contains_inline_call(n->list[i]))
+            return 1;
+    return 0;
+}
+
 static int inline_call_needs_arg_temps(const struct AstNode *n, struct Sym *fn)
 {
     int i;
@@ -2165,7 +2195,7 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
 {
     int i;
 
-    if (inline_expr_contains_call(fn->inline_return_expr))
+    if (inline_expr_contains_inline_call(inline_body_expr(fn)))
         return 0;
 
     for (i = 0; i < n->list_len; ++i) {
@@ -2242,12 +2272,15 @@ static int g_inline_expand_depth;
 static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
 {
     struct AstNode *expr;
+    const struct AstNode *src_expr;
     const char *temp_names[MAX_PROTO_PARAMS];
     char temp_name_buf[MAX_PROTO_PARAMS][64];
     int i;
 
     if (fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
-        fn_sym->inline_return_expr == NULL)
+        inline_body_expr(fn_sym) == NULL)
+        return 0;
+    if (fn_sym->inline_stmt_expr != NULL && !expr_result_dead)
         return 0;
     if (g_inline_expand_depth >= 8)
         return 0;
@@ -2261,11 +2294,11 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
         return 0;
 
     g_inline_expand_depth++;
-    expr = clone_inline_expr(&g_ast_arena, fn_sym, fn_sym->inline_return_expr, n,
-                             temp_names);
+    src_expr = inline_body_expr(fn_sym);
+    expr = clone_inline_expr(&g_ast_arena, fn_sym, src_expr, n, temp_names);
     ast_gen_expr(expr);
     g_inline_expand_depth--;
-    g_expr_type = fn_sym->type;
+    g_expr_type = fn_sym->inline_stmt_expr != NULL ? TYPE_VOID : fn_sym->type;
     g_long_from16 = 0;
     return 1;
 }

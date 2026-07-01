@@ -99,8 +99,11 @@ K&R function definitions are still accepted; prefer prototypes for new code.
 
 `static inline` is the supported inline form for small helper functions. dcc can
 inline simple return-expression helpers, early-return `if` chains lowered to
-conditional expressions, simple struct/pointer member accessors, and scalar
-`int`/pointer/`long`/`float` expression helpers. When every call site inlines,
+conditional expressions, simple struct/pointer member accessors, single
+expression-statement `void` helpers such as `*dst = value`, and scalar
+`int`/pointer/`long`/`float` expression helpers. `void` helpers inline only when
+called as a statement; their assignment/store expression may contain ordinary
+helper calls such as `*dst = clamp((long)*dst + v)`. When every call site inlines,
 the private out-of-line static helper body is removed; if a call cannot be
 inlined safely, dcc keeps and calls that private fallback body. Hidden
 caller-frame temporaries preserve single evaluation for multi-use 16-bit

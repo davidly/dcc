@@ -4,7 +4,7 @@
 #include <unistd.h>
 
 /*
- * ATTNC89 - "Paper Tape is All You Need"
+ * ATTNC99 - "Paper Tape is All You Need"
  *
  * A 1-layer, 1-head transformer trained to reverse an 8-digit sequence.
  *
@@ -41,13 +41,13 @@
  *   Q16 weight accumulators   (long, value = real * 65536)
  *
  * Build (from the dcc repo, with DCC/DCCPEEP/DCCRTLSTRIP exported):
- *   ./ma.sh attnc89 peep        -> ATTNC89.COM
+ *   ./ma.sh attnc99 peep        -> ATTNC99.COM
  *
  * Usage:
- *   attnc89 -t      train, save weights to ATTN.WTS, then test
- *   attnc89         run inference using the saved weights (default)
- *   attnc89 <file>  run inference on <file> instead of ATTN.IN
- *   attnc89 -h      help
+ *   attnc99 -t      train, save weights to ATTN.WTS, then test
+ *   attnc99         run inference using the saved weights (default)
+ *   attnc99 <file>  run inference on <file> instead of ATTN.IN
+ *   attnc99 -h      help
  */
 
 #define D 16            /* d_model            */
