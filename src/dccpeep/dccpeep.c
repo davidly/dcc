@@ -6,7 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define MAX_LINES 40000
+#define MAX_LINES 400000
 #define MAX_LINE  512
 
 static char *lines[MAX_LINES];
