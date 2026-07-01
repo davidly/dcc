@@ -1,0 +1,72 @@
+PASS (a+=5) val = 25
+PASS (a+=5) a = 25
+PASS (a-=5) val = 15
+PASS (a-=5) a = 15
+PASS (a*=3) val = 18
+PASS (a*=3) a = 18
+PASS (a/=4) val = 5
+PASS (a/=4) a = 5
+PASS (a%=5) val = 3
+PASS (a%=5) a = 3
+PASS (a&=10) val = 8
+PASS (a&=10) a = 8
+PASS (a|=1) val = 13
+PASS (a|=1) a = 13
+PASS (a^=5) val = 9
+PASS (a^=5) a = 9
+PASS (a<<=2) val = 12
+PASS (a<<=2) a = 12
+PASS (a>>=2) val = 10
+PASS (a>>=2) a = 10
+PASS (*p+=5) val = 25
+PASS (*p+=5) b = 25
+PASS (*p-=5) val = 15
+PASS (*p-=5) b = 15
+PASS (*p*=3) val = 18
+PASS (*p*=3) b = 18
+PASS (*p/=4) val = 5
+PASS (*p/=4) b = 5
+PASS (*p%=5) val = 3
+PASS (*p%=5) b = 3
+PASS (*p&=10) val = 8
+PASS (*p&=10) b = 8
+PASS (*p|=1) val = 13
+PASS (*p|=1) b = 13
+PASS (*p^=5) val = 9
+PASS (*p^=5) b = 9
+PASS (*p<<=2) val = 12
+PASS (*p<<=2) b = 12
+PASS (*p>>=2) val = 10
+PASS (*p>>=2) b = 10
+PASS (arr+=5) val = 25
+PASS (arr+=5) = 25
+PASS (arr*=3) val = 18
+PASS (arr*=3) = 18
+PASS (arr/=4) val = 5
+PASS (arr/=4) = 5
+PASS (arr&=10) val = 8
+PASS (arr&=10) = 8
+PASS (arr<<=2) val = 12
+PASS (arr<<=2) = 12
+PASS (s.x+=5) val = 25
+PASS (s.x+=5) = 25
+PASS (s.x*=3) val = 18
+PASS (s.x*=3) = 18
+PASS (s.x/=4) val = 5
+PASS (s.x/=4) = 5
+PASS (s.x|=1) val = 13
+PASS (s.x|=1) = 13
+PASS carr0 = 7
+PASS a=b=9 a = 9
+PASS a=b=9 b = 9
+PASS (b=4)+1 = 5
+PASS b after = 4
+PASS (*p=7) val = 7
+PASS (*p=7) b = 7
+PASS (arr=8) val = 8
+PASS (arr=8) = 8
+PASS (s.x=9) val = 9
+PASS (s.x=9) = 9
+PASS (*p=3)+4 = 7
+PASS (*p=3) b = 3
+tcaslv completed with great success

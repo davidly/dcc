@@ -105,12 +105,6 @@ void cf_convert_to_type(struct ConstVal *v, int type)
     cf_cast_to_type(v, type);
 }
 
-int cf_is_expr_stop(int kind)
-{
-    return kind == TOK_EOF || kind == ')' || kind == ']' || kind == ',' ||
-           kind == ';' || kind == ':' || kind == '}';
-}
-
 int cf_parse_lor(struct ConstVal *out);
 
 unsigned long cf_parse_integer_literal_bits(const char *text)
@@ -545,46 +539,6 @@ void emit_const_value(struct ConstVal v)
         fprintf(outf, "\tld hl,%lu\n", v.u & 0xffffUL);
     }
     g_expr_type = v.type;
-}
-
-int try_gen_const_expr(void)
-{
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    int save_errors;
-    int save_long_suffix;
-    int save_unsigned_suffix;
-    struct Token save_tok;
-    struct ConstVal v;
-
-    if (tok.kind == TOK_ID || tok.kind == TOK_STR || tok.kind == TOK_WSTR || tok.kind == TOK_FLOATLIT)
-        return 0;
-
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_errors = errors;
-    save_long_suffix = g_tok_long_suffix;
-    save_unsigned_suffix = g_tok_unsigned_suffix;
-    save_tok = tok;
-
-    if (!try_parse_const_expr_value(&v) || !cf_is_expr_stop(tok.kind) || errors != save_errors) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        errors = save_errors;
-        g_tok_long_suffix = save_long_suffix;
-        g_tok_unsigned_suffix = save_unsigned_suffix;
-        tok = save_tok;
-        return 0;
-    }
-
-    emit_const_value(v);
-    return 1;
 }
 
 

@@ -49,16 +49,19 @@ sees the real set of runtime symbols the program calls.
 
 dcc's compiler implementation is AST-driven for function bodies: statements and
 expressions are parsed into typed AST nodes, and the AST walker emits the Z80
-assembly. The AST is "function-local" only in scope: top-level declarations,
-the preprocessor, and the global type/symbol tables remain direct table-driven
-front-end machinery rather than AST nodes.
+assembly. Code generation is a **single AST path** — every expression and
+statement, including local-declaration initializers, is lowered through the AST
+emitter (initializers build into an isolated arena so they never disturb the
+surrounding statement walk). The AST is "function-local" only in scope:
+top-level declarations, the preprocessor, and the global type/symbol tables
+remain direct table-driven front-end machinery rather than AST nodes.
 
 ```mermaid
 flowchart LR
     SRC([".c source"]) --> PP["preprocess +<br/>#include splice"]
     PP --> LEX["lexer<br/>(next_token)"]
     LEX --> BUILD["dcc_ast_build.c<br/>build function-local AST"]
-    BUILD --> GEN["dcc_ast_gen.c<br/>emit from AST"]
+    BUILD --> GEN["dcc_ast_gen*.c<br/>emit from AST"]
     GEN --> ASM([".MAC assembly"])
 ```
 
@@ -77,9 +80,8 @@ The phases are:
 ### Typed expression lowering
 
 The AST carries expression result types, so codegen can choose 16-bit, 32-bit,
-pointer, struct, or float lowering from the tree it is emitting. That removes
-the old side-effect-free type oracle and the broad class of source-text peeks
-that could only see the first token or two of an upcoming operand.
+pointer, struct, or float lowering from the tree it is emitting — the full
+typed operand is always in hand before any code is emitted.
 
 ## Inside dcc: module architecture
 
@@ -114,7 +116,7 @@ graph TB
     subgraph AST["3 - Function-local AST"]
       ASTN["dcc_ast.c / dcc_ast.h"]
       ASTB["dcc_ast_build.c"]
-      ASTG["dcc_ast_gen.c"]
+      ASTG["dcc_ast_gen*.c<br/>(5 TUs)"]
     end
 
     subgraph CG["4 - Code generation helpers"]
@@ -145,8 +147,8 @@ other — the arrows show the usual direction, not a hard layering rule.
 | Shared | `dcc.h`, `dcc_state.c` | Contract + single definition of all shared state |
 | Front end | `dcc.c`, `dcc_preproc.c`, `dcc_diag_emit.c`, `dcc_asmname.c` | Driver/CLI, preprocessor + lexer, diagnostics + emit primitives, C-name-to-asm-symbol mapping |
 | Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c` | Type system, symbol tables, constant-expression evaluation, constant folding |
-| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` | AST node storage, typed statement/expression building, AST-driven Z80 codegen |
-| Code generation helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c` | Shared low-level expression, operator, comparison, assignment, declaration, compound-block, switch-table, and fast-path helpers used by the AST emitter |
+| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` + `dcc_ast_gen_support.c` / `_expr.c` / `_cond.c` / `_stmt.c` (behind `dcc_ast_gen_internal.h`) | AST node storage, typed statement/expression building, and the AST-driven Z80 emitter — split into classifiers/type resolvers (`dcc_ast_gen.c`), the `ast_gen_supported` dispatch and folds (`_support.c`), expression emitters (`_expr.c`), condition/branch emitters (`_cond.c`), and switch/for/statement emitters (`_stmt.c`) |
+| Code generation helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c` | Shared low-level emit helpers — expression, operator, comparison, assignment, declaration, and compound-block/switch-table lowering — all invoked *by the AST emitter* |
 | Top level / output | `dcc_func.c`, `dcc_data.c` | Function/frame parsing and data-section emission |
 
 ## Inside dccpeep: a fixpoint peephole optimizer
@@ -282,8 +284,8 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 
 - dcc is an **AST-driven** C89 compiler for function bodies, with direct
   lowering from typed AST nodes to Z80/M80 assembly.
-- Typed AST expression nodes replace the old side-effect-free type oracle for
-  mixed-width codegen decisions.
+- Typed AST expression nodes drive mixed-width (16/32-bit, pointer, float)
+  codegen decisions from the tree being emitted.
 - Machine-dependent optimization is split out into **`dccpeep`**, a
   fixpoint peephole optimizer over the assembly text, with separate time (`-Ot`)
   and size (`-Os`) strategies.

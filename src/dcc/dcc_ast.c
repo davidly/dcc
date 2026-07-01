@@ -95,15 +95,6 @@ void ast_arena_reset(struct AstArena *ar)
     }
 }
 
-void ast_arena_free(struct AstArena *ar)
-{
-    int i;
-    for (i = 0; i < ar->nblocks; i++)
-        free(ar->blocks[i]);
-    free(ar->blocks);
-    ast_arena_init(ar);
-}
-
 /* ------------------------------------------------------------------------- *
  * Node constructors.
  * ------------------------------------------------------------------------- */
@@ -144,22 +135,6 @@ struct AstNode *ast_float_lit(struct AstArena *ar, unsigned long bits, int type)
 {
     struct AstNode *n = ast_new(ar, AST_FLOAT_LIT);
     n->uval = bits;
-    n->type = type;
-    return n;
-}
-
-struct AstNode *ast_str_lit(struct AstArena *ar, int str_index, int type)
-{
-    struct AstNode *n = ast_new(ar, AST_STR_LIT);
-    n->str_index = str_index;
-    n->type = type;
-    return n;
-}
-
-struct AstNode *ast_ident(struct AstArena *ar, struct Sym *sym, int type)
-{
-    struct AstNode *n = ast_new(ar, AST_IDENT);
-    n->sym = sym;
     n->type = type;
     return n;
 }

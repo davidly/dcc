@@ -13,7 +13,7 @@
 cmake_minimum_required(VERSION 3.10)
 project(dcc C)
 
-set(CMAKE_C_STANDARD 89)
+set(CMAKE_C_STANDARD 90)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -43,10 +43,14 @@ set(DCC_SOURCES
     dcc_data.c
     dcc_ast.c           # function-local AST (arena + nodes)
     dcc_ast_build.c     # function-local AST builder
-    dcc_ast_gen.c       # AST-driven codegen walker
+    dcc_ast_gen.c           # AST classifiers / type & lvalue resolvers
+    dcc_ast_gen_support.c   # AST support dispatch, calls/structs/folds
+    dcc_ast_gen_expr.c      # AST expression emitters
+    dcc_ast_gen_cond.c      # AST condition and branch emitters
+    dcc_ast_gen_stmt.c      # AST statement/switch/for emitters
 )
 
-add_executable(dcc ${DCC_SOURCES} dcc.h)
+add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")

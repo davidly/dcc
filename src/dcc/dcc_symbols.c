@@ -220,57 +220,6 @@ void emit_global_char_index_addr(struct Sym *s)
 }
 
 
-int emit_simple_local_index_to_hl(void)
-{
-    struct Sym *idx;
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
-
-    if (tok.kind != TOK_ID)
-        return 0;
-
-    idx = find_sym(tok.text);
-    if (!idx)
-        return 0;
-
-    if (idx->storage != SC_LOCAL && idx->storage != SC_PARAM)
-        return 0;
-
-    if (type_size(idx->type) != 2)
-        return 0;
-
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
-
-    next_token();
-    if (tok.kind != ']') {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
-        return 0;
-    }
-
-    if (idx->offset < -128 || idx->offset + 1 > 127) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
-        return 0;
-    }
-    fprintf(outf, "\tld l,(ix%+d)\n", idx->offset);
-    fprintf(outf, "\tld h,(ix%+d)\n", idx->offset + 1);
-    return 1;
-}
-
 void emit_test_global_char_index_zero(struct Sym *s, int false_label)
 {
     emit_global_char_index_addr(s);
@@ -810,61 +759,6 @@ void emit_add_field_offset(struct FieldDef *fd)
         fprintf(outf, "\tld de,%d\n", fd->offset);
         emit("\tadd hl,de\n");
     }
-}
-
-int apply_field_access_from_addr(int cur_type, int arrow, int *is_array)
-{
-    struct FieldDef *fd;
-    int sid;
-    int di;
-
-    if (is_array) {
-        is_array[0] = 0;
-    }
-
-    if (arrow) {
-        emit_load_from_hl(cur_type);
-    }
-
-    if (tok.kind != TOK_ID) {
-        error_here("field name expected");
-        return TYPE_INT;
-    }
-
-    sid = base_struct_id_from_type(cur_type);
-    fd = find_field_def(sid, tok.text);
-    if (!fd) {
-        error_here("unknown struct field");
-        next_token();
-        return TYPE_INT;
-    }
-
-    next_token();
-
-    emit_add_field_offset(fd);
-
-    if (is_array) {
-        is_array[0] = fd->is_array;
-    }
-    current_field_array_elem_size = fd->elem_size ? fd->elem_size : type_size(fd->type);
-    /* Float fields are stored as opaque 4-byte objects.  This is normally
-     * already true through type_size(), but keep the field metadata explicit
-     * so arrays of structs containing float fields and float field arrays use
-     * the same 4-byte stride as plain float arrays. */
-    if (fd->is_array && type_is_float(fd->elem_type))
-        current_field_array_elem_size = 4;
-    else if (!fd->is_array && type_is_float(fd->type))
-        current_field_array_elem_size = 4;
-    current_field_array_dim_count = fd->dim_count;
-    for (di = 0; di < 4; ++di) {
-        current_field_array_dims[di] = fd->dims[di];
-    }
-    current_field_bit_width = fd->bit_width;
-    current_field_bit_shift = fd->bit_shift;
-    current_field_bit_mask = fd->bit_mask;
-    if (fd->is_array)
-        return fd->elem_type;
-    return fd->type;
 }
 
 void skip_balanced_bracket(int open_ch, int close_ch)

@@ -32,7 +32,7 @@ ntvcm.
 
 | Path | What |
 | ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`, `dcc_ast.c`/`dcc_ast_build.c`/`dcc_ast_gen.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. |
+| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. **Codegen is a single AST path**: `dcc_ast.c`/`dcc_ast_build.c` build the typed function-local AST (initializers via `ast_emit_init_expr` into an isolated arena), and the AST emitter lives in `dcc_ast_gen.c` + `dcc_ast_gen_support.c`/`_expr.c`/`_cond.c`/`_stmt.c` (behind `dcc_ast_gen_internal.h`). The `dcc_expr.c`/`dcc_ops.c`/`dcc_cmp.c`/`dcc_assign.c`/`dcc_stmt.c` modules provide the low-level emit helpers the AST walker calls into. |
 | `src/dccpeep/` | Peephole optimizer (`-Ot` time / `-Os` size). |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |

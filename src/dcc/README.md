@@ -70,15 +70,17 @@ a single module and kept `static` there:
 
 ### Function-local AST lowering
 
-The old streaming statement/expression generator has been retired as the public
-codegen path. [`dcc_ast_build.c`](dcc_ast_build.c) parses one function-body
-statement or top-level expression into [`dcc_ast.h`](dcc_ast.h) nodes, and
-[`dcc_ast_gen.c`](dcc_ast_gen.c) emits it. Expression nodes carry the result
-type that codegen needs, so mixed-width decisions such as `float`, `long`,
-pointer arithmetic, casts, array decay, and `?:` lowering come from the AST
-rather than a side-effect-free type oracle.
+Code generation is a single AST path. [`dcc_ast_build.c`](dcc_ast_build.c)
+parses one function-body statement or top-level expression into
+[`dcc_ast.h`](dcc_ast.h) nodes, and the split AST emitter
+([`dcc_ast_gen.c`](dcc_ast_gen.c), [`dcc_ast_gen_support.c`](dcc_ast_gen_support.c),
+[`dcc_ast_gen_expr.c`](dcc_ast_gen_expr.c), [`dcc_ast_gen_cond.c`](dcc_ast_gen_cond.c),
+and [`dcc_ast_gen_stmt.c`](dcc_ast_gen_stmt.c)) emits it; unsupported AST shapes
+are compiler errors. Expression nodes carry the result type that codegen needs,
+so mixed-width decisions such as `float`, `long`, pointer arithmetic, casts,
+array decay, and `?:` lowering come directly from the AST.
 
-The AST walker still reuses the existing low-level emit helpers in modules such
+The AST walker uses the low-level emit helpers in modules such
 as [`dcc_expr.c`](dcc_expr.c), [`dcc_ops.c`](dcc_ops.c),
 [`dcc_cmp.c`](dcc_cmp.c), [`dcc_symbols.c`](dcc_symbols.c), and
 [`dcc_decl.c`](dcc_decl.c). Local declarations are represented as captured
@@ -114,7 +116,7 @@ graph TB
       subgraph AST["3 · Function-local AST"]
         ASTN["dcc_ast.c / dcc_ast.h<br/>arena · nodes"]
         ASTB["dcc_ast_build.c<br/>AST builder"]
-        ASTG["dcc_ast_gen.c<br/>AST emitter"]
+        ASTG["dcc_ast_gen*.c<br/>AST emitter (5 TUs)"]
       end
 
       subgraph CG["4 · Code generation helpers"]
@@ -151,7 +153,7 @@ flowchart LR
     PPF --> LEX["dcc_preproc.c<br/>next_token · lexer"]
     LEX --> PARSE["dcc_func · dcc_stmt<br/>parse function bodies"]
     PARSE --> AST["dcc_ast_build.c<br/>build function-local AST"]
-    AST --> EMIT["dcc_ast_gen.c<br/>emit from AST"]
+    AST --> EMIT["dcc_ast_gen*.c<br/>emit from AST"]
     EMIT --> DATA["dcc_data.c<br/>emit data section"]
     DATA --> OUT([".mac assembly"])
 ```
@@ -177,12 +179,12 @@ The arrows above show the dominant direction, not a hard layering restriction.
 | [`dcc_fold.c`](dcc_fold.c) | The `cf_*` constant-folding engine (with C type/promotion rules), `sizeof`/`offsetof` evaluation, and emission of folded constant results. |
 | [`dcc_ast.h`](dcc_ast.h), [`dcc_ast.c`](dcc_ast.c) | Function-local AST node definitions, list helpers, arena allocation, and debug dumping. |
 | [`dcc_ast_build.c`](dcc_ast_build.c) | AST builder for expressions and statements, including declaration-span capture for local declarations. |
-| [`dcc_ast_gen.c`](dcc_ast_gen.c) | AST-driven Z80 code generator and support gates; unsupported AST shapes are compiler errors in normal codegen. |
-| [`dcc_expr.c`](dcc_expr.c) | Core expression code generation: `gen_primary`/`gen_unary`, casts, dereference/address-of, function-call argument marshalling (scalar/struct/variadic), and a large set of recognised fast-path peepholes. |
+| [`dcc_ast_gen.c`](dcc_ast_gen.c), [`dcc_ast_gen_support.c`](dcc_ast_gen_support.c), [`dcc_ast_gen_expr.c`](dcc_ast_gen_expr.c), [`dcc_ast_gen_cond.c`](dcc_ast_gen_cond.c), [`dcc_ast_gen_stmt.c`](dcc_ast_gen_stmt.c), [`dcc_ast_gen_internal.h`](dcc_ast_gen_internal.h) | AST-driven Z80 emitter split by role: classifiers/type and lvalue resolvers, support dispatch/call/struct gates/folds, expression emitters, condition/branch emitters, and switch/for/statement emitters. Unsupported AST shapes are compiler errors in normal codegen. |
+| [`dcc_expr.c`](dcc_expr.c) | Shared low-level expression helpers for the AST emitter: load/store through HL, struct copies, casts and conversions, bitfield extract/insert, pre/post increment-decrement, call cleanup, and declaration-side parsing helpers. |
 | [`dcc_cmp.c`](dcc_cmp.c) | Relational/equality comparison codegen (signed/unsigned, 16- and 32-bit) and condition-to-branch lowering, including single-`cp` byte-operand comparators. |
-| [`dcc_ops.c`](dcc_ops.c) | Binary-operator/arithmetic codegen helpers: `+ - * / %`, shifts, bitwise ops across 16/32-bit and unsigned variants, integer promotion, pointer element-size scaling, and power-of-two float scaling. |
-| [`dcc_assign.c`](dcc_assign.c) | Assignment lowering (plain/compound; scalar/struct/bitfield/array element), float literal and r-value materialisation, and the top-level `gen_expr` entry points. |
-| [`dcc_stmt_fast.c`](dcc_stmt_fast.c) | Whole-statement fast-path idioms: in-place `++`/`--`, self-add accumulation, and the CRC-update byte idiom. Each falls back to the generic path when unmatched. |
+| [`dcc_ops.c`](dcc_ops.c) | Binary-operator/arithmetic helpers for `+ - * / %`, shifts, bitwise ops, 16/32-bit and unsigned variants, integer promotion, pointer element-size scaling, float comparisons, and nonzero tests. |
+| [`dcc_assign.c`](dcc_assign.c) | Shared assignment/float primitives for the AST emitter: materialising float constants and computing global byte-array element addresses. |
+| [`dcc_stmt_fast.c`](dcc_stmt_fast.c) | In-place increment/decrement helper for lvalue addresses already in HL, covering byte, 16-bit, and 32-bit operands. |
 | [`dcc_decl.c`](dcc_decl.c) | Local declaration and initializer codegen: scalars, arrays, structs/unions, bitfields, brace initializer lists, and const-scalar folding of local initializers. |
 | [`dcc_stmt.c`](dcc_stmt.c) | Statement dispatcher and lowering for compound blocks, `if`/`else`, `while`, `for`, `do`-`while`, `switch` (if-chain and jump-table strategies), `return`, `break`/`continue`, `goto`, and several pointer-walking loop idioms. |
 | [`dcc_func.c`](dcc_func.c) | Function and top-level declaration parsing: prototype and K&R parameter lists, prologue/epilogue and frame layout, the function-body scan, typedef declarations, and file-scope object parsing/emission. |
@@ -266,6 +268,6 @@ diff baseline_test_dcc.txt test_dcc.txt \
 - **After any change**, rebuild and run the regression suite. For pure
   refactors, the filtered diff must stay empty.
 - **Reaching for an operand's type before it is generated?** Carry it on the
-  AST node and lower through [`dcc_ast_gen.c`](dcc_ast_gen.c). Avoid adding new
-  shallow source-text peeks; the AST is the source of truth for typed
+  AST node and lower through the split AST emitter (`dcc_ast_gen*.c`). Avoid
+  adding new shallow source-text peeks; the AST is the source of truth for typed
   expressions.

@@ -75,13 +75,6 @@ int type_is_float(int type)
     return (type & 15) == TYPE_FLOAT;
 }
 
-void error_float_unsupported(const char *what)
-{
-    error_here(what);
-    emit("\tld hl,0\n");
-    g_expr_type = TYPE_INT;
-}
-
 int object_array_size(int type, int count)
 {
     int base_size;

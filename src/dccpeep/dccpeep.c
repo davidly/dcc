@@ -1179,6 +1179,39 @@ static int pass_elim_dead_ix_stores(void)
             /* Fall through: also treat push ix as a regular no-(ix) instruction */
         }
 
+        /* Small-offset IX-frame address idiom:
+         *   push ix / pop hl / {dec hl | inc hl}*
+         * computes HL = IX+K where K is the net of the inc/dec chain (used for
+         * &local when the offset is close to the frame pointer).  Like the
+         * ld de,K / add hl,de form above, the address is taken via HL and the
+         * pointed-to bytes may be read or written through it, so mark up to 4
+         * consecutive bytes from offset K as live to avoid deleting the store
+         * that initialised the pointed-to object. */
+        if (strcmp(tmp, "push ix") == 0 && i + 1 < nlines) {
+            char t1[MAX_LINE], tj[MAX_LINE];
+            strip_peep_comment_copy(t1, lines[i + 1]);
+            if (strcmp(t1, "pop hl") == 0) {
+                long kv = 0;
+                int j = i + 2;
+                int saw = 0;
+                while (j < nlines) {
+                    strip_peep_comment_copy(tj, lines[j]);
+                    if (strcmp(tj, "dec hl") == 0) { kv--; saw = 1; j++; }
+                    else if (strcmp(tj, "inc hl") == 0) { kv++; saw = 1; j++; }
+                    else break;
+                }
+                if (saw) {
+                    int b;
+                    for (b = 0; b < 4; b++) {
+                        if (kv + b >= -128 && kv + b <= 127) {
+                            idx = (int)(kv + b) + 128;
+                            last_store[idx] = -1;
+                        }
+                    }
+                }
+            }
+        }
+
         /* Check whether this instruction touches an IX-indexed address */
         if (strstr(tmp, "(ix") == NULL)
             continue;
@@ -2095,6 +2128,85 @@ static int pass_ix_postdec_to_local(void)
     return changed;
 }
 
+/*
+ * Return non-zero if a token equal to the d, e or de register appears in the
+ * operand portion of an instruction line (comment already stripped).  Used to
+ * detect reads of the DE register pair.  Mnemonic letters (e.g. the 'd' in
+ * "dec" or the 'e' in "ex") are ignored because only operands are scanned.
+ */
+static int insn_mentions_de(const char *buf)
+{
+    const char *ops;
+    const char *t;
+    int len;
+
+    /* Skip mnemonic (up to first space/tab). */
+    ops = buf;
+    while (*ops && *ops != ' ' && *ops != '\t')
+        ops++;
+
+    while (*ops) {
+        /* Skip separators. */
+        while (*ops && !(( *ops >= 'a' && *ops <= 'z') ||
+                         (*ops >= 'A' && *ops <= 'Z')))
+            ops++;
+        if (!*ops)
+            break;
+        t = ops;
+        while ((*ops >= 'a' && *ops <= 'z') ||
+               (*ops >= 'A' && *ops <= 'Z') ||
+               (*ops >= '0' && *ops <= '9'))
+            ops++;
+        len = (int)(ops - t);
+        if ((len == 1 && (t[0] == 'd' || t[0] == 'e')) ||
+            (len == 2 && t[0] == 'd' && t[1] == 'e'))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * Return non-zero if the DE register pair is provably dead starting at line
+ * `start`: i.e. it is fully redefined (ld de,.. / pop de) before any read of
+ * D, E or DE, and before any control-flow or alternate-register boundary.
+ * Conservative: anything uncertain (labels, branches, calls, exx) yields "not
+ * dead" so callers refrain from deleting the instruction that set DE.
+ */
+static int peep_de_dead_at(int start)
+{
+    int k;
+    char buf[MAX_LINE];
+
+    for (k = start; k < nlines; ++k) {
+        if (is_blank_or_comment(lines[k]))
+            continue;
+
+        strip_peep_comment_copy(buf, lines[k]);
+        if (buf[0] == 0)
+            continue;
+
+        if (starts_label(buf))
+            return 0;
+
+        /* Full redefinition of DE without reading it => dead. */
+        if (strncmp(buf, "ld de,", 6) == 0 || strcmp(buf, "pop de") == 0)
+            return 1;
+
+        /* Control-flow / alternate-register boundary: be conservative. */
+        if (strncmp(buf, "jp", 2) == 0 || strncmp(buf, "jr", 2) == 0 ||
+            strncmp(buf, "call", 4) == 0 || strncmp(buf, "ret", 3) == 0 ||
+            strncmp(buf, "djnz", 4) == 0 || strncmp(buf, "rst", 3) == 0 ||
+            strcmp(buf, "exx") == 0)
+            return 0;
+
+        /* Any read (or partial write) of D/E/DE keeps it live. */
+        if (insn_mentions_de(buf))
+            return 0;
+    }
+
+    return 1;
+}
+
 static int pass_store_word_const_hl(void)
 {
     int i;
@@ -2109,7 +2221,8 @@ static int pass_store_word_const_hl(void)
             eq(i + 1, "ld (hl),e") &&
             eq(i + 2, "inc hl") &&
             eq(i + 3, "ld (hl),d") &&
-            !(i + 5 < nlines && eq(i + 4, "pop hl") && eq(i + 5, "ld (hl),e"))) {
+            !(i + 5 < nlines && eq(i + 4, "pop hl") && eq(i + 5, "ld (hl),e")) &&
+            peep_de_dead_at(i + 4)) {
             sprintf(line, "ld (hl),%d", imm & 255);
             replace1_tagged(i, line, "store_word_const");
             replace1(i + 1, "inc hl");

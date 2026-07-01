@@ -10,6 +10,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_ast.h"
 int parse_float_init_literal(unsigned long *bits)
 {
     int sign;
@@ -320,7 +321,7 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
     emit_add_const_to_hl(off);
     emit("\tpush hl\n");
 
-    gen_expr_no_comma();
+    ast_emit_init_expr();
 
     if (type_is_long(type)) {
         if (!type_is_long(g_expr_type))
@@ -901,7 +902,7 @@ void gen_local_decl_after_type(int base)
             if (accept('=')) {
                 unsigned long ignored_const_value;
                 if (!try_parse_local_const_initializer(type, &ignored_const_value)) {
-                    gen_expr_no_comma();
+                    ast_emit_init_expr();
                 }
             }
         } else if (accept('=')) {
@@ -926,7 +927,7 @@ void gen_local_decl_after_type(int base)
                 next_token();
                 emit_load_sym_addr(s);
                 emit("\tpush hl\n");
-                gen_expr_no_comma();
+                ast_emit_init_expr();
                 if (type_is_long(type)) {
                     if (!type_is_long(g_expr_type))
                         emit_extend_to_long_typed(g_expr_type);
@@ -957,7 +958,7 @@ void gen_local_decl_after_type(int base)
                      */
                     emit_load_sym_addr(s);
                     emit("\tpush hl\n");
-                    gen_expr_no_comma();
+                    ast_emit_init_expr();
                     if (!type_is_float(g_expr_type))
                         emit_convert_int_to_float(g_expr_type);
                     emit_store_de_to_addr_hl(type);
@@ -965,7 +966,7 @@ void gen_local_decl_after_type(int base)
             } else {
                 emit_load_sym_addr(s);
                 emit("\tpush hl\n");
-                gen_expr_no_comma();
+                ast_emit_init_expr();
                 if (type_is_long(type)) {
                     /* For long locals, emit_store_de_to_addr_hl pops the
                      * address itself via "pop de", so don't consume it here. */

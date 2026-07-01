@@ -1,0 +1,13 @@
+PASS: *(&*p) = 42
+PASS: q=&*p then *q = 42
+PASS: q==p = 1
+PASS: b after *(&*p)=7 = 7
+PASS: nested &*&* deref = 7
+PASS: &*(p+2) deref = 30
+PASS: arr[1] after &*(p+1)=99 = 99
+PASS: global &*gp = 123
+PASS: gb after *(&*gp)=456 = 456
+PASS: &*(&s.x) = 5
+PASS: s.x after *(&*p)=77 = 77
+PASS: &*(p+3) - &*p = 3
+taddr completed with great success

@@ -20,6 +20,12 @@
 int g_ast_build_enabled = 1;
 struct AstArena g_ast_arena;
 
+/* Separate arena for declaration-initializer expressions.  Kept distinct from
+ * g_ast_arena so that building/emitting an initializer during
+ * ast_emit_decl_span (which runs inside the surrounding AST statement walk)
+ * never resets the arena still holding that walk's pending nodes. */
+struct AstArena g_ast_init_arena;
+
 static int ast_num_text_plain_decimal(const char *s)
 {
     const char *p;
@@ -438,12 +444,11 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
             break;
         next_token();
         /*
-         * For ordinary binary operators the streaming code generator selects
-         * its arithmetic conversion branch from peek_simple_unary_type() taken
-         * at the RHS position.  The lexer is at exactly that position now, so
-         * capture the same value (with all its quirks) into the node; the AST
-         * walker reuses it to compute an identical common type.  && / || are
-         * short-circuit control flow and do not consult the peek.
+         * For ordinary binary operators the arithmetic conversion branch is
+         * selected from peek_simple_unary_type() taken at the RHS position.
+         * The lexer is at exactly that position now, so capture that value into
+         * the node; the AST walker reuses it to compute the common type.
+         * && / || are short-circuit control flow and do not consult the peek.
          */
         if (k != TOK_ANDAND && k != TOK_OROR)
             peek = peek_simple_unary_type();
@@ -832,7 +837,7 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
  * section owns a list of ordinary statements up to the next top-level label.
  * Declines on declarations, duplicate/default-invalid labels,
  * pre-label statements, and case values outside the non-negative table-scan
- * range so codegen can reproduce streaming's label pre-scans. */
+ * range that the switch codegen's label pre-scan supports. */
 static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
 {
     struct AstNode *n;
@@ -978,8 +983,6 @@ void ast_emit_decl_span(const struct AstNode *n)
     int sv_line = line_no;
     int sv_tok_line = tok_line;
     struct Token sv_tok = tok;
-    int sv_build_enabled = g_ast_build_enabled;
-    int sv_gen_enabled = g_ast_gen_enabled;
 
     posi = sp->posi;
     tok_start_pos = sp->tok_start_pos;
@@ -987,15 +990,10 @@ void ast_emit_decl_span(const struct AstNode *n)
     tok_line = sp->tok_line;
     tok = sp->tok;
 
-    /* Drive the declaration through the existing declaration codegen.  The depth-0
-     * gen_expr AST hook resets the shared g_ast_arena after each expression;
-     * if a declaration initializer triggered it here, it would wipe the arena
-     * that still holds the surrounding AST statement's pending sibling nodes
-     * (corrupting them mid-walk).  Disabling the hook keeps the same
-    * initializer output without touching the arena. */
-    g_ast_build_enabled = 0;
-    g_ast_gen_enabled = 0;
-
+    /* Drive the declaration through the declaration codegen.  Initializer
+     * expressions are emitted via ast_emit_init_expr, which builds into the
+     * isolated g_ast_init_arena and so never disturbs the shared g_ast_arena
+     * that still holds the surrounding AST statement's pending sibling nodes. */
     if (tok.kind == TOK_TYPEDEF) {
         parse_typedef_decl();
     } else {
@@ -1011,9 +1009,6 @@ void ast_emit_decl_span(const struct AstNode *n)
         else
             gen_local_decl_after_type(t);
     }
-
-    g_ast_build_enabled = sv_build_enabled;
-    g_ast_gen_enabled = sv_gen_enabled;
 
     posi = sv_posi;
     tok_start_pos = sv_tok_start;
@@ -1108,6 +1103,7 @@ void ast_build_init(void)
     g_ast_gen_enabled = (g != NULL && g[0] == '2') ? 2 : 1;
 
     ast_arena_init(&g_ast_arena);
+    ast_arena_init(&g_ast_init_arena);
 }
 
 const char *ast_kind_name(int kind)

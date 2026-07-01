@@ -104,7 +104,7 @@ struct AstNode {
 
     int peek_type;          /* AST_BINARY: peek_simple_unary_type() of the   */
                             /* rhs, captured at build time so the walker     */
-                            /* reproduces the streaming common-type choice   */
+                            /* computes the arithmetic common-type choice    */
     int line;               /* source line, for diagnostics                */
 };
 
@@ -127,7 +127,6 @@ struct AstArena {
 void ast_arena_init(struct AstArena *ar);
 void *ast_arena_alloc(struct AstArena *ar, size_t n);
 void ast_arena_reset(struct AstArena *ar);   /* keep first block, drop rest */
-void ast_arena_free(struct AstArena *ar);    /* release everything          */
 
 /* ---- node construction (all allocate from `ar`) ---- */
 struct AstNode *ast_new(struct AstArena *ar, int kind);
@@ -138,8 +137,6 @@ struct AstNode *ast_new(struct AstArena *ar, int kind);
 void ast_emit_decl_span(const struct AstNode *n);
 struct AstNode *ast_int_lit(struct AstArena *ar, long value, int type);
 struct AstNode *ast_float_lit(struct AstArena *ar, unsigned long bits, int type);
-struct AstNode *ast_str_lit(struct AstArena *ar, int str_index, int type);
-struct AstNode *ast_ident(struct AstArena *ar, struct Sym *sym, int type);
 struct AstNode *ast_unary(struct AstArena *ar, int op, struct AstNode *operand,
                           int type);
 struct AstNode *ast_binary(struct AstArena *ar, int kind, int op,
@@ -167,6 +164,7 @@ char *ast_arena_strdup(struct AstArena *ar, const char *s);
  * ------------------------------------------------------------------------- */
 extern int g_ast_build_enabled;     /* 0 internal suppress, 1 build, 2 dump  */
 extern struct AstArena g_ast_arena; /* shared function-local build arena      */
+extern struct AstArena g_ast_init_arena; /* isolated decl-initializer arena   */
 
 void ast_build_init(void);
 struct AstNode *ast_build_expr(struct AstArena *ar);  /* full expression       */
@@ -184,6 +182,10 @@ extern int g_ast_gen_enabled;       /* 0 internal suppress, 1 emit, 2 report */
 
 int ast_gen_supported(const struct AstNode *n);
 void ast_gen_expr(const struct AstNode *n);   /* emit; sets g_expr_type        */
+
+/* Pure-AST emission of a declaration initializer's assignment-expression.
+ * Builds into the isolated g_ast_init_arena; fatal on unsupported constructs. */
+void ast_emit_init_expr(void);
 
 /* Statement hook.  Called from gen_statement to build the next statement from
  * the token stream and emit it from the AST.  Returns 0 only in scanner/debug
