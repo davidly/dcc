@@ -1,0 +1,2 @@
+<source>:6: error: unknown field in offsetof near 'y'
+dcc: 1 error(s)

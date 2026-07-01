@@ -119,7 +119,17 @@ void gen_ident(const struct AstNode *n)
                 return;
             }
         }
-        fatal("ast_gen_expr: unresolved identifier");
+        {
+            char msg[96];
+            sprintf(msg, "undefined symbol '%s'", name);
+            fprintf(stderr, "%s:%d: error: %s\n",
+                    tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
+                    n->line > 0 ? n->line : tok_line, msg);
+            errors++;
+            if (errors > 40) fatal("too many errors");
+        }
+        emit("\tld hl,0\n");
+        g_expr_type = TYPE_INT;
         return;
     }
 
@@ -699,8 +709,30 @@ void ast_emit_init_expr(void)
     struct AstNode *n;
     int ptr_type;
     int no_deref;
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    long end_pos;
+    long end_tok_start;
+    int end_line;
+    int end_tok_line;
+    struct Token end_tok;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
 
     n = ast_build_assign_expr(&g_ast_init_arena);
+
+    end_pos = posi;
+    end_tok_start = tok_start_pos;
+    end_line = line_no;
+    end_tok_line = tok_line;
+    end_tok = tok;
 
     if (n != NULL && ast_pointer_expr_type(n, &ptr_type, &no_deref)) {
         gen_pointer_expr_ast(n, &ptr_type, &no_deref);
@@ -726,7 +758,27 @@ void ast_emit_init_expr(void)
                     ast_kind_name(n->kind), tok_line);
     }
     ast_arena_reset(&g_ast_init_arena);
-    fatal("unsupported AST initializer expression");
+
+    tok = sv_tok;
+    tok_line = sv_tok_line;
+    line_no = sv_line;
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    error_here(n == NULL ? "malformed initializer expression" : "unsupported initializer expression");
+
+    if (n != NULL) {
+        posi = end_pos;
+        tok_start_pos = end_tok_start;
+        line_no = end_line;
+        tok_line = end_tok_line;
+        tok = end_tok;
+    } else {
+        while (tok.kind != TOK_EOF && tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+            next_token();
+    }
+
+    g_expr_type = TYPE_INT;
+    emit("\tld hl,0\n");
 }
 
 static int ast_bool_bitand_const_rhs(const struct AstNode *n,

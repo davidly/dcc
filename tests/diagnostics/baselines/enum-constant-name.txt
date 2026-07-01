@@ -1,0 +1,4 @@
+<source>:2: error: enum constant name expected near '='
+<source>:2: error: expected '}' near '='
+<source>:2: error: identifier expected near '='
+dcc: 3 error(s)

@@ -1,0 +1,2 @@
+<source>:8: error: unsupported expression statement near 's'
+dcc: 1 error(s)

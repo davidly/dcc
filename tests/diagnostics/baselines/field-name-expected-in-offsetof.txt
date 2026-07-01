@@ -1,0 +1,5 @@
+<source>:6: error: field name expected in offsetof near '1'
+<source>:6: error: expected ')' near '1'
+<source>:6: error: expected '}' near '1'
+<source>:6: error: identifier expected near '1'
+dcc: 4 error(s)

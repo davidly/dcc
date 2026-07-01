@@ -1,0 +1,3 @@
+<source>:6: error: field name expected in initializer designator near '='
+<source>:7: error: expected '}' near ';'
+dcc: 2 error(s)

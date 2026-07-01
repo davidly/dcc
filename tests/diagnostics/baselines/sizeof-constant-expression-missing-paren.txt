@@ -1,0 +1,4 @@
+<source>:2: error: '(' expected after sizeof in constant expression near 'int'
+<source>:2: error: expected '}' near 'int'
+<source>:2: error: identifier expected near 'int'
+dcc: 3 error(s)

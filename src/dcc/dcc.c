@@ -244,8 +244,17 @@ void make_include_path(const char *base, const char *inc,
     out[outsz - 1] = 0;
 }
 
-int try_parse_include(const char *line, long n, char *name, int namesz,
-                              int *is_system)
+int report_include_error(const char *file, int line, const char *msg)
+{
+    fprintf(stderr, "%s:%d: error: %s\n", file ? file : "<input>", line, msg);
+    errors++;
+    if (errors > 40)
+        fatal("too many errors");
+    return -1;
+}
+
+int try_parse_include(const char *line, long n, const char *file, int src_line,
+                              char *name, int namesz, int *is_system)
 {
     long i;
     int j;
@@ -273,7 +282,7 @@ int try_parse_include(const char *line, long n, char *name, int namesz,
         i++;
 
     if (i >= n || (line[i] != '"' && line[i] != '<'))
-        fatal("bad include syntax");
+        return report_include_error(file, src_line, "bad include syntax");
 
     if (line[i] == '<') {
         endch = '>';
@@ -288,13 +297,13 @@ int try_parse_include(const char *line, long n, char *name, int namesz,
 
     while (i < n && line[i] != endch) {
         if (j + 1 >= namesz)
-            fatal("include name too long");
+            return report_include_error(file, src_line, "include name too long");
 
         name[j++] = line[i++];
     }
 
     if (i >= n || line[i] != endch)
-        fatal("unterminated include name");
+        return report_include_error(file, src_line, "unterminated include name");
 
     name[j] = 0;
     return 1;
@@ -350,11 +359,15 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
 
         {
             int is_system = 0;
-            if (try_parse_include(raw + line_start,
-                                  line_end - line_start,
-                                  incname,
-                                  sizeof(incname),
-                                  &is_system)) {
+            int include_status;
+            include_status = try_parse_include(raw + line_start,
+                                               line_end - line_start,
+                                               name,
+                                               src_line,
+                                               incname,
+                                               sizeof(incname),
+                                               &is_system);
+            if (include_status > 0) {
                 if (is_system) {
                     /* For system includes (<foo.h>), try the local directory
                      * first.  If a local file is found, include it just like a
@@ -382,10 +395,12 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
                     append_line_directive(&out, &out_len2, &out_cap, src_line + 1, name);
                     free(incsrc);
                 }
-            } else {
+            } else if (include_status == 0) {
                 append_mem(&out, &out_len2, &out_cap,
                            raw + line_start,
                            p - line_start);
+            } else {
+                append_mem(&out, &out_len2, &out_cap, "\n", 1);
             }
         } /* end try_parse_include block */
         src_line++;
@@ -567,8 +582,17 @@ char *filter_active_preprocessor_source(long *lenp)
             while (s < e && is_ident_char((unsigned char)*s) && ni < 63)
                 name[ni++] = *s++;
             name[ni] = 0;
-            if (sp >= MAX_IFSTACK)
-                fatal("too many nested #if");
+            if (sp >= MAX_IFSTACK) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                fprintf(stderr, "%s:%d: error: too many nested #if\n", filebuf, lno);
+                errors++;
+                if (errors > 40)
+                    fatal("too many errors");
+                append_mem(&out, &out_len, &out_cap, "\n", 1);
+                goto next_filter_line;
+            }
             cond = (name[0] && find_define(name) >= 0);
             if (!strcmp(word, "ifndef"))
                 cond = !cond;
@@ -593,8 +617,17 @@ char *filter_active_preprocessor_source(long *lenp)
             strip_macro_replacement_comments(expr);
             line_no = logical_line;
             cond = pp_eval_simple_expr(expr);
-            if (sp >= MAX_IFSTACK)
-                fatal("too many nested #if");
+            if (sp >= MAX_IFSTACK) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                fprintf(stderr, "%s:%d: error: too many nested #if\n", filebuf, lno);
+                errors++;
+                if (errors > 40)
+                    fatal("too many errors");
+                append_mem(&out, &out_len, &out_cap, "\n", 1);
+                goto next_filter_line;
+            }
             active_stack[sp] = active;
             branch_taken[sp] = (active && cond) ? 1 : 0;
             seen_else[sp] = 0;

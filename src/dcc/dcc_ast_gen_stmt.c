@@ -452,14 +452,52 @@ void ast_gen_stmt(const struct AstNode *n)
     }
 }
 
+static const char *ast_unsupported_statement_message(const struct AstNode *n)
+{
+    if (n == NULL)
+        return "malformed statement";
+
+    switch (n->kind) {
+    case AST_BREAK:
+        return "break statement outside loop or switch";
+    case AST_CONTINUE:
+        return "continue statement outside loop";
+    case AST_CASE:
+        return "case label outside switch";
+    case AST_DEFAULT:
+        return "default label outside switch";
+    case AST_RETURN:
+        return "unsupported return expression";
+    case AST_EXPR_STMT:
+        return "unsupported expression statement";
+    case AST_IF:
+        return "unsupported if condition or branch";
+    case AST_WHILE:
+        return "unsupported while condition or body";
+    case AST_DOWHILE:
+        return "unsupported do-while condition or body";
+    case AST_FOR:
+        return "unsupported for statement";
+    case AST_SWITCH:
+        return "unsupported switch expression or body";
+    default:
+        return "unsupported AST statement";
+    }
+}
+
 int ast_try_emit_statement(void)
 {
     long sv_pos;
     long sv_tok_start;
+    long end_pos;
+    long end_tok_start;
     int sv_line;
     int sv_tok_line;
+    int end_line;
+    int end_tok_line;
     int sv_for_seq;
     struct Token sv_tok;
+    struct Token end_tok;
     struct AstNode *n;
     int report;
 
@@ -476,6 +514,12 @@ int ast_try_emit_statement(void)
     sv_tok = tok;
 
     n = ast_build_stmt(&g_ast_arena);
+
+    end_pos = posi;
+    end_tok_start = tok_start_pos;
+    end_line = line_no;
+    end_tok_line = tok_line;
+    end_tok = tok;
 
     if (n != NULL && ast_stmt_supported(n)) {
         g_for_seq = sv_for_seq;
@@ -496,12 +540,48 @@ int ast_try_emit_statement(void)
         }
     }
 
+    tok = sv_tok;
+    tok_line = sv_tok_line;
+    line_no = sv_line;
     posi = sv_pos;
     tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    error_here(ast_unsupported_statement_message(n));
+
+    if (n != NULL) {
+        posi = end_pos;
+        tok_start_pos = end_tok_start;
+        line_no = end_line;
+        tok_line = end_tok_line;
+        tok = end_tok;
+    } else {
+        int paren_depth = 0;
+        int bracket_depth = 0;
+        int brace_depth = 0;
+
+        while (tok.kind != TOK_EOF) {
+            if (tok.kind == ';' && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+                next_token();
+                break;
+            }
+            if (tok.kind == '}' && paren_depth == 0 && bracket_depth == 0 && brace_depth == 0)
+                break;
+            if (tok.kind == '(')
+                paren_depth++;
+            else if (tok.kind == ')' && paren_depth > 0)
+                paren_depth--;
+            else if (tok.kind == '[')
+                bracket_depth++;
+            else if (tok.kind == ']' && bracket_depth > 0)
+                bracket_depth--;
+            else if (tok.kind == '{')
+                brace_depth++;
+            else if (tok.kind == '}' && brace_depth > 0)
+                brace_depth--;
+            next_token();
+        }
+    }
+
     g_for_seq = sv_for_seq;
     ast_arena_reset(&g_ast_arena);
-    return 0;
+    return 1;
 }

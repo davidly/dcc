@@ -13,6 +13,10 @@ tests/
   E.PAS, E.COB, ... # fixture input files consumed by some interpreters
   baselines/
     <name>.txt      # expected stdout for tests/<name>.c
+  diagnostics/
+    <name>.c        # compile-fail diagnostic tests
+    baselines/
+      <name>.txt    # expected normalized dcc stderr/stdout
   extended-tests/
     c-testsuite/    # imported c89/c99/c11 single-exec corpus
 ```
@@ -79,6 +83,24 @@ A test **passes** when its program builds, runs, and its stdout matches the
 corresponding `baselines/<name>.txt` byte-for-byte (line endings normalized to
 LF). A test with no baseline file is still built and run, but reported as
 "no baseline" rather than verified.
+
+## Running compile-fail diagnostic tests
+
+The diagnostic suite under `tests/diagnostics/` verifies compiler errors for
+programs that are expected to fail during `dcc` compilation. The runner captures
+compiler output, normalizes the tested source path to `<source>`, and compares
+against `tests/diagnostics/baselines/<name>.txt`.
+
+```pwsh
+# Verify diagnostic baselines
+pwsh ./scripts/run-diagnostics.ps1
+
+# Refresh baselines after an intentional diagnostic wording change
+pwsh ./scripts/run-diagnostics.ps1 -Update
+```
+
+Use small single-purpose inputs here: each file should exercise one diagnostic
+path and fail before assembly or emulator stages are needed.
 
 ## Running the extended c-testsuite corpus
 

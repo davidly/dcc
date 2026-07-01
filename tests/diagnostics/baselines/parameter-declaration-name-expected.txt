@@ -1,0 +1,2 @@
+<source>:2: error: parameter declaration name expected near ';'
+dcc: 1 error(s)

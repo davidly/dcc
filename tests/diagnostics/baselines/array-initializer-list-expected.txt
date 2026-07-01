@@ -1,0 +1,5 @@
+<source>:1: error: array initializer list expected near '1'
+<source>:1: error: expected ';' near '1'
+<source>:1: error: external declaration expected near '1'
+<source>:1: error: external declaration expected near ';'
+dcc: 4 error(s)

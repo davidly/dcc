@@ -1,0 +1,2 @@
+<source>:1: error: '##' is not a valid preprocessor directive
+dcc: 1 error(s)

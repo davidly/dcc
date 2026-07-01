@@ -1,0 +1,2 @@
+<source>:5: error: struct initializer list expected near '1'
+dcc: 1 error(s)

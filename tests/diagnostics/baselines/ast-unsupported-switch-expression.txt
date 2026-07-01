@@ -1,0 +1,2 @@
+<source>:8: error: unsupported switch expression or body near 'switch'
+dcc: 1 error(s)

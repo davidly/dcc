@@ -1,0 +1,2 @@
+<source>:8: error: unsupported if condition or branch near 'if'
+dcc: 1 error(s)

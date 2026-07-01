@@ -1,0 +1,2 @@
+<source>:1: error: bad include syntax
+dcc: 1 error(s)

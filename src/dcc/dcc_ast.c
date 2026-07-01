@@ -119,7 +119,7 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->list_cap = 0;
     n->aux = NULL;
     n->peek_type = 0;
-    n->line = 0;
+    n->line = tok_line;
     return n;
 }
 

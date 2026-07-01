@@ -1,0 +1,2 @@
+<source>:2: error: old-style parameter declaration does not match parameter list near ';'
+dcc: 1 error(s)

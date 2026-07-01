@@ -684,7 +684,15 @@ void parse_preprocessor_line(void)
         val[i] = 0;
         strip_macro_replacement_comments(val);
 
-        if (if_sp >= MAX_IFSTACK) fatal("too many nested #if");
+        if (if_sp >= MAX_IFSTACK) {
+            fprintf(stderr, "%s:%d: error: too many nested #if\n",
+                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                line_no);
+            errors++;
+            if (errors > 40) fatal("too many errors");
+            while (peekc() && peekc() != '\n') getc_src();
+            return;
+        }
 
         parent = pp_active;
         cond = pp_eval_simple_expr(val);
@@ -703,7 +711,15 @@ void parse_preprocessor_line(void)
             name[i++] = (char)getc_src();
         name[i] = 0;
 
-        if (if_sp >= MAX_IFSTACK) fatal("too many nested #if");
+        if (if_sp >= MAX_IFSTACK) {
+            fprintf(stderr, "%s:%d: error: too many nested #if\n",
+                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                line_no);
+            errors++;
+            if (errors > 40) fatal("too many errors");
+            while (peekc() && peekc() != '\n') getc_src();
+            return;
+        }
 
         parent = pp_active;
         cond = find_define(name) >= 0;
@@ -1436,6 +1452,8 @@ void strip_macro_replacement_comments(char *s)
     trim_arg(s);
 }
 
+static int macro_call_args_too_many;
+
 int read_macro_call_args(char args[8][128], int *nargs)
 {
     int c;
@@ -1453,6 +1471,7 @@ int read_macro_call_args(char args[8][128], int *nargs)
     ai = 0;
     ap = 0;
     depth = 0;
+    macro_call_args_too_many = 0;
     memset(args, 0, 8 * 128);
 
     for (;;) {
@@ -1513,8 +1532,19 @@ int read_macro_call_args(char args[8][128], int *nargs)
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
-            if (ai >= 8)
-                fatal("too many macro arguments");
+            if (ai >= 8) {
+                macro_call_args_too_many = 1;
+                while ((c = getc_src()) != 0) {
+                    if (c == '(' || c == '[' || c == '{')
+                        depth++;
+                    else if (c == ')' && depth == 0)
+                        break;
+                    else if ((c == ')' || c == ']' || c == '}') && depth > 0)
+                        depth--;
+                }
+                *nargs = ai + 1;
+                return 1;
+            }
             ap = 0;
             continue;
         }
@@ -2331,8 +2361,13 @@ void next_token(void)
 
                 save_pos = posi;
                 if (read_macro_call_args(args, &nargs)) {
-                    if (nargs != defs[di].nargs)
-                        error_here("wrong number of macro arguments");
+                    if (nargs != defs[di].nargs) {
+                        error_here(macro_call_args_too_many ? "too many macro arguments" :
+                                   "wrong number of macro arguments");
+                        replace_source_range(tok_start_pos, posi, "0");
+                        next_token();
+                        return;
+                    }
                     expand_function_macro(di, args, expbuf, sizeof(expbuf));
                     replace_source_range(tok_start_pos, posi, expbuf);
                     next_token();
@@ -2656,10 +2691,70 @@ int accept(int k)
     return 0;
 }
 
+static const char *expected_token_name(int k, char *buf)
+{
+    switch (k) {
+        case TOK_EOF:      return "end of file";
+        case TOK_ID:       return "identifier";
+        case TOK_NUM:      return "number";
+        case TOK_STR:      return "string literal";
+        case TOK_CHARLIT:  return "character constant";
+        case TOK_INT:      return "int";
+        case TOK_CHAR:     return "char";
+        case TOK_VOID:     return "void";
+        case TOK_UNSIGNED: return "unsigned";
+        case TOK_SIGNED:   return "signed";
+        case TOK_EXTERN:   return "extern";
+        case TOK_STATIC:   return "static";
+        case TOK_CONST:    return "const";
+        case TOK_IF:       return "if";
+        case TOK_ELSE:     return "else";
+        case TOK_WHILE:    return "while";
+        case TOK_FOR:      return "for";
+        case TOK_RETURN:   return "return";
+        case TOK_BREAK:    return "break";
+        case TOK_CONTINUE: return "continue";
+        case TOK_SIZEOF:   return "sizeof";
+        case TOK_TYPEDEF:  return "typedef";
+        case TOK_STRUCT:   return "struct";
+        case TOK_UNION:    return "union";
+        case TOK_ENUM:     return "enum";
+        case TOK_SWITCH:   return "switch";
+        case TOK_CASE:     return "case";
+        case TOK_DEFAULT:  return "default";
+        case TOK_LONG:     return "long";
+        case TOK_FLOAT:    return "float";
+        case TOK_BOOL:     return "_Bool";
+        case TOK_EQ:       return "==";
+        case TOK_NE:       return "!=";
+        case TOK_LE:       return "<=";
+        case TOK_GE:       return ">=";
+        case TOK_ANDAND:   return "&&";
+        case TOK_OROR:     return "||";
+        case TOK_SHL:      return "<<";
+        case TOK_SHR:      return ">>";
+        case TOK_INC:      return "++";
+        case TOK_DEC:      return "--";
+        case TOK_ARROW:    return "->";
+        case TOK_ELLIPSIS: return "...";
+        default:
+            if (k > 0 && k < 128 && isprint((unsigned char)k)) {
+                sprintf(buf, "'%c'", k);
+                return buf;
+            }
+            sprintf(buf, "token %d", k);
+            return buf;
+    }
+}
+
 void expect(int k)
 {
     if (tok.kind != k) {
-        error_here("unexpected token");
+        char namebuf[32];
+        char msg[80];
+
+        sprintf(msg, "expected %s", expected_token_name(k, namebuf));
+        error_here(msg);
         return;
     }
     next_token();

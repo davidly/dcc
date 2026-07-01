@@ -1,0 +1,2 @@
+<source>:3: error: too many macro arguments near 'F'
+dcc: 1 error(s)
