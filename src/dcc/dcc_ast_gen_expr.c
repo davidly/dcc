@@ -2200,15 +2200,6 @@ static void inline_temp_name_for_call(char *dst, int dstsz, int index)
     (void)dstsz;
 }
 
-static const struct AstNode *inline_body_expr(struct Sym *fn)
-{
-    if (fn == NULL)
-        return NULL;
-    if (fn->inline_return_expr != NULL)
-        return fn->inline_return_expr;
-    return fn->inline_stmt_expr;
-}
-
 static const struct AstNode *inline_substitution_body(struct Sym *fn)
 {
     if (fn == NULL)
