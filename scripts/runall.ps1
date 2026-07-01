@@ -11,6 +11,9 @@ emulator, and compares output against per-app baselines in tests/baselines/
 order does not matter. Uses tests/_test_overrides.json for test-specific arguments and
 stack sizes.
 
+Pass -Extended to also run scripts/runall-extended.ps1 after the main app suite,
+verifying the imported c-testsuite single-exec corpus as part of the same run.
+
 Supports per-test arguments (e.g., ttt with "10" as input) and custom stack
 size overrides (e.g., cobint needs 1536 bytes, triangle needs 768).
 
@@ -49,6 +52,9 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
 .PARAMETER Help
     Show this help text and exit without building or running tests.
 
+.PARAMETER Extended
+    Also run the extended c-testsuite single-exec corpus after the main app suite.
+
 .PARAMETER Serial
   Build and verify apps sequentially in the shared build directory. By default
   the suite runs in parallel; use -Serial as a fallback (e.g. for debugging or
@@ -71,6 +77,7 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
     pwsh ./scripts/runall.ps1 -Help
   pwsh ./scripts/runall.ps1 -NoStackCheck
   pwsh ./scripts/runall.ps1 -Mode nopeep
+    pwsh ./scripts/runall.ps1 -Extended
   pwsh ./scripts/runall.ps1 -Serial
   pwsh ./scripts/runall.ps1 -ThrottleLimit 8
     pwsh ./scripts/runall.ps1 -Report
@@ -95,6 +102,7 @@ param(
     [ValidateSet("fast", "nopeep", "full")]
     [string]$Mode = "fast",
     [switch]$Help,
+    [switch]$Extended,
     [int]$RunTimeout = 60,
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
@@ -730,6 +738,40 @@ function Write-PerformanceReport {
     }
 }
 
+function Invoke-ExtendedSuite {
+    param(
+        [string]$Mode,
+        [string]$Emulator,
+        [int]$RunTimeout,
+        [string]$BuildDir,
+        [bool]$StackCheck,
+        [bool]$Serial,
+        [int]$ThrottleLimit
+    )
+
+    $extendedScript = Join-Path $PSScriptRoot "runall-extended.ps1"
+    $extendedBuildDir = Join-Path $BuildDir "extended-tests"
+    $extendedArgs = @(
+        "-NoProfile",
+        "-File", $extendedScript,
+        "-Mode", $Mode,
+        "-Emulator", $Emulator,
+        "-RunTimeout", $RunTimeout,
+        "-BuildDir", $extendedBuildDir,
+        "-ThrottleLimit", $ThrottleLimit
+    )
+    if (-not $StackCheck) { $extendedArgs += "-NoStackCheck" }
+    if ($Serial) { $extendedArgs += "-Serial" }
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "STARTING EXTENDED C-TESTSUITE" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    & pwsh @extendedArgs
+    $script:ExtendedSuiteExitCode = $LASTEXITCODE
+}
+
 $results = @()
 $totalToRun = $workItems.Count
 
@@ -818,6 +860,17 @@ foreach ($result in $results) {
     }
 }
 
+$extendedPassed = $null
+if ($Extended) {
+    Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
+        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit
+    $extendedExitCode = $script:ExtendedSuiteExitCode
+    $extendedPassed = ($extendedExitCode -eq 0)
+    if (-not $extendedPassed) {
+        $failed++
+    }
+}
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "TEST SUITE SUMMARY" -ForegroundColor Cyan
@@ -833,15 +886,22 @@ Write-Host "  Total apps:   $($testFiles.Count)"
 Write-Host "  Passed:       $passed" -ForegroundColor Green
 Write-Host "  Failed:       $failed" -ForegroundColor $(if ($failed -eq 0) { "Green" } else { "Red" })
 Write-Host "  Skipped:      $skipped"
+if ($Extended) {
+    Write-Host "  Extended:     $(if ($extendedPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($extendedPassed) { "Green" } else { "Red" })
+}
 Write-Host "  Total time:   $suiteElapsedStr"
 Write-Host "  Optimisation: $optimisationSummary"
 
-if ($failed -gt 0) {
+if ($failedApps.Count -gt 0) {
     Write-Host ""
     Write-Host "Failed apps:" -ForegroundColor Red
     foreach ($app in $failedApps) {
         Write-Host "  - $app" -ForegroundColor Red
     }
+}
+if ($Extended -and -not $extendedPassed) {
+    Write-Host ""
+    Write-Host "Extended c-testsuite failed" -ForegroundColor Red
 }
 
 if ($Report) {

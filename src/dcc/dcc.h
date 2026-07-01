@@ -105,6 +105,7 @@
 #define TYPE_VOID      3
 #define TYPE_LONG      4
 #define TYPE_FLOAT     5   /* syntax/storage only: 32-bit opaque float */
+#define TYPE_BOOL      6
 #define TYPE_PTR       16
 #define TYPE_PTR2      64
 #define TYPE_UNSIGNED  32
@@ -183,6 +184,7 @@
 #define TOK_FLOATLIT   312
 #define TOK_SHORT      315
 #define TOK_WSTR       314
+#define TOK_BOOL       316
 #define TOK_SWITCH     300
 #define TOK_CASE       301
 #define TOK_DEFAULT    302
@@ -556,6 +558,7 @@ int type_size(int type);
 int type_scalar_atom_count(int type);
 int type_is_long(int type);
 int type_is_float(int type);
+int type_is_bool(int type);
 int object_array_size(int type, int count);
 int type_ptr_depth(int type);
 int type_add_ptr(int type);
@@ -657,6 +660,7 @@ void emit_const_value(struct ConstVal v);
 /* ---- expr ---- */
 int parse_sizeof_expr_operand(void);
 void emit_load_from_hl(int type);
+void emit_bool_normalize_hl(int source_type);
 void emit_store_de_to_addr_hl(int type);
 int type_is_struct_object(int type);
 int same_struct_type(int a, int b);

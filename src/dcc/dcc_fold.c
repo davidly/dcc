@@ -58,7 +58,7 @@ int cf_promote_type(int type)
         return type;
     if (type_is_long(type))
         return type;
-    if ((type & 15) == TYPE_CHAR)
+    if ((type & 15) == TYPE_CHAR || (type & 15) == TYPE_BOOL)
         return TYPE_INT;
     return (type & TYPE_UNSIGNED) ? (TYPE_INT | TYPE_UNSIGNED) : TYPE_INT;
 }
@@ -85,6 +85,10 @@ void cf_cast_to_type(struct ConstVal *v, int type)
     unsigned long sign;
 
     v->type = type;
+    if (type_is_bool(type)) {
+        v->u = v->u ? 1UL : 0UL;
+        return;
+    }
     mask = cf_mask_for_type(type);
     u = v->u & mask;
 

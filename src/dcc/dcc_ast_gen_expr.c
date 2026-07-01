@@ -43,6 +43,13 @@ void gen_cast_ast(const struct AstNode *n)
         g_long_from16 = 0;
         return;
     }
+    if (type_is_bool(t)) {
+        if (!ast_expr_yields_bool01(n->a))
+            emit_bool_normalize_hl(g_expr_type);
+        g_expr_type = t;
+        g_long_from16 = 0;
+        return;
+    }
     if (type_is_float(g_expr_type)) {
         emit_convert_float_to_intlike(t);
         g_expr_type = t;
@@ -172,6 +179,14 @@ void gen_unary_ast(const struct AstNode *n)
     }
     if ((op == '-' || op == '+' || op == '~') &&
         ast_unary_int_const_fold(n, &fv)) {
+        fprintf(outf, "\tld hl,%ld\n", fv & 0xffffL);
+        g_expr_type = TYPE_INT;
+        return;
+    }
+
+    /* `!<constant-int-expr>` (including chains like `!!0`) folds to a single
+     * 0/1 immediate; ast_const_scalar_fold already yields the final value. */
+    if (op == '!' && ast_const_scalar_fold(n, &fv)) {
         fprintf(outf, "\tld hl,%ld\n", fv & 0xffffL);
         g_expr_type = TYPE_INT;
         return;
@@ -712,6 +727,70 @@ void ast_emit_init_expr(void)
     fatal("unsupported AST initializer expression");
 }
 
+static int ast_bool_bitand_const_rhs(const struct AstNode *n,
+                                     const struct AstNode **out_value,
+                                     unsigned int *out_mask)
+{
+    if (n == NULL || n->kind != AST_BINARY || n->op != '&')
+        return 0;
+    if (n->a != NULL && n->a->kind == AST_INT_LIT &&
+        n->b != NULL && ast_value_is_plain_int(n->b) && ast_gen_supported(n->b)) {
+        *out_value = n->b;
+        *out_mask = (unsigned int)(n->a->ival & 0xffffL);
+        return 1;
+    }
+    if (n->b != NULL && n->b->kind == AST_INT_LIT &&
+        n->a != NULL && ast_value_is_plain_int(n->a) && ast_gen_supported(n->a)) {
+        *out_value = n->a;
+        *out_mask = (unsigned int)(n->b->ival & 0xffffL);
+        return 1;
+    }
+    return 0;
+}
+
+static void emit_store_bool_masked_hl_to_addr_on_stack(unsigned int mask,
+                                                       int need_result)
+{
+    unsigned int byte_mask;
+
+    mask &= 0xffffU;
+    if (mask == 0) {
+        if (need_result)
+            emit("\tld de,0\n");
+        emit("\tpop hl\n\tld (hl),0\n");
+        return;
+    }
+
+    byte_mask = 0;
+    if ((mask & 0xff00U) == 0) {
+        byte_mask = mask & 0xffU;
+        fprintf(outf, "\tld a,l\n\tand %u\n", byte_mask);
+    } else if ((mask & 0x00ffU) == 0) {
+        byte_mask = (mask >> 8) & 0xffU;
+        fprintf(outf, "\tld a,h\n\tand %u\n", byte_mask);
+    } else {
+        fprintf(outf, "\tld a,h\n\tand %u\n\tld e,a\n\tld a,l\n\tand %u\n\tor e\n",
+                (mask >> 8) & 0xffU, mask & 0xffU);
+    }
+    if (need_result)
+        emit("\tld d,0\n");
+
+    if (byte_mask == 1) {
+        emit("\tld e,a\n\tpop hl\n\tld (hl),e\n");
+        return;
+    }
+    if (byte_mask == 128) {
+        emit("\trlca\n\tld e,a\n\tpop hl\n\tld (hl),e\n");
+        return;
+    }
+    if (byte_mask == 64) {
+        emit("\trlca\n\trlca\n\tld e,a\n\tpop hl\n\tld (hl),e\n");
+        return;
+    }
+
+    emit("\tld e,0\n\tjr z,$+3\n\tinc e\n\tpop hl\n\tld (hl),e\n");
+}
+
 void gen_assign_ast(const struct AstNode *n)
 {
     struct Sym *s;
@@ -767,6 +846,9 @@ void gen_assign_ast(const struct AstNode *n)
         int bf_width;
         int bf_shift;
         unsigned int bf_mask;
+        int rhs_bool01;
+        const struct AstNode *mask_value;
+        unsigned int bool_mask;
 
         if (ast_global_byte_array_const_store(n, &byte_arr, &byte_idx, &byte_rhs)) {
             emit_global_byte_array_index_addr(byte_arr, NULL, byte_idx, 1);
@@ -806,6 +888,20 @@ void gen_assign_ast(const struct AstNode *n)
 
         if (n->op == '=') {
             emit("\tpush hl\n");
+            rhs_bool01 = 0;
+
+            if (type_is_bool(val_type) &&
+                ast_bool_bitand_const_rhs(n->b, &mask_value, &bool_mask)) {
+                saved_dead = expr_result_dead;
+                expr_result_dead = 0;
+                ast_gen_expr(mask_value);
+                expr_result_dead = saved_dead;
+                emit_store_bool_masked_hl_to_addr_on_stack(bool_mask, !want_dead);
+                if (!want_dead)
+                    emit("\tex de,hl\n");
+                g_long_from16 = 0;
+                return;
+            }
 
             saved_dead = expr_result_dead;
             expr_result_dead = 0;
@@ -822,6 +918,13 @@ void gen_assign_ast(const struct AstNode *n)
                 ast_gen_expr(n->b);                 /* rhs -> HL */
             }
             expr_result_dead = saved_dead;
+            if (type_is_bool(val_type)) {
+                rhs_bool01 = ast_expr_yields_bool01(n->b);
+                if (!rhs_bool01) {
+                    emit_bool_normalize_hl(g_expr_type);
+                    rhs_bool01 = 1;
+                }
+            }
             if (type_size(val_type) == 4) {
                 if (type_is_float(val_type)) {
                     if (!type_is_float(g_expr_type))
@@ -842,7 +945,10 @@ void gen_assign_ast(const struct AstNode *n)
                 return;
             }
             emit("\tex de,hl\n\tpop hl\n");         /* DE = value, HL = address */
-            emit_store_de_to_addr_hl(val_type);
+            if (type_is_bool(val_type) && rhs_bool01)
+                emit("\tld (hl),e\n");
+            else
+                emit_store_de_to_addr_hl(val_type);
             if (!want_dead)
                 emit("\tex de,hl\n");
             g_long_from16 = 0;
@@ -1241,6 +1347,8 @@ void gen_assign_ast(const struct AstNode *n)
         expr_result_dead = 0;
         ast_gen_expr(n->b);
         expr_result_dead = saved_dead;
+        if (type_is_bool(s->type) && !ast_expr_yields_bool01(n->b))
+            emit_bool_normalize_hl(g_expr_type);
         if (type_size(s->type) > 1)
             emit_promote_byte_to_int(g_expr_type);
         emit("\tex de,hl\n\tpop hl\n");
@@ -1380,6 +1488,13 @@ void gen_assign_ast(const struct AstNode *n)
             struct Sym *rs = find_sym(n->b->sval);
             if (rs != NULL && sym_can_ix_direct(rs) &&
                 !type_is_float(rs->type) && !type_is_long(rs->type)) {
+                if (type_is_bool(s->type)) {
+                    emit_load_sym_value_direct(rs);
+                    emit_store_hl_to_sym_direct(s);
+                    g_expr_type = s->type;
+                    g_long_from16 = 0;
+                    return;
+                }
                 fprintf(outf, "\tld a,(ix%+d)\n", rs->offset);
                 fprintf(outf, "\tld (ix%+d),a\n", s->offset);
                 g_expr_type = s->type;
@@ -1388,6 +1503,12 @@ void gen_assign_ast(const struct AstNode *n)
             }
         }
         if (type_size(s->type) == 1 && n->b->kind == AST_INT_LIT) {
+            if (type_is_bool(s->type)) {
+                fprintf(outf, "\tld (ix%+d),%d\n", s->offset, n->b->ival ? 1 : 0);
+                g_expr_type = s->type;
+                g_long_from16 = 0;
+                return;
+            }
             fprintf(outf, "\tld (ix%+d),%ld\n", s->offset, n->b->ival & 255);
             g_expr_type = s->type;
             g_long_from16 = 0;
@@ -1396,6 +1517,8 @@ void gen_assign_ast(const struct AstNode *n)
         if (type_size(s->type) == 1) {
             long fv;
             if (ast_int_const_cast_fold(n->b, &fv)) {
+                if (type_is_bool(s->type))
+                    fv = fv ? 1 : 0;
                 fprintf(outf, "\tld (ix%+d),%ld\n", s->offset, fv & 255);
                 g_expr_type = s->type;
                 g_long_from16 = 0;
@@ -1436,7 +1559,13 @@ void gen_assign_ast(const struct AstNode *n)
             ast_gen_expr(n->b);
             expr_result_dead = saved_dead;
         }
-        if (type_is_float(g_expr_type))
+        if (type_is_bool(s->type)) {
+            /* emit_store_hl_to_sym_direct normalises the 16-bit value; only
+             * wide (long/float) sources need reducing to 0/1 up front. */
+            if (!ast_expr_yields_bool01(n->b) &&
+                (type_is_float(g_expr_type) || type_is_long(g_expr_type)))
+                emit_bool_normalize_hl(g_expr_type);
+        } else if (type_is_float(g_expr_type))
             emit_convert_float_to_intlike(s->type);
         else if (!type_is_long(g_expr_type))
             emit_promote_byte_to_int(g_expr_type);

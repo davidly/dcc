@@ -82,7 +82,7 @@ int ast_is_plain_int_type(int t)
 {
     if (t & (TYPE_PTR | TYPE_PTR2 | TYPE_STRUCT))
         return 0;
-    return (t & 15) == TYPE_CHAR || (t & 15) == TYPE_INT;
+    return (t & 15) == TYPE_CHAR || (t & 15) == TYPE_BOOL || (t & 15) == TYPE_INT;
 }
 
 

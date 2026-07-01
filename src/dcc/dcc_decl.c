@@ -276,6 +276,9 @@ void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int inde
 {
     int elem_size;
 
+    if (type_is_bool(elem_type))
+        v = v ? 1 : 0;
+
     elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
 
@@ -298,6 +301,9 @@ void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int inde
 
 void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
 {
+    if (type_is_bool(type))
+        v = v ? 1 : 0;
+
     emit_load_sym_addr(s);
     emit_add_const_to_hl(off);
     emit("\tpush hl\n");
@@ -322,6 +328,14 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
     emit("\tpush hl\n");
 
     ast_emit_init_expr();
+
+    if (type_is_bool(type)) {
+        if (!type_is_bool(g_expr_type))
+            emit_bool_normalize_hl(g_expr_type);
+        emit("\tex de,hl\n\tpop hl\n");
+        emit_store_de_to_addr_hl(type);
+        return;
+    }
 
     if (type_is_long(type)) {
         if (type_is_float(g_expr_type))

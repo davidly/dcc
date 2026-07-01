@@ -4,7 +4,7 @@
 Build and run the extended c-testsuite single-exec corpus with dcc.
 
 .DESCRIPTION
-Discovers tests under tests/extended-tests/c-testsuite/tests/single-exec,
+Discovers tests under tests/extended-tests/tests/single-exec,
 filters them by C standard tags, builds each source with dcc through the normal
 dcc -> dccpeep -> M80 -> dccrtlstrip -> M80 -> L80 pipeline, runs the produced
 .COM under ntvcm, and compares captured stdout+stderr with the matching
@@ -52,7 +52,7 @@ param(
     [string]$Emulator = "ntvcm",
     [switch]$NoStackCheck,
     [string]$BuildDir = "build/extended-tests",
-    [string]$SuiteDir = "tests/extended-tests/c-testsuite/tests/single-exec",
+    [string]$SuiteDir = "tests/extended-tests/tests/single-exec",
     [ValidateSet("fast", "nopeep", "full")]
     [string]$Mode = "fast",
     [switch]$C89,
@@ -62,7 +62,7 @@ param(
     [string[]]$Test = @(),
     [switch]$Help,
     [int]$RunTimeout = 60,
-    [string]$SkipFile = "tests/extended-tests/_extended_test_overrides.json",
+    [string]$SkipFile = "tests/_extended_test_overrides.json",
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -88,7 +88,10 @@ if ($Help) {
     return
 }
 
-$defaultSkipFile = "tests/extended-tests/_extended_test_overrides.json"
+$defaultSuiteDir = "tests/extended-tests/tests/single-exec"
+$defaultSkipFile = "tests/_extended_test_overrides.json"
+$extendedTestSubmodulePath = "tests/extended-tests"
+if ([string]::IsNullOrWhiteSpace($SuiteDir)) { $SuiteDir = $defaultSuiteDir }
 if ([string]::IsNullOrWhiteSpace($SkipFile)) { $SkipFile = $defaultSkipFile }
 
 $ErrorActionPreference = "Stop"
@@ -369,6 +372,30 @@ function Invoke-ExtendedTest {
         Elapsed = $sw.Elapsed
         Lines   = $lines.ToArray()
     }
+}
+
+function Ensure-ExtendedTestSubmodule {
+    param(
+        [string]$RepoRoot,
+        [string]$SubmodulePath,
+        [string]$SuiteDir
+    )
+
+    $suitePath = if ([System.IO.Path]::IsPathRooted($SuiteDir)) { $SuiteDir } else { Join-Path $RepoRoot $SuiteDir }
+    if (Test-Path -LiteralPath $suitePath -PathType Container) { return }
+
+    Write-Host "Extended test submodule not initialized; running git submodule update --init -- $SubmodulePath" -ForegroundColor Cyan
+    $initResult = Invoke-ProcessWithTimeout -FilePath "git" -Arguments @("submodule", "update", "--init", "--", $SubmodulePath) -WorkingDirectory $RepoRoot -TimeoutSeconds 0
+    if ($initResult.ExitCode -ne 0) {
+        Write-Error "Failed to initialize extended test submodule at $SubmodulePath.`n$($initResult.Output)"
+        exit 1
+    }
+}
+
+$defaultSuiteFullPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $defaultSuiteDir))
+$suiteFullPath = if ([System.IO.Path]::IsPathRooted($SuiteDir)) { [System.IO.Path]::GetFullPath($SuiteDir) } else { [System.IO.Path]::GetFullPath((Join-Path $repoRoot $SuiteDir)) }
+if ($suiteFullPath -eq $defaultSuiteFullPath) {
+    Ensure-ExtendedTestSubmodule -RepoRoot $repoRoot -SubmodulePath $extendedTestSubmodulePath -SuiteDir $SuiteDir
 }
 
 if (-not (Test-Path -LiteralPath $SuiteDir -PathType Container)) {

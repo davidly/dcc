@@ -57,6 +57,7 @@ int type_size(int type)
         return 0;
     }
     if ((type & 15) == TYPE_CHAR) return 1;
+    if ((type & 15) == TYPE_BOOL) return 1;
     if ((type & 15) == TYPE_VOID) return 0;
     if ((type & 15) == TYPE_LONG) return 4;
     if ((type & 15) == TYPE_FLOAT) return 4;
@@ -73,6 +74,12 @@ int type_is_float(int type)
 {
     if (type & (TYPE_PTR | TYPE_PTR2)) return 0;
     return (type & 15) == TYPE_FLOAT;
+}
+
+int type_is_bool(int type)
+{
+    if (type & (TYPE_PTR | TYPE_PTR2)) return 0;
+    return (type & 15) == TYPE_BOOL;
 }
 
 int object_array_size(int type, int count)
@@ -186,6 +193,7 @@ int type_index_elem_size(int type)
         int base = type & 15;
         if (type & TYPE_STRUCT)
             return type_size(type & ~(TYPE_PTR | TYPE_PTR2));
+        if (base == TYPE_BOOL) return 1;
         if (base == TYPE_CHAR) return 1;
         if (base == TYPE_VOID) return 1;
         if (base == TYPE_LONG) return 4;
@@ -517,6 +525,7 @@ int parse_base_type(void)
     int saw_char;
     int saw_void;
     int saw_float;
+    int saw_bool;
 
     t = 0;
     saw_any = 0;
@@ -526,6 +535,7 @@ int parse_base_type(void)
     saw_char = 0;
     saw_void = 0;
     saw_float = 0;
+    saw_bool = 0;
     g_typedef_array_len = 0;
     g_typedef_is_func = 0;
     decl_is_register = 0;
@@ -549,6 +559,7 @@ int parse_base_type(void)
         if (tok.kind == TOK_SHORT) { saw_short = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_INT) { saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_FLOAT) { saw_float = 1; saw_any = 1; next_token(); continue; }
+        if (tok.kind == TOK_BOOL) { saw_bool = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_CHAR) { saw_char = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_VOID) { saw_void = 1; saw_any = 1; next_token(); continue; }
 
@@ -640,7 +651,8 @@ int parse_base_type(void)
         error_here("type expected");
         t = TYPE_INT;
     } else if (t == 0) {
-        if (saw_float) t = TYPE_FLOAT;
+        if (saw_bool) t = TYPE_BOOL;
+        else if (saw_float) t = TYPE_FLOAT;
         else if (saw_void) t = TYPE_VOID;
         else if (saw_char) t = TYPE_CHAR;
         else if (saw_long) t = TYPE_LONG;

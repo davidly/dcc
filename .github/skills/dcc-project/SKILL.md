@@ -37,7 +37,7 @@ ntvcm.
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
 | `tests/` | `*.c` test apps + `tests/baselines/<app>.txt` expected stdout + `tests/_test_overrides.json` (per-app args/stdin/stack/ignore). |
-| `scripts/` | `runall.ps1`, `ma.ps1`, `build-dcc.ps1`, `stacksize.*`. |
+| `scripts/` | `runall.ps1`, `runall-extended.ps1`, `ma.ps1`, `build-dcc.ps1`, `stacksize.*`. |
 | `docs/docs/en/appendix/00-architecture.md` | In-depth architecture reference. |
 
 Convention: source `.c` files are **lowercase** (only dcc reads them); generated
@@ -63,13 +63,17 @@ pwsh ./scripts/runall.ps1 -Help           # show help and exit
 pwsh ./scripts/runall.ps1 -Mode fast      # default unless otherwise stated by the agent/developer
 pwsh ./scripts/runall.ps1 -Mode nopeep    # unoptimized CP/M Z80 binary
 pwsh ./scripts/runall.ps1 -Serial         # sequential fallback (debugging)
+pwsh ./scripts/runall.ps1 -Extended       # also run the c-testsuite extended corpus
 ```
 
 The default `-Mode fast` builds each app once as an optimized CP/M Z80 binary.
 Use `-Mode full` to build each app twice, once optimized and once unoptimized,
 and verify both against the same baseline. Exit code 0 = all passed, 1 = one or
 more failed. Add `-Report` to append per-app cycle/size metrics to
-`perf_results.csv`.
+`perf_results.csv`. Add `-Extended` when a regular regression run should also
+run the imported c-testsuite single-exec corpus through `runall-extended.ps1`;
+that runner initializes the `tests/extended-tests` submodule automatically when
+the corpus is not present on disk.
 
 ## Test baselines and overrides
 
@@ -131,4 +135,6 @@ change.
 1. Change a source file under `src/` (or `DCCRTL.MAC`).
 2. `pwsh ./scripts/build-dcc.ps1` to rebuild the host tools.
 3. `pwsh ./scripts/ma.ps1 <app>` to reproduce/iterate on one case.
-4. `pwsh ./scripts/runall.ps1` to confirm no regressions across all apps.
+4. `pwsh ./scripts/runall.ps1` to confirm no regressions across all apps; use
+   `pwsh ./scripts/runall.ps1 -Extended` when the extended c-testsuite corpus
+   should be included too.

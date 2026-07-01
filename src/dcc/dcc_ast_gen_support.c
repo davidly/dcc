@@ -8,6 +8,30 @@
 #include "dcc_ast_gen_internal.h"
 
 
+int ast_expr_yields_bool01(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 0;
+    if (type_is_bool(n->type))
+        return 1;
+    switch (n->kind) {
+    case AST_INT_LIT:
+        return n->ival == 0 || n->ival == 1;
+    case AST_UNARY:
+        return n->op == '!';
+    case AST_BINARY:
+        return is_cmp_op(n->op);
+    case AST_LOGAND:
+    case AST_LOGOR:
+        return 1;
+    case AST_CAST:
+        return type_is_bool(n->type);
+    default:
+        return 0;
+    }
+}
+
+
 int ast_gen_supported(const struct AstNode *n)
 {
     if (n == NULL)
@@ -55,6 +79,14 @@ int ast_gen_supported(const struct AstNode *n)
                 is_cmp_op(n->a->op) && ast_gen_supported(n->a) &&
                 (ast_value_is_float_word(n->a->a) || ast_value_is_float_word(n->a->b)))
                 return 1;
+            /* `!<constant-int-expr>` (including chains like `!!0`) folds to a
+             * single 0/1 immediate in gen_unary_ast, so allow it even though
+             * the operand is itself a constant. */
+            if (n->op == '!') {
+                long cv;
+                if (ast_const_scalar_fold(n, &cv))
+                    return 1;
+            }
             if (ast_node_is_const(n->a))
                 return 0;
             return ast_gen_supported(n->a);
@@ -363,6 +395,8 @@ int ast_gen_supported(const struct AstNode *n)
                     return 0;
                 if (type_is_float(elem))
                     return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b);
+                if (type_is_bool(elem))
+                    return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b) || ast_value_is_float_word(n->b);
                 if (type_is_long(elem))
                     return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
                 if (type_ptr_depth(elem) > 0)
@@ -431,6 +465,9 @@ int ast_gen_supported(const struct AstNode *n)
             if (type_is_float(field_type))
                 return n->op == '=' &&
                        (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
+            if (type_is_bool(field_type))
+                return n->op == '=' &&
+                       (ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b) || ast_value_is_float_word(n->b));
             if (type_ptr_depth(field_type) > 0) {
                 if (n->op == '=')
                     return type_size(field_type) == 2 &&
@@ -582,6 +619,8 @@ int ast_gen_supported(const struct AstNode *n)
         }
         if (!ast_is_plain_int_type(s->type))
             return 0;
+        if (type_is_bool(s->type) && n->op == '=')
+            return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b) || ast_value_is_float_word(n->b);
         if (type_size(s->type) == 2 && n->op == '=' &&
             ast_value_is_float_word(n->b))
             return 1;

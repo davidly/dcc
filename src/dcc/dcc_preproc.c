@@ -984,6 +984,7 @@ int keyword_kind(const char *s)
     if (!strcmp(s, "short")) return TOK_SHORT;
     if (!strcmp(s, "long")) return TOK_LONG;
     if (!strcmp(s, "float")) return TOK_FLOAT;
+    if (!strcmp(s, "_Bool")) return TOK_BOOL;
     if (!strcmp(s, "char")) return TOK_CHAR;
     if (!strcmp(s, "void")) return TOK_VOID;
     if (!strcmp(s, "unsigned")) return TOK_UNSIGNED;

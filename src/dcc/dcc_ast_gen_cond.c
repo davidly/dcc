@@ -104,6 +104,8 @@ void gen_return_ast(const struct AstNode *n)
                 emit("\tld h,0\n");
             else
                 emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
+            if (type_is_bool(current_return_type) && rs->storage == SC_PARAM)
+                emit_bool_normalize_hl(current_return_type);
             g_expr_type = current_return_type;
         } else if (n->a->kind == AST_INT_LIT) {
             fprintf(outf, "\tld hl,%ld\n", n->a->ival & 255);
@@ -124,7 +126,12 @@ void gen_return_ast(const struct AstNode *n)
             ast_gen_expr(n->a);
     }
     if (n->a != NULL) {
-        if (type_is_float(current_return_type) && !type_is_float(g_expr_type)) {
+        if (type_is_bool(current_return_type)) {
+            /* Only non-bool sources need normalising; a bool value is 0/1. */
+            if (!ast_expr_yields_bool01(n->a))
+                emit_bool_normalize_hl(g_expr_type);
+            g_expr_type = current_return_type;
+        } else if (type_is_float(current_return_type) && !type_is_float(g_expr_type)) {
             emit_convert_int_to_float(g_expr_type);
             g_expr_type = current_return_type;
         } else if (!type_is_float(current_return_type) && type_is_float(g_expr_type)) {

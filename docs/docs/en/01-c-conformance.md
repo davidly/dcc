@@ -1,9 +1,9 @@
 # C conformance and target exceptions
 
-dcc is a CP/M 2.2 / Z80 cross-compiler with a C89 language core and selected,
-target-appropriate C99/C11 front-end compatibility. It aims for strong C89
-source compatibility within the CP/M/Z80 target contract, not hosted desktop C
-conformance.
+dcc is a CP/M 2.2 / Z80 cross-compiler with a C89 language core, a first-class
+`_Bool` scalar type, and selected target-appropriate C99/C11 front-end
+compatibility. It aims for strong C89 source compatibility within the CP/M/Z80
+target contract, not hosted desktop C conformance.
 
 Read this page by exception:
 
@@ -22,6 +22,7 @@ gaps; they follow from CP/M 2.2, the Z80 data model, or the DCCRTL runtime.
 | Area | dcc behavior |
 | --- | --- |
 | Integer and pointer model | `int`, `short`, pointers, `size_t`, and `ptrdiff_t` are 16-bit. `long` is 32-bit. |
+| Boolean model | `_Bool` is a first-class 8-bit scalar type. Nonzero values normalize to `1` when stored, cast, initialized, loaded as parameters, or returned as `_Bool`. |
 | Floating point | `float` is the only floating type. Unsuffixed floating constants are treated as single-precision `float`. |
 | `double` / `long double` | Not supported as distinct types. Use `float`. |
 | `long long` / 64-bit integers | Not supported. Use 32-bit `long` / `unsigned long`. |
@@ -32,12 +33,13 @@ gaps; they follow from CP/M 2.2, the Z80 data model, or the DCCRTL runtime.
 
 ## Recognized keywords
 
-dcc recognizes the C89 keyword set except for `double`. It also recognizes a
-small number of later keywords as compatibility syntax.
+dcc recognizes the C89 keyword set except for `double`. It also recognizes
+`_Bool` as a first-class scalar type and a small number of later keywords as
+compatibility syntax.
 
 | Category | Keywords |
 | --- | --- |
-| Types | `char`, `short`, `int`, `long`, `signed`, `unsigned`, `float`, `void` |
+| Types | `char`, `short`, `int`, `long`, `signed`, `unsigned`, `float`, `void`, `_Bool` |
 | Storage class | `auto`, `extern`, `register`, `static`, `typedef` |
 | Type qualifiers | `const`, `volatile` |
 | Aggregates / enums | `struct`, `union`, `enum` |
@@ -52,7 +54,6 @@ small number of later keywords as compatibility syntax.
 | `double` / `long double` | Not supported. dcc has 32-bit `float` as its only floating type. |
 | `long long` | Not supported. dcc has no 64-bit integer type. |
 | `restrict` | Not implemented. |
-| `_Bool` | Not a compiler keyword. Include [`stdbool.h`](standard-lib/11-stdbool.md) for `bool`, `true`, and `false` as ordinary library definitions. |
 | `_Complex` | Not implemented. |
 | `_Atomic`, `_Generic`, `_Thread_local` | Not implemented. |
 
@@ -91,6 +92,11 @@ for (int i = 0; i < 3; i++)
 
 ### C99/C11 declaration compatibility
 
+- `_Bool` is a first-class 1-byte scalar type in dcc's type system, not a macro
+  or library simulation. Assignments, casts, initializers, parameter loads, and
+  return values normalize nonzero values to `1`; include
+  [`stdbool.h`](standard-lib/11-stdbool.md) for the portable aliases `bool`,
+  `true`, and `false`.
 - Forward enum declarations are accepted as `int`-sized enum types, including
   inside prototypes and function-pointer declarators.
 - C11 anonymous struct/union members are accepted, including aggregate
@@ -139,7 +145,6 @@ become supportable later, but code should not depend on them today.
 | C89 hosted library | Hosted stdio, locale, signal, time, process, and wide-character runtime behavior | Runtime-inapplicable or absent in DCCRTL. |
 | C99 | `long long` and 64-bit integer typedefs/operations | Target-inapplicable. The Z80 model uses 16-bit `int`/pointers and 32-bit `long`. |
 | C99 | `restrict` | Not implemented. |
-| C99 | `_Bool` keyword | Not a compiler keyword. Include [`stdbool.h`](standard-lib/11-stdbool.md) for `bool`, `true`, and `false` as ordinary library definitions. |
 | C99 | `_Complex` | Not implemented. |
 | C99 | Variadic macros | Not implemented; includes `__VA_ARGS__` and empty-argument behavior. |
 | C99 | Block-scope compound literal value/copy forms | Not implemented. Address-taking forms are supported as described above. |

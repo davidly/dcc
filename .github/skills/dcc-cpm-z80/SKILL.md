@@ -1,6 +1,6 @@
 ---
 name: dcc-cpm-z80
-description: 'Write, build, test, and debug C89/C99/C11-targeted code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, C89, C99, C11, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, ma.sh, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus target-appropriate C99/C11 front-end compatibility EXCEPT for the Z80/CP/M deviations this skill documents: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full library/printf/scanf inventory and pitfalls are in the reference files.'
+description: 'Write, build, test, and debug C89/C99/C11-targeted code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, C89, C99, C11, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, ma.sh, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus a first-class _Bool scalar type and target-appropriate C99/C11 front-end compatibility EXCEPT for the Z80/CP/M deviations this skill documents: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full library/printf/scanf inventory and pitfalls are in the reference files.'
 argument-hint: 'Describe the C89/C99/C11 CP/M-Z80 task (write code, build, run under ntvcm, debug a failure)'
 ---
 
@@ -10,11 +10,12 @@ dcc is a cross-compiler (runs on the host) that emits Z80 assembly for CP/M 2.2.
 The runtime is [DCCRTL.MAC](DCCRTL.MAC); programs run on real hardware or an
 emulator such as **ntvcm** (Altair 8800).
 
-**Assume standard C89 plus target-appropriate C99/C11 front-end compatibility.**
-dcc is not a hosted desktop C implementation: the CP/M 2.2 runtime, Z80 data
-model, and DCCRTL library subset are part of the compiler contract. Anything not
-listed here should be treated as ordinary C89/C99/C11, but CP/M/Z80 limits always
-win over host ABI expectations.
+**Assume standard C89 plus dcc's first-class `_Bool` scalar type and
+target-appropriate C99/C11 front-end compatibility.** dcc is not a hosted
+desktop C implementation: the CP/M 2.2 runtime, Z80 data model, and DCCRTL
+library subset are part of the compiler contract. Anything not listed here
+should be treated as ordinary C89/C99/C11, but CP/M/Z80 limits always win over
+host ABI expectations.
 
 ## Compiler conformance level
 
@@ -46,6 +47,7 @@ win over host ABI expectations.
 | `long` | 32-bit | |
 | `float` | 32-bit | **the only floating type** |
 | `double` / `long double` | — | **not supported as a distinct type; use `float`** |
+| `_Bool` / `bool` | 8-bit | First-class scalar type; `stdbool.h` aliases `bool` to `_Bool`; nonzero `_Bool` stores/casts/initializers/parameter loads/returns normalize to `1` |
 | pointer / `size_t` / `ptrdiff_t` / `wchar_t` | 16-bit | flat 64 KB space |
 | `char` | 8-bit **signed** | use `unsigned char` for bytes ≥ 0x80 / table indices |
 | `FILE` | `int` | |
@@ -95,28 +97,20 @@ comments, block-scoped declarations (inner blocks shadow outer names), and
 but inert (`const` constant-folds initializers only — not read-only memory).
 K&R function definitions are still accepted; prefer prototypes for new code.
 
-dcc also accepts practical front-end compatibility used by common C99-era code:
-forward enum declarations are parsed as `int`-sized enum types, including inside
-function prototypes and function-pointer declarators such as
-`int (*member)(enum E value)`. C11 anonymous struct/union members are accepted,
-including aggregate initialization through the anonymous member. GNU
-`__attribute__((...))` annotations are skipped when they appear in supported
-declaration positions.
+dcc has a first-class C99-style `_Bool` scalar type: it is 1 byte wide, and
+nonzero values normalize to `1` on `_Bool` stores, casts, initializers,
+parameter loads, and returns. Include `stdbool.h` for the portable spellings
+`bool`, `true`, and `false`. dcc also accepts practical front-end compatibility
+used by common C99-era code: forward enum declarations are parsed as `int`-sized
+enum types, including inside function prototypes and function-pointer
+declarators such as `int (*member)(enum E value)`. C11 anonymous struct/union
+members are accepted, including aggregate initialization through the anonymous
+member. GNU `__attribute__((...))` annotations are skipped when they appear in
+supported declaration positions.
 
-C99 aggregate initializer compatibility includes `.field = value` struct/union
-field designators and `[index] = value` array designators, including nested
-array designators in multidimensional aggregate initializers. GNU range
-designators (`[0 ... 3] = value`) are not supported. File-scope compound
-literals used in global constant initializers are supported. Address-taking
-automatic/block-scope compound literal forms such as `&(struct S){1, 2}` are
-also supported by creating hidden automatic storage for the enclosing function;
-block-scope value/copy compound literal forms are not supported yet.
-
-Not implemented yet, but plausible front-end scope: C99 variadic macros
-(`__VA_ARGS__` and empty-argument behavior), block-scope compound literal
-value/copy forms, GNU range designators, flexible-array initialization, empty
-`struct {}` extension syntax, GNU statement expressions, `__builtin_expect`,
-and C11 `_Generic` for target-supported types.
+Not implemented yet, but plausible front-end scope: C99 designated initializers,
+C99 array designators, C99 compound literals, C99 variadic macros, GNU statement
+expressions, `__builtin_expect`, and C11 `_Generic` for target-supported types.
 
 Target-inapplicable or runtime-inapplicable exceptions: `double`/`long double`,
 `long long`, 64-bit integer typedefs/operations, host ABI checks,

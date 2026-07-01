@@ -88,6 +88,8 @@ void emit_load_from_hl(int type)
 void emit_store_de_to_addr_hl(int type)
 {
     if (type_size(type) == 1) {
+        if (type_is_bool(type))
+            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n");
         emit("\tld (hl),e\n");
     } else if (type_size(type) == 4) {
         /* value in DE:HL (DE=high, HL=low), address on stack (2 bytes) */
@@ -106,6 +108,23 @@ void emit_store_de_to_addr_hl(int type)
         emit("\tinc hl\n");
         emit("\tld (hl),d\n");
     }
+}
+
+void emit_bool_normalize_hl(int source_type)
+{
+    if (type_is_float(source_type))
+        emit_convert_float_to_intlike(TYPE_INT);
+
+    if (type_is_long(source_type))
+        emit("\tld a,h\n\tor l\n\tor d\n\tor e\n");
+    else
+        emit("\tld a,h\n\tor l\n");
+
+    /* Reduce the (non-)zero flag to a canonical 0/1 in HL using a short forward
+     * skip instead of a two-label jump sequence.  The compact form matters for
+     * large unoptimised builds, where the verbose sequence can bloat the object
+     * enough to exceed the CP/M linker's memory (e.g. the a1 interpreter). */
+    emit("\tld hl,0\n\tjr z,$+3\n\tinc l\n");
 }
 
 

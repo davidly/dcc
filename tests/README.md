@@ -32,8 +32,9 @@ The relationship is **by file name**:
 | `tests/ttt.c`          | `tests/baselines/ttt.txt`         |
 | `tests/cobint.c`       | `tests/baselines/cobint.txt`      |
 
-The test runner (`scripts/runall.ps1`) builds each `*.c` file, runs it, and
-compares the captured stdout against the like-named file in `baselines/`.
+The test runner (`scripts/runall.ps1`) builds each main-suite `*.c` file, runs
+it, and compares the captured stdout against the like-named file in
+`baselines/`.
 Because matching is keyed on the **app name** (not position in a list), the
 order in which tests are discovered or run does not matter.
 
@@ -48,6 +49,9 @@ From the repo root, with PowerShell 7+:
 ```pwsh
 # Build + run every test, verify against tests/baselines/ (parallel by default)
 pwsh ./scripts/runall.ps1
+
+# Also run the extended c-testsuite corpus after the main suite
+pwsh ./scripts/runall.ps1 -Extended
 
 # Sequential fallback (one app at a time in the shared build/ dir)
 pwsh ./scripts/runall.ps1 -Serial
@@ -78,12 +82,12 @@ LF). A test with no baseline file is still built and run, but reported as
 
 ## Running the extended c-testsuite corpus
 
-The imported c-testsuite single-exec cases live under
-`tests/extended-tests/c-testsuite/tests/single-exec/`. Each case keeps the
+The c-testsuite single-exec submodule cases live under
+`tests/extended-tests/tests/single-exec/`. Each case keeps the
 upstream trio of files: `<id>.c`, `<id>.c.tags`, and `<id>.c.expected`.
 
 Target-inapplicable cases are listed in
-`tests/extended-tests/_extended_test_overrides.json`. These are tests whose
+`tests/_extended_test_overrides.json`. These are tests whose
 premise conflicts with dcc's CP/M 2.2/Z80 target model or documented C dialect
 (for example `long long`, `double`, wide-character headers, GNU statement
 expressions, or C99/C11 features that dcc intentionally does not provide). The
@@ -114,7 +118,7 @@ pwsh ./scripts/runall-extended.ps1 -C89 -Test 00001
 pwsh ./scripts/runall-extended.ps1 -C89 -RunTimeout 30
 
 # Use an alternate skip file, or an empty/nonexistent one to run everything
-pwsh ./scripts/runall-extended.ps1 -C89 -SkipFile tests/extended-tests/_extended_test_overrides.json
+pwsh ./scripts/runall-extended.ps1 -C89 -SkipFile tests/_extended_test_overrides.json
 ```
 
 The runner defaults to `-Mode fast` and parallel execution, matching the main

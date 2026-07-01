@@ -1494,6 +1494,8 @@ static void global_init_write_value_at(struct Sym *s, int off, const char *label
     unsigned long uv;
 
     if (bytes <= 0) bytes = 2;
+    if (!is_label && bytes == 1 && type_is_bool(s->type))
+        v = v ? 1 : 0;
     if (is_label) {
         global_init_write_label_at(s, off, label, bytes);
         return;
@@ -1835,7 +1837,11 @@ static void parse_global_init_type_at(struct Sym *s, int type, int size, int bas
 
     k = parse_global_init_atom(&v, label, sizeof(label));
     if (k == 1)
+    {
+        if (type_is_bool(type))
+            v = v ? 1 : 0;
         global_init_write_value_at(s, baseoff, NULL, v, size, 0);
+    }
     else if (k == 2)
         global_init_write_value_at(s, baseoff, label, 0, size, 1);
     else
@@ -1878,6 +1884,8 @@ void parse_global_scalar_array_init_scalar(struct Sym *s, int *np)
         k = parse_global_init_atom(&v, s->init_labels[n],
                                    sizeof(s->init_labels[n]));
         if (k == 1) {
+            if (type_is_bool(s->type))
+                v = v ? 1 : 0;
             sprintf(s->init_labels[n], "%ld", v);
             s->init_sizes[n] = elem_bytes;
             np[0] = n + 1;
@@ -2065,6 +2073,8 @@ void parse_global_init_list(struct Sym *s)
                 k = parse_global_init_atom(&v, s->init_labels[0],
                                            sizeof(s->init_labels[0]));
                 if (k == 1) {
+                    if (type_is_bool(s->type))
+                        v = v ? 1 : 0;
                     s->init_value = v;
                     s->init_count = 0;
                 } else if (k == 2) {

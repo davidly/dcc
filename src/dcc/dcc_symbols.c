@@ -521,10 +521,12 @@ void emit_load_sym_value_direct(struct Sym *s)
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);
             emit("\tld l,(hl)\n");
-            if (s->type & TYPE_UNSIGNED)
+            if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
                 emit("\tld h,0\n");
             else
                 emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
+            if (type_is_bool(s->type))
+                emit_bool_normalize_hl(s->type);
         } else if (type_size(s->type) == 4) {
             emit_load_frame_addr_hl(s);
             emit("\tld a,(hl)\n\tld l,a\n\tinc hl\n\tld a,(hl)\n\tld h,a\n");
@@ -539,10 +541,12 @@ void emit_load_sym_value_direct(struct Sym *s)
     }
     if (type_size(s->type) == 1) {
         fprintf(outf, "\tld l,(ix%+d)\n", s->offset);
-        if (s->type & TYPE_UNSIGNED)
+        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
             emit("\tld h,0\n");
         else
             emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
+        if (type_is_bool(s->type) && s->storage == SC_PARAM)
+            emit_bool_normalize_hl(s->type);
     } else if (type_size(s->type) == 4) {
         fprintf(outf, "\tld l,(ix%+d)\n", s->offset);
         fprintf(outf, "\tld h,(ix%+d)\n", s->offset + 1);
@@ -560,10 +564,12 @@ void emit_load_sym_de_direct(struct Sym *s)
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);
             emit("\tld e,(hl)\n");
-            if (s->type & TYPE_UNSIGNED)
+            if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
                 emit("\tld d,0\n");
             else
                 emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
+            if (type_is_bool(s->type))
+                emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
         } else {
             emit_load_frame_addr_hl(s);
             emit("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n");
@@ -572,10 +578,12 @@ void emit_load_sym_de_direct(struct Sym *s)
     }
     if (type_size(s->type) == 1) {
         fprintf(outf, "\tld e,(ix%+d)\n", s->offset);
-        if (s->type & TYPE_UNSIGNED)
+        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
             emit("\tld d,0\n");
         else
             emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
+        if (type_is_bool(s->type) && s->storage == SC_PARAM)
+            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
     } else {
         fprintf(outf, "\tld e,(ix%+d)\n", s->offset);
         fprintf(outf, "\tld d,(ix%+d)\n", s->offset + 1);
@@ -590,6 +598,8 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
     }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
         if (type_size(s->type) == 1) {
+            if (type_is_bool(s->type))
+                emit_bool_normalize_hl(s->type);
             emit("\tld e,l\n");
             emit_load_frame_addr_hl(s);
             emit("\tld (hl),e\n");
@@ -605,6 +615,8 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
         return;
     }
     if (type_size(s->type) == 1) {
+        if (type_is_bool(s->type))
+            emit_bool_normalize_hl(s->type);
         fprintf(outf, "\tld (ix%+d),l\n", s->offset);
     } else if (type_size(s->type) == 4) {
         fprintf(outf, "\tld (ix%+d),l\n", s->offset);

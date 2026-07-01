@@ -197,10 +197,11 @@ pwsh ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
 
 ## `runall.ps1`
 
-Comprehensive test suite: builds and runs all test applications with output
+Comprehensive test suite: builds and runs all main test applications with output
 verification against per-app baselines in `tests/baselines/`. Uses `ma.ps1` to
 build each app and `tests/_test_overrides.json` for test-specific arguments and stack
 sizes. Comparison is keyed by app name, so test discovery order does not matter.
+Pass `-Extended` to run the extended c-testsuite corpus after the main suite.
 See [`tests/README.md`](../tests/README.md) for the test/baseline relationship.
 
 **Runs in parallel by default** (each app builds in its own `build/<app>/`
@@ -233,6 +234,7 @@ build mode. Use `-Mode full` when you want both fast and nopeep builds.
 | `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
 | `-Mode` | `fast` | Build mode: `fast` (optimized), `nopeep` (unoptimized), or `full` |
 | `-Help` | (off) | Show help text and exit without building or running tests |
+| `-Extended` | (off) | Also run the extended c-testsuite corpus after the main suite |
 | `-Serial` | (off) | Run sequentially instead of the default parallel mode |
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
 | `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
@@ -261,6 +263,7 @@ pwsh ./scripts/runall.ps1 -NoStackCheck         # build without the stack guard
 pwsh ./scripts/runall.ps1 -ThrottleLimit 8      # cap concurrency
 pwsh ./scripts/runall.ps1 -Mode fast            # optimized build only
 pwsh ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
+pwsh ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
 pwsh ./scripts/runall.ps1 -Report               # append perf_results.csv
 pwsh ./scripts/runall.ps1 -ReportClockHz 0 -Report  # full-speed report run
 ```

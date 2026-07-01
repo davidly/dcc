@@ -275,7 +275,7 @@ int promote_int_type(int t)
     if (!type_is_arith(t)) return t;
     if (type_is_float(t)) return t;
     if (type_is_long(t)) return t;
-    if ((t & 15) == TYPE_CHAR) return TYPE_INT;
+    if ((t & 15) == TYPE_CHAR || (t & 15) == TYPE_BOOL) return TYPE_INT;
     return (t & TYPE_UNSIGNED) ? (TYPE_INT | TYPE_UNSIGNED) : TYPE_INT;
 }
 
