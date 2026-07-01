@@ -1,19 +1,34 @@
 # C conformance and target exceptions
 
-dcc is a CP/M 2.2 / Z80 cross-compiler with a C89 core and a growing set of
-target-appropriate C99/C11 front-end features. It is not a hosted desktop C
-implementation: the Z80 data model, CP/M file semantics, and DCCRTL runtime are
-part of the language contract.
+dcc is a CP/M 2.2 / Z80 cross-compiler with a C89 language core and selected,
+target-appropriate C99/C11 front-end compatibility. It aims for strong C89
+source compatibility within the CP/M/Z80 target contract, not hosted desktop C
+conformance.
 
-Use this rule of thumb when porting code:
+Read this page by exception:
 
-- Ordinary C89 should compile unless it depends on a hosted runtime function not
-  present in DCCRTL.
-- C99/C11 front-end features listed below are supported when they fit the 16-bit
-  CP/M target.
-- Host ABI assumptions do not apply. `int`, pointers, `size_t`, and `ptrdiff_t`
-  are 16-bit; `long` is 32-bit; there is no 64-bit integer type and no 8-byte
-  floating type.
+- The baseline is ordinary C89, subject to the target-model and runtime limits
+  below.
+- Later C99/C11/GNU features are supported only when listed in
+  [Supported post-C89 front-end features](#supported-post-c89-front-end-features).
+- Anything listed in [Unsupported or target-inapplicable features](#unsupported-or-target-inapplicable-features)
+  should be treated as unavailable even if a hosted desktop compiler accepts it.
+
+## Target contract
+
+The target contract applies to every source level. These are not temporary parser
+gaps; they follow from CP/M 2.2, the Z80 data model, or the DCCRTL runtime.
+
+| Area | dcc behavior |
+| --- | --- |
+| Integer and pointer model | `int`, `short`, pointers, `size_t`, and `ptrdiff_t` are 16-bit. `long` is 32-bit. |
+| Floating point | `float` is the only floating type. Unsuffixed floating constants are treated as single-precision `float`. |
+| `double` / `long double` | Not supported as distinct types. Use `float`. |
+| `long long` / 64-bit integers | Not supported. Use 32-bit `long` / `unsigned long`. |
+| Host ABI assumptions | Do not assume ILP32/LP64/LLP64 macros, host-sized `int`, or host-width expression results. |
+| Byte-stream stdio | CP/M text files use Ctrl-Z EOF semantics, and DCCRTL stdio is a subset of hosted C stdio. |
+| Wide-character Unicode runtime | `wchar_t` is a 16-bit integer typedef, but Unicode/wide-character library behavior is not implemented. |
+| POSIX / hosted services | No pthreads, C11 threads, POSIX process APIs, signals, locale, or time library support in the CP/M runtime. |
 
 ## Recognized keywords
 
@@ -110,36 +125,28 @@ dcc reserves the storage on the C stack at runtime and restores the stack from
 the function frame on return. Keep VLAs small: the CP/M transient program area
 is shared by code, data, heap, and stack.
 
-## Not implemented yet
+## Unsupported or target-inapplicable features
 
-The following are front-end compatibility candidates, not inherent CP/M/Z80
-model conflicts. Code using them may become supportable in future dcc versions,
-but they are not implemented today.
+The table below separates target-model limits from front-end compatibility gaps.
+Target-model limits are part of dcc's CP/M/Z80 contract. Front-end gaps may
+become supportable later, but code should not depend on them today.
 
-| Feature | Notes |
-| --- | --- |
-| C99 variadic macros | Includes `__VA_ARGS__` and related empty-argument behavior. |
-| Block-scope compound literals | Automatic compound literal objects inside function bodies are not implemented yet. File-scope initializer forms are supported as described above. |
-| GNU range designators | Includes `[first ... last] = value` initializer ranges. |
-| Flexible-array initialization | Initializing storage for a flexible array member is not implemented. |
-| Empty structs | Empty `struct {}` is a compiler extension and is not implemented. |
-| C11 `_Generic` | Not implemented; some tests also require `long long`, which remains target-inapplicable. |
-| GNU statement expressions | Includes `({ ... })`; `__builtin_expect` is also not recognized. |
-
-## Target-model and runtime exceptions
-
-These are not just missing parser features. They are consequences of the CP/M
-2.2 / Z80 target, the dcc data model, or the DCCRTL runtime.
-
-| Area | dcc behavior |
-| --- | --- |
-| `double` / `long double` | Not supported. Unsuffixed floating constants are treated as single-precision `float`. |
-| `long long` / 64-bit integers | Not supported. Use 32-bit `long` / `unsigned long`. |
-| Host ABI assumptions | Do not assume ILP32/LP64/LLP64 macros or host-sized `int`; dcc has 16-bit `int` and 16-bit pointers. |
-| Host-sized integer expectations | Expressions that require host-width `int` produce 16-bit target results unless explicitly promoted to `long`. |
-| Byte-stream stdio | CP/M text files use Ctrl-Z EOF semantics, and DCCRTL stdio is a subset of hosted C stdio. |
-| Wide-character Unicode runtime | `wchar_t` is a 16-bit integer typedef, but Unicode/wide-character library behavior is not implemented. |
-| POSIX / hosted services | No pthreads, C11 threads, POSIX process APIs, signals, locale, or time library support in the CP/M runtime. |
+| Source level | Feature | Status |
+| --- | --- | --- |
+| C89 | `double` / `long double` | Target-inapplicable. dcc has single-precision `float` as its only floating type. |
+| C89 hosted library | Hosted stdio, locale, signal, time, process, and wide-character runtime behavior | Runtime-inapplicable or absent in DCCRTL. |
+| C99 | `long long` and 64-bit integer typedefs/operations | Target-inapplicable. The Z80 model uses 16-bit `int`/pointers and 32-bit `long`. |
+| C99 | `restrict` | Not implemented. |
+| C99 | `_Bool` keyword | Not a compiler keyword. Include [`stdbool.h`](standard-lib/11-stdbool.md) for `bool`, `true`, and `false` as ordinary library definitions. |
+| C99 | `_Complex` | Not implemented. |
+| C99 | Variadic macros | Not implemented; includes `__VA_ARGS__` and empty-argument behavior. |
+| C99 | Block-scope compound literals | Not implemented. File-scope/global initializer forms are supported as described above. |
+| C99 | Flexible-array member initialization | Not implemented. |
+| C11 | `_Generic` | Not implemented; some imported tests also require unsupported `long long`. |
+| C11 | `_Atomic`, `_Thread_local`, C11 threads | Not implemented or runtime-inapplicable. |
+| GNU/TCC extensions | Range designators | Not implemented; includes `[first ... last] = value`. |
+| GNU/TCC extensions | Empty structs | Not implemented; empty `struct {}` is an extension. |
+| GNU extensions | Statement expressions and branch prediction builtins | Not implemented; includes `({ ... })` and `__builtin_expect`. |
 
 ## Identifier significance
 
