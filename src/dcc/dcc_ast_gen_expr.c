@@ -120,7 +120,7 @@ void gen_ident(const struct AstNode *n)
             }
         }
         {
-            char msg[96];
+            char msg[MAX_TOK_TEXT + 64];
             sprintf(msg, "use of undeclared identifier '%s'", name);
             fprintf(stderr, "%s:%d: error: %s\n",
                     tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),

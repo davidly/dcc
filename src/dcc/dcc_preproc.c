@@ -572,6 +572,7 @@ static int parse_pragma_macro_name(const char *line, const char *op, char *name,
 static void pp_push_macro(const char *name)
 {
     int di;
+    size_t namelen;
     struct MacroPushEntry *e;
 
     if (nmacro_push_stack >= MAX_MACRO_PUSH)
@@ -579,7 +580,10 @@ static void pp_push_macro(const char *name)
 
     e = &macro_push_stack[nmacro_push_stack++];
     memset(e, 0, sizeof(*e));
-    strncpy(e->name, name, sizeof(e->name) - 1);
+    namelen = strlen(name);
+    if (namelen > sizeof(e->name) - 1)
+        namelen = sizeof(e->name) - 1;
+    memcpy(e->name, name, namelen);
 
     di = find_define(name);
     if (di >= 0) {
@@ -2216,21 +2220,6 @@ int define_number_value(const char *name, long *out, int depth)
         }
     }
 
-    return 0;
-}
-
-static int macro_suppressed_member_name_at(long at)
-{
-    long p;
-
-    p = at;
-    while (p > 0 && (src[p - 1] == ' ' || src[p - 1] == '\t' || src[p - 1] == '\r' || src[p - 1] == '\n'))
-        p--;
-
-    if (p > 0 && src[p - 1] == '.')
-        return 1;
-    if (p > 1 && src[p - 2] == '-' && src[p - 1] == '>')
-        return 1;
     return 0;
 }
 

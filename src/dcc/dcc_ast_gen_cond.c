@@ -1068,7 +1068,6 @@ int ast_stmt_supported(const struct AstNode *n)
         return ok;
     }
     case AST_SWITCH: {
-        int i;
         int old_nflow;
         int ok;
         if (n->a == NULL || !ast_gen_supported(n->a) ||

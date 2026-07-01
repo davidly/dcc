@@ -142,6 +142,7 @@ static void record_inline_function_if_simple(struct Sym *s)
     struct AstNode *ret_expr;
     int i;
     int nparams;
+    size_t namelen;
 
     if (s == NULL || !s->is_static || !s->is_inline || tok.kind != '{')
         return;
@@ -155,9 +156,11 @@ static void record_inline_function_if_simple(struct Sym *s)
             if (!(type_size(locals[i].type) == 2 || type_size(locals[i].type) == 4) ||
                 type_is_struct_object(locals[i].type))
                 return;
-            strncpy(s->inline_param_names[nparams], locals[i].name,
-                    sizeof(s->inline_param_names[nparams]) - 1);
-            s->inline_param_names[nparams][sizeof(s->inline_param_names[nparams]) - 1] = 0;
+            namelen = strlen(locals[i].name);
+            if (namelen > sizeof(s->inline_param_names[nparams]) - 1)
+                namelen = sizeof(s->inline_param_names[nparams]) - 1;
+            memcpy(s->inline_param_names[nparams], locals[i].name, namelen);
+            s->inline_param_names[nparams][namelen] = 0;
             nparams++;
         }
     }
@@ -2017,14 +2020,10 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
 {
     int sid;
     int i;
-    int used;
-    int total;
     int is_union;
     int had_brace;
 
     sid = type_struct_id(type);
-    total = type_size(type);
-    used = 0;
     is_union = (sid > 0 && sid <= nstruct_defs && struct_defs[sid - 1].is_union);
 
     had_brace = 0;
@@ -2048,7 +2047,6 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                 parse_global_init_array_at(s, first->elem_type, first->array_len, first->elem_size, baseoff);
             else
                 parse_global_init_type_at(s, first->type, first->size, baseoff);
-            used = first->size;
 
             /* Braceless union element in an array (static U a[] = {1,2,3})
              * stops after its single initializer; the array loop owns the
@@ -2137,7 +2135,6 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                 k = next;
             }
             global_init_write_value_at(s, baseoff + unit_off, NULL, (long)(unit & 0xffffU), 2, 0);
-            used = unit_off + 2;
             if (k > i)
                 i = k - 1;
             if (stop)
@@ -2151,7 +2148,6 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
         else
             parse_global_init_type_at(s, fd->type, fd->size, baseoff + fd->offset);
 
-        used = fd->offset + fd->size;
         if (!had_brace && next_parent_field_index(sid, i + 1) < 0)
             break;
         if (!accept(',')) break;
