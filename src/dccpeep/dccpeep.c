@@ -2419,8 +2419,13 @@ static int pass_const_divmod_helpers(void)
         } while (0)
 
         TRY_DIVMOD_HELPER("__divu", "__q2u");
+        /* A divisor that fits in a byte gets the even cheaper single-register
+         * remainder helper (__r1u/__r1s take the divisor in E alone, with a
+         * per-step 8-bit compare instead of __r2u/__r2s's 16-bit one). */
+        if (!oldname && divv <= 255) TRY_DIVMOD_HELPER("__modu", "__r1u");
         if (!oldname) TRY_DIVMOD_HELPER("__modu", "__r2u");
         if (!oldname) TRY_DIVMOD_HELPER("__divs", "__q2s");
+        if (!oldname && divv <= 255) TRY_DIVMOD_HELPER("__mods", "__r1s");
         if (!oldname) TRY_DIVMOD_HELPER("__mods", "__r2s");
 
 #undef TRY_DIVMOD_HELPER
@@ -2440,6 +2445,15 @@ static int pass_const_divmod_helpers(void)
         } else {
             replace1_tagged(i + 1, call_new, "const_divmod_helper");
         }
+
+        /* __r1u/__r1s only read E, so shrink the 3-byte "ld de,N" divisor
+         * load to the 2-byte "ld e,N" form to match. */
+        if (!strcmp(newname, "__r1u") || !strcmp(newname, "__r1s")) {
+            char l_e[32];
+            sprintf(l_e, "ld e,%ld", divv);
+            replace1(i, l_e);
+        }
+
         changed = 1;
     }
 
@@ -2472,6 +2486,7 @@ static int peep_line_is_divmod_extrn(const char *line)
     static const char *names[] = {
         "__divu", "__modu", "__divs", "__mods",
         "__q2u", "__r2u", "__q2s", "__r2s",
+        "__r1u", "__r1s",
         NULL
     };
     int i;
@@ -2502,13 +2517,14 @@ static void pass_fix_divmod_extrns(void)
     static const char *names[] = {
         "__divu", "__modu", "__divs", "__mods",
         "__q2u", "__r2u", "__q2s", "__r2s",
+        "__r1u", "__r1s",
         NULL
     };
-    int used[8];
+    int used[10];
     int i, k;
     char line[64];
 
-    for (k = 0; k < 8; ++k)
+    for (k = 0; k < 10; ++k)
         used[k] = 0;
 
     /* Delete all existing EXTRNs for this helper family. */
@@ -2528,7 +2544,7 @@ static void pass_fix_divmod_extrns(void)
     }
 
     /* Insert in reverse so final order matches names[]. */
-    for (k = 7; k >= 0; --k) {
+    for (k = 9; k >= 0; --k) {
         if (used[k]) {
             sprintf(line, "extrn %s", names[k]);
             insert_line(0, line);
@@ -7351,6 +7367,128 @@ static int pass_ldir_memset(void)
     return changed;
 }
 
+/* Rotated-loop counterpart to pass_ldir_memset: recognises the identical
+ * "loop stores a constant into every array element" idiom, but in the
+ * bottom-tested shape ast_gen_for_stmt emits when it can prove the loop's
+ * first iteration is certain (a plain `var = CONST; var OP CONST2; var++`
+ * header where the entry test is statically known true) - body first, then
+ * the increment, then the bound compare branching back to the body. This is
+ * a cyclic rotation of the exact same instructions pass_ldir_memset matches
+ * (store, increment, compare, in a different order around the back-edge),
+ * not a new idiom, so it produces the identical LDIR replacement. */
+static int pass_ldir_memset_rotated(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 20 < nlines; i++) {
+        char lbody[128], tmp[128];
+        int lo_ix, hi_ix;
+        long size_val;
+        char arr_sym[128];
+        char const_str[32];
+        int j, ip;
+
+        /* 1. Lbody label */
+        if (!label_name_at(i, lbody))
+            continue;
+        j = i + 1;
+
+        /* 2. Body: reload index, compute address, store constant */
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo_ix)) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi_ix)) continue; j++;
+        if (hi_ix != lo_ix - 1) continue;
+        if (!parse_ld_de_imm(lines[j], arr_sym) || arr_sym[0] != '_') continue; j++;
+        if (!eq(j, "add hl,de")) continue; j++;
+        if (strncmp(lines[j], "ld (hl),", 8) != 0) continue;
+        {
+            const char *p = lines[j] + 8;
+            int v;
+            if (!parse_nonneg_int(p, &v) || v > 255) continue;
+            sprintf(const_str, "%d", v);
+        }
+        j++;
+
+        /* 3. Optional Linc label */
+        if (starts_label(lines[j]))
+            j++;
+
+        /* 4. Increment: inc (ix-lo); jp nz,Ltest; inc (ix-hi); Ltest: */
+        {
+            char stored_lo[32];
+            sprintf(stored_lo, "inc (ix-%d)", lo_ix);
+            if (!eq(j, stored_lo)) continue; j++;
+        }
+        if (!parse_jp_nz_label(lines[j], tmp)) continue; j++;
+        {
+            char stored_hi[32];
+            sprintf(stored_hi, "inc (ix-%d)", hi_ix);
+            if (!eq(j, stored_hi)) continue; j++;
+        }
+        if (!line_is_label_name(j, tmp)) continue; j++;
+
+        /* 5. Comparison block: reload index, compare bound, branch back to Lbody */
+        {
+            int lo2, hi2;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2)) continue; j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2)) continue; j++;
+            if (lo2 != lo_ix || hi2 != hi_ix) continue;
+        }
+        if (!parse_ld_de_positive_imm(lines[j], &size_val)) continue; j++;
+        if (eq(j, "ld a,h") && eq(j+1, "xor 80h") && eq(j+2, "ld h,a") &&
+            eq(j+3, "ld a,d") && eq(j+4, "xor 80h") && eq(j+5, "ld d,a"))
+            j += 6;
+        if (!eq(j, "or a")) continue; j++;
+        if (!eq(j, "sbc hl,de")) continue; j++;
+        if (!parse_jp_z_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue; j++;
+        if (!parse_jp_c_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue;
+        ip = j;
+
+        /* 6. Verify the index was initialised to 0 immediately before Lbody.
+         *    Look for:  ld hl,0 / ld (ix-lo),l / ld (ix-hi),h */
+        {
+            char lo_store[32], hi_store[32];
+            int found = 0;
+            int k;
+
+            sprintf(lo_store, "ld (ix-%d),l", lo_ix);
+            sprintf(hi_store, "ld (ix-%d),h", hi_ix);
+
+            for (k = i - 1; k >= 0 && k >= i - 6; k--) {
+                if (eq(k, "ld hl,0") &&
+                    k + 1 < i && eq(k + 1, lo_store) &&
+                    k + 2 < i && eq(k + 2, hi_store)) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) continue;
+        }
+
+        /* All checks passed.  Replace the rotated loop with LDIR. */
+        {
+            char ld_hl_sym[MAX_LINE], ld_const[MAX_LINE], ld_de_sym1[MAX_LINE], ld_bc[MAX_LINE];
+
+            sprintf(ld_hl_sym,  "ld hl,%s",     arr_sym);
+            sprintf(ld_const,   "ld (hl),%s",   const_str);
+            sprintf(ld_de_sym1, "ld de,%s+1",   arr_sym);
+            sprintf(ld_bc,      "ld bc,%ld",     size_val);
+
+            delete_n(i, ip - i + 1);
+
+            insert_line_tagged(i + 0, ld_hl_sym, "ldir_memset");
+            insert_line(i + 1, ld_const);
+            insert_line(i + 2, ld_de_sym1);
+            insert_line(i + 3, ld_bc);
+            insert_line(i + 4, "ldir");
+
+            changed = 1;
+        }
+    }
+
+    return changed;
+}
+
 /*
  * Parse "ld R,(ix-N)" extracting N (positive int). R is a single register
  * character ('l','h','e','d'). Returns 1 on success.
@@ -7930,6 +8068,171 @@ static int pass_reuse_sbc_result_for_flagcheck(void)
             insert_line(i + 10, "ld a,(hl)");
             insert_line(i + 11, "or a");
             insert_line(i + 12, jp_cond_dest);   /* jp z/nz,LDEST        */
+
+            changed = 1;
+        }
+    }
+
+    return changed;
+}
+
+/*
+ * pass_reuse_sbc_result_for_flagcheck_rotated:
+ *
+ * Rotated-loop counterpart to pass_reuse_sbc_result_for_flagcheck above. In a
+ * rotated loop the bound compare sits at the BOTTOM, branching back to the
+ * body at the TOP - so unlike the non-rotated case, the compare does not
+ * unconditionally precede every use of the body's address computation: the
+ * very first iteration reaches the body by falling out of the loop's init,
+ * never through the compare. Reusing the compare's leftover HL therefore
+ * needs an extra one-time "prime" load right after the init, computing the
+ * same HL value the compare would have produced, so every entry into the
+ * body - first iteration included - sees consistent state. Restricted to a
+ * zero literal loop index (the same restriction pass_ldir_memset_rotated
+ * relies on), so the prime is always the constant -(N+1).
+ *
+ * Matches (compare block, found first, scanning backward from there):
+ *   Lbody:
+ *     ld l,(ix-K) / ld h,(ix-K-1)
+ *     ld de,SYM (global symbol)
+ *     add hl,de
+ *     ld a,(hl)
+ *     or a
+ *     jp z/nz,LDEST
+ *     ...
+ *   ld l,(ix-K) / ld h,(ix-K-1)
+ *   ld de,N
+ *   ld a,h / xor 80h / ld h,a / ld a,d / xor 80h / ld d,a   ; signed bias
+ *   or a
+ *   sbc hl,de
+ *   jp z,Lbody
+ *   jp c,Lbody
+ *
+ * immediately preceded (within the loop init, found by backward scan from
+ * Lbody) by:
+ *   ld hl,0
+ *   ld (ix-K),l
+ *   ld (ix-K-1),h
+ *
+ * Rewrites all three regions: the compare drops its signed bias and jp z
+ * branch (unsigned N+1 folds both into a single "sbc hl,de; jp c,Lbody"),
+ * the body's index reload + array-base add becomes a single "ld de,SYM+N+1;
+ * add hl,de" reusing HL, and the init gains one extra "ld hl,-(N+1)" line so
+ * the first entry into the body sees the same HL the compare would have left.
+ */
+static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 7 <= nlines; i++) {
+        int K, M, lo2, hi2;
+        long N;
+        char lbody[128], tmp[128], arr_sym[128], dest[128];
+        int body_idx, init_idx, j, k, cmp_end;
+
+        /* Compare block: reload index, compare, branch back. The signed
+         * bias (xor 80h on both halves) is present when this pass runs
+         * before pass_elim_loop_back_signed_bias has stripped it, and absent
+         * when that pass has already run first in this same convergence
+         * pass - accept both, mirroring pass_ldir_memset's own optional
+         * bias check. Either way both "jp z,Lbody" and "jp c,Lbody" remain,
+         * since that other pass only strips the bias lines, not the
+         * branches. */
+        if (!stride_parse_ld_r_ix_neg(lines[i + 0], 'l', &K)) continue;
+        if (!stride_parse_ld_r_ix_neg(lines[i + 1], 'h', &M)) continue;
+        if (M != K - 1) continue;
+        j = i + 2;
+        if (!parse_ld_de_positive_imm(lines[j], &N)) continue; j++;
+        if (eq(j, "ld a,h") && eq(j+1, "xor 80h") && eq(j+2, "ld h,a") &&
+            eq(j+3, "ld a,d") && eq(j+4, "xor 80h") && eq(j+5, "ld d,a"))
+            j += 6;
+        if (!eq(j, "or a")) continue; j++;
+        if (!eq(j, "sbc hl,de")) continue; j++;
+        if (!parse_jp_z_label(lines[j], lbody)) continue; j++;
+        if (!parse_jp_c_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue;
+        cmp_end = j;
+
+        /* Lbody must be reached only from the two branches just matched, plus
+         * fall-through from the loop init - nothing else may enter it with a
+         * different (or absent) HL value. */
+        if (count_jumps_to_label(lbody) != 2) continue;
+
+        /* Find Lbody's line index. */
+        body_idx = -1;
+        for (k = 0; k < nlines; k++) {
+            if (label_name_at(k, tmp) && strcmp(tmp, lbody) == 0) {
+                body_idx = k;
+                break;
+            }
+        }
+        if (body_idx < 0 || body_idx >= i)
+            continue;
+
+        /* Lbody's prefix: reload the same index, load the array base, add,
+         * read the byte, test it, branch on the flag. */
+        j = body_idx + 1;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2) || lo2 != K) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2) || hi2 != M) continue; j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym) || arr_sym[0] != '_') continue; j++;
+        if (!eq(j, "add hl,de")) continue; j++;
+        if (!eq(j, "ld a,(hl)")) continue; j++;
+        if (!eq(j, "or a")) continue; j++;
+        /* The flag test itself (jp z/nz,dest) is left untouched by the
+         * rewrite below - only confirm it's there so we're not misreading
+         * some other shape as this idiom. */
+        if (!parse_jp_z_label(lines[j], dest) && !parse_jp_nz_label(lines[j], dest))
+            continue;
+
+        /* Loop init immediately preceding Lbody: ld hl,0 / ld (ix-K),l / ld (ix-M),h */
+        {
+            char lo_store[32], hi_store[32];
+            int found = 0;
+            sprintf(lo_store, "ld (ix-%d),l", K);
+            sprintf(hi_store, "ld (ix-%d),h", M);
+            init_idx = -1;
+            for (k = body_idx - 1; k >= 0 && k >= body_idx - 6; k--) {
+                if (eq(k, "ld hl,0") &&
+                    k + 1 < body_idx && eq(k + 1, lo_store) &&
+                    k + 2 < body_idx && eq(k + 2, hi_store)) {
+                    found = 1;
+                    init_idx = k;
+                    break;
+                }
+            }
+            if (!found) continue;
+        }
+
+        /* All checks passed.  Rewrite compare, body prefix, and init - in
+         * descending line-index order so each edit's position stays valid
+         * for the edits still to come. */
+        {
+            long np1 = N + 1;
+            char l_de_np1[MAX_LINE], jp_c_lbody[MAX_LINE];
+            char l_de_sym_np1[MAX_LINE], l_prime[MAX_LINE];
+
+            /* 1. Compare block (highest index): drop the signed bias (if
+             *    still present) and the "jp z" branch; unsigned N+1 needs
+             *    only "sbc hl,de; jp c". */
+            sprintf(l_de_np1, "ld de,%ld", np1);
+            sprintf(jp_c_lbody, "jp c,%s", lbody);
+            delete_n(i + 2, cmp_end - (i + 2) + 1); /* de,N .. jp c,lbody, inclusive */
+            insert_line(i + 2, l_de_np1);
+            insert_line(i + 3, "or a");
+            insert_line(i + 4, "sbc hl,de");
+            insert_line_tagged(i + 5, jp_c_lbody, "reuse_sbc_rotated");
+
+            /* 2. Lbody prefix: replace the index reload + array-base add
+             *    with a single de-load against SYM+N+1 that reuses HL. */
+            sprintf(l_de_sym_np1, "ld de,%s+%ld", arr_sym, np1);
+            delete_n(body_idx + 1, 4); /* the two reloads + ld de,SYM + add hl,de */
+            insert_line(body_idx + 1, l_de_sym_np1);
+            insert_line(body_idx + 2, "add hl,de");
+
+            /* 3. Init: prime HL to -(N+1) so the first entry into Lbody sees
+             *    the same HL the compare would have left behind. */
+            sprintf(l_prime, "ld hl,%ld", (-np1) & 0xffffL);
+            insert_line(init_idx + 3, l_prime);
 
             changed = 1;
         }
@@ -10541,7 +10844,9 @@ int main(int argc, char **argv)
         if (pass_incsp_to_popbc()) changed = 1;
         if (pass_remove_unreferenced_labels()) changed = 1;
         if (pass_ldir_memset()) changed = 1;
+        if (pass_ldir_memset_rotated()) changed = 1;
         if (pass_reuse_sbc_result_for_flagcheck()) changed = 1;
+        if (pass_reuse_sbc_result_for_flagcheck_rotated()) changed = 1;
         if (pass_cond_skip_shortcut()) changed = 1;
         if (pass_stride_loop_to_ptr()) changed = 1;
         if (pass_stride_k_setup_to_direct()) changed = 1;

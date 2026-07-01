@@ -210,6 +210,66 @@ void ast_gen_switch_stmt(const struct AstNode *n)
     emit_label(lend);
 }
 
+/* Is `n`'s for-header provably certain to run its first iteration, so the
+ * upfront entry test can be skipped and the condition checked only at the
+ * bottom (do-while style, one fewer branch per call than a top-tested loop
+ * pays across the whole run)? Restricted to the simple, common shape this can
+ * be decided for purely from literal values, with no evaluation: a plain
+ * (non-C99-declaration) `var = CONST` init, whose SAME variable is compared
+ * against a CONST bound in the condition with a plain relational operator.
+ * Both operand orders (`var OP const` and `const OP var`) are accepted. Since
+ * both init and cond are parsed in the for-header's own scope, matching by
+ * identifier text is sound - there is no way for the init and cond names to
+ * resolve to different symbols here. Declines (returns 0) for anything else,
+ * which is always safe: the caller falls back to the ordinary top-tested
+ * loop. This only decides whether the entry test is skippable; it does not
+ * change the loop's shape, body, or exit condition in any other way. */
+static int ast_for_first_iter_certain(const struct AstNode *n)
+{
+    const struct AstNode *cond;
+    const char *varname;
+    long init_val;
+    long bound_val;
+    int op;
+
+    if (n->a == NULL || n->a->kind != AST_ASSIGN || n->a->op != '=')
+        return 0;
+    if (n->a->a == NULL || n->a->a->kind != AST_IDENT)
+        return 0;
+    if (n->a->b == NULL || n->a->b->kind != AST_INT_LIT)
+        return 0;
+    varname = n->a->a->sval;
+    init_val = n->a->b->ival;
+
+    cond = n->b;
+    if (cond == NULL || cond->kind != AST_BINARY || !is_cmp_op(cond->op))
+        return 0;
+
+    if (cond->a != NULL && cond->a->kind == AST_IDENT &&
+        !strcmp(cond->a->sval, varname) &&
+        cond->b != NULL && cond->b->kind == AST_INT_LIT) {
+        op = cond->op;
+        bound_val = cond->b->ival;
+    } else if (cond->b != NULL && cond->b->kind == AST_IDENT &&
+               !strcmp(cond->b->sval, varname) &&
+               cond->a != NULL && cond->a->kind == AST_INT_LIT) {
+        op = invert_relop_for_swap(cond->op);
+        bound_val = cond->a->ival;
+    } else {
+        return 0;
+    }
+
+    switch (op) {
+    case '<':    return init_val < bound_val;
+    case TOK_LE: return init_val <= bound_val;
+    case '>':    return init_val > bound_val;
+    case TOK_GE: return init_val >= bound_val;
+    case TOK_EQ: return init_val == bound_val;
+    case TOK_NE: return init_val != bound_val;
+    default:     return 0;
+    }
+}
+
 void ast_gen_for_stmt(const struct AstNode *n)
 {
     int ltop;
@@ -217,10 +277,23 @@ void ast_gen_for_stmt(const struct AstNode *n)
     int lend;
     int for_seq;
     int rename_count;
+    int rotate;
 
     for_seq = g_for_seq++;
     if (for_seq >= MAX_FOR_SCOPES)
         fatal("too many for statements");
+    /* g_for_rename_count[] is indexed by for_seq, which is reused across
+     * functions and across the (up to three) passes over one function's
+     * body (frame-sizing scan x2, then the real pass) - g_for_seq itself
+     * resets to 0 for each pass, but this array does not reset on its own.
+     * dcc_func.c's old hand-written frame-sizing scanner used to zero this
+     * slot unconditionally for every for-loop it walked past, decl-init or
+     * not, before that scanner was replaced by ast_scan_for_stmt driving
+     * this same AST builder/emitter. Match that here: reset before deciding
+     * which branch below applies, so a plain expression init reliably sees
+     * "no renames" instead of whatever a decl-init loop that previously
+     * owned this for_seq slot left behind. */
+    g_for_rename_count[for_seq] = 0;
     rename_count = g_for_rename_count[for_seq];
 
     ltop = new_label();
@@ -228,19 +301,29 @@ void ast_gen_for_stmt(const struct AstNode *n)
     lend = new_label();
 
     if (n->a != NULL && n->a->kind == AST_DECL) {
-        /* C99 for-init declaration: drive declaration codegen
-         * through the captured span with the for-scope rename context set, so
-         * the loop variable is renamed to its unique internal slot and pushed
-         * onto the active rename stack for the body/cond/inc to resolve. */
+        /* C99 for-init declaration: drive declaration codegen through the
+         * captured span with the for-scope rename context set, so the loop
+         * variable is renamed to its unique internal slot and pushed onto
+         * the active rename stack for the body/cond/inc to resolve.
+         *
+         * g_for_rename_count[for_seq] used to be populated ahead of time by
+         * dcc_func.c's old hand-written frame-sizing scanner, which recorded
+         * each for-init declarator's rename via g_for_decl_recording before
+         * any AST codegen ever ran for this loop. That scanner is gone, so
+         * nothing else ever sets g_for_decl_recording=1 any more - relying
+         * on a pre-existing count here would always see 0 (just reset above)
+         * and fail every C99 for-init loop. Record fresh instead: this same
+         * call self-records via g_for_decl_recording=1, so each invocation
+         * (both scan-time replays and the real pass) is self-contained and
+         * does not depend on a prior pass having run. */
         int old_for_decl_seq = g_for_decl_seq;
         int old_for_decl_rename_index = g_for_decl_rename_index;
         int old_for_decl_recording = g_for_decl_recording;
         g_for_decl_seq = for_seq;
         g_for_decl_rename_index = 0;
-        g_for_decl_recording = 0;
+        g_for_decl_recording = 1;
         ast_emit_decl_span(n->a);
-        if (g_for_decl_rename_index != rename_count)
-            fatal("for-init scope mismatch");
+        rename_count = g_for_decl_rename_index;
         g_for_decl_seq = old_for_decl_seq;
         g_for_decl_rename_index = old_for_decl_rename_index;
         g_for_decl_recording = old_for_decl_recording;
@@ -251,14 +334,48 @@ void ast_gen_for_stmt(const struct AstNode *n)
             ast_gen_expr(n->a);
     }
 
+    if (n->sym != NULL) {
+        long init_val, base_val, mod_val;
+        ast_for_mod_fill_supported(n, NULL, &init_val, &base_val, &mod_val, NULL);
+        fprintf(outf, "\tld a,%ld\n", base_val + (init_val % mod_val));
+        fprintf(outf, "\tld (ix%+d),a\n", n->sym->offset);
+    }
+
+    rotate = ast_for_first_iter_certain(n);
+
     emit_label(ltop);
-    if (n->b != NULL)
+    if (!rotate && n->b != NULL)
         ast_gen_cond_branch(n->b, lend, 0);
 
     break_stack[nflow] = lend;
     cont_stack[nflow] = linc;
     nflow++;
-    ast_gen_stmt(n->d);
+    if (n->sym != NULL) {
+        /* Cyclic-byte-fill fast path (see ast_for_mod_fill_supported): the
+         * loop's own test/increment above and below are untouched - only
+         * this one statement's BASE+(ivar%MOD) computation is replaced, by a
+         * frame-resident byte counter (n->sym, reserved at build time)
+         * primed to BASE+(INIT%MOD) once before the loop and then simply
+         * incremented (wrapping at BASE+MOD back to BASE) each iteration,
+         * avoiding a division call in the hot path. */
+        long base_val, mod_val;
+        int val_type;
+        int lwrap;
+
+        ast_for_mod_fill_supported(n, NULL, NULL, &base_val, &mod_val, NULL);
+        gen_index_addr_ast(n->d->a->a, &val_type);   /* HL = &ARR[ivar] */
+        fprintf(outf, "\tld a,(ix%+d)\n", n->sym->offset);
+        emit("\tld (hl),a\n");
+        emit("\tinc a\n");
+        fprintf(outf, "\tcp %ld\n", base_val + mod_val);
+        lwrap = new_label();
+        emit_jp_label("jr nz,", lwrap);
+        fprintf(outf, "\tld a,%ld\n", base_val);
+        emit_label(lwrap);
+        fprintf(outf, "\tld (ix%+d),a\n", n->sym->offset);
+    } else {
+        ast_gen_stmt(n->d);
+    }
     nflow--;
 
     emit_label(linc);
@@ -280,7 +397,10 @@ void ast_gen_for_stmt(const struct AstNode *n)
         }
         expr_result_dead = old_dead;
     }
-    emit_jp_label("jp", ltop);
+    if (rotate)
+        ast_gen_cond_branch(n->b, ltop, 1);
+    else
+        emit_jp_label("jp", ltop);
     emit_label(lend);
 
     /* Close the for-init scope so source names resolve to outer symbols. */
@@ -288,6 +408,45 @@ void ast_gen_for_stmt(const struct AstNode *n)
         pop_for_rename();
         rename_count--;
     }
+}
+
+/* See dcc_ast.h for the rationale: scan_function_body's frame-sizing scan
+ * (dcc_func.c) calls this instead of hand-walking a for-statement's tokens,
+ * so any local allocation the real codegen pass would make (declarations in
+ * the body, ast_for_mod_fill_supported's rolling-counter slot, etc.) is
+ * automatically accounted for here too, since this runs the exact same
+ * builder+emitter. Output is redirected to a throwaway sink for the
+ * duration - this must never write to the real output file. scan_mode is
+ * also set, matching the existing C99 for-init declaration probe in
+ * ast_gen_cond_branch: some emit-adjacent bookkeeping (e.g.
+ * emit_runtime_extrn_if_needed's "already emitted" cache) is keyed on it
+ * specifically, not on where outf points, and must see this replay as
+ * suppressed or a runtime helper first used here would be marked emitted
+ * while its EXTRN line went nowhere, leaving it undefined for the real
+ * pass. */
+int ast_scan_for_stmt(void)
+{
+    static FILE *sink = NULL;
+    FILE *s_outf;
+    int s_scan_mode;
+    struct AstNode *n;
+
+    s_outf = outf;
+    s_scan_mode = scan_mode;
+    if (sink == NULL)
+        sink = fopen("/dev/null", "w");
+    if (sink != NULL)
+        outf = sink;
+    scan_mode = 1;
+
+    n = ast_build_stmt(&g_ast_arena);
+    if (n != NULL && ast_stmt_supported(n))
+        ast_gen_stmt(n);
+
+    ast_arena_reset(&g_ast_arena);
+    scan_mode = s_scan_mode;
+    outf = s_outf;
+    return n != NULL;
 }
 
 /* Emit statement node `n` (gated by ast_stmt_supported). */

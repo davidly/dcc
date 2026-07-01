@@ -1620,7 +1620,10 @@ int ast_global_byte_array_fast_store(const struct AstNode *n,
         idx_has_const = 1;
     } else if (n->a->b->kind == AST_IDENT) {
         idx_sym = find_sym(n->a->b->sval);
-        if (!sym_can_ix_direct(idx_sym) || type_size(idx_sym->type) != 1)
+        if (!sym_can_ix_direct(idx_sym))
+            return 0;
+        if (type_size(idx_sym->type) != 1 &&
+            !(type_size(idx_sym->type) == 2 && ast_is_plain_int_type(idx_sym->type)))
             return 0;
     } else {
         return 0;
@@ -1657,5 +1660,122 @@ int ast_global_byte_array_fast_store(const struct AstNode *n,
         *out_rhs_const = rhs_const;
     if (out_rhs_kind != NULL)
         *out_rhs_kind = rhs_kind;
+    return 1;
+}
+
+/* Detects the narrow "cyclic byte fill" loop idiom:
+ *
+ *     for (ivar = INIT; ivar < BOUND; ivar++)
+ *         ARR[ivar] = BASE + (ivar % MOD);        (or the commuted order)
+ *
+ * with ARR a global byte array and INIT/BASE/MOD compile-time int literals
+ * (INIT >= 0, BASE in 0..255, MOD in 1..255, BASE+MOD <= 256 so the rolling
+ * byte counter never needs to wrap outside that range). Pure analysis of the
+ * already-built for-header/body shape - no allocation, no emission - so it is
+ * safe to call from both ast_build_for_stmt (to decide whether to reserve the
+ * rolling-counter's frame slot) and ast_gen_for_stmt (to re-extract the same
+ * constants for the specialised emission). Declining (0) is always safe: the
+ * caller falls back to the ordinary loop path.
+ *
+ * This does not disturb ivar's own storage/increment at all - the loop's
+ * normal test/increment logic keeps running unchanged. Only the body's
+ * BASE+(ivar%MOD) computation is replaced, by a byte counter that starts at
+ * BASE+(INIT%MOD) and simply increments (wrapping at BASE+MOD back to BASE)
+ * once per iteration, which stays equal to BASE+(ivar%MOD) by induction
+ * however ivar's real storage is used elsewhere. */
+int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
+                                      long *out_init, long *out_base,
+                                      long *out_mod, const char **out_ivar_name)
+{
+    const struct AstNode *body_assign;
+    const struct AstNode *lhs;
+    const struct AstNode *rhs;
+    const struct AstNode *mod_expr;
+    const struct AstNode *base_lit;
+    struct Sym *arr;
+    const char *ivar_name;
+    long init_val, base_val, mod_val;
+
+    if (n->a == NULL || n->a->kind != AST_ASSIGN || n->a->op != '=')
+        return 0;
+    if (n->a->a == NULL || n->a->a->kind != AST_IDENT)
+        return 0;
+    if (n->a->b == NULL || n->a->b->kind != AST_INT_LIT)
+        return 0;
+    ivar_name = n->a->a->sval;
+    init_val = n->a->b->ival;
+    if (init_val < 0)
+        return 0;
+
+    /* The bound itself is never inspected below - the loop's own condition
+     * codegen (ast_gen_cond_branch) still owns it untouched, so any bound
+     * expression is fine so long as ivar is compared with '<'. */
+    if (n->b == NULL || n->b->kind != AST_BINARY || n->b->op != '<')
+        return 0;
+    if (n->b->a == NULL || n->b->a->kind != AST_IDENT ||
+        strcmp(n->b->a->sval, ivar_name) != 0)
+        return 0;
+
+    if (n->c == NULL)
+        return 0;
+    if (!((n->c->kind == AST_UNARY || n->c->kind == AST_POSTFIX) &&
+          n->c->op == TOK_INC))
+        return 0;
+    if (n->c->a == NULL || n->c->a->kind != AST_IDENT ||
+        strcmp(n->c->a->sval, ivar_name) != 0)
+        return 0;
+
+    if (n->d == NULL || n->d->kind != AST_EXPR_STMT || n->d->a == NULL)
+        return 0;
+    body_assign = n->d->a;
+    if (body_assign->kind != AST_ASSIGN || body_assign->op != '=')
+        return 0;
+
+    lhs = body_assign->a;
+    rhs = body_assign->b;
+    if (lhs == NULL || lhs->kind != AST_INDEX || lhs->a == NULL ||
+        lhs->a->kind != AST_IDENT || lhs->b == NULL ||
+        lhs->b->kind != AST_IDENT || strcmp(lhs->b->sval, ivar_name) != 0)
+        return 0;
+    arr = find_global(lhs->a->sval);
+    if (arr == NULL || !arr->is_array || arr->storage != SC_GLOBAL ||
+        type_size(arr->type) != 1)
+        return 0;
+
+    if (rhs == NULL || rhs->kind != AST_BINARY || rhs->op != '+')
+        return 0;
+    if (rhs->a != NULL && rhs->a->kind == AST_INT_LIT &&
+        rhs->b != NULL && rhs->b->kind == AST_BINARY) {
+        base_lit = rhs->a;
+        mod_expr = rhs->b;
+    } else if (rhs->b != NULL && rhs->b->kind == AST_INT_LIT &&
+               rhs->a != NULL && rhs->a->kind == AST_BINARY) {
+        base_lit = rhs->b;
+        mod_expr = rhs->a;
+    } else {
+        return 0;
+    }
+    if (mod_expr->op != '%')
+        return 0;
+    if (mod_expr->a == NULL || mod_expr->a->kind != AST_IDENT ||
+        strcmp(mod_expr->a->sval, ivar_name) != 0)
+        return 0;
+    if (mod_expr->b == NULL || mod_expr->b->kind != AST_INT_LIT)
+        return 0;
+
+    base_val = base_lit->ival;
+    mod_val = mod_expr->b->ival;
+    if (base_val < 0 || base_val > 255)
+        return 0;
+    if (mod_val < 1 || mod_val > 255)
+        return 0;
+    if (base_val + mod_val > 256)
+        return 0;
+
+    if (out_arr != NULL) *out_arr = arr;
+    if (out_init != NULL) *out_init = init_val;
+    if (out_base != NULL) *out_base = base_val;
+    if (out_mod != NULL) *out_mod = mod_val;
+    if (out_ivar_name != NULL) *out_ivar_name = ivar_name;
     return 1;
 }

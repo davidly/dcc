@@ -1294,95 +1294,25 @@ void scan_function_body(void)
             leave_scope();
             can_decl = 1;
         } else if (tok.kind == TOK_FOR) {
-            int for_seq;
             /*
-             * The old scanner looked for starts_type() at every token in the
-             * function body.  That is unsafe now that casts are supported:
+             * Build and replay the whole for-statement (header + body)
+             * through the AST builder/emitter (ast_scan_for_stmt, output
+             * suppressed) instead of hand-walking tokens. This is the exact
+             * same builder+emitter the real codegen pass uses, so frame
+             * sizing - declarations inside the body, C99 for-init renaming,
+             * and any AST-level for-loop fast path that reserves extra frame
+             * space - stays in sync with the real pass by construction,
+             * rather than needing a hand-written parallel scanner kept in
+             * sync by hand. (That hand-written scanner used to live here;
+             * see git history for its final form and the cast-vs-declaration
+             * bug it once had to work around - both are now moot since this
+             * runs the real parser instead of guessing at token shapes.)
              *
-             *     f = s + ((float)p / (float)denom);
-             *
-             * During the pre-pass, the "float" in the cast was mistaken for a
-             * block declaration.  scan_local_decl_after_type() then bailed out
-             * at ')' without consuming a declaration, and the scan could miss
-             * later real declarations.  The generated prologue therefore
-             * reserved too little stack space; a call such as printf could
-             * overwrite locals, making a later call like nmfpart(f) receive
-             * garbage even though f printed correctly just before the call.
-             *
-             * Scan declarations only at statement/declaration boundaries, with
-             * a special case for C99-style for-init declarations.
+             * A 0 return (AST build declined) is left alone: it only happens
+             * for malformed/unsupported input that the real pass will report
+             * with a proper diagnostic anyway.
              */
-            for_seq = g_for_seq++;
-            if (for_seq >= MAX_FOR_SCOPES)
-                fatal("too many for statements");
-            next_token();
-            if (accept('(')) {
-                int depth;
-
-                if (starts_type()) {
-                    int t;
-                    int old_for_decl_seq;
-                    int old_for_decl_rename_index;
-                    int old_for_decl_recording;
-                    decl_is_extern = 0;
-                    decl_is_static = 0;
-                    decl_is_inline = 0;
-                    decl_is_const = 0;
-                    t = parse_base_type();
-
-                    g_for_rename_count[for_seq] = 0;
-
-                    old_for_decl_seq = g_for_decl_seq;
-                    old_for_decl_rename_index = g_for_decl_rename_index;
-                    old_for_decl_recording = g_for_decl_recording;
-                    g_for_decl_seq = for_seq;
-                    g_for_decl_rename_index = 0;
-                    g_for_decl_recording = 1;
-
-                    if (tok.kind != ';')
-                        scan_local_decl_after_type(t); /* consumes ';' */
-                    else
-                        next_token();
-
-                    while (g_for_decl_rename_index > 0) {
-                        pop_for_rename();
-                        g_for_decl_rename_index--;
-                    }
-                    g_for_decl_seq = old_for_decl_seq;
-                    g_for_decl_rename_index = old_for_decl_rename_index;
-                    g_for_decl_recording = old_for_decl_recording;
-                } else {
-                    g_for_rename_count[for_seq] = 0;
-                    depth = 0;
-                    while (tok.kind != TOK_EOF) {
-                        if (depth == 0 && tok.kind == ';') {
-                            next_token();
-                            break;
-                        }
-                        if (tok.kind == '(' || tok.kind == '[') depth++;
-                        else if (tok.kind == ')' || tok.kind == ']') {
-                            if (depth > 0) depth--;
-                        }
-                        next_token();
-                    }
-                }
-
-                /* Skip the condition and increment clauses.  They may contain
-                 * casts, but cannot contain declarations except for the
-                 * for-init handled above. */
-                depth = 0;
-                while (tok.kind != TOK_EOF) {
-                    if (depth == 0 && tok.kind == ')') {
-                        next_token();
-                        break;
-                    }
-                    if (tok.kind == '(' || tok.kind == '[') depth++;
-                    else if (tok.kind == ')' || tok.kind == ']') {
-                        if (depth > 0) depth--;
-                    }
-                    next_token();
-                }
-            }
+            ast_scan_for_stmt();
             can_decl = 1;
         } else if (can_decl && tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
@@ -2540,6 +2470,7 @@ void parse_function_or_global(int base_type)
         int saved_local_size;
         int saved_param_offset;
         int saved_nenum_consts;
+        int saved_nulabels;
 
         int base_is_func_typedef;
         int is_funcret_funcptr_decl;
@@ -2634,6 +2565,7 @@ void parse_function_or_global(int base_type)
                 saved_local_size = local_size;
                 saved_param_offset = param_offset;
                 saved_nenum_consts = nenum_consts;
+                saved_nulabels = nulabels;
 
                 current_function_has_call = 0;
                 g_static_local_func_index = (int)(s - globals);
@@ -2659,6 +2591,14 @@ void parse_function_or_global(int base_type)
                 local_size = saved_local_size;
                 param_offset = saved_param_offset;
                 nenum_consts = saved_nenum_consts;
+                /* ast_scan_for_stmt (called by scan_function_body via the AST
+                 * builder/emitter for for-loops) can now reach a labeled
+                 * statement inside a loop body and call define_user_label,
+                 * which the old hand-walked scanner never did. Reset nulabels
+                 * before the second scan pass so it does not see the first
+                 * scan's labels as already-defined duplicates - matching how
+                 * nlocals/local_size are reset here for the same reason. */
+                nulabels = saved_nulabels;
 
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;

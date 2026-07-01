@@ -275,6 +275,33 @@ int ast_is_simple_cmp_cond(const struct AstNode *n)
     return ast_cmp_operand_ok(n->a) && ast_cmp_operand_ok(n->b);
 }
 
+/* Is `n` a relational comparison of a qualifying operand (ast_cmp_operand_ok)
+ * against a plain-int constant of ANY value, using ANY relational operator?
+ * This is the general counterpart to ast_is_const_cmp_cond's small byte-level
+ * fast path (op '<' or '>= 0', constant 0..255): it declines whenever that
+ * cheaper path already claims the comparison, and otherwise falls back to the
+ * same plain-16-bit direct-branch emitter as ast_is_simple_cmp_cond
+ * (ast_gen_cmp_branch), which is agnostic to whether an operand is an
+ * identifier or a literal - ast_gen_expr loads either into HL. Without this,
+ * a loop bound like `i <= SIZE` for a large SIZE has no direct-branch fast
+ * path and falls all the way to the generic materialize-0/1-then-test path,
+ * which is both slower and hides the loop shape from later structural
+ * peephole passes (e.g. the LDIR-memset and strided-store rewrites). */
+int ast_is_general_const_cmp_cond(const struct AstNode *n)
+{
+    if (n == NULL || n->kind != AST_BINARY || !is_cmp_op(n->op))
+        return 0;
+    if (ast_is_const_cmp_cond(n))
+        return 0;
+    if (n->a != NULL && n->a->kind == AST_INT_LIT &&
+        ast_is_plain_int_type(n->a->type) && ast_cmp_operand_ok(n->b))
+        return 1;
+    if (n->b != NULL && n->b->kind == AST_INT_LIT &&
+        ast_is_plain_int_type(n->b->type) && ast_cmp_operand_ok(n->a))
+        return 1;
+    return 0;
+}
+
 /* If `n` is a relational comparison lowered via the small-const-int
  * signed-local16 fast path (emit_cmp_const_branch_for_signed_local16 in
  * dcc_cmp.c), fill sp/opp/cp with the (sym, effective-op, const) to hand that
@@ -367,9 +394,13 @@ int ast_is_const_plain_int_cmp_cond(const struct AstNode *n)
 }
 
 /* Translate a comparison operand expression into a ByteOperand, or return 0.
- * We recognise only the two register/immediate kinds: kind 1 (IX-direct
- * UNSIGNED char local/param) and kind 2 (0..255 constant).  Kind 3 (global byte
- * array[index]) is NOT handled here. */
+ * Recognises three kinds: kind 1 (IX-direct UNSIGNED char local/param),
+ * kind 2 (0..255 constant), and kind 3 (global byte array element, indexed by
+ * either a constant or an IX-direct UNSIGNED char local/param). The kind-3
+ * emitters (emit_byte_operand_to_a / emit_cp_byte_operand in dcc_cmp.c)
+ * zero-extend op->idx_sym's single byte into D before the address add, so a
+ * qualifying index must itself be a byte - a wider index is not handled here
+ * (falls through to the generic path, same as any other unsupported shape). */
 int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
 {
     struct Sym *s;
@@ -391,6 +422,32 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
         if (e->ival >= 0 && e->ival <= 255) {
             op->kind = 2;
             op->val = e->ival;
+            return 1;
+        }
+        return 0;
+    }
+    if (e->kind == AST_INDEX && e->a != NULL && e->a->kind == AST_IDENT &&
+        e->b != NULL) {
+        struct Sym *arr = find_global(e->a->sval);
+        if (arr == NULL || !arr->is_array || type_size(arr->type) != 1)
+            return 0;
+        if (e->b->kind == AST_INT_LIT) {
+            if (e->b->ival < 0)
+                return 0;
+            op->kind = 3;
+            op->sym = arr;
+            op->idx_sym = NULL;
+            op->val = e->b->ival;
+            return 1;
+        }
+        if (e->b->kind == AST_IDENT) {
+            struct Sym *idx = find_sym(e->b->sval);
+            if (idx == NULL || !sym_can_ix_direct(idx) ||
+                type_size(idx->type) != 1 || !(idx->type & TYPE_UNSIGNED))
+                return 0;
+            op->kind = 3;
+            op->sym = arr;
+            op->idx_sym = idx;
             return 1;
         }
         return 0;
@@ -989,6 +1046,20 @@ int ast_stmt_supported(const struct AstNode *n)
         if (g_for_seq >= MAX_FOR_SCOPES)
             return 0;
         for_seq = g_for_seq++;
+        /* g_for_rename_count[] is indexed by for_seq, reused across
+         * functions and across passes; nothing resets it on its own now
+         * that dcc_func.c's old hand-written frame-sizing scanner (which
+         * used to zero this slot for every for-loop it walked past) is
+         * gone. Reset unconditionally before reading it, so a plain
+         * expression init reliably sees "no renames" instead of whatever a
+         * decl-init loop that previously owned this for_seq slot left
+         * behind - matching the same reset in ast_gen_for_stmt. Not rolled
+         * back afterward: this probe's own speculative work IS rolled back
+         * below (nlocals/local_size/etc.), but the real ast_gen_for_stmt
+         * call that follows for this same for_seq always resets and
+         * re-records its own count independently regardless, so leaving
+         * this slot at whatever this probe computed cannot affect it. */
+        g_for_rename_count[for_seq] = 0;
         rename_count = g_for_rename_count[for_seq];
 
         if (n->a != NULL && n->a->kind == AST_DECL) {
@@ -1010,7 +1081,14 @@ int ast_stmt_supported(const struct AstNode *n)
             /* Redirect emission to a throwaway sink so the suppressed replay
              * cannot leak partial output (scan_mode guards most but not every
              * emit path), and set scan_mode so nested AST build/gen and the
-             * remaining guarded emits stay quiet. */
+             * remaining guarded emits stay quiet.
+             *
+             * g_for_decl_recording=1 (not 0): nothing pre-populates
+             * g_for_rename_count[for_seq] any more (see the matching comment
+             * in ast_gen_for_stmt - the hand-written frame-sizing scanner
+             * that used to do that recording is gone), so this probe must
+             * record its own fresh count from the just-reset slot rather
+             * than validate against a stale/zero one. */
             if (sink == NULL)
                 sink = fopen("/dev/null", "w");
             if (sink != NULL)
@@ -1018,7 +1096,7 @@ int ast_stmt_supported(const struct AstNode *n)
             scan_mode = 1;
             g_for_decl_seq = for_seq;
             g_for_decl_rename_index = 0;
-            g_for_decl_recording = 0;
+            g_for_decl_recording = 1;
             ast_emit_decl_span(n->a);
             g_for_decl_seq = s_decl_seq;
             g_for_decl_rename_index = s_decl_index;
@@ -1327,6 +1405,10 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
         return;
     }
     if (ast_is_simple_cmp_cond(n)) {
+        ast_gen_cmp_branch(n, label, branch_when_true);
+        return;
+    }
+    if (ast_is_general_const_cmp_cond(n)) {
         ast_gen_cmp_branch(n, label, branch_when_true);
         return;
     }

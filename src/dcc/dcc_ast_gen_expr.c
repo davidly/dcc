@@ -589,6 +589,27 @@ void gen_binary_ast(const struct AstNode *n)
     int common_type;
     const char *float_helper;
 
+    /* `CONST * expr` mirror of the `expr * CONST` fast path further below:
+     * multiplication is commutative, so a qualifying constant on the LEFT
+     * gets the same emit_mul_hl_const treatment (no push/pop, no __mulu/__muls
+     * call) by evaluating the non-constant operand into HL first. Checked with
+     * static type predicates only (nothing evaluated yet), so it is safe to
+     * decide before the generic lhs-first evaluation below runs. Declines when
+     * the RHS is itself a literal (constant folding elsewhere already handles
+     * that) so this never overlaps the existing const-on-the-right check. */
+    if (n->op == '*' && n->a->kind == AST_INT_LIT && n->b->kind != AST_INT_LIT &&
+        !type_is_long(n->a->type) && !type_is_float(n->a->type) &&
+        ast_mul_const_value_ok(n->a->ival) && ast_value_is_plain_int(n->b) &&
+        !ast_value_is_long_word(n->b) && !ast_value_is_float_word(n->b)) {
+        int rhs_type;
+        ast_gen_expr(n->b);
+        rhs_type = promote_int_type(g_expr_type);
+        emit_mul_hl_const(n->a->ival & 0xffffL);
+        g_expr_type = common_arith_type(rhs_type, n->a->type);
+        g_long_from16 = 0;
+        return;
+    }
+
     if (n->op == '+' || n->op == '-') {
         int ptr_type;
         int no_deref;
@@ -2176,23 +2197,6 @@ static void inline_temp_name_for_call(char *dst, int dstsz, int index)
     (void)dstsz;
 }
 
-static int inline_expr_contains_call(const struct AstNode *n)
-{
-    int i;
-
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_CALL)
-        return 1;
-    if (inline_expr_contains_call(n->a) || inline_expr_contains_call(n->b) ||
-        inline_expr_contains_call(n->c) || inline_expr_contains_call(n->d))
-        return 1;
-    for (i = 0; i < n->list_len; ++i)
-        if (inline_expr_contains_call(n->list[i]))
-            return 1;
-    return 0;
-}
-
 static const struct AstNode *inline_body_expr(struct Sym *fn)
 {
     if (fn == NULL)
@@ -2450,6 +2454,41 @@ void gen_call_ast(const struct AstNode *n)
     if (fn_sym == NULL) {
         fn_sym = add_global(name, TYPE_INT, SC_FUNC);
         fn_sym->needs_extrn = 1;
+    }
+
+    /* Fastcall strlen(p): DCCRTL's __slf takes s directly in HL and returns
+     * the length in HL, skipping the push-arg/call/pop-arg dance the general
+     * path below would use to call __slen. strlen is common enough in hot
+     * code (e.g. inside loops) that this pays off broadly. asm_name_for
+     * already treats a bare "strlen" call as the runtime function
+     * unconditionally (see dcc_asmname.c), so this makes the same
+     * assumption. */
+    if (n->list_len == 1 && !strcmp(name, "strlen")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->list[0]);       /* HL = s */
+        expr_result_dead = old_dead;
+        emit_runtime_call("__slf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall strchr(p,c): DCCRTL's __chf takes s in HL and c's low byte in
+     * A, returning the match (or 0) in HL - same rationale as strlen above. */
+    if (n->list_len == 2 && !strcmp(name, "strchr")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->list[0]);       /* HL = s */
+        emit("\tpush hl\n");
+        ast_gen_expr(n->list[1]);       /* HL = c */
+        expr_result_dead = old_dead;
+        emit("\tld a,l\n");
+        emit("\tpop hl\n");
+        emit_runtime_call("__chf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
     }
 
     if (fn_sym->is_static && fn_sym->is_inline)

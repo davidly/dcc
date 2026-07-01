@@ -162,6 +162,14 @@ struct AstNode *ast_call(struct AstArena *ar, struct AstNode *callee, int type);
 void ast_list_push(struct AstArena *ar, struct AstNode *parent,
                    struct AstNode *child);
 
+/* Detects the "cyclic byte fill" for-loop idiom (see dcc_ast_gen_support.c
+ * for the full shape). Callable from both ast_build_for_stmt (build time,
+ * to reserve the rolling-counter's frame slot) and ast_gen_for_stmt
+ * (codegen time, to re-extract the same constants). */
+int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
+                                      long *out_init, long *out_base,
+                                      long *out_mod, const char **out_ivar_name);
+
 /* Copy a NUL-terminated string into the arena. */
 char *ast_arena_strdup(struct AstArena *ar, const char *s);
 
@@ -200,5 +208,16 @@ void ast_emit_init_expr(void);
  * the token stream and emit it from the AST.  Returns 0 only in scanner/debug
  * paths that deliberately bypass AST codegen. */
 int ast_try_emit_statement(void);
+
+/* For scan_function_body's frame-sizing scan (dcc_func.c): build and replay
+ * the for-statement at the current token position through the same AST
+ * builder/emitter the real codegen pass uses, with output redirected to a
+ * throwaway sink. Keeps frame sizing - and any AST-level for-loop fast path
+ * that reserves extra frame space - automatically in sync with the real
+ * pass, by construction, instead of needing a hand-written parallel token
+ * scanner kept in sync by hand. Returns 1 on success (tokens consumed,
+ * locals sized); 0 if the AST builder declined (the real pass will report
+ * this properly; the caller here should not treat 0 as fatal). */
+int ast_scan_for_stmt(void);
 
 #endif /* DCC_AST_H */

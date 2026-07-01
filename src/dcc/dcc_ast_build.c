@@ -871,6 +871,17 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
     n->b = cond;
     n->c = inc;
     n->d = body;
+
+    /* The cyclic-byte-fill fast path (ast_gen_for_stmt) needs a one-byte
+     * frame slot for its rolling counter. Local frame layout is finalised
+     * during this build pass (add_local_alloc grows the running frame size
+     * as declarations/temporaries are encountered), before codegen emits the
+     * function prologue - so the slot must be reserved here, not later at
+     * codegen time. Stash the resulting Sym* on the node (AST_FOR does not
+     * otherwise use n->sym) for ast_gen_for_stmt to pick up. */
+    if (ast_for_mod_fill_supported(n, NULL, NULL, NULL, NULL, NULL))
+        n->sym = add_local_alloc("#modfill", TYPE_CHAR | TYPE_UNSIGNED, 1);
+
     return n;
 }
 

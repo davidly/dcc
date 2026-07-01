@@ -190,6 +190,7 @@ void gen_return_ast(const struct AstNode *n);
 int ast_cmp_operand_ok(const struct AstNode *e);
 int ast_operand_is_ptr_ident(const struct AstNode *e);
 int ast_is_simple_cmp_cond(const struct AstNode *n);
+int ast_is_general_const_cmp_cond(const struct AstNode *n);
 int ast_const_cmp_extract(const struct AstNode *n, struct Sym **sp,
                                  int *opp, long *cp);
 int ast_is_const_cmp_cond(const struct AstNode *n);

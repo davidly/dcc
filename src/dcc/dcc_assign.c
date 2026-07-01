@@ -31,6 +31,15 @@ void emit_global_byte_array_index_addr(struct Sym *arr, struct Sym *idx_sym, lon
             fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(arr)));
         else
             fprintf(outf, "\tld hl,%s+%ld\n", asm_name_for(sym_asm_name(arr)), idx_const & 0xffffL);
+    } else if (type_size(idx_sym->type) == 2) {
+        /* Matches the canonical "index into HL, base into DE" shape that
+         * structural peephole passes (e.g. the LDIR-memset loop rewrite)
+         * recognise from loops indexed by a plain int, rather than the
+         * "base into HL, index into DE" order used below for a byte index. */
+        fprintf(outf, "\tld l,(ix%+d)\n", idx_sym->offset);
+        fprintf(outf, "\tld h,(ix%+d)\n", idx_sym->offset + 1);
+        fprintf(outf, "\tld de,%s\n", asm_name_for(sym_asm_name(arr)));
+        emit("\tadd hl,de\n");
     } else {
         fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(arr)));
         fprintf(outf, "\tld e,(ix%+d)\n", idx_sym->offset);
