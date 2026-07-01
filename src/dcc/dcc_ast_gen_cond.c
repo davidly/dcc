@@ -491,6 +491,71 @@ int ast_is_direct_byte_bitand_cond(const struct AstNode *n)
     return n->b->ival >= 0 && n->b->ival <= 255;
 }
 
+/* Same idea as ast_is_direct_byte_bitand_cond, but for a wider (int/long)
+ * ix-direct scalar ANDed with a byte-range mask (e.g. the very common
+ * `if (e & 1)` parity test on a uint32_t loop counter). A mask in 0..255 only
+ * ever touches the low (first, little-endian) byte of the operand - the AND
+ * of that byte with the mask already determines the whole expression's
+ * truth value regardless of the operand's width, so only that one byte needs
+ * to be loaded and tested, exactly like the byte fast path above. */
+int ast_is_direct_wide_bitand_cond(const struct AstNode *n)
+{
+    struct Sym *s;
+
+    if (n == NULL || n->kind != AST_BINARY || n->op != '&')
+        return 0;
+    if (n->a == NULL || n->a->kind != AST_IDENT ||
+        n->b == NULL || n->b->kind != AST_INT_LIT)
+        return 0;
+    s = find_sym(n->a->sval);
+    if (s == NULL || !sym_can_ix_direct(s))
+        return 0;
+    if (!ast_is_plain_int_type(s->type) && !type_is_long(s->type))
+        return 0;
+    if (type_size(s->type) <= 1)
+        return 0;
+    return n->b->ival >= 0 && n->b->ival <= 255;
+}
+
+/* Is `n` an `==`/`!=` comparison of a long (4-byte) ix-direct scalar against
+ * a compile-time integer constant (either operand order)?  ast_long_cmp_supported
+ * already accepts this shape, but its emitter (gen_long_cmp_ast) treats the
+ * constant as an ordinary runtime operand - loading it through the general
+ * expression path, pushing it, sign-extending it - before doing a full
+ * generic long compare and materialising a 0/1 bool to test.  Since the
+ * "other operand" here is known at compile time, the whole comparison
+ * collapses to XOR-ing each of the 4 stored bytes against its matching
+ * constant byte and OR-ing the results together (zero iff equal), with no
+ * register shuffling or intermediate bool at all - direct-branchable exactly
+ * like the byte/plain-int fast paths above. Relational ops (<, >=, ...) are
+ * not handled here: unlike equality, they need sign-aware multi-byte
+ * subtraction, not a bitwise fast path. */
+int ast_is_direct_long_const_eq_cond(const struct AstNode *n)
+{
+    struct Sym *s;
+    const struct AstNode *idn;
+
+    if (n == NULL || n->kind != AST_BINARY)
+        return 0;
+    if (n->op != TOK_EQ && n->op != TOK_NE)
+        return 0;
+    if (n->a != NULL && n->a->kind == AST_IDENT &&
+        n->b != NULL && n->b->kind == AST_INT_LIT) {
+        idn = n->a;
+    } else if (n->a != NULL && n->a->kind == AST_INT_LIT &&
+               n->b != NULL && n->b->kind == AST_IDENT) {
+        idn = n->b;
+    } else {
+        return 0;
+    }
+    s = find_sym(idn->sval);
+    if (s == NULL || s->is_array || s->is_const_value || s->storage == SC_FUNC)
+        return 0;
+    if (!type_is_long(s->type))
+        return 0;
+    return sym_can_ix_direct(s);
+}
+
 int ast_global_char_index_cond(const struct AstNode *n, struct Sym **out_sym)
 {
     struct Sym *s;
@@ -572,9 +637,13 @@ int ast_cond_generic(const struct AstNode *n)
         return 1;
     if (ast_is_direct_byte_bitand_cond(n))
         return 1;
+    if (ast_is_direct_wide_bitand_cond(n))
+        return 1;
     if (ast_global_char_index_cond(n, NULL))
         return 1;
     if (ast_is_float_cmp_cond(n))
+        return 1;
+    if (ast_is_direct_long_const_eq_cond(n))
         return 1;
     if (ast_long_cmp_supported(n))
         return 1;
@@ -1334,6 +1403,74 @@ void ast_gen_direct_byte_bitand_branch(const struct AstNode *n, int label,
         emit_jp_label("jp z,", label);
 }
 
+/* Emitter for ast_is_direct_wide_bitand_cond: identical shape to the byte
+ * fast path above - the operand's low byte lives at its own frame offset
+ * regardless of the symbol's full width (Z80 is little-endian), so no extra
+ * work is needed to reach it. */
+void ast_gen_direct_wide_bitand_branch(const struct AstNode *n, int label,
+                                              int branch_when_true)
+{
+    struct Sym *s;
+    long mask;
+
+    s = find_sym(n->a->sval);
+    mask = n->b->ival & 255;
+    fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
+    fprintf(outf, "\tand %ld\n", mask);
+    if (branch_when_true)
+        emit_jp_label("jp nz,", label);
+    else
+        emit_jp_label("jp z,", label);
+}
+
+/* Emitter for ast_is_direct_long_const_eq_cond: XOR each stored byte against
+ * its matching constant byte (skipping a byte whose constant is 0 - xor 0 is
+ * a no-op), OR-ing the running result in C so the whole thing collapses to a
+ * single zero/nonzero test - zero iff all 4 bytes matched. */
+void ast_gen_direct_long_const_eq_branch(const struct AstNode *n, int label,
+                                                int branch_when_true)
+{
+    struct Sym *s;
+    const struct AstNode *idn;
+    const struct AstNode *cn;
+    unsigned long uval;
+    int kbyte[4];
+    int branch_on_zero;
+    int i;
+
+    if (n->a->kind == AST_IDENT) {
+        idn = n->a;
+        cn = n->b;
+    } else {
+        idn = n->b;
+        cn = n->a;
+    }
+    s = find_sym(idn->sval);
+    uval = (unsigned long)cn->ival;
+    kbyte[0] = (int)(uval & 0xff);
+    kbyte[1] = (int)((uval >> 8) & 0xff);
+    kbyte[2] = (int)((uval >> 16) & 0xff);
+    kbyte[3] = (int)((uval >> 24) & 0xff);
+
+    /* n->op is TOK_EQ or TOK_NE; branch_when_true says which way `label` is
+     * taken. Equal <=> the XOR/OR chain is zero. */
+    branch_on_zero = (n->op == TOK_EQ) ? branch_when_true : !branch_when_true;
+
+    for (i = 0; i < 4; ++i) {
+        fprintf(outf, "\tld a,(ix%+d)\n", s->offset + i);
+        if (kbyte[i] != 0)
+            fprintf(outf, "\txor %d\n", kbyte[i]);
+        if (i > 0)
+            emit("\tor c\n");
+        if (i < 3)
+            emit("\tld c,a\n");
+    }
+    if (branch_on_zero)
+        emit_jp_label("jp z,", label);
+    else
+        emit_jp_label("jp nz,", label);
+}
+
 void ast_gen_float_cmp_branch(const struct AstNode *n, int label,
                                      int branch_when_true)
 {
@@ -1399,12 +1536,20 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
         ast_gen_direct_byte_bitand_branch(n, label, branch_when_true);
         return;
     }
+    if (ast_is_direct_wide_bitand_cond(n)) {
+        ast_gen_direct_wide_bitand_branch(n, label, branch_when_true);
+        return;
+    }
     if (ast_global_char_index_cond(n, NULL)) {
         ast_gen_global_char_index_branch(n, label, branch_when_true);
         return;
     }
     if (ast_is_float_cmp_cond(n)) {
         ast_gen_float_cmp_branch(n, label, branch_when_true);
+        return;
+    }
+    if (ast_is_direct_long_const_eq_cond(n)) {
+        ast_gen_direct_long_const_eq_branch(n, label, branch_when_true);
         return;
     }
     if (ast_long_cmp_supported(n)) {
