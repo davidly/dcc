@@ -875,8 +875,16 @@ void parse_preprocessor_line(void)
 
                     while (isspace((unsigned char)peekc()) && peekc() != '\n')
                         getc_src();
-                    if (peekc() == ',')
+                    if (peekc() == ',') {
                         getc_src();
+                    } else if (peekc() != 0 && peekc() != ')' && peekc() != '\n') {
+                        /* Consume any stray character (notably the '.' of a
+                         * C99 '...' variadic parameter list) so the loop always
+                         * makes forward progress. Without this the parser spins
+                         * forever on '...' because nothing else advances the
+                         * cursor. Variadic macros are otherwise not implemented. */
+                        getc_src();
+                    }
                 }
                 if (peekc() == ')')
                     getc_src();

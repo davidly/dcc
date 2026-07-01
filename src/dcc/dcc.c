@@ -818,7 +818,17 @@ char *filter_active_preprocessor_source(long *lenp)
                     if (params[nargs][0] && nargs < 7)
                         nargs++;
                     while (s < e && (*s == ' ' || *s == '\t')) s++;
-                    if (s < e && *s == ',') s++;
+                    if (s < e && *s == ',') {
+                        s++;
+                    } else if (s < e && *s != ')') {
+                        /* Consume any stray character (notably the '.' of a
+                         * C99 '...' variadic parameter list) so this scan
+                         * always makes forward progress. Without this the
+                         * pass spins forever on '...' because nothing else
+                         * advances the cursor. Variadic macros are not
+                         * otherwise implemented. */
+                        s++;
+                    }
                 }
                 if (s < e && *s == ')') s++;
                 while (s < e && (*s == ' ' || *s == '\t')) s++;
