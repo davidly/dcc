@@ -2049,6 +2049,185 @@ static int pass_ix_array_word_addr(void)
     return changed;
 }
 
+/* Matches the canonical array-word-address block that pass_ix_array_word_addr
+ * produces:
+ *   ld l,(ix+O)
+ *   ld h,(ix+O+1)
+ *   [dec hl | inc hl]        (optional; step = -1/+1, else 0)
+ *   add hl,hl
+ *   push ix
+ *   pop de
+ *   add hl,de
+ *   ld de,ARROFF
+ *   add hl,de
+ * On success returns the block's length in lines (8 or 9) and sets
+ * *out_idxoff/*out_step/*out_arroff; returns 0 (outputs untouched) on no
+ * match. */
+static int peep_match_array_word_addr_block(int i, int *out_idxoff,
+                                                    int *out_step, int *out_arroff)
+{
+    int idxoff;
+    int step;
+    int arroff;
+    int j;
+
+    if (!peep_parse_ld_ix_pair(lines[i], lines[i + 1], &idxoff))
+        return 0;
+    j = i + 2;
+    step = 0;
+    if (eq(j, "dec hl")) { step = -1; j++; }
+    else if (eq(j, "inc hl")) { step = 1; j++; }
+
+    if (!eq(j, "add hl,hl")) return 0;
+    if (!eq(j + 1, "push ix")) return 0;
+    if (!eq(j + 2, "pop de")) return 0;
+    if (!eq(j + 3, "add hl,de")) return 0;
+    if (!peep_parse_ld_de_signed(lines[j + 4], &arroff)) return 0;
+    if (!eq(j + 5, "add hl,de")) return 0;
+
+    *out_idxoff = idxoff;
+    *out_step = step;
+    *out_arroff = arroff;
+    return (j + 6) - i;
+}
+
+/* True if line `s` writes to local-frame offset `off` or `off+1` (the two
+ * bytes of a word-sized ix-direct local): `ld (ix+off),R`, `inc (ix+off)`, or
+ * `dec (ix+off)`, for either byte. Used to prove an index variable is
+ * unchanged across the gap pass_reuse_array_word_addr scans. */
+static int peep_writes_ix_off(const char *s, int off)
+{
+    char tmp[MAX_LINE];
+    char *p;
+    char *endp;
+    int target;
+
+    strip_peep_comment_copy(tmp, s);
+
+    if (strncmp(tmp, "ld (ix", 6) == 0) {
+        p = tmp + 6;
+        target = (int)strtol(p, &endp, 10);
+        if (*endp == ')' && endp[1] == ',')
+            return target == off || target == off + 1;
+        return 0;
+    }
+    if (strncmp(tmp, "inc (ix", 7) == 0 || strncmp(tmp, "dec (ix", 7) == 0) {
+        p = tmp + 7;
+        target = (int)strtol(p, &endp, 10);
+        if (*endp == ')')
+            return target == off || target == off + 1;
+        return 0;
+    }
+    return 0;
+}
+
+/* True if line `s` is a `call` to something other than a dcc runtime helper
+ * (whose names all start with "__"). A call to a runtime helper only ever
+ * receives register-passed values (never the address of a caller local), so
+ * it cannot write back to the index variable's frame slot; an arbitrary user
+ * function (named "_name" per dcc's C-symbol convention) could have been
+ * passed "&n" explicitly and is not provably safe to skip over. */
+static int peep_line_is_unsafe_call(const char *s)
+{
+    char tmp[MAX_LINE];
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "call ", 5) != 0)
+        return 0;
+    return strncmp(tmp + 5, "__", 2) != 0;
+}
+
+/* Two array-word-address blocks (see peep_match_array_word_addr_block) for
+ * the SAME array and the SAME index variable, separated only by:
+ *   push hl
+ *   <straight-line code that reads but never writes the index variable,
+ *    and contains no label - e.g. a runtime helper call using the address>
+ *   pop hl
+ *   ld (hl),R1 / inc hl / ld (hl),R2      (word store through the address)
+ * recompute the second address completely from scratch even though it is a
+ * fixed, known offset from the first: right after that word store, HL still
+ * holds (first address + 1), so the second address is just HL adjusted by a
+ * compile-time constant.  Common in code that stores a[i] then reads an
+ * adjacent a[i-1]/a[i+1] shortly after (e.g. a[n] = x % n; ... a[n-1] ...).
+ *
+ * Conservative by construction: aborts (no rewrite) on any label or any
+ * write to the index variable's frame slot inside the gap, so it only fires
+ * when the second block's address is provably identical to what recomputing
+ * it from scratch would have produced. */
+static int pass_reuse_array_word_addr(void)
+{
+    int i;
+    int changed;
+    int idxoffA, stepA, arroffA, lenA;
+    int idxoffB, stepB, arroffB, lenB;
+    int gap_end;
+    int k;
+    int delta;
+    char line[64];
+
+    changed = 0;
+
+    for (i = 0; i + 6 < nlines; ++i) {
+        lenA = peep_match_array_word_addr_block(i, &idxoffA, &stepA, &arroffA);
+        if (!lenA)
+            continue;
+        if (!eq(i + lenA, "push hl"))
+            continue;
+
+        gap_end = 0;
+        for (k = i + lenA + 1; k + 3 < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;                       /* control-flow join: unsafe */
+            if (peep_writes_ix_off(lines[k], idxoffA))
+                break;                       /* index variable changed */
+            if (peep_line_is_unsafe_call(lines[k]))
+                break;                       /* could alias the index variable */
+            if (eq(k, "pop hl")) {
+                if ((eq(k + 1, "ld (hl),b") || eq(k + 1, "ld (hl),c") ||
+                     eq(k + 1, "ld (hl),d") || eq(k + 1, "ld (hl),e") ||
+                     eq(k + 1, "ld (hl),a")) &&
+                    eq(k + 2, "inc hl") &&
+                    (eq(k + 3, "ld (hl),b") || eq(k + 3, "ld (hl),c") ||
+                     eq(k + 3, "ld (hl),d") || eq(k + 3, "ld (hl),e") ||
+                     eq(k + 3, "ld (hl),a")))
+                    gap_end = k + 4;
+                break;   /* pop hl found (matched or not): gap ends here */
+            }
+        }
+        if (gap_end == 0)
+            continue;
+
+        lenB = peep_match_array_word_addr_block(gap_end, &idxoffB, &stepB, &arroffB);
+        if (!lenB)
+            continue;
+        if (idxoffB != idxoffA || arroffB != arroffA)
+            continue;
+
+        /* HL == &array[idxA]+stepA*2 + 1 right after the word-store tail.
+         * Block B wants &array[idxA]+stepB*2. delta is always odd (never 0),
+         * so there is always at least one instruction to emit. */
+        delta = (stepB - stepA) * 2 - 1;
+
+        delete_n(gap_end, lenB);
+        if (delta >= -4 && delta <= 4) {
+            int n = delta > 0 ? delta : -delta;
+            int m;
+            for (m = 0; m < n; ++m)
+                insert_line(gap_end, delta > 0 ? "inc hl" : "dec hl");
+            replace1_tagged(gap_end, lines[gap_end], "reuse_array_word_addr");
+        } else {
+            sprintf(line, "ld de,%d", delta);
+            insert_line(gap_end, "add hl,de");
+            insert_line(gap_end, line);
+            replace1_tagged(gap_end, lines[gap_end], "reuse_array_word_addr");
+        }
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_ix_postdec_to_local(void)
 {
     int i;
@@ -10837,6 +11016,7 @@ int main(int argc, char **argv)
         if (pass_base_index_addr()) changed = 1;
         if (pass_e_signed_le_zero()) changed = 1;
         if (pass_ix_array_word_addr()) changed = 1;
+        if (pass_reuse_array_word_addr()) changed = 1;
         if (pass_ix_postdec_to_local()) changed = 1;
         if (pass_store_word_const_hl()) changed = 1;
         if (pass_findsolution_clear_board_loop()) changed = 1;
