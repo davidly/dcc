@@ -108,17 +108,20 @@ for (int i = 0; i < 3; i++)
   positions.
 - `static inline` functions are supported for small helper functions. dcc can
   inline simple return-expression bodies, early-return `if` chains lowered to
-  conditional expressions, simple struct/pointer member accessors, single
-  expression-statement `void` helpers such as `*dst = value`, and scalar
+  conditional expressions, simple struct/pointer member accessors,
+  statement-context `void` helpers made of one or more expression statements
+  such as `*dst = value`, and scalar
   `int`/pointer/`long`/`float` expression helpers. `void` helpers inline only
-  when called as a statement; their assignment/store expression may contain
+  when called as a statement; their assignment/store expressions may contain
   ordinary helper calls, for example `*dst = clamp((long)*dst + v)`. When all
-  call sites inline,
+  call sites inline and the function address is not taken,
   dcc removes the private out-of-line static function body; if a call cannot be
-  inlined safely, it keeps and calls the private static fallback body. Hidden
-  caller-frame temporaries preserve single evaluation for multi-use 16-bit
-  parameters such as `max(i++, j++)`. Multi-use `long`/`float` parameters with
-  side-effecting arguments fall back to the out-of-line body. Plain `inline`
+  inlined safely, or if the function address is used, it keeps and calls the
+  private static fallback body. Hidden caller-frame temporaries preserve single
+  evaluation for multi-use 16-bit parameters such as `max(i++, j++)`.
+  Multi-use `long`/`float` parameters with side-effecting arguments, inline
+  bodies with local declarations, and unsupported statement bodies fall back to
+  the out-of-line body. Plain `inline`
   without `static` is accepted for source compatibility but does not yet receive
   C99 external-inline linkage semantics or call-site inlining.
 
@@ -140,6 +143,7 @@ for (int i = 0; i < 3; i++)
   static inline void add_int(int *dst, int v)
   {
     *dst = clamp8(*dst + v);
+    dst[1] = clamp8(dst[1] - v);
   }
 
   value = max_int(i++, limit);    /* i++ is evaluated once */

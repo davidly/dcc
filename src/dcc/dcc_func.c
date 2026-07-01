@@ -133,6 +133,27 @@ static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int ind
     return cond;
 }
 
+static int inline_void_stmt_body_is_simple(struct Sym *fn, const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind != AST_COMPOUND)
+        return 0;
+    if (n->list_len <= 0)
+        return 0;
+    for (i = 0; i < n->list_len; ++i) {
+        const struct AstNode *stmt;
+        stmt = n->list[i];
+        if (stmt == NULL || stmt->kind != AST_EXPR_STMT || stmt->a == NULL)
+            return 0;
+        if (!inline_expr_is_simple(fn, stmt->a))
+            return 0;
+    }
+    return 1;
+}
+
 static void record_inline_function_if_simple(struct Sym *s)
 {
     long sv_pos;
@@ -187,12 +208,13 @@ static void record_inline_function_if_simple(struct Sym *s)
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
 
-    if ((s->type & 15) == TYPE_VOID && body != NULL && body->kind == AST_COMPOUND &&
-        body->list_len == 1 && body->list[0] != NULL &&
-        body->list[0]->kind == AST_EXPR_STMT && body->list[0]->a != NULL) {
-        if (!inline_expr_is_simple(s, body->list[0]->a))
+    if ((s->type & 15) == TYPE_VOID) {
+        if (!inline_void_stmt_body_is_simple(s, body))
             return;
-        s->inline_stmt_expr = body->list[0]->a;
+        if (body->list_len == 1)
+            s->inline_stmt_expr = body->list[0]->a;
+        else
+            s->inline_stmt_body = body;
         return;
     }
 
@@ -208,7 +230,8 @@ static void record_inline_function_if_simple(struct Sym *s)
 static int static_inline_body_can_be_buffered(struct Sym *s)
 {
     return s != NULL && s->is_static && s->is_inline &&
-           (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL);
+           (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL ||
+            s->inline_stmt_body != NULL);
 }
 
 static void inline_temp_name(char *dst, int dstsz, int index)
@@ -222,7 +245,8 @@ static int inline_function_has_multiuse_param(struct Sym *s)
     int i;
 
     if (s == NULL || !s->is_static || !s->is_inline ||
-        (s->inline_return_expr == NULL && s->inline_stmt_expr == NULL))
+        (s->inline_return_expr == NULL && s->inline_stmt_expr == NULL &&
+         s->inline_stmt_body == NULL))
         return 0;
     for (i = 0; i < s->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
         if (s->inline_param_use_count[i] > 1)
