@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - "**"
+      - "!gh-pages"
   workflow_dispatch:
 permissions:
   contents: write
@@ -37,9 +38,5 @@ jobs:
       - run: pip install -r "$REQUIREMENTS"
       # Run from the config directory so pymdownx.snippets' base_path ("../..")
       # resolves to the repo root (it is resolved against the CWD, not docs_dir).
-      - run: mkdocs build
-        if: ${{ github.ref_name != 'main' }}
-        working-directory: docs/docs
       - run: mkdocs gh-deploy --force
-        if: ${{ github.ref_name == 'main' }}
         working-directory: docs/docs
