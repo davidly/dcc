@@ -14,6 +14,9 @@
 
 #include "dcc.h"
 #include "dcc_ast.h"
+
+void append_mem(char **outp, long *lenp, long *capp, const char *s, long n);
+
 long file_size(FILE *f)
 {
     long n;
@@ -24,36 +27,83 @@ long file_size(FILE *f)
 }
 
 
-char *splice_backslash_newlines(char *in, long *lenp)
+char *splice_backslash_newlines(char *in, long *lenp, const char *filename)
 {
     long i;
-    long o;
     long n;
+    long run_start;
     char *out;
+    long out_len;
+    long out_cap;
+    int phys_line;
+    int spliced_since_sync;
 
     n = lenp[0];
-    out = (char *)xmalloc((size_t)n + 1);
+    out = NULL;
+    out_len = 0;
+    out_cap = 0;
+    phys_line = 1;
+    spliced_since_sync = 0;
 
     i = 0;
-    o = 0;
+    run_start = 0;
     while (i < n) {
+        int splice_len = 0;
+
         if (in[i] == '\\') {
-            if (i + 1 < n && in[i + 1] == '\n') {
-                i += 2;
-                continue;
-            }
-            if (i + 2 < n && in[i + 1] == '\r' && in[i + 2] == '\n') {
-                i += 3;
-                continue;
-            }
+            if (i + 1 < n && in[i + 1] == '\n')
+                splice_len = 2;
+            else if (i + 2 < n && in[i + 1] == '\r' && in[i + 2] == '\n')
+                splice_len = 3;
         }
 
-        out[o++] = in[i++];
+        if (splice_len) {
+            if (i > run_start)
+                append_mem(&out, &out_len, &out_cap, in + run_start, i - run_start);
+            i += splice_len;
+            run_start = i;
+            phys_line++;
+            spliced_since_sync++;
+            continue;
+        }
+
+        if (in[i] == '\n') {
+            i++;
+            append_mem(&out, &out_len, &out_cap, in + run_start, i - run_start);
+            run_start = i;
+            phys_line++;
+            /*
+             * Deleting a backslash-newline pair (translation phase 2) drops a
+             * physical line from the character stream without dropping it
+             * from the file's line numbering, so every diagnostic for the
+             * rest of the file would otherwise read low by the number of
+             * continued lines already spliced away.  Resync with the same
+             * #line directive mechanism already used for #include splicing
+             * (see append_line_directive/preprocess_includes_file) right
+             * after the first real (non-spliced) newline that follows a
+             * spliced run, so line_no matches the original file again.
+             */
+            if (spliced_since_sync > 0) {
+                char buf[768];
+                sprintf(buf, "#line %d \"%s\"\n", phys_line, filename);
+                append_mem(&out, &out_len, &out_cap, buf, (long)strlen(buf));
+                spliced_since_sync = 0;
+            }
+            continue;
+        }
+
+        i++;
+    }
+    if (i > run_start)
+        append_mem(&out, &out_len, &out_cap, in + run_start, i - run_start);
+
+    if (!out) {
+        out = (char *)xmalloc(1);
+        out[0] = 0;
     }
 
-    out[o] = 0;
     free(in);
-    lenp[0] = o;
+    lenp[0] = out_len;
     return out;
 }
 
@@ -85,7 +135,7 @@ char *read_file(const char *name, long *lenp)
      * preprocessing/tokenization.  This enables continued macro definitions,
      * strings, identifiers, and split operators.
      */
-    p = splice_backslash_newlines(p, lenp);
+    p = splice_backslash_newlines(p, lenp, name);
     return p;
 }
 

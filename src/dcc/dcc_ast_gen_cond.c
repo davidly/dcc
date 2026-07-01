@@ -924,13 +924,20 @@ int ast_dead_expr_supported(const struct AstNode *e)
 
 int ast_for_init_expr_supported(const struct AstNode *e)
 {
+    int old_dead;
+    int ok;
     if (e == NULL)
         return 1;
+    old_dead = expr_result_dead;
+    expr_result_dead = 1;
     if (e->kind == AST_ASSIGN)
-        return e->op == '=' && ast_gen_supported(e);
-    if (e->kind == AST_COMMA)
-        return ast_gen_supported(e);
-    return e->kind == AST_CALL && ast_gen_supported(e);
+        ok = e->op == '=' && ast_gen_supported(e);
+    else if (e->kind == AST_COMMA)
+        ok = ast_gen_supported(e);
+    else
+        ok = e->kind == AST_CALL && ast_gen_supported(e);
+    expr_result_dead = old_dead;
+    return ok;
 }
 
 /* Is the expression-statement node `n` (n->a is the expression) AST-emittable?

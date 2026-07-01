@@ -330,8 +330,16 @@ void ast_gen_for_stmt(const struct AstNode *n)
     } else {
         if (rename_count != 0)
             fatal("unsupported AST for-init scope");
-        if (n->a != NULL)
+        if (n->a != NULL) {
+            /* The init expression's value is never used - match the dead-result
+             * context ast_for_init_expr_supported gates under (see that function),
+             * so an out-of-ix-range long/float scalar init routes to the same
+             * address-computed store fast path the gate already approved. */
+            int saved_dead = expr_result_dead;
+            expr_result_dead = 1;
             ast_gen_expr(n->a);
+            expr_result_dead = saved_dead;
+        }
     }
 
     if (n->sym != NULL) {

@@ -413,7 +413,18 @@ int ast_gen_supported(const struct AstNode *n)
                 base = find_sym(n->a->a->sval);
                 decayed = base->is_array ? type_add_ptr(base->type) : base->type;
                 elem = type_decay_ptr(decayed);
-                if (type_size(elem) != 2 && (n->op != '=' || type_size(elem) != 1))
+                /* A byte element normally requires plain `=`; also accept a
+                 * dead-result compound assign (`a[i] += k;` as its own
+                 * statement, e.g. inside a for-loop body) the same way the
+                 * N-D array and pointer-element branches above already do -
+                 * this final fallback (a plain local/global 1-D array
+                 * reached by a computed index) had no such exception, so
+                 * every byte array here declined += even though nothing
+                 * about reaching the array through this specific helper
+                 * makes that unsafe. */
+                if (type_size(elem) != 2 &&
+                    (type_size(elem) != 1 ||
+                     (n->op != '=' && !(is_compound && expr_result_dead))))
                     return 0;
                 if (type_size(elem) == 1 && base->is_array &&
                     (base->storage == SC_GLOBAL || base->storage == SC_EXTERN))
