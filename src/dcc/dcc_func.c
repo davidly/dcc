@@ -495,6 +495,76 @@ void skip_initializer_or_decl_tail(void)
     }
 }
 
+static int scan_compound_literal_if_present(void)
+{
+    long save_pos;
+    long save_tok_start;
+    int save_line;
+    int save_tok_line;
+    struct Token save_tok;
+    int type;
+    int size;
+    int depth;
+
+    if (tok.kind != '(' || !paren_starts_cast())
+        return 0;
+
+    save_pos = posi;
+    save_tok_start = tok_start_pos;
+    save_line = line_no;
+    save_tok_line = tok_line;
+    save_tok = tok;
+
+    next_token();
+    parse_type_name_decl(&type, &size);
+    expect(')');
+
+    if (tok.kind != '{') {
+        posi = save_pos;
+        tok_start_pos = save_tok_start;
+        line_no = save_line;
+        tok_line = save_tok_line;
+        tok = save_tok;
+        return 0;
+    }
+
+    add_compound_literal_local(type);
+
+    depth = 0;
+    do {
+        if (tok.kind == TOK_EOF)
+            break;
+        if (tok.kind == '{')
+            depth++;
+        else if (tok.kind == '}')
+            depth--;
+        next_token();
+    } while (depth > 0);
+
+    return 1;
+}
+
+static void scan_initializer_or_decl_tail(void)
+{
+    int depth;
+
+    depth = 0;
+
+    while (tok.kind != TOK_EOF) {
+        if (depth == 0 && (tok.kind == ',' || tok.kind == ';')) return;
+
+        if (tok.kind == '(' && scan_compound_literal_if_present())
+            continue;
+
+        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') depth++;
+        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+            if (depth > 0) depth--;
+        }
+
+        next_token();
+    }
+}
+
 
 
 int local_name_address_taken_ahead(const char *name)
@@ -717,7 +787,7 @@ void scan_local_decl_after_type(int base)
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
 
-        if (s && !s->is_const_value && accept('=')) skip_initializer_or_decl_tail();
+        if (s && !s->is_const_value && accept('=')) scan_initializer_or_decl_tail();
 
         if (!accept(',')) break;
     }
@@ -839,6 +909,7 @@ void scan_function_body(void)
     g_for_decl_rename_index = 0;
     g_for_decl_recording = 0;
     g_scope_depth = 0;
+    g_compound_literal_seq = 0;
 
     expect('{');
     enter_scope();              /* function body block */
@@ -964,6 +1035,10 @@ void scan_function_body(void)
             can_decl = 1;
         } else {
             int k;
+            if (tok.kind == '(' && scan_compound_literal_if_present()) {
+                can_decl = 0;
+                continue;
+            }
             k = tok.kind;
             if (k == TOK_ID) {
                 next_token();
@@ -2246,6 +2321,7 @@ void parse_function_or_global(int base_type)
                 g_scope_depth = 0;
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;
+                g_compound_literal_seq = 0;
                 emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                 gen_compound();
                 check_undefined_user_labels();

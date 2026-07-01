@@ -428,6 +428,7 @@ extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum *
 extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
+extern int  g_compound_literal_seq;
 void flush_pending_asm(void);
 
 /* user-defined goto labels (function-scoped) */
@@ -602,6 +603,7 @@ void emit_test_global_char_index_zero(struct Sym *s, int false_label);
 struct Sym *add_global(const char *name, int type, int storage);
 struct Sym *add_local_known(const char *name, int type, int storage, int offset, int bytes);
 struct Sym *add_local_alloc(const char *name, int type, int bytes);
+struct Sym *add_compound_literal_local(int type);
 struct Sym *add_param_alloc(const char *name, int type);
 int add_string_ex(const char *s, int is_wide);
 char *read_adjacent_string_literals_ex(int *is_widep);

@@ -229,6 +229,44 @@ static int ast_sizeof_expr_value(const struct AstNode *n)
     return type_size(t);
 }
 
+static void ast_skip_braced_initializer(void)
+{
+    int depth;
+
+    depth = 0;
+    do {
+        if (tok.kind == TOK_EOF)
+            break;
+        if (tok.kind == '{')
+            depth++;
+        else if (tok.kind == '}')
+            depth--;
+        next_token();
+    } while (depth > 0);
+}
+
+static struct AstNode *ast_build_compound_literal(struct AstArena *ar, int type)
+{
+    struct AstNode *n;
+    struct AstCompoundLitSpan *sp;
+
+    sp = (struct AstCompoundLitSpan *)ast_arena_alloc(ar, sizeof(struct AstCompoundLitSpan));
+    sp->posi = posi;
+    sp->tok_start_pos = tok_start_pos;
+    sp->line_no = line_no;
+    sp->tok_line = tok_line;
+    sp->tok = tok;
+
+    n = ast_new(ar, AST_COMPOUND_LITERAL);
+    n->type = type;
+    n->sym = add_compound_literal_local(type);
+    n->aux = sp;
+    n->line = sp->tok_line;
+
+    ast_skip_braced_initializer();
+    return n;
+}
+
 /* Forward declarations (mutually recursive grammar). */
 static struct AstNode *p_assign(struct AstArena *ar);
 
@@ -403,6 +441,8 @@ static struct AstNode *p_unary(struct AstArena *ar)
         next_token();                    /* consume '(' */
         parse_type_name_decl(&cty, &csz); /* parse ( type-name */
         expect(')');
+        if (tok.kind == '{')
+            return ast_build_compound_literal(ar, cty);
         operand = p_unary(ar);
         return ast_cast(ar, cty, operand);
     }
@@ -1120,6 +1160,7 @@ const char *ast_kind_name(int kind)
     case AST_ASSIGN:      return "assign";
     case AST_COND:        return "cond";
     case AST_CAST:        return "cast";
+    case AST_COMPOUND_LITERAL: return "compound-literal";
     case AST_COMMA:       return "comma";
     case AST_SIZEOF_EXPR: return "sizeof-expr";
     case AST_SIZEOF_TYPE: return "sizeof-type";

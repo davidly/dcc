@@ -54,6 +54,7 @@ enum AstKind {
     AST_ASSIGN,         /* a op= b (op '=' for plain assignment)           */
     AST_COND,           /* a ? b : c                                       */
     AST_CAST,           /* (type)a: type = target type, a = operand        */
+    AST_COMPOUND_LITERAL, /* (type){...}: sym = hidden auto object          */
     AST_COMMA,          /* a , b                                           */
     AST_SIZEOF_EXPR,    /* sizeof a                                        */
     AST_SIZEOF_TYPE,    /* sizeof(type): type = operand type               */
@@ -121,6 +122,14 @@ struct AstArena {
     int cap_blocks;         /* capacity of the blocks array                */
     size_t block_size;      /* bytes per block                             */
     size_t used;            /* bytes used in the current (last) block      */
+};
+
+struct AstCompoundLitSpan {
+    long posi;
+    long tok_start_pos;
+    int line_no;
+    int tok_line;
+    struct Token tok;
 };
 
 /* ---- arena lifecycle ---- */

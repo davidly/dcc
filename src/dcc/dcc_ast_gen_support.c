@@ -18,6 +18,7 @@ int ast_gen_supported(const struct AstNode *n)
     case AST_STR_LIT:
     case AST_SIZEOF_EXPR:
     case AST_SIZEOF_TYPE:
+    case AST_COMPOUND_LITERAL:
         return 1;
     case AST_IDENT:
         return ident_supported(n->sval);

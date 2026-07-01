@@ -273,6 +273,19 @@ struct Sym *add_local_alloc(const char *name, int type, int bytes)
     return s;
 }
 
+struct Sym *add_compound_literal_local(int type)
+{
+    char name[64];
+    int bytes;
+
+    bytes = type_size(type);
+    if (bytes <= 0)
+        bytes = 2;
+
+    sprintf(name, "#clit%d", g_compound_literal_seq++);
+    return add_local_alloc(name, type, bytes);
+}
+
 struct Sym *add_param_alloc(const char *name, int type)
 {
     struct Sym *s;

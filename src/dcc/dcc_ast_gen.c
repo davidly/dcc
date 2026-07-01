@@ -1954,6 +1954,11 @@ int ast_address_of_value_type(const struct AstNode *n, int *out_type)
             *out_type = elem;
         return 1;
     }
+    if (n->kind == AST_COMPOUND_LITERAL) {
+        if (out_type)
+            *out_type = n->type;
+        return 1;
+    }
     return 0;
 }
 

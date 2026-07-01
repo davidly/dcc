@@ -157,6 +157,7 @@ int g_parse_type_was_enum;
 char pending_asm_buf[8192];
 int  pending_asm_len;
 int  asm_suppress_depth;
+int  g_compound_literal_seq;
 
 /* User-defined goto labels (function-scoped) */
 char ulabel_names[MAX_USER_LABELS][64];

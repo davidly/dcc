@@ -222,6 +222,10 @@ void gen_unary_ast(const struct AstNode *n)
             g_expr_type = type_add_ptr(val_type);
             return;
         }
+        if (n->a->kind == AST_COMPOUND_LITERAL) {
+            ast_gen_expr(n->a);
+            return;
+        }
         s = find_sym(n->a->sval);
         emit_load_sym_addr(s);
         g_expr_type = type_add_ptr(s->type);
@@ -335,6 +339,42 @@ void gen_unary_ast(const struct AstNode *n)
         emit("\tld a,h\n\tcpl\n\tld h,a\n\tld a,l\n\tcpl\n\tld l,a\n");
         g_expr_type = promote_int_type(g_expr_type);
     }
+}
+
+static void gen_compound_literal_ast(const struct AstNode *n)
+{
+    struct AstCompoundLitSpan *sp = (struct AstCompoundLitSpan *)n->aux;
+    long sv_posi = posi;
+    long sv_tok_start = tok_start_pos;
+    int sv_line = line_no;
+    int sv_tok_line = tok_line;
+    struct Token sv_tok = tok;
+
+    posi = sp->posi;
+    tok_start_pos = sp->tok_start_pos;
+    line_no = sp->line_no;
+    tok_line = sp->tok_line;
+    tok = sp->tok;
+
+    if ((n->type & TYPE_STRUCT) && type_ptr_depth(n->type) == 0) {
+        emit_init_auto_struct_from_list(n->sym);
+    } else if (accept('{')) {
+        emit_init_auto_struct_scalar(n->sym, 0, n->type);
+        if (tok.kind == ',')
+            next_token();
+        expect('}');
+    } else {
+        emit_init_auto_struct_scalar(n->sym, 0, n->type);
+    }
+
+    posi = sv_posi;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
+
+    emit_load_sym_addr(n->sym);
+    g_expr_type = type_add_ptr(n->type);
 }
 
 void gen_pointer_cmp_operand_ast(const struct AstNode *n)
@@ -2709,6 +2749,9 @@ void ast_gen_expr(const struct AstNode *n)
         break;
     case AST_CAST:
         gen_cast_ast(n);
+        break;
+    case AST_COMPOUND_LITERAL:
+        gen_compound_literal_ast(n);
         break;
     case AST_COMMA:
         ast_gen_expr(n->a);

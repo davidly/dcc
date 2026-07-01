@@ -107,7 +107,9 @@ for (int i = 0; i < 3; i++)
   designators such as `[0 ... 3] = value` are not supported.
 - File-scope compound literals used in global constant initializers are
   supported, including address-taking forms such as `&(struct S){ 1, 2 }`.
-  Automatic/block-scope compound literal objects are not supported yet.
+- Address-taking automatic/block-scope compound literals such as
+  `&(struct S){ 1, 2 }` are supported by creating hidden automatic storage for
+  the enclosing function.
 
 ### Variable-length arrays
 
@@ -140,7 +142,7 @@ become supportable later, but code should not depend on them today.
 | C99 | `_Bool` keyword | Not a compiler keyword. Include [`stdbool.h`](standard-lib/11-stdbool.md) for `bool`, `true`, and `false` as ordinary library definitions. |
 | C99 | `_Complex` | Not implemented. |
 | C99 | Variadic macros | Not implemented; includes `__VA_ARGS__` and empty-argument behavior. |
-| C99 | Block-scope compound literals | Not implemented. File-scope/global initializer forms are supported as described above. |
+| C99 | Block-scope compound literal value/copy forms | Not implemented. Address-taking forms are supported as described above. |
 | C99 | Flexible-array member initialization | Not implemented. |
 | C11 | `_Generic` | Not implemented; some imported tests also require unsupported `long long`. |
 | C11 | `_Atomic`, `_Thread_local`, C11 threads | Not implemented or runtime-inapplicable. |
