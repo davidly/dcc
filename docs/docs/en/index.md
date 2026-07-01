@@ -1,9 +1,9 @@
 # Introduction
 
 **dcc** is an open source C compiler for **CP/M 2.2 on the Z80**. It has a C89
-core plus target-appropriate C99/C11 front-end compatibility, and it translates
-a `.c` file to M80 assembly. M80 assembles the result, and L80 links it into a
-CP/M `.COM` program.
+core plus target-appropriate C99/C11 front-end compatibility. For every source
+file it accepts, dcc translates the `.c` file to M80 assembly; M80 assembles the
+result, and L80 links it into a CP/M `.COM` program.
 
 dcc runs on Windows, macOS, and Linux, but the programs it builds run under
 CP/M. The [ntvcm](https://github.com/davidly/ntvcm) emulator and other popular
