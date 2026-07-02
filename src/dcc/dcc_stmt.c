@@ -39,14 +39,18 @@ static int current_identifier_starts_label(void)
 
 void gen_compound(void)
 {
+    int dead;
+
     expect('{');
     enter_scope();
+    dead = 0;
 
     while (tok.kind != TOK_EOF && tok.kind != '}') {
         if (tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
         } else if (current_identifier_starts_label()) {
             gen_statement();
+            dead = ast_last_statement_exits();
         } else if (starts_type()) {
             int t;
             int is_static_local;
@@ -58,10 +62,28 @@ void gen_compound(void)
             } else if (is_static_local) {
                 scan_static_local_decl_after_type(t);
             } else {
+                if (dead)
+                    asm_suppress_depth++;
                 gen_local_decl_after_type(t);
+                if (dead)
+                    asm_suppress_depth--;
             }
         } else {
-            gen_statement();
+            if (dead) {
+                struct AstNode *n;
+
+                n = ast_build_stmt(&g_ast_arena);
+                if (n == NULL || !ast_stmt_supported(n))
+                    fatal("unsupported AST statement");
+                if (ast_stmt_has_reentry_label(n)) {
+                    ast_gen_stmt(n);
+                    dead = ast_stmt_exits(n);
+                }
+                ast_arena_reset(&g_ast_arena);
+            } else {
+                gen_statement();
+                dead = ast_last_statement_exits();
+            }
         }
     }
 
