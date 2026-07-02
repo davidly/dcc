@@ -1,0 +1,2 @@
+<source>:1: error: expected ';' near '<eof>'
+dcc: 1 error(s)

@@ -35,6 +35,10 @@ parameters below are forwarded to Invoke-MaBuild.
 .PARAMETER Emulator
   Emulator command for running ntvcm (default: "ntvcm").
 
+.PARAMETER SourcePath
+    Optional explicit C source file path. When omitted, the driver searches the
+    normal dcc test locations by app name.
+
 .EXAMPLE
   pwsh ./scripts/ma.ps1 triangle
   pwsh ./scripts/ma.ps1 sieve nopeep
@@ -61,7 +65,8 @@ param(
     [string]$Mode = "full",
 
     [string]$BuildDir = "build",
-    [string]$Emulator = "ntvcm"
+    [string]$Emulator = "ntvcm",
+    [string]$SourcePath = ""
 )
 
 # CRLF conversion helper for M80. Reads as text, normalizes all line endings to
@@ -94,6 +99,7 @@ function Invoke-MaBuild {
         [string]$Mode = "fast",
         [string]$BuildDir = "build",
         [string]$Emulator = "ntvcm",
+        [string]$SourcePath = "",
         [int]$StackSize = 0,
         [switch]$Quiet
     )
@@ -103,11 +109,16 @@ function Invoke-MaBuild {
         if (-not $Quiet) { Write-Host $Message -ForegroundColor $Color }
     }
 
+    function Write-BuildError {
+        param([string]$Message)
+        Write-Error -Message $Message -ErrorAction Continue
+    }
+
     # Normalize mode
     $modeLower = $Mode.ToLower()
     if ($modeLower -eq "full") {
-        $fastOk = Invoke-MaBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -StackSize $StackSize -Quiet:$Quiet
-        $nopeepOk = Invoke-MaBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -StackSize $StackSize -Quiet:$Quiet
+        $fastOk = Invoke-MaBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -Quiet:$Quiet
+        $nopeepOk = Invoke-MaBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -Quiet:$Quiet
         return ($fastOk -and $nopeepOk)
     }
     $usePeep = @("fast", "peep", "opt", "optimized", "o", "1", "yes", "true") -contains $modeLower
@@ -118,24 +129,36 @@ function Invoke-MaBuild {
     $upperBase = $base.ToUpper()
 
     $sourceFile = ""
-    foreach ($candidate in @(
-        (Join-Path "tests" "$base.c"),
-        (Join-Path "tests" "$base.C"),
-        (Join-Path "tests" "$lowerBase.c"),
-        (Join-Path "tests" "$upperBase.C"),
-        "$base.c",
-        "$base.C",
-        "$lowerBase.c",
-        "$upperBase.C"
-    )) {
-        if (Test-Path $candidate -PathType Leaf) {
-            $sourceFile = $candidate
-            break
+    if ($SourcePath) {
+        if (Test-Path -LiteralPath $SourcePath -PathType Leaf) {
+            $sourceFile = (Resolve-Path -LiteralPath $SourcePath).ProviderPath
+        }
+    }
+    else {
+        foreach ($candidate in @(
+            (Join-Path "tests" "$base.c"),
+            (Join-Path "tests" "$base.C"),
+            (Join-Path "tests" "$lowerBase.c"),
+            (Join-Path "tests" "$upperBase.C"),
+            "$base.c",
+            "$base.C",
+            "$lowerBase.c",
+            "$upperBase.C"
+        )) {
+            if (Test-Path $candidate -PathType Leaf) {
+                $sourceFile = $candidate
+                break
+            }
         }
     }
 
     if (-not $sourceFile) {
-        Write-Error "Source file not found for: $Name"
+        if ($SourcePath) {
+            Write-BuildError "Source file not found: $SourcePath"
+        }
+        else {
+            Write-BuildError "Source file not found for: $Name"
+        }
         return $false
     }
 
@@ -172,10 +195,11 @@ function Invoke-MaBuild {
     $peepTmp = Join-Path $BuildDir "_PEEPOUT.MAC"
     $rtlSrc = Join-Path $BuildDir "DCCRTL.MAC"
     $rtlMin = Join-Path $BuildDir "RTLMIN.MAC"
+    $rtlMinRel = Join-Path $BuildDir "RTLMIN.REL"
     $rootRtlSrc = "DCCRTL.MAC"
 
     if (-not (Test-Path $rootRtlSrc)) {
-        Write-Error "Runtime not found: $rootRtlSrc"
+        Write-BuildError "Runtime not found: $rootRtlSrc"
         return $false
     }
 
@@ -196,8 +220,12 @@ function Invoke-MaBuild {
         $dccStackChk = "-fstack-check"
     }
 
-    # Clean old artifacts
-    Remove-Item -Path @($appMac, $appRel, $appCom, (Join-Path $BuildDir "$upperBase.PRN"), $peepTmp, $rtlSrc, $rtlMin, (Join-Path $BuildDir "RTLMIN.REL"), (Join-Path $BuildDir "RTLMIN.PRN")) -Force -ErrorAction SilentlyContinue
+    # Clean old artifacts. This deletes every file this build is about to
+    # (re)create BEFORE running any tool, so a failed compile/assemble/link
+    # cannot leave a stale artifact from a previous build that would be run or
+    # verified as if the build had succeeded. The lowercase convenience copy is
+    # included so it cannot linger on case-sensitive filesystems.
+    Remove-Item -Path @($appMac, $appRel, $appCom, (Join-Path $BuildDir "$lowerBase.com"), (Join-Path $BuildDir "$upperBase.PRN"), $peepTmp, $rtlSrc, $rtlMin, $rtlMinRel, (Join-Path $BuildDir "RTLMIN.PRN")) -Force -ErrorAction SilentlyContinue
 
     # Determine stack size: explicit parameter wins, then env var, then default.
     $dccStackSize = if ($StackSize -gt 0) { "$StackSize" }
@@ -212,10 +240,16 @@ function Invoke-MaBuild {
 
     Write-Step "  Compiling with: $DCC $($dccArgs -join ' ')"
     $dccOut = & $DCC @($dccArgs | Where-Object { $_ }) 2>&1
+    $dccExit = $LASTEXITCODE
     if (-not $Quiet) { $dccOut | Write-Host }
 
+    if ($dccExit -ne 0) {
+        Write-BuildError "Compilation failed for $Name (dcc exit code $dccExit)"
+        return $false
+    }
+
     if (-not (Test-Path $appMac)) {
-        Write-Error "Compilation failed, no .MAC produced for $Name"
+        Write-BuildError "Compilation failed, no .MAC produced for $Name"
         return $false
     }
 
@@ -223,7 +257,12 @@ function Invoke-MaBuild {
     if ($usePeep) {
         Write-Step "  Optimizing with dccpeep..."
         $peepOut = & $DCCPEEP "$appMac" "$peepTmp" 2>&1
+        $peepExit = $LASTEXITCODE
         if (-not $Quiet) { $peepOut | Write-Host }
+        if ($peepExit -ne 0 -or -not (Test-Path $peepTmp)) {
+            Write-BuildError "Peephole optimization failed for $Name (dccpeep exit code $peepExit)"
+            return $false
+        }
         Move-Item -Path $peepTmp -Destination $appMac -Force
     }
 
@@ -236,6 +275,14 @@ function Invoke-MaBuild {
     $m80Out = & $NTVCM "$M80" "=$upperBase.MAC" "/X" "/O" "/Z" "/L" 2>&1
     Pop-Location
     if (-not $Quiet) { $m80Out | Write-Host }
+
+    # The .REL was deleted above, so its absence now means M80 failed to
+    # assemble the app (ntvcm always exits 0, so artifact presence is the
+    # reliable signal that this stage produced output).
+    if (-not (Test-Path $appRel)) {
+        Write-BuildError "Assembly failed: no .REL produced for $Name"
+        return $false
+    }
 
     # Strip runtime
     Write-Step "  Stripping runtime..."
@@ -260,6 +307,13 @@ function Invoke-MaBuild {
     Pop-Location
     if (-not $Quiet) { $rtlOut | Write-Host; $linkOut | Write-Host }
 
+    # RTLMIN.REL was deleted above; its absence means the runtime failed to
+    # assemble, which would leave the link reading nothing (or stale) input.
+    if (-not (Test-Path $rtlMinRel)) {
+        Write-BuildError "Runtime assembly failed: RTLMIN.REL not produced for $Name"
+        return $false
+    }
+
     # Create lowercase convenience copy
     $lowerCom = Join-Path $BuildDir "$lowerBase.com"
     if ((Test-Path $appCom) -and $lowerBase -ne $upperBase) {
@@ -273,7 +327,7 @@ function Invoke-MaBuild {
     $buildWarnings = $allBuildOut | Where-Object { $_ -match '%Mult\. Def\.|%Phase error|%Undefined' }
     if ($buildWarnings) {
         $buildWarnings | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
-        Write-Error "Build warnings treated as errors for $Name"
+        Write-BuildError "Build warnings treated as errors for $Name"
         return $false
     }
 
@@ -282,7 +336,7 @@ function Invoke-MaBuild {
         return $true
     }
     else {
-        Write-Error "Build failed: .COM file not produced for $Name"
+        Write-BuildError "Build failed: .COM file not produced for $Name"
         return $false
     }
 }
@@ -295,6 +349,6 @@ if ($MyInvocation.InvocationName -ne '.') {
         Write-Error "Name is required. Usage: ma.ps1 <name> [full|fast|nopeep]"
         exit 1
     }
-    $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator
+    $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath
     if (-not $ok) { exit 1 }
 }

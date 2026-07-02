@@ -1,0 +1,2 @@
+<source>:3: error: case label outside switch near 'case'
+dcc: 1 error(s)

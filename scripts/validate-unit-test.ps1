@@ -526,6 +526,7 @@ You can also pass a compiler explicitly:
         '{{DATE}}' = '[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}'
         '{{TIME}}' = '\d{2}:\d{2}:\d{2}'
         '{{SEP}}'  = '[/\\]'
+        '{{UINT}}' = '\d+'
     }
 
     $testFiles = if ($App) {

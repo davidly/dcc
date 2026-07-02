@@ -1,0 +1,6 @@
+<source>:2: error: constant integer expression expected near 'x'
+<source>:2: error: expected '}' near 'x'
+<source>:3: error: expected ';' near '}'
+<source>:3: error: external declaration expected near '}'
+<source>:3: error: external declaration expected near ';'
+dcc: 5 error(s)

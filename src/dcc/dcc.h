@@ -2,11 +2,12 @@
  * dcc.h - umbrella header for the modularised dcc compiler.
  *
  * dcc is a tiny bootstrap C89 compiler that targets Z80 assembly for the
- * Microsoft M80 / LINK-80 toolchain on CP/M-80. It is a single-pass,
- * syntax-directed translator (no AST): the parser and code generator share a
- * large amount of file-scope state. Because of that tight coupling, the
- * separate-compilation layout uses ONE shared header (this file) included by
- * every module's .c, in the spirit of a classic single-binary C compiler.
+ * Microsoft M80 / LINK-80 toolchain on CP/M-80. Function bodies are lowered
+ * through a function-local AST, while the parser, AST builder, and codegen
+ * helpers still share a large amount of file-scope state. Because of that
+ * tight coupling, the separate-compilation layout uses ONE shared header (this
+ * file) included by every module's .c, in the spirit of a classic
+ * single-binary C compiler.
  *
  * This header declares everything the modules agree on:
  *   1. System headers used across the compiler.
@@ -51,6 +52,22 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+
+/*
+ * Portable null-device path for throwaway fopen() sinks (used to suppress
+ * output during speculative/frame-sizing AST replay passes - see
+ * ast_scan_for_stmt and the AST_FOR/AST_COMPOUND probes in
+ * dcc_ast_gen_cond.c).  "/dev/null" does not exist on native Windows: MSVC's
+ * fopen() there fails on it (it looks for a "dev" subdirectory), silently
+ * leaving the caller's `outf` pointed at the real output file instead of a
+ * sink - so the replay's speculative emission leaks into real output.  The
+ * Windows null device is "NUL".
+ */
+#ifdef _WIN32
+#define DCC_NULL_DEVICE "NUL"
+#else
+#define DCC_NULL_DEVICE "/dev/null"
+#endif
 
 /* ------------------------------------------------------------------------- *
  * Capacity / translation-limit macros.
@@ -104,6 +121,7 @@
 #define TYPE_VOID      3
 #define TYPE_LONG      4
 #define TYPE_FLOAT     5   /* syntax/storage only: 32-bit opaque float */
+#define TYPE_BOOL      6
 #define TYPE_PTR       16
 #define TYPE_PTR2      64
 #define TYPE_UNSIGNED  32
@@ -182,6 +200,7 @@
 #define TOK_FLOATLIT   312
 #define TOK_SHORT      315
 #define TOK_WSTR       314
+#define TOK_BOOL       316
 #define TOK_SWITCH     300
 #define TOK_CASE       301
 #define TOK_DEFAULT    302
@@ -196,6 +215,8 @@ struct Token {
     char text[MAX_TOK_TEXT];
     char file[256];
 };
+
+struct AstNode;
 
 struct Sym {
     char name[64];
@@ -218,6 +239,14 @@ struct Sym {
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
+    int is_inline;   /* function declared with inline specifier */
+    struct AstNode *inline_return_expr; /* simple static inline body, if captured */
+    struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
+    struct AstNode *inline_stmt_body;   /* simple void inline statement body */
+    int inline_param_use_count[MAX_PROTO_PARAMS];
+    char inline_param_names[MAX_PROTO_PARAMS][64];
+    FILE *inline_body_file; /* buffered out-of-line body for dead static inline elimination */
+    int inline_body_needed;
     int has_proto;
     int proto_nargs;
     int proto_variadic;
@@ -232,6 +261,7 @@ struct Def {
     int is_func;
     int nargs;
     char params[8][32];
+    int is_variadic;  /* C99 `...`: params[nargs-1] is "__VA_ARGS__" */
 };
 
 struct AsmName {
@@ -371,6 +401,7 @@ extern int current_local_bytes;
 extern int max_function_local_bytes;
 extern int current_omit_ix_frame;
 extern int current_function_has_call;
+extern int g_inline_body_buffering;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -412,6 +443,7 @@ extern int errors;
 extern int scan_mode;
 extern int decl_is_extern;
 extern int decl_is_static;
+extern int decl_is_inline;     /* current declaration used inline specifier */
 extern int decl_is_const;      /* current declaration used const qualifier */
 extern int decl_is_register;   /* current decl used 'register' keyword */
 extern int expr_result_dead;
@@ -421,11 +453,13 @@ extern int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-
 extern int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
 extern int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
 extern int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
+extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum */
 
 /* Pending #asm block output buffered to avoid duplicate emission from posi save/restore */
 extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
+extern int  g_compound_literal_seq;
 void flush_pending_asm(void);
 
 /* user-defined goto labels (function-scoped) */
@@ -512,7 +546,9 @@ long pp_expr_bitxor(void);
 long pp_expr_bitor(void);
 long pp_expr_andand(void);
 long pp_expr_oror(void);
+long pp_expr_cond(void);
 int pp_eval_simple_expr(const char *s);
+void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
 void remove_define(const char *name);
 void pp_recompute_active(void);
 void parse_preprocessor_line(void);
@@ -526,10 +562,11 @@ int parse_charlit_string_value(const char *s, long *out);
 void replace_source_range(long start, long end, const char *text);
 void trim_arg(char *s);
 void strip_macro_replacement_comments(char *s);
-int read_macro_call_args(char args[8][128], int *nargs);
+int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count);
 void append_macro_string_literal(const char *arg, char *out, int *oip, int outsz);
 int macro_param_index(int di, const char *ident);
-int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs);
+int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
+                                     int variadic_named_count);
 void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
 void paste_tokens_in_text(char *s);
 int replacement_param_raw_context(const char *start, const char *param_start, const char *param_end);
@@ -551,7 +588,7 @@ int type_size(int type);
 int type_scalar_atom_count(int type);
 int type_is_long(int type);
 int type_is_float(int type);
-void error_float_unsupported(const char *what);
+int type_is_bool(int type);
 int object_array_size(int type, int count);
 int type_ptr_depth(int type);
 int type_add_ptr(int type);
@@ -585,6 +622,7 @@ long parse_const_long_band(void);
 long parse_const_long_xor(void);
 long parse_const_long_bitor(void);
 long parse_const_long_andand(void);
+long parse_const_long_oror(void);
 long parse_const_long_expr(void);
 int parse_const_int_expr(void);
 int starts_type(void);
@@ -595,11 +633,11 @@ struct Sym *find_global(const char *name);
 struct Sym *find_sym(const char *name);
 int is_global_char_array_sym(struct Sym *s);
 void emit_global_char_index_addr(struct Sym *s);
-int emit_simple_local_index_to_hl(void);
 void emit_test_global_char_index_zero(struct Sym *s, int false_label);
 struct Sym *add_global(const char *name, int type, int storage);
 struct Sym *add_local_known(const char *name, int type, int storage, int offset, int bytes);
 struct Sym *add_local_alloc(const char *name, int type, int bytes);
+struct Sym *add_compound_literal_local(int type);
 struct Sym *add_param_alloc(const char *name, int type);
 int add_string_ex(const char *s, int is_wide);
 char *read_adjacent_string_literals_ex(int *is_widep);
@@ -621,7 +659,6 @@ int try_emit_post_update_sym_direct(struct Sym *s, int op);
 void emit_incdec_sym_direct(struct Sym *s, int op);
 int base_struct_id_from_type(int type);
 void emit_add_field_offset(struct FieldDef *fd);
-int apply_field_access_from_addr(int cur_type, int arrow, int *is_array);
 void skip_balanced_bracket(int open_ch, int close_ch);
 int parse_offsetof_value(void);
 int sizeof_common_type(int a, int b, int op);
@@ -635,7 +672,6 @@ int cf_promote_type(int type);
 int cf_common_arith_type(int a, int b);
 void cf_cast_to_type(struct ConstVal *v, int type);
 void cf_convert_to_type(struct ConstVal *v, int type);
-int cf_is_expr_stop(int kind);
 unsigned long cf_parse_integer_literal_bits(const char *text);
 int cf_parse_primary(struct ConstVal *out);
 int cf_parse_unary(struct ConstVal *out);
@@ -651,11 +687,11 @@ int cf_parse_land(struct ConstVal *out);
 int cf_parse_lor(struct ConstVal *out);
 int try_parse_const_expr_value(struct ConstVal *out);
 void emit_const_value(struct ConstVal v);
-int try_gen_const_expr(void);
 
 /* ---- expr ---- */
 int parse_sizeof_expr_operand(void);
 void emit_load_from_hl(int type);
+void emit_bool_normalize_hl(int source_type);
 void emit_store_de_to_addr_hl(int type);
 int type_is_struct_object(int type);
 int same_struct_type(int a, int b);
@@ -675,89 +711,36 @@ int mark_user_label_reference(const char *name);
 int define_user_label(const char *name);
 void check_undefined_user_labels(void);
 int parse_enum_const_value(void);
-int bracket_expr_has_field_access(void);
-int try_fast_global_char_array_condition(int false_label);
-int is_assignment_token(int k);
-int skip_lvalue_syntax(void);
-int lookahead_is_assignment(void);
-int try_fast_global_char_array_store(void);
 void gen_post_update_symbol_addr_value(struct Sym *s, int op);
-int try_gen_deref_postinc_lvalue_addr(int *ptype);
-int try_parse_const_subscript(long *out);
-void gen_lvalue_addr(int *ptype);
 void gen_post_update_from_addr(int type, int op);
-int paren_starts_indirect_call(void);
-int try_inline_strcpy_call(char *name, long *arg_start, long *arg_end, int argc);
 void emit_promote_byte_to_int(int actual_type);
 void emit_promote_int_to_long(int actual_type, int expected_type);
 void emit_convert_int_to_float(int actual_type);
 void emit_convert_float_to_intlike(int target_type);
 int expected_arg_type(struct Sym *fn, int arg_index, int *ptype);
-void trim_small(char *s);
-void strip_line_directives_and_semi(char *s);
-int parse_simple_ident_text(const char *s, char *out);
-int va_size_from_text(const char *s);
-int try_builtin_stdarg_call(const char *name, long *arg_start, long *arg_end, int argc);
-int parse_call_args_after_lparen(long *arg_start, long *arg_end, int *argcp);
-int try_emit_fast_byte_add_const_snippet(const char *snippet);
-int emit_default_call_args(long *arg_start, long *arg_end, int argc);
 void emit_cleanup_stack_bytes(int bytes);
-int try_emit_struct_return_call_assignment(int lhs_type);
-int try_emit_push_struct_return_call_arg(const char *snippet, int want_type);
 void emit_call_hl_from_stack_offset(int off);
 void emit_extract_bitfield(void);
 void emit_store_bitfield_from_hl(void);
-int try_emit_string_fastcall(const char *name, long arg_start[MAX_SNAPSHOT], long arg_end[MAX_SNAPSHOT], int argc);
-int try_inline_cb_is_zero_call(const char *name, long arg_start[MAX_SNAPSHOT], long arg_end[MAX_SNAPSHOT], int argc);
-int try_gen_parenthesized_const_size_expr(void);
-int try_gen_parenthesized_deref_array_value(void);
-void gen_primary(void);
 int paren_starts_cast(void);
-int try_gen_simple_deref_value(void);
 void emit_incdec_value_in_dehl(int type, int op);
 void emit_pre_incdec_lvalue(int type, int op);
-void gen_unary(void);
 
 /* ---- cmp ---- */
 void gen_cmp(int op);
 void gen_cmp_typed(int op, int lhs_type);
-int is_relop_token(int k);
 void emit_signed_bias_for_relop(int op);
 void emit_cmp_branch_false(int op, int lfalse);
 void emit_cmp_branch_true(int op, int ltrue);
-int const_positive_snippet_value(const char *s, long *out);
-int snippet_const_expr_value(const char *snippet, struct ConstVal *out);
-int const_rel_result(struct ConstVal lhs, int op, struct ConstVal rhs, int *resultp);
-void emit_const_rel_branch(int rel_result, int label, int branch_when_true);
 void emit_cmp_branch_false_unsigned(int op, int lfalse);
 void emit_cmp_branch_true_unsigned(int op, int ltrue);
-void scan_until_stop_at_depth0(int stop_kind);
 int invert_relop_for_swap(int op);
-int parse_byte_const_operand(long *vp);
-int parse_global_byte_array_index_operand(struct ByteOperand *op);
-int parse_byte_operand_fast(struct ByteOperand *op);
 void emit_byte_operand_to_a(struct ByteOperand *op);
 void emit_cp_byte_operand(struct ByteOperand *op);
 int byte_operand_can_be_lhs(struct ByteOperand *op);
 void emit_byte_cmp_branch_after_cp(int op, int label, int branch_when_true);
-int gen_direct_byte_rel_branch_until(int label, int branch_when_true, int stop_kind);
-int simple_direct_condition_until(int stop_kind);
-int snippet_is_single_pointer_id(const char *s);
-const char *skip_snippet_ws_and_lines(const char *s);
-int snippet_simple_type(const char *s, int *typep);
-int snippet_needs_long_compare(const char *lhs, const char *rhs, int *commonp);
 void emit_branch_on_bool_hl(int label, int branch_when_true);
-int try_emit_long_cmp_const_branch(int op, const char *rhs_code, int common_type,
-                                   int label, int branch_when_true);
-void gen_direct_rel_branch_until(int op, int label, int branch_when_true, int stop_kind);
-int gen_direct_byte_bitand_branch_until(int label, int branch_when_true, int stop_kind);
-int gen_const_and_byte_condition_branch_until(int label, int branch_when_true, int stop_kind);
 int emit_cmp_const_branch_for_signed_local16(struct Sym *s, int op, long c, int label, int branch_when_true);
-int gen_direct_small_const_int_rel_branch_until(int label, int branch_when_true, int stop_kind);
-int gen_condition_branch_false_until(int lfalse, int stop_kind);
-int gen_condition_branch_true_until(int ltrue, int stop_kind);
-int gen_condition_branch_false(int lfalse);
-int gen_condition_branch_true(int ltrue);
 
 /* ---- ops ---- */
 void gen_signed_divmod16(int op);
@@ -769,64 +752,29 @@ void gen_binop32(int op, int lhs_type);
 void gen_cmp32(int op, int lhs_type);
 void gen_binop32_typed(int op, int lhs_type);
 void emit_mul_hl_const(long v);
-int try_gen_const_times(void);
 int type_is_unsigned(int t);
 int type_is_arith(int t);
 int promote_int_type(int t);
-int typeof_conditional_arm(void);
 int common_arith_type(int a, int b);
 void emit_cast_16_to_common(int from_type, int common_type);
 int peek_simple_unary_type(void);
-int float_literal_pow2_exp(const char *s, int *exp_out);
-void emit_fscale_pow2(int exp_delta);
-int try_consume_float_pow2_compound_scale(int op);
-int try_gen_float_pow2_times(void);
-void gen_mul(void);
 void scale_hl_by_elem_size(int elem);
 int int_log2_pow2(int v);
 void emit_arith_shift_right_hl_const(int count);
 void emit_logical_shift_right_hl_const(int count);
-void emit_shift_left_hl_const(int count);
 void emit_and_hl_const(unsigned int mask);
 void divide_hl_by_elem_size(int elem);
-void gen_add(void);
 int emit_shift_const_long(int op, int lhs_type, long count);
 void emit_shift_loop(int op, int lhs_type);
-void gen_shift(void);
 void emit_float_compare_call(int op);
-void gen_float_cmp_16lhs(int op, int lhs_type);
-void gen_float_cmp_long_lhs(int op, int lhs_type);
-void gen_rel(void);
-void gen_eq(void);
-void gen_band(void);
-void gen_bxor(void);
-void gen_bor(void);
 void emit_test_expr_nonzero(int expr_type, int true_label, int branch_when_true);
-void gen_land(void);
-void gen_lor(void);
-void gen_conditional(void);
 
 /* ---- assign ---- */
 void emit_load_float_bits(unsigned long bits);
-int parse_float_assignment_literal(unsigned long *bits);
-int try_emit_float_rvalue_dehl(void);
 void emit_global_byte_array_index_addr(struct Sym *arr, struct Sym *idx_sym, long idx_const, int has_const);
-int try_fast_global_byte_array_store(void);
-void gen_assign(void);
-void gen_expr_no_comma(void);
-void gen_expr(void);
 
 /* ---- stmt_fast ---- */
 void emit_incdec_addr(int type, int op);
-int lookahead_is_post_incdec_statement(int *op_out);
-int try_fast_local_self_add_statement(void);
-int try_gen_incdec_statement(void);
-void emit_store_a_to_sym_byte_preserve_de(struct Sym *s, int byte_off);
-void emit_load_simple_byte_to_c(struct Sym *s, long val, int is_const);
-void emit_and_mask_byte_direct(struct Sym *mask_sym, int byte_index);
-int try_fast_crc_update_byte_simple_args(struct Sym *dst);
-int try_fast_crc_update_byte_statement(void);
-void gen_expr_statement(void);
 
 /* ---- decl ---- */
 int parse_float_init_literal(unsigned long *bits);
@@ -860,38 +808,8 @@ void gen_local_decl_after_type(int base);
 
 /* ---- stmt ---- */
 void gen_compound(void);
-void gen_if(void);
-void emit_load_sym_word_to_bc(struct Sym *s);
-void emit_store_de_to_sym_word(struct Sym *s);
-void emit_store_bc_to_sym_word(struct Sym *s);
-void emit_bc_add_const_small(int n);
-int parse_while_deref_nonzero_id(char *name, int namesz, struct Sym **sp, int *elemp);
-void emit_load_bc_pointee_to_hl_or_a(int elem);
-void emit_test_loaded_pointee_zero(int elem);
-void emit_compare_loaded_pointee_to_sym(int elem, struct Sym *csym);
-int try_gen_bc_pointer_copy_while(void);
-int try_gen_bc_pointer_find_while(void);
-int try_gen_bc_pointer_rfind_while(void);
-int try_gen_bc_pointer_scan_while(void);
-void gen_while(void);
-char *copy_range(long a, long b);
-void gen_snippet_expr(const char *snippet);
-void gen_snippet_lvalue_addr(const char *snippet, int *ptype);
-void skip_expr_until_rparen(long *startp, long *endp);
-void skip_for_cond(long *startp, long *endp);
-void gen_snippet_cond_true(const char *snippet, int ltrue);
-int for_init_always_enters_loop(void);
-int try_gen_bc_byte_array_cycle_for(void);
-void gen_for(void);
-void gen_return(void);
-void gen_switch_chain(void);
-int scan_switch_cases_for_table(int *case_vals, int *case_labs, int *case_countp, int *default_labp, int *minp, int *maxp);
-int scan_switch_cases_for_chain(int *case_vals, int *case_labs, int *case_countp, int *default_labp);
 int switch_label_for_value(int value, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
 void emit_switch_jump_table(int minv, int maxv, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
-void gen_switch_table(void);
-void gen_switch(void);
-void gen_do_while(void);
 void gen_statement(void);
 
 /* ---- func ---- */
@@ -909,7 +827,8 @@ void parse_param_list(void);
 int current_function_param_count(void);
 int current_function_safe_to_omit_ix(int return_type, int local_bytes);
 void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
-void emit_function_epilogue(void);
+void emit_function_epilogue(int implicit_zero_return);
+void emit_needed_inline_bodies(void);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
 void scan_local_decl_after_type(int base);

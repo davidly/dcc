@@ -1,0 +1,3 @@
+<source>:1: error: type expected near ';'
+<source>:1: error: identifier expected in typedef near ';'
+dcc: 2 error(s)

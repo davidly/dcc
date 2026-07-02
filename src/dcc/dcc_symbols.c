@@ -220,57 +220,6 @@ void emit_global_char_index_addr(struct Sym *s)
 }
 
 
-int emit_simple_local_index_to_hl(void)
-{
-    struct Sym *idx;
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
-
-    if (tok.kind != TOK_ID)
-        return 0;
-
-    idx = find_sym(tok.text);
-    if (!idx)
-        return 0;
-
-    if (idx->storage != SC_LOCAL && idx->storage != SC_PARAM)
-        return 0;
-
-    if (type_size(idx->type) != 2)
-        return 0;
-
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
-
-    next_token();
-    if (tok.kind != ']') {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
-        return 0;
-    }
-
-    if (idx->offset < -128 || idx->offset + 1 > 127) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
-        return 0;
-    }
-    fprintf(outf, "\tld l,(ix%+d)\n", idx->offset);
-    fprintf(outf, "\tld h,(ix%+d)\n", idx->offset + 1);
-    return 1;
-}
-
 void emit_test_global_char_index_zero(struct Sym *s, int false_label)
 {
     emit_global_char_index_addr(s);
@@ -322,6 +271,19 @@ struct Sym *add_local_alloc(const char *name, int type, int bytes)
     local_size += bytes;
     s = add_local_known(name, type, SC_LOCAL, -local_size, bytes);
     return s;
+}
+
+struct Sym *add_compound_literal_local(int type)
+{
+    char name[64];
+    int bytes;
+
+    bytes = type_size(type);
+    if (bytes <= 0)
+        bytes = 2;
+
+    sprintf(name, "#clit%d", g_compound_literal_seq++);
+    return add_local_alloc(name, type, bytes);
 }
 
 struct Sym *add_param_alloc(const char *name, int type)
@@ -441,6 +403,21 @@ void emit_runtime_extrn_if_needed(const char *name)
     static int nemitted;
     int i;
 
+    /*
+     * During a suppressed scan/replay (scan_mode), do not emit the EXTRN and,
+     * crucially, do not record it as emitted.  Otherwise a runtime helper first
+     * "used" inside a suppressed gate replay would be marked emitted while its
+     * EXTRN line went nowhere, so the real emission would skip it and leave the
+     * helper undefined at link time.
+     */
+    if (scan_mode)
+        return;
+
+    if (g_inline_body_buffering) {
+        fprintf(outf, "\textrn %s\n", name);
+        return;
+    }
+
     for (i = 0; i < nemitted; ++i) {
         if (!strcmp(emitted[i], name))
             return;
@@ -449,8 +426,7 @@ void emit_runtime_extrn_if_needed(const char *name)
     if (nemitted >= 64)
         fatal("too many runtime extrns");
 
-    if (!scan_mode)
-        fprintf(outf, "\textrn %s\n", name);
+    fprintf(outf, "\textrn %s\n", name);
     emitted[nemitted++] = name;
 }
 
@@ -550,10 +526,12 @@ void emit_load_sym_value_direct(struct Sym *s)
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);
             emit("\tld l,(hl)\n");
-            if (s->type & TYPE_UNSIGNED)
+            if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
                 emit("\tld h,0\n");
             else
                 emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
+            if (type_is_bool(s->type))
+                emit_bool_normalize_hl(s->type);
         } else if (type_size(s->type) == 4) {
             emit_load_frame_addr_hl(s);
             emit("\tld a,(hl)\n\tld l,a\n\tinc hl\n\tld a,(hl)\n\tld h,a\n");
@@ -568,10 +546,12 @@ void emit_load_sym_value_direct(struct Sym *s)
     }
     if (type_size(s->type) == 1) {
         fprintf(outf, "\tld l,(ix%+d)\n", s->offset);
-        if (s->type & TYPE_UNSIGNED)
+        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
             emit("\tld h,0\n");
         else
             emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
+        if (type_is_bool(s->type) && s->storage == SC_PARAM)
+            emit_bool_normalize_hl(s->type);
     } else if (type_size(s->type) == 4) {
         fprintf(outf, "\tld l,(ix%+d)\n", s->offset);
         fprintf(outf, "\tld h,(ix%+d)\n", s->offset + 1);
@@ -589,10 +569,12 @@ void emit_load_sym_de_direct(struct Sym *s)
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);
             emit("\tld e,(hl)\n");
-            if (s->type & TYPE_UNSIGNED)
+            if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
                 emit("\tld d,0\n");
             else
                 emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
+            if (type_is_bool(s->type))
+                emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
         } else {
             emit_load_frame_addr_hl(s);
             emit("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n");
@@ -601,10 +583,12 @@ void emit_load_sym_de_direct(struct Sym *s)
     }
     if (type_size(s->type) == 1) {
         fprintf(outf, "\tld e,(ix%+d)\n", s->offset);
-        if (s->type & TYPE_UNSIGNED)
+        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
             emit("\tld d,0\n");
         else
             emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
+        if (type_is_bool(s->type) && s->storage == SC_PARAM)
+            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
     } else {
         fprintf(outf, "\tld e,(ix%+d)\n", s->offset);
         fprintf(outf, "\tld d,(ix%+d)\n", s->offset + 1);
@@ -619,6 +603,8 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
     }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
         if (type_size(s->type) == 1) {
+            if (type_is_bool(s->type))
+                emit_bool_normalize_hl(s->type);
             emit("\tld e,l\n");
             emit_load_frame_addr_hl(s);
             emit("\tld (hl),e\n");
@@ -634,6 +620,8 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
         return;
     }
     if (type_size(s->type) == 1) {
+        if (type_is_bool(s->type))
+            emit_bool_normalize_hl(s->type);
         fprintf(outf, "\tld (ix%+d),l\n", s->offset);
     } else if (type_size(s->type) == 4) {
         fprintf(outf, "\tld (ix%+d),l\n", s->offset);
@@ -801,61 +789,6 @@ void emit_add_field_offset(struct FieldDef *fd)
         fprintf(outf, "\tld de,%d\n", fd->offset);
         emit("\tadd hl,de\n");
     }
-}
-
-int apply_field_access_from_addr(int cur_type, int arrow, int *is_array)
-{
-    struct FieldDef *fd;
-    int sid;
-    int di;
-
-    if (is_array) {
-        is_array[0] = 0;
-    }
-
-    if (arrow) {
-        emit_load_from_hl(cur_type);
-    }
-
-    if (tok.kind != TOK_ID) {
-        error_here("field name expected");
-        return TYPE_INT;
-    }
-
-    sid = base_struct_id_from_type(cur_type);
-    fd = find_field_def(sid, tok.text);
-    if (!fd) {
-        error_here("unknown struct field");
-        next_token();
-        return TYPE_INT;
-    }
-
-    next_token();
-
-    emit_add_field_offset(fd);
-
-    if (is_array) {
-        is_array[0] = fd->is_array;
-    }
-    current_field_array_elem_size = fd->elem_size ? fd->elem_size : type_size(fd->type);
-    /* Float fields are stored as opaque 4-byte objects.  This is normally
-     * already true through type_size(), but keep the field metadata explicit
-     * so arrays of structs containing float fields and float field arrays use
-     * the same 4-byte stride as plain float arrays. */
-    if (fd->is_array && type_is_float(fd->elem_type))
-        current_field_array_elem_size = 4;
-    else if (!fd->is_array && type_is_float(fd->type))
-        current_field_array_elem_size = 4;
-    current_field_array_dim_count = fd->dim_count;
-    for (di = 0; di < 4; ++di) {
-        current_field_array_dims[di] = fd->dims[di];
-    }
-    current_field_bit_width = fd->bit_width;
-    current_field_bit_shift = fd->bit_shift;
-    current_field_bit_mask = fd->bit_mask;
-    if (fd->is_array)
-        return fd->elem_type;
-    return fd->type;
 }
 
 void skip_balanced_bracket(int open_ch, int close_ch)
@@ -1074,7 +1007,11 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
                 return 1;
             }
         }
-        error_here("undefined symbol");
+        {
+            char msg[MAX_TOK_TEXT + 64];
+            sprintf(msg, "use of undeclared identifier '%s'", tok.text);
+            error_here(msg);
+        }
         next_token();
         *typep = TYPE_INT;
         *sizep = 2;

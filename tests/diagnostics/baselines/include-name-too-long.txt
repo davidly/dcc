@@ -1,0 +1,2 @@
+<source>:1: error: include name too long
+dcc: 1 error(s)

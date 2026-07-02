@@ -1,0 +1,2 @@
+<source>:7: error: duplicate goto label near 'return'
+dcc: 1 error(s)

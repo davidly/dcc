@@ -1,0 +1,3 @@
+[submodule "tests/extended-tests"]
+	path = tests/extended-tests
+	url = https://github.com/c-testsuite/c-testsuite

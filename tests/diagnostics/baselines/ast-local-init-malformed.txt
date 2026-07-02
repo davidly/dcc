@@ -1,0 +1,2 @@
+<source>:3: error: malformed initializer expression near ';'
+dcc: 1 error(s)

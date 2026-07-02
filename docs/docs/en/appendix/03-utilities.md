@@ -59,9 +59,13 @@ Runs in parallel by default:
 
 - Each app builds in its own `build/<app>/` subdirectory so concurrent builds
   don't clobber shared artifacts.
+- The whole run is isolated under a per-invocation `build/run-<pid>/` folder that
+  is removed automatically on exit; pass `-KeepBuild` to retain it for debugging.
 - A live `[ n/total] PASS/FAIL` status prints as each app completes.
 - Use `-Serial` to fall back to sequential builds in the shared `build/`
   directory.
+- Pass `-Extended` to also run the imported c-testsuite single-exec corpus
+  (via `runall-extended.ps1`) after the main suite.
 - The lightweight stack-overflow guard (`-fstack-check`) is **on by default**;
   pass `-NoStackCheck` to build without it.
 - Pass `-Report` to append per-app run time and `.COM` size measurements to a
@@ -87,6 +91,8 @@ With no options, the suite runs in parallel, enables `-fstack-check`, and uses
 ./scripts/runall.ps1 -Emulator altair
 ./scripts/runall.ps1 -Mode fast            # optimized build only
 ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
+./scripts/runall.ps1 -Extended             # also run extended c-testsuite
+./scripts/runall.ps1 -KeepBuild            # keep build/run-<pid>/ for debugging
 ./scripts/runall.ps1 -Report               # also append perf_results.csv
 ```
 
@@ -113,8 +119,10 @@ The `-Mode` parameter selects which optimization pass(es) to build and verify.
 | `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
 | `-Mode` | `fast` | Build mode: `fast` (optimized), `nopeep` (unoptimized), or `full` |
 | `-Help` | (off) | Show help text and exit without building or running tests |
+| `-Extended` | (off) | Also run the extended c-testsuite corpus after the main suite |
 | `-Serial` | (off) | Run sequentially instead of the default parallel mode |
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
+| `-KeepBuild` | (off) | Keep the per-invocation `build/run-<pid>/` folder instead of removing it on exit (parallel mode) |
 | `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
 | `-ReportFile` | `perf_results.csv` | CSV path used by `-Report` |
 | `-ReportClockHz` | `1000000000` | ntvcm clock speed used for measured app runs in report mode; set to `0` for full-speed report runs |

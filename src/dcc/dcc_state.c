@@ -5,12 +5,11 @@
  * file-scope globals; every other module references them through the matching
  * `extern` declarations in the umbrella header dcc.h.
  *
- * Why dcc keeps so much shared state: it is a single-pass, syntax-directed
- * compiler with no AST. Parser and code generator share a large amount of
- * "current position" state (the source buffer, the lookahead token, the
- * symbol tables, per-function codegen flags, ...). Keeping all of it in one
- * place, declared once in dcc.h, lets the modules cooperate without threading
- * the state through every call.
+ * Why dcc keeps so much shared state: parser, AST builder, and codegen helpers
+ * share a large amount of "current position" state (the source buffer, the
+ * lookahead token, the symbol tables, per-function codegen flags, ...).
+ * Keeping all of it in one place, declared once in dcc.h, lets the modules
+ * cooperate without threading the state through every call.
  *
  * Intentionally NOT here (kept private/static to one module for locality):
  *   - pp_expr_p / pp_expr_depth        -> dcc_preproc.c (#if expression cursor)
@@ -101,6 +100,7 @@ int current_local_bytes;
 int max_function_local_bytes;
 int current_omit_ix_frame;
 int current_function_has_call;
+int g_inline_body_buffering;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];
@@ -141,6 +141,7 @@ int errors;
 int scan_mode;
 int decl_is_extern;
 int decl_is_static;
+int decl_is_inline;
 int decl_is_const;      /* current declaration used const qualifier */
 int decl_is_register;   /* current decl used 'register' keyword */
 int expr_result_dead;
@@ -150,6 +151,7 @@ int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int lit
 int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
 int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
 int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
+int g_parse_type_was_enum;
 
 /* Pending #asm block output: buffered until a safe flush point (function
  * epilogue or end of translation unit) to avoid duplication from the
@@ -157,6 +159,7 @@ int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim ar
 char pending_asm_buf[8192];
 int  pending_asm_len;
 int  asm_suppress_depth;
+int  g_compound_literal_seq;
 
 /* User-defined goto labels (function-scoped) */
 char ulabel_names[MAX_USER_LABELS][64];

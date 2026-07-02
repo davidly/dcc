@@ -1,0 +1,2 @@
+<source>:3: error: malformed statement near 'return'
+dcc: 1 error(s)

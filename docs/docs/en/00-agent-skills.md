@@ -1,9 +1,10 @@
 # Agentic skills
 
 The dcc repo ships a project-scoped **agentic skill** in
-`.github/skills/c89-cpm-z80`. A skill is a folder containing a `SKILL.md` (plus
+`.github/skills/dcc-cpm-z80`. A skill is a folder containing a `SKILL.md` (plus
 optional `references/`) that packages domain knowledge. This one covers C89
-code for dcc, CP/M 2.2, Z80, ntvcm, and the dcc runtime library.
+plus target-appropriate C99/C11 code for dcc, CP/M 2.2, Z80, ntvcm, and the dcc
+runtime library.
 
 An agent that supports skills reads `SKILL.md` on demand when your task matches
 the skill's description, so it gets dcc-specific guidance without you pasting it
@@ -16,7 +17,7 @@ open the dcc repo. The agent loads it when your request falls within the skill's
 scope, such as dcc, CP/M, Z80, ntvcm, or DCCRTL. You can also request it
 explicitly:
 
-> use the c89-cpm-z80 skill to build and test foo.c
+> use the dcc-cpm-z80 skill to build and test foo.c
 
 ## Using the skill from the GitHub Copilot CLI
 
@@ -42,27 +43,27 @@ Copy the skill folder into one personal skills root, for example
 === "Windows"
 
     New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
-    Copy-Item -Recurse ".github\skills\c89-cpm-z80" "$env:USERPROFILE\.agents\skills\"
+    Copy-Item -Recurse ".github\skills\dcc-cpm-z80" "$env:USERPROFILE\.agents\skills\"
 
 === "macOS"
 
     mkdir -p ~/.agents/skills
-    cp -R .github/skills/c89-cpm-z80 ~/.agents/skills/
+    cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/
 
 === "Ubuntu"
 
     mkdir -p ~/.agents/skills
-    cp -R .github/skills/c89-cpm-z80 ~/.agents/skills/
+    cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/
 
 === "Ubuntu ARM64"
 
     mkdir -p ~/.agents/skills
-    cp -R .github/skills/c89-cpm-z80 ~/.agents/skills/
+    cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/
 
 === "Windows ARM64"
 
     New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
-    Copy-Item -Recurse ".github\skills\c89-cpm-z80" "$env:USERPROFILE\.agents\skills\"
+    Copy-Item -Recurse ".github\skills\dcc-cpm-z80" "$env:USERPROFILE\.agents\skills\"
 
 The repo copy and the personal copy are independent files, so re-copy after
 editing either one to keep them in sync.

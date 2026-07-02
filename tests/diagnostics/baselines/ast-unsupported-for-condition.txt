@@ -1,0 +1,2 @@
+<source>:8: error: unsupported for statement near 'for'
+dcc: 1 error(s)

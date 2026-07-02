@@ -11,6 +11,9 @@ emulator, and compares output against per-app baselines in tests/baselines/
 order does not matter. Uses tests/_test_overrides.json for test-specific arguments and
 stack sizes.
 
+Pass -Extended to also run scripts/runall-extended.ps1 after the main app suite,
+verifying the imported c-testsuite single-exec corpus as part of the same run.
+
 Supports per-test arguments (e.g., ttt with "10" as input) and custom stack
 size overrides (e.g., cobint needs 1536 bytes, triangle needs 768).
 
@@ -49,6 +52,9 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
 .PARAMETER Help
     Show this help text and exit without building or running tests.
 
+.PARAMETER Extended
+    Also run the extended c-testsuite single-exec corpus after the main app suite.
+
 .PARAMETER Serial
   Build and verify apps sequentially in the shared build directory. By default
   the suite runs in parallel; use -Serial as a fallback (e.g. for debugging or
@@ -66,11 +72,18 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
 .PARAMETER ReportClockHz
     ntvcm clock speed used for measured app runs in -Report mode (default: 400000000).
 
+.PARAMETER KeepBuild
+    In parallel mode the suite builds into a per-invocation folder
+    (build/run-<pid>) so concurrent runs stay isolated, and removes it on exit to
+    keep build/ from accumulating run-* folders. Pass -KeepBuild to retain that
+    folder (e.g. to inspect failing build artifacts).
+
 .EXAMPLE
   pwsh ./scripts/runall.ps1
     pwsh ./scripts/runall.ps1 -Help
   pwsh ./scripts/runall.ps1 -NoStackCheck
   pwsh ./scripts/runall.ps1 -Mode nopeep
+    pwsh ./scripts/runall.ps1 -Extended
   pwsh ./scripts/runall.ps1 -Serial
   pwsh ./scripts/runall.ps1 -ThrottleLimit 8
     pwsh ./scripts/runall.ps1 -Report
@@ -95,12 +108,14 @@ param(
     [ValidateSet("fast", "nopeep", "full")]
     [string]$Mode = "fast",
     [switch]$Help,
+    [switch]$Extended,
     [int]$RunTimeout = 60,
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [switch]$Report,
     [string]$ReportFile = "perf_results.csv",
     [long]$ReportClockHz = 400000000,
+    [switch]$KeepBuild,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -154,9 +169,27 @@ function Restore-TerminalState {
     }
 }
 
+# Per-run isolation directory (parallel mode only). Recorded here so it can be
+# removed on exit, keeping the build/ tree from accumulating one run-* folder
+# per invocation. Pass -KeepBuild to retain it for debugging.
+$script:RunBuildRoot = $null
+
+function Remove-RunBuildDir {
+    if ($KeepBuild) { return }
+    if ($script:RunBuildRoot -and (Test-Path $script:RunBuildRoot -PathType Container)) {
+        try {
+            Remove-Item -LiteralPath $script:RunBuildRoot -Recurse -Force -ErrorAction Stop
+        }
+        catch { }
+    }
+}
+
 trap {
     Restore-TerminalState
-    throw
+    Remove-RunBuildDir
+    # Re-throw the original error record so its message/position survive rather
+    # than surfacing a generic "ScriptHalted" from a bare throw.
+    throw $_
 }
 
 # Dot-source the build driver once so Invoke-MaBuild runs in-process. This
@@ -170,6 +203,19 @@ $requestedEmulator = $Emulator
 $Mode = $requestedMode
 $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
+
+function New-RunBuildId {
+    return "run-$PID"
+}
+
+if ($Parallel) {
+    # Isolate this invocation by process id so concurrent runs never clobber
+    # each other's per-app build dirs. The folder is removed on exit (see
+    # Remove-RunBuildDir) unless -KeepBuild is set, so build/ does not fill up
+    # with run-* folders.
+    $BuildDir = Join-Path $BuildDir (New-RunBuildId)
+    $script:RunBuildRoot = $BuildDir
+}
 
 # Get machine name for reporting (platform-specific)
 $machineName = $null
@@ -533,11 +579,13 @@ function Get-Baseline {
 #   {{DATE}}  - C __DATE__ value, e.g. "Jun 16 2026"
 #   {{TIME}}  - C __TIME__ value, e.g. "20:01:50"
 #   {{SEP}}   - path separator, "/" (Unix) or "\" (Windows)
+#   {{UINT}}  - unsigned decimal integer
 #   {{HEX4}}  - four uppercase hex digits, e.g. "0040"
 $Placeholders = [ordered]@{
     '{{DATE}}' = '[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}'
     '{{TIME}}' = '\d{2}:\d{2}:\d{2}'
     '{{SEP}}'  = '[/\\]'
+    '{{UINT}}' = '\d+'
     '{{HEX4}}' = '[0-9A-F]{4}'
 }
 
@@ -634,6 +682,7 @@ Write-Host "STARTING BUILD AND RUN SUITE" -ForegroundColor Cyan
 Write-Host "Mode: $optimisationSummary" -ForegroundColor Cyan
 if ($Parallel) {
     Write-Host "(parallel, throttle = $ThrottleLimit)" -ForegroundColor Cyan
+    Write-Host "Build root: $BuildDir" -ForegroundColor Cyan
 }
 Write-Host "========================================" -ForegroundColor Cyan
 
@@ -730,6 +779,41 @@ function Write-PerformanceReport {
     }
 }
 
+function Invoke-ExtendedSuite {
+    param(
+        [string]$Mode,
+        [string]$Emulator,
+        [int]$RunTimeout,
+        [string]$BuildDir,
+        [bool]$StackCheck,
+        [bool]$Serial,
+        [int]$ThrottleLimit
+    )
+
+    $extendedScript = Join-Path $PSScriptRoot "runall-extended.ps1"
+    $extendedBuildDir = Join-Path $BuildDir "extended-tests"
+    $extendedArgs = @(
+        "-NoProfile",
+        "-File", $extendedScript,
+        "-Mode", $Mode,
+        "-Emulator", $Emulator,
+        "-RunTimeout", $RunTimeout,
+        "-BuildDir", $extendedBuildDir,
+        "-All",
+        "-ThrottleLimit", $ThrottleLimit
+    )
+    if (-not $StackCheck) { $extendedArgs += "-NoStackCheck" }
+    if ($Serial) { $extendedArgs += "-Serial" }
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "STARTING EXTENDED C-TESTSUITE" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    & pwsh @extendedArgs
+    $script:ExtendedSuiteExitCode = $LASTEXITCODE
+}
+
 $results = @()
 $totalToRun = $workItems.Count
 
@@ -818,6 +902,17 @@ foreach ($result in $results) {
     }
 }
 
+$extendedPassed = $null
+if ($Extended) {
+    Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
+        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit
+    $extendedExitCode = $script:ExtendedSuiteExitCode
+    $extendedPassed = ($extendedExitCode -eq 0)
+    if (-not $extendedPassed) {
+        $failed++
+    }
+}
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "TEST SUITE SUMMARY" -ForegroundColor Cyan
@@ -833,15 +928,22 @@ Write-Host "  Total apps:   $($testFiles.Count)"
 Write-Host "  Passed:       $passed" -ForegroundColor Green
 Write-Host "  Failed:       $failed" -ForegroundColor $(if ($failed -eq 0) { "Green" } else { "Red" })
 Write-Host "  Skipped:      $skipped"
+if ($Extended) {
+    Write-Host "  Extended:     $(if ($extendedPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($extendedPassed) { "Green" } else { "Red" })
+}
 Write-Host "  Total time:   $suiteElapsedStr"
 Write-Host "  Optimisation: $optimisationSummary"
 
-if ($failed -gt 0) {
+if ($failedApps.Count -gt 0) {
     Write-Host ""
     Write-Host "Failed apps:" -ForegroundColor Red
     foreach ($app in $failedApps) {
         Write-Host "  - $app" -ForegroundColor Red
     }
+}
+if ($Extended -and -not $extendedPassed) {
+    Write-Host ""
+    Write-Host "Extended c-testsuite failed" -ForegroundColor Red
 }
 
 if ($Report) {
@@ -854,9 +956,14 @@ if ($null -ne $_savedStty) { stty $_savedStty 2>$null }
 if ($failed -eq 0) {
     Write-Host ">>> SUCCESS: All tests passed <<<" -ForegroundColor Green
     Restore-TerminalState
+    Remove-RunBuildDir
     exit 0
 } else {
     Write-Host ">>> FAILURE: $failed test(s) failed <<<" -ForegroundColor Red
+    if ($script:RunBuildRoot -and -not $KeepBuild) {
+        Write-Host "  (build artifacts removed; re-run with -KeepBuild to retain them for debugging)" -ForegroundColor DarkGray
+    }
     Restore-TerminalState
+    Remove-RunBuildDir
     exit 1
 }

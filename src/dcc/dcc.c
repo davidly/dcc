@@ -13,6 +13,10 @@
  */
 
 #include "dcc.h"
+#include "dcc_ast.h"
+
+void append_mem(char **outp, long *lenp, long *capp, const char *s, long n);
+
 long file_size(FILE *f)
 {
     long n;
@@ -23,36 +27,83 @@ long file_size(FILE *f)
 }
 
 
-char *splice_backslash_newlines(char *in, long *lenp)
+char *splice_backslash_newlines(char *in, long *lenp, const char *filename)
 {
     long i;
-    long o;
     long n;
+    long run_start;
     char *out;
+    long out_len;
+    long out_cap;
+    int phys_line;
+    int spliced_since_sync;
 
     n = lenp[0];
-    out = (char *)xmalloc((size_t)n + 1);
+    out = NULL;
+    out_len = 0;
+    out_cap = 0;
+    phys_line = 1;
+    spliced_since_sync = 0;
 
     i = 0;
-    o = 0;
+    run_start = 0;
     while (i < n) {
+        int splice_len = 0;
+
         if (in[i] == '\\') {
-            if (i + 1 < n && in[i + 1] == '\n') {
-                i += 2;
-                continue;
-            }
-            if (i + 2 < n && in[i + 1] == '\r' && in[i + 2] == '\n') {
-                i += 3;
-                continue;
-            }
+            if (i + 1 < n && in[i + 1] == '\n')
+                splice_len = 2;
+            else if (i + 2 < n && in[i + 1] == '\r' && in[i + 2] == '\n')
+                splice_len = 3;
         }
 
-        out[o++] = in[i++];
+        if (splice_len) {
+            if (i > run_start)
+                append_mem(&out, &out_len, &out_cap, in + run_start, i - run_start);
+            i += splice_len;
+            run_start = i;
+            phys_line++;
+            spliced_since_sync++;
+            continue;
+        }
+
+        if (in[i] == '\n') {
+            i++;
+            append_mem(&out, &out_len, &out_cap, in + run_start, i - run_start);
+            run_start = i;
+            phys_line++;
+            /*
+             * Deleting a backslash-newline pair (translation phase 2) drops a
+             * physical line from the character stream without dropping it
+             * from the file's line numbering, so every diagnostic for the
+             * rest of the file would otherwise read low by the number of
+             * continued lines already spliced away.  Resync with the same
+             * #line directive mechanism already used for #include splicing
+             * (see append_line_directive/preprocess_includes_file) right
+             * after the first real (non-spliced) newline that follows a
+             * spliced run, so line_no matches the original file again.
+             */
+            if (spliced_since_sync > 0) {
+                char buf[768];
+                sprintf(buf, "#line %d \"%s\"\n", phys_line, filename);
+                append_mem(&out, &out_len, &out_cap, buf, (long)strlen(buf));
+                spliced_since_sync = 0;
+            }
+            continue;
+        }
+
+        i++;
+    }
+    if (i > run_start)
+        append_mem(&out, &out_len, &out_cap, in + run_start, i - run_start);
+
+    if (!out) {
+        out = (char *)xmalloc(1);
+        out[0] = 0;
     }
 
-    out[o] = 0;
     free(in);
-    lenp[0] = o;
+    lenp[0] = out_len;
     return out;
 }
 
@@ -84,7 +135,7 @@ char *read_file(const char *name, long *lenp)
      * preprocessing/tokenization.  This enables continued macro definitions,
      * strings, identifiers, and split operators.
      */
-    p = splice_backslash_newlines(p, lenp);
+    p = splice_backslash_newlines(p, lenp, name);
     return p;
 }
 
@@ -243,8 +294,17 @@ void make_include_path(const char *base, const char *inc,
     out[outsz - 1] = 0;
 }
 
-int try_parse_include(const char *line, long n, char *name, int namesz,
-                              int *is_system)
+int report_include_error(const char *file, int line, const char *msg)
+{
+    fprintf(stderr, "%s:%d: error: %s\n", file ? file : "<input>", line, msg);
+    errors++;
+    if (errors > 40)
+        fatal("too many errors");
+    return -1;
+}
+
+int try_parse_include(const char *line, long n, const char *file, int src_line,
+                              char *name, int namesz, int *is_system)
 {
     long i;
     int j;
@@ -272,7 +332,7 @@ int try_parse_include(const char *line, long n, char *name, int namesz,
         i++;
 
     if (i >= n || (line[i] != '"' && line[i] != '<'))
-        fatal("bad include syntax");
+        return report_include_error(file, src_line, "expected \"FILENAME\" or <FILENAME>");
 
     if (line[i] == '<') {
         endch = '>';
@@ -287,13 +347,13 @@ int try_parse_include(const char *line, long n, char *name, int namesz,
 
     while (i < n && line[i] != endch) {
         if (j + 1 >= namesz)
-            fatal("include name too long");
+            return report_include_error(file, src_line, "include name too long");
 
         name[j++] = line[i++];
     }
 
     if (i >= n || line[i] != endch)
-        fatal("unterminated include name");
+        return report_include_error(file, src_line, "unterminated include name");
 
     name[j] = 0;
     return 1;
@@ -349,11 +409,15 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
 
         {
             int is_system = 0;
-            if (try_parse_include(raw + line_start,
-                                  line_end - line_start,
-                                  incname,
-                                  sizeof(incname),
-                                  &is_system)) {
+            int include_status;
+            include_status = try_parse_include(raw + line_start,
+                                               line_end - line_start,
+                                               name,
+                                               src_line,
+                                               incname,
+                                               sizeof(incname),
+                                               &is_system);
+            if (include_status > 0) {
                 if (is_system) {
                     /* For system includes (<foo.h>), try the local directory
                      * first.  If a local file is found, include it just like a
@@ -381,10 +445,12 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
                     append_line_directive(&out, &out_len2, &out_cap, src_line + 1, name);
                     free(incsrc);
                 }
-            } else {
+            } else if (include_status == 0) {
                 append_mem(&out, &out_len2, &out_cap,
                            raw + line_start,
                            p - line_start);
+            } else {
+                append_mem(&out, &out_len2, &out_cap, "\n", 1);
             }
         } /* end try_parse_include block */
         src_line++;
@@ -434,6 +500,7 @@ char *filter_active_preprocessor_source(long *lenp)
     int sp;
     int active;
     int in_asm;
+    int logical_line;
 
     out = NULL;
     out_len = 0;
@@ -442,12 +509,14 @@ char *filter_active_preprocessor_source(long *lenp)
     sp = 0;
     active = 1;
     in_asm = 0;
+    logical_line = 1;
 
     while (p < src_len) {
         const char *s;
         const char *e;
         char word[32];
         int is_directive;
+        int next_logical_line;
 
         line_start = p;
         while (p < src_len && src[p] != '\n')
@@ -455,6 +524,8 @@ char *filter_active_preprocessor_source(long *lenp)
         line_end = p;
         if (p < src_len && src[p] == '\n')
             p++;
+        line_no = logical_line;
+        next_logical_line = logical_line + 1;
 
         s = src + line_start;
         e = src + line_end;
@@ -475,7 +546,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 if (!strcmp(ww, "endasm")) {
                     in_asm = 0;
                     append_mem(&out, &out_len, &out_cap, "\n", 1);
-                    continue;
+                    goto next_filter_line;
                 }
             }
             /* Pass asm content to tokenizer as a pseudo-directive.
@@ -487,7 +558,7 @@ char *filter_active_preprocessor_source(long *lenp)
             } else {
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
             }
-            continue;
+            goto next_filter_line;
         }
 
         if (!is_directive) {
@@ -495,7 +566,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
             else
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         s++;
@@ -521,13 +592,35 @@ char *filter_active_preprocessor_source(long *lenp)
             errors++;
             if (errors > 40) fatal("too many errors");
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "line")) {
-            if (active)
+            if (active) {
+                char line_expr[MAX_MACRO_TEXT];
+                char expanded[MAX_MACRO_TEXT];
+                const char *lp;
+                int ei;
+                int lno;
+
+                while (s < e && (*s == ' ' || *s == '\t'))
+                    s++;
+                ei = 0;
+                while (s < e && ei < (int)sizeof(line_expr) - 1)
+                    line_expr[ei++] = *s++;
+                line_expr[ei] = 0;
+                macro_expand_argument_text(line_expr, expanded, sizeof(expanded), 0);
+                lp = expanded;
+                while (*lp && isspace((unsigned char)*lp))
+                    lp++;
+                lno = 0;
+                while (isdigit((unsigned char)*lp))
+                    lno = lno * 10 + *lp++ - '0';
+                if (lno > 0)
+                    next_logical_line = lno;
                 append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
-            continue;
+            }
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "ifdef") || !strcmp(word, "ifndef")) {
@@ -539,8 +632,17 @@ char *filter_active_preprocessor_source(long *lenp)
             while (s < e && is_ident_char((unsigned char)*s) && ni < 63)
                 name[ni++] = *s++;
             name[ni] = 0;
-            if (sp >= MAX_IFSTACK)
-                fatal("too many nested #if");
+            if (sp >= MAX_IFSTACK) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                fprintf(stderr, "%s:%d: error: too many nested #if\n", filebuf, lno);
+                errors++;
+                if (errors > 40)
+                    fatal("too many errors");
+                append_mem(&out, &out_len, &out_cap, "\n", 1);
+                goto next_filter_line;
+            }
             cond = (name[0] && find_define(name) >= 0);
             if (!strcmp(word, "ifndef"))
                 cond = !cond;
@@ -550,7 +652,7 @@ char *filter_active_preprocessor_source(long *lenp)
             active = active && cond;
             sp++;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "if")) {
@@ -563,16 +665,26 @@ char *filter_active_preprocessor_source(long *lenp)
                 expr[ei++] = *s++;
             expr[ei] = 0;
             strip_macro_replacement_comments(expr);
+            line_no = logical_line;
             cond = pp_eval_simple_expr(expr);
-            if (sp >= MAX_IFSTACK)
-                fatal("too many nested #if");
+            if (sp >= MAX_IFSTACK) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                fprintf(stderr, "%s:%d: error: too many nested #if\n", filebuf, lno);
+                errors++;
+                if (errors > 40)
+                    fatal("too many errors");
+                append_mem(&out, &out_len, &out_cap, "\n", 1);
+                goto next_filter_line;
+            }
             active_stack[sp] = active;
             branch_taken[sp] = (active && cond) ? 1 : 0;
             seen_else[sp] = 0;
             active = active && cond;
             sp++;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "elif")) {
@@ -593,6 +705,7 @@ char *filter_active_preprocessor_source(long *lenp)
                         expr[ei++] = *s++;
                     expr[ei] = 0;
                     strip_macro_replacement_comments(expr);
+                        line_no = logical_line;
                     cond = pp_eval_simple_expr(expr);
                     active = parent && cond;
                     if (active)
@@ -600,7 +713,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 }
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "else")) {
@@ -618,7 +731,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 }
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "endif")) {
@@ -627,12 +740,12 @@ char *filter_active_preprocessor_source(long *lenp)
                 active = active_stack[sp];
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!active) {
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "error")) {
@@ -655,7 +768,7 @@ char *filter_active_preprocessor_source(long *lenp)
             if (errors > 40)
                 fatal("too many errors");
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "undef")) {
@@ -673,7 +786,7 @@ char *filter_active_preprocessor_source(long *lenp)
              * The mutation above is only for this filtering pass.
              */
             append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "define")) {
@@ -698,6 +811,23 @@ char *filter_active_preprocessor_source(long *lenp)
                 while (s < e && *s != ')') {
                     while (s < e && (*s == ' ' || *s == '\t')) s++;
                     if (s >= e || *s == ')') break;
+
+                    /* C99 variadic marker `...`: nothing else in this loop
+                     * consumes a '.', so without this it would spin on it
+                     * forever (see the matching fix and comment in
+                     * dcc_preproc.c's #define parameter-list parser, which
+                     * this one duplicates for the #if/#ifdef pre-scan). */
+                    if (s + 2 < e && s[0] == '.' && s[1] == '.' && s[2] == '.') {
+                        s += 3;
+                        if (nargs < 7) {
+                            strcpy(params[nargs], "__VA_ARGS__");
+                            nargs++;
+                        }
+                        while (s < e && (*s == ' ' || *s == '\t')) s++;
+                        if (s < e && *s == ',') s++;
+                        continue;
+                    }
+
                     pi = 0;
                     while (s < e && is_ident_char((unsigned char)*s) && pi < 31)
                         params[nargs][pi++] = *s++;
@@ -705,7 +835,17 @@ char *filter_active_preprocessor_source(long *lenp)
                     if (params[nargs][0] && nargs < 7)
                         nargs++;
                     while (s < e && (*s == ' ' || *s == '\t')) s++;
-                    if (s < e && *s == ',') s++;
+                    if (s < e && *s == ',') {
+                        s++;
+                    } else if (s < e && *s != ')') {
+                        /* Consume any stray character (notably the '.' of a
+                         * C99 '...' variadic parameter list) so this scan
+                         * always makes forward progress. Without this the
+                         * pass spins forever on '...' because nothing else
+                         * advances the cursor. Variadic macros are not
+                         * otherwise implemented. */
+                        s++;
+                    }
                 }
                 if (s < e && *s == ')') s++;
                 while (s < e && (*s == ' ' || *s == '\t')) s++;
@@ -731,20 +871,20 @@ char *filter_active_preprocessor_source(long *lenp)
              * for evaluating later conditionals during this filtering pass.
              */
             append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "asm")) {
             if (active)
                 in_asm = 1;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "endasm")) {
             /* #endasm without matching #asm - ignore */
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
         }
 
         if (!strcmp(word, "warning")) {
@@ -764,13 +904,21 @@ char *filter_active_preprocessor_source(long *lenp)
                 fprintf(stderr, "%s:%d: warning: #warning %s\n", filebuf, lno, msg);
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
-            continue;
+            goto next_filter_line;
+        }
+
+        if (!strcmp(word, "pragma")) {
+            if (active)
+                append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
+            else
+                append_mem(&out, &out_len, &out_cap, "\n", 1);
+            goto next_filter_line;
         }
 
         /* Unknown directives in inactive code are silently dropped.
-         * In active code, #pragma and the null directive are silently ignored;
-         * anything else is a hard error. */
-        if (active && word[0] != 0 && strcmp(word, "pragma") != 0) {
+         * In active code, the null directive is silently ignored; anything
+         * else is a hard error. */
+        if (active && word[0] != 0) {
             char filebuf[256];
             int lno;
             source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
@@ -780,6 +928,9 @@ char *filter_active_preprocessor_source(long *lenp)
             if (errors > 40) fatal("too many errors");
         }
         append_mem(&out, &out_len, &out_cap, "\n", 1);
+
+next_filter_line:
+        logical_line = next_logical_line;
     }
 
     if (!out) {
@@ -892,6 +1043,7 @@ int main(int argc, char **argv)
     max_function_local_bytes = 0;
 
     add_define("_DCC_", "1");
+    ast_build_init();
 
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-ffloatio") || !strcmp(argv[i], "-f")) {
@@ -1030,8 +1182,9 @@ int main(int argc, char **argv)
         add_define("EOF", "-1");
 
     parse_translation_unit();
-    emit_deferred_extrns();
+    emit_needed_inline_bodies();
     emit_data();
+    emit_deferred_extrns();
     emit("\n\tend\n");
 
     if (outf != stdout)

@@ -1,0 +1,17 @@
+PASS: p[-1] = 40
+PASS: p[-3] = 20
+PASS: p[-5] = 0
+PASS: p[0] = 50
+PASS: p[2] = 70
+PASS: a[3] after p[-2]=999 = 999
+PASS: cp[-1] = 6
+PASS: cp[-4] = 3
+PASS: ca[4] after cp[-2]=88 = 88
+PASS: lp[-1] = 3000
+PASS: lp[-4] = 0
+PASS: la[1] after lp[-3] = 77777
+PASS: garr p[-2] = 105
+PASS: glarr lp[-5] = 0
+PASS: p[+1] = 40
+PASS: p[~0] = 20
+tnegidx completed with great success

@@ -23,6 +23,8 @@
 /docs/docs/en/images/table.jpg
 
 # Python cache artifacts
+/.env/
+/.site/
 __pycache__/
 *.py[cod]
 

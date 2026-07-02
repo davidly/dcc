@@ -1,0 +1,2 @@
+<source>:3: error: too many initializer elements near '2'
+dcc: 1 error(s)

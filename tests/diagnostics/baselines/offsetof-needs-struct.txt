@@ -1,0 +1,3 @@
+<source>:2: error: offsetof needs struct/union type near 'x'
+<source>:2: error: unknown field in offsetof near 'x'
+dcc: 2 error(s)

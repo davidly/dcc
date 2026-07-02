@@ -1,0 +1,1 @@
+static inline: 21 12

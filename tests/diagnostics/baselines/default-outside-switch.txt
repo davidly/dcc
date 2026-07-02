@@ -1,0 +1,2 @@
+<source>:3: error: default label outside switch near 'default'
+dcc: 1 error(s)

@@ -1,0 +1,2 @@
+<source>:3: error: variable length arrays are not supported; use malloc and an explicit pointer near 'n'
+dcc: 1 error(s)

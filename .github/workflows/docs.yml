@@ -2,7 +2,8 @@ name: Generate Docs and Deploy to GitHub Pages
 on:
   push:
     branches:
-      - main
+      - "**"
+      - "!gh-pages"
   workflow_dispatch:
 permissions:
   contents: write
@@ -16,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
       - name: Configure Git Credentials
         run: |
           git config user.name github-actions[bot]

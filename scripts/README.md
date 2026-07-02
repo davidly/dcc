@@ -197,15 +197,20 @@ pwsh ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
 
 ## `runall.ps1`
 
-Comprehensive test suite: builds and runs all test applications with output
+Comprehensive test suite: builds and runs all main test applications with output
 verification against per-app baselines in `tests/baselines/`. Uses `ma.ps1` to
 build each app and `tests/_test_overrides.json` for test-specific arguments and stack
 sizes. Comparison is keyed by app name, so test discovery order does not matter.
+Pass `-Extended` to run the extended c-testsuite corpus after the main suite.
 See [`tests/README.md`](../tests/README.md) for the test/baseline relationship.
 
 **Runs in parallel by default** (each app builds in its own `build/<app>/`
-subdirectory so concurrent builds don't clobber shared artifacts). Use
-`-Serial` to fall back to sequential builds in the shared `build/` directory.
+subdirectory so concurrent builds don't clobber shared artifacts). In parallel
+mode the whole run is isolated under a per-invocation `build/run-<pid>/` folder,
+which is **removed automatically on exit** so `build/` does not accumulate one
+folder per run; pass `-KeepBuild` to retain it (e.g. to inspect a failing
+build's artifacts). Use `-Serial` to fall back to sequential builds in the
+shared `build/` directory.
 The lightweight stack-overflow guard (`-fstack-check`) is **on by default**;
 pass `-NoStackCheck` to build without it.
 Pass `-Report` to append per-app run-time and `.COM` size measurements while
@@ -233,8 +238,10 @@ build mode. Use `-Mode full` when you want both fast and nopeep builds.
 | `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
 | `-Mode` | `fast` | Build mode: `fast` (optimized), `nopeep` (unoptimized), or `full` |
 | `-Help` | (off) | Show help text and exit without building or running tests |
+| `-Extended` | (off) | Also run the extended c-testsuite corpus after the main suite |
 | `-Serial` | (off) | Run sequentially instead of the default parallel mode |
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
+| `-KeepBuild` | (off) | Keep the per-invocation `build/run-<pid>/` folder instead of removing it on exit (parallel mode) |
 | `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
 | `-ReportFile` | `perf_results.csv` | CSV path used by `-Report` |
 | `-ReportClockHz` | `400000000` | ntvcm clock speed used for measured report runs; set to `0` for full-speed report runs |
@@ -261,6 +268,8 @@ pwsh ./scripts/runall.ps1 -NoStackCheck         # build without the stack guard
 pwsh ./scripts/runall.ps1 -ThrottleLimit 8      # cap concurrency
 pwsh ./scripts/runall.ps1 -Mode fast            # optimized build only
 pwsh ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
+pwsh ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
+pwsh ./scripts/runall.ps1 -KeepBuild            # keep build/run-<pid>/ for debugging
 pwsh ./scripts/runall.ps1 -Report               # append perf_results.csv
 pwsh ./scripts/runall.ps1 -ReportClockHz 0 -Report  # full-speed report run
 ```
@@ -268,7 +277,8 @@ pwsh ./scripts/runall.ps1 -ReportClockHz 0 -Report  # full-speed report run
 Parallel mode is markedly faster on multi-core machines. Each app builds in its
 own `build/<app>/` subdirectory so concurrent builds don't clobber shared
 artifacts, and a live `[ n/total] PASS/FAIL` status prints as each app
-completes.
+completes. The run's `build/run-<pid>/` folder is removed on exit unless
+`-KeepBuild` is passed.
 
 ### Output
 

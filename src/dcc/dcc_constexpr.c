@@ -50,7 +50,16 @@ long parse_const_long_primary(void)
             }
             expect(')');
         } else {
-            error_here("'(' expected after sizeof in constant expression");
+            if (starts_type()) {
+                int t;
+                int sz;
+                error_here("expected an expression");
+                parse_type_name_decl(&t, &sz);
+                (void)t;
+                (void)sz;
+            } else {
+                error_here("'(' expected after sizeof in constant expression");
+            }
             v = 2;
         }
         return sign * v;
@@ -253,11 +262,27 @@ long parse_const_long_bitor(void)
 long parse_const_long_andand(void)
 {
     long v;
+    long r;
 
     v = parse_const_long_bitor();
     while (tok.kind == TOK_ANDAND) {
         next_token();
-        v = (v && parse_const_long_bitor());
+        r = parse_const_long_bitor();
+        v = (v && r);
+    }
+    return v;
+}
+
+long parse_const_long_oror(void)
+{
+    long v;
+    long r;
+
+    v = parse_const_long_andand();
+    while (tok.kind == TOK_OROR) {
+        next_token();
+        r = parse_const_long_andand();
+        v = (v || r);
     }
     return v;
 }
@@ -265,11 +290,16 @@ long parse_const_long_andand(void)
 long parse_const_long_expr(void)
 {
     long v;
+    long t;
+    long f;
 
-    v = parse_const_long_andand();
-    while (tok.kind == TOK_OROR) {
+    v = parse_const_long_oror();
+    if (tok.kind == '?') {
         next_token();
-        v = (v || parse_const_long_andand());
+        t = parse_const_long_expr();
+        expect(':');
+        f = parse_const_long_expr();
+        v = v ? t : f;
     }
     return v;
 }
@@ -283,6 +313,7 @@ int parse_const_int_expr(void)
 int starts_type(void)
 {
     return tok.kind == TOK_INT || tok.kind == TOK_LONG || tok.kind == TOK_SHORT || tok.kind == TOK_FLOAT || tok.kind == TOK_CHAR || tok.kind == TOK_VOID ||
+            tok.kind == TOK_BOOL ||
            tok.kind == TOK_UNSIGNED || tok.kind == TOK_SIGNED || tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE ||
            tok.kind == TOK_EXTERN || tok.kind == TOK_STATIC || tok.kind == TOK_REGISTER || tok.kind == TOK_AUTO ||
            tok.kind == TOK_INLINE ||

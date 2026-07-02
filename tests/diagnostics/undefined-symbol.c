@@ -1,0 +1,1 @@
+int x = sizeof(missing_symbol);

@@ -1,0 +1,2 @@
+<source>:2: error: expected an expression near 'int'
+dcc: 1 error(s)

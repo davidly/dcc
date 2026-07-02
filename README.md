@@ -1,10 +1,10 @@
 # dcc
-C89 compiler targeting CP/M 2.2 on a Z80
+C compiler targeting CP/M 2.2 on a Z80
 
 The [dcc documentation](https://gloveboxes.github.io/dcc/) covers all features, usage, and API reference.
 
 ## What dcc is
-dcc implements most C89 syntax. It takes a .c file and generates a .MAC assembly file that can be assembled by M80 and linked by L80 to produce CP/M .COM files.
+dcc has a C89 core plus target-appropriate C99/C11 front-end support. For every source file it accepts, dcc generates a .MAC assembly file that can be assembled by M80 and linked by L80 to produce CP/M .COM files.
 
 A separate app dccpeep.c is a peephole optimizer that rewrites portions of .MAC files so apps run faster. It's not necessary to use dccpeep; apps will work just fine without it. But if you need your app to be both smaller and faster it's worth running.
 
@@ -23,11 +23,11 @@ Two reference documents in the [docs](docs) directory cover the runtime in depth
 
 ## Agent skills
 
-This repo ships a project-scoped agent **skill** in [.github/skills/c89-cpm-z80](.github/skills/c89-cpm-z80). A skill is a folder containing a `SKILL.md` (plus optional `references/`) that packages domain knowledge — here, how to write, build, test, and debug C89 code for dcc/CP/M/Z80 along with the runtime library inventory and hard-won pitfalls. An agent that supports skills reads `SKILL.md` on demand when your task matches the skill's description, so it gets dcc-specific guidance without you pasting it into every prompt.
+This repo ships a project-scoped agent **skill** in [.github/skills/dcc-cpm-z80](.github/skills/dcc-cpm-z80). A skill is a folder containing a `SKILL.md` (plus optional `references/`) that packages domain knowledge — here, how to write, build, test, and debug C89/C99/C11-targeted code for dcc/CP/M/Z80 along with the runtime library inventory and hard-won pitfalls. An agent that supports skills reads `SKILL.md` on demand when your task matches the skill's description, so it gets dcc-specific guidance without you pasting it into every prompt.
 
 ### Invoking a skill in VS Code
 
-With GitHub Copilot in VS Code (agent mode), the skill is picked up automatically when you open this repo — the agent loads it when your request falls within the skill's scope (anything mentioning dcc, CP/M, Z80, ntvcm, DCCRTL, etc.). You don't have to do anything special; you can also nudge it explicitly, e.g. "use the c89-cpm-z80 skill to build and test foo.c".
+With GitHub Copilot in VS Code (agent mode), the skill is picked up automatically when you open this repo — the agent loads it when your request falls within the skill's scope (anything mentioning dcc, CP/M, Z80, ntvcm, DCCRTL, etc.). You don't have to do anything special; you can also nudge it explicitly, e.g. "use the dcc-cpm-z80 skill to build and test foo.c".
 
 ### Using the skill from the GitHub Copilot CLI
 
@@ -48,13 +48,13 @@ To use it from **every** workspace on your machine, copy the skill folder into a
 **macOS / Linux:**
 ```sh
 mkdir -p ~/.agents/skills
-cp -R .github/skills/c89-cpm-z80 ~/.agents/skills/
+cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/
 ```
 
 **Windows (PowerShell):**
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
-Copy-Item -Recurse ".github\skills\c89-cpm-z80" "$env:USERPROFILE\.agents\skills\"
+Copy-Item -Recurse ".github\skills\dcc-cpm-z80" "$env:USERPROFILE\.agents\skills\"
 ```
 
 The repo copy and the personal copy are independent files, so re-copy after editing either one to keep them in sync. See [.github/skills/README.md](.github/skills/README.md) for the full list of supported skill roots and sync tips.

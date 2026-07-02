@@ -1,8 +1,8 @@
 #ifndef _STDBOOL_H
 #define _STDBOOL_H
 
-/** Boolean storage type, implemented as unsigned char. */
-typedef unsigned char bool;
+/** Boolean storage type. */
+typedef _Bool bool;
 /** Boolean true value. */
 #define true  1
 /** Boolean false value. */
@@ -12,6 +12,3 @@ typedef unsigned char bool;
 #define __bool_true_false_are_defined 1
 
 #endif
-
-
-

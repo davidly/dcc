@@ -1,6 +1,6 @@
 ---
 name: dcc-project
-description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89 -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (ma.ps1), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the c89-cpm-z80 skill for that.'
+description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89/C99/C11 front end -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (ma.ps1), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
 argument-hint: 'Describe the dcc-project task (change codegen, run the test suite, build a single app, rebuild host tools)'
 ---
 
@@ -10,7 +10,7 @@ dcc is a **cross** toolchain: the host programs `dcc`, `dccpeep`, and
 `dccrtlstrip` compile with a modern compiler and run on your desktop. They emit
 Z80 assembly and CP/M 2.2 `.COM` files that run under an emulator such as
 **ntvcm**. This skill is about changing and validating *those tools and the
-runtime*, not about authoring CP/M apps (use `c89-cpm-z80` for that).
+runtime*, not about authoring CP/M apps (use `dcc-cpm-z80` for that).
 
 ## When to use
 
@@ -32,12 +32,12 @@ ntvcm.
 
 | Path | What |
 | ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`/`dcc_type_oracle.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. |
+| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. **Codegen is a single AST path**: `dcc_ast.c`/`dcc_ast_build.c` build the typed function-local AST (initializers via `ast_emit_init_expr` into an isolated arena), and the AST emitter lives in `dcc_ast_gen.c` + `dcc_ast_gen_support.c`/`_expr.c`/`_cond.c`/`_stmt.c` (behind `dcc_ast_gen_internal.h`). The `dcc_expr.c`/`dcc_ops.c`/`dcc_cmp.c`/`dcc_assign.c`/`dcc_stmt.c` modules provide the low-level emit helpers the AST walker calls into. |
 | `src/dccpeep/` | Peephole optimizer (`-Ot` time / `-Os` size). |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
 | `tests/` | `*.c` test apps + `tests/baselines/<app>.txt` expected stdout + `tests/_test_overrides.json` (per-app args/stdin/stack/ignore). |
-| `scripts/` | `runall.ps1`, `ma.ps1`, `build-dcc.ps1`, `stacksize.*`. |
+| `scripts/` | `runall.ps1`, `runall-extended.ps1`, `ma.ps1`, `build-dcc.ps1`, `stacksize.*`. |
 | `docs/docs/en/appendix/00-architecture.md` | In-depth architecture reference. |
 
 Convention: source `.c` files are **lowercase** (only dcc reads them); generated
@@ -63,13 +63,24 @@ pwsh ./scripts/runall.ps1 -Help           # show help and exit
 pwsh ./scripts/runall.ps1 -Mode fast      # default unless otherwise stated by the agent/developer
 pwsh ./scripts/runall.ps1 -Mode nopeep    # unoptimized CP/M Z80 binary
 pwsh ./scripts/runall.ps1 -Serial         # sequential fallback (debugging)
+pwsh ./scripts/runall.ps1 -Extended       # also run the c-testsuite extended corpus
+pwsh ./scripts/runall.ps1 -KeepBuild      # keep build/run-<pid>/ for debugging
 ```
+
+In parallel mode each invocation is isolated under a per-invocation
+`build/run-<pid>/` folder that is removed automatically on exit (so `build/`
+does not fill up with one folder per run); pass `-KeepBuild` to retain it for
+inspection. `runall-extended.ps1` uses the same `run-<pid>` isolation, cleanup,
+and `-KeepBuild` behavior under `build/extended-tests/`.
 
 The default `-Mode fast` builds each app once as an optimized CP/M Z80 binary.
 Use `-Mode full` to build each app twice, once optimized and once unoptimized,
 and verify both against the same baseline. Exit code 0 = all passed, 1 = one or
 more failed. Add `-Report` to append per-app cycle/size metrics to
-`perf_results.csv`.
+`perf_results.csv`. Add `-Extended` when a regular regression run should also
+run the imported c-testsuite single-exec corpus through `runall-extended.ps1`;
+that runner initializes the `tests/extended-tests` submodule automatically when
+the corpus is not present on disk.
 
 ## Test baselines and overrides
 
@@ -110,7 +121,10 @@ pwsh ./scripts/ma.ps1 <name> nopeep     # unoptimized CP/M Z80 binary
 compare a suspected optimizer bug, build both ways and diff the run output or
 the generated `BUILD/<NAME>.MAC`. Useful env vars: `DCC_STACK_SIZE` (stack
 reserve), `DCC_FORCE_STACK_CHECK=1`, and `DCC`/`DCCPEEP`/`DCCRTLSTRIP`/`NTVCM`/
-`M80`/`L80` to pin tool paths.
+`M80`/`L80` to pin tool paths. For AST codegen debugging: `DCC_AST_REPORT=1`
+logs `; AST-unsupported ...` for the statement/initializer a support gate
+declined (this immediately precedes the `unsupported AST statement` fatal), and
+`DCC_AST_BUILD=2` dumps each built AST tree to stderr before it is emitted.
 
 ## Rebuild the host tools after a source change
 
@@ -128,4 +142,6 @@ change.
 1. Change a source file under `src/` (or `DCCRTL.MAC`).
 2. `pwsh ./scripts/build-dcc.ps1` to rebuild the host tools.
 3. `pwsh ./scripts/ma.ps1 <app>` to reproduce/iterate on one case.
-4. `pwsh ./scripts/runall.ps1` to confirm no regressions across all apps.
+4. `pwsh ./scripts/runall.ps1` to confirm no regressions across all apps; use
+   `pwsh ./scripts/runall.ps1 -Extended` when the extended c-testsuite corpus
+   should be included too.

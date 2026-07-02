@@ -1,4 +1,4 @@
-site_name: dcc C89 Reference
+site_name: dcc C89/C99/C11 Reference
 site_author: David Lee
 site_description: >-
   MkDocs documentation for the dcc compiler, runtime, and dccrtlstrip size analysis.
@@ -16,7 +16,7 @@ nav:
   - Introduction: en/index.md
   - The toolchain: en/00-setup-toolchain.md
   - Agentic skills: en/00-agent-skills.md
-  - C89 conformance: en/01-c89-conformance.md
+  - C conformance: en/01-c-conformance.md
   - Building and linking: en/02-build-and-link.md
   - Types and conventions: en/03-types-and-conventions.md
   - Operators: en/04-operators.md
@@ -54,7 +54,7 @@ plugins:
         - locale: en
           name: English
           default: true
-          site_name: dcc C89 Reference
+          site_name: dcc C89/C99/C11 Reference
 
 hooks:
   - hooks/copy_assets.py

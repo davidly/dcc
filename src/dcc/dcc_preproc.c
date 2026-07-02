@@ -12,6 +12,20 @@
  */
 
 #include "dcc.h"
+
+#define MACRO_PLACEMARKER '\002'
+
+#define MAX_MACRO_PUSH 64
+
+struct MacroPushEntry {
+    char name[64];
+    int was_defined;
+    struct Def def;
+};
+
+static struct MacroPushEntry macro_push_stack[MAX_MACRO_PUSH];
+static int nmacro_push_stack;
+
 int find_define(const char *name)
 {
     int i;
@@ -41,6 +55,9 @@ void add_define_ex(const char *name, const char *value, int is_func, int nargs, 
         strncpy(defs[i].params[j], params[j], sizeof(defs[i].params[j]) - 1);
         defs[i].params[j][sizeof(defs[i].params[j]) - 1] = 0;
     }
+    /* C99 variadic macro: the parameter-list parser appends "__VA_ARGS__" as
+     * the last param when it sees `...`, so that marks the macro variadic. */
+    defs[i].is_variadic = nargs > 0 && !strcmp(defs[i].params[nargs - 1], "__VA_ARGS__");
 
     strncpy(defs[i].value, value, sizeof(defs[i].value) - 1);
     defs[i].value[sizeof(defs[i].value) - 1] = 0;
@@ -162,6 +179,7 @@ long pp_expr_bitxor(void);
 long pp_expr_bitor(void);
 long pp_expr_andand(void);
 long pp_expr_oror(void);
+long pp_expr_cond(void);
 
 long pp_expr_defined(void)
 {
@@ -206,7 +224,7 @@ long pp_expr_primary(void)
 
     if (*pp_expr_p == '(') {
         pp_expr_p++;
-        v = pp_expr_oror();
+        v = pp_expr_cond();
         pp_expr_skip_ws();
         if (*pp_expr_p == ')')
             pp_expr_p++;
@@ -228,12 +246,15 @@ long pp_expr_primary(void)
             name[i++] = *pp_expr_p++;
         name[i] = 0;
 
+        if (!strcmp(name, "__LINE__"))
+            return line_no;
+
         di = find_define(name);
         if (di >= 0 && !defs[di].is_func && pp_expr_depth < 16) {
             savep = pp_expr_p;
             pp_expr_p = defs[di].value;
             pp_expr_depth++;
-            v = pp_expr_oror();
+            v = pp_expr_cond();
             pp_expr_depth--;
             pp_expr_p = savep;
             return v;
@@ -479,11 +500,31 @@ long pp_expr_oror(void)
     return v;
 }
 
+long pp_expr_cond(void)
+{
+    long v;
+    long t;
+    long f;
+
+    v = pp_expr_oror();
+    pp_expr_skip_ws();
+    if (*pp_expr_p == '?') {
+        pp_expr_p++;
+        t = pp_expr_cond();
+        pp_expr_skip_ws();
+        if (*pp_expr_p == ':')
+            pp_expr_p++;
+        f = pp_expr_cond();
+        v = v ? t : f;
+    }
+    return v;
+}
+
 int pp_eval_simple_expr(const char *s)
 {
     pp_expr_p = s;
     pp_expr_depth = 0;
-    return pp_expr_oror() != 0;
+    return pp_expr_cond() != 0;
 }
 
 void remove_define(const char *name)
@@ -500,6 +541,108 @@ void remove_define(const char *name)
     ndefs--;
 }
 
+static int parse_pragma_macro_name(const char *line, const char *op, char *name, int namesz)
+{
+    int oi;
+
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    while (*op) {
+        if (*line++ != *op++)
+            return 0;
+    }
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    if (*line++ != '(')
+        return 0;
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    if (*line++ != '"')
+        return 0;
+
+    oi = 0;
+    while (*line && *line != '"' && oi < namesz - 1)
+        name[oi++] = *line++;
+    name[oi] = 0;
+    if (*line != '"')
+        return 0;
+    line++;
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    return name[0] && *line == ')';
+}
+
+static void pp_push_macro(const char *name)
+{
+    int di;
+    size_t namelen;
+    struct MacroPushEntry *e;
+
+    if (nmacro_push_stack >= MAX_MACRO_PUSH)
+        fatal("too many pushed macros");
+
+    e = &macro_push_stack[nmacro_push_stack++];
+    memset(e, 0, sizeof(*e));
+    namelen = strlen(name);
+    if (namelen > sizeof(e->name) - 1)
+        namelen = sizeof(e->name) - 1;
+    memcpy(e->name, name, namelen);
+
+    di = find_define(name);
+    if (di >= 0) {
+        e->was_defined = 1;
+        e->def = defs[di];
+    }
+}
+
+static void pp_pop_macro(const char *name)
+{
+    int si;
+    int di;
+    int j;
+    struct MacroPushEntry saved;
+
+    for (si = nmacro_push_stack - 1; si >= 0; --si) {
+        if (!strcmp(macro_push_stack[si].name, name))
+            break;
+    }
+    if (si < 0)
+        return;
+
+    saved = macro_push_stack[si];
+    for (j = si; j + 1 < nmacro_push_stack; ++j)
+        macro_push_stack[j] = macro_push_stack[j + 1];
+    nmacro_push_stack--;
+
+    if (!saved.was_defined) {
+        remove_define(name);
+        return;
+    }
+
+    di = find_define(name);
+    if (di >= 0) {
+        defs[di] = saved.def;
+    } else {
+        if (ndefs >= MAX_DEFINES)
+            fatal("too many defines");
+        defs[ndefs++] = saved.def;
+    }
+}
+
+static void handle_pragma_line(const char *line)
+{
+    char name[64];
+
+    if (parse_pragma_macro_name(line, "push_macro", name, sizeof(name))) {
+        pp_push_macro(name);
+        return;
+    }
+    if (parse_pragma_macro_name(line, "pop_macro", name, sizeof(name))) {
+        pp_pop_macro(name);
+        return;
+    }
+}
+
 void pp_recompute_active(void)
 {
     if (if_sp <= 0) {
@@ -508,6 +651,8 @@ void pp_recompute_active(void)
         pp_active = if_parent_active[if_sp - 1] && if_this_active[if_sp - 1];
     }
 }
+
+void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
 
 void parse_preprocessor_line(void)
 {
@@ -546,7 +691,15 @@ void parse_preprocessor_line(void)
         val[i] = 0;
         strip_macro_replacement_comments(val);
 
-        if (if_sp >= MAX_IFSTACK) fatal("too many nested #if");
+        if (if_sp >= MAX_IFSTACK) {
+            fprintf(stderr, "%s:%d: error: too many nested #if\n",
+                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                line_no);
+            errors++;
+            if (errors > 40) fatal("too many errors");
+            while (peekc() && peekc() != '\n') getc_src();
+            return;
+        }
 
         parent = pp_active;
         cond = pp_eval_simple_expr(val);
@@ -565,7 +718,15 @@ void parse_preprocessor_line(void)
             name[i++] = (char)getc_src();
         name[i] = 0;
 
-        if (if_sp >= MAX_IFSTACK) fatal("too many nested #if");
+        if (if_sp >= MAX_IFSTACK) {
+            fprintf(stderr, "%s:%d: error: too many nested #if\n",
+                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                line_no);
+            errors++;
+            if (errors > 40) fatal("too many errors");
+            while (peekc() && peekc() != '\n') getc_src();
+            return;
+        }
 
         parent = pp_active;
         cond = find_define(name) >= 0;
@@ -620,29 +781,39 @@ void parse_preprocessor_line(void)
     } else if (!strcmp(word, "line")) {
         int lno;
         int qi;
+        char expanded[MAX_MACRO_TEXT];
+        const char *lp;
 
         while (isspace((unsigned char)peekc()) && peekc() != '\n')
             getc_src();
 
+        i = 0;
+        while ((c = peekc()) != 0 && c != '\n' && i < (int)sizeof(val) - 1)
+            val[i++] = (char)getc_src();
+        val[i] = 0;
+        macro_expand_argument_text(val, expanded, sizeof(expanded), 0);
+
+        lp = expanded;
+        while (*lp && isspace((unsigned char)*lp))
+            lp++;
+
         lno = 0;
-        while (isdigit((unsigned char)peekc()))
-            lno = lno * 10 + getc_src() - '0';
+        while (isdigit((unsigned char)*lp))
+            lno = lno * 10 + *lp++ - '0';
 
         if (lno > 0)
             line_no = lno - 1;
 
-        while (isspace((unsigned char)peekc()) && peekc() != '\n')
-            getc_src();
+        while (*lp && isspace((unsigned char)*lp))
+            lp++;
 
-        if (peekc() == '"') {
-            getc_src();
+        if (*lp == '"') {
+            lp++;
             qi = 0;
-            while (peekc() && peekc() != '"' && peekc() != '\n' &&
+            while (*lp && *lp != '"' && *lp != '\n' &&
                    qi < (int)sizeof(current_file_name) - 1)
-                current_file_name[qi++] = (char)getc_src();
+                current_file_name[qi++] = *lp++;
             current_file_name[qi] = 0;
-            if (peekc() == '"')
-                getc_src();
         }
     } else if (!strcmp(word, "include")) {
         /* #include directives are expanded before tokenisation by
@@ -698,6 +869,28 @@ void parse_preprocessor_line(void)
                     if (peekc() == ')')
                         break;
 
+                    /* C99 variadic marker `...`: none of the identifier,
+                     * whitespace, comma, or ')' cases above consume a '.',
+                     * so without this the loop would spin on it forever.
+                     * Bind the trailing arguments to the implicit name
+                     * __VA_ARGS__, which the rest of the macro engine then
+                     * treats as an ordinary parameter. */
+                    if (peekc() == '.' && posi + 2 < src_len &&
+                        src[posi + 1] == '.' && src[posi + 2] == '.') {
+                        getc_src();
+                        getc_src();
+                        getc_src();
+                        if (nargs < 7) {
+                            strcpy(params[nargs], "__VA_ARGS__");
+                            nargs++;
+                        }
+                        while (isspace((unsigned char)peekc()) && peekc() != '\n')
+                            getc_src();
+                        if (peekc() == ',')
+                            getc_src();
+                        continue;
+                    }
+
                     pp = 0;
                     while (is_ident_char(peekc()) && pp < 31)
                         params[nargs][pp++] = (char)getc_src();
@@ -707,8 +900,16 @@ void parse_preprocessor_line(void)
 
                     while (isspace((unsigned char)peekc()) && peekc() != '\n')
                         getc_src();
-                    if (peekc() == ',')
+                    if (peekc() == ',') {
                         getc_src();
+                    } else if (peekc() != 0 && peekc() != ')' && peekc() != '\n') {
+                        /* Consume any stray character (notably the '.' of a
+                         * C99 '...' variadic parameter list) so the loop always
+                         * makes forward progress. Without this the parser spins
+                         * forever on '...' because nothing else advances the
+                         * cursor. Variadic macros are otherwise not implemented. */
+                        getc_src();
+                    }
                 }
                 if (peekc() == ')')
                     getc_src();
@@ -795,8 +996,16 @@ void parse_preprocessor_line(void)
                     current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
                     line_no, val);
         }
-    } else if (!strcmp(word, "pragma") || word[0] == 0) {
-        /* #pragma and null directive (#) are silently ignored */
+    } else if (!strcmp(word, "pragma")) {
+        if (pp_active) {
+            i = 0;
+            while ((c = peekc()) != 0 && c != '\n' && i < (int)sizeof(val) - 1)
+                val[i++] = (char)getc_src();
+            val[i] = 0;
+            handle_pragma_line(val);
+        }
+    } else if (word[0] == 0) {
+        /* null directive (#) is silently ignored */
     } else {
         /* Any other unrecognised directive is an error when active.
          * In an inactive block it is silently skipped so that unknown
@@ -864,6 +1073,7 @@ int keyword_kind(const char *s)
     if (!strcmp(s, "short")) return TOK_SHORT;
     if (!strcmp(s, "long")) return TOK_LONG;
     if (!strcmp(s, "float")) return TOK_FLOAT;
+    if (!strcmp(s, "_Bool")) return TOK_BOOL;
     if (!strcmp(s, "char")) return TOK_CHAR;
     if (!strcmp(s, "void")) return TOK_VOID;
     if (!strcmp(s, "unsigned")) return TOK_UNSIGNED;
@@ -893,6 +1103,52 @@ int keyword_kind(const char *s)
     if (!strcmp(s, "do")) return TOK_DO;
     if (!strcmp(s, "inline")) return TOK_INLINE;
     return TOK_ID;
+}
+
+static void skip_gnu_attribute(void)
+{
+    int depth;
+    int c;
+
+    while (isspace((unsigned char)peekc()))
+        getc_src();
+    if (peekc() != '(')
+        return;
+
+    depth = 0;
+    while ((c = getc_src()) != 0) {
+        if (c == '"') {
+            while (peekc() && peekc() != '"') {
+                if (peekc() == '\\') {
+                    getc_src();
+                    if (peekc()) getc_src();
+                } else {
+                    getc_src();
+                }
+            }
+            if (peekc() == '"') getc_src();
+            continue;
+        }
+        if (c == '\'') {
+            while (peekc() && peekc() != '\'') {
+                if (peekc() == '\\') {
+                    getc_src();
+                    if (peekc()) getc_src();
+                } else {
+                    getc_src();
+                }
+            }
+            if (peekc() == '\'') getc_src();
+            continue;
+        }
+        if (c == '(')
+            depth++;
+        else if (c == ')') {
+            depth--;
+            if (depth <= 0)
+                break;
+        }
+    }
 }
 
 int read_escape(void)
@@ -1233,7 +1489,9 @@ void strip_macro_replacement_comments(char *s)
     trim_arg(s);
 }
 
-int read_macro_call_args(char args[8][128], int *nargs)
+static int macro_call_args_too_many;
+
+int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count)
 {
     int c;
     int depth;
@@ -1250,6 +1508,7 @@ int read_macro_call_args(char args[8][128], int *nargs)
     ai = 0;
     ap = 0;
     depth = 0;
+    macro_call_args_too_many = 0;
     memset(args, 0, 8 * 128);
 
     for (;;) {
@@ -1307,11 +1566,28 @@ int read_macro_call_args(char args[8][128], int *nargs)
         }
 
         if (c == ',' && depth == 0) {
+            if (variadic_named_count >= 0 && ai >= variadic_named_count) {
+                /* Inside the variadic tail: this comma belongs to the
+                 * __VA_ARGS__ text itself, not an argument separator. */
+                if (ap < 127) args[ai][ap++] = (char)c;
+                continue;
+            }
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
-            if (ai >= 8)
-                fatal("too many macro arguments");
+            if (ai >= 8) {
+                macro_call_args_too_many = 1;
+                while ((c = getc_src()) != 0) {
+                    if (c == '(' || c == '[' || c == '{')
+                        depth++;
+                    else if (c == ')' && depth == 0)
+                        break;
+                    else if ((c == ')' || c == ']' || c == '}') && depth > 0)
+                        depth--;
+                }
+                *nargs = ai + 1;
+                return 1;
+            }
             ap = 0;
             continue;
         }
@@ -1320,8 +1596,15 @@ int read_macro_call_args(char args[8][128], int *nargs)
             args[ai][ap++] = (char)c;
     }
 
-    if (ai == 1 && args[0][0] == 0)
+    if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
         ai = 0;
+
+    /* A variadic macro always has an argument slot for __VA_ARGS__, even
+     * when the call supplies none beyond the named parameters. See the
+     * matching comment in read_macro_call_args_text. */
+    if (variadic_named_count >= 0 && ai == variadic_named_count)
+        ai++;
+
     *nargs = ai;
     return 1;
 }
@@ -1390,7 +1673,16 @@ int macro_param_index(int di, const char *ident)
 
 void expand_function_macro(int di, char args[8][128], char *out, int outsz);
 
-int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs)
+/* variadic_named_count: -1 for an ordinary macro (every top-level comma
+ * starts a new argument, as before); for a variadic macro, the count of
+ * named (non "...") parameters. Once that many arguments have been
+ * collected, further top-level commas stop splitting and are kept as
+ * literal text in the final slot instead, so `FOO(a, b, c)` bound to
+ * `#define FOO(x, ...)` yields args = { "a", "b, c" } - the source's own
+ * comma/space formatting flows through unchanged since nothing is
+ * synthesized here, matching how the C99 __VA_ARGS__ argument reads. */
+int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
+                                     int variadic_named_count)
 {
     const char *p;
     int c;
@@ -1466,6 +1758,12 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs)
         }
 
         if (c == ',' && depth == 0) {
+            if (variadic_named_count >= 0 && ai >= variadic_named_count) {
+                /* Inside the variadic tail: this comma belongs to the
+                 * __VA_ARGS__ text itself, not an argument separator. */
+                if (ap < 127) args[ai][ap++] = (char)c;
+                continue;
+            }
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
@@ -1479,8 +1777,17 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs)
             args[ai][ap++] = (char)c;
     }
 
-    if (ai == 1 && args[0][0] == 0)
+    if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
         ai = 0;
+
+    /* A variadic macro always has an argument slot for __VA_ARGS__, even
+     * when the call supplies none beyond the named parameters (e.g.
+     * `ZERO_1_VAR(1)` against `#define ZERO_1_VAR(A, ...)`). In that case
+     * the loop above only ever finalised the named slots, so args[ai] is
+     * still exactly as the memset at the top of this function left it -
+     * "" - and just needs to be counted in. */
+    if (variadic_named_count >= 0 && ai == variadic_named_count)
+        ai++;
 
     *nargs = ai;
     *pp = p;
@@ -1545,7 +1852,7 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
 
             if (!strcmp(ident, "__LINE__")) {
                 char numbuf[32];
-                sprintf(numbuf, "%d", tok_line);
+                sprintf(numbuf, "%d", line_no);
                 for (ii = 0; numbuf[ii] && oi < outsz - 1; ++ii)
                     out[oi++] = numbuf[ii];
                 continue;
@@ -1577,7 +1884,8 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
                     int nargs;
 
                     after_ident = p;
-                    if (read_macro_call_args_text(&after_ident, args, &nargs)) {
+                    if (read_macro_call_args_text(&after_ident, args, &nargs,
+                            defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                         char tmp[MAX_MACRO_TEXT];
                         char tmp2[MAX_MACRO_TEXT];
                         if (nargs != defs[di].nargs)
@@ -1612,17 +1920,36 @@ void paste_tokens_in_text(char *s)
     char tmp[MAX_MACRO_TEXT];
     int i;
     int o;
+    int had_placemarker;
 
     i = 0;
     o = 0;
 
     while (s[i] && o < (int)sizeof(tmp) - 1) {
+        if (s[i] == MACRO_PLACEMARKER) {
+            i++;
+            continue;
+        }
+
         if (s[i] == '#' && s[i + 1] == '#') {
             while (o > 0 && isspace((unsigned char)tmp[o - 1]))
+                --o;
+            if (o > 0 && tmp[o - 1] == MACRO_PLACEMARKER)
                 --o;
             i += 2;
             while (s[i] && isspace((unsigned char)s[i]))
                 ++i;
+            had_placemarker = 0;
+            if (s[i] == MACRO_PLACEMARKER) {
+                had_placemarker = 1;
+                i++;
+                while (s[i] && isspace((unsigned char)s[i]))
+                    ++i;
+            }
+            if (had_placemarker && o > 0 && s[i] &&
+                !isspace((unsigned char)tmp[o - 1]) &&
+                !isspace((unsigned char)s[i]))
+                tmp[o++] = ' ';
             continue;
         }
 
@@ -1741,8 +2068,13 @@ void expand_function_macro(int di, char args[8][128], char *out, int outsz)
                 else
                     a = expanded_args[matched];
 
-                while (*a && oi < outsz - 1)
-                    out[oi++] = *a++;
+                if (*a == 0 && replacement_param_raw_context(defs[di].value, ident_start, ident_end)) {
+                    if (oi < outsz - 1)
+                        out[oi++] = MACRO_PLACEMARKER;
+                } else {
+                    while (*a && oi < outsz - 1)
+                        out[oi++] = *a++;
+                }
             } else {
                 for (j = 0; ident[j] && oi < outsz - 1; ++j)
                     out[oi++] = ident[j];
@@ -1879,6 +2211,28 @@ int macro_number_should_expand_textually(const char *s)
     return v > 0xffffUL || (is_nondecimal && v > 32767UL);
 }
 
+static int macro_value_is_integer_literal(const char *s)
+{
+    char *endp;
+
+    while (*s && isspace((unsigned char)*s))
+        s++;
+
+    if (!isdigit((unsigned char)*s) &&
+        !((s[0] == '-' || s[0] == '+') && isdigit((unsigned char)s[1])))
+        return 0;
+
+    (void)strtoul(s, &endp, 0);
+
+    while (*endp == 'u' || *endp == 'U' || *endp == 'l' || *endp == 'L')
+        endp++;
+
+    while (*endp && isspace((unsigned char)*endp))
+        endp++;
+
+    return *endp == 0;
+}
+
 int define_number_value(const char *name, long *out, int depth)
 {
     int di;
@@ -1907,8 +2261,7 @@ int define_number_value(const char *name, long *out, int depth)
         v = v + 1;
     }
 
-    if (isdigit((unsigned char)v[0]) ||
-        ((v[0] == '-' || v[0] == '+') && isdigit((unsigned char)v[1]))) {
+    if (macro_value_is_integer_literal(v)) {
         out[0] = parse_number_string(v);
         return 1;
     }
@@ -1938,21 +2291,6 @@ int define_number_value(const char *name, long *out, int depth)
         }
     }
 
-    return 0;
-}
-
-static int macro_suppressed_member_name_at(long at)
-{
-    long p;
-
-    p = at;
-    while (p > 0 && (src[p - 1] == ' ' || src[p - 1] == '\t' || src[p - 1] == '\r' || src[p - 1] == '\n'))
-        p--;
-
-    if (p > 0 && src[p - 1] == '.')
-        return 1;
-    if (p > 1 && src[p - 2] == '-' && src[p - 1] == '>')
-        return 1;
     return 0;
 }
 
@@ -2027,6 +2365,12 @@ void next_token(void)
             tok.text[i++] = (char)getc_src();
         tok.text[i] = 0;
 
+        if (!strcmp(tok.text, "__attribute__")) {
+            skip_gnu_attribute();
+            next_token();
+            return;
+        }
+
         /* C89 predefined macros.  These are handled by the lexer so
          * __FILE__ and __LINE__ reflect the logical source location after
          * include/#line processing. */
@@ -2062,8 +2406,7 @@ void next_token(void)
         }
 
         di = find_define(tok.text);
-        if (di >= 0 && (macro_disabled_here(tok.text, tok_start_pos) ||
-                        macro_suppressed_member_name_at(tok_start_pos)))
+        if (di >= 0 && macro_disabled_here(tok.text, tok_start_pos))
             di = -1;
         if (di >= 0) {
             long dv;
@@ -2077,9 +2420,16 @@ void next_token(void)
                 char expbuf[512];
 
                 save_pos = posi;
-                if (read_macro_call_args(args, &nargs)) {
-                    if (nargs != defs[di].nargs)
-                        error_here("wrong number of macro arguments");
+                if (read_macro_call_args(args, &nargs,
+                        defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
+                    if (nargs != defs[di].nargs) {
+                        error_here(macro_call_args_too_many ?
+                                   "too many arguments provided to function-like macro invocation" :
+                                   "too few arguments provided to function-like macro invocation");
+                        replace_source_range(tok_start_pos, posi, "0");
+                        next_token();
+                        return;
+                    }
                     expand_function_macro(di, args, expbuf, sizeof(expbuf));
                     replace_source_range(tok_start_pos, posi, expbuf);
                     next_token();
@@ -2403,10 +2753,70 @@ int accept(int k)
     return 0;
 }
 
+static const char *expected_token_name(int k, char *buf)
+{
+    switch (k) {
+        case TOK_EOF:      return "end of file";
+        case TOK_ID:       return "identifier";
+        case TOK_NUM:      return "number";
+        case TOK_STR:      return "string literal";
+        case TOK_CHARLIT:  return "character constant";
+        case TOK_INT:      return "int";
+        case TOK_CHAR:     return "char";
+        case TOK_VOID:     return "void";
+        case TOK_UNSIGNED: return "unsigned";
+        case TOK_SIGNED:   return "signed";
+        case TOK_EXTERN:   return "extern";
+        case TOK_STATIC:   return "static";
+        case TOK_CONST:    return "const";
+        case TOK_IF:       return "if";
+        case TOK_ELSE:     return "else";
+        case TOK_WHILE:    return "while";
+        case TOK_FOR:      return "for";
+        case TOK_RETURN:   return "return";
+        case TOK_BREAK:    return "break";
+        case TOK_CONTINUE: return "continue";
+        case TOK_SIZEOF:   return "sizeof";
+        case TOK_TYPEDEF:  return "typedef";
+        case TOK_STRUCT:   return "struct";
+        case TOK_UNION:    return "union";
+        case TOK_ENUM:     return "enum";
+        case TOK_SWITCH:   return "switch";
+        case TOK_CASE:     return "case";
+        case TOK_DEFAULT:  return "default";
+        case TOK_LONG:     return "long";
+        case TOK_FLOAT:    return "float";
+        case TOK_BOOL:     return "_Bool";
+        case TOK_EQ:       return "==";
+        case TOK_NE:       return "!=";
+        case TOK_LE:       return "<=";
+        case TOK_GE:       return ">=";
+        case TOK_ANDAND:   return "&&";
+        case TOK_OROR:     return "||";
+        case TOK_SHL:      return "<<";
+        case TOK_SHR:      return ">>";
+        case TOK_INC:      return "++";
+        case TOK_DEC:      return "--";
+        case TOK_ARROW:    return "->";
+        case TOK_ELLIPSIS: return "...";
+        default:
+            if (k > 0 && k < 128 && isprint((unsigned char)k)) {
+                sprintf(buf, "'%c'", k);
+                return buf;
+            }
+            sprintf(buf, "token %d", k);
+            return buf;
+    }
+}
+
 void expect(int k)
 {
     if (tok.kind != k) {
-        error_here("unexpected token");
+        char namebuf[32];
+        char msg[80];
+
+        sprintf(msg, "expected %s", expected_token_name(k, namebuf));
+        error_here(msg);
         return;
     }
     next_token();

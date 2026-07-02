@@ -57,6 +57,7 @@ int type_size(int type)
         return 0;
     }
     if ((type & 15) == TYPE_CHAR) return 1;
+    if ((type & 15) == TYPE_BOOL) return 1;
     if ((type & 15) == TYPE_VOID) return 0;
     if ((type & 15) == TYPE_LONG) return 4;
     if ((type & 15) == TYPE_FLOAT) return 4;
@@ -75,11 +76,10 @@ int type_is_float(int type)
     return (type & 15) == TYPE_FLOAT;
 }
 
-void error_float_unsupported(const char *what)
+int type_is_bool(int type)
 {
-    error_here(what);
-    emit("\tld hl,0\n");
-    g_expr_type = TYPE_INT;
+    if (type & (TYPE_PTR | TYPE_PTR2)) return 0;
+    return (type & 15) == TYPE_BOOL;
 }
 
 int object_array_size(int type, int count)
@@ -193,6 +193,7 @@ int type_index_elem_size(int type)
         int base = type & 15;
         if (type & TYPE_STRUCT)
             return type_size(type & ~(TYPE_PTR | TYPE_PTR2));
+        if (base == TYPE_BOOL) return 1;
         if (base == TYPE_CHAR) return 1;
         if (base == TYPE_VOID) return 1;
         if (base == TYPE_LONG) return 4;
@@ -356,15 +357,21 @@ void parse_struct_definition(int struct_id)
         ftype = parse_type();
 
         for (;;) {
+            int is_funcptr_field;
             while (accept('*')) { skip_type_qualifiers(); ftype = type_add_ptr(ftype); }
 
-            if (tok.kind != TOK_ID) {
-                error_here("field name expected");
-                break;
-            }
+            is_funcptr_field = 0;
+            if (parse_funcptr_declarator(&ftype, fname, sizeof(fname))) {
+                is_funcptr_field = 1;
+            } else {
+                if (tok.kind != TOK_ID) {
+                    error_here("field name expected");
+                    break;
+                }
 
-            dcc_copy_str(fname, sizeof(fname), tok.text);
-            next_token();
+                dcc_copy_str(fname, sizeof(fname), tok.text);
+                next_token();
+            }
 
             if (tok.kind == ':') {
                 int bw;
@@ -400,7 +407,7 @@ void parse_struct_definition(int struct_id)
                 dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
                 if ((ftype & 15) != TYPE_INT || type_ptr_depth(ftype) != 0)
                     error_here("bitfield type must be int or unsigned int");
-                field_defs[nfield_defs].type = (ftype & TYPE_UNSIGNED) ?
+                field_defs[nfield_defs].type = ((ftype & TYPE_UNSIGNED) || g_parse_type_was_enum) ?
                     (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
                 field_defs[nfield_defs].parent_struct_id = struct_id;
                 field_defs[nfield_defs].offset = bit_unit_offset;
@@ -433,6 +440,14 @@ void parse_struct_definition(int struct_id)
 
             field_defs[nfield_defs].elem_type = ftype;
             field_defs[nfield_defs].elem_size = bytes;
+
+            if (is_funcptr_field && g_funcptr_decl_array_len > 0) {
+                field_defs[nfield_defs].is_array = 1;
+                field_defs[nfield_defs].array_len = g_funcptr_decl_array_len;
+                field_defs[nfield_defs].dims[0] = g_funcptr_decl_array_len;
+                field_defs[nfield_defs].dim_count = 1;
+                bytes *= g_funcptr_decl_array_len;
+            }
 
             while (accept('[')) {
                 int flen;
@@ -510,6 +525,7 @@ int parse_base_type(void)
     int saw_char;
     int saw_void;
     int saw_float;
+    int saw_bool;
 
     t = 0;
     saw_any = 0;
@@ -519,17 +535,21 @@ int parse_base_type(void)
     saw_char = 0;
     saw_void = 0;
     saw_float = 0;
+    saw_bool = 0;
     g_typedef_array_len = 0;
     g_typedef_is_func = 0;
     decl_is_register = 0;
     decl_is_const = 0;
+    decl_is_inline = 0;
+    g_parse_type_was_enum = 0;
 
     /* C89 declaration specifiers are order-independent. */
     for (;;) {
         if (tok.kind == TOK_REGISTER) { decl_is_register = 1; next_token(); continue; }
         if (tok.kind == TOK_CONST) { decl_is_const = 1; next_token(); continue; }
+        if (tok.kind == TOK_INLINE) { decl_is_inline = 1; next_token(); continue; }
         if (tok.kind == TOK_VOLATILE ||
-            tok.kind == TOK_AUTO || tok.kind == TOK_INLINE) {
+            tok.kind == TOK_AUTO) {
             next_token();
             continue;
         }
@@ -541,6 +561,7 @@ int parse_base_type(void)
         if (tok.kind == TOK_SHORT) { saw_short = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_INT) { saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_FLOAT) { saw_float = 1; saw_any = 1; next_token(); continue; }
+        if (tok.kind == TOK_BOOL) { saw_bool = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_CHAR) { saw_char = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_VOID) { saw_void = 1; saw_any = 1; next_token(); continue; }
 
@@ -612,6 +633,7 @@ int parse_base_type(void)
                 expect('}');
             }
             t = TYPE_INT;
+            g_parse_type_was_enum = 1;
             saw_any = 1;
             break;
         }
@@ -631,7 +653,8 @@ int parse_base_type(void)
         error_here("type expected");
         t = TYPE_INT;
     } else if (t == 0) {
-        if (saw_float) t = TYPE_FLOAT;
+        if (saw_bool) t = TYPE_BOOL;
+        else if (saw_float) t = TYPE_FLOAT;
         else if (saw_void) t = TYPE_VOID;
         else if (saw_char) t = TYPE_CHAR;
         else if (saw_long) t = TYPE_LONG;

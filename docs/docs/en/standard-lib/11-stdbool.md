@@ -9,15 +9,12 @@ portable C programs.
 
 ## Runtime model
 
-dcc does not recognize the native C99 `_Bool` keyword. This header provides the
-portable names as an ordinary typedef and macros: `bool` is `unsigned char`,
-`true` is `1`, and `false` is `0`.
+dcc recognizes the native C99 `_Bool` keyword as a first-class 1-byte scalar
+type. This header only provides the portable names: `bool` is `_Bool`, `true` is
+`1`, and `false` is `0`.
 
-!!! warning "`bool` does not normalize"
-    Because `bool` is just an unsigned character type, assigning a nonzero value
-    such as `2` stores that value. It does not normalize every nonzero
-    assignment to `1` the way C99 `_Bool` would. Compare against zero, or use
-    `!!x`, when you need a canonical 0/1 result.
+Assignments, casts, initializers, parameter loads, and return values normalize
+nonzero `_Bool` / `bool` values to `1`.
 
 ## Boolean values
 

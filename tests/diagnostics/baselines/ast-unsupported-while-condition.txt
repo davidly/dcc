@@ -1,0 +1,2 @@
+<source>:8: error: unsupported while condition or body near 'while'
+dcc: 1 error(s)

@@ -1,0 +1,2 @@
+<source>:65: error: too many nested #if
+dcc: 1 error(s)

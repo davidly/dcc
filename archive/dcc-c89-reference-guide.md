@@ -224,13 +224,20 @@ Notes specific to the 16-bit model:
 
 ### Beyond C89
 
-- `inline` — accepted as a non-C89 (C99) extension and then ignored; functions
-  are always emitted normally. No other C99/C11 keywords (`restrict`, `_Bool`,
-  `_Complex`, and so on) are recognized. The native `_Bool` keyword in
-  particular is **not** a compiler type — but `bool`, `true`, and `false` are
-  still available as an ordinary library typedef by including
-  [stdbool.h](#stdboolh--boolean-type), so portable C99 source that uses them
-  compiles unchanged.
+- `static inline` — supported for small C99-style helper functions. dcc can
+  inline simple return-expression helpers, early-return `if` chains lowered to
+  conditional expressions, simple struct/pointer member accessors, scalar
+  `int`/pointer/`long`/`float` expression helpers, and statement-context
+  `void` helpers whose body is one or more expression statements such as
+  `*dst = value`. When every call site inlines and the function address is not
+  taken, the private out-of-line static helper body is removed; if a call cannot
+  be inlined safely, or if the function address is used, dcc keeps the private
+  fallback body. Plain externally linked `inline` is accepted for source compatibility
+  but does not yet have C99 external-inline linkage semantics or call-site
+  inlining. No other C99/C11 keywords (`restrict`, `_Complex`, and so on) are
+  recognized here unless documented elsewhere. The native `_Bool` keyword is a
+  first-class compiler type; `bool`, `true`, and `false` are also available via
+  [stdbool.h](#stdboolh--boolean-type).
 - **C99 `for`-loop init declarations** — `for (int i = 0; i < n; i++)` is
   accepted and the loop variable has proper C99 loop scope: it shadows any
   outer variable of the same name for the duration of the loop and is not

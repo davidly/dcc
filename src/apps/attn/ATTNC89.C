@@ -54,6 +54,15 @@
 #define S 8             /* sequence length    */
 #define V 10            /* vocab (digits 0-9) */
 
+#define NPARAM (V*D + S*D + D*D + D*D + D*D + D*V)
+#define WBYTES (NPARAM * (int)sizeof(long))
+
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
+#define SA_CAT2(a, b) a##b
+#define SA_CAT(a, b) SA_CAT2(a, b)
+#define _Static_assert(e, msg) typedef char SA_CAT(static_assertion_, __LINE__)[(e) ? 1 : -1]
+#endif
+
 #define NSTEP 700       /* max training steps  */
 #define RPRT 50         /* report interval     */
 #define FSTEP 10        /* mix in IFILE every n steps */
@@ -75,6 +84,15 @@
 #define KB (S*D)
 #define VB (2*S*D)
 #define AB (3*S*D)
+
+_Static_assert(sizeof(int) == 2, "ATTNC89 needs 16-bit int");
+_Static_assert(sizeof(long) == 4, "ATTNC89 needs 32-bit long");
+_Static_assert(D == 16, "ATTNC89 assumes d_model is 16");
+_Static_assert(S == 8, "ATTNC89 assumes sequence length is 8");
+_Static_assert(V == 10, "ATTNC89 assumes 10 digit tokens");
+_Static_assert(AB == 3*S*D, "ATTNC89 workspace offsets changed");
+_Static_assert(AB + S*S == 3*S*D + S*S, "ATTNC89 workspace size changed");
+_Static_assert(WBYTES == 4864, "ATTNC89 weight file payload changed");
 
 /* --- Q16 weight accumulators (native little-endian long) --- */
 long wtke[V*D];         /* token embed  */
@@ -184,11 +202,11 @@ int logtbl[256] = {
 /* --- forward declarations --- */
 static int  lci(long a);
 static int  lq8(long a);
-static int  mq8(int a, int b);
-static int  fxdiv(int a, int b);
+static inline int mq8(int a, int b);
+static inline int fxdiv(int a, int b);
 static int  asr(int v, int n);
-static void addcl(int *dst, int v);
-static int  subcl(int a, int b);
+static inline void addcl(int *dst, int v);
+static inline int subcl(int a, int b);
 static int  vmax(int *vec, unsigned char n, int *pidx);
 static int  vdot(int *x, int *y, unsigned char n);
 static void vsadd(int sc, int *src, int *dst, unsigned char n);
@@ -219,7 +237,7 @@ static int  seqfile(char *fname, int mode);
 static int  filrun(char *fname, int trn);
 static void count(void);
 static int  closs(void);
-static int  lossfr(int loss);
+static inline int lossfr(int loss);
 static void report(void);
 static void test(void);
 static int  infseq(void);
@@ -256,13 +274,13 @@ static int lq8(long a)
 }
 
 /* (a * b) >> 8 -> clamped Q8 int */
-static int mq8(int a, int b)
+static inline int mq8(int a, int b)
 {
     return lq8((long)a * b);
 }
 
 /* Q8 divide: (a << 8) / b -> clamped Q8 int (a >= 0, b > 0 at all call sites) */
-static int fxdiv(int a, int b)
+static inline int fxdiv(int a, int b)
 {
     return lci(((long)a * 256L) / (long)b);
 }
@@ -282,13 +300,13 @@ static int asr(int v, int n)
 }
 
 /* *dst += v, saturating to signed 16-bit */
-static void addcl(int *dst, int v)
+static inline void addcl(int *dst, int v)
 {
     *dst = lci((long)*dst + v);
 }
 
 /* a - b, saturating to signed 16-bit */
-static int subcl(int a, int b)
+static inline int subcl(int a, int b)
 {
     return lci((long)a - b);
 }
@@ -786,12 +804,9 @@ static int closs(void)
 }
 
 /* fractional part (0-9999) of a Q12 value */
-static int lossfr(int loss)
+static inline int lossfr(int loss)
 {
-    int fr;
-
-    fr = loss & 0x0FFF;
-    return (int)(((long)fr * 10000L) / 4096L);
+    return (int)(((long)(loss & 0x0FFF) * 10000L) / 4096L);
 }
 
 /* print step / loss / accuracy, then reset counters */

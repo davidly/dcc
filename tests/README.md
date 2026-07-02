@@ -13,6 +13,12 @@ tests/
   E.PAS, E.COB, ... # fixture input files consumed by some interpreters
   baselines/
     <name>.txt      # expected stdout for tests/<name>.c
+  diagnostics/
+    <name>.c        # compile-fail diagnostic tests
+    baselines/
+      <name>.txt    # expected normalized dcc stderr/stdout
+  extended-tests/
+    c-testsuite/    # imported c89/c99/c11 single-exec corpus
 ```
 
 ## How tests and baselines relate
@@ -30,8 +36,9 @@ The relationship is **by file name**:
 | `tests/ttt.c`          | `tests/baselines/ttt.txt`         |
 | `tests/cobint.c`       | `tests/baselines/cobint.txt`      |
 
-The test runner (`scripts/runall.ps1`) builds each `*.c` file, runs it, and
-compares the captured stdout against the like-named file in `baselines/`.
+The test runner (`scripts/runall.ps1`) builds each main-suite `*.c` file, runs
+it, and compares the captured stdout against the like-named file in
+`baselines/`.
 Because matching is keyed on the **app name** (not position in a list), the
 order in which tests are discovered or run does not matter.
 
@@ -47,6 +54,9 @@ From the repo root, with PowerShell 7+:
 # Build + run every test, verify against tests/baselines/ (parallel by default)
 pwsh ./scripts/runall.ps1
 
+# Also run the extended c-testsuite corpus after the main suite
+pwsh ./scripts/runall.ps1 -Extended
+
 # Sequential fallback (one app at a time in the shared build/ dir)
 pwsh ./scripts/runall.ps1 -Serial
 
@@ -56,6 +66,9 @@ pwsh ./scripts/runall.ps1 -Mode nopeep   # unoptimized only
 
 # Build without the stack-overflow guard (on by default)
 pwsh ./scripts/runall.ps1 -NoStackCheck
+
+# Keep the per-invocation build/run-<pid>/ folder instead of removing it on exit
+pwsh ./scripts/runall.ps1 -KeepBuild
 ```
 
 By default the suite builds each app in **both** optimization modes \u2014 `peep`
@@ -64,7 +77,9 @@ and verifies both against the same baseline, so a default run does two builds
 per app. Use `-Mode peep` or `-Mode nopeep` to build just one.
 
 By default the suite runs **in parallel** (each app builds in its own
-`build/<app>/` subdirectory), which is much faster on multi-core machines. Pass
+`build/<app>/` subdirectory), which is much faster on multi-core machines. Each
+parallel invocation is isolated under a `build/run-<pid>/` folder that is
+removed automatically on exit (pass `-KeepBuild` to keep it for debugging). Pass
 `-Serial` to build sequentially in the shared `build/` directory. The
 lightweight stack-overflow guard (`-fstack-check`) is on by default; use
 `-NoStackCheck` to disable it.
@@ -73,6 +88,69 @@ A test **passes** when its program builds, runs, and its stdout matches the
 corresponding `baselines/<name>.txt` byte-for-byte (line endings normalized to
 LF). A test with no baseline file is still built and run, but reported as
 "no baseline" rather than verified.
+
+## Running compile-fail diagnostic tests
+
+The diagnostic suite under `tests/diagnostics/` verifies compiler errors for
+programs that are expected to fail during `dcc` compilation. The runner captures
+compiler output, normalizes the tested source path to `<source>`, and compares
+against `tests/diagnostics/baselines/<name>.txt`.
+
+```pwsh
+# Verify diagnostic baselines
+pwsh ./scripts/run-diagnostics.ps1
+
+# Refresh baselines after an intentional diagnostic wording change
+pwsh ./scripts/run-diagnostics.ps1 -Update
+```
+
+Use small single-purpose inputs here: each file should exercise one diagnostic
+path and fail before assembly or emulator stages are needed.
+
+## Running the extended c-testsuite corpus
+
+The c-testsuite single-exec submodule cases live under
+`tests/extended-tests/tests/single-exec/`. Each case keeps the
+upstream trio of files: `<id>.c`, `<id>.c.tags`, and `<id>.c.expected`.
+
+Target-inapplicable cases are listed in
+`tests/_extended_test_overrides.json`. These are tests whose
+premise conflicts with dcc's CP/M 2.2/Z80 target model or documented C dialect
+(for example `long long`, `double`, wide-character headers, GNU statement
+expressions, or C99/C11 features that dcc intentionally does not provide). The
+extended runner reports them as skipped instead of failures.
+
+Use `scripts/runall-extended.ps1` to build those cases with the same dcc,
+dccpeep, M80, dccrtlstrip, M80, and L80 pipeline as the main suite, then run the
+resulting `.COM` files under `ntvcm` and compare stdout+stderr with the matching
+`.expected` file.
+
+```pwsh
+# C89-tagged tests (default when no standard flag is supplied)
+pwsh ./scripts/runall-extended.ps1 -C89
+
+# C99 target-standard set; c89-tagged tests are included by c-testsuite rules
+pwsh ./scripts/runall-extended.ps1 -C99
+
+# C11 target-standard set; c89 and c99 tests are included by c-testsuite rules
+pwsh ./scripts/runall-extended.ps1 -C11
+
+# Every imported single-exec case, including any case without a standard tag
+pwsh ./scripts/runall-extended.ps1 -All
+
+# Smoke-test one case
+pwsh ./scripts/runall-extended.ps1 -C89 -Test 00001
+
+# Bound each build pass and emulator run to 30 seconds
+pwsh ./scripts/runall-extended.ps1 -C89 -RunTimeout 30
+
+# Use an alternate skip file, or an empty/nonexistent one to run everything
+pwsh ./scripts/runall-extended.ps1 -C89 -SkipFile tests/_extended_test_overrides.json
+```
+
+The runner defaults to `-Mode fast` and parallel execution, matching the main
+`runall.ps1` runner's current default behavior. Use `-Mode nopeep`, `-Mode full`,
+or `-Serial` when you need a different pass or easier debugging.
 
 ## Placeholders for volatile output
 

@@ -47,18 +47,22 @@ sees the real set of runtime symbols the program calls.
 
 ## Compiler Shape
 
-dcc is a single-pass, syntax-directed translator. It does not build an AST or an
-intermediate representation. As the parser recognizes a construct, it emits the
-corresponding Z80 assembly.
+dcc's compiler implementation is AST-driven for function bodies: statements and
+expressions are parsed into typed AST nodes, and the AST walker emits the Z80
+assembly. Code generation is a **single AST path** — every expression and
+statement, including local-declaration initializers, is lowered through the AST
+emitter (initializers build into an isolated arena so they never disturb the
+surrounding statement walk). The AST is "function-local" only in scope:
+top-level declarations, the preprocessor, and the global type/symbol tables
+remain direct table-driven front-end machinery rather than AST nodes.
 
 ```mermaid
 flowchart LR
     SRC([".c source"]) --> PP["preprocess +<br/>#include splice"]
     PP --> LEX["lexer<br/>(next_token)"]
-    LEX --> PARSE["recursive-descent parse<br/>+ emit (one pass)"]
-    PARSE --> ASM([".MAC assembly"])
-    PARSE -. consults .-> ORA["type oracle<br/>(side-effect-free)"]
-    ORA -. type verdict .-> PARSE
+    LEX --> BUILD["dcc_ast_build.c<br/>build function-local AST"]
+    BUILD --> GEN["dcc_ast_gen*.c<br/>emit from AST"]
+    GEN --> ASM([".MAC assembly"])
 ```
 
 The phases are:
@@ -66,48 +70,27 @@ The phases are:
 | Classic phase | Conventional design | dcc's approach |
 | --- | --- | --- |
 | Lexical analysis | Separate tokenizer | `next_token` lexer in `dcc_preproc.c` (integrated with the preprocessor) |
-| Parsing | Build an AST | Recursive-descent parse with **no AST**; actions emit code inline |
-| Semantic analysis | Walk the AST, annotate types | Done *during* the parse against live symbol/type tables |
+| Parsing | Build an AST | Recursive-descent parse into a function-local AST |
+| Semantic analysis | Walk the AST, annotate types | Done during AST construction against live symbol/type tables |
 | Intermediate representation | One or more IRs (e.g. three-address code, SSA) | **None** — C maps straight to Z80 |
 | Machine-independent optimization | Passes over the IR | Mostly absent by design; some peephole/idiom fast paths in codegen |
-| Code generation | Lower IR to target | Emitted directly by the parser's semantic actions |
+| Code generation | Lower IR to target | AST walker emits Z80/M80 assembly through shared emit helpers |
 | Machine-dependent optimization | Target peephole pass | Separate program `dccpeep` over the emitted text |
 
-### Type prediction
+### Typed expression lowering
 
-Without an AST, the parser must choose 16-bit, 32-bit, or float code before it
-emits each operand of an operator, conditional arm, or branch condition.
-
-dcc uses two mechanisms:
-
-- A shallow source-text peek (`peek_simple_unary_type`, `snippet_simple_type`)
-  checks the first token or two of the upcoming operand.
-- The type oracle (`dcc_type_oracle.c`) walks the full expression grammar and
-  returns the type the generator will produce, applying the usual arithmetic
-  conversions without emitting code.
-
-```mermaid
-flowchart TB
-    GEN["code generator<br/>reaches an operator"] --> SNAP["snapshot lexer state<br/>(posi, tok, line, flags)"]
-    SNAP --> WALK["type oracle walks the<br/>full operand grammar"]
-    WALK --> VERDICT["return C type verdict"]
-    VERDICT --> RESTORE["restore lexer state"]
-    RESTORE --> EMIT["re-parse + emit<br/>correctly-typed code"]
-```
-
-The oracle snapshots and restores lexer state before returning. It supplies
-whole-expression type information without a full AST or a second code-generating
-pass.
+The AST carries expression result types, so codegen can choose 16-bit, 32-bit,
+pointer, struct, or float lowering from the tree it is emitting — the full
+typed operand is always in hand before any code is emitted.
 
 ## Inside dcc: module architecture
 
 The compiler is one binary built from focused modules that all share a single
-umbrella header, `dcc.h`. Because parsing and code generation are interleaved
-and share a large amount of file-scope state (the source buffer, the lookahead
-token, the symbol/type tables, per-function codegen flags), the natural layout
-is the classic single-binary compiler shape: **one shared header, many
-cooperating `.c` files**, with all mutable state defined once in
-`dcc_state.c`.
+umbrella header, `dcc.h`. The parser, AST builder, AST emitter, and low-level
+emit helpers share file-scope compiler state (the source buffer, the lookahead
+token, the symbol/type tables, per-function codegen flags), so the natural
+layout is the classic single-binary compiler shape: **one shared header, many
+cooperating `.c` files**, with all mutable state defined once in `dcc_state.c`.
 
 ```mermaid
 graph TB
@@ -128,25 +111,30 @@ graph TB
         SYM["dcc_symbols.c"]
         CONST["dcc_constexpr.c"]
         FOLD["dcc_fold.c"]
-        ORACLE["dcc_type_oracle.c"]
     end
 
-    subgraph CG["3 - Code generation"]
+    subgraph AST["3 - Function-local AST"]
+      ASTN["dcc_ast.c / dcc_ast.h"]
+      ASTB["dcc_ast_build.c"]
+      ASTG["dcc_ast_gen*.c<br/>(5 TUs)"]
+    end
+
+    subgraph CG["4 - Code generation helpers"]
         EXPR["dcc_expr.c<br/>expressions, calls"]
         OPS["dcc_ops.c<br/>arithmetic, bitwise"]
         CMP["dcc_cmp.c<br/>compare, branch"]
         ASSIGN["dcc_assign.c"]
-        STMT["dcc_stmt.c<br/>if/while/for/switch"]
+        STMT["dcc_stmt.c<br/>compound + switch helpers"]
         DECL["dcc_decl.c<br/>local decls, initializers"]
     end
 
-    subgraph TOP["4 - Top level + output"]
+    subgraph TOP["5 - Top level + output"]
         FUNC["dcc_func.c<br/>functions, frame layout"]
         DATA["dcc_data.c<br/>data-section emission"]
     end
 
     SHARED -.included by all.-> FE
-    FE ==> TYP ==> CG ==> TOP
+    FE ==> TYP ==> AST ==> CG ==> TOP
 ```
 
 The thick arrows are the dominant translation pipeline (front end → types →
@@ -158,8 +146,9 @@ other — the arrows show the usual direction, not a hard layering rule.
 | --- | --- | --- |
 | Shared | `dcc.h`, `dcc_state.c` | Contract + single definition of all shared state |
 | Front end | `dcc.c`, `dcc_preproc.c`, `dcc_diag_emit.c`, `dcc_asmname.c` | Driver/CLI, preprocessor + lexer, diagnostics + emit primitives, C-name-to-asm-symbol mapping |
-| Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c`, `dcc_type_oracle.c` | Type system, symbol tables, constant-expression evaluation, constant folding, the type oracle |
-| Code generation | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c` | Expression, operator, comparison, assignment, statement, and declaration lowering |
+| Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c` | Type system, symbol tables, constant-expression evaluation, constant folding |
+| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` + `dcc_ast_gen_support.c` / `_expr.c` / `_cond.c` / `_stmt.c` (behind `dcc_ast_gen_internal.h`) | AST node storage, typed statement/expression building, and the AST-driven Z80 emitter — split into classifiers/type resolvers (`dcc_ast_gen.c`), the `ast_gen_supported` dispatch and folds (`_support.c`), expression emitters (`_expr.c`), condition/branch emitters (`_cond.c`), and switch/for/statement emitters (`_stmt.c`) |
+| Code generation helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c` | Shared low-level emit helpers — expression, operator, comparison, assignment, declaration, and compound-block/switch-table lowering — all invoked *by the AST emitter* |
 | Top level / output | `dcc_func.c`, `dcc_data.c` | Function/frame parsing and data-section emission |
 
 ## Inside dccpeep: a fixpoint peephole optimizer
@@ -293,13 +282,10 @@ sizing a program are:
 Those numbers are recomputed from `DCCRTL.MAC` on every docs build, so editing
 the runtime and rebuilding the docs is all that is needed to refresh them.
 
-- dcc is a **single-pass, syntax-directed** C89 compiler with **no AST and no
-  IR** — code is emitted as the parser recognises each construct, in the
-  tradition of the earliest C compilers.
-- The one structural weakness of that design (knowing operand types before
-  emitting them) is addressed by a **side-effect-free type oracle**, a
-  "1.5-pass" technique that restores accurate whole-expression typing without a
-  tree.
+- dcc is an **AST-driven** C89 compiler for function bodies, with direct
+  lowering from typed AST nodes to Z80/M80 assembly.
+- Typed AST expression nodes drive mixed-width (16/32-bit, pointer, float)
+  codegen decisions from the tree being emitted.
 - Machine-dependent optimization is split out into **`dccpeep`**, a
   fixpoint peephole optimizer over the assembly text, with separate time (`-Ot`)
   and size (`-Os`) strategies.

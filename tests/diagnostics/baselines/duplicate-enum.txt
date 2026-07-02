@@ -1,0 +1,2 @@
+<source>:4: error: duplicate enum constant near '}'
+dcc: 1 error(s)

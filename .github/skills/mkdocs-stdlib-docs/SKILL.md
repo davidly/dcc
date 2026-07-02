@@ -25,7 +25,7 @@ keeps the human-written behavior notes, dcc deviations, examples, and caveats.
 - Reordering a library page to follow conventional C reference structure while
   preserving dcc-specific runtime notes.
 
-Do not use this skill for ordinary CP/M app code; use `c89-cpm-z80`. Do not use
+Do not use this skill for ordinary CP/M app code; use `dcc-cpm-z80`. Do not use
 it for compiler/runtime implementation changes except when docs must be checked
 against those implementation details; use `dcc-project` for the code change.
 

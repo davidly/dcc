@@ -59,6 +59,32 @@ int init_label_is_string_literal_label(const char *p)
     return *p == 0;
 }
 
+static void mark_init_label_extrn(const char *p)
+{
+    char base[64];
+    int i;
+    int n;
+    struct Sym *s;
+
+    if (init_label_is_number(p) || init_label_is_string_literal_label(p))
+        return;
+
+    for (n = 0; p[n] && p[n] != '+' && p[n] != '-' && n < (int)sizeof(base) - 1; ++n)
+        base[n] = p[n];
+    base[n] = 0;
+
+    s = find_global(base);
+    if (s == NULL) {
+        for (i = 0; i < nglobals; ++i) {
+            if (!strcmp(asm_name_for(sym_asm_name(&globals[i])), base)) {
+                s = &globals[i];
+                break;
+            }
+        }
+    }
+    emit_extrn_if_needed(s);
+}
+
 void emit_init_label_or_number(const char *p, int bytes)
 {
     long v;
@@ -77,6 +103,7 @@ void emit_init_label_or_number(const char *p, int bytes)
      * verbatim so M80 can compute the relocatable value.  Ordinary C symbol
      * names still need the normal target name mapping.
      */
+    mark_init_label_extrn(p);
     if (init_label_is_string_literal_label(p)) {
         fprintf(outf, "\tdw %s\n", p);
     } else if (strchr(p, '+') || strchr(p, '-')) {
