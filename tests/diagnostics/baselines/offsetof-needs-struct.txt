@@ -1,3 +1,7 @@
-<source>:2: error: offsetof needs struct/union type near 'x'
-<source>:2: error: unknown field in offsetof near 'x'
+<source>:2: error DCC-E0505: offsetof needs struct/union type near 'x'
+        A = __offsetof(int, x)
+                            ^
+<source>:2: error DCC-E0504: unknown field in offsetof near 'x'
+        A = __offsetof(int, x)
+                            ^
 dcc: 2 error(s)

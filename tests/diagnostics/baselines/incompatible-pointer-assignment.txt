@@ -1,0 +1,4 @@
+<source>:4: error DCC-E0920: incompatible integer to pointer assignment near ')'
+        return sizeof(p = 1);
+                           ^
+dcc: 1 error(s)

@@ -1,0 +1,4 @@
+<source>:7: error DCC-E1105: expected ')' near '}'
+    };
+    ^
+dcc: 1 error(s)

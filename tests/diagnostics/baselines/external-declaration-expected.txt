@@ -1,2 +1,4 @@
-<source>:2: error: external declaration expected near '@'
+<source>:2: error DCC-E1101: external declaration expected near '@'
+    @
+    ^
 dcc: 1 error(s)

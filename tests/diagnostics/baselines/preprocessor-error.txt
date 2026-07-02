@@ -1,2 +1,4 @@
-<source>:1: error: #error diagnostic smoke test
+<source>:1: error DCC-E0312: #error diagnostic smoke test
+    #error diagnostic smoke test
+    ^
 dcc: 1 error(s)

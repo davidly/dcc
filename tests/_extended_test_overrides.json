@@ -6,10 +6,13 @@
   "tests": [
     { "name": "00046", "ignore": true, "reason": "Uses C11 anonymous struct/union members; dcc does not implement anonymous aggregate member lookup yet." },
     { "name": "00050", "ignore": true, "reason": "Uses C11 anonymous union members and aggregate initialization through anonymous members; dcc does not implement this yet." },
+    { "name": "00081", "ignore": true, "reason": "Uses long long; dcc has no 64-bit integer type." },
+    { "name": "00082", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
     { "name": "00104", "ignore": true, "reason": "Uses int64_t and 64-bit integer constants; dcc has no 64-bit integer type." },
     { "name": "00119", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
     { "name": "00123", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
     { "name": "00128", "ignore": true, "reason": "Uses long long and unsigned long long assignment cases; dcc has no 64-bit integer type." },
+    { "name": "00135", "ignore": true, "reason": "Uses long long and unsigned long long constants; dcc has no 64-bit integer type." },
     { "name": "00162", "ignore": true, "reason": "Uses C99 array parameter qualifiers (const/static/volatile/restrict inside []), not implemented by dcc." },
     { "name": "00166", "ignore": true, "reason": "Assumes host-sized int can hold large octal/hex constants; dcc int is 16-bit on Z80." },
     { "name": "00168", "ignore": true, "reason": "Expected output assumes int can hold 10!; dcc int is 16-bit on Z80 and wraps by the target data model." },

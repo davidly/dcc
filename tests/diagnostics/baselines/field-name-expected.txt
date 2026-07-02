@@ -1,0 +1,4 @@
+<source>:8: error DCC-E0506: field name expected near ')'
+        A = sizeof(s.)
+                     ^
+dcc: 1 error(s)

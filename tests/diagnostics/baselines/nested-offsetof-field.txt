@@ -1,0 +1,4 @@
+<source>:6: error DCC-E0508: nested offsetof field is not struct/union near 'y'
+        A = __offsetof(struct S, x.y)
+                                   ^
+dcc: 1 error(s)

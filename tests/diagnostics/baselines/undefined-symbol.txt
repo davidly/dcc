@@ -1,2 +1,4 @@
-<source>:1: error: use of undeclared identifier 'missing_symbol' near 'missing_symbol'
+<source>:1: error DCC-E0201: use of undeclared identifier 'missing_symbol' near 'missing_symbol'
+    int x = sizeof(missing_symbol);
+                   ^
 dcc: 1 error(s)

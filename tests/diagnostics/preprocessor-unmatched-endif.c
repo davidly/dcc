@@ -1,0 +1,2 @@
+#endif
+int x;

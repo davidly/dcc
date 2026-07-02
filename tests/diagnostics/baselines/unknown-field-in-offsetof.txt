@@ -1,2 +1,4 @@
-<source>:6: error: unknown field in offsetof near 'y'
+<source>:6: error DCC-E0504: unknown field in offsetof near 'y'
+        A = __offsetof(struct S, y)
+                                 ^
 dcc: 1 error(s)

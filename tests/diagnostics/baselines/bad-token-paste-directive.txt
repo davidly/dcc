@@ -1,2 +1,4 @@
-<source>:1: error: '##' is not a valid preprocessor directive
+<source>:1: error DCC-E0310: '##' is not a valid preprocessor directive
+    ## define X 1
+    ^
 dcc: 1 error(s)

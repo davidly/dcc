@@ -1,0 +1,4 @@
+<source>:6: error DCC-E0911: too many union initializer elements near '2'
+    union U u = { 1, 2 };
+                     ^
+dcc: 1 error(s)

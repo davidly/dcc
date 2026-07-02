@@ -35,6 +35,122 @@ void fatal(const char *msg)
     exit(1);
 }
 
+static int dcc_msg_has(const char *msg, const char *needle)
+{
+    return msg && needle && strstr(msg, needle) != NULL;
+}
+
+const char *dcc_diag_code_for_message(const char *msg)
+{
+    if (dcc_msg_has(msg, "undeclared identifier")) return "DCC-E0201";
+    if (dcc_msg_has(msg, "expected \"FILENAME\" or <FILENAME>")) return "DCC-E0301";
+    if (dcc_msg_has(msg, "include name too long")) return "DCC-E0302";
+    if (dcc_msg_has(msg, "unterminated include name")) return "DCC-E0303";
+    if (dcc_msg_has(msg, "not a valid preprocessor directive")) return "DCC-E0310";
+    if (dcc_msg_has(msg, "unknown preprocessor directive")) return "DCC-E0310";
+    if (dcc_msg_has(msg, "too many nested #if")) return "DCC-E0311";
+    if (dcc_msg_has(msg, "#error")) return "DCC-E0312";
+    if (dcc_msg_has(msg, "#elif without matching #if")) return "DCC-E0313";
+    if (dcc_msg_has(msg, "#else without matching #if")) return "DCC-E0314";
+    if (dcc_msg_has(msg, "#endif without matching #if")) return "DCC-E0315";
+    if (dcc_msg_has(msg, "too many arguments provided to function-like macro invocation")) return "DCC-E0320";
+    if (dcc_msg_has(msg, "too few arguments provided to function-like macro invocation")) return "DCC-E0321";
+    if (dcc_msg_has(msg, "constant integer expression expected")) return "DCC-E0401";
+    if (dcc_msg_has(msg, "division by zero in constant expression")) return "DCC-E0402";
+    if (dcc_msg_has(msg, "expected an expression")) return "DCC-E0403";
+    if (dcc_msg_has(msg, "expected a field designator")) return "DCC-E0501";
+    if (dcc_msg_has(msg, "unknown field initializer designator")) return "DCC-E0502";
+    if (dcc_msg_has(msg, "field name expected in offsetof")) return "DCC-E0503";
+    if (dcc_msg_has(msg, "unknown field in offsetof")) return "DCC-E0504";
+    if (dcc_msg_has(msg, "offsetof needs struct/union type")) return "DCC-E0505";
+    if (dcc_msg_has(msg, "__offsetof expected")) return "DCC-E0507";
+    if (dcc_msg_has(msg, "nested offsetof field is not struct/union")) return "DCC-E0508";
+    if (dcc_msg_has(msg, "unknown struct field")) return "DCC-E0509";
+    if (dcc_msg_has(msg, "field name expected")) return "DCC-E0506";
+    if (dcc_msg_has(msg, "bitfield type must be int or unsigned int")) return "DCC-E0510";
+    if (dcc_msg_has(msg, "invalid bitfield width")) return "DCC-E0511";
+    if (dcc_msg_has(msg, "duplicate enum constant")) return "DCC-E0520";
+    if (dcc_msg_has(msg, "enum constant name expected")) return "DCC-E0521";
+    if (dcc_msg_has(msg, "struct/union name or '{' expected")) return "DCC-E0530";
+    if (dcc_msg_has(msg, "type expected")) return "DCC-E0531";
+    if (dcc_msg_has(msg, "multiple storage classes in declaration")) return "DCC-E0540";
+    if (dcc_msg_has(msg, "variable length arrays are not supported")) return "DCC-E0601";
+    if (dcc_msg_has(msg, "subscripted value is not an array or pointer")) return "DCC-E0602";
+    if (dcc_msg_has(msg, "break statement outside loop or switch")) return "DCC-E0701";
+    if (dcc_msg_has(msg, "continue statement outside loop")) return "DCC-E0702";
+    if (dcc_msg_has(msg, "case label outside switch")) return "DCC-E0703";
+    if (dcc_msg_has(msg, "default label outside switch")) return "DCC-E0704";
+    if (dcc_msg_has(msg, "duplicate goto label")) return "DCC-E0705";
+    if (dcc_msg_has(msg, "undefined goto label")) return "DCC-E0706";
+    if (dcc_msg_has(msg, "parameter declaration name expected")) return "DCC-E0801";
+    if (dcc_msg_has(msg, "parameter name expected")) return "DCC-E0802";
+    if (dcc_msg_has(msg, "old-style parameter declaration does not match parameter list")) return "DCC-E0803";
+    if (dcc_msg_has(msg, "redefinition of")) return "DCC-E0804";
+    if (dcc_msg_has(msg, "too few arguments to function call")) return "DCC-E0805";
+    if (dcc_msg_has(msg, "too many arguments to function call")) return "DCC-E0806";
+    if (dcc_msg_has(msg, "identifier expected after & in initializer")) return "DCC-E0901";
+    if (dcc_msg_has(msg, "constant initializer expected")) return "DCC-E0902";
+    if (dcc_msg_has(msg, "string initializer too long")) return "DCC-E0903";
+    if (dcc_msg_has(msg, "too many initializer elements")) return "DCC-E0904";
+    if (dcc_msg_has(msg, "struct initializer list expected")) return "DCC-E0905";
+    if (dcc_msg_has(msg, "array initializer list expected")) return "DCC-E0906";
+    if (dcc_msg_has(msg, "compound literal initializer expected")) return "DCC-E0907";
+    if (dcc_msg_has(msg, "numeric constant expected after sign")) return "DCC-E0908";
+    if (dcc_msg_has(msg, "negative initializer offset")) return "DCC-E0909";
+    if (dcc_msg_has(msg, "initializer designator overlaps address constant")) return "DCC-E0910";
+    if (dcc_msg_has(msg, "too many union initializer elements")) return "DCC-E0911";
+    if (dcc_msg_has(msg, "float initializer must be constant")) return "DCC-E0912";
+    if (dcc_msg_has(msg, "negative array initializer designator")) return "DCC-E0913";
+    if (dcc_msg_has(msg, "wide string cannot initialize char array")) return "DCC-E0914";
+    if (dcc_msg_has(msg, "bitfield initializer must be constant integer")) return "DCC-E0915";
+    if (dcc_msg_has(msg, "incompatible integer to pointer assignment")) return "DCC-E0920";
+    if (dcc_msg_has(msg, "unsupported sizeof expression")) return "DCC-E1001";
+    if (dcc_msg_has(msg, "unsupported")) return "DCC-E1002";
+    if (dcc_msg_has(msg, "malformed")) return "DCC-E1003";
+    if (dcc_msg_has(msg, "string literal too long")) return "DCC-E1004";
+    if (dcc_msg_has(msg, "'(' expected after sizeof in constant expression")) return "DCC-E1005";
+    if (dcc_msg_has(msg, "external declaration expected")) return "DCC-E1101";
+    if (dcc_msg_has(msg, "expected ';'")) return "DCC-E1102";
+    if (dcc_msg_has(msg, "expected '}'")) return "DCC-E1103";
+    if (dcc_msg_has(msg, "identifier expected")) return "DCC-E1104";
+    if (dcc_msg_has(msg, "expected ')'")) return "DCC-E1105";
+    if (dcc_msg_has(msg, "expected ']'")) return "DCC-E1106";
+    if (dcc_msg_has(msg, "expected '='")) return "DCC-E1107";
+    if (dcc_msg_has(msg, "double is not supported")) return "DCC-E1201";
+    if (dcc_msg_has(msg, "long long is not supported")) return "DCC-E1202";
+    if (dcc_msg_has(msg, "64-bit integer types are not supported")) return "DCC-E1203";
+    return "DCC-E0001";
+}
+
+static void dcc_print_source_caret(long ofs)
+{
+    long start;
+    long end;
+    long p;
+    long caret;
+
+    if (!src || src_len <= 0 || ofs < 0 || ofs > src_len)
+        return;
+
+    start = ofs;
+    while (start > 0 && src[start - 1] != '\n' && src[start - 1] != '\r')
+        start--;
+    end = ofs;
+    while (end < src_len && src[end] != '\n' && src[end] != '\r')
+        end++;
+    if (end <= start)
+        return;
+
+    fprintf(stderr, "    ");
+    for (p = start; p < end; ++p)
+        fputc((unsigned char)src[p], stderr);
+    fprintf(stderr, "\n    ");
+    caret = ofs - start;
+    for (p = 0; p < caret; ++p)
+        fputc(src[start + p] == '\t' ? '\t' : ' ', stderr);
+    fprintf(stderr, "^\n");
+}
+
 void init_predefined_macro_texts(void)
 {
     time_t now;
@@ -131,15 +247,28 @@ void source_location_at(long ofs, char *filebuf, int filebufsz, int *linep)
     linep[0] = line;
 }
 
+void dcc_error_at(const char *file, int line, long ofs, const char *msg, const char *near_text)
+{
+    const char *fn;
+    const char *code;
+
+    fn = file && file[0] ? file : (input_name ? input_name : "<input>");
+    code = dcc_diag_code_for_message(msg);
+    if (near_text && near_text[0])
+        fprintf(stderr, "%s:%d: error %s: %s near '%s'\n", fn, line, code, msg, near_text);
+    else
+        fprintf(stderr, "%s:%d: error %s: %s\n", fn, line, code, msg);
+    dcc_print_source_caret(ofs);
+    errors++;
+    if (errors > 40) fatal("too many errors");
+}
+
 void error_here(const char *msg)
 {
     const char *fn;
 
     fn = tok.file[0] ? tok.file : (input_name ? input_name : "<input>");
-    fprintf(stderr, "%s:%d: error: %s near '%s'\n",
-            fn, tok_line, msg, tok.text);
-    errors++;
-    if (errors > 40) fatal("too many errors");
+    dcc_error_at(fn, tok_line, tok_start_pos, msg, tok.text);
 }
 
 void *xmalloc(size_t n)

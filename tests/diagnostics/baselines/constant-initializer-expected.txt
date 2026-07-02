@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0902: constant initializer expected near ';'
+    int x = ;
+            ^
+dcc: 1 error(s)

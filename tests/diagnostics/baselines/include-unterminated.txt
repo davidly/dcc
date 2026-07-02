@@ -1,2 +1,2 @@
-<source>:1: error: unterminated include name
+<source>:1: error DCC-E0303: unterminated include name
 dcc: 1 error(s)

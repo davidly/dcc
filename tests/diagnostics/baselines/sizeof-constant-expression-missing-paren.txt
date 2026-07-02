@@ -1,2 +1,4 @@
-<source>:2: error: expected an expression near 'int'
+<source>:2: error DCC-E0403: expected an expression near 'int'
+        A = sizeof int
+                   ^
 dcc: 1 error(s)

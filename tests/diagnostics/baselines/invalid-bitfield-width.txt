@@ -1,2 +1,4 @@
-<source>:2: error: invalid bitfield width near ';'
+<source>:2: error DCC-E0511: invalid bitfield width near ';'
+        int x: -1;
+                 ^
 dcc: 1 error(s)

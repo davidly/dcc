@@ -1,0 +1,4 @@
+<source>:1: error DCC-E1201: double is not supported by dcc's CP/M/Z80 target; use float near 'double'
+    double x;
+    ^
+dcc: 1 error(s)

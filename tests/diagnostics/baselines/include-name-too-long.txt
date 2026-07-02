@@ -1,2 +1,2 @@
-<source>:1: error: include name too long
+<source>:1: error DCC-E0302: include name too long
 dcc: 1 error(s)

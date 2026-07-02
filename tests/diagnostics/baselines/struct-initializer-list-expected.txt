@@ -1,2 +1,4 @@
-<source>:5: error: struct initializer list expected near '1'
+<source>:5: error DCC-E0905: struct initializer list expected near '1'
+    struct S s = 1;
+                 ^
 dcc: 1 error(s)

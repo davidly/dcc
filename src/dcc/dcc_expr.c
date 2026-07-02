@@ -830,11 +830,10 @@ void check_undefined_user_labels(void)
 
     for (i = 0; i < nulabels; ++i) {
         if (ulabel_referenced[i] && !ulabel_defined[i]) {
-            fprintf(stderr, "%s:%d: error: undefined goto label '%s'\n",
-                    tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
-                    tok_line, ulabel_names[i]);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            char msg[96];
+            sprintf(msg, "undefined goto label '%s'", ulabel_names[i]);
+            dcc_error_at(tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
+                         tok_line, -1, msg, NULL);
         }
     }
 }

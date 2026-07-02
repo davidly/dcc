@@ -1,2 +1,4 @@
-<source>:3: error: case label outside switch near 'case'
+<source>:3: error DCC-E0703: case label outside switch near 'case'
+    case 1:
+    ^
 dcc: 1 error(s)

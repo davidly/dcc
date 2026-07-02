@@ -1,2 +1,4 @@
-<source>:3: error: variable length arrays are not supported; use malloc and an explicit pointer near 'n'
+<source>:3: error DCC-E0601: variable length arrays are not supported; use malloc and an explicit pointer near 'n'
+        int a[n];
+              ^
 dcc: 1 error(s)

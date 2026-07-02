@@ -1,2 +1,4 @@
-<source>:3: error: malformed initializer expression near ';'
+<source>:3: error DCC-E1003: malformed initializer expression near ';'
+        int x = ;
+                ^
 dcc: 1 error(s)

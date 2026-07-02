@@ -1,0 +1,4 @@
+<source>:5: error DCC-E0806: too many arguments to function call near ';'
+        return f(1);
+                   ^
+dcc: 1 error(s)

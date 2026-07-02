@@ -1,2 +1,4 @@
-<source>:3: error: too many initializer elements near '2'
+<source>:3: error DCC-E0904: too many initializer elements near '2'
+        int a[1] = { 1, 2 };
+                        ^
 dcc: 1 error(s)

@@ -1,2 +1,4 @@
-<source>:5: error: unsupported sizeof expression near ')'
+<source>:5: error DCC-E1001: unsupported sizeof expression near ')'
+    int y = sizeof(((struct S*)0)->y);
+                                ^
 dcc: 1 error(s)

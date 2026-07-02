@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0314: #else without matching #if
+    #else
+    ^
+dcc: 1 error(s)

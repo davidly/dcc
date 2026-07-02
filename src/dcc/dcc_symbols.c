@@ -837,6 +837,8 @@ int parse_offsetof_value(void)
     for (;;) {
         if (tok.kind != TOK_ID) {
             error_here("field name expected in offsetof");
+            while (tok.kind != TOK_EOF && tok.kind != ')')
+                next_token();
             break;
         }
 
@@ -870,6 +872,8 @@ int parse_offsetof_value(void)
         sid = base_struct_id_from_type(t);
         if (sid <= 0) {
             error_here("nested offsetof field is not struct/union");
+            while (tok.kind != TOK_EOF && tok.kind != ')')
+                next_token();
             break;
         }
     }

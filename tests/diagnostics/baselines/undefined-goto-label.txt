@@ -1,0 +1,2 @@
+<source>:5: error DCC-E0706: undefined goto label 'missing_label'
+dcc: 1 error(s)

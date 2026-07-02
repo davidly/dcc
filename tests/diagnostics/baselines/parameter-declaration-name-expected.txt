@@ -1,2 +1,4 @@
-<source>:2: error: parameter declaration name expected near ';'
+<source>:2: error DCC-E0801: parameter declaration name expected near ';'
+        int;
+           ^
 dcc: 1 error(s)

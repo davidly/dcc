@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0313: #elif without matching #if
+    #elif 1
+    ^
+dcc: 1 error(s)

@@ -296,10 +296,7 @@ void make_include_path(const char *base, const char *inc,
 
 int report_include_error(const char *file, int line, const char *msg)
 {
-    fprintf(stderr, "%s:%d: error: %s\n", file ? file : "<input>", line, msg);
-    errors++;
-    if (errors > 40)
-        fatal("too many errors");
+    dcc_error_at(file ? file : "<input>", line, -1, msg, NULL);
     return -1;
 }
 
@@ -587,10 +584,7 @@ char *filter_active_preprocessor_source(long *lenp)
             char filebuf[256];
             int lno;
             source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
-            fprintf(stderr, "%s:%d: error: '##' is not a valid preprocessor directive\n",
-                    filebuf, lno);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            dcc_error_at(filebuf, lno, line_start, "'##' is not a valid preprocessor directive", NULL);
             append_mem(&out, &out_len, &out_cap, "\n", 1);
             goto next_filter_line;
         }
@@ -636,10 +630,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 char filebuf[256];
                 int lno;
                 source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
-                fprintf(stderr, "%s:%d: error: too many nested #if\n", filebuf, lno);
-                errors++;
-                if (errors > 40)
-                    fatal("too many errors");
+                dcc_error_at(filebuf, lno, line_start, "too many nested #if", NULL);
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
                 goto next_filter_line;
             }
@@ -671,10 +662,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 char filebuf[256];
                 int lno;
                 source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
-                fprintf(stderr, "%s:%d: error: too many nested #if\n", filebuf, lno);
-                errors++;
-                if (errors > 40)
-                    fatal("too many errors");
+                dcc_error_at(filebuf, lno, line_start, "too many nested #if", NULL);
                 append_mem(&out, &out_len, &out_cap, "\n", 1);
                 goto next_filter_line;
             }
@@ -711,6 +699,11 @@ char *filter_active_preprocessor_source(long *lenp)
                     if (active)
                         branch_taken[i] = 1;
                 }
+            } else if (active) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                dcc_error_at(filebuf, lno, line_start, "#elif without matching #if", NULL);
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
             goto next_filter_line;
@@ -729,6 +722,11 @@ char *filter_active_preprocessor_source(long *lenp)
                 } else {
                     active = 0;
                 }
+            } else if (active) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                dcc_error_at(filebuf, lno, line_start, "#else without matching #if", NULL);
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
             goto next_filter_line;
@@ -738,6 +736,11 @@ char *filter_active_preprocessor_source(long *lenp)
             if (sp > 0) {
                 sp--;
                 active = active_stack[sp];
+            } else if (active) {
+                char filebuf[256];
+                int lno;
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                dcc_error_at(filebuf, lno, line_start, "#endif without matching #if", NULL);
             }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
             goto next_filter_line;
@@ -763,10 +766,11 @@ char *filter_active_preprocessor_source(long *lenp)
             msg[mi] = 0;
 
             source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
-            fprintf(stderr, "%s:%d: error: #error %s\n", filebuf, lno, msg);
-            errors++;
-            if (errors > 40)
-                fatal("too many errors");
+            {
+                char diag[280];
+                sprintf(diag, "#error %s", msg);
+                dcc_error_at(filebuf, lno, line_start, diag, NULL);
+            }
             append_mem(&out, &out_len, &out_cap, "\n", 1);
             goto next_filter_line;
         }
@@ -921,11 +925,10 @@ char *filter_active_preprocessor_source(long *lenp)
         if (active && word[0] != 0) {
             char filebuf[256];
             int lno;
+            char msg[96];
             source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
-            fprintf(stderr, "%s:%d: error: unknown preprocessor directive '#%s'\n",
-                    filebuf, lno, word);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            sprintf(msg, "unknown preprocessor directive '#%s'", word);
+            dcc_error_at(filebuf, lno, line_start, msg, NULL);
         }
         append_mem(&out, &out_len, &out_cap, "\n", 1);
 
