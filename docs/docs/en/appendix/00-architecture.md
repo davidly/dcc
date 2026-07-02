@@ -255,20 +255,19 @@ Key design points:
 
 ## The runtime: a block-structured library sized for stripping
 
-The runtime `DCCRTL.MAC` is a single ~16,500-line assembly source, but its
+The runtime `DCCRTL.MAC` is a single ~19,000-line assembly source, but its
 *architecture* is what makes the toolchain's "pay only for what you use"
 property possible. Rather than one monolithic blob, the runtime is written as
-**~220 independent blocks**, each delimited by a `public` label and each
-depending only on a small shared prelude. A program never links the whole
-library — `dccrtlstrip` keeps only the blocks the application actually
-references (the mark-and-sweep details are in the companion appendix
-[*Runtime optimization*](01-dccrtlstrip.md)). The architectural
+**~280 parsed blocks** around `public` entry points and shared preludes. A
+program never links the whole library — `dccrtlstrip` keeps only the blocks the
+application actually references (the mark-and-sweep details are in the companion
+appendix [*Runtime optimization*](01-dccrtlstrip.md)). The architectural
 consequence is that **every routine has a well-defined, measurable size cost**.
 
 ```mermaid
 flowchart TB
-    subgraph RT["DCCRTL.MAC (~16,500 lines, ~220 public blocks)"]
-        BASE["always-present baseline<br/>~226 lines, 6 blocks<br/>(start, argv/console, heap, exit)"]
+    subgraph RT["DCCRTL.MAC (~19,000 lines, ~280 parsed blocks)"]
+      BASE["always-present baseline<br/>~297 lines, 7 blocks<br/>(start, argv/console, heap, exit)"]
         IO["stdio blocks<br/>printf, file I/O core"]
         MEM["memory blocks<br/>malloc/free/realloc"]
         LONG["32-bit long blocks"]
@@ -297,11 +296,11 @@ The gap between the two is the whole story of the runtime's size architecture: a
 small `self` with a large `marginal` means the routine sits on top of a big
 shared substrate (the file-I/O core, or the float arithmetic core).
 
-### The always-present baseline (~226 lines)
+### The always-present baseline (~297 lines)
 
-Six blocks are always linked because they are reachable from the forced `start`
-root: program entry and heap/BSS setup, the command-tail `argv` builder (which
-also contains the console writer `__conout`), the heap-state words, and
+Seven blocks are always linked because they are reachable from the forced
+`start` root: program entry and heap/BSS setup, the command-tail `argv` builder
+(which also contains the console writer `__conout`), the heap-state words, and
 `exit`. Console output therefore costs essentially nothing extra — `putchar`
 and `puts` call into code that is already present.
 
@@ -311,16 +310,16 @@ The runtime's size is dominated by a few shared cores. Routines that sit on a
 core are cheap individually but expensive to introduce, because the first one
 links the whole core:
 
-| Feature group | Shared core it links | Marginal cost (lines) |
-| --- | --- | ---: |
-| Console output (`putchar`, `puts`, integer `printf`) | none (baseline only) | ~12–840 |
-| File-stream + low-level I/O (`fopen`, `fread`, `fputs`, `fprintf`) | FCB/DMA file core (~470) | ~470–1,500 |
-| `scanf` / `sscanf` / `fscanf` | shared 697-line scan core | ~1,290–1,305 |
-| Memory (`malloc`/`free`/`realloc`/`calloc`) | heap helpers (`__mlh`, `__frcoal`) | ~130–650 |
-| 32-bit `long` arithmetic | long mul/div/mod helpers | ~30–340 |
-| `float` operators | normalise/round core (~700) | ~700–1,050 |
-| `math.h` (`sinf`, `expf`, `powf`, …) | float core + conversions | ~1,500–3,300 |
-| `string.h` / `ctype.h` | none (self-contained) | ~15–100 |
+| Feature group | Shared core it tends to link |
+| --- | --- |
+| Console output (`putchar`, `puts`, integer `printf`) | baseline console writer or self-contained formatter |
+| File-stream + low-level I/O (`fopen`, `fread`, `fputs`, `fprintf`) | FCB/DMA file core |
+| `scanf` / `sscanf` / `fscanf` | shared scan core |
+| Memory (`malloc`/`free`/`realloc`/`calloc`) | heap helpers and size arithmetic |
+| 32-bit `long` arithmetic | long multiply/divide/modulo helpers |
+| `float` operators | float normalise/round core |
+| `math.h` (`sinf`, `expf`, `powf`, …) | float core plus conversions and chained math helpers |
+| `string.h` / `ctype.h` | usually self-contained routines |
 
 The exact per-routine `self`/`marginal` numbers — and the transitive
 dependencies behind each one — are tabulated on the auto-generated
@@ -334,11 +333,13 @@ sizing a program are:
   links a shared core. Additional routines in the same family are then nearly
   free.
 - **`math.h` is the single biggest lever** — the `exp`/`log`/`pow` and
-  hyperbolic group runs ~2,000–3,300 lines because each chains other math
-  routines on top of the float core.
+  hyperbolic group are expensive because each chains other math routines on top
+  of the float core.
 
 Those numbers are recomputed from `DCCRTL.MAC` on every docs build, so editing
 the runtime and rebuilding the docs is all that is needed to refresh them.
+
+## Architecture summary
 
 - dcc is an **AST-driven** C89 compiler for function bodies, with direct
   lowering from typed AST nodes to Z80/M80 assembly.
@@ -347,8 +348,8 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 - Machine-dependent optimization is split out into **`dccpeep`**, a
   fixpoint peephole optimizer over the assembly text, with separate time (`-Ot`)
   and size (`-Os`) strategies.
-- The runtime `DCCRTL.MAC` is **block-structured** (~220 independent `public`
-  blocks over a ~226-line baseline), so every routine has a measurable
+- The runtime `DCCRTL.MAC` is **block-structured** (~280 parsed blocks over a
+  ~297-line baseline), so every routine has a measurable
   `self`/`marginal` size cost and `dccrtlstrip` can link only the blocks a
   program references.
 - The back half of the pipeline reuses the proven off-the-shelf Microsoft

@@ -1,6 +1,6 @@
 # Appendix: runtime optimization
 
-`DCCRTL.MAC` is a single ~16,560-line runtime, but most programs use only a
+`DCCRTL.MAC` is a single ~19,000-line runtime, but most programs use only a
 fraction of it. The normal dcc build flow runs `dccrtlstrip` before the final
 L80 link to remove unreferenced routines. This appendix explains how it decides
 what to keep and what each library feature costs in code size once its
