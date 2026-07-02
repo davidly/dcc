@@ -4,8 +4,6 @@
     "Ignored tests below are either not-yet-implemented C99/C11/GNU front-end compatibility candidates or true CP/M 2.2/Z80 target-model/runtime mismatches. Target-model reasons are called out explicitly."
   ],
   "tests": [
-    { "name": "00046", "ignore": true, "reason": "Uses C11 anonymous struct/union members; dcc does not implement anonymous aggregate member lookup yet." },
-    { "name": "00050", "ignore": true, "reason": "Uses C11 anonymous union members and aggregate initialization through anonymous members; dcc does not implement this yet." },
     { "name": "00081", "ignore": true, "reason": "Uses long long; dcc has no 64-bit integer type." },
     { "name": "00082", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
     { "name": "00104", "ignore": true, "reason": "Uses int64_t and 64-bit integer constants; dcc has no 64-bit integer type." },

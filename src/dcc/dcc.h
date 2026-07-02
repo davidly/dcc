@@ -288,6 +288,8 @@ struct FieldDef {
     int dim_count;
     int dims[4];
     int parent_struct_id; /* which struct/union owns this field */
+    int is_anonymous;   /* unnamed C11 struct/union member; owns layout/init slot */
+    int is_promoted;    /* synthetic lookup alias through an anonymous member */
     int bit_width;      /* >0 for C89 int bitfield */
     int bit_shift;      /* bit offset within containing 16-bit storage unit */
     unsigned int bit_mask;

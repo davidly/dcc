@@ -122,10 +122,12 @@ parameter loads, and returns. Include `stdbool.h` for the portable spellings
 `bool`, `true`, and `false`. dcc also accepts practical front-end compatibility
 used by common C99-era code: forward enum declarations are parsed as `int`-sized
 enum types, including inside function prototypes and function-pointer
-declarators such as `int (*member)(enum E value)`. C11 anonymous struct/union
-members are accepted, including aggregate initialization through the anonymous
-member. GNU `__attribute__((...))` annotations are skipped when they appear in
-supported declaration positions.
+declarators such as `int (*member)(enum E value)`. C11 anonymous struct and
+union members are accepted; members of anonymous aggregates are promoted for
+ordinary member access, including nested forms, and aggregate initialization
+through anonymous struct/union members is supported. GNU
+`__attribute__((...))` annotations are skipped when they appear in supported
+declaration positions.
 
 Not implemented yet, but plausible front-end scope: C99 designated initializers,
 C99 array designators, C99 compound literals, C99 variadic macros, GNU statement

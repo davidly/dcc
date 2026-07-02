@@ -2008,7 +2008,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
         struct FieldDef *first;
         first = NULL;
         for (i = 0; i < nfield_defs; ++i) {
-            if (field_defs[i].parent_struct_id == sid) {
+            if (field_defs[i].parent_struct_id == sid && !field_defs[i].is_promoted) {
                 first = &field_defs[i];
                 break;
             }
@@ -2059,7 +2059,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             expect('=');
         } else {
             fd = &field_defs[i];
-            if (fd->parent_struct_id != sid)
+            if (fd->parent_struct_id != sid || fd->is_promoted)
                 continue;
         }
 
@@ -2077,7 +2077,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             while (k >= 0 && k < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}') {
                 struct FieldDef *bfd;
                 bfd = &field_defs[k];
-                if (bfd->parent_struct_id == sid) {
+                if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
                     if (bfd->bit_width <= 0 || bfd->offset != unit_off)
                         break;
                     unit |= bitfield_init_part(bfd, parse_struct_init_const_value());

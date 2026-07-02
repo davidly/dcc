@@ -135,7 +135,7 @@ int type_scalar_atom_count(int type)
         int d;
 
         fd = &field_defs[i];
-        if (fd->parent_struct_id != sid)
+        if (fd->parent_struct_id != sid || fd->is_promoted)
             continue;
 
         fcount = 1;
@@ -338,6 +338,37 @@ struct FieldDef *find_field_def(int struct_id, const char *field_name)
     return NULL;
 }
 
+static void promote_anonymous_aggregate_fields(int parent_struct_id, struct FieldDef *anon_fd)
+{
+    int child_sid;
+    int i;
+    int limit;
+
+    if (anon_fd == NULL || !(anon_fd->type & TYPE_STRUCT) || type_ptr_depth(anon_fd->type) != 0)
+        return;
+
+    child_sid = type_struct_id(anon_fd->type);
+    if (child_sid <= 0 || child_sid > nstruct_defs)
+        return;
+
+    limit = nfield_defs;
+    for (i = 0; i < limit; ++i) {
+        if (field_defs[i].parent_struct_id != child_sid || field_defs[i].is_anonymous)
+            continue;
+        if (field_defs[i].name[0] == 0)
+            continue;
+        if (nfield_defs >= MAX_FIELDS)
+            fatal("too many struct fields");
+
+        field_defs[nfield_defs] = field_defs[i];
+        field_defs[nfield_defs].parent_struct_id = parent_struct_id;
+        field_defs[nfield_defs].offset += anon_fd->offset;
+        field_defs[nfield_defs].is_anonymous = 0;
+        field_defs[nfield_defs].is_promoted = 1;
+        nfield_defs++;
+    }
+}
+
 void parse_struct_definition(int struct_id)
 {
     struct StructDef *sd;
@@ -362,19 +393,27 @@ void parse_struct_definition(int struct_id)
 
         for (;;) {
             int is_funcptr_field;
+            int is_anonymous_field;
+            int field_index;
             while (accept('*')) { skip_type_qualifiers(); ftype = type_add_ptr(ftype); }
 
             is_funcptr_field = 0;
+            is_anonymous_field = 0;
             if (parse_funcptr_declarator(&ftype, fname, sizeof(fname))) {
                 is_funcptr_field = 1;
             } else {
                 if (tok.kind != TOK_ID) {
-                    error_here("field name expected");
-                    break;
+                    if (tok.kind == ';' && (ftype & TYPE_STRUCT) && type_ptr_depth(ftype) == 0) {
+                        fname[0] = 0;
+                        is_anonymous_field = 1;
+                    } else {
+                        error_here("field name expected");
+                        break;
+                    }
+                } else {
+                    dcc_copy_str(fname, sizeof(fname), tok.text);
+                    next_token();
                 }
-
-                dcc_copy_str(fname, sizeof(fname), tok.text);
-                next_token();
             }
 
             if (tok.kind == ':') {
@@ -466,6 +505,8 @@ void parse_struct_definition(int struct_id)
             }
 
             field_defs[nfield_defs].size = bytes;
+            field_defs[nfield_defs].is_anonymous = is_anonymous_field;
+            field_index = nfield_defs;
             nfield_defs++;
 
             sd->field_count++;
@@ -475,6 +516,9 @@ void parse_struct_definition(int struct_id)
             } else {
                 sd->size += bytes;
             }
+
+            if (is_anonymous_field)
+                promote_anonymous_aggregate_fields(struct_id, &field_defs[field_index]);
 
             if (!accept(',')) break;
         }
