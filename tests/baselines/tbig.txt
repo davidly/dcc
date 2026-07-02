@@ -1,0 +1,17 @@
+tbig: validating 65536 records (8388608 bytes)
+writing sequentially........
+verifying sequentially........
+sequential verify: 65536 ok, 0 bad
+
+random access boundary probes:
+  record 0 (offset 0): OK
+  record 16383 (offset 2097024): OK
+  record 32767 (offset 4194176): OK
+  record 65533 (offset 8388224): OK
+  record 65534 (offset 8388352): OK
+  record 65535 (offset 8388480): OK
+
+probing one record past the documented 8mb / 65535 cp/m 2.2 limit...
+  write past 65535 SUCCEEDED (allowed here; real cp/m 2.2 documents this as out of range)
+
+tbig completed with great success

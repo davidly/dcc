@@ -36,6 +36,7 @@
     { "name": "trw", "host": true },
     { "name": "trw2", "host": true },
     { "name": "trwold", "host": true },
+    { "name": "tbig", "host": true },
     { "name": "ttrig", "host": true },
     { "name": "tallocx", "host": true },
     { "name": "tmalloch", "host": true },
