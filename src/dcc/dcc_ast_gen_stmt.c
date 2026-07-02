@@ -432,6 +432,8 @@ void ast_gen_for_stmt(const struct AstNode *n)
  * suppressed or a runtime helper first used here would be marked emitted
  * while its EXTRN line went nowhere, leaving it undefined for the real
  * pass. */
+static int g_ast_last_stmt_exits;
+
 int ast_scan_for_stmt(void)
 {
     static FILE *sink = NULL;
@@ -455,6 +457,72 @@ int ast_scan_for_stmt(void)
     scan_mode = s_scan_mode;
     outf = s_outf;
     return n != NULL;
+}
+
+int ast_stmt_has_reentry_label(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_LABEL || n->kind == AST_CASE || n->kind == AST_DEFAULT)
+        return 1;
+    if (n->kind == AST_COMPOUND) {
+        for (i = 0; i < n->list_len; ++i)
+            if (ast_stmt_has_reentry_label(n->list[i]))
+                return 1;
+        return 0;
+    }
+    if (n->kind == AST_IF)
+        return ast_stmt_has_reentry_label(n->b) || ast_stmt_has_reentry_label(n->c);
+    if (n->kind == AST_WHILE || n->kind == AST_DOWHILE)
+        return ast_stmt_has_reentry_label(n->b);
+    if (n->kind == AST_FOR)
+        return ast_stmt_has_reentry_label(n->d);
+    if (n->kind == AST_SWITCH)
+        return ast_stmt_has_reentry_label(n->b);
+    return 0;
+}
+
+int ast_stmt_exits(const struct AstNode *n)
+{
+    int i;
+    int exits;
+
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_RETURN:
+    case AST_BREAK:
+    case AST_CONTINUE:
+    case AST_GOTO:
+        return 1;
+    case AST_LABEL:
+    case AST_CASE:
+    case AST_DEFAULT:
+        return ast_stmt_exits(n->b);
+    case AST_IF:
+        if (ast_is_const_nonzero_condition(n->a))
+            return ast_stmt_exits(n->b);
+        if (ast_is_const_zero_condition(n->a))
+            return n->c != NULL && ast_stmt_exits(n->c);
+        return n->c != NULL && ast_stmt_exits(n->b) && ast_stmt_exits(n->c);
+    case AST_COMPOUND:
+        exits = 0;
+        for (i = 0; i < n->list_len; ++i) {
+            if (exits && !ast_stmt_has_reentry_label(n->list[i]))
+                continue;
+            exits = ast_stmt_exits(n->list[i]);
+        }
+        return exits;
+    default:
+        return 0;
+    }
+}
+
+int ast_last_statement_exits(void)
+{
+    return g_ast_last_stmt_exits;
 }
 
 /* Emit statement node `n` (gated by ast_stmt_supported). */
@@ -608,9 +676,27 @@ void ast_gen_stmt(const struct AstNode *n)
          * spans, the latter running the declaration codegen); leave_scope().
          * enter/leave emit nothing. */
         int i;
+        int dead;
         enter_scope();
-        for (i = 0; i < n->list_len; ++i)
+        dead = 0;
+        for (i = 0; i < n->list_len; ++i) {
+            if (dead && !ast_stmt_has_reentry_label(n->list[i])) {
+                int j;
+                if (n->list[i]->kind == AST_DECL) {
+                    for (j = i + 1; j < n->list_len; ++j) {
+                        if (ast_stmt_has_reentry_label(n->list[j])) {
+                            asm_suppress_depth++;
+                            ast_gen_stmt(n->list[i]);
+                            asm_suppress_depth--;
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
             ast_gen_stmt(n->list[i]);
+            dead = ast_stmt_exits(n->list[i]);
+        }
         leave_scope();
         break;
     }
@@ -668,6 +754,8 @@ int ast_try_emit_statement(void)
     struct AstNode *n;
     int report;
 
+    g_ast_last_stmt_exits = 0;
+
     if (scan_mode)
         return 0;
 
@@ -693,6 +781,7 @@ int ast_try_emit_statement(void)
         if (g_ast_build_enabled == 2)
             ast_dump(n, 0);
         ast_gen_stmt(n);
+        g_ast_last_stmt_exits = ast_stmt_exits(n);
         ast_arena_reset(&g_ast_arena);
         return 1;
     }
