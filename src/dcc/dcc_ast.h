@@ -199,6 +199,8 @@ void ast_dump(const struct AstNode *n, int depth);
  * ------------------------------------------------------------------------- */
 int ast_gen_supported(const struct AstNode *n);
 void ast_gen_expr(const struct AstNode *n);   /* emit; sets g_expr_type        */
+int ast_stmt_supported(const struct AstNode *n);
+void ast_gen_stmt(const struct AstNode *n);
 int ast_stmt_has_reentry_label(const struct AstNode *n);
 int ast_stmt_exits(const struct AstNode *n);
 int ast_last_statement_exits(void);
