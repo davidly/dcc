@@ -1,7 +1,7 @@
 # dcc
 C compiler targeting CP/M 2.2 on a Z80
 
-The [dcc documentation](https://gloveboxes.github.io/dcc/) covers all features, usage, and API reference.
+The [dcc documentation](https://davidly.github.io/dcc/) covers all features, usage, and API reference.
 
 ## What dcc is
 dcc has a C89 core plus target-appropriate C99/C11 front-end support. For every source file it accepts, dcc generates a .MAC assembly file that can be assembled by M80 and linked by L80 to produce CP/M .COM files.
