@@ -64,7 +64,14 @@ pwsh ./scripts/runall.ps1 -Mode fast      # default unless otherwise stated by t
 pwsh ./scripts/runall.ps1 -Mode nopeep    # unoptimized CP/M Z80 binary
 pwsh ./scripts/runall.ps1 -Serial         # sequential fallback (debugging)
 pwsh ./scripts/runall.ps1 -Extended       # also run the c-testsuite extended corpus
+pwsh ./scripts/runall.ps1 -KeepBuild      # keep build/run-<pid>/ for debugging
 ```
+
+In parallel mode each invocation is isolated under a per-invocation
+`build/run-<pid>/` folder that is removed automatically on exit (so `build/`
+does not fill up with one folder per run); pass `-KeepBuild` to retain it for
+inspection. `runall-extended.ps1` uses the same `run-<pid>` isolation, cleanup,
+and `-KeepBuild` behavior under `build/extended-tests/`.
 
 The default `-Mode fast` builds each app once as an optimized CP/M Z80 binary.
 Use `-Mode full` to build each app twice, once optimized and once unoptimized,

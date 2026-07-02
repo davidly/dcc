@@ -74,9 +74,9 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
 
 .PARAMETER KeepBuild
     In parallel mode the suite builds into a per-invocation folder
-    (build/run-<pid>-<rand>) so concurrent runs stay isolated, and removes it on
-    exit to keep build/ from accumulating run-* folders. Pass -KeepBuild to
-    retain that folder (e.g. to inspect failing build artifacts).
+    (build/run-<pid>) so concurrent runs stay isolated, and removes it on exit to
+    keep build/ from accumulating run-* folders. Pass -KeepBuild to retain that
+    folder (e.g. to inspect failing build artifacts).
 
 .EXAMPLE
   pwsh ./scripts/runall.ps1
@@ -187,7 +187,9 @@ function Remove-RunBuildDir {
 trap {
     Restore-TerminalState
     Remove-RunBuildDir
-    throw
+    # Re-throw the original error record so its message/position survive rather
+    # than surfacing a generic "ScriptHalted" from a bare throw.
+    throw $_
 }
 
 # Dot-source the build driver once so Invoke-MaBuild runs in-process. This
@@ -203,14 +205,14 @@ $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
 
 function New-RunBuildId {
-    $rand = Get-Random -Minimum 100000 -Maximum 1000000
-    return "run-$PID-$rand"
+    return "run-$PID"
 }
 
 if ($Parallel) {
-    # Isolate this invocation so concurrent runs never clobber each other's
-    # per-app build dirs. The folder is removed on exit (see Remove-RunBuildDir)
-    # unless -KeepBuild is set, so build/ does not fill up with run-* folders.
+    # Isolate this invocation by process id so concurrent runs never clobber
+    # each other's per-app build dirs. The folder is removed on exit (see
+    # Remove-RunBuildDir) unless -KeepBuild is set, so build/ does not fill up
+    # with run-* folders.
     $BuildDir = Join-Path $BuildDir (New-RunBuildId)
     $script:RunBuildRoot = $BuildDir
 }

@@ -66,6 +66,9 @@ pwsh ./scripts/runall.ps1 -Mode nopeep   # unoptimized only
 
 # Build without the stack-overflow guard (on by default)
 pwsh ./scripts/runall.ps1 -NoStackCheck
+
+# Keep the per-invocation build/run-<pid>/ folder instead of removing it on exit
+pwsh ./scripts/runall.ps1 -KeepBuild
 ```
 
 By default the suite builds each app in **both** optimization modes \u2014 `peep`
@@ -74,7 +77,9 @@ and verifies both against the same baseline, so a default run does two builds
 per app. Use `-Mode peep` or `-Mode nopeep` to build just one.
 
 By default the suite runs **in parallel** (each app builds in its own
-`build/<app>/` subdirectory), which is much faster on multi-core machines. Pass
+`build/<app>/` subdirectory), which is much faster on multi-core machines. Each
+parallel invocation is isolated under a `build/run-<pid>/` folder that is
+removed automatically on exit (pass `-KeepBuild` to keep it for debugging). Pass
 `-Serial` to build sequentially in the shared `build/` directory. The
 lightweight stack-overflow guard (`-fstack-check`) is on by default; use
 `-NoStackCheck` to disable it.

@@ -164,6 +164,30 @@ for (int i = 0; i < 3; i++)
   `&(struct S){ 1, 2 }` are supported by creating hidden automatic storage for
   the enclosing function.
 
+### C99 variadic macros
+
+Function-like macros may declare a trailing `...` parameter, and `__VA_ARGS__`
+expands to the matching trailing arguments (with their separating commas) in the
+replacement list.
+
+- All top-level commas after the named parameters are captured as a single
+  `__VA_ARGS__` argument, so the variadic tail keeps its internal commas.
+- `#__VA_ARGS__` stringizes the variadic tail, following the usual `#`
+  stringize rules.
+- Empty variadic invocations are supported: when no trailing arguments are
+  supplied, `__VA_ARGS__` expands to nothing (for example `#define Z(...) 0`
+  called as `Z()`, or `#define Z1(A, ...) A` called as `Z1(1)`).
+
+```c
+#define CALL(F, ...) F(__VA_ARGS__)
+#define ARGS(...)    __VA_ARGS__
+#define STR(...)     #__VA_ARGS__
+
+CALL(two, 3, 4);     /* two(3, 4) */
+foo(ARGS(5));        /* foo(5) */
+puts(STR(1, 2, 3));  /* "1, 2, 3" */
+```
+
 ## Unsupported or target-inapplicable features
 
 The table below separates target-model limits from front-end compatibility gaps.
@@ -178,7 +202,6 @@ become supportable later, but code should not depend on them today.
 | C99 | Variable-length arrays | Not implemented. Use `malloc` and an explicit pointer when runtime-sized storage is required. |
 | C99 | `restrict` | Not implemented. |
 | C99 | `_Complex` | Not implemented. |
-| C99 | Variadic macros | Not implemented; includes `__VA_ARGS__` and empty-argument behavior. |
 | C99 | Block-scope compound literal value/copy forms | Not implemented. Address-taking forms are supported as described above. |
 | C99 | Flexible-array member initialization | Not implemented. |
 | C11 | `_Generic` | Not implemented; some imported tests also require unsupported `long long`. |

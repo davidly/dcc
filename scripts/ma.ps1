@@ -195,6 +195,7 @@ function Invoke-MaBuild {
     $peepTmp = Join-Path $BuildDir "_PEEPOUT.MAC"
     $rtlSrc = Join-Path $BuildDir "DCCRTL.MAC"
     $rtlMin = Join-Path $BuildDir "RTLMIN.MAC"
+    $rtlMinRel = Join-Path $BuildDir "RTLMIN.REL"
     $rootRtlSrc = "DCCRTL.MAC"
 
     if (-not (Test-Path $rootRtlSrc)) {
@@ -219,8 +220,12 @@ function Invoke-MaBuild {
         $dccStackChk = "-fstack-check"
     }
 
-    # Clean old artifacts
-    Remove-Item -Path @($appMac, $appRel, $appCom, (Join-Path $BuildDir "$upperBase.PRN"), $peepTmp, $rtlSrc, $rtlMin, (Join-Path $BuildDir "RTLMIN.REL"), (Join-Path $BuildDir "RTLMIN.PRN")) -Force -ErrorAction SilentlyContinue
+    # Clean old artifacts. This deletes every file this build is about to
+    # (re)create BEFORE running any tool, so a failed compile/assemble/link
+    # cannot leave a stale artifact from a previous build that would be run or
+    # verified as if the build had succeeded. The lowercase convenience copy is
+    # included so it cannot linger on case-sensitive filesystems.
+    Remove-Item -Path @($appMac, $appRel, $appCom, (Join-Path $BuildDir "$lowerBase.com"), (Join-Path $BuildDir "$upperBase.PRN"), $peepTmp, $rtlSrc, $rtlMin, $rtlMinRel, (Join-Path $BuildDir "RTLMIN.PRN")) -Force -ErrorAction SilentlyContinue
 
     # Determine stack size: explicit parameter wins, then env var, then default.
     $dccStackSize = if ($StackSize -gt 0) { "$StackSize" }
@@ -252,7 +257,12 @@ function Invoke-MaBuild {
     if ($usePeep) {
         Write-Step "  Optimizing with dccpeep..."
         $peepOut = & $DCCPEEP "$appMac" "$peepTmp" 2>&1
+        $peepExit = $LASTEXITCODE
         if (-not $Quiet) { $peepOut | Write-Host }
+        if ($peepExit -ne 0 -or -not (Test-Path $peepTmp)) {
+            Write-BuildError "Peephole optimization failed for $Name (dccpeep exit code $peepExit)"
+            return $false
+        }
         Move-Item -Path $peepTmp -Destination $appMac -Force
     }
 
@@ -265,6 +275,14 @@ function Invoke-MaBuild {
     $m80Out = & $NTVCM "$M80" "=$upperBase.MAC" "/X" "/O" "/Z" "/L" 2>&1
     Pop-Location
     if (-not $Quiet) { $m80Out | Write-Host }
+
+    # The .REL was deleted above, so its absence now means M80 failed to
+    # assemble the app (ntvcm always exits 0, so artifact presence is the
+    # reliable signal that this stage produced output).
+    if (-not (Test-Path $appRel)) {
+        Write-BuildError "Assembly failed: no .REL produced for $Name"
+        return $false
+    }
 
     # Strip runtime
     Write-Step "  Stripping runtime..."
@@ -288,6 +306,13 @@ function Invoke-MaBuild {
     $linkOut = & $NTVCM "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E" 2>&1
     Pop-Location
     if (-not $Quiet) { $rtlOut | Write-Host; $linkOut | Write-Host }
+
+    # RTLMIN.REL was deleted above; its absence means the runtime failed to
+    # assemble, which would leave the link reading nothing (or stale) input.
+    if (-not (Test-Path $rtlMinRel)) {
+        Write-BuildError "Runtime assembly failed: RTLMIN.REL not produced for $Name"
+        return $false
+    }
 
     # Create lowercase convenience copy
     $lowerCom = Join-Path $BuildDir "$lowerBase.com"

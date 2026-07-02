@@ -41,6 +41,11 @@ dcc -> dccpeep -> M80 -> dccrtlstrip -> M80 -> L80 pipeline, runs the produced
 .PARAMETER SkipFile
     JSON file listing target-inapplicable extended tests to ignore.
 
+.PARAMETER KeepBuild
+    In parallel mode the suite builds into a per-invocation folder
+    (build/extended-tests/run-<pid>) so concurrent runs stay isolated, and
+    removes it on exit. Pass -KeepBuild to retain it for debugging.
+
 .EXAMPLE
   pwsh ./scripts/runall-extended.ps1 -C89
   pwsh ./scripts/runall-extended.ps1 -C99 -Serial
@@ -65,6 +70,7 @@ param(
     [string]$SkipFile = "tests/_extended_test_overrides.json",
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
+    [switch]$KeepBuild,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -126,13 +132,37 @@ $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
 
 function New-RunBuildId {
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-ffff"
-    $rand = Get-Random -Minimum 100000 -Maximum 1000000
-    return "run-$stamp-$rand"
+    return "run-$PID"
+}
+
+# Per-run isolation directory (parallel mode only). Recorded so it can be removed
+# on exit, keeping build/extended-tests/ from accumulating one run-* folder per
+# invocation. Pass -KeepBuild to retain it for debugging.
+$script:RunBuildRoot = $null
+
+function Remove-RunBuildDir {
+    if ($KeepBuild) { return }
+    if ($script:RunBuildRoot -and (Test-Path $script:RunBuildRoot -PathType Container)) {
+        try {
+            Remove-Item -LiteralPath $script:RunBuildRoot -Recurse -Force -ErrorAction Stop
+        }
+        catch { }
+    }
+}
+
+trap {
+    Remove-RunBuildDir
+    # Re-throw the original error record so its message/position survive rather
+    # than surfacing a generic "ScriptHalted" from a bare throw.
+    throw $_
 }
 
 if ($Parallel) {
+    # Isolate this invocation by process id so concurrent runs never clobber
+    # each other's per-test build dirs. The folder is removed on exit (see
+    # Remove-RunBuildDir) unless -KeepBuild is set.
     $BuildDir = Join-Path $BuildDir (New-RunBuildId)
+    $script:RunBuildRoot = $BuildDir
 }
 
 $ignoredTests = @{}
@@ -448,6 +478,7 @@ if ($allCases.Count -eq 0) {
         foreach ($case in $skippedCases) {
             Write-Host "  SKIP $($case.Name): $($case.Reason)" -ForegroundColor DarkYellow
         }
+        Remove-RunBuildDir
         exit 0
     }
     Write-Error "No extended tests matched standards [$standardSummary] in $SuiteDir"
@@ -644,9 +675,11 @@ if ($skippedCases.Count -gt 0) {
 Write-Host ""
 if ($failed -eq 0) {
     Write-Host ">>> SUCCESS: All extended tests passed <<<" -ForegroundColor Green
+    Remove-RunBuildDir
     exit 0
 }
 else {
     Write-Host ">>> FAILURE: $failed extended test(s) failed <<<" -ForegroundColor Red
+    Remove-RunBuildDir
     exit 1
 }

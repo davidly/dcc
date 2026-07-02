@@ -6,10 +6,6 @@
   "tests": [
     { "name": "00046", "ignore": true, "reason": "Uses C11 anonymous struct/union members; dcc does not implement anonymous aggregate member lookup yet." },
     { "name": "00050", "ignore": true, "reason": "Uses C11 anonymous union members and aggregate initialization through anonymous members; dcc does not implement this yet." },
-    { "name": "00083", "ignore": true, "reason": "C99 variadic macro support is not implemented yet." },
-    { "name": "00084", "ignore": true, "reason": "C99 variadic macro support is not implemented yet." },
-    { "name": "00085", "ignore": true, "reason": "C99 variadic macro support is not implemented yet." },
-    { "name": "00097", "ignore": true, "reason": "C99 variadic macro redefinition/empty-argument behavior is not implemented yet." },
     { "name": "00104", "ignore": true, "reason": "Uses int64_t and 64-bit integer constants; dcc has no 64-bit integer type." },
     { "name": "00119", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
     { "name": "00123", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
