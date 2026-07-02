@@ -74,6 +74,12 @@ optimizer pass.
 
 ## Engineering Notes
 
-dcc changes are built often, run under the emulator, and compared against
-baselines. The main constraints are small memory, old tools, fixed file formats,
-and reproducible tests.
+The dcc C Compiler was engineered agentically, with plenty of human supervision,
+patience, and love. It is unit tested against baselines grounded in modern desktop
+C compilers and a platform-appropriate subset of the community-driven
+[c-testsuite](https://github.com/c-testsuite/c-testsuite).
+
+## Contributions and Feedback Welcome
+
+This is an Open Source C compiler, community contributions welcome and/or report issues via the GitHub Issues for this project.
+

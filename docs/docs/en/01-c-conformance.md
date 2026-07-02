@@ -102,8 +102,10 @@ for (int i = 0; i < 3; i++)
   `true`, and `false`.
 - Forward enum declarations are accepted as `int`-sized enum types, including
   inside prototypes and function-pointer declarators.
-- C11 anonymous struct/union members are accepted, including aggregate
-  initialization through the anonymous member.
+- C11 anonymous struct and union members are accepted. Members of anonymous
+  aggregates are promoted for ordinary member access, including nested forms,
+  and aggregate initialization through anonymous struct/union members is
+  supported.
 - GNU `__attribute__((...))` annotations are skipped in supported declaration
   positions.
 - `static inline` functions are supported for small helper functions. dcc can

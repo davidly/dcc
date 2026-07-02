@@ -514,7 +514,7 @@ int next_parent_field_index(int sid, int start)
 {
     int k;
     for (k = start; k < nfield_defs; ++k)
-        if (field_defs[k].parent_struct_id == sid)
+        if (field_defs[k].parent_struct_id == sid && !field_defs[k].is_promoted)
             return k;
     return -1;
 }
@@ -549,7 +549,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
         struct FieldDef *first;
         first = NULL;
         for (i = 0; i < nfield_defs; ++i) {
-            if (field_defs[i].parent_struct_id == sid) {
+            if (field_defs[i].parent_struct_id == sid && !field_defs[i].is_promoted) {
                 first = &field_defs[i];
                 break;
             }
@@ -605,7 +605,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             expect('=');
         } else {
             fd = &field_defs[i];
-            if (fd->parent_struct_id != sid)
+            if (fd->parent_struct_id != sid || fd->is_promoted)
                 continue;
         }
 
@@ -626,7 +626,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             while (k >= 0 && k < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}') {
                 struct FieldDef *bfd;
                 bfd = &field_defs[k];
-                if (bfd->parent_struct_id == sid) {
+                if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
                     if (bfd->bit_width <= 0 || bfd->offset != unit_off)
                         break;
                     unit |= bitfield_init_part(bfd, parse_struct_init_const_value());
