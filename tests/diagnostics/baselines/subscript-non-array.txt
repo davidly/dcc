@@ -1,0 +1,4 @@
+<source>:4: error DCC-E0602: subscripted value is not an array or pointer near '['
+        return sizeof(x[0]);
+                       ^
+dcc: 1 error(s)

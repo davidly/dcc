@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0315: #endif without matching #if
+    #endif
+    ^
+dcc: 1 error(s)

@@ -33,6 +33,10 @@ void skip_type_qualifiers(void)
 }
 
 int parse_type(void);
+int is_unsupported_target_type_name(const char *name)
+{
+    return name && (!strcmp(name, "double") || !strcmp(name, "int64_t") || !strcmp(name, "uint64_t"));
+}
 int parse_const_int_expr(void);
 
 int type_struct_id(int type)
@@ -521,21 +525,25 @@ int parse_base_type(void)
     int saw_any;
     int saw_unsigned;
     int saw_long;
+    int saw_long_long;
     int saw_short;
     int saw_char;
     int saw_void;
     int saw_float;
     int saw_bool;
+    int storage_class_seen;
 
     t = 0;
     saw_any = 0;
     saw_unsigned = 0;
     saw_long = 0;
+    saw_long_long = 0;
     saw_short = 0;
     saw_char = 0;
     saw_void = 0;
     saw_float = 0;
     saw_bool = 0;
+    storage_class_seen = 0;
     g_typedef_array_len = 0;
     g_typedef_is_func = 0;
     decl_is_register = 0;
@@ -545,19 +553,54 @@ int parse_base_type(void)
 
     /* C89 declaration specifiers are order-independent. */
     for (;;) {
-        if (tok.kind == TOK_REGISTER) { decl_is_register = 1; next_token(); continue; }
+        if (tok.kind == TOK_REGISTER) {
+            if (storage_class_seen)
+                error_here("multiple storage classes in declaration");
+            storage_class_seen = 1;
+            decl_is_register = 1;
+            next_token();
+            continue;
+        }
         if (tok.kind == TOK_CONST) { decl_is_const = 1; next_token(); continue; }
         if (tok.kind == TOK_INLINE) { decl_is_inline = 1; next_token(); continue; }
         if (tok.kind == TOK_VOLATILE ||
             tok.kind == TOK_AUTO) {
+            if (tok.kind == TOK_AUTO) {
+                if (storage_class_seen)
+                    error_here("multiple storage classes in declaration");
+                storage_class_seen = 1;
+            }
             next_token();
             continue;
         }
-        if (tok.kind == TOK_EXTERN) { decl_is_extern = 1; next_token(); continue; }
-        if (tok.kind == TOK_STATIC) { decl_is_static = 1; next_token(); continue; }
+        if (tok.kind == TOK_EXTERN) {
+            if (storage_class_seen)
+                error_here("multiple storage classes in declaration");
+            storage_class_seen = 1;
+            decl_is_extern = 1;
+            next_token();
+            continue;
+        }
+        if (tok.kind == TOK_STATIC) {
+            if (storage_class_seen)
+                error_here("multiple storage classes in declaration");
+            storage_class_seen = 1;
+            decl_is_static = 1;
+            next_token();
+            continue;
+        }
         if (tok.kind == TOK_UNSIGNED) { saw_unsigned = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_SIGNED) { saw_any = 1; next_token(); continue; }
-        if (tok.kind == TOK_LONG) { saw_long = 1; saw_any = 1; next_token(); continue; }
+        if (tok.kind == TOK_LONG) {
+            if (saw_long && !saw_long_long) {
+                error_here("long long is not supported by dcc's CP/M/Z80 target; use long");
+                saw_long_long = 1;
+            }
+            saw_long = 1;
+            saw_any = 1;
+            next_token();
+            continue;
+        }
         if (tok.kind == TOK_SHORT) { saw_short = 1; saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_INT) { saw_any = 1; next_token(); continue; }
         if (tok.kind == TOK_FLOAT) { saw_float = 1; saw_any = 1; next_token(); continue; }
@@ -601,7 +644,12 @@ int parse_base_type(void)
                     char ename[64];
                     int ei;
                     int dup;
-                    if (tok.kind != TOK_ID) { error_here("enum constant name expected"); break; }
+                    if (tok.kind != TOK_ID) {
+                        error_here("enum constant name expected");
+                        while (tok.kind != TOK_EOF && tok.kind != '}')
+                            next_token();
+                        break;
+                    }
                     dcc_copy_str(ename, sizeof(ename), tok.text);
                     next_token();
 
@@ -609,7 +657,13 @@ int parse_base_type(void)
                      * not just bare numeric literals.  This accepts forms such
                      * as B = A + 2, C = (1 << 4), D = sizeof(int), and
                      * negative expressions. */
-                    if (accept('=')) cur_val = parse_enum_const_value();
+                    if (accept('=')) {
+                        cur_val = parse_enum_const_value();
+                        if (tok.kind != ',' && tok.kind != '}') {
+                            while (tok.kind != TOK_EOF && tok.kind != '}')
+                                next_token();
+                        }
+                    }
 
                     dup = 0;
                     for (ei = 0; ei < nenum_consts; ++ei) {
@@ -636,6 +690,23 @@ int parse_base_type(void)
             g_parse_type_was_enum = 1;
             saw_any = 1;
             break;
+        }
+
+        if (!saw_any && tok.kind == TOK_ID && !strcmp(tok.text, "double")) {
+            error_here("double is not supported by dcc's CP/M/Z80 target; use float");
+            saw_float = 1;
+            saw_any = 1;
+            next_token();
+            continue;
+        }
+
+        if (!saw_any && tok.kind == TOK_ID &&
+            (!strcmp(tok.text, "int64_t") || !strcmp(tok.text, "uint64_t"))) {
+            error_here("64-bit integer types are not supported by dcc's CP/M/Z80 target; use long");
+            saw_long = 1;
+            saw_any = 1;
+            next_token();
+            continue;
         }
 
         if (!saw_any && tok.kind == TOK_ID && (td = find_typedef(tok.text)) >= 0) {

@@ -1,2 +1,2 @@
-<source>:1: error: expected "FILENAME" or <FILENAME>
+<source>:1: error DCC-E0301: expected "FILENAME" or <FILENAME>
 dcc: 1 error(s)

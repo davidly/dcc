@@ -1,2 +1,4 @@
-<source>:2: error: bitfield type must be int or unsigned int near ';'
+<source>:2: error DCC-E0510: bitfield type must be int or unsigned int near ';'
+        char x: 1;
+                 ^
 dcc: 1 error(s)

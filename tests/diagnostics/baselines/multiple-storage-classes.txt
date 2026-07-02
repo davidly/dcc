@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0540: multiple storage classes in declaration near 'static'
+    extern static int x;
+           ^
+dcc: 1 error(s)

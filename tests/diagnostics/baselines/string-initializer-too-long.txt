@@ -1,2 +1,4 @@
-<source>:7: error: string initializer too long for char array field near '}'
+<source>:7: error DCC-E0903: string initializer too long for char array field near '}'
+    };
+    ^
 dcc: 1 error(s)

@@ -1,0 +1,4 @@
+<source>:1: error DCC-E1107: expected '=' near '1'
+    int a[2] = { [0] 1 };
+                     ^
+dcc: 1 error(s)

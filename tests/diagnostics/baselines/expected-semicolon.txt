@@ -1,2 +1,4 @@
-<source>:1: error: expected ';' near '<eof>'
+<source>:1: error DCC-E1102: expected ';' near '<eof>'
+    int x
+        ^
 dcc: 1 error(s)

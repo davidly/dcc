@@ -675,11 +675,8 @@ void parse_preprocessor_line(void)
      * valid inside a macro replacement list; at directive position it is
      * always a hard error, even inside an inactive #if block. */
     if (word[0] == 0 && peekc() == '#') {
-        fprintf(stderr, "%s:%d: error: '##' is not a valid preprocessor directive\n",
-                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                line_no);
-        errors++;
-        if (errors > 40) fatal("too many errors");
+        dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                 line_no, tok_start_pos, "'##' is not a valid preprocessor directive", NULL);
         while (peekc() && peekc() != '\n') getc_src();
         return;
     }
@@ -692,11 +689,8 @@ void parse_preprocessor_line(void)
         strip_macro_replacement_comments(val);
 
         if (if_sp >= MAX_IFSTACK) {
-            fprintf(stderr, "%s:%d: error: too many nested #if\n",
-                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                line_no);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                         line_no, tok_start_pos, "too many nested #if", NULL);
             while (peekc() && peekc() != '\n') getc_src();
             return;
         }
@@ -719,11 +713,8 @@ void parse_preprocessor_line(void)
         name[i] = 0;
 
         if (if_sp >= MAX_IFSTACK) {
-            fprintf(stderr, "%s:%d: error: too many nested #if\n",
-                current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                line_no);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                         line_no, tok_start_pos, "too many nested #if", NULL);
             while (peekc() && peekc() != '\n') getc_src();
             return;
         }
@@ -740,7 +731,8 @@ void parse_preprocessor_line(void)
         pp_recompute_active();
     } else if (!strcmp(word, "elif")) {
         if (if_sp <= 0) {
-            /* ignore unmatched #elif for now */
+            dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                         line_no, tok_start_pos, "#elif without matching #if", NULL);
         } else {
             i = if_sp - 1;
             if (if_seen_else[i]) {
@@ -764,7 +756,8 @@ void parse_preprocessor_line(void)
         }
     } else if (!strcmp(word, "else")) {
         if (if_sp <= 0) {
-            /* ignore unmatched #else for now */
+            dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                         line_no, tok_start_pos, "#else without matching #if", NULL);
         } else {
             i = if_sp - 1;
             if (!if_seen_else[i]) {
@@ -777,6 +770,9 @@ void parse_preprocessor_line(void)
     } else if (!strcmp(word, "endif")) {
         if (if_sp > 0)
             if_sp--;
+        else
+            dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                         line_no, tok_start_pos, "#endif without matching #if", NULL);
         pp_recompute_active();
     } else if (!strcmp(word, "line")) {
         int lno;
@@ -834,11 +830,12 @@ void parse_preprocessor_line(void)
             while ((c = peekc()) != 0 && c != '\n' && i < (int)sizeof(val) - 1)
                 val[i++] = (char)getc_src();
             val[i] = 0;
-            fprintf(stderr, "%s:%d: error: #error %s\n",
-                    current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                    line_no, val);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            {
+                char msg[MAX_MACRO_TEXT + 16];
+                sprintf(msg, "#error %s", val);
+                dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                             line_no, tok_start_pos, msg, NULL);
+            }
         }
     } else if (!strcmp(word, "define")) {
         if (pp_active) {
@@ -1011,11 +1008,10 @@ void parse_preprocessor_line(void)
          * In an inactive block it is silently skipped so that unknown
          * directives in dead code do not cascade into spurious errors. */
         if (pp_active) {
-            fprintf(stderr, "%s:%d: error: unknown preprocessor directive '#%s'\n",
-                    current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                    line_no, word);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            char msg[96];
+            sprintf(msg, "unknown preprocessor directive '#%s'", word);
+            dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
+                         line_no, tok_start_pos, msg, NULL);
         }
     }
 

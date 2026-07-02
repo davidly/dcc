@@ -1,0 +1,4 @@
+<source>:6: error DCC-E0915: bitfield initializer must be constant integer near '}'
+    struct S s = { .x = missing_symbol };
+                                       ^
+dcc: 1 error(s)

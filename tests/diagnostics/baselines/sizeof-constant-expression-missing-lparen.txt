@@ -1,0 +1,4 @@
+<source>:2: error DCC-E1005: '(' expected after sizeof in constant expression near 'x'
+        A = sizeof x
+                   ^
+dcc: 1 error(s)

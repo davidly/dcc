@@ -1,0 +1,4 @@
+<source>:1: error DCC-E1202: long long is not supported by dcc's CP/M/Z80 target; use long near 'long'
+    long long x;
+         ^
+dcc: 1 error(s)

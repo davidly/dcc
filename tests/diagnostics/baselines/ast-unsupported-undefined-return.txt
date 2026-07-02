@@ -1,2 +1,4 @@
-<source>:3: error: unsupported return expression near 'return'
+<source>:3: error DCC-E1002: unsupported return expression near 'return'
+        return missing_symbol;
+        ^
 dcc: 1 error(s)

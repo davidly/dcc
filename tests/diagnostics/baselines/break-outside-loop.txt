@@ -1,2 +1,4 @@
-<source>:3: error: break statement outside loop or switch near 'break'
+<source>:3: error DCC-E0701: break statement outside loop or switch near 'break'
+        break;
+        ^
 dcc: 1 error(s)

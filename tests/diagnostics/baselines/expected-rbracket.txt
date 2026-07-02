@@ -1,0 +1,4 @@
+<source>:1: error DCC-E1106: expected ']' near '='
+    int a[2] = { [0 = 1 };
+                    ^
+dcc: 1 error(s)

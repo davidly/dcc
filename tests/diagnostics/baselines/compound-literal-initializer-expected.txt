@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0907: compound literal initializer expected near ';'
+    int *p = &(int);
+                   ^
+dcc: 1 error(s)

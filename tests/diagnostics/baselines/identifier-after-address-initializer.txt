@@ -1,5 +1,4 @@
-<source>:1: error: identifier expected after & in initializer near '1'
-<source>:1: error: expected ';' near '1'
-<source>:1: error: external declaration expected near '1'
-<source>:1: error: external declaration expected near ';'
-dcc: 4 error(s)
+<source>:1: error DCC-E0901: identifier expected after & in initializer near '1'
+    int *p = &1;
+              ^
+dcc: 1 error(s)

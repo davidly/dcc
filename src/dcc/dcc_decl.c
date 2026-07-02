@@ -570,11 +570,8 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             if (had_brace && accept(',')) {
                 if (tok.kind != '}') {
                     error_here("too many union initializer elements");
-                    while (tok.kind != TOK_EOF && tok.kind != '}') {
-                        skip_initializer_or_decl_tail();
-                        if (tok.kind == ',') next_token();
-                        else break;
-                    }
+                    while (tok.kind != TOK_EOF && tok.kind != '}')
+                        next_token();
                 }
             }
         }
@@ -592,13 +589,15 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             next_token();
             if (tok.kind != TOK_ID) {
                 error_here("expected a field designator, such as '.field = value'");
-                skip_initializer_or_decl_tail();
+                while (tok.kind != TOK_EOF && tok.kind != '}')
+                    next_token();
                 break;
             }
             fd = find_field_def(sid, tok.text);
             if (fd == NULL) {
                 error_here("unknown field initializer designator");
-                skip_initializer_or_decl_tail();
+                while (tok.kind != TOK_EOF && tok.kind != '}')
+                    next_token();
                 break;
             }
             i = (int)(fd - field_defs);

@@ -48,6 +48,43 @@ static int ast_num_text_plain_decimal(const char *s)
 }
 
 static int ast_expr_type_for_sizeof(const struct AstNode *n);
+static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n);
+
+static int ast_expr_is_null_pointer_constant(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_INT_LIT && n->ival == 0)
+        return 1;
+    if (n->kind == AST_UNARY && n->op == '+')
+        return ast_expr_is_null_pointer_constant(n->a);
+    return 0;
+}
+
+static int ast_expr_is_array_decay(const struct AstNode *n)
+{
+    struct Sym *s;
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_IDENT) {
+        s = find_sym(n->sval);
+        return s != NULL && s->is_array;
+    }
+    if (n->kind == AST_MEMBER) {
+        struct FieldDef *fd = ast_member_field_for_sizeof(n);
+        return fd != NULL && fd->is_array;
+    }
+    return 0;
+}
+
+static int ast_expr_is_function_designator(const struct AstNode *n)
+{
+    struct Sym *s;
+    if (n == NULL || n->kind != AST_IDENT)
+        return 0;
+    s = find_sym(n->sval);
+    return s != NULL && s->storage == SC_FUNC;
+}
 
 static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
 {
@@ -181,6 +218,46 @@ static int ast_index_root_and_count(const struct AstNode *n,
     if (root != NULL)
         *root = n;
     return count;
+}
+
+static int ast_expr_is_array_row(const struct AstNode *n)
+{
+    const struct AstNode *root;
+    int index_count;
+
+    if (n == NULL || n->kind != AST_INDEX)
+        return 0;
+    index_count = ast_index_root_and_count(n, &root);
+    if (root != NULL && root->kind == AST_IDENT) {
+        struct Sym *s = find_sym(root->sval);
+        if (s == NULL)
+            return 0;
+        if (s->is_array)
+            return s->dim_count > index_count;
+        return type_ptr_depth(s->type) > 0 && s->dim_count >= index_count;
+    }
+    if (root != NULL && root->kind == AST_MEMBER) {
+        struct FieldDef *fd = ast_member_field_for_sizeof(root);
+        return fd != NULL && fd->is_array && fd->dim_count > index_count;
+    }
+    return 0;
+}
+
+static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 0;
+    if (ast_expr_is_null_pointer_constant(n))
+        return 1;
+    if (type_ptr_depth(ast_expr_type_for_sizeof(n)) > 0)
+        return 1;
+    if (ast_expr_is_array_decay(n) || ast_expr_is_array_row(n) ||
+        ast_expr_is_function_designator(n))
+        return 1;
+    if (n->kind == AST_COND)
+        return ast_expr_is_pointer_assignment_rhs(n->b) ||
+               ast_expr_is_pointer_assignment_rhs(n->c);
+    return 0;
 }
 
 static int ast_sizeof_expr_value(const struct AstNode *n)
@@ -355,6 +432,18 @@ static struct AstNode *p_postfix(struct AstArena *ar)
     for (;;) {
         if (tok.kind == '[') {
             struct AstNode *m = ast_new(ar, AST_INDEX);
+            int base_type = ast_expr_type_for_sizeof(n);
+            if (n != NULL && n->kind == AST_IDENT) {
+                struct Sym *base_sym = find_sym(n->sval);
+                if (base_sym != NULL && !base_sym->is_array && type_ptr_depth(base_type) == 0)
+                    error_here("subscripted value is not an array or pointer");
+            } else if (n != NULL && n->kind == AST_MEMBER && base_type != 0 &&
+                       type_ptr_depth(base_type) == 0) {
+                struct FieldDef *base_field = (n != NULL && n->kind == AST_MEMBER) ?
+                    ast_member_field_for_sizeof(n) : NULL;
+                if (base_field == NULL || !base_field->is_array)
+                    error_here("subscripted value is not an array or pointer");
+            }
             next_token();
             m->a = n;
             m->b = ast_build_expr(ar);
@@ -378,6 +467,12 @@ static struct AstNode *p_postfix(struct AstArena *ar)
             }
             if (tok.kind == ')')
                 next_token();
+            if (n->kind == AST_IDENT && n->sym != NULL && n->sym->has_proto && !n->sym->proto_variadic) {
+                if (call->list_len < n->sym->proto_nargs)
+                    error_here("too few arguments to function call");
+                else if (call->list_len > n->sym->proto_nargs)
+                    error_here("too many arguments to function call");
+            }
             n = call;
         } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
             struct AstNode *m = ast_new(ar, AST_MEMBER);
@@ -539,6 +634,9 @@ static struct AstNode *p_assign(struct AstArena *ar)
         struct AstNode *rhs;
         next_token();
         rhs = p_assign(ar);              /* right-associative */
+        if (op == '=' && type_ptr_depth(ast_expr_type_for_sizeof(lhs)) > 0 &&
+            !ast_expr_is_pointer_assignment_rhs(rhs))
+            error_here("incompatible integer to pointer assignment");
         return ast_assign(ar, op, lhs, rhs, 0);
     }
     return lhs;

@@ -1,3 +1,4 @@
-<source>:6: error: unknown field initializer designator near 'y'
-<source>:7: error: expected '}' near ';'
-dcc: 2 error(s)
+<source>:6: error DCC-E0502: unknown field initializer designator near 'y'
+        .y = 1
+         ^
+dcc: 1 error(s)

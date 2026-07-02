@@ -1,3 +1,7 @@
-<source>:1: error: type expected near ';'
-<source>:1: error: identifier expected in typedef near ';'
+<source>:1: error DCC-E0531: type expected near ';'
+    typedef ;
+            ^
+<source>:1: error DCC-E1104: identifier expected in typedef near ';'
+    typedef ;
+            ^
 dcc: 2 error(s)

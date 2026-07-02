@@ -1,2 +1,4 @@
-<source>:8: error: unsupported expression statement near 's'
+<source>:8: error DCC-E1002: unsupported expression statement near 's'
+        s = (struct S)1;
+        ^
 dcc: 1 error(s)

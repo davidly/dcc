@@ -1,2 +1,4 @@
-<source>:1: error: struct/union name or '{' expected near ';'
+<source>:1: error DCC-E0530: struct/union name or '{' expected near ';'
+    struct ;
+           ^
 dcc: 1 error(s)

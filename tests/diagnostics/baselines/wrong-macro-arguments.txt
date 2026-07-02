@@ -1,2 +1,4 @@
-<source>:3: error: too few arguments provided to function-like macro invocation near 'F'
+<source>:3: error DCC-E0321: too few arguments provided to function-like macro invocation near 'F'
+    int x = F(1);
+            ^
 dcc: 1 error(s)

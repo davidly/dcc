@@ -1,2 +1,4 @@
-<source>:2: error: old-style parameter declaration does not match parameter list near ';'
+<source>:2: error DCC-E0803: old-style parameter declaration does not match parameter list near ';'
+        int b;
+             ^
 dcc: 1 error(s)

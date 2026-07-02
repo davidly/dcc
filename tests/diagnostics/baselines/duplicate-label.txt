@@ -1,2 +1,4 @@
-<source>:7: error: duplicate goto label near 'return'
+<source>:7: error DCC-E0705: duplicate goto label near 'return'
+        return 0;
+        ^
 dcc: 1 error(s)

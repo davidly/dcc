@@ -75,8 +75,9 @@ void gen_str_lit(const struct AstNode *n)
 {
     /* Intern at emit time (the build deferred this codegen side effect); the
      * 1:1 substitution at gen_expr preserves source order, so the assigned
-    * string id remains stable. */
-    int sid = add_string_ex(n->sval, (int)n->ival);
+     * string id remains stable. */
+    int sid;
+    sid = add_string_ex(n->sval, (int)n->ival);
     fprintf(outf, "\tld hl,S%d\n", sid);
     g_expr_type = TYPE_CHAR | TYPE_PTR;
 }
@@ -127,11 +128,8 @@ void gen_ident(const struct AstNode *n)
         {
             char msg[MAX_TOK_TEXT + 64];
             sprintf(msg, "use of undeclared identifier '%s'", name);
-            fprintf(stderr, "%s:%d: error: %s\n",
-                    tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
-                    n->line > 0 ? n->line : tok_line, msg);
-            errors++;
-            if (errors > 40) fatal("too many errors");
+            dcc_error_at(tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
+                         n->line > 0 ? n->line : tok_line, -1, msg, NULL);
         }
         emit("\tld hl,0\n");
         g_expr_type = TYPE_INT;

@@ -1,3 +1,4 @@
-<source>:6: error: expected a field designator, such as '.field = value' near '='
-<source>:7: error: expected '}' near ';'
-dcc: 2 error(s)
+<source>:6: error DCC-E0501: expected a field designator, such as '.field = value' near '='
+        . = 1
+          ^
+dcc: 1 error(s)

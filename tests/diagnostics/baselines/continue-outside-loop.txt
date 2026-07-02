@@ -1,2 +1,4 @@
-<source>:3: error: continue statement outside loop near 'continue'
+<source>:3: error DCC-E0702: continue statement outside loop near 'continue'
+        continue;
+        ^
 dcc: 1 error(s)

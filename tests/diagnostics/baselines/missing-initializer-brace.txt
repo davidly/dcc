@@ -1,0 +1,4 @@
+<source>:1: error DCC-E1103: expected '}' near ';'
+    int a[2] = { 1, 2;
+                     ^
+dcc: 1 error(s)

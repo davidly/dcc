@@ -1,2 +1,4 @@
-<source>:3: error: malformed statement near 'return'
+<source>:3: error DCC-E1003: malformed statement near 'return'
+        return 0
+        ^
 dcc: 1 error(s)

@@ -1,0 +1,4 @@
+<source>:1: error DCC-E1203: 64-bit integer types are not supported by dcc's CP/M/Z80 target; use long near 'int64_t'
+    int64_t x;
+    ^
+dcc: 1 error(s)

@@ -1,2 +1,7 @@
-<source>:65: error: too many nested #if
-dcc: 1 error(s)
+<source>:65: error DCC-E0311: too many nested #if
+    #if 1
+    ^
+<source>:131: error DCC-E0315: #endif without matching #if
+    #endif
+    ^
+dcc: 2 error(s)

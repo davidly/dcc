@@ -1,2 +1,4 @@
-<source>:3: error: division by zero in constant expression near '}'
+<source>:3: error DCC-E0402: division by zero in constant expression near '}'
+    };
+    ^
 dcc: 1 error(s)

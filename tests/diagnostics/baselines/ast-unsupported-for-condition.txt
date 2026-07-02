@@ -1,2 +1,4 @@
-<source>:8: error: unsupported for statement near 'for'
+<source>:8: error DCC-E1002: unsupported for statement near 'for'
+        for (; s.y; ) {
+        ^
 dcc: 1 error(s)

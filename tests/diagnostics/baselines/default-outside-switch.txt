@@ -1,2 +1,4 @@
-<source>:3: error: default label outside switch near 'default'
+<source>:3: error DCC-E0704: default label outside switch near 'default'
+    default:
+    ^
 dcc: 1 error(s)

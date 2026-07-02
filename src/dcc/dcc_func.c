@@ -1149,7 +1149,7 @@ void scan_local_decl_after_type(int base)
          * swallowed this and silently kept the first declaration's type; report
          * it instead, then reuse the existing symbol for error recovery. */
         s = find_local_decl(name);
-        if (s) {
+        if (s && !scan_mode) {
             char redef_msg[96];
             sprintf(redef_msg, "redefinition of '%s'", source_name);
             error_here(redef_msg);
@@ -1621,10 +1621,14 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
             return 2;   /* symbolic address */
         }
         error_here("identifier expected after & in initializer");
+        if (tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+            next_token();
         return 0;
     }
 
     error_here("constant initializer expected");
+    if (tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+        next_token();
     return 0;
 }
 
@@ -2022,11 +2026,8 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             if (had_brace && accept(',')) {
                 if (tok.kind != '}') {
                     error_here("too many union initializer elements");
-                    while (tok.kind != TOK_EOF && tok.kind != '}') {
-                        skip_initializer_or_decl_tail();
-                        if (tok.kind == ',') next_token();
-                        else break;
-                    }
+                    while (tok.kind != TOK_EOF && tok.kind != '}')
+                        next_token();
                 }
             }
         }
@@ -2042,13 +2043,15 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             next_token();
             if (tok.kind != TOK_ID) {
                 error_here("expected a field designator, such as '.field = value'");
-                skip_initializer_or_decl_tail();
+                while (tok.kind != TOK_EOF && tok.kind != '}')
+                    next_token();
                 break;
             }
             fd = find_field_def(sid, tok.text);
             if (fd == NULL) {
                 error_here("unknown field initializer designator");
-                skip_initializer_or_decl_tail();
+                while (tok.kind != TOK_EOF && tok.kind != '}')
+                    next_token();
                 break;
             }
             i = field_def_index(fd);
@@ -2403,6 +2406,8 @@ void parse_global_init_list(struct Sym *s)
             }
         } else {
             error_here("array initializer list expected");
+            while (tok.kind != TOK_EOF && tok.kind != ';' && tok.kind != ',')
+                next_token();
         }
         return;
     }
@@ -2922,6 +2927,17 @@ void parse_translation_unit(void)
             } else {
                 parse_function_or_global(t);
             }
+        } else if (tok.kind == TOK_ID && is_unsupported_target_type_name(tok.text)) {
+            int t;
+            decl_is_extern = 0;
+            decl_is_static = 0;
+            decl_is_inline = 0;
+            decl_is_const = 0;
+            t = parse_type();
+            if (tok.kind == ';')
+                next_token();
+            else
+                parse_function_or_global(t);
         } else if (tok.kind == TOK_ID) {
             /* C89: implicit int return type for function definition/declaration. */
             decl_is_extern = 0;
