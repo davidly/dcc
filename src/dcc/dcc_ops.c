@@ -655,43 +655,66 @@ int emit_shift_const_long(int op, int lhs_type, long count)
         return 1;
     }
 
-    if (is_left) {
-        if (count == 8) { emit("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 16) { emit("\tld e,l\n\tld d,h\n\tld hl,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 24) { emit("\tld d,l\n\tld e,0\n\tld hl,0\n"); g_long_from16 = 0; return 1; }
-    } else if (is_unsigned) {
-        if (count == 8) { emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 16) { emit("\tld l,e\n\tld h,d\n\tld de,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 24) { emit("\tld l,d\n\tld h,0\n\tld de,0\n"); g_long_from16 = 0; return 1; }
-    } else {
-        /*
-         * Signed right shift by a whole number of bytes: the same byte
-         * moves as the unsigned case, but the vacated high bytes are filled
-         * with the replicated sign byte (0x00 or 0xFF) computed in A rather
-         * than zero.  DE:HL holds the value (D = MSB, L = LSB).
-         *   ld a,d / rla / sbc a,a  ->  A = 0x00 if non-negative, 0xFF if negative.
-         */
-        if (count == 8) {
-            emit("\tld a,d\n\trla\n\tsbc a,a\n");
-            emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,a\n");
-            g_long_from16 = 0;
-            return 1;
-        }
-        if (count == 16) {
-            emit("\tld a,d\n\trla\n\tsbc a,a\n");
-            emit("\tld l,e\n\tld h,d\n\tld e,a\n\tld d,a\n");
-            g_long_from16 = 0;
-            return 1;
-        }
-        if (count == 24) {
-            emit("\tld a,d\n\trla\n\tsbc a,a\n");
-            emit("\tld l,d\n\tld h,a\n\tld e,a\n\tld d,a\n");
-            g_long_from16 = 0;
-            return 1;
+    /* Any count 1..31 decomposes into a whole-byte move (0-3 bytes, the
+     * same register-move sequences the count==8/16/24 special cases below
+     * always used, just parameterized) plus a 0-7 bit remainder. The
+     * remainder is unrolled directly - the count is a compile-time
+     * constant, so a runtime b-counted loop (emit_shift_loop) would only
+     * add loop-control overhead for no benefit. This is what closed the
+     * gap for byte-aligned counts before generalizing to every count: a
+     * shift like `e >>= 1` (bits=1, bytes=0) used to fall through to
+     * emit_shift_loop for want of a bytes==0 case here, paying for a loop
+     * counter and a conditional branch around a single shift instruction
+     * sequence. */
+    {
+        int bytes = (int)(count / 8);
+        int bits = (int)(count % 8);
+
+        if (is_left) {
+            switch (bytes) {
+            case 1: emit("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"); break;
+            case 2: emit("\tld e,l\n\tld d,h\n\tld hl,0\n"); break;
+            case 3: emit("\tld d,l\n\tld e,0\n\tld hl,0\n"); break;
+            default: break;
+            }
+            while (bits-- > 0)
+                emit("\tadd hl,hl\n\trl e\n\trl d\n");
+        } else if (is_unsigned) {
+            switch (bytes) {
+            case 1: emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,0\n"); break;
+            case 2: emit("\tld l,e\n\tld h,d\n\tld de,0\n"); break;
+            case 3: emit("\tld l,d\n\tld h,0\n\tld de,0\n"); break;
+            default: break;
+            }
+            while (bits-- > 0)
+                emit("\tsrl d\n\trr e\n\trr h\n\trr l\n");
+        } else {
+            /*
+             * Signed right shift: a whole-byte move fills the vacated high
+             * bytes with the replicated sign byte (0x00 or 0xFF) computed
+             * in A rather than zero.  DE:HL holds the value (D = MSB,
+             * L = LSB).  ld a,d / rla / sbc a,a  ->  A = 0x00 if
+             * non-negative, 0xFF if negative.  A bit remainder then uses
+             * the ordinary sign-preserving `sra d` chain, which keeps
+             * re-deriving the same sign bit on each shift - exactly like
+             * the hardware instruction would if repeated by hand.
+             */
+            if (bytes > 0) {
+                emit("\tld a,d\n\trla\n\tsbc a,a\n");
+                switch (bytes) {
+                case 1: emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,a\n"); break;
+                case 2: emit("\tld l,e\n\tld h,d\n\tld e,a\n\tld d,a\n"); break;
+                case 3: emit("\tld l,d\n\tld h,a\n\tld e,a\n\tld d,a\n"); break;
+                default: break;
+                }
+            }
+            while (bits-- > 0)
+                emit("\tsra d\n\trr e\n\trr h\n\trr l\n");
         }
     }
 
-    return 0;
+    g_long_from16 = 0;
+    return 1;
 }
 
 void emit_shift_loop(int op, int lhs_type)
