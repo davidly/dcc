@@ -1,0 +1,206 @@
+#Requires -Version 7
+<#
+.SYNOPSIS
+Create a native installer from a staged dcc release package.
+#>
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$PackageName,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PackageRoot,
+
+    [Parameter(Mandatory = $true)]
+    [string]$Target,
+
+    [string]$OutputDir = "dist",
+    [string]$Version = "0.0.0"
+)
+
+$ErrorActionPreference = "Stop"
+
+$resolvedPackageRoot = (Resolve-Path -LiteralPath $PackageRoot).ProviderPath
+$outputRoot = if ([System.IO.Path]::IsPathRooted($OutputDir)) {
+    [System.IO.Path]::GetFullPath($OutputDir)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $OutputDir))
+}
+New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+
+function Get-InstallerVersion {
+    param([string]$InputVersion)
+
+    $match = [regex]::Match($InputVersion, '(\d+)\.(\d+)\.(\d+)')
+    if ($match.Success) { return $match.Value }
+    return "0.0.0"
+}
+
+function Copy-DirectoryContents {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    foreach ($item in @(Get-ChildItem -LiteralPath $Source -Force)) {
+        Copy-Item -LiteralPath $item.FullName -Destination $Destination -Recurse -Force
+    }
+}
+
+function New-UnixLinks {
+    param(
+        [string]$Root,
+        [string]$Prefix,
+        [string]$LinkDir
+    )
+
+    $binDir = Join-Path $Root $LinkDir.TrimStart("/")
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    foreach ($tool in @("dcc", "dccpeep", "dccrtlstrip", "ntvcm")) {
+        New-Item -ItemType SymbolicLink -Path (Join-Path $binDir $tool) -Target "$Prefix/bin/$tool" -Force | Out-Null
+    }
+
+    $wrapper = @"
+#!/usr/bin/env sh
+exec pwsh "$Prefix/scripts/ma.ps1" "`$@"
+"@
+    $wrapperPath = Join-Path $binDir "dcc-ma"
+    Set-Content -LiteralPath $wrapperPath -Value $wrapper -Encoding utf8
+    & chmod +x $wrapperPath
+}
+
+function New-DebPackage {
+    $arch = if ($Target -like "*arm64") { "arm64" } else { "amd64" }
+    $versionText = Get-InstallerVersion $Version
+    $debRoot = Join-Path $outputRoot "$PackageName-debroot"
+    if (Test-Path -LiteralPath $debRoot) { Remove-Item -LiteralPath $debRoot -Recurse -Force }
+
+    $installPrefix = "/opt/dcc-4-cpm-z80"
+    $payloadRoot = Join-Path $debRoot "opt/dcc-4-cpm-z80"
+    Copy-DirectoryContents -Source $resolvedPackageRoot -Destination $payloadRoot
+    New-UnixLinks -Root $debRoot -Prefix $installPrefix -LinkDir "/usr/bin"
+
+    $controlDir = Join-Path $debRoot "DEBIAN"
+    New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
+    $control = @"
+Package: dcc-4-cpm-z80
+Version: $versionText
+Section: devel
+Priority: optional
+Architecture: $arch
+Maintainer: gloveboxes <noreply@github.com>
+Description: dcc C compiler toolchain for CP/M 2.2 on Z80
+ Includes dcc, dccpeep, dccrtlstrip, ntvcm, the DCC runtime, CP/M assembler/linker tools, standard-library headers, and helper scripts.
+"@
+    Set-Content -LiteralPath (Join-Path $controlDir "control") -Value $control -Encoding ascii
+
+    $debPath = Join-Path $outputRoot "$PackageName.deb"
+    & dpkg-deb --build --root-owner-group $debRoot $debPath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Created: $debPath"
+}
+
+function New-MacPackage {
+    $versionText = Get-InstallerVersion $Version
+    $pkgRoot = Join-Path $outputRoot "$PackageName-pkgroot"
+    if (Test-Path -LiteralPath $pkgRoot) { Remove-Item -LiteralPath $pkgRoot -Recurse -Force }
+
+    $installPrefix = "/usr/local/dcc-4-cpm-z80"
+    $payloadRoot = Join-Path $pkgRoot "usr/local/dcc-4-cpm-z80"
+    Copy-DirectoryContents -Source $resolvedPackageRoot -Destination $payloadRoot
+    New-UnixLinks -Root $pkgRoot -Prefix $installPrefix -LinkDir "/usr/local/bin"
+
+    $pkgPath = Join-Path $outputRoot "$PackageName.pkg"
+    & pkgbuild --root $pkgRoot --identifier "com.gloveboxes.dcc-4-cpm-z80" --version $versionText --install-location / $pkgPath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Created: $pkgPath"
+}
+
+function ConvertTo-WixText {
+    param([string]$Text)
+    return [System.Security.SecurityElement]::Escape($Text)
+}
+
+function New-MsiPackage {
+    $versionText = Get-InstallerVersion $Version
+    $wixCommand = Get-Command wix -ErrorAction SilentlyContinue
+    if (-not $wixCommand) { throw "WiX Toolset command 'wix' was not found." }
+
+    $componentIds = [System.Collections.Generic.List[string]]::new()
+    $nextId = 1
+
+    function New-WixId {
+        param([string]$Prefix)
+        $script:nextId += 1
+        return "$Prefix$script:nextId"
+    }
+
+    function Add-WixDirectory {
+        param(
+            [string]$Path,
+            [int]$Indent
+        )
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $pad = " " * $Indent
+
+        foreach ($directory in @(Get-ChildItem -LiteralPath $Path -Directory | Sort-Object Name)) {
+            $dirId = New-WixId "dir"
+            $dirName = ConvertTo-WixText $directory.Name
+            $lines.Add("$pad<Directory Id=`"$dirId`" Name=`"$dirName`">")
+            foreach ($line in @(Add-WixDirectory -Path $directory.FullName -Indent ($Indent + 2))) { $lines.Add($line) }
+            $lines.Add("$pad</Directory>")
+        }
+
+        foreach ($file in @(Get-ChildItem -LiteralPath $Path -File | Sort-Object Name)) {
+            $componentId = New-WixId "cmp"
+            $fileId = New-WixId "fil"
+            $source = ConvertTo-WixText $file.FullName
+            $name = ConvertTo-WixText $file.Name
+            $componentIds.Add($componentId)
+            $lines.Add("$pad<Component Id=`"$componentId`" Guid=`"*`">")
+            $lines.Add("$pad  <File Id=`"$fileId`" Source=`"$source`" Name=`"$name`" KeyPath=`"yes`" />")
+            $lines.Add("$pad</Component>")
+        }
+
+        return $lines.ToArray()
+    }
+
+    $script:nextId = $nextId
+    $wxsPath = Join-Path $outputRoot "$PackageName.wxs"
+    $msiPath = Join-Path $outputRoot "$PackageName.msi"
+    $arch = if ($Target -like "*arm64") { "arm64" } else { "x64" }
+    $upgradeCode = "{6B38A8A4-61F7-4D3F-8F7A-3B0220E86F40}"
+
+    $wxs = [System.Collections.Generic.List[string]]::new()
+    $wxs.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
+    $wxs.Add("  <Package Name=`"dcc 4 CP/M Z80`" Manufacturer=`"gloveboxes`" Version=`"$versionText`" UpgradeCode=`"$upgradeCode`" Scope=`"perMachine`">")
+    $wxs.Add('    <MajorUpgrade DowngradeErrorMessage="A newer version of dcc 4 CP/M Z80 is already installed." />')
+    $wxs.Add('    <MediaTemplate EmbedCab="yes" />')
+    $wxs.Add('    <StandardDirectory Id="ProgramFiles64Folder">')
+    $wxs.Add('      <Directory Id="INSTALLFOLDER" Name="dcc-4-cpm-z80">')
+    foreach ($line in @(Add-WixDirectory -Path $resolvedPackageRoot -Indent 8)) { $wxs.Add($line) }
+    $wxs.Add('      </Directory>')
+    $wxs.Add('    </StandardDirectory>')
+    $wxs.Add('    <Feature Id="MainFeature" Title="dcc 4 CP/M Z80" Level="1">')
+    foreach ($componentId in $componentIds) { $wxs.Add("      <ComponentRef Id=`"$componentId`" />") }
+    $wxs.Add('    </Feature>')
+    $wxs.Add('  </Package>')
+    $wxs.Add('</Wix>')
+    Set-Content -LiteralPath $wxsPath -Value $wxs -Encoding utf8
+
+    & wix build $wxsPath -arch $arch -out $msiPath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Created: $msiPath"
+}
+
+if ($IsWindows) {
+    New-MsiPackage
+} elseif ($IsMacOS) {
+    New-MacPackage
+} elseif ($IsLinux) {
+    New-DebPackage
+} else {
+    throw "Unsupported installer host OS."
+}
