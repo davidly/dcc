@@ -200,6 +200,11 @@ function New-MsiPackage {
     $wxs.Add('    <StandardDirectory Id="ProgramFiles64Folder">')
     $wxs.Add('      <Directory Id="INSTALLFOLDER" Name="dcc-4-cpm-z80">')
     foreach ($line in @(Add-WixDirectory -Path $resolvedPackageRoot -Indent 8)) { $wxs.Add($line) }
+    $componentIds.Add("cmpPathEnvironment")
+    $wxs.Add('        <Component Id="cmpPathEnvironment" Guid="*">')
+    $wxs.Add('          <Environment Id="envBinPath" Name="Path" Value="[INSTALLFOLDER]bin" Action="set" Part="last" System="yes" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envScriptsPath" Name="Path" Value="[INSTALLFOLDER]scripts" Action="set" Part="last" System="yes" Permanent="no" KeyPath="yes" />')
+    $wxs.Add('        </Component>')
     $wxs.Add('      </Directory>')
     $wxs.Add('    </StandardDirectory>')
     $wxs.Add('    <Feature Id="MainFeature" Title="dcc 4 CP/M Z80" Level="1">')
