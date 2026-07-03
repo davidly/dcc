@@ -2,6 +2,22 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `publish-package.ps1`
+
+Publishes or republishes the binary package release. By default it reads the
+version from `scripts/package-version.txt` (`v2.0.0`), deletes any existing
+GitHub release/tag for that version, recreates the tag at the current commit,
+and pushes the tag so `.github/workflows/release.yml` rebuilds the package
+assets.
+
+```pwsh
+pwsh ./scripts/publish-package.ps1
+pwsh ./scripts/publish-package.ps1 -Version v2.0.1 -Watch
+```
+
+The script requires `git` and the GitHub CLI (`gh`) on `PATH`, and refuses to
+publish from a dirty worktree unless `-AllowDirty` is passed.
+
 ## Host compilers to install
 
 The PowerShell scripts are intended to work on Windows, macOS, and Linux. For
