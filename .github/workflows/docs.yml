@@ -1,25 +1,28 @@
-name: Docs
+name: Generate Docs and Deploy to GitHub Pages
 on:
   push:
     branches:
       - "**"
-  pull_request:
+      - "!gh-pages"
   workflow_dispatch:
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  build:
+  deploy:
     env:
       REQUIREMENTS: docs/docs/requirements.txt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Configure Git Credentials
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
@@ -35,20 +38,5 @@ jobs:
       - run: pip install -r "$REQUIREMENTS"
       # Run from the config directory so pymdownx.snippets' base_path ("../..")
       # resolves to the repo root (it is resolved against the CWD, not docs_dir).
-      - run: mkdocs build --strict --site-dir "$GITHUB_WORKSPACE/_site"
+      - run: mkdocs gh-deploy --force
         working-directory: docs/docs
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
