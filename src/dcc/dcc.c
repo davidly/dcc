@@ -1160,6 +1160,16 @@ int main(int argc, char **argv)
      * by the normal lexer-level preprocessor in source order.  Do not pre-scan
      * them globally; that breaks C macro scoping/order.
      */
+
+    /* Whole-file lexical scan of which identifiers are ever written to /
+     * have their address taken, and in which function each write occurs -
+     * see dcc_global_scan.c. Runs once, over the same finalised `src`
+     * buffer the real pass will tokenise, then fully rewinds lexer and
+     * macro-table state so the real pass starts exactly as if this had
+     * never happened. Must run before posi/line_no are set for the real
+     * pass below (it sets and restores them itself). */
+    scan_global_write_info();
+
     posi = 0;
     tok_start_pos = 0;
     line_no = 1;

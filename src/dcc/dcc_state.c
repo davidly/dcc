@@ -161,6 +161,7 @@ int  pending_asm_len;
 int  asm_suppress_depth;
 int  g_compound_literal_seq;
 int  g_licm_seq;
+char g_current_compiling_func[64];
 
 /* User-defined goto labels (function-scoped) */
 char ulabel_names[MAX_USER_LABELS][64];

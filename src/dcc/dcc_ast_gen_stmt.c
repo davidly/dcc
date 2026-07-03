@@ -393,6 +393,67 @@ void ast_gen_for_stmt(const struct AstNode *n)
         hoist_body = ast_new(&g_ast_arena, AST_EXPR_STMT);
         hoist_body->a = assign;
         (void)hoist_ivar_name;
+    } else if (n->sym == NULL) {
+        const struct AstNode *gmv_member;
+        int gmv_val_type;
+
+        /* Loop-invariant global-member VALUE hoist (see
+         * ast_for_hoist_global_member_value_supported for the full shape/
+         * rationale/soundness argument): if the loop body's first statement
+         * reads BASE->FIELD's value - provably invariant for this whole
+         * function's execution via the whole-file write scan, even though
+         * the rest of the body is full of calls - cache that value once
+         * here, before the loop, into a fresh compiler-temp local, and
+         * rewrite ONLY the first statement (n->d itself is untouched;
+         * nothing else in the body is inspected or rewritten) to read
+         * through that temp instead of re-fetching BASE->FIELD on every
+         * iteration. */
+        if (ast_for_hoist_global_member_value_supported(n, &gmv_member, &gmv_val_type)) {
+            struct Sym *val_tmp;
+            struct AstNode *ident;
+            struct AstNode *new_index;
+            struct AstNode *new_addrof;
+            struct AstNode *new_assign;
+            struct AstNode *new_body;
+            const struct AstNode *stmt0 = n->d->list[0];
+            const struct AstNode *orig_index = stmt0->a->b->a;
+            char tmp_name[24];
+            int i;
+
+            sprintf(tmp_name, "#gmv%d", g_licm_seq++);
+            val_tmp = add_local_alloc(tmp_name, gmv_val_type, 2);
+
+            gen_member_ast(gmv_member);  /* HL = BASE->FIELD's value, computed once */
+            emit_store_hl_to_sym_direct(val_tmp);
+
+            ident = ast_new(&g_ast_arena, AST_IDENT);
+            ident->sval = ast_arena_strdup(&g_ast_arena, val_tmp->name);
+
+            new_index = ast_new(&g_ast_arena, AST_INDEX);
+            new_index->a = ident;
+            new_index->b = orig_index->b;
+
+            new_addrof = ast_new(&g_ast_arena, AST_UNARY);
+            new_addrof->op = '&';
+            new_addrof->a = new_index;
+
+            new_assign = ast_new(&g_ast_arena, AST_ASSIGN);
+            new_assign->op = '=';
+            new_assign->a = stmt0->a->a;
+            new_assign->b = new_addrof;
+
+            new_body = ast_new(&g_ast_arena, AST_COMPOUND);
+            new_body->list = (struct AstNode **)ast_arena_alloc(&g_ast_arena,
+                sizeof(struct AstNode *) * (size_t)n->d->list_len);
+            new_body->list_len = n->d->list_len;
+            new_body->list_cap = n->d->list_len;
+            new_body->list[0] = ast_new(&g_ast_arena, AST_EXPR_STMT);
+            new_body->list[0]->a = new_assign;
+            for (i = 1; i < n->d->list_len; ++i)
+                new_body->list[i] = n->d->list[i];
+
+            hoist_body = new_body;
+        }
     }
 
     emit_label(ltop);

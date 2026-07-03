@@ -1925,3 +1925,96 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
     if (out_val_type != NULL) *out_val_type = val_type;
     return 1;
 }
+
+/* Detects a for-loop whose body's FIRST statement is exactly
+ *     IDENT = & BASE->FIELD[ INDEX_EXPR ];
+ * where BASE is a plain file-scope static global and FIELD is a
+ * pointer-typed member - tests/cint.c's run(): `in = &G->code[pc++];`, the
+ * first statement of an otherwise call-heavy bytecode-dispatch loop body.
+ * BASE->FIELD's VALUE (not its address) is re-fetched - a base-symbol load
+ * then a dereference through the field's byte offset - on every iteration,
+ * even though it cannot change across the whole loop's execution... which
+ * ordinary side-effect analysis can't decide here, since the loop body
+ * (the switch after this statement) is full of calls that analysis alone
+ * cannot rule out as reassigning BASE.
+ *
+ * That is instead proven via the whole-file lexical write scan in
+ * dcc_global_scan.c: this only fires when BASE is written in EXACTLY ONE
+ * place in the entire translation unit and that place is not the function
+ * currently being compiled (g_current_compiling_func) - and BASE must be
+ * `static`, so (unlike a plain extern global) the whole file the scan
+ * covers is *by language guarantee* every place that could possibly write
+ * to it, not just everywhere this compiler happens to have looked. See
+ * dcc_global_scan.c's header for exactly what this does and does not
+ * prove - in particular, it does not verify the one writer function can
+ * never be re-entered from this function's own call graph, only that it is
+ * not this function itself.
+ *
+ * Conservative in every other direction too: only the loop's first
+ * statement is ever inspected or rewritten - nothing about the rest of the
+ * body (the switch) needs to be, or is, examined. Declining (0) is always
+ * safe: the caller falls back to ordinary per-iteration codegen for the
+ * whole loop, unchanged. */
+int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
+                                                 const struct AstNode **out_member,
+                                                 int *out_val_type)
+{
+    const struct AstNode *body;
+    const struct AstNode *stmt0;
+    const struct AstNode *assign;
+    const struct AstNode *addr_of;
+    const struct AstNode *index;
+    const struct AstNode *member;
+    struct Sym *base_sym;
+    int val_type;
+
+    if (n == NULL || n->d == NULL)
+        return 0;
+    body = n->d;
+    if (body->kind != AST_COMPOUND || body->list_len < 1)
+        return 0;
+
+    stmt0 = body->list[0];
+    if (stmt0 == NULL || stmt0->kind != AST_EXPR_STMT || stmt0->a == NULL)
+        return 0;
+    assign = stmt0->a;
+    if (assign->kind != AST_ASSIGN || assign->op != '=')
+        return 0;
+    if (assign->a == NULL || assign->a->kind != AST_IDENT)
+        return 0;
+
+    addr_of = assign->b;
+    if (addr_of == NULL || addr_of->kind != AST_UNARY || addr_of->op != '&')
+        return 0;
+
+    index = addr_of->a;
+    if (index == NULL || index->kind != AST_INDEX || index->a == NULL)
+        return 0;
+
+    member = index->a;
+    if (member->kind != AST_MEMBER || member->op != TOK_ARROW)
+        return 0;
+    if (member->a == NULL || member->a->kind != AST_IDENT || member->a->sval == NULL)
+        return 0;
+
+    base_sym = find_sym(member->a->sval);
+    if (base_sym == NULL || base_sym->storage != SC_GLOBAL || !base_sym->is_static)
+        return 0;
+    if (!is_global_word_sym(base_sym))
+        return 0;
+
+    if (global_text_addr_taken_count(base_sym->name) != 0)
+        return 0;
+    if (global_text_write_count(base_sym->name) != 1)
+        return 0;
+    if (global_text_written_in_function(base_sym->name, g_current_compiling_func))
+        return 0;
+
+    val_type = ast_member_field_value_type(member);
+    if (type_ptr_depth(val_type) == 0)
+        return 0;
+
+    *out_member = member;
+    *out_val_type = val_type;
+    return 1;
+}

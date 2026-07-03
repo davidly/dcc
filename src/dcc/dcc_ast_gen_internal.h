@@ -181,6 +181,7 @@ void gen_struct_deref_copy_assign_ast(const struct AstNode *n);
 void gen_struct_member_copy_assign_ast(const struct AstNode *n);
 void gen_member_addr_ast(const struct AstNode *n, int *out_val_type);
 void gen_member_ast(const struct AstNode *n);
+int ast_member_field_value_type(const struct AstNode *n);
 void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
                                  int *out_no_deref);
 void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type);

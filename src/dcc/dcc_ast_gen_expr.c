@@ -2918,6 +2918,24 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
     *out_val_type = val_type;
 }
 
+/* Look up a plain `BASE->FIELD` member node's value type without emitting
+ * anything - the same resolution gen_member_addr_ast's plain-identifier-base
+ * fallback performs (base symbol's type -> struct id -> field def). Used by
+ * ast_for_hoist_global_member_value_supported (dcc_ast_gen_support.c) to
+ * size the value-cache temp it allocates. Only meaningful for exactly the
+ * shape that predicate matches: n->a is a plain identifier. */
+int ast_member_field_value_type(const struct AstNode *n)
+{
+    struct Sym *s;
+    int sid;
+    struct FieldDef *fd;
+
+    s = find_sym(n->a->sval);
+    sid = base_struct_id_from_type(s->type);
+    fd = find_field_def(sid, n->sval);
+    return fd->is_array ? fd->elem_type : fd->type;
+}
+
 void gen_member_ast(const struct AstNode *n)
 {
     int val_type;

@@ -2786,6 +2786,16 @@ void parse_function_or_global(int base_type)
                 parse_old_style_param_declarations();
 
             if (tok.kind == '{') {
+                /* Set once here, covering both frame-sizing scan passes below
+                 * and the real codegen pass later in this same block, so a
+                 * hoist decision keyed on "am I compiling function X" (see
+                 * ast_for_hoist_global_member_value_supported) is identical
+                 * across all passes over this function - required for the
+                 * scan pass to reserve the same frame space the real pass
+                 * allocates. */
+                strncpy(g_current_compiling_func, name, sizeof(g_current_compiling_func) - 1);
+                g_current_compiling_func[sizeof(g_current_compiling_func) - 1] = 0;
+
                 record_inline_function_if_simple(s);
                 if (function_body_mentions_multiuse_inline_call())
                     reserve_inline_temp_locals();

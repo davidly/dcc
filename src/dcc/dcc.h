@@ -465,6 +465,14 @@ extern int  g_compound_literal_seq;
 extern int  g_licm_seq;
 void flush_pending_asm(void);
 
+/* ---- whole-file global-write pre-scan (dcc_global_scan.c) -------------- */
+extern char g_current_compiling_func[64];
+void scan_global_write_info(void);
+void reset_preproc_scan_state(void);
+int global_text_write_count(const char *name);
+int global_text_addr_taken_count(const char *name);
+int global_text_written_in_function(const char *name, const char *func);
+
 /* user-defined goto labels (function-scoped) */
 extern char ulabel_names[MAX_USER_LABELS][64];
 extern int  ulabel_ids[MAX_USER_LABELS];

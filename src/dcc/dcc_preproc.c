@@ -1370,6 +1370,25 @@ static void add_disabled_macro_range(long start, long end, const char *name)
     disabled_macro_name[i][sizeof(disabled_macro_name[i]) - 1] = 0;
 }
 
+/* Both disabled_macro_ranges (source-position-keyed, see above) and the
+ * push_macro/pop_macro stack are guaranteed empty before compilation ever
+ * starts, so a caller that tokenises the file once before real parsing
+ * begins (dcc_global_scan.c's whole-file pre-pass) can simply clear them
+ * back to that guaranteed-empty state afterward, rather than needing to
+ * snapshot and restore their prior contents like the (non-empty-capable)
+ * defs table. Position ranges recorded during a pre-pass are meaningless
+ * to the real pass regardless of whether `src` gets restored byte-for-byte
+ * afterward: expansion lengths differ across independent tokenisations, so
+ * the same absolute position can denote different text each time - a stale
+ * range left over from the pre-pass can spuriously suppress (or, in
+ * principle, fail to suppress) a real macro reference at a position that
+ * only accidentally collides with one from the earlier scan. */
+void reset_preproc_scan_state(void)
+{
+    ndisabled_macro_ranges = 0;
+    nmacro_push_stack = 0;
+}
+
 void replace_source_range(long start, long end, const char *text)
 {
     long n;

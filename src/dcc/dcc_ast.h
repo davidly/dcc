@@ -186,6 +186,18 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
                                                const struct AstNode **out_lhs,
                                                int *out_val_type);
 
+/* Detects a for-loop whose body's first statement reads a global's member
+ * value that is provably invariant across the whole file (via the
+ * dcc_global_scan.c whole-file write scan), even though the rest of the
+ * loop body is full of calls ordinary side-effect analysis can't see
+ * through (see dcc_ast_gen_support.c for the full shape and rationale -
+ * tests/cint.c's run() dispatch loop is the motivating case). Callable from
+ * ast_gen_for_stmt to decide whether to cache that value once before the
+ * loop instead of re-fetching it every iteration. */
+int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
+                                                  const struct AstNode **out_member,
+                                                  int *out_val_type);
+
 /* Copy a NUL-terminated string into the arena. */
 char *ast_arena_strdup(struct AstArena *ar, const char *s);
 
