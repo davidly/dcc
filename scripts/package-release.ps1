@@ -172,19 +172,48 @@ if (-not $InstallDir) {
     }
 }
 
-$installPath = [System.IO.Path]::GetFullPath($InstallDir)
-
-if (Test-Path -LiteralPath $installPath) {
-    Remove-Item -LiteralPath $installPath -Recurse -Force
-    Write-Host "Removed: $installPath"
+$installCandidates = @()
+if ($InstallDir) {
+    $installCandidates += [System.IO.Path]::GetFullPath($InstallDir)
 }
 else {
-    Write-Host "Install directory not found: $installPath"
+    $defaultInstallDir = if ($isWindowsHost) {
+        Join-Path $env:LOCALAPPDATA "dcc-cpm-z80"
+    } else {
+        Join-Path $HOME ".local/dcc-cpm-z80"
+    }
+    $installCandidates += [System.IO.Path]::GetFullPath($defaultInstallDir)
+
+    $legacyInstallDir = if ($isWindowsHost) {
+        Join-Path $env:LOCALAPPDATA "dcc"
+    } else {
+        Join-Path $HOME ".local/dcc"
+    }
+    $legacyInstallPath = [System.IO.Path]::GetFullPath($legacyInstallDir)
+    if ($installCandidates -notcontains $legacyInstallPath) {
+        $installCandidates += $legacyInstallPath
+    }
+}
+
+$removedAny = $false
+foreach ($installPath in $installCandidates) {
+    if (Test-Path -LiteralPath $installPath) {
+        Remove-Item -LiteralPath $installPath -Recurse -Force
+        Write-Host "Removed: $installPath"
+        $removedAny = $true
+    }
+}
+if (-not $removedAny) {
+    Write-Host "No install directory found. Checked: $($installCandidates -join ', ')"
 }
 
 if ($RemoveFromUserPath) {
     $separator = [System.IO.Path]::PathSeparator
-    $pathsToRemove = @((Join-Path $installPath "bin"), (Join-Path $installPath "scripts"))
+    $pathsToRemove = @()
+    foreach ($installPath in $installCandidates) {
+        $pathsToRemove += (Join-Path $installPath "bin")
+        $pathsToRemove += (Join-Path $installPath "scripts")
+    }
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $remainingEntries = @($currentPath -split [regex]::Escape($separator) |
         Where-Object { $_ -and ($pathsToRemove -notcontains $_) })
@@ -192,14 +221,21 @@ if ($RemoveFromUserPath) {
     Write-Host "User PATH entries removed. Restart your terminal for PATH changes to take effect."
 }
 
-$envVars = @{
-    DCC_HOME = $installPath
-    DCC_INCLUDE = (Join-Path $installPath "include")
-    DCC_LIB = ((Join-Path $installPath "lib"), $installPath -join [System.IO.Path]::PathSeparator)
-    DCC_RUNTIME = (Join-Path $installPath "lib/DCCRTL.MAC")
+$expectedEnvValues = @{
+    DCC_HOME = @()
+    DCC_INCLUDE = @()
+    DCC_LIB = @()
+    DCC_RUNTIME = @()
 }
-foreach ($entry in $envVars.GetEnumerator()) {
-    if ([Environment]::GetEnvironmentVariable($entry.Key, "User") -eq $entry.Value) {
+foreach ($installPath in $installCandidates) {
+    $expectedEnvValues.DCC_HOME += $installPath
+    $expectedEnvValues.DCC_INCLUDE += (Join-Path $installPath "include")
+    $expectedEnvValues.DCC_LIB += ((Join-Path $installPath "lib"), $installPath -join [System.IO.Path]::PathSeparator)
+    $expectedEnvValues.DCC_RUNTIME += (Join-Path $installPath "lib/DCCRTL.MAC")
+}
+foreach ($entry in $expectedEnvValues.GetEnumerator()) {
+    $currentValue = [Environment]::GetEnvironmentVariable($entry.Key, "User")
+    if ($entry.Value -contains $currentValue) {
         [Environment]::SetEnvironmentVariable($entry.Key, $null, "User")
         Write-Host "Removed user environment variable: $($entry.Key)"
     }
