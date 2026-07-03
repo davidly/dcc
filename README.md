@@ -1,4 +1,6 @@
 # dcc
+[![CI](https://github.com/davidly/dcc/actions/workflows/ci.yml/badge.svg)](https://github.com/davidly/dcc/actions/workflows/ci.yml)
+
 C compiler targeting CP/M 2.2 on a Z80
 
 The [dcc documentation](https://davidly.github.io/dcc/) covers all features, usage, and API reference.

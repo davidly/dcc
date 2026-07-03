@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Unit tests and extended suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout dcc
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout ntvcm emulator
+        uses: actions/checkout@v4
+        with:
+          repository: davidly/ntvcm
+          path: ntvcm
+
+      - name: Build ntvcm emulator
+        run: |
+          chmod +x ./m.sh
+          ./m.sh
+        working-directory: ntvcm
+
+      - name: Add tool directories to PATH
+        run: |
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
+
+      - name: Build dcc host tools
+        shell: pwsh
+        run: ./scripts/build-dcc.ps1
+
+      - name: Run unit tests and extended suite
+        shell: pwsh
+        run: ./scripts/runall.ps1 -Mode full -Extended
