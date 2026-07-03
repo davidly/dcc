@@ -228,44 +228,51 @@ void emit_mul_hl_const(long v)
         while (n-- > 0)
             emit("\tadd hl,hl\n");
     } else if (v == 3) {
-        emit("\tpush hl\n");
+        /* Save x in DE via two 8-bit register moves (8 cycles) rather than
+         * push/pop (21 cycles) - dccpeep's own pass_mulu_const peephole
+         * (which used to be what produced this exact shape, back when this
+         * constant went through a `call __mulu` for it to rewrite) already
+         * used ld d,h/ld e,l for precisely this reason. Matching it here
+         * means dcc's own codegen no longer regresses versus what dccpeep
+         * used to hand-optimize for the same constant. */
+        emit("\tld d,h\n");
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");
-        emit("\tpop de\n");
         emit("\tadd hl,de\n");
     } else if (v == 5) {
-        emit("\tpush hl\n");
+        emit("\tld d,h\n");
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");
         emit("\tadd hl,hl\n");
-        emit("\tpop de\n");
         emit("\tadd hl,de\n");
     } else if (v == 6) {
-        emit("\tpush hl\n");     /* save x */
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");   /* 2x */
         emit("\tadd hl,hl\n");   /* 4x */
-        emit("\tpop de\n");      /* x */
         emit("\tadd hl,de\n");   /* 5x */
         emit("\tadd hl,de\n");   /* 6x */
     } else if (v == 7) {
-        emit("\tpush hl\n");     /* save x */
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");   /* 2x */
         emit("\tadd hl,hl\n");   /* 4x */
         emit("\tadd hl,hl\n");   /* 8x */
-        emit("\tpop de\n");      /* x */
         emit("\tor a\n");
         emit("\tsbc hl,de\n");   /* 8x - x = 7x */
     } else if (v == 9) {
-        emit("\tpush hl\n");     /* save x */
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");   /* 2x */
         emit("\tadd hl,hl\n");   /* 4x */
         emit("\tadd hl,hl\n");   /* 8x */
-        emit("\tpop de\n");      /* x */
         emit("\tadd hl,de\n");   /* 9x */
     } else if (v == 10) {
-        emit("\tpush hl\n");     /* save x */
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");   /* 2x */
         emit("\tadd hl,hl\n");   /* 4x */
         emit("\tadd hl,hl\n");   /* 8x */
-        emit("\tpop de\n");      /* x */
         emit("\tadd hl,de\n");   /* 9x */
         emit("\tadd hl,de\n");   /* 10x */
     } else {
