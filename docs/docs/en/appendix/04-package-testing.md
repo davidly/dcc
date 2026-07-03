@@ -123,6 +123,88 @@ virsh list --all
 
 You should see `libvirt` and `kvm` in `groups`.
 
+## Resetting Guests with Snapshots
+
+Install each guest operating system once, apply guest OS updates and basic tools,
+then take a clean snapshot before installing any dcc package. Revert to that
+clean state before each package test so install, upgrade, and uninstall checks
+are repeatable.
+
+For guests managed by libvirt, such as the Linux x64 and Windows x64 examples,
+shut the guest down and create a snapshot:
+
+```sh
+virsh shutdown dcc-x64
+virsh snapshot-create-as dcc-x64 clean-install "Clean OS install before dcc package testing" --atomic
+virsh snapshot-list dcc-x64
+```
+
+For the Windows x64 guest, use the Windows domain name:
+
+```sh
+virsh shutdown dcc-windows-x64
+virsh snapshot-create-as dcc-windows-x64 clean-install "Clean OS install before dcc package testing" --atomic
+virsh snapshot-list dcc-windows-x64
+```
+
+To reset a libvirt guest to the clean state:
+
+```sh
+virsh shutdown dcc-x64
+virsh snapshot-revert dcc-x64 clean-install
+virsh start dcc-x64
+```
+
+Replace `dcc-x64` with `dcc-windows-x64` for the Windows x64 guest. If libvirt
+rejects a snapshot because of firmware or disk configuration, use the
+`virt-manager` Snapshots view for the same guest, or clone the qcow2 disk before
+package installation and copy it back when you need to reset.
+
+For direct QEMU guests, such as the Linux ARM64 and Windows ARM64 examples, use
+a clean base qcow2 image plus a disposable overlay. After the Linux ARM64 guest
+is installed and shut down, convert the installed disk into a base image and
+create a writable overlay using the original filename:
+
+```sh
+cd ~/VMs/dcc-arm64
+mv ubuntu-arm64.qcow2 ubuntu-arm64-base.qcow2
+qemu-img create -f qcow2 -F qcow2 -b ubuntu-arm64-base.qcow2 ubuntu-arm64.qcow2
+```
+
+To reset the Linux ARM64 guest, delete and recreate only the overlay:
+
+```sh
+cd ~/VMs/dcc-arm64
+rm -f ubuntu-arm64.qcow2
+qemu-img create -f qcow2 -F qcow2 -b ubuntu-arm64-base.qcow2 ubuntu-arm64.qcow2
+```
+
+The existing QEMU boot commands keep working because they still point at
+`ubuntu-arm64.qcow2`, which is now the disposable overlay.
+
+For Windows ARM64, preserve both the clean disk and the clean UEFI variables
+file after installation:
+
+```sh
+cd ~/VMs/dcc-windows-arm64
+cp AAVMF_VARS.fd AAVMF_VARS.clean.fd
+mv windows-arm64.qcow2 windows-arm64-base.qcow2
+qemu-img create -f qcow2 -F qcow2 -b windows-arm64-base.qcow2 windows-arm64.qcow2
+```
+
+To reset the Windows ARM64 guest:
+
+```sh
+cd ~/VMs/dcc-windows-arm64
+rm -f windows-arm64.qcow2 AAVMF_VARS.fd
+cp AAVMF_VARS.clean.fd AAVMF_VARS.fd
+qemu-img create -f qcow2 -F qcow2 -b windows-arm64-base.qcow2 windows-arm64.qcow2
+```
+
+For Apple Silicon package tests in Parallels, use Parallels snapshots. Take a
+snapshot after the clean macOS guest setup and before installing the dcc package,
+then revert that snapshot before each package test run.
+
 ## x64 Guest VM
 
 Download the x64 ISO:
