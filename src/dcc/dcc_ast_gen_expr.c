@@ -1043,6 +1043,11 @@ void gen_assign_ast(const struct AstNode *n)
         return;
     }
 
+    if (ast_is_byte_addr_copy_assign(n)) {
+        gen_byte_addr_copy_assign_ast(n);
+        return;
+    }
+
     if (ast_struct_copy_assign_supported(n)) {
         gen_struct_copy_assign_ast(n);
         return;
@@ -2801,6 +2806,37 @@ void gen_struct_member_copy_assign_ast(const struct AstNode *n)
     emit("\tex de,hl\n\tpop hl\n");
     emit_copy_de_to_hl_bytes(type_size(lhs_type));
     g_expr_type = lhs_type;
+    g_long_from16 = 0;
+}
+
+/* Emitter for ast_is_byte_addr_copy_assign: compute both addresses (lhs
+ * first, matching the generic non-identifier-lvalue assignment path's
+ * evaluation order just below in this file), then copy the single byte
+ * directly address-to-address - no promotion to int, no shuffling of the
+ * value itself through the stack, just `ld a,(hl)` / `ld (de),a`. */
+void gen_byte_addr_copy_assign_ast(const struct AstNode *n)
+{
+    int val_type;
+
+    if (n->a->kind == AST_INDEX)
+        gen_index_addr_ast(n->a, &val_type);   /* HL = destination address */
+    else if (n->a->kind == AST_MEMBER)
+        gen_member_addr_ast(n->a, &val_type);
+    else
+        gen_deref_addr_ast(n->a, &val_type);
+    emit("\tpush hl\n");
+
+    if (n->b->kind == AST_INDEX)
+        gen_index_addr_ast(n->b, &val_type);   /* HL = source address */
+    else if (n->b->kind == AST_MEMBER)
+        gen_member_addr_ast(n->b, &val_type);
+    else
+        gen_deref_addr_ast(n->b, &val_type);
+
+    emit("\tpop de\n");        /* DE = destination address, HL = source address */
+    emit("\tld a,(hl)\n");
+    emit("\tld (de),a\n");
+    g_expr_type = val_type;
     g_long_from16 = 0;
 }
 

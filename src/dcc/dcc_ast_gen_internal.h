@@ -110,6 +110,9 @@ int ast_struct_return_call_assign_supported(int lhs_type,
                                                   const struct AstNode *rhs);
 int ast_struct_deref_copy_assign_supported(const struct AstNode *n);
 int ast_struct_member_copy_assign_supported(const struct AstNode *n);
+int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type);
+int ast_is_byte_addr_copy_assign(const struct AstNode *n);
+void gen_byte_addr_copy_assign_ast(const struct AstNode *n);
 int ast_struct_addr_expr_supported(const struct AstNode *n, int *out_type);
 int ast_struct_copy_assign_supported(const struct AstNode *n);
 int ast_is_const_zero_condition(const struct AstNode *n);
