@@ -768,9 +768,11 @@ int int_log2_pow2(int v);
 void emit_arith_shift_right_hl_const(int count);
 void emit_logical_shift_right_hl_const(int count);
 void emit_and_hl_const(unsigned int mask);
+void emit_and_long_const(unsigned long mask);
 void divide_hl_by_elem_size(int elem);
 int emit_shift_const_long(int op, int lhs_type, long count);
 void emit_shift_loop(int op, int lhs_type);
+int emit_mul_pow2_long_const(long multiplier);
 void emit_float_compare_call(int op);
 void emit_test_expr_nonzero(int expr_type, int true_label, int branch_when_true);
 

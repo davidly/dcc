@@ -535,17 +535,72 @@ void gen_long_cmp_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* Extract the compile-time value of `n` when it is a bare integer literal or
+ * a cast directly wrapping one (e.g. `(long)128`, which parses as a CAST
+ * node over an INT_LIT rather than folding into a single long-typed
+ * literal). Declines (returns 0) for anything else: a multi-level cast or a
+ * cast of a non-literal might not be safe to fold without evaluating. */
+static int ast_const_int_operand_value(const struct AstNode *n, long *out)
+{
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_INT_LIT) {
+        *out = n->ival;
+        return 1;
+    }
+    if (n->kind == AST_CAST && n->a != NULL && n->a->kind == AST_INT_LIT) {
+        *out = n->a->ival;
+        return 1;
+    }
+    return 0;
+}
+
 void gen_long_arith_ast(const struct AstNode *n)
 {
     int lhs_type;
     int common_type;
     int lhs_from16;
     int rhs_from16;
+    long const_val;
 
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
     common_type = common_arith_type(lhs_type, n->peek_type);
     emit_cast_16_to_common(lhs_type, common_type);
+
+    /* `long_expr & <compile-time constant>`: the rhs is known at compile
+     * time, so there is nothing to evaluate and nothing that needs pushing
+     * through the stack. Any byte of the mask that is all-ones leaves the
+     * matching byte of the lhs untouched, any byte that is all-zero clears
+     * it outright, and only a genuinely mixed byte needs a real `and`. The
+     * generic path materializes the mask constant, pushes the lhs, pops it
+     * back, and ANDs four bytes through `ex de,hl` shuffling regardless of
+     * the mask's shape; skip all of that. This also covers the common
+     * byte-extraction idiom used to pull bytes out of a long
+     * (`(v >> 24) & 0xff`) and to zero-extend a narrower value into one
+     * (`(long)c & 0xffL`), where the mask is exactly a byte/word boundary. */
+    if (n->op == '&' && ast_const_int_operand_value(n->b, &const_val)) {
+        emit_and_long_const((unsigned long)const_val);
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* `long_expr * <compile-time power-of-two constant>`: strength-reduce to
+     * a shift instead of a call to __lmul. Byte-aligned shift counts reuse
+     * the same cheap register-move sequences as `<<`; any leftover sub-byte
+     * bits are a handful of unrolled `add hl,hl`/`rl e`/`rl d` steps, still
+     * far cheaper than the generic runtime multiply. Declines (returns 0)
+     * for non-power-of-two constants, 0, and 1, which fall through to the
+     * generic path below (0 and 1 are rare enough as literal long
+     * multipliers not to be worth special-casing separately). */
+    if (n->op == '*' && ast_const_int_operand_value(n->b, &const_val) &&
+        emit_mul_pow2_long_const(const_val)) {
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     lhs_from16 = g_long_from16;
     emit("\tpush de\n\tpush hl\n");
     ast_gen_expr(n->b);

@@ -547,6 +547,42 @@ void emit_and_hl_const(unsigned int mask)
     gen_binop('&');
 }
 
+/* AND one 16-bit register pair (hi_reg:lo_reg, e.g. 'd','e' or 'h','l') with
+ * a compile-time word mask in place, without a temporary register pair: a
+ * byte that is all-ones in the mask is left untouched, a byte that is
+ * all-zero collapses to a single immediate load, and anything else gets one
+ * immediate `and`. */
+static void emit_and_word_const(char hi_reg, char lo_reg, unsigned int word_mask)
+{
+    unsigned int hib = (word_mask >> 8) & 0xffU;
+    unsigned int lob = word_mask & 0xffU;
+
+    if (word_mask == 0xffffU)
+        return;
+    if (word_mask == 0) {
+        fprintf(outf, "\tld %c%c,0\n", hi_reg, lo_reg);
+        return;
+    }
+    if (hib == 0)
+        fprintf(outf, "\tld %c,0\n", hi_reg);
+    else if (hib != 0xffU)
+        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
+    if (lob == 0)
+        fprintf(outf, "\tld %c,0\n", lo_reg);
+    else if (lob != 0xffU)
+        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
+}
+
+/* AND the DE:HL long value (DE = high word, HL = low word) with a
+ * compile-time 32-bit mask in place. Used for `long_expr & <const>` so the
+ * mask never needs to be materialized into a register pair or pushed
+ * through the stack alongside the lhs. */
+void emit_and_long_const(unsigned long mask)
+{
+    emit_and_word_const('d', 'e', (unsigned int)((mask >> 16) & 0xffffUL));
+    emit_and_word_const('h', 'l', (unsigned int)(mask & 0xffffUL));
+}
+
 void divide_hl_by_elem_size(int elem)
 {
     int shift;
@@ -660,6 +696,62 @@ void emit_shift_loop(int op, int lhs_type)
     emit_label(ldone);
     if (type_is_long(lhs_type))
         g_long_from16 = 0;
+}
+
+/* log2 of a power-of-two value in the full unsigned 32-bit long range;
+ * int_log2_pow2 is restricted to the host `int` and cannot be trusted with
+ * values above INT_MAX (e.g. 0x80000000). Returns -1 if v is 0 or not a
+ * power of two. */
+static int ulong_log2_pow2(unsigned long v)
+{
+    int n;
+
+    if (v == 0 || (v & (v - 1)) != 0)
+        return -1;
+    n = 0;
+    while (v > 1) {
+        v >>= 1;
+        n++;
+    }
+    return n;
+}
+
+/* Strength-reduce `long_expr * <compile-time power-of-two constant>` into a
+ * left shift on the already-evaluated DE:HL value, with no push/pop and no
+ * __lmul call. Whole-byte shift counts reuse the exact register-move
+ * sequences emit_shift_const_long uses for `<<`; any remaining 0-7 bits are
+ * unrolled `add hl,hl`/`rl e`/`rl d` steps (cheap and known at compile time,
+ * so an actual runtime loop would only add overhead). Returns 0 (and emits
+ * nothing) for multipliers that are not an exact power of two, leaving the
+ * caller to fall back to the generic path; 0 and 1 are treated as "not a
+ * useful shift" for the same reason. */
+int emit_mul_pow2_long_const(long multiplier)
+{
+    int shift;
+    int bytes;
+    int bits;
+
+    shift = ulong_log2_pow2((unsigned long)multiplier);
+    if (shift <= 0)
+        return 0;
+
+    if (shift >= 32) {
+        emit("\tld hl,0\n\tld de,0\n");
+        return 1;
+    }
+
+    bytes = shift / 8;
+    bits = shift % 8;
+
+    switch (bytes) {
+    case 1: emit("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"); break;
+    case 2: emit("\tld e,l\n\tld d,h\n\tld hl,0\n"); break;
+    case 3: emit("\tld d,l\n\tld e,0\n\tld hl,0\n"); break;
+    default: break;
+    }
+    while (bits-- > 0)
+        emit("\tadd hl,hl\n\trl e\n\trl d\n");
+    return 1;
 }
 
 void emit_float_compare_call(int op)
