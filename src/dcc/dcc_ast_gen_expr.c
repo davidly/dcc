@@ -2876,10 +2876,21 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
     } else {
         s = find_sym(n->a->sval);
         cur_type = s->type;
-        emit_load_sym_addr(s);
-
-        if (arrow)
-            emit_load_from_hl(cur_type);
+        /* Mirrors gen_deref_addr_ast's identical fast path for plain `*p`:
+         * a `->` access needs the POINTER VARIABLE'S VALUE, not its own
+         * address, so for a plain ix-direct local/param or global-word
+         * symbol, load that value directly (`ld hl,(name)` for a global -
+         * one instruction - or the equivalent direct ix-relative load for a
+         * local) instead of computing &s and then dereferencing it, which
+         * is the correct-but-needlessly-expensive general path required
+         * only when s has no direct load form at all. */
+        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s))) {
+            emit_load_sym_value_direct(s);
+        } else {
+            emit_load_sym_addr(s);
+            if (arrow)
+                emit_load_from_hl(cur_type);
+        }
     }
 
     sid = base_struct_id_from_type(cur_type);
