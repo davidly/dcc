@@ -12,11 +12,11 @@ pushd src/dcc
 popd
 
 echo "Building dccpeep..."
-gcc -O2 -o dccpeep src/dccpeep/dccpeep.c -static
+gcc -O2 -o dccpeep src/dccpeep/dccpeep.c
 # cp dccpeep /mnt/c/users/david/onedrive/ntvcm/dcc
 
 echo "Building dccrtlstrip..."
-gcc -O2 -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c -static
+gcc -O2 -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c
 # cp dccrtlstrip /mnt/c/users/david/onedrive/ntvcm/dcc
 
 echo "Done."
