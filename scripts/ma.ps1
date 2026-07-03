@@ -181,10 +181,18 @@ function Invoke-MaBuild {
         New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
     }
 
+    $assetRoots = @((Get-Location).Path)
+    $scriptAssetRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
+    if ($assetRoots -notcontains $scriptAssetRoot) { $assetRoots += $scriptAssetRoot }
+
     # Stage tool COM files
     foreach ($toolFile in @("m80.com", "l80.com")) {
-        if (Test-Path $toolFile) {
-            Copy-Item -Path $toolFile -Destination (Join-Path $BuildDir $toolFile) -Force -ErrorAction SilentlyContinue
+        foreach ($assetRoot in $assetRoots) {
+            $toolPath = Join-Path $assetRoot $toolFile
+            if (Test-Path $toolPath) {
+                Copy-Item -Path $toolPath -Destination (Join-Path $BuildDir $toolFile) -Force -ErrorAction SilentlyContinue
+                break
+            }
         }
     }
 
@@ -196,10 +204,17 @@ function Invoke-MaBuild {
     $rtlSrc = Join-Path $BuildDir "DCCRTL.MAC"
     $rtlMin = Join-Path $BuildDir "RTLMIN.MAC"
     $rtlMinRel = Join-Path $BuildDir "RTLMIN.REL"
-    $rootRtlSrc = "DCCRTL.MAC"
+    $rootRtlSrc = $null
+    foreach ($assetRoot in $assetRoots) {
+        $candidateRtlSrc = Join-Path $assetRoot "DCCRTL.MAC"
+        if (Test-Path $candidateRtlSrc) {
+            $rootRtlSrc = $candidateRtlSrc
+            break
+        }
+    }
 
-    if (-not (Test-Path $rootRtlSrc)) {
-        Write-BuildError "Runtime not found: $rootRtlSrc"
+    if (-not $rootRtlSrc) {
+        Write-BuildError "Runtime not found: DCCRTL.MAC"
         return $false
     }
 

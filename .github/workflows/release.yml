@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+            archive: zip
+            ntvcm: ntvcm.exe
+          - target: windows-arm64
+            os: windows-11-arm
+            archive: zip
+            ntvcm: ntvcm.exe
+          - target: linux-x64
+            os: ubuntu-24.04
+            archive: tar.gz
+            ntvcm: ntvcm
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+            ntvcm: ntvcm
+          - target: macos-apple-silicon
+            os: macos-15
+            archive: tar.gz
+            ntvcm: ntvcm
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      PACKAGE_NAME: dcc-4-cpm-z80-${{ github.event.inputs.version || github.ref_name }}-${{ matrix.target }}
+    steps:
+      - name: Checkout dcc
+        uses: actions/checkout@v4
+
+      - name: Checkout ntvcm emulator
+        uses: actions/checkout@v4
+        with:
+          repository: davidly/ntvcm
+          path: ntvcm
+
+      - name: Build ntvcm emulator on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ntvcm
+        run: |
+          cl /nologo ntvcm.cxx x80.cxx /I. /GS- /GL /Oti2 /Ob3 /EHsc /Zi /link user32.lib /OPT:REF /OUT:ntvcm.exe
+
+      - name: Build ntvcm emulator on Linux
+        if: runner.os == 'Linux'
+        working-directory: ntvcm
+        run: |
+          g++ -O3 -fno-builtin -D NDEBUG -I . ntvcm.cxx x80.cxx -o ntvcm -static
+
+      - name: Build ntvcm emulator on macOS
+        if: runner.os == 'macOS'
+        working-directory: ntvcm
+        run: |
+          clang++ -O3 -fno-builtin -D NDEBUG -I . ntvcm.cxx x80.cxx -o ntvcm
+
+      - name: Build dcc host tools
+        shell: pwsh
+        run: ./scripts/build-dcc.ps1
+
+      - name: Package release directory
+        shell: pwsh
+        run: |
+          ./scripts/package-release.ps1 `
+            -PackageName "$env:PACKAGE_NAME" `
+            -NtvcmPath "ntvcm/${{ matrix.ntvcm }}" `
+            -OutputDir dist `
+            -Version "$env:RELEASE_VERSION"
+
+      - name: Create zip archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/$env:PACKAGE_NAME" -DestinationPath "dist/$env:PACKAGE_NAME.zip" -Force
+
+      - name: Create tar.gz archive
+        if: matrix.archive == 'tar.gz'
+        run: tar -czf "dist/$PACKAGE_NAME.tar.gz" -C dist "$PACKAGE_NAME"
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: dist/${{ env.PACKAGE_NAME }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          name: dcc ${{ github.event.inputs.version || github.ref_name }}
+          files: release-assets/*
+          generate_release_notes: true
