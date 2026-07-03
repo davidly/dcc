@@ -238,6 +238,28 @@ void emit_mul_hl_const(long v)
         emit("\tadd hl,hl\n");
         emit("\tpop de\n");
         emit("\tadd hl,de\n");
+    } else if (v == 6) {
+        emit("\tpush hl\n");     /* save x */
+        emit("\tadd hl,hl\n");   /* 2x */
+        emit("\tadd hl,hl\n");   /* 4x */
+        emit("\tpop de\n");      /* x */
+        emit("\tadd hl,de\n");   /* 5x */
+        emit("\tadd hl,de\n");   /* 6x */
+    } else if (v == 7) {
+        emit("\tpush hl\n");     /* save x */
+        emit("\tadd hl,hl\n");   /* 2x */
+        emit("\tadd hl,hl\n");   /* 4x */
+        emit("\tadd hl,hl\n");   /* 8x */
+        emit("\tpop de\n");      /* x */
+        emit("\tor a\n");
+        emit("\tsbc hl,de\n");   /* 8x - x = 7x */
+    } else if (v == 9) {
+        emit("\tpush hl\n");     /* save x */
+        emit("\tadd hl,hl\n");   /* 2x */
+        emit("\tadd hl,hl\n");   /* 4x */
+        emit("\tadd hl,hl\n");   /* 8x */
+        emit("\tpop de\n");      /* x */
+        emit("\tadd hl,de\n");   /* 9x */
     } else if (v == 10) {
         emit("\tpush hl\n");     /* save x */
         emit("\tadd hl,hl\n");   /* 2x */
@@ -488,8 +510,14 @@ void scale_hl_by_elem_size(int elem)
         return;
     }
 
-    fprintf(outf, "\tld de,%d\n", elem);
-    emit_runtime_call("__mulu");
+    /* Not a power of two: emit_mul_hl_const already knows cheap shift/add
+     * sequences for a handful of small constants (3,5,6,7,9,10 - exactly
+     * the row/element strides a 2- or 3-column int/char array or a small
+     * struct produces) and falls back to __mulu itself for anything else,
+     * so delegating here gives every array-index and pointer-arithmetic
+     * scaling call site (there are over a dozen) the same fast paths for
+     * free instead of duplicating them. */
+    emit_mul_hl_const(elem);
 }
 
 int int_log2_pow2(int v)

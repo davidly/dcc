@@ -170,8 +170,8 @@ int ast_field_array_index_stride(int base_size, int dim_count,
 int ast_mul_const_value_ok(long v)
 {
     long m = v & 0xffffL;
-    return m == 0 || m == 1 || m == 3 || m == 5 || m == 10 ||
-           int_log2_pow2((int)m) >= 0;
+    return m == 0 || m == 1 || m == 3 || m == 5 || m == 6 || m == 7 ||
+           m == 9 || m == 10 || int_log2_pow2((int)m) >= 0;
 }
 
 /* Conservative: returns 1 only when the node is CERTAIN to evaluate to a plain
