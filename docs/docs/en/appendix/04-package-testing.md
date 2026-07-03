@@ -70,12 +70,12 @@ ARM64 package.
 - macOS `.pkg`: installs to `/usr/local/dcc-4-cpm-z80` and creates command
   links in `/usr/local/bin`.
 - Windows `.msi`: rebuilt MSI packages add `%ProgramFiles%\dcc-4-cpm-z80\bin`
-  and `%ProgramFiles%\dcc-4-cpm-z80\scripts` to the machine `Path`. Restart the
+  and `%ProgramFiles%\dcc-4-cpm-z80\scripts` to the user `Path`. Restart the
   terminal after install so it sees the updated environment.
 - Windows `.zip`: `pwsh ./install.ps1 -AddToUserPath` adds the package `bin`
   and `scripts` directories to the user `Path`.
 
-The `v2.0.0` Windows MSI assets add the package directories to the machine
+The `v2.0.0` Windows MSI assets add the package directories to the user
 `Path`. If the current PowerShell session was already open before installation,
 prepend the paths before testing or open a new terminal:
 
@@ -122,6 +122,10 @@ virsh list --all
 ```
 
 You should see `libvirt` and `kvm` in `groups`.
+
+Libvirt system VMs run as the `libvirt-qemu` user, which usually cannot traverse
+your home directory. For `virt-install` guests, stage ISO files and VM disks
+under `/var/lib/libvirt/images` instead of `$HOME` to avoid permission failures.
 
 ## Resetting Guests with Snapshots
 
@@ -182,12 +186,13 @@ qemu-img create -f qcow2 -F qcow2 -b ubuntu-arm64-base.qcow2 ubuntu-arm64.qcow2
 The existing QEMU boot commands keep working because they still point at
 `ubuntu-arm64.qcow2`, which is now the disposable overlay.
 
-For Windows ARM64, preserve both the clean disk and the clean UEFI variables
-file after installation:
+For Windows ARM64, preserve the clean disk, UEFI variables file, and TPM state
+after installation:
 
 ```sh
 cd ~/VMs/dcc-windows-arm64
 cp AAVMF_VARS.fd AAVMF_VARS.clean.fd
+cp -a tpm tpm.clean
 mv windows-arm64.qcow2 windows-arm64-base.qcow2
 qemu-img create -f qcow2 -F qcow2 -b windows-arm64-base.qcow2 windows-arm64.qcow2
 ```
@@ -196,8 +201,9 @@ To reset the Windows ARM64 guest:
 
 ```sh
 cd ~/VMs/dcc-windows-arm64
-rm -f windows-arm64.qcow2 AAVMF_VARS.fd
+rm -rf windows-arm64.qcow2 AAVMF_VARS.fd tpm
 cp AAVMF_VARS.clean.fd AAVMF_VARS.fd
+cp -a tpm.clean tpm
 qemu-img create -f qcow2 -F qcow2 -b windows-arm64-base.qcow2 windows-arm64.qcow2
 ```
 
@@ -218,14 +224,15 @@ wget https://releases.ubuntu.com/24.04/ubuntu-24.04.4-live-server-amd64.iso
 Create the VM with `virt-install`:
 
 ```sh
-mkdir -p ~/VMs/dcc-x64
+sudo cp -n ~/Downloads/isos/ubuntu-24.04.4-live-server-amd64.iso /var/lib/libvirt/images/
+sudo chmod 0644 /var/lib/libvirt/images/ubuntu-24.04.4-live-server-amd64.iso
 virt-install \
   --name dcc-x64 \
   --memory 4096 \
   --vcpus 12 \
   --cpu host \
-  --disk path=$HOME/VMs/dcc-x64/ubuntu-x64.qcow2,size=30,bus=virtio,format=qcow2 \
-  --cdrom $HOME/Downloads/isos/ubuntu-24.04.4-live-server-amd64.iso \
+  --disk path=/var/lib/libvirt/images/dcc-x64.qcow2,size=30,bus=virtio,format=qcow2 \
+  --cdrom /var/lib/libvirt/images/ubuntu-24.04.4-live-server-amd64.iso \
   --os-variant ubuntu24.04 \
   --network network=default,model=virtio \
   --graphics spice \
@@ -246,19 +253,8 @@ Download the x64 package inside the guest:
 wget https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-x64.deb
 ```
 
-Install PowerShell in the guest. `dcc`, `dccpeep`, and `ntvcm` are native
-binaries, but `dcc-ma` invokes `scripts/ma.ps1`, so package smoke tests need
-`pwsh`:
-
-```sh
-sudo apt update
-sudo apt install -y wget apt-transport-https software-properties-common
-source /etc/os-release
-wget -q https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb
-sudo dpkg -i packages-microsoft-prod.deb
-sudo apt update
-sudo apt install -y powershell
-```
+The Linux package uses native binaries and a native `scripts/ma.sh` build
+driver, so package smoke tests do not require PowerShell.
 
 Install the package:
 
@@ -369,17 +365,8 @@ Or download it directly inside the guest:
 wget https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-arm64.deb
 ```
 
-Install PowerShell inside the ARM64 guest:
-
-```sh
-sudo apt update
-sudo apt install -y wget apt-transport-https software-properties-common
-source /etc/os-release
-wget -q https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb
-sudo dpkg -i packages-microsoft-prod.deb
-sudo apt update
-sudo apt install -y powershell
-```
+The ARM64 Linux package uses native binaries and a native `scripts/ma.sh` build
+driver, so package smoke tests do not require PowerShell.
 
 Install the ARM64 package:
 
@@ -417,13 +404,15 @@ mv ~/Downloads/isos/Win11*_x64*.iso ~/Downloads/isos/Win11_x64.iso
 Create the VM with UEFI and TPM 2.0 enabled:
 
 ```sh
+sudo cp -n ~/Downloads/isos/Win11_x64.iso /var/lib/libvirt/images/
+sudo chmod 0644 /var/lib/libvirt/images/Win11_x64.iso
 virt-install \
   --name dcc-windows-x64 \
   --memory 8192 \
   --vcpus 12 \
   --cpu host \
-  --disk path=$HOME/VMs/dcc-windows-x64/windows-x64.qcow2,size=80,bus=sata,format=qcow2 \
-  --cdrom $HOME/Downloads/isos/Win11_x64.iso \
+  --disk path=/var/lib/libvirt/images/dcc-windows-x64.qcow2,size=80,bus=sata,format=qcow2 \
+  --cdrom /var/lib/libvirt/images/Win11_x64.iso \
   --os-variant win11 \
   --network network=default,model=e1000e \
   --graphics spice \
@@ -483,8 +472,29 @@ commands below use `Win11_ARM64.iso` as a local rename.
 ```sh
 mkdir -p ~/Downloads/isos ~/VMs/dcc-windows-arm64
 mv ~/Downloads/isos/Win11*_ARM64*.iso ~/Downloads/isos/Win11_ARM64.iso
-cp /usr/share/AAVMF/AAVMF_VARS.fd ~/VMs/dcc-windows-arm64/AAVMF_VARS.fd
+cp /usr/share/AAVMF/AAVMF_VARS.ms.fd ~/VMs/dcc-windows-arm64/AAVMF_VARS.fd
 qemu-img create -f qcow2 ~/VMs/dcc-windows-arm64/windows-arm64.qcow2 80G
+```
+
+Windows 11 requires TPM 2.0 and Secure Boot. The `AAVMF_CODE.secboot.fd` firmware
+and `AAVMF_VARS.ms.fd` variables file provide Secure Boot with Microsoft keys.
+Start a software TPM before booting the installer:
+
+```sh
+mkdir -p ~/VMs/dcc-windows-arm64/tpm
+rm -f ~/VMs/dcc-windows-arm64/swtpm-sock
+swtpm socket \
+  --tpm2 \
+  --tpmstate dir=$HOME/VMs/dcc-windows-arm64/tpm \
+  --ctrl type=unixio,path=$HOME/VMs/dcc-windows-arm64/swtpm-sock \
+  --daemon
+```
+
+If you already booted with `AAVMF_VARS.fd` and saw the Windows requirements
+screen, shut down QEMU and replace the variables file before retrying:
+
+```sh
+cp /usr/share/AAVMF/AAVMF_VARS.ms.fd ~/VMs/dcc-windows-arm64/AAVMF_VARS.fd
 ```
 
 Boot the installer:
@@ -495,13 +505,16 @@ qemu-system-aarch64 \
   -cpu max \
   -smp 12 \
   -m 8192 \
-  -drive if=pflash,format=raw,readonly=on,file=/usr/share/AAVMF/AAVMF_CODE.fd \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/AAVMF/AAVMF_CODE.secboot.fd \
   -drive if=pflash,format=raw,file=$HOME/VMs/dcc-windows-arm64/AAVMF_VARS.fd \
+  -chardev socket,id=chrtpm,path=$HOME/VMs/dcc-windows-arm64/swtpm-sock \
+  -tpmdev emulator,id=tpm0,chardev=chrtpm \
+  -device tpm-tis-device,tpmdev=tpm0 \
   -drive if=none,id=system,file=$HOME/VMs/dcc-windows-arm64/windows-arm64.qcow2,format=qcow2 \
   -device nvme,drive=system,serial=dccwinarm64 \
   -drive if=none,id=install,media=cdrom,readonly=on,file=$HOME/Downloads/isos/Win11_ARM64.iso \
-  -device usb-storage,drive=install \
   -device qemu-xhci \
+  -device usb-storage,drive=install \
   -device usb-kbd \
   -device usb-tablet \
   -device ramfb \
@@ -511,7 +524,7 @@ qemu-system-aarch64 \
 ```
 
 After installation, boot from disk with the same command but omit the `install`
-drive and `usb-storage` lines.
+drive and `usb-storage` lines. Start `swtpm` first if it is not already running.
 
 Inside the Windows ARM64 guest, install PowerShell 7 if needed, then install the
 ARM64 MSI:
@@ -565,7 +578,7 @@ EOF
 Build it with the installed helper:
 
 ```sh
-dcc-ma hello -SourcePath ./hello.c -Mode fast
+dcc-ma hello --source-path ./hello.c --mode fast
 ```
 
 Run the generated CP/M program:
@@ -585,7 +598,8 @@ Also verify the package files are where the installer expects them:
 ```sh
 ls -l /opt/dcc-4-cpm-z80
 ls -l /opt/dcc-4-cpm-z80/bin
-ls -l /opt/dcc-4-cpm-z80/scripts/ma.ps1
+ls -l /opt/dcc-4-cpm-z80/scripts/ma.sh /opt/dcc-4-cpm-z80/scripts/ma.ps1
+ls -l /opt/dcc-4-cpm-z80/dcc-env.sh
 ls -l /opt/dcc-4-cpm-z80/DCCRTL.MAC /opt/dcc-4-cpm-z80/m80.com /opt/dcc-4-cpm-z80/l80.com
 ```
 
@@ -684,6 +698,7 @@ Test-Path "$env:ProgramFiles\dcc-4-cpm-z80"
 - The `.deb` package installs under `/opt/dcc-4-cpm-z80` and places command
   links in `/usr/bin`.
 - The Windows MSI installs under `%ProgramFiles%\dcc-4-cpm-z80`.
-- `dcc-ma` requires PowerShell 7 because it wraps `scripts/ma.ps1`.
+- On Linux and macOS, `dcc-ma` wraps the native `scripts/ma.sh` helper.
+- On Windows, use `ma.ps1` through PowerShell 7.
 - The portable `.tar.gz` packages can be tested without root by extracting them
   and running `./install.sh` with custom `PREFIX` and `LINK_DIR` values.

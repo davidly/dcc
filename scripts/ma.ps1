@@ -52,6 +52,10 @@ parameters below are forwarded to Invoke-MaBuild.
     NTVCM            emulator (default: "ntvcm")
     M80              assembler (default: "m80")
     L80              linker (default: "l80")
+    DCC_HOME         dcc package/install root; used to find include/, lib/, and CP/M tools
+    DCC_INCLUDE      additional dcc include directories, separated by the host path separator
+    DCC_LIB          additional runtime/tool asset roots, separated by the host path separator
+    DCC_RUNTIME      explicit path to DCCRTL.MAC
     DCC_STACK_SIZE   C stack reserve in bytes (default: 512)
     DCC_FORCE_STACK_CHECK  enable -fstack-check for all apps
 #>
@@ -176,14 +180,69 @@ function Invoke-MaBuild {
     $L80 = $env:L80 -replace '^\s+|\s+$', ''
     if (-not $L80) { $L80 = "l80" }
 
+    function Add-UniquePath {
+        param(
+            [System.Collections.Generic.List[string]]$List,
+            [string]$Path
+        )
+
+        $trimmedPath = $Path -replace '^\s+|\s+$', ''
+        if (-not $trimmedPath) { return }
+
+        $resolvedPath = $trimmedPath
+        if (Test-Path -LiteralPath $trimmedPath) {
+            $resolvedPath = (Resolve-Path -LiteralPath $trimmedPath).ProviderPath
+        }
+
+        if (-not $List.Contains($resolvedPath)) {
+            $List.Add($resolvedPath) | Out-Null
+        }
+    }
+
+    function Add-PathList {
+        param(
+            [System.Collections.Generic.List[string]]$List,
+            [string]$Paths
+        )
+
+        if (-not $Paths) { return }
+        foreach ($pathEntry in @($Paths -split [regex]::Escape([System.IO.Path]::PathSeparator))) {
+            Add-UniquePath -List $List -Path $pathEntry
+        }
+    }
+
     # Ensure build directory exists
     if (-not (Test-Path $BuildDir -PathType Container)) {
         New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
     }
 
-    $assetRoots = @((Get-Location).Path)
+    $assetRoots = [System.Collections.Generic.List[string]]::new()
+    Add-UniquePath -List $assetRoots -Path (Get-Location).Path
+
+    $dccHome = $env:DCC_HOME -replace '^\s+|\s+$', ''
+    if ($dccHome) {
+        Add-UniquePath -List $assetRoots -Path $dccHome
+        Add-UniquePath -List $assetRoots -Path (Join-Path $dccHome "lib")
+    }
+
+    Add-PathList -List $assetRoots -Paths $env:DCC_LIB
+
     $scriptAssetRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
-    if ($assetRoots -notcontains $scriptAssetRoot) { $assetRoots += $scriptAssetRoot }
+    Add-UniquePath -List $assetRoots -Path $scriptAssetRoot
+    Add-UniquePath -List $assetRoots -Path (Join-Path $scriptAssetRoot "lib")
+
+    $includeDirs = [System.Collections.Generic.List[string]]::new()
+    Add-PathList -List $includeDirs -Paths $env:DCC_INCLUDE
+    if ($dccHome) { Add-UniquePath -List $includeDirs -Path (Join-Path $dccHome "include") }
+    foreach ($assetRoot in $assetRoots) {
+        $candidateIncludeDir = Join-Path $assetRoot "include"
+        if (Test-Path -LiteralPath $candidateIncludeDir -PathType Container) {
+            Add-UniquePath -List $includeDirs -Path $candidateIncludeDir
+        }
+        elseif (Test-Path -LiteralPath (Join-Path $assetRoot "stdio.h") -PathType Leaf) {
+            Add-UniquePath -List $includeDirs -Path $assetRoot
+        }
+    }
 
     # Stage tool COM files
     foreach ($toolFile in @("m80.com", "l80.com")) {
@@ -205,11 +264,25 @@ function Invoke-MaBuild {
     $rtlMin = Join-Path $BuildDir "RTLMIN.MAC"
     $rtlMinRel = Join-Path $BuildDir "RTLMIN.REL"
     $rootRtlSrc = $null
-    foreach ($assetRoot in $assetRoots) {
-        $candidateRtlSrc = Join-Path $assetRoot "DCCRTL.MAC"
-        if (Test-Path $candidateRtlSrc) {
-            $rootRtlSrc = $candidateRtlSrc
-            break
+
+    $explicitRuntime = $env:DCC_RUNTIME -replace '^\s+|\s+$', ''
+    if ($explicitRuntime) {
+        if (Test-Path -LiteralPath $explicitRuntime -PathType Leaf) {
+            $rootRtlSrc = (Resolve-Path -LiteralPath $explicitRuntime).ProviderPath
+        }
+        else {
+            Write-BuildError "Runtime not found from DCC_RUNTIME: $explicitRuntime"
+            return $false
+        }
+    }
+
+    if (-not $rootRtlSrc) {
+        foreach ($assetRoot in $assetRoots) {
+            $candidateRtlSrc = Join-Path $assetRoot "DCCRTL.MAC"
+            if (Test-Path $candidateRtlSrc) {
+                $rootRtlSrc = $candidateRtlSrc
+                break
+            }
         }
     }
 
@@ -251,6 +324,7 @@ function Invoke-MaBuild {
     $dccArgs = @($dccStackChk, "-stack", $dccStackSize)
     if ($dccFloatio -eq 1) { $dccArgs += "-ffloatio" }
     if ($dccLongio  -eq 1) { $dccArgs += "-flongio"  }
+    foreach ($includeDir in $includeDirs) { $dccArgs += @("-I", $includeDir) }
     $dccArgs += @($sourceFile, "-o", $appMac)
 
     Write-Step "  Compiling with: $DCC $($dccArgs -join ' ')"

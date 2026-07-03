@@ -9,14 +9,25 @@ commands below work from any folder that holds your `.c` sources.
 
 ## The build script
 
-The primary build command is the cross-platform `scripts/ma.ps1` script. It
-compiles, optimizes, strips the runtime, assembles, and links in one step. From
-your operating-system terminal or the VS Code terminal, change to the dcc
-checkout, start PowerShell, and run the script there:
+The primary build command is the `ma` build driver. It compiles, optimizes,
+strips the runtime, assembles, and links in one step.
+
+On Linux and macOS packages, use the native shell wrapper:
+
+```sh
+dcc-ma foo --mode fast       # builds foo.c -> FOO.COM
+dcc-ma foo --mode nopeep     # skip the dccpeep optimizer
+```
+
+From a source checkout or portable package, run the script directly:
+
+```sh
+./scripts/ma.sh foo --mode fast
+```
+
+On Windows, use the PowerShell driver:
 
 ```pwsh
-cd /path/to/dcc
-pwsh
 ./scripts/ma.ps1 foo -Mode fast    # builds foo.c -> FOO.COM
 ./scripts/ma.ps1 foo -Mode nopeep  # skip the dccpeep optimizer
 ```

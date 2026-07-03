@@ -79,7 +79,7 @@ foreach ($header in $headers) {
     Copy-RequiredFile -Source (Join-Path $repoRoot $header) -Destination (Join-Path $includeDir $header)
 }
 
-$helperScripts = @("ma.ps1", "stacksize.sh", "stacksize.bat", "README.md")
+$helperScripts = @("ma.ps1", "ma.sh", "stacksize.sh", "stacksize.bat", "README.md")
 foreach ($script in $helperScripts) {
     Copy-RequiredFile -Source (Join-Path $repoRoot "scripts/$script") -Destination (Join-Path $scriptsDir $script)
 }
@@ -138,9 +138,15 @@ if ($AddToUserPath) {
     [Environment]::SetEnvironmentVariable("Path", ($currentEntries -join $separator), "User")
 }
 
+[Environment]::SetEnvironmentVariable("DCC_HOME", $installPath, "User")
+[Environment]::SetEnvironmentVariable("DCC_INCLUDE", (Join-Path $installPath "include"), "User")
+[Environment]::SetEnvironmentVariable("DCC_LIB", ((Join-Path $installPath "lib"), $installPath -join [System.IO.Path]::PathSeparator), "User")
+[Environment]::SetEnvironmentVariable("DCC_RUNTIME", (Join-Path $installPath "lib/DCCRTL.MAC"), "User")
+
 Write-Host "dcc installed to: $installPath"
 Write-Host "Tools: $installPath/bin"
 Write-Host "PowerShell helpers: $installPath/scripts"
+Write-Host "User environment variables set: DCC_HOME, DCC_INCLUDE, DCC_LIB, DCC_RUNTIME"
 if ($AddToUserPath) {
     Write-Host "User PATH updated. Restart your terminal for PATH changes to take effect."
 }
@@ -185,6 +191,19 @@ if ($RemoveFromUserPath) {
     [Environment]::SetEnvironmentVariable("Path", ($remainingEntries -join $separator), "User")
     Write-Host "User PATH entries removed. Restart your terminal for PATH changes to take effect."
 }
+
+$envVars = @{
+    DCC_HOME = $installPath
+    DCC_INCLUDE = (Join-Path $installPath "include")
+    DCC_LIB = ((Join-Path $installPath "lib"), $installPath -join [System.IO.Path]::PathSeparator)
+    DCC_RUNTIME = (Join-Path $installPath "lib/DCCRTL.MAC")
+}
+foreach ($entry in $envVars.GetEnumerator()) {
+    if ([Environment]::GetEnvironmentVariable($entry.Key, "User") -eq $entry.Value) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $null, "User")
+        Write-Host "Removed user environment variable: $($entry.Key)"
+    }
+}
 '@
 
 $installSh = @'
@@ -205,6 +224,14 @@ mkdir -p "$PREFIX"
     tar -xpf -
 )
 
+cat > "$PREFIX/dcc-env.sh" <<EOF
+# dcc 4 CP/M Z80 package environment
+export DCC_HOME="$PREFIX"
+export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
+export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
+export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
+EOF
+
 mkdir -p "$LINK_DIR"
 for tool in dcc dccpeep dccrtlstrip ntvcm; do
     if [ -f "$PREFIX/bin/$tool" ]; then
@@ -214,14 +241,20 @@ done
 
 cat > "$LINK_DIR/dcc-ma" <<EOF
 #!/usr/bin/env sh
-exec pwsh "$PREFIX/scripts/ma.ps1" "\$@"
+export DCC_HOME="$PREFIX"
+export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
+export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
+export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
+exec "$PREFIX/scripts/ma.sh" "\$@"
 EOF
 chmod +x "$LINK_DIR/dcc-ma"
 
 echo "dcc installed to: $PREFIX"
 echo "Command links written to: $LINK_DIR"
-echo "PowerShell helper scripts are in: $PREFIX/scripts"
-echo "Use dcc-ma as a convenience wrapper for scripts/ma.ps1."
+echo "Helper scripts are in: $PREFIX/scripts"
+echo "Package environment file written to: $PREFIX/dcc-env.sh"
+echo "Source it with: . $PREFIX/dcc-env.sh"
+echo "Use dcc-ma as a convenience wrapper for scripts/ma.sh."
 '@
 
 $uninstallSh = @'
@@ -248,6 +281,7 @@ Write-PackageTextFile -Path (Join-Path $packageRoot "install.sh") -Content $inst
 Write-PackageTextFile -Path (Join-Path $packageRoot "uninstall.sh") -Content $uninstallSh
 if (-not $IsWindows) {
     & chmod +x (Join-Path $packageRoot "install.sh") (Join-Path $packageRoot "uninstall.sh")
+    & chmod +x (Join-Path $scriptsDir "ma.sh")
 }
 
 $versionLine = if ($Version) { "Version: $Version" } else { "Version: development build" }
@@ -265,9 +299,9 @@ public standard-library headers.
 - bin/ - dcc, dccpeep, dccrtlstrip, and ntvcm for this host platform.
 - include/ - dcc public C headers.
 - lib/ - DCCRTL.MAC runtime library.
-- scripts/ - PowerShell and shell helper scripts, including ma.ps1.
+- scripts/ - helper scripts, including ma.sh and ma.ps1.
 - DCCRTL.MAC, m80.com, l80.com - staged at the package root for compatibility
-  with ma.ps1 and the existing build pipeline.
+    with ma.sh, ma.ps1, and the existing build pipeline.
 
 ## Install
 
@@ -287,12 +321,31 @@ By default, Unix installs to `\$HOME/.local/dcc` and links commands into
 `\$HOME/.local/bin`. Override with `PREFIX=/path/to/dcc LINK_DIR=/path/to/bin
 ./install.sh`.
 
+The Unix installer writes `dcc-env.sh` under the install prefix. Source it from
+custom shells or scripts when you need the package environment outside the
+`dcc-ma` wrapper:
+
+```sh
+. \$HOME/.local/dcc/dcc-env.sh
+```
+
 ## Portable quick start
 
 From this package root, add bin to your PATH, then build a C source file:
 
+Linux/macOS:
+
+```sh
+export PATH="\$PWD/bin:\$PATH"
+export DCC_HOME="\$PWD"
+./scripts/ma.sh hello --source-path ./hello.c --mode fast
+```
+
+Windows PowerShell 7+:
+
 ```pwsh
 `$env:PATH = "`$PWD/bin`$([IO.Path]::PathSeparator)`$env:PATH"
+`$env:DCC_HOME = "`$PWD"
 pwsh ./scripts/ma.ps1 hello -SourcePath ./hello.c -Mode fast
 ```
 

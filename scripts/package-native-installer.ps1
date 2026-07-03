@@ -63,11 +63,40 @@ function New-UnixLinks {
 
     $wrapper = @"
 #!/usr/bin/env sh
-exec pwsh "$Prefix/scripts/ma.ps1" "`$@"
+export DCC_HOME="$Prefix"
+export DCC_INCLUDE="`$DCC_HOME/include`${DCC_INCLUDE:+:`$DCC_INCLUDE}"
+export DCC_LIB="`$DCC_HOME/lib:`$DCC_HOME`${DCC_LIB:+:`$DCC_LIB}"
+export DCC_RUNTIME="`${DCC_RUNTIME:-`$DCC_HOME/lib/DCCRTL.MAC}"
+exec "$Prefix/scripts/ma.sh" "`$@"
 "@
     $wrapperPath = Join-Path $binDir "dcc-ma"
     Set-Content -LiteralPath $wrapperPath -Value $wrapper -Encoding utf8
     & chmod +x $wrapperPath
+}
+
+function New-UnixEnvironment {
+    param(
+        [string]$Root,
+        [string]$Prefix
+    )
+
+    $envScript = @"
+# dcc 4 CP/M Z80 package environment
+export DCC_HOME="$Prefix"
+export DCC_INCLUDE="`$DCC_HOME/include`${DCC_INCLUDE:+:`$DCC_INCLUDE}"
+export DCC_LIB="`$DCC_HOME/lib:`$DCC_HOME`${DCC_LIB:+:`$DCC_LIB}"
+export DCC_RUNTIME="`${DCC_RUNTIME:-`$DCC_HOME/lib/DCCRTL.MAC}"
+"@
+
+    $profileDir = Join-Path $Root "etc/profile.d"
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+    $profilePath = Join-Path $profileDir "dcc-4-cpm-z80.sh"
+    Set-Content -LiteralPath $profilePath -Value $envScript -Encoding utf8
+
+    $prefixRoot = Join-Path $Root $Prefix.TrimStart("/")
+    New-Item -ItemType Directory -Path $prefixRoot -Force | Out-Null
+    $packageEnvPath = Join-Path $prefixRoot "dcc-env.sh"
+    Set-Content -LiteralPath $packageEnvPath -Value $envScript -Encoding utf8
 }
 
 function New-DebPackage {
@@ -80,6 +109,7 @@ function New-DebPackage {
     $payloadRoot = Join-Path $debRoot "opt/dcc-4-cpm-z80"
     Copy-DirectoryContents -Source $resolvedPackageRoot -Destination $payloadRoot
     New-UnixLinks -Root $debRoot -Prefix $installPrefix -LinkDir "/usr/bin"
+    New-UnixEnvironment -Root $debRoot -Prefix $installPrefix
 
     $controlDir = Join-Path $debRoot "DEBIAN"
     New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
@@ -110,6 +140,7 @@ function New-MacPackage {
     $payloadRoot = Join-Path $pkgRoot "usr/local/dcc-4-cpm-z80"
     Copy-DirectoryContents -Source $resolvedPackageRoot -Destination $payloadRoot
     New-UnixLinks -Root $pkgRoot -Prefix $installPrefix -LinkDir "/usr/local/bin"
+    New-UnixEnvironment -Root $pkgRoot -Prefix $installPrefix
 
     $pkgPath = Join-Path $outputRoot "$PackageName.pkg"
     & pkgbuild --root $pkgRoot --identifier "com.gloveboxes.dcc-4-cpm-z80" --version $versionText --install-location / $pkgPath
@@ -202,8 +233,12 @@ function New-MsiPackage {
     foreach ($line in @(Add-WixDirectory -Path $resolvedPackageRoot -Indent 8)) { $wxs.Add($line) }
     $componentIds.Add("cmpPathEnvironment")
     $wxs.Add('        <Component Id="cmpPathEnvironment" Guid="*">')
-    $wxs.Add('          <Environment Id="envBinPath" Name="Path" Value="[INSTALLFOLDER]bin" Action="set" Part="last" System="yes" Permanent="no" />')
-    $wxs.Add('          <Environment Id="envScriptsPath" Name="Path" Value="[INSTALLFOLDER]scripts" Action="set" Part="last" System="yes" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envBinPath" Name="Path" Value="[INSTALLFOLDER]bin" Action="set" Part="last" System="no" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envScriptsPath" Name="Path" Value="[INSTALLFOLDER]scripts" Action="set" Part="last" System="no" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envDccHome" Name="DCC_HOME" Value="[INSTALLFOLDER]" Action="set" System="no" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envDccInclude" Name="DCC_INCLUDE" Value="[INSTALLFOLDER]include" Action="set" System="no" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envDccLib" Name="DCC_LIB" Value="[INSTALLFOLDER]lib;[INSTALLFOLDER]" Action="set" System="no" Permanent="no" />')
+    $wxs.Add('          <Environment Id="envDccRuntime" Name="DCC_RUNTIME" Value="[INSTALLFOLDER]lib\DCCRTL.MAC" Action="set" System="no" Permanent="no" />')
     $wxs.Add('          <RegistryValue Root="HKLM" Key="Software\gloveboxes\dcc-4-cpm-z80" Name="PathEnvironment" Type="integer" Value="1" KeyPath="yes" />')
     $wxs.Add('        </Component>')
     $wxs.Add('      </Directory>')
