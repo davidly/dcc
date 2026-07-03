@@ -43,6 +43,7 @@ nav:
       - Runtime optimization: en/appendix/01-dccrtlstrip.md
       - Runtime function sizes: en/appendix/02-runtime-sizes.md
       - Utilities: en/appendix/03-utilities.md
+      - Package testing: en/appendix/04-package-testing.md
 
 plugins:
   - search

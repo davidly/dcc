@@ -1,12 +1,17 @@
 # Package Testing with Linux and Windows VMs
 
-This guide describes how to test the dcc release packages from a Linux Mint x64
-host. Use native x64 VMs for the x64 packages and emulated ARM64 VMs for the
-ARM64 packages.
+This guide describes how to test the dcc release packages from an x64 host
+running an Ubuntu-based distribution. Use native x64 VMs for the x64 packages
+and emulated ARM64 VMs for the ARM64 packages.
 
-The examples use Ubuntu Server 24.04 guests because Linux Mint is Ubuntu-based
-and the Linux release packages are `.deb` packages. Windows package testing uses
-Windows 11 x64 and Windows 11 Arm-based PC guests.
+The examples use Ubuntu Server 24.04 guests because Ubuntu-based distributions
+use `.deb` packages. Windows package testing uses Windows 11 x64 and Windows 11
+Arm-based PC guests.
+
+Apple Silicon packages need to be tested on Apple Silicon hardware, such as a
+MacBook with an Apple Silicon processor. If you need to isolate the test in a
+guest OS, use a MacBook with Parallels installed and run an Apple Silicon macOS
+virtual machine.
 
 ## Release Downloads
 
@@ -70,16 +75,16 @@ ARM64 package.
 - Windows `.zip`: `pwsh ./install.ps1 -AddToUserPath` adds the package `bin`
   and `scripts` directories to the user `Path`.
 
-The published `v2.0.0` Windows MSI assets were built before the MSI PATH update.
-When testing those exact files, prepend the paths in the current PowerShell
-session after installing:
+The `v2.0.0` Windows MSI assets add the package directories to the machine
+`Path`. If the current PowerShell session was already open before installation,
+prepend the paths before testing or open a new terminal:
 
 ```powershell
 $InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
 $env:Path = "$InstallRoot\bin;$InstallRoot\scripts;$env:Path"
 ```
 
-## Host Setup on Linux Mint
+## Host Setup on Ubuntu-Based Distributions
 
 Install virtualization tools:
 
@@ -131,10 +136,11 @@ wget https://releases.ubuntu.com/24.04/ubuntu-24.04.4-live-server-amd64.iso
 Create the VM with `virt-install`:
 
 ```sh
+mkdir -p ~/VMs/dcc-x64
 virt-install \
   --name dcc-x64 \
   --memory 4096 \
-  --vcpus 2 \
+  --vcpus 12 \
   --cpu host \
   --disk path=$HOME/VMs/dcc-x64/ubuntu-x64.qcow2,size=30,bus=virtio,format=qcow2 \
   --cdrom $HOME/Downloads/isos/ubuntu-24.04.4-live-server-amd64.iso \
@@ -191,9 +197,9 @@ command -v dcc dccpeep dccrtlstrip ntvcm dcc-ma
 
 ## ARM64 Guest VM on an x64 Host
 
-An ARM64 guest on an x64 Linux Mint host uses QEMU full-system emulation. It is
-much slower than the x64 VM, but it is a real ARM64 operating system and is good
-for testing the `linux-arm64` package.
+An ARM64 guest on an x64 Ubuntu-based host uses QEMU full-system emulation. It
+is much slower than the x64 VM, but it is a real ARM64 operating system and is
+good for testing the `linux-arm64` package.
 
 Download the ARM64 ISO:
 
@@ -206,6 +212,7 @@ wget https://cdimage.ubuntu.com/ubuntu/releases/24.04/release/ubuntu-24.04.4-liv
 Create a disk:
 
 ```sh
+mkdir -p ~/VMs/dcc-arm64
 qemu-img create -f qcow2 ~/VMs/dcc-arm64/ubuntu-arm64.qcow2 30G
 ```
 
@@ -215,7 +222,7 @@ Boot the installer:
 qemu-system-aarch64 \
   -machine virt \
   -cpu cortex-a72 \
-  -smp 4 \
+  -smp 12 \
   -m 4096 \
   -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
   -drive if=virtio,file=$HOME/VMs/dcc-arm64/ubuntu-arm64.qcow2,format=qcow2 \
@@ -223,6 +230,9 @@ qemu-system-aarch64 \
   -boot d \
   -device virtio-net-pci,netdev=net0 \
   -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+  -device qemu-xhci \
+  -device usb-kbd \
+  -device usb-tablet \
   -device virtio-gpu-pci \
   -display gtk
 ```
@@ -233,15 +243,23 @@ After installing Ubuntu, shut down and boot from disk:
 qemu-system-aarch64 \
   -machine virt \
   -cpu cortex-a72 \
-  -smp 4 \
+  -smp 12 \
   -m 4096 \
   -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
   -drive if=virtio,file=$HOME/VMs/dcc-arm64/ubuntu-arm64.qcow2,format=qcow2 \
   -device virtio-net-pci,netdev=net0 \
   -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+  -device qemu-xhci \
+  -device usb-kbd \
+  -device usb-tablet \
   -device virtio-gpu-pci \
   -display gtk
 ```
+
+If the installer window does not accept keystrokes, click inside the QEMU GTK
+window, then press `Ctrl+Alt+G` to toggle the keyboard grab. If it still ignores
+input, restart QEMU with the explicit USB keyboard and tablet devices shown
+above.
 
 If `cortex-a72` is too slow or does not boot cleanly, try:
 
@@ -320,7 +338,7 @@ Create the VM with UEFI and TPM 2.0 enabled:
 virt-install \
   --name dcc-windows-x64 \
   --memory 8192 \
-  --vcpus 4 \
+  --vcpus 12 \
   --cpu host \
   --disk path=$HOME/VMs/dcc-windows-x64/windows-x64.qcow2,size=80,bus=sata,format=qcow2 \
   --cdrom $HOME/Downloads/isos/Win11_x64.iso \
@@ -347,7 +365,8 @@ Invoke-WebRequest `
 msiexec /i "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-x64.msi" /qn /norestart
 ```
 
-For the published `v2.0.0` MSI, update the current session PATH before testing:
+If the current terminal was already open before MSI installation, update the
+current session PATH before testing:
 
 ```powershell
 $InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
@@ -392,7 +411,7 @@ Boot the installer:
 qemu-system-aarch64 \
   -machine virt \
   -cpu max \
-  -smp 4 \
+  -smp 12 \
   -m 8192 \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/AAVMF/AAVMF_CODE.fd \
   -drive if=pflash,format=raw,file=$HOME/VMs/dcc-windows-arm64/AAVMF_VARS.fd \
@@ -425,7 +444,8 @@ Invoke-WebRequest `
 msiexec /i "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-arm64.msi" /qn /norestart
 ```
 
-For the published `v2.0.0` MSI, update the current session PATH before testing:
+If the current terminal was already open before MSI installation, update the
+current session PATH before testing:
 
 ```powershell
 $InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
@@ -505,8 +525,9 @@ command -v dcc-ma || true
 
 ## Windows Guest Smoke Test
 
-Open PowerShell 7 in the Windows guest. If you are testing the published
-`v2.0.0` MSI, prepend the installed package paths for the current session first:
+Open PowerShell 7 in the Windows guest. If the terminal was already open before
+MSI installation, prepend the installed package paths for the current session
+first:
 
 ```powershell
 $InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
