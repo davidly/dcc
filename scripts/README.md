@@ -215,8 +215,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast 
 - `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
 
-Run `powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 -Help` or
-`./scripts/ma.sh --help` for the full option map, including which `dcc` options
+Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which `dcc` options
 are owned by the helper pipeline.
 
 ## `runall.ps1`

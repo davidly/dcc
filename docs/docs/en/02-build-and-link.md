@@ -9,15 +9,15 @@ commands below work from any folder that holds your `.c` sources.
 
 ## The build script
 
-The primary installed build command is `dcc-build`. It compiles, optimizes,
+The primary installed build command is `dcc-ma`. It compiles, optimizes,
 strips the runtime, assembles, and links in one step.
 
 With an installed package, use the common wrapper command on Windows, macOS, and
 Linux:
 
 ```sh
-dcc-build foo --mode fast       # builds foo.c -> FOO.COM
-dcc-build foo --mode nopeep     # skip the dccpeep optimizer
+dcc-ma foo --mode fast       # builds foo.c -> FOO.COM
+dcc-ma foo --mode nopeep     # skip the dccpeep optimizer
 ```
 
 From a source checkout, run the implementation script directly:

@@ -70,12 +70,9 @@ export DCC_LIB="`$DCC_HOME/lib:`$DCC_HOME`${DCC_LIB:+:`$DCC_LIB}"
 export DCC_RUNTIME="`${DCC_RUNTIME:-`$DCC_HOME/lib/DCCRTL.MAC}"
 exec "$Prefix/scripts/ma.sh" "`$@"
 "@
-    $wrapperPath = Join-Path $binDir "dcc-build"
+    $wrapperPath = Join-Path $binDir "dcc-ma"
     Set-Content -LiteralPath $wrapperPath -Value $wrapper -Encoding utf8
     & chmod +x $wrapperPath
-
-    $legacyWrapperPath = Join-Path $binDir "dcc-ma"
-    New-Item -ItemType SymbolicLink -Path $legacyWrapperPath -Target "dcc-build" -Force | Out-Null
 }
 
 function New-UnixEnvironment {

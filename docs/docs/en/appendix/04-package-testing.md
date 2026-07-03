@@ -66,7 +66,7 @@ ARM64 package.
 ## Package PATH Behavior
 
 - Linux `.deb`: installs to `/opt/dcc-cpm-z80` and creates command links in
-  `/usr/bin` for `dcc`, `dccpeep`, `dccrtlstrip`, `ntvcm`, and `dcc-build`.
+  `/usr/bin` for `dcc`, `dccpeep`, `dccrtlstrip`, `ntvcm`, and `dcc-ma`.
 - macOS `.pkg`: installs to `/usr/local/dcc-cpm-z80` and creates command
   links in `/usr/local/bin`.
 - Windows `.msi`: rebuilt MSI packages add `%ProgramFiles%\dcc-cpm-z80\bin`
@@ -268,7 +268,7 @@ Verify the installed commands:
 uname -m
 dcc --version
 ntvcm -V
-command -v dcc dccpeep dccrtlstrip ntvcm dcc-build
+command -v dcc dccpeep dccrtlstrip ntvcm dcc-ma
 ```
 
 `uname -m` should print `x86_64`.
@@ -380,7 +380,7 @@ Verify architecture and installed commands:
 uname -m
 dcc --version
 ntvcm -V
-command -v dcc dccpeep dccrtlstrip ntvcm dcc-build
+command -v dcc dccpeep dccrtlstrip ntvcm dcc-ma
 ```
 
 `uname -m` should print `aarch64`.
@@ -444,7 +444,7 @@ Verify the installed commands:
 $env:PROCESSOR_ARCHITECTURE
 dcc --version
 ntvcm -V
-Get-Command dcc,dccpeep,dccrtlstrip,ntvcm,dcc-build
+Get-Command dcc,dccpeep,dccrtlstrip,ntvcm,dcc-ma
 ```
 
 `$env:PROCESSOR_ARCHITECTURE` should print `AMD64`.
@@ -544,7 +544,7 @@ Verify the installed commands:
 $env:PROCESSOR_ARCHITECTURE
 dcc --version
 ntvcm -V
-Get-Command dcc,dccpeep,dccrtlstrip,ntvcm,dcc-build
+Get-Command dcc,dccpeep,dccrtlstrip,ntvcm,dcc-ma
 ```
 
 `$env:PROCESSOR_ARCHITECTURE` should print `ARM64`.
@@ -569,7 +569,7 @@ EOF
 Build it with the installed helper:
 
 ```sh
-dcc-build hello --source-path ./hello.c --mode fast
+dcc-ma hello --source-path ./hello.c --mode fast
 ```
 
 Run the generated CP/M program:
@@ -607,7 +607,7 @@ Confirm commands are gone:
 ```sh
 command -v dcc || true
 command -v ntvcm || true
-command -v dcc-build || true
+command -v dcc-ma || true
 ```
 
 ## Windows Guest Smoke Test
@@ -640,7 +640,7 @@ int main(void) {
 Build it with the installed helper script:
 
 ```powershell
-dcc-build hello -SourcePath .\hello.c -Mode fast
+dcc-ma hello -SourcePath .\hello.c -Mode fast
 ```
 
 Run the generated CP/M program:
@@ -660,7 +660,7 @@ Also verify the package files are where the installer expects them:
 ```powershell
 Get-ChildItem "$InstallRoot"
 Get-ChildItem "$InstallRoot\bin"
-Get-Command dcc-build
+Get-Command dcc-ma
 Test-Path "$InstallRoot\scripts\ma.ps1"
 Test-Path "$InstallRoot\DCCRTL.MAC"
 Test-Path "$InstallRoot\m80.com"
@@ -690,7 +690,7 @@ Test-Path "$env:ProgramFiles\dcc-cpm-z80"
 - The `.deb` package installs under `/opt/dcc-cpm-z80` and places command
   links in `/usr/bin`.
 - The Windows MSI installs under `%ProgramFiles%\dcc-cpm-z80`.
-- On Linux, macOS, and Windows, `dcc-build` is the installed single-app build
+- On Linux, macOS, and Windows, `dcc-ma` is the installed single-app build
   command. The underlying `ma.sh` and `ma.ps1` scripts remain in `scripts/`.
 - The portable `.tar.gz` packages can be tested without root by extracting them
   and running `./install.sh` with custom `PREFIX` and `LINK_DIR` values.

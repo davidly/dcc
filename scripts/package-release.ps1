@@ -120,11 +120,11 @@ exec "$DCC_HOME/scripts/ma.sh" "$@"
 '@
 
 if ($IsWindows) {
-    Write-PackageTextFile -Path (Join-Path $binDir "dcc-build.cmd") -Content $windowsBuildCommand
+    Write-PackageTextFile -Path (Join-Path $binDir "dcc-ma.cmd") -Content $windowsBuildCommand
 }
 else {
-    Write-PackageTextFile -Path (Join-Path $binDir "dcc-build") -Content $unixBuildCommand
-    & chmod +x (Join-Path $binDir "dcc-build")
+    Write-PackageTextFile -Path (Join-Path $binDir "dcc-ma") -Content $unixBuildCommand
+    & chmod +x (Join-Path $binDir "dcc-ma")
 }
 
 Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
@@ -309,7 +309,7 @@ for tool in dcc dccpeep dccrtlstrip ntvcm; do
     fi
 done
 
-cat > "$LINK_DIR/dcc-build" <<EOF
+cat > "$LINK_DIR/dcc-ma" <<EOF
 #!/usr/bin/env sh
 export DCC_HOME="$PREFIX"
 export PATH="\$DCC_HOME/bin:\$PATH"
@@ -318,15 +318,14 @@ export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
 export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
 exec "$PREFIX/scripts/ma.sh" "\$@"
 EOF
-chmod +x "$LINK_DIR/dcc-build"
-ln -sf "$LINK_DIR/dcc-build" "$LINK_DIR/dcc-ma"
+chmod +x "$LINK_DIR/dcc-ma"
 
 echo "dcc installed to: $PREFIX"
 echo "Command links written to: $LINK_DIR"
 echo "Helper scripts are in: $PREFIX/scripts"
 echo "Package environment file written to: $PREFIX/dcc-env.sh"
 echo "Source it with: . $PREFIX/dcc-env.sh"
-echo "Use dcc-build to build CP/M apps with dcc."
+echo "Use dcc-ma to build CP/M apps with dcc."
 '@
 
 $uninstallSh = @'
@@ -337,7 +336,7 @@ PREFIX=${PREFIX:-"$HOME/.local/dcc-cpm-z80"}
 LINK_DIR=${LINK_DIR:-"$HOME/.local/bin"}
 
 rm -rf "$PREFIX"
-for tool in dcc dccpeep dccrtlstrip ntvcm dcc-build dcc-ma; do
+for tool in dcc dccpeep dccrtlstrip ntvcm dcc-ma; do
     if [ -L "$LINK_DIR/$tool" ] || [ -f "$LINK_DIR/$tool" ]; then
         rm -f "$LINK_DIR/$tool"
     fi
@@ -368,7 +367,7 @@ public standard-library headers.
 
 ## Layout
 
-- bin/ - dcc, dccpeep, dccrtlstrip, ntvcm, and dcc-build for this host platform.
+- bin/ - dcc, dccpeep, dccrtlstrip, ntvcm, and dcc-ma for this host platform.
 - include/ - dcc public C headers.
 - lib/ - DCCRTL.MAC runtime library.
 - scripts/ - helper scripts, including ma.sh and ma.ps1.
@@ -394,9 +393,9 @@ By default, Unix installs to `\$HOME/.local/dcc-cpm-z80` and links commands into
 ./install.sh`.
 
 The Unix installer writes `dcc-env.sh` under the install prefix and creates a
-`dcc-build` command in `LINK_DIR`. Source `dcc-env.sh` from
+`dcc-ma` command in `LINK_DIR`. Source `dcc-env.sh` from
 custom shells or scripts when you need the package environment outside the
-`dcc-build` wrapper:
+`dcc-ma` wrapper:
 
 ```sh
 . \$HOME/.local/dcc-cpm-z80/dcc-env.sh
@@ -411,7 +410,7 @@ Linux/macOS:
 ```sh
 export PATH="\$PWD/bin:\$PATH"
 export DCC_HOME="\$PWD"
-dcc-build hello --source-path ./hello.c --mode fast
+dcc-ma hello --source-path ./hello.c --mode fast
 ```
 
 Windows PowerShell:
@@ -419,7 +418,7 @@ Windows PowerShell:
 ```pwsh
 `$env:PATH = "`$PWD/bin`$([IO.Path]::PathSeparator)`$env:PATH"
 `$env:DCC_HOME = "`$PWD"
-dcc-build hello -SourcePath .\hello.c -Mode fast
+dcc-ma hello -SourcePath .\hello.c -Mode fast
 ```
 
 The resulting CP/M .COM and intermediate build files are written under build/.

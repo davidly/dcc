@@ -39,9 +39,9 @@ parameters below are forwarded to Invoke-MaBuild.
     normal dcc test locations by app name.
 
 .EXAMPLE
-    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 triangle
-    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve nopeep
-    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast -BuildDir mybuild
+    dcc-ma triangle
+    dcc-ma sieve nopeep
+    dcc-ma cobint -Mode fast -BuildDir mybuild
 
 .NOTES
   Environment Variables:
@@ -80,8 +80,8 @@ param(
 
 function Show-MaHelp {
         @'
-usage: ma.ps1 <name> [full|fast|nopeep] [-SourcePath FILE] [-BuildDir DIR] [-Emulator COMMAND]
-             ma.ps1 -Help
+usage: dcc-ma <name> [full|fast|nopeep] [-SourcePath FILE] [-BuildDir DIR] [-Emulator COMMAND]
+    dcc-ma -Help
 
 build modes:
     full       build optimized and unoptimized outputs (default)
@@ -106,10 +106,10 @@ dcc options controlled by this helper:
     -fstack-check               DCC_FORCE_STACK_CHECK=1, or source contains DCC_STACK_CHECK
     -f, -ffloatio               DCC_FLOATIO=1
     -fl, -flongio               DCC_LONGIO=1
-    -o <file>                   managed by ma.ps1
+    -o <file>                   managed by dcc-ma
     input.c                     selected by -Name or -SourcePath
 
-dcc options not suitable for ma.ps1:
+dcc options not suitable for dcc-ma:
     -c, -module                 use a manual dcc/M80/L80 pipeline for multi-module builds
     -v, --version, -h, --help   run dcc directly
 
@@ -126,9 +126,9 @@ ntvcm options:
     -8 use 8080 instruction set, -f:<file> keystroke input, -V version.
 
 examples:
-    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 hello -SourcePath .\hello.c -Mode fast
-    $env:DCC_STACK_SIZE="1024"; powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve fast
-    $env:DCC_ARGS="-DDEBUG=1"; $env:NTVCM_ARGS="-p -s:4000000"; powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 hello fast
+    dcc-ma hello -SourcePath .\hello.c -Mode fast
+    $env:DCC_STACK_SIZE="1024"; dcc-ma sieve fast
+    $env:DCC_ARGS="-DDEBUG=1"; $env:NTVCM_ARGS="-p -s:4000000"; dcc-ma hello fast
 '@ | Write-Host
 }
 
@@ -356,7 +356,7 @@ function Invoke-MaBuild {
         return $false
     }
 
-    # Optional printf runtime support. Leave these off by default so ma.ps1
+    # Optional printf runtime support. Leave these off by default so dcc-ma
     # matches direct dcc invocation unless the caller opts in.
     $dccFloatio = ($env:DCC_FLOATIO -eq "1")
     $dccLongio = ($env:DCC_LONGIO -eq "1")

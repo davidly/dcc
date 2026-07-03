@@ -6,12 +6,12 @@ Run these scripts from the dcc checkout or from an installed package. Linux and
 macOS packages include a native shell build driver, so normal package users do
 not need PowerShell to build a single app.
 
-## Build Driver (`dcc-build`, `ma.sh` / `ma.ps1`)
+## Build Driver (`dcc-ma`, `ma.sh` / `ma.ps1`)
 
 The build driver compiles one app, optionally runs `dccpeep`, strips the
 runtime, assembles, and links a `.COM` executable.
 
-- Installed packages: use `dcc-build` on Windows, macOS, and Linux.
+- Installed packages: use `dcc-ma` on Windows, macOS, and Linux.
 - Source checkout: use `scripts/ma.sh` on Linux/macOS, or `scripts/ma.ps1` with Windows PowerShell 5.1 or PowerShell 7+.
 
 ### Build Driver Usage
@@ -21,7 +21,7 @@ runtime, assembles, and links a `.COM` executable.
 ```
 
 ```sh
-dcc-build <name> [mode] [options]
+dcc-ma <name> [mode] [options]
 ```
 
 ```sh
@@ -41,9 +41,9 @@ dcc-build <name> [mode] [options]
 ```
 
 ```sh
-dcc-build triangle
-dcc-build sieve nopeep
-dcc-build cobint --mode fast --build-dir mybuild
+dcc-ma triangle
+dcc-ma sieve nopeep
+dcc-ma cobint --mode fast --build-dir mybuild
 ```
 
 ```sh
@@ -75,7 +75,7 @@ dcc-build cobint --mode fast --build-dir mybuild
 - `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
 
-Run `ma.ps1 -Help` or `ma.sh --help` for the full option map, including which
+Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which
 `dcc` options are owned by the helper pipeline.
 
 ## Test Suite Runner (`runall.ps1`)

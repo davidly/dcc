@@ -3,14 +3,14 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-usage: ma.sh name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND]
-             ma.sh --help
+usage: dcc-ma name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND]
+    dcc-ma --help
 
 examples:
-  ma.sh sieve fast
-  ma.sh hello --source-path ./hello.c --build-dir build
-    DCC_STACK_SIZE=1024 ma.sh sieve fast
-    DCC_ARGS="-DDEBUG=1" NTVCM_ARGS="-p -s:4000000" ma.sh hello fast
+  dcc-ma sieve fast
+  dcc-ma hello --source-path ./hello.c --build-dir build
+  DCC_STACK_SIZE=1024 dcc-ma sieve fast
+  DCC_ARGS="-DDEBUG=1" NTVCM_ARGS="-p -s:4000000" dcc-ma hello fast
 
 build modes:
     full       build optimized and unoptimized outputs (default)
@@ -35,10 +35,10 @@ dcc options controlled by this helper:
     -fstack-check               DCC_FORCE_STACK_CHECK=1, or source contains DCC_STACK_CHECK
     -f, -ffloatio               DCC_FLOATIO=1
     -fl, -flongio               DCC_LONGIO=1
-    -o <file>                   managed by ma.sh
+    -o <file>                   managed by dcc-ma
     input.c                     selected by name or --source-path
 
-dcc options not suitable for ma.sh:
+dcc options not suitable for dcc-ma:
     -c, -module                 use a manual dcc/M80/L80 pipeline for multi-module builds
     -v, --version, -h, --help   run dcc directly
 
