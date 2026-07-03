@@ -1300,6 +1300,7 @@ void scan_function_body(void)
     g_for_decl_recording = 0;
     g_scope_depth = 0;
     g_compound_literal_seq = 0;
+    g_licm_seq = 0;
 
     expect('{');
     enter_scope();              /* function body block */
@@ -2624,6 +2625,7 @@ static int try_speculative_noix_function_body(const char *name, int type,
     g_static_local_func_index = (int)(s - globals);
     g_static_local_seq = 0;
     g_compound_literal_seq = 0;
+    g_licm_seq = 0;
     emit_function_prologue(name, local_bytes, 1);
     gen_compound();
     emit_function_epilogue(implicit_zero_return);
@@ -2673,6 +2675,7 @@ static int try_speculative_noix_function_body(const char *name, int type,
     g_static_local_func_index = (int)(s - globals);
     g_static_local_seq = 0;
     g_compound_literal_seq = 0;
+    g_licm_seq = 0;
     return 0;
 }
 
@@ -2867,6 +2870,7 @@ void parse_function_or_global(int base_type)
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;
                 g_compound_literal_seq = 0;
+                g_licm_seq = 0;
                 if (static_inline_body_can_be_buffered(s)) {
                     FILE *saved_outf;
 

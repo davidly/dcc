@@ -170,6 +170,22 @@ int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
                                       long *out_init, long *out_base,
                                       long *out_mod, const char **out_ivar_name);
 
+/* General-purpose expression predicates (dcc_ast_gen_support.c): does the
+ * subtree reference a given identifier anywhere, and does it contain any
+ * observable side effect anywhere. Used together to prove a candidate
+ * lvalue address is loop-invariant (see ast_for_hoist_lvalue_addr_supported). */
+int ast_expr_references_ident(const struct AstNode *n, const char *name);
+int ast_expr_has_side_effects(const struct AstNode *n);
+
+/* Detects a for-loop whose whole body is one assignment to an array-element
+ * lvalue whose address is provably the same on every iteration (see
+ * dcc_ast_gen_support.c for the full shape and rationale). Callable from
+ * ast_gen_for_stmt to decide whether to hoist the address computation. */
+int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
+                                               const char **out_ivar_name,
+                                               const struct AstNode **out_lhs,
+                                               int *out_val_type);
+
 /* Copy a NUL-terminated string into the arena. */
 char *ast_arena_strdup(struct AstArena *ar, const char *s);
 

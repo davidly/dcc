@@ -462,6 +462,7 @@ extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
 extern int  g_compound_literal_seq;
+extern int  g_licm_seq;
 void flush_pending_asm(void);
 
 /* user-defined goto labels (function-scoped) */

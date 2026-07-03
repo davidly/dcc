@@ -278,6 +278,10 @@ void ast_gen_for_stmt(const struct AstNode *n)
     int for_seq;
     int rename_count;
     int rotate;
+    const char *hoist_ivar_name;
+    const struct AstNode *hoist_lhs;
+    int hoist_val_type;
+    struct AstNode *hoist_body;
 
     for_seq = g_for_seq++;
     if (for_seq >= MAX_FOR_SCOPES)
@@ -351,6 +355,46 @@ void ast_gen_for_stmt(const struct AstNode *n)
 
     rotate = ast_for_first_iter_certain(n);
 
+    /* Loop-invariant lvalue address hoist (see ast_for_hoist_lvalue_addr_
+     * supported for the full shape/rationale): if the whole body is one
+     * assignment to ARR[...] whose address never depends on this loop's
+     * induction variable, compute that address once here, before the loop,
+     * into a fresh compiler-temp pointer local - then rewrite the body (only
+     * for codegen purposes; n->d itself is untouched) to store/combine
+     * through *that pointer instead of recomputing ARR[...]'s address on
+     * every iteration. Declines (hoist_body stays NULL) for anything not
+     * matching that exact narrow shape, in which case the loop runs exactly
+     * as before. */
+    hoist_body = NULL;
+    if (n->sym == NULL &&
+        ast_for_hoist_lvalue_addr_supported(n, &hoist_ivar_name, &hoist_lhs, &hoist_val_type)) {
+        struct Sym *addr_tmp;
+        struct AstNode *ident;
+        struct AstNode *deref;
+        struct AstNode *assign;
+        char tmp_name[24];
+        int addr_val_type;
+
+        sprintf(tmp_name, "#licm%d", g_licm_seq++);
+        addr_tmp = add_local_alloc(tmp_name, type_add_ptr(hoist_val_type), 2);
+
+        gen_index_addr_ast(hoist_lhs, &addr_val_type);  /* HL = the hoisted address, computed once */
+        emit_store_hl_to_sym_direct(addr_tmp);
+
+        ident = ast_new(&g_ast_arena, AST_IDENT);
+        ident->sval = ast_arena_strdup(&g_ast_arena, addr_tmp->name);
+        deref = ast_new(&g_ast_arena, AST_UNARY);
+        deref->op = '*';
+        deref->a = ident;
+        assign = ast_new(&g_ast_arena, AST_ASSIGN);
+        assign->op = n->d->a->op;
+        assign->a = deref;
+        assign->b = n->d->a->b;
+        hoist_body = ast_new(&g_ast_arena, AST_EXPR_STMT);
+        hoist_body->a = assign;
+        (void)hoist_ivar_name;
+    }
+
     emit_label(ltop);
     if (!rotate && n->b != NULL)
         ast_gen_cond_branch(n->b, lend, 0);
@@ -381,6 +425,8 @@ void ast_gen_for_stmt(const struct AstNode *n)
         fprintf(outf, "\tld a,%ld\n", base_val);
         emit_label(lwrap);
         fprintf(outf, "\tld (ix%+d),a\n", n->sym->offset);
+    } else if (hoist_body != NULL) {
+        ast_gen_stmt(hoist_body);
     } else {
         ast_gen_stmt(n->d);
     }
