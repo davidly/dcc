@@ -4,15 +4,59 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 usage: ma.sh name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND]
+             ma.sh --help
 
 examples:
   ma.sh sieve fast
   ma.sh hello --source-path ./hello.c --build-dir build
+    DCC_STACK_SIZE=1024 ma.sh sieve fast
+    DCC_ARGS="-DDEBUG=1" NTVCM_ARGS="-p -s:4000000" ma.sh hello fast
+
+build modes:
+    full       build optimized and unoptimized outputs (default)
+    fast       run dccpeep after dcc
+    nopeep     skip dccpeep
+
+script options:
+    --source-path FILE  explicit C source path
+    --build-dir DIR     build artifact directory (default: build)
+    --emulator COMMAND  emulator command used for CP/M tools (default: ntvcm)
+    --mode MODE         full, fast, or nopeep
+    --help, -h          show this help
+
+dcc pipeline:
+    dcc -> dccpeep (fast mode) -> ntvcm M80 -> dccrtlstrip -> ntvcm M80 -> ntvcm L80
+
+dcc options controlled by this helper:
+    dcc option                  how to set it
+    -I <dir>                    DCC_INCLUDE, path-separator separated; package include/ is added automatically
+    -D<name>[=value], -U<name>  DCC_ARGS="-DNAME=1 -UOLD"
+    -s, -stack <bytes>          DCC_STACK_SIZE=<bytes>; omitted when unset
+    -fstack-check               DCC_FORCE_STACK_CHECK=1, or source contains DCC_STACK_CHECK
+    -f, -ffloatio               DCC_FLOATIO=1
+    -fl, -flongio               DCC_LONGIO=1
+    -o <file>                   managed by ma.sh
+    input.c                     selected by name or --source-path
+
+dcc options not suitable for ma.sh:
+    -c, -module                 use a manual dcc/M80/L80 pipeline for multi-module builds
+    -v, --version, -h, --help   run dcc directly
+
+tool and asset overrides:
+    DCC, DCCPEEP, DCCRTLSTRIP   host tool paths or command names
+    NTVCM, M80, L80             emulator and CP/M tool command names
+    DCC_HOME                    package/install root for bin/, include/, lib/, m80.com, l80.com
+    DCC_LIB                     extra runtime/tool asset roots, path-separator separated
+    DCC_RUNTIME                 explicit DCCRTL.MAC path
 
 environment:
-  DCC, DCCPEEP, DCCRTLSTRIP, NTVCM, M80, L80
-  DCC_HOME, DCC_INCLUDE, DCC_LIB, DCC_RUNTIME
-  DCC_STACK_SIZE, DCC_FORCE_STACK_CHECK
+    DCC_ARGS                    extra whitespace-separated dcc options
+    NTVCM_ARGS                  extra whitespace-separated ntvcm options before M80/L80
+
+ntvcm options:
+    NTVCM_ARGS="-p -s:4000000"  add ntvcm options before M80/L80
+    Common ntvcm options: -p performance, -s:X clock Hz, -t trace, -i instruction trace,
+    -8 use 8080 instruction set, -f:<file> keystroke input, -V version.
 EOF
 }
 
@@ -20,6 +64,13 @@ if [ $# -lt 1 ]; then
     usage
     exit 1
 fi
+
+case "$1" in
+    --help|-h)
+        usage
+        exit 0
+        ;;
+esac
 
 name_arg="$1"
 shift
@@ -254,16 +305,24 @@ run_one() {
     }
 
     local dcc_floatio dcc_longio dcc_stackchk dcc_stack_size
-    dcc_floatio=0
-    if grep -Eiq '%[-+ #0-9.*]*[fF]' "$source_file"; then dcc_floatio=1; fi
-    dcc_longio=0
-    if grep -Eiq '%[-+ #0-9.*]*l[duxXs]' "$source_file"; then dcc_longio=1; fi
+    dcc_floatio="${DCC_FLOATIO:-0}"
+    dcc_longio="${DCC_LONGIO:-0}"
 
     dcc_stackchk=""
     if [ "${DCC_FORCE_STACK_CHECK:-0}" = "1" ] || grep -q 'DCC_STACK_CHECK' "$source_file"; then
         dcc_stackchk="-fstack-check"
     fi
-    dcc_stack_size="${DCC_STACK_SIZE:-512}"
+    dcc_stack_size="${DCC_STACK_SIZE:-}"
+
+    local dcc_extra_args ntvcm_args
+    dcc_extra_args=()
+    ntvcm_args=()
+    if [ -n "${DCC_ARGS:-}" ]; then
+        dcc_extra_args=($DCC_ARGS)
+    fi
+    if [ -n "${NTVCM_ARGS:-}" ]; then
+        ntvcm_args=($NTVCM_ARGS)
+    fi
 
     rm -f "$app_mac" "$app_rel" "$app_com" "$build_dir/${upper_base}.PRN" \
         "$peep_tmp" "$rtl_src" "$rtl_min" "$rtl_min_rel" "$build_dir/RTLMIN.PRN"
@@ -271,10 +330,12 @@ run_one() {
     local dcc_args include_dir strip_args
     dcc_args=()
     if [ -n "$dcc_stackchk" ]; then dcc_args[${#dcc_args[@]}]="$dcc_stackchk"; fi
-    if [ "$dcc_floatio" -eq 1 ]; then dcc_args[${#dcc_args[@]}]="-ffloatio"; fi
-    if [ "$dcc_longio" -eq 1 ]; then dcc_args[${#dcc_args[@]}]="-flongio"; fi
-    dcc_args[${#dcc_args[@]}]="-stack"
-    dcc_args[${#dcc_args[@]}]="$dcc_stack_size"
+    if [ "$dcc_stack_size" ]; then dcc_args[${#dcc_args[@]}]="-stack"; dcc_args[${#dcc_args[@]}]="$dcc_stack_size"; fi
+    if [ "$dcc_floatio" = "1" ]; then dcc_args[${#dcc_args[@]}]="-ffloatio"; fi
+    if [ "$dcc_longio" = "1" ]; then dcc_args[${#dcc_args[@]}]="-flongio"; fi
+    for include_dir in "${dcc_extra_args[@]+${dcc_extra_args[@]}}"; do
+        dcc_args[${#dcc_args[@]}]="$include_dir"
+    done
     for include_dir in "${include_dirs[@]+${include_dirs[@]}}"; do
         dcc_args[${#dcc_args[@]}]="-I"
         dcc_args[${#dcc_args[@]}]="$include_dir"
@@ -294,21 +355,21 @@ run_one() {
 
     (
         cd "$build_dir"
-        "$(resolve_command "$NTVCM")" "$M80" "=${upper_base}.MAC" /X /O /Z /L
+        "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=${upper_base}.MAC" /X /O /Z /L
     )
 
     cp -f "$root_rtl_src" "$rtl_src"
     to_crlf "$rtl_src"
     strip_args=()
-    if [ "$dcc_floatio" -eq 1 ]; then strip_args[${#strip_args[@]}]="-k"; strip_args[${#strip_args[@]}]="_pffio"; fi
-    if [ "$dcc_longio" -eq 1 ]; then strip_args[${#strip_args[@]}]="-k"; strip_args[${#strip_args[@]}]="_pflng"; fi
+    if [ "$dcc_floatio" = "1" ]; then strip_args[${#strip_args[@]}]="-k"; strip_args[${#strip_args[@]}]="_pffio"; fi
+    if [ "$dcc_longio" = "1" ]; then strip_args[${#strip_args[@]}]="-k"; strip_args[${#strip_args[@]}]="_pflng"; fi
     "$(resolve_command "$DCCRTLSTRIP")" "${strip_args[@]+${strip_args[@]}}" -r "$rtl_src" -o "$rtl_min" "$app_mac"
     to_crlf "$rtl_min"
 
     (
         cd "$build_dir"
-        "$(resolve_command "$NTVCM")" "$M80" "=RTLMIN.MAC" /X /O /Z
-        "$(resolve_command "$NTVCM")" "$L80" "/P:100,RTLMIN,${upper_base},${upper_base}/N/E"
+        "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=RTLMIN.MAC" /X /O /Z
+        "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$L80" "/P:100,RTLMIN,${upper_base},${upper_base}/N/E"
     )
 
     local lower_com

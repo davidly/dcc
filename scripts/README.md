@@ -155,7 +155,7 @@ Cross-platform build driver (Windows PowerShell 5.1 and PowerShell 7+ equivalent
 single test app with optional peephole optimization, strips runtime symbols,
 and links to produce a `.COM` executable. The complete pipeline:
 
-1. Compile source with `dcc` (auto-detect floatio and stack-check flags)
+1. Compile source with `dcc` using default compiler options unless build flags are requested through environment variables
 2. Optimize with `dccpeep` (optional, fast mode only)
 3. Assemble app.MAC with M80
 4. Strip DCCRTL runtime using dccrtlstrip
@@ -191,9 +191,17 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast 
 
 ### Environment Variables
 
-- `DCC_STACK_SIZE` — C stack reserve in bytes (default: 512)
+- `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
 - `DCC_FORCE_STACK_CHECK` — Enable `-fstack-check` for all builds
+- `DCC_FLOATIO` — Set to `1` to pass `-ffloatio` and keep float `printf` runtime support
+- `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
+- `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
+- `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
+
+Run `powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 -Help` or
+`./scripts/ma.sh --help` for the full option map, including which `dcc` options
+are owned by the helper pipeline.
 
 ## `runall.ps1`
 

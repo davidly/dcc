@@ -64,14 +64,18 @@ function New-UnixLinks {
     $wrapper = @"
 #!/usr/bin/env sh
 export DCC_HOME="$Prefix"
+export PATH="`$DCC_HOME/bin:`$PATH"
 export DCC_INCLUDE="`$DCC_HOME/include`${DCC_INCLUDE:+:`$DCC_INCLUDE}"
 export DCC_LIB="`$DCC_HOME/lib:`$DCC_HOME`${DCC_LIB:+:`$DCC_LIB}"
 export DCC_RUNTIME="`${DCC_RUNTIME:-`$DCC_HOME/lib/DCCRTL.MAC}"
 exec "$Prefix/scripts/ma.sh" "`$@"
 "@
-    $wrapperPath = Join-Path $binDir "dcc-ma"
+    $wrapperPath = Join-Path $binDir "dcc-build"
     Set-Content -LiteralPath $wrapperPath -Value $wrapper -Encoding utf8
     & chmod +x $wrapperPath
+
+    $legacyWrapperPath = Join-Path $binDir "dcc-ma"
+    New-Item -ItemType SymbolicLink -Path $legacyWrapperPath -Target "dcc-build" -Force | Out-Null
 }
 
 function New-UnixEnvironment {

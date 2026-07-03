@@ -9,17 +9,18 @@ commands below work from any folder that holds your `.c` sources.
 
 ## The build script
 
-The primary build command is the `ma` build driver. It compiles, optimizes,
+The primary installed build command is `dcc-build`. It compiles, optimizes,
 strips the runtime, assembles, and links in one step.
 
-On Linux and macOS packages, use the native shell wrapper:
+With an installed package, use the common wrapper command on Windows, macOS, and
+Linux:
 
 ```sh
-dcc-ma foo --mode fast       # builds foo.c -> FOO.COM
-dcc-ma foo --mode nopeep     # skip the dccpeep optimizer
+dcc-build foo --mode fast       # builds foo.c -> FOO.COM
+dcc-build foo --mode nopeep     # skip the dccpeep optimizer
 ```
 
-From a source checkout or portable package, run the script directly:
+From a source checkout, run the implementation script directly:
 
 ```sh
 ./scripts/ma.sh foo --mode fast

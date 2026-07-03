@@ -7,7 +7,7 @@ and links to produce a .COM executable.
 .DESCRIPTION
 This is the PowerShell equivalent of ma.sh. It runs under Windows PowerShell 5.1
 and PowerShell 7+, and handles the complete build pipeline:
-  1. Compile source with dcc (detect floatio, stack-check, floatio flags)
+    1. Compile source with dcc
   2. Optimize with dccpeep (optional)
   3. Assemble app.MAC with M80
   4. Strip DCCRTL runtime using dccrtlstrip
@@ -55,8 +55,12 @@ parameters below are forwarded to Invoke-MaBuild.
     DCC_INCLUDE      additional dcc include directories, separated by the host path separator
     DCC_LIB          additional runtime/tool asset roots, separated by the host path separator
     DCC_RUNTIME      explicit path to DCCRTL.MAC
-    DCC_STACK_SIZE   C stack reserve in bytes (default: 512)
+    DCC_ARGS         extra whitespace-separated dcc options, such as -DNAME=1 -UOLD
+    DCC_STACK_SIZE   C stack reserve in bytes; when unset, dcc uses its default
     DCC_FORCE_STACK_CHECK  enable -fstack-check for all apps
+    DCC_FLOATIO      enable dcc -ffloatio and keep float printf runtime support
+    DCC_LONGIO       enable dcc -flongio and keep long integer printf runtime support
+    NTVCM_ARGS       extra whitespace-separated ntvcm options, such as -p -s:4000000
 #>
 
 param(
@@ -69,8 +73,70 @@ param(
 
     [string]$BuildDir = "build",
     [string]$Emulator = "ntvcm",
-    [string]$SourcePath = ""
+        [string]$SourcePath = "",
+        [Alias("h")]
+        [switch]$Help
 )
+
+function Show-MaHelp {
+        @'
+usage: ma.ps1 <name> [full|fast|nopeep] [-SourcePath FILE] [-BuildDir DIR] [-Emulator COMMAND]
+             ma.ps1 -Help
+
+build modes:
+    full       build optimized and unoptimized outputs (default)
+    fast       run dccpeep after dcc
+    nopeep     skip dccpeep
+
+script options:
+    -Name <name>        app name without .c; searches tests/<name>.c and ./<name>.c
+    -SourcePath <file>  explicit C source path
+    -BuildDir <dir>     build artifact directory (default: build)
+    -Emulator <command> emulator command used for CP/M tools (default: ntvcm)
+    -Help               show this help
+
+dcc pipeline:
+    dcc -> dccpeep (fast mode) -> ntvcm M80 -> dccrtlstrip -> ntvcm M80 -> ntvcm L80
+
+dcc options controlled by this helper:
+    dcc option                  how to set it
+    -I <dir>                    DCC_INCLUDE, path-separator separated; package include/ is added automatically
+    -D<name>[=value], -U<name>  DCC_ARGS="-DNAME=1 -UOLD"
+    -s, -stack <bytes>          DCC_STACK_SIZE=<bytes>; omitted when unset
+    -fstack-check               DCC_FORCE_STACK_CHECK=1, or source contains DCC_STACK_CHECK
+    -f, -ffloatio               DCC_FLOATIO=1
+    -fl, -flongio               DCC_LONGIO=1
+    -o <file>                   managed by ma.ps1
+    input.c                     selected by -Name or -SourcePath
+
+dcc options not suitable for ma.ps1:
+    -c, -module                 use a manual dcc/M80/L80 pipeline for multi-module builds
+    -v, --version, -h, --help   run dcc directly
+
+tool and asset overrides:
+    DCC, DCCPEEP, DCCRTLSTRIP   host tool paths or command names
+    NTVCM, M80, L80             emulator and CP/M tool command names
+    DCC_HOME                    package/install root for bin/, include/, lib/, m80.com, l80.com
+    DCC_LIB                     extra runtime/tool asset roots, path-separator separated
+    DCC_RUNTIME                 explicit DCCRTL.MAC path
+
+ntvcm options:
+    NTVCM_ARGS="-p -s:4000000"  add ntvcm options before M80/L80
+    Common ntvcm options: -p performance, -s:X clock Hz, -t trace, -i instruction trace,
+    -8 use 8080 instruction set, -f:<file> keystroke input, -V version.
+
+examples:
+    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 hello -SourcePath .\hello.c -Mode fast
+    $env:DCC_STACK_SIZE="1024"; powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve fast
+    $env:DCC_ARGS="-DDEBUG=1"; $env:NTVCM_ARGS="-p -s:4000000"; powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 hello fast
+'@ | Write-Host
+}
+
+function Split-MaArgumentString {
+        param([string]$ArgumentText)
+        if (-not $ArgumentText) { return @() }
+        return @($ArgumentText -split '\s+' | Where-Object { $_ })
+}
 
 # CRLF conversion helper for M80. Reads as text, normalizes all line endings to
 # LF, then emits CRLF without a BOM so M80 sees clean bytes.
@@ -290,16 +356,11 @@ function Invoke-MaBuild {
         return $false
     }
 
-    # Detect floatio / longio requirements
-    $dccFloatio = 0
-    $dccLongio = 0
+    # Optional printf runtime support. Leave these off by default so ma.ps1
+    # matches direct dcc invocation unless the caller opts in.
+    $dccFloatio = ($env:DCC_FLOATIO -eq "1")
+    $dccLongio = ($env:DCC_LONGIO -eq "1")
     $sourceContent = Get-Content -Path $sourceFile -Raw
-    if ($sourceContent -match '%[-+ #0-9.*]*[fF]') {
-        $dccFloatio = 1
-    }
-    if ($sourceContent -match '%[-+ #0-9.*]*l[duxXs]') {
-        $dccLongio = 1
-    }
 
     # Detect/enable stack check
     $dccStackChk = ""
@@ -314,15 +375,21 @@ function Invoke-MaBuild {
     # included so it cannot linger on case-sensitive filesystems.
     Remove-Item -Path @($appMac, $appRel, $appCom, (Join-Path $BuildDir "$lowerBase.com"), (Join-Path $BuildDir "$upperBase.PRN"), $peepTmp, $rtlSrc, $rtlMin, $rtlMinRel, (Join-Path $BuildDir "RTLMIN.PRN")) -Force -ErrorAction SilentlyContinue
 
-    # Determine stack size: explicit parameter wins, then env var, then default.
+    # Determine stack size: explicit parameter wins, then env var. When neither
+    # is set, omit -stack so dcc uses its own default.
     $dccStackSize = if ($StackSize -gt 0) { "$StackSize" }
                     elseif ($env:DCC_STACK_SIZE) { $env:DCC_STACK_SIZE }
-                    else { "512" }
+                    else { "" }
+    $extraDccArgs = @(Split-MaArgumentString $env:DCC_ARGS)
+    $ntvcmArgs = @(Split-MaArgumentString $env:NTVCM_ARGS)
 
     # Compile to .MAC
-    $dccArgs = @($dccStackChk, "-stack", $dccStackSize)
-    if ($dccFloatio -eq 1) { $dccArgs += "-ffloatio" }
-    if ($dccLongio  -eq 1) { $dccArgs += "-flongio"  }
+    $dccArgs = @()
+    if ($dccStackChk) { $dccArgs += $dccStackChk }
+    if ($dccStackSize) { $dccArgs += @("-stack", $dccStackSize) }
+    if ($dccFloatio) { $dccArgs += "-ffloatio" }
+    if ($dccLongio) { $dccArgs += "-flongio" }
+    $dccArgs += $extraDccArgs
     foreach ($includeDir in $includeDirs) { $dccArgs += @("-I", $includeDir) }
     $dccArgs += @($sourceFile, "-o", $appMac)
 
@@ -360,7 +427,7 @@ function Invoke-MaBuild {
     # Assemble app
     Write-Step "  Assembling $upperBase.MAC..."
     Push-Location $BuildDir
-    $m80Out = & $NTVCM "$M80" "=$upperBase.MAC" "/X" "/O" "/Z" "/L" 2>&1
+    $m80Out = & $NTVCM @ntvcmArgs "$M80" "=$upperBase.MAC" "/X" "/O" "/Z" "/L" 2>&1
     Pop-Location
     if (-not $Quiet) { $m80Out | Write-Host }
 
@@ -378,8 +445,8 @@ function Invoke-MaBuild {
     ConvertTo-CRLF $rtlSrc
 
     $stripArgs = @()
-    if ($dccFloatio -eq 1) { $stripArgs += @("-k", "_pffio") }
-    if ($dccLongio  -eq 1) { $stripArgs += @("-k", "_pflng") }
+    if ($dccFloatio) { $stripArgs += @("-k", "_pffio") }
+    if ($dccLongio) { $stripArgs += @("-k", "_pflng") }
     $stripArgs += @("-r", $rtlSrc, "-o", $rtlMin, $appMac)
 
     $stripOut = & $DCCRTLSTRIP @stripArgs 2>&1
@@ -390,8 +457,8 @@ function Invoke-MaBuild {
     # Assemble runtime and link
     Write-Step "  Assembling RTLMIN.MAC and linking..."
     Push-Location $BuildDir
-    $rtlOut = & $NTVCM "$M80" "=RTLMIN.MAC" "/X" "/O" "/Z" 2>&1
-    $linkOut = & $NTVCM "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E" 2>&1
+    $rtlOut = & $NTVCM @ntvcmArgs "$M80" "=RTLMIN.MAC" "/X" "/O" "/Z" 2>&1
+    $linkOut = & $NTVCM @ntvcmArgs "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E" 2>&1
     Pop-Location
     if (-not $Quiet) { $rtlOut | Write-Host; $linkOut | Write-Host }
 
@@ -433,8 +500,13 @@ function Invoke-MaBuild {
 # parameters. Dot-sourcing leaves InvocationName as "." and skips this block,
 # exposing Invoke-MaBuild and ConvertTo-CRLF to the caller.
 if ($MyInvocation.InvocationName -ne '.') {
+    if ($Help -or $Name -eq "help" -or $Name -eq "--help" -or $Name -eq "-h") {
+        Show-MaHelp
+        exit 0
+    }
     if (-not $Name) {
-        Write-Error "Name is required. Usage: ma.ps1 <name> [full|fast|nopeep]"
+        Show-MaHelp
+        Write-Error "Name is required."
         exit 1
     }
     $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath

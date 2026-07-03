@@ -6,18 +6,22 @@ Run these scripts from the dcc checkout or from an installed package. Linux and
 macOS packages include a native shell build driver, so normal package users do
 not need PowerShell to build a single app.
 
-## Build Driver (`ma.sh` / `ma.ps1`)
+## Build Driver (`dcc-build`, `ma.sh` / `ma.ps1`)
 
 The build driver compiles one app, optionally runs `dccpeep`, strips the
 runtime, assembles, and links a `.COM` executable.
 
-- Linux/macOS: use `scripts/ma.sh`, or `dcc-ma` after package installation.
-- Windows/cross-platform automation: use `scripts/ma.ps1` with Windows PowerShell 5.1 or PowerShell 7+.
+- Installed packages: use `dcc-build` on Windows, macOS, and Linux.
+- Source checkout: use `scripts/ma.sh` on Linux/macOS, or `scripts/ma.ps1` with Windows PowerShell 5.1 or PowerShell 7+.
 
 ### Build Driver Usage
 
 ```pwsh
 ./scripts/ma.ps1 <name> [mode] [options]
+```
+
+```sh
+dcc-build <name> [mode] [options]
 ```
 
 ```sh
@@ -37,6 +41,12 @@ runtime, assembles, and links a `.COM` executable.
 ```
 
 ```sh
+dcc-build triangle
+dcc-build sieve nopeep
+dcc-build cobint --mode fast --build-dir mybuild
+```
+
+```sh
 ./scripts/ma.sh triangle
 ./scripts/ma.sh sieve nopeep
 ./scripts/ma.sh cobint --mode fast --build-dir mybuild
@@ -53,13 +63,20 @@ runtime, assembles, and links a `.COM` executable.
 
 ### Environment Variables
 
-- `DCC_STACK_SIZE` — C stack reserve in bytes (default: 512)
+- `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
 - `DCC_FORCE_STACK_CHECK` — Force `-fstack-check` on all builds
+- `DCC_FLOATIO` — Set to `1` to pass `-ffloatio` and keep float `printf` runtime support
+- `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
+- `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
+- `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
 - `DCC_HOME` — dcc package/install root; used to find `include/`, `lib/`, and CP/M tools
 - `DCC_INCLUDE` — extra include directories, separated by the host path separator
 - `DCC_LIB` — extra runtime/tool asset roots, separated by the host path separator
 - `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
+
+Run `ma.ps1 -Help` or `ma.sh --help` for the full option map, including which
+`dcc` options are owned by the helper pipeline.
 
 ## Test Suite Runner (`runall.ps1`)
 

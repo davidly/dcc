@@ -84,9 +84,6 @@ foreach ($script in $helperScripts) {
     Copy-RequiredFile -Source (Join-Path $repoRoot "scripts/$script") -Destination (Join-Path $scriptsDir $script)
 }
 
-Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
-Copy-RequiredFile -Source (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $packageRoot "LICENSE")
-
 function Write-PackageTextFile {
     param(
         [string]$Path,
@@ -95,6 +92,43 @@ function Write-PackageTextFile {
 
     Set-Content -LiteralPath $Path -Value $Content -Encoding utf8
 }
+
+$windowsBuildCommand = @'
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%..") do set "DCC_HOME=%%~fI"
+set "PATH=%DCC_HOME%\bin;%PATH%"
+set "DCC_INCLUDE=%DCC_HOME%\include;%DCC_INCLUDE%"
+set "DCC_LIB=%DCC_HOME%\lib;%DCC_HOME%;%DCC_LIB%"
+if not defined DCC_RUNTIME set "DCC_RUNTIME=%DCC_HOME%\lib\DCCRTL.MAC"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%DCC_HOME%\scripts\ma.ps1" %*
+exit /b %ERRORLEVEL%
+'@
+
+$unixBuildCommand = @'
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+DCC_HOME=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+export DCC_HOME
+export PATH="$DCC_HOME/bin:$PATH"
+export DCC_INCLUDE="$DCC_HOME/include${DCC_INCLUDE:+:$DCC_INCLUDE}"
+export DCC_LIB="$DCC_HOME/lib:$DCC_HOME${DCC_LIB:+:$DCC_LIB}"
+export DCC_RUNTIME="${DCC_RUNTIME:-$DCC_HOME/lib/DCCRTL.MAC}"
+exec "$DCC_HOME/scripts/ma.sh" "$@"
+'@
+
+if ($IsWindows) {
+    Write-PackageTextFile -Path (Join-Path $binDir "dcc-build.cmd") -Content $windowsBuildCommand
+}
+else {
+    Write-PackageTextFile -Path (Join-Path $binDir "dcc-build") -Content $unixBuildCommand
+    & chmod +x (Join-Path $binDir "dcc-build")
+}
+
+Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
+Copy-RequiredFile -Source (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $packageRoot "LICENSE")
 
 $installPs1 = @'
 param(
@@ -275,22 +309,24 @@ for tool in dcc dccpeep dccrtlstrip ntvcm; do
     fi
 done
 
-cat > "$LINK_DIR/dcc-ma" <<EOF
+cat > "$LINK_DIR/dcc-build" <<EOF
 #!/usr/bin/env sh
 export DCC_HOME="$PREFIX"
+export PATH="\$DCC_HOME/bin:\$PATH"
 export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
 export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
 export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
 exec "$PREFIX/scripts/ma.sh" "\$@"
 EOF
-chmod +x "$LINK_DIR/dcc-ma"
+chmod +x "$LINK_DIR/dcc-build"
+ln -sf "$LINK_DIR/dcc-build" "$LINK_DIR/dcc-ma"
 
 echo "dcc installed to: $PREFIX"
 echo "Command links written to: $LINK_DIR"
 echo "Helper scripts are in: $PREFIX/scripts"
 echo "Package environment file written to: $PREFIX/dcc-env.sh"
 echo "Source it with: . $PREFIX/dcc-env.sh"
-echo "Use dcc-ma as a convenience wrapper for scripts/ma.sh."
+echo "Use dcc-build to build CP/M apps with dcc."
 '@
 
 $uninstallSh = @'
@@ -301,7 +337,7 @@ PREFIX=${PREFIX:-"$HOME/.local/dcc-cpm-z80"}
 LINK_DIR=${LINK_DIR:-"$HOME/.local/bin"}
 
 rm -rf "$PREFIX"
-for tool in dcc dccpeep dccrtlstrip ntvcm dcc-ma; do
+for tool in dcc dccpeep dccrtlstrip ntvcm dcc-build dcc-ma; do
     if [ -L "$LINK_DIR/$tool" ] || [ -f "$LINK_DIR/$tool" ]; then
         rm -f "$LINK_DIR/$tool"
     fi
@@ -332,7 +368,7 @@ public standard-library headers.
 
 ## Layout
 
-- bin/ - dcc, dccpeep, dccrtlstrip, and ntvcm for this host platform.
+- bin/ - dcc, dccpeep, dccrtlstrip, ntvcm, and dcc-build for this host platform.
 - include/ - dcc public C headers.
 - lib/ - DCCRTL.MAC runtime library.
 - scripts/ - helper scripts, including ma.sh and ma.ps1.
@@ -357,9 +393,10 @@ By default, Unix installs to `\$HOME/.local/dcc-cpm-z80` and links commands into
 `\$HOME/.local/bin`. Override with `PREFIX=/path/to/dcc LINK_DIR=/path/to/bin
 ./install.sh`.
 
-The Unix installer writes `dcc-env.sh` under the install prefix. Source it from
+The Unix installer writes `dcc-env.sh` under the install prefix and creates a
+`dcc-build` command in `LINK_DIR`. Source `dcc-env.sh` from
 custom shells or scripts when you need the package environment outside the
-`dcc-ma` wrapper:
+`dcc-build` wrapper:
 
 ```sh
 . \$HOME/.local/dcc-cpm-z80/dcc-env.sh
@@ -374,7 +411,7 @@ Linux/macOS:
 ```sh
 export PATH="\$PWD/bin:\$PATH"
 export DCC_HOME="\$PWD"
-./scripts/ma.sh hello --source-path ./hello.c --mode fast
+dcc-build hello --source-path ./hello.c --mode fast
 ```
 
 Windows PowerShell:
@@ -382,7 +419,7 @@ Windows PowerShell:
 ```pwsh
 `$env:PATH = "`$PWD/bin`$([IO.Path]::PathSeparator)`$env:PATH"
 `$env:DCC_HOME = "`$PWD"
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 hello -SourcePath .\hello.c -Mode fast
+dcc-build hello -SourcePath .\hello.c -Mode fast
 ```
 
 The resulting CP/M .COM and intermediate build files are written under build/.
