@@ -130,8 +130,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          dotnet tool install --global wix
-          Join-Path $env:USERPROFILE '.dotnet\tools' | Out-File -FilePath $env:GITHUB_PATH -Append
+          dotnet tool install --global wix --version 6.0.2
+          $dotnetTools = Join-Path $env:USERPROFILE '.dotnet\tools'
+          Add-Content -Path $env:GITHUB_PATH -Value $dotnetTools
+          & (Join-Path $dotnetTools 'wix.exe') --version
 
       - name: Create native installer
         shell: pwsh

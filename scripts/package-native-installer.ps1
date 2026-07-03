@@ -122,10 +122,29 @@ function ConvertTo-WixText {
     return [System.Security.SecurityElement]::Escape($Text)
 }
 
+function Get-WixCommandPath {
+    $wixCommand = Get-Command wix -ErrorAction SilentlyContinue
+    if ($wixCommand) { return $wixCommand.Source }
+
+    $candidateRoots = @($env:USERPROFILE, $HOME) | Where-Object { $_ } | Select-Object -Unique
+    foreach ($root in $candidateRoots) {
+        foreach ($candidate in @(
+            (Join-Path $root ".dotnet/tools/wix.exe"),
+            (Join-Path $root ".dotnet/tools/wix")
+        )) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+    }
+
+    throw "WiX Toolset command 'wix' was not found. PATH: $env:PATH"
+}
+
 function New-MsiPackage {
     $versionText = Get-InstallerVersion $Version
-    $wixCommand = Get-Command wix -ErrorAction SilentlyContinue
-    if (-not $wixCommand) { throw "WiX Toolset command 'wix' was not found." }
+    $wixCommandPath = Get-WixCommandPath
+    Write-Host "WiX command: $wixCommandPath"
+    & $wixCommandPath --version
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     $componentIds = [System.Collections.Generic.List[string]]::new()
     $nextId = 1
@@ -190,8 +209,12 @@ function New-MsiPackage {
     $wxs.Add('</Wix>')
     Set-Content -LiteralPath $wxsPath -Value $wxs -Encoding utf8
 
-    & wix build $wxsPath -arch $arch -out $msiPath
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $wixCommandPath build $wxsPath -arch $arch -out $msiPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Generated WiX source ($wxsPath):"
+        Get-Content -LiteralPath $wxsPath | ForEach-Object { Write-Host $_ }
+        exit $LASTEXITCODE
+    }
     Write-Host "Created: $msiPath"
 }
 
