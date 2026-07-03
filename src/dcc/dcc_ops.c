@@ -541,12 +541,6 @@ void emit_logical_shift_right_hl_const(int count)
         emit("\tsrl h\n\trr l\n");
 }
 
-void emit_and_hl_const(unsigned int mask)
-{
-    fprintf(outf, "\tld de,%u\n", mask & 0xffffU);
-    gen_binop('&');
-}
-
 /* AND one 16-bit register pair (hi_reg:lo_reg, e.g. 'd','e' or 'h','l') with
  * a compile-time word mask in place, without a temporary register pair: a
  * byte that is all-ones in the mask is left untouched, a byte that is
@@ -571,6 +565,14 @@ static void emit_and_word_const(char hi_reg, char lo_reg, unsigned int word_mask
         fprintf(outf, "\tld %c,0\n", lo_reg);
     else if (lob != 0xffU)
         fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
+}
+
+/* AND HL with a compile-time mask in place. Used both for the unsigned `%
+ * pow2` fast path and for plain `int_expr & <const>` (see gen_binary_ast):
+ * no temporary register pair or stack use, just the byte-wise logic above. */
+void emit_and_hl_const(unsigned int mask)
+{
+    emit_and_word_const('h', 'l', mask & 0xffffU);
 }
 
 /* AND the DE:HL long value (DE = high word, HL = low word) with a

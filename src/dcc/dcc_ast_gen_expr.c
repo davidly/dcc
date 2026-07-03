@@ -644,6 +644,7 @@ void gen_binary_ast(const struct AstNode *n)
     int lhs_type;
     int common_type;
     const char *float_helper;
+    long const_val;
 
     /* `CONST * expr` mirror of the `expr * CONST` fast path further below:
      * multiplication is commutative, so a qualifying constant on the LEFT
@@ -760,6 +761,21 @@ void gen_binary_ast(const struct AstNode *n)
         }
     }
 
+    /* `lhs & <compile-time constant>` (plain int, e.g. `sq & 7`): lhs is
+     * already in HL and the rhs needs no evaluation, so skip the generic
+     * push-lhs/evaluate-rhs/ex de,hl/pop/and sequence entirely and mask HL
+     * in place with emit_and_hl_const's byte-wise immediate logic (mirrors
+     * the long `& <const>` fast path in gen_long_arith_ast). Tiny one-liner
+     * helpers like `sq & 7` get called an enormous number of times in
+     * search-heavy code, so trimming the push/pop off each call matters. */
+    if (n->op == '&' && ast_const_int_operand_value(n->b, &const_val) &&
+        !type_is_long(common_type)) {
+        emit_and_hl_const((unsigned int)(const_val & 0xffffL));
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     emit("\tpush hl\n");
     ast_gen_expr(n->b);
     if (type_is_long(g_expr_type)) {
@@ -806,6 +822,29 @@ void gen_shift_ast(const struct AstNode *n)
         g_long_from16 = 0;
         return;
     }
+    /* Compile-time shift count on a plain int: unroll directly instead of
+     * the runtime b-counted loop below. Mirrors the long case's
+     * emit_shift_const_long fast path just above: `<<` is a handful of
+     * `add hl,hl`, and `>>` reuses the existing arithmetic/logical
+     * constant-count shifters already used elsewhere for pointer scaling.
+     * Restricted to 0..15 (a 16-bit int's full width) so out-of-range counts
+     * keep falling through to the generic runtime loop unchanged. */
+    if (n->b->kind == AST_INT_LIT && ast_value_is_plain_int(n->b) &&
+        n->b->ival >= 0 && n->b->ival < 16) {
+        int count = (int)n->b->ival;
+        if (n->op == TOK_SHL || n->op == TOK_SHLEQ) {
+            while (count-- > 0)
+                emit("\tadd hl,hl\n");
+        } else if (lhs_type & TYPE_UNSIGNED) {
+            emit_logical_shift_right_hl_const(count);
+        } else {
+            emit_arith_shift_right_hl_const(count);
+        }
+        g_expr_type = lhs_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     emit("\tpush hl\n");
     ast_gen_expr(n->b);
     emit("\tld b,l\n\tpop hl\n");
@@ -3126,6 +3165,25 @@ void gen_logical_ast(const struct AstNode *n)
 {
     int lhs_type;
     int le;
+
+    /* `x >= LO && x <= HI` (see ast_is_range_check_cond in
+     * dcc_ast_gen_cond.c) used as a plain value, e.g. `return sq >= 0 && sq
+     * < 64;` rather than an if/while condition: reuse the same fused single-
+     * evaluation range-check branch and just materialize its 0/1 result,
+     * instead of the generic path's two independent evaluations/promotions
+     * of x plus two intermediate booleans. */
+    if (ast_is_range_check_cond(n, NULL, NULL, NULL)) {
+        int lt = new_label();
+        le = new_label();
+        ast_gen_range_check_branch(n, lt, 1);
+        emit("\tld hl,0\n");
+        emit_jp_label("jp", le);
+        emit_label(lt);
+        emit("\tld hl,1\n");
+        emit_label(le);
+        g_expr_type = TYPE_INT;
+        return;
+    }
 
     if (n->kind == AST_LOGAND) {
         int lf = 0;

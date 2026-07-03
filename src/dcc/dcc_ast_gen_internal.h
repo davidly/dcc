@@ -199,6 +199,8 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op);
 int ast_is_byte_cmp_cond(const struct AstNode *n);
 int ast_is_direct_byte_bitand_cond(const struct AstNode *n);
 int ast_is_direct_wide_bitand_cond(const struct AstNode *n);
+int ast_is_range_check_cond(const struct AstNode *n, const struct AstNode **out_x,
+                                   long *out_lo, long *out_hi);
 int ast_is_direct_long_const_eq_cond(const struct AstNode *n);
 int ast_global_char_index_cond(const struct AstNode *n, struct Sym **out_sym);
 void ast_gen_global_char_index_branch(const struct AstNode *n, int label,
@@ -227,6 +229,8 @@ void ast_gen_direct_byte_bitand_branch(const struct AstNode *n, int label,
                                              int branch_when_true);
 void ast_gen_direct_wide_bitand_branch(const struct AstNode *n, int label,
                                               int branch_when_true);
+void ast_gen_range_check_branch(const struct AstNode *n, int label,
+                                       int branch_when_true);
 void ast_gen_direct_long_const_eq_branch(const struct AstNode *n, int label,
                                                 int branch_when_true);
 void ast_gen_float_cmp_branch(const struct AstNode *n, int label,

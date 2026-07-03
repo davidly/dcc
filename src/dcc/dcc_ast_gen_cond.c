@@ -517,6 +517,96 @@ int ast_is_direct_wide_bitand_cond(const struct AstNode *n)
     return n->b->ival >= 0 && n->b->ival <= 255;
 }
 
+/* Extract an inclusive lower bound from one relational comparison node:
+ * `x >= LO`, `x > LO`, `LO <= x`, or `LO < x` (LO a compile-time constant).
+ * The strict forms are folded to their inclusive equivalent (`x > LO`
+ * becomes `x >= LO+1`) so the caller only ever deals with inclusive bounds. */
+static int ast_range_extract_lower(const struct AstNode *cmp,
+                                    const struct AstNode **out_x, long *out_lo)
+{
+    if (cmp == NULL || cmp->kind != AST_BINARY)
+        return 0;
+    if (cmp->op == TOK_GE && cmp->b != NULL && cmp->b->kind == AST_INT_LIT) {
+        *out_x = cmp->a; *out_lo = cmp->b->ival; return 1;
+    }
+    if (cmp->op == '>' && cmp->b != NULL && cmp->b->kind == AST_INT_LIT) {
+        *out_x = cmp->a; *out_lo = cmp->b->ival + 1; return 1;
+    }
+    if (cmp->op == TOK_LE && cmp->a != NULL && cmp->a->kind == AST_INT_LIT) {
+        *out_x = cmp->b; *out_lo = cmp->a->ival; return 1;
+    }
+    if (cmp->op == '<' && cmp->a != NULL && cmp->a->kind == AST_INT_LIT) {
+        *out_x = cmp->b; *out_lo = cmp->a->ival + 1; return 1;
+    }
+    return 0;
+}
+
+/* Same idea as ast_range_extract_lower, but for an inclusive upper bound:
+ * `x <= HI`, `x < HI`, `HI >= x`, or `HI > x`. */
+static int ast_range_extract_upper(const struct AstNode *cmp,
+                                    const struct AstNode **out_x, long *out_hi)
+{
+    if (cmp == NULL || cmp->kind != AST_BINARY)
+        return 0;
+    if (cmp->op == TOK_LE && cmp->b != NULL && cmp->b->kind == AST_INT_LIT) {
+        *out_x = cmp->a; *out_hi = cmp->b->ival; return 1;
+    }
+    if (cmp->op == '<' && cmp->b != NULL && cmp->b->kind == AST_INT_LIT) {
+        *out_x = cmp->a; *out_hi = cmp->b->ival - 1; return 1;
+    }
+    if (cmp->op == TOK_GE && cmp->a != NULL && cmp->a->kind == AST_INT_LIT) {
+        *out_x = cmp->b; *out_hi = cmp->a->ival; return 1;
+    }
+    if (cmp->op == '>' && cmp->a != NULL && cmp->a->kind == AST_INT_LIT) {
+        *out_x = cmp->b; *out_hi = cmp->a->ival - 1; return 1;
+    }
+    return 0;
+}
+
+/* Is `n` the classic range-check idiom `x >= LO && x <= HI` (any mix of
+ * inclusive/strict spellings and operand orders, e.g. `x > LO && x < HI` or
+ * `LO <= x && HI > x`), where LO and HI are compile-time constants and both
+ * halves name the exact same plain scalar identifier? This is extremely
+ * common for character classification (`p >= 'A' && p <= 'Z'`) and bounds
+ * checks (`sq >= 0 && sq < 64`). The generic codegen evaluates and promotes
+ * `x` twice - once per comparison, each a fresh reload-and-sign-extend for a
+ * byte-sized x - and materializes an intermediate 0/1 bool for each half
+ * before combining them. Since `x` is a bare identifier read here (never a
+ * call, dereference, or anything else with a side effect or a reason to
+ * produce a different value on a second read), fusing the two reads into one
+ * is always safe: nothing can change `x` between them. ast_gen_range_check_
+ * branch turns the pair into a single evaluation, a single promotion, and one
+ * unsigned-subtract-and-compare against the span, with a direct branch and no
+ * intermediate bool at all. */
+int ast_is_range_check_cond(const struct AstNode *n, const struct AstNode **out_x,
+                             long *out_lo, long *out_hi)
+{
+    const struct AstNode *x1;
+    const struct AstNode *x2;
+    long lo;
+    long hi;
+
+    if (n == NULL || n->kind != AST_LOGAND)
+        return 0;
+    if (!ast_range_extract_lower(n->a, &x1, &lo))
+        return 0;
+    if (!ast_range_extract_upper(n->b, &x2, &hi))
+        return 0;
+    if (x1 == NULL || x2 == NULL || x1->kind != AST_IDENT || x2->kind != AST_IDENT)
+        return 0;
+    if (strcmp(x1->sval, x2->sval) != 0)
+        return 0;
+    if (!ast_gen_supported(x1) || !ast_value_is_plain_int(x1))
+        return 0;
+    if (lo > hi || (hi - lo) >= 0xffffL)
+        return 0;
+
+    if (out_x) *out_x = x1;
+    if (out_lo) *out_lo = lo;
+    if (out_hi) *out_hi = hi;
+    return 1;
+}
+
 /* Is `n` an `==`/`!=` comparison of a long (4-byte) ix-direct scalar against
  * a compile-time integer constant (either operand order)?  ast_long_cmp_supported
  * already accepts this shape, but its emitter (gen_long_cmp_ast) treats the
@@ -1423,6 +1513,33 @@ void ast_gen_direct_wide_bitand_branch(const struct AstNode *n, int label,
         emit_jp_label("jp z,", label);
 }
 
+/* Emitter for ast_is_range_check_cond: evaluate `x` exactly once (instead of
+ * once per original comparison - ast_gen_expr on a bare identifier always
+ * arrives already promoted to int width, per gen_ident/emit_load_sym_value_
+ * direct/emit_load_from_hl, so there is no separate promotion step to run
+ * here), then reduce `LO <= x <= HI` to the standard single-unsigned-compare
+ * range trick: bias x down by LO (a no-op when LO is 0) and check that the
+ * unsigned result is no more than (HI-LO), i.e. strictly less than
+ * (HI-LO)+1. This works regardless of x's or the bounds' signedness - it
+ * operates on the raw 16-bit bit pattern the whole way through, the same
+ * reason the trick is standard practice in hand-written C. */
+void ast_gen_range_check_branch(const struct AstNode *n, int label,
+                                       int branch_when_true)
+{
+    const struct AstNode *x;
+    long lo;
+    long hi;
+
+    ast_is_range_check_cond(n, &x, &lo, &hi);
+
+    ast_gen_expr(x);
+
+    if ((lo & 0xffffL) != 0)
+        fprintf(outf, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", lo & 0xffffL);
+    fprintf(outf, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", (hi - lo + 1) & 0xffffL);
+    emit_jp_label(branch_when_true ? "jp c," : "jp nc,", label);
+}
+
 /* Emitter for ast_is_direct_long_const_eq_cond: XOR each stored byte against
  * its matching constant byte (skipping a byte whose constant is 0 - xor 0 is
  * a no-op), OR-ing the running result in C so the whole thing collapses to a
@@ -1522,6 +1639,10 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
         } else {
             ast_gen_cond_branch(n->b, label, branch_when_true);
         }
+        return;
+    }
+    if (ast_is_range_check_cond(n, NULL, NULL, NULL)) {
+        ast_gen_range_check_branch(n, label, branch_when_true);
         return;
     }
     if (ast_is_const_cmp_cond(n)) {
