@@ -24,14 +24,14 @@ https://github.com/gloveboxes/dcc/releases/tag/v2.0.0
 Direct package URLs:
 
 ```text
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-x64.deb
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-arm64.deb
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-x64.tar.gz
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-arm64.tar.gz
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-windows-x64.msi
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-windows-arm64.msi
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-windows-x64.zip
-https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-windows-arm64.zip
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-linux-x64.deb
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-linux-arm64.deb
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-linux-x64.tar.gz
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-linux-arm64.tar.gz
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-windows-x64.msi
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-windows-arm64.msi
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-windows-x64.zip
+https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-windows-arm64.zip
 ```
 
 Ubuntu ISO URLs:
@@ -65,14 +65,14 @@ ARM64 package.
 
 ## Package PATH Behavior
 
-- Linux `.deb`: installs to `/opt/dcc-4-cpm-z80` and creates command links in
+- Linux `.deb`: installs to `/opt/dcc-cpm-z80` and creates command links in
   `/usr/bin` for `dcc`, `dccpeep`, `dccrtlstrip`, `ntvcm`, and `dcc-ma`.
-- macOS `.pkg`: installs to `/usr/local/dcc-4-cpm-z80` and creates command
+- macOS `.pkg`: installs to `/usr/local/dcc-cpm-z80` and creates command
   links in `/usr/local/bin`.
-- Windows `.msi`: rebuilt MSI packages add `%ProgramFiles%\dcc-4-cpm-z80\bin`
-  and `%ProgramFiles%\dcc-4-cpm-z80\scripts` to the user `Path`. Restart the
+- Windows `.msi`: rebuilt MSI packages add `%ProgramFiles%\dcc-cpm-z80\bin`
+  and `%ProgramFiles%\dcc-cpm-z80\scripts` to the user `Path`. Restart the
   terminal after install so it sees the updated environment.
-- Windows `.zip`: `pwsh ./install.ps1 -AddToUserPath` adds the package `bin`
+- Windows `.zip`: `powershell.exe -ExecutionPolicy Bypass -File .\install.ps1 -AddToUserPath` adds the package `bin`
   and `scripts` directories to the user `Path`.
 
 The `v2.0.0` Windows MSI assets add the package directories to the user
@@ -80,7 +80,7 @@ The `v2.0.0` Windows MSI assets add the package directories to the user
 prepend the paths before testing or open a new terminal:
 
 ```powershell
-$InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
+$InstallRoot = Join-Path $env:ProgramFiles "dcc-cpm-z80"
 $env:Path = "$InstallRoot\bin;$InstallRoot\scripts;$env:Path"
 ```
 
@@ -250,7 +250,7 @@ sudo apt install -y openssh-server
 Download the x64 package inside the guest:
 
 ```sh
-wget https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-x64.deb
+wget https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-linux-x64.deb
 ```
 
 The Linux package uses native binaries and a native `scripts/ma.sh` build
@@ -259,7 +259,7 @@ driver, so package smoke tests do not require PowerShell.
 Install the package:
 
 ```sh
-sudo apt install -y ./dcc-4-cpm-z80-v2.0.0-linux-x64.deb
+sudo apt install -y ./dcc-cpm-z80-v2.0.0-linux-x64.deb
 ```
 
 Verify the installed commands:
@@ -356,13 +356,13 @@ From the host, copy the ARM64 package into the guest. Replace `ubuntu` with the
 user you created during install:
 
 ```sh
-scp -P 2222 dcc-4-cpm-z80-v2.0.0-linux-arm64.deb ubuntu@127.0.0.1:/tmp/
+scp -P 2222 dcc-cpm-z80-v2.0.0-linux-arm64.deb ubuntu@127.0.0.1:/tmp/
 ```
 
 Or download it directly inside the guest:
 
 ```sh
-wget https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-linux-arm64.deb
+wget https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-linux-arm64.deb
 ```
 
 The ARM64 Linux package uses native binaries and a native `scripts/ma.sh` build
@@ -371,7 +371,7 @@ driver, so package smoke tests do not require PowerShell.
 Install the ARM64 package:
 
 ```sh
-sudo apt install -y ./dcc-4-cpm-z80-v2.0.0-linux-arm64.deb
+sudo apt install -y ./dcc-cpm-z80-v2.0.0-linux-arm64.deb
 ```
 
 Verify architecture and installed commands:
@@ -420,27 +420,21 @@ virt-install \
   --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb
 ```
 
-Inside the Windows guest, install PowerShell 7 if it is not already present:
-
-```powershell
-winget install --id Microsoft.PowerShell --source winget
-```
-
 Download and install the x64 MSI:
 
 ```powershell
 Invoke-WebRequest `
-  -Uri "https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-windows-x64.msi" `
-  -OutFile "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-x64.msi"
+  -Uri "https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-windows-x64.msi" `
+  -OutFile "$env:TEMP\dcc-cpm-z80-v2.0.0-windows-x64.msi"
 
-msiexec /i "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-x64.msi" /qn /norestart
+msiexec /i "$env:TEMP\dcc-cpm-z80-v2.0.0-windows-x64.msi" /qn /norestart
 ```
 
 If the current terminal was already open before MSI installation, update the
 current session PATH before testing:
 
 ```powershell
-$InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
+$InstallRoot = Join-Path $env:ProgramFiles "dcc-cpm-z80"
 $env:Path = "$InstallRoot\bin;$InstallRoot\scripts;$env:Path"
 ```
 
@@ -526,24 +520,21 @@ qemu-system-aarch64 \
 After installation, boot from disk with the same command but omit the `install`
 drive and `usb-storage` lines. Start `swtpm` first if it is not already running.
 
-Inside the Windows ARM64 guest, install PowerShell 7 if needed, then install the
-ARM64 MSI:
+Inside the Windows ARM64 guest, install the ARM64 MSI:
 
 ```powershell
-winget install --id Microsoft.PowerShell --source winget
-
 Invoke-WebRequest `
-  -Uri "https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-4-cpm-z80-v2.0.0-windows-arm64.msi" `
-  -OutFile "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-arm64.msi"
+  -Uri "https://github.com/gloveboxes/dcc/releases/download/v2.0.0/dcc-cpm-z80-v2.0.0-windows-arm64.msi" `
+  -OutFile "$env:TEMP\dcc-cpm-z80-v2.0.0-windows-arm64.msi"
 
-msiexec /i "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-arm64.msi" /qn /norestart
+msiexec /i "$env:TEMP\dcc-cpm-z80-v2.0.0-windows-arm64.msi" /qn /norestart
 ```
 
 If the current terminal was already open before MSI installation, update the
 current session PATH before testing:
 
 ```powershell
-$InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
+$InstallRoot = Join-Path $env:ProgramFiles "dcc-cpm-z80"
 $env:Path = "$InstallRoot\bin;$InstallRoot\scripts;$env:Path"
 ```
 
@@ -596,11 +587,11 @@ hello from dcc package
 Also verify the package files are where the installer expects them:
 
 ```sh
-ls -l /opt/dcc-4-cpm-z80
-ls -l /opt/dcc-4-cpm-z80/bin
-ls -l /opt/dcc-4-cpm-z80/scripts/ma.sh /opt/dcc-4-cpm-z80/scripts/ma.ps1
-ls -l /opt/dcc-4-cpm-z80/dcc-env.sh
-ls -l /opt/dcc-4-cpm-z80/DCCRTL.MAC /opt/dcc-4-cpm-z80/m80.com /opt/dcc-4-cpm-z80/l80.com
+ls -l /opt/dcc-cpm-z80
+ls -l /opt/dcc-cpm-z80/bin
+ls -l /opt/dcc-cpm-z80/scripts/ma.sh /opt/dcc-cpm-z80/scripts/ma.ps1
+ls -l /opt/dcc-cpm-z80/dcc-env.sh
+ls -l /opt/dcc-cpm-z80/DCCRTL.MAC /opt/dcc-cpm-z80/m80.com /opt/dcc-cpm-z80/l80.com
 ```
 
 ## Linux Uninstall Test
@@ -608,7 +599,7 @@ ls -l /opt/dcc-4-cpm-z80/DCCRTL.MAC /opt/dcc-4-cpm-z80/m80.com /opt/dcc-4-cpm-z8
 Remove the package:
 
 ```sh
-sudo apt remove -y dcc-4-cpm-z80
+sudo apt remove -y dcc-cpm-z80
 ```
 
 Confirm commands are gone:
@@ -621,12 +612,12 @@ command -v dcc-ma || true
 
 ## Windows Guest Smoke Test
 
-Open PowerShell 7 in the Windows guest. If the terminal was already open before
+Open Windows PowerShell in the Windows guest. If the terminal was already open before
 MSI installation, prepend the installed package paths for the current session
 first:
 
 ```powershell
-$InstallRoot = Join-Path $env:ProgramFiles "dcc-4-cpm-z80"
+$InstallRoot = Join-Path $env:ProgramFiles "dcc-cpm-z80"
 $env:Path = "$InstallRoot\bin;$InstallRoot\scripts;$env:Path"
 ```
 
@@ -649,7 +640,7 @@ int main(void) {
 Build it with the installed helper script:
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File "$InstallRoot\scripts\ma.ps1" hello -SourcePath .\hello.c -Mode fast
+powershell.exe -ExecutionPolicy Bypass -File "$InstallRoot\scripts\ma.ps1" hello -SourcePath .\hello.c -Mode fast
 ```
 
 Run the generated CP/M program:
@@ -681,7 +672,7 @@ Uninstall using the same MSI file you installed. Use the x64 filename in the x64
 guest and the ARM64 filename in the ARM64 guest:
 
 ```powershell
-msiexec /x "$env:TEMP\dcc-4-cpm-z80-v2.0.0-windows-x64.msi" /qn /norestart
+msiexec /x "$env:TEMP\dcc-cpm-z80-v2.0.0-windows-x64.msi" /qn /norestart
 ```
 
 Confirm the commands are gone:
@@ -689,16 +680,17 @@ Confirm the commands are gone:
 ```powershell
 Get-Command dcc -ErrorAction SilentlyContinue
 Get-Command ntvcm -ErrorAction SilentlyContinue
-Test-Path "$env:ProgramFiles\dcc-4-cpm-z80"
+Test-Path "$env:ProgramFiles\dcc-cpm-z80"
 ```
 
 ## Notes
 
 - The ARM64 VM is expected to be slow on an x64 host.
-- The `.deb` package installs under `/opt/dcc-4-cpm-z80` and places command
+- The `.deb` package installs under `/opt/dcc-cpm-z80` and places command
   links in `/usr/bin`.
-- The Windows MSI installs under `%ProgramFiles%\dcc-4-cpm-z80`.
+- The Windows MSI installs under `%ProgramFiles%\dcc-cpm-z80`.
 - On Linux and macOS, `dcc-ma` wraps the native `scripts/ma.sh` helper.
-- On Windows, use `ma.ps1` through PowerShell 7.
+- On Windows, `ma.ps1` works with the Windows PowerShell 5.1 already included
+  with Windows, or with PowerShell 7+ if it is installed.
 - The portable `.tar.gz` packages can be tested without root by extracting them
   and running `./install.sh` with custom `PREFIX` and `LINK_DIR` values.

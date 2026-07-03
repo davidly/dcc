@@ -25,11 +25,12 @@ From a source checkout or portable package, run the script directly:
 ./scripts/ma.sh foo --mode fast
 ```
 
-On Windows, use the PowerShell driver:
+On Windows, use the PowerShell driver. It works with the Windows PowerShell 5.1
+already included with Windows, as well as PowerShell 7+:
 
 ```pwsh
-./scripts/ma.ps1 foo -Mode fast    # builds foo.c -> FOO.COM
-./scripts/ma.ps1 foo -Mode nopeep  # skip the dccpeep optimizer
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode fast    # builds foo.c -> FOO.COM
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode nopeep  # skip the dccpeep optimizer
 ```
 
 This runs the compiler, the optional `dccpeep` peephole optimizer,

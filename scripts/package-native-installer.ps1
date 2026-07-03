@@ -81,7 +81,7 @@ function New-UnixEnvironment {
     )
 
     $envScript = @"
-# dcc 4 CP/M Z80 package environment
+# dcc CP/M Z80 package environment
 export DCC_HOME="$Prefix"
 export DCC_INCLUDE="`$DCC_HOME/include`${DCC_INCLUDE:+:`$DCC_INCLUDE}"
 export DCC_LIB="`$DCC_HOME/lib:`$DCC_HOME`${DCC_LIB:+:`$DCC_LIB}"
@@ -90,7 +90,7 @@ export DCC_RUNTIME="`${DCC_RUNTIME:-`$DCC_HOME/lib/DCCRTL.MAC}"
 
     $profileDir = Join-Path $Root "etc/profile.d"
     New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
-    $profilePath = Join-Path $profileDir "dcc-4-cpm-z80.sh"
+    $profilePath = Join-Path $profileDir "dcc-cpm-z80.sh"
     Set-Content -LiteralPath $profilePath -Value $envScript -Encoding utf8
 
     $prefixRoot = Join-Path $Root $Prefix.TrimStart("/")
@@ -105,8 +105,8 @@ function New-DebPackage {
     $debRoot = Join-Path $outputRoot "$PackageName-debroot"
     if (Test-Path -LiteralPath $debRoot) { Remove-Item -LiteralPath $debRoot -Recurse -Force }
 
-    $installPrefix = "/opt/dcc-4-cpm-z80"
-    $payloadRoot = Join-Path $debRoot "opt/dcc-4-cpm-z80"
+    $installPrefix = "/opt/dcc-cpm-z80"
+    $payloadRoot = Join-Path $debRoot "opt/dcc-cpm-z80"
     Copy-DirectoryContents -Source $resolvedPackageRoot -Destination $payloadRoot
     New-UnixLinks -Root $debRoot -Prefix $installPrefix -LinkDir "/usr/bin"
     New-UnixEnvironment -Root $debRoot -Prefix $installPrefix
@@ -114,12 +114,15 @@ function New-DebPackage {
     $controlDir = Join-Path $debRoot "DEBIAN"
     New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
     $control = @"
-Package: dcc-4-cpm-z80
+Package: dcc-cpm-z80
 Version: $versionText
 Section: devel
 Priority: optional
 Architecture: $arch
 Maintainer: gloveboxes <noreply@github.com>
+Provides: dcc-4-cpm-z80
+Conflicts: dcc-4-cpm-z80
+Replaces: dcc-4-cpm-z80
 Description: dcc C compiler toolchain for CP/M 2.2 on Z80
  Includes dcc, dccpeep, dccrtlstrip, ntvcm, the DCC runtime, CP/M assembler/linker tools, standard-library headers, and helper scripts.
 "@
@@ -136,14 +139,14 @@ function New-MacPackage {
     $pkgRoot = Join-Path $outputRoot "$PackageName-pkgroot"
     if (Test-Path -LiteralPath $pkgRoot) { Remove-Item -LiteralPath $pkgRoot -Recurse -Force }
 
-    $installPrefix = "/usr/local/dcc-4-cpm-z80"
-    $payloadRoot = Join-Path $pkgRoot "usr/local/dcc-4-cpm-z80"
+    $installPrefix = "/usr/local/dcc-cpm-z80"
+    $payloadRoot = Join-Path $pkgRoot "usr/local/dcc-cpm-z80"
     Copy-DirectoryContents -Source $resolvedPackageRoot -Destination $payloadRoot
     New-UnixLinks -Root $pkgRoot -Prefix $installPrefix -LinkDir "/usr/local/bin"
     New-UnixEnvironment -Root $pkgRoot -Prefix $installPrefix
 
     $pkgPath = Join-Path $outputRoot "$PackageName.pkg"
-    & pkgbuild --root $pkgRoot --identifier "com.gloveboxes.dcc-4-cpm-z80" --version $versionText --install-location / $pkgPath
+    & pkgbuild --root $pkgRoot --identifier "com.gloveboxes.dcc-cpm-z80" --version $versionText --install-location / $pkgPath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Created: $pkgPath"
 }
@@ -225,11 +228,11 @@ function New-MsiPackage {
 
     $wxs = [System.Collections.Generic.List[string]]::new()
     $wxs.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
-    $wxs.Add("  <Package Name=`"dcc 4 CP/M Z80`" Manufacturer=`"gloveboxes`" Version=`"$versionText`" UpgradeCode=`"$upgradeCode`" Scope=`"perMachine`">")
-    $wxs.Add('    <MajorUpgrade DowngradeErrorMessage="A newer version of dcc 4 CP/M Z80 is already installed." />')
+    $wxs.Add("  <Package Name=`"dcc CP/M Z80`" Manufacturer=`"gloveboxes`" Version=`"$versionText`" UpgradeCode=`"$upgradeCode`" Scope=`"perMachine`">")
+    $wxs.Add('    <MajorUpgrade DowngradeErrorMessage="A newer version of dcc CP/M Z80 is already installed." />')
     $wxs.Add('    <MediaTemplate EmbedCab="yes" />')
     $wxs.Add('    <StandardDirectory Id="ProgramFiles64Folder">')
-    $wxs.Add('      <Directory Id="INSTALLFOLDER" Name="dcc-4-cpm-z80">')
+    $wxs.Add('      <Directory Id="INSTALLFOLDER" Name="dcc-cpm-z80">')
     foreach ($line in @(Add-WixDirectory -Path $resolvedPackageRoot -Indent 8)) { $wxs.Add($line) }
     $componentIds.Add("cmpPathEnvironment")
     $wxs.Add('        <Component Id="cmpPathEnvironment" Guid="*">')
@@ -239,11 +242,11 @@ function New-MsiPackage {
     $wxs.Add('          <Environment Id="envDccInclude" Name="DCC_INCLUDE" Value="[INSTALLFOLDER]include" Action="set" System="no" Permanent="no" />')
     $wxs.Add('          <Environment Id="envDccLib" Name="DCC_LIB" Value="[INSTALLFOLDER]lib;[INSTALLFOLDER]" Action="set" System="no" Permanent="no" />')
     $wxs.Add('          <Environment Id="envDccRuntime" Name="DCC_RUNTIME" Value="[INSTALLFOLDER]lib\DCCRTL.MAC" Action="set" System="no" Permanent="no" />')
-    $wxs.Add('          <RegistryValue Root="HKLM" Key="Software\gloveboxes\dcc-4-cpm-z80" Name="PathEnvironment" Type="integer" Value="1" KeyPath="yes" />')
+    $wxs.Add('          <RegistryValue Root="HKLM" Key="Software\gloveboxes\dcc-cpm-z80" Name="PathEnvironment" Type="integer" Value="1" KeyPath="yes" />')
     $wxs.Add('        </Component>')
     $wxs.Add('      </Directory>')
     $wxs.Add('    </StandardDirectory>')
-    $wxs.Add('    <Feature Id="MainFeature" Title="dcc 4 CP/M Z80" Level="1">')
+    $wxs.Add('    <Feature Id="MainFeature" Title="dcc CP/M Z80" Level="1">')
     foreach ($componentId in $componentIds) { $wxs.Add("      <ComponentRef Id=`"$componentId`" />") }
     $wxs.Add('    </Feature>')
     $wxs.Add('  </Package>')

@@ -1,4 +1,3 @@
-#Requires -Version 7
 <#
 .SYNOPSIS
 Cross-platform build driver for dcc C compiler targeting CP/M Z80.
@@ -6,8 +5,8 @@ Compiles a single app with optional peephole optimization, strips runtime,
 and links to produce a .COM executable.
 
 .DESCRIPTION
-This is the PowerShell 7+ equivalent of ma.sh. It handles the complete build
-pipeline:
+This is the PowerShell equivalent of ma.sh. It runs under Windows PowerShell 5.1
+and PowerShell 7+, and handles the complete build pipeline:
   1. Compile source with dcc (detect floatio, stack-check, floatio flags)
   2. Optimize with dccpeep (optional)
   3. Assemble app.MAC with M80
@@ -17,7 +16,7 @@ pipeline:
 
 The build logic lives in the Invoke-MaBuild function so other scripts (e.g.
 runall.ps1) can dot-source this file once and call Invoke-MaBuild in-process,
-avoiding a fresh pwsh process per build. When run directly as a script, the
+avoiding a fresh PowerShell process per build. When run directly as a script, the
 parameters below are forwarded to Invoke-MaBuild.
 
 .PARAMETER Name
@@ -40,9 +39,9 @@ parameters below are forwarded to Invoke-MaBuild.
     normal dcc test locations by app name.
 
 .EXAMPLE
-  pwsh ./scripts/ma.ps1 triangle
-  pwsh ./scripts/ma.ps1 sieve nopeep
-    pwsh ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
+    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 triangle
+    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve nopeep
+    powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast -BuildDir mybuild
 
 .NOTES
   Environment Variables:
@@ -88,7 +87,7 @@ function ConvertTo-CRLF {
     $text = $text -replace "`r`n", "`n"   # collapse existing CRLF to LF
     $text = $text -replace "`r", "`n"      # handle any lone CR
     $text = $text -replace "`n", "`r`n"    # convert all LF to CRLF
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
     [System.IO.File]::WriteAllText($FilePath, $text, $utf8NoBom)
 }
 
@@ -216,7 +215,7 @@ function Invoke-MaBuild {
         New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
     }
 
-    $assetRoots = [System.Collections.Generic.List[string]]::new()
+    $assetRoots = New-Object 'System.Collections.Generic.List[string]'
     Add-UniquePath -List $assetRoots -Path (Get-Location).Path
 
     $dccHome = $env:DCC_HOME -replace '^\s+|\s+$', ''
@@ -231,7 +230,7 @@ function Invoke-MaBuild {
     Add-UniquePath -List $assetRoots -Path $scriptAssetRoot
     Add-UniquePath -List $assetRoots -Path (Join-Path $scriptAssetRoot "lib")
 
-    $includeDirs = [System.Collections.Generic.List[string]]::new()
+    $includeDirs = New-Object 'System.Collections.Generic.List[string]'
     Add-PathList -List $includeDirs -Paths $env:DCC_INCLUDE
     if ($dccHome) { Add-UniquePath -List $includeDirs -Path (Join-Path $dccHome "include") }
     foreach ($assetRoot in $assetRoots) {

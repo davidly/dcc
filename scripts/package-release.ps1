@@ -79,7 +79,7 @@ foreach ($header in $headers) {
     Copy-RequiredFile -Source (Join-Path $repoRoot $header) -Destination (Join-Path $includeDir $header)
 }
 
-$helperScripts = @("ma.ps1", "ma.sh", "stacksize.sh", "stacksize.bat", "README.md")
+$helperScripts = @("ma.ps1", "ma.sh", "stacksize.sh", "stacksize.bat")
 foreach ($script in $helperScripts) {
     Copy-RequiredFile -Source (Join-Path $repoRoot "scripts/$script") -Destination (Join-Path $scriptsDir $script)
 }
@@ -97,19 +97,19 @@ function Write-PackageTextFile {
 }
 
 $installPs1 = @'
-#Requires -Version 7
 param(
     [string]$InstallDir = "",
     [switch]$AddToUserPath
 )
 
 $ErrorActionPreference = "Stop"
+$isWindowsHost = [System.IO.Path]::DirectorySeparatorChar -eq '\'
 
 if (-not $InstallDir) {
-    $InstallDir = if ($IsWindows) {
-        Join-Path $env:LOCALAPPDATA "dcc"
+    $InstallDir = if ($isWindowsHost) {
+        Join-Path $env:LOCALAPPDATA "dcc-cpm-z80"
     } else {
-        Join-Path $HOME ".local/dcc"
+        Join-Path $HOME ".local/dcc-cpm-z80"
     }
 }
 
@@ -156,19 +156,19 @@ else {
 '@
 
 $uninstallPs1 = @'
-#Requires -Version 7
 param(
     [string]$InstallDir = "",
     [switch]$RemoveFromUserPath
 )
 
 $ErrorActionPreference = "Stop"
+$isWindowsHost = [System.IO.Path]::DirectorySeparatorChar -eq '\'
 
 if (-not $InstallDir) {
-    $InstallDir = if ($IsWindows) {
-        Join-Path $env:LOCALAPPDATA "dcc"
+    $InstallDir = if ($isWindowsHost) {
+        Join-Path $env:LOCALAPPDATA "dcc-cpm-z80"
     } else {
-        Join-Path $HOME ".local/dcc"
+        Join-Path $HOME ".local/dcc-cpm-z80"
     }
 }
 
@@ -211,7 +211,7 @@ $installSh = @'
 set -eu
 
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PREFIX=${PREFIX:-"$HOME/.local/dcc"}
+PREFIX=${PREFIX:-"$HOME/.local/dcc-cpm-z80"}
 LINK_DIR=${LINK_DIR:-"$HOME/.local/bin"}
 
 rm -rf "$PREFIX"
@@ -225,7 +225,7 @@ mkdir -p "$PREFIX"
 )
 
 cat > "$PREFIX/dcc-env.sh" <<EOF
-# dcc 4 CP/M Z80 package environment
+# dcc CP/M Z80 package environment
 export DCC_HOME="$PREFIX"
 export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
 export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
@@ -261,7 +261,7 @@ $uninstallSh = @'
 #!/usr/bin/env sh
 set -eu
 
-PREFIX=${PREFIX:-"$HOME/.local/dcc"}
+PREFIX=${PREFIX:-"$HOME/.local/dcc-cpm-z80"}
 LINK_DIR=${LINK_DIR:-"$HOME/.local/bin"}
 
 rm -rf "$PREFIX"
@@ -305,10 +305,10 @@ public standard-library headers.
 
 ## Install
 
-Windows PowerShell 7+:
+Windows PowerShell:
 
 ```pwsh
-pwsh ./install.ps1 -AddToUserPath
+powershell.exe -ExecutionPolicy Bypass -File .\install.ps1 -AddToUserPath
 ```
 
 Linux/macOS:
@@ -317,7 +317,7 @@ Linux/macOS:
 ./install.sh
 ```
 
-By default, Unix installs to `\$HOME/.local/dcc` and links commands into
+By default, Unix installs to `\$HOME/.local/dcc-cpm-z80` and links commands into
 `\$HOME/.local/bin`. Override with `PREFIX=/path/to/dcc LINK_DIR=/path/to/bin
 ./install.sh`.
 
@@ -326,7 +326,7 @@ custom shells or scripts when you need the package environment outside the
 `dcc-ma` wrapper:
 
 ```sh
-. \$HOME/.local/dcc/dcc-env.sh
+. \$HOME/.local/dcc-cpm-z80/dcc-env.sh
 ```
 
 ## Portable quick start
@@ -341,12 +341,12 @@ export DCC_HOME="\$PWD"
 ./scripts/ma.sh hello --source-path ./hello.c --mode fast
 ```
 
-Windows PowerShell 7+:
+Windows PowerShell:
 
 ```pwsh
 `$env:PATH = "`$PWD/bin`$([IO.Path]::PathSeparator)`$env:PATH"
 `$env:DCC_HOME = "`$PWD"
-pwsh ./scripts/ma.ps1 hello -SourcePath ./hello.c -Mode fast
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 hello -SourcePath .\hello.c -Mode fast
 ```
 
 The resulting CP/M .COM and intermediate build files are written under build/.

@@ -49,7 +49,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
-      PACKAGE_NAME: dcc-4-cpm-z80-${{ github.event.inputs.version || github.ref_name }}-${{ matrix.target }}
+      PACKAGE_NAME: dcc-cpm-z80-${{ github.event.inputs.version || github.ref_name }}-${{ matrix.target }}
     steps:
       - name: Checkout dcc
         uses: actions/checkout@v4
@@ -102,6 +102,38 @@ jobs:
         shell: pwsh
         run: ./scripts/build-dcc.ps1
 
+      - name: Sign Windows binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+          WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:WINDOWS_CODESIGN_PFX_BASE64 -or -not $env:WINDOWS_CODESIGN_PASSWORD) {
+            Write-Host "Skipping Windows binary signing because WINDOWS_CODESIGN_PFX_BASE64 or WINDOWS_CODESIGN_PASSWORD is not configured."
+            return
+          }
+
+          $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
+
+          $signToolPath = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+          if (-not $signToolPath) {
+            $signToolPath = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1).FullName
+          }
+          if (-not $signToolPath) { throw "signtool.exe was not found." }
+
+          foreach ($file in @("dcc.exe", "dccpeep.exe", "dccrtlstrip.exe", "ntvcm/${{ matrix.ntvcm }}")) {
+            if (Test-Path -LiteralPath $file) {
+              & $signToolPath sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $pfxPath /p $env:WINDOWS_CODESIGN_PASSWORD $file
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+
       - name: Package release directory
         shell: pwsh
         run: |
@@ -145,6 +177,35 @@ jobs:
             -OutputDir dist `
             -Version "$env:RELEASE_VERSION"
 
+      - name: Sign Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+          WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:WINDOWS_CODESIGN_PFX_BASE64 -or -not $env:WINDOWS_CODESIGN_PASSWORD) {
+            Write-Host "Skipping Windows installer signing because WINDOWS_CODESIGN_PFX_BASE64 or WINDOWS_CODESIGN_PASSWORD is not configured."
+            return
+          }
+
+          $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
+
+          $signToolPath = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+          if (-not $signToolPath) {
+            $signToolPath = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1).FullName
+          }
+          if (-not $signToolPath) { throw "signtool.exe was not found." }
+
+          $msiPath = "dist/$env:PACKAGE_NAME.msi"
+          & $signToolPath sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $pfxPath /p $env:WINDOWS_CODESIGN_PASSWORD $msiPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload release package artifact
         uses: actions/upload-artifact@v4
         with:
@@ -165,6 +226,10 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

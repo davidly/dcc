@@ -12,7 +12,7 @@ The build driver compiles one app, optionally runs `dccpeep`, strips the
 runtime, assembles, and links a `.COM` executable.
 
 - Linux/macOS: use `scripts/ma.sh`, or `dcc-ma` after package installation.
-- Windows/cross-platform automation: use `scripts/ma.ps1` with PowerShell 7+.
+- Windows/cross-platform automation: use `scripts/ma.ps1` with Windows PowerShell 5.1 or PowerShell 7+.
 
 ### Build Driver Usage
 

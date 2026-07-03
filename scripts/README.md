@@ -151,7 +151,7 @@ the regression suite, add it to the per-app `stack_size_for` table in
 
 ## `ma.ps1`
 
-Cross-platform build driver (PowerShell 7+ equivalent of `ma.sh`). Compiles a
+Cross-platform build driver (Windows PowerShell 5.1 and PowerShell 7+ equivalent of `ma.sh`). Compiles a
 single test app with optional peephole optimization, strips runtime symbols,
 and links to produce a `.COM` executable. The complete pipeline:
 
@@ -165,7 +165,7 @@ and links to produce a `.COM` executable. The complete pipeline:
 ### Usage
 
 ```pwsh
-pwsh ./scripts/ma.ps1 <name> [full|fast|nopeep]
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 <name> [full|fast|nopeep]
 ```
 
 - `<name>` — test app name (e.g., `triangle`, `sieve`, `ttt`)
@@ -175,9 +175,9 @@ pwsh ./scripts/ma.ps1 <name> [full|fast|nopeep]
 ### Examples
 
 ```pwsh
-pwsh ./scripts/ma.ps1 triangle
-pwsh ./scripts/ma.ps1 sieve nopeep
-pwsh ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 triangle
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve nopeep
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast -BuildDir mybuild
 ```
 
 ### Parameters
