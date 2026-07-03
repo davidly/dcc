@@ -2474,6 +2474,191 @@ void parse_global_init_list(struct Sym *s)
     }
 }
 
+/* Cheap pre-filter for try_speculative_noix_function_body: is it even worth
+ * attempting? A function that makes any call almost certainly pushes
+ * arguments for it (current_function_has_call is set during the scan pass,
+ * so it is already known here) - cheap to check and saves a wasted extra
+ * generation pass on the common case. main() is excluded outright: it is
+ * never a hot leaf, and the __mrun-shim emission right after this codegen
+ * assumes the ordinary IX-framed epilogue shape.
+ *
+ * local_bytes must be exactly 0 (no declared locals AND no compiler-
+ * generated temporaries - #itmp/#clit locals count too, since local_bytes is
+ * just local_size after the scan). This is load-bearing, not a size
+ * heuristic: the disabled no-IX-frame support only ever extended to
+ * SC_PARAM addressing (frame_sp_offset_for_sym, and the current_omit_ix_
+ * frame checks in emit_load_sym_value_direct/emit_load_frame_addr_hl are
+ * both gated on `s->storage == SC_PARAM`). A local variable is still
+ * addressed (ix+N) unconditionally - with no `push ix`/`ld ix,0` this reads
+ * and writes through whatever garbage IX happens to hold at entry, silently
+ * corrupting memory rather than crashing. A speculative generation pass
+ * cannot catch this the way it catches an SP-shifting push (there is no
+ * "did the buffer do something wrong" signal to check for - the emitted
+ * instructions are individually valid, just relative to the wrong
+ * register), so functions with any local storage must be excluded here,
+ * before ever attempting it, rather than verified after the fact. */
+static int function_qualifies_for_speculative_noix(const char *name, int local_bytes)
+{
+    if (strcmp(name, "main") == 0)
+        return 0;
+    if (current_function_has_call)
+        return 0;
+    if (local_bytes != 0)
+        return 0;
+    return 1;
+}
+
+/* Does the buffered speculative body contain anything unsafe for a function
+ * that never set up an IX frame? Two independent signals, both fatal:
+ *
+ *   - "push": the only way SP-relative (sp+N) addressing already computed
+ *     earlier in the body can go wrong - a push shifts SP out from under it,
+ *     and dcc has no live SP-delta tracking to compensate.
+ *   - "(ix": IX was never loaded with anything meaningful in this function
+ *     (no `push ix`/`ld ix,0`/`add ix,sp`), so ANY `(ix+N)`/`(ix-N)` memory
+ *     reference anywhere in the body reads or writes through whatever
+ *     garbage IX happens to hold at entry - silently corrupting memory
+ *     rather than crashing. This is not hypothetical: the disabled no-IX
+ *     support only ever touched a handful of load/store helpers
+ *     (emit_load_sym_value_direct and friends in dcc_symbols.c) to check
+ *     current_omit_ix_frame; other, unrelated fast paths elsewhere in the
+ *     codegen (e.g. gen_return_ast's dedicated "return a 1-byte identifier"
+ *     shortcut) emit `(ix+N)` addressing directly and were never taught
+ *     about current_omit_ix_frame at all, so cannot be trusted to have
+ *     skipped it just because this function has no locals. Rather than
+ *     audit every such shortcut across the codebase (and every future one
+ *     anyone adds), checking for the address mode itself is exact: a
+ *     correctly-generated no-IX-frame body can never legitimately contain
+ *     it, so any occurrence at all is proof something used it by mistake.
+ *
+ * Every push/(ix in dcc's own codegen is emitted as literal text (there are
+ * no comments or other decoration at this stage - dccpeep is a separate
+ * later pass), so a plain substring search is exact, not a heuristic. */
+static int tmpfile_unsafe_for_noix(FILE *f)
+{
+    long size;
+    char *buf;
+    int found;
+
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    rewind(f);
+    if (size <= 0)
+        return 0;
+    buf = (char *)xmalloc((size_t)size + 1);
+    if (fread(buf, 1, (size_t)size, f) != (size_t)size)
+        fatal("cannot read speculative no-ix-frame temp file");
+    buf[size] = 0;
+    found = strstr(buf, "push") != NULL || strstr(buf, "(ix") != NULL;
+    free(buf);
+    return found;
+}
+
+/* Speculatively generate `name`'s already-scanned body without an IX frame
+ * (params/locals addressed sp-relative - see current_function_safe_to_omit_ix,
+ * which stays hard-disabled for the ordinary path below), and check whether
+ * it ever pushed anything. A push is the only way that addressing can go
+ * wrong: it shifts SP out from under every sp+N address already computed,
+ * and dcc has no live SP-delta tracking to compensate (auditing every push
+ * emission site to add that tracking would be a much larger, more invasive
+ * change - see the long comment on current_function_safe_to_omit_ix). Rather
+ * than prove push-freedom statically, generate into a scratch buffer and
+ * inspect the result: no push anywhere means SP provably never moved, so
+ * every address in the buffer is correct and it can be used as-is; a push
+ * means discard it and let the caller regenerate normally with the IX frame,
+ * via the exact same rewind this function performs on failure.
+ *
+ * Returns 1 if the no-IX version was kept and already written to outf; 0 if
+ * the caller must still run the normal (IX-framed) codegen path itself, with
+ * every relevant piece of parser/codegen state already rewound to the body
+ * start as if this function had never been called - the same state the
+ * scan-to-codegen reset just above this call already established. */
+static int try_speculative_noix_function_body(const char *name, int type,
+                                                     int local_bytes, struct Sym *s,
+                                                     long body_start_pos,
+                                                     long body_start_tok_start,
+                                                     int body_start_line,
+                                                     int body_start_tok_line,
+                                                     struct Token body_start_tok,
+                                                     int body_start_nlocals,
+                                                     int body_start_local_size)
+{
+    FILE *scratch;
+    FILE *saved_outf_ptr;
+    int implicit_zero_return;
+    int c;
+
+    implicit_zero_return = strcmp(name, "main") == 0 &&
+                            (type & 15) == TYPE_INT && type_ptr_depth(type) == 0;
+
+    scratch = tmpfile();
+    if (scratch == NULL)
+        fatal("cannot create speculative no-ix-frame temp file");
+
+    saved_outf_ptr = outf;
+    outf = scratch;
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    emit_function_prologue(name, local_bytes, 1);
+    gen_compound();
+    emit_function_epilogue(implicit_zero_return);
+    outf = saved_outf_ptr;
+
+    /* check_undefined_user_labels() is deliberately not called above: if
+     * this attempt is about to be discarded, calling it here would both
+     * double-report a genuine undefined-label error (the caller's normal
+     * codegen path below already calls it once) and, more subtly, leave
+     * ulabel_defined[]/nulabels populated from this attempt's goto/label
+     * bookkeeping for the caller's fresh gen_compound() run to collide
+     * with - exactly the "duplicate goto label" false positive this
+     * function's first version produced by forgetting to reset nulabels
+     * (and the rest of the per-function codegen state below) before
+     * falling back. */
+    if (!tmpfile_unsafe_for_noix(scratch)) {
+        check_undefined_user_labels();
+        rewind(scratch);
+        while ((c = fgetc(scratch)) != EOF)
+            fputc(c, outf);
+        fclose(scratch);
+        return 1;
+    }
+
+    fclose(scratch);
+
+    /* Undo every bit of per-function codegen state this discarded attempt
+     * touched - the same set the scan-to-codegen transition above this
+     * function resets - so the caller's normal codegen path runs exactly as
+     * if this function had never been called. */
+    posi = body_start_pos;
+    tok_start_pos = body_start_tok_start;
+    line_no = body_start_line;
+    tok_line = body_start_tok_line;
+    tok = body_start_tok;
+    nlocals = body_start_nlocals;
+    local_size = body_start_local_size;
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    return 0;
+}
+
 void parse_function_or_global(int base_type)
 {
     int done;
@@ -2680,6 +2865,13 @@ void parse_function_or_global(int base_type)
                     emit_function_epilogue(0);
                     g_inline_body_buffering--;
                     outf = saved_outf;
+                } else if (function_qualifies_for_speculative_noix(name, current_local_bytes) &&
+                           try_speculative_noix_function_body(name, type, current_local_bytes, s,
+                                                               saved_pos, saved_tok_start, saved_line,
+                                                               saved_tok_line, saved_tok,
+                                                               saved_nlocals, saved_local_size)) {
+                    /* No-IX-frame body already generated and written to outf
+                     * inside try_speculative_noix_function_body. */
                 } else {
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                     gen_compound();
