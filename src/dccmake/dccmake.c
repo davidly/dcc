@@ -14,11 +14,27 @@
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(path) _mkdir(path)
+#define CHDIR(path) _chdir(path)
+#define GETCWD(buf, size) _getcwd(buf, (int)(size))
 #define PATH_SEP '\\'
+/* A same-directory tool reference has to use the platform's own separator:
+ * cmd.exe (which run_cmd's system() call goes through) does not resolve a
+ * POSIX-style "./name" the way a shell does - it fails outright with
+ * "'.' is not recognized as an internal or external command" - so this
+ * cannot just be a single "./name" literal shared with the non-Windows
+ * build. */
+#define LOCAL_DCC ".\\dcc"
+#define LOCAL_DCCPEEP ".\\dccpeep"
+#define LOCAL_DCCRTLSTRIP ".\\dccrtlstrip"
 #else
 #include <unistd.h>
 #define MKDIR(path) mkdir(path, 0777)
+#define CHDIR(path) chdir(path)
+#define GETCWD(buf, size) getcwd(buf, size)
 #define PATH_SEP '/'
+#define LOCAL_DCC "./dcc"
+#define LOCAL_DCCPEEP "./dccpeep"
+#define LOCAL_DCCRTLSTRIP "./dccrtlstrip"
 #endif
 
 #define MAX_ITEMS 128
@@ -339,6 +355,60 @@ static int add_whitespace_args(char items[MAX_ITEMS][MAX_PATH_LEN], int *count, 
     return 1;
 }
 
+/* Resolve one of the pipeline tool commands (dcc/dccpeep/dccrtlstrip/ntvcm/
+ * m80/l80) into `dst`: an explicit ENV_NAME override always wins; otherwise
+ * prefer a same-directory build (LOCAL_NAME, e.g. "./dcc") if present, else
+ * fall back to a bare command name resolved via PATH.
+ *
+ * On Windows, a locally-built tool is "./dcc.exe", never bare "./dcc" -
+ * file_exists("./dcc") is always false there even when "./dcc.exe" is
+ * sitting right next to it, silently falling through past the local build
+ * to the bare "dcc" fallback. That fallback then fails outright: cmd.exe's
+ * PATH+PATHEXT search (what run_cmd's system() call ultimately goes
+ * through) has no reason to look in the current directory unless "." is on
+ * PATH, and a freshly-built dcc.exe never is - so the whole build fails
+ * with "The system cannot find the path specified." Try the ".exe"-
+ * suffixed local path first on Windows so the same-directory build
+ * resolves the same way it does everywhere else. This deliberately does
+ * NOT touch the final bare-fallback case (PATH search for a name with no
+ * local file found) - that already goes through cmd.exe's own correct
+ * PATHEXT resolution, which knows the right extension (.exe/.com/.bat) for
+ * whatever is actually on PATH; guessing ".exe" there could just as easily
+ * break a working non-.exe PATH tool as fix a missing one. */
+static void resolve_tool_path(char *dst, size_t dst_size, const char *env_name,
+                               const char *local_name, const char *fallback)
+{
+    const char *v;
+#ifdef _WIN32
+    char buf[MAX_PATH_LEN];
+#endif
+
+    v = getenv(env_name);
+    if (v && *v) {
+        copy_text(dst, dst_size, v);
+        return;
+    }
+
+#ifdef _WIN32
+    if (local_name) {
+        snprintf(buf, sizeof(buf), "%s.exe", local_name);
+        if (file_exists(buf)) {
+            copy_text(dst, dst_size, buf);
+            return;
+        }
+    }
+#endif
+    if (local_name && file_exists(local_name)) {
+        copy_text(dst, dst_size, local_name);
+        return;
+    }
+
+    copy_text(dst, dst_size, fallback);
+}
+
+/* Same env-override-then-local-file-then-fallback resolution as
+ * resolve_tool_path, but for a plain data file (DCCRTL.MAC) rather than an
+ * executable - no platform-specific ".exe" suffix applies. */
 static const char *env_or_default(const char *env_name, const char *local_name, const char *fallback)
 {
     const char *v;
@@ -359,12 +429,12 @@ static void init_config(struct Config *cfg)
     cfg->stack_bytes = 512;
     cfg->peep = 1;
     copy_text(cfg->build_dir, sizeof(cfg->build_dir), "build");
-    copy_text(cfg->dcc, sizeof(cfg->dcc), env_or_default("DCC", "./dcc", "dcc"));
-    copy_text(cfg->dccpeep, sizeof(cfg->dccpeep), env_or_default("DCCPEEP", "./dccpeep", "dccpeep"));
-    copy_text(cfg->dccrtlstrip, sizeof(cfg->dccrtlstrip), env_or_default("DCCRTLSTRIP", "./dccrtlstrip", "dccrtlstrip"));
-    copy_text(cfg->ntvcm, sizeof(cfg->ntvcm), env_or_default("NTVCM", NULL, "ntvcm"));
-    copy_text(cfg->m80, sizeof(cfg->m80), env_or_default("M80", NULL, "m80"));
-    copy_text(cfg->l80, sizeof(cfg->l80), env_or_default("L80", NULL, "l80"));
+    resolve_tool_path(cfg->dcc, sizeof(cfg->dcc), "DCC", LOCAL_DCC, "dcc");
+    resolve_tool_path(cfg->dccpeep, sizeof(cfg->dccpeep), "DCCPEEP", LOCAL_DCCPEEP, "dccpeep");
+    resolve_tool_path(cfg->dccrtlstrip, sizeof(cfg->dccrtlstrip), "DCCRTLSTRIP", LOCAL_DCCRTLSTRIP, "dccrtlstrip");
+    resolve_tool_path(cfg->ntvcm, sizeof(cfg->ntvcm), "NTVCM", NULL, "ntvcm");
+    resolve_tool_path(cfg->m80, sizeof(cfg->m80), "M80", NULL, "m80");
+    resolve_tool_path(cfg->l80, sizeof(cfg->l80), "L80", NULL, "l80");
     copy_text(cfg->runtime, sizeof(cfg->runtime), env_or_default("DCC_RUNTIME", "DCCRTL.MAC", "DCCRTL.MAC"));
     add_whitespace_args(cfg->dcc_args, &cfg->dcc_arg_count, getenv("DCC_ARGS"));
 }
@@ -856,29 +926,86 @@ static int cmd_arg(char *cmd, size_t cmd_size, const char *arg)
 #endif
 }
 
-static int build_cd_command(char *dst, size_t dst_size, const char *dir, const char *inner)
-{
-    cmd_init(dst, dst_size);
-#ifdef _WIN32
-    if (!cmd_append_raw(dst, dst_size, "cd /d")) return 0;
-#else
-    if (!cmd_append_raw(dst, dst_size, "cd")) return 0;
-#endif
-    if (!cmd_arg(dst, dst_size, dir)) return 0;
-    if (!cmd_append_raw(dst, dst_size, " && ")) return 0;
-    return cmd_append_raw(dst, dst_size, inner);
-}
-
 static int run_cmd(const char *cmd)
 {
     int rc;
     printf("+ %s\n", cmd);
+#ifdef _WIN32
+    /* system() on Windows runs the command via "cmd.exe /c <cmd>". cmd.exe's
+     * own command-line parsing strips a leading and trailing quote character
+     * from what follows /c only when the whole remainder is exactly one
+     * quoted executable name with nothing else quoted inside it; any other
+     * shape (like our `"exe" "arg1" "arg2" ...` - one quoted token per
+     * argument, built by cmd_arg above) instead falls back to cmd.exe's
+     * older behaviour of unconditionally stripping the very first and very
+     * last quote character of the whole line. That mangles a multi-argument
+     * quoted command: the first argument's closing quote and the last
+     * argument's opening quote both survive in the wrong places, so e.g.
+     * `".\dcc.exe" "-o" "x"` is executed as if the program name were
+     * `.\dcc.exe" "-o" "x` - a path that can never exist, failing with "The
+     * system cannot find the path specified." The standard workaround is to
+     * wrap the entire command in one more pair of quotes: cmd.exe's stripping
+     * then consumes that outer pair intact, leaving every individually-
+     * quoted argument exactly as built. */
+    {
+        char *wrapped;
+        size_t len;
+
+        len = strlen(cmd);
+        wrapped = (char *)malloc(len + 3);
+        if (!wrapped) {
+            fprintf(stderr, "out of memory building command line\n");
+            return 0;
+        }
+        wrapped[0] = '"';
+        memcpy(wrapped + 1, cmd, len);
+        wrapped[len + 1] = '"';
+        wrapped[len + 2] = 0;
+        rc = system(wrapped);
+        free(wrapped);
+    }
+#else
     rc = system(cmd);
+#endif
     if (rc != 0) {
         fprintf(stderr, "command failed: %s\n", cmd);
         return 0;
     }
     return 1;
+}
+
+/* Run `inner_cmd` with the process's working directory temporarily switched
+ * to `dir`, restoring the original directory afterward regardless of the
+ * command's outcome. This used to be done as a single compound shell
+ * command ("cd /d dir && inner_cmd" on Windows, "cd dir && inner_cmd"
+ * elsewhere) passed straight to run_cmd, but on Windows that shape doesn't
+ * benefit from run_cmd's own quote-wrapping fix: once a command contains
+ * both a shell operator (&&) and several individually-quoted arguments,
+ * cmd.exe's /c quote-stripping mangles it regardless of how the whole
+ * string is wrapped (confirmed empirically - wrapping the entire compound
+ * command in an extra pair of quotes does not fix it the way it fixes a
+ * plain multi-argument command). Actually changing directory sidesteps that
+ * shell-quoting fragility entirely: run_cmd only ever sees a plain
+ * program-plus-arguments command, the one shape it's already correct for. */
+static int run_cmd_in_dir(const char *dir, const char *inner_cmd)
+{
+    char saved_cwd[MAX_PATH_LEN];
+    int ok;
+
+    if (!GETCWD(saved_cwd, sizeof(saved_cwd))) {
+        fprintf(stderr, "cannot determine current directory\n");
+        return 0;
+    }
+    if (CHDIR(dir) != 0) {
+        fprintf(stderr, "cannot cd to %s: %s\n", dir, strerror(errno));
+        return 0;
+    }
+    ok = run_cmd(inner_cmd);
+    if (CHDIR(saved_cwd) != 0) {
+        fprintf(stderr, "cannot cd back to %s: %s\n", saved_cwd, strerror(errno));
+        return 0;
+    }
+    return ok;
 }
 
 static int copy_file(const char *src, const char *dst)
@@ -1027,7 +1154,6 @@ static int run_build(struct Config *cfg)
     char output_upper[MAX_NAME_LEN];
     char output_lower[MAX_NAME_LEN];
     char link_arg[MAX_CMD_LEN];
-    char shell_cmd[MAX_CMD_LEN];
     int i;
 
     if (cfg->input_count <= 0) {
@@ -1141,9 +1267,7 @@ static int run_build(struct Config *cfg)
         if (!cmd_arg(cmd, sizeof(cmd), "/O")) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), "/Z")) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), "/L")) return 0;
-        if (!build_cd_command(shell_cmd, sizeof(shell_cmd), cfg->build_dir, cmd))
-            return 0;
-        if (!run_cmd(shell_cmd) || !file_exists(rels[i])) {
+        if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rels[i])) {
             fprintf(stderr, "assembly failed: %s was not produced\n", rels[i]);
             return 0;
         }
@@ -1177,9 +1301,7 @@ static int run_build(struct Config *cfg)
     if (!cmd_arg(cmd, sizeof(cmd), "/X")) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), "/O")) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), "/Z")) return 0;
-    if (!build_cd_command(shell_cmd, sizeof(shell_cmd), cfg->build_dir, cmd))
-        return 0;
-    if (!run_cmd(shell_cmd) || !file_exists(rtl_rel)) {
+    if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rtl_rel)) {
         fprintf(stderr, "runtime assembly failed: %s was not produced\n", rtl_rel);
         return 0;
     }
@@ -1197,9 +1319,7 @@ static int run_build(struct Config *cfg)
     if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), cfg->l80)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), link_arg)) return 0;
-    if (!build_cd_command(shell_cmd, sizeof(shell_cmd), cfg->build_dir, cmd))
-        return 0;
-    if (!run_cmd(shell_cmd) || !file_exists(app_com)) {
+    if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(app_com)) {
         fprintf(stderr, "link failed: %s was not produced\n", app_com);
         return 0;
     }
