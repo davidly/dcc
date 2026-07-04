@@ -322,7 +322,17 @@ static void record_inline_function_if_simple(struct Sym *s)
     sv_tok_line = tok_line;
     sv_tok = tok;
 
+    /* This is a throwaway speculative parse of the function's own body,
+     * run before any of its locals are declared for this pass - a
+     * reference to one of them would otherwise resolve as "not found" and
+     * default to int (see ast_expr_type_for_sizeof's AST_IDENT case),
+     * which can trip a real type diagnostic (e.g. a bogus "incompatible
+     * integer to pointer assignment") for a perfectly valid program.
+     * asm_suppress_depth marks the parse as inert so dcc_error_at drops
+     * any such false positive. */
+    asm_suppress_depth++;
     body = ast_build_stmt(&g_ast_inline_arena);
+    asm_suppress_depth--;
 
     posi = sv_pos;
     tok_start_pos = sv_tok_start;
@@ -357,6 +367,59 @@ static int static_inline_body_can_be_buffered(struct Sym *s)
     return s != NULL && s->is_static && s->is_inline &&
            (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL ||
             s->inline_stmt_body != NULL);
+}
+
+/* Independent of is_inline/is_static: captures a zero-argument function's
+ * return expression (bare return, or an early-return if-chain collapsed to
+ * a ternary, exactly like the inline substitution shape) purely so
+ * dcc_array_narrow.c can recursively bound a call site like rndrm() when
+ * proving an array's values are provably in [0,255]. Deliberately does NOT
+ * reuse inline_expr_is_simple's gate - that check is about whether an
+ * expression is safe to *duplicate at a call site*, a different question
+ * from whether dcc_array_narrow.c's own (separate, narrower) rule set can
+ * bound it. */
+static void record_narrow_return_expr_if_simple(struct Sym *s)
+{
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    struct AstNode *body;
+    struct AstNode *ret_expr;
+
+    if (s == NULL || s->proto_nargs != 0 || s->proto_variadic || tok.kind != '{')
+        return;
+    if ((s->type & 15) == TYPE_VOID || type_size(s->type) != 2 ||
+        type_is_bool(s->type) || type_is_struct_object(s->type))
+        return;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    /* See the identical comment in record_inline_function_if_simple: this
+     * speculatively parses the whole body before any of its own locals are
+     * declared for this pass, so a reference to one can misresolve and
+     * trip a false-positive diagnostic; asm_suppress_depth marks the parse
+     * as inert so dcc_error_at drops it. */
+    asm_suppress_depth++;
+    body = ast_build_stmt(&g_ast_inline_arena);
+    asm_suppress_depth--;
+
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
+
+    ret_expr = inline_return_expr_from_seq(body, 0);
+    if (ret_expr == NULL)
+        return;
+
+    s->narrow_return_expr = ret_expr;
 }
 
 /* Any other static function's body: buffer it too, so it can be dropped at
@@ -1252,6 +1315,83 @@ int local_name_used_ahead(const char *name)
     return found;
 }
 
+/* Speculatively parses the rest of the enclosing block (from the current
+ * position, which must be right after an eligible array declarator with no
+ * initializer) into an AST, then asks dcc_array_narrow.c whether every
+ * value ever stored into `name` is provably in [0,255]. Always rewinds the
+ * lexer position and every per-function counter that must stay in sync
+ * between this (scan) pass and the later, independent codegen pass
+ * (gen_local_decl_after_type must reach the identical conclusion using the
+ * identical scratch parse, since both determine the same array's frame
+ * size/offset independently - see the frame-sizing comments in
+ * parse_function_or_global).
+ *
+ * Bails (returns 0, the safe default) if the speculative parse cannot
+ * reach the block's closing brace - e.g. a further local declaration
+ * follows, which ast_build_stmt does not handle (declarations are parsed
+ * by this file, not the AST builder) - rather than guess. */
+int try_narrow_local_int_array(const char *name, int type, int arrlen, int total_elems)
+{
+    long sv_pos, sv_tok_start;
+    int sv_line, sv_tok_line;
+    struct Token sv_tok;
+    int sv_nulabels, sv_for_seq, sv_forren_n, sv_for_decl_seq, sv_for_decl_rename_index;
+    int sv_for_decl_recording, sv_scope_depth, sv_compound_literal_seq, sv_licm_seq;
+    static struct AstArena narrow_scratch_arena;
+    static int narrow_scratch_inited;
+    struct AstNode *seq;
+    int result;
+
+    if ((type & 15) != TYPE_INT || type_ptr_depth(type) != 0 || type_is_struct_object(type) ||
+        (arrlen <= 0 && total_elems <= 0) || tok.kind == '=' || g_last_array_dim_count > 1)
+        return 0;
+
+    if (!narrow_scratch_inited) {
+        ast_arena_init(&narrow_scratch_arena);
+        narrow_scratch_inited = 1;
+    }
+    ast_arena_reset(&narrow_scratch_arena);
+
+    sv_pos = posi; sv_tok_start = tok_start_pos;
+    sv_line = line_no; sv_tok_line = tok_line;
+    sv_tok = tok;
+    sv_nulabels = nulabels;
+    sv_for_seq = g_for_seq; sv_forren_n = g_forren_n;
+    sv_for_decl_seq = g_for_decl_seq; sv_for_decl_rename_index = g_for_decl_rename_index;
+    sv_for_decl_recording = g_for_decl_recording; sv_scope_depth = g_scope_depth;
+    sv_compound_literal_seq = g_compound_literal_seq; sv_licm_seq = g_licm_seq;
+
+    /* Same rationale as record_narrow_return_expr_if_simple: this walks
+     * forward through code whose later declarations (if any follow) have
+     * not been (re-)entered into the symbol table for this pass, so a
+     * reference to one can misresolve and trip a false-positive diagnostic;
+     * asm_suppress_depth marks the parse as inert so dcc_error_at drops it. */
+    asm_suppress_depth++;
+    seq = ast_new(&narrow_scratch_arena, AST_COMPOUND);
+    for (;;) {
+        struct AstNode *stmt;
+        if (tok.kind == '}' || tok.kind == TOK_EOF)
+            break;
+        stmt = ast_build_stmt(&narrow_scratch_arena);
+        if (stmt == NULL)
+            break;
+        ast_list_push(&narrow_scratch_arena, seq, stmt);
+    }
+    asm_suppress_depth--;
+    result = (tok.kind == '}') ? narrow_array_is_byte_safe(seq, name) : 0;
+
+    posi = sv_pos; tok_start_pos = sv_tok_start;
+    line_no = sv_line; tok_line = sv_tok_line;
+    tok = sv_tok;
+    nulabels = sv_nulabels;
+    g_for_seq = sv_for_seq; g_forren_n = sv_forren_n;
+    g_for_decl_seq = sv_for_decl_seq; g_for_decl_rename_index = sv_for_decl_rename_index;
+    g_for_decl_recording = sv_for_decl_recording; g_scope_depth = sv_scope_depth;
+    g_compound_literal_seq = sv_compound_literal_seq; g_licm_seq = sv_licm_seq;
+
+    return result;
+}
+
 void scan_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
@@ -1345,6 +1485,19 @@ void scan_local_decl_after_type(int base)
         if (arrlen == 0 && g_typedef_array_len > 0) {
             arrlen = g_typedef_array_len;
             total_elems = g_typedef_array_len;
+        }
+
+        if (try_narrow_local_int_array(name, type, arrlen, total_elems)) {
+            type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
+            /* first_stride_bytes (see parse_array_declarator_dims) was
+             * computed from the pre-narrowing int element size and is still
+             * sitting in current_field_array_elem_size; a single-dimension
+             * array (guaranteed by the g_last_array_dim_count > 1 eligibility
+             * check above) has no real per-row stride distinct from the
+             * element size, so clearing it makes the Sym.elem_size ternary
+             * below fall through to type_size(type), matching the narrowed
+             * type instead of silently keeping the stale, too-wide stride. */
+            current_field_array_elem_size = 0;
         }
 
         bytes = type_size(type);
@@ -3029,6 +3182,7 @@ void parse_function_or_global(int base_type)
                 g_current_compiling_func[sizeof(g_current_compiling_func) - 1] = 0;
 
                 record_inline_function_if_simple(s);
+                record_narrow_return_expr_if_simple(s);
                 if (function_body_mentions_multiuse_inline_call())
                     reserve_inline_temp_locals();
 

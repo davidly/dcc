@@ -245,6 +245,11 @@ struct Sym {
     struct AstNode *inline_stmt_body;   /* simple void inline statement body */
     int inline_param_use_count[MAX_PROTO_PARAMS];
     char inline_param_names[MAX_PROTO_PARAMS][64];
+    struct AstNode *narrow_return_expr; /* captured return expr of a zero-arg,
+                                         * single-return function - independent
+                                         * of is_inline, used only to bound
+                                         * calls like rndrm() for array-narrowing
+                                         * analysis (see dcc_array_narrow.c) */
     FILE *deferred_body_file; /* buffered out-of-line body for dead static-function
                                * elimination - both a static inline's fallback body
                                * and a plain (non-inline) static function's only body */
@@ -853,6 +858,8 @@ void emit_needed_deferred_bodies(void);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
 int local_name_used_ahead(const char *name);
+int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name);
+int try_narrow_local_int_array(const char *name, int type, int arrlen, int total_elems);
 void scan_local_decl_after_type(int base);
 void scan_static_local_decl_after_type(int base);
 void scan_function_body(void);

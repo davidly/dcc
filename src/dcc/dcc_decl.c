@@ -948,6 +948,20 @@ void gen_local_decl_after_type(int base)
             total_elems = g_typedef_array_len;
         }
 
+        /* Must reach the identical conclusion scan_local_decl_after_type
+         * already reached for this same declarator during the earlier
+         * frame-sizing pass - both independently re-run the same
+         * speculative parse over the same source text, so they agree. */
+        if (try_narrow_local_int_array(name, type, arrlen, total_elems)) {
+            type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
+            /* See the identical comment in scan_local_decl_after_type
+             * (dcc_func.c): first_stride_bytes was computed from the
+             * pre-narrowing int element size, so it must be invalidated
+             * here too or Sym.elem_size below keeps the stale, too-wide
+             * stride even though Sym.type is now correctly narrowed. */
+            current_field_array_elem_size = 0;
+        }
+
         s = find_local_decl(name);
         if (!s)
             s = try_const_fold_local(name, source_name, type,

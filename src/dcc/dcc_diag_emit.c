@@ -252,6 +252,17 @@ void dcc_error_at(const char *file, int line, long ofs, const char *msg, const c
     const char *fn;
     const char *code;
 
+    /* asm_suppress_depth marks source text being parsed for its structural
+     * side effects only (dead code kept in sync for frame layout, a real
+     * inline-asm block, or - see record_inline_function_if_simple/
+     * record_narrow_return_expr_if_simple in dcc_func.c - a throwaway
+     * speculative re-parse of a function body before its own locals are
+     * declared for this pass) - never for a diagnostic a user should see, so
+     * a type/syntax complaint raised while it's set is a false positive of
+     * the speculative context, not a real error in the program. */
+    if (asm_suppress_depth > 0)
+        return;
+
     fn = file && file[0] ? file : (input_name ? input_name : "<input>");
     code = dcc_diag_code_for_message(msg);
     if (near_text && near_text[0])
