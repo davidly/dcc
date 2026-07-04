@@ -186,25 +186,21 @@ static int emit(int op, int a, int b)
     return G->cp++;
 }
 
-static void patch(int at, int v)
+static inline void patch(int at, int v)
 {
     G->code[at].a = v;
 }
 
-static void pushv(int v)
+static inline void pushv(int v)
 {
-    int *p;
-    p = G->stp;
-    *p = v;
-    G->stp = p + 1;
+    *G->stp = v;
+    G->stp = G->stp + 1;
 }
 
-static int popv(void)
+static inline int popv(void)
 {
-    int *p;
-    p = G->stp - 1;
-    G->stp = p;
-    return *p;
+    G->stp = G->stp - 1;
+    return *G->stp;
 }
 
 static void mark_get(struct Mark *m)
