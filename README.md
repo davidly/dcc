@@ -1,4 +1,7 @@
 # dcc
+[![CI](https://github.com/gloveboxes/dcc/actions/workflows/ci.yml/badge.svg)](https://github.com/gloveboxes/dcc/actions/workflows/ci.yml)
+[![Docs](https://github.com/gloveboxes/dcc/actions/workflows/docs.yml/badge.svg)](https://github.com/gloveboxes/dcc/actions/workflows/docs.yml)
+
 C compiler targeting CP/M 2.2 on a Z80
 
 The [dcc documentation](https://davidly.github.io/dcc/) covers all features, usage, and API reference.

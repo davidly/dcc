@@ -464,6 +464,7 @@ extern int  asm_suppress_depth;
 extern int  g_compound_literal_seq;
 extern int  g_licm_seq;
 void flush_pending_asm(void);
+void pp_reset_asm_dedupe(void);
 
 /* ---- whole-file global-write pre-scan (dcc_global_scan.c) -------------- */
 extern char g_current_compiling_func[64];

@@ -9,16 +9,29 @@ commands below work from any folder that holds your `.c` sources.
 
 ## The build script
 
-The primary build command is the cross-platform `scripts/ma.ps1` script. It
-compiles, optimizes, strips the runtime, assembles, and links in one step. From
-your operating-system terminal or the VS Code terminal, change to the dcc
-checkout, start PowerShell, and run the script there:
+The primary installed build command is `dcc-ma`. It compiles, optimizes,
+strips the runtime, assembles, and links in one step.
+
+With an installed package, use the common wrapper command on Windows, macOS, and
+Linux:
+
+```sh
+dcc-ma foo --mode fast       # builds foo.c -> FOO.COM
+dcc-ma foo --mode nopeep     # skip the dccpeep optimizer
+```
+
+From a source checkout, run the implementation script directly:
+
+```sh
+./scripts/ma.sh foo --mode fast
+```
+
+On Windows, use the PowerShell driver. It works with the Windows PowerShell 5.1
+already included with Windows, as well as PowerShell 7+:
 
 ```pwsh
-cd /path/to/dcc
-pwsh
-./scripts/ma.ps1 foo -Mode fast    # builds foo.c -> FOO.COM
-./scripts/ma.ps1 foo -Mode nopeep  # skip the dccpeep optimizer
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode fast    # builds foo.c -> FOO.COM
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode nopeep  # skip the dccpeep optimizer
 ```
 
 This runs the compiler, the optional `dccpeep` peephole optimizer,

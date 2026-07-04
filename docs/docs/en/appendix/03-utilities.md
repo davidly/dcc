@@ -2,24 +2,30 @@
 
 Developer scripts for building and testing dcc programs.
 
-Run these scripts from the dcc checkout. Open your operating-system terminal or
-the VS Code terminal, change to the dcc directory, start PowerShell, and then
-run the script commands shown below:
+Run these scripts from the dcc checkout or from an installed package. Linux and
+macOS packages include a native shell build driver, so normal package users do
+not need PowerShell to build a single app.
 
-```pwsh
-cd /path/to/dcc
-pwsh
-```
+## Build Driver (`dcc-ma`, `ma.sh` / `ma.ps1`)
 
-## Build Driver (`ma.ps1`)
+The build driver compiles one app, optionally runs `dccpeep`, strips the
+runtime, assembles, and links a `.COM` executable.
 
-Cross-platform PowerShell 7+ build driver. It compiles one app, optionally runs
-`dccpeep`, strips the runtime, assembles, and links a `.COM` executable.
+- Installed packages: use `dcc-ma` on Windows, macOS, and Linux.
+- Source checkout: use `scripts/ma.sh` on Linux/macOS, or `scripts/ma.ps1` with Windows PowerShell 5.1 or PowerShell 7+.
 
 ### Build Driver Usage
 
 ```pwsh
 ./scripts/ma.ps1 <name> [mode] [options]
+```
+
+```sh
+dcc-ma <name> [mode] [options]
+```
+
+```sh
+./scripts/ma.sh <name> [mode] [options]
 ```
 
 - `<name>` — Test app name (e.g., `triangle`, `sieve`, `ttt`)
@@ -34,6 +40,18 @@ Cross-platform PowerShell 7+ build driver. It compiles one app, optionally runs
 ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
 ```
 
+```sh
+dcc-ma triangle
+dcc-ma sieve nopeep
+dcc-ma cobint --mode fast --build-dir mybuild
+```
+
+```sh
+./scripts/ma.sh triangle
+./scripts/ma.sh sieve nopeep
+./scripts/ma.sh cobint --mode fast --build-dir mybuild
+```
+
 ### Build Driver Parameters
 
 | Parameter | Default | Purpose |
@@ -45,15 +63,26 @@ Cross-platform PowerShell 7+ build driver. It compiles one app, optionally runs
 
 ### Environment Variables
 
-- `DCC_STACK_SIZE` — C stack reserve in bytes (default: 512)
+- `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
 - `DCC_FORCE_STACK_CHECK` — Force `-fstack-check` on all builds
+- `DCC_FLOATIO` — Set to `1` to pass `-ffloatio` and keep float `printf` runtime support
+- `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
+- `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
+- `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
+- `DCC_HOME` — dcc package/install root; used to find `include/`, `lib/`, and CP/M tools
+- `DCC_INCLUDE` — extra include directories, separated by the host path separator
+- `DCC_LIB` — extra runtime/tool asset roots, separated by the host path separator
+- `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
+
+Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which
+`dcc` options are owned by the helper pipeline.
 
 ## Test Suite Runner (`runall.ps1`)
 
 Builds and runs the test suite against per-app baselines in `tests/baselines/`.
-It uses `ma.ps1` for builds and `tests/_test_overrides.json` for test-specific
-arguments and stack sizes.
+It uses `dccmake` for builds and `tests/_test_overrides.json` for test-specific
+runtime arguments, stack sizes, and optional dcc build flags.
 
 Runs in parallel by default:
 
@@ -235,7 +264,7 @@ one test, keyed by `name`:
 ```json
 {
   "apps": [
-    { "name": "<app>", "args": "<string>", "stdin": "<string>", "stack_size": <int>, "ignore": <bool> }
+    { "name": "<app>", "args": "<string>", "stdin": "<string>", "stack_size": <int>, "dcc_args": "<string>", "dcc_floatio": <bool>, "dcc_longio": <bool>, "ignore": <bool> }
   ]
 }
 ```
@@ -246,6 +275,9 @@ one test, keyed by `name`:
 | `args` | string | no | `""` | Command-line arguments passed to the program when run. Multi-token strings are split on whitespace (e.g. `"a bb ccc"`) |
 | `stdin` | string | no | `""` | Text piped to the program's standard input during execution (for keyboard/input-driven tests) |
 | `stack_size` | integer | no | `512` | C stack reserve in bytes, passed to `dcc` as `-stack`. Used by recursive apps that need more headroom |
+| `dcc_args` | string | no | `""` | Extra dcc-style build arguments passed through `dccmake` (for example `-DNAME=1 -UOLD`) |
+| `dcc_floatio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-floatio` and dcc `-ffloatio` for this app |
+| `dcc_longio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-flongio` and dcc `-flongio` for this app |
 | `ignore` | boolean | no | `false` | When `true`, the test is skipped entirely (not built or run) |
 
 Entries with none of the optional properties have no effect, so an app only

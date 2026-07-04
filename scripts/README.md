@@ -2,6 +2,22 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `publish-package.ps1`
+
+Publishes or republishes the binary package release. By default it reads the
+version from `scripts/package-version.txt` (`v2.0.0`), deletes any existing
+GitHub release/tag for that version, recreates the tag at the current commit,
+and pushes the tag so `.github/workflows/release.yml` rebuilds the package
+assets.
+
+```pwsh
+pwsh ./scripts/publish-package.ps1
+pwsh ./scripts/publish-package.ps1 -Version v2.0.1 -Watch
+```
+
+The script requires `git` and the GitHub CLI (`gh`) on `PATH`, and refuses to
+publish from a dirty worktree unless `-AllowDirty` is passed.
+
 ## Host compilers to install
 
 The PowerShell scripts are intended to work on Windows, macOS, and Linux. For
@@ -151,11 +167,11 @@ the regression suite, add it to the per-app `stack_size_for` table in
 
 ## `ma.ps1`
 
-Cross-platform build driver (PowerShell 7+ equivalent of `ma.sh`). Compiles a
+Cross-platform build driver (Windows PowerShell 5.1 and PowerShell 7+ equivalent of `ma.sh`). Compiles a
 single test app with optional peephole optimization, strips runtime symbols,
 and links to produce a `.COM` executable. The complete pipeline:
 
-1. Compile source with `dcc` (auto-detect floatio and stack-check flags)
+1. Compile source with `dcc` using default compiler options unless build flags are requested through environment variables
 2. Optimize with `dccpeep` (optional, fast mode only)
 3. Assemble app.MAC with M80
 4. Strip DCCRTL runtime using dccrtlstrip
@@ -165,7 +181,7 @@ and links to produce a `.COM` executable. The complete pipeline:
 ### Usage
 
 ```pwsh
-pwsh ./scripts/ma.ps1 <name> [full|fast|nopeep]
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 <name> [full|fast|nopeep]
 ```
 
 - `<name>` — test app name (e.g., `triangle`, `sieve`, `ttt`)
@@ -175,9 +191,9 @@ pwsh ./scripts/ma.ps1 <name> [full|fast|nopeep]
 ### Examples
 
 ```pwsh
-pwsh ./scripts/ma.ps1 triangle
-pwsh ./scripts/ma.ps1 sieve nopeep
-pwsh ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 triangle
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve nopeep
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast -BuildDir mybuild
 ```
 
 ### Parameters
@@ -191,16 +207,23 @@ pwsh ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
 
 ### Environment Variables
 
-- `DCC_STACK_SIZE` — C stack reserve in bytes (default: 512)
+- `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
 - `DCC_FORCE_STACK_CHECK` — Enable `-fstack-check` for all builds
+- `DCC_FLOATIO` — Set to `1` to pass `-ffloatio` and keep float `printf` runtime support
+- `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
+- `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
+- `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
+
+Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which `dcc` options
+are owned by the helper pipeline.
 
 ## `runall.ps1`
 
 Comprehensive test suite: builds and runs all main test applications with output
-verification against per-app baselines in `tests/baselines/`. Uses `ma.ps1` to
-build each app and `tests/_test_overrides.json` for test-specific arguments and stack
-sizes. Comparison is keyed by app name, so test discovery order does not matter.
+verification against per-app baselines in `tests/baselines/`. Uses `dccmake` to
+build each app and `tests/_test_overrides.json` for test-specific runtime and
+build settings. Comparison is keyed by app name, so test discovery order does not matter.
 Pass `-Extended` to run the extended c-testsuite corpus after the main suite.
 See [`tests/README.md`](../tests/README.md) for the test/baseline relationship.
 

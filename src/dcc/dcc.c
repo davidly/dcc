@@ -1174,6 +1174,7 @@ int main(int argc, char **argv)
     tok_start_pos = 0;
     line_no = 1;
     tok_line = 1;
+    pp_reset_asm_dedupe();
 
     if (!strcmp(output_name, "-")) {
         outf = stdout;

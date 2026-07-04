@@ -14,6 +14,8 @@
 /dccpeep.exe
 /dccrtlstrip
 /dccrtlstrip.exe
+/dccmake
+/dccmake.exe
 /build
 /test_dcc.txt
 /test_dccu.txt

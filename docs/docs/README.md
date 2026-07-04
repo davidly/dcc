@@ -53,7 +53,8 @@ MkDocs prints the local URL, usually `http://127.0.0.1:8000/`.
 ## Deploy
 
 The GitHub Actions workflow in `.github/workflows/docs.yml` builds this MkDocs
-site from the `main` branch and publishes it with `mkdocs gh-deploy`.
+site from the default branch and publishes it to the `gh-pages` branch with
+`mkdocs gh-deploy`.
 
 ## Updating runtime size tables
 

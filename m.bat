@@ -10,6 +10,8 @@ if exist dccpeep del /q dccpeep
 if exist dccpeep.exe del /q dccpeep.exe
 if exist dccrtlstrip del /q dccrtlstrip
 if exist dccrtlstrip.exe del /q dccrtlstrip.exe
+if exist dccmake del /q dccmake
+if exist dccmake.exe del /q dccmake.exe
 
 pushd src\dcc
 call build-dcc.bat
@@ -20,4 +22,6 @@ rem cl /nologo dcc.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /li
 cl /nologo src\dccpeep\dccpeep.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 
 cl /nologo src\dccrtlstrip\dccrtlstrip.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
+
+cl /nologo src\dccmake\dccmake.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 

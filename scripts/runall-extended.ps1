@@ -94,6 +94,9 @@ if ($Help) {
     return
 }
 
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
+Set-Location $repoRoot
+
 $defaultSuiteDir = "tests/extended-tests/tests/single-exec"
 $defaultSkipFile = "tests/_extended_test_overrides.json"
 $extendedTestSubmodulePath = "tests/extended-tests"
@@ -125,8 +128,6 @@ foreach ($name in $Test) {
 $requestedMode = $Mode
 $requestedBuildDir = $BuildDir
 $requestedEmulator = $Emulator
-$buildScriptPath = Join-Path $PSScriptRoot "ma.ps1"
-$repoRoot = (Get-Location).Path
 $Mode = $requestedMode
 $BuildDir = $requestedBuildDir
 $Emulator = $requestedEmulator
@@ -167,6 +168,7 @@ if ($Parallel) {
 
 $ignoredTests = @{}
 $expectedExitCodes = @{}
+$buildOverrides = @{}
 $resolvedSkipFile = $null
 foreach ($candidate in @($SkipFile, (Join-Path $repoRoot $SkipFile), (Join-Path $repoRoot $defaultSkipFile))) {
     if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
@@ -183,6 +185,13 @@ if ($resolvedSkipFile) {
         }
         if ($skipName -and $null -ne $skipEntry.expected_exit_code) {
             $expectedExitCodes[$skipName.ToLowerInvariant()] = [int]$skipEntry.expected_exit_code
+        }
+        if ($skipName -and ($skipEntry.dcc_args -or $null -ne $skipEntry.dcc_floatio -or $null -ne $skipEntry.dcc_longio)) {
+            $entry = @{}
+            if ($skipEntry.dcc_args) { $entry['dcc_args'] = $skipEntry.dcc_args.ToString() }
+            if ($null -ne $skipEntry.dcc_floatio) { $entry['dcc_floatio'] = $skipEntry.dcc_floatio }
+            if ($null -ne $skipEntry.dcc_longio) { $entry['dcc_longio'] = $skipEntry.dcc_longio }
+            $buildOverrides[$skipName.ToLowerInvariant()] = $entry
         }
     }
 }
@@ -203,6 +212,24 @@ function Test-IsNtvcmEmulator {
     param([string]$Command)
     $leaf = [System.IO.Path]::GetFileNameWithoutExtension($Command)
     return ($leaf -ieq "ntvcm")
+}
+
+function Get-DccMakeCommand {
+    $override = $env:DCCMAKE -replace '^\s+|\s+$', ''
+    if ($override) { return $override }
+    $local = Join-Path (Get-Location).Path ($(if ($IsWindows) { "dccmake.exe" } else { "dccmake" }))
+    if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
+    return "dccmake"
+}
+
+function ConvertTo-BooleanSetting {
+    param([object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $Value }
+    $text = $Value.ToString().Trim().ToLowerInvariant()
+    if ($text -in @("1", "true", "yes", "on")) { return $true }
+    if ($text -in @("0", "false", "no", "off")) { return $false }
+    throw "Invalid boolean setting: $Value"
 }
 
 function Get-TestTags {
@@ -295,7 +322,6 @@ function Invoke-ExtendedTest {
         [string[]]$Modes,
         [string]$BuildDir,
         [string]$RepoRoot,
-        [string]$BuildScriptPath,
         [string]$Emulator,
         [string[]]$EmulatorRunArgs,
         [int]$RunTimeout
@@ -323,16 +349,24 @@ function Invoke-ExtendedTest {
     foreach ($buildMode in $Modes) {
         if (-not $casePassed) { break }
         $displayMode = if ($buildMode -eq "peep") { "fast" } else { $buildMode }
+        $usePeep = @("fast", "peep", "opt", "optimized", "o", "1", "yes", "true") -contains $buildMode.ToLowerInvariant()
         $buildArgs = @(
-            "-NoProfile",
-            "-File", $BuildScriptPath,
-            $Case.Name,
-            "-Mode", $buildMode,
-            "-BuildDir", $caseBuildDir,
-            "-Emulator", $Emulator,
-            "-SourcePath", $Case.SourcePath
+            "dcc-input=$($Case.SourcePath)",
+            "dcc-output=$($Case.Name)",
+            "dcc-build-dir=$caseBuildDir",
+            "dcc-peep=$([string]$usePeep)",
+            "ntvcm-tool=$Emulator"
         )
-        $buildResult = Invoke-ProcessWithTimeout -FilePath "pwsh" -Arguments $buildArgs -WorkingDirectory $RepoRoot -TimeoutSeconds $RunTimeout
+        if ($null -ne $Case.DccFloatio) {
+            $buildArgs += "dcc-floatio=$([string](ConvertTo-BooleanSetting $Case.DccFloatio))"
+        }
+        if ($null -ne $Case.DccLongio) {
+            $buildArgs += "dcc-flongio=$([string](ConvertTo-BooleanSetting $Case.DccLongio))"
+        }
+        if ($Case.DccArgs) {
+            $buildArgs += @($Case.DccArgs -split '\s+' | Where-Object { $_ })
+        }
+        $buildResult = Invoke-ProcessWithTimeout -FilePath (Get-DccMakeCommand) -Arguments $buildArgs -WorkingDirectory $RepoRoot -TimeoutSeconds $RunTimeout
 
         if ($buildResult.TimedOut) {
             $lines.Add("  Building $($Case.Name) ($displayMode)... TIMEOUT after ${RunTimeout}s")
@@ -468,6 +502,9 @@ foreach ($source in @(Get-ChildItem -LiteralPath $SuiteDir -Filter "*.c" -File |
         SourcePath   = $source.FullName
         ExpectedPath = (Join-Path $SuiteDir "$name.c.expected")
         Tags         = ($tags -join ",")
+        DccArgs      = if ($buildOverrides.ContainsKey($ignoreKey) -and $buildOverrides[$ignoreKey].ContainsKey('dcc_args')) { $buildOverrides[$ignoreKey]['dcc_args'] } else { "" }
+        DccFloatio   = if ($buildOverrides.ContainsKey($ignoreKey) -and $buildOverrides[$ignoreKey].ContainsKey('dcc_floatio')) { $buildOverrides[$ignoreKey]['dcc_floatio'] } else { $true }
+        DccLongio    = if ($buildOverrides.ContainsKey($ignoreKey) -and $buildOverrides[$ignoreKey].ContainsKey('dcc_longio')) { $buildOverrides[$ignoreKey]['dcc_longio'] } else { $true }
         ExpectedExitCode = if ($expectedExitCodes.ContainsKey($ignoreKey)) { $expectedExitCodes[$ignoreKey] } else { 0 }
     })
 }
@@ -548,9 +585,10 @@ if ($Parallel) {
     $matchDef = ${function:Test-MatchesExpected}.ToString()
     $processDef = ${function:Invoke-ProcessWithTimeout}.ToString()
     $invokeDef = ${function:Invoke-ExtendedTest}.ToString()
+    $gdmDef = ${function:Get-DccMakeCommand}.ToString()
+    $ctbsDef = ${function:ConvertTo-BooleanSetting}.ToString()
     $stackCheckOn = [bool]$StackCheck
     $runArgs = @($emulatorRunArgs)
-    $maPath = $buildScriptPath
 
     $done = 0
     $allCases | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
@@ -560,11 +598,12 @@ if ($Parallel) {
         ${function:Normalize-TestOutput} = $using:normalizeDef
         ${function:Test-MatchesExpected} = $using:matchDef
         ${function:Invoke-ProcessWithTimeout} = $using:processDef
+        ${function:Get-DccMakeCommand} = $using:gdmDef
+        ${function:ConvertTo-BooleanSetting} = $using:ctbsDef
         ${function:Invoke-ExtendedTest} = $using:invokeDef
         $caseBuildDir = Join-Path $using:BuildDir $case.Name
         Invoke-ExtendedTest -Case $case -Modes $using:modes -BuildDir $caseBuildDir -RepoRoot $using:repoRoot `
-            -BuildScriptPath $using:maPath -Emulator $using:Emulator -EmulatorRunArgs $using:runArgs `
-            -RunTimeout $using:RunTimeout
+            -Emulator $using:Emulator -EmulatorRunArgs $using:runArgs -RunTimeout $using:RunTimeout
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -577,8 +616,7 @@ else {
     foreach ($case in $allCases) {
         $done++
         $result = Invoke-ExtendedTest -Case $case -Modes $modes -BuildDir $BuildDir -RepoRoot $repoRoot `
-            -BuildScriptPath $buildScriptPath -Emulator $Emulator -EmulatorRunArgs $emulatorRunArgs `
-            -RunTimeout $RunTimeout
+            -Emulator $Emulator -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
         $results += $result
         Show-ExtendedResult -Result $result -Index $done -Total $totalToRun
     }
@@ -595,8 +633,7 @@ if ($Parallel) {
 
             $retryBuildDir = Join-Path $BuildDir $case[0].Name
             $retryResult = Invoke-ExtendedTest -Case $case[0] -Modes $modes -BuildDir $retryBuildDir -RepoRoot $repoRoot `
-                -BuildScriptPath $buildScriptPath -Emulator $Emulator -EmulatorRunArgs $emulatorRunArgs `
-                -RunTimeout $RunTimeout
+                -Emulator $Emulator -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
 
             $retryStatus = if ($retryResult.Passed) { "PASS" } else { "FAIL" }
             $retryColor = if ($retryResult.Passed) { "Green" } else { "Red" }

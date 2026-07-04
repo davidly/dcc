@@ -246,11 +246,14 @@ ntvcm is a C++ project. Build it from its own directory.
 
 Build scripts live in the `scripts` directory:
 
-- `scripts/ma.ps1` — builds one app
+- `dcc-ma` — installed package command for building one app on Windows, macOS, and Linux
+- `scripts/ma.sh` — source-checkout implementation for Linux/macOS without PowerShell
+- `scripts/ma.ps1` — source-checkout implementation for Windows PowerShell 5.1 or PowerShell 7+
 - `scripts/runall.ps1` — builds and verifies the test suite
 
-Run either script from your operating-system terminal or the VS Code terminal by
-changing to the dcc checkout, starting `pwsh`, and running `./scripts/ma.ps1` or
+Run the single-app shell helper directly on Linux/macOS, or run the PowerShell
+scripts from your operating-system terminal or the VS Code terminal by changing
+to the dcc checkout, starting `pwsh`, and running `./scripts/ma.ps1` or
 `./scripts/runall.ps1`.
 
 They resolve each tool the same way: they use an environment variable if you set

@@ -5,7 +5,7 @@ Comprehensive test suite: builds and runs all test applications with output
 verification against baseline.
 
 .DESCRIPTION
-Builds all *.c files in tests/ folder using ma.ps1, executes each under the
+Builds all *.c files in tests/ folder using dccmake, executes each under the
 emulator, and compares output against per-app baselines in tests/baselines/
 (one <app>.txt per test). Comparison is keyed by app name, so test discovery
 order does not matter. Uses tests/_test_overrides.json for test-specific arguments and
@@ -139,6 +139,9 @@ if ($Help) {
     return
 }
 
+$script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
+Set-Location $script:RepoRoot
+
 # Parallel is the default; -Serial or -Report forces the sequential fallback.
 $Parallel = -not ($Serial -or $Report)
 
@@ -191,18 +194,6 @@ trap {
     # than surfacing a generic "ScriptHalted" from a bare throw.
     throw $_
 }
-
-# Dot-source the build driver once so Invoke-MaBuild runs in-process. This
-# avoids spawning a fresh pwsh per build, which is the dominant cost over a
-# full suite (hundreds of builds). ma.ps1 has its own param block, so preserve
-# this script's parameter values before dot-sourcing it.
-$requestedMode = $Mode
-$requestedBuildDir = $BuildDir
-$requestedEmulator = $Emulator
-. (Join-Path $PSScriptRoot "ma.ps1")
-$Mode = $requestedMode
-$BuildDir = $requestedBuildDir
-$Emulator = $requestedEmulator
 
 function New-RunBuildId {
     return "run-$PID"
@@ -260,6 +251,9 @@ if (-not (Test-Path $appOverridesPath)) {
         if ($app.args) { $appOverrides[$app.name]['args'] = $app.args }
         if ($app.stdin) { $appOverrides[$app.name]['stdin'] = $app.stdin }
         if ($app.stack_size) { $appOverrides[$app.name]['stack_size'] = $app.stack_size }
+        if ($app.dcc_args) { $appOverrides[$app.name]['dcc_args'] = $app.dcc_args }
+        if ($null -ne $app.dcc_floatio) { $appOverrides[$app.name]['dcc_floatio'] = $app.dcc_floatio }
+        if ($null -ne $app.dcc_longio) { $appOverrides[$app.name]['dcc_longio'] = $app.dcc_longio }
         if ($app.ignore) { $appOverrides[$app.name]['ignore'] = $app.ignore }
     }
 }
@@ -313,6 +307,40 @@ function Get-AppStdin {
     return ""
 }
 
+function Get-DccArgs {
+    param([string]$app)
+    if ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['dcc_args']) {
+        return $appOverrides[$app]['dcc_args']
+    }
+    return ""
+}
+
+function Get-DccFloatio {
+    param([string]$app)
+    if ($appOverrides.ContainsKey($app) -and $appOverrides[$app].ContainsKey('dcc_floatio')) {
+        return $appOverrides[$app]['dcc_floatio']
+    }
+    return $true
+}
+
+function Get-DccLongio {
+    param([string]$app)
+    if ($appOverrides.ContainsKey($app) -and $appOverrides[$app].ContainsKey('dcc_longio')) {
+        return $appOverrides[$app]['dcc_longio']
+    }
+    return $true
+}
+
+function ConvertTo-BooleanSetting {
+    param([object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $Value }
+    $text = $Value.ToString().Trim().ToLowerInvariant()
+    if ($text -in @("1", "true", "yes", "on")) { return $true }
+    if ($text -in @("0", "false", "no", "off")) { return $false }
+    throw "Invalid boolean setting: $Value"
+}
+
 function Get-IgnoreApp {
     param([string]$app)
     return ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['ignore'])
@@ -322,6 +350,119 @@ function Test-IsNtvcmEmulator {
     param([string]$Command)
     $leaf = [System.IO.Path]::GetFileNameWithoutExtension($Command)
     return ($leaf -ieq "ntvcm")
+}
+
+function Get-DccMakeCommand {
+    $override = $env:DCCMAKE -replace '^\s+|\s+$', ''
+    if ($override) { return $override }
+    $local = Join-Path (Get-Location).Path ($(if ($IsWindows) { "dccmake.exe" } else { "dccmake" }))
+    if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
+    return "dccmake"
+}
+
+function Invoke-DccMakeBuild {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+        [string]$Mode = "fast",
+        [string]$BuildDir = "build",
+        [string]$Emulator = "ntvcm",
+        [string]$SourcePath = "",
+        [int]$StackSize = 0,
+        [string]$DccArgs = "",
+        [object]$DccFloatio = $null,
+        [object]$DccLongio = $null,
+        [switch]$Quiet
+    )
+
+    $modeLower = $Mode.ToLowerInvariant()
+    if ($modeLower -eq "full") {
+        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -Quiet:$Quiet
+        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -Quiet:$Quiet
+        return ($fastOk -and $nopeepOk)
+    }
+    $usePeep = @("fast", "peep", "opt", "optimized", "o", "1", "yes", "true") -contains $modeLower
+
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($Name)
+    $lowerBase = $base.ToLowerInvariant()
+    $upperBase = $base.ToUpperInvariant()
+
+    $sourceFile = ""
+    if ($SourcePath) {
+        if (Test-Path -LiteralPath $SourcePath -PathType Leaf) {
+            $sourceFile = (Resolve-Path -LiteralPath $SourcePath).ProviderPath
+        }
+    }
+    else {
+        foreach ($candidate in @(
+            (Join-Path "tests" "$base.c"),
+            (Join-Path "tests" "$base.C"),
+            (Join-Path "tests" "$lowerBase.c"),
+            (Join-Path "tests" "$upperBase.C"),
+            "$base.c",
+            "$base.C",
+            "$lowerBase.c",
+            "$upperBase.C"
+        )) {
+            if (Test-Path $candidate -PathType Leaf) {
+                $sourceFile = $candidate
+                break
+            }
+        }
+    }
+
+    if (-not $sourceFile) {
+        Write-Error "Source file not found for: $Name" -ErrorAction Continue
+        return $false
+    }
+
+    if (-not (Test-Path $BuildDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
+    }
+
+    $dccmake = Get-DccMakeCommand
+    $args = @(
+        "dcc-input=$sourceFile",
+        "dcc-output=$base",
+        "dcc-build-dir=$BuildDir",
+        "dcc-peep=$([string]$usePeep)",
+        "ntvcm-tool=$Emulator"
+    )
+    if ($null -ne $DccFloatio) {
+        $args += "dcc-floatio=$([string](ConvertTo-BooleanSetting $DccFloatio))"
+    }
+    if ($null -ne $DccLongio) {
+        $args += "dcc-flongio=$([string](ConvertTo-BooleanSetting $DccLongio))"
+    }
+    if ($StackSize -gt 0) {
+        $args += @("-s", "$StackSize")
+    }
+    if ($DccArgs) {
+        $args += @($DccArgs -split '\s+' | Where-Object { $_ })
+    }
+
+    $buildOut = & $dccmake @args 2>&1
+    $exitCode = $LASTEXITCODE
+    if (-not $Quiet) { $buildOut | Write-Host }
+    if ($exitCode -ne 0) {
+        Write-Error "dccmake failed for $Name ($Mode) with exit code $exitCode" -ErrorAction Continue
+        return $false
+    }
+
+    $buildWarnings = @($buildOut | Where-Object { $_ -match '%Mult\. Def\.|%Phase error|%Undefined' })
+    if ($buildWarnings) {
+        $buildWarnings | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+        Write-Error "Build warnings treated as errors for $Name" -ErrorAction Continue
+        return $false
+    }
+
+    $appCom = Join-Path $BuildDir "$upperBase.COM"
+    if (Test-Path -LiteralPath $appCom -PathType Leaf) {
+        return $true
+    }
+
+    Write-Error "Build failed: .COM file not produced for $Name" -ErrorAction Continue
+    return $false
 }
 
 # CP/M data fixtures are every file in tests/ that is not a C source or repo
@@ -343,6 +484,9 @@ function Get-FixtureFiles {
 # interpreters read these files from the current working directory, and apps are
 # run from the build dir (below), so the fixtures must live there too.
 function Stage-FixtureInputs {
+    if (-not (Test-Path $BuildDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
+    }
     foreach ($f in $fixtureList) {
         Copy-FixtureUpper -Fixture $f -DestDir $BuildDir
     }
@@ -384,9 +528,8 @@ function Copy-FixtureUpper {
 # Build, run, and verify a single app across the requested modes. Returns a
 # result object with a collected log (Lines) so callers can print output in a
 # deterministic, grouped order (important under parallel execution). This is
-# self-contained: it only depends on Invoke-MaBuild / ConvertTo-CRLF (from
-# ma.ps1) and Test-MatchesBaseline, all of which are made available in both
-# serial and parallel contexts.
+# self-contained: it depends on Invoke-DccMakeBuild and Test-MatchesBaseline,
+# both of which are made available in both serial and parallel contexts.
 function Invoke-AppTest {
     param(
         [string]$AppName,
@@ -398,6 +541,9 @@ function Invoke-AppTest {
         [string]$RunArgs,
         [string]$RunStdin,
         [string]$StackSize,
+        [string]$DccArgs,
+        [object]$DccFloatio,
+        [object]$DccLongio,
         [string[]]$EmulatorRunArgs,
         [object[]]$Fixtures,
         [bool]$StageFixtures = $true
@@ -432,7 +578,7 @@ function Invoke-AppTest {
         $stackSizeInt = if ($StackSize) { [int]$StackSize } else { 0 }
         $ok = $false
         try {
-            $ok = Invoke-MaBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -Quiet
+            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -Quiet
         }
         catch { $ok = $false }
 
@@ -673,6 +819,9 @@ foreach ($app in $testFiles) {
         RunArgs      = (Get-AppArgs $app)
         RunStdin     = (Get-AppStdin $app)
         StackSize    = (Get-StackSize $app)
+        DccArgs      = (Get-DccArgs $app)
+        DccFloatio   = (Get-DccFloatio $app)
+        DccLongio    = (Get-DccLongio $app)
     })
 }
 
@@ -822,10 +971,12 @@ if ($Parallel) {
     # per-app build dirs (build/<app>) prevent the shared-file clobbering that
     # would otherwise occur (DCCRTL.MAC, RTLMIN.MAC, tool COMs, .COM outputs).
     $repoRoot     = (Get-Location).Path
-    $maPath       = (Join-Path $PSScriptRoot "ma.ps1")
     $tmbDef       = ${function:Test-MatchesBaseline}.ToString()
     $iatDef       = ${function:Invoke-AppTest}.ToString()
     $cfuDef       = ${function:Copy-FixtureUpper}.ToString()
+    $ctbsDef      = ${function:ConvertTo-BooleanSetting}.ToString()
+    $gdmDef       = ${function:Get-DccMakeCommand}.ToString()
+    $idmbDef      = ${function:Invoke-DccMakeBuild}.ToString()
     $stackCheckOn = [bool]$StackCheck
     $runArgs      = @($emulatorRunArgs)
 
@@ -838,9 +989,11 @@ if ($Parallel) {
         Set-Location $using:repoRoot
         if ($using:stackCheckOn) { $env:DCC_FORCE_STACK_CHECK = "1" }
         # Bring the needed functions into this runspace.
-        . $using:maPath                                   # Invoke-MaBuild, ConvertTo-CRLF
         ${function:Test-MatchesBaseline} = $using:tmbDef
         ${function:Copy-FixtureUpper}    = $using:cfuDef
+        ${function:ConvertTo-BooleanSetting} = $using:ctbsDef
+        ${function:Get-DccMakeCommand}   = $using:gdmDef
+        ${function:Invoke-DccMakeBuild}  = $using:idmbDef
         ${function:Invoke-AppTest}       = $using:iatDef
 
         $appBuildDir = Join-Path $using:BuildDir $item.App
@@ -848,7 +1001,9 @@ if ($Parallel) {
             -BaselineDir $using:BaselineDir -Emulator $using:Emulator `
             -Placeholders $using:Placeholders -RunArgs $item.RunArgs `
             -RunStdin $item.RunStdin `
-            -StackSize $item.StackSize -EmulatorRunArgs $using:runArgs `
+            -StackSize $item.StackSize -DccArgs $item.DccArgs `
+            -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
+            -EmulatorRunArgs $using:runArgs `
             -Fixtures $using:fixtureList -StageFixtures $true
     } | ForEach-Object {
         $result = $_
@@ -885,7 +1040,9 @@ else {
         $result = Invoke-AppTest -AppName $item.App -Modes $modes -BuildDir $BuildDir `
             -BaselineDir $BaselineDir -Emulator $Emulator -Placeholders $Placeholders `
             -RunArgs $item.RunArgs -RunStdin $item.RunStdin `
-            -StackSize $item.StackSize -EmulatorRunArgs $emulatorRunArgs `
+            -StackSize $item.StackSize -DccArgs $item.DccArgs `
+            -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
+            -EmulatorRunArgs $emulatorRunArgs `
             -Fixtures $fixtureList -StageFixtures $false
         Show-AppResult $result
         $results += $result
