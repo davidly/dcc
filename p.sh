@@ -35,6 +35,7 @@ ntvcm -p build/MM
 
 for file in tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com; do
     if [ -f "build/$file" ]; then
-        stat -c "%s %n" "build/$file"
+        # GNU stat (Linux) uses -c; BSD stat (macOS) uses -f with different format specifiers.
+        stat -c "%s %n" "build/$file" 2>/dev/null || stat -f "%z %N" "build/$file"
     fi
 done
