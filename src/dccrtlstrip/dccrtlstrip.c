@@ -435,6 +435,48 @@ static void start_new_block_at(int i, int *curp)
     *curp = cur;
 }
 
+/* Is `line` inert as far as splitting label starts is concerned - blank,
+ * a comment, a PUBLIC directive, or a bare "label:" with nothing else on
+ * the line? Used to detect a run of alias labels that share one
+ * fallthrough body further down (e.g. DCCRTL.MAC's time stubs:
+ * _asctime:/_ctime:/_gmtime:/__ltim: all immediately precede the single
+ * "ld hl,0 / ret" body they share). A label line with code after the
+ * colon, or an EQU/data line, is real content and returns 0. */
+static int line_is_bare_label_or_inert(const char *line)
+{
+    char clean[MAX_LINE];
+    char lab[128];
+    const char *p;
+    const char *colon;
+
+    if (is_public_line(line))
+        return 1;
+
+    strip_comment_copy(line, clean, sizeof(clean));
+    p = skipws(clean);
+    if (*p == 0)
+        return 1;
+
+    if (!parse_label(clean, lab))
+        return 0;
+
+    colon = strchr(clean, ':');
+    if (!colon)
+        return 0;
+    return *skipws(colon + 1) == 0;
+}
+
+/* Do the lines in [a, b) contain nothing but alias labels/comments/blanks -
+ * i.e. no line here is itself the start of that label's real body? */
+static int range_is_alias_only(int a, int b)
+{
+    int i;
+    for (i = a; i < b; ++i)
+        if (!line_is_bare_label_or_inert(lines[i].s))
+            return 0;
+    return 1;
+}
+
 static void build_blocks(void)
 {
     int i;
@@ -490,6 +532,37 @@ static void build_blocks(void)
                 starts[nstarts++] = li;
         }
         sort_ints(starts, nstarts);
+
+        /*
+         * Merge a run of alias labels that share one fallthrough body with
+         * no real code of their own (e.g. DCCRTL.MAC's time stubs -
+         * _asctime:/_ctime:/_gmtime:/__ltim: all immediately precede the
+         * single "ld hl,0 / ret" body they share) back into one block.
+         * Without this, splitting at every label boundary gives every
+         * alias but the last an EMPTY block - falling through into
+         * whatever the stripper decided to emit next - since the actual
+         * body only lives in the range belonging to the final label.
+         */
+        if (nstarts > 1) {
+            int merged[128];
+            int nmerged;
+            int k;
+
+            nmerged = 0;
+            j = 0;
+            while (j < nstarts) {
+                int group_start = starts[j];
+                while (j + 1 < nstarts &&
+                       range_is_alias_only(starts[j], starts[j + 1]))
+                    j++;
+                if (nmerged < 128)
+                    merged[nmerged++] = group_start;
+                j++;
+            }
+            for (k = 0; k < nmerged; ++k)
+                starts[k] = merged[k];
+            nstarts = nmerged;
+        }
 
         if (nstarts <= 1) {
             bi = -1;
