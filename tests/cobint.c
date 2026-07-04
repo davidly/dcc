@@ -613,20 +613,22 @@ static void exec_stmt_tokens(void)
     int k;
     while (tp < tend && !stopped && !jumped) {
         k = tpeek();
-        if (k == KW_ELSE) return;
-        if (k == KW_MOVE) do_move();
-        else if (k == KW_COMPUTE) do_compute();
-        else if (k == KW_ADD) do_add();
-        else if (k == KW_SUBTRACT) do_subtract();
-        else if (k == KW_MULTIPLY) do_multiply();
-        else if (k == KW_DIVIDE) do_divide();
-        else if (k == KW_DISPLAY) do_display();
-        else if (k == KW_PERFORM) do_perform();
-        else if (k == KW_GO || k == KW_GOTO) do_goto();
-        else if (k == KW_IF) exec_if();
-        else if (k == KW_STOP) { stopped = 1; return; }
-        else if (k == KW_EXIT) { tp++; return; }
-        else tp++;
+        switch (k) {
+        case KW_ELSE: return;
+        case KW_MOVE: do_move(); break;
+        case KW_COMPUTE: do_compute(); break;
+        case KW_ADD: do_add(); break;
+        case KW_SUBTRACT: do_subtract(); break;
+        case KW_MULTIPLY: do_multiply(); break;
+        case KW_DIVIDE: do_divide(); break;
+        case KW_DISPLAY: do_display(); break;
+        case KW_PERFORM: do_perform(); break;
+        case KW_GO: case KW_GOTO: do_goto(); break;
+        case KW_IF: exec_if(); break;
+        case KW_STOP: stopped = 1; return;
+        case KW_EXIT: tp++; return;
+        default: tp++; break;
+        }
     }
 }
 
