@@ -1167,32 +1167,15 @@ static void program(void)
         next();
 }
 
-#if 1 /* 10% faster overall for most apps */
+static inline int popv(void)
+{
+    return *(stp = stp - 1);
+}
 
-    #define popv() (*(stp = stp - 1))
-    #define pushv(v) do { *stp++ = (v); } while(0)
-
-#else
-
-    static int popv(void)
-    {
-        if (sp <= 0) {
-            fprintf(stderr, "stack underflow\n");
-            exit(1);
-        }
-        return st[--sp];
-    }
-    
-    static void pushv(int v)
-    {
-        if (sp >= MAXSTACK) {
-            fprintf(stderr, "stack overflow\n");
-            exit(1);
-        }
-        st[sp++] = v;
-    }
-
-#endif
+static inline void pushv(int v)
+{
+    *stp++ = v;
+}
 
 static void call_proc(int pi, int pc)
 {

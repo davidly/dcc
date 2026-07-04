@@ -468,13 +468,8 @@ static void resolve_patches(void)
     }
 }
 
-#if 1
-    #define pushv(v) do { st[sp++] = (v); } while(0)
-    #define popv() (st[--sp])
-#else
-    static void pushv(int v) { if (sp >= MAXSTACK) die("stack overflow"); st[sp++] = v; }
-    static int popv(void) { if (sp <= 0) die("stack underflow"); return st[--sp]; }
-#endif
+static inline void pushv(int v) { st[sp++] = v; }
+static inline int popv(void) { return st[--sp]; }
 
 static void run(void)
 {
