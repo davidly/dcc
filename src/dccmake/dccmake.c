@@ -904,6 +904,18 @@ static int copy_file(const char *src, const char *dst)
     return 1;
 }
 
+static int same_file(const char *a, const char *b)
+{
+    struct stat sa;
+    struct stat sb;
+
+    if (!strcmp(a, b))
+        return 1;
+    if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
+        return 0;
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
 static int to_crlf(const char *path)
 {
     FILE *in;
@@ -1180,7 +1192,7 @@ static int run_build(struct Config *cfg)
         return 0;
     }
 
-    if (strcmp(output_lower, output_upper) != 0)
+    if (strcmp(output_lower, output_upper) != 0 && !same_file(app_com, lower_com))
         copy_file(app_com, lower_com);
 
     printf("dccmake: built %s\n", app_com);
