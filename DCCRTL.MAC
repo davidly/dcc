@@ -18467,6 +18467,7 @@ wcs_ret:
 
         public  _exec
         public  _execv
+        public  __xmain
 ; XTCOD=31 (trampoline code bytes), XTSGP=16 (stack gap below trampoline)
 
 ; int exec(const char *path, const char *cmdtail)
