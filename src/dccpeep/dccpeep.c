@@ -1069,6 +1069,72 @@ static void peep_format_ix_off(char *buf, int off)
         sprintf(buf, "%d", off);
 }
 
+static int peep_parse_ld_e_imm8(const char *s, int *out)
+{
+    char tmp[MAX_LINE];
+    char *endp;
+    long v;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "ld e,", 5) != 0)
+        return 0;
+
+    v = strtol(tmp + 5, &endp, 0);
+    if (*endp != 0 || v < 0 || v > 255)
+        return 0;
+
+    *out = (int)v;
+    return 1;
+}
+
+static int pass_ix_addr_byte_store_imm(void)
+{
+    int i;
+    int j;
+    int off;
+    int add;
+    int imm;
+    int changed = 0;
+    char line[MAX_LINE];
+    char offbuf[32];
+
+    for (i = 0; i + 5 < nlines; ++i) {
+        if (!eq(i, "push ix")) continue;
+        if (!eq(i + 1, "pop hl")) continue;
+        if (!peep_parse_ld_de_signed(lines[i + 2], &off)) continue;
+        if (!eq(i + 3, "add hl,de")) continue;
+
+        j = i + 4;
+        while (j < nlines && eq(j, "inc hl")) {
+            off++;
+            j++;
+        }
+        if (j + 1 < nlines && peep_parse_ld_de_signed(lines[j], &add) &&
+            eq(j + 1, "add hl,de")) {
+            off += add;
+            j += 2;
+            while (j < nlines && eq(j, "inc hl")) {
+                off++;
+                j++;
+            }
+        }
+
+        if (off < -128 || off > 127) continue;
+        if (j + 1 >= nlines) continue;
+        if (!peep_parse_ld_e_imm8(lines[j], &imm)) continue;
+        if (!eq(j + 1, "ld (hl),e")) continue;
+
+        peep_format_ix_off(offbuf, off);
+        sprintf(line, "ld (ix%s),%d", offbuf, imm);
+        replace1_tagged(i, line, "ix_addr_byte_store_imm");
+        delete_n(i + 1, j + 1 - i);
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
 /*
  * Dead IX-frame store elimination.
  *
@@ -3642,6 +3708,32 @@ static int peep_call_uses_stack_args_only(const char *s)
     return name[0] == '_';
 }
 
+static int peep_call_uses_long_stack_args(const char *s)
+{
+    char tmp[MAX_LINE];
+    const char *name;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "call ", 5) != 0)
+        return 0;
+
+    name = tmp + 5;
+    if (strncmp(name, "__", 2) == 0) {
+        return strcmp(name, "__lts") == 0 ||
+               strcmp(name, "__les") == 0 ||
+               strcmp(name, "__lgs") == 0 ||
+               strcmp(name, "__lks") == 0 ||
+               strcmp(name, "__lds") == 0 ||
+               strcmp(name, "__ltu") == 0 ||
+               strcmp(name, "__lmu") == 0 ||
+               strcmp(name, "__lms") == 0 ||
+               strcmp(name, "__fgt") == 0 ||
+               strcmp(name, "__fadd") == 0;
+    }
+
+    return name[0] == '_';
+}
+
 /*
  * A common by-reference load used as an immediate stack argument:
  *
@@ -3671,6 +3763,57 @@ static int pass_word_load_push_de_call(void)
 
         replace1_tagged(i + 3, "push de", "word_load_push_de_call");
         delete_n(i + 4, 1);
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
+/*
+ * A 32-bit value loaded from memory is often pushed immediately as a long or
+ * float stack argument:
+ *
+ *   ld e,(hl) / inc hl / ld d,(hl)          ; DE = low word
+ *   inc hl / ld a,(hl) / inc hl / ld h,(hl)
+ *   ld l,a                                  ; HL = high word
+ *   ex de,hl
+ *   push de
+ *   push hl
+ *   call __helper
+ *
+ * Before the exchange, HL is already the high word and DE the low word.  Push
+ * them in that order and skip the exchange.  Constrain this to immediate
+ * stack-argument calls; register-ABI helpers are deliberately excluded.
+ */
+static int pass_long_load_push_no_ex_call(void)
+{
+    int i;
+    int call_line;
+    int changed = 0;
+
+    for (i = 0; i + 11 < nlines; ++i) {
+        if (!eq(i,      "ld e,(hl)")) continue;
+        if (!eq(i + 1,  "inc hl")) continue;
+        if (!eq(i + 2,  "ld d,(hl)")) continue;
+        if (!eq(i + 3,  "inc hl")) continue;
+        if (!eq(i + 4,  "ld a,(hl)")) continue;
+        if (!eq(i + 5,  "inc hl")) continue;
+        if (!eq(i + 6,  "ld h,(hl)")) continue;
+        if (!eq(i + 7,  "ld l,a")) continue;
+        if (!eq(i + 8,  "ex de,hl")) continue;
+        if (!eq(i + 9,  "push de")) continue;
+        if (!eq(i + 10, "push hl")) continue;
+
+        call_line = i + 11;
+        if (call_line < nlines && strncmp(lines[call_line], "extrn ", 6) == 0)
+            call_line++;
+        if (call_line >= nlines || !peep_call_uses_long_stack_args(lines[call_line]))
+            continue;
+
+        replace1_tagged(i + 8, "push hl", "long_load_push_no_ex_call");
+        replace1(i + 9, "push de");
+        delete_n(i + 10, 1);
         changed = 1;
         if (i > 0) --i;
     }
@@ -11142,6 +11285,7 @@ int main(int argc, char **argv)
         if (pass_inline_simple_call_hl_from_loaded_pointer()) changed = 1;
         if (pass_dead_hl_load_before_ldhl()) changed = 1;
         if (pass_word_load_push_de_call()) changed = 1;
+        if (pass_long_load_push_no_ex_call()) changed = 1;
         if (pass_elim_loop_back_signed_bias()) changed = 1;
         if (pass_cp_zero_to_or_a()) changed = 1;
         if (pass_hl_cmp_zero_to_or_hl()) changed = 1;
@@ -11211,6 +11355,7 @@ int main(int argc, char **argv)
         if (pass_cp_jz_jpc()) changed = 1;
         if (pass_bool_from_cmp()) changed = 1;
         if (pass_elim_dead_ix_stores()) changed = 1;
+        if (pass_ix_addr_byte_store_imm()) changed = 1;
         if (pass_remove_ix_store_reload_a()) changed = 1;
         if (pass_a_tracks_ix_byte()) changed = 1;
         if (pass_byte_postdec_copy()) changed = 1;
