@@ -501,6 +501,25 @@ void gen_long_cmp_ast(const struct AstNode *n)
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
     if (!type_is_long(lhs_type)) {
+        /* 16-bit LHS against a signed long compile-time constant (e.g.
+         * `int x < 40000L`, where the decimal literal is `long` because it
+         * exceeds INT_MAX). Promote the LHS to long in DE:HL and use the
+         * inline signed-long-const compare, exactly as the long-LHS path
+         * below does. Without this the operand falls into
+         * gen_binop32_promote_16lhs_ast, which pushes both operands and calls
+         * the __lts/__les runtime helper -- ~40 instructions and a call for
+         * what the old stream compiler did inline. */
+        common_type = common_arith_type(lhs_type, promote_int_type(n->b->type));
+        if ((n->op == '<' || n->op == '>' || n->op == TOK_LE || n->op == TOK_GE) &&
+            type_is_long(common_type) && !(common_type & TYPE_UNSIGNED) &&
+            type_is_long(n->b->type) && ast_const_scalar_fold(n->b, &rhs_const)) {
+            emit_cast_16_to_common(lhs_type, common_type);   /* HL -> DE:HL */
+            if (emit_signed_long_const_cmp_ast(n->op, rhs_const)) {
+                g_expr_type = TYPE_INT;
+                g_long_from16 = 0;
+                return;
+            }
+        }
         emit("\tpush hl\n");
         ast_gen_expr(n->b);
         rhs_type = promote_int_type(g_expr_type);
@@ -563,6 +582,24 @@ void gen_long_arith_ast(const struct AstNode *n)
     int rhs_from16;
     long const_val;
 
+    /* Whole-expression constant fold for a long result (companion to the
+     * 16-bit fold in gen_binary_ast). The AST builder never folds, so a source
+     * constant such as `100000L + 200000L` would otherwise materialise both
+     * 32-bit operands and call a runtime long add/mul. When the whole node is a
+     * compile-time constant and the operator's low 32 bits are the same under
+     * signed and unsigned interpretation (+, -, *, &, |, ^), emit the folded
+     * long immediate (low half in HL, high half in DE) directly. Relational /
+     * divide / modulo / shift keep their signedness-aware paths. */
+    if (!type_is_float(n->a->type) && !type_is_float(n->b->type) &&
+        ast_const_fold_strict(n, &const_val)) {
+        common_type = common_arith_type(promote_int_type(n->a->type), n->peek_type);
+        fprintf(outf, "\tld hl,%ld\n", const_val & 0xffffL);
+        fprintf(outf, "\tld de,%ld\n", (const_val >> 16) & 0xffffL);
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
     common_type = common_arith_type(lhs_type, n->peek_type);
@@ -620,6 +657,28 @@ void gen_long_arith_ast(const struct AstNode *n)
 
 void gen_binop32_promote_16lhs_ast(int op, int lhs_type, int common_type)
 {
+    /* Entry: the 16-bit LHS is on the stack (a single `push hl`) and the long
+     * RHS is in DE:HL -- the shape produced when gen_binary_ast pushes a
+     * 16-bit LHS and only afterwards discovers the RHS is long. The uniform
+     * 32-bit ops expect the LHS as a long on the stack and the RHS in DE:HL.
+     *
+     * For commutative operators (+, *, &, |, ^) swap the operand roles: pop
+     * the 16-bit LHS, spill the long RHS to the stack, extend the LHS into
+     * DE:HL, and run the standard 32-bit op. gen_binop32 then computes
+     * (stack RHS) op (DE:HL LHS) == LHS op RHS by commutativity, and pops its
+     * own 4 bytes -- no deep stack round-trip. */
+    if (op == '+' || op == '*' || op == '&' || op == '|' || op == '^') {
+        emit("\tpop bc\n");                 /* BC = 16-bit LHS (B hi, C lo) */
+        emit("\tpush de\n\tpush hl\n");     /* long RHS -> stack */
+        emit("\tld l,c\n\tld h,b\n");       /* HL = LHS low word */
+        emit_cast_16_to_common(lhs_type, common_type); /* DE:HL = (long)LHS */
+        gen_binop32_typed(op, common_type);
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Non-commutative (-, /, %): operand order matters, so keep the
+     * order-preserving reconstruction (rebuild LHS as a long beneath the RHS). */
     emit("\tpop bc\n");
     emit("\tpush de\n\tpush hl\n");
     emit("\tld h,b\n\tld l,c\n");
@@ -645,6 +704,27 @@ void gen_binary_ast(const struct AstNode *n)
     int common_type;
     const char *float_helper;
     long const_val;
+
+    /* Whole-expression constant fold. The AST builder never folds, so without
+     * this a source expression like `1000 + 2000` or `(30 * 10) / 3` evaluates
+     * BOTH operands and does the arithmetic at run time. If the whole binary
+     * node folds to a value that is identical under signed and unsigned
+     * interpretation (ast_const_fold_strict enforces this, rejecting only the
+     * genuinely signedness-ambiguous divide/modulo/shift/relational cases with
+     * a negative operand), materialise the folded immediate directly. Long and
+     * float results fold on their own paths. */
+    if (!type_is_long(n->a->type) && !type_is_float(n->a->type) &&
+        !type_is_long(n->b->type) && !type_is_float(n->b->type) &&
+        !type_is_long(n->peek_type) && !type_is_float(n->peek_type) &&
+        ast_const_fold_strict(n, &const_val)) {
+        int fold_type = is_cmp_op(n->op)
+            ? TYPE_INT
+            : common_arith_type(promote_int_type(n->a->type), n->peek_type);
+        fprintf(outf, "\tld hl,%ld\n", const_val & 0xffffL);
+        g_expr_type = fold_type;
+        g_long_from16 = 0;
+        return;
+    }
 
     /* `CONST * expr` mirror of the `expr * CONST` fast path further below:
      * multiplication is commutative, so a qualifying constant on the LEFT
@@ -772,6 +852,29 @@ void gen_binary_ast(const struct AstNode *n)
         !type_is_long(common_type)) {
         emit_and_hl_const((unsigned int)(const_val & 0xffffL));
         g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Constant RHS on the generic 16-bit path: the right operand is known at
+     * compile time, so load it straight into DE rather than running the
+     * uniform push-lhs / evaluate-rhs-into-HL / ex de,hl / pop-hl marshaling.
+     * The lhs is already in HL and DE is scratch, so the end state
+     * (HL = lhs, DE = rhs) is byte-for-byte identical to the generic sequence
+     * while dropping a push, a pop and an ex de,hl per operator. The &, *,
+     * unsigned /,% constant cases returned above; this covers the remaining
+     * +, -, |, ^, signed /,%, and comparison operators against a literal --
+     * i.e. the pervasive loop-condition / accumulator shapes like `i < N`,
+     * `n - 1`, `x | mask`. */
+    if (!type_is_long(common_type) &&
+        ast_const_int_operand_value(n->b, &const_val) &&
+        !type_is_long(n->b->type) && !type_is_float(n->b->type)) {
+        fprintf(outf, "\tld de,%ld\n", const_val & 0xffffL);
+        gen_binop_typed(n->op, common_type);
+        if (is_cmp_op(n->op))
+            g_expr_type = TYPE_INT;
+        else
+            g_expr_type = common_type;
         g_long_from16 = 0;
         return;
     }
@@ -1909,6 +2012,31 @@ void gen_assign_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* First-subscript fast path for a global/static array base. The base address is
+ * a compile-time symbol, so compute the scaled index into HL first and add the
+ * base via `ld de,SYM` -- avoiding the `push hl / ex de,hl / pop hl` round-trip
+ * the generic base-in-HL sequence needs for a non-constant index. The peephole
+ * cannot remove that push/pop because a relocatable symbol is not a foldable
+ * literal (its sxt/const folds skip symbol loads). Returns 1 when it emitted the
+ * whole first-subscript address (HL = &SYM[idx]); 0 when the caller should fall
+ * back (constant index, or a non-array / frame-relative base). */
+static int emit_array_symbase_index(struct Sym *s, const struct AstNode *idx,
+                                    int elem)
+{
+    if (s == NULL || !s->is_array)
+        return 0;
+    if (s->storage == SC_LOCAL || s->storage == SC_PARAM)
+        return 0;                        /* frame-relative base, not a symbol */
+    if (idx == NULL || idx->kind == AST_INT_LIT)
+        return 0;                        /* constant index: add-const path is fine */
+    gen_index_subscript_expr_ast(idx);   /* index -> HL */
+    scale_hl_by_elem_size(elem);         /* index * elem */
+    emit_extrn_if_needed(s);
+    fprintf(outf, "\tld de,%s\n", asm_name_for(sym_asm_name(s)));
+    emit("\tadd hl,de\n");
+    return 1;
+}
+
 /* Emit a plain-int subscript read `base[index]` via the IDENTIFIER-ROOTED
  * subscript machine (NOT the postfix chain - the two use different base loads
  * and element-size helpers).  The gate (ast_index_plain_int_read) guarantees a
@@ -1954,12 +2082,22 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
         struct Sym *ns;
         int count;
         int idx;
+        int first = 0;
         ast_index_symbol_nd_collect(n, &ns, idxs, &count);
-        emit_load_sym_addr(ns);
-        cur_type = ns->type;
-        if (!ns->is_array && type_ptr_depth(cur_type) > 0)
-            emit_load_from_hl(cur_type);
-        for (idx = 0; idx < count; ++idx) {
+        /* Symbol-base fast path for the first subscript of a global/static
+         * array: scale the index and add `ld de,SYM` instead of push/ex/pop. */
+        if (count > 0 && ns->is_array &&
+            emit_array_symbase_index(ns, idxs[0],
+                                     sym_array_index_elem_size(ns, 0))) {
+            cur_type = ns->type;
+            first = 1;
+        } else {
+            emit_load_sym_addr(ns);
+            cur_type = ns->type;
+            if (!ns->is_array && type_ptr_depth(cur_type) > 0)
+                emit_load_from_hl(cur_type);
+        }
+        for (idx = first; idx < count; ++idx) {
             if (ns->is_array)
                 elem_size = sym_array_index_elem_size(ns, idx);
             else
@@ -2018,17 +2156,19 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
     if (ast_index_2d_addressable_addr(n)) {
         const struct AstNode *outer = n->a;
         s = find_sym(outer->a->sval);
-        emit_load_sym_addr(s);
         elem_size = sym_array_index_elem_size(s, 0);
-        if (outer->b->kind == AST_INT_LIT) {
-            emit_add_const_to_hl(outer->b->ival * elem_size);
-        } else {
-            emit("\tpush hl\n");
-            gen_index_subscript_expr_ast(outer->b);
-            scale_hl_by_elem_size(elem_size);
-            emit("\tex de,hl\n");
-            emit("\tpop hl\n");
-            emit("\tadd hl,de\n");
+        if (!emit_array_symbase_index(s, outer->b, elem_size)) {
+            emit_load_sym_addr(s);
+            if (outer->b->kind == AST_INT_LIT) {
+                emit_add_const_to_hl(outer->b->ival * elem_size);
+            } else {
+                emit("\tpush hl\n");
+                gen_index_subscript_expr_ast(outer->b);
+                scale_hl_by_elem_size(elem_size);
+                emit("\tex de,hl\n");
+                emit("\tpop hl\n");
+                emit("\tadd hl,de\n");
+            }
         }
         elem_size = sym_array_index_elem_size(s, 1);
         if (n->b->kind == AST_INT_LIT) {

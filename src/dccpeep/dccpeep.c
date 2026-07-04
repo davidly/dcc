@@ -3623,6 +3623,61 @@ static int pass_dead_hl_load_before_ldhl(void)
     return changed;
 }
 
+static int peep_call_uses_stack_args_only(const char *s)
+{
+    char tmp[MAX_LINE];
+    const char *name;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "call ", 5) != 0)
+        return 0;
+
+    name = tmp + 5;
+    if (strncmp(name, "__", 2) == 0) {
+        return strcmp(name, "__scmp") == 0 ||
+               strcmp(name, "__ncmp") == 0 ||
+               strcmp(name, "__mset") == 0;
+    }
+
+    return name[0] == '_';
+}
+
+/*
+ * A common by-reference load used as an immediate stack argument:
+ *
+ *   ld e,(hl)
+ *   inc hl
+ *   ld d,(hl)
+ *   ex de,hl
+ *   push hl
+ *   call _func
+ *
+ * The loaded word is already in DE.  For ordinary stack-argument calls the
+ * transient HL/DE register values are not part of the call ABI, so push DE
+ * directly and avoid the exchange.  Do not apply to register-ABI helpers.
+ */
+static int pass_word_load_push_de_call(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 5 < nlines; ++i) {
+        if (!eq(i,     "ld e,(hl)")) continue;
+        if (!eq(i + 1, "inc hl")) continue;
+        if (!eq(i + 2, "ld d,(hl)")) continue;
+        if (!eq(i + 3, "ex de,hl")) continue;
+        if (!eq(i + 4, "push hl")) continue;
+        if (!peep_call_uses_stack_args_only(lines[i + 5])) continue;
+
+        replace1_tagged(i + 3, "push de", "word_load_push_de_call");
+        delete_n(i + 4, 1);
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
 static int parse_ix_off_numeric(const char *off, int *val); /* forward */
 
 /*
@@ -5509,6 +5564,72 @@ static int pass_shrink_minmax_frame1_after_value_c(void)
 }
 
 /*
+ * pass_minmax_board_ptr_loop:
+ *
+ * In _MinMax, after the loop counter has been moved to B, the hot blank-cell
+ * scan still recomputes &_g_board[B] at every iteration:
+ *
+ *   ld b,0
+ * Lloop:
+ *   ld hl,_g_board
+ *   ld e,b
+ *   ld d,0
+ *   add hl,de
+ *   ld a,(hl)
+ *   or a
+ *   jp nz,Ltail
+ *   ... recursive call, with HL saved/restored as the board-cell pointer ...
+ * Ltail:
+ *   inc b
+ *   ld a,b
+ *   cp 9
+ *   jp c,Lloop
+ *
+ * HL is the current board-cell pointer on every path reaching Ltail: the
+ * occupied-cell path never changes it, and the recursive path restores it via
+ * pass_minmax_save_board_addr.  Initialize HL once and walk it with inc hl.
+ */
+static int pass_minmax_board_ptr_loop(void)
+{
+    int start, end, i, j;
+    char loop_lab[128], tail_lab[128], got_lab[128];
+    char cond[16];
+
+    if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+
+    for (i = start; i + 8 < end; i++) {
+        if (!eq(i, "ld b,0")) continue;
+        if (!label_name_at(i + 1, loop_lab)) continue;
+        if (!eq(i + 2, "ld hl,_g_board")) continue;
+        if (!eq(i + 3, "ld e,b")) continue;
+        if (!eq(i + 4, "ld d,0")) continue;
+        if (!eq(i + 5, "add hl,de")) continue;
+        if (!eq(i + 6, "ld a,(hl)")) continue;
+        if (!eq(i + 7, "or a")) continue;
+        if (!peep_parse_any_cond_jump(lines[i + 8], cond, tail_lab)) continue;
+        if (strcmp(cond, "nz") != 0) continue;
+
+        for (j = i + 9; j + 4 < end; j++) {
+            if (!label_name_at(j, got_lab) || strcmp(got_lab, tail_lab) != 0)
+                continue;
+            if (!eq(j + 1, "inc b")) continue;
+            if (!eq(j + 2, "ld a,b")) continue;
+            if (!eq(j + 3, "cp 9")) continue;
+            if (!peep_parse_any_cond_jump(lines[j + 4], cond, got_lab)) continue;
+            if (strcmp(cond, "c") != 0 || strcmp(got_lab, loop_lab) != 0) continue;
+
+            insert_line_tagged(j + 1, "inc hl", "minmax_board_ptr_loop");
+            insert_line_tagged(i + 1, "ld hl,_g_board", "minmax_board_ptr_loop");
+            delete_n(i + 3, 4);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
  * pass_minmax_byte_returns:
  *
  * MinMax is declared as returning int, but every value it returns fits in a
@@ -7273,6 +7394,40 @@ static int pass_once(void)
             replace1_tagged(i, "ld a,(hl)", "byte_zero_test");
             replace1(i + 1, "or a");
             delete_n(i + 2, 2);
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
+        /* Signed byte zero-test from memory:
+         *   ld l,(hl)
+         *   ld a,l
+         *   rlca
+         *   sbc a,a
+         *   ld h,a
+         *   ld a,h
+         *   or l
+         *   jr/jp z|nz,L
+         *
+         * The sign-extension is irrelevant for a zero/nonzero branch.  Test
+         * the byte directly, leaving HL untouched; only apply when the next
+         * consumer is a Z/NZ branch so no signed flags are being preserved.
+         */
+        if (i + 7 < nlines &&
+            eq(i,     "ld l,(hl)") &&
+            eq(i + 1, "ld a,l") &&
+            eq(i + 2, "rlca") &&
+            eq(i + 3, "sbc a,a") &&
+            eq(i + 4, "ld h,a") &&
+            eq(i + 5, "ld a,h") &&
+            eq(i + 6, "or l") &&
+            (strncmp(lines[i + 7], "jp z,", 5) == 0 ||
+             strncmp(lines[i + 7], "jp nz,", 6) == 0 ||
+             strncmp(lines[i + 7], "jr z,", 5) == 0 ||
+             strncmp(lines[i + 7], "jr nz,", 6) == 0)) {
+            replace1_tagged(i, "ld a,(hl)", "byte_signed_zero_test");
+            replace1(i + 1, "or a");
+            delete_n(i + 2, 5);
             changed = 1;
             if (i > 0) i--;
             continue;
@@ -10986,6 +11141,7 @@ int main(int argc, char **argv)
         if (pass_byte_minmax_board_and_assign()) changed = 1;
         if (pass_inline_simple_call_hl_from_loaded_pointer()) changed = 1;
         if (pass_dead_hl_load_before_ldhl()) changed = 1;
+        if (pass_word_load_push_de_call()) changed = 1;
         if (pass_elim_loop_back_signed_bias()) changed = 1;
         if (pass_cp_zero_to_or_a()) changed = 1;
         if (pass_hl_cmp_zero_to_or_hl()) changed = 1;
@@ -11007,6 +11163,7 @@ int main(int argc, char **argv)
         if (pass_shrink_minmax_frame2_after_loop_ctr_b()) changed = 1;
         if (pass_minmax_value_c()) changed = 1;
         if (pass_shrink_minmax_frame1_after_value_c()) changed = 1;
+        if (pass_minmax_board_ptr_loop()) changed = 1;
         if (pass_minmax_byte_returns()) changed = 1;
         if (pass_minmax_pack_frame()) changed = 1;
         if (pass_minmax_pack_call()) changed = 1;

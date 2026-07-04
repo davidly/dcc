@@ -1,6 +1,6 @@
 ---
 name: dcc-cpm-z80
-description: 'Write, build, test, and debug C89/C99/C11-targeted code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, C89, C99, C11, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, ma.sh, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus a first-class _Bool scalar type and target-appropriate C99/C11 front-end compatibility EXCEPT for the Z80/CP/M deviations this skill documents: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full library/printf/scanf inventory and pitfalls are in the reference files.'
+description: 'Write, build, test, and debug C89/C99/C11-targeted code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, dccmake, C89, C99, C11, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus a first-class _Bool scalar type and target-appropriate C99/C11 front-end compatibility EXCEPT for the Z80/CP/M deviations this skill documents: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full library/printf/scanf inventory and pitfalls are in the reference files.'
 argument-hint: 'Describe the C89/C99/C11 CP/M-Z80 task (write code, build, run under ntvcm, debug a failure)'
 ---
 
@@ -34,7 +34,7 @@ host ABI expectations.
 ## When to use
 
 - Writing, porting, or reviewing C89/C99/C11 code compiled by `dcc`.
-- Building/running/debugging a dcc program (`ma.sh`, `ntvcm`).
+- Building/running/debugging a dcc program (`dccmake`, `ntvcm`).
 - CP/M file I/O, VT100/ANSI console UIs, or DCCRTL work.
 
 ## Deviations from standard C
@@ -151,24 +151,43 @@ characters can silently collide at link time — make such a one-file helper
 
 ## Build and run
 
-The standard helper scripts live in the dcc repo. **Set these env vars first**
-(they make `ma.sh` use the local binaries):
+The standard build helper is `dccmake`, which runs the full CP/M pipeline and
+uses the local tools on `PATH` by default. If needed, put the dcc and ntvcm
+directories first on `PATH`:
 
 ```sh
 export PATH="/Users/<USER_NAME_FOLDER>/GitHub/ntvcm:/Users/<USER_NAME_FOLDER>/GitHub/dcc:$PATH"
-export DCC=./dcc DCCPEEP=./dccpeep DCCRTLSTRIP=./dccrtlstrip
 ```
 
 **Build/run one program** (compile → peephole → strip runtime → M80 → L80):
 
 ```sh
-./ma.sh foo peep      # foo.c -> FOO.COM (peephole optimised); use 'nopeep' to skip
-ntvcm FOO             # run it (uppercase, no extension)
-ntvcm FOO ARG1 ARG2   # with CP/M command-line args
+dccmake foo.c dcc-output=FOO dcc-peep=true   # foo.c -> build/FOO.COM
+ntvcm build/FOO.COM                          # run it
+ntvcm build/FOO.COM ARG1 ARG2                # with CP/M command-line args
 ```
 
-> The source name passed to `ma.sh` must be 8.3-clean (base ≤ 8 chars,
-> extension ≤ 3, no extra dots). ntvcm reports
+Use `dcc-peep=false` for an unoptimized build. `dccmake` also accepts common dcc
+options and settings, for example:
+
+```sh
+dccmake foo.c dcc-output=FOO dcc-stack-bytes=768
+dccmake foo.c bar.c dcc-output=FOO
+dccmake foo.c dcc-output=FOO dcc-floatio=true
+dccmake foo.c dcc-output=FOO dcc-include-directory=include dcc-define=DEBUG=1
+```
+
+For repeatable local builds, put settings in `dccmake.txt`:
+
+```text
+dcc-input=foo.c, bar.c
+dcc-output=FOO
+dcc-peep=true
+dcc-stack-bytes=768
+```
+
+> The source and output names used by `dccmake` must be 8.3-clean (base ≤ 8
+> chars, extension ≤ 3, no extra dots). ntvcm reports
 > `argument is not a valid CP/M 8.3 filename` for a non-conforming name —
 > rename the file when you see it.
 
@@ -183,7 +202,7 @@ checking the current directory first, then each `-I` directory in order. The
 bundled headers (`stdio.h`, `stdlib.h`, `string.h`, `math.h`, …) live in the
 **dcc repo root**, so:
 
-- Building **inside** the dcc repo (as `ma.sh` does): they're found
+- Building **inside** the dcc repo: they're found
   automatically via the current directory — no `-I` needed.
 - Building **elsewhere**: point dcc at the repo, e.g.
   `dcc -I /path/to/dcc myapp.c -o myapp.mac` (repeat `-I` for more dirs).
@@ -194,7 +213,7 @@ the runtime but without type-checking); a missing `"..."` header is a fatal
 error. If standard calls compile yet misbehave, check that `-I` actually
 resolves the dcc headers.
 
-Notes: M80 needs CRLF (`ma.sh` converts). `RTLMIN.MAC` is generated per-app by
+Notes: M80 needs CRLF (`dccmake` handles this). `RTLMIN.MAC` is generated per-app by
 `dccrtlstrip` during the build — don't hand-edit it.
 
 ## Top pitfalls
@@ -216,6 +235,6 @@ for the full function inventory and `printf`/`scanf` conversion tables see
 3. **Match repo conventions.** Read a nearby working program first. In the dcc
    repo, the exhaustive reference is
    [dcc-c89-reference-guide.md](dcc-c89-reference-guide.md) at the repo root.
-4. **Build and run**: `./ma.sh <name> peep && ntvcm <NAME>` (add the `-ffloatio`
-   path if you use `%f`); redirect stdin for interactive apps and compare
-   against expected output.
+4. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`
+  (set `dcc-floatio=true` if you use `%f`); redirect stdin for interactive apps
+  and compare against expected output.

@@ -1565,6 +1565,85 @@ int ast_const_condition_fold(const struct AstNode *n, long *out)
     return ast_const_scalar_fold(n, out);
 }
 
+/*
+ * Strict constant fold. Like ast_const_scalar_fold, but returns 1 only when the
+ * folded value is guaranteed identical under BOTH the target's signed and
+ * unsigned interpretations at every step. ast_const_scalar_fold evaluates in
+ * signed host `long`, so divide, modulo, right-shift and relational operators
+ * can disagree with the 16-/32-bit target result once an operand is negative;
+ * this walker rejects (returns 0) exactly those ambiguous cases. Callers may
+ * therefore emit the folded immediate (masked to the result width) directly.
+ *
+ * Signedness-independent low-bit operators (+ - * & | ^ and the two-value
+ * unary/equality forms) always fold. Left-shift folds for valid target-width
+ * counts via unsigned host arithmetic. Divide/modulo require both operands >= 0;
+ * right-shift requires a non-negative left operand; relational operators
+ * require both operands >= 0 so the signed host comparison matches the target.
+ */
+int ast_const_fold_strict(const struct AstNode *n, long *out)
+{
+    long a;
+    long b;
+
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_INT_LIT:
+        *out = n->ival;
+        return 1;
+    case AST_IDENT:
+        return ast_const_scalar_fold(n, out);   /* enum / const value: a leaf */
+    case AST_UNARY:
+        if (!ast_const_fold_strict(n->a, &a))
+            return 0;
+        switch (n->op) {
+        case '+': *out = a; return 1;
+        case '-': *out = -a; return 1;
+        case '~': *out = ~a; return 1;
+        case '!': *out = !a; return 1;
+        default: return 0;
+        }
+    case AST_CAST:
+        if (type_is_float(n->type) || type_ptr_depth(n->type) > 0)
+            return 0;
+        if (!ast_const_fold_strict(n->a, &a))
+            return 0;
+        *out = ast_const_apply_int_cast(a, n->type);
+        return 1;
+    case AST_LOGAND:
+    case AST_LOGOR:
+        if (!ast_const_fold_strict(n->a, &a) || !ast_const_fold_strict(n->b, &b))
+            return 0;
+        *out = (n->kind == AST_LOGAND) ? ((a != 0) && (b != 0))
+                                       : ((a != 0) || (b != 0));
+        return 1;
+    case AST_BINARY:
+        if (!ast_const_fold_strict(n->a, &a) || !ast_const_fold_strict(n->b, &b))
+            return 0;
+        switch (n->op) {
+        case '+': *out = a + b; return 1;
+        case '-': *out = a - b; return 1;
+        case '*': *out = a * b; return 1;
+        case '&': *out = a & b; return 1;
+        case '|': *out = a | b; return 1;
+        case '^': *out = a ^ b; return 1;
+        case TOK_SHL: if (b < 0 || b >= 32) return 0; *out = (long)((unsigned long)a << (unsigned int)b); return 1;
+        case TOK_EQ: *out = (a == b); return 1;
+        case TOK_NE: *out = (a != b); return 1;
+        case '/': if (a < 0 || b <= 0) return 0; *out = a / b; return 1;
+        case '%': if (a < 0 || b <= 0) return 0; *out = a % b; return 1;
+        case TOK_SHR: if (a < 0 || b < 0 || b >= 32) return 0; *out = a >> b; return 1;
+        case '<': if (a < 0 || b < 0) return 0; *out = (a < b); return 1;
+        case '>': if (a < 0 || b < 0) return 0; *out = (a > b); return 1;
+        case TOK_LE: if (a < 0 || b < 0) return 0; *out = (a <= b); return 1;
+        case TOK_GE: if (a < 0 || b < 0) return 0; *out = (a >= b); return 1;
+        default: return 0;
+        }
+    default:
+        return 0;
+    }
+}
+
 int ast_global_byte_array_const_store(const struct AstNode *n,
                                              struct Sym **out_arr,
                                              long *out_idx,

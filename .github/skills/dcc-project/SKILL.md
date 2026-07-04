@@ -1,6 +1,6 @@
 ---
 name: dcc-project
-description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89/C99/C11 front end -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (ma.ps1), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
+description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89/C99/C11 front end -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (dccmake), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
 argument-hint: 'Describe the dcc-project task (change codegen, run the test suite, build a single app, rebuild host tools)'
 ---
 
@@ -37,7 +37,7 @@ ntvcm.
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
 | `tests/` | `*.c` test apps + `tests/baselines/<app>.txt` expected stdout + `tests/_test_overrides.json` (per-app args/stdin/stack/ignore). |
-| `scripts/` | `runall.ps1`, `runall-extended.ps1`, `ma.ps1`, `build-dcc.ps1`, `stacksize.*`. |
+| `scripts/` | `runall.ps1`, `runall-extended.ps1`, `build-dcc.ps1`, `stacksize.*`. |
 | `docs/docs/en/appendix/00-architecture.md` | In-depth architecture reference. |
 
 Convention: source `.c` files are **lowercase** (only dcc reads them); generated
@@ -106,25 +106,44 @@ When adding or changing a test, update `_test_overrides.json` for its runtime
 needs first, then regenerate or edit `tests/baselines/<app>.txt` only when the
 new output is the intended behavior.
 
-## Build / debug a single app
+When running test apps directly under `ntvcm` for benchmarking or debugging,
+look up the app in `_test_overrides.json` first and pass the same `args`,
+`stdin`, and stack assumptions that `runall.ps1` would use. Some apps are
+interpreters, expect keyboard input, or are intentionally ignored; raw direct
+`ntvcm APP.COM` runs can hang or measure the wrong workload. On macOS, if no
+`timeout` command is installed, use a small Perl alarm wrapper for ad-hoc direct
+runs, for example:
 
-Use `ma.ps1` to drive the full pipeline for one app — ideal for reproducing a
-failing test in isolation:
-
-```pwsh
-pwsh ./scripts/ma.ps1 <name>            # full (optimized + unoptimized) — default
-pwsh ./scripts/ma.ps1 <name> fast       # optimized CP/M Z80 binary
-pwsh ./scripts/ma.ps1 <name> nopeep     # unoptimized CP/M Z80 binary
+```sh
+perl -e 'alarm shift; exec @ARGV' 30 ntvcm -p -s:200000000 APP.COM ARGS...
 ```
 
-`<name>` is the test/app name without `.c` (e.g. `sieve`, `ttt`, `cobint`). To
-compare a suspected optimizer bug, build both ways and diff the run output or
-the generated `BUILD/<NAME>.MAC`. Useful env vars: `DCC_STACK_SIZE` (stack
-reserve), `DCC_FORCE_STACK_CHECK=1`, and `DCC`/`DCCPEEP`/`DCCRTLSTRIP`/`NTVCM`/
-`M80`/`L80` to pin tool paths. For AST codegen debugging: `DCC_AST_REPORT=1`
-logs `; AST-unsupported ...` for the statement/initializer a support gate
-declined (this immediately precedes the `unsupported AST statement` fatal), and
-`DCC_AST_BUILD=2` dumps each built AST tree to stderr before it is emitted.
+## Build / debug a single app
+
+Use `dccmake` to drive the full pipeline for one app — ideal for reproducing a
+failing test in isolation:
+
+```sh
+dccmake tests/sieve.c dcc-output=SIEVE dcc-peep=true
+dccmake tests/sieve.c dcc-output=SIEVE dcc-peep=false
+```
+
+`dccmake` accepts positional `.c` inputs or `dcc-input=main.c,module.c`, and the
+output base must be CP/M 8.3-clean. Common settings are:
+
+```sh
+dccmake tests/app.c dcc-output=APP dcc-peep=true dcc-stack-bytes=768
+dccmake main.c module.c dcc-output=APP dcc-include-directory=include
+dccmake tests/e.c dcc-output=E dcc-floatio=true dcc-flongio=true
+```
+
+To compare a suspected optimizer bug, build once with `dcc-peep=true` and once
+with `dcc-peep=false`, then diff the run output or generated `build/<NAME>.MAC`.
+Tool commands can be pinned with settings such as `dcc-tool=./dcc`,
+`dccpeep-tool=./dccpeep`, `dccrtlstrip-tool=./dccrtlstrip`, and
+`ntvcm-tool=ntvcm`; `DCC_AST_REPORT=1` logs `; AST-unsupported ...` for the
+statement/initializer a support gate declined, and `DCC_AST_BUILD=2` dumps each
+built AST tree to stderr before it is emitted.
 
 ## Rebuild the host tools after a source change
 
@@ -137,11 +156,60 @@ Or the platform root scripts: `m.bat` (Windows/MSVC), `m.sh` (Linux/gcc),
 the repo root. Rebuild before re-running `runall.ps1` so tests exercise your
 change.
 
+## Performance and optimizer work
+
+Use measured signals before changing codegen, `dccpeep`, or `DCCRTL.MAC`:
+
+- For cycle measurements, run CP/M binaries with `ntvcm -p -s:200000000` and
+	compare the reported `Z80 cycles`; the `-s` value is a clock rate, not a cycle
+	cap.
+- For direct benchmark runs, honor `tests/_test_overrides.json` and use a
+	timeout/alarm wrapper so input-driven or long-running apps do not hang the
+	session.
+- If the local `ntvcm` build has the profiling extension, `-g:<file>` writes a
+	`pc,count,asm` CSV. Sort it with `sort -t, -k2 -nr file.prof | head` and map
+	hot PCs back to generated `.PRN`/`.MAC` or runtime labels before optimizing.
+- For broad compiler-vs-peephole comparisons, keep the peephole version fixed
+	and compare post-peephole instruction counts. Peephole tag counts alone can
+	mislead: fewer tags may mean the compiler emitted the optimized form directly.
+
+Important performance lessons from recent work:
+
+- `dccpeep` has many shape-specific passes. A compiler change that improves
+	no-peep output can still regress the shipping path if it hides canonical loop
+	shapes such as stride loops or compare-fusion patterns. Check peep output and
+	dynamic cycles before keeping such changes.
+- Prefer small, falsifiable peephole passes with tight guards. Good generic
+	candidates are repeated residual patterns across many optimized `.MAC` files,
+	especially when the next consumer proves registers/flags are dead. Exclude
+	register-ABI helpers such as `__call_hl` and `__m1s` from ordinary
+	stack-argument rewrites.
+- Runtime helper changes can dominate app performance. Profile first: fixed
+	point and long-heavy apps often spend most cycles in `DCCRTL.MAC` helpers such
+	as multiply, divide, shift, or string/memory routines.
+- `DCCRTL.MAC` is copied by `dccrtlstrip`; do not rely on assembler macro
+	features such as `REPT` unless the runtime/tooling already supports them.
+	Manual unrolling should be size-bounded and justified by measured wins.
+- For AST constant folding, avoid host undefined behavior and host-only
+	semantics. Fold only when target signed/unsigned behavior is provably the
+	same, and use unsigned host arithmetic for low-bit shift folds when needed.
+
+Useful corpus-mining tactics:
+
+- Build a deterministic sample from `tests/*.c` by sorted filename when a full
+	corpus pass is too slow; record the sample rule and failures/ignored apps.
+- Mine optimized `.MAC` output for repeated n-grams after stripping comments and
+	labels, then inspect concrete contexts before writing a pass.
+- Validate a new pass with: rebuild host tools, rebuild affected apps, count the
+	new `; peep:` tag, compare size/cycles on affected apps, then run
+	`pwsh ./scripts/runall.ps1 -Mode full`.
+
 ## Typical workflow
 
 1. Change a source file under `src/` (or `DCCRTL.MAC`).
 2. `pwsh ./scripts/build-dcc.ps1` to rebuild the host tools.
-3. `pwsh ./scripts/ma.ps1 <app>` to reproduce/iterate on one case.
+3. `dccmake tests/<app>.c dcc-output=<APP> dcc-peep=true` to reproduce/iterate
+	on one case.
 4. `pwsh ./scripts/runall.ps1` to confirm no regressions across all apps; use
    `pwsh ./scripts/runall.ps1 -Extended` when the extended c-testsuite corpus
    should be included too.
