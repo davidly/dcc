@@ -1790,3 +1790,231 @@ int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
     if (out_ivar_name != NULL) *out_ivar_name = ivar_name;
     return 1;
 }
+
+/* Does `n`'s subtree contain an AST_IDENT node named exactly `name`
+ * anywhere - however deeply nested (array indices, member accesses,
+ * casts, call arguments, ...)? Used to prove a would-be-hoisted expression
+ * truly does not depend on a given loop's induction variable. Unrecognised
+ * node shapes are not special-cased: every child field and list entry is
+ * always walked, so declining to recurse into something is never a way
+ * this can silently miss a reference. */
+int ast_expr_references_ident(const struct AstNode *n, const char *name)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_IDENT && n->sval != NULL && !strcmp(n->sval, name))
+        return 1;
+    if (ast_expr_references_ident(n->a, name)) return 1;
+    if (ast_expr_references_ident(n->b, name)) return 1;
+    if (ast_expr_references_ident(n->c, name)) return 1;
+    if (ast_expr_references_ident(n->d, name)) return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (ast_expr_references_ident(n->list[i], name))
+            return 1;
+    return 0;
+}
+
+/* Does `n`'s subtree contain anything with an observable side effect -
+ * any assignment (plain or compound), ++/--, or a function call? Used to
+ * prove an expression can safely be evaluated once and reused across loop
+ * iterations instead of once per iteration (for a would-be-hoisted lvalue
+ * address), or that skipping a would-be extra evaluation changes nothing
+ * observable (for a statement's rhs, which must have none of these for its
+ * absence from a hoisted address computation to be irrelevant). Same
+ * always-recurse convention as ast_expr_references_ident: an unrecognised
+ * shape is scanned, not assumed innocent. */
+int ast_expr_has_side_effects(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_ASSIGN || n->kind == AST_CALL)
+        return 1;
+    if ((n->kind == AST_UNARY || n->kind == AST_POSTFIX) &&
+        (n->op == TOK_INC || n->op == TOK_DEC))
+        return 1;
+    if (ast_expr_has_side_effects(n->a)) return 1;
+    if (ast_expr_has_side_effects(n->b)) return 1;
+    if (ast_expr_has_side_effects(n->c)) return 1;
+    if (ast_expr_has_side_effects(n->d)) return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (ast_expr_has_side_effects(n->list[i]))
+            return 1;
+    return 0;
+}
+
+/* Detects a for-loop whose entire body is exactly one assignment (plain '='
+ * or arithmetic compound +=/-=/ *=// =) to an array-element lvalue whose
+ * address does not depend on the loop's own induction variable and has no
+ * side effects anywhere in the statement - i.e. the store target is
+ * provably the SAME memory location on every iteration, so its address can
+ * be computed once before the loop instead of on every one of it:
+ *
+ *     for (k = ...; k < BOUND; k++)
+ *         C[i][j] += A[i][k] * B[k][j];       (i, j do not involve k)
+ *
+ * is exactly tests/mm.c's matmult() inner loop: C[i][j]'s address never
+ * changes across the k loop (i and j belong to the enclosing loops and are
+ * untouched here), yet the ordinary codegen recomputes it from scratch on
+ * all `m` iterations. Hoisting it collapses that to the same "compute the
+ * address once, then walk" shape the same file's hand-optimised fmatmult()
+ * already uses via an explicit local pointer.
+ *
+ * Conservative on purpose, in every direction that matters for a first cut
+ * of this optimisation: the lvalue must be a bare AST_INDEX (no member/
+ * deref lvalues yet), the rhs must have zero side effects at all (not just
+ * "doesn't touch i/j" - ruling out e.g. a call that could mutate a global
+ * i/j through some other path), and the assignment op is restricted to the
+ * plain arithmetic set. Declining (0) is always safe: the caller falls
+ * back to the ordinary per-iteration address computation. out_ivar_name/
+ * out_lhs/out_val_type are only meaningful when this returns 1. */
+int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
+                                               const char **out_ivar_name,
+                                               const struct AstNode **out_lhs,
+                                               int *out_val_type)
+{
+    const char *ivar_name;
+    const struct AstNode *body_assign;
+    const struct AstNode *lhs;
+    const struct AstNode *rhs;
+    int val_type;
+
+    if (n == NULL || n->c == NULL)
+        return 0;
+    if ((n->c->kind == AST_UNARY || n->c->kind == AST_POSTFIX) &&
+        (n->c->op == TOK_INC || n->c->op == TOK_DEC) &&
+        n->c->a != NULL && n->c->a->kind == AST_IDENT) {
+        ivar_name = n->c->a->sval;
+    } else {
+        return 0;
+    }
+
+    if (n->d == NULL || n->d->kind != AST_EXPR_STMT || n->d->a == NULL)
+        return 0;
+    body_assign = n->d->a;
+    if (body_assign->kind != AST_ASSIGN)
+        return 0;
+    if (body_assign->op != '=' && body_assign->op != TOK_ADDEQ &&
+        body_assign->op != TOK_SUBEQ && body_assign->op != TOK_MULEQ &&
+        body_assign->op != TOK_DIVEQ)
+        return 0;
+
+    lhs = body_assign->a;
+    rhs = body_assign->b;
+    if (lhs == NULL || lhs->kind != AST_INDEX)
+        return 0;
+    if (!ast_index_lvalue_elem_type(lhs, &val_type))
+        return 0;
+    if (type_is_struct_object(val_type))
+        return 0;
+
+    if (ast_expr_references_ident(lhs, ivar_name))
+        return 0;
+    if (ast_expr_has_side_effects(lhs))
+        return 0;
+    if (rhs == NULL || ast_expr_has_side_effects(rhs))
+        return 0;
+    if (!ast_gen_supported(lhs))
+        return 0;
+
+    if (out_ivar_name != NULL) *out_ivar_name = ivar_name;
+    if (out_lhs != NULL) *out_lhs = lhs;
+    if (out_val_type != NULL) *out_val_type = val_type;
+    return 1;
+}
+
+/* Detects a for-loop whose body's FIRST statement is exactly
+ *     IDENT = & BASE->FIELD[ INDEX_EXPR ];
+ * where BASE is a plain file-scope static global and FIELD is a
+ * pointer-typed member - tests/cint.c's run(): `in = &G->code[pc++];`, the
+ * first statement of an otherwise call-heavy bytecode-dispatch loop body.
+ * BASE->FIELD's VALUE (not its address) is re-fetched - a base-symbol load
+ * then a dereference through the field's byte offset - on every iteration,
+ * even though it cannot change across the whole loop's execution... which
+ * ordinary side-effect analysis can't decide here, since the loop body
+ * (the switch after this statement) is full of calls that analysis alone
+ * cannot rule out as reassigning BASE.
+ *
+ * That is instead proven via the whole-file lexical write scan in
+ * dcc_global_scan.c: this only fires when BASE is written in EXACTLY ONE
+ * place in the entire translation unit and that place is not the function
+ * currently being compiled (g_current_compiling_func) - and BASE must be
+ * `static`, so (unlike a plain extern global) the whole file the scan
+ * covers is *by language guarantee* every place that could possibly write
+ * to it, not just everywhere this compiler happens to have looked. See
+ * dcc_global_scan.c's header for exactly what this does and does not
+ * prove - in particular, it does not verify the one writer function can
+ * never be re-entered from this function's own call graph, only that it is
+ * not this function itself.
+ *
+ * Conservative in every other direction too: only the loop's first
+ * statement is ever inspected or rewritten - nothing about the rest of the
+ * body (the switch) needs to be, or is, examined. Declining (0) is always
+ * safe: the caller falls back to ordinary per-iteration codegen for the
+ * whole loop, unchanged. */
+int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
+                                                 const struct AstNode **out_member,
+                                                 int *out_val_type)
+{
+    const struct AstNode *body;
+    const struct AstNode *stmt0;
+    const struct AstNode *assign;
+    const struct AstNode *addr_of;
+    const struct AstNode *index;
+    const struct AstNode *member;
+    struct Sym *base_sym;
+    int val_type;
+
+    if (n == NULL || n->d == NULL)
+        return 0;
+    body = n->d;
+    if (body->kind != AST_COMPOUND || body->list_len < 1)
+        return 0;
+
+    stmt0 = body->list[0];
+    if (stmt0 == NULL || stmt0->kind != AST_EXPR_STMT || stmt0->a == NULL)
+        return 0;
+    assign = stmt0->a;
+    if (assign->kind != AST_ASSIGN || assign->op != '=')
+        return 0;
+    if (assign->a == NULL || assign->a->kind != AST_IDENT)
+        return 0;
+
+    addr_of = assign->b;
+    if (addr_of == NULL || addr_of->kind != AST_UNARY || addr_of->op != '&')
+        return 0;
+
+    index = addr_of->a;
+    if (index == NULL || index->kind != AST_INDEX || index->a == NULL)
+        return 0;
+
+    member = index->a;
+    if (member->kind != AST_MEMBER || member->op != TOK_ARROW)
+        return 0;
+    if (member->a == NULL || member->a->kind != AST_IDENT || member->a->sval == NULL)
+        return 0;
+
+    base_sym = find_sym(member->a->sval);
+    if (base_sym == NULL || base_sym->storage != SC_GLOBAL || !base_sym->is_static)
+        return 0;
+    if (!is_global_word_sym(base_sym))
+        return 0;
+
+    if (global_text_addr_taken_count(base_sym->name) != 0)
+        return 0;
+    if (global_text_write_count(base_sym->name) != 1)
+        return 0;
+    if (global_text_written_in_function(base_sym->name, g_current_compiling_func))
+        return 0;
+
+    val_type = ast_member_field_value_type(member);
+    if (type_ptr_depth(val_type) == 0)
+        return 0;
+
+    *out_member = member;
+    *out_val_type = val_type;
+    return 1;
+}

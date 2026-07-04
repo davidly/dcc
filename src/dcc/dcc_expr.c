@@ -853,16 +853,27 @@ int parse_enum_const_value(void)
 void gen_post_update_symbol_addr_value(struct Sym *s, int op)
 {
     int t;
+    int elem;
 
     t = s->type;
+    elem = type_index_elem_size(t);
 
-    emit_load_sym_addr(s);          /* HL = address of pointer variable */
-    emit("\tpush hl\n");            /* save pointer variable address */
-    emit_load_from_hl(t);           /* HL = old pointer value */
-    emit("\tpush hl\n");            /* save old pointer value for lvalue */
-
-    {
-        int elem = type_index_elem_size(t);
+    if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
+        /* A plain ix-direct local or global-word symbol (the overwhelmingly
+         * common case for `p++`/`p--` on a pointer variable, e.g. the `pc`
+         * in `*pc++ = val;`) never needs its own address computed at all -
+         * emit_load_sym_value_direct/emit_store_hl_to_sym_direct already
+         * know how to read and write it with a couple of plain `ld`
+         * instructions each. The generic fallback below computes the
+         * variable's address, then reads and writes back *through* that
+         * address, which for exactly this case is a needless address
+         * computation plus a pile of push/pop/ex shuffling to keep the old
+         * value, the new value, and the variable's address all live at
+         * once - the classic "store the pointer back to itself" dance that
+         * is only actually required for lvalues without a direct load/store
+         * form (out-of-range stack offsets, etc). */
+        emit_load_sym_value_direct(s);  /* HL = old pointer value */
+        emit("\tpush hl\n");             /* save old pointer value for lvalue */
         if (op == TOK_INC) {
             emit("\tinc hl\n");
             if (elem >= 2) emit("\tinc hl\n");
@@ -872,6 +883,25 @@ void gen_post_update_symbol_addr_value(struct Sym *s, int op)
             if (elem >= 2) emit("\tdec hl\n");
             if (elem >= 4) { emit("\tdec hl\n"); emit("\tdec hl\n"); }
         }
+        emit_store_hl_to_sym_direct(s);  /* store new pointer value */
+        emit("\tpop hl\n");               /* HL = old pointer, used as lvalue address */
+        g_expr_type = t;
+        return;
+    }
+
+    emit_load_sym_addr(s);          /* HL = address of pointer variable */
+    emit("\tpush hl\n");            /* save pointer variable address */
+    emit_load_from_hl(t);           /* HL = old pointer value */
+    emit("\tpush hl\n");            /* save old pointer value for lvalue */
+
+    if (op == TOK_INC) {
+        emit("\tinc hl\n");
+        if (elem >= 2) emit("\tinc hl\n");
+        if (elem >= 4) { emit("\tinc hl\n"); emit("\tinc hl\n"); }
+    } else {
+        emit("\tdec hl\n");
+        if (elem >= 2) emit("\tdec hl\n");
+        if (elem >= 4) { emit("\tdec hl\n"); emit("\tdec hl\n"); }
     }
 
     emit("\tex de,hl\n");           /* DE = new pointer value */

@@ -170,8 +170,8 @@ int ast_field_array_index_stride(int base_size, int dim_count,
 int ast_mul_const_value_ok(long v)
 {
     long m = v & 0xffffL;
-    return m == 0 || m == 1 || m == 3 || m == 5 || m == 10 ||
-           int_log2_pow2((int)m) >= 0;
+    return m == 0 || m == 1 || m == 3 || m == 5 || m == 6 || m == 7 ||
+           m == 9 || m == 10 || int_log2_pow2((int)m) >= 0;
 }
 
 /* Conservative: returns 1 only when the node is CERTAIN to evaluate to a plain
@@ -2347,6 +2347,62 @@ int ast_struct_member_copy_assign_supported(const struct AstNode *n)
     return rhs != NULL && !rhs->is_const_value && rhs->storage != SC_FUNC &&
            !rhs->is_array && type_is_struct_object(rhs->type) &&
            same_struct_type(lhs_type, rhs->type);
+}
+
+/* Does `n` name an addressable byte lvalue (a struct/union member, an array
+ * element, or a pointer dereference) of a plain 1-byte scalar type? Bitfields
+ * are already excluded by ast_member_lvalue_type/ast_index_lvalue_elem_type
+ * (both decline when the field has bit_width > 0). Pointers and _Bool are
+ * excluded explicitly: a byte pointer element doesn't exist (pointers are
+ * always 2 bytes), and _Bool's stored representation must stay normalized to
+ * exactly 0/1, which this fast path deliberately does not handle. */
+int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type)
+{
+    int t;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_MEMBER) {
+        if (!ast_member_lvalue_type(n, &t))
+            return 0;
+    } else if (n->kind == AST_INDEX) {
+        if (!ast_index_lvalue_elem_type(n, &t))
+            return 0;
+    } else if (n->kind == AST_UNARY && n->op == '*') {
+        if (!ast_deref_lvalue_type(n, &t))
+            return 0;
+    } else {
+        return 0;
+    }
+    if (type_size(t) != 1 || type_ptr_depth(t) > 0 || type_is_bool(t))
+        return 0;
+    if (out_type)
+        *out_type = t;
+    return 1;
+}
+
+/* Is `n` a plain `dst = src;` where both sides are addressable byte lvalues
+ * (ast_is_byte_addr_lvalue) reached through a member/index/deref - i.e. NOT
+ * a bare identifier on either side (those already have their own direct
+ * fast paths elsewhere) - and the assignment's own value is unused? This is
+ * exactly the shape of a hand-written struct-field-by-field copy like
+ * `d->from = s->from;` (an int8_t field): the generic non-identifier-lvalue
+ * assignment path reads the source byte via the ordinary byte-load path,
+ * which sign/zero-extends it to a full 16-bit int, only to truncate it
+ * straight back down to one byte on the store - the promotion is pure waste,
+ * since nothing else ever observes the widened value. */
+int ast_is_byte_addr_copy_assign(const struct AstNode *n)
+{
+    int lhs_type;
+    int rhs_type;
+
+    if (n == NULL || n->kind != AST_ASSIGN || n->op != '=' || !expr_result_dead)
+        return 0;
+    if (!ast_is_byte_addr_lvalue(n->a, &lhs_type))
+        return 0;
+    if (!ast_is_byte_addr_lvalue(n->b, &rhs_type))
+        return 0;
+    return ast_gen_supported(n->a) && ast_gen_supported(n->b);
 }
 
 int ast_struct_addr_expr_supported(const struct AstNode *n, int *out_type)

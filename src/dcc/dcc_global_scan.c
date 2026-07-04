@@ -1,0 +1,316 @@
+/*
+ * dcc_global_scan.c - whole-translation-unit lexical scan of which
+ * identifiers are ever written to or have their address taken, and (for
+ * writes) which function that happens in.
+ *
+ * This exists to let a codegen fast path (see ast_for_hoist_global_member_
+ * value_supported, dcc_ast_gen_support.c) prove a global variable's value is
+ * invariant across an entire function's execution - specifically, across a
+ * hot loop full of calls that the compiler cannot otherwise rule out as
+ * reassigning it. dcc compiles in a single forward pass over the source, so
+ * while generating one function it has no way to know whether some
+ * later-defined function also reassigns a given global; this module runs a
+ * dedicated pre-pass over the *entire* file first (before any real parsing
+ * or codegen begins) purely to answer that one question, then rewinds all
+ * lexer/preprocessor state as if it had never run.
+ *
+ * This is a lexical pattern match, not a semantic one: it does not resolve
+ * identifiers through the real symbol table (which does not exist yet at
+ * pre-pass time) and only recognises "this token looks like a write to name
+ * X" from token-kind adjacency (an identifier immediately followed by an
+ * assignment/increment/decrement operator, or immediately preceded by one,
+ * or immediately preceded by '&', and not immediately preceded by '.' or
+ * "->" - which would make it a struct member name, not a variable
+ * reference). A local variable or struct field that happens to share a
+ * global's name can therefore be counted as if it were a write to that
+ * global; this is always the SAFE direction (it only makes the analysis
+ * more conservative, never less), which is what matters here.
+ *
+ * What this does NOT prove: that the one recorded writer function can never
+ * be re-entered from within the call graph of the function asking the
+ * question. That would need real interprocedural call-graph analysis, which
+ * this module does not attempt. The residual assumption is: once a global
+ * has been written by its one writer, nothing later in the program's
+ * execution calls that writer again. This holds for the ordinary "init once,
+ * then treat as read-only" idiom this feature targets, and is exactly the
+ * shape ast_for_hoist_global_member_value_supported requires (a single
+ * textual write site outside the function being optimised) before it will
+ * ever consider the global invariant.
+ */
+
+#include "dcc.h"
+
+#define MAX_GLOBAL_SCAN_NAMES 512
+#define MAX_GLOBAL_SCAN_WRITES 1024
+
+struct GlobalScanEntry {
+    char name[64];
+    int write_count;
+    int addr_taken_count;
+};
+
+static struct GlobalScanEntry g_scan_entries[MAX_GLOBAL_SCAN_NAMES];
+static int g_scan_nentries;
+static int g_scan_overflowed;
+
+struct GlobalScanWrite {
+    char name[64];
+    char func[64];
+};
+
+static struct GlobalScanWrite g_scan_writes[MAX_GLOBAL_SCAN_WRITES];
+static int g_scan_nwrites;
+
+static struct GlobalScanEntry *find_or_add_scan_entry(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_scan_nentries; ++i)
+        if (!strcmp(g_scan_entries[i].name, name))
+            return &g_scan_entries[i];
+
+    if (g_scan_nentries >= MAX_GLOBAL_SCAN_NAMES) {
+        g_scan_overflowed = 1;
+        return NULL;
+    }
+
+    strncpy(g_scan_entries[g_scan_nentries].name, name, 63);
+    g_scan_entries[g_scan_nentries].name[63] = 0;
+    g_scan_entries[g_scan_nentries].write_count = 0;
+    g_scan_entries[g_scan_nentries].addr_taken_count = 0;
+    return &g_scan_entries[g_scan_nentries++];
+}
+
+static void record_write(const char *name, const char *func)
+{
+    struct GlobalScanEntry *e = find_or_add_scan_entry(name);
+    if (e != NULL)
+        e->write_count++;
+
+    if (g_scan_nwrites >= MAX_GLOBAL_SCAN_WRITES) {
+        g_scan_overflowed = 1;
+        return;
+    }
+    strncpy(g_scan_writes[g_scan_nwrites].name, name, 63);
+    g_scan_writes[g_scan_nwrites].name[63] = 0;
+    strncpy(g_scan_writes[g_scan_nwrites].func, func ? func : "", 63);
+    g_scan_writes[g_scan_nwrites].func[63] = 0;
+    g_scan_nwrites++;
+}
+
+static void record_addr_taken(const char *name)
+{
+    struct GlobalScanEntry *e = find_or_add_scan_entry(name);
+    if (e != NULL)
+        e->addr_taken_count++;
+}
+
+static int token_starts_assignment_or_incdec(int kind)
+{
+    switch (kind) {
+    case '=': case TOK_ADDEQ: case TOK_SUBEQ: case TOK_MULEQ:
+    case TOK_DIVEQ: case TOK_MODEQ: case TOK_ANDEQ: case TOK_OREQ:
+    case TOK_XOREQ: case TOK_SHLEQ: case TOK_SHREQ:
+    case TOK_INC: case TOK_DEC:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* One-time whole-file lexical scan (see file header). Must run before any
+ * real parsing begins: it fully rewinds the lexer position and the macro
+ * table afterward, but does NOT rewind file-scope tables that only grow
+ * monotonically during real compilation (there are none touched here - this
+ * only tokenises, it builds no symbols, types, or AST). */
+void scan_global_write_info(void)
+{
+    long saved_posi;
+    long saved_tok_start;
+    int saved_line;
+    int saved_tok_line;
+    struct Token saved_tok;
+    struct Def *saved_defs;
+    int saved_ndefs;
+    char *saved_src;
+    long saved_src_len;
+    int brace_depth;
+    int paren_depth;
+    char func_at_depth0[64];
+    char pending_call_name[64];
+    int prev_kind;
+    char prev_text[MAX_TOK_TEXT];
+
+    saved_posi = posi;
+    saved_tok_start = tok_start_pos;
+    saved_line = line_no;
+    saved_tok_line = tok_line;
+    saved_tok = tok;
+
+    saved_defs = (struct Def *)xmalloc(sizeof(defs));
+    saved_ndefs = ndefs;
+    memcpy(saved_defs, defs, sizeof(defs));
+
+    /* Object-like macro expansion (dcc_preproc.c's replace_source_range)
+     * rewrites the shared `src` buffer IN PLACE - it reallocates a new
+     * buffer, repoints the global `src` at it, and updates `src_len`. That
+     * makes tokenising the file even once observably non-idempotent for a
+     * macro whose expansion text itself ends in the macro's own name (e.g.
+     * tests/cobint.c's `#define tp G->tp`): the first expansion rewrites
+     * "tp" to "G->tp" in the actual source text, so a second tokenisation
+     * pass over what it assumes is still the original text finds "tp"
+     * again at the tail and expands it again, into "G->G->tp". Snapshot
+     * and fully restore the buffer's *content*, not just posi/src_len,
+     * so this scan is truly invisible to the real pass that follows. */
+    saved_src = (char *)xmalloc((size_t)src_len + 1);
+    memcpy(saved_src, src, (size_t)src_len + 1);
+    saved_src_len = src_len;
+
+    posi = 0;
+    tok_start_pos = 0;
+    line_no = 1;
+    tok_line = 1;
+    next_token();
+
+    brace_depth = 0;
+    paren_depth = 0;
+    func_at_depth0[0] = 0;
+    pending_call_name[0] = 0;
+    prev_kind = TOK_EOF;
+    prev_text[0] = 0;
+
+    while (tok.kind != TOK_EOF) {
+        if (tok.kind == TOK_ID && prev_kind != '.' && prev_kind != TOK_ARROW) {
+            char name[64];
+            long sv_posi = posi, sv_tok_start = tok_start_pos;
+            int sv_line = line_no, sv_tok_line = tok_line;
+            struct Token sv_tok = tok;
+            int next_kind;
+
+            strncpy(name, tok.text, 63);
+            name[63] = 0;
+
+            next_token();
+            next_kind = tok.kind;
+
+            posi = sv_posi;
+            tok_start_pos = sv_tok_start;
+            line_no = sv_line;
+            tok_line = sv_tok_line;
+            tok = sv_tok;
+
+            /* `&EXPR->field`/`&EXPR.field`/`&EXPR[i]` takes the address of
+             * a *member/element reached through* this identifier, not of
+             * the identifier's own storage (postfix `->`/`.`/`[` bind
+             * tighter than unary `&`, so `&G->sym[i]` parses as
+             * `&(G->sym[i])`) - only count a bare `&name` (nothing
+             * postfix-chained onto it) as taking name's own address. */
+            if (prev_kind == '&' && next_kind != '.' && next_kind != TOK_ARROW &&
+                next_kind != '[') {
+                record_addr_taken(name);
+            } else if (prev_kind == TOK_INC || prev_kind == TOK_DEC) {
+                record_write(name, func_at_depth0);
+            } else if (token_starts_assignment_or_incdec(next_kind)) {
+                record_write(name, func_at_depth0);
+            }
+
+            if (paren_depth == 0 && brace_depth == 0) {
+                strncpy(pending_call_name, name, 63);
+                pending_call_name[63] = 0;
+            }
+        } else if (tok.kind == '(') {
+            paren_depth++;
+        } else if (tok.kind == ')') {
+            if (paren_depth > 0)
+                paren_depth--;
+        } else if (tok.kind == '{') {
+            if (brace_depth == 0 && paren_depth == 0) {
+                strncpy(func_at_depth0, pending_call_name, 63);
+                func_at_depth0[63] = 0;
+            }
+            brace_depth++;
+        } else if (tok.kind == '}') {
+            if (brace_depth > 0)
+                brace_depth--;
+            if (brace_depth == 0)
+                func_at_depth0[0] = 0;
+        } else if (tok.kind != TOK_ID) {
+            pending_call_name[0] = 0;
+        }
+
+        prev_kind = tok.kind;
+        strncpy(prev_text, tok.text, MAX_TOK_TEXT - 1);
+        prev_text[MAX_TOK_TEXT - 1] = 0;
+        (void)prev_text;
+        next_token();
+    }
+
+    ndefs = saved_ndefs;
+    memcpy(defs, saved_defs, sizeof(defs));
+    free(saved_defs);
+
+    /* `src` has very likely been reallocated one or more times by macro
+     * expansion during the scan above (see the comment where saved_src is
+     * captured) - free whatever it currently points to and restore the
+     * untouched snapshot, rather than relying on posi/src_len alone. */
+    free(src);
+    src = saved_src;
+    src_len = saved_src_len;
+
+    /* Position-keyed preprocessor state populated by that same macro
+     * expansion (dcc_preproc.c's disabled-macro-range tracking and
+     * push_macro/pop_macro stack) is meaningless once `src` has been
+     * swapped back - see reset_preproc_scan_state's own comment. */
+    reset_preproc_scan_state();
+
+    posi = saved_posi;
+    tok_start_pos = saved_tok_start;
+    line_no = saved_line;
+    tok_line = saved_tok_line;
+    tok = saved_tok;
+}
+
+/* Total number of textual write-context occurrences of `name` anywhere in
+ * the file (see the file header for exactly what counts). If the scan
+ * table overflowed, every query is answered as "unsafe" (a large sentinel),
+ * since an overflowed scan cannot prove an absence of writes. */
+int global_text_write_count(const char *name)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 999;
+    for (i = 0; i < g_scan_nentries; ++i)
+        if (!strcmp(g_scan_entries[i].name, name))
+            return g_scan_entries[i].write_count;
+    return 0;
+}
+
+int global_text_addr_taken_count(const char *name)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 999;
+    for (i = 0; i < g_scan_nentries; ++i)
+        if (!strcmp(g_scan_entries[i].name, name))
+            return g_scan_entries[i].addr_taken_count;
+    return 0;
+}
+
+/* Is there a recorded write to `name` whose enclosing function is exactly
+ * `func`? Used together with global_text_write_count(name)==1 to prove: the
+ * one write anywhere in the file is not inside the function currently being
+ * compiled. */
+int global_text_written_in_function(const char *name, const char *func)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 1;
+    for (i = 0; i < g_scan_nwrites; ++i)
+        if (!strcmp(g_scan_writes[i].name, name) &&
+            !strcmp(g_scan_writes[i].func, func))
+            return 1;
+    return 0;
+}

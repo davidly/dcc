@@ -2061,7 +2061,7 @@ static int pass_ix_array_word_addr(void)
  *   ld de,ARROFF
  *   add hl,de
  * On success returns the block's length in lines (8 or 9) and sets
- * *out_idxoff/*out_step/*out_arroff; returns 0 (outputs untouched) on no
+ * *out_idxoff, *out_step, *out_arroff; returns 0 (outputs untouched) on no
  * match. */
 static int peep_match_array_word_addr_block(int i, int *out_idxoff,
                                                     int *out_step, int *out_arroff)

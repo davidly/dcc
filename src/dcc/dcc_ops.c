@@ -228,22 +228,51 @@ void emit_mul_hl_const(long v)
         while (n-- > 0)
             emit("\tadd hl,hl\n");
     } else if (v == 3) {
-        emit("\tpush hl\n");
+        /* Save x in DE via two 8-bit register moves (8 cycles) rather than
+         * push/pop (21 cycles) - dccpeep's own pass_mulu_const peephole
+         * (which used to be what produced this exact shape, back when this
+         * constant went through a `call __mulu` for it to rewrite) already
+         * used ld d,h/ld e,l for precisely this reason. Matching it here
+         * means dcc's own codegen no longer regresses versus what dccpeep
+         * used to hand-optimize for the same constant. */
+        emit("\tld d,h\n");
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");
-        emit("\tpop de\n");
         emit("\tadd hl,de\n");
     } else if (v == 5) {
-        emit("\tpush hl\n");
+        emit("\tld d,h\n");
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");
         emit("\tadd hl,hl\n");
-        emit("\tpop de\n");
         emit("\tadd hl,de\n");
-    } else if (v == 10) {
-        emit("\tpush hl\n");     /* save x */
+    } else if (v == 6) {
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
+        emit("\tadd hl,hl\n");   /* 2x */
+        emit("\tadd hl,hl\n");   /* 4x */
+        emit("\tadd hl,de\n");   /* 5x */
+        emit("\tadd hl,de\n");   /* 6x */
+    } else if (v == 7) {
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
         emit("\tadd hl,hl\n");   /* 2x */
         emit("\tadd hl,hl\n");   /* 4x */
         emit("\tadd hl,hl\n");   /* 8x */
-        emit("\tpop de\n");      /* x */
+        emit("\tor a\n");
+        emit("\tsbc hl,de\n");   /* 8x - x = 7x */
+    } else if (v == 9) {
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
+        emit("\tadd hl,hl\n");   /* 2x */
+        emit("\tadd hl,hl\n");   /* 4x */
+        emit("\tadd hl,hl\n");   /* 8x */
+        emit("\tadd hl,de\n");   /* 9x */
+    } else if (v == 10) {
+        emit("\tld d,h\n");      /* save x */
+        emit("\tld e,l\n");
+        emit("\tadd hl,hl\n");   /* 2x */
+        emit("\tadd hl,hl\n");   /* 4x */
+        emit("\tadd hl,hl\n");   /* 8x */
         emit("\tadd hl,de\n");   /* 9x */
         emit("\tadd hl,de\n");   /* 10x */
     } else {
@@ -488,8 +517,14 @@ void scale_hl_by_elem_size(int elem)
         return;
     }
 
-    fprintf(outf, "\tld de,%d\n", elem);
-    emit_runtime_call("__mulu");
+    /* Not a power of two: emit_mul_hl_const already knows cheap shift/add
+     * sequences for a handful of small constants (3,5,6,7,9,10 - exactly
+     * the row/element strides a 2- or 3-column int/char array or a small
+     * struct produces) and falls back to __mulu itself for anything else,
+     * so delegating here gives every array-index and pointer-arithmetic
+     * scaling call site (there are over a dozen) the same fast paths for
+     * free instead of duplicating them. */
+    emit_mul_hl_const(elem);
 }
 
 int int_log2_pow2(int v)
@@ -541,10 +576,48 @@ void emit_logical_shift_right_hl_const(int count)
         emit("\tsrl h\n\trr l\n");
 }
 
+/* AND one 16-bit register pair (hi_reg:lo_reg, e.g. 'd','e' or 'h','l') with
+ * a compile-time word mask in place, without a temporary register pair: a
+ * byte that is all-ones in the mask is left untouched, a byte that is
+ * all-zero collapses to a single immediate load, and anything else gets one
+ * immediate `and`. */
+static void emit_and_word_const(char hi_reg, char lo_reg, unsigned int word_mask)
+{
+    unsigned int hib = (word_mask >> 8) & 0xffU;
+    unsigned int lob = word_mask & 0xffU;
+
+    if (word_mask == 0xffffU)
+        return;
+    if (word_mask == 0) {
+        fprintf(outf, "\tld %c%c,0\n", hi_reg, lo_reg);
+        return;
+    }
+    if (hib == 0)
+        fprintf(outf, "\tld %c,0\n", hi_reg);
+    else if (hib != 0xffU)
+        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
+    if (lob == 0)
+        fprintf(outf, "\tld %c,0\n", lo_reg);
+    else if (lob != 0xffU)
+        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
+}
+
+/* AND HL with a compile-time mask in place. Used both for the unsigned `%
+ * pow2` fast path and for plain `int_expr & <const>` (see gen_binary_ast):
+ * no temporary register pair or stack use, just the byte-wise logic above. */
 void emit_and_hl_const(unsigned int mask)
 {
-    fprintf(outf, "\tld de,%u\n", mask & 0xffffU);
-    gen_binop('&');
+    emit_and_word_const('h', 'l', mask & 0xffffU);
+}
+
+/* AND the DE:HL long value (DE = high word, HL = low word) with a
+ * compile-time 32-bit mask in place. Used for `long_expr & <const>` so the
+ * mask never needs to be materialized into a register pair or pushed
+ * through the stack alongside the lhs. */
+void emit_and_long_const(unsigned long mask)
+{
+    emit_and_word_const('d', 'e', (unsigned int)((mask >> 16) & 0xffffUL));
+    emit_and_word_const('h', 'l', (unsigned int)(mask & 0xffffUL));
 }
 
 void divide_hl_by_elem_size(int elem)
@@ -589,43 +662,66 @@ int emit_shift_const_long(int op, int lhs_type, long count)
         return 1;
     }
 
-    if (is_left) {
-        if (count == 8) { emit("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 16) { emit("\tld e,l\n\tld d,h\n\tld hl,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 24) { emit("\tld d,l\n\tld e,0\n\tld hl,0\n"); g_long_from16 = 0; return 1; }
-    } else if (is_unsigned) {
-        if (count == 8) { emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 16) { emit("\tld l,e\n\tld h,d\n\tld de,0\n"); g_long_from16 = 0; return 1; }
-        if (count == 24) { emit("\tld l,d\n\tld h,0\n\tld de,0\n"); g_long_from16 = 0; return 1; }
-    } else {
-        /*
-         * Signed right shift by a whole number of bytes: the same byte
-         * moves as the unsigned case, but the vacated high bytes are filled
-         * with the replicated sign byte (0x00 or 0xFF) computed in A rather
-         * than zero.  DE:HL holds the value (D = MSB, L = LSB).
-         *   ld a,d / rla / sbc a,a  ->  A = 0x00 if non-negative, 0xFF if negative.
-         */
-        if (count == 8) {
-            emit("\tld a,d\n\trla\n\tsbc a,a\n");
-            emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,a\n");
-            g_long_from16 = 0;
-            return 1;
-        }
-        if (count == 16) {
-            emit("\tld a,d\n\trla\n\tsbc a,a\n");
-            emit("\tld l,e\n\tld h,d\n\tld e,a\n\tld d,a\n");
-            g_long_from16 = 0;
-            return 1;
-        }
-        if (count == 24) {
-            emit("\tld a,d\n\trla\n\tsbc a,a\n");
-            emit("\tld l,d\n\tld h,a\n\tld e,a\n\tld d,a\n");
-            g_long_from16 = 0;
-            return 1;
+    /* Any count 1..31 decomposes into a whole-byte move (0-3 bytes, the
+     * same register-move sequences the count==8/16/24 special cases below
+     * always used, just parameterized) plus a 0-7 bit remainder. The
+     * remainder is unrolled directly - the count is a compile-time
+     * constant, so a runtime b-counted loop (emit_shift_loop) would only
+     * add loop-control overhead for no benefit. This is what closed the
+     * gap for byte-aligned counts before generalizing to every count: a
+     * shift like `e >>= 1` (bits=1, bytes=0) used to fall through to
+     * emit_shift_loop for want of a bytes==0 case here, paying for a loop
+     * counter and a conditional branch around a single shift instruction
+     * sequence. */
+    {
+        int bytes = (int)(count / 8);
+        int bits = (int)(count % 8);
+
+        if (is_left) {
+            switch (bytes) {
+            case 1: emit("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"); break;
+            case 2: emit("\tld e,l\n\tld d,h\n\tld hl,0\n"); break;
+            case 3: emit("\tld d,l\n\tld e,0\n\tld hl,0\n"); break;
+            default: break;
+            }
+            while (bits-- > 0)
+                emit("\tadd hl,hl\n\trl e\n\trl d\n");
+        } else if (is_unsigned) {
+            switch (bytes) {
+            case 1: emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,0\n"); break;
+            case 2: emit("\tld l,e\n\tld h,d\n\tld de,0\n"); break;
+            case 3: emit("\tld l,d\n\tld h,0\n\tld de,0\n"); break;
+            default: break;
+            }
+            while (bits-- > 0)
+                emit("\tsrl d\n\trr e\n\trr h\n\trr l\n");
+        } else {
+            /*
+             * Signed right shift: a whole-byte move fills the vacated high
+             * bytes with the replicated sign byte (0x00 or 0xFF) computed
+             * in A rather than zero.  DE:HL holds the value (D = MSB,
+             * L = LSB).  ld a,d / rla / sbc a,a  ->  A = 0x00 if
+             * non-negative, 0xFF if negative.  A bit remainder then uses
+             * the ordinary sign-preserving `sra d` chain, which keeps
+             * re-deriving the same sign bit on each shift - exactly like
+             * the hardware instruction would if repeated by hand.
+             */
+            if (bytes > 0) {
+                emit("\tld a,d\n\trla\n\tsbc a,a\n");
+                switch (bytes) {
+                case 1: emit("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,a\n"); break;
+                case 2: emit("\tld l,e\n\tld h,d\n\tld e,a\n\tld d,a\n"); break;
+                case 3: emit("\tld l,d\n\tld h,a\n\tld e,a\n\tld d,a\n"); break;
+                default: break;
+                }
+            }
+            while (bits-- > 0)
+                emit("\tsra d\n\trr e\n\trr h\n\trr l\n");
         }
     }
 
-    return 0;
+    g_long_from16 = 0;
+    return 1;
 }
 
 void emit_shift_loop(int op, int lhs_type)
@@ -660,6 +756,62 @@ void emit_shift_loop(int op, int lhs_type)
     emit_label(ldone);
     if (type_is_long(lhs_type))
         g_long_from16 = 0;
+}
+
+/* log2 of a power-of-two value in the full unsigned 32-bit long range;
+ * int_log2_pow2 is restricted to the host `int` and cannot be trusted with
+ * values above INT_MAX (e.g. 0x80000000). Returns -1 if v is 0 or not a
+ * power of two. */
+static int ulong_log2_pow2(unsigned long v)
+{
+    int n;
+
+    if (v == 0 || (v & (v - 1)) != 0)
+        return -1;
+    n = 0;
+    while (v > 1) {
+        v >>= 1;
+        n++;
+    }
+    return n;
+}
+
+/* Strength-reduce `long_expr * <compile-time power-of-two constant>` into a
+ * left shift on the already-evaluated DE:HL value, with no push/pop and no
+ * __lmul call. Whole-byte shift counts reuse the exact register-move
+ * sequences emit_shift_const_long uses for `<<`; any remaining 0-7 bits are
+ * unrolled `add hl,hl`/`rl e`/`rl d` steps (cheap and known at compile time,
+ * so an actual runtime loop would only add overhead). Returns 0 (and emits
+ * nothing) for multipliers that are not an exact power of two, leaving the
+ * caller to fall back to the generic path; 0 and 1 are treated as "not a
+ * useful shift" for the same reason. */
+int emit_mul_pow2_long_const(long multiplier)
+{
+    int shift;
+    int bytes;
+    int bits;
+
+    shift = ulong_log2_pow2((unsigned long)multiplier);
+    if (shift <= 0)
+        return 0;
+
+    if (shift >= 32) {
+        emit("\tld hl,0\n\tld de,0\n");
+        return 1;
+    }
+
+    bytes = shift / 8;
+    bits = shift % 8;
+
+    switch (bytes) {
+    case 1: emit("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"); break;
+    case 2: emit("\tld e,l\n\tld d,h\n\tld hl,0\n"); break;
+    case 3: emit("\tld d,l\n\tld e,0\n\tld hl,0\n"); break;
+    default: break;
+    }
+    while (bits-- > 0)
+        emit("\tadd hl,hl\n\trl e\n\trl d\n");
+    return 1;
 }
 
 void emit_float_compare_call(int op)

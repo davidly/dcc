@@ -462,8 +462,17 @@ extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
 extern int  g_compound_literal_seq;
+extern int  g_licm_seq;
 void flush_pending_asm(void);
 void pp_reset_asm_dedupe(void);
+
+/* ---- whole-file global-write pre-scan (dcc_global_scan.c) -------------- */
+extern char g_current_compiling_func[64];
+void scan_global_write_info(void);
+void reset_preproc_scan_state(void);
+int global_text_write_count(const char *name);
+int global_text_addr_taken_count(const char *name);
+int global_text_written_in_function(const char *name, const char *func);
 
 /* user-defined goto labels (function-scoped) */
 extern char ulabel_names[MAX_USER_LABELS][64];
@@ -769,9 +778,11 @@ int int_log2_pow2(int v);
 void emit_arith_shift_right_hl_const(int count);
 void emit_logical_shift_right_hl_const(int count);
 void emit_and_hl_const(unsigned int mask);
+void emit_and_long_const(unsigned long mask);
 void divide_hl_by_elem_size(int elem);
 int emit_shift_const_long(int op, int lhs_type, long count);
 void emit_shift_loop(int op, int lhs_type);
+int emit_mul_pow2_long_const(long multiplier);
 void emit_float_compare_call(int op);
 void emit_test_expr_nonzero(int expr_type, int true_label, int branch_when_true);
 

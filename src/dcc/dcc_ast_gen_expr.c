@@ -535,17 +535,72 @@ void gen_long_cmp_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* Extract the compile-time value of `n` when it is a bare integer literal or
+ * a cast directly wrapping one (e.g. `(long)128`, which parses as a CAST
+ * node over an INT_LIT rather than folding into a single long-typed
+ * literal). Declines (returns 0) for anything else: a multi-level cast or a
+ * cast of a non-literal might not be safe to fold without evaluating. */
+static int ast_const_int_operand_value(const struct AstNode *n, long *out)
+{
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_INT_LIT) {
+        *out = n->ival;
+        return 1;
+    }
+    if (n->kind == AST_CAST && n->a != NULL && n->a->kind == AST_INT_LIT) {
+        *out = n->a->ival;
+        return 1;
+    }
+    return 0;
+}
+
 void gen_long_arith_ast(const struct AstNode *n)
 {
     int lhs_type;
     int common_type;
     int lhs_from16;
     int rhs_from16;
+    long const_val;
 
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
     common_type = common_arith_type(lhs_type, n->peek_type);
     emit_cast_16_to_common(lhs_type, common_type);
+
+    /* `long_expr & <compile-time constant>`: the rhs is known at compile
+     * time, so there is nothing to evaluate and nothing that needs pushing
+     * through the stack. Any byte of the mask that is all-ones leaves the
+     * matching byte of the lhs untouched, any byte that is all-zero clears
+     * it outright, and only a genuinely mixed byte needs a real `and`. The
+     * generic path materializes the mask constant, pushes the lhs, pops it
+     * back, and ANDs four bytes through `ex de,hl` shuffling regardless of
+     * the mask's shape; skip all of that. This also covers the common
+     * byte-extraction idiom used to pull bytes out of a long
+     * (`(v >> 24) & 0xff`) and to zero-extend a narrower value into one
+     * (`(long)c & 0xffL`), where the mask is exactly a byte/word boundary. */
+    if (n->op == '&' && ast_const_int_operand_value(n->b, &const_val)) {
+        emit_and_long_const((unsigned long)const_val);
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* `long_expr * <compile-time power-of-two constant>`: strength-reduce to
+     * a shift instead of a call to __lmul. Byte-aligned shift counts reuse
+     * the same cheap register-move sequences as `<<`; any leftover sub-byte
+     * bits are a handful of unrolled `add hl,hl`/`rl e`/`rl d` steps, still
+     * far cheaper than the generic runtime multiply. Declines (returns 0)
+     * for non-power-of-two constants, 0, and 1, which fall through to the
+     * generic path below (0 and 1 are rare enough as literal long
+     * multipliers not to be worth special-casing separately). */
+    if (n->op == '*' && ast_const_int_operand_value(n->b, &const_val) &&
+        emit_mul_pow2_long_const(const_val)) {
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     lhs_from16 = g_long_from16;
     emit("\tpush de\n\tpush hl\n");
     ast_gen_expr(n->b);
@@ -589,6 +644,7 @@ void gen_binary_ast(const struct AstNode *n)
     int lhs_type;
     int common_type;
     const char *float_helper;
+    long const_val;
 
     /* `CONST * expr` mirror of the `expr * CONST` fast path further below:
      * multiplication is commutative, so a qualifying constant on the LEFT
@@ -705,6 +761,21 @@ void gen_binary_ast(const struct AstNode *n)
         }
     }
 
+    /* `lhs & <compile-time constant>` (plain int, e.g. `sq & 7`): lhs is
+     * already in HL and the rhs needs no evaluation, so skip the generic
+     * push-lhs/evaluate-rhs/ex de,hl/pop/and sequence entirely and mask HL
+     * in place with emit_and_hl_const's byte-wise immediate logic (mirrors
+     * the long `& <const>` fast path in gen_long_arith_ast). Tiny one-liner
+     * helpers like `sq & 7` get called an enormous number of times in
+     * search-heavy code, so trimming the push/pop off each call matters. */
+    if (n->op == '&' && ast_const_int_operand_value(n->b, &const_val) &&
+        !type_is_long(common_type)) {
+        emit_and_hl_const((unsigned int)(const_val & 0xffffL));
+        g_expr_type = common_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     emit("\tpush hl\n");
     ast_gen_expr(n->b);
     if (type_is_long(g_expr_type)) {
@@ -751,6 +822,29 @@ void gen_shift_ast(const struct AstNode *n)
         g_long_from16 = 0;
         return;
     }
+    /* Compile-time shift count on a plain int: unroll directly instead of
+     * the runtime b-counted loop below. Mirrors the long case's
+     * emit_shift_const_long fast path just above: `<<` is a handful of
+     * `add hl,hl`, and `>>` reuses the existing arithmetic/logical
+     * constant-count shifters already used elsewhere for pointer scaling.
+     * Restricted to 0..15 (a 16-bit int's full width) so out-of-range counts
+     * keep falling through to the generic runtime loop unchanged. */
+    if (n->b->kind == AST_INT_LIT && ast_value_is_plain_int(n->b) &&
+        n->b->ival >= 0 && n->b->ival < 16) {
+        int count = (int)n->b->ival;
+        if (n->op == TOK_SHL || n->op == TOK_SHLEQ) {
+            while (count-- > 0)
+                emit("\tadd hl,hl\n");
+        } else if (lhs_type & TYPE_UNSIGNED) {
+            emit_logical_shift_right_hl_const(count);
+        } else {
+            emit_arith_shift_right_hl_const(count);
+        }
+        g_expr_type = lhs_type;
+        g_long_from16 = 0;
+        return;
+    }
+
     emit("\tpush hl\n");
     ast_gen_expr(n->b);
     emit("\tld b,l\n\tpop hl\n");
@@ -946,6 +1040,11 @@ void gen_assign_ast(const struct AstNode *n)
 
     if (ast_struct_member_copy_assign_supported(n)) {
         gen_struct_member_copy_assign_ast(n);
+        return;
+    }
+
+    if (ast_is_byte_addr_copy_assign(n)) {
+        gen_byte_addr_copy_assign_ast(n);
         return;
     }
 
@@ -2710,6 +2809,37 @@ void gen_struct_member_copy_assign_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* Emitter for ast_is_byte_addr_copy_assign: compute both addresses (lhs
+ * first, matching the generic non-identifier-lvalue assignment path's
+ * evaluation order just below in this file), then copy the single byte
+ * directly address-to-address - no promotion to int, no shuffling of the
+ * value itself through the stack, just `ld a,(hl)` / `ld (de),a`. */
+void gen_byte_addr_copy_assign_ast(const struct AstNode *n)
+{
+    int val_type;
+
+    if (n->a->kind == AST_INDEX)
+        gen_index_addr_ast(n->a, &val_type);   /* HL = destination address */
+    else if (n->a->kind == AST_MEMBER)
+        gen_member_addr_ast(n->a, &val_type);
+    else
+        gen_deref_addr_ast(n->a, &val_type);
+    emit("\tpush hl\n");
+
+    if (n->b->kind == AST_INDEX)
+        gen_index_addr_ast(n->b, &val_type);   /* HL = source address */
+    else if (n->b->kind == AST_MEMBER)
+        gen_member_addr_ast(n->b, &val_type);
+    else
+        gen_deref_addr_ast(n->b, &val_type);
+
+    emit("\tpop de\n");        /* DE = destination address, HL = source address */
+    emit("\tld a,(hl)\n");
+    emit("\tld (de),a\n");
+    g_expr_type = val_type;
+    g_long_from16 = 0;
+}
+
 /* Emit a single struct field read `id.f` / `id->f` via the identifier-rooted
  * field machine: load the base address, dereference once for `->`, add the
  * field offset, publish the field metadata into the current_field_* globals,
@@ -2746,10 +2876,21 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
     } else {
         s = find_sym(n->a->sval);
         cur_type = s->type;
-        emit_load_sym_addr(s);
-
-        if (arrow)
-            emit_load_from_hl(cur_type);
+        /* Mirrors gen_deref_addr_ast's identical fast path for plain `*p`:
+         * a `->` access needs the POINTER VARIABLE'S VALUE, not its own
+         * address, so for a plain ix-direct local/param or global-word
+         * symbol, load that value directly (`ld hl,(name)` for a global -
+         * one instruction - or the equivalent direct ix-relative load for a
+         * local) instead of computing &s and then dereferencing it, which
+         * is the correct-but-needlessly-expensive general path required
+         * only when s has no direct load form at all. */
+        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s))) {
+            emit_load_sym_value_direct(s);
+        } else {
+            emit_load_sym_addr(s);
+            if (arrow)
+                emit_load_from_hl(cur_type);
+        }
     }
 
     sid = base_struct_id_from_type(cur_type);
@@ -2775,6 +2916,24 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
 
     val_type = fd->is_array ? fd->elem_type : fd->type;
     *out_val_type = val_type;
+}
+
+/* Look up a plain `BASE->FIELD` member node's value type without emitting
+ * anything - the same resolution gen_member_addr_ast's plain-identifier-base
+ * fallback performs (base symbol's type -> struct id -> field def). Used by
+ * ast_for_hoist_global_member_value_supported (dcc_ast_gen_support.c) to
+ * size the value-cache temp it allocates. Only meaningful for exactly the
+ * shape that predicate matches: n->a is a plain identifier. */
+int ast_member_field_value_type(const struct AstNode *n)
+{
+    struct Sym *s;
+    int sid;
+    struct FieldDef *fd;
+
+    s = find_sym(n->a->sval);
+    sid = base_struct_id_from_type(s->type);
+    fd = find_field_def(sid, n->sval);
+    return fd->is_array ? fd->elem_type : fd->type;
 }
 
 void gen_member_ast(const struct AstNode *n)
@@ -3071,6 +3230,25 @@ void gen_logical_ast(const struct AstNode *n)
 {
     int lhs_type;
     int le;
+
+    /* `x >= LO && x <= HI` (see ast_is_range_check_cond in
+     * dcc_ast_gen_cond.c) used as a plain value, e.g. `return sq >= 0 && sq
+     * < 64;` rather than an if/while condition: reuse the same fused single-
+     * evaluation range-check branch and just materialize its 0/1 result,
+     * instead of the generic path's two independent evaluations/promotions
+     * of x plus two intermediate booleans. */
+    if (ast_is_range_check_cond(n, NULL, NULL, NULL)) {
+        int lt = new_label();
+        le = new_label();
+        ast_gen_range_check_branch(n, lt, 1);
+        emit("\tld hl,0\n");
+        emit_jp_label("jp", le);
+        emit_label(lt);
+        emit("\tld hl,1\n");
+        emit_label(le);
+        g_expr_type = TYPE_INT;
+        return;
+    }
 
     if (n->kind == AST_LOGAND) {
         int lf = 0;

@@ -110,6 +110,9 @@ int ast_struct_return_call_assign_supported(int lhs_type,
                                                   const struct AstNode *rhs);
 int ast_struct_deref_copy_assign_supported(const struct AstNode *n);
 int ast_struct_member_copy_assign_supported(const struct AstNode *n);
+int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type);
+int ast_is_byte_addr_copy_assign(const struct AstNode *n);
+void gen_byte_addr_copy_assign_ast(const struct AstNode *n);
 int ast_struct_addr_expr_supported(const struct AstNode *n, int *out_type);
 int ast_struct_copy_assign_supported(const struct AstNode *n);
 int ast_is_const_zero_condition(const struct AstNode *n);
@@ -178,6 +181,7 @@ void gen_struct_deref_copy_assign_ast(const struct AstNode *n);
 void gen_struct_member_copy_assign_ast(const struct AstNode *n);
 void gen_member_addr_ast(const struct AstNode *n, int *out_val_type);
 void gen_member_ast(const struct AstNode *n);
+int ast_member_field_value_type(const struct AstNode *n);
 void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
                                  int *out_no_deref);
 void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type);
@@ -199,6 +203,8 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op);
 int ast_is_byte_cmp_cond(const struct AstNode *n);
 int ast_is_direct_byte_bitand_cond(const struct AstNode *n);
 int ast_is_direct_wide_bitand_cond(const struct AstNode *n);
+int ast_is_range_check_cond(const struct AstNode *n, const struct AstNode **out_x,
+                                   long *out_lo, long *out_hi);
 int ast_is_direct_long_const_eq_cond(const struct AstNode *n);
 int ast_global_char_index_cond(const struct AstNode *n, struct Sym **out_sym);
 void ast_gen_global_char_index_branch(const struct AstNode *n, int label,
@@ -227,6 +233,8 @@ void ast_gen_direct_byte_bitand_branch(const struct AstNode *n, int label,
                                              int branch_when_true);
 void ast_gen_direct_wide_bitand_branch(const struct AstNode *n, int label,
                                               int branch_when_true);
+void ast_gen_range_check_branch(const struct AstNode *n, int label,
+                                       int branch_when_true);
 void ast_gen_direct_long_const_eq_branch(const struct AstNode *n, int label,
                                                 int branch_when_true);
 void ast_gen_float_cmp_branch(const struct AstNode *n, int label,
