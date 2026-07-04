@@ -13,9 +13,12 @@ examples:
   DCC_ARGS="-DDEBUG=1" NTVCM_ARGS="-p -s:4000000" dcc-ma hello fast
 
 build modes:
-    full       build optimized and unoptimized outputs (default)
-    fast       run dccpeep after dcc
+    fast       run dccpeep after dcc (default)
     nopeep     skip dccpeep
+    full       build fast then nopeep, in that order - since both write to
+               the same output path, nopeep's un-optimized build is what
+               is left behind; mainly useful to see both dccpeep and no-
+               dccpeep console output in one run, not to keep both files
 
 script options:
     --source-path FILE  explicit C source path
@@ -75,7 +78,7 @@ esac
 name_arg="$1"
 shift
 
-mode="full"
+mode="fast"
 build_dir="build"
 source_path=""
 emulator="ntvcm"
@@ -106,7 +109,7 @@ while [ $# -gt 0 ]; do
             mode="$2"
             shift 2
             ;;
-        full|fast|peep|nopeep|opt|optimized|o|noopt|unopt|u|1|0|yes|no|true|false)
+        full|fast|peep|nopeep|opt|optimized|o|-o|noopt|unopt|u|-u|1|0|yes|no|true|false)
             mode="$1"
             shift
             ;;
@@ -209,8 +212,8 @@ run_one() {
     local mode_lc use_peep
     mode_lc=$(printf '%s' "$build_mode" | tr '[:upper:]' '[:lower:]')
     case "$mode_lc" in
-        fast|peep|opt|optimized|o|1|yes|true) use_peep=1 ;;
-        nopeep|noopt|unopt|u|0|no|false) use_peep=0 ;;
+        fast|peep|opt|optimized|o|-o|1|yes|true) use_peep=1 ;;
+        nopeep|noopt|unopt|u|-u|0|no|false) use_peep=0 ;;
         *) echo "unknown optimization mode: $build_mode" >&2; return 1 ;;
     esac
 
