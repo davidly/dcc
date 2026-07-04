@@ -436,6 +436,10 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
             trim(p);
             if (*p) {
                 char arg[MAX_PATH_LEN];
+                if (strlen(p) + 2 >= sizeof(arg)) {
+                    fprintf(stderr, "dcc-define value too long: %s\n", p);
+                    return 0;
+                }
                 snprintf(arg, sizeof(arg), "-D%s", p);
                 if (!add_item(cfg->dcc_args, &cfg->dcc_arg_count, arg))
                     return 0;
@@ -460,6 +464,10 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
             trim(p);
             if (*p) {
                 char arg[MAX_PATH_LEN];
+                if (strlen(p) + 2 >= sizeof(arg)) {
+                    fprintf(stderr, "dcc-undefine value too long: %s\n", p);
+                    return 0;
+                }
                 snprintf(arg, sizeof(arg), "-U%s", p);
                 if (!add_item(cfg->dcc_args, &cfg->dcc_arg_count, arg))
                     return 0;
@@ -1102,7 +1110,11 @@ static int run_build(struct Config *cfg)
         if (!run_cmd(cmd) || !file_exists(macs[i]))
             return 0;
         if (cfg->peep) {
-            snprintf(tmp, sizeof(tmp), "%s%c_PEEPOUT_%d.MAC", cfg->build_dir, PATH_SEP, i);
+            int tmp_n = snprintf(tmp, sizeof(tmp), "%s%c_PEEPOUT_%d.MAC", cfg->build_dir, PATH_SEP, i);
+            if (tmp_n < 0 || (size_t)tmp_n >= sizeof(tmp)) {
+                fprintf(stderr, "build path too long: %s\n", cfg->build_dir);
+                return 0;
+            }
             cmd_init(cmd, sizeof(cmd));
             if (!cmd_arg(cmd, sizeof(cmd), cfg->dccpeep)) return 0;
             if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
