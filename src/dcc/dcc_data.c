@@ -85,6 +85,8 @@ static void mark_init_label_extrn(const char *p)
     emit_extrn_if_needed(s);
 }
 
+static void emit_init_zero_bytes(int bytes);
+
 void emit_init_label_or_number(const char *p, int bytes)
 {
     long v;
@@ -113,7 +115,17 @@ void emit_init_label_or_number(const char *p, int bytes)
     }
 
     if (bytes > 2)
-        fprintf(outf, "\tds %d\n", bytes - 2);
+        emit_init_zero_bytes(bytes - 2);
+}
+
+static void emit_init_zero_bytes(int bytes)
+{
+    while (bytes >= 2) {
+        fprintf(outf, "\tdw 0\n");
+        bytes -= 2;
+    }
+    if (bytes > 0)
+        fprintf(outf, "\tdb 0\n");
 }
 
 void emit_data(void)
@@ -229,7 +241,7 @@ void emit_data(void)
             }
 
             if (s->size > used_bytes)
-                fprintf(outf, "\tds %d\n", s->size - used_bytes);
+                emit_init_zero_bytes(s->size - used_bytes);
         } else {
             emit_init_numeric(s->init_value, type_size(s->type));
         }
