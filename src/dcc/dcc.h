@@ -595,6 +595,8 @@ void expect(int k);
 /* ---- types ---- */
 int find_enum_const(const char *name);
 int is_type_qualifier_token(int k);
+int is_restrict_qualifier_token(void);
+void skip_parameter_array_qualifiers(void);
 void skip_type_qualifiers(void);
 int type_struct_id(int type);
 int make_struct_type(int id);

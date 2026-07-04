@@ -26,9 +26,24 @@ int is_type_qualifier_token(int k)
     return k == TOK_CONST || k == TOK_VOLATILE;
 }
 
+int is_restrict_qualifier_token(void)
+{
+    /* `restrict` is a C99/C11 keyword but dcc's lexer has no dedicated token
+     * for it, so it arrives as an identifier.  Treat it as a type qualifier
+     * everywhere ordinary const/volatile qualifiers are accepted. */
+    return tok.kind == TOK_ID && !strcmp(tok.text, "restrict");
+}
+
+void skip_parameter_array_qualifiers(void)
+{
+    while (is_type_qualifier_token(tok.kind) || is_restrict_qualifier_token() ||
+           tok.kind == TOK_STATIC)
+        next_token();
+}
+
 void skip_type_qualifiers(void)
 {
-    while (is_type_qualifier_token(tok.kind))
+    while (is_type_qualifier_token(tok.kind) || is_restrict_qualifier_token())
         next_token();
 }
 

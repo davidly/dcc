@@ -232,6 +232,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         tok = save_tok;
         return 0;
     }
+    skip_type_qualifiers();
 
     if (tok.kind == '(') {
         int depth;
@@ -461,6 +462,7 @@ int parse_abstract_funcptr_declarator(int *ptype)
         expect(')');
     } else if (tok.kind == '[') {
         while (accept('[')) {
+            skip_parameter_array_qualifiers();
             if (tok.kind != ']')
                 (void)parse_const_int_expr();
             expect(']');
