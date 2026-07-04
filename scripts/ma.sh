@@ -217,13 +217,16 @@ run_one() {
         *) echo "unknown optimization mode: $build_mode" >&2; return 1 ;;
     esac
 
-    local DCC DCCPEEP DCCRTLSTRIP NTVCM M80 L80
-    DCC=${DCC:-dcc}
-    DCCPEEP=${DCCPEEP:-dccpeep}
-    DCCRTLSTRIP=${DCCRTLSTRIP:-dccrtlstrip}
-    NTVCM=${NTVCM:-$emulator}
-    M80=${M80:-m80}
-    L80=${L80:-l80}
+    # Each `local NAME="${NAME:-default}"` must combine the declaration and
+    # the default-value assignment in one statement - a bare `local NAME`
+    # followed by a separate `NAME=${NAME:-default}` shadows any inherited
+    # exported override with an empty local first, silently discarding it.
+    local DCC="${DCC:-dcc}"
+    local DCCPEEP="${DCCPEEP:-dccpeep}"
+    local DCCRTLSTRIP="${DCCRTLSTRIP:-dccrtlstrip}"
+    local NTVCM="${NTVCM:-$emulator}"
+    local M80="${M80:-m80}"
+    local L80="${L80:-l80}"
 
     mkdir -p "$build_dir"
 

@@ -24,6 +24,23 @@ static int inline_param_index(struct Sym *s, const char *name)
     return -1;
 }
 
+static int inline_expr_touches_param(struct Sym *fn, const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_IDENT)
+        return inline_param_index(fn, n->sval) >= 0;
+    if (inline_expr_touches_param(fn, n->a) || inline_expr_touches_param(fn, n->b) ||
+        inline_expr_touches_param(fn, n->c) || inline_expr_touches_param(fn, n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (inline_expr_touches_param(fn, n->list[i]))
+            return 1;
+    return 0;
+}
+
 static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
 {
     int i;
@@ -46,13 +63,21 @@ static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
         }
         return find_global(n->sval) != NULL;
     case AST_UNARY:
-        if (n->op == TOK_INC || n->op == TOK_DEC)
+        /* ++/-- substituted verbatim onto a parameter would mutate the
+         * caller's argument expression, so only allow it on operands that
+         * don't reach a parameter (e.g. globals). */
+        if ((n->op == TOK_INC || n->op == TOK_DEC) && inline_expr_touches_param(fn, n->a))
+            return 0;
+        return inline_expr_is_simple(fn, n->a);
+    case AST_POSTFIX:
+        if (inline_expr_touches_param(fn, n->a))
             return 0;
         return inline_expr_is_simple(fn, n->a);
     case AST_BINARY:
     case AST_LOGAND:
     case AST_LOGOR:
     case AST_INDEX:
+    case AST_COMMA:
         return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
     case AST_ASSIGN:
         return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
@@ -75,15 +100,16 @@ static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
     }
 }
 
+static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int index);
+
 static struct AstNode *inline_stmt_return_expr(struct AstNode *n)
 {
     if (n == NULL)
         return NULL;
     if (n->kind == AST_RETURN)
         return n->a;
-    if (n->kind == AST_COMPOUND && n->list_len == 1 && n->list[0] != NULL &&
-        n->list[0]->kind == AST_RETURN)
-        return n->list[0]->a;
+    if (n->kind == AST_COMPOUND)
+        return inline_return_expr_from_seq(n, 0);
     return NULL;
 }
 
@@ -94,6 +120,7 @@ static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int ind
     struct AstNode *else_expr;
     struct AstNode *rest_expr;
     struct AstNode *cond;
+    struct AstNode *comma;
 
     if (body == NULL || body->kind != AST_COMPOUND || index >= body->list_len)
         return NULL;
@@ -104,6 +131,21 @@ static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int ind
 
     if (stmt->kind == AST_RETURN)
         return (index == body->list_len - 1) ? stmt->a : NULL;
+
+    if (stmt->kind == AST_EXPR_STMT && stmt->a != NULL) {
+        /* A side-effecting statement ahead of the eventual return: fold it
+         * into a comma expression so it still executes exactly once, in
+         * order, when the whole sequence is substituted at the call site. */
+        rest_expr = inline_return_expr_from_seq(body, index + 1);
+        if (rest_expr == NULL)
+            return NULL;
+        comma = ast_new(&g_ast_inline_arena, AST_COMMA);
+        comma->op = ',';
+        comma->a = stmt->a;
+        comma->b = rest_expr;
+        comma->type = 0;
+        return comma;
+    }
 
     if (stmt->kind != AST_IF)
         return NULL;

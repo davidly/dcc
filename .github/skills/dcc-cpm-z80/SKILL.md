@@ -102,7 +102,14 @@ inline simple return-expression helpers, early-return `if` chains lowered to
 conditional expressions, simple struct/pointer member accessors,
 statement-context `void` helpers made of one or more expression statements such
 as `*dst = value`, and scalar
-`int`/pointer/`long`/`float` expression helpers. `void` helpers inline only when
+`int`/pointer/`long`/`float` expression helpers. A value-returning `if`-branch
+(or the top-level body) may also have side-effecting statements ahead of its
+`return`, e.g. `if (tp >= tend) return 0; return tc[tp++];` or
+`if (k > 0) { n++; return 1; } return 0;` — these are folded into comma
+expressions rather than requiring a bare `return`. `++`/`--` inside an inlined
+return expression is only allowed on operands that don't reach a parameter
+(globals are fine; incrementing a parameter verbatim would mutate the caller's
+argument expression once substituted). `void` helpers inline only when
 called as a statement; their assignment/store expressions may contain ordinary
 helper calls such as `*dst = clamp((long)*dst + v)`. When every call site inlines
 and the function address is not taken,

@@ -197,24 +197,24 @@ static int find_para(const char *name)
     return 0;
 }
 
-static int stmt_for_para_i(int p)
+static inline int stmt_for_para_i(int p)
 {
     return para[p].first;
 }
 
-static int tpeek(void)
+static inline int tpeek(void)
 {
     if (tp >= tend) return 0;
     return tc[tp];
 }
 
-static int tget(void)
+static inline int tget(void)
 {
     if (tp >= tend) return 0;
     return tc[tp++];
 }
 
-static int acc(int k)
+static inline int acc(int k)
 {
     if (tpeek() == k) { tp++; return 1; }
     return 0;
@@ -630,20 +630,17 @@ static void exec_stmt_tokens(void)
     }
 }
 
-static void exec_one(int si)
-{
-    tp = stmt[si].ts;
-    tend = stmt[si].te;
-    exec_stmt_tokens();
-}
-
 static void exec_range(int start, int end)
 {
     int pc;
     pc = start;
     while (pc <= end && !stopped) {
         jumped = 0;
-        exec_one(pc);
+
+        tp = stmt[pc].ts;
+        tend = stmt[pc].te;
+        exec_stmt_tokens();
+
         if (jumped) pc = jtarget;
         else pc++;
         if (pc < start || pc > end) break;

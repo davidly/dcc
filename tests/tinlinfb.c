@@ -2,6 +2,7 @@
 
 int counter = 0;
 int slots[5];
+int gcounter = 0;
 
 struct Pair {
     int left;
@@ -71,6 +72,23 @@ static inline void store_pair(int *dst, int a, int b)
     dst[1] = dst[1] + b;
 }
 
+/* Early-return if-chain whose final return expression has a side effect
+ * (postfix increment on a global) - the increment must run exactly once
+ * per call, in the returned expression's evaluation order. */
+static inline int next_and_mark(void)
+{
+    if (gcounter > 100) return -1;
+    return gcounter++;
+}
+
+/* If-branch body with a leading side-effect statement before its return -
+ * folded into a comma expression rather than a bare return-or-ternary. */
+static inline int bump_if(int k)
+{
+    if (k > 0) { gcounter++; return 1; }
+    return 0;
+}
+
 int main(void)
 {
     struct Pair pair;
@@ -88,6 +106,8 @@ int main(void)
     int (*fp)(int);
     int via_ptr;
     int local_ok;
+    int seq_ok;
+    int bump_ok;
 
     pair.left = 44;
     pair.right = 77;
@@ -111,6 +131,10 @@ int main(void)
     fp = plus5;
     via_ptr = fp(6);
     local_ok = local_helper(8);
-    printf("inline temps: %d %d %d %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, stored2, via_ptr, local_ok, counter);
+    seq_ok = next_and_mark();
+    seq_ok += next_and_mark() * 10;
+    bump_ok = bump_if(5);
+    bump_ok += bump_if(-1) * 10;
+    printf("inline temps: %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, stored2, via_ptr, local_ok, counter, seq_ok, bump_ok, gcounter);
     return 0;
 }
