@@ -20,6 +20,6 @@ gcc -O2 -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c
 # cp dccrtlstrip /mnt/c/users/david/onedrive/ntvcm/dcc
 
 echo "Building dccmake..."
-gcc -O2 -o dccmake src/dccmake/dccmake.c -static
+gcc -O2 -o dccmake src/dccmake/dccmake.c
 
 echo "Done."
