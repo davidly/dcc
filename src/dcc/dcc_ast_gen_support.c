@@ -912,6 +912,11 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
     int old_dead;
     int i;
 
+    /* This emits its own `call` directly rather than going through
+     * gen_call_ast, so it needs its own deferred_body_needed marking too. */
+    if (fn_sym != NULL && fn_sym->is_static)
+        fn_sym->deferred_body_needed = 1;
+
     fprintf(outf, "\tld hl,-%d\n", struct_bytes);
     emit("\tadd hl,sp\n");
     emit("\tld sp,hl\n");

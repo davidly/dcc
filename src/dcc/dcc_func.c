@@ -359,6 +359,20 @@ static int static_inline_body_can_be_buffered(struct Sym *s)
             s->inline_stmt_body != NULL);
 }
 
+/* Any other static function's body: buffer it too, so it can be dropped at
+ * end-of-file if nothing in this translation unit ever calls it or uses its
+ * address (see emit_needed_deferred_bodies / the deferred_body_needed
+ * marking sites in dcc_ast_gen_expr.c and the global-initializer symbol
+ * resolution in this file). `main` is excluded even though it is never
+ * `static` in valid, idiomatic C: the CRT startup shim below calls it via a
+ * raw fprintf'd `call` that bypasses the AST-based marking entirely, so a
+ * static `main` would otherwise look unreferenced and get silently
+ * dropped. */
+static int plain_static_body_can_be_buffered(struct Sym *s, const char *name)
+{
+    return s != NULL && s->is_static && strcmp(name, "main") != 0;
+}
+
 static void inline_temp_name(char *dst, int dstsz, int index)
 {
     sprintf(dst, "#itmp%d", index);
@@ -444,7 +458,7 @@ static void reserve_inline_temp_locals(void)
     }
 }
 
-void emit_needed_inline_bodies(void)
+void emit_needed_deferred_bodies(void)
 {
     int i;
 
@@ -453,15 +467,15 @@ void emit_needed_inline_bodies(void)
         int c;
 
         s = &globals[i];
-        if (s->inline_body_file == NULL)
+        if (s->deferred_body_file == NULL)
             continue;
-        if (s->inline_body_needed) {
-            rewind(s->inline_body_file);
-            while ((c = fgetc(s->inline_body_file)) != EOF)
+        if (s->deferred_body_needed) {
+            rewind(s->deferred_body_file);
+            while ((c = fgetc(s->deferred_body_file)) != EOF)
                 fputc(c, outf);
         }
-        fclose(s->inline_body_file);
-        s->inline_body_file = NULL;
+        fclose(s->deferred_body_file);
+        s->deferred_body_file = NULL;
     }
 }
 
@@ -1699,6 +1713,13 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
             struct Sym *ls;
             const char *lname;
             ls = find_sym(tok.text);
+            /* A global initializer that names a function (e.g. a function-
+             * pointer table) is a real reference: this bypasses the normal
+             * runtime expression codegen entirely, so it must mark the
+             * function needed itself rather than relying on the ast_gen_expr
+             * SC_FUNC hook. */
+            if (ls != NULL && ls->storage == SC_FUNC && ls->is_static)
+                ls->deferred_body_needed = 1;
             lname = ls ? sym_asm_name(ls) : tok.text;
             if (label && labelsz > 0) {
                 strncpy(label, lname, labelsz - 1);
@@ -3017,11 +3038,11 @@ void parse_function_or_global(int base_type)
                 if (static_inline_body_can_be_buffered(s)) {
                     FILE *saved_outf;
 
-                    s->inline_body_file = tmpfile();
-                    if (s->inline_body_file == NULL)
-                        fatal("cannot create inline body temp file");
+                    s->deferred_body_file = tmpfile();
+                    if (s->deferred_body_file == NULL)
+                        fatal("cannot create deferred body temp file");
                     saved_outf = outf;
-                    outf = s->inline_body_file;
+                    outf = s->deferred_body_file;
                     g_inline_body_buffering++;
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                     gen_compound();
@@ -3036,6 +3057,21 @@ void parse_function_or_global(int base_type)
                                                                saved_nlocals, saved_local_size)) {
                     /* No-IX-frame body already generated and written to outf
                      * inside try_speculative_noix_function_body. */
+                } else if (plain_static_body_can_be_buffered(s, name)) {
+                    FILE *saved_outf;
+
+                    s->deferred_body_file = tmpfile();
+                    if (s->deferred_body_file == NULL)
+                        fatal("cannot create deferred body temp file");
+                    saved_outf = outf;
+                    outf = s->deferred_body_file;
+                    g_inline_body_buffering++;
+                    emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
+                    gen_compound();
+                    check_undefined_user_labels();
+                    emit_function_epilogue(0);
+                    g_inline_body_buffering--;
+                    outf = saved_outf;
                 } else {
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                     gen_compound();

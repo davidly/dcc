@@ -142,10 +142,12 @@ void gen_ident(const struct AstNode *n)
         return;
     }
 
-    /* A function name used as a value decays to its address. */
+    /* A function name used as a value decays to its address - a real
+     * reference regardless of whether it's also inline-eligible, so any
+     * static function's buffered body must be kept. */
     if (s->storage == SC_FUNC) {
-        if (s->is_static && s->is_inline && inline_substitution_body(s) != NULL)
-            s->inline_body_needed = 1;
+        if (s->is_static)
+            s->deferred_body_needed = 1;
         fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
         g_expr_type = type_add_ptr(s->type);
         return;
@@ -2741,8 +2743,11 @@ void gen_call_ast(const struct AstNode *n)
         return;
     }
 
-    if (fn_sym->is_static && fn_sym->is_inline)
-        fn_sym->inline_body_needed = 1;
+    /* A real (non-inlined) call to any static function - inline-eligible or
+     * not - is what its buffered body's dead-code elimination decision
+     * hinges on. */
+    if (fn_sym->is_static)
+        fn_sym->deferred_body_needed = 1;
 
     /* Push arguments right-to-left, one 16-bit word each (prototype-16-bit /
      * default-int push), with call arguments forced live across evaluation. */
@@ -2819,6 +2824,11 @@ void gen_struct_return_call_assign_ast(const struct AstNode *lhs,
     int arg_bytes = 0;
     int old_dead;
     int i;
+
+    /* This emits its own `call` directly rather than going through
+     * gen_call_ast, so it needs its own deferred_body_needed marking too. */
+    if (fn_sym != NULL && fn_sym->is_static)
+        fn_sym->deferred_body_needed = 1;
 
     gen_struct_addr_expr_ast(lhs, &lhs_type);
     emit("\tpush hl\n");
