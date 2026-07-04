@@ -194,20 +194,16 @@ static void patch(int at, int v)
     G->code[at].a = v;
 }
 
-static void pushv(int v)
+static inline void pushv(int v)
 {
-    int *p;
-    p = G->stp;
-    *p = v;
-    G->stp = p + 1;
+    *G->stp = v;
+    G->stp = G->stp + 1;
 }
 
-static int popv(void)
+static inline int popv(void)
 {
-    int *p;
-    p = G->stp - 1;
-    G->stp = p;
-    return *p;
+    G->stp = G->stp - 1;
+    return *G->stp;
 }
 
 static void mark_get(struct Mark *m)
@@ -928,22 +924,19 @@ static void parse_package(void)
     emit(OP_HALT, 0, 0);
 }
 
-static int mem_get(int base, int esz, int idx, unsigned char *m)
+static inline int mem_get(int base, int esz, int idx, unsigned char *m)
 {
-    int a, v;
-    a = base + idx * esz;
-    if (esz == 1) return m[a];
-    v = m[a] | (m[a + 1] << 8);
-    return (short)v;
+    if (esz == 1) return m[base + idx * esz];
+    return (short)(m[base + idx * esz] | (m[base + idx * esz + 1] << 8));
 }
 
-static void mem_set(int base, int esz, int idx, unsigned char *m, int v)
+static inline void mem_set(int base, int esz, int idx, unsigned char *m, int v)
 {
-    int a;
-    a = base + idx * esz;
-    if (esz == 1) { m[a] = (unsigned char)v; return; }
-    m[a] = (unsigned char)(v & 255);
-    m[a + 1] = (unsigned char)((v >> 8) & 255);
+    if (esz == 1) { m[base + idx * esz] = (unsigned char)v; }
+    else {
+        m[base + idx * esz] = (unsigned char)(v & 255);
+        m[base + idx * esz + 1] = (unsigned char)((v >> 8) & 255);
+    }
 }
 
 static void call_func(int fi, int retpc, int argc)

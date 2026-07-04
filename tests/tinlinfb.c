@@ -89,6 +89,29 @@ static inline int bump_if(int k)
     return 0;
 }
 
+int stack2[8];
+int sp2 = 0;
+
+static void note_overflow(void)
+{
+    gcounter = gcounter + 1000;
+}
+
+/* A side-effect-only guard with no else and no return of its own (e.g.
+ * an out-of-line bounds check that calls a helper before falling through
+ * to the real work) - distinct from the early-return if-chains above. */
+static inline void guard_push(int v)
+{
+    if (sp2 >= 4) note_overflow();
+    stack2[sp2++] = v;
+}
+
+static inline int guard_pop(void)
+{
+    if (sp2 <= 0) note_overflow();
+    return stack2[--sp2];
+}
+
 int main(void)
 {
     struct Pair pair;
@@ -108,6 +131,7 @@ int main(void)
     int local_ok;
     int seq_ok;
     int bump_ok;
+    int guard_sum;
 
     pair.left = 44;
     pair.right = 77;
@@ -135,6 +159,12 @@ int main(void)
     seq_ok += next_and_mark() * 10;
     bump_ok = bump_if(5);
     bump_ok += bump_if(-1) * 10;
-    printf("inline temps: %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, stored2, via_ptr, local_ok, counter, seq_ok, bump_ok, gcounter);
+    guard_push(7);
+    guard_push(8);
+    guard_push(9);
+    guard_push(10);
+    guard_push(11);
+    guard_sum = guard_pop() + guard_pop() + guard_pop() + guard_pop() + guard_pop();
+    printf("inline temps: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", result, bigger, clamped, field, wide_ok, float_ok, stored, stored2, via_ptr, local_ok, counter, seq_ok, bump_ok, gcounter, guard_sum, sp2);
     return 0;
 }

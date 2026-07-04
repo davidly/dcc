@@ -304,15 +304,13 @@ static void grow_mem(int need)
     mcap = ncap;
 }
 
-static int cell_at(int a)
+static inline int cell_at(int a)
 {
-    int v;
     if (a < 0 || a + 1 >= mcap) die("bad address");
-    v = mem[a] | (mem[a + 1] << 8);
-    return (short)v;
+    return (short)(mem[a] | (mem[a + 1] << 8));
 }
 
-static void set_cell(int a, int v)
+static inline void set_cell(int a, int v)
 {
     if (a < 0 || a + 1 >= mcap) die("bad address");
     mem[a] = (unsigned char)(v & 255);

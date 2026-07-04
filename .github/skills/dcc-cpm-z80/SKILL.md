@@ -109,7 +109,11 @@ as `*dst = value`, and scalar
 expressions rather than requiring a bare `return`. `++`/`--` inside an inlined
 return expression is only allowed on operands that don't reach a parameter
 (globals are fine; incrementing a parameter verbatim would mutate the caller's
-argument expression once substituted). `void` helpers inline only when
+argument expression once substituted). A guard `if` with no `return` and no
+`else`, e.g. `if (sp <= 0) die("empty");` ahead of a later `return`, or as a
+standalone statement in a `void` body, is also supported - the side effect
+runs conditionally but the surrounding code executes unconditionally either
+way. `void` helpers inline only when
 called as a statement; their assignment/store expressions may contain ordinary
 helper calls such as `*dst = clamp((long)*dst + v)`. When every call site inlines
 and the function address is not taken,
@@ -122,6 +126,19 @@ side-effecting arguments, inline bodies with local declarations, and unsupported
 statement bodies fall back. Plain externally linked `inline` is parsed
 for source compatibility but does not yet have C99 external-inline linkage
 semantics or call-site inlining.
+
+Inlining a helper called from many sites (e.g. a bytecode VM's per-opcode
+memory accessor invoked from a dozen `switch` cases) duplicates its body at
+each call site; on CP/M's small fixed address space this can grow a `nopeep`
+(unoptimized) binary enough to shrink the room left for the program's own
+heap, so a memory-hungry workload can start failing with an out-of-memory
+error that has nothing to do with the inlined code's logic. This only
+showed up in the harness's `nopeep` build - the `fast` (peephole-optimized)
+build stayed small enough to pass - so treat a `nopeep`-only failure after
+adding `static inline` as a size regression to check, not necessarily a
+correctness bug: compare `.COM` size with and without the change, and
+prefer leaving a many-call-site helper as a real function if inlining it
+doesn't leave enough headroom.
 
 dcc has a first-class C99-style `_Bool` scalar type: it is 1 byte wide, and
 nonzero values normalize to `1` on `_Bool` stores, casts, initializers,

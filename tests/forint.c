@@ -235,14 +235,12 @@ static int ensure_sym(const char *name)
     i=find_sym(name);
     return i>=0?i:add_sym(name,K_SCALAR,TYPE_I2,0);
 }
-static int cell_at(int a)
+static inline int cell_at(int a)
 {
-    int v;
     if(a<0||a+1>=G->mcap)die("bad cell");
-    v=G->mem[a]|(G->mem[a+1]<<8);
-    return(short)v;
+    return(short)(G->mem[a]|(G->mem[a+1]<<8));
 }
-static void set_cell(int a,int v)
+static inline void set_cell(int a,int v)
 {
     if(a<0||a+1>=G->mcap)die("bad cell");
     G->mem[a]=(unsigned char)(v&255);

@@ -113,6 +113,41 @@ static struct AstNode *inline_stmt_return_expr(struct AstNode *n)
     return NULL;
 }
 
+static struct AstNode *inline_void_seq_to_expr(struct AstNode *n, int index)
+{
+    struct AstNode *stmt;
+    struct AstNode *rest;
+    struct AstNode *comma;
+    struct AstNode *zero;
+
+    if (n == NULL)
+        return NULL;
+    if (n->kind != AST_COMPOUND) {
+        /* A bare (unbraced) single statement. */
+        if (n->kind != AST_EXPR_STMT || n->a == NULL)
+            return NULL;
+        return n->a;
+    }
+    if (index >= n->list_len) {
+        zero = ast_new(&g_ast_inline_arena, AST_INT_LIT);
+        zero->ival = 0;
+        zero->type = TYPE_INT;
+        return zero;
+    }
+    stmt = n->list[index];
+    if (stmt == NULL || stmt->kind != AST_EXPR_STMT || stmt->a == NULL)
+        return NULL;
+    rest = inline_void_seq_to_expr(n, index + 1);
+    if (rest == NULL)
+        return NULL;
+    comma = ast_new(&g_ast_inline_arena, AST_COMMA);
+    comma->op = ',';
+    comma->a = stmt->a;
+    comma->b = rest;
+    comma->type = 0;
+    return comma;
+}
+
 static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int index)
 {
     struct AstNode *stmt;
@@ -121,6 +156,8 @@ static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int ind
     struct AstNode *rest_expr;
     struct AstNode *cond;
     struct AstNode *comma;
+    struct AstNode *guard_expr;
+    struct AstNode *zero;
 
     if (body == NULL || body->kind != AST_COMPOUND || index >= body->list_len)
         return NULL;
@@ -151,8 +188,34 @@ static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int ind
         return NULL;
 
     then_expr = inline_stmt_return_expr(stmt->b);
-    if (then_expr == NULL)
-        return NULL;
+    if (then_expr == NULL) {
+        /* Not a return-producing branch: allow a side-effect-only guard
+         * with no else, e.g. `if (sp <= 0) die("empty");` ahead of the
+         * real return - folded as `(cond ? (side effects, 0) : 0), rest`
+         * so it still runs exactly once, in order. */
+        if (stmt->c != NULL)
+            return NULL;
+        guard_expr = inline_void_seq_to_expr(stmt->b, 0);
+        if (guard_expr == NULL)
+            return NULL;
+        rest_expr = inline_return_expr_from_seq(body, index + 1);
+        if (rest_expr == NULL)
+            return NULL;
+        zero = ast_new(&g_ast_inline_arena, AST_INT_LIT);
+        zero->ival = 0;
+        zero->type = TYPE_INT;
+        cond = ast_new(&g_ast_inline_arena, AST_COND);
+        cond->a = stmt->a;
+        cond->b = guard_expr;
+        cond->c = zero;
+        cond->type = 0;
+        comma = ast_new(&g_ast_inline_arena, AST_COMMA);
+        comma->op = ',';
+        comma->a = cond;
+        comma->b = rest_expr;
+        comma->type = 0;
+        return comma;
+    }
 
     if (stmt->c != NULL) {
         if (index != body->list_len - 1)
@@ -175,25 +238,45 @@ static struct AstNode *inline_return_expr_from_seq(struct AstNode *body, int ind
     return cond;
 }
 
-static int inline_void_stmt_body_is_simple(struct Sym *fn, const struct AstNode *n)
+static int inline_void_stmt_seq_is_simple(struct Sym *fn, const struct AstNode *n);
+
+static int inline_void_body_stmt_is_simple(struct Sym *fn, const struct AstNode *stmt)
+{
+    if (stmt == NULL)
+        return 0;
+    if (stmt->kind == AST_EXPR_STMT)
+        return stmt->a != NULL && inline_expr_is_simple(fn, stmt->a);
+    if (stmt->kind == AST_IF) {
+        if (!inline_expr_is_simple(fn, stmt->a))
+            return 0;
+        if (!inline_void_stmt_seq_is_simple(fn, stmt->b))
+            return 0;
+        if (stmt->c != NULL && !inline_void_stmt_seq_is_simple(fn, stmt->c))
+            return 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int inline_void_stmt_seq_is_simple(struct Sym *fn, const struct AstNode *n)
 {
     int i;
 
     if (n == NULL)
         return 0;
     if (n->kind != AST_COMPOUND)
-        return 0;
-    if (n->list_len <= 0)
-        return 0;
-    for (i = 0; i < n->list_len; ++i) {
-        const struct AstNode *stmt;
-        stmt = n->list[i];
-        if (stmt == NULL || stmt->kind != AST_EXPR_STMT || stmt->a == NULL)
+        return inline_void_body_stmt_is_simple(fn, n);
+    for (i = 0; i < n->list_len; ++i)
+        if (!inline_void_body_stmt_is_simple(fn, n->list[i]))
             return 0;
-        if (!inline_expr_is_simple(fn, stmt->a))
-            return 0;
-    }
     return 1;
+}
+
+static int inline_void_stmt_body_is_simple(struct Sym *fn, const struct AstNode *n)
+{
+    if (n == NULL || n->kind != AST_COMPOUND || n->list_len <= 0)
+        return 0;
+    return inline_void_stmt_seq_is_simple(fn, n);
 }
 
 static void record_inline_function_if_simple(struct Sym *s)
@@ -253,7 +336,7 @@ static void record_inline_function_if_simple(struct Sym *s)
     if ((s->type & 15) == TYPE_VOID) {
         if (!inline_void_stmt_body_is_simple(s, body))
             return;
-        if (body->list_len == 1)
+        if (body->list_len == 1 && body->list[0]->kind == AST_EXPR_STMT)
             s->inline_stmt_expr = body->list[0]->a;
         else
             s->inline_stmt_body = body;
