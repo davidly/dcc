@@ -308,6 +308,18 @@ run_one() {
     dcc_floatio="${DCC_FLOATIO:-0}"
     dcc_longio="${DCC_LONGIO:-0}"
 
+    # Auto-detect float/long printf format usage from the source, so ordinary
+    # programs don't pull in the larger _pffio/_pflng runtime helpers unless
+    # they actually use %f or %ld/%lu/%lx/%ls. An explicit DCC_FLOATIO=1/
+    # DCC_LONGIO=1 in the environment always wins; this only fills in the
+    # default when neither was already forced on.
+    if [ "$dcc_floatio" != "1" ] && grep -Eiq '%[-+ #0-9.*]*[fF]' "$source_file"; then
+        dcc_floatio=1
+    fi
+    if [ "$dcc_longio" != "1" ] && grep -Eiq '%[-+ #0-9.*]*l[duxXs]' "$source_file"; then
+        dcc_longio=1
+    fi
+
     dcc_stackchk=""
     if [ "${DCC_FORCE_STACK_CHECK:-0}" = "1" ] || grep -q 'DCC_STACK_CHECK' "$source_file"; then
         dcc_stackchk="-fstack-check"
