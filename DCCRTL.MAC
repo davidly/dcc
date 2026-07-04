@@ -463,7 +463,7 @@ sb_console:
         ld      (__cob_mode),a
         jr      sb_ret
 sb_none:
-        call    __cob_default           ; revert to the internal buffer
+        call    __cobdflt           ; revert to the internal buffer
         ld      a,2                     ; _IONBF
         ld      (__cob_mode),a
 sb_ret:
@@ -472,6 +472,8 @@ sb_ret:
         ret
 
         public  _setvbuf
+        public  __cob_setbuf
+        public  __cobdflt
 _setvbuf:
         ; int setvbuf(FILE *fp, char *buf, int mode, size_t size)
         ; mode: _IOFBF(0)/_IOLBF(1)/_IONBF(2).  Returns 0 on success, nonzero
@@ -508,7 +510,7 @@ svb_console:
         pop     ix
         ret
 svb_internal:
-        call    __cob_default
+        call    __cobdflt
         ld      hl,0                    ; success
         pop     ix
         ret
@@ -532,16 +534,16 @@ __cob_setbuf:
         jr      nz,csb_ok               ; size >= 256: plenty of room
         ld      a,e
         cp      2
-        jr      c,__cob_default         ; size 0 or 1: too small for a guard
+        jr      c,__cobdflt         ; size 0 or 1: too small for a guard
 csb_ok:
         ld      (__cob_ptr),hl
         dec     de                      ; capacity = size - 1 (reserve guard)
         ld      (__cob_cap),de
         ret
 
-; __cob_default: revert console output to the internal __cobuf/COBSZ buffer.
+; __cobdflt: revert console output to the internal __cobuf/COBSZ buffer.
 ; Clobbers HL.
-__cob_default:
+__cobdflt:
         ld      hl,__cobuf
         ld      (__cob_ptr),hl
         ld      hl,COBSZ
@@ -2990,6 +2992,19 @@ __sxhl: ld      a,l
         ret
 
         public  _printf
+        public  __pf_run
+        public  pf_emit_a
+        public  pf_emstr
+        public  pf_arg_hl
+        public  pf_pad_a
+        public  pf_zero_prec_blank
+        public  pf_zsetup
+        public  pf_efflen
+        public  pf_iprepad
+        public  pf_zfd
+        public  pf_ipostpad
+        public  pf_hex_store_nz
+        public  pf_hforce
 _printf:
         push    ix
         ld      ix,0
@@ -3307,7 +3322,7 @@ pf_zfd_zloop:
         dec     d
         jr      nz,pf_zfd_zloop
 pf_zfd_print:
-        call    pf_emit_z
+        call    pf_emstr
         ret
 
 pf_c:
@@ -3560,14 +3575,14 @@ pfbu1:
         pop     ix
         ret
 
-; pf_emit_z: emit the null-terminated string at HL through pf_emit_a.
-pf_emit_z:
+; pf_emstr: emit the null-terminated string at HL through pf_emit_a.
+pf_emstr:
         ld      a,(hl)
         or      a
         ret     z
         inc     hl
         call    pf_emit_a
-        jr      pf_emit_z
+        jr      pf_emstr
 
 ; pf_build_hex16: convert HL (unsigned 16-bit) to minimal hex text.
 ; Out: A = digit count, HL -> first digit in pf_decbuf, null-terminated.
@@ -3596,7 +3611,7 @@ pf_build_hex16:
         call    pf_hex_store_nz
 
         ld      a,l             ; low byte, low nibble; always emit one digit
-        call    pf_hex_store_force
+        call    pf_hforce
 
         ld      (ix+0),0
         ld      a,d             ; return digit count
@@ -3620,7 +3635,7 @@ pf_hex_store_have:
         jr      pf_hex_store_common
 
 ; Store nibble A unconditionally; used for the final nibble so zero prints "0".
-pf_hex_store_force:
+pf_hforce:
         and     0fh
 pf_hex_store_common:
         call    pf_hex_nib_char
@@ -3836,7 +3851,7 @@ pfbu32_1:
 ; Used by the %f float formatter for the integer part.
 pf_print_u32:
         call    pf_build_u32    ; A = count, HL -> first digit
-        call    pf_emit_z
+        call    pf_emstr
         ret
 
 __pf32_l:       dw      0
@@ -4257,7 +4272,7 @@ pf_neg32:
 
 ; pf_build_hex32: convert __pf32_h:__pf32_l (unsigned 32-bit) to minimal hex text.
 ; Out: A = digit count, HL -> first digit in pf_decbuf32, null-terminated.
-; Uses pf_hexup/pf_hex_store_nz/pf_hex_store_force from the _printf block.
+; Uses pf_hexup/pf_hex_store_nz/pf_hforce from the _printf block.
 pf_build_hex32:
         push    ix
         push    de
@@ -4304,7 +4319,7 @@ pf_build_hex32:
         call    pf_hex_store_nz
 
         ld      a,l             ; low word, low byte, low nibble; always emit one digit
-        call    pf_hex_store_force
+        call    pf_hforce
 
         ld      (ix+0),0
         ld      a,d             ; return digit count
@@ -5155,6 +5170,23 @@ _errno:
         public  _lseek
         public  _fsync
         public  _fdatasync
+        public  __emfil
+        public  __offp
+        public  __fcbp
+        public  __mkfcb
+        public  __enoent
+        public  __nospc
+        public  __usep
+        public  __ebadf
+        public  __ioerr
+        public  __chkfd
+        public  __setrr
+        public  __chunk
+        public  __advio
+        public  __rdhit
+        public  __rdsto
+        public  __zerdm
+        public  __einval
 
 FIRSTFD  equ     3
 ; NFILES is the number of concurrently open real files (fd FIRSTFD..MAXFD-1).
@@ -9414,6 +9446,7 @@ _sscanf:
         ret
 
         public  _fscanf
+        public  __scan_run
 _fscanf:
         push    ix
         ld      ix,0
@@ -16874,6 +16907,8 @@ MFL100:
         ret
 
         public _modff
+        public sc_isspace
+        public sc_isdigit
 _modff:
         push ix
         ld ix,0
@@ -16977,7 +17012,7 @@ MFL116:
 
 
 ; static function sc_isspace
-SCZ0001:
+sc_isspace:
         push ix
         ld ix,0
         add ix,sp
@@ -17016,8 +17051,9 @@ SCL5:
         pop ix
         ret
 
-; static function sc_digit
-SCZ0002:
+; static function sc_digit (renamed sc_isdigit: collides with the unrelated
+; sc_digit byte variable in __stol/__stou's parse state, further down)
+sc_isdigit:
         push ix
         ld ix,0
         add ix,sp
@@ -17134,7 +17170,7 @@ SCL38:
         ld h,a
         ld h,0
         push hl
-        call SCZ0001
+        call sc_isspace
         pop bc
         ld a,h
         or l
@@ -17358,7 +17394,7 @@ SCL72:
         ld h,a
         ld h,0
         push hl
-        call SCZ0002
+        call sc_isdigit
         pop bc
         ld (ix-8),l
         ld (ix-7),h
@@ -17662,7 +17698,7 @@ SCL107:
         ld h,a
         ld h,0
         push hl
-        call SCZ0001
+        call sc_isspace
         pop bc
         ld a,h
         or l
@@ -17870,7 +17906,7 @@ SCL139:
         ld h,a
         ld h,0
         push hl
-        call SCZ0002
+        call sc_isdigit
         pop bc
         ld (ix-8),l
         ld (ix-7),h
