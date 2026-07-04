@@ -37,8 +37,7 @@ if (Test-Path -LiteralPath $packageRoot) {
 $binDir = Join-Path $packageRoot "bin"
 $includeDir = Join-Path $packageRoot "include"
 $libDir = Join-Path $packageRoot "lib"
-$scriptsDir = Join-Path $packageRoot "scripts"
-foreach ($dir in @($binDir, $includeDir, $libDir, $scriptsDir)) {
+foreach ($dir in @($binDir, $includeDir, $libDir)) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 
@@ -55,7 +54,7 @@ function Copy-RequiredFile {
 }
 
 $exeExt = if ($IsWindows) { ".exe" } else { "" }
-$hostTools = @("dcc", "dccpeep", "dccrtlstrip")
+$hostTools = @("dcc", "dccpeep", "dccrtlstrip", "dccmake")
 foreach ($tool in $hostTools) {
     Copy-RequiredFile -Source (Join-Path $repoRoot "$tool$exeExt") -Destination (Join-Path $binDir "$tool$exeExt")
 }
@@ -79,11 +78,6 @@ foreach ($header in $headers) {
     Copy-RequiredFile -Source (Join-Path $repoRoot $header) -Destination (Join-Path $includeDir $header)
 }
 
-$helperScripts = @("ma.ps1", "ma.sh", "stacksize.sh", "stacksize.bat")
-foreach ($script in $helperScripts) {
-    Copy-RequiredFile -Source (Join-Path $repoRoot "scripts/$script") -Destination (Join-Path $scriptsDir $script)
-}
-
 function Write-PackageTextFile {
     param(
         [string]$Path,
@@ -91,40 +85,6 @@ function Write-PackageTextFile {
     )
 
     Set-Content -LiteralPath $Path -Value $Content -Encoding utf8
-}
-
-$windowsBuildCommand = @'
-@echo off
-setlocal
-set "SCRIPT_DIR=%~dp0"
-for %%I in ("%SCRIPT_DIR%..") do set "DCC_HOME=%%~fI"
-set "PATH=%DCC_HOME%\bin;%PATH%"
-set "DCC_INCLUDE=%DCC_HOME%\include;%DCC_INCLUDE%"
-set "DCC_LIB=%DCC_HOME%\lib;%DCC_HOME%;%DCC_LIB%"
-if not defined DCC_RUNTIME set "DCC_RUNTIME=%DCC_HOME%\lib\DCCRTL.MAC"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%DCC_HOME%\scripts\ma.ps1" %*
-exit /b %ERRORLEVEL%
-'@
-
-$unixBuildCommand = @'
-#!/usr/bin/env sh
-set -eu
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-DCC_HOME=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-export DCC_HOME
-export PATH="$DCC_HOME/bin:$PATH"
-export DCC_INCLUDE="$DCC_HOME/include${DCC_INCLUDE:+:$DCC_INCLUDE}"
-export DCC_LIB="$DCC_HOME/lib:$DCC_HOME${DCC_LIB:+:$DCC_LIB}"
-export DCC_RUNTIME="${DCC_RUNTIME:-$DCC_HOME/lib/DCCRTL.MAC}"
-exec "$DCC_HOME/scripts/ma.sh" "$@"
-'@
-
-if ($IsWindows) {
-    Write-PackageTextFile -Path (Join-Path $binDir "dcc-ma.cmd") -Content $windowsBuildCommand
-}
-else {
-    Write-PackageTextFile -Path (Join-Path $binDir "dcc-ma") -Content $unixBuildCommand
-    & chmod +x (Join-Path $binDir "dcc-ma")
 }
 
 Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
@@ -160,7 +120,7 @@ Get-ChildItem -LiteralPath $packageRoot -Force |
     Copy-Item -Destination $installPath -Recurse -Force
 
 if ($AddToUserPath) {
-    $pathsToAdd = @((Join-Path $installPath "bin"), (Join-Path $installPath "scripts"))
+    $pathsToAdd = @((Join-Path $installPath "bin"))
     $separator = [System.IO.Path]::PathSeparator
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $currentEntries = @($currentPath -split [regex]::Escape($separator) | Where-Object { $_ })
@@ -176,16 +136,17 @@ if ($AddToUserPath) {
 [Environment]::SetEnvironmentVariable("DCC_INCLUDE", (Join-Path $installPath "include"), "User")
 [Environment]::SetEnvironmentVariable("DCC_LIB", ((Join-Path $installPath "lib"), $installPath -join [System.IO.Path]::PathSeparator), "User")
 [Environment]::SetEnvironmentVariable("DCC_RUNTIME", (Join-Path $installPath "lib/DCCRTL.MAC"), "User")
+[Environment]::SetEnvironmentVariable("M80", (Join-Path $installPath "m80.com"), "User")
+[Environment]::SetEnvironmentVariable("L80", (Join-Path $installPath "l80.com"), "User")
 
 Write-Host "dcc installed to: $installPath"
 Write-Host "Tools: $installPath/bin"
-Write-Host "PowerShell helpers: $installPath/scripts"
-Write-Host "User environment variables set: DCC_HOME, DCC_INCLUDE, DCC_LIB, DCC_RUNTIME"
+Write-Host "User environment variables set: DCC_HOME, DCC_INCLUDE, DCC_LIB, DCC_RUNTIME, M80, L80"
 if ($AddToUserPath) {
     Write-Host "User PATH updated. Restart your terminal for PATH changes to take effect."
 }
 else {
-    Write-Host "Run with -AddToUserPath to add bin/ and scripts/ to your user PATH."
+    Write-Host "Run with -AddToUserPath to add bin/ to your user PATH."
 }
 '@
 
@@ -260,12 +221,16 @@ $expectedEnvValues = @{
     DCC_INCLUDE = @()
     DCC_LIB = @()
     DCC_RUNTIME = @()
+    M80 = @()
+    L80 = @()
 }
 foreach ($installPath in $installCandidates) {
     $expectedEnvValues.DCC_HOME += $installPath
     $expectedEnvValues.DCC_INCLUDE += (Join-Path $installPath "include")
     $expectedEnvValues.DCC_LIB += ((Join-Path $installPath "lib"), $installPath -join [System.IO.Path]::PathSeparator)
     $expectedEnvValues.DCC_RUNTIME += (Join-Path $installPath "lib/DCCRTL.MAC")
+    $expectedEnvValues.M80 += (Join-Path $installPath "m80.com")
+    $expectedEnvValues.L80 += (Join-Path $installPath "l80.com")
 }
 foreach ($entry in $expectedEnvValues.GetEnumerator()) {
     $currentValue = [Environment]::GetEnvironmentVariable($entry.Key, "User")
@@ -300,32 +265,22 @@ export DCC_HOME="$PREFIX"
 export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
 export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
 export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
+export M80="\${M80:-\$DCC_HOME/m80.com}"
+export L80="\${L80:-\$DCC_HOME/l80.com}"
 EOF
 
 mkdir -p "$LINK_DIR"
-for tool in dcc dccpeep dccrtlstrip ntvcm; do
+for tool in dcc dccpeep dccrtlstrip dccmake ntvcm; do
     if [ -f "$PREFIX/bin/$tool" ]; then
         ln -sf "$PREFIX/bin/$tool" "$LINK_DIR/$tool"
     fi
 done
 
-cat > "$LINK_DIR/dcc-ma" <<EOF
-#!/usr/bin/env sh
-export DCC_HOME="$PREFIX"
-export PATH="\$DCC_HOME/bin:\$PATH"
-export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
-export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
-export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
-exec "$PREFIX/scripts/ma.sh" "\$@"
-EOF
-chmod +x "$LINK_DIR/dcc-ma"
-
 echo "dcc installed to: $PREFIX"
 echo "Command links written to: $LINK_DIR"
-echo "Helper scripts are in: $PREFIX/scripts"
 echo "Package environment file written to: $PREFIX/dcc-env.sh"
 echo "Source it with: . $PREFIX/dcc-env.sh"
-echo "Use dcc-ma to build CP/M apps with dcc."
+echo "Use dccmake to build CP/M apps with dcc."
 '@
 
 $uninstallSh = @'
@@ -336,7 +291,7 @@ PREFIX=${PREFIX:-"$HOME/.local/dcc-cpm-z80"}
 LINK_DIR=${LINK_DIR:-"$HOME/.local/bin"}
 
 rm -rf "$PREFIX"
-for tool in dcc dccpeep dccrtlstrip ntvcm dcc-ma; do
+for tool in dcc dccpeep dccrtlstrip dccmake ntvcm; do
     if [ -L "$LINK_DIR/$tool" ] || [ -f "$LINK_DIR/$tool" ]; then
         rm -f "$LINK_DIR/$tool"
     fi
@@ -352,14 +307,13 @@ Write-PackageTextFile -Path (Join-Path $packageRoot "install.sh") -Content $inst
 Write-PackageTextFile -Path (Join-Path $packageRoot "uninstall.sh") -Content $uninstallSh
 if (-not $IsWindows) {
     & chmod +x (Join-Path $packageRoot "install.sh") (Join-Path $packageRoot "uninstall.sh")
-    & chmod +x (Join-Path $scriptsDir "ma.sh")
 }
 
 $versionLine = if ($Version) { "Version: $Version" } else { "Version: development build" }
-$packageReadme = @"
+$packageReadmeTemplate = @'
 # dcc binary package
 
-$versionLine
+{{VERSION_LINE}}
 
 This package contains the dcc host tools, the ntvcm CP/M emulator, the CP/M
 assembler/linker tools used by the build pipeline, the DCC runtime, and the
@@ -367,12 +321,11 @@ public standard-library headers.
 
 ## Layout
 
-- bin/ - dcc, dccpeep, dccrtlstrip, ntvcm, and dcc-ma for this host platform.
+- bin/ - dcc, dccpeep, dccrtlstrip, dccmake, and ntvcm for this host platform.
 - include/ - dcc public C headers.
 - lib/ - DCCRTL.MAC runtime library.
-- scripts/ - helper scripts, including ma.sh and ma.ps1.
 - DCCRTL.MAC, m80.com, l80.com - staged at the package root for compatibility
-    with ma.sh, ma.ps1, and the existing build pipeline.
+    with dccmake and the existing build pipeline.
 
 ## Install
 
@@ -388,17 +341,15 @@ Linux/macOS:
 ./install.sh
 ```
 
-By default, Unix installs to `\$HOME/.local/dcc-cpm-z80` and links commands into
-`\$HOME/.local/bin`. Override with `PREFIX=/path/to/dcc LINK_DIR=/path/to/bin
+By default, Unix installs to `$HOME/.local/dcc-cpm-z80` and links commands into
+`$HOME/.local/bin`. Override with `PREFIX=/path/to/dcc LINK_DIR=/path/to/bin
 ./install.sh`.
 
-The Unix installer writes `dcc-env.sh` under the install prefix and creates a
-`dcc-ma` command in `LINK_DIR`. Source `dcc-env.sh` from
-custom shells or scripts when you need the package environment outside the
-`dcc-ma` wrapper:
+The Unix installer writes `dcc-env.sh` under the install prefix. Source it from
+custom shells or scripts before running `dccmake`:
 
 ```sh
-. \$HOME/.local/dcc-cpm-z80/dcc-env.sh
+. $HOME/.local/dcc-cpm-z80/dcc-env.sh
 ```
 
 ## Portable quick start
@@ -408,21 +359,28 @@ From this package root, add bin to your PATH, then build a C source file:
 Linux/macOS:
 
 ```sh
-export PATH="\$PWD/bin:\$PATH"
-export DCC_HOME="\$PWD"
-dcc-ma hello --source-path ./hello.c --mode fast
+export PATH="$PWD/bin:$PATH"
+export DCC_HOME="$PWD"
+export DCC_RUNTIME="$PWD/lib/DCCRTL.MAC"
+export M80="$PWD/m80.com"
+export L80="$PWD/l80.com"
+dccmake hello.c dcc-include="$PWD/include"
 ```
 
 Windows PowerShell:
 
 ```pwsh
-`$env:PATH = "`$PWD/bin`$([IO.Path]::PathSeparator)`$env:PATH"
-`$env:DCC_HOME = "`$PWD"
-dcc-ma hello -SourcePath .\hello.c -Mode fast
+$env:PATH = "$PWD/bin$([IO.Path]::PathSeparator)$env:PATH"
+$env:DCC_HOME = "$PWD"
+$env:DCC_RUNTIME = "$PWD/lib/DCCRTL.MAC"
+$env:M80 = "$PWD/m80.com"
+$env:L80 = "$PWD/l80.com"
+dccmake hello.c dcc-include="$PWD/include"
 ```
 
 The resulting CP/M .COM and intermediate build files are written under build/.
-"@
+'@
+$packageReadme = $packageReadmeTemplate.Replace("{{VERSION_LINE}}", $versionLine)
 
 Write-PackageTextFile -Path (Join-Path $packageRoot "PACKAGE-README.md") -Content $packageReadme
 

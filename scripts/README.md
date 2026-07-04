@@ -221,9 +221,9 @@ are owned by the helper pipeline.
 ## `runall.ps1`
 
 Comprehensive test suite: builds and runs all main test applications with output
-verification against per-app baselines in `tests/baselines/`. Uses `ma.ps1` to
-build each app and `tests/_test_overrides.json` for test-specific arguments and stack
-sizes. Comparison is keyed by app name, so test discovery order does not matter.
+verification against per-app baselines in `tests/baselines/`. Uses `dccmake` to
+build each app and `tests/_test_overrides.json` for test-specific runtime and
+build settings. Comparison is keyed by app name, so test discovery order does not matter.
 Pass `-Extended` to run the extended c-testsuite corpus after the main suite.
 See [`tests/README.md`](../tests/README.md) for the test/baseline relationship.
 

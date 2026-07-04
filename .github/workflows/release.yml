@@ -24,27 +24,22 @@ jobs:
           - target: windows-x64
             os: windows-2025
             archive: zip
-            installer: msi
             ntvcm: ntvcm.exe
           - target: windows-arm64
             os: windows-11-arm
             archive: zip
-            installer: msi
             ntvcm: ntvcm.exe
           - target: linux-x64
             os: ubuntu-24.04
             archive: tar.gz
-            installer: deb
             ntvcm: ntvcm
           - target: linux-arm64
             os: ubuntu-24.04-arm
             archive: tar.gz
-            installer: deb
             ntvcm: ntvcm
           - target: macos-apple-silicon
             os: macos-15
             archive: tar.gz
-            installer: pkg
             ntvcm: ntvcm
     runs-on: ${{ matrix.os }}
     env:
@@ -152,67 +147,11 @@ jobs:
         if: matrix.archive == 'tar.gz'
         run: tar -czf "dist/$PACKAGE_NAME.tar.gz" -C dist "$PACKAGE_NAME"
 
-      - name: Set up .NET for WiX
-        if: runner.os == 'Windows'
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 9.x
-
-      - name: Install WiX Toolset
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 6.0.2
-          $dotnetTools = Join-Path $env:USERPROFILE '.dotnet\tools'
-          Add-Content -Path $env:GITHUB_PATH -Value $dotnetTools
-          & (Join-Path $dotnetTools 'wix.exe') --version
-
-      - name: Create native installer
-        shell: pwsh
-        run: |
-          ./scripts/package-native-installer.ps1 `
-            -PackageName "$env:PACKAGE_NAME" `
-            -PackageRoot "dist/$env:PACKAGE_NAME" `
-            -Target "${{ matrix.target }}" `
-            -OutputDir dist `
-            -Version "$env:RELEASE_VERSION"
-
-      - name: Sign Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
-          WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
-          WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
-        run: |
-          if (-not $env:WINDOWS_CODESIGN_PFX_BASE64 -or -not $env:WINDOWS_CODESIGN_PASSWORD) {
-            Write-Host "Skipping Windows installer signing because WINDOWS_CODESIGN_PFX_BASE64 or WINDOWS_CODESIGN_PASSWORD is not configured."
-            return
-          }
-
-          $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
-          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
-
-          $signToolPath = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
-          if (-not $signToolPath) {
-            $signToolPath = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-              Sort-Object FullName -Descending |
-              Select-Object -First 1).FullName
-          }
-          if (-not $signToolPath) { throw "signtool.exe was not found." }
-
-          $msiPath = "dist/$env:PACKAGE_NAME.msi"
-          & $signToolPath sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $pfxPath /p $env:WINDOWS_CODESIGN_PASSWORD $msiPath
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Upload release package artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PACKAGE_NAME }}
-          path: |
-            dist/${{ env.PACKAGE_NAME }}.${{ matrix.archive }}
-            dist/${{ env.PACKAGE_NAME }}.${{ matrix.installer }}
+          path: dist/${{ env.PACKAGE_NAME }}.${{ matrix.archive }}
           if-no-files-found: error
 
   publish:

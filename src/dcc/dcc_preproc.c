@@ -16,6 +16,7 @@
 #define MACRO_PLACEMARKER '\002'
 
 #define MAX_MACRO_PUSH 64
+#define MAX_ASM_SEEN_LINES 4096
 
 struct MacroPushEntry {
     char name[64];
@@ -25,6 +26,36 @@ struct MacroPushEntry {
 
 static struct MacroPushEntry macro_push_stack[MAX_MACRO_PUSH];
 static int nmacro_push_stack;
+
+/* #asm lines are single-emission constructs: parser scans may revisit the
+ * same filtered-source offset, but the corresponding assembly line should be
+ * buffered once per translation unit. */
+static long asm_seen_lines[MAX_ASM_SEEN_LINES];
+static int n_asm_seen_lines;
+
+static int asm_line_was_seen(long pos)
+{
+    int i;
+    for (i = 0; i < n_asm_seen_lines; i++) {
+        if (asm_seen_lines[i] == pos)
+            return 1;
+    }
+    return 0;
+}
+
+static void mark_asm_line_seen(long pos)
+{
+    if (n_asm_seen_lines >= MAX_ASM_SEEN_LINES)
+        fatal("too many #asm lines (exceeded MAX_ASM_SEEN_LINES)");
+    asm_seen_lines[n_asm_seen_lines++] = pos;
+}
+
+/* Reset the #asm de-duplication state.  Called once per compile (where posi is
+ * reset) so saved positions never leak across translation units. */
+void pp_reset_asm_dedupe(void)
+{
+    n_asm_seen_lines = 0;
+}
 
 int find_define(const char *name)
 {
@@ -949,12 +980,15 @@ void parse_preprocessor_line(void)
             getc_src();
         }
         line[li] = 0;
-        if (!scan_mode && asm_suppress_depth == 0) {
-            if (pending_asm_len + li + 2 < (int)sizeof(pending_asm_buf)) {
-                memcpy(pending_asm_buf + pending_asm_len, line, (size_t)li);
-                pending_asm_len += li;
-                pending_asm_buf[pending_asm_len++] = '\n';
-            }
+        if (!scan_mode && asm_suppress_depth == 0 && !asm_line_was_seen(posi)) {
+            /* Record the position before buffering so the dedup bookkeeping
+             * never depends on whether the pending buffer had room. */
+            mark_asm_line_seen(posi);
+            if (pending_asm_len + li + 2 >= (int)sizeof(pending_asm_buf))
+                fatal("#asm block too large for pending buffer");
+            memcpy(pending_asm_buf + pending_asm_len, line, (size_t)li);
+            pending_asm_len += li;
+            pending_asm_buf[pending_asm_len++] = '\n';
             /* If this line is "public _name", mark the C symbol as defined
              * so DCC won't emit a redundant extrn for it at end of file. */
             {

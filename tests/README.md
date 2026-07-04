@@ -43,8 +43,9 @@ Because matching is keyed on the **app name** (not position in a list), the
 order in which tests are discovered or run does not matter.
 
 > Note: a few tests take command-line arguments or need a larger stack. Those
-> parameters live in `tests/_test_overrides.json` (keys: `args`, `stack_size`,
-> `ignore`). For example `ttt` is run with `10`, and `cobint` reads `e.cob`.
+> parameters live in `tests/_test_overrides.json` (keys: `args`, `stdin`,
+> `stack_size`, `dcc_args`, `dcc_floatio`, `dcc_longio`, `ignore`). For example
+> `ttt` is run with `10`, and `cobint` reads `e.cob`.
 
 ## Running the suite
 
@@ -218,5 +219,6 @@ headers. The split reproduces the original baseline byte-for-byte.
 - Do not edit `baseline_test_dcc.txt` by hand to fix a single test; prefer
   editing the per-app baseline. The legacy file is kept only for historical
   reference and round-trip regeneration.
-- Per-test run parameters (arguments, stack size, ignore) are configuration,
-  and live in `tests/_test_overrides.json`, not encoded in the baselines.
+- Per-test run and build parameters (arguments, stack size, dcc flags, ignore)
+  are configuration, and live in `tests/_test_overrides.json`, not encoded in
+  the baselines.

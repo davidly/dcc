@@ -81,8 +81,8 @@ Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full opt
 ## Test Suite Runner (`runall.ps1`)
 
 Builds and runs the test suite against per-app baselines in `tests/baselines/`.
-It uses `ma.ps1` for builds and `tests/_test_overrides.json` for test-specific
-arguments and stack sizes.
+It uses `dccmake` for builds and `tests/_test_overrides.json` for test-specific
+runtime arguments, stack sizes, and optional dcc build flags.
 
 Runs in parallel by default:
 
@@ -264,7 +264,7 @@ one test, keyed by `name`:
 ```json
 {
   "apps": [
-    { "name": "<app>", "args": "<string>", "stdin": "<string>", "stack_size": <int>, "ignore": <bool> }
+    { "name": "<app>", "args": "<string>", "stdin": "<string>", "stack_size": <int>, "dcc_args": "<string>", "dcc_floatio": <bool>, "dcc_longio": <bool>, "ignore": <bool> }
   ]
 }
 ```
@@ -275,6 +275,9 @@ one test, keyed by `name`:
 | `args` | string | no | `""` | Command-line arguments passed to the program when run. Multi-token strings are split on whitespace (e.g. `"a bb ccc"`) |
 | `stdin` | string | no | `""` | Text piped to the program's standard input during execution (for keyboard/input-driven tests) |
 | `stack_size` | integer | no | `512` | C stack reserve in bytes, passed to `dcc` as `-stack`. Used by recursive apps that need more headroom |
+| `dcc_args` | string | no | `""` | Extra dcc-style build arguments passed through `dccmake` (for example `-DNAME=1 -UOLD`) |
+| `dcc_floatio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-floatio` and dcc `-ffloatio` for this app |
+| `dcc_longio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-flongio` and dcc `-flongio` for this app |
 | `ignore` | boolean | no | `false` | When `true`, the test is skipped entirely (not built or run) |
 
 Entries with none of the optional properties have no effect, so an app only

@@ -463,6 +463,7 @@ extern int  pending_asm_len;
 extern int  asm_suppress_depth;
 extern int  g_compound_literal_seq;
 void flush_pending_asm(void);
+void pp_reset_asm_dedupe(void);
 
 /* user-defined goto labels (function-scoped) */
 extern char ulabel_names[MAX_USER_LABELS][64];
