@@ -385,9 +385,17 @@ void skip_prototype_array_suffixes(int *ptype)
     memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
 
     while (accept('[')) {
+        skip_parameter_array_qualifiers();
+
         if (tok.kind == ']') {
             n = 0;
             next_token();
+        } else if (tok.kind == '*') {
+            /* C99 `[*]` unspecified-size VLA marker in a prototype; it decays
+             * to a pointer exactly like `[]`. */
+            next_token();
+            expect(']');
+            n = 0;
         } else {
             n = parse_const_int_expr();
             expect(']');

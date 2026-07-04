@@ -82,7 +82,9 @@ portability surprises when code is moved from a hosted desktop compiler.
 | Mixed declarations and statements in nested blocks | Supported |
 | Unnamed parameters in prototypes | Supported |
 | Array parameters adjusted to pointers | Supported |
+| C99 array parameter qualifiers: `int a[const 5]`, `int a[static 5]`, `int a[volatile 5]`, `int a[restrict 5]`, `int a[const *]` | Accepted as syntax compatibility; array parameters still decay to pointers |
 | Function-typed parameters adjusted to pointers | Supported |
+| `restrict` qualifier | Accepted as source compatibility; no alias-analysis optimization semantics are provided |
 | Variadic macros and `__VA_ARGS__` | Supported |
 | Empty variadic macro arguments | Supported |
 | Designated initializers for struct and array members | Supported |
@@ -98,7 +100,6 @@ portability surprises when code is moved from a hosted desktop compiler.
 | --- | --- |
 | `long long` and 64-bit integer types | Not supported |
 | Variable-length arrays | Not supported |
-| `restrict` | Not supported |
 | `_Complex` and complex arithmetic | Not supported |
 | Full C99 compound literal value semantics | Partly supported only |
 | Flexible array member initialization | Not supported |

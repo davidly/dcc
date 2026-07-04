@@ -11,7 +11,6 @@
     { "name": "00123", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
     { "name": "00128", "ignore": true, "reason": "Uses long long and unsigned long long assignment cases; dcc has no 64-bit integer type." },
     { "name": "00135", "ignore": true, "reason": "Uses long long and unsigned long long constants; dcc has no 64-bit integer type." },
-    { "name": "00162", "ignore": true, "reason": "Uses C99 array parameter qualifiers (const/static/volatile/restrict inside []), not implemented by dcc." },
     { "name": "00166", "ignore": true, "reason": "Assumes host-sized int can hold large octal/hex constants; dcc int is 16-bit on Z80." },
     { "name": "00168", "ignore": true, "reason": "Expected output assumes int can hold 10!; dcc int is 16-bit on Z80 and wraps by the target data model." },
     { "name": "00174", "ignore": true, "reason": "Expected output depends on C double precision for unsuffixed floating constants; dcc has float as its only floating type." },
