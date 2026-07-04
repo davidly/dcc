@@ -1,6 +1,6 @@
 # Appendix: compiler architecture
 
-This appendix describes the dcc toolchain: the compiler `dcc`, the peephole
+This appendix describes the DCC C Compiler toolchain: the compiler `dcc`, the peephole
 optimizer `dccpeep`, the runtime size reducer `dccrtlstrip`, and the Microsoft
 `M80` / `L80` assembler and linker.
 
@@ -41,13 +41,13 @@ flowchart LR
 | Link | `L80` | `.REL` files | `.COM` | Resolve symbols into a CP/M executable |
 
 The `dccpeep` stage is optional (`./scripts/ma.ps1 name -Mode nopeep` skips it
-when run from PowerShell in the dcc checkout). `dccrtlstrip` runs against the
+when run from PowerShell in the DCC C Compiler checkout). `dccrtlstrip` runs against the
 *final* application assembly so it
 sees the real set of runtime symbols the program calls.
 
 ## Compiler Shape
 
-dcc's compiler implementation is AST-driven for function bodies: statements and
+DCC C Compiler's implementation is AST-driven for function bodies: statements and
 expressions are parsed into typed AST nodes, and the AST walker emits the Z80
 assembly. Code generation is a **single AST path** — every expression and
 statement, including local-declaration initializers, is lowered through the AST
@@ -67,7 +67,7 @@ flowchart LR
 
 The phases are:
 
-| Classic phase | Conventional design | dcc's approach |
+| Classic phase | Conventional design | DCC C Compiler approach |
 | --- | --- | --- |
 | Lexical analysis | Separate tokenizer | `next_token` lexer in `dcc_preproc.c` (integrated with the preprocessor) |
 | Parsing | Build an AST | Recursive-descent parse into a function-local AST |
@@ -85,7 +85,7 @@ typed operand is always in hand before any code is emitted.
 
 ## Compiler Features
 
-dcc is intentionally small, but the compiler front end still provides a
+The DCC C Compiler is intentionally small, but the compiler front end still provides a
 user-facing feature set around diagnostics, C89/C99 compatibility extensions,
 target-model checks, and size-oriented dead-code elimination in the generated
 program.
@@ -117,7 +117,7 @@ was detected, while the message text names the exact source-level issue.
 
 ### Dead code detection and elimination
 
-dcc does not run a whole-program control-flow analysis pass, and it does not
+The DCC C Compiler does not run a whole-program control-flow analysis pass, and it does not
 warn about arbitrary unreachable user statements. Instead, dead-code handling is
 pragmatic and size-focused at the points where the toolchain has reliable local
 knowledge:
@@ -141,7 +141,7 @@ This split keeps the compiler simple while still attacking the biggest sources
 of wasted code: unused expression values, local assembly redundancies, unused
 inline bodies, and unreferenced runtime support.
 
-## Inside dcc: module architecture
+## Inside DCC C Compiler: module architecture
 
 The compiler is one binary built from focused modules that all share a single
 umbrella header, `dcc.h`. The parser, AST builder, AST emitter, and low-level
@@ -211,7 +211,7 @@ other — the arrows show the usual direction, not a hard layering rule.
 
 ## Inside dccpeep: a fixpoint peephole optimizer
 
-`dccpeep` is dcc's **machine-dependent optimizer**. It reads the emitted `.MAC`
+`dccpeep` is DCC C Compiler's **machine-dependent optimizer**. It reads the emitted `.MAC`
 as an array of text lines and applies dozens of small *peephole* rewrites —
 each one matches a short local instruction pattern and replaces it with a
 cheaper equivalent (for example folding a redundant store/reload, threading a
@@ -341,7 +341,7 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 
 ## Architecture summary
 
-- dcc is an **AST-driven** C89 compiler for function bodies, with direct
+- the DCC C Compiler is an **AST-driven** C89 compiler for function bodies, with direct
   lowering from typed AST nodes to Z80/M80 assembly.
 - Typed AST expression nodes drive mixed-width (16/32-bit, pointer, float)
   codegen decisions from the tree being emitted.
@@ -353,5 +353,5 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
   `self`/`marginal` size cost and `dccrtlstrip` can link only the blocks a
   program references.
 - The back half of the pipeline reuses the proven off-the-shelf Microsoft
-  **`M80`/`L80`** assembler and linker, so dcc never has to implement object
+  **`M80`/`L80`** assembler and linker, so DCC C Compiler never has to implement object
   formats or relocation itself.

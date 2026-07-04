@@ -1,7 +1,7 @@
-# dcc MkDocs site
+# DCC C Compiler MkDocs site
 
 This folder contains the MkDocs configuration and English documentation source
-for the dcc documentation site.
+for the DCC C Compiler documentation site.
 
 ## Layout
 

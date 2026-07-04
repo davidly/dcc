@@ -2,8 +2,8 @@
 
 This page covers the path from a `.c` file to a runnable CP/M `.COM` program and
 the compiler options that most affect the result. You typically do this in your
-**own project directory** — dcc and ntvcm are general-purpose tools for building
-CP/M / Z80 C apps anywhere, not just inside the dcc repo. As long as the tools
+**own project directory** — DCC C Compiler and ntvcm are general-purpose tools for building
+CP/M / Z80 C apps anywhere, not just inside the DCC C Compiler repo. As long as the tools
 are on your `PATH` (see [Setting up the toolchain](00-setup-toolchain.md)), the
 commands below work from any folder that holds your `.c` sources.
 
@@ -282,8 +282,8 @@ script resolves each tool from your `PATH` or from the `DCC`, `DCCPEEP`, and
     `scripts/ma.ps1` stages `m80.com` and `l80.com` before invoking `ntvcm`.
     For a manual build, keep those `.COM` files and `DCCRTL.MAC` in the working
     directory where you run the pipeline, or adjust the paths to match your
-    layout. Replace `/path/to/dcc` (or `C:\path\to\dcc`) with the dcc repo path
-    that contains the standard headers; if you run from the dcc repo root, the
+    layout. Replace `/path/to/dcc` (or `C:\path\to\dcc`) with the DCC C Compiler repo path
+    that contains the standard headers; if you run from the DCC C Compiler repo root, the
     explicit `-I` is usually unnecessary.
 
     M80 expects CP/M-style CRLF text files; LF-only files can be misread. The Unix
@@ -329,7 +329,7 @@ Common options:
   the bottom of the stack, so growing the stack shrinks the heap and vice versa.
   By default there are no runtime checks that stop the stack from smashing the
   heap.
-- **`-fstack-check`** — opt in to a lightweight stack-overflow guard. dcc emits
+- **`-fstack-check`** — opt in to a lightweight stack-overflow guard. the DCC C Compiler emits
   a short `call __stchk` in each function prologue (after the frame is set up)
   that compares the live stack pointer against the heap ceiling. If the stack
   has grown into the heap, the program prints `?stack overflow` and exits with

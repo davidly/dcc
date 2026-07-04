@@ -12,7 +12,7 @@ parameter list.
 `va_list` is a `char *` cursor walking the caller's stack frame. Start it with
 `va_start`, fetch each argument with `va_arg`, and finish with `va_end`.
 
-dcc uses 16-bit `int` and pointer arguments, 32-bit `long` and `float`
+The DCC C Compiler uses 16-bit `int` and pointer arguments, 32-bit `long` and `float`
 arguments, and no `double`. Pass the exact promoted type to `va_arg`: use `int`
 for narrow integer types after default promotions, `long` for long values, and
 `float` for floating values on this target.

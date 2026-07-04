@@ -1,6 +1,6 @@
 # Package Testing with Linux and Windows VMs
 
-This guide describes how to test the dcc release packages from an x64 host
+This guide describes how to test the DCC C Compiler release packages from an x64 host
 running an Ubuntu-based distribution. Use native x64 VMs for the x64 packages
 and emulated ARM64 VMs for the ARM64 packages.
 
@@ -130,7 +130,7 @@ under `/var/lib/libvirt/images` instead of `$HOME` to avoid permission failures.
 ## Resetting Guests with Snapshots
 
 Install each guest operating system once, apply guest OS updates and basic tools,
-then take a clean snapshot before installing any dcc package. Revert to that
+then take a clean snapshot before installing any DCC C Compiler package. Revert to that
 clean state before each package test so install, upgrade, and uninstall checks
 are repeatable.
 
@@ -139,7 +139,7 @@ shut the guest down and create a snapshot:
 
 ```sh
 virsh shutdown dcc-x64
-virsh snapshot-create-as dcc-x64 clean-install "Clean OS install before dcc package testing" --atomic
+virsh snapshot-create-as dcc-x64 clean-install "Clean OS install before DCC C Compiler package testing" --atomic
 virsh snapshot-list dcc-x64
 ```
 
@@ -147,7 +147,7 @@ For the Windows x64 guest, use the Windows domain name:
 
 ```sh
 virsh shutdown dcc-windows-x64
-virsh snapshot-create-as dcc-windows-x64 clean-install "Clean OS install before dcc package testing" --atomic
+virsh snapshot-create-as dcc-windows-x64 clean-install "Clean OS install before DCC C Compiler package testing" --atomic
 virsh snapshot-list dcc-windows-x64
 ```
 
@@ -208,7 +208,7 @@ qemu-img create -f qcow2 -F qcow2 -b windows-arm64-base.qcow2 windows-arm64.qcow
 ```
 
 For Apple Silicon package tests in Parallels, use Parallels snapshots. Take a
-snapshot after the clean macOS guest setup and before installing the dcc package,
+snapshot after the clean macOS guest setup and before installing the DCC C Compiler package,
 then revert that snapshot before each package test run.
 
 ## x64 Guest VM
@@ -560,7 +560,7 @@ cat > hello.c <<'EOF'
 #include <stdio.h>
 
 int main(void) {
-    printf("hello from dcc package\n");
+    printf("hello from DCC C Compiler package\n");
     return 0;
 }
 EOF
@@ -581,7 +581,7 @@ ntvcm build/HELLO.COM
 Expected output:
 
 ```text
-hello from dcc package
+hello from DCC C Compiler package
 ```
 
 Also verify the package files are where the installer expects them:
@@ -631,7 +631,7 @@ Set-Location "$HOME\dcc-smoke"
 #include <stdio.h>
 
 int main(void) {
-  printf("hello from dcc package\n");
+  printf("hello from DCC C Compiler package\n");
   return 0;
 }
 '@ | Set-Content -LiteralPath .\hello.c -Encoding ascii
@@ -652,7 +652,7 @@ ntvcm .\build\HELLO.COM
 Expected output:
 
 ```text
-hello from dcc package
+hello from DCC C Compiler package
 ```
 
 Also verify the package files are where the installer expects them:

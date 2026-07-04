@@ -9,7 +9,7 @@ headers and portable data-structure code.
 
 ## Runtime model
 
-dcc is a 16-bit target: `size_t`, `ptrdiff_t`, and object pointers are all
+The DCC C Compiler is a 16-bit target: `size_t`, `ptrdiff_t`, and object pointers are all
 16-bit. `wchar_t` is an unsigned 16-bit type and matches the representation used
 for wide string literals.
 

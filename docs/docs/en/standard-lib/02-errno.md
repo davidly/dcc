@@ -9,11 +9,11 @@ error codes.
 
 ## Runtime model
 
-The dcc runtime is single-threaded, so `errno` is one global `int`. Runtime calls
+The DCC C Compiler runtime is single-threaded, so `errno` is one global `int`. Runtime calls
 set it when they fail; successful calls are not required to clear it. Test the
 function result first, then inspect `errno` only on failure.
 
-C89 requires `EDOM` and `ERANGE`. dcc also defines conventional small-system and
+C89 requires `EDOM` and `ERANGE`. DCC C Compiler also defines conventional small-system and
 POSIX-style file errors used by the CP/M file and directory support.
 
 ## Error checks

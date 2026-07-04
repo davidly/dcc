@@ -1,220 +1,142 @@
-# C conformance and target exceptions
+# C language conformance
 
-dcc is a CP/M 2.2 / Z80 cross-compiler with a C89 language core, a first-class
-`_Bool` scalar type, and selected target-appropriate C99/C11 front-end
-compatibility. It aims for strong C89 source compatibility within the CP/M/Z80
-target contract, not hosted desktop C conformance.
+The DCC C Compiler is a C compiler for CP/M 2.2 on the Z80. This page describes language
+support for that target, not for a hosted desktop system. Its base language is
+C89, with selected C99 and C11 features added where they fit CP/M and the Z80.
 
-Read this page by exception:
+Read the tables additively: start with the C89 support, then add the supported
+C99 features, then add the supported C11 features.
 
-- The baseline is ordinary C89, subject to the target-model and runtime limits
-  below.
-- Later C99/C11/GNU features are supported only when listed in
-  [Supported post-C89 front-end features](#supported-post-c89-front-end-features).
-- Anything listed in [Unsupported or target-inapplicable features](#unsupported-or-target-inapplicable-features)
-  should be treated as unavailable even if a hosted desktop compiler accepts it.
+## Target model
 
-## Target contract
+These limits apply at every language level.
 
-The target contract applies to every source level. These are not temporary parser
-gaps; they follow from CP/M 2.2, the Z80 data model, or the DCCRTL runtime.
-
-| Area | dcc behavior |
+| Feature | DCC C Compiler behavior |
 | --- | --- |
-| Integer and pointer model | `int`, `short`, pointers, `size_t`, and `ptrdiff_t` are 16-bit. `long` is 32-bit. |
-| Boolean model | `_Bool` is a first-class 8-bit scalar type. Nonzero values normalize to `1` when stored, cast, initialized, loaded as parameters, or returned as `_Bool`. |
-| Floating point | `float` is the only floating type. Unsuffixed floating constants are treated as single-precision `float`. |
-| `double` / `long double` | Not supported as distinct types. Use `float`. |
-| `long long` / 64-bit integers | Not supported. Use 32-bit `long` / `unsigned long`. |
-| Host ABI assumptions | Do not assume ILP32/LP64/LLP64 macros, host-sized `int`, or host-width expression results. |
-| Byte-stream stdio | CP/M text files use Ctrl-Z EOF semantics, and DCCRTL stdio is a subset of hosted C stdio. |
-| Wide-character Unicode runtime | `wchar_t` is a 16-bit integer typedef, but Unicode/wide-character library behavior is not implemented. |
-| POSIX / hosted services | No pthreads, C11 threads, POSIX process APIs, signals, locale, or time library support in the CP/M runtime. |
+| `char` | 8 bits, signed |
+| `short`, `int` | 16 bits |
+| pointers | 16 bits |
+| `long` | 32 bits |
+| `float` | 32 bits |
+| `_Bool` | 8 bits, normalized to `0` or `1` |
+| `double`, `long double` | not distinct types; use `float` |
+| `long long` | not supported |
+| hosted environment | outside the CP/M 2.2 target model |
+| processes, threads, signals, locales | outside the CP/M 2.2 target model |
 
-## Recognized keywords
+## Practical implications of the target model
 
-dcc recognizes the C89 keyword set except for `double`. It also recognizes
-`_Bool` as a first-class scalar type and a small number of later keywords as
-compatibility syntax.
+These follow directly from the table above and are often the source of
+portability surprises when code is moved from a hosted desktop compiler.
 
-| Category | Keywords |
+| Practical rule | What it means |
 | --- | --- |
-| Types | `char`, `short`, `int`, `long`, `signed`, `unsigned`, `float`, `void`, `_Bool` |
-| Storage class | `auto`, `extern`, `register`, `static`, `typedef` |
-| Type qualifiers | `const`, `volatile` |
-| Aggregates / enums | `struct`, `union`, `enum` |
-| Control flow | `if`, `else`, `switch`, `case`, `default`, `for`, `while`, `do`, `break`, `continue`, `goto`, `return` |
-| Operators | `sizeof` |
-| Accepted compatibility keywords | `inline` |
+| `int` is 16-bit | Use `long` (and `%ld`) for values beyond +/-32767. Code that assumes host-sized `int` or 64-bit arithmetic is outside the target model. |
+| `float` is the only floating type | Unsuffixed floating constants are treated as `float`; there is no wider `double` fallback. |
+| `float` precision is ~24 bits | Integers above about +/-16,777,216 are not all exactly representable as `float`; converting large `long` values rounds to nearest representable single precision value. |
+| `%` is integer-only | Use `fmodf` for floating-point remainder; `float % float` is a compile error. |
 
-### Keyword exceptions
+## C89 support
 
-| Keyword | Status |
+| Language feature | Status |
 | --- | --- |
-| `double` / `long double` | Not supported. dcc has 32-bit `float` as its only floating type. |
-| `long long` | Not supported. dcc has no 64-bit integer type. |
-| `restrict` | Not implemented. |
-| `_Complex` | Not implemented. |
-| `_Atomic`, `_Generic`, `_Thread_local` | Not implemented. |
+| Basic scalar types: `char`, `short`, `int`, `long`, `float`, `void` | Supported, with the target sizes above |
+| Signed and unsigned integer types | Supported |
+| Pointers, arrays, pointer arithmetic | Supported |
+| `struct`, `union`, `enum` | Supported |
+| Integer bit-fields | Supported, packed into 16-bit units |
+| Function declarations and prototypes | Supported |
+| Old-style function declarations and definitions | Supported |
+| `typedef` | Supported |
+| Storage classes: `auto`, `extern`, `register`, `static` | Supported; `auto` is a no-op and `register` is only a hint |
+| Type qualifiers: `const`, `volatile` | Accepted for source compatibility; no CP/M/Z80 memory-model semantics are provided |
+| Expressions and usual arithmetic conversions | Supported within the target type model |
+| `if`, `switch`, loops, `break`, `continue`, `goto`, `return` | Supported |
+| `sizeof` | Supported |
+| Preprocessor macros and conditional inclusion | Supported |
+| `__FILE__`, `__LINE__`, `__DATE__`, `__TIME__`, `__STDC__` | Supported |
+| String literals and adjacent string literal concatenation | Supported |
+| Global and automatic initializers | Supported |
 
-## Accepted-but-inert qualifiers
+## Missing from C89
 
-A few keywords are parsed so source compiles, but they do not change code
-generation:
+| Language or environment feature | Status |
+| --- | --- |
+| Distinct `double` and `long double` arithmetic | Not supported |
+| Full hosted C library behavior | Outside the CP/M 2.2 target model |
+| Locale-sensitive execution environment | Outside the CP/M 2.2 target model |
+| Standard signal environment | Outside the CP/M 2.2 target model |
+| Wide-character library behavior | Outside the CP/M 2.2 target model |
+| Read-only storage for `const` objects | Outside the CP/M 2.2 memory model |
+| Strict `volatile` memory/device access semantics | Outside the CP/M 2.2 memory model |
+| Forced register allocation from `register` | Not implemented |
 
-- `const` - honored only for constant folding of const-initialized variables. It
-  does not place data in read-only memory.
-- `volatile` - accepted but otherwise ignored.
-- `register` - accepted as a hint only; it does not force register allocation.
-- `auto` - accepted; since it is already the default storage for locals, it is a
-  no-op.
+## C99 additions
 
-`inline` is accepted as a function specifier. The supported optimization form is
-`static inline`; plain externally linked `inline` is parsed but emitted as a
-normal externally linked function.
+| C99 feature | Status |
+| --- | --- |
+| `_Bool` | Supported as a real scalar type |
+| `stdbool.h` aliases: `bool`, `true`, `false` | Supported |
+| `//` comments | Supported |
+| Declarations in `for` loop initializers | Supported |
+| Mixed declarations and statements in nested blocks | Supported |
+| Unnamed parameters in prototypes | Supported |
+| Array parameters adjusted to pointers | Supported |
+| Function-typed parameters adjusted to pointers | Supported |
+| Variadic macros and `__VA_ARGS__` | Supported |
+| Empty variadic macro arguments | Supported |
+| Designated initializers for struct and array members | Supported |
+| File-scope compound literals in constant initializers | Supported |
+| Address-taking block-scope compound literals | Supported |
+| `inline` keyword | Accepted; plain external `inline` is emitted as an ordinary function |
+| `static inline` simple helper functions | Supported for a useful subset |
+| Trailing comma in enum lists | Accepted as syntax compatibility |
 
-## Supported post-C89 front-end features
+## Missing from C99
 
-These features are supported because they are useful for modern C source and fit
-the Z80/CP/M target model.
+| C99 feature | Status |
+| --- | --- |
+| `long long` and 64-bit integer types | Not supported |
+| Variable-length arrays | Not supported |
+| `restrict` | Not supported |
+| `_Complex` and complex arithmetic | Not supported |
+| Full C99 compound literal value semantics | Partly supported only |
+| Flexible array member initialization | Not supported |
+| C99 external `inline` linkage rules | Not implemented |
+| Full C99 floating-point environment | Outside the CP/M 2.2 target model |
+| Full C99 hosted library | Outside the CP/M 2.2 target model |
 
-### C99 comments and declarations
+## C11 additions
 
-- `//` line comments are accepted everywhere C89 block comments are accepted,
-  including trailing comments on preprocessor directives.
-- `for`-loop init declarations are supported with C99 loop scope.
-- Block-local declarations may appear inside nested `{ ... }` blocks and shadow
-  outer locals for that block.
+| C11 feature | Status |
+| --- | --- |
+| Anonymous `struct` members | Supported |
+| Anonymous `union` members | Supported |
+| Initialization through anonymous aggregate members | Supported |
 
-```c
-int i = 99;
-for (int i = 0; i < 3; i++)
-    use(i);                 /* 0, 1, 2 */
-/* outer i is still 99 here */
-```
+## Missing from C11
 
-### C99/C11 declaration compatibility
+| C11 feature | Status |
+| --- | --- |
+| `_Generic` | Not supported |
+| `_Atomic` | Outside the CP/M 2.2 target model |
+| `_Thread_local` | Outside the CP/M 2.2 target model |
+| C11 threads | Outside the CP/M 2.2 target model |
+| C11 atomics library | Outside the CP/M 2.2 target model |
+| C11 bounds-checking interfaces | Outside the CP/M 2.2 target model |
+| Hosted C11 library additions | Outside the CP/M 2.2 target model |
 
-- `_Bool` is a first-class 1-byte scalar type in dcc's type system, not a macro
-  or library simulation. Assignments, casts, initializers, parameter loads, and
-  return values normalize nonzero values to `1`; include
-  [`stdbool.h`](standard-lib/11-stdbool.md) for the portable aliases `bool`,
-  `true`, and `false`.
-- Forward enum declarations are accepted as `int`-sized enum types, including
-  inside prototypes and function-pointer declarators.
-- C11 anonymous struct and union members are accepted. Members of anonymous
-  aggregates are promoted for ordinary member access, including nested forms,
-  and aggregate initialization through anonymous struct/union members is
-  supported.
-- GNU `__attribute__((...))` annotations are skipped in supported declaration
-  positions.
-- `static inline` functions are supported for small helper functions. dcc can
-  inline simple return-expression bodies, early-return `if` chains lowered to
-  conditional expressions, simple struct/pointer member accessors,
-  statement-context `void` helpers made of one or more expression statements
-  such as `*dst = value`, and scalar
-  `int`/pointer/`long`/`float` expression helpers. `void` helpers inline only
-  when called as a statement; their assignment/store expressions may contain
-  ordinary helper calls, for example `*dst = clamp((long)*dst + v)`. When all
-  call sites inline and the function address is not taken,
-  dcc removes the private out-of-line static function body; if a call cannot be
-  inlined safely, or if the function address is used, it keeps and calls the
-  private static fallback body. Hidden caller-frame temporaries preserve single
-  evaluation for multi-use 16-bit parameters such as `max(i++, j++)`.
-  Multi-use `long`/`float` parameters with side-effecting arguments, inline
-  bodies with local declarations, and unsupported statement bodies fall back to
-  the out-of-line body. Plain `inline`
-  without `static` is accepted for source compatibility but does not yet receive
-  C99 external-inline linkage semantics or call-site inlining.
+## Extensions accepted for compatibility
 
-  ```c
-  static inline int max_int(int a, int b)
-  {
-    return a > b ? a : b;
-  }
+| Extension | Status |
+| --- | --- |
+| `__attribute__((...))` in common declaration positions | Ignored |
 
-  static inline int clamp8(int x)
-  {
-    if (x < 0)
-      return 0;
-    if (x > 255)
-      return 255;
-    return x;
-  }
+## Extensions not supported
 
-  static inline void add_int(int *dst, int v)
-  {
-    *dst = clamp8(*dst + v);
-    dst[1] = clamp8(dst[1] - v);
-  }
-
-  value = max_int(i++, limit);    /* i++ is evaluated once */
-  byte = clamp8(sample + bias);   /* helper body can be removed if all calls inline */
-  add_int(&total, delta);         /* statement-context helper */
-  ```
-
-### C99 aggregate initializers and compound literals
-
-- Struct/union field designators such as `.field = value` are supported in
-  global and automatic aggregate initializers.
-- Array designators such as `[index] = value` are supported, including nested
-  array designators in multidimensional aggregate initializers. GNU range
-  designators such as `[0 ... 3] = value` are not supported.
-- File-scope compound literals used in global constant initializers are
-  supported, including address-taking forms such as `&(struct S){ 1, 2 }`.
-- Address-taking automatic/block-scope compound literals such as
-  `&(struct S){ 1, 2 }` are supported by creating hidden automatic storage for
-  the enclosing function.
-
-### C99 variadic macros
-
-Function-like macros may declare a trailing `...` parameter, and `__VA_ARGS__`
-expands to the matching trailing arguments (with their separating commas) in the
-replacement list.
-
-- All top-level commas after the named parameters are captured as a single
-  `__VA_ARGS__` argument, so the variadic tail keeps its internal commas.
-- `#__VA_ARGS__` stringizes the variadic tail, following the usual `#`
-  stringize rules.
-- Empty variadic invocations are supported: when no trailing arguments are
-  supplied, `__VA_ARGS__` expands to nothing (for example `#define Z(...) 0`
-  called as `Z()`, or `#define Z1(A, ...) A` called as `Z1(1)`).
-
-```c
-#define CALL(F, ...) F(__VA_ARGS__)
-#define ARGS(...)    __VA_ARGS__
-#define STR(...)     #__VA_ARGS__
-
-CALL(two, 3, 4);     /* two(3, 4) */
-foo(ARGS(5));        /* foo(5) */
-puts(STR(1, 2, 3));  /* "1, 2, 3" */
-```
-
-## Unsupported or target-inapplicable features
-
-The table below separates target-model limits from front-end compatibility gaps.
-Target-model limits are part of dcc's CP/M/Z80 contract. Front-end gaps may
-become supportable later, but code should not depend on them today.
-
-| Source level | Feature | Status |
-| --- | --- | --- |
-| C89 | `double` / `long double` | Target-inapplicable. dcc has single-precision `float` as its only floating type. |
-| C89 hosted library | Hosted stdio, locale, signal, time, process, and wide-character runtime behavior | Runtime-inapplicable or absent in DCCRTL. |
-| C99 | `long long` and 64-bit integer typedefs/operations | Target-inapplicable. The Z80 model uses 16-bit `int`/pointers and 32-bit `long`. |
-| C99 | Variable-length arrays | Not implemented. Use `malloc` and an explicit pointer when runtime-sized storage is required. |
-| C99 | `restrict` | Not implemented. |
-| C99 | `_Complex` | Not implemented. |
-| C99 | Block-scope compound literal value/copy forms | Not implemented. Address-taking forms are supported as described above. |
-| C99 | Flexible-array member initialization | Not implemented. |
-| C11 | `_Generic` | Not implemented; some imported tests also require unsupported `long long`. |
-| C11 | `_Atomic`, `_Thread_local`, C11 threads | Not implemented or runtime-inapplicable. |
-| GNU/TCC extensions | Range designators | Not implemented; includes `[first ... last] = value`. |
-| GNU/TCC extensions | Empty structs | Not implemented; empty `struct {}` is an extension. |
-| GNU extensions | Statement expressions and branch prediction builtins | Not implemented; includes `({ ... })` and `__builtin_expect`. |
-
-## Identifier significance
-
-dcc exceeds C89's identifier-significance minimum of 31 characters for internal
-identifiers. Externals are still constrained by the M80/L80 toolchain's symbol
-handling, so keep exported names reasonably distinct near the front of the
-identifier.
+| Extension | Status |
+| --- | --- |
+| GNU range designators, such as `[0 ... 3]` | Not supported |
+| Empty structures | Not supported |
+| Statement expressions, such as `({ ... })` | Not supported |
+| `__builtin_expect` | Not supported |
