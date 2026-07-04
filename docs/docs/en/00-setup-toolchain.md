@@ -1,26 +1,23 @@
 # The toolchain
 
-To build and run CP/M apps with dcc you need two things: the dcc compiler tools
-(`dcc`, `dccpeep`, `dccrtlstrip`, plus `DCCRTL.MAC`, `m80.com`, and `l80.com`)
-and the [ntvcm](https://github.com/davidly/ntvcm) CP/M 2.2 emulator to run the
-results. Both are self-contained projects that build on Windows, Linux, and
-macOS.
+To compile, assemble, link, and run CP/M apps with the DCC C Compiler toolchain, you need two things: the DCC C Compiler tools
+(`dcc`, `dccmake`, `dccpeep`, `dccrtlstrip`, plus `DCCRTL.MAC`, `m80.com`, and `l80.com`) and the [ntvcm](https://github.com/davidly/ntvcm) CP/M 2.2 emulator to run CP/M binaries, including `m80.com`, `l80.com`, and the resulting programs.
 
 You build these tools once. After that, use them from any CP/M app project.
 
 Setup flow:
 
 - Install the host prerequisites for Windows, macOS, or Linux.
-- Clone the `dcc` and `ntvcm` repositories.
-- Build the dcc host tools with `pwsh ./scripts/build-dcc.ps1`.
+- Clone the DCC C Compiler (`dcc`) and `ntvcm` repositories.
+- Build the DCC C Compiler host tools with `pwsh ./scripts/build-dcc.ps1`.
 - Build the ntvcm emulator.
-- Add the dcc and ntvcm directories to your `PATH`.
+- Add the DCC C Compiler and ntvcm directories to your `PATH`.
 - Verify the setup with a sample CP/M program.
 
 ## Install prerequisites
 
 Install the native compiler tools for your host platform before cloning and
-building dcc or ntvcm.
+building DCC C Compiler or ntvcm.
 
 === "Windows"
 
@@ -139,7 +136,7 @@ building dcc or ntvcm.
 
         You can also use the Visual Studio Installer and select **Desktop
         development with C++**, then add the **MSVC ARM64/ARM64EC build tools**
-        component. The dcc Windows build scripts use the native ARM64 MSVC
+        component. The DCC C Compiler Windows build scripts use the native ARM64 MSVC
         environment (`vcvarsarm64.bat`) when they run on Windows ARM64.
 
     2. Verify that the ARM64 MSVC tools were installed:
@@ -162,13 +159,13 @@ building dcc or ntvcm.
 
 ## Clone the repositories
 
-    # Clone the dcc compiler
+    # Clone DCC C Compiler
     git clone https://github.com/davidly/dcc.git
 
     # Clone the ntvcm z80 emulator
     git clone https://github.com/davidly/ntvcm.git
 
-## Build dcc
+## Build DCC C Compiler
 
 The cross-platform PowerShell build script is in the `scripts` directory. It
 builds `dcc`, `dccpeep`, and `dccrtlstrip`, using MSVC on Windows, clang on
@@ -253,27 +250,28 @@ Build scripts live in the `scripts` directory:
 
 Run the single-app shell helper directly on Linux/macOS, or run the PowerShell
 scripts from your operating-system terminal or the VS Code terminal by changing
-to the dcc checkout, starting `pwsh`, and running `./scripts/ma.ps1` or
+to the DCC C Compiler checkout, starting `pwsh`, and running `./scripts/ma.ps1` or
 `./scripts/runall.ps1`.
 
 They resolve each tool the same way: they use an environment variable if you set
 one, otherwise they look for the tool on your `PATH`. The relevant tools are:
 
 - `dcc` — compiler
+- `dccmake` — build pipeline helper
 - `dccpeep` — peephole optimizer
 - `dccrtlstrip` — runtime stripper
 - `ntvcm` — CP/M emulator
 - `m80` / `l80` — assembler and linker
 
-Recommended setup, especially when building apps in a project *outside* the dcc
+Recommended setup, especially when building apps in a project *outside* the DCC C Compiler
 repo, is to add the directories containing the built `dcc` and `ntvcm`
-binaries to your `PATH`. The dcc directory also provides `dccpeep`,
+binaries to your `PATH`. The DCC C Compiler directory also provides `dccpeep`,
 `dccrtlstrip`, `m80.com`, `l80.com`, and `DCCRTL.MAC`, so no per-tool variables
 are needed.
 
 === "Windows"
 
-    1. Add the dcc and ntvcm directories to `PATH` for the current PowerShell
+    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current PowerShell
        session:
 
         ```powershell
@@ -293,7 +291,7 @@ are needed.
        `dccpeep`, `dccrtlstrip`, and `ntvcm` automatically.
 
        To pin specific binaries instead (for example, when juggling multiple
-       dcc builds), set the environment variables to explicit paths and only
+    DCC C Compiler builds), set the environment variables to explicit paths and only
        put ntvcm on `PATH`:
 
         ```powershell
@@ -305,7 +303,7 @@ are needed.
 
 === "macOS"
 
-    1. Add the dcc and ntvcm directories to `PATH` for the current shell
+    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current shell
        session:
 
         ```bash
@@ -326,7 +324,7 @@ are needed.
        automatically.
 
        To pin specific binaries instead (for example, when juggling multiple
-       dcc builds), set the environment variables to explicit paths and only
+    DCC C Compiler builds), set the environment variables to explicit paths and only
        put ntvcm on `PATH`:
 
         ```bash
@@ -338,7 +336,7 @@ are needed.
 
 === "Ubuntu"
 
-    1. Add the dcc and ntvcm directories to `PATH` for the current shell
+    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current shell
        session:
 
         ```bash
@@ -359,7 +357,7 @@ are needed.
        automatically.
 
        To pin specific binaries instead (for example, when juggling multiple
-       dcc builds), set the environment variables to explicit paths and only
+    DCC C Compiler builds), set the environment variables to explicit paths and only
        put ntvcm on `PATH`:
 
         ```bash
@@ -371,7 +369,7 @@ are needed.
 
 === "Ubuntu ARM64"
 
-    1. Add the dcc and ntvcm directories to `PATH` for the current shell
+    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current shell
        session:
 
         ```bash
@@ -392,7 +390,7 @@ are needed.
        automatically.
 
        To pin specific binaries instead (for example, when juggling multiple
-       dcc builds), set the environment variables to explicit paths and only
+    DCC C Compiler builds), set the environment variables to explicit paths and only
        put ntvcm on `PATH`:
 
         ```bash
@@ -404,7 +402,7 @@ are needed.
 
 === "Windows ARM64"
 
-    1. Add the dcc and ntvcm directories to `PATH` for the current PowerShell
+    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current PowerShell
        session:
 
         ```powershell
@@ -424,7 +422,7 @@ are needed.
        `dccpeep`, `dccrtlstrip`, and `ntvcm` automatically.
 
        To pin specific binaries instead (for example, when juggling multiple
-       dcc builds), set the environment variables to explicit paths and only
+    DCC C Compiler builds), set the environment variables to explicit paths and only
        put ntvcm on `PATH`:
 
         ```powershell
@@ -436,9 +434,9 @@ are needed.
 
 ## Verify the setup
 
-With the tools on your `PATH`, build and run one of the dcc repo's sample tests
+With the tools on your `PATH`, build and run one of the DCC C Compiler repo's sample tests
 to confirm everything is wired up. From your operating-system terminal or the VS
-Code terminal, change to the dcc checkout, start PowerShell, build
+Code terminal, change to the DCC C Compiler checkout, start PowerShell, build
 `tests/tstr.c`, then run the generated `.COM` file under ntvcm:
 
     cd /path/to/dcc
@@ -446,7 +444,7 @@ Code terminal, change to the dcc checkout, start PowerShell, build
     ./scripts/ma.ps1 tstr -Mode fast       # compiles tests/tstr.c -> TSTR.COM
     ntvcm TSTR.COM                         # runs it under the emulator
 
-The dcc repo's `tests/` programs are suitable samples for scratch projects, but
-day-to-day work does not need to happen inside the dcc repo. The tools build
+The DCC C Compiler repo's `tests/` programs are suitable samples for scratch projects, but
+day-to-day work does not need to happen inside the DCC C Compiler repo. The tools build
 CP/M apps from wherever your sources live. Once that works, move on to
 [Building and linking](02-build-and-link.md) for the day-to-day workflow.

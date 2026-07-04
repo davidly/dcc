@@ -1,6 +1,6 @@
 # Floating point math (`math.h`)
 
-Include [`math.h`](08-math.md). dcc has only 32-bit `float` (no `double`), so
+Include [`math.h`](08-math.md). the DCC C Compiler has only 32-bit `float` (no `double`), so
 the math entry points are the single-precision `...f` variants. The unsuffixed
 C89 names are provided as macro aliases for convenience.
 
@@ -17,7 +17,7 @@ corresponding single-precision `...f` runtime function.
 
 ## Runtime model
 
-dcc treats `float` as the only floating type. C89 normally declares the
+DCC C Compiler treats `float` as the only floating type. C89 normally declares the
 unsuffixed math names (`sqrt`, `sin`, `pow`, and so on) as `double` functions,
 but this runtime has no `double`, so [`math.h`](08-math.md) maps those names to
 the single-precision `...f` functions with macros.

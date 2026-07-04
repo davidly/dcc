@@ -1,20 +1,19 @@
 # Agentic skills
 
-The dcc repo ships a project-scoped **agentic skill** in
+The DCC C Compiler repo ships a project-scoped **agentic skill** in
 `.github/skills/dcc-cpm-z80`. A skill is a folder containing a `SKILL.md` (plus
-optional `references/`) that packages domain knowledge. This one covers C89
-plus target-appropriate C99/C11 code for dcc, CP/M 2.2, Z80, ntvcm, and the dcc
-runtime library.
+optional `references/`) that packages domain knowledge. This one covers the
+language, runtime, and toolchain rules for the DCC C Compiler.
 
 An agent that supports skills reads `SKILL.md` on demand when your task matches
-the skill's description, so it gets dcc-specific guidance without you pasting it
+the skill's description, so it gets guidance for the DCC C Compiler without you pasting it
 into every prompt.
 
 ## Invoking the skill in VS Code
 
 With GitHub Copilot in VS Code (agent mode), the skill is picked up when you
-open the dcc repo. The agent loads it when your request falls within the skill's
-scope, such as dcc, CP/M, Z80, ntvcm, or DCCRTL. You can also request it
+open the DCC C Compiler repo. The agent loads it when your request falls within the skill's
+scope, such as source for the DCC C Compiler, DCCRTL, or ntvcm. You can also request it
 explicitly:
 
 > use the dcc-cpm-z80 skill to build and test foo.c
@@ -28,12 +27,12 @@ a session:
     copilot
 
 Then ask something within the skill's scope, for example: "build and run sieve.c
-for CP/M with dcc".
+with the DCC C Compiler".
 
 ## Making the skill available system-wide
 
-The copy in the dcc repo only applies while you work inside that repo. To use
-the skill from other projects, copy it to a personal skills root. The dcc tools
+The copy in the DCC C Compiler repo only applies while you work inside that repo. To use
+the skill from other projects, copy it to a personal skills root. The DCC C Compiler tools
 and `DCCRTL.MAC` must still be on your `PATH`; see
 [Setting up the toolchain](00-setup-toolchain.md).
 

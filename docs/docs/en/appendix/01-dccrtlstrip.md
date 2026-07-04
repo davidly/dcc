@@ -1,7 +1,7 @@
 # Appendix: runtime optimization
 
 `DCCRTL.MAC` is a single ~19,000-line runtime, but most programs use only a
-fraction of it. The normal dcc build flow runs `dccrtlstrip` before the final
+fraction of it. The normal DCC C Compiler build flow runs `dccrtlstrip` before the final
 L80 link to remove unreferenced routines. This appendix explains how it decides
 what to keep and what each library feature costs in code size once its
 transitive dependencies are linked.
@@ -9,7 +9,7 @@ transitive dependencies are linked.
 ## How `dccrtlstrip` decides what to keep
 
 Most library names in the standard headers are ordinary C identifiers. During
-code generation, dcc maps well-known library calls to short internal assembler
+code generation, DCC C Compiler maps well-known library calls to short internal assembler
 labels (for example `memcpy` becomes `__mcpy`, `strlen` becomes `__slen`). Do
 not write those short names yourself; include the header and call the C
 function. These internal names are what `dccrtlstrip` sees when it scans the

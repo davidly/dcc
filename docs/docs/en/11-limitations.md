@@ -5,25 +5,12 @@ and the single source-of-truth runtime.
 
 ## Language and type limits
 
-- **The compiler is C89 plus target-appropriate C99/C11 front-end support, not
-  hosted desktop C.** See [C conformance and target exceptions](01-c-conformance.md)
-  for the supported post-C89 features and the not-yet-implemented front-end
-  compatibility candidates.
-- **No `double` or `long double`.** Only 32-bit `float` exists; all math is
-  single precision. Unsuffixed floating constants are treated as `float`, not as
-  a wider host `double`.
-- **No `long long` or 64-bit integer type.** The largest integer type is 32-bit
-  `long` / `unsigned long`.
-- **`float` precision is ~24 bits.** Integers past about ±16,777,216 are not
-  all representable, so converting a large `long` to
-  `float` — or comparing a `long` against a `float` — rounds to the nearest
-  single. Keep values as integers when you need full 32-bit precision. See
-  [Floating point math](standard-lib/08-math.md).
-- **`%` is integer-only.** Use `fmodf` for a floating-point remainder;
-  `float % float` is a compile error.
-- **`int` is 16-bit.** Use `long` (and `%ld`) when you need more than ±32767.
-  Tests or programs that assume host-sized `int`, ILP32/LP64/LLP64 ABI macros,
-  or 64-bit arithmetic are outside the Z80 target model.
+- **Language support is defined on the conformance page.** See
+  [C conformance and target exceptions](01-c-conformance.md) for the additive
+  C89/C99/C11 feature matrix, target model, and practical numeric implications.
+- **Treat hosted-desktop assumptions as out of scope for this target.** Code
+  written for ILP32/LP64/LLP64 host ABIs, full hosted C libraries, or 64-bit
+  arithmetic should be treated as a porting task.
 
 ## Library limits
 
@@ -35,7 +22,7 @@ and the single source-of-truth runtime.
   field widths.
 - **`%f` needs `-ffloatio`.** Without that flag, float formatting isn't linked.
 - **Wide-character Unicode library behavior is not implemented.** `wchar_t` is a
-  16-bit integer typedef, but dcc does not provide a hosted wide-character
+  16-bit integer typedef, but the DCC C Compiler does not provide a hosted wide-character
   Unicode runtime.
 
 ## Runtime and environment limits
@@ -60,7 +47,7 @@ definition, the link step fails with an unresolved external.
 
 | Function | Notes |
 | --- | --- |
-| `atof` | Implemented and declared as `float atof(const char *)`. C89 `atof` returns `double`, which dcc does not have; this extension returns `float` (IEEE 754 single precision). |
+| `atof` | Implemented and declared as `float atof(const char *)`. C89 `atof` returns `double`, which the DCC C Compiler does not have; this extension returns `float` (IEEE 754 single precision). |
 
 If you need to supply your own implementation of an unimplemented function,
 either `#include` its `.c` from your main file, or compile it separately with

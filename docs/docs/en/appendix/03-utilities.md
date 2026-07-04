@@ -1,8 +1,8 @@
 # Utilities
 
-Developer scripts for building and testing dcc programs.
+Developer scripts for building and testing DCC C Compiler programs.
 
-Run these scripts from the dcc checkout or from an installed package. Linux and
+Run these scripts from the DCC C Compiler checkout or from an installed package. Linux and
 macOS packages include a native shell build driver, so normal package users do
 not need PowerShell to build a single app.
 
@@ -69,7 +69,7 @@ dcc-ma cobint --mode fast --build-dir mybuild
 - `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
 - `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
 - `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
-- `DCC_HOME` — dcc package/install root; used to find `include/`, `lib/`, and CP/M tools
+- `DCC_HOME` — DCC C Compiler package/install root; used to find `include/`, `lib/`, and CP/M tools
 - `DCC_INCLUDE` — extra include directories, separated by the host path separator
 - `DCC_LIB` — extra runtime/tool asset roots, separated by the host path separator
 - `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
@@ -82,7 +82,7 @@ Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full opt
 
 Builds and runs the test suite against per-app baselines in `tests/baselines/`.
 It uses `dccmake` for builds and `tests/_test_overrides.json` for test-specific
-runtime arguments, stack sizes, and optional dcc build flags.
+runtime arguments, stack sizes, and optional DCC C Compiler build flags.
 
 Runs in parallel by default:
 
@@ -173,7 +173,7 @@ Compiles each `tests/*.c` program with a native host C compiler, runs the host
 executable, and compares stdout with `tests/baselines/<app>.txt`. This is a
 read-only baseline check: it never rewrites baseline files. It is useful for
 checking that the unit-test sources and expected output still make sense on a
-normal C implementation before comparing them with dcc's CP/M/Z80 output.
+normal C implementation before comparing them with the DCC C Compiler output.
 
 Host compiler selection follows `scripts/build-dcc.ps1`:
 
@@ -223,7 +223,7 @@ compiler can build and link 32-bit executables. The script probes this
 automatically: if the probe succeeds, Linux GCC host validations run with
 `-m32`; if it fails, the script keeps using the normal compiler mode.
 
-This matters because dcc has 16-bit pointers and 32-bit `long`, so a 32-bit host
+This matters because the DCC C Compiler has 16-bit pointers and 32-bit `long`, so a 32-bit host
 build can run a few host-only tests that are skipped on a normal 64-bit Linux
 compiler. Install the normal C build tools plus the 32-bit development libraries
 for your distribution, then rerun the validator.
@@ -275,7 +275,7 @@ one test, keyed by `name`:
 | `args` | string | no | `""` | Command-line arguments passed to the program when run. Multi-token strings are split on whitespace (e.g. `"a bb ccc"`) |
 | `stdin` | string | no | `""` | Text piped to the program's standard input during execution (for keyboard/input-driven tests) |
 | `stack_size` | integer | no | `512` | C stack reserve in bytes, passed to `dcc` as `-stack`. Used by recursive apps that need more headroom |
-| `dcc_args` | string | no | `""` | Extra dcc-style build arguments passed through `dccmake` (for example `-DNAME=1 -UOLD`) |
+| `dcc_args` | string | no | `""` | Extra DCC C Compiler build arguments passed through `dccmake` (for example `-DNAME=1 -UOLD`) |
 | `dcc_floatio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-floatio` and dcc `-ffloatio` for this app |
 | `dcc_longio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-flongio` and dcc `-flongio` for this app |
 | `ignore` | boolean | no | `false` | When `true`, the test is skipped entirely (not built or run) |
@@ -361,7 +361,7 @@ controls which CSV columns are populated: `-Mode full` fills both `peep_*` and
 
 ## Stack Size Measurement (`stacksize.sh` / `stacksize.bat`)
 
-Finds the minimum C stack reserve an app needs under dcc's lightweight
+Finds the minimum C stack reserve an app needs under DCC C Compiler's lightweight
 stack-overflow guard (`-fstack-check`). See the
 [Building and linking](../02-build-and-link.md#measuring-the-stack-an-app-needs)
 section for full documentation, or run `scripts/stacksize.sh --help`.

@@ -1,12 +1,12 @@
-site_name: dcc C89/C99/C11 Reference
+site_name: DCC C Compiler Reference
 site_author: David Lee
 site_description: >-
-  MkDocs documentation for the dcc compiler, runtime, and dccrtlstrip size analysis.
+  MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.
 
 docs_dir: en
 site_dir: ../site
 
-repo_name: dcc
+repo_name: DCC C Compiler
 repo_url: https://github.com/davidly/dcc
 
 copyright: >-
@@ -55,7 +55,7 @@ plugins:
         - locale: en
           name: English
           default: true
-          site_name: dcc C89/C99/C11 Reference
+          site_name: DCC C Compiler Reference
 
 hooks:
   - hooks/copy_assets.py

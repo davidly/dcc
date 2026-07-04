@@ -14,7 +14,7 @@ later with a non-local jump.
 ## Runtime model
 
 `jmp_buf` is an 8-byte buffer holding the saved return address, stack pointer,
-IX frame pointer, and padding. dcc declares `setjmp` as an ordinary function;
+IX frame pointer, and padding. DCC C Compiler declares `setjmp` as an ordinary function;
 the runtime entry still reads the caller frame so the call behaves like the C89
 non-local jump primitive.
 
