@@ -159,7 +159,7 @@ For a complete, tested program, see the worked
 [`sscanf` parsing example](../12-examples.md#parsing-input-with-sscanf).
 
 Not supported: floating input (`%f`, `%e`, `%g`), scansets (`%[...]`), `%n`, and
-`%p`. No `dcc` compiler option enables floating-point `scanf` input.
+`%p`. No DCC C Compiler option enables floating-point `scanf` input.
 
 ## Character and string I/O
 

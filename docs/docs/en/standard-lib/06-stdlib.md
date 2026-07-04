@@ -14,7 +14,7 @@ control, and pseudo-random numbers.
 
 ## Runtime model
 
-The standard functions in this header are runtime-backed. dcc also declares a
+The standard functions in this header are runtime-backed. DCC C Compiler also declares a
 small set of CP/M and Z80 extensions here (`bdos`, `inp`, and `outp`); those are
 documented with the CP/M services rather than treated as portable C APIs.
 
@@ -66,8 +66,8 @@ long  v = strtol("  -0x1Ag", &end, 0);            /* v = -26, *end = 'g'  */
 unsigned long u = strtoul("4294967295", NULL, 10); /* ULONG_MAX */
 ```
 
-`atof` is available as a dcc extension: it is declared as `float atof(const char *nptr)`
-and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which dcc
+`atof` is available as a DCC C Compiler extension: it is declared as `float atof(const char *nptr)`
+and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
 does not have.
 
 ## Integer arithmetic helpers

@@ -9,7 +9,7 @@ portable C programs.
 
 ## Runtime model
 
-dcc recognizes the native C99 `_Bool` keyword as a first-class 1-byte scalar
+DCC C Compiler recognizes the native C99 `_Bool` keyword as a first-class 1-byte scalar
 type. This header only provides the portable names: `bool` is `_Bool`, `true` is
 `1`, and `false` is `0`.
 

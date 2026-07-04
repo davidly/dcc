@@ -1,7 +1,7 @@
 # Fixed-width integers (`stdint.h`)
 
 Include [`stdint.h`](13-stdint.md) for fixed-width integer typedefs that match
-the dcc target model.
+The DCC C Compiler target model.
 
 ## Types
 
@@ -9,7 +9,7 @@ the dcc target model.
 
 ## Runtime model
 
-dcc is a 16-bit target with 8-bit `char`, 16-bit `int`, and 32-bit `long`.
+The DCC C Compiler is a 16-bit target with 8-bit `char`, 16-bit `int`, and 32-bit `long`.
 `stdint.h` names those exact storage widths without adding new runtime support.
 
 `wchar_t` is also defined here if no earlier header has defined it. The type is
@@ -32,6 +32,6 @@ struct rec {
 
 Use the ordinary C types when you only need the natural target word size.
 
-For formatted output, use the underlying dcc type. For example, `uint32_t` is an
+For formatted output, use the underlying DCC C Compiler type. For example, `uint32_t` is an
 `unsigned long`, so print it with `%lu` or `%lx` and compile with `-fl` /
 `-flongio`.
