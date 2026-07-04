@@ -1,0 +1,3 @@
+shadow=99
+scalars=12 aggregates=8
+with_init=5 side_calls=1 p.a=1 used=1

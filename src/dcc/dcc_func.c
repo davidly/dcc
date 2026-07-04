@@ -1191,6 +1191,67 @@ int local_name_address_taken_ahead(const char *name)
     return 0;
 }
 
+/* Is `name` ever referenced again before the end of the block that
+ * currently encloses the parser's position? Scans forward from here,
+ * tracking brace depth so a name used only in a later, unrelated sibling
+ * block (after this one closes) correctly does not count - the same name
+ * there is out of scope for this declaration regardless of whether it
+ * happens to be a shadowing declaration. A crude "not immediately preceded
+ * by '.' or '->'" guard avoids miscounting a struct/union member access
+ * that merely shares this local's name as a use of the local itself.
+ *
+ * This is a lexical scan (not symbol-table-based, matching
+ * scan_global_write_info's approach for the analogous whole-file
+ * question), so it necessarily overcounts in some cases - a same-named
+ * member access with the guard defeated by an intervening comment or
+ * macro, for instance. Overcounting only means a genuinely-unused local
+ * gets kept (a missed optimization); it can never cause a used local to be
+ * dropped, which is the only direction that would be unsafe. */
+int local_name_used_ahead(const char *name)
+{
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    int depth;
+    int prev_was_member_access;
+    int found;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    depth = 0;
+    found = 0;
+    prev_was_member_access = 0;
+    while (tok.kind != TOK_EOF) {
+        if (tok.kind == '{') {
+            depth++;
+        } else if (tok.kind == '}') {
+            if (depth == 0)
+                break;
+            depth--;
+        } else if (tok.kind == TOK_ID && !strcmp(tok.text, name)) {
+            if (!prev_was_member_access) {
+                found = 1;
+                break;
+            }
+        }
+        prev_was_member_access = (tok.kind == '.' || tok.kind == TOK_ARROW);
+        next_token();
+    }
+
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
+    return found;
+}
+
 void scan_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
@@ -1305,8 +1366,11 @@ void scan_local_decl_after_type(int base)
             s = try_const_fold_local(name, source_name, type,
                                      arrlen != 0 || g_last_array_dim_count != 0);
 
+        {
+        int freshly_allocated = 0;
         if (!s) {
             s = add_local_alloc(name, type, bytes);
+            freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;
@@ -1324,7 +1388,21 @@ void scan_local_decl_after_type(int base)
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
 
-        if (s && !s->is_const_value && accept('=')) scan_initializer_or_decl_tail();
+        if (s && !s->is_const_value && accept('=')) {
+            scan_initializer_or_decl_tail();
+        } else if (freshly_allocated && !local_name_used_ahead(source_name)) {
+            /* No initializer, and never referenced again in this scope:
+             * add_local_alloc just appended this Sym as the last local and
+             * reserved its frame space, so popping both back off is safe -
+             * nothing later in this same declarator loop has allocated
+             * anything above it yet. freshly_allocated (rather than just
+             * !s->is_const_value) guards against the redefinition-error
+             * recovery case, where s is an unrelated pre-existing symbol and
+             * bytes/nlocals do not describe it. */
+            nlocals--;
+            local_size -= bytes;
+        }
+        }
 
         if (!accept(',')) break;
     }

@@ -852,6 +852,7 @@ void emit_function_epilogue(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
+int local_name_used_ahead(const char *name);
 void scan_local_decl_after_type(int base);
 void scan_static_local_decl_after_type(int base);
 void scan_function_body(void);

@@ -843,6 +843,7 @@ void gen_local_decl_after_type(int base)
     char name[64];
     char source_name[64];
     struct Sym *s;
+    int freshly_allocated;
 
     for (;;) {
         type = base;
@@ -951,12 +952,14 @@ void gen_local_decl_after_type(int base)
         if (!s)
             s = try_const_fold_local(name, source_name, type,
                                      total_elems > 0 || g_last_array_dim_count > 0);
+        freshly_allocated = 0;
         if (!s) {
             bytes = type_size(type);
             if (total_elems > 0)
                 bytes = object_array_size(type, total_elems);
 
             s = add_local_alloc(name, type, bytes);
+            freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;
@@ -1064,6 +1067,20 @@ void gen_local_decl_after_type(int base)
                     emit_store_de_to_addr_hl(type);
                 }
             }
+        } else if (freshly_allocated && !local_name_used_ahead(source_name)) {
+            /* No initializer, and never referenced again in this scope:
+             * add_local_alloc just appended this Sym as the last local and
+             * reserved its frame space, so popping both back off is safe -
+             * nothing later in this same declarator loop has allocated
+             * anything above it yet. freshly_allocated (rather than just
+             * !s->is_const_value) guards against the redefinition-error
+             * recovery case, where s is an unrelated pre-existing symbol and
+             * bytes/nlocals do not describe it. Must match
+             * scan_local_decl_after_type's identical decision exactly, since
+             * that earlier frame-sizing pass already committed to the frame
+             * size this function's prologue was emitted with. */
+            nlocals--;
+            local_size -= bytes;
         }
 
         if (!accept(',')) break;
