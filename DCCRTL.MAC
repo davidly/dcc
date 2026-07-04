@@ -6359,16 +6359,38 @@ __lmul:
         ld      de,(__lm_rhs_l)         ; DE = Ylo (multiplier / low accumulator)
         ld      bc,(__lm_lhs_l)         ; BC = Xlo (multiplicand, constant)
         ld      hl,0                    ; HL = high accumulator
-        ld      a,16
+        ld      a,4                     ; 4 groups of 4 bits = 16 iterations
 lmul_b:
-        bit     0,e                     ; multiplier LSB (bit preserves carry)
-        jr      z,lmul_bn
-        add     hl,bc                   ; HL += Xlo; CF = carry out of bit 15
-        jr      lmul_bs
-lmul_bn:
-        or      a                       ; CF = 0 for a clean shift
-lmul_bs:
-        rr      h                       ; shift CF:HL:DE right by one (33-bit)
+        ; 4 unrolled bit steps (see __m1u for the leading-or-a / jr z,$+3 idiom)
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
         rr      l
         rr      d
         rr      e
@@ -6402,15 +6424,43 @@ lmul_bs:
 __m1u:
         ex      de,hl                   ; DE = multiplier/low accumulator
         ld      hl,0                    ; HL = high accumulator
-        ld      a,16
+        ld      a,4                     ; 4 groups of 4 bits = 16 iterations
 lm1u_b:
-        bit     0,e
-        jr      z,lm1u_bn
-        add     hl,bc
-        jr      lm1u_bs
-lm1u_bn:
+        ; --- 4 unrolled bit steps ---------------------------------------
+        ; A leading `or a` sets CF=0 so the shift is clean when the bit is
+        ; clear; `add hl,bc` overwrites CF with the real carry when the bit is
+        ; set.  `jr z,$+3` skips only the 1-byte `add hl,bc`, so neither branch
+        ; needs a label.  Unrolling by 4 cuts the dec/jr loop control from 16x
+        ; to 4x -- the 16x16->32 multiply is the hottest runtime routine in
+        ; fixed-point apps (e.g. attnc99's vdot/mvmul).
         or      a
-lm1u_bs:
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
         rr      h
         rr      l
         rr      d
@@ -6447,15 +6497,37 @@ lm1s_ap:
 lm1s_bp:
         ex      de,hl                   ; DE = |RHS| multiplier/low accumulator
         ld      hl,0                    ; HL = high accumulator
-        ld      a,16
+        ld      a,4                     ; 4 groups of 4 bits = 16 iterations
 lm1s_b:
-        bit     0,e
-        jr      z,lm1s_bn
-        add     hl,bc
-        jr      lm1s_bs
-lm1s_bn:
+        ; 4 unrolled bit steps (see __m1u for the leading-or-a / jr z,$+3 idiom)
         or      a
-lm1s_bs:
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      d
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
         rr      h
         rr      l
         rr      d
@@ -6693,8 +6765,22 @@ ldqr_byte:
         ; the dividend MSB into carry for adc hl,hl.  When adc hl,hl overflows,
         ; the true shifted value exceeds 65535 >= divisor, so a subtract is
         ; mandatory and (HL_wrapped - divisor) is the correct remainder.
-        ld      b,8
+        ld      b,4                     ; 4 groups of 2 bits = 8 quotient bits
 ldqr_bit:
+        sla     a                       ; dividend bit7 -> carry; bit0 = 0 (quotient slot)
+        adc     hl,hl                   ; HL = (HL<<1) | bit; carry = 16-bit overflow
+        jr      c,ldqr_sub1             ; overflow: must subtract, quotient bit = 1
+        or      a                       ; clear carry (leaves A unchanged)
+        sbc     hl,de                   ; trial HL -= divisor
+        jr      nc,ldqr_one1            ; HL >= divisor: keep, quotient bit = 1
+        add     hl,de                   ; restore: HL < divisor, quotient bit = 0
+        jr      ldqr_cont1
+ldqr_sub1:
+        or      a                       ; clear carry
+        sbc     hl,de                   ; HL_wrapped - divisor = correct remainder
+ldqr_one1:
+        inc     a                       ; set quotient bit (bit0)
+ldqr_cont1:
         sla     a                       ; dividend bit7 -> carry; bit0 = 0 (quotient slot)
         adc     hl,hl                   ; HL = (HL<<1) | bit; carry = 16-bit overflow
         jr      c,ldqr_sub              ; overflow: must subtract, quotient bit = 1
