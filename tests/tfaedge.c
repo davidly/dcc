@@ -52,5 +52,57 @@ int main()
     a = 100.5f; b = -100.0f; r = a + b;
     printf("%f\n", r);                 /* 0.500000 - mixed signs, near-cancel */
 
+    /* Added for the fully register-resident __fadd/__fsub rewrite (both
+     * operands' entire unpacked state, not just the alignment/renormalize
+     * shifts, live in registers across the main+alternate Z80 banks).
+     * These specifically target the cross-bank subtract-direction logic
+     * (FSUBTR/FBBIG): differing exponents combined with either operand
+     * being the bigger magnitude, via both __fadd (opposite signs) and
+     * __fsub (same signs, flipped internally) entry points, plus heavy
+     * cancellation forcing many renormalize shifts and -0.0 handling. */
+
+    a = 5.0f; b = 3.0f; r = a - b;
+    printf("%f\n", r);                 /* 2.000000 - A bigger, no sign flip */
+
+    a = 10.0f; b = -3.0f; r = a + b;
+    printf("%f\n", r);                 /* 7.000000 - add, opposite signs,
+                                           A bigger magnitude and exponent */
+
+    a = 3.0f; b = -10.0f; r = a + b;
+    printf("%f\n", r);                 /* -7.000000 - add, opposite signs,
+                                           B bigger magnitude and exponent:
+                                           exercises the cross-bank negate
+                                           (FBBIG) via __fadd directly, not
+                                           just __fsub's internal flip */
+
+    a = -3.0f; b = 10.0f; r = a + b;
+    printf("%f\n", r);                 /* 7.000000 - mirror of the above */
+
+    a = 1000.0f; b = -0.001f; r = a + b;
+    printf("%f\n", r);                 /* 999.999023 - NOT negligible: the
+                                           exponent gap here is ~19, under
+                                           the diff>=24 threshold, so B's
+                                           truncated-but-nonzero residual
+                                           still perturbs the result;
+                                           verified byte-for-byte identical
+                                           to the pre-rewrite implementation
+                                           via differential testing */
+
+    a = 0.001f; b = -1000.0f; r = a + b;
+    printf("%f\n", r);                 /* -999.999023 - mirror of the above,
+                                           B's sign wins (B is bigger) */
+
+    a = 1048576.0f; b = -1048577.0f; r = a + b;
+    printf("%f\n", r);                 /* -1.000000 - heavy cancellation
+                                           (many renormalize left-shifts)
+                                           combined with B being bigger */
+
+    a = 0.0f; b = -0.0f; r = a + b;
+    printf("%f\n", r);                 /* 0.000000 - zero shortcut path
+                                           with a negative-zero operand */
+
+    a = -0.0f; b = 0.0f; r = a + b;
+    printf("%f\n", r);                 /* 0.000000 - mirror */
+
     return 0;
 }

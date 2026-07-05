@@ -11397,7 +11397,7 @@ __fadd:
         add     ix,sp
         xor     a
         ld      (FSUB),a
-        jp      FADD0
+        jp      FADDR0
 
         public  __fsub
 __fsub:
@@ -11406,311 +11406,227 @@ __fsub:
         add     ix,sp
         ld      a,1
         ld      (FSUB),a
-FADD0:
-        ; unpack left operand into A* scratch
+FADDR0:
+        ; Fully register-resident add/subtract: both operands' entire
+        ; unpacked state (sign, exponent, 24-bit mantissa with the
+        ; implicit bit merged in) live in registers for the WHOLE
+        ; computation - one operand in the main register bank, the other
+        ; in the alternate bank (reached via EXX) - with no named memory
+        ; scratch at all, unlike __fmul/__fdiv's AM0-2/BM0-2/AEXP/BEXP/
+        ; ASGN/BSGN. Mirrors z88dk math32's fsadd32 structure (see project
+        ; notes), adapted for dcc's 24-bit (not 32-bit) mantissa.
+        ;
+        ; Register layout, per bank: B=exponent, C=mantissa high byte,
+        ; H=mantissa mid byte, L=mantissa low byte, D=sign (0x80 or 0), E
+        ; spare. EXX swaps BC/DE/HL only, never AF or the flags, so A (and
+        ; the flags right after a compare) are always safe to carry across
+        ; a bank switch.
+
+        ; unpack operand A (left) into the main bank
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
         ld      d,(ix+11)
-        call    FUNA
-        ; unpack right operand into B* scratch
+        call    FUNR
+
+        exx
+        ; unpack operand B (right) into the alternate bank
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        call    FUNB
+        call    FUNR
+
+        ; __fsub: flip B's sign (alternate bank's D is active here)
         ld      a,(FSUB)
         or      a
-        jp      z,FANOS
-        ld      a,(BSGN)
+        jp      z,FANOFL
+        ld      a,d
         xor     80h             ; flip IEEE sign bit, not bit 0
-        ld      (BSGN),a
-FANOS:
-        ; zero shortcuts
-        ld      a,(AEXP)
-        or      a
-        jp      nz,FABNZ
-        ld      a,(AM2)
-        or      a
-        jp      nz,FABNZ
-        ld      a,(AM1)
-        or      a
-        jp      nz,FABNZ
-        ld      a,(AM0)
-        or      a
-        jp      nz,FABNZ
-        call    FPB
+        ld      d,a
+FANOFL:
+        exx                     ; main bank (operand A) active again
+
+        ; zero shortcuts: if A==0, result=B; if B==0, result=A. "Zero"
+        ; means exponent and all three mantissa bytes are zero, matching
+        ; the original memory-based check exactly (not just exponent==0).
+        ld      a,b
+        or      c
+        or      h
+        or      l
+        jp      nz,FANZ
+        ; A is zero: pack B (alternate bank) directly and return.
+        exx
+        call    FPKR
         jp      FARET
-FABNZ:
-        ld      a,(BEXP)
-        or      a
-        jp      nz,FALGN
-        ld      a,(BM2)
-        or      a
-        jp      nz,FALGN
-        ld      a,(BM1)
-        or      a
-        jp      nz,FALGN
-        ld      a,(BM0)
-        or      a
-        jp      nz,FALGN
-        call    FPA
+FANZ:
+        exx                     ; peek at B's zero-ness
+        ld      a,b
+        or      c
+        or      h
+        or      l
+        exx                     ; back to main; EXX doesn't touch flags
+        jp      nz,FALGNR
+        ; B is zero: pack A (main bank, already active) and return.
+        call    FPKR
         jp      FARET
 
-FALGN:
-        ; align exponents: compute diff once, shift in a djnz loop, early-exit if diff>=24.
-        ld      a,(AEXP)
-        ld      b,a             ; B = AEXP
-        ld      a,(BEXP)        ; A = BEXP
-        sub     b               ; A = BEXP - AEXP (signed)
-        jp      z,FASGN         ; equal exponents: nothing to align
-        jp      c,FALGN_AGT     ; carry: BEXP < AEXP, A has larger exponent
+FALGNR:
+        ; align exponents: compute the difference once (in whichever
+        ; direction lands as a positive shift count) and shift the smaller
+        ; operand's mantissa via FSHR (byte-skip plus register-resident
+        ; residual bit shift, same technique as the old FALGN).
+        exx                     ; alternate active (operand B)
+        ld      a,b             ; A = BEXP
+        exx                     ; main active again; A preserved = BEXP
+        ld      e,a             ; E (main, spare) = BEXP, preserved for
+                                ; later even though A gets consumed below
+        sub     b               ; A = BEXP - AEXP; main's B (AEXP) unchanged
+        jp      z,FSIGNC        ; equal exponents: nothing to align
+        jp      c,FAEXPB        ; carry: BEXP < AEXP -> shift B's mantissa
 
-        ; BEXP > AEXP: shift A mantissa right by (BEXP-AEXP), then set AEXP=BEXP
+        ; BEXP > AEXP: shift A's mantissa right by A(=diff), then AEXP:=BEXP
         cp      24
-        jp      nc,FALGN_AABS   ; diff >= 24: A's contribution rounds to zero
-        ld      b,a             ; B = shift count (1..23)
-FALGN_AB8:
-        ; FSRA is a truncating right shift, so 8 of them == moving each
-        ; mantissa byte down one position with a zero fill at the top.
-        ld      a,b
-        cp      8
-        jp      c,FALGN_ABIT    ; <8 remaining: bit-shift the rest
-        ld      a,(AM1)
-        ld      (AM0),a
-        ld      a,(AM2)
-        ld      (AM1),a
+        jp      nc,FANEGL       ; diff >= 24: A's contribution negligible
+        call    FSHR            ; shift main's C:H:L right by A bits
+        ld      a,e
+        ld      b,a             ; AEXP := BEXP
+        jp      FSIGNC
+FANEGL:
+        ; A negligible relative to B: zero A's mantissa, AEXP := BEXP
         xor     a
-        ld      (AM2),a
-        ld      a,b
-        sub     8
-        ld      b,a
-        jp      FALGN_AB8
-FALGN_ABIT:
-        ld      a,b
-        or      a
-        jp      z,FALGN_ADONE   ; whole number of bytes: no residual bits
-        ; Register-resident residual shift (B is 1..7 here, guaranteed
-        ; nonzero by the check above): load the 24-bit mantissa once,
-        ; shift entirely in registers, store once - instead of the old
-        ; per-bit FSRA call, which round-tripped all 3 mantissa bytes
-        ; through memory on every single bit shifted.
-        ld      a,(AM0)
-        ld      l,a
-        ld      a,(AM1)
-        ld      h,a
-        ld      a,(AM2)
         ld      c,a
-FALGN_ASHR:
+        ld      h,a
+        ld      l,a
+        ld      a,e
+        ld      b,a
+        jp      FSIGNC
+
+FAEXPB:
+        ; AEXP > BEXP (A = BEXP-AEXP, negative): negate for B's shift count.
+        ; AEXP (main's B) is already the correct result exponent here, so
+        ; nothing needs preserving/restoring the way BEXP did above.
+        neg
+        cp      24
+        jp      nc,FBNEGL       ; diff >= 24: B's contribution negligible
+        exx                     ; alternate active (operand B's mantissa)
+        call    FSHR            ; shift alternate's C:H:L right by A bits
+        exx                     ; main active again
+        jp      FSIGNC
+FBNEGL:
+        ; B negligible relative to A: zero B's mantissa (alternate bank)
+        exx
+        xor     a
+        ld      c,a
+        ld      h,a
+        ld      l,a
+        exx
+        jp      FSIGNC
+
+FSIGNC:
+        ; compare signs (both operands now share the same exponent)
+        ld      a,d             ; A = ASGN
+        exx                     ; alternate active; A preserved
+        cp      d               ; compare against BSGN
+        exx                     ; main active; EXX preserves flags
+        jp      nz,FSUBTR
+
+        ; same sign: mantissa add. Move main's low16 to the alternate bank
+        ; via the stack (cheap, one push/pop pair - not a named-memory
+        ; round trip), add there against B's own low16, then bring the
+        ; 24-bit sum back the same way. See project notes for the by-hand
+        ; trace confirming this is a correct 24-bit cross-bank add.
+        push    hl              ; stack: main's AM1:AM0
+        ld      a,c             ; A = AM2
+        exx                     ; alternate active
+        pop     de              ; DE(alt) = AM1:AM0
+        add     hl,de           ; HL(alt, own BM1:BM0) + DE -> sum low16
+        adc     a,c             ; A = AM2+BM2+carry -> sum high byte
+        push    hl              ; stack: sum's low16
+        exx                     ; main active; A (sum high byte) preserved
+        pop     hl              ; main's HL = sum's low16
+        ld      c,a             ; main's C = sum's high byte
+        jp      c,FOVERF        ; carry: mantissa overflowed bit 23
+        jp      FNORMR
+FOVERF:
+        ; overflow: shift right 1, restore the implicit bit, exponent++
         srl     c
         rr      h
         rr      l
-        djnz    FALGN_ASHR
-        ld      a,l
-        ld      (AM0),a
-        ld      a,h
-        ld      (AM1),a
-        ld      a,c
-        ld      (AM2),a
-FALGN_ADONE:
-        ld      a,(BEXP)
-        ld      (AEXP),a        ; align AEXP up to BEXP
-        jp      FASGN
+        set     7,c
+        inc     b
+        jp      FPACKR
 
-FALGN_AGT:
-        ; AEXP > BEXP: A = BEXP-AEXP is negative, negate to get AEXP-BEXP
-        neg                     ; A = AEXP - BEXP (positive)
-        cp      24
-        jp      nc,FALGN_BABS   ; diff >= 24: B's contribution rounds to zero
-        ld      b,a             ; B = shift count (1..23)
-FALGN_BB8:
-        ; same truncating byte-shift shortcut for the B mantissa.
-        ld      a,b
-        cp      8
-        jp      c,FALGN_BBIT    ; <8 remaining: bit-shift the rest
-        ld      a,(BM1)
-        ld      (BM0),a
-        ld      a,(BM2)
-        ld      (BM1),a
-        xor     a
-        ld      (BM2),a
-        ld      a,b
-        sub     8
-        ld      b,a
-        jp      FALGN_BB8
-FALGN_BBIT:
-        ld      a,b
-        or      a
-        jp      z,FASGN         ; whole number of bytes: no residual bits
-        ; Same register-resident residual shift as FALGN_ASHR, mirrored
-        ; for the B mantissa (B is 1..7 here, guaranteed nonzero).
-        ld      a,(BM0)
-        ld      l,a
-        ld      a,(BM1)
-        ld      h,a
-        ld      a,(BM2)
-        ld      c,a
-FALGN_BSHR:
-        srl     c
-        rr      h
-        rr      l
-        djnz    FALGN_BSHR
-        ld      a,l
-        ld      (BM0),a
-        ld      a,h
-        ld      (BM1),a
-        ld      a,c
-        ld      (BM2),a
-        jp      FASGN
-
-FALGN_AABS:
-        ; A is negligible relative to B: zero A's mantissa, set AEXP=BEXP
-        xor     a
-        ld      (AM0),a
-        ld      (AM1),a
-        ld      (AM2),a
-        ld      a,(BEXP)
-        ld      (AEXP),a
-        jp      FASGN
-
-FALGN_BABS:
-        ; B is negligible relative to A: zero B's mantissa
-        xor     a
-        ld      (BM0),a
-        ld      (BM1),a
-        ld      (BM2),a
-        jp      FASGN
-
-FASGN:
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        cp      b
-        jp      nz,FSUBM
-        ; same sign: mantissa A += B
-        ld      a,(AM0)
-        ld      b,a
-        ld      a,(BM0)
-        add     a,b
-        ld      (AM0),a
-        ld      a,(AM1)
-        ld      b,a
-        ld      a,(BM1)
-        adc     a,b
-        ld      (AM1),a
-        ld      a,(AM2)
-        ld      b,a
-        ld      a,(BM2)
-        adc     a,b
-        ld      (AM2),a
-        jp      nc,FNORM
-        ; carry out of bit 23: shift right and set hidden bit
-        call    FSRA
-        ld      a,(AM2)
-        or      80h
-        ld      (AM2),a
-        ld      a,(AEXP)
-        inc     a
-        ld      (AEXP),a
-        jp      FPACK
-
-FSUBM:
-        ; different signs: subtract smaller magnitude from larger.
-        call    FCMPM
-        jp      z,FZERO
-        jp      nc,FASUB          ; A >= B
-        ; B > A: A = B - A, sign = B sign
-        ld      a,(BM0)
-        ld      b,a
-        ld      a,(AM0)
-        ld      c,a
-        ld      a,b
-        sub     c
-        ld      (AM0),a
-        ld      a,(BM1)
-        ld      b,a
-        ld      a,(AM1)
-        ld      c,a
-        ld      a,b
-        sbc     a,c
-        ld      (AM1),a
-        ld      a,(BM2)
-        ld      b,a
-        ld      a,(AM2)
-        ld      c,a
-        ld      a,b
-        sbc     a,c
-        ld      (AM2),a
-        ld      a,(BSGN)
-        ld      (ASGN),a
-        jp      FNORM
-FASUB:
-        ld      a,(AM0)
-        ld      b,a
-        ld      a,(BM0)
-        ld      c,a
-        ld      a,b
-        sub     c
-        ld      (AM0),a
-        ld      a,(AM1)
-        ld      b,a
-        ld      a,(BM1)
-        ld      c,a
-        ld      a,b
-        sbc     a,c
-        ld      (AM1),a
-        ld      a,(AM2)
-        ld      b,a
-        ld      a,(BM2)
-        ld      c,a
-        ld      a,b
-        sbc     a,c
-        ld      (AM2),a
-
-FNORM:
-        ; Register-resident renormalize-after-subtract: load the mantissa
-        ; and exponent once, shift-left-until-normalized entirely in
-        ; registers, and store back once - instead of the old loop, which
-        ; called FSLA (a full 3-byte memory round trip) once per bit
-        ; shifted, plus re-read AM2/AEXP from memory on every iteration to
-        ; re-check the stopping conditions.
+FSUBTR:
+        ; different signs: subtract, result sign = sign of the bigger
+        ; magnitude. Compute A-B via the same cross-bank stack transfer;
+        ; a borrow out of the high byte means B was bigger, so negate the
+        ; (still in-progress) difference and take B's sign instead of
+        ; redoing a separate B-A subtraction.
         ;
-        ; The "mantissa == 0" check only needs to happen once, up front:
-        ; every shift below only ever executes when bit 7 of the high byte
-        ; (AM2) is confirmed NOT set, so the bit each shift discards off
-        ; the top is always 0 - a nonzero 24-bit value can never become
-        ; zero by repeatedly discarding leading zero bits, so if the
-        ; mantissa is nonzero here, it stays nonzero for the rest of this
-        ; loop without needing to re-check.
-        ld      a,(AM0)
-        ld      l,a
-        ld      a,(AM1)
-        ld      h,a
-        ld      a,(AM2)
+        ; "pop de" below writes both D and E, which would destroy BSGN (in
+        ; D) before FBBIG gets a chance to read it - save it into B first
+        ; (BEXP is no longer needed once alignment is done, so B is free).
+        push    hl              ; stack: main's AM1:AM0
+        ld      a,c              ; A = AM2
+        exx                      ; alternate active
+        ld      b,d              ; B = BSGN (saved before "pop de" clobbers D)
+        pop     de               ; DE(alt) = AM1:AM0
+        ex      de,hl            ; HL(alt) = AM1:AM0, DE(alt) = BM1:BM0
+        or      a                ; clear carry
+        sbc     hl,de            ; HL = A_low16 - B_low16
+        sbc     a,c              ; A = AM2-BM2-borrow -> diff high byte;
+                                ; final borrow-out in carry
+        jp      c,FBBIG          ; A_mantissa < B_mantissa
+        ; A_mantissa >= B_mantissa: diff (A-B) is correct, sign stays A's
+        push    hl
+        exx                      ; main active; A (diff high byte) preserved
+        pop     hl
         ld      c,a
+        jp      FNORMR
+
+FBBIG:
+        ; A_mantissa < B_mantissa: negate {A:HL} (still in the alternate
+        ; bank) to get B-A; result sign becomes B's sign (saved in B above).
+        ; C (BM2) is no longer needed once the subtract is done, so it's
+        ; free to use as the negate scratch instead of B (which now holds
+        ; BSGN and must survive).
+        ld      c,a
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+        ld      a,0
+        sbc     a,c             ; A = negated high byte
+        push    hl               ; stack: negated low16
+        exx                      ; main active; A preserved
+        pop     hl               ; main's HL = negated low16
+        ld      c,a               ; main's C = negated high byte
+        exx                       ; alternate active, to fetch BSGN (saved in B)
+        ld      a,b
+        exx                       ; main active
+        ld      d,a               ; ASGN := BSGN
+        jp      FNORMR
+
+FNORMR:
+        ; Register-resident renormalize, identical logic/stopping
+        ; conditions to the old memory-based FNORM, just targeting C:H:L
+        ; (mantissa) and B (exponent) directly instead of AM2:AM1:AM0 and
+        ; AEXP in memory.
+        ld      a,c
         or      h
         or      l
         jp      z,FZERO
-        ld      a,(AEXP)
-        ld      b,a
-FNORM_LP:
+FNORMR_LP:
         bit     7,c
-        jp      nz,FNORM_DONE
-        add     hl,hl           ; 16-bit shift left of AM1:AM0 (H=AM1,L=AM0)
-        rl      c               ; carry out of AM1's bit 7 rolls into AM2's bit 0
-        djnz    FNORM_LP        ; also decrements the AEXP copy in B
-FNORM_DONE:
-        ld      a,l
-        ld      (AM0),a
-        ld      a,h
-        ld      (AM1),a
-        ld      a,c
-        ld      (AM2),a
-        ld      a,b
-        ld      (AEXP),a
-
-FPACK:
-        call    FPA
+        jp      nz,FPACKR
+        add     hl,hl           ; 16-bit shift left of the low 16 bits
+        rl      c               ; carry out rolls into the high byte's bit 0
+        djnz    FNORMR_LP       ; also decrements the exponent copy in B
+FPACKR:
+        call    FPKR
 FARET:
         ld      sp,ix
         pop     ix
@@ -11719,6 +11635,96 @@ FZERO:
         ld      hl,0
         ld      de,0
         jp      FARET
+
+; Unpack whichever register bank is currently active (transparent to
+; EXX): entry D=sign+exp_hi7 E=exp_lo1+mant_hi7 H=mant_mid L=mant_lo (the
+; packed float already loaded into DEHL); exit B=exponent C=mantissa high
+; byte (implicit bit merged in) H=mantissa mid byte (unchanged from entry)
+; L=mantissa low byte (unchanged from entry) D=sign. Used by the
+; register-resident __fadd/__fsub above - unrelated to FUNA/FUNB, which
+; __fmul/__fdiv still use to unpack into memory scratch.
+FUNR:
+        ld      a,d
+        and     7fh
+        add     a,a
+        ld      b,a
+        ld      a,e
+        rlca
+        and     1
+        or      b
+        ld      b,a             ; B = exponent (final)
+        ld      a,d
+        and     80h
+        ld      d,a             ; D = sign (final) - safe, done with D's
+                                ; incoming value
+        ld      a,e
+        and     7fh
+        ld      c,a             ; C = mantissa high byte candidate
+        ld      a,b
+        or      a
+        jp      z,FUNRZ
+        ld      a,c
+        or      80h
+        ld      c,a
+FUNRZ:
+        ret
+
+; Pack whichever register bank is currently active: entry B=exponent
+; C=mantissa high byte H=mantissa mid byte L=mantissa low byte D=sign;
+; exit D=sign+exp_hi7 E=exp_lo1+mant_hi7 H=mant_mid (unchanged) L=mant_lo
+; (unchanged) - the packed float, ready to return via DE:HL.
+FPKR:
+        ld      a,b
+        or      a
+        jp      z,FPKRZ
+        ld      e,a             ; E = exponent (preserved copy; E is
+                                ; spare/free by pack time)
+        srl     a
+        or      d
+        ld      d,a             ; D = sign | (exp>>1)  [final]
+        ld      a,e
+        and     1
+        rrca
+        and     80h
+        ld      b,a             ; B's exponent role is done now
+        ld      a,c
+        and     7fh
+        or      b
+        ld      e,a             ; E = final byte2  [final]
+        ret
+FPKRZ:
+        ld      d,0
+        ld      e,0
+        ld      h,0
+        ld      l,0
+        ret
+
+; Shift whichever register bank's C:H:L mantissa (high:mid:low) right by
+; A bits (A in 1..23), used by FALGNR above. Byte-skip shortcut for shift
+; counts >=8 (a register move, not a memory copy like the old FALGN_AB8/
+; FALGN_BB8), falling through to a register-resident residual bit shift
+; for the remaining 0..7 bits - same technique as the old FALGN_ASHR/
+; FALGN_BSHR, just reusable across both operands via EXX instead of
+; duplicated per-operand.
+FSHR:
+FSHR_BC:
+        cp      8
+        jp      c,FSHR_RE
+        sub     8
+        ld      l,h
+        ld      h,c
+        ld      c,0
+        jp      FSHR_BC
+FSHR_RE:
+        or      a
+        ret     z
+        ld      b,a
+FSHR_BL:
+        srl     c
+        rr      h
+        rr      l
+        djnz    FSHR_BL
+        ret
 
 ; unpack DE:HL to A scratch
 FUNA:
