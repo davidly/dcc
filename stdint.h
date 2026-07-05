@@ -13,6 +13,10 @@ typedef int int16_t;
 typedef long int32_t;
 /** Unsigned 32-bit integer type. */
 typedef unsigned long uint32_t;
+/** Signed integer type capable of holding a pointer (16-bit target). */
+typedef int intptr_t;
+/** Unsigned integer type capable of holding a pointer (16-bit target). */
+typedef unsigned int uintptr_t;
 #ifndef _WCHAR_T
 #define _WCHAR_T
 /** Unsigned 16-bit wide character type. */
