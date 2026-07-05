@@ -2010,6 +2010,48 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
     return 1;
 }
 
+/* Same ivar/body shape check as ast_for_hoist_lvalue_addr_supported (a plain
+ * "for (...; ...; ivar++/ivar--)" loop whose whole body is one assignment
+ * statement with a side-effect-free rhs), but says nothing about the lhs -
+ * this fires whether or not the lhs address happens to be hoistable, since a
+ * row-invariant 2D array read living in the rhs (see
+ * ast_hoist_row_invariant_2d_reads in dcc_ast_gen_stmt.c) is a useful hoist
+ * on its own, independent of that other optimisation. Declining (0) is
+ * always safe: the caller falls back to ordinary per-iteration codegen. */
+int ast_for_rhs_hoist_scan_supported(const struct AstNode *n,
+                                            const char **out_ivar_name,
+                                            const struct AstNode **out_rhs)
+{
+    const char *ivar_name;
+    const struct AstNode *body_assign;
+
+    if (n == NULL || n->c == NULL)
+        return 0;
+    if ((n->c->kind == AST_UNARY || n->c->kind == AST_POSTFIX) &&
+        (n->c->op == TOK_INC || n->c->op == TOK_DEC) &&
+        n->c->a != NULL && n->c->a->kind == AST_IDENT) {
+        ivar_name = n->c->a->sval;
+    } else {
+        return 0;
+    }
+
+    if (n->d == NULL || n->d->kind != AST_EXPR_STMT || n->d->a == NULL)
+        return 0;
+    body_assign = n->d->a;
+    if (body_assign->kind != AST_ASSIGN)
+        return 0;
+    if (body_assign->op != '=' && body_assign->op != TOK_ADDEQ &&
+        body_assign->op != TOK_SUBEQ && body_assign->op != TOK_MULEQ &&
+        body_assign->op != TOK_DIVEQ)
+        return 0;
+    if (body_assign->b == NULL || ast_expr_has_side_effects(body_assign->b))
+        return 0;
+
+    if (out_ivar_name != NULL) *out_ivar_name = ivar_name;
+    if (out_rhs != NULL) *out_rhs = body_assign->b;
+    return 1;
+}
+
 /* Detects a for-loop whose body's FIRST statement is exactly
  *     IDENT = & BASE->FIELD[ INDEX_EXPR ];
  * where BASE is a plain file-scope static global and FIELD is a

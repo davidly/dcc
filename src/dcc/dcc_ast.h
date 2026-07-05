@@ -192,6 +192,15 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
                                                const struct AstNode **out_lhs,
                                                int *out_val_type);
 
+/* Extracts a for-loop's induction-variable name and its body's assignment
+ * rhs, for the caller to scan for row-invariant 2D array reads worth
+ * hoisting (see dcc_ast_gen_stmt.c's ast_hoist_row_invariant_2d_reads).
+ * Unlike ast_for_hoist_lvalue_addr_supported, this says nothing about the
+ * lhs - it fires whether or not the lhs address is itself hoistable. */
+int ast_for_rhs_hoist_scan_supported(const struct AstNode *n,
+                                            const char **out_ivar_name,
+                                            const struct AstNode **out_rhs);
+
 /* Detects a for-loop whose body's first statement reads a global's member
  * value that is provably invariant across the whole file (via the
  * dcc_global_scan.c whole-file write scan), even though the rest of the

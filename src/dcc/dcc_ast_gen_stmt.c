@@ -270,6 +270,104 @@ static int ast_for_first_iter_certain(const struct AstNode *n)
     }
 }
 
+/* Rewrites a copy of `rhs` (a for-loop body's assignment right-hand side),
+ * hoisting the address of any 2D array read within it whose OUTER (row)
+ * subscript does not reference `ivar_name` and has no side effects.
+ * tests/mm.c's matmult() inner loop is the motivating case:
+ *
+ *     for (k = 0; k < m; k++)
+ *         C[i][j] += A[i][k] * B[k][j];
+ *
+ * A[i][k]'s row subscript is `i`, invariant across the k-loop, but the
+ * expensive non-power-of-2 row-stride multiply (i*80) needed to form
+ * A[i][k]'s address is recomputed from scratch on every one of the m
+ * iterations by ordinary codegen - exactly the same waste
+ * ast_for_hoist_lvalue_addr_supported's hoist eliminates for a loop-
+ * invariant lhs, just one level removed (inside the rhs rather than being
+ * the lhs itself). B[k][j]'s row subscript is `k` itself, so it is NOT
+ * eligible: hoisting a column-only invariant there would only save the
+ * already-cheap power-of-2 column scale (j*4), not the expensive row
+ * multiply, so that case is deliberately left alone.
+ *
+ * For each qualifying 2D read found, this computes &ARR[row][0] once (via
+ * gen_index_addr_ast + emit_store_hl_to_sym_direct, as a side effect of
+ * this call - so this must be invoked exactly once, right before the loop
+ * whose body it is rewriting), stores it into a fresh compiler-temp
+ * pointer local, and replaces the read with a 1-D index through that
+ * pointer using the original (unhoisted) column subscript.
+ *
+ * Recurses through the tree sharing any subtree that needed no rewrite, and
+ * returns `rhs` itself unchanged if nothing in it qualifies - so a no-op
+ * call has no side effects and allocates nothing. Only descends through
+ * binary/unary operand positions (`a`/`b`), which is sufficient for the
+ * `A[i][k] * B[k][j]`-shaped expressions this targets; a hoistable read
+ * reachable only through some other AST shape is simply left un-hoisted,
+ * which is always safe, just less thorough. */
+static struct AstNode *ast_hoist_row_invariant_2d_reads(const struct AstNode *rhs,
+                                                                const char *ivar_name)
+{
+    const struct AstNode *outer;
+    const struct AstNode *row_idx;
+    struct AstNode *na;
+    struct AstNode *nb;
+    struct AstNode *copy;
+    int elem_val_type;
+
+    if (rhs == NULL)
+        return NULL;
+
+    if (rhs->kind == AST_INDEX && ast_index_2d_addressable_addr(rhs)) {
+        outer = rhs->a;
+        row_idx = outer->b;
+        if (!ast_expr_references_ident(row_idx, ivar_name) &&
+            !ast_expr_has_side_effects(row_idx) &&
+            ast_index_2d_array_elem_type(rhs, &elem_val_type) &&
+            !type_is_struct_object(elem_val_type)) {
+            struct Sym *addr_tmp;
+            struct AstNode *zero_lit;
+            struct AstNode *row_addr;
+            struct AstNode *ident;
+            struct AstNode *replaced;
+            char tmp_name[24];
+            int addr_val_type;
+
+            zero_lit = ast_new(&g_ast_arena, AST_INT_LIT);
+            zero_lit->ival = 0;
+            zero_lit->type = TYPE_INT;
+            row_addr = ast_new(&g_ast_arena, AST_INDEX);
+            row_addr->a = (struct AstNode *)outer;
+            row_addr->b = zero_lit;
+
+            sprintf(tmp_name, "#licm%d", g_licm_seq++);
+            addr_tmp = add_local_alloc(tmp_name, type_add_ptr(elem_val_type), 2);
+            gen_index_addr_ast(row_addr, &addr_val_type);  /* HL = &ARR[row][0], computed once */
+            emit_store_hl_to_sym_direct(addr_tmp);
+
+            ident = ast_new(&g_ast_arena, AST_IDENT);
+            ident->sval = ast_arena_strdup(&g_ast_arena, addr_tmp->name);
+            replaced = ast_new(&g_ast_arena, AST_INDEX);
+            replaced->a = ident;
+            replaced->b = rhs->b;
+            return replaced;
+        }
+        return (struct AstNode *)rhs;
+    }
+
+    if (rhs->kind != AST_BINARY && rhs->kind != AST_UNARY)
+        return (struct AstNode *)rhs;
+
+    na = ast_hoist_row_invariant_2d_reads(rhs->a, ivar_name);
+    nb = ast_hoist_row_invariant_2d_reads(rhs->b, ivar_name);
+    if (na == rhs->a && nb == rhs->b)
+        return (struct AstNode *)rhs;
+
+    copy = ast_new(&g_ast_arena, rhs->kind);
+    *copy = *rhs;
+    copy->a = na;
+    copy->b = nb;
+    return copy;
+}
+
 void ast_gen_for_stmt(const struct AstNode *n)
 {
     int ltop;
@@ -453,6 +551,39 @@ void ast_gen_for_stmt(const struct AstNode *n)
                 new_body->list[i] = n->d->list[i];
 
             hoist_body = new_body;
+        }
+    }
+
+    /* Loop-invariant rhs 2D-array-read row hoist (see
+     * ast_hoist_row_invariant_2d_reads above for the full shape/rationale).
+     * Runs independently of the lhs hoist above: fires whether or not
+     * hoist_body is already set, either editing that hoist_body's assign in
+     * place (when the lhs hoist above already built one, as in mm.c's
+     * matmult(), where both this and the lhs hoist apply to the same
+     * statement) or building a fresh hoist_body of its own (when the lhs
+     * hoist declined, e.g. because the lhs itself depends on the induction
+     * variable). Declines (leaves hoist_body/n->d exactly as decided above)
+     * for anything not matching that exact narrow shape. */
+    {
+        const char *rhs_ivar_name;
+        const struct AstNode *rhs_orig;
+
+        if (n->sym == NULL &&
+            ast_for_rhs_hoist_scan_supported(n, &rhs_ivar_name, &rhs_orig)) {
+            struct AstNode *rhs_rewritten = ast_hoist_row_invariant_2d_reads(rhs_orig, rhs_ivar_name);
+
+            if (rhs_rewritten != rhs_orig) {
+                if (hoist_body != NULL) {
+                    hoist_body->a->b = rhs_rewritten;
+                } else {
+                    struct AstNode *assign = ast_new(&g_ast_arena, AST_ASSIGN);
+                    assign->op = n->d->a->op;
+                    assign->a = n->d->a->a;
+                    assign->b = rhs_rewritten;
+                    hoist_body = ast_new(&g_ast_arena, AST_EXPR_STMT);
+                    hoist_body->a = assign;
+                }
+            }
         }
     }
 
