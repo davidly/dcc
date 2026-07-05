@@ -12076,7 +12076,9 @@ FMANZ:
         jp      FMDONE
 
 FMANBZ:
-        ; Alo != 0, Blo == 0: only Ahi*Bhi and Alo*Bhi survive.
+        ; Alo != 0, Blo == 0: only Ahi*Bhi and Alo*Bhi survive. Both terms
+        ; have an 8-bit operand (Bhi, Ahi respectively), so __m8u (half the
+        ; iterations of __m1u) applies to both, same as the general case.
         xor     a
         ld      (FP2),a
         ld      (FP3),a
@@ -12086,99 +12088,91 @@ FMANBZ:
         ld      a,(AM0)
         ld      c,a
         ld      a,(AM1)
-        ld      b,a             ; BC = Alo
-        ld      a,(BM2)
-        ld      l,a
-        ld      h,0             ; HL = 0:Bhi
-        call    __m1u           ; DE:HL = Alo*Bhi
+        ld      b,a             ; BC = Alo (multiplicand)
+        ld      a,(BM2)         ; A = Bhi (8-bit multiplier)
+        call    __m8u           ; HL:E = Alo*Bhi (byte0=E,byte1=L,byte2=H)
         ld      a,(FP2)
-        add     a,l
+        add     a,e
         ld      (FP2),a
         ld      a,(FP3)
-        adc     a,h
+        adc     a,l
         ld      (FP3),a
         ld      a,(FP4)
-        adc     a,e
+        adc     a,h
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,d
+        adc     a,0
         ld      (FP5),a
 
-        ld      a,(AM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Ahi
         ld      a,(BM2)
-        ld      l,a
-        ld      h,0             ; HL = 0:Bhi
-        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      c,a
+        ld      b,0             ; BC = 0:Bhi (multiplicand)
+        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
+        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
         ld      a,(FP4)
-        add     a,l
+        add     a,e
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,h
+        adc     a,l
         ld      (FP5),a
         jp      FMDONE
 
 FMAZBN:
-        ; Alo == 0, Blo != 0: only Ahi*Bhi and Ahi*Blo survive.
+        ; Alo == 0, Blo != 0: only Ahi*Bhi and Ahi*Blo survive; both terms
+        ; have an 8-bit operand (Ahi both times), same __m8u treatment.
         xor     a
         ld      (FP2),a
         ld      (FP3),a
         ld      (FP4),a
         ld      (FP5),a
 
-        ld      a,(AM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Ahi
         ld      a,(BM0)
-        ld      l,a
+        ld      c,a
         ld      a,(BM1)
-        ld      h,a             ; HL = Blo
-        call    __m1u           ; DE:HL = Ahi*Blo
+        ld      b,a             ; BC = Blo (multiplicand)
+        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
+        call    __m8u           ; HL:E = Ahi*Blo (byte0=E,byte1=L,byte2=H)
         ld      a,(FP2)
-        add     a,l
+        add     a,e
         ld      (FP2),a
         ld      a,(FP3)
-        adc     a,h
+        adc     a,l
         ld      (FP3),a
         ld      a,(FP4)
-        adc     a,e
+        adc     a,h
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,d
+        adc     a,0
         ld      (FP5),a
 
-        ld      a,(AM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Ahi
         ld      a,(BM2)
-        ld      l,a
-        ld      h,0             ; HL = 0:Bhi
-        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      c,a
+        ld      b,0             ; BC = 0:Bhi (multiplicand)
+        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
+        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
         ld      a,(FP4)
-        add     a,l
+        add     a,e
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,h
+        adc     a,l
         ld      (FP5),a
         jp      FMDONE
 
 FMABZ:
         ; Alo == 0, Blo == 0: only Ahi*Bhi survives, landing at offset 16
         ; with nothing to add to (accumulator would otherwise be zero).
+        ; Both operands are 8-bit, so __m8u applies directly.
         xor     a
         ld      (FP2),a
         ld      (FP3),a
-        ld      a,(AM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Ahi
         ld      a,(BM2)
-        ld      l,a
-        ld      h,0             ; HL = 0:Bhi
-        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
-        ld      a,l
+        ld      c,a
+        ld      b,0             ; BC = 0:Bhi (multiplicand)
+        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
+        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
+        ld      a,e
         ld      (FP4),a
-        ld      a,h
+        ld      a,l
         ld      (FP5),a
 
 FMDONE:
