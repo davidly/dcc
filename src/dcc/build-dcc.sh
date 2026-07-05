@@ -27,7 +27,7 @@ if [ -z "$CC" ]; then
         *)      CC=gcc ;;
     esac
 fi
-CFLAGS=${CFLAGS:--std=c89 -Wall -Wextra -O2}
+CFLAGS=${CFLAGS:--std=c89 -Wall -Wextra -O2 -g}
 
 # On macOS, clang can emit large tentative definitions into __DATA,__common
 # with very high alignment (for large objects), which triggers an ld warning
