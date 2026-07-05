@@ -1378,7 +1378,9 @@ static int run_build(struct Config *cfg)
     if (!cmd_arg(cmd, sizeof(cmd), rtl_src)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), "-o")) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), rtl_min)) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), macs[0])) return 0;
+    for (i = 0; i < cfg->input_count; i++) {
+        if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
+    }
     if (!run_cmd(cmd) || !file_exists(rtl_min) || !to_crlf(rtl_min))
         return 0;
 
