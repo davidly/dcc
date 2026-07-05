@@ -11734,10 +11734,12 @@ FUNA:
         and     1
         or      b
         ld      (AEXP),a
+        ld      c,a             ; cache the exponent - avoids reloading it
+                                ; from memory below, once A is clobbered
         ld      a,e
         and     7fh
         ld      b,a
-        ld      a,(AEXP)
+        ld      a,c
         or      a
         jp      z,FUNAZ
         ld      a,b
@@ -11765,10 +11767,12 @@ FUNB:
         and     1
         or      b
         ld      (BEXP),a
+        ld      c,a             ; cache the exponent - avoids reloading it
+                                ; from memory below, once A is clobbered
         ld      a,e
         and     7fh
         ld      b,a
-        ld      a,(BEXP)
+        ld      a,c
         or      a
         jp      z,FUNBZ
         ld      a,b
