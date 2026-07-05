@@ -10,8 +10,8 @@ Run the commands for your platform from the root of the DCC repo folder.
 If you edit the docs in VS Code, install these Markdown extensions for a better
 editing experience:
 
-- [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one)
-- [markdownlint](https://marketplace.visualstudio.com/items?itemName=DavidAnson.vscode-markdownlint)
+- [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one){: target="_blank" }
+- [markdownlint](https://marketplace.visualstudio.com/items?itemName=DavidAnson.vscode-markdownlint){: target="_blank" }
 
 === "Windows"
 
