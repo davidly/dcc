@@ -2294,6 +2294,234 @@ static int pass_reuse_array_word_addr(void)
     return changed;
 }
 
+/* Byte-array counterpart of pass_ix_array_word_addr: same canonical raw
+ * shape, minus the "add hl,hl" doubling step (a byte array's stride is 1,
+ * so the index needs no scaling before being added to the base address).
+ * Matches:
+ *   push ix
+ *   pop hl
+ *   ld de,BASEOFF
+ *   add hl,de
+ *   push hl
+ *   ld l,(ix+O) / ld h,(ix+O+1)
+ *   [dec hl | inc hl]        (optional index adjustment)
+ *   ex de,hl
+ *   pop hl
+ *   add hl,de
+ * and rewrites in place to the canonical block peep_match_array_byte_addr_block
+ * recognizes:
+ *   ld l,(ix+O)
+ *   ld h,(ix+O+1)
+ *   [dec hl | inc hl]
+ *   push ix
+ *   pop de
+ *   add hl,de
+ *   ld de,ARROFF
+ *   add hl,de */
+static int pass_ix_array_byte_addr(void)
+{
+    int i;
+    int changed;
+    int baseoff;
+    int idxoff;
+    int step;
+    int j;
+    char line[160];
+
+    changed = 0;
+
+    for (i = 0; i + 9 < nlines; ++i) {
+        if (eq(i, "push ix") &&
+            eq(i + 1, "pop hl") &&
+            peep_parse_ld_de_signed(lines[i + 2], &baseoff) &&
+            eq(i + 3, "add hl,de") &&
+            eq(i + 4, "push hl") &&
+            peep_parse_ld_ix_pair(lines[i + 5], lines[i + 6], &idxoff)) {
+            j = i + 7;
+            step = 0;
+            if (eq(j, "dec hl")) {
+                step = -1;
+                j++;
+            } else if (eq(j, "inc hl")) {
+                step = 1;
+                j++;
+            }
+
+            if (eq(j, "ex de,hl") &&
+                eq(j + 1, "pop hl") &&
+                eq(j + 2, "add hl,de")) {
+                replace1_tagged(i, lines[i + 5], "ix_array_byte_addr");
+                replace1(i + 1, lines[i + 6]);
+                if (step < 0)
+                    replace1(i + 2, "dec hl");
+                else if (step > 0)
+                    replace1(i + 2, "inc hl");
+                else
+                    replace1(i + 2, "push ix");
+
+                if (step != 0)
+                    replace1(i + 3, "push ix");
+                else
+                    replace1(i + 3, "pop de");
+                if (step != 0)
+                    replace1(i + 4, "pop de");
+                else
+                    replace1(i + 4, "add hl,de");
+                if (step != 0)
+                    replace1(i + 5, "add hl,de");
+                else {
+                    sprintf(line, "ld de,%d", baseoff);
+                    replace1(i + 5, line);
+                }
+                if (step != 0) {
+                    sprintf(line, "ld de,%d", baseoff);
+                    replace1(i + 6, line);
+                } else {
+                    replace1(i + 6, "add hl,de");
+                }
+                if (step != 0)
+                    replace1(i + 7, "add hl,de");
+
+                if (step != 0)
+                    delete_n(i + 8, (j + 3) - (i + 8));
+                else
+                    delete_n(i + 7, (j + 3) - (i + 7));
+
+                changed = 1;
+                if (i > 0) --i;
+            }
+        }
+    }
+
+    return changed;
+}
+
+/* Matches the canonical array-byte-address block that pass_ix_array_byte_addr
+ * produces:
+ *   ld l,(ix+O)
+ *   ld h,(ix+O+1)
+ *   [dec hl | inc hl]        (optional; step = -1/+1, else 0)
+ *   push ix
+ *   pop de
+ *   add hl,de
+ *   ld de,ARROFF
+ *   add hl,de
+ * On success returns the block's length in lines (7 or 8) and sets
+ * *out_idxoff, *out_step, *out_arroff; returns 0 (outputs untouched) on no
+ * match. */
+static int peep_match_array_byte_addr_block(int i, int *out_idxoff,
+                                                    int *out_step, int *out_arroff)
+{
+    int idxoff;
+    int step;
+    int arroff;
+    int j;
+
+    if (!peep_parse_ld_ix_pair(lines[i], lines[i + 1], &idxoff))
+        return 0;
+    j = i + 2;
+    step = 0;
+    if (eq(j, "dec hl")) { step = -1; j++; }
+    else if (eq(j, "inc hl")) { step = 1; j++; }
+
+    if (!eq(j, "push ix")) return 0;
+    if (!eq(j + 1, "pop de")) return 0;
+    if (!eq(j + 2, "add hl,de")) return 0;
+    if (!peep_parse_ld_de_signed(lines[j + 3], &arroff)) return 0;
+    if (!eq(j + 4, "add hl,de")) return 0;
+
+    *out_idxoff = idxoff;
+    *out_step = step;
+    *out_arroff = arroff;
+    return (j + 5) - i;
+}
+
+/* Byte-array counterpart of pass_reuse_array_word_addr. Two array-byte-
+ * address blocks for the SAME array and SAME index variable, separated only
+ * by a push hl / <straight-line gap that reads but never writes the index
+ * variable, no label> / pop hl / ld (hl),R (single-byte store through the
+ * address) - the second address is recomputed from scratch even though HL,
+ * right after that single-byte store, is unchanged (still exactly
+ * &array[idxA]+stepA, since - unlike the word-store tail's "inc hl" - a
+ * one-byte store never moves HL). Common in the same e.c shape as the word
+ * version: `a[n] = x % n; ... a[n-1] ...` once `a` has been narrowed from
+ * int to unsigned char. */
+static int pass_reuse_array_byte_addr(void)
+{
+    int i;
+    int changed;
+    int idxoffA, stepA, arroffA, lenA;
+    int idxoffB, stepB, arroffB, lenB;
+    int gap_end;
+    int k;
+    int delta;
+    char line[64];
+
+    changed = 0;
+
+    for (i = 0; i + 6 < nlines; ++i) {
+        lenA = peep_match_array_byte_addr_block(i, &idxoffA, &stepA, &arroffA);
+        if (!lenA)
+            continue;
+        if (!eq(i + lenA, "push hl"))
+            continue;
+
+        gap_end = 0;
+        for (k = i + lenA + 1; k + 1 < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;                       /* control-flow join: unsafe */
+            if (peep_writes_ix_off(lines[k], idxoffA))
+                break;                       /* index variable changed */
+            if (peep_line_is_unsafe_call(lines[k]))
+                break;                       /* could alias the index variable */
+            if (eq(k, "pop hl")) {
+                if (eq(k + 1, "ld (hl),a") || eq(k + 1, "ld (hl),b") ||
+                    eq(k + 1, "ld (hl),c") || eq(k + 1, "ld (hl),d") ||
+                    eq(k + 1, "ld (hl),e"))
+                    gap_end = k + 2;
+                break;   /* pop hl found (matched or not): gap ends here */
+            }
+        }
+        if (gap_end == 0)
+            continue;
+
+        lenB = peep_match_array_byte_addr_block(gap_end, &idxoffB, &stepB, &arroffB);
+        if (!lenB)
+            continue;
+        if (idxoffB != idxoffA || arroffB != arroffA)
+            continue;
+
+        /* HL == &array[idxA]+stepA unchanged right after the byte-store
+         * tail (no "+1" term here - a single-byte store never advances HL,
+         * unlike the word version's second-byte "inc hl"). Block B wants
+         * &array[idxA]+stepB, so delta is simply stepB - stepA. */
+        delta = stepB - stepA;
+
+        delete_n(gap_end, lenB);
+        if (delta == 0) {
+            /* HL already holds exactly the address block B wanted. */
+            changed = 1;
+            continue;
+        }
+        if (delta >= -4 && delta <= 4) {
+            int n = delta > 0 ? delta : -delta;
+            int m;
+            for (m = 0; m < n; ++m)
+                insert_line(gap_end, delta > 0 ? "inc hl" : "dec hl");
+            replace1_tagged(gap_end, lines[gap_end], "reuse_array_byte_addr");
+        } else {
+            sprintf(line, "ld de,%d", delta);
+            insert_line(gap_end, "add hl,de");
+            insert_line(gap_end, line);
+            replace1_tagged(gap_end, lines[gap_end], "reuse_array_byte_addr");
+        }
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_ix_postdec_to_local(void)
 {
     int i;
@@ -11318,6 +11546,8 @@ int main(int argc, char **argv)
         if (pass_e_signed_le_zero()) changed = 1;
         if (pass_ix_array_word_addr()) changed = 1;
         if (pass_reuse_array_word_addr()) changed = 1;
+        if (pass_ix_array_byte_addr()) changed = 1;
+        if (pass_reuse_array_byte_addr()) changed = 1;
         if (pass_ix_postdec_to_local()) changed = 1;
         if (pass_store_word_const_hl()) changed = 1;
         if (pass_findsolution_clear_board_loop()) changed = 1;
