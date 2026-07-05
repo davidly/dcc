@@ -165,12 +165,23 @@ m80-command=${DCC_DIR}/m80.com
 l80-command=${DCC_DIR}/l80.com
 ```
 
-With that file in place:
+With that file in place, set the tool roots and build the app:
 
 ```sh
 export DCC_DIR=$HOME/GitHub/dcc
 export NTVCM_DIR=$HOME/GitHub/ntvcm
+
 dccmake
+```
+
+The generated CP/M executable lands in the configured build directory, for
+example `build/ATTNC99.COM`. If you want the `.COM` beside your source file and
+do not need to keep the intermediate `.MAC`, `.REL`, `.PRN`, and stripped
+runtime files, copy it back and remove the build directory:
+
+```sh
+mv -f build/*.COM .
+rm -rf build
 ```
 
 Command-line values override the file, so this builds the same app without the
