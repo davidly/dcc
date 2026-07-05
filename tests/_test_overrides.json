@@ -14,6 +14,7 @@
     { "name": "tchess", "args": "-c -p:1" },
     { "name": "targs", "args": "a bb ccc dddd eeeee", "host": true },
     { "name": "tkbd", "stdin": "x" },
+    { "name": "tscanin", "stdin": "42 -7 hello" },
     { "name": "triangle", "stack_size": 768 },
     { "name": "catalan", "stack_size": 768 },
     { "name": "fileops", "host": true },

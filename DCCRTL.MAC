@@ -772,9 +772,21 @@ __gchr:
 gchr_no_pb:
         call    __cflush        ; show any pending prompt before blocking
         ld      c,1
-        call    5
+        call    5               ; BDOS fn 1: blocking console input, echoes A
+        cp      1ah             ; Ctrl-Z: CP/M text EOF
+        jr      z,gchr_eof
+        cp      0dh             ; CR (Enter): echo LF and present '\n'
+        jr      nz,gchr_ret
+        ld      e,0ah
+        ld      c,2
+        call    5               ; echo the LF following the echoed CR
+        ld      a,0ah           ; deliver '\n' to the caller
+gchr_ret:
         ld      h,0
         ld      l,a
+        ret
+gchr_eof:
+        ld      hl,0ffffh       ; EOF sentinel consumed by _read
         ret
 
         public  __kbht
@@ -4862,6 +4874,8 @@ __atl_d:        db      0
 ; single-precision float in DE:HL (DE=high word, HL=low word).
 ; Accepts optional leading whitespace, optional +/- sign, decimal
 ; digits, optional decimal point, and optional e/E signed exponent.
+; Also accepts nan, inf, and infinity (case-insensitive).  Overflow
+; returns signed infinity; underflow returns signed zero.
 ; Note: standard C89 atof returns double; this returns float because
 ; dcc has no double type.
 _atof:
@@ -4876,17 +4890,24 @@ _atof:
         ld      (__atf_mant+2),hl       ; mant = 0.0f
         ld      (__atf_frac),hl         ; fractional digit count = 0
         ld      (__atf_expo),hl         ; explicit exponent = 0
+        ld      (__atf_adj),hl          ; skipped integer digit exponent adj = 0
+        ld      (__atf_esav),hl         ; no exponent marker yet
         xor     a
         ld      (__atf_neg),a
         ld      (__atf_dp),a            ; seen decimal point = 0
         ld      (__atf_eneg),a
+        ld      (__atf_edig),a
+        ld      (__atf_sd),a            ; saw a mantissa digit = 0
+        ld      (__atf_ndig),a          ; kept significant digits = 0
         ld      hl,(__atf_p)
 atf_ws:
         ld      a,(hl)
         cp      ' '
         jr      z,atf_wsi
-        cp      9                       ; horizontal tab
-        jr      nz,atf_sign
+        cp      9                       ; C whitespace: \t..\r
+        jr      c,atf_sign
+        cp      14
+        jr      nc,atf_sign
 atf_wsi:
         inc     hl
         jr      atf_ws
@@ -4903,6 +4924,71 @@ atf_spl:
         inc     hl
 atf_psv:
         ld      (__atf_p),hl
+        ; C99 spellings are useful on a single-precision target too.
+        ld      a,(hl)
+        and     0dfh
+        cp      'N'
+        jr      nz,atf_chk_inf
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'A'
+        jr      nz,atf_dlp
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'N'
+        jr      nz,atf_dlp
+        inc     hl
+        ld      (__atf_p),hl
+        ld      de,07fc0h              ; quiet NaN, 0x7fc00000
+        ld      hl,0
+        jp      atf_apply_sign
+atf_chk_inf:
+        ld      hl,(__atf_p)
+        ld      a,(hl)
+        and     0dfh
+        cp      'I'
+        jr      nz,atf_dlp
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'N'
+        jr      nz,atf_dlp
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'F'
+        jr      nz,atf_dlp
+        inc     hl
+        ld      (__atf_p),hl           ; consume at least "inf"
+        ld      a,(hl)
+        and     0dfh
+        cp      'I'
+        jp      nz,atf_make_inf
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'N'
+        jp      nz,atf_make_inf
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'I'
+        jp      nz,atf_make_inf
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'T'
+        jp      nz,atf_make_inf
+        inc     hl
+        ld      a,(hl)
+        and     0dfh
+        cp      'Y'
+        jp      nz,atf_make_inf
+        inc     hl
+        ld      (__atf_p),hl           ; full "infinity" consumed
+        jp      atf_make_inf
         ; main digit loop: accumulates integer and fractional digits
 atf_dlp:
         ld      hl,(__atf_p)
@@ -4911,21 +4997,48 @@ atf_dlp:
         jr      nz,atf_nodp
         ld      a,(__atf_dp)
         or      a
-        jr      nz,atf_mant_done        ; second '.' ends parse
+        jp      nz,atf_mant_done        ; second '.' ends parse
         ld      a,1
         ld      (__atf_dp),a
         inc     hl
         ld      (__atf_p),hl
-        jr      atf_dlp
+        jp      atf_dlp
 atf_nodp:
         cp      '0'
-        jr      c,atf_mant_done
+        jp      c,atf_mant_done
         cp      '9'+1
-        jr      nc,atf_mant_done
+        jp      nc,atf_mant_done
         sub     '0'
         ld      (__atf_d),a
+        ld      a,1
+        ld      (__atf_sd),a            ; saw at least one mantissa digit
         inc     hl
         ld      (__atf_p),hl
+        ; Keep at most 38 significant decimal digits so the intermediate
+        ; float mantissa cannot overflow before exponent scaling.  Skipped
+        ; integer digits are folded into an exponent adjustment; skipped
+        ; fractional digits are simply discarded precision.
+        ld      a,(__atf_ndig)
+        or      a
+        jr      nz,atf_sig_digit
+        ld      a,(__atf_d)
+        or      a
+        jr      z,atf_keep_digit        ; leading zero: keep but don't count
+atf_sig_digit:
+        ld      a,(__atf_ndig)
+        cp      38
+        jr      c,atf_count_digit
+        ld      a,(__atf_dp)
+        or      a
+        jp      nz,atf_dlp              ; extra fractional digit: drop it
+        ld      hl,(__atf_adj)          ; extra integer digit: value *= 10
+        inc     hl
+        ld      (__atf_adj),hl
+        jp      atf_dlp
+atf_count_digit:
+        inc     a
+        ld      (__atf_ndig),a
+atf_keep_digit:
         ld      a,(__atf_dp)
         or      a
         jr      z,atf_nfc
@@ -4969,8 +5082,24 @@ atf_nfc:
         pop     bc
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),de
-        jr      atf_dlp
+        jp      atf_dlp
 atf_mant_done:
+        ; No mantissa digit means no valid numeric token (e.g. "", ".",
+        ; "e5", ".e5", "+.").  C requires strtod to leave endptr at the
+        ; original nptr and return 0 in that case, so restore it here rather
+        ; than consuming a stray '.'/exponent.
+        ld      b,a                     ; preserve current char
+        ld      a,(__atf_sd)
+        or      a
+        jr      nz,atf_md_go
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      (__atf_p),hl            ; endptr = original nptr
+        ld      hl,0
+        ld      de,0
+        jp      atf_ret
+atf_md_go:
+        ld      a,b                     ; restore current char
         ; a = current char; check for e/E exponent
         cp      'e'
         jr      z,atf_expd
@@ -4978,6 +5107,7 @@ atf_mant_done:
         jr      nz,atf_net
 atf_expd:
         ld      hl,(__atf_p)
+        ld      (__atf_esav),hl         ; restore here if no exponent digits
         inc     hl                      ; skip 'e'/'E'
         ld      a,(hl)
         cp      '-'
@@ -5001,6 +5131,13 @@ atf_elp:
         jr      nc,atf_net
         sub     '0'
         ld      c,a
+        ld      a,1
+        ld      (__atf_edig),a
+        ld      hl,(__atf_expo)
+        ld      de,400                  ; bound parse work for huge exponents
+        or      a
+        sbc     hl,de
+        jr      nc,atf_esat
         ld      hl,(__atf_expo)
         add     hl,hl
         ld      d,h
@@ -5011,12 +5148,31 @@ atf_elp:
         ld      e,c
         ld      d,0
         add     hl,de                   ; HL = expo*10 + digit
+        ld      de,400
+        or      a
+        sbc     hl,de
+        jr      c,atf_estore_orig
+atf_esat:
+        ld      hl,400
+        jr      atf_estore
+atf_estore_orig:
+        add     hl,de                   ; undo compare: restore computed expo
+atf_estore:
         ld      (__atf_expo),hl
         ld      hl,(__atf_p)
         inc     hl
         ld      (__atf_p),hl
         jr      atf_elp
 atf_net:
+        ld      a,(__atf_edig)
+        or      a
+        jr      nz,atf_net_go
+        ld      hl,(__atf_esav)
+        ld      a,h
+        or      l
+        jr      z,atf_net_go
+        ld      (__atf_p),hl            ; "1e" leaves endptr at 'e'
+atf_net_go:
         ; net_exp = (eneg ? -(expo+frac) : expo-frac)
         ld      hl,(__atf_expo)
         ld      de,(__atf_frac)
@@ -5033,12 +5189,28 @@ atf_net:
 atf_net_pos:
         sbc     hl,de                   ; HL = expo - frac (carry=0)
 atf_net_sv:
+        ld      de,(__atf_adj)
+        add     hl,de                   ; account for skipped integer digits
         ld      (__atf_net),hl
+        ; Zero stays zero regardless of exponent range.
+        ld      hl,(__atf_mant)
+        ld      a,h
+        or      l
+        ld      hl,(__atf_mant+2)
+        or      h
+        or      l
+        jr      z,atf_sign_bit
+        ld      hl,(__atf_net)
         ld      a,h
         or      l
         jr      z,atf_sign_bit          ; net == 0: no scaling needed
         bit     7,h
         jr      nz,atf_neg_net          ; net < 0: divide by 10
+        ld      de,39                   ; > FLT_MAX decimal range -> infinity
+        or      a
+        sbc     hl,de
+        jr      nc,atf_make_inf
+        ld      hl,(__atf_net)
 atf_pos_net:
         ; mant *= 10.0f, net times
         ld      de,04120h
@@ -5064,6 +5236,14 @@ atf_pos_net:
         jr      nz,atf_pos_net
         jr      atf_sign_bit
 atf_neg_net:
+        ld      de,(__atf_net)
+        ld      hl,0
+        or      a
+        sbc     hl,de                   ; HL = abs(net)
+        ld      de,78                   ; FLT_MAX*10^-78 < FLT_MIN for any
+        or      a                       ; mantissa, so this always underflows
+        sbc     hl,de
+        jr      nc,atf_make_zero
         ; mant /= 10.0f, |net| times (net is negative, counting toward 0)
         ld      hl,(__atf_mant)
         ld      de,(__atf_mant+2)
@@ -5089,6 +5269,7 @@ atf_neg_net:
 atf_sign_bit:
         ld      hl,(__atf_mant)
         ld      de,(__atf_mant+2)
+atf_apply_sign:
         ld      a,(__atf_neg)
         or      a
         jr      z,atf_ret
@@ -5098,14 +5279,27 @@ atf_sign_bit:
 atf_ret:
         pop     ix
         ret
+atf_make_inf:
+        ld      hl,0
+        ld      de,07f80h
+        jr      atf_apply_sign
+atf_make_zero:
+        ld      hl,0
+        ld      de,0
+        jr      atf_apply_sign
 __atf_p:        dw      0
 __atf_mant:     ds      4
 __atf_frac:     dw      0
 __atf_expo:     dw      0
+__atf_adj:      dw      0
 __atf_net:      dw      0
+__atf_esav:     dw      0
 __atf_neg:      db      0
 __atf_dp:       db      0
 __atf_eneg:     db      0
+__atf_edig:     db      0
+__atf_sd:       db      0
+__atf_ndig:     db      0
 __atf_d:        db      0
 
         public  _strtod
@@ -5416,10 +5610,11 @@ _read:
         ld      a,(ix+8)
         or      (ix+9)
         jr      z,rdzero
-        call    __cflush        ; show any pending prompt before blocking
-        ld      c,6
-        ld      e,0ffh
-        call    5
+        call    __gchr          ; blocking console input, with stdin pushback
+        ld      a,h
+        or      a
+        jr      nz,rdzero       ; H!=0 -> EOF sentinel (0FFFFh): 0 bytes read
+        ld      a,l
         ld      l,(ix+6)
         ld      h,(ix+7)
         ld      (hl),a

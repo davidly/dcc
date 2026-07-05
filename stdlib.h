@@ -46,7 +46,9 @@ int atoi(const char *nptr);
 long atol(const char *nptr);
 /** Convert the leading decimal text in nptr to float.
  *  Note: C89 atof normally returns double; dcc has no double type,
- *  so this returns float (IEEE 754 single precision). */
+ *  so this returns float (IEEE 754 single precision).  Accepts nan,
+ *  inf, and infinity spellings.  Overflow returns signed infinity;
+ *  underflow returns signed zero. */
 float atof(const char *nptr);
 /** Convert text in nptr to long using base 2 through 36, or base 0 for auto-detection. */
 long strtol(const char *nptr, char **endptr, int base);
