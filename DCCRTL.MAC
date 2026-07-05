@@ -6477,6 +6477,77 @@ lm1u_b:
         ex      de,hl
         ret
 
+; __m8u: unsigned 8x16 -> 24-bit multiply, register ABI.
+;   Entry: A  = 8-bit multiplier, BC = 16-bit multiplicand.
+;   Exit:  HL:E = 24-bit product (HL = high 16 bits, E = low 8 bits).
+;   Used by __fmul for the three mantissa partial products that have an
+;   8-bit operand (Ahi*Blo, Alo*Bhi, Ahi*Bhi).  Only 8 multiplier bits are
+;   processed, so it runs half the iterations of the full 16x16 __m1u while
+;   using the identical or-a / bit-test / jr z,$+3 / add / shift idiom, here
+;   shifting the 3-byte accumulator HL:E right one bit per step.
+        public  __m8u
+__m8u:
+        ld      e,a                     ; E = multiplier / low accumulator
+        ld      hl,0                    ; HL = high accumulator
+        ; --- 8 unrolled bit steps (see __m1u for the idiom) --------------
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        ret
+
 ; __m1s: signed 16x16 -> 32 multiply, register ABI.
 ;   Entry: BC = LHS low word, HL = RHS low word.  Exit: DE:HL = product.
         public  __m1s
@@ -11949,64 +12020,58 @@ FMANZ:
         ld      (FP4),a
         ld      (FP5),a         ; accumulator = high16(Alo*Blo), high half 0
 
-        ; term = Ahi*Blo -> DE:HL (32-bit); add in full at offset 0.
-        ld      a,(AM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Ahi
+        ; term = Ahi*Blo (8x16) -> HL:E (24-bit); add in full at offset 0.
         ld      a,(BM0)
-        ld      l,a
+        ld      c,a
         ld      a,(BM1)
-        ld      h,a             ; HL = Blo
-        call    __m1u           ; DE:HL = Ahi*Blo
+        ld      b,a             ; BC = Blo (multiplicand)
+        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
+        call    __m8u           ; HL:E = Ahi*Blo (byte0=E,byte1=L,byte2=H)
         ld      a,(FP2)
-        add     a,l
+        add     a,e
         ld      (FP2),a
         ld      a,(FP3)
-        adc     a,h
+        adc     a,l
         ld      (FP3),a
         ld      a,(FP4)
-        adc     a,e
+        adc     a,h
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,d
+        adc     a,0
         ld      (FP5),a
 
-        ; term = Alo*Bhi -> DE:HL (32-bit); add in full at offset 0.
+        ; term = Alo*Bhi (16x8) -> HL:E (24-bit); add in full at offset 0.
         ld      a,(AM0)
         ld      c,a
         ld      a,(AM1)
-        ld      b,a             ; BC = Alo
-        ld      a,(BM2)
-        ld      l,a
-        ld      h,0             ; HL = 0:Bhi
-        call    __m1u           ; DE:HL = Alo*Bhi
+        ld      b,a             ; BC = Alo (multiplicand)
+        ld      a,(BM2)         ; A = Bhi (8-bit multiplier)
+        call    __m8u           ; HL:E = Alo*Bhi (byte0=E,byte1=L,byte2=H)
         ld      a,(FP2)
-        add     a,l
+        add     a,e
         ld      (FP2),a
         ld      a,(FP3)
-        adc     a,h
+        adc     a,l
         ld      (FP3),a
         ld      a,(FP4)
-        adc     a,e
+        adc     a,h
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,d
+        adc     a,0
         ld      (FP5),a
 
-        ; term = Ahi*Bhi; both operands < 256 so the product fits entirely
-        ; in HL (DE = 0 always) - add just the two bytes at offset 16.
-        ld      a,(AM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Ahi
+        ; term = Ahi*Bhi (8x8) -> HL:E; product fits in 16 bits (H = 0), so
+        ; the value is L:E - add its two bytes at offset 16.
         ld      a,(BM2)
-        ld      l,a
-        ld      h,0             ; HL = 0:Bhi
-        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      c,a
+        ld      b,0             ; BC = 0:Bhi (multiplicand)
+        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
+        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
         ld      a,(FP4)
-        add     a,l
+        add     a,e
         ld      (FP4),a
         ld      a,(FP5)
-        adc     a,h
+        adc     a,l
         ld      (FP5),a
         jp      FMDONE
 
@@ -12135,28 +12200,32 @@ FMDONE:
         jp      FMPAK
 
 FMNOC:
-        ; Mantissa = product >> 23.  Shift P5:P4:P3:P2 right by 7.
-        ld      b,7
-FMSR7:
+        ; Mantissa = (product >> 23) & 0FFFFFFh.  The 32-bit value in
+        ; FP5:FP4:FP3:FP2 (FP5 = high byte) has to be shifted right by 7 and
+        ; its low 24 bits kept.  Bit 7 of FP5 is guaranteed clear here (the
+        ; product-bit-47 case branched to the >>24 path above), so V < 2^31
+        ; and therefore
+        ;   (V >> 7) & 0FFFFFFh  ==  bytes 1..3 of (V << 1).
+        ; That collapses the old seven-step right shift (28 shift ops) into a
+        ; single 32-bit left shift plus three byte stores.
+        ld      a,(FP2)
+        ld      l,a
+        ld      a,(FP3)
+        ld      h,a
+        ld      a,(FP4)
+        ld      e,a
         ld      a,(FP5)
-        srl     a
-        ld      (FP5),a
-        ld      a,(FP4)
-        rr      a
-        ld      (FP4),a
-        ld      a,(FP3)
-        rr      a
-        ld      (FP3),a
-        ld      a,(FP2)
-        rr      a
-        ld      (FP2),a
-        djnz    FMSR7
-        ld      a,(FP2)
-        ld      (AM0),a
-        ld      a,(FP3)
-        ld      (AM1),a
-        ld      a,(FP4)
-        ld      (AM2),a
+        ld      d,a             ; DEHL = FP5:FP4:FP3:FP2 (D = high byte)
+        sla     l
+        rl      h
+        rl      e
+        rl      d               ; DEHL <<= 1 (discarded top bit was 0)
+        ld      a,h
+        ld      (AM0),a         ; AM0 = byte 1 of (V<<1) = low byte of V>>7
+        ld      a,e
+        ld      (AM1),a         ; AM1 = byte 2
+        ld      a,d
+        ld      (AM2),a         ; AM2 = byte 3
 
 FMPAK:
         call    FPA
