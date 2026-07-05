@@ -2660,6 +2660,168 @@ static int pass_byte_loop_counter_to_reg_c(void)
     return changed;
 }
 
+/* Matches either raw shape dcc emits for an array address indexed by the
+ * register-promoted loop counter in C (see
+ * pass_byte_loop_counter_to_reg_c). Narrowing (and now registerizing) an
+ * index variable changes its own load shape each time - first from an
+ * ix-word-pair to an ix-byte-zero-extend, now to this register-based
+ * zero-extend - and pass_ix_array_byte_addr/pass_reuse_array_byte_addr
+ * were built around the ix-offset shapes, so they stop matching once the
+ * index lives in C; this is a dedicated counterpart for that case, keyed
+ * on the register instead of any ix-offset (so there is no "idxoff" to
+ * track - the index source is always exactly C).
+ *
+ * step == 0 (e.g. array[n]):
+ *   push ix
+ *   pop hl
+ *   ld de,BASEOFF
+ *   add hl,de
+ *   ld e,c
+ *   ld d,0
+ *   add hl,de
+ *
+ * step != 0 (e.g. array[n-1]):
+ *   push ix
+ *   pop hl
+ *   ld de,BASEOFF
+ *   add hl,de
+ *   push hl
+ *   ld l,c
+ *   ld h,0
+ *   [dec hl | inc hl]
+ *   ex de,hl
+ *   pop hl
+ *   add hl,de
+ *
+ * Returns the match length in lines (7 or 11), or 0 on no match. */
+static int peep_match_reg_array_addr_raw(int i, int *out_step, int *out_arroff)
+{
+    int arroff;
+    int j;
+    int step;
+
+    if (!eq(i, "push ix") || !eq(i + 1, "pop hl") ||
+        !peep_parse_ld_de_signed(lines[i + 2], &arroff) || !eq(i + 3, "add hl,de"))
+        return 0;
+
+    if (eq(i + 4, "ld e,c") && eq(i + 5, "ld d,0") && eq(i + 6, "add hl,de")) {
+        *out_step = 0;
+        *out_arroff = arroff;
+        return 7;
+    }
+
+    if (eq(i + 4, "push hl") && eq(i + 5, "ld l,c") && eq(i + 6, "ld h,0")) {
+        j = i + 7;
+        step = 0;
+        if (eq(j, "dec hl")) { step = -1; j++; }
+        else if (eq(j, "inc hl")) { step = 1; j++; }
+        if (eq(j, "ex de,hl") && eq(j + 1, "pop hl") && eq(j + 2, "add hl,de")) {
+            *out_step = step;
+            *out_arroff = arroff;
+            return (j + 3) - i;
+        }
+    }
+
+    return 0;
+}
+
+/* True if line `s` could change register C's value - dec c/inc c/ld c,X/
+ * pop bc. Used to prove C (the register-promoted loop counter) is
+ * unchanged across the gap pass_reuse_reg_array_byte_addr scans; a write
+ * to (ix+d) shadowing C is not a hazard here since nothing in this gap
+ * reads the shadow slot back into C. */
+static int peep_line_writes_reg_c(const char *s)
+{
+    char tmp[MAX_LINE];
+
+    strip_peep_comment_copy(tmp, s);
+    if (!strcmp(tmp, "dec c") || !strcmp(tmp, "inc c"))
+        return 1;
+    if (strncmp(tmp, "ld c,", 5) == 0)
+        return 1;
+    if (strncmp(tmp, "pop bc", 6) == 0)
+        return 1;
+    return 0;
+}
+
+/* Register-index counterpart of pass_reuse_array_byte_addr: two array-
+ * address blocks (see peep_match_reg_array_addr_raw) for the SAME array
+ * and the SAME register-promoted index, separated only by a push hl /
+ * <straight-line gap that neither writes C nor calls anything other than
+ * a dcc runtime helper, no label> / pop hl / ld (hl),R (single-byte store)
+ * - reuses the first address (adjusted by a few inc/dec hl) instead of
+ * recomputing the second one from scratch. */
+static int pass_reuse_reg_array_byte_addr(void)
+{
+    int i;
+    int changed;
+    int stepA, arroffA, lenA;
+    int stepB, arroffB, lenB;
+    int gap_end;
+    int k;
+    int delta;
+    char line[64];
+
+    changed = 0;
+
+    for (i = 0; i + 6 < nlines; ++i) {
+        lenA = peep_match_reg_array_addr_raw(i, &stepA, &arroffA);
+        if (!lenA)
+            continue;
+        if (!eq(i + lenA, "push hl"))
+            continue;
+
+        gap_end = 0;
+        for (k = i + lenA + 1; k + 1 < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;
+            if (peep_line_writes_reg_c(lines[k]))
+                break;
+            if (peep_line_is_unsafe_call(lines[k]))
+                break;
+            if (eq(k, "pop hl")) {
+                if (eq(k + 1, "ld (hl),a") || eq(k + 1, "ld (hl),b") ||
+                    eq(k + 1, "ld (hl),c") || eq(k + 1, "ld (hl),d") ||
+                    eq(k + 1, "ld (hl),e"))
+                    gap_end = k + 2;
+                break;
+            }
+        }
+        if (gap_end == 0)
+            continue;
+
+        lenB = peep_match_reg_array_addr_raw(gap_end, &stepB, &arroffB);
+        if (!lenB)
+            continue;
+        if (arroffB != arroffA)
+            continue;
+
+        delta = stepB - stepA;
+
+        delete_n(gap_end, lenB);
+        if (delta == 0) {
+            changed = 1;
+            continue;
+        }
+        if (delta >= -4 && delta <= 4) {
+            int n = delta > 0 ? delta : -delta;
+            int m;
+            for (m = 0; m < n; ++m)
+                insert_line(gap_end, delta > 0 ? "inc hl" : "dec hl");
+            replace1_tagged(gap_end, lines[gap_end], "reuse_reg_array_byte_addr");
+        } else {
+            sprintf(line, "ld de,%d", delta);
+            insert_line(gap_end, "add hl,de");
+            insert_line(gap_end, line);
+            replace1_tagged(gap_end, lines[gap_end], "reuse_reg_array_byte_addr");
+        }
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_ix_postdec_to_local(void)
 {
     int i;
@@ -11687,6 +11849,7 @@ int main(int argc, char **argv)
         if (pass_ix_array_byte_addr()) changed = 1;
         if (pass_reuse_array_byte_addr()) changed = 1;
         if (pass_byte_loop_counter_to_reg_c()) changed = 1;
+        if (pass_reuse_reg_array_byte_addr()) changed = 1;
         if (pass_ix_postdec_to_local()) changed = 1;
         if (pass_store_word_const_hl()) changed = 1;
         if (pass_findsolution_clear_board_loop()) changed = 1;
