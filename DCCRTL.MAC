@@ -12102,93 +12102,158 @@ __fdiv:
         jp      nc,FDINF
         ld      (AEXP),a
 
-        ; R = A mantissa, Q = 0.  Compute 24-bit Q ~= A/B scaled by 2^23.
-        ld      a,(AM0)
-        ld      (FP0),a
-        ld      a,(AM1)
-        ld      (FP1),a
-        ld      a,(AM2)
-        ld      (FP2),a
-        xor     a
-        ld      (FP3),a
-        ld      (FQ0),a
-        ld      (FQ1),a
-        ld      (FQ2),a
-
-        ; Load divisor mantissa into registers for the 24-iteration loop.
-        ; H=BM2, L=BM1, D=BM0 are constant throughout; C=0 for FP3 borrow.
-        ; B=BM2 survives from FUNB; BM0/BM1 must reload from memory because
-        ; the exponent computation above clobbers H, L, D, and E.
+        ; R = A mantissa (register-resident), Q = 0 (register-resident).
+        ; Compute 24-bit Q ~= A/B scaled by 2^23.
+        ;
+        ; Two register banks, swapped via EXX:
+        ;   "arithmetic" bank (active by default): H=BM2,L=BM1,D=BM0 is the
+        ;     constant divisor; B=R2,C=R1,E=R0 is the 24-bit remainder R.
+        ;   "control" bank (reached via EXX): H=FQ1,L=FQ0,B=FQ2 is the
+        ;     24-bit quotient Q being built; C=RHI is an explicit 0/1 flag
+        ;     standing in for R's 25th bit (R is bounded to stay under
+        ;     2*divisor < 2^25, so one flag bit suffices instead of a full
+        ;     4th byte); D is the loop counter.
+        ; EXX does not touch AF, so A/flags are free to use as scratch
+        ; across bank switches without disturbing either bank's state.
+        ;
+        ; H=BM2, L=BM1, D=BM0 in the arithmetic bank are constant
+        ; throughout; B=BM2 survives from FUNB; BM0/BM1 must reload from
+        ; memory because the exponent computation above clobbers H, L, D,
+        ; and E.
         ld      h,b             ; H = BM2  (B preserved through exponent computation)
         ld      a,(BM1)
         ld      l,a             ; L = BM1
         ld      a,(BM0)
         ld      d,a             ; D = BM0
-        ld      c,0
 
-        ld      b,24
+        ld      a,(AM2)
+        ld      b,a             ; R2 = AM2
+        ld      a,(AM1)
+        ld      c,a             ; R1 = AM1
+        ld      a,(AM0)
+        ld      e,a             ; R0 = AM0
+
+        exx
+        ; control bank: Q = 0, RHI = 0, loop counter = 24
+        ld      b,0             ; FQ2 = 0
+        ld      hl,0            ; FQ1:FQ0 = 0
+        ld      c,0             ; RHI = 0
+        ld      d,24            ; loop counter
 FDLUP:
-        ; Q <<= 1
-        ld      a,(FQ0)
-        add     a,a
-        ld      (FQ0),a
-        ld      a,(FQ1)
-        rla
-        ld      (FQ1),a
-        ld      a,(FQ2)
-        rla
-        ld      (FQ2),a
-
-        ; if R >= B then R -= B and set low bit of Q.
-        ; R is kept as a 25-bit value in FP3:FP2:FP1:FP0.
-        ; BM (divisor mantissa) is in H:L:D; C=0 supplies the zero borrow operand.
-        ld      a,(FP3)
+        ; --- check RHI (control bank active) ---
+        ld      a,c
         or      a
-        jp      nz,FDSUB        ; FP3 != 0: R > B (B has no byte here)
-        ld      a,(FP2)
-        cp      h               ; FP2 - BM2; carry if FP2 < BM2
-        jp      c,FDNSB         ; R < B
-        jp      nz,FDSUB        ; R > B
-        ld      a,(FP1)
-        cp      l               ; FP1 - BM1
-        jp      c,FDNSB
-        jp      nz,FDSUB
-        ld      a,(FP0)
-        cp      d               ; FP0 - BM0; carry if FP0 < BM0
-        jp      c,FDNSB         ; R < B; fall through if R >= B
-FDSUB:
-        ld      a,(FP0)
-        sub     d               ; FP0 - BM0 (no borrow input)
-        ld      (FP0),a
-        ld      a,(FP1)
-        sbc     a,l             ; FP1 - BM1 - borrow
-        ld      (FP1),a
-        ld      a,(FP2)
-        sbc     a,h             ; FP2 - BM2 - borrow
-        ld      (FP2),a
-        ld      a,(FP3)
-        sbc     a,c             ; FP3 - 0 - borrow (C=0)
-        ld      (FP3),a
-        ld      a,(FQ0)
-        or      1
-        ld      (FQ0),a
-FDNSB:
-        ; R <<= 1
-        ld      a,(FP0)
-        add     a,a
-        ld      (FP0),a
-        ld      a,(FP1)
-        rla
-        ld      (FP1),a
-        ld      a,(FP2)
-        rla
-        ld      (FP2),a
-        ld      a,(FP3)
-        rla
-        ld      (FP3),a
+        jp      nz,FDFSUB       ; RHI==1: R is unconditionally >= divisor
 
-        dec     b
+        ; --- RHI==0: compare R against the divisor (arithmetic bank) ---
+        exx
+        ld      a,b
+        cp      h               ; R2 - BM2
+        jp      c,FDNOSB        ; R < B
+        jp      nz,FDDOSB       ; R > B
+        ld      a,c
+        cp      l               ; R1 - BM1
+        jp      c,FDNOSB
+        jp      nz,FDDOSB
+        ld      a,e
+        cp      d               ; R0 - BM0
+        jp      c,FDNOSB        ; R < B; fall through if R >= B
+FDDOSB:
+        ld      a,e
+        sub     d               ; R0 - BM0 (no borrow input)
+        ld      e,a
+        ld      a,c
+        sbc     a,l             ; R1 - BM1 - borrow
+        ld      c,a
+        ld      a,b
+        sbc     a,h             ; R2 - BM2 - borrow
+        ld      b,a
+        exx                     ; back to control bank
+        ld      e,1             ; SUBFLAG = 1 (a subtract happened)
+        jp      FDSHQ
+FDNOSB:
+        exx                     ; back to control bank
+        ld      e,0             ; SUBFLAG = 0
+        jp      FDSHQ
+
+FDFSUB:
+        ; RHI was 1, meaning R (conceptually RHI*2^24 + R-main) is
+        ; unconditionally >= the 24-bit divisor.  R-main < divisor is
+        ; therefore guaranteed (proof: the shift-doubling loop invariant
+        ; keeps R < 2*divisor at all times, so RHI=1 implies
+        ; R-main < 2*divisor - 2^24 <= divisor - 1), so the subtract always
+        ; borrows and the new RHI is always 0 - true regardless of RHI's
+        ; incoming value, so clear it unconditionally before subtracting.
+        xor     a
+        ld      c,a             ; RHI = 0
+        exx                     ; to arithmetic bank
+        ld      a,e
+        sub     d
+        ld      e,a
+        ld      a,c
+        sbc     a,l
+        ld      c,a
+        ld      a,b
+        sbc     a,h
+        ld      b,a
+        exx                     ; back to control bank
+        ld      e,1             ; SUBFLAG = 1
+
+FDSHQ:
+        ; --- Q <<= 1 (control bank: H:L = FQ1:FQ0, B = FQ2). Must happen
+        ; BEFORE consulting SUBFLAG: the original algorithm shifts Q first
+        ; (producing a fresh, zero bit 0) and only then ORs in the new low
+        ; bit, so SUBFLAG has to be carried across this shift rather than
+        ; applied before it. ---
+        add     hl,hl
+        rl      b
+        ld      a,e             ; SUBFLAG
+        or      a
+        jp      z,FDNOLS
+        ld      a,l
+        or      1
+        ld      l,a             ; Q's freshly-shifted-in low bit set
+FDNOLS:
+        ; --- R <<= 1 (arithmetic bank); carry-out becomes the new RHI ---
+        exx
+        ld      a,e
+        add     a,a
+        ld      e,a
+        ld      a,c
+        rla
+        ld      c,a
+        ld      a,b
+        rla
+        ld      b,a
+        exx                     ; back to control bank; EXX preserves carry
+        jp      c,FDSRHI
+        xor     a
+        ld      c,a             ; RHI = 0
+        jp      FDCNT
+FDSRHI:
+        ld      a,1
+        ld      c,a             ; RHI = 1
+FDCNT:
+        dec     d
         jp      nz,FDLUP
+
+        ; Copy the register-resident R, RHI and Q back to the memory
+        ; locations the unchanged rounding/normalize code below expects.
+        ld      a,c
+        ld      (FP3),a
+        ld      a,l
+        ld      (FQ0),a
+        ld      a,h
+        ld      (FQ1),a
+        ld      a,b
+        ld      (FQ2),a
+        exx                     ; back to arithmetic bank for R2:R1:R0
+        ld      a,e
+        ld      (FP0),a
+        ld      a,c
+        ld      (FP1),a
+        ld      a,b
+        ld      (FP2),a
 
         ; Round division result.  At this point FP3:FP2:FP1:FP0 holds
         ; 2*remainder from the final quotient step.  If that value is at
