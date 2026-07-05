@@ -11419,9 +11419,28 @@ FALGN_ABIT:
         ld      a,b
         or      a
         jp      z,FALGN_ADONE   ; whole number of bytes: no residual bits
+        ; Register-resident residual shift (B is 1..7 here, guaranteed
+        ; nonzero by the check above): load the 24-bit mantissa once,
+        ; shift entirely in registers, store once - instead of the old
+        ; per-bit FSRA call, which round-tripped all 3 mantissa bytes
+        ; through memory on every single bit shifted.
+        ld      a,(AM0)
+        ld      l,a
+        ld      a,(AM1)
+        ld      h,a
+        ld      a,(AM2)
+        ld      c,a
 FALGN_ASHR:
-        call    FSRA
+        srl     c
+        rr      h
+        rr      l
         djnz    FALGN_ASHR
+        ld      a,l
+        ld      (AM0),a
+        ld      a,h
+        ld      (AM1),a
+        ld      a,c
+        ld      (AM2),a
 FALGN_ADONE:
         ld      a,(BEXP)
         ld      (AEXP),a        ; align AEXP up to BEXP
@@ -11452,9 +11471,25 @@ FALGN_BBIT:
         ld      a,b
         or      a
         jp      z,FASGN         ; whole number of bytes: no residual bits
+        ; Same register-resident residual shift as FALGN_ASHR, mirrored
+        ; for the B mantissa (B is 1..7 here, guaranteed nonzero).
+        ld      a,(BM0)
+        ld      l,a
+        ld      a,(BM1)
+        ld      h,a
+        ld      a,(BM2)
+        ld      c,a
 FALGN_BSHR:
-        call    FSRB
+        srl     c
+        rr      h
+        rr      l
         djnz    FALGN_BSHR
+        ld      a,l
+        ld      (BM0),a
+        ld      a,h
+        ld      (BM1),a
+        ld      a,c
+        ld      (BM2),a
         jp      FASGN
 
 FALGN_AABS:
@@ -11562,35 +11597,46 @@ FASUB:
         ld      (AM2),a
 
 FNORM:
-        ; if mantissa became zero, return +0.
-        ld      a,(AM2)
-        or      a
-        jp      nz,FNL1
-        ld      a,(AM1)
-        or      a
-        jp      nz,FNL0
+        ; Register-resident renormalize-after-subtract: load the mantissa
+        ; and exponent once, shift-left-until-normalized entirely in
+        ; registers, and store back once - instead of the old loop, which
+        ; called FSLA (a full 3-byte memory round trip) once per bit
+        ; shifted, plus re-read AM2/AEXP from memory on every iteration to
+        ; re-check the stopping conditions.
+        ;
+        ; The "mantissa == 0" check only needs to happen once, up front:
+        ; every shift below only ever executes when bit 7 of the high byte
+        ; (AM2) is confirmed NOT set, so the bit each shift discards off
+        ; the top is always 0 - a nonzero 24-bit value can never become
+        ; zero by repeatedly discarding leading zero bits, so if the
+        ; mantissa is nonzero here, it stays nonzero for the rest of this
+        ; loop without needing to re-check.
         ld      a,(AM0)
-        or      a
-        jp      z,FZERO
-FNL0:
-        ; shift left until high byte non-zero or exponent reaches zero
-        call    FSLA
-        ld      a,(AEXP)
-        dec     a
-        ld      (AEXP),a
-        jp      z,FPACK
-        jp      FNORM
-FNL1:
-        ; Reload AM2 on each pass.  After decrementing AEXP, A no longer
-        ; contains the mantissa high byte.
+        ld      l,a
+        ld      a,(AM1)
+        ld      h,a
         ld      a,(AM2)
-        bit     7,a
-        jp      nz,FPACK
-        call    FSLA
+        ld      c,a
+        or      h
+        or      l
+        jp      z,FZERO
         ld      a,(AEXP)
-        dec     a
+        ld      b,a
+FNORM_LP:
+        bit     7,c
+        jp      nz,FNORM_DONE
+        add     hl,hl           ; 16-bit shift left of AM1:AM0 (H=AM1,L=AM0)
+        rl      c               ; carry out of AM1's bit 7 rolls into AM2's bit 0
+        djnz    FNORM_LP        ; also decrements the AEXP copy in B
+FNORM_DONE:
+        ld      a,l
+        ld      (AM0),a
+        ld      a,h
+        ld      (AM1),a
+        ld      a,c
+        ld      (AM2),a
+        ld      a,b
         ld      (AEXP),a
-        jp      nz,FNL1
 
 FPACK:
         call    FPA
