@@ -11884,10 +11884,10 @@ __fmul:
         ;
         ; Replaces a 24-iteration bit-serial shift-and-add loop, where every
         ; iteration touched a 6-byte accumulator and a 6-byte shifted
-        ; multiplicand entirely through memory, with four calls to __m1u -
-        ; the same fully register-resident, unrolled 16x16->32 unsigned
-        ; multiply dcc's own long multiply already relies on (see __m1u
-        ; above) - plus a small, fixed number of accumulator updates.
+        ; multiplicand entirely through memory, with up to four calls to
+        ; __m1u - the same fully register-resident, unrolled 16x16->32
+        ; unsigned multiply dcc's own long multiply already relies on (see
+        ; __m1u above) - plus a small, fixed number of accumulator updates.
         ;
         ; Splitting each 24-bit mantissa into an 8-bit high part and 16-bit
         ; low part (A = Ahi*2^16 + Alo, B = Bhi*2^16 + Blo):
@@ -11899,7 +11899,37 @@ __fmul:
         ; [2^46,2^48) and top32(A*B) is guaranteed to fit in 32 bits - a
         ; plain carry-propagating accumulator can never overflow while
         ; adding these four terms in any order.
+        ;
+        ; Small integer-valued floats (2.0, 3.0, ... up to 256.0) have Alo
+        ; and/or Blo entirely zero, since their whole significant mantissa
+        ; fits in the top byte - the old bit-serial loop special-cased this
+        ; (skipping guaranteed-zero low iterations) and this workload is
+        ; common enough (e.g. small-integer matrix benchmarks) that losing
+        ; the shortcut was a measurable regression. Recover it here: any
+        ; term whose Alo or Blo factor is entirely zero is mathematically
+        ; zero and its __m1u call is skipped outright, rather than replacing
+        ; the algorithm.
+        ld      a,(AM0)
+        ld      b,a
+        ld      a,(AM1)
+        or      b
+        jp      nz,FMANZ        ; Alo != 0
+        ld      a,(BM0)
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        jp      nz,FMAZBN       ; Alo == 0, Blo != 0
+        jp      FMABZ           ; Alo == 0, Blo == 0
 
+FMANZ:
+        ld      a,(BM0)
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        jp      z,FMANBZ        ; Alo != 0, Blo == 0
+
+        ; Alo != 0, Blo != 0: general case, all four terms.
+        ;
         ; term = Alo*Blo -> DE:HL (32-bit); only DE (the high 16 bits)
         ; is needed - it seeds the accumulator directly.
         ld      a,(AM0)
@@ -11978,7 +12008,115 @@ __fmul:
         ld      a,(FP5)
         adc     a,h
         ld      (FP5),a
+        jp      FMDONE
 
+FMANBZ:
+        ; Alo != 0, Blo == 0: only Ahi*Bhi and Alo*Bhi survive.
+        xor     a
+        ld      (FP2),a
+        ld      (FP3),a
+        ld      (FP4),a
+        ld      (FP5),a
+
+        ld      a,(AM0)
+        ld      c,a
+        ld      a,(AM1)
+        ld      b,a             ; BC = Alo
+        ld      a,(BM2)
+        ld      l,a
+        ld      h,0             ; HL = 0:Bhi
+        call    __m1u           ; DE:HL = Alo*Bhi
+        ld      a,(FP2)
+        add     a,l
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,h
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,e
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,d
+        ld      (FP5),a
+
+        ld      a,(AM2)
+        ld      c,a
+        ld      b,0             ; BC = 0:Ahi
+        ld      a,(BM2)
+        ld      l,a
+        ld      h,0             ; HL = 0:Bhi
+        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      a,(FP4)
+        add     a,l
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,h
+        ld      (FP5),a
+        jp      FMDONE
+
+FMAZBN:
+        ; Alo == 0, Blo != 0: only Ahi*Bhi and Ahi*Blo survive.
+        xor     a
+        ld      (FP2),a
+        ld      (FP3),a
+        ld      (FP4),a
+        ld      (FP5),a
+
+        ld      a,(AM2)
+        ld      c,a
+        ld      b,0             ; BC = 0:Ahi
+        ld      a,(BM0)
+        ld      l,a
+        ld      a,(BM1)
+        ld      h,a             ; HL = Blo
+        call    __m1u           ; DE:HL = Ahi*Blo
+        ld      a,(FP2)
+        add     a,l
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,h
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,e
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,d
+        ld      (FP5),a
+
+        ld      a,(AM2)
+        ld      c,a
+        ld      b,0             ; BC = 0:Ahi
+        ld      a,(BM2)
+        ld      l,a
+        ld      h,0             ; HL = 0:Bhi
+        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      a,(FP4)
+        add     a,l
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,h
+        ld      (FP5),a
+        jp      FMDONE
+
+FMABZ:
+        ; Alo == 0, Blo == 0: only Ahi*Bhi survives, landing at offset 16
+        ; with nothing to add to (accumulator would otherwise be zero).
+        xor     a
+        ld      (FP2),a
+        ld      (FP3),a
+        ld      a,(AM2)
+        ld      c,a
+        ld      b,0             ; BC = 0:Ahi
+        ld      a,(BM2)
+        ld      l,a
+        ld      h,0             ; HL = 0:Bhi
+        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      a,l
+        ld      (FP4),a
+        ld      a,h
+        ld      (FP5),a
+
+FMDONE:
         ; If product bit 47 is set, mantissa = product >> 24 and exponent++.
         ld      a,(FP5)
         bit     7,a
