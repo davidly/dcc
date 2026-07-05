@@ -47,5 +47,5 @@ int   k = (int)(cond ? 2 : 3.5f);  /* the ?: is float; cast back to int */
 
 Mind the single-precision limit whenever a wide `long` meets a `float`: the
 integer side rounds to the nearest `float` first, so compare as integers when
-you need full 32-bit precision. See [Floating point math](standard-lib/08-math.md) for the
+you need full 32-bit precision. See [Floating-point math](standard-lib/08-math.md) for the
 details.

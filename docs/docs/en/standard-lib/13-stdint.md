@@ -1,7 +1,7 @@
 # Fixed-width integers (`stdint.h`)
 
 Include [`stdint.h`](13-stdint.md) for fixed-width integer typedefs that match
-The DCC C Compiler target model.
+the DCC C Compiler target model.
 
 ## Types
 

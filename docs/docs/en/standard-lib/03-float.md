@@ -36,5 +36,5 @@ int nearly_same(float a, float b)
 }
 ```
 
-See [Floating point math](08-math.md) for math-library accuracy and mixed-type
+See [Floating-point math](08-math.md) for math-library accuracy and mixed-type
 gotchas.

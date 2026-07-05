@@ -1,12 +1,12 @@
 # Introduction
 
-**DCC C Compiler** is an open source C compiler for **CP/M 2.2 on the Z80**. It has a C89 plus CP/M-relevant C99/C11 support. For every source
+**DCC C Compiler** is an open source C compiler for **CP/M 2.2 on the Z80**. It supports C89 plus CP/M-relevant C99/C11 features. For every source
 file it accepts, the DCC C Compiler translates the `.c` file to M80 assembly; M80 assembles the
 result, and L80 links it into a CP/M `.COM` program.
 
 The DCC C Compiler runs on Windows, macOS, and Linux, but the programs it builds run under
 CP/M. The [ntvcm](https://github.com/davidly/ntvcm) emulator and other popular
-CP/M Z80 emulators run those programs, as well real Z80 CPM 2.2 and 3.0 systems.
+CP/M Z80 emulators run those programs, as do real Z80 CP/M 2.2 and 3.0 systems.
 
 ![DCC C Compiler banner](images/dcc-retro-banner.svg)
 
@@ -76,4 +76,10 @@ C compilers and a platform-appropriate subset of the community-driven
 
 ## Contributions and Feedback Welcome
 
-This is an Open Source C compiler, community contributions welcome and/or report issues via the GitHub Issues for this project.
+This is an open source C compiler. Community contributions are welcome; please report issues through the project's GitHub Issues page.
+
+## Star the Repository
+
+If the DCC C Compiler is useful to you, please consider starring the
+[GitHub repository](https://github.com/davidly/dcc). It helps other CP/M and Z80
+developers find the project.
