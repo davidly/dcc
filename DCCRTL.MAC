@@ -12276,35 +12276,67 @@ __fmadd:
         ld      ix,0
         add     ix,sp
 
+        ; Register-resident unpack of 'a' (main bank) and 'b' (alternate
+        ; bank) via FUNR - see __fadd's design notes. Unlike the memory-
+        ; based FUNA/FUNB (still used by __fmul above and by the memory-
+        ; based fallback below), this never touches named memory for
+        ; AM0-2/BM0-2/AEXP/BEXP/ASGN/BSGN - which matters because the
+        ; common case (both operands small-integer-valued, e.g. mm.c-style
+        ; matrices) hits the fast path further down and never needs memory
+        ; at all for the mantissa multiply.
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
         ld      d,(ix+11)
-        call    FUNA
+        call    FUNR
+        exx
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        call    FUNB
+        call    FUNR
+        exx
 
-        ld      a,(AEXP)
-        or      a
+        ; zero shortcuts (register-resident: exponent|mantissa all zero)
+        ld      a,b
+        or      c
+        or      h
+        or      l
         jp      z,FQZERO
-        ld      a,(BEXP)
-        or      a
+        exx
+        ld      a,b
+        or      c
+        or      h
+        or      l
+        exx
         jp      z,FQZERO
 
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        xor     b
+        ; sign = ASGN xor BSGN, stashed in the alternate bank's spare E'
+        ; for now - D(main) needs to stay free for the exponent's 16-bit
+        ; computation just below, so the final sign doesn't move into
+        ; D(main) until after that completes.
+        ld      a,d
+        exx
+        xor     d
         and     80h
-        ld      (ASGN),a
+        ld      e,a
+        exx
 
-        ld      a,(AEXP)
+        ; exponent = AEXP + BEXP - 127 (16-bit, matching __fmul's exact
+        ; overflow/underflow checks - see FMDONE's comment above for why
+        ; this needs to be 16-bit, not a plain 8-bit add). HL is needed as
+        ; scratch for this, but HL is also where Alo (AM1:AM0) lives from
+        ; the FUNR unpack - stash it on the stack first. If this hits an
+        ; early FQZERO/FQOVF exit, the push is simply discarded by the
+        ; shared epilogue's "ld sp,ix" reset; otherwise it's popped back
+        ; explicitly right after, once HL is free again.
+        push    hl
+        ld      a,b
         ld      l,a
         ld      h,0
-        ld      a,(BEXP)
+        exx
+        ld      a,b
+        exx
         ld      e,a
         ld      d,0
         add     hl,de
@@ -12315,23 +12347,137 @@ __fmadd:
         jp      nz,FQZERO
         ld      a,h
         or      a
-        jp      nz,FQINF
+        jp      nz,FQOVF
         ld      a,l
         cp      255
-        jp      nc,FQINF
-        ld      (AEXP),a
+        jp      nc,FQOVF
+        ld      b,a             ; B(main) = result exponent
+        pop     hl              ; restore Alo (main H:L)
 
-        ld      a,(AM0)
-        ld      b,a
-        ld      a,(AM1)
-        or      b
-        jp      nz,FQANZ
-        ld      a,(BM0)
-        ld      b,a
-        ld      a,(BM1)
-        or      b
-        jp      nz,FQAZBN
-        jp      FQABZ
+        ; move the stashed sign into its final home now that D(main) is
+        ; free again (the exponent computation is done with it)
+        exx
+        ld      a,e
+        exx
+        ld      d,a             ; D(main) = result sign [final]
+
+        ; check Alo==0 (main H|L) and Blo==0 (alternate H'|L') - true for
+        ; every multiply in a small-integer-valued workload, since the
+        ; whole significant mantissa then fits in the top byte (Ahi/Bhi,
+        ; already register-resident in C/C').
+        ld      a,h
+        or      l
+        jp      nz,FQFB1
+        exx
+        ld      a,h
+        or      l
+        exx
+        jp      nz,FQFB2
+
+        ; --- fast path: Alo==0 and Blo==0, only Ahi*Bhi survives ---
+        ; "pop bc" below sets BOTH B and C - it's used to load C=Bhi, but
+        ; that would just as well clobber B, which holds the precious
+        ; result exponent. Save the whole BC pair (exponent+Ahi) on the
+        ; stack first and restore it right after the __m8u call, once the
+        ; 0:Bhi value it's needed for as an argument has been consumed.
+        push    bc              ; stash exponent(B) + Ahi(C)
+        ld      a,c             ; A = Ahi (main), the __m8u multiplier
+        exx                      ; alternate active; A preserved
+        ld      b,0
+        push    bc               ; stack: 0:Bhi
+        exx                       ; main active; A preserved
+        pop     bc                ; BC(main) = 0:Bhi (multiplicand)
+        call    __m8u             ; HL:E = Ahi*Bhi (H=0, value=L:E)
+        pop     bc                ; restore B(exponent):C(Ahi, no longer needed)
+
+        bit     7,l
+        jp      z,FQFNOC
+        ld      c,l
+        ld      h,e
+        ld      l,0
+        inc     b
+        ld      a,b
+        cp      255
+        jp      nc,FQOVF2
+        jp      FQBRIDGE_R
+FQFNOC:
+        ; no-carry case: same "(V>>7)&0xFFFFFF == bytes1..3 of (V<<1)"
+        ; identity as FQNOC/FMNOC above, specialized since the low two
+        ; bytes of V are always 0 in this fast path (nothing but Ahi*Bhi
+        ; contributes), so only L and E actually need shifting.
+        sla     e
+        rl      l
+        ld      c,l
+        ld      h,e
+        ld      l,0
+        jp      FQBRIDGE_R
+
+FQOVF2:
+        ; mantissa-carry pushed the exponent to overflow; sign is already
+        ; final in D at this point (set before the fast path ran).
+        ld      a,d
+        ld      (ASGN),a
+        jp      FQINF
+
+FQOVF:
+        ; exponent overflow before the multiply even starts; the sign is
+        ; still in its stashed alternate-bank home (D(main) isn't final
+        ; yet at this point), so fetch it from there instead.
+        exx
+        ld      a,e
+        exx
+        ld      (ASGN),a
+        jp      FQINF
+
+FQFB1:
+        ; Alo != 0: no fast path. Store both operands to the same memory
+        ; locations __fmul's unchanged FUNA/FUNB would have, then jump
+        ; into FQANZ, whose own header re-checks Blo to pick the full
+        ; four-term computation or FQANBZ - exactly the check this path
+        ; still needs, so no work is duplicated.
+        ld      a,b
+        ld      (AEXP),a
+        ld      a,d
+        ld      (ASGN),a
+        ld      a,c
+        ld      (AM2),a
+        ld      a,h
+        ld      (AM1),a
+        ld      a,l
+        ld      (AM0),a
+        exx
+        ld      a,c
+        ld      (BM2),a
+        ld      a,h
+        ld      (BM1),a
+        ld      a,l
+        ld      (BM0),a
+        exx
+        jp      FQANZ
+
+FQFB2:
+        ; Alo == 0, Blo != 0: store the same way, then jump directly into
+        ; FQAZBN - its precondition is already exactly established here,
+        ; so no re-check is needed.
+        ld      a,b
+        ld      (AEXP),a
+        ld      a,d
+        ld      (ASGN),a
+        ld      a,c
+        ld      (AM2),a
+        ld      a,h
+        ld      (AM1),a
+        ld      a,l
+        ld      (AM0),a
+        exx
+        ld      a,c
+        ld      (BM2),a
+        ld      a,h
+        ld      (BM1),a
+        ld      a,l
+        ld      (BM0),a
+        exx
+        jp      FQAZBN
 
 FQANZ:
         ld      a,(BM0)
@@ -12576,6 +12722,11 @@ FQBRIDGE:
         ld      a,(AM0)
         ld      l,a
 
+FQBRIDGE_R:
+        ; entry point for callers that already have B=exponent,
+        ; C=mantissa-hi, H=mantissa-mid, L=mantissa-low, D=sign resident
+        ; in registers (the fast path below) - skips the memory reads
+        ; above entirely.
         exx
         ld      l,(ix+12)
         ld      h,(ix+13)
