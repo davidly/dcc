@@ -148,6 +148,14 @@ static int ensure_dir(const char *path)
     return errno == EEXIST;
 }
 
+static int dir_exists(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return 0;
+    return (st.st_mode & S_IFDIR) != 0;
+}
+
 static void path_join(char *dst, size_t dst_size, const char *dir, const char *name)
 {
     size_t n;
@@ -285,6 +293,68 @@ static int parse_int(const char *value, int *out)
     if (*value == 0 || *endp != 0 || v < 0 || v > 32767)
         return 0;
     *out = (int)v;
+    return 1;
+}
+
+static int expand_env_macros(const char *label, const char *value, char *out, size_t out_size)
+{
+    size_t out_pos;
+    size_t i;
+
+    if (out_size == 0)
+        return 0;
+
+    out_pos = 0;
+    for (i = 0; value[i]; i++) {
+        if (value[i] == '$' && value[i + 1] == '{') {
+            char name[MAX_NAME_LEN];
+            const char *env_value;
+            size_t name_len;
+            size_t j;
+
+            i += 2;
+            name_len = 0;
+            while (value[i] && value[i] != '}') {
+                if (name_len + 1 >= sizeof(name)) {
+                    fprintf(stderr, "%s contains an environment macro name that is too long\n", label);
+                    return 0;
+                }
+                name[name_len++] = value[i++];
+            }
+            if (value[i] != '}') {
+                fprintf(stderr, "%s contains an unterminated environment macro\n", label);
+                return 0;
+            }
+            if (name_len == 0) {
+                fprintf(stderr, "%s contains an empty environment macro\n", label);
+                return 0;
+            }
+            name[name_len] = 0;
+            env_value = getenv(name);
+            if (!env_value) {
+                fprintf(stderr, "%s references unset environment variable %s\n", label, name);
+                return 0;
+            }
+            for (j = 0; env_value[j]; j++) {
+                if (out_pos + 1 >= out_size) {
+                    fprintf(stderr, "%s is too long after environment macro expansion\n", label);
+                    return 0;
+                }
+                out[out_pos++] = env_value[j];
+            }
+        } else {
+            if (value[i] == '}') {
+                fprintf(stderr, "%s contains an unmatched environment macro terminator\n", label);
+                return 0;
+            }
+            if (out_pos + 1 >= out_size) {
+                fprintf(stderr, "%s is too long after environment macro expansion\n", label);
+                return 0;
+            }
+            out[out_pos++] = value[i];
+        }
+    }
+    out[out_pos] = 0;
     return 1;
 }
 
@@ -442,10 +512,14 @@ static void init_config(struct Config *cfg)
 static int apply_setting(struct Config *cfg, const char *raw_key, const char *value)
 {
     char key[MAX_NAME_LEN];
+    char expanded[MAX_LINE_LEN];
     int b;
     int n;
 
     normalize_key(key, sizeof(key), raw_key);
+    if (!expand_env_macros(raw_key, value, expanded, sizeof(expanded)))
+        return 0;
+    value = expanded;
     if (!strcmp(key, "dcc-input")) {
         cfg->input_count = 0;
         return add_list(cfg->inputs, &cfg->input_count, value);
@@ -668,6 +742,8 @@ static void print_help(void)
     printf("dccmake.txt format:\n");
     printf("  One key=value setting per line. Blank lines are ignored. Text after # is a\n");
     printf("  comment. Comma-separated values may contain spaces around commas.\n");
+    printf("  Values may reference environment variables as ${NAME}. Unset or malformed\n");
+    printf("  environment-variable references are errors.\n");
     printf("  dcc-input basenames and dcc-output must be valid CP/M 8.3 names.\n");
     printf("\n");
     printf("  example:\n");
@@ -715,6 +791,12 @@ static void print_help(void)
     printf("  m80-command=m80               CP/M assembler command passed to ntvcm\n");
     printf("  l80-command=l80               CP/M linker command passed to ntvcm\n");
     printf("  dcc-runtime=DCCRTL.MAC        runtime source used by dccrtlstrip\n");
+    printf("\n");
+    printf("environment macro examples:\n");
+    printf("  dccrtlstrip-tool=${DCC_DIR}/dccrtlstrip\n");
+    printf("  ntvcm-tool=${NTVCM_DIR}/ntvcm\n");
+    printf("  m80-command=${DCC_DIR}/m80.com\n");
+    printf("  l80-command=${DCC_DIR}/l80.com\n");
 }
 
 static int is_positional_c_source(const char *arg)
@@ -1191,6 +1273,12 @@ static int run_build(struct Config *cfg)
     for (i = 0; i < cfg->input_count; i++) {
         if (!file_exists(cfg->inputs[i])) {
             fprintf(stderr, "input not found: %s\n", cfg->inputs[i]);
+            return 0;
+        }
+    }
+    for (i = 0; i < cfg->include_count; i++) {
+        if (!dir_exists(cfg->includes[i])) {
+            fprintf(stderr, "include directory not found or not a directory: %s\n", cfg->includes[i]);
             return 0;
         }
     }
