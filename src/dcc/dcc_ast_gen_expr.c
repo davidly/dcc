@@ -3209,6 +3209,15 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
             gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
         else
             ast_gen_expr(n->a);
+        /* A cast re-types the pointer, so any row-decay stride the operand
+         * signalled (e.g. a 2D array decaying to a pointer-to-row) no
+         * longer applies - subsequent pointer arithmetic on the CAST's
+         * result must scale by the cast's own target type, not the
+         * pre-cast operand's row size. Without this reset, a caller like
+         * `(ftype*)C2D + n` would inherit C2D's stale row stride from the
+         * inner gen_pointer_expr_ast call and scale by the row size
+         * instead of sizeof(ftype). */
+        g_array_decay_stride = 0;
         g_expr_type = n->type;
         g_long_from16 = 0;
         *out_type = n->type;
