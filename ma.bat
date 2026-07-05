@@ -124,7 +124,7 @@ if errorlevel 1 exit /b 1
 
 rem Link app + runtime.
 pushd "%BUILDDIR%"
-ntvcm l80 /P:100,rtlmin,%name%,%name%/N/E
+ntvcm l80 /P:100,rtlmin,%name%,%name%/N/E/Y
 if errorlevel 1 (
     popd
     exit /b 1

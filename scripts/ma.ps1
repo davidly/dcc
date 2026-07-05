@@ -458,7 +458,7 @@ function Invoke-MaBuild {
     Write-Step "  Assembling RTLMIN.MAC and linking..."
     Push-Location $BuildDir
     $rtlOut = & $NTVCM @ntvcmArgs "$M80" "=RTLMIN.MAC" "/X" "/O" "/Z" 2>&1
-    $linkOut = & $NTVCM @ntvcmArgs "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E" 2>&1
+    $linkOut = & $NTVCM @ntvcmArgs "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E/Y" 2>&1
     Pop-Location
     if (-not $Quiet) { $rtlOut | Write-Host; $linkOut | Write-Host }
 

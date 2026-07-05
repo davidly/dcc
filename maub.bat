@@ -26,7 +26,7 @@ ntvcm m80 =dccrtl.mac /X /O /Z
 if errorlevel 1 exit /b 1
 
 rem Link app + runtime.
-ntvcm l80 dccrtl,%name%,%name%/N/E
+ntvcm l80 dccrtl,%name%,%name%/N/E/Y
 if errorlevel 1 exit /b 1
 
 

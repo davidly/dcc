@@ -23,7 +23,7 @@ type dccrtl.m80
 findstr /C:"Fatal error(s)" dccrtl.m80 | findstr /V /C:"No Fatal" >nul
 if not errorlevel 1 exit /b 1
 
-ntvcm l80 dccrtl,dcc0,dcc1,dcc2,x0,x1,x2,x3,dcc4,dcc5,dcc/N/E >dcc.l80 2>&1
+ntvcm l80 dccrtl,dcc0,dcc1,dcc2,x0,x1,x2,x3,dcc4,dcc5,dcc/N/E/Y >dcc.l80 2>&1
 type dcc.l80
 findstr /C:"?Loading Error" /C:"Mult. Def." /C:"Undefined Global(s)" dcc.l80 >nul
 if not errorlevel 1 exit /b 1

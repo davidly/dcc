@@ -1403,7 +1403,7 @@ static int run_build(struct Config *cfg)
     }
     if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
     if (!cmd_append_raw(link_arg, sizeof(link_arg), output_upper)) return 0;
-    if (!cmd_append_raw(link_arg, sizeof(link_arg), "/N/E")) return 0;
+    if (!cmd_append_raw(link_arg, sizeof(link_arg), "/N/E/Y")) return 0;
 
     cmd_init(cmd, sizeof(cmd));
     if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
