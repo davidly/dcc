@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 520" role="img" aria-labelledby="title desc">
   <title id="title">DCC C Compiler retro CP/M Z80 compiler banner</title>
-  <desc id="desc">A retro terminal-inspired banner showing DCC C Compiler compiling C89 and C99-style source into CP/M 2.2 Z80 applications.</desc>
+  <desc id="desc">A retro terminal-inspired banner showing DCC C Compiler compiling C89 plus CP/M-relevant C99 and C11 source into CP/M 2.2 Z80 applications.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#101820"/>
@@ -70,7 +70,7 @@
 
   <g transform="translate(690 74)">
     <text x="0" y="48" class="sans" font-size="54" font-weight="800" fill="#f2f7f4">DCC C Compiler</text>
-    <text x="0" y="92" class="sans" font-size="30" font-weight="700" fill="#ffc857">C89 + practical C99 conveniences</text>
+    <text x="0" y="92" class="sans" font-size="30" font-weight="700" fill="#ffc857">C89 plus CP/M-relevant C99/C11 support</text>
     <text x="0" y="132" class="sans muted" font-size="24">Cross-compile modern-feeling C for CP/M 2.2 on the Z80.</text>
 
     <g transform="translate(0 162)">

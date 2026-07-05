@@ -1,7 +1,6 @@
 # Introduction
 
-**DCC C Compiler** is an open source C compiler for **CP/M 2.2 on the Z80**. It has a C89
-core plus target-appropriate C99/C11 front-end compatibility. For every source
+**DCC C Compiler** is an open source C compiler for **CP/M 2.2 on the Z80**. It has a C89 plus CP/M-relevant C99/C11 support. For every source
 file it accepts, the DCC C Compiler translates the `.c` file to M80 assembly; M80 assembles the
 result, and L80 links it into a CP/M `.COM` program.
 
