@@ -12252,6 +12252,338 @@ FMINF:
         pop     ix
         ret
 
+; __fmadd: fused a*b+c for floats.  Computes the product exactly as __fmul
+; does above (same hybrid zero-skip mantissa multiply, same __m8u/__m1u
+; calls, same normalize step - this whole block is a deliberate copy of
+; __fmul's body, not a shared subroutine, so nothing here can ever affect
+; __fmul's already-verified behavior) but instead of packing the product
+; to IEEE format and returning, it loads the still-unpacked product
+; (exponent, sign, normalized 24-bit mantissa - exactly the form __fadd's
+; register-resident FUNR unpack produces) directly into the main register
+; bank, unpacks 'c' the normal way into the alternate bank, and jumps
+; straight into __fadd's existing register-resident logic at FANOFL (the
+; point right after __fadd's own sign-flip check, which fmadd never needs
+; since this is always an add, never a subtract). This skips one full
+; pack+unpack round trip - and the stack traffic of an intermediate call -
+; compared to a separate __fmul then __fadd.
+;
+; Stack args: caller pushes c, then a, then b (b closest to the return
+; address, matching __fmul/__fadd's existing push order for their own two
+; operands): ix+4..7 = b, ix+8..11 = a, ix+12..15 = c.
+        public  __fmadd
+__fmadd:
+        push    ix
+        ld      ix,0
+        add     ix,sp
+
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        call    FUNA
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    FUNB
+
+        ld      a,(AEXP)
+        or      a
+        jp      z,FQZERO
+        ld      a,(BEXP)
+        or      a
+        jp      z,FQZERO
+
+        ld      a,(ASGN)
+        ld      b,a
+        ld      a,(BSGN)
+        xor     b
+        and     80h
+        ld      (ASGN),a
+
+        ld      a,(AEXP)
+        ld      l,a
+        ld      h,0
+        ld      a,(BEXP)
+        ld      e,a
+        ld      d,0
+        add     hl,de
+        ld      de,127
+        or      a
+        sbc     hl,de
+        bit     7,h
+        jp      nz,FQZERO
+        ld      a,h
+        or      a
+        jp      nz,FQINF
+        ld      a,l
+        cp      255
+        jp      nc,FQINF
+        ld      (AEXP),a
+
+        ld      a,(AM0)
+        ld      b,a
+        ld      a,(AM1)
+        or      b
+        jp      nz,FQANZ
+        ld      a,(BM0)
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        jp      nz,FQAZBN
+        jp      FQABZ
+
+FQANZ:
+        ld      a,(BM0)
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        jp      z,FQANBZ
+
+        ld      a,(AM0)
+        ld      c,a
+        ld      a,(AM1)
+        ld      b,a
+        ld      a,(BM0)
+        ld      l,a
+        ld      a,(BM1)
+        ld      h,a
+        call    __m1u
+        ld      a,e
+        ld      (FP2),a
+        ld      a,d
+        ld      (FP3),a
+        xor     a
+        ld      (FP4),a
+        ld      (FP5),a
+
+        ld      a,(BM0)
+        ld      c,a
+        ld      a,(BM1)
+        ld      b,a
+        ld      a,(AM2)
+        call    __m8u
+        ld      a,(FP2)
+        add     a,e
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,l
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,h
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,0
+        ld      (FP5),a
+
+        ld      a,(AM0)
+        ld      c,a
+        ld      a,(AM1)
+        ld      b,a
+        ld      a,(BM2)
+        call    __m8u
+        ld      a,(FP2)
+        add     a,e
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,l
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,h
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,0
+        ld      (FP5),a
+
+        ld      a,(BM2)
+        ld      c,a
+        ld      b,0
+        ld      a,(AM2)
+        call    __m8u
+        ld      a,(FP4)
+        add     a,e
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,l
+        ld      (FP5),a
+        jp      FQDONE
+
+FQANBZ:
+        xor     a
+        ld      (FP2),a
+        ld      (FP3),a
+        ld      (FP4),a
+        ld      (FP5),a
+
+        ld      a,(AM0)
+        ld      c,a
+        ld      a,(AM1)
+        ld      b,a
+        ld      a,(BM2)
+        call    __m8u
+        ld      a,(FP2)
+        add     a,e
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,l
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,h
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,0
+        ld      (FP5),a
+
+        ld      a,(BM2)
+        ld      c,a
+        ld      b,0
+        ld      a,(AM2)
+        call    __m8u
+        ld      a,(FP4)
+        add     a,e
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,l
+        ld      (FP5),a
+        jp      FQDONE
+
+FQAZBN:
+        xor     a
+        ld      (FP2),a
+        ld      (FP3),a
+        ld      (FP4),a
+        ld      (FP5),a
+
+        ld      a,(BM0)
+        ld      c,a
+        ld      a,(BM1)
+        ld      b,a
+        ld      a,(AM2)
+        call    __m8u
+        ld      a,(FP2)
+        add     a,e
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,l
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,h
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,0
+        ld      (FP5),a
+
+        ld      a,(BM2)
+        ld      c,a
+        ld      b,0
+        ld      a,(AM2)
+        call    __m8u
+        ld      a,(FP4)
+        add     a,e
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,l
+        ld      (FP5),a
+        jp      FQDONE
+
+FQABZ:
+        xor     a
+        ld      (FP2),a
+        ld      (FP3),a
+        ld      a,(BM2)
+        ld      c,a
+        ld      b,0
+        ld      a,(AM2)
+        call    __m8u
+        ld      a,e
+        ld      (FP4),a
+        ld      a,l
+        ld      (FP5),a
+
+FQDONE:
+        ld      a,(FP5)
+        bit     7,a
+        jp      z,FQNOC
+        ld      a,(AEXP)
+        inc     a
+        cp      255
+        jp      nc,FQINF
+        ld      (AEXP),a
+        ld      a,(FP3)
+        ld      (AM0),a
+        ld      a,(FP4)
+        ld      (AM1),a
+        ld      a,(FP5)
+        ld      (AM2),a
+        jp      FQBRIDGE
+
+FQNOC:
+        ld      a,(FP2)
+        ld      l,a
+        ld      a,(FP3)
+        ld      h,a
+        ld      a,(FP4)
+        ld      e,a
+        ld      a,(FP5)
+        ld      d,a
+        sla     l
+        rl      h
+        rl      e
+        rl      d
+        ld      a,h
+        ld      (AM0),a
+        ld      a,e
+        ld      (AM1),a
+        ld      a,d
+        ld      (AM2),a
+        jp      FQBRIDGE
+
+FQZERO:
+        ; matches __fmul's own FMZERO exactly: always +0, sign dropped -
+        ; a pre-existing dcc quirk (not introduced here), preserved for
+        ; consistency with a separate __fmul+__fadd call pair.
+        xor     a
+        ld      (AEXP),a
+        ld      (ASGN),a
+        ld      (AM0),a
+        ld      (AM1),a
+        ld      (AM2),a
+        jp      FQBRIDGE
+
+FQINF:
+        ; matches the unpacked form of __fmul's own FMINF packed output
+        ; (7f80h | sign): AEXP=255, AM2=80h (FUNR would merge the implicit
+        ; bit into any nonzero-exponent value, including this one), AM1/
+        ; AM0=0.
+        ld      a,255
+        ld      (AEXP),a
+        ld      a,80h
+        ld      (AM2),a
+        xor     a
+        ld      (AM1),a
+        ld      (AM0),a
+        jp      FQBRIDGE
+
+FQBRIDGE:
+        ld      a,(AEXP)
+        ld      b,a
+        ld      a,(ASGN)
+        ld      d,a
+        ld      a,(AM2)
+        ld      c,a
+        ld      a,(AM1)
+        ld      h,a
+        ld      a,(AM0)
+        ld      l,a
+
+        exx
+        ld      l,(ix+12)
+        ld      h,(ix+13)
+        ld      e,(ix+14)
+        ld      d,(ix+15)
+        call    FUNR
+        jp      FANOFL
+
 
         public  __fdiv
 __fdiv:

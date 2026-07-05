@@ -47,7 +47,6 @@ static int ast_num_text_plain_decimal(const char *s)
     return 1;
 }
 
-static int ast_expr_type_for_sizeof(const struct AstNode *n);
 static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n);
 
 static int ast_expr_is_null_pointer_constant(const struct AstNode *n)
@@ -107,7 +106,7 @@ static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
     return find_field_def(sid, n->sval);
 }
 
-static int ast_expr_type_for_sizeof(const struct AstNode *n)
+int ast_expr_type_for_sizeof(const struct AstNode *n)
 {
     struct Sym *s;
     int lt;

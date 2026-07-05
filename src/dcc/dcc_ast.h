@@ -177,6 +177,12 @@ int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
 int ast_expr_references_ident(const struct AstNode *n, const char *name);
 int ast_expr_has_side_effects(const struct AstNode *n);
 
+/* Recursive, side-effect-free static type inference for an expression node -
+ * originally written for sizeof, general-purpose enough to reuse anywhere a
+ * node's result type is needed before/without running its codegen (e.g.
+ * deciding whether a multiply subexpression is float-valued for fusion). */
+int ast_expr_type_for_sizeof(const struct AstNode *n);
+
 /* Detects a for-loop whose whole body is one assignment to an array-element
  * lvalue whose address is provably the same on every iteration (see
  * dcc_ast_gen_support.c for the full shape and rationale). Callable from

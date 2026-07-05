@@ -1131,6 +1131,63 @@ static void emit_store_bool_masked_hl_to_addr_on_stack(unsigned int mask,
     emit("\tld e,0\n\tjr z,$+3\n\tinc e\n\tpop hl\n\tld (hl),e\n");
 }
 
+/* True if `rhs` is exactly the shape __fmadd can fuse: a float-valued
+ * multiplication. Checked via ast_expr_type_for_sizeof, a side-effect-free
+ * recursive type walker (originally written for sizeof, general enough to
+ * reuse here) - this mirrors the runtime check gen_binary_ast uses to
+ * decide whether '*' takes the float path, just evaluated ahead of time
+ * instead of after ast_gen_expr(n->a) has already run. */
+static int ast_is_float_madd_rhs(const struct AstNode *rhs)
+{
+    if (rhs->kind != AST_BINARY || rhs->op != '*')
+        return 0;
+    return type_is_float(ast_expr_type_for_sizeof(rhs));
+}
+
+/* Shared tail for a float compound assignment, called once the addend
+ * (the compound-assign target's current value) has already been evaluated
+ * and pushed as DE:HL. When n is `+=` and the rhs is a float multiply,
+ * fuses into a single __fmadd(addend, a, b) call instead of evaluating
+ * the multiply into DE:HL, pushing it, and calling __fmul separately -
+ * skipping one pack+unpack round trip through the runtime's IEEE format.
+ * Falls back to the original evaluate/push/call/pop sequence for every
+ * other float compound assignment (+=, -=, *=, /= with a non-fusable rhs).
+ * g_expr_type is left as whatever ast_gen_expr(n->b) (or n->b->a/n->b->b)
+ * last set it to, matching the pre-existing behavior at every call site -
+ * each site overwrites it with the (float) lvalue type immediately after. */
+static void emit_float_compound_rhs(const struct AstNode *n, int saved_dead)
+{
+    const char *helper;
+
+    if (n->op == TOK_ADDEQ && ast_is_float_madd_rhs(n->b)) {
+        expr_result_dead = 0;
+        ast_gen_expr(n->b->a);
+        if (!type_is_float(g_expr_type))
+            emit_convert_int_to_float(g_expr_type);
+        emit("\tpush de\n\tpush hl\n");
+        ast_gen_expr(n->b->b);
+        if (!type_is_float(g_expr_type))
+            emit_convert_int_to_float(g_expr_type);
+        emit("\tpush de\n\tpush hl\n");
+        expr_result_dead = saved_dead;
+        emit_runtime_call("__fmadd");
+        emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+        return;
+    }
+
+    expr_result_dead = 0;
+    ast_gen_expr(n->b);
+    expr_result_dead = saved_dead;
+    if (!type_is_float(g_expr_type))
+        emit_convert_int_to_float(g_expr_type);
+    emit("\tpush de\n\tpush hl\n");
+    helper = n->op == TOK_ADDEQ ? "__fadd" :
+             n->op == TOK_SUBEQ ? "__fsub" :
+             n->op == TOK_MULEQ ? "__fmul" : "__fdiv";
+    emit_runtime_call(helper);
+    emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+}
+
 void gen_assign_ast(const struct AstNode *n)
 {
     struct Sym *s;
@@ -1336,8 +1393,16 @@ void gen_assign_ast(const struct AstNode *n)
             }
 
             emit("\tpush de\n\tpush hl\n");         /* save current value */
-
             saved_dead = expr_result_dead;
+
+            if (type_is_float(val_type)) {
+                emit_float_compound_rhs(n, saved_dead);
+                emit_store_de_to_addr_hl(val_type);
+                g_expr_type = val_type;
+                g_long_from16 = 0;
+                return;
+            }
+
             expr_result_dead = 0;
             ast_gen_expr(n->b);                      /* rhs -> DE:HL or HL */
             expr_result_dead = saved_dead;
@@ -1354,20 +1419,6 @@ void gen_assign_ast(const struct AstNode *n)
                     emit("\tex de,hl\n");
                     emit("\tld d,b\n\tld e,c\n");
                 }
-                g_expr_type = val_type;
-                g_long_from16 = 0;
-                return;
-            }
-
-            if (type_is_float(val_type)) {
-                if (!type_is_float(g_expr_type))
-                    emit_convert_int_to_float(g_expr_type);
-                emit("\tpush de\n\tpush hl\n");
-                emit_runtime_call(n->op == TOK_ADDEQ ? "__fadd" :
-                                  n->op == TOK_SUBEQ ? "__fsub" :
-                                  n->op == TOK_MULEQ ? "__fmul" : "__fdiv");
-                emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
-                emit_store_de_to_addr_hl(val_type);
                 g_expr_type = val_type;
                 g_long_from16 = 0;
                 return;
@@ -1497,16 +1548,7 @@ void gen_assign_ast(const struct AstNode *n)
         emit("\tpush hl\n");
         emit_load_from_hl(s->type);
         emit("\tpush de\n\tpush hl\n");
-        expr_result_dead = 0;
-        ast_gen_expr(n->b);
-        expr_result_dead = saved_dead;
-        if (!type_is_float(g_expr_type))
-            emit_convert_int_to_float(g_expr_type);
-        emit("\tpush de\n\tpush hl\n");
-        emit_runtime_call(n->op == TOK_ADDEQ ? "__fadd" :
-                          n->op == TOK_SUBEQ ? "__fsub" :
-                          n->op == TOK_MULEQ ? "__fmul" : "__fdiv");
-        emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+        emit_float_compound_rhs(n, saved_dead);
         emit_store_de_to_addr_hl(s->type);
         g_expr_type = s->type;
         g_long_from16 = 0;
@@ -1537,16 +1579,7 @@ void gen_assign_ast(const struct AstNode *n)
         saved_dead = expr_result_dead;
         emit_load_sym_value_direct(s);
         emit("\tpush de\n\tpush hl\n");
-        expr_result_dead = 0;
-        ast_gen_expr(n->b);
-        expr_result_dead = saved_dead;
-        if (!type_is_float(g_expr_type))
-            emit_convert_int_to_float(g_expr_type);
-        emit("\tpush de\n\tpush hl\n");
-        emit_runtime_call(n->op == TOK_ADDEQ ? "__fadd" :
-                          n->op == TOK_SUBEQ ? "__fsub" :
-                          n->op == TOK_MULEQ ? "__fmul" : "__fdiv");
-        emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+        emit_float_compound_rhs(n, saved_dead);
         emit_store_hl_to_sym_direct(s);
         g_expr_type = s->type;
         g_long_from16 = 0;
