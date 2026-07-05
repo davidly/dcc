@@ -251,8 +251,8 @@ for the full function inventory and `printf`/`scanf` conversion tables see
 ## Workflow
 
 1. **Plan for the deviations.** Floating point → single precision (no `double`);
-   decimal parsing → a `float` parser (no `atof`); `time`/`signal`/`locale` →
-   don't exist.
+  decimal parsing → dcc's `float`-returning `atof`, or a small parser if you
+  need different semantics; `time`/`signal`/`locale` → don't exist.
 2. **Check the library** in [references/library.md](./references/library.md)
    before calling anything unverified — a missing function is a link error,
    not a compile error.
