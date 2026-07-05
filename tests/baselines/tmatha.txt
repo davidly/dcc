@@ -1,0 +1,4 @@
+=== dcc math.h alias verification ===
+-------------------------------
+checks=23 failures=0
+RESULT: PASS

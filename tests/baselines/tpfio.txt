@@ -1,0 +1,6 @@
+tpfio start
+a=1.250000
+b=2.50
+sum=3.750000
+mix=7 2.5 ok
+tpfio ok
