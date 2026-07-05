@@ -33,6 +33,7 @@ portability surprises when code is moved from a hosted desktop compiler.
 | --- | --- |
 | `int` is 16-bit | Use `long` (and `%ld`) for values beyond +/-32767. Code that assumes host-sized `int` or 64-bit arithmetic is outside the target model. |
 | `float` is the only floating type | Unsuffixed floating constants are treated as `float`; there is no wider `double` fallback. |
+| `atof` returns `float` | C89 declares `atof` as returning `double`; DCC C Compiler has no distinct `double`, so `stdlib.h` declares `float atof(const char *)`. |
 | `float` precision is ~24 bits | Integers above about +/-16,777,216 are not all exactly representable as `float`; converting large `long` values rounds to nearest representable single precision value. |
 | `%` is integer-only | Use `fmodf` for floating-point remainder; `float % float` is a compile error. |
 

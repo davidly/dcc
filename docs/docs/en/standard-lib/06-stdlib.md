@@ -68,7 +68,8 @@ unsigned long u = strtoul("4294967295", NULL, 10); /* ULONG_MAX */
 
 `atof` is available as a DCC C Compiler extension: it is declared as `float atof(const char *nptr)`
 and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
-does not have.
+does not have. It accepts ordinary decimal text with an optional exponent, plus the case-insensitive
+spellings `nan`, `inf`, and `infinity`. Overflow returns signed infinity; underflow returns signed zero.
 
 ## Integer arithmetic helpers
 
