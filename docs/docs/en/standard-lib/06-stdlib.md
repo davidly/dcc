@@ -1,8 +1,8 @@
 # Memory and utilities (`stdlib.h`)
 
-Include [`stdlib.h`](06-stdlib.md). This header covers dynamic memory, string-to
--number conversion, integer arithmetic helpers, searching and sorting, process
-control, and pseudo-random numbers.
+Include [`stdlib.h`](06-stdlib.md). This header covers dynamic memory,
+string-to-number conversion, integer arithmetic helpers, searching and sorting,
+process control, and pseudo-random numbers.
 
 ## Types and Macros
 

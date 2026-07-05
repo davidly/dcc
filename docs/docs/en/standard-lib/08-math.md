@@ -1,6 +1,6 @@
-# Floating point math (`math.h`)
+# Floating-point math (`math.h`)
 
-Include [`math.h`](08-math.md). the DCC C Compiler has only 32-bit `float` (no `double`), so
+Include [`math.h`](08-math.md). The DCC C Compiler has only 32-bit `float` (no `double`), so
 the math entry points are the single-precision `...f` variants. The unsuffixed
 C89 names are provided as macro aliases for convenience.
 
@@ -25,10 +25,10 @@ the single-precision `...f` functions with macros.
 !!! warning "Float is the biggest size lever"
     A single `float` operator links the shared normalise/round core, and the
     transcendental functions (`expf`/`logf`/`powf` and the trig/hyperbolic
-  families) are the heaviest individual features in the runtime. They are
-  software routines on the Z80, not hardware floating-point operations, so
-  budget both code size and execution time. See the
-  [appendix](../appendix/01-dccrtlstrip.md).
+    families) are the heaviest individual features in the runtime. They are
+    software routines on the Z80, not hardware floating-point operations, so
+    budget both code size and execution time. See the
+    [appendix](../appendix/01-dccrtlstrip.md).
 
 ## Function groups
 

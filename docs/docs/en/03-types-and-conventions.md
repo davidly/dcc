@@ -26,8 +26,8 @@ The practical consequences:
 - Use `unsigned` / `unsigned long` when you need wraparound arithmetic or a
   logical right shift; signed right shift sign-extends.
 - `float` carries about 7 decimal digits (a 24-bit significand). Integers up to
-  2<sup>24</sup> (16,777,216) are exact; beyond that, converting a large `long`
-  to `float` rounds to the nearest single. See [Floating point math](standard-lib/08-math.md)
+  `2^24` (16,777,216) are exact; beyond that, converting a large `long`
+  to `float` rounds to the nearest single. See [Floating-point math](standard-lib/08-math.md)
   for the full set of precision gotchas.
 
 ## Useful constants

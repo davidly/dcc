@@ -329,7 +329,7 @@ Common options:
   the bottom of the stack, so growing the stack shrinks the heap and vice versa.
   By default there are no runtime checks that stop the stack from smashing the
   heap.
-- **`-fstack-check`** — opt in to a lightweight stack-overflow guard. the DCC C Compiler emits
+- **`-fstack-check`** — opt in to a lightweight stack-overflow guard. The DCC C Compiler emits
   a short `call __stchk` in each function prologue (after the frame is set up)
   that compares the live stack pointer against the heap ceiling. If the stack
   has grown into the heap, the program prints `?stack overflow` and exits with
