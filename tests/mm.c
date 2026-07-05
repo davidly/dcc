@@ -37,6 +37,22 @@ void fillb()
             B[ i ][ j ] = (ftype) ( ( i + j + 2 ) / ( j + 1 ) );
 }
 
+static void fillar()
+{
+    register int i, j;
+    for ( i = 0; i < l; i++ )
+        for ( j = 0; j < m; j++ )
+            A[ i ][ j ] = ( (ftype) ( i + j + 2 ) ) / 3.0;
+}
+
+static void fillbr()
+{
+    register int i, j;
+    for ( i = 0; i < m; i++ )
+        for ( j = 0; j < n; j++ )
+            B[ i ][ j ] = ( (ftype) ( i + j + 2 ) ) / 7.0;
+}
+
 void fillc()
 {
     register int i, j;
@@ -106,6 +122,8 @@ void fsummit()
 
 int main( int argc, char * argv[] )
 {
+    ftype fastsumm;
+
     Summ = 0.0;
 
     filla();
@@ -136,6 +154,44 @@ int main( int argc, char * argv[] )
     if ( 465880.0 != Summ )
     {
         printf( "incorrect Summ for normal version\n" );
+        exit( 1 );
+    }
+
+    printf( "summ is : %f\n", Summ );
+
+    /* Second pass: A and B hold realistic, non-whole-number values (plain
+     * ratios, not the small-integer values used above) so fp add/multiply
+     * exercise real mantissa rounding instead of dcc's small-integer fast
+     * paths. There's no independently precomputed expected sum here - dcc's
+     * float routines don't round the same way a hardware/IEEE-754 reference
+     * would, so the fast (fmatmult/fsummit) and slow (matmult/summit)
+     * results are checked against EACH OTHER instead: both call the same
+     * RTL, just via different address computations, so they must agree. */
+    Summ = 0.0;
+
+    fillar();
+    fillbr();
+    fillc();
+
+    fmatmult();
+    fsummit();
+
+    fastsumm = Summ;
+
+    printf( "summ is : %f\n", Summ );
+
+    Summ = 0.0;
+
+    fillar();
+    fillbr();
+    fillc();
+
+    matmult();
+    summit();
+
+    if ( fastsumm != Summ )
+    {
+        printf( "incorrect Summ for realistic-value version\n" );
         exit( 1 );
     }
 
