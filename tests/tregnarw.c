@@ -58,10 +58,34 @@ int lusr(void)
     return total;
 }
 
+/* Guards a real, reproduced bug: an unguarded increment (`i++`) on a
+ * register-qualified scalar was invisible to the narrowing proof (only
+ * `--i`/`i--` was ever checked), so `i` here was incorrectly narrowed to
+ * unsigned char even though it climbs to 299 - wrapping at 256 and
+ * silently corrupting the sum. Loop termination is deliberately driven by
+ * `j` (unrelated to `i`) rather than by comparing `i` itself, so even a
+ * regression of this fix gives a wrong SUM rather than an infinite loop
+ * in the test suite. */
+int lbig(void)
+{
+    register int i;
+    int j;
+    int total;
+
+    total = 0;
+    i = 0;
+    for (j = 0; j < 300; j++) {
+        total = total + i;
+        i++;
+    }
+    return total;
+}
+
 int main()
 {
     printf("a=%d\n", lres());
     printf("b=%d\n", lmod());
     printf("c=%d\n", lusr());
+    printf("d=%d\n", lbig());
     return 0;
 }

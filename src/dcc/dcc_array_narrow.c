@@ -350,6 +350,25 @@ static const char *narrow_decrement_target(const struct AstNode *n)
     return NULL;
 }
 
+/* Is `n` an increment (`++X`/`X++`) of a plain identifier, and if so,
+ * which name? Mirrors narrow_decrement_target. Unlike a decrement (which
+ * has a recognized self-guarding "counts down to a known floor" idiom),
+ * this engine has no rule anywhere that bounds an increment from above -
+ * it only ever tracks lower bounds from loop guards (see
+ * narrow_cond_lower_bounds). Every caller of this function must therefore
+ * treat a match as an unconditional decline, never something to verify
+ * further. */
+static const char *narrow_increment_target(const struct AstNode *n)
+{
+    if (n == NULL)
+        return NULL;
+    if (n->kind == AST_UNARY && n->op == TOK_INC && n->a != NULL && n->a->kind == AST_IDENT)
+        return n->a->sval;
+    if (n->kind == AST_POSTFIX && n->op == TOK_INC && n->a != NULL && n->a->kind == AST_IDENT)
+        return n->a->sval;
+    return NULL;
+}
+
 #define MAX_NARROW_WRITES 48
 
 struct NarrowWrite {
@@ -436,6 +455,24 @@ static void narrow_walk_bare_expr(struct NarrowWalkState *st, const struct AstNo
             NARROW_FAIL(st);
         }
         return;
+    }
+
+    {
+        const char *inc_name = narrow_increment_target(e);
+        if (inc_name != NULL) {
+            idx = narrow_group_index(st->group, inc_name);
+            if (idx >= 0) {
+                /* No rule anywhere in this engine bounds an increment from
+                 * above (see narrow_increment_target) - e.g. `for (i = 0;
+                 * i <= SIZE; i++)` can carry i arbitrarily far past 255
+                 * even though every write TO i "looks" like just 0. This
+                 * was a real, reproduced bug: a plain incrementing loop
+                 * counter got silently narrowed to unsigned char and wrapped,
+                 * corrupting the loop entirely. Always decline. */
+                NARROW_FAIL(st);
+            }
+            return;
+        }
     }
 
     if (e->kind == AST_ASSIGN) {
