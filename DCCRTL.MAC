@@ -11830,213 +11830,108 @@ __fmul:
         jp      nc,FMINF
         ld      (AEXP),a
 
-        ; P = 0.
-        xor     a
-        ld      (FP0),a
-        ld      (FP1),a
-        ld      (FP2),a
-        ld      (FP3),a
-        ld      (FP4),a
-        ld      (FP5),a
-
-        ; Choose the multiplier Q to avoid guaranteed zero low-byte
-        ; iterations.  Product is commutative, so this is exact.
+        ; Mantissa multiply: compute only the top 32 bits of the 24x24-bit
+        ; product AM2:AM1:AM0 * BM2:BM1:BM0, landing directly in FP2:FP3:
+        ; FP4:FP5 - the only bytes the code below this point ever reads
+        ; (FP0/FP1, the low 16 bits of the true 48-bit product, were
+        ; computed by the old bit-serial loop but never read afterward).
         ;
-        ; Prefer a 16-bit byte skip if either mantissa has two zero low bytes;
-        ; otherwise use an 8-bit byte skip if either mantissa has one zero low
-        ; byte.  This keeps full 24-bit mantissas and only avoids iterations
-        ; where Q's low byte would force no add.
+        ; Replaces a 24-iteration bit-serial shift-and-add loop, where every
+        ; iteration touched a 6-byte accumulator and a 6-byte shifted
+        ; multiplicand entirely through memory, with four calls to __m1u -
+        ; the same fully register-resident, unrolled 16x16->32 unsigned
+        ; multiply dcc's own long multiply already relies on (see __m1u
+        ; above) - plus a small, fixed number of accumulator updates.
+        ;
+        ; Splitting each 24-bit mantissa into an 8-bit high part and 16-bit
+        ; low part (A = Ahi*2^16 + Alo, B = Bhi*2^16 + Blo):
+        ;
+        ;   top32(A*B) = (Ahi*Bhi)<<16 + Ahi*Blo + Alo*Bhi + (Alo*Blo>>16)
+        ;
+        ; Every term is non-negative and A,B both lie in [2^23,2^24) (the
+        ; implicit leading mantissa bit is always set here), so A*B lies in
+        ; [2^46,2^48) and top32(A*B) is guaranteed to fit in 32 bits - a
+        ; plain carry-propagating accumulator can never overflow while
+        ; adding these four terms in any order.
+
+        ; term = Alo*Blo -> DE:HL (32-bit); only DE (the high 16 bits)
+        ; is needed - it seeds the accumulator directly.
         ld      a,(AM0)
-        or      a
-        jp      nz,FMCHECK_B
+        ld      c,a
         ld      a,(AM1)
-        or      a
-        jp      z,FMSET_BA_8    ; A has 16 low zero bits
-        jp      FMCHECK_B2_FOR_8
-
-FMCHECK_B:
+        ld      b,a             ; BC = Alo
         ld      a,(BM0)
-        or      a
-        jp      nz,FMSET_AB_24
-        ld      a,(BM1)
-        or      a
-        jp      z,FMSET_AB_8    ; B has 16 low zero bits
-        jp      FMSET_AB_16     ; B has 8 low zero bits
-
-FMCHECK_B2_FOR_8:
-        ; A has 8 low zero bits.  If B has 16, prefer that; otherwise use A.
-        ld      a,(BM0)
-        or      a
-        jp      nz,FMSET_BA_16
-        ld      a,(BM1)
-        or      a
-        jp      z,FMSET_AB_8
-        jp      FMSET_BA_16
-
-FMSET_BA_16:
-        ; A has 8 low zero bits: M = B mantissa << 8, Q = A >> 8.
-        xor     a
-        ld      (FM0),a
-        ld      a,(BM0)
-        ld      (FM1),a
-        ld      a,(BM1)
-        ld      (FM2),a
-        ld      a,(BM2)
-        ld      (FM3),a
-        xor     a
-        ld      (FM4),a
-        ld      (FM5),a
-        ld      h,0
-        ld      a,(AM2)
-        ld      l,a
-        ld      a,(AM1)
-        ld      e,a
-        ld      b,16
-        jp      FMLP
-
-FMSET_BA_8:
-        ; A has 16 low zero bits: M = B mantissa << 16, Q = A >> 16.
-        xor     a
-        ld      (FM0),a
-        ld      (FM1),a
-        ld      a,(BM0)
-        ld      (FM2),a
-        ld      a,(BM1)
-        ld      (FM3),a
-        ld      a,(BM2)
-        ld      (FM4),a
-        xor     a
-        ld      (FM5),a
-        ld      h,0
-        ld      l,0
-        ld      a,(AM2)
-        ld      e,a
-        ld      b,8
-        jp      FMLP
-
-FMSET_AB_16:
-        ; B has 8 low zero bits: M = A mantissa << 8, Q = B >> 8.
-        xor     a
-        ld      (FM0),a
-        ld      a,(AM0)
-        ld      (FM1),a
-        ld      a,(AM1)
-        ld      (FM2),a
-        ld      a,(AM2)
-        ld      (FM3),a
-        xor     a
-        ld      (FM4),a
-        ld      (FM5),a
-        ld      h,0
-        ld      a,(BM2)
         ld      l,a
         ld      a,(BM1)
-        ld      e,a
-        ld      b,16
-        jp      FMLP
-
-FMSET_AB_8:
-        ; B has 16 low zero bits: M = A mantissa << 16, Q = B >> 16.
-        xor     a
-        ld      (FM0),a
-        ld      (FM1),a
-        ld      a,(AM0)
-        ld      (FM2),a
-        ld      a,(AM1)
-        ld      (FM3),a
-        ld      a,(AM2)
-        ld      (FM4),a
-        xor     a
-        ld      (FM5),a
-        ld      h,0
-        ld      l,0
-        ld      a,(BM2)
-        ld      e,a
-        ld      b,8
-        jp      FMLP
-
-FMSET_AB_24:
-        ; General path: M = A mantissa, Q = B mantissa.
-        ld      a,(AM0)
-        ld      (FM0),a
-        ld      a,(AM1)
-        ld      (FM1),a
-        ld      a,(AM2)
-        ld      (FM2),a
-        xor     a
-        ld      (FM3),a
-        ld      (FM4),a
-        ld      (FM5),a
-        ld      a,(BM2)
-        ld      h,a
-        ld      a,(BM1)
-        ld      l,a
-        ld      a,(BM0)
-        ld      e,a
-        ld      b,24
-
-FMLP:
-        ; Q >>= 1; carry = old bit-0 of E (the multiplier bit to test)
-        srl     h
-        rr      l
-        rr      e
-        push    hl              ; save Q high bytes (H=FQ2, L=FQ1)
-        ld      hl,FM0          ; HL -> M[0]; pointer for both P+=M and M<<=1
-        jp      nc,FMNA         ; skip accumulate if this Q bit was 0
-
-        ; P += M  (HL = FM0; 'add' on byte 0 ignores the stale carry=1)
-        ld      a,(FP0)
-        add     a,(hl)
-        ld      (FP0),a
-        inc     hl
-        ld      a,(FP1)
-        adc     a,(hl)
-        ld      (FP1),a
-        inc     hl
-        ld      a,(FP2)
-        adc     a,(hl)
+        ld      h,a             ; HL = Blo
+        call    __m1u           ; DE:HL = Alo*Blo
+        ld      a,e
         ld      (FP2),a
-        inc     hl
-        ld      a,(FP3)
-        adc     a,(hl)
+        ld      a,d
         ld      (FP3),a
-        inc     hl
-        ld      a,(FP4)
-        adc     a,(hl)
+        xor     a
         ld      (FP4),a
-        inc     hl
+        ld      (FP5),a         ; accumulator = high16(Alo*Blo), high half 0
+
+        ; term = Ahi*Blo -> DE:HL (32-bit); add in full at offset 0.
+        ld      a,(AM2)
+        ld      c,a
+        ld      b,0             ; BC = 0:Ahi
+        ld      a,(BM0)
+        ld      l,a
+        ld      a,(BM1)
+        ld      h,a             ; HL = Blo
+        call    __m1u           ; DE:HL = Ahi*Blo
+        ld      a,(FP2)
+        add     a,l
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,h
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,e
+        ld      (FP4),a
         ld      a,(FP5)
-        adc     a,(hl)
+        adc     a,d
         ld      (FP5),a
-        ld      hl,FM0          ; reset HL -> M[0] for M shift below
-FMNA:
-        ; M <<= 1  (HL = FM0; 'add' on byte 0 ignores carry from P+=M)
-        ld      a,(hl)
-        add     a,a
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        rla
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        rla
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        rla
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        rla
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        rla
-        ld      (hl),a
-        pop     hl              ; restore Q (H=FQ2, L=FQ1)
-        dec     b
-        jp      nz,FMLP
+
+        ; term = Alo*Bhi -> DE:HL (32-bit); add in full at offset 0.
+        ld      a,(AM0)
+        ld      c,a
+        ld      a,(AM1)
+        ld      b,a             ; BC = Alo
+        ld      a,(BM2)
+        ld      l,a
+        ld      h,0             ; HL = 0:Bhi
+        call    __m1u           ; DE:HL = Alo*Bhi
+        ld      a,(FP2)
+        add     a,l
+        ld      (FP2),a
+        ld      a,(FP3)
+        adc     a,h
+        ld      (FP3),a
+        ld      a,(FP4)
+        adc     a,e
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,d
+        ld      (FP5),a
+
+        ; term = Ahi*Bhi; both operands < 256 so the product fits entirely
+        ; in HL (DE = 0 always) - add just the two bytes at offset 16.
+        ld      a,(AM2)
+        ld      c,a
+        ld      b,0             ; BC = 0:Ahi
+        ld      a,(BM2)
+        ld      l,a
+        ld      h,0             ; HL = 0:Bhi
+        call    __m1u           ; HL = Ahi*Bhi (DE = 0)
+        ld      a,(FP4)
+        add     a,l
+        ld      (FP4),a
+        ld      a,(FP5)
+        adc     a,h
+        ld      (FP5),a
 
         ; If product bit 47 is set, mantissa = product >> 24 and exponent++.
         ld      a,(FP5)
