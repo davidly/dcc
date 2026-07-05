@@ -7,6 +7,12 @@ normally `http://127.0.0.1:8000/`.
 
 Run the commands for your platform from the root of the DCC repo folder.
 
+If you edit the docs in VS Code, install these Markdown extensions for a better
+editing experience:
+
+- [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one)
+- [markdownlint](https://marketplace.visualstudio.com/items?itemName=DavidAnson.vscode-markdownlint)
+
 === "Windows"
 
     ```powershell
