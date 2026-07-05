@@ -1,7 +1,7 @@
 # The toolchain
 
 To compile, assemble, link, and run CP/M apps with the DCC C Compiler toolchain, you need two things: the DCC C Compiler tools
-(`dcc`, `dccmake`, `dccpeep`, `dccrtlstrip`, plus `DCCRTL.MAC`, `m80.com`, and `l80.com`) and the [ntvcm](https://github.com/davidly/ntvcm) CP/M 2.2 emulator to run CP/M binaries, including `m80.com`, `l80.com`, and the resulting programs.
+([`dcc`](appendix/03-utilities.md#toolchain-commands), [`dccmake`](appendix/03-utilities.md#build-pipeline-helper-dccmake), [`dccpeep`](appendix/03-utilities.md#toolchain-commands), [`dccrtlstrip`](appendix/03-utilities.md#toolchain-commands), plus [`DCCRTL.MAC`](appendix/03-utilities.md#toolchain-commands), [`m80.com`](appendix/03-utilities.md#toolchain-commands), and [`l80.com`](appendix/03-utilities.md#toolchain-commands)) and the [`ntvcm`](appendix/03-utilities.md#toolchain-commands) CP/M 2.2 emulator to run CP/M binaries, including `m80.com`, `l80.com`, and the resulting programs.
 
 You build these tools once. After that, use them from any CP/M app project.
 
@@ -256,12 +256,12 @@ to the DCC C Compiler checkout, starting `pwsh`, and running `./scripts/ma.ps1` 
 They resolve each tool the same way: they use an environment variable if you set
 one, otherwise they look for the tool on your `PATH`. The relevant tools are:
 
-- `dcc` — compiler
-- `dccmake` — build pipeline helper
-- `dccpeep` — peephole optimizer
-- `dccrtlstrip` — runtime stripper
-- `ntvcm` — CP/M emulator
-- `m80` / `l80` — assembler and linker
+- [`dcc`](appendix/03-utilities.md#toolchain-commands) — compiler
+- [`dccmake`](appendix/03-utilities.md#build-pipeline-helper-dccmake) — build pipeline helper
+- [`dccpeep`](appendix/03-utilities.md#toolchain-commands) — peephole optimizer
+- [`dccrtlstrip`](appendix/03-utilities.md#toolchain-commands) — runtime stripper
+- [`ntvcm`](appendix/03-utilities.md#toolchain-commands) — CP/M emulator
+- [`m80`](appendix/03-utilities.md#toolchain-commands) / [`l80`](appendix/03-utilities.md#toolchain-commands) — assembler and linker
 
 Recommended setup, especially when building apps in a project *outside* the DCC C Compiler
 repo, is to add the directories containing the built `dcc` and `ntvcm`
