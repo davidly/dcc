@@ -44,6 +44,7 @@ nav:
       - Runtime function sizes: en/appendix/02-runtime-sizes.md
       - Utilities: en/appendix/03-utilities.md
       - Package testing: en/appendix/04-package-testing.md
+      - Building project docs: en/appendix/05-building-project-docs.md
 
 plugins:
   - search
