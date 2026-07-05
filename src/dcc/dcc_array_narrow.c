@@ -573,13 +573,18 @@ static void narrow_walk_stmt(struct NarrowWalkState *st, const struct AstNode *s
             if (guard_ok) {
                 /* The preceding assignment's RHS must itself be known
                  * strictly positive, not merely nonneg - a bare
-                 * group-member hypothesis alone only gives nonneg. Both a
+                 * group-member hypothesis alone only gives nonneg. A
                  * plain copy (`n = N;`) and the bundled `n = N--;` shape
-                 * reduce to "look up N's own fact" here. */
+                 * both reduce to "look up N's own fact" here; a literal
+                 * (`n = 5;`) is simplest of all - its own value IS the
+                 * fact, encoded the same way narrow_seq_update_literal_fact
+                 * would (min_exclusive = literal - 1), needing no lookup. */
                 if (prev->a->b->kind == AST_IDENT)
                     prev_min = narrow_facts_min(facts, prev->a->b->sval);
                 else if (prev_dec != NULL)
                     prev_min = narrow_facts_min(facts, prev_dec);
+                else if (prev->a->b->kind == AST_INT_LIT)
+                    prev_min = (int)prev->a->b->ival - 1;
                 else
                     prev_min = -1;
                 guard_ok = narrow_is_strictly_positive_fact(prev_min);
@@ -835,11 +840,17 @@ static void narrow_collect_deps(const struct AstNode *n, struct NarrowGroup *kno
     narrow_collect_deps(n->b, known, deps, dep_is_array, n_deps, max_deps);
 }
 
-/* Top-level entry: attempt to prove every value ever stored into
- * `arr_name` (an int array) within `scope` (a compound statement - the
- * enclosing function's body) is in [0,255]. Returns 1 if safe to narrow
- * its element type to unsigned char, 0 if declined. */
-int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
+/* Shared engine for both narrow_array_is_byte_safe and
+ * narrow_scalar_is_byte_safe: attempt to prove every value ever stored into
+ * `name` (an array if is_array, else a plain scalar) within `scope` (a
+ * compound statement - the enclosing function's body) is in [0,255].
+ * Returns 1 if safe to narrow to unsigned char, 0 if declined. The only
+ * difference the is_array flag makes to the proof itself is in the escape
+ * check (narrow_name_escapes): a bare, non-indexed occurrence of an array
+ * name decays to a pointer and is an escape, but a bare occurrence of a
+ * scalar name is an ordinary read/use, not an escape. */
+static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *name,
+                                    int is_array)
 {
     struct NarrowGroup group;
     struct NarrowWalkState st;
@@ -851,7 +862,7 @@ int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
         return 0;
 
     group.n = 0;
-    if (narrow_group_add(&group, arr_name, 1) < 0)
+    if (narrow_group_add(&group, name, is_array) < 0)
         return 0;
 
     for (pass = 0; pass < MAX_NARROW_GROUP + 1; ++pass) {
@@ -925,4 +936,20 @@ int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
     g_narrow_active_facts = NULL;
 
     return 1;
+}
+
+int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
+{
+    return narrow_is_byte_safe_impl(scope, arr_name, 1);
+}
+
+/* Same proof, seeded with a plain scalar instead of an array - e.g. e.c's
+ * loop counter `n`, which this analysis already has to bound anyway as a
+ * dependency of proving `a[]` narrow-safe (n is a %-divisor, so it already
+ * needs the same nonneg-and-<=255 property). Exposed separately so a
+ * scalar can be proven byte-safe on its own, without requiring some other
+ * array in the same scope to be the one asking. */
+int narrow_scalar_is_byte_safe(const struct AstNode *scope, const char *name)
+{
+    return narrow_is_byte_safe_impl(scope, name, 0);
 }

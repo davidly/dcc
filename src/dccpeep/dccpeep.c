@@ -2522,6 +2522,144 @@ static int pass_reuse_array_byte_addr(void)
     return changed;
 }
 
+static int peep_parse_dec_ix_byte(const char *s, int *off)
+{
+    char tmp[MAX_LINE];
+    char *p;
+    char *endp;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "dec (ix", 7) != 0)
+        return 0;
+    p = tmp + 7;
+    *off = (int)strtol(p, &endp, 10);
+    if (*endp != ')' || endp[1] != 0)
+        return 0;
+    return 1;
+}
+
+/* Recognizes a byte-sized ix-local used purely as a self-guarding
+ * decrementing loop counter - dcc_array_narrow.c's `while(--n)` idiom,
+ * once narrowing has made the counter's own storage a single byte (see
+ * try_narrow_register_scalar in dcc_func.c) - and promotes it to register
+ * C for the loop's duration, eliminating the ix-frame reload on every use.
+ *
+ * Matches:
+ *   LABEL:
+ *   dec (ix+O)
+ *   jp z, EXIT
+ *   <body, ending in a bare "jp LABEL">
+ * where every reference to (ix+O) inside the body is one of exactly two
+ * whitelisted "zero-extend into a 16-bit register pair" shapes -
+ *   ld e,(ix+O)        ld l,(ix+O)
+ *   ld d,0              ld h,0
+ * - and every call inside the body is to __mods or __divs specifically:
+ * runtime helpers documented (see DCCRTL.MAC) to preserve BC across the
+ * call, so C can stand in for the whole loop with no spill/reload at all.
+ *
+ * Declines (the safe default, missing the optimization but never
+ * misapplying it) if any other reference to the counter's slot, any other
+ * call, or any other label appears in the body - this pass does not try
+ * to reason about what such a reference might mean. */
+static int pass_byte_loop_counter_to_reg_c(void)
+{
+    int i;
+    int changed;
+    int off;
+    char label[128];
+    char target[128];
+    char tgt[128];
+    int loop_end;
+    int k;
+    int ok;
+    char pat_ix[40];
+    char pat_lde[40];
+    char pat_lhl[40];
+    char prime[40];
+    char writeback[40];
+
+    changed = 0;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        if (!starts_label(lines[i]))
+            continue;
+        if (!peep_parse_dec_ix_byte(lines[i + 1], &off))
+            continue;
+        if (!parse_jp_cond_label(lines[i + 2], "z", target))
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        /* Find the matching loop-back jump to this same label, with no
+         * other label in between (single-entry, single-exit body). */
+        loop_end = -1;
+        for (k = i + 3; k < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;
+            if (is_uncond_jp(lines[k])) {
+                if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
+                    loop_end = k;
+                break;
+            }
+        }
+        if (loop_end < 0)
+            continue;
+
+        sprintf(pat_ix, "(ix%+d)", off);
+        sprintf(pat_lde, "ld e,(ix%+d)", off);
+        sprintf(pat_lhl, "ld l,(ix%+d)", off);
+
+        ok = 1;
+        for (k = i + 3; k < loop_end && ok; ++k) {
+            if (strncmp(lines[k], "call ", 5) == 0) {
+                if (!eq(k, "call __mods") && !eq(k, "call __divs"))
+                    ok = 0;
+                continue;
+            }
+            if (strstr(lines[k], pat_ix) == NULL)
+                continue;
+            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
+                ++k;
+                continue;
+            }
+            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) {
+                ++k;
+                continue;
+            }
+            ok = 0;
+        }
+        if (!ok)
+            continue;
+
+        /* In-place replacements first, while every index computed above is
+         * still valid (no lines inserted/deleted yet). */
+        replace1_tagged(i + 1, "dec c", "byte_loop_counter_to_reg_c");
+        for (k = i + 3; k < loop_end; ++k) {
+            if (eq(k, pat_lde)) { replace1(k, "ld e,c"); continue; }
+            if (eq(k, pat_lhl)) { replace1(k, "ld l,c"); continue; }
+        }
+
+        /* Write the counter back to its frame slot right after the
+         * decrement (LD does not touch flags, so the Z flag "dec c" just
+         * set is still valid two lines later at the exit branch) - makes
+         * the transform safe regardless of whether anything after the
+         * loop still reads the slot, without needing to prove it doesn't. */
+        sprintf(writeback, "ld (ix%+d),c", off);
+        insert_line(i + 2, writeback);
+
+        /* Prime the register right before the loop label. */
+        sprintf(prime, "ld c,(ix%+d)", off);
+        insert_line_tagged(i, prime, "byte_loop_counter_to_reg_c");
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_ix_postdec_to_local(void)
 {
     int i;
@@ -11548,6 +11686,7 @@ int main(int argc, char **argv)
         if (pass_reuse_array_word_addr()) changed = 1;
         if (pass_ix_array_byte_addr()) changed = 1;
         if (pass_reuse_array_byte_addr()) changed = 1;
+        if (pass_byte_loop_counter_to_reg_c()) changed = 1;
         if (pass_ix_postdec_to_local()) changed = 1;
         if (pass_store_word_const_hl()) changed = 1;
         if (pass_findsolution_clear_board_loop()) changed = 1;

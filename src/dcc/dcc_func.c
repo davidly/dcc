@@ -1315,6 +1315,73 @@ int local_name_used_ahead(const char *name)
     return found;
 }
 
+/* Purely lexical skip of one declaration statement with NO initializer,
+ * tracking paren/bracket/brace depth to find the terminating top-level
+ * ';' - no symbol-table side effects, no attempt to understand the
+ * declaration. Used only so the speculative narrow-safety walk (see
+ * narrow_build_speculative_scope) can step past a LATER declaration that
+ * ast_build_stmt cannot itself handle.
+ *
+ * Returns 1 (and leaves the token stream just past the ';') only for a
+ * plain, uninitialized declaration - its only content besides the name is
+ * compile-time-constant array dimensions, which by C89 rules cannot
+ * reference a local variable, so it truly cannot alias or escape any name
+ * this analysis cares about. Returns 0 if a top-level '=' is seen anywhere
+ * in the statement: an initializer CAN reference (and so alias/escape) one
+ * of the names being proven narrow-safe - e.g. `int *ip = ai;` aliases
+ * `ai` - and that reference would never reach narrow_name_escapes if this
+ * function silently skipped past it. On a 0 return the token position is
+ * unspecified; the caller aborts the whole speculative parse either way,
+ * so nothing needs to resync it. */
+static int narrow_skip_declaration_statement(void)
+{
+    int depth = 0;
+    while (tok.kind != TOK_EOF) {
+        if (depth == 0 && tok.kind == ';') {
+            next_token();
+            return 1;
+        }
+        if (depth == 0 && tok.kind == '=')
+            return 0;
+        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{')
+            depth++;
+        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+            if (depth > 0) depth--;
+        }
+        next_token();
+    }
+    return 0;
+}
+
+/* Shared by try_narrow_local_int_array and try_narrow_register_scalar:
+ * speculatively parses the rest of the enclosing block, from the current
+ * position, into an AST. A further local declaration in between (common -
+ * neither the array nor the scalar being proven need be the last local in
+ * the block) is lexically skipped rather than requiring ast_build_stmt to
+ * handle it (declarations are parsed by this file, not the AST builder).
+ * A typedef, or any other construct ast_build_stmt itself declines, still
+ * aborts the whole speculative parse (returns NULL) rather than guessing. */
+static struct AstNode *narrow_build_speculative_scope(struct AstArena *ar)
+{
+    struct AstNode *seq;
+
+    seq = ast_new(ar, AST_COMPOUND);
+    for (;;) {
+        struct AstNode *stmt;
+        if (tok.kind == '}' || tok.kind == TOK_EOF)
+            return seq;
+        if (starts_type() && tok.kind != TOK_TYPEDEF) {
+            if (!narrow_skip_declaration_statement())
+                return NULL;
+            continue;
+        }
+        stmt = ast_build_stmt(ar);
+        if (stmt == NULL)
+            return NULL;
+        ast_list_push(ar, seq, stmt);
+    }
+}
+
 /* Speculatively parses the rest of the enclosing block (from the current
  * position, which must be right after an eligible array declarator with no
  * initializer) into an AST, then asks dcc_array_narrow.c whether every
@@ -1327,9 +1394,8 @@ int local_name_used_ahead(const char *name)
  * parse_function_or_global).
  *
  * Bails (returns 0, the safe default) if the speculative parse cannot
- * reach the block's closing brace - e.g. a further local declaration
- * follows, which ast_build_stmt does not handle (declarations are parsed
- * by this file, not the AST builder) - rather than guess. */
+ * reach the block's closing brace - e.g. some construct ast_build_stmt
+ * cannot handle at all - rather than guess. */
 int try_narrow_local_int_array(const char *name, int type, int arrlen, int total_elems)
 {
     long sv_pos, sv_tok_start;
@@ -1367,18 +1433,67 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
      * reference to one can misresolve and trip a false-positive diagnostic;
      * asm_suppress_depth marks the parse as inert so dcc_error_at drops it. */
     asm_suppress_depth++;
-    seq = ast_new(&narrow_scratch_arena, AST_COMPOUND);
-    for (;;) {
-        struct AstNode *stmt;
-        if (tok.kind == '}' || tok.kind == TOK_EOF)
-            break;
-        stmt = ast_build_stmt(&narrow_scratch_arena);
-        if (stmt == NULL)
-            break;
-        ast_list_push(&narrow_scratch_arena, seq, stmt);
-    }
+    seq = narrow_build_speculative_scope(&narrow_scratch_arena);
     asm_suppress_depth--;
-    result = (tok.kind == '}') ? narrow_array_is_byte_safe(seq, name) : 0;
+    result = (seq != NULL) ? narrow_array_is_byte_safe(seq, name) : 0;
+
+    posi = sv_pos; tok_start_pos = sv_tok_start;
+    line_no = sv_line; tok_line = sv_tok_line;
+    tok = sv_tok;
+    nulabels = sv_nulabels;
+    g_for_seq = sv_for_seq; g_forren_n = sv_forren_n;
+    g_for_decl_seq = sv_for_decl_seq; g_for_decl_rename_index = sv_for_decl_rename_index;
+    g_for_decl_recording = sv_for_decl_recording; g_scope_depth = sv_scope_depth;
+    g_compound_literal_seq = sv_compound_literal_seq; g_licm_seq = sv_licm_seq;
+
+    return result;
+}
+
+/* Scalar counterpart of try_narrow_local_int_array: proves a plain
+ * register-qualified int local's own value (not an array's elements) is
+ * always in [0,255], so its storage can narrow to unsigned char - e.g.
+ * e.c's `register int n`, which this same engine already has to bound
+ * anyway as a dependency of proving `a[]` narrow-safe (n is a %-divisor).
+ * is_register is captured by the caller (from decl_is_register) rather
+ * than read here, since nothing this function calls is expected to touch
+ * that global, but relying on a value already in hand is more robust than
+ * re-reading a global after a speculative parse. */
+int try_narrow_register_scalar(const char *name, int type, int is_register,
+                               int arrlen, int total_elems)
+{
+    long sv_pos, sv_tok_start;
+    int sv_line, sv_tok_line;
+    struct Token sv_tok;
+    int sv_nulabels, sv_for_seq, sv_forren_n, sv_for_decl_seq, sv_for_decl_rename_index;
+    int sv_for_decl_recording, sv_scope_depth, sv_compound_literal_seq, sv_licm_seq;
+    static struct AstArena narrow_scalar_scratch_arena;
+    static int narrow_scalar_scratch_inited;
+    struct AstNode *seq;
+    int result;
+
+    if (!is_register || (type & 15) != TYPE_INT || type_ptr_depth(type) != 0 ||
+        type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || tok.kind == '=')
+        return 0;
+
+    if (!narrow_scalar_scratch_inited) {
+        ast_arena_init(&narrow_scalar_scratch_arena);
+        narrow_scalar_scratch_inited = 1;
+    }
+    ast_arena_reset(&narrow_scalar_scratch_arena);
+
+    sv_pos = posi; sv_tok_start = tok_start_pos;
+    sv_line = line_no; sv_tok_line = tok_line;
+    sv_tok = tok;
+    sv_nulabels = nulabels;
+    sv_for_seq = g_for_seq; sv_forren_n = g_forren_n;
+    sv_for_decl_seq = g_for_decl_seq; sv_for_decl_rename_index = g_for_decl_rename_index;
+    sv_for_decl_recording = g_for_decl_recording; sv_scope_depth = g_scope_depth;
+    sv_compound_literal_seq = g_compound_literal_seq; sv_licm_seq = g_licm_seq;
+
+    asm_suppress_depth++;
+    seq = narrow_build_speculative_scope(&narrow_scalar_scratch_arena);
+    asm_suppress_depth--;
+    result = (seq != NULL) ? narrow_scalar_is_byte_safe(seq, name) : 0;
 
     posi = sv_pos; tok_start_pos = sv_tok_start;
     line_no = sv_line; tok_line = sv_tok_line;
@@ -1498,6 +1613,8 @@ void scan_local_decl_after_type(int base)
              * below fall through to type_size(type), matching the narrowed
              * type instead of silently keeping the stale, too-wide stride. */
             current_field_array_elem_size = 0;
+        } else if (try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
+            type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         }
 
         bytes = type_size(type);

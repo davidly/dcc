@@ -2033,6 +2033,13 @@ dm_miss:
 ; Input:  HL = signed dividend, DE = signed divisor
 ; Output: HL = quotient (__divs) or remainder (__mods)
 ; Semantics: quotient truncates toward zero; remainder has dividend sign.
+;
+; CONTRACT: __divs, __mods, __divu, and __modu all preserve BC across the
+; call (the fast paths never touch it; the slow paths and DRSU explicitly
+; push/pop it). dccpeep's pass_byte_loop_counter_to_reg_c relies on this to
+; keep a loop counter live in C across a call to one of these without any
+; spill/reload - if that ever changes, update this comment and the pass's
+; whitelist of safe-to-cross call targets together.
 __divs:
         ; Fast path: if both operands are non-negative, signed division is
         ; identical to unsigned division.  This avoids the sign-wrapper
