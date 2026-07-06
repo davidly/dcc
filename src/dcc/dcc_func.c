@@ -1366,6 +1366,22 @@ static struct AstNode *narrow_build_speculative_scope(struct AstArena *ar)
 {
     struct AstNode *seq;
 
+    /* The caller's current position may be mid-declaration - e.g. proving
+     * the FIRST name in `register int i, j;` or `int a[200], b[200];`
+     * narrow-safe leaves the token stream sitting at the comma before the
+     * next declarator, not at a fresh statement boundary. Lexically skip
+     * whatever remains of the CURRENT declaration statement first (exactly
+     * like the loop below already does for a LATER, separate declaration -
+     * narrow_skip_declaration_statement bails safely on a top-level '=' the
+     * same way there too) so the loop always starts at a genuine statement
+     * boundary. A no-op past the ';' when the caller's declarator was
+     * already the last, or only, one in its statement. Without this, every
+     * declarator except the last in a comma-separated declaration silently
+     * failed to narrow at all (returned NULL here, so the caller always
+     * saw "not safe to narrow" regardless of the actual proof). */
+    if (!narrow_skip_declaration_statement())
+        return NULL;
+
     seq = ast_new(ar, AST_COMPOUND);
     for (;;) {
         struct AstNode *stmt;

@@ -337,6 +337,36 @@ static int narrow_cond_lower_bounds(const struct AstNode *cond, const char *name
     return 0;
 }
 
+/* Does `cond` recognizably establish `name < K` (strict) for some positive
+ * literal K? Used only for the narrow "for (name = 0; name < K; name++)"
+ * shape in the AST_FOR case below - the one place this engine bounds an
+ * increment from above at all (see narrow_increment_target's comment on why
+ * it declines everywhere else). Only the two textual orderings `name < K` /
+ * `K > name` are recognized, and deliberately NOT `<=`/`>=`: that one-off
+ * difference is exactly the shape of the real, previously-reproduced bug
+ * narrow_increment_target's comment describes (K==255 with `<=` lets the
+ * counter reach 256, wrapping an unsigned char back to 0 and never exiting)
+ * - out of scope by construction here, not by a fallible arithmetic
+ * adjustment. */
+static int narrow_cond_upper_bounds_lt(const struct AstNode *cond, const char *name, int *out_max)
+{
+    if (cond == NULL || cond->kind != AST_BINARY)
+        return 0;
+    if (cond->op == '<' && cond->a != NULL && cond->a->kind == AST_IDENT &&
+        !strcmp(cond->a->sval, name) && cond->b != NULL && cond->b->kind == AST_INT_LIT &&
+        cond->b->ival > 0) {
+        *out_max = (int)cond->b->ival;
+        return 1;
+    }
+    if (cond->op == '>' && cond->b != NULL && cond->b->kind == AST_IDENT &&
+        !strcmp(cond->b->sval, name) && cond->a != NULL && cond->a->kind == AST_INT_LIT &&
+        cond->a->ival > 0) {
+        *out_max = (int)cond->a->ival;
+        return 1;
+    }
+    return 0;
+}
+
 /* Is `n` a decrement (`--X`/`X--`) of a plain identifier, and if so, which
  * name? Returns NULL if not a decrement of a bare identifier. */
 static const char *narrow_decrement_target(const struct AstNode *n)
@@ -657,24 +687,49 @@ static void narrow_walk_stmt(struct NarrowWalkState *st, const struct AstNode *s
     case AST_FOR: {
         struct NarrowFacts saved;
         int min_ex;
+        int max_ex;
         int handled;
         int i;
+        int inc_bounded;
 
         narrow_walk_bare_expr(st, stmt->a, facts);
+
+        /* `for (i = 0; i < K; i++)`: the guard proves the increment can
+         * never carry i past K, so - unlike every other increment in this
+         * engine, which is always declined (see narrow_walk_bare_expr) -
+         * this one narrow, structurally-verified shape validates the
+         * increment inline instead of calling narrow_walk_bare_expr on it
+         * (which would otherwise unconditionally decline it). The init
+         * clause (`i = 0`) needs no special handling here: it is an
+         * ordinary literal assignment, already proven nonneg-and-bounded by
+         * the standard narrow_expr_bound path below. */
+        inc_bounded = 0;
+        {
+            const char *inc_name = narrow_increment_target(stmt->c);
+            if (inc_name != NULL) {
+                int idx = narrow_group_index(st->group, inc_name);
+                if (idx >= 0 && !st->group->is_array[idx] &&
+                    narrow_cond_upper_bounds_lt(stmt->b, inc_name, &max_ex) &&
+                    max_ex <= NARROW_TARGET_BOUND)
+                    inc_bounded = 1;
+            }
+        }
 
         handled = 0;
         for (i = 0; i < st->group->n && !handled; ++i) {
             if (narrow_cond_lower_bounds(stmt->b, st->group->names[i], &min_ex)) {
                 narrow_facts_push(facts, st->group->names[i], min_ex, &saved);
                 narrow_walk_stmt(st, stmt->d, NULL, facts);
-                narrow_walk_bare_expr(st, stmt->c, facts);
+                if (!inc_bounded)
+                    narrow_walk_bare_expr(st, stmt->c, facts);
                 *facts = saved;
                 handled = 1;
             }
         }
         if (!handled) {
             narrow_walk_stmt(st, stmt->d, NULL, facts);
-            narrow_walk_bare_expr(st, stmt->c, facts);
+            if (!inc_bounded)
+                narrow_walk_bare_expr(st, stmt->c, facts);
         }
         return;
     }

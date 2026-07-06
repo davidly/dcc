@@ -57,6 +57,7 @@ struct Config {
     char dcc_args[MAX_ITEMS][MAX_PATH_LEN];
     int dcc_arg_count;
     int peep;
+    int dccpeep_undoc;
     char build_dir[MAX_PATH_LEN];
     char dcc[MAX_PATH_LEN];
     char dccpeep[MAX_PATH_LEN];
@@ -498,6 +499,7 @@ static void init_config(struct Config *cfg)
     cfg->stack_check = getenv("DCC_FORCE_STACK_CHECK") && !strcmp(getenv("DCC_FORCE_STACK_CHECK"), "1");
     cfg->stack_bytes = 512;
     cfg->peep = 1;
+    cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
     copy_text(cfg->build_dir, sizeof(cfg->build_dir), "build");
     resolve_tool_path(cfg->dcc, sizeof(cfg->dcc), "DCC", LOCAL_DCC, "dcc");
     resolve_tool_path(cfg->dccpeep, sizeof(cfg->dccpeep), "DCCPEEP", LOCAL_DCCPEEP, "dccpeep");
@@ -628,6 +630,14 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
             return 0;
         }
         cfg->peep = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-allow-undocumented-z80")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->dccpeep_undoc = b;
         return 1;
     }
     if (!strcmp(key, "dcc-build-dir")) {
@@ -769,6 +779,8 @@ static void print_help(void)
     printf("  dcc-define=NAME[=value],...    pass -D values to dcc\n");
     printf("  dcc-undefine=NAME,...          pass -U values to dcc\n");
     printf("  dcc-peep=true|false|1|0        run dccpeep; default true\n");
+    printf("  dcc-allow-undocumented-z80=false|true|1|0\n");
+    printf("                                 pass -fundocumented-z80 to dccpeep; default false\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
     printf("\n");
     printf("dcc-style command options:\n");
@@ -1331,6 +1343,9 @@ static int run_build(struct Config *cfg)
             }
             cmd_init(cmd, sizeof(cmd));
             if (!cmd_arg(cmd, sizeof(cmd), cfg->dccpeep)) return 0;
+            if (cfg->dccpeep_undoc) {
+                if (!cmd_arg(cmd, sizeof(cmd), "-fundocumented-z80")) return 0;
+            }
             if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
             if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
             if (!run_cmd(cmd) || !file_exists(tmp))

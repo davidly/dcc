@@ -13,6 +13,16 @@ static char *lines[MAX_LINES];
 static int nlines;
 static int opt_size = 0;  /* -Os: use RTL helper stubs; default -Ot: inline */
 
+/* -fundocumented-z80: allow peephole passes that rely on undocumented Z80
+ * opcodes (currently just the IYH/IYL half-register load/inc/dec forms
+ * pass_byte_loop_counter_to_reg_iyl/pass_byte_incr_loop_counter_to_reg_iyl
+ * use, wrapped in M80 macros since M80 has no native mnemonic for them -
+ * see the macro prelude in main()). These opcodes are well-established
+ * folklore on real NMOS Z80 silicon and its common clones, and verified
+ * working under ntvcm, but are not part of the documented Z80 instruction
+ * set, so they are opt-in and OFF by default. */
+static int allow_undocumented_z80 = 0;
+
 static char *xstrdup2(const char *s)
 {
     char *p;
@@ -2653,6 +2663,422 @@ static int pass_byte_loop_counter_to_reg_c(void)
         /* Prime the register right before the loop label. */
         sprintf(prime, "ld c,(ix%+d)", off);
         insert_line_tagged(i, prime, "byte_loop_counter_to_reg_c");
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
+/*
+ * IY is otherwise completely unused across dcc's own codegen and all of
+ * DCCRTL.MAC (verified: zero occurrences), unlike BC which the codegen and
+ * runtime use constantly. That makes it a second, near-unconditionally-safe
+ * register slot for pass_byte_loop_counter_to_reg_iyl below - EXCEPT for
+ * calls into another function in this SAME translation unit, which might
+ * itself have one of its own loops promoted to IYL by this same pass and
+ * would silently stomp this loop's live counter across the call. This scan
+ * (run once, before the fixed-point pass loop) collects every function
+ * entry-point label in the file so that pass can tell those calls apart
+ * from RTL/library calls (which never touch IY).
+ *
+ * Matches the two shapes dcc_func.c's emit_function_prologue emits:
+ *   public NAME       (non-static)      ; static function ORIGNAME (static)
+ *   NAME:                               MANGLEDNAME:
+ * In both cases the actual asm label used at call sites is on the line
+ * immediately after the marker, so that's what gets collected - not the
+ * original C name in the static-function comment.
+ *
+ * Residual gap: a multi-module ("-c -module") build where the callee lives
+ * in a separately compiled-and-peepholed file is invisible to this per-file
+ * scan. Every test in this repository's harness is single-module, so this
+ * is a documented limitation, not a live bug against anything exercised
+ * here.
+ */
+#define MAX_LOCAL_FUNC_LABELS 8192
+static char local_func_labels[MAX_LOCAL_FUNC_LABELS][128];
+static int n_local_func_labels;
+
+static void scan_local_func_labels(void)
+{
+    int i;
+    char name[128];
+    int n;
+
+    n_local_func_labels = 0;
+    for (i = 0; i + 1 < nlines; ++i) {
+        if (strncmp(lines[i], "public ", 7) != 0 &&
+            strncmp(lines[i], "; static function ", 19) != 0)
+            continue;
+        if (!starts_label(lines[i + 1]))
+            continue;
+
+        strncpy(name, lines[i + 1], sizeof(name) - 1);
+        name[sizeof(name) - 1] = 0;
+        n = (int)strlen(name);
+        if (n > 0 && name[n - 1] == ':')
+            name[n - 1] = 0;
+
+        if (n_local_func_labels < MAX_LOCAL_FUNC_LABELS)
+            strcpy(local_func_labels[n_local_func_labels++], name);
+    }
+}
+
+static int is_local_func_label(const char *name)
+{
+    int i;
+    for (i = 0; i < n_local_func_labels; ++i)
+        if (!strcmp(local_func_labels[i], name))
+            return 1;
+    return 0;
+}
+
+/*
+ * IYL counterpart of pass_byte_loop_counter_to_reg_c: the identical self-
+ * guarding decrementing-loop-counter shape (see that pass's comment), but
+ * promoted into IY's low byte via undocumented FD-prefixed opcodes instead
+ * of register C. The opcodes are wrapped in M80 macros (IYDECL/IYLDA/IYSTA/
+ * IYLDE - inserted once at the top of the file in main(), see there) since
+ * M80 does not recognize the "iyl"/"iyh" mnemonic spellings directly.
+ *
+ * Because nothing else touches IY (see scan_local_func_labels above), this
+ * pass allows ANY call inside the loop body, not just __mods/__divs, except
+ * one that is_local_func_label flags as another function in this same file
+ * - declined exactly like pass_byte_loop_counter_to_reg_c declines a call
+ * that isn't __mods/__divs.
+ *
+ * "ld l,(ix+off)" can't become a single "ld l,iyl": the FD prefix redirects
+ * EVERY H/L reference in an instruction, so "ld l,iyl" would actually
+ * encode "ld iyl,iyl" - there is no single-instruction undocumented form
+ * that reads IYL into the real L register (E, unaffected by the H/L
+ * substitution rule, has no such problem - "ld e,iyl" is a clean single
+ * instruction). That whitelisted shape expands to two lines (IYLDA, then
+ * "ld l,a") instead of a single-line replacement.
+ */
+static int pass_byte_loop_counter_to_reg_iyl(void)
+{
+    int i;
+    int changed;
+    int off;
+    char label[128];
+    char target[128];
+    char tgt[128];
+    int loop_end;
+    int k;
+    int ok;
+    int needs_iyl;
+    char pat_ix[40];
+    char pat_lde[40];
+    char pat_lhl[40];
+    char prime[40];
+    char writeback[40];
+    char callee[128];
+    const char *p;
+
+    changed = 0;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        if (!starts_label(lines[i]))
+            continue;
+        if (!peep_parse_dec_ix_byte(lines[i + 1], &off))
+            continue;
+        if (!parse_jp_cond_label(lines[i + 2], "z", target))
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        /* Find the matching loop-back jump to this same label, with no
+         * other label in between (single-entry, single-exit body). */
+        loop_end = -1;
+        for (k = i + 3; k < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;
+            if (is_uncond_jp(lines[k])) {
+                if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
+                    loop_end = k;
+                break;
+            }
+        }
+        if (loop_end < 0)
+            continue;
+
+        sprintf(pat_ix, "(ix%+d)", off);
+        sprintf(pat_lde, "ld e,(ix%+d)", off);
+        sprintf(pat_lhl, "ld l,(ix%+d)", off);
+
+        ok = 1;
+        needs_iyl = 0;
+        for (k = i + 3; k < loop_end && ok; ++k) {
+            /* IY is a single register: a NESTED loop (this candidate's body
+             * contains another loop already promoted to IYL by an earlier
+             * match in this same scan - inner loops are found first, since
+             * their tail text appears before an enclosing loop's own tail)
+             * would silently clobber it. Decline outright - a real bug
+             * here corrupted mm.c's matrix multiply (all three nested
+             * i/j/k counters tried to claim IYL at once) before this check
+             * existed. */
+            if (strncmp(lines[k], "IY", 2) == 0) {
+                ok = 0;
+                continue;
+            }
+            if (strncmp(lines[k], "call ", 5) == 0) {
+                strip_peep_comment_copy(callee, lines[k]);
+                p = callee + 5;
+                while (*p == ' ' || *p == '\t')
+                    p++;
+                if (is_local_func_label(p))
+                    ok = 0;
+                else if (strcmp(p, "__mods") != 0 && strcmp(p, "__divs") != 0)
+                    needs_iyl = 1;
+                continue;
+            }
+            if (strstr(lines[k], pat_ix) == NULL)
+                continue;
+            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
+                ++k;
+                continue;
+            }
+            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) {
+                ++k;
+                continue;
+            }
+            ok = 0;
+        }
+        /* If every call in the body is __mods/__divs (or there are none),
+         * pass_byte_loop_counter_to_reg_c's own whitelist already covers
+         * this loop - defer to it rather than racing it for the same
+         * pattern. Whichever of the two runs first within a given
+         * fixed-point pass depends on how many other passes' preconditions
+         * this exact loop still needs to satisfy first, which is NOT the
+         * same thing as their static order in the pass list; a real
+         * regression on e.c (whose loop is fully __mods/__divs-eligible)
+         * showed IYL winning that race after an unrelated pass reordering,
+         * which is strictly worse than register C here (no FD-prefix tax,
+         * and no forced two-line expansion for the "ld l,(ix+off)" shape).
+         * IYL should only ever be used for what C structurally cannot
+         * handle at all. */
+        if (!needs_iyl)
+            ok = 0;
+        if (!ok)
+            continue;
+
+        /* In-place replacements first, while every index computed above is
+         * still valid. The "ld l,(ix+off)" shape is the one exception -
+         * expanding to two lines shifts everything after it, so loop_end
+         * and k are bumped in lockstep right there. */
+        replace1_tagged(i + 1, "IYDECL", "byte_loop_counter_to_reg_iyl");
+        for (k = i + 3; k < loop_end; ++k) {
+            if (eq(k, pat_lde)) {
+                replace1_tagged(k, "IYLDE", "byte_loop_counter_to_reg_iyl");
+                continue;
+            }
+            if (eq(k, pat_lhl)) {
+                replace1_tagged(k, "IYLDA", "byte_loop_counter_to_reg_iyl");
+                insert_line(k + 1, "ld l,a");
+                loop_end++;
+                ++k;
+                continue;
+            }
+        }
+
+        /* Write the counter back to its frame slot right after the
+         * decrement, same rationale as pass_byte_loop_counter_to_reg_c
+         * (safe regardless of whether anything after the loop still reads
+         * the slot). IYLDA/writeback don't touch flags, so the Z flag
+         * IYDECL just set is still valid at the exit branch. */
+        insert_line_tagged(i + 2, "IYLDA", "byte_loop_counter_to_reg_iyl");
+        sprintf(writeback, "ld (ix%+d),a", off);
+        insert_line(i + 3, writeback);
+
+        /* Prime the register right before the loop label. */
+        sprintf(prime, "ld a,(ix%+d)", off);
+        insert_line(i, prime);
+        insert_line_tagged(i + 1, "IYSTA", "byte_loop_counter_to_reg_iyl");
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
+static int peep_parse_inc_ix_byte(const char *s, int *off)
+{
+    char tmp[MAX_LINE];
+    char *p;
+    char *endp;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "inc (ix", 7) != 0)
+        return 0;
+    p = tmp + 7;
+    *off = (int)strtol(p, &endp, 10);
+    if (*endp != ')' || endp[1] != 0)
+        return 0;
+    return 1;
+}
+
+static int peep_parse_cp_const(const char *s, int *val)
+{
+    char tmp[MAX_LINE];
+    char *endp;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "cp ", 3) != 0)
+        return 0;
+    *val = (int)strtol(tmp + 3, &endp, 10);
+    if (*endp != 0)
+        return 0;
+    return 1;
+}
+
+/*
+ * Increasing-loop counterpart of pass_byte_loop_counter_to_reg_iyl: dcc's
+ * codegen for a byte-narrowed `for (i = 0; i < K; i++) BODY` (see
+ * dcc_array_narrow.c's narrow_cond_upper_bounds_lt) tests at the BOTTOM of
+ * the loop rather than the top:
+ *
+ *   LOOP:
+ *     <body>
+ *     inc (ix+off)
+ *     ld a,(ix+off)
+ *     cp K
+ *     jp c, LOOP
+ *
+ * Same IYL promotion and same call-safety rule (scan_local_func_labels/
+ * is_local_func_label) as pass_byte_loop_counter_to_reg_iyl. The writeback
+ * is nearly free here: IYLDA already has to reload the fresh value into A
+ * for the "cp K" comparison, so one more "ld (ix+off),a" covers every
+ * iteration's writeback at essentially no extra cost - unlike the
+ * decrementing pass (and unlike the "ld l,(ix+off)" shape below, which
+ * still needs its own dedicated two-line expansion for the same H/L-
+ * substitution reason documented there).
+ */
+static int pass_byte_incr_loop_counter_to_reg_iyl(void)
+{
+    int i;
+    int changed;
+    int off;
+    int bound;
+    char label[128];
+    char tmp[128];
+    int loop_start;
+    int k;
+    int ok;
+    char pat_ix[40];
+    char pat_lde[40];
+    char pat_lhl[40];
+    char pat_lda[40];
+    char callee[128];
+    const char *p;
+
+    changed = 0;
+
+    for (i = 0; i + 3 < nlines; ++i) {
+        if (!peep_parse_inc_ix_byte(lines[i], &off))
+            continue;
+        sprintf(pat_lda, "ld a,(ix%+d)", off);
+        if (!eq(i + 1, pat_lda))
+            continue;
+        if (!peep_parse_cp_const(lines[i + 2], &bound))
+            continue;
+        if (!parse_jp_cond_label(lines[i + 3], "c", label))
+            continue;
+
+        /* Find the loop's own start label (the jp c,LABEL target),
+         * searching backward - it must precede this tail. */
+        loop_start = -1;
+        for (k = i; k >= 0; --k) {
+            if (!starts_label(lines[k]))
+                continue;
+            strcpy(tmp, lines[k]);
+            {
+                int n = (int)strlen(tmp);
+                if (n > 0 && tmp[n - 1] == ':')
+                    tmp[n - 1] = 0;
+            }
+            if (!strcmp(tmp, label)) {
+                loop_start = k;
+                break;
+            }
+        }
+        if (loop_start < 0)
+            continue;
+
+        sprintf(pat_ix, "(ix%+d)", off);
+        sprintf(pat_lde, "ld e,(ix%+d)", off);
+        sprintf(pat_lhl, "ld l,(ix%+d)", off);
+
+        ok = 1;
+        for (k = loop_start + 1; k < i && ok; ++k) {
+            /* IY is a single register: a NESTED loop already promoted to
+             * IYL by an earlier match in this same scan would silently
+             * clobber it - see pass_byte_loop_counter_to_reg_iyl's comment
+             * on the exact bug this caused in mm.c before this check
+             * existed (i/j/k all tried to claim IYL simultaneously). */
+            if (strncmp(lines[k], "IY", 2) == 0) {
+                ok = 0;
+                continue;
+            }
+            if (strncmp(lines[k], "call ", 5) == 0) {
+                strip_peep_comment_copy(callee, lines[k]);
+                p = callee + 5;
+                while (*p == ' ' || *p == '\t')
+                    p++;
+                if (is_local_func_label(p))
+                    ok = 0;
+                continue;
+            }
+            if (strstr(lines[k], pat_ix) == NULL)
+                continue;
+            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
+                ++k;
+                continue;
+            }
+            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) {
+                ++k;
+                continue;
+            }
+            ok = 0;
+        }
+        if (!ok)
+            continue;
+
+        /* In-place replacements first, bumping i in lockstep with the one
+         * two-line expansion (mirrors pass_byte_loop_counter_to_reg_iyl). */
+        for (k = loop_start + 1; k < i; ++k) {
+            if (eq(k, pat_lde)) {
+                replace1_tagged(k, "IYLDE", "byte_incr_loop_counter_to_reg_iyl");
+                continue;
+            }
+            if (eq(k, pat_lhl)) {
+                replace1_tagged(k, "IYLDA", "byte_incr_loop_counter_to_reg_iyl");
+                insert_line(k + 1, "ld l,a");
+                ++i;
+                ++k;
+                continue;
+            }
+        }
+
+        replace1_tagged(i, "IYINCL", "byte_incr_loop_counter_to_reg_iyl");
+        replace1_tagged(i + 1, "IYLDA", "byte_incr_loop_counter_to_reg_iyl");
+        {
+            char storeback[40];
+            sprintf(storeback, "ld (ix%+d),a", off);
+            insert_line(i + 2, storeback);
+        }
+
+        /* Prime IYL right before the loop's own start label - inserted
+         * last, since it shifts everything from loop_start onward (the
+         * body/tail edits above are already done). */
+        {
+            char primeload[40];
+            sprintf(primeload, "ld a,(ix%+d)", off);
+            insert_line(loop_start, primeload);
+            insert_line_tagged(loop_start + 1, "IYSTA", "byte_incr_loop_counter_to_reg_iyl");
+        }
 
         changed = 1;
     }
@@ -11780,29 +12206,57 @@ int main(int argc, char **argv)
 {
     int changed;
     int passes;
-    const char *infile;
-    const char *outfile;
+    const char *infile = NULL;
+    const char *outfile = NULL;
+    int ai;
 
-    if (argc == 4) {
-        if (strcmp(argv[1], "-Os") == 0)
+    for (ai = 1; ai < argc; ++ai) {
+        if (strcmp(argv[ai], "-Os") == 0) {
             opt_size = 1;
-        else if (strcmp(argv[1], "-Ot") == 0)
+        } else if (strcmp(argv[ai], "-Ot") == 0) {
             opt_size = 0;
-        else {
-            fprintf(stderr, "usage: dccpeep [-Ot|-Os] input.mac output.mac\n");
-            return 1;
+        } else if (strcmp(argv[ai], "-fundocumented-z80") == 0) {
+            allow_undocumented_z80 = 1;
+        } else if (infile == NULL) {
+            infile = argv[ai];
+        } else if (outfile == NULL) {
+            outfile = argv[ai];
+        } else {
+            infile = NULL;
+            break;
         }
-        infile  = argv[2];
-        outfile = argv[3];
-    } else if (argc == 3) {
-        infile  = argv[1];
-        outfile = argv[2];
-    } else {
-        fprintf(stderr, "usage: dccpeep [-Ot|-Os] input.mac output.mac\n");
+    }
+    if (infile == NULL || outfile == NULL) {
+        fprintf(stderr,
+                "usage: dccpeep [-Ot|-Os] [-fundocumented-z80] input.mac output.mac\n");
         return 1;
     }
 
     read_file(infile);
+
+    if (allow_undocumented_z80) {
+        /* M80 has no native "iyl"/"iyh" mnemonics, so pass_byte_loop_counter_
+         * to_reg_iyl's undocumented FD-prefixed opcodes are wrapped in
+         * macros, defined once here at the very top of the file (a MACRO/
+         * ENDM definition emits no code unless invoked, so this costs zero
+         * bytes in every program that doesn't end up using it). */
+        insert_line(0, "IYDECL MACRO");
+        insert_line(1, "db 0FDh,02Dh");
+        insert_line(2, "ENDM");
+        insert_line(3, "IYLDA MACRO");
+        insert_line(4, "db 0FDh,07Dh");
+        insert_line(5, "ENDM");
+        insert_line(6, "IYSTA MACRO");
+        insert_line(7, "db 0FDh,06Fh");
+        insert_line(8, "ENDM");
+        insert_line(9, "IYLDE MACRO");
+        insert_line(10, "db 0FDh,05Dh");
+        insert_line(11, "ENDM");
+        insert_line(12, "IYINCL MACRO");
+        insert_line(13, "db 0FDh,02Ch");
+        insert_line(14, "ENDM");
+        scan_local_func_labels();
+    }
 
     passes = 0;
     do {
@@ -11879,6 +12333,19 @@ int main(int argc, char **argv)
         if (pass_byte_global_ptr_array_addr()) changed = 1;
         if (pass_byte_ix_array_addr()) changed = 1;
         if (pass_byte_ix_predec_zero_test()) changed = 1;
+        /* Deliberately placed after the specialized array-addressing passes
+         * above (pass_byte_global_ptr_array_addr in particular): both of
+         * these IYL-promotion passes match a plain "ld e,(ix+off)"/"ld
+         * l,(ix+off)" read, which is also part of several of those passes'
+         * own, more specific (and cheaper, since they need no IY prefix
+         * tax) fused address-computation patterns. Running first would let
+         * IYL promotion win a pattern an existing, already-optimal peephole
+         * would otherwise have claimed - measured as a real (if tiny)
+         * regression on attnc99 before this ordering fix. */
+        if (allow_undocumented_z80) {
+            if (pass_byte_loop_counter_to_reg_iyl()) changed = 1;
+            if (pass_byte_incr_loop_counter_to_reg_iyl()) changed = 1;
+        }
         if (pass_ix_pair_load_to_de()) changed = 1;
         if (pass_ix_byte_load_to_de()) changed = 1;
         if (pass_remove_ix_store_reload_hl()) changed = 1;
