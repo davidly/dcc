@@ -1467,6 +1467,41 @@ int ast_unary_long_const_fold(const struct AstNode *n, long *out)
     return 0;
 }
 
+/* A unary +/- chain bottoming out in a float literal or a folded (`const
+ * float x = <literal>;`) local folds to a single immediate with the sign bit
+ * flipped at compile time, e.g. `-PI` from `const float PI = 3.14159265f;`.
+ * Mirrors ast_unary_int_const_fold/ast_unary_long_const_fold above, but for
+ * float: without this, gen_unary_ast emitted the constant's bit pattern via
+ * the normal float load and then a runtime `ld a,d / xor 80h / ld d,a` to
+ * flip its sign on every execution, even though the negated value is just as
+ * knowable at compile time as the original. */
+int ast_unary_float_const_fold(const struct AstNode *n, unsigned long *out)
+{
+    unsigned long v;
+    struct Sym *s;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_FLOAT_LIT) {
+        *out = n->uval;
+        return 1;
+    }
+    if (n->kind == AST_IDENT) {
+        s = find_sym(n->sval);
+        if (s != NULL && s->is_const_value && type_is_float(s->type)) {
+            *out = (unsigned long)s->const_value;
+            return 1;
+        }
+        return 0;
+    }
+    if (n->kind == AST_UNARY && (n->op == '-' || n->op == '+') &&
+        ast_unary_float_const_fold(n->a, &v)) {
+        *out = (n->op == '-') ? (v ^ 0x80000000UL) : v;
+        return 1;
+    }
+    return 0;
+}
+
 int ast_const_scalar_fold(const struct AstNode *n, long *out)
 {
     long a;

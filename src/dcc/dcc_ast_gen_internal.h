@@ -139,6 +139,7 @@ int ast_pointer_assign_rhs_supported(const struct AstNode *n);
 int ast_unary_int_const_fold(const struct AstNode *n, long *out);
 int ast_int_const_cast_fold(const struct AstNode *n, long *out);
 int ast_unary_long_const_fold(const struct AstNode *n, long *out);
+int ast_unary_float_const_fold(const struct AstNode *n, unsigned long *out);
 int ast_const_scalar_fold(const struct AstNode *n, long *out);
 long ast_const_apply_int_cast(long v, int type);
 int ast_const_fold_strict(const struct AstNode *n, long *out);

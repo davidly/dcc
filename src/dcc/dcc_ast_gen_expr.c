@@ -185,6 +185,18 @@ void gen_unary_ast(const struct AstNode *n)
 {
     int op = n->op;
     long fv;
+    unsigned long ffv;
+
+    /* A unary +/- chain over a float literal or folded `const float` local
+     * (e.g. `-PI`) folds to one immediate with the sign bit already flipped,
+     * instead of loading the constant and then flipping its sign at runtime
+     * with `ld a,d / xor 80h / ld d,a` on every execution. */
+    if ((op == '-' || op == '+') &&
+        ast_unary_float_const_fold(n, &ffv)) {
+        emit_load_float_bits(ffv);
+        g_expr_type = TYPE_FLOAT;
+        return;
+    }
 
     /* A unary chain over a single int literal folds to one immediate. */
     if ((op == '-' || op == '+' || op == '~') &&
