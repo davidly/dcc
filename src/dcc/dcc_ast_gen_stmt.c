@@ -191,6 +191,7 @@ void ast_gen_switch_stmt(const struct AstNode *n)
     enter_scope();
     break_stack[nflow] = lend;
     cont_stack[nflow] = (nflow > 0) ? cont_stack[nflow - 1] : lend;
+    flow_scope_depth[nflow] = g_scope_depth;
     nflow++;
 
     if (ast_sw_depth < AST_MAX_SW_NEST) {
@@ -593,6 +594,7 @@ void ast_gen_for_stmt(const struct AstNode *n)
 
     break_stack[nflow] = lend;
     cont_stack[nflow] = linc;
+    flow_scope_depth[nflow] = g_scope_depth;
     nflow++;
     if (n->sym != NULL) {
         /* Cyclic-byte-fill fast path (see ast_for_mod_fill_supported): the
@@ -799,16 +801,58 @@ void ast_gen_stmt(const struct AstNode *n)
         gen_return_ast(n);
         break;
     case AST_BREAK:
+        emit_vla_restore_for_flow(flow_scope_depth[nflow - 1]);
         emit_jp_label("jp", break_stack[nflow - 1]);
         break;
     case AST_CONTINUE:
+        emit_vla_restore_for_flow(flow_scope_depth[nflow - 1]);
         emit_jp_label("jp", cont_stack[nflow - 1]);
         break;
     case AST_GOTO:
-        emit_jp_label("jp", mark_user_label_reference(n->sval));
+        {
+            int li;
+            int active_depth;
+            li = find_or_alloc_user_label_index(n->sval);
+            ulabel_referenced[li] = 1;
+            active_depth = vla_active_scope_depth();
+            if (ulabel_defined[li]) {
+                if (ulabel_vla_depth[li] > g_scope_depth) {
+                    error_here("goto into a variable-length array scope is not supported");
+                } else if (active_depth != 0 && ulabel_vla_depth[li] < g_scope_depth) {
+                    emit_vla_restore_for_flow(ulabel_vla_depth[li]);
+                }
+            } else if (active_depth != 0) {
+                if (ulabel_ref_vla_depth[li] != 0 &&
+                    ulabel_ref_vla_depth[li] != g_scope_depth)
+                    error_here("goto across different variable-length array scopes is not supported");
+                ulabel_ref_vla_depth[li] = g_scope_depth;
+            }
+            if (active_depth != 0 && !ulabel_defined[li]) {
+                /* One-pass codegen cannot know whether an unresolved forward label
+                 * will be inside this same VLA scope or outside it.  Emit the
+                 * safe form: restore now so forward goto-out is correct; if the
+                 * label later proves to be inside a VLA scope, diagnose it. */
+                emit_vla_restore_for_flow(0);
+                ulabel_ref_vla_restored[li] = 1;
+            }
+            emit_jp_label("jp", ulabel_ids[li]);
+        }
         break;
     case AST_LABEL:
-        emit_label(define_user_label(n->sval));
+        {
+            int li;
+            li = find_or_alloc_user_label_index(n->sval);
+            if (vla_active_scope_depth() != 0 && ulabel_referenced[li] &&
+                ulabel_ref_vla_depth[li] != g_scope_depth)
+                error_here("goto into a variable-length array scope is not supported");
+            if (vla_active_scope_depth() != 0 && ulabel_ref_vla_restored[li])
+                error_here("forward goto within a variable-length array scope is not supported");
+            if (vla_active_scope_depth() == 0 && ulabel_ref_vla_depth[li] != 0) {
+                ulabel_ref_vla_depth[li] = 0;
+                ulabel_ref_vla_restored[li] = 0;
+            }
+            emit_label(define_user_label(n->sval));
+        }
         ast_gen_stmt(n->b);
         break;
     case AST_CASE: {
@@ -819,6 +863,8 @@ void ast_gen_stmt(const struct AstNode *n)
 
         if (ast_sw_depth <= 0)
             fatal("case label outside switch");
+        if (vla_active_scope_depth() != 0)
+            error_here("case label inside a variable-length array scope is not supported");
         cv = n->ival;
         lab = -1;
         sw = &ast_sw_ctx[ast_sw_depth - 1];
@@ -838,6 +884,8 @@ void ast_gen_stmt(const struct AstNode *n)
 
         if (ast_sw_depth <= 0)
             fatal("default label outside switch");
+        if (vla_active_scope_depth() != 0)
+            error_here("default label inside a variable-length array scope is not supported");
         sw = &ast_sw_ctx[ast_sw_depth - 1];
         if (sw->def_lab >= 0)
             emit_label(sw->def_lab);
@@ -873,6 +921,7 @@ void ast_gen_stmt(const struct AstNode *n)
         }
         break_stack[nflow] = lend;
         cont_stack[nflow] = ltop;
+        flow_scope_depth[nflow] = g_scope_depth;
         nflow++;
         ast_gen_stmt(n->b);
         nflow--;
@@ -892,6 +941,7 @@ void ast_gen_stmt(const struct AstNode *n)
         emit_label(ltop);
         break_stack[nflow] = lend;
         cont_stack[nflow] = lcont;
+        flow_scope_depth[nflow] = g_scope_depth;
         nflow++;
         ast_gen_stmt(n->b);
         nflow--;
@@ -935,6 +985,11 @@ void ast_gen_stmt(const struct AstNode *n)
             ast_gen_stmt(n->list[i]);
             dead = ast_stmt_exits(n->list[i]);
         }
+        /* Reclaim this scope's VLAs on fall-through exit (unreachable when the
+         * block always exits; break/continue/return reclaim on their own). */
+        if (!dead && g_scope_depth < MAX_SCOPE_DEPTH &&
+            g_vla_scope_off[g_scope_depth] != 0)
+            emit_vla_restore_sp(g_vla_scope_off[g_scope_depth]);
         leave_scope();
         break;
     }

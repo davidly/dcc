@@ -232,6 +232,7 @@ struct Sym {
     char (*init_labels)[64];
     int *init_sizes;
     int is_array;
+    int is_vla;     /* C99 variable-length array: slot holds a runtime pointer */
     int array_len;
     int elem_size; /* stride per first-dimension element */
     int dim_count; /* C array dimensions, e.g. a[2][3] -> 2 */
@@ -446,6 +447,11 @@ extern int g_static_local_func_index;
 extern int g_static_local_seq;
 void enter_scope(void);
 void leave_scope(void);
+int vla_scope_ensure_save_slot(void);
+int vla_active_scope_depth(void);
+void emit_vla_save_sp(int off);
+void emit_vla_restore_sp(int off);
+void emit_vla_restore_for_flow(int floor_depth);
 struct Sym *find_local_decl(const char *name);
 
 extern int errors;
@@ -486,6 +492,9 @@ extern char ulabel_names[MAX_USER_LABELS][64];
 extern int  ulabel_ids[MAX_USER_LABELS];
 extern int  ulabel_defined[MAX_USER_LABELS];
 extern int  ulabel_referenced[MAX_USER_LABELS];
+extern int  ulabel_vla_depth[MAX_USER_LABELS];
+extern int  ulabel_ref_vla_depth[MAX_USER_LABELS];
+extern int  ulabel_ref_vla_restored[MAX_USER_LABELS];
 extern int  nulabels;
 
 /* enum constants (file-scoped) */
@@ -512,6 +521,23 @@ extern int g_ptr_array_dims[8];
 extern int g_ptr_array_elem_size;
 extern int g_last_array_dim_count;
 extern int g_last_array_dims[8];
+
+/* C99 VLA: parse_array_declarator_dims() captures the first-dimension size
+ * expression here when it is not a constant, so the local-declaration codegen
+ * can re-emit it at the declaration site to allocate the block at run time. */
+extern int g_vla_pending;
+extern long g_vla_dim_posi;
+extern long g_vla_dim_tok_start;
+extern int g_vla_dim_line;
+extern int g_vla_dim_tok_line;
+extern struct Token g_vla_dim_tok;
+
+/* C99 VLA block-scope reclamation: for each open block scope depth, the frame
+ * offset of a hidden slot holding the SP to restore to when the scope exits
+ * (0 = the scope has no VLA).  flow_scope_depth records the scope depth at each
+ * loop/switch entry so break/continue can reclaim the VLAs allocated inside. */
+extern int g_vla_scope_off[MAX_SCOPE_DEPTH];
+extern int flow_scope_depth[MAX_FLOW];
 
 /* ------------------------------------------------------------------------- *
  * Cross-module function prototypes, grouped by owning module. (Generated to
@@ -734,6 +760,7 @@ void emit_init_auto_char_array_from_string(struct Sym *s, const char *str);
 int find_or_alloc_user_label_index(const char *name);
 int mark_user_label_reference(const char *name);
 int define_user_label(const char *name);
+int find_or_alloc_user_label_index(const char *name);
 void check_undefined_user_labels(void);
 int parse_enum_const_value(void);
 void gen_post_update_symbol_addr_value(struct Sym *s, int op);

@@ -50,17 +50,14 @@ long parse_const_long_primary(void)
             }
             expect(')');
         } else {
-            if (starts_type()) {
-                int t;
-                int sz;
-                error_here("expected an expression");
-                parse_type_name_decl(&t, &sz);
-                (void)t;
-                (void)sz;
-            } else {
-                error_here("'(' expected after sizeof in constant expression");
-            }
-            v = 2;
+            int t;
+            int sz;
+            /* sizeof unary-expression without parentheses.  Do not consume
+             * following binary operators: sizeof a + 1 is (sizeof a) + 1,
+             * not sizeof(a + 1). */
+            if (!sizeof_parse_primary_type(&t, &sz))
+                sz = 2;
+            v = sz;
         }
         return sign * v;
     }

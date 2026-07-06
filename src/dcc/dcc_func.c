@@ -1620,6 +1620,7 @@ void scan_local_decl_after_type(int base)
 
         bytes = type_size(type);
         if (total_elems > 0) bytes *= total_elems;
+        if (g_vla_pending) bytes = 2;   /* VLA: reserve only a pointer slot */
 
         /* A name already present in the innermost open block is a redefinition.
          * find_local_decl() only searches the current scope (and ignores
@@ -1648,6 +1649,17 @@ void scan_local_decl_after_type(int base)
                 s->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
                 if (s->elem_size <= 0) s->elem_size = 2;
                 copy_last_array_dims_to_sym(s);
+                if (g_vla_pending) {
+                    /* VLA: keep the elem_size set above (element size for
+                     * a[n], row stride for a[n][C]); the slot holds a runtime
+                     * pointer, mirrored by gen_local_decl_after_type. */
+                    s->is_vla = 1;
+                    s->array_len = 0;
+                    if (s->elem_size <= 0) s->elem_size = 1;
+                    /* Reserve this scope's SP-save slot (first VLA only) so the
+                     * frame matches the codegen pass, which also emits it. */
+                    vla_scope_ensure_save_slot();
+                }
             } else if (g_ptr_array_dim_count > 0) {
                 int pi;
                 s->elem_size = g_ptr_array_elem_size;
@@ -1661,7 +1673,7 @@ void scan_local_decl_after_type(int base)
 
         if (s && !s->is_const_value && accept('=')) {
             scan_initializer_or_decl_tail();
-        } else if (freshly_allocated && !local_name_used_ahead(source_name)) {
+        } else if (freshly_allocated && !g_vla_pending && !local_name_used_ahead(source_name)) {
             /* No initializer, and never referenced again in this scope:
              * add_local_alloc just appended this Sym as the last local and
              * reserved its frame space, so popping both back off is safe -
@@ -1716,6 +1728,16 @@ void scan_static_local_decl_after_type(int base)
             if (arrlen == 0)
                 parse_array_declarator_dims(type, &arrlen, &first_stride_bytes, 1);
             current_field_array_elem_size = first_stride_bytes;
+        }
+        if (g_vla_pending) {
+            /* A static (or file-scope) array cannot have a run-time bound:
+             * its storage is a fixed global, not stack-allocated.  Reject
+             * rather than silently emit a wrong-sized static array.  Clear the
+             * flag so it does not leak into the next declarator. */
+            if (asm_suppress_depth == 0)
+                error_here("variable length array declaration cannot have static storage duration");
+            g_vla_pending = 0;
+            arrlen = 0;
         }
         if (arrlen == 0 && g_typedef_array_len > 0)
             arrlen = g_typedef_array_len;

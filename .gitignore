@@ -1,4 +1,5 @@
 # macOS Finder / Desktop Services metadata
+*.dSYM/
 .DS_Store
 .DS_Store?
 .AppleDouble

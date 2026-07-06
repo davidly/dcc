@@ -836,6 +836,63 @@ void emit_init_auto_array_from_list(struct Sym *s, int elem_type)
     }
 }
 
+/*
+ * Allocate a C99 variable-length array at run time.  parse_array_declarator_dims
+ * captured the (non-constant) first-dimension expression; re-seek the lexer to
+ * it, evaluate it into HL, scale by the element size, carve the block off the
+ * stack below SP, and store the resulting base pointer into the VLA's frame
+ * slot.  The block is reclaimed at block-scope exit by restoring SP from the
+ * scope's hidden `#vlasp` save slot (see emit_vla_save_sp/emit_vla_restore_sp),
+ * and by the function epilogue's `ld sp,ix` on any remaining return path.
+ */
+static void emit_vla_alloc(struct Sym *s)
+{
+    long r_posi;
+    long r_tok_start;
+    int r_line;
+    int r_tok_line;
+    struct Token r_tok;
+
+    r_posi = posi;
+    r_tok_start = tok_start_pos;
+    r_line = line_no;
+    r_tok_line = tok_line;
+    r_tok = tok;
+
+    posi = g_vla_dim_posi;
+    tok_start_pos = g_vla_dim_tok_start;
+    line_no = g_vla_dim_line;
+    tok_line = g_vla_dim_tok_line;
+    tok = g_vla_dim_tok;
+
+    ast_emit_init_expr();               /* HL = element count */
+
+    posi = r_posi;
+    tok_start_pos = r_tok_start;
+    line_no = r_line;
+    tok_line = r_tok_line;
+    tok = r_tok;
+
+    if (s->elem_size > 1)
+        emit_mul_hl_const((long)s->elem_size);   /* HL = size in bytes */
+
+    /* SP -= size; the new SP is the block base, stored into the slot. */
+    emit("\tex de,hl\n");
+    emit("\tld hl,0\n");
+    emit("\tadd hl,sp\n");
+    emit("\tor a\n");
+    emit("\tsbc hl,de\n");
+    emit("\tld sp,hl\n");
+    if (opt_stack_check)
+        emit_runtime_call("__stchk");
+    emit("\tld hl,0\n");
+    emit("\tadd hl,sp\n");
+    emit("\tpush hl\n");
+    emit_load_frame_addr_hl(s);         /* HL = &slot (may clobber DE) */
+    emit("\tpop de\n");                 /* DE = block base */
+    emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
+}
+
 void gen_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
@@ -971,7 +1028,9 @@ void gen_local_decl_after_type(int base)
         freshly_allocated = 0;
         if (!s) {
             bytes = type_size(type);
-            if (total_elems > 0)
+            if (g_vla_pending)
+                bytes = 2;              /* VLA: reserve only a pointer slot */
+            else if (total_elems > 0)
                 bytes = object_array_size(type, total_elems);
 
             s = add_local_alloc(name, type, bytes);
@@ -982,6 +1041,23 @@ void gen_local_decl_after_type(int base)
                 s->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
                 if (s->elem_size <= 0) s->elem_size = 2;
                 copy_last_array_dims_to_sym(s);
+                if (g_vla_pending) {
+                    /* VLA: the frame slot holds a runtime pointer to the
+                     * block.  Keep the elem_size set above - the element size
+                     * for a[n], or the (constant) row stride for a[n][C] - so
+                     * both indexing and the allocation size are correct for
+                     * the variable outer dimension. */
+                    s->is_vla = 1;
+                    s->array_len = 0;
+                    if (s->elem_size <= 0) s->elem_size = 1;
+                    /* Save SP once per scope, before its first VLA, so the
+                     * scope's VLAs can be reclaimed at block/loop exit. */
+                    {
+                        int vsp_off = vla_scope_ensure_save_slot();
+                        if (vsp_off != 0)
+                            emit_vla_save_sp(vsp_off);
+                    }
+                }
             } else if (g_ptr_array_dim_count > 0) {
                 int pi;
                 s->elem_size = g_ptr_array_elem_size;
@@ -992,6 +1068,15 @@ void gen_local_decl_after_type(int base)
         }
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
+
+        if (g_vla_pending) {
+            /* A variable inner dimension (runtime row stride) already errored
+             * during the declarator parse; only a variable outer dimension
+             * with constant inner dimensions reaches here. */
+            if (freshly_allocated)
+                emit_vla_alloc(s);
+            g_vla_pending = 0;
+        }
 
         if (s->is_const_value) {
             if (accept('=')) {
