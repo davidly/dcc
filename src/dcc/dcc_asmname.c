@@ -186,3 +186,52 @@ const char *asm_name_for(const char *cname)
 
     return asm_names[nasm_names++].aname;
 }
+
+void asm_name_check_public_collision(const char *cname)
+{
+    /*
+     * M80/L80 only honor the first 6 significant characters of a PUBLIC
+     * symbol, so two distinct external-linkage C names that agree there
+     * (e.g. xatanf/xatan2f -> _XATAN) look fine in the emitted .MAC but
+     * silently collide at link time ("%Mult. Def. Global _XATAN"). Only
+     * names actually emitted with a `public` directive are at risk (plain
+     * BSS globals in a single-module build are EQU aliases, never public,
+     * so they are exempt), which is why this is a separate opt-in check
+     * called from each `public %s` emission site rather than folded into
+     * every asm_name_for() lookup.
+     */
+    static char seen_cname[MAX_ASM_NAMES][64];
+    static char seen_aname[MAX_ASM_NAMES][66];
+    static int nseen;
+    const char *aname;
+    int i;
+
+    aname = asm_name_for(cname);
+
+    for (i = 0; i < nseen; ++i) {
+        if (!strcmp(seen_cname[i], cname))
+            return;
+        if (asm_prefix_eq_ci(seen_aname[i], aname, 6)) {
+            char errbuf[320];
+            char cname1[64], cname2[64];
+            strncpy(cname1, seen_cname[i], sizeof(cname1) - 1);
+            cname1[sizeof(cname1) - 1] = 0;
+            strncpy(cname2, cname, sizeof(cname2) - 1);
+            cname2[sizeof(cname2) - 1] = 0;
+            sprintf(errbuf,
+                    "global names '%s' and '%s' are not distinguishable "
+                    "in M80's 6 significant character public symbols "
+                    "(both become '%.6s'); rename one",
+                    cname1, cname2, aname);
+            fatal(errbuf);
+        }
+    }
+
+    if (nseen < MAX_ASM_NAMES) {
+        strncpy(seen_cname[nseen], cname, sizeof(seen_cname[nseen]) - 1);
+        seen_cname[nseen][sizeof(seen_cname[nseen]) - 1] = 0;
+        strncpy(seen_aname[nseen], aname, sizeof(seen_aname[nseen]) - 1);
+        seen_aname[nseen][sizeof(seen_aname[nseen]) - 1] = 0;
+        nseen++;
+    }
+}

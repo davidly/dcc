@@ -216,8 +216,10 @@ void emit_data(void)
         /* skip BSS (uninitialized) globals — emitted separately below */
         if (!(s->has_init && s->init_count > 0) && !(s->has_init && !s->is_array)) continue;
 
-        if (!s->is_static)
+        if (!s->is_static) {
+            asm_name_check_public_collision(sym_asm_name(s));
             fprintf(outf, "\tpublic %s\n", asm_name_for(sym_asm_name(s)));
+        }
         fprintf(outf, "%s:\n", asm_name_for(sym_asm_name(s)));
         if (s->has_init && s->init_count > 0) {
             int j;
@@ -277,8 +279,10 @@ void emit_data(void)
                 if ((s->has_init && s->init_count > 0) || (s->has_init && !s->is_array)) continue;
 
                 bss_size = s->size > 0 ? s->size : 2;
-                if (!s->is_static)
+                if (!s->is_static) {
+                    asm_name_check_public_collision(sym_asm_name(s));
                     fprintf(outf, "\tpublic %s\n", asm_name_for(sym_asm_name(s)));
+                }
                 fprintf(outf, "%s:\n", asm_name_for(sym_asm_name(s)));
                 fprintf(outf, "\tds %d\n", bss_size);
             }

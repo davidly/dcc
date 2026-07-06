@@ -997,6 +997,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     aname = asm_name_for(name);
 
     if (!s || !s->is_static) {
+        asm_name_check_public_collision(name);
         fprintf(outf, "\n\tpublic %s\n", aname);
     } else {
         /* File-scope static functions are mangled to avoid M80/L80 short-name

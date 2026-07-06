@@ -523,6 +523,7 @@ int asm_name_must_mangle(const char *cname);
 int asm_name_is_internal_public(const char *cname);
 const char *asm_name_for_runtime(const char *cname);
 const char *asm_name_for(const char *cname);
+void asm_name_check_public_collision(const char *cname);
 const char *sym_asm_name(struct Sym *s);
 
 /* ---- diag_emit ---- */

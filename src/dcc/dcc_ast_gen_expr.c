@@ -8,6 +8,7 @@
 #include "dcc_ast_gen_internal.h"
 
 static const struct AstNode *inline_substitution_body(struct Sym *fn);
+static int ast_is_float_madd_rhs(const struct AstNode *rhs);
 
 void gen_int_lit(const struct AstNode *n)
 {
@@ -800,6 +801,37 @@ void gen_binary_ast(const struct AstNode *n)
         (type_is_float(g_expr_type) || ast_value_is_float_word(n->b))) {
         if (!type_is_float(g_expr_type))
             emit_convert_int_to_float(g_expr_type);
+
+        /* `addend + b*c` (the shape every Horner-scheme polynomial evaluates,
+         * e.g. sinf/cosf/atanf's minimax approximations) otherwise evaluates
+         * the multiply into DE:HL, pushes it, and calls __fadd separately -
+         * two runtime calls and two push/pop round trips through the IEEE
+         * packing where one __fmadd(addend, b, c) call does both. n->a (the
+         * addend) is already evaluated above; mirrors emit_float_compound_rhs's
+         * '+='-only fusion but for the general binary '+' case.
+         *
+         * Trade-off (measured via perf_results.csv A/B across all 220 tests):
+         * a program that newly starts using __fmadd here pays a one-time
+         * +640/+768 byte cost to link in its RTL routine (a deliberate full
+         * duplicate of __fmul's body, not shared code), but every affected
+         * program's cycle count improves (-0.2% to -1.3%); none regressed. */
+        if (n->op == '+' && ast_is_float_madd_rhs(n->b)) {
+            emit("\tpush de\n\tpush hl\n");
+            ast_gen_expr(n->b->a);
+            if (!type_is_float(g_expr_type))
+                emit_convert_int_to_float(g_expr_type);
+            emit("\tpush de\n\tpush hl\n");
+            ast_gen_expr(n->b->b);
+            if (!type_is_float(g_expr_type))
+                emit_convert_int_to_float(g_expr_type);
+            emit("\tpush de\n\tpush hl\n");
+            emit_runtime_call("__fmadd");
+            emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+            g_expr_type = TYPE_FLOAT;
+            g_long_from16 = 0;
+            return;
+        }
+
         emit("\tpush de\n\tpush hl\n");
         ast_gen_expr(n->b);
         if (!type_is_float(g_expr_type))
