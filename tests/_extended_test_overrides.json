@@ -20,7 +20,7 @@
     { "name": "00200", "ignore": true, "reason": "Uses long long generic-selection cases; dcc has no 64-bit integer type." },
     { "name": "00203", "ignore": true, "reason": "Uses long long constants; dcc has no 64-bit integer type." },
     { "name": "00204", "ignore": true, "reason": "Tests host ABI details with double, long double, long long, uint64_t, and int64_t; those are outside dcc's CP/M/Z80 model." },
-    { "name": "00207", "ignore": true, "reason": "Contains a true C99 variable-length array; dcc does not implement VLAs. The constant-expression array bounds in the same test are not VLAs." },
+    { "name": "00207", "ignore": false, "reason": "C99 single-variable-dimension VLA (char test[argc]); dcc now supports VLAs whose only variable dimension is the outermost, so this builds and runs." },
     { "name": "00212", "ignore": true, "reason": "Checks LLP64/LP64/ILP32 host data models; dcc is a 16-bit-pointer CP/M/Z80 target." },
     { "name": "00213", "ignore": true, "reason": "GNU statement-expression support is not implemented yet." },
     { "name": "00214", "ignore": true, "reason": "GNU statement-expression and __builtin_expect support is not implemented yet." },

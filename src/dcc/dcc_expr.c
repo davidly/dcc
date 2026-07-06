@@ -547,6 +547,155 @@ int char_array_string_initializer_size(int base_type)
  * already uses Sym.elem_size as the stride for the first index, so bufs[i]
  * points at the correct row without needing a full C array type system.
  */
+static void skip_array_dim_balanced(int open, int close)
+{
+    int depth;
+
+    if (tok.kind != open)
+        return;
+    depth = 1;
+    next_token();
+    while (tok.kind != TOK_EOF && depth > 0) {
+        if (tok.kind == open)
+            depth++;
+        else if (tok.kind == close)
+            depth--;
+        next_token();
+    }
+}
+
+static void skip_sizeof_array_dim_operand(void)
+{
+    int done;
+
+    if (tok.kind == TOK_SIZEOF)
+        next_token();
+
+    while (tok.kind == TOK_SIZEOF || tok.kind == '*' || tok.kind == '&' ||
+           tok.kind == '+' || tok.kind == '-' || tok.kind == '!' ||
+           tok.kind == '~') {
+        if (tok.kind == TOK_SIZEOF)
+            next_token();
+        else
+            next_token();
+    }
+
+    if (tok.kind == '(') {
+        skip_array_dim_balanced('(', ')');
+        return;
+    }
+
+    if (tok.kind == TOK_ID || tok.kind == TOK_NUM || tok.kind == TOK_CHARLIT ||
+        tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
+        next_token();
+        done = 0;
+        while (!done) {
+            if (tok.kind == '[') {
+                skip_array_dim_balanced('[', ']');
+            } else if (tok.kind == '(') {
+                skip_array_dim_balanced('(', ')');
+            } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+                next_token();
+                if (tok.kind == TOK_ID)
+                    next_token();
+            } else {
+                done = 1;
+            }
+        }
+    }
+}
+
+static int array_dim_has_runtime_identifier(void)
+{
+    long save_pos;
+    long save_tok_start;
+    int save_line;
+    int save_tok_line;
+    struct Token save_tok;
+    int depth;
+    int has_runtime;
+
+    save_pos = posi;
+    save_tok_start = tok_start_pos;
+    save_line = line_no;
+    save_tok_line = tok_line;
+    save_tok = tok;
+
+    depth = 0;
+    has_runtime = 0;
+    while (tok.kind != TOK_EOF) {
+        if (depth == 0 && tok.kind == ']')
+            break;
+        if (tok.kind == TOK_SIZEOF) {
+            skip_sizeof_array_dim_operand();
+            continue;
+        }
+        if (tok.kind == '(') {
+            /* A parenthesized construct that begins with a type is a cast (or
+             * parenthesized type): its type-name identifiers (e.g. size_t in
+             * (size_t)8) are not runtime values, so skip the whole `(type)`
+             * and keep scanning the operand.  An ordinary parenthesized
+             * expression is counted normally so its identifiers are seen. */
+            next_token();
+            if (starts_type()) {
+                int d2 = 1;
+                while (tok.kind != TOK_EOF && d2 > 0) {
+                    if (tok.kind == '(')
+                        d2++;
+                    else if (tok.kind == ')')
+                        d2--;
+                    next_token();
+                }
+            } else {
+                depth++;
+            }
+            continue;
+        }
+        if (tok.kind == TOK_ID && find_enum_const(tok.text) < 0) {
+            has_runtime = 1;
+            break;
+        }
+        if (tok.kind == '[' || tok.kind == '{')
+            depth++;
+        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+            if (depth > 0)
+                depth--;
+        }
+        next_token();
+    }
+
+    posi = save_pos;
+    tok_start_pos = save_tok_start;
+    line_no = save_line;
+    tok_line = save_tok_line;
+    tok = save_tok;
+    return has_runtime;
+}
+
+/*
+ * Skip tokens up to the `]` that closes the current array dimension, honoring
+ * nested brackets/parens/braces so a subscript or call inside the dimension
+ * expression (e.g. `b[a[n-1] + 2]`) does not stop early on an inner `]`.  The
+ * opening `[` of the dimension has already been consumed by the caller; on
+ * return the closing `]` has been consumed too.
+ */
+static void skip_array_dim_to_close(void)
+{
+    int depth = 0;
+    while (tok.kind != TOK_EOF) {
+        if (depth == 0 && tok.kind == ']')
+            break;
+        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{')
+            depth++;
+        else if (tok.kind == ')' || tok.kind == '}')
+            { if (depth > 0) depth--; }
+        else if (tok.kind == ']')
+            { if (depth > 0) depth--; }
+        next_token();
+    }
+    expect(']');
+}
+
 void parse_array_declarator_dims(int base_type,
                                         int *total_len,
                                         int *first_stride_bytes,
@@ -562,6 +711,7 @@ void parse_array_declarator_dims(int base_type,
 
     ndims = 0;
     g_last_array_dim_count = 0;
+    g_vla_pending = 0;
     memset(g_last_array_dims, 0, sizeof(g_last_array_dims));
 
     while (accept('[')) {
@@ -571,14 +721,33 @@ void parse_array_declarator_dims(int base_type,
                     ? char_array_string_initializer_size(base_type)
                     : 0;
         } else {
-            if (tok.kind == TOK_ID && find_enum_const(tok.text) < 0) {
-                if (asm_suppress_depth == 0)
-                    error_here("variable length arrays are not supported; use malloc and an explicit pointer");
-                next_token();
-                while (tok.kind != ']' && tok.kind != TOK_EOF)
-                    next_token();
-                expect(']');
-                n = 0;
+            if (array_dim_has_runtime_identifier()) {
+                /*
+                 * Non-constant array bound.  A local VLA whose only variable
+                 * dimension is the first is supported: capture the dimension
+                 * expression so the declaration codegen can evaluate it at run
+                 * time and allocate the block below SP (the array then decays
+                 * to that pointer).  Capture in every pass - including the
+                 * frame-sizing scan (asm_suppress_depth > 0) - so scan and
+                 * codegen reserve the identical pointer slot.  A variable inner
+                 * dimension has a runtime stride and is rejected below (the
+                 * error is emitted only when not suppressed, i.e. at codegen).
+                 */
+                if (ndims == 0) {
+                    g_vla_pending = 1;
+                    g_vla_dim_posi = posi;
+                    g_vla_dim_tok_start = tok_start_pos;
+                    g_vla_dim_line = line_no;
+                    g_vla_dim_tok_line = tok_line;
+                    g_vla_dim_tok = tok;
+                    skip_array_dim_to_close();
+                    n = 0;
+                } else {
+                    if (asm_suppress_depth == 0)
+                        error_here("variable length arrays are not supported; use malloc and an explicit pointer");
+                    skip_array_dim_to_close();
+                    n = 0;
+                }
             } else {
                 n = parse_const_int_expr();
                 expect(']');
@@ -803,6 +972,9 @@ int find_or_alloc_user_label_index(const char *name)
     ulabel_ids[nulabels] = new_label();
     ulabel_defined[nulabels] = 0;
     ulabel_referenced[nulabels] = 0;
+    ulabel_vla_depth[nulabels] = 0;
+    ulabel_ref_vla_depth[nulabels] = 0;
+    ulabel_ref_vla_restored[nulabels] = 0;
     return nulabels++;
 }
 
@@ -823,6 +995,7 @@ int define_user_label(const char *name)
     if (ulabel_defined[i])
         error_here("duplicate goto label");
     ulabel_defined[i] = 1;
+    ulabel_vla_depth[i] = g_scope_depth;
     return ulabel_ids[i];
 }
 

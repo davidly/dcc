@@ -129,6 +129,77 @@ void enter_scope(void)
     if (g_scope_depth >= MAX_SCOPE_DEPTH)
         fatal("too many nested block scopes");
     g_scope_watermark[g_scope_depth++] = nlocals;
+    /* A freshly opened scope has no VLA save slot yet. */
+    if (g_scope_depth < MAX_SCOPE_DEPTH)
+        g_vla_scope_off[g_scope_depth] = 0;
+}
+
+/*
+ * Ensure the current block scope has a hidden slot in which to save SP before
+ * its first VLA is allocated, so the scope's VLAs can be reclaimed when it
+ * exits.  Called by BOTH the frame-sizing scan and codegen at the first VLA in
+ * a scope, so the two passes reserve the identical slot (local_size is
+ * monotonic).  Returns the slot's frame offset, or 0 if the scope already has
+ * one / on overflow.
+ */
+int vla_scope_ensure_save_slot(void)
+{
+    struct Sym *s;
+
+    if (g_scope_depth < 0 || g_scope_depth >= MAX_SCOPE_DEPTH)
+        return 0;
+    if (g_vla_scope_off[g_scope_depth] != 0)
+        return 0;                       /* already allocated for this scope */
+    s = add_local_alloc("#vlasp", TYPE_INT, 2);
+    g_vla_scope_off[g_scope_depth] = s->offset;
+    return s->offset;
+}
+
+int vla_active_scope_depth(void)
+{
+    int d;
+    for (d = 1; d <= g_scope_depth && d < MAX_SCOPE_DEPTH; ++d)
+        if (g_vla_scope_off[d] != 0)
+            return d;
+    return 0;
+}
+
+/* HL-free helper: save the current SP into the frame slot at `off`. */
+void emit_vla_save_sp(int off)
+{
+    emit("\tld hl,0\n\tadd hl,sp\n");   /* HL = SP */
+    emit("\tpush hl\n");                /* stash SP value */
+    emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
+    fprintf(outf, "\tld de,%d\n\tadd hl,de\n", off);
+    emit("\tpop de\n");                 /* DE = SP value */
+    emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
+}
+
+/* Restore SP from the frame slot at `off`, reclaiming that scope's VLAs. */
+void emit_vla_restore_sp(int off)
+{
+    emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
+    fprintf(outf, "\tld de,%d\n\tadd hl,de\n", off);
+    emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");  /* HL = saved SP */
+    emit("\tld sp,hl\n");
+}
+
+/*
+ * Reclaim VLAs when leaving a loop/switch via break or continue.  Restore SP to
+ * the outermost active VLA save slot among the scopes being exited (depths
+ * greater than floor_depth); restoring an outer slot reclaims every inner
+ * scope's VLAs, so only one restore is needed.  Emits nothing when no VLA was
+ * declared inside the loop.
+ */
+void emit_vla_restore_for_flow(int floor_depth)
+{
+    int d;
+    for (d = floor_depth + 1; d <= g_scope_depth && d < MAX_SCOPE_DEPTH; ++d) {
+        if (g_vla_scope_off[d] != 0) {
+            emit_vla_restore_sp(g_vla_scope_off[d]);
+            return;
+        }
+    }
 }
 
 void leave_scope(void)
@@ -472,6 +543,14 @@ void emit_load_frame_addr_hl(struct Sym *s)
 
 void emit_load_sym_addr(struct Sym *s)
 {
+    if (s->is_vla) {
+        /* A VLA's storage is allocated at run time below SP; its frame slot
+         * holds a pointer to that block.  The array decays to that pointer
+         * value, so load the slot contents rather than the slot's address. */
+        emit_load_frame_addr_hl(s);
+        emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");
+        return;
+    }
     if (s->storage == SC_LOCAL || s->storage == SC_PARAM) {
         emit_load_frame_addr_hl(s);
     } else {
@@ -1027,59 +1106,73 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
     sz = is_arr ? s->size : type_size(type);
     elem_size = s->elem_size ? s->elem_size : type_size(type);
     if (elem_size <= 0) elem_size = 1;
-    next_token();
+    {
+        /* sizeof of a whole VLA needs its runtime byte size, which is not a
+         * compile-time constant; reject rather than silently use the pointer
+         * slot size.  Indexing/field access below reduces to a constant-size
+         * subobject, so only the bare VLA operand is diagnosed (checked after
+         * the postfix loop via vla_whole). */
+        int vla_whole = s->is_vla;
+        next_token();
 
-    for (;;) {
-        if (tok.kind == '[') {
-            skip_balanced_bracket('[', ']');
-            if (is_arr) {
-                sz = elem_size;
+        for (;;) {
+            if (tok.kind == '[') {
+                skip_balanced_bracket('[', ']');
+                vla_whole = 0;
+                if (is_arr) {
+                    sz = elem_size;
+                    is_arr = 0;
+                } else {
+                    type = type_decay_ptr(type);
+                    sz = type_size(type);
+                    if (sz <= 0) sz = 1;
+                }
+            } else if (tok.kind == '(') {
+                /* Function call expression: sizeof uses the function return
+                 * type.  Arguments are not evaluated; just skip the list. */
+                skip_balanced_bracket('(', ')');
                 is_arr = 0;
-            } else {
-                type = type_decay_ptr(type);
+                vla_whole = 0;
                 sz = type_size(type);
-                if (sz <= 0) sz = 1;
-            }
-        } else if (tok.kind == '(') {
-            /* Function call expression: sizeof uses the function return type.
-             * Arguments are not evaluated; just skip the argument list. */
-            skip_balanced_bracket('(', ')');
-            is_arr = 0;
-            sz = type_size(type);
-            if (sz <= 0) sz = 2;
-        } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
-            int arrow;
+                if (sz <= 0) sz = 2;
+            } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+                int arrow;
 
-            arrow = tok.kind == TOK_ARROW;
-            next_token();
-
-            if (tok.kind != TOK_ID) {
-                error_here("field name expected");
-                break;
-            }
-
-            if (arrow)
-                sid = base_struct_id_from_type(type_decay_ptr(type));
-            else
-                sid = base_struct_id_from_type(type);
-
-            fd = find_field_def(sid, tok.text);
-            if (!fd) {
-                error_here("unknown struct field");
+                arrow = tok.kind == TOK_ARROW;
+                vla_whole = 0;
                 next_token();
+
+                if (tok.kind != TOK_ID) {
+                    error_here("field name expected");
+                    break;
+                }
+
+                if (arrow)
+                    sid = base_struct_id_from_type(type_decay_ptr(type));
+                else
+                    sid = base_struct_id_from_type(type);
+
+                fd = find_field_def(sid, tok.text);
+                if (!fd) {
+                    error_here("unknown struct field");
+                    next_token();
+                    break;
+                }
+
+                next_token();
+
+                type = fd->is_array ? fd->elem_type : fd->type;
+                sz = fd->is_array ? fd->size : fd->size;
+                is_arr = fd->is_array;
+                elem_size = fd->elem_size ? fd->elem_size : type_size(type);
+                if (elem_size <= 0) elem_size = 1;
+            } else {
                 break;
             }
-
-            next_token();
-
-            type = fd->is_array ? fd->elem_type : fd->type;
-            sz = fd->is_array ? fd->size : fd->size;
-            is_arr = fd->is_array;
-            elem_size = fd->elem_size ? fd->elem_size : type_size(type);
-            if (elem_size <= 0) elem_size = 1;
-        } else {
-            break;
         }
+
+        if (vla_whole && asm_suppress_depth == 0)
+            error_here("sizeof applied to a variable-length array is not supported");
     }
 
     *typep = type;

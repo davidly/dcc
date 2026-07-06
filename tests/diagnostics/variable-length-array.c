@@ -1,5 +1,5 @@
-int f(int n)
+int f(int n, int m)
 {
-    int a[n];
+    int a[n][m];
     return 0;
 }

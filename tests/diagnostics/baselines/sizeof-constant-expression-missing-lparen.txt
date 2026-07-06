@@ -1,4 +1,4 @@
-<source>:2: error DCC-E1005: '(' expected after sizeof in constant expression near 'x'
+<source>:2: error DCC-E0201: use of undeclared identifier 'x' near 'x'
         A = sizeof x
                    ^
 dcc: 1 error(s)

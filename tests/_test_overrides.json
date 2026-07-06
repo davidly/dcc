@@ -18,6 +18,8 @@
     { "name": "tpfio", "dcc_floatio": true, "dcc_longio": false },
     { "name": "tplng", "dcc_floatio": false, "dcc_longio": true },
     { "name": "tvplain", "dcc_floatio": false, "dcc_longio": false },
+    { "name": "tvla", "stack_size": 1024 },
+    { "name": "tvlax", "stack_size": 2048 },
     { "name": "triangle", "stack_size": 768 },
     { "name": "catalan", "stack_size": 768 },
     { "name": "fileops", "host": true },

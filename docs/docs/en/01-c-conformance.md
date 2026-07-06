@@ -84,6 +84,7 @@ portability surprises when code is moved from a hosted desktop compiler.
 | Unnamed parameters in prototypes | Supported |
 | Array parameters adjusted to pointers | Supported |
 | C99 array parameter qualifiers: `int a[const 5]`, `int a[static 5]`, `int a[volatile 5]`, `int a[restrict 5]`, `int a[const *]` | Accepted as syntax compatibility; array parameters still decay to pointers |
+| Variable-length arrays (local) | Supported when the only variable dimension is the outermost, with constant inner dimensions (`a[n]`, `a[n][3]`). The array decays to a pointer to stack-allocated storage and is reclaimed at ordinary block-scope exit, including loop iterations, `break`, and `continue` |
 | Function-typed parameters adjusted to pointers | Supported |
 | `restrict` qualifier | Accepted as source compatibility; no alias-analysis optimization semantics are provided |
 | Variadic macros and `__VA_ARGS__` | Supported |
@@ -100,13 +101,19 @@ portability surprises when code is moved from a hosted desktop compiler.
 | C99 feature | Status |
 | --- | --- |
 | `long long` and 64-bit integer types | Not supported |
-| Variable-length arrays | Not supported |
+| Variable-length arrays with a variable inner dimension (`a[n][m]`) | Not supported; the runtime row stride is not modelled (variable outermost dimension is supported, above) |
+| `goto`/`case` entry into VLA scopes | Not supported; jumps that could bypass VLA allocation are rejected |
+| `sizeof` applied to a whole VLA | Not supported; the size is not a compile-time constant, so it is rejected rather than silently miscomputed (`sizeof vla[i]` on a constant-size subobject is fine) |
 | `_Complex` and complex arithmetic | Not supported |
 | Full C99 compound literal value semantics | Partly supported only |
 | Flexible array member initialization | Not supported |
 | C99 external `inline` linkage rules | Not implemented |
 | Full C99 floating-point environment | Outside the CP/M 2.2 target model |
 | Full C99 hosted library | Outside the CP/M 2.2 target model |
+
+For the practical VLA guide — supported forms, block-scope reclamation in loops
+and recursion, and worked examples — see
+[Variable-length arrays](03-types-and-conventions.md#variable-length-arrays).
 
 ## C11 additions
 

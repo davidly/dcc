@@ -1,0 +1,4 @@
+<source>:3: error DCC-E0001: variable length array declaration cannot have static storage duration near ';'
+        static int a[n];
+                       ^
+dcc: 1 error(s)

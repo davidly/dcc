@@ -274,6 +274,8 @@ static int ast_sizeof_expr_value(const struct AstNode *n)
     case AST_IDENT:
         s = find_sym(n->sval);
         if (s != NULL && s->is_array) {
+            if (s->is_vla && asm_suppress_depth == 0)
+                error_here("sizeof applied to a variable-length array is not supported");
             total = sym_array_total_elems(s);
             if (total <= 0)
                 total = 1;

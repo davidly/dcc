@@ -1,0 +1,4 @@
+<source>:10: error DCC-E0001: goto into a variable-length array scope is not supported near '}'
+    }
+    ^
+dcc: 1 error(s)

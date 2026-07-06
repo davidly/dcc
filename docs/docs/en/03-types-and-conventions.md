@@ -134,3 +134,72 @@ int main(void)
   storage for their uninitialized globals so multiple modules do not overlap the
   final application's synthetic BSS range. The zeroing guarantee above describes
   the normal final app translation unit linked with `DCCRTL.MAC` / `RTLMIN.MAC`.
+
+## Variable-length arrays
+
+DCC supports a practical subset of C99 variable-length arrays (VLAs):
+a **local array whose size is a run-time value**, allocated on the stack when
+its declaration is reached and released when its block is left. This is meant
+for runtime-sized scratch storage on the 16-bit Z80/CP/M target, not full
+variably-modified type support. The [C conformance](01-c-conformance.md) page
+lists the summary status; this section is the practical guide.
+
+### Supported
+
+A local array whose **outermost** dimension is a run-time expression, with any
+constant inner dimensions:
+
+```c
+void f(int n)
+{
+    int  a[n];          /* 1-D VLA                        */
+    char buf[n + 1];    /* any run-time size expression   */
+    int  grid[n][3];    /* variable outer, constant inner */
+    /* a, buf, grid decay to pointers exactly like fixed arrays */
+}
+```
+
+- The size expression is evaluated **once**, when the declaration is reached.
+- In multidimensional arrays such as `grid[n][3]`, the inner dimensions must be
+  compile-time constants because they define the row stride used for indexing.
+- **Block-scope reclamation.** The array lives until its enclosing block exits,
+  so a VLA inside a loop does not grow the stack — each iteration reuses the
+  same storage:
+
+  ```c
+  for (i = 0; i < iters; i++) {
+      int scratch[n];     /* allocated and freed every iteration */
+      /* ... use scratch ... */
+  }                       /* stack pointer restored here each pass */
+  ```
+
+- Reclamation happens on **every** normal exit from the block: fall-through,
+  `break`, `continue`, `return`, and a `goto` that leaves the scope.
+- Recursion works: each call frame gets its own VLA and releases it on return.
+- With `-fstack-check`, the run-time allocation is bounds-checked, so an
+  oversized VLA aborts gracefully instead of colliding with the heap. VLAs draw
+  from the same `-stack` reserve as ordinary locals; size it for the deepest
+  expected allocation (see [Building and linking](02-build-and-link.md)).
+
+### Not supported (diagnosed, never miscompiled)
+
+- A **variable inner** dimension, e.g. `int a[n][m]`, because the row stride
+  would be a run-time value. Only the outermost dimension may vary. Use an
+  explicit index computation or `malloc` for a fully dynamic 2-D array.
+- `sizeof` applied to a **whole** VLA. Its size would be a run-time value; DCC
+  rejects it rather than silently return the wrong value. `sizeof a[0]` and
+  other constant-size subobjects are fine. Track the length yourself:
+
+  ```c
+  int a[n];
+  /* sizeof a;              -> error: not a compile-time size */
+  /* memset(a, 0, sizeof a) -> would be wrong; use the count: */
+  memset(a, 0, (size_t)n * sizeof a[0]);   /* sizeof a[0] is a constant */
+  ```
+
+- Jumping **into** a VLA's scope with `goto`, `case`, or `default` (which would
+  bypass the allocation) is rejected, matching a conforming compiler.
+- Variably-modified **types** beyond the array object itself — VLA `typedef`s,
+  pointers-to-VLA (`int (*p)[n]`), and run-time-bound VLA function parameters —
+  are not modelled.
+
