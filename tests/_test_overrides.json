@@ -44,6 +44,7 @@
     { "name": "trwold", "host": true },
     { "name": "tbig", "host": true },
     { "name": "ttrig", "host": true },
+    { "name": "ptrig", "ignore": true },
     { "name": "tallocx", "host": true },
     { "name": "tmalloch", "host": true },
     { "name": "tc89size", "host": true },
