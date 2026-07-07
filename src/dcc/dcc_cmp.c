@@ -243,6 +243,24 @@ void emit_byte_operand_to_a(struct ByteOperand *op)
         fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
         fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         emit("\tld a,(hl)\n");
+    } else if (op->kind == 5) {
+        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        if (op->idx_sym) {
+            fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
+            emit("\tadd hl,de\n");
+        } else if (op->val != 0) {
+            fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
+            emit("\tadd hl,de\n");
+        }
+        emit("\tld a,(hl)\n");
+    } else if (op->kind == 6) {
+        fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
+        if (op->idx_sym)
+            fprintf(outf, "\tadd a,(ix%+d)\n", op->idx_sym->offset);
+        if ((op->val & 255L) != 0)
+            fprintf(outf, "\tadd a,%ld\n", op->val & 255L);
     }
 }
 
@@ -273,12 +291,34 @@ void emit_cp_byte_operand(struct ByteOperand *op)
         fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
         fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         emit("\tcp (hl)\n");
+    } else if (op->kind == 5) {
+        emit("\tld b,a\n");
+        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        if (op->idx_sym) {
+            fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
+            emit("\tadd hl,de\n");
+        } else if (op->val != 0) {
+            fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
+            emit("\tadd hl,de\n");
+        }
+        emit("\tld a,b\n");
+        emit("\tcp (hl)\n");
+    } else if (op->kind == 6) {
+        emit("\tld b,a\n");
+        fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
+        if (op->idx_sym)
+            fprintf(outf, "\tadd a,(ix%+d)\n", op->idx_sym->offset);
+        if ((op->val & 255L) != 0)
+            fprintf(outf, "\tadd a,%ld\n", op->val & 255L);
+        emit("\tld c,a\n\tld a,b\n\tcp c\n");
     }
 }
 
 int byte_operand_can_be_lhs(struct ByteOperand *op)
 {
-    return op->kind == 1 || op->kind == 3 || op->kind == 4;
+    return op->kind == 1 || op->kind == 3 || op->kind == 4 || op->kind == 5 || op->kind == 6;
 }
 
 void emit_byte_cmp_branch_after_cp(int op, int label, int branch_when_true)

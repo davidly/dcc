@@ -403,6 +403,74 @@ int ast_is_const_plain_int_cmp_cond(const struct AstNode *n)
  * zero-extend op->idx_sym's single byte into D before the address add, so a
  * qualifying index must itself be a byte - a wider index is not handled here
  * (falls through to the generic path, same as any other unsupported shape). */
+
+static int ast_strip_byte_cast_mask_cond(const struct AstNode **ep)
+{
+    long mask;
+    const struct AstNode *e = *ep;
+
+    if (e != NULL && e->kind == AST_CAST && type_size(e->type) == 1)
+        e = e->a;
+    if (e != NULL && e->kind == AST_BINARY && e->op == '&' &&
+        e->b != NULL && e->b->kind == AST_INT_LIT &&
+        ((unsigned long)e->b->ival & 0xffffffffUL) == 255UL)
+        e = e->a;
+    if (e != NULL && e->kind == AST_CAST && type_size(e->type) == 1)
+        e = e->a;
+    (void)mask;
+    *ep = e;
+    return e != NULL;
+}
+
+static int ast_low_byte_sum_operand_cond(const struct AstNode *e, struct ByteOperand *op)
+{
+    struct Sym *s;
+    struct Sym *t;
+    const struct AstNode *lhs;
+    const struct AstNode *rhs;
+
+    if (!ast_strip_byte_cast_mask_cond(&e))
+        return 0;
+
+    if (e->kind == AST_IDENT) {
+        s = find_sym(e->sval);
+        if (s != NULL && sym_can_ix_direct(s) && type_size(s->type) <= 4) {
+            op->kind = 6;
+            op->sym = s;
+            op->idx_sym = NULL;
+            op->val = 0;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (e->kind != AST_BINARY || e->op != '+')
+        return 0;
+    lhs = e->a;
+    rhs = e->b;
+    if (lhs == NULL || lhs->kind != AST_IDENT)
+        return 0;
+    s = find_sym(lhs->sval);
+    if (s == NULL || !sym_can_ix_direct(s) || type_size(s->type) > 4)
+        return 0;
+    op->kind = 6;
+    op->sym = s;
+    op->idx_sym = NULL;
+    op->val = 0;
+    if (rhs != NULL && rhs->kind == AST_IDENT) {
+        t = find_sym(rhs->sval);
+        if (t == NULL || !sym_can_ix_direct(t) || type_size(t->type) > 4)
+            return 0;
+        op->idx_sym = t;
+        return 1;
+    }
+    if (rhs != NULL && rhs->kind == AST_INT_LIT) {
+        op->val = rhs->ival;
+        return 1;
+    }
+    return 0;
+}
+
 int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
 {
     struct Sym *s;
@@ -431,28 +499,30 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
     if (e->kind == AST_INDEX && e->a != NULL && e->a->kind == AST_IDENT &&
         e->b != NULL) {
         struct Sym *arr = find_global(e->a->sval);
-        if (arr == NULL || !arr->is_array || type_size(arr->type) != 1)
+        if (arr != NULL && arr->is_array && type_size(arr->type) == 1) {
+            if (e->b->kind == AST_INT_LIT) {
+                if (e->b->ival < 0)
+                    return 0;
+                op->kind = 3;
+                op->sym = arr;
+                op->idx_sym = NULL;
+                op->val = e->b->ival;
+                return 1;
+            }
+            if (e->b->kind == AST_IDENT) {
+                struct Sym *idx = find_sym(e->b->sval);
+                if (idx == NULL || !sym_can_ix_direct(idx) ||
+                    type_size(idx->type) != 1 || !(idx->type & TYPE_UNSIGNED))
+                    return 0;
+                op->kind = 3;
+                op->sym = arr;
+                op->idx_sym = idx;
+                return 1;
+            }
             return 0;
-        if (e->b->kind == AST_INT_LIT) {
-            if (e->b->ival < 0)
-                return 0;
-            op->kind = 3;
-            op->sym = arr;
-            op->idx_sym = NULL;
-            op->val = e->b->ival;
-            return 1;
         }
-        if (e->b->kind == AST_IDENT) {
-            struct Sym *idx = find_sym(e->b->sval);
-            if (idx == NULL || !sym_can_ix_direct(idx) ||
-                type_size(idx->type) != 1 || !(idx->type & TYPE_UNSIGNED))
-                return 0;
-            op->kind = 3;
-            op->sym = arr;
-            op->idx_sym = idx;
-            return 1;
-        }
-        return 0;
+        /* Not a global byte array: fall through so the local pointer
+         * subscript case below can recognise forms such as b[i]. */
     }
     if (e->kind == AST_UNARY && e->op == '*' &&
         e->a != NULL && e->a->kind == AST_IDENT) {
@@ -467,6 +537,33 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
         op->sym = ps;
         return 1;
     }
+    if (e->kind == AST_INDEX && e->a != NULL && e->a->kind == AST_IDENT &&
+        e->b != NULL) {
+        int base;
+        struct Sym *ps = find_sym(e->a->sval);
+        if (ps != NULL && sym_can_ix_direct(ps)) {
+            base = type_decay_ptr(ps->type);
+            if (type_size(base) == 1) {
+                if (e->b->kind == AST_IDENT) {
+                    struct Sym *idx = find_sym(e->b->sval);
+                    if (idx != NULL && sym_can_ix_direct(idx) && type_size(idx->type) == 2) {
+                        op->kind = 5;
+                        op->sym = ps;
+                        op->idx_sym = idx;
+                        return 1;
+                    }
+                } else if (e->b->kind == AST_INT_LIT && e->b->ival >= 0) {
+                    op->kind = 5;
+                    op->sym = ps;
+                    op->idx_sym = NULL;
+                    op->val = e->b->ival;
+                    return 1;
+                }
+            }
+        }
+    }
+    if (ast_low_byte_sum_operand_cond(e, op))
+        return 1;
     return 0;
 }
 

@@ -9,6 +9,227 @@
 
 static const struct AstNode *inline_substitution_body(struct Sym *fn);
 static int ast_is_float_madd_rhs(const struct AstNode *rhs);
+static int ast_const_int_operand_value(const struct AstNode *n, long *out);
+static int ast_masked_byte_operand(const struct AstNode *n, const struct AstNode **out);
+static int ast_long_byte_extract(const struct AstNode *n, const struct AstNode **out_base, int *out_byte);
+static void emit_long_byte_from_reg(int byte_index);
+static int emit_low_byte_expr_to_a(const struct AstNode *n);
+static int emit_long_byte_shift_to_reg(const struct AstNode *n);
+
+
+/* Recognize byte-truncation idioms that are common in hand-written portable C:
+ *     (unsigned char)(x & 0xff)
+ *     (char)((long)x & 0xffL)
+ * The target byte conversion already keeps only L, so the explicit mask is
+ * redundant and expensive when the left side forced a long promotion.  Return
+ * the expression whose low byte should be used. */
+static int ast_masked_byte_operand(const struct AstNode *n, const struct AstNode **out)
+{
+    long cv;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_BINARY && n->op == '&' &&
+        ast_const_int_operand_value(n->b, &cv) && ((unsigned long)cv & 0xffffffffUL) == 255UL) {
+        *out = n->a;
+        return 1;
+    }
+    return 0;
+}
+
+/* Recognize the four byte-extraction forms from a 32-bit value:
+ *     long_expr & 0xff
+ *     (long_expr >> 8)  & 0xff
+ *     (long_expr >> 16) & 0xff
+ *     (long_expr >> 24) & 0xff
+ * The long value lives in DE:HL as bytes D:E:H:L from high to low, so after
+ * evaluating the base we can select the requested byte directly instead of
+ * running the generic long shift and long AND helpers. */
+static int ast_long_byte_extract(const struct AstNode *n, const struct AstNode **out_base, int *out_byte)
+{
+    long mask;
+    long shift;
+    const struct AstNode *lhs;
+
+    if (n == NULL || n->kind != AST_BINARY || n->op != '&')
+        return 0;
+    if (!ast_const_int_operand_value(n->b, &mask) || ((unsigned long)mask & 0xffffffffUL) != 255UL)
+        return 0;
+
+    lhs = n->a;
+    if (lhs != NULL && lhs->kind == AST_BINARY && lhs->op == TOK_SHR &&
+        ast_const_int_operand_value(lhs->b, &shift)) {
+        if (shift != 8 && shift != 16 && shift != 24)
+            return 0;
+        *out_base = lhs->a;
+        *out_byte = (int)(shift / 8);
+        return 1;
+    }
+
+    *out_base = lhs;
+    *out_byte = 0;
+    return 1;
+}
+
+static void emit_long_byte_from_reg(int byte_index)
+{
+    switch (byte_index) {
+    case 0:
+        emit("\tld h,0\n");
+        break;
+    case 1:
+        emit("\tld l,h\n\tld h,0\n");
+        break;
+    case 2:
+        emit("\tld l,e\n\tld h,0\n");
+        break;
+    default:
+        emit("\tld l,d\n\tld h,0\n");
+        break;
+    }
+    emit("\tld de,0\n");
+}
+
+
+static void emit_long_one_byte_from_a(int byte_index)
+{
+    switch (byte_index) {
+    case 0:
+        emit("\tld l,a\n\tld h,0\n\tld de,0\n");
+        break;
+    case 1:
+        emit("\tld h,a\n\tld l,0\n\tld de,0\n");
+        break;
+    case 2:
+        emit("\tld e,a\n\tld d,0\n\tld hl,0\n");
+        break;
+    default:
+        emit("\tld d,a\n\tld e,0\n\tld hl,0\n");
+        break;
+    }
+}
+
+/* Recognize `(byte_expr & 255L) << {0,8,16,24}` and materialize the
+ * resulting long by loading just the byte and placing it in the target byte
+ * lane of DE:HL.  This is the inverse of ast_long_byte_extract() and is the
+ * hot get_stamp() pattern: widening, long AND, long shift, and long OR are
+ * all unnecessary when only one byte contributes to the result. */
+static int emit_long_byte_shift_to_reg(const struct AstNode *n)
+{
+    const struct AstNode *src;
+    long sh;
+    int byte_index;
+
+    if (n == NULL)
+        return 0;
+
+    src = n;
+    sh = 0;
+    if (n->kind == AST_BINARY && n->op == TOK_SHL) {
+        if (!ast_const_int_operand_value(n->b, &sh))
+            return 0;
+        if (sh != 0 && sh != 8 && sh != 16 && sh != 24)
+            return 0;
+        src = n->a;
+    }
+
+    if (!ast_masked_byte_operand(src, &src))
+        return 0;
+
+    if (!emit_low_byte_expr_to_a(src))
+        return 0;
+    byte_index = (int)(sh / 8);
+    emit_long_one_byte_from_a(byte_index);
+    return 1;
+}
+
+/* Emit the low byte of a small expression directly into A without widening to
+ * int/long.  This is intentionally conservative and targets hot portable-C
+ * idioms such as `(char)((rec + i) & 0xff)`: the low byte of an addition only
+ * depends on the low bytes of its operands, so an IX-direct load/add sequence
+ * is enough.  Declines if evaluating the expression would need calls, memory
+ * addressing, or anything that might clobber HL (the lvalue address in the
+ * store fast path). */
+static int emit_low_byte_expr_to_a(const struct AstNode *n)
+{
+    const struct AstNode *src;
+    struct Sym *s;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_CAST && type_size(n->type) == 1)
+        return emit_low_byte_expr_to_a(n->a);
+    if (ast_masked_byte_operand(n, &src))
+        return emit_low_byte_expr_to_a(src);
+    {
+        const struct AstNode *byte_base;
+        int byte_index;
+        if (ast_long_byte_extract(n, &byte_base, &byte_index) &&
+            byte_base != NULL && byte_base->kind == AST_IDENT) {
+            s = find_sym(byte_base->sval);
+            if (s != NULL && sym_can_ix_direct(s) && type_is_long(s->type)) {
+                fprintf(outf, "\tld a,(ix%+d)\n", s->offset + byte_index);
+                return 1;
+            }
+        }
+    }
+    if (n->kind == AST_IDENT) {
+        s = find_sym(n->sval);
+        if (s == NULL || !sym_can_ix_direct(s) || type_size(s->type) > 4)
+            return 0;
+        fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
+        return 1;
+    }
+    if (n->kind == AST_INT_LIT) {
+        fprintf(outf, "\tld a,%ld\n", n->ival & 255L);
+        return 1;
+    }
+    if (n->kind == AST_INDEX && n->a != NULL && n->a->kind == AST_IDENT &&
+        n->b != NULL) {
+        int base;
+        struct Sym *ps = find_sym(n->a->sval);
+        if (ps != NULL && sym_can_ix_direct(ps)) {
+            base = type_decay_ptr(ps->type);
+            if (type_size(base) == 1) {
+                fprintf(outf, "\tld l,(ix%+d)\n", ps->offset);
+                fprintf(outf, "\tld h,(ix%+d)\n", ps->offset + 1);
+                if (n->b->kind == AST_IDENT) {
+                    struct Sym *idx = find_sym(n->b->sval);
+                    if (idx == NULL || !sym_can_ix_direct(idx) || type_size(idx->type) != 2)
+                        return 0;
+                    fprintf(outf, "\tld e,(ix%+d)\n", idx->offset);
+                    fprintf(outf, "\tld d,(ix%+d)\n", idx->offset + 1);
+                    emit("\tadd hl,de\n");
+                } else if (n->b->kind == AST_INT_LIT) {
+                    if (n->b->ival != 0) {
+                        fprintf(outf, "\tld de,%ld\n", n->b->ival & 0xffffL);
+                        emit("\tadd hl,de\n");
+                    }
+                } else {
+                    return 0;
+                }
+                emit("\tld a,(hl)\n");
+                return 1;
+            }
+        }
+    }
+    if (n->kind == AST_BINARY && (n->op == '+' || n->op == '-')) {
+        if (!emit_low_byte_expr_to_a(n->a))
+            return 0;
+        if (n->b != NULL && n->b->kind == AST_IDENT) {
+            s = find_sym(n->b->sval);
+            if (s == NULL || !sym_can_ix_direct(s) || type_size(s->type) > 4)
+                return 0;
+            fprintf(outf, n->op == '+' ? "\tadd a,(ix%+d)\n" : "\tsub (ix%+d)\n", s->offset);
+            return 1;
+        }
+        if (n->b != NULL && n->b->kind == AST_INT_LIT) {
+            fprintf(outf, n->op == '+' ? "\tadd a,%ld\n" : "\tsub %ld\n", n->b->ival & 255L);
+            return 1;
+        }
+    }
+    return 0;
+}
 
 void gen_int_lit(const struct AstNode *n)
 {
@@ -30,6 +251,19 @@ void gen_cast_ast(const struct AstNode *n)
 {
     int t = n->type;
     int from16 = 0;
+    const struct AstNode *byte_src;
+
+    if (type_size(t) == 1 && ast_masked_byte_operand(n->a, &byte_src)) {
+        ast_gen_expr(byte_src);
+        if (t & TYPE_UNSIGNED)
+            emit("\tld h,0\n");
+        else
+            emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
+        g_expr_type = t;
+        g_long_from16 = 0;
+        return;
+    }
+
     ast_gen_expr(n->a);
     if (type_is_float(t)) {
         if (!type_is_float(g_expr_type))
@@ -647,6 +881,32 @@ void gen_long_arith_ast(const struct AstNode *n)
         g_expr_type = common_type;
         g_long_from16 = 0;
         return;
+    }
+
+    if ((n->op == TOK_SHL || n->op == '|') && emit_long_byte_shift_to_reg(n)) {
+        g_expr_type = TYPE_LONG | TYPE_UNSIGNED;
+        g_long_from16 = 0;
+        return;
+    }
+
+    if (n->op == '&') {
+        const struct AstNode *byte_base;
+        int byte_index;
+        if (ast_long_byte_extract(n, &byte_base, &byte_index)) {
+            if (byte_index == 0 && byte_base != NULL && byte_base->kind == AST_CAST &&
+                type_is_long(byte_base->type) && ast_value_is_plain_int(byte_base->a)) {
+                ast_gen_expr(byte_base->a);
+                emit("\tld h,0\n\tld de,0\n");
+            } else {
+                ast_gen_expr(byte_base);
+                if (!type_is_long(g_expr_type))
+                    emit_extend_to_long_typed(g_expr_type);
+                emit_long_byte_from_reg(byte_index);
+            }
+            g_expr_type = TYPE_LONG | TYPE_UNSIGNED;
+            g_long_from16 = 0;
+            return;
+        }
     }
 
     ast_gen_expr(n->a);
@@ -1365,6 +1625,27 @@ void gen_assign_ast(const struct AstNode *n)
         bf_width = current_field_bit_width;
         bf_shift = current_field_bit_shift;
         bf_mask = current_field_bit_mask;
+
+        /* The low-byte store shortcut is correct for char/uchar fields and
+         * array elements, but not for _Bool.  _Bool assignment must first
+         * normalize every non-zero RHS value to exactly 1; otherwise cases
+         * like arr[1] = 123, flags.a = 1000L, and *p = 77 store the raw low
+         * byte and break C99 _Bool semantics.  Let the normal assignment path
+         * below evaluate and emit_bool_normalize_hl() for boolean lvalues. */
+        if (n->op == '=' && type_size(val_type) == 1 && !type_is_bool(val_type) &&
+            bf_width == 0 && emit_low_byte_expr_to_a(n->b)) {
+            emit("\tld (hl),a\n");
+            if (!want_dead) {
+                emit("\tld l,a\n");
+                if (val_type & TYPE_UNSIGNED)
+                    emit("\tld h,0\n");
+                else
+                    emit("\trlca\n\tsbc a,a\n\tld h,a\n");
+            }
+            g_expr_type = val_type;
+            g_long_from16 = 0;
+            return;
+        }
 
         if (n->op == '=') {
             emit("\tpush hl\n");
