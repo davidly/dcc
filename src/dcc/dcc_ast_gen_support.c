@@ -5,6 +5,7 @@
  * prototypes live in dcc_ast_gen_internal.h.
  */
 #include <string.h>
+#include <stdint.h>
 #include "dcc_ast_gen_internal.h"
 
 #define AST_SUPPORT_CACHE_SIZE 4096
@@ -68,7 +69,7 @@ static int ast_int_elem_assign_rhs_ok(const struct AstNode *n)
 
 int ast_gen_supported(const struct AstNode *n)
 {
-    unsigned long h;
+    uintptr_t h;
     unsigned idx;
     int dead;
     int value;
@@ -78,7 +79,7 @@ int ast_gen_supported(const struct AstNode *n)
         return 0;
 
     dead = expr_result_dead ? 1 : 0;
-    h = ((unsigned long)n >> 4) ^ (unsigned long)(n->kind * 131) ^ (unsigned long)dead;
+    h = ((uintptr_t)n >> 4) ^ (uintptr_t)(n->kind * 131) ^ (uintptr_t)dead;
     idx = (unsigned)(h & (AST_SUPPORT_CACHE_SIZE - 1));
     e = &ast_support_cache[idx];
     if (e->stamp == ast_support_cache_stamp && e->node == n && e->dead == dead)
