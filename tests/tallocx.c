@@ -74,17 +74,19 @@ static void t_split(void)
     unsigned char *b;
     unsigned char *c;
 
-    a = (unsigned char *)malloc(16U);
+    a = (unsigned char *)malloc(20U);
     if (a == 0)
         fail("split setup malloc failed");
-    fill(a, 16U, 1);
+    fill(a, 20U, 1);
     free(a);
 
     b = (unsigned char *)malloc(12U);
     c = (unsigned char *)malloc(1U);
     if (b != a)
         fail("split did not reuse block head");
-    if ((unsigned)c != (unsigned)b + 15U)
+    /* 20 - 12 = 8 spare bytes, enough to split off a 4-byte tail block (2
+     * bytes each of header/footer overhead either side of the tail data). */
+    if ((unsigned)c != (unsigned)b + 16U)
         fail("split tail payload wrong address");
     c[0] = 0xa5;
     check(b, 12U, 1, "split head contents changed unexpectedly");
@@ -110,9 +112,12 @@ static void t_nosplit(void)
     b = (unsigned char *)malloc(13U);
     if (b != a)
         fail("nosplit did not reuse block head");
-    /* slack is 16-13 = 3 < HDRSIZE+1, so no tail fragment must be split off;
-     * the block must remain a full 16-byte block.  Freeing it (still non-top)
-     * and requesting 16 must reuse the exact same address. */
+    /* 13 rounds up to 14 (allocations are aligned to even sizes); slack is
+     * 16-14 = 2, below the minimum useful split (needs 6 spare bytes: 4
+     * bytes header+footer overhead plus a 2-byte usable tail), so no tail
+     * fragment must be split off; the block must remain a full 16-byte
+     * block.  Freeing it (still non-top) and requesting 16 must reuse the
+     * exact same address. */
     free(b);
     c = (unsigned char *)malloc(16U);
     if (c != a)
@@ -203,7 +208,7 @@ static void t_sizes(void)
     unsigned int base;
     unsigned int need;
 
-    for (base = 8U; base <= 80U; base += 7U) {
+    for (base = 8U; base <= 80U; base += 8U) {
         g = (unsigned char *)malloc(5U);
         a = (unsigned char *)malloc(base);
         b = (unsigned char *)malloc(7U);
@@ -211,12 +216,15 @@ static void t_sizes(void)
             fail("size sweep split setup failed");
 
         free(a);
-        need = base - 4U;
+        /* remainder == 6: the minimum spare that still splits off a usable
+         * (2-byte) tail block - 4 bytes of header+footer overhead either
+         * side of the tail data. */
+        need = base - 6U;
         p = (unsigned char *)malloc(need);
-        q = (unsigned char *)malloc(1U);
+        q = (unsigned char *)malloc(2U);
         if (p != a)
             fail("size sweep split did not reuse head");
-        if ((unsigned)q != (unsigned)a + need + 3U)
+        if ((unsigned)q != (unsigned)a + need + 4U)
             fail("size sweep split tail wrong address");
         free(p);
         free(q);
@@ -230,12 +238,13 @@ static void t_sizes(void)
             fail("size sweep nosplit setup failed");
 
         free(a);
-        need = base - 3U;
+        /* remainder == 4: below the split threshold. */
+        need = base - 4U;
         p = (unsigned char *)malloc(need);
         q = (unsigned char *)malloc(1U);
         if (p != a)
             fail("size sweep nosplit did not reuse head");
-        if ((unsigned)q == (unsigned)a + need + 3U)
+        if ((unsigned)q == (unsigned)a + need + 4U)
             fail("size sweep nosplit incorrectly made tail");
         free(p);
         free(q);
@@ -378,13 +387,14 @@ static void t_recoalesce(void)
         fail("recoalesce realloc failed");
     check(q, 100U, 12, "recoalesce realloc lost contents");
 
-    /* The fragment sits at q + 150 + HDRSIZE.  If the old-block free coalesced,
-     * a 120-byte malloc reuses it at exactly that address; otherwise malloc is
-     * forced to extend the heap and returns a higher address. */
+    /* The fragment sits at q + 150 + HDRSIZE + FTRSIZE (past the used part's
+     * own header and footer).  If the old-block free coalesced, a 120-byte
+     * malloc reuses it at exactly that address; otherwise malloc is forced
+     * to extend the heap and returns a higher address. */
     r = (unsigned char *)malloc(120U);
     if (r == 0)
         fail("recoalesce post malloc failed");
-    if ((unsigned)r != (unsigned)q + 153U)
+    if ((unsigned)r != (unsigned)q + 154U)
         fail("realloc free did not coalesce (heap fragmented)");
     free(q);
     free(r);

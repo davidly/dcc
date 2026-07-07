@@ -13,7 +13,8 @@
         public  __hlimit   ; heap limit
         public  start
 
-HDRSIZE          equ     3
+HDRSIZE          equ     2
+FTRSIZE          equ     2
 ; Maximum fd value + 1: fds 0..10 (stdin/stdout/stderr + NFILES real files).
 ; Keep in sync with MAXFD = FIRSTFD+NFILES at the _open block.
 UGC_MAX  equ     11
@@ -75,6 +76,40 @@ bss_done:
         call    _exit                   ; -> __cflush, __cpm_set_retcode, jp 0000h
         ; unreachable
 
+; Every heap block is [HDRSIZE header][user data][FTRSIZE footer], where
+; header and footer both hold the SAME packed value: bit 0 is the free
+; flag (1 = free, 0 = used), bits 15-1 are the user size. This only works
+; because every stored size is rounded to even (see __mlh), which leaves
+; bit 0 free to double as the flag - shrinking a 2-byte size field down to
+; a 2-byte size+flag field, so adding a footer costs 2 bytes/allocation
+; instead of naively adding a full 3rd header byte's worth (footer) on top.
+; The footer is what lets __frcoal find the block immediately before the
+; one being freed in O(1) (read 2 bytes) instead of a linear scan.
+;
+; Write `packed` as BOTH the header at `addr` and the matching footer
+; FTRSIZE bytes after `size` bytes of user data (i.e. at addr+HDRSIZE+
+; size). Every block state change in the allocator goes through this, so
+; there is one place that can get the header/footer pairing wrong instead
+; of several. Kept in this always-linked startup block (like __hbase/
+; __brk/__hlimit above) rather than inside __mlh's or __frcoal's own block,
+; so that neither malloc-only nor free-only programs are forced to pull in
+; the other's block just to reach this helper. It sits AFTER start's own
+; code (which is never reached by fall-through - CP/M begins executing at
+; the very first byte of the linked image, with no jump to `start`, so
+; anything placed before `start:` in this block would execute first, with
+; garbage register state, rather than through an explicit call).
+; Entry: HL=addr, DE=packed, BC=size (true, even user size).
+; Exit: HL clobbered (ends at footer+2). AF clobbered. DE, BC preserved.
+__wr_hf:
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl              ; HL = addr + HDRSIZE
+        add     hl,bc           ; HL = addr + HDRSIZE + size = footer addr
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        ret
 
 ; ------------------------------------------------------------
 ; CP/M command-tail argc/argv builder
@@ -7721,6 +7756,14 @@ rl_have_ptr:
         ld      (__rl_old),hl
         ld      l,(ix+6)
         ld      h,(ix+7)
+        ; Round up to even (0 stays 0, so the realloc(ptr,0) check below
+        ; still sees the caller's true zero), matching __mlh's own header
+        ; format - see __wr_hf's header comment.
+        ld      a,l
+        and     1
+        jr      z,rl_sz_even
+        inc     hl
+rl_sz_even:
         ld      (__rl_size),hl
 
         ; realloc(ptr, 0): free ptr and return NULL.
@@ -7734,7 +7777,9 @@ rl_have_ptr:
         ret
 
 rl_alloc:
-        ; Read old block user size from header at ptr-HDRSIZE.
+        ; Read old block's true user size from its 2-byte packed header at
+        ; ptr-HDRSIZE.  It is a used block, so the flag bit is clear and the
+        ; raw stored value already equals the true size.
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
         add     hl,de
@@ -7745,7 +7790,7 @@ rl_alloc:
 
         ; ---- In-place fast paths (avoid allocate + copy + free) ----
         ld      hl,(__rl_cnt)           ; old size
-        ld      de,(__rl_size)          ; new size
+        ld      de,(__rl_size)          ; new size (already rounded to even)
         or      a
         sbc     hl,de
         jp      c,rl_try_grow           ; new > old -> try growing in place
@@ -7754,39 +7799,51 @@ rl_alloc:
         or      a
         jr      nz,rl_shrink_split      ; slack >= 256 -> always split a tail
         ld      a,l
-        cp      HDRSIZE+1
-        jr      c,rl_keep_whole         ; slack < HDRSIZE+1 -> too small to split
+        cp      HDRSIZE+FTRSIZE+2
+        jr      c,rl_keep_whole         ; slack too small to make a useful tail
 rl_shrink_split:
-        ; Shrink the block to the new size and free the tail as its own block.
+        ; Shrink the block to the new size (used) - header+footer.
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
         add     hl,de                   ; HL = header
+        ld      (__rl_hdr),hl
         ld      de,(__rl_size)
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d                  ; header size = new size (flags untouched)
-        ; tail user size = slack - HDRSIZE
+        ld      b,d
+        ld      c,e                     ; BC = new size (used, flag clear)
+        ld      hl,(__rl_hdr)
+        call    __wr_hf
+
+        ; tail user size = slack - (HDRSIZE+FTRSIZE)
         ld      hl,(__rl_cnt)
         ld      de,(__rl_size)
         or      a
         sbc     hl,de                   ; HL = slack
-        ld      de,HDRSIZE
+        ld      de,HDRSIZE+FTRSIZE
         or      a
-        sbc     hl,de                   ; HL = tail user size
-        push    hl                      ; save tail user size
-        ld      hl,(__rl_old)
-        ld      de,(__rl_size)
-        add     hl,de                   ; HL = tail header = ptr + new size
-        pop     de                      ; DE = tail user size
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
-        inc     hl
-        ld      (hl),1                  ; flags = free
-        ; Coalesce the freed tail forward (and trim __brk if it is the top).
+        sbc     hl,de                   ; HL = tail user size (true, even)
+        ld      (__rl_tsz),hl
+
+        ; tail header = ptr + new_size + FTRSIZE (right after the used
+        ; part's own footer, just written above).
         ld      hl,(__rl_old)
         ld      de,(__rl_size)
         add     hl,de
+        ld      de,FTRSIZE
+        add     hl,de                   ; HL = tail header address
+        ld      (__rl_thdr),hl
+
+        ; Write the tail as USED (flag clear) - __frcoal below expects a
+        ; used block (it reads the header without masking a flag bit, on
+        ; the assumption the flag is currently 0) and does its own mark-
+        ; free + coalesce; pre-marking it free here would make __frcoal
+        ; double-count the flag bit as part of the size.
+        ld      bc,(__rl_tsz)           ; BC = tail user size (true)
+        ld      de,(__rl_tsz)           ; DE = packed(used) = tail_size
+        ld      hl,(__rl_thdr)
+        call    __wr_hf
+
+        ; Coalesce the freed tail forward (and trim __brk if it is the top).
+        ld      hl,(__rl_thdr)
         ld      de,HDRSIZE
         add     hl,de                   ; HL = tail user pointer
         call    __frcoal
@@ -7799,18 +7856,23 @@ rl_keep_whole:
         ret
 
 rl_try_grow:
-        ; new > old.  Grow in place only when this is the top heap block, i.e.
-        ; its end == __brk and the larger end still fits below __hlimit.
+        ; new > old.  Grow in place only when this is the top heap block,
+        ; i.e. its end (== ptr+old_size+FTRSIZE) is __brk, and the larger
+        ; end still fits below __hlimit.
         ld      hl,(__rl_old)
         ld      de,(__rl_cnt)
-        add     hl,de                   ; HL = block end = ptr + old size
+        add     hl,de
+        ld      de,FTRSIZE
+        add     hl,de                   ; HL = block end = ptr+old_size+FTRSIZE
         ld      de,(__brk)
         or      a
         sbc     hl,de
         jp      nz,rl_do_alloc          ; not the top block
         ld      hl,(__rl_old)
         ld      de,(__rl_size)
-        add     hl,de                   ; HL = new block end
+        add     hl,de
+        ld      de,FTRSIZE
+        add     hl,de                   ; HL = new block end = ptr+new_size+FTRSIZE
         jp      c,rl_do_alloc           ; address wrap -> cannot grow here
         push    hl
         ld      de,(__hlimit)
@@ -7825,10 +7887,12 @@ rl_grow_ok:
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
         add     hl,de                   ; HL = header
+        ld      (__rl_hdr),hl
         ld      de,(__rl_size)
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d                  ; header size = new size
+        ld      b,d
+        ld      c,e                     ; BC = new size
+        ld      hl,(__rl_hdr)
+        call    __wr_hf                 ; header+footer, used, size=new
         ld      hl,(__rl_old)
         pop     ix
         ret
@@ -7872,6 +7936,9 @@ __rl_old:       dw      0
 __rl_new:       dw      0
 __rl_size:      dw      0
 __rl_cnt:       dw      0
+__rl_hdr:       dw      0
+__rl_tsz:       dw      0
+__rl_thdr:      dw      0
 
         public  _free
 _free:
@@ -7889,55 +7956,63 @@ _free:
 ; it with an immediately-preceding free block and any following free blocks.
 ; Shared by _free and realloc so every free path keeps the heap coalesced;
 ; malloc's first-fit walk does not itself merge adjacent free blocks.
+;
+; The preceding block's identity is found in O(1) via its footer - the 2
+; bytes immediately before this block's own header - instead of a linear
+; scan from __hbase; see __wr_hf's header comment for the packed
+; header/footer format this depends on.
 ; Corrupts AF, BC, DE, HL.  Does not use IX.
 __frcoal:
         ld      a,h
         or      l
         ret     z               ; NULL: do nothing
-        dec     hl              ; HL = &header[2] flags byte
-        ld      (hl),1          ; mark free
-        dec     hl
-        dec     hl              ; HL = header
+        ld      de,0-HDRSIZE
+        add     hl,de           ; HL = header address
         ld      (__fr_hdr),hl
 
-        ; If the immediately preceding block is also free, use that as the
-        ; coalescing anchor so frees in either order merge adjacent blocks.
-        ld      hl,(__hbase)
-        ld      (__fr_scan),hl
-fr_prev:
-        ld      hl,(__fr_scan)
-        ld      de,(__fr_hdr)
-        or      a
-        sbc     hl,de           ; scan - current header
-        jr      z,fr_coal       ; scan reached current block
-        jr      nc,fr_coal      ; defensive: scan passed current block
-        ld      hl,(__fr_scan)
+        ; Mark this block free: its packed value's flag bit is currently
+        ; clear (used), so the raw stored bytes already equal its true
+        ; size - set bit 0 and rewrite header+footer together.
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)          ; DE = scan block user size
-        ld      hl,(__fr_scan)
-        ld      bc,HDRSIZE
-        add     hl,bc
-        add     hl,de           ; HL = block after scan
-        push    hl
-        ld      de,(__fr_hdr)
+        ld      d,(hl)          ; DE = packed (used, so DE == true size)
+        ld      b,d
+        ld      c,e             ; BC = true size (for __wr_hf)
+        set     0,e             ; DE = packed(free) = size|1
+        ld      hl,(__fr_hdr)
+        call    __wr_hf
+
+        ; O(1) predecessor check: unless this is the very first heap block,
+        ; read the 2 bytes just before our own header - the preceding
+        ; block's footer - to see if it is free.
+        ld      hl,(__fr_hdr)
+        ld      de,(__hbase)
         or      a
         sbc     hl,de
-        pop     hl              ; HL = block after scan
-        jr      z,fr_prev_adj
-        jr      nc,fr_coal      ; defensive: next passed current block
-        ld      (__fr_scan),hl
-        jr      fr_prev
+        jp      z,fr_coal       ; this IS the first block: no predecessor
 
-fr_prev_adj:
-        ld      hl,(__fr_scan)
-        inc     hl
-        inc     hl
-        ld      a,(hl)          ; previous flags
+        ld      hl,(__fr_hdr)
+        ld      de,FTRSIZE
         or      a
-        jr      z,fr_coal       ; previous block is used
-        ld      hl,(__fr_scan)
-        ld      (__fr_hdr),hl   ; previous free block becomes the anchor
+        sbc     hl,de           ; HL = preceding block's footer address
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = preceding block's packed footer value
+        ld      a,e
+        and     1
+        jr      z,fr_coal       ; preceding block is used: nothing to merge
+
+        ; Preceding block is free: its header sits (HDRSIZE+FTRSIZE+size)
+        ; bytes before our own header.
+        ld      a,e
+        and     0feh
+        ld      e,a             ; DE = true preceding size
+        ld      hl,(__fr_hdr)
+        ld      bc,0-(HDRSIZE+FTRSIZE)
+        add     hl,bc
+        or      a
+        sbc     hl,de           ; HL = preceding block's header address
+        ld      (__fr_hdr),hl   ; it becomes the coalescing anchor
 
 fr_coal:
         ; Merge any immediately following free blocks.  Never read a next
@@ -7945,9 +8020,13 @@ fr_coal:
         ld      hl,(__fr_hdr)
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)          ; DE = current user size
+        ld      d,(hl)          ; DE = anchor packed value (flag=1, free)
+        ld      a,e
+        and     0feh
+        ld      e,a             ; DE = true anchor size
+        ld      (__fr_csz),de
         ld      hl,(__fr_hdr)
-        ld      bc,HDRSIZE
+        ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de           ; HL = next block header
         push    hl
@@ -7957,29 +8036,30 @@ fr_coal:
         pop     hl              ; HL = next block header
         jr      nc,fr_done      ; next >= __brk: no following block
 
-        push    hl
-        inc     hl
-        inc     hl
-        ld      a,(hl)          ; next flags
-        pop     hl              ; HL = next block header
-        or      a
-        jr      z,fr_done       ; next block is used
-
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)          ; DE = next user size
+        ld      d,(hl)          ; DE = next block's packed value
+        ld      a,e
+        and     1
+        jr      z,fr_done       ; next block is used
+
+        ld      a,e
+        and     0feh
+        ld      e,a             ; DE = true next size
+
+        ; merged_size = anchor_size + HDRSIZE + FTRSIZE + next_size
+        ld      hl,(__fr_csz)
+        ld      bc,HDRSIZE+FTRSIZE
+        add     hl,bc
+        add     hl,de           ; HL = merged size (true, even)
+        ld      b,h
+        ld      c,l             ; BC = merged size
+        ld      d,h
+        ld      e,l
+        set     0,e             ; DE = packed(free) = merged_size|1
         ld      hl,(__fr_hdr)
-        ld      c,(hl)
-        inc     hl
-        ld      b,(hl)          ; BC = current user size
-        ld      hl,HDRSIZE
-        add     hl,de
-        add     hl,bc           ; HL = merged user size
-        ex      de,hl
-        ld      hl,(__fr_hdr)
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
+        call    __wr_hf         ; rewrites the anchor header + a new, farther
+                                 ; out footer for the merged block
         jr      fr_coal
 fr_done:
         ; Heap trim: if the (coalesced) free block ends exactly at __brk it is
@@ -7989,9 +8069,12 @@ fr_done:
         ld      hl,(__fr_hdr)
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)                  ; DE = anchor user size
+        ld      d,(hl)                  ; DE = anchor packed value
+        ld      a,e
+        and     0feh
+        ld      e,a                     ; DE = true anchor size
         ld      hl,(__fr_hdr)
-        ld      bc,HDRSIZE
+        ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de                   ; HL = anchor block end
         ld      de,(__brk)
@@ -8003,18 +8086,24 @@ fr_done:
         ret
 
 __fr_hdr:       dw      0
-__fr_scan:      dw      0
+__fr_csz:       dw      0
 
         public  __mlh
-; Internal: HL = requested size (0 treated as 1). Returns HL = ptr or 0.
-; Corrupts AF, BC, DE, HL. Does not use/save IX.
-; Separate public block: _malloc/_calloc reference this helper, but _free and
-; programs that only need heap-limit startup state do not pull it in.
+; Internal: HL = requested size (0 treated as 2; odd sizes rounded up to
+; the next even value - see __wr_hf's header comment for why). Returns
+; HL = ptr or 0. Corrupts AF, BC, DE, HL. Does not use/save IX.
+; Separate public block: _malloc/_calloc reference this helper, but _free
+; and programs that only need heap-limit startup state do not pull it in.
 __mlh:
+        ld      a,l
+        and     1
+        jr      z,mh_rnd_ok
+        inc     hl
+mh_rnd_ok:
         ld      a,h
         or      l
         jr      nz,mh_sz_ok
-        ld      l,1             ; size 0 -> 1
+        ld      l,2             ; size 0 -> 2
 mh_sz_ok:
         ld      (__ml_need),hl
 
@@ -8031,20 +8120,21 @@ mh_walk:
         jp      z,mh_extend
         jp      c,mh_extend
 
-        ; Read 3-byte header at __ml_p: DE = user size, A = flags
+        ; Read the 2-byte packed header at __ml_p: DE = size|flag.
         ld      hl,(__ml_p)
         ld      e,(hl)
         inc     hl
         ld      d,(hl)
-        inc     hl
-        ld      a,(hl)
 
-        ; Dispatch on free flag (bit 0; nonzero is treated as free)
-        or      a
+        ld      a,e
+        and     1
         jr      z,mh_used
 
-        ; --- Free block ---
-        ld      (__ml_usiz),de  ; save in case block is too small
+        ; --- Free block --- DE currently holds size|1; mask to true size.
+        ld      a,e
+        and     0feh
+        ld      e,a
+        ld      (__ml_usiz),de  ; save true size in case block is too small
 
         ; Compare user_size (DE) >= need (HL = __ml_need)
         ld      hl,(__ml_need)
@@ -8053,67 +8143,68 @@ mh_walk:
         sbc     hl,de           ; HL = user_size - need; carry if too small
         jr      c,mh_skip_free
 
-        ; Block fits. HL = remainder = user_size - need, DE = need.
-        ; Split if remainder >= HDRSIZE+1 (= 4)
+        ; Block fits. HL = remainder (even), DE = need. Split only if the
+        ; remainder can hold a useful (>=2 byte) free block of its own,
+        ; i.e. remainder >= HDRSIZE+FTRSIZE+2.
         ld      a,h
         or      a
         jr      nz,mh_split     ; high byte != 0 -> remainder >= 256 -> always split
         ld      a,l
-        cp      HDRSIZE+1
+        cp      HDRSIZE+FTRSIZE+2
         jr      nc,mh_split
 
-        ; No split: use whole block. Restore user_size = need + remainder.
+        ; No split: use whole block. Restore user_size = need + remainder,
+        ; then write it back as used - flag bit clear, so the packed value
+        ; is just the size unchanged.
         ex      de,hl           ; HL = need, DE = remainder
-        add     hl,de           ; HL = user_size
-        ; Write used header at __ml_p
-        ld      de,(__ml_p)
-        ld      a,l
-        ld      (de),a
-        inc     de
-        ld      a,h
-        ld      (de),a
-        inc     de
-        xor     a               ; flags = used
-        ld      (de),a
-        ; Return __ml_p + HDRSIZE
+        add     hl,de           ; HL = user_size (true, even)
+        ld      b,h
+        ld      c,l             ; BC = user_size
+        ld      d,h
+        ld      e,l             ; DE = packed(used) = user_size unchanged
+        ld      hl,(__ml_p)
+        call    __wr_hf
         ld      hl,(__ml_p)
         ld      de,HDRSIZE
         add     hl,de
         ret
 
 mh_split:
-        ; HL = remainder, DE = need.
-        ; Write used header at __ml_p: size=need, flags=0
-        ld      bc,(__ml_p)
-        ld      a,e
-        ld      (bc),a          ; header low = need_lo
-        inc     bc
-        ld      a,d
-        ld      (bc),a          ; header high = need_hi
-        inc     bc
-        xor     a
-        ld      (bc),a          ; flags = used
-        ; Compute new free block address = __ml_p + HDRSIZE + need
+        ; HL = remainder, DE = need. Write the used header+footer for the
+        ; 'need'-sized part first (__wr_hf leaves DE/BC untouched).
+        push    hl              ; save remainder
+        ld      b,d
+        ld      c,e             ; BC = need (size arg; DE already packed(used))
+        ld      hl,(__ml_p)
+        call    __wr_hf
+        pop     hl              ; HL = remainder (DE is still need)
+
+        ; New free block header = __ml_p + HDRSIZE + need + FTRSIZE (right
+        ; after the used part's own footer, which spans need's own end -
+        ; not immediately after its data, or the free header would alias
+        ; that footer).
         push    hl              ; save remainder
         ld      hl,(__ml_p)
-        ld      de,HDRSIZE
+        ld      bc,HDRSIZE+FTRSIZE
+        add     hl,bc
         add     hl,de
-        ld      de,(__ml_need)
-        add     hl,de           ; HL = new free block address
-        pop     de              ; DE = remainder
-        ; New block user_size = remainder - HDRSIZE
-        ld      a,e
-        sub     HDRSIZE
-        ld      e,a
-        ld      a,d
-        sbc     a,0
-        ld      d,a             ; DE = new_user_size
-        ; Write free header at HL
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
-        inc     hl
-        ld      (hl),1          ; flags = free
+        ld      (__ml_fp),hl    ; new free block's header address
+        pop     hl              ; HL = remainder
+
+        ; New free block's user_size = remainder - (HDRSIZE+FTRSIZE); its
+        ; own footer lands exactly at the original block's unmoved footer
+        ; (the arithmetic is verified in __wr_hf's header comment context).
+        ld      de,HDRSIZE+FTRSIZE
+        or      a
+        sbc     hl,de           ; HL = new free user_size (true, even)
+        ld      b,h
+        ld      c,l             ; BC = new free user_size
+        ld      d,h
+        ld      e,l
+        set     0,e             ; DE = packed(free) = user_size|1
+        ld      hl,(__ml_fp)
+        call    __wr_hf
+
         ; Return __ml_p + HDRSIZE
         ld      hl,(__ml_p)
         ld      de,HDRSIZE
@@ -8121,19 +8212,20 @@ mh_split:
         ret
 
 mh_skip_free:
-        ; Free but too small: advance by HDRSIZE + user_size
+        ; Free but too small: advance by HDRSIZE + FTRSIZE + user_size
         ld      hl,(__ml_p)
         ld      de,(__ml_usiz)
-        ld      bc,HDRSIZE
+        ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de
         ld      (__ml_p),hl
         jp      mh_walk
 
 mh_used:
-        ; Used block. DE = user_size from header.
+        ; Used block. DE = packed header value; flag bit is clear so DE is
+        ; already the true user_size.
         ld      hl,(__ml_p)
-        ld      bc,HDRSIZE
+        ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de
         ld      (__ml_p),hl
@@ -8141,17 +8233,17 @@ mh_used:
 
 mh_extend:
         ; No free block found. Extend heap upward.
-        ; Check: brk + HDRSIZE + need <= heap_limit
+        ; Check: brk + HDRSIZE + FTRSIZE + need <= heap_limit
         ld      hl,(__brk)
         ld      (__ml_p),hl     ; save old brk (reuse __ml_p)
         ld      de,(__ml_need)
         add     hl,de
         jp      c,mh_oom        ; 16-bit wrap means the block cannot fit
-        ld      de,HDRSIZE
-        add     hl,de           ; HL = brk + need + HDRSIZE
-        jp      c,mh_oom        ; header addition wrapped past 0ffffh
+        ld      de,HDRSIZE+FTRSIZE
+        add     hl,de           ; HL = brk + need + HDRSIZE + FTRSIZE
+        jp      c,mh_oom        ; header/footer addition wrapped past 0ffffh
         ; Require new_brk <= __hlimit.  HL is the exclusive end of
-        ; the allocation (old brk + header + user size).
+        ; the allocation (old brk + header + user size + footer).
         ; This comparison deliberately avoids computing hlimit+1, which
         ; itself can wrap when the CP/M stack starts near FFFFh.
         ld      de,(__hlimit)
@@ -8163,17 +8255,16 @@ mh_extend:
 
 mh_extend_ok:
 
-        ; Write used header at old brk
-        ld      hl,(__ml_p)     ; HL = old brk
+        ; Write used header+footer at old brk (packed(used) == need, since
+        ; need is already even and the flag bit is 0 for used).
         ld      de,(__ml_need)
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
-        inc     hl
-        ld      (hl),0          ; flags = used
-        ; Advance brk: new_brk = old_brk + HDRSIZE + need
+        ld      b,d
+        ld      c,e
         ld      hl,(__ml_p)
-        ld      de,HDRSIZE
+        call    __wr_hf
+        ; Advance brk: new_brk = old_brk + HDRSIZE + FTRSIZE + need
+        ld      hl,(__ml_p)
+        ld      de,HDRSIZE+FTRSIZE
         add     hl,de
         ld      de,(__ml_need)
         add     hl,de
@@ -8192,6 +8283,7 @@ mh_oom:
 __ml_need:      dw      0
 __ml_p:         dw      0
 __ml_usiz:      dw      0
+__ml_fp:        dw      0
 
         public  __lmd
 __lmd:
