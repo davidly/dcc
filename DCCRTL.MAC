@@ -28,13 +28,10 @@ EMFILE   equ     24
 ENOSPC   equ     28
 
         cseg
-; Heap state used by start/free/malloc.  Keep this in the always-kept
-; startup block so allocator code itself is not pulled in just because
-; start initializes __brk/__hlimit.
-__hbase:        dw      0
-__brk:          dw      0
-__hlimit:       dw      0
-
+; start: must be the very first thing in the linked image - CP/M loads a
+; .COM at 0100h and begins executing there directly, with no jump to a
+; named entry point, so anything placed before start: in this always-kept
+; block (even zeroed data, which happens to decode as NOP) executes first.
 start:
         ; Initialize heap allocator.
         ; __hlimit = initial SP - __stack_size
@@ -75,6 +72,14 @@ bss_done:
         push    hl                      ; pass main() return value to exit
         call    _exit                   ; -> __cflush, __cpm_set_retcode, jp 0000h
         ; unreachable
+
+; Heap state used by start/free/malloc.  Kept in this always-kept startup
+; block (data, not code, so its position relative to start: doesn't matter
+; for execution) so allocator code itself is not pulled in just because
+; start initializes __brk/__hlimit.
+__hbase:        dw      0
+__brk:          dw      0
+__hlimit:       dw      0
 
 ; Every heap block is [HDRSIZE header][user data][FTRSIZE footer], where
 ; header and footer both hold the SAME packed value: bit 0 is the free
