@@ -7,6 +7,7 @@
  */
 #include <stdio.h>
 #include <setjmp.h>
+#include <string.h>
 
 static int checks = 0;
 static int failures = 0;
@@ -155,6 +156,271 @@ static int fixed_cast_bounds(void)
     int bcount = (int)(sizeof b / sizeof b[0]);
     return (acount == 8) && (bcount == 5);
 }
+
+static int uvp_helper(int x) { return x + 1; }
+
+/* Regression: an UNUSED VLA (its name never referenced again) that is the
+ * first VLA in its scope, followed by a normal local, must NOT let the
+ * dead-local prune drop the VLA's hidden #vlasp/#vlasz slots.  The codegen
+ * pass used to prune the just-allocated VLA (its `bytes` is only the 2-byte
+ * pointer, and g_vla_pending was already cleared), so the following local
+ * aliased the saved-SP slot; the block-exit "ld sp,(#vlasp)" then restored a
+ * garbage SP.  The scan pass never pruned it, so the two passes disagreed.
+ * Fall through the block (so the per-block SP restore runs) and then make a
+ * call, which uses SP - a clobbered SP would corrupt the call. */
+static int unused_vla_prune_fallthrough(int n)
+{
+    int result = 0;
+    {
+        int unused[n];
+        int marker = 22222;
+        result = marker;
+    }
+    result = uvp_helper(result);
+    return result;
+}
+
+/* Same hazard, but with live locals bracketing the block to catch a frame
+ * offset that shifted between the two passes. */
+static int unused_vla_prune_locals(int n)
+{
+    int a = 111;
+    int b = 222;
+    {
+        int unused[n];
+        int c = 333;
+        a = a + c;
+    }
+    b = b + a;
+    return b;
+}
+
+/* Stronger form of the same regression: on the old codegen path, `marker`
+ * reused the hidden #vlasp offset, so block exit restored SP to &result+2.
+ * The following call's argument push then overwrote result itself.  Keep the
+ * address trick DCC-only so the host clang baseline stays well-defined. */
+static int unused_vla_prune_sp_alias(int n)
+{
+#ifdef _DCC_
+    int result = 1234;
+    {
+        int unused[n];
+        int marker = (int)&result + 2;
+        (void)marker;
+    }
+    uvp_helper(0);
+    return result;
+#else
+    (void)n;
+    uvp_helper(0);
+    return 1234;
+#endif
+}
+
+/* Same hidden-slot alias bug, but with the unused VLA and following local in
+ * one declaration statement.  This specifically covers the declaration loop's
+ * comma path after pruning the first declarator. */
+static int unused_vla_prune_same_decl(int n)
+{
+#ifdef _DCC_
+    int result = 4321;
+    {
+        int unused[n], marker = (int)&result + 2;
+        (void)marker;
+    }
+    uvp_helper(0);
+    return result;
+#else
+    (void)n;
+    uvp_helper(0);
+    return 4321;
+#endif
+}
+
+/* ---- sizeof on a VLA (C99 6.5.3.4: the operand is a run-time value) ----
+ *
+ * dcc stores each VLA's run-time byte size in a hidden frame slot when the VLA
+ * is allocated; `sizeof vla` loads that slot.  All expectations below are
+ * written in terms of sizeof(int)/element counts so they are identical on a
+ * 16-bit-int target (dcc) and a 32-bit-int host (the clang baseline). */
+
+/* Whole 1-D VLA: byte size == n elements. */
+static int vla_sizeof_1d(int n)
+{
+    int a[n];
+    return (int)sizeof a;               /* n * sizeof(int) */
+}
+
+/* Whole 2-D VLA with a constant inner dim: n rows * 3 * sizeof(int). */
+static int vla_sizeof_2d(int rows)
+{
+    int a[rows][3];
+    return (int)sizeof a;               /* rows * 3 * sizeof(int) */
+}
+
+/* A constant-size subobject stays a compile-time constant. */
+static int vla_sizeof_element(int n)
+{
+    int a[n];
+    return (int)sizeof a[0];            /* sizeof(int) */
+}
+
+/* The pervasive element-count idiom must yield n regardless of int width. */
+static int vla_sizeof_count(int n)
+{
+    int a[n];
+    return (int)(sizeof a / sizeof a[0]);   /* n */
+}
+
+/* 2-D VLA row count and row size via sizeof. */
+static int vla_sizeof_2d_rows(int rows)
+{
+    int a[rows][3];
+    return (int)(sizeof a / sizeof a[0]);   /* rows */
+}
+
+static int vla_sizeof_2d_row(int rows)
+{
+    int a[rows][3];
+    return (int)sizeof a[0];            /* 3 * sizeof(int) */
+}
+
+/* char VLA: element size is 1 on every target, so byte size == n. */
+static int vla_sizeof_char(int n)
+{
+    char b[n];
+    return (int)sizeof b;               /* n */
+}
+
+/* The VLA bound (with a side effect) is evaluated exactly once; sizeof reads
+ * the stored size afterwards rather than re-evaluating the bound. */
+static int vla_sizeof_saved_once(int n)
+{
+    int calls = n;
+    int a[calls++];
+    /* count is n (calls++ used n); calls is n+1 iff evaluated exactly once. */
+    return (int)(sizeof a / sizeof a[0]) * 1000 + calls;
+}
+
+/* sizeof as the byte count of a memset over the whole VLA. */
+static int vla_memset_sizeof(int n)
+{
+    int a[n];
+    int i;
+    int s = 0;
+    memset(a, 0, sizeof a);
+    for (i = 0; i < n; i++)
+        s += a[i];
+    return s;                           /* 0 */
+}
+
+/* --- sizeof of a VLA declared in a NESTED scope ---
+ * A nested-block declaration only enters the symbol table when its span is
+ * emitted, so sizeof must be resolved at emit time.  These would silently
+ * return the wrong size if sizeof were baked at AST-build time. */
+static int vla_sizeof_nested_block(int n)
+{
+    int r = 0;
+    {
+        int a[n];
+        r = (int)(sizeof a / sizeof a[0]);      /* n */
+    }
+    return r;
+}
+
+static int vla_sizeof_if_body(int n)
+{
+    int r = -1;
+    if (n > 0) {
+        int a[n];
+        r = (int)(sizeof a / sizeof a[0]);      /* n */
+    }
+    return r;
+}
+
+static int vla_sizeof_deep_nested(int n)
+{
+    {
+        {
+            {
+                int a[n];
+                return (int)(sizeof a / sizeof a[0]);   /* n */
+            }
+        }
+    }
+}
+
+/* A VLA re-declared each loop iteration with a changing bound: sizeof must
+ * reflect the current iteration's size, not a stale one. */
+static int vla_sizeof_loop_changes(int n)
+{
+    int i;
+    int acc = 0;
+    for (i = 1; i <= n; i++) {
+        int a[i];
+        acc += (int)(sizeof a / sizeof a[0]);   /* += i */
+    }
+    return acc;                                 /* 1+2+...+n */
+}
+
+/* sizeof of the FIRST VLA taken after a SECOND VLA is declared: exercises the
+ * per-VLA hidden size-slot offsets staying distinct and correct. */
+static int vla_sizeof_first_after_second(int n)
+{
+    int a[n];
+    int b[n + 5];
+    int cb = (int)(sizeof b / sizeof b[0]);     /* n+5 */
+    int ca = (int)(sizeof a / sizeof a[0]);     /* n */
+    return ca * 1000 + cb;
+}
+
+static int vla_sizeof_shadow_inner(int n)
+{
+    int a[3];
+    {
+        int a[n];
+        return (int)(sizeof a / sizeof a[0]);   /* inner VLA */
+    }
+}
+
+static int vla_sizeof_shadow_outer_after(int n)
+{
+    int a[n];
+    {
+        int a[4];
+        (void)a;
+    }
+    return (int)(sizeof a / sizeof a[0]);       /* outer VLA */
+}
+
+/* --- sizeof of a VLA as an operand of arithmetic/bitwise operators ---
+ * A whole-VLA sizeof is a run-time value, so these must NOT be folded as if
+ * sizeof were a compile-time constant (which would read a stale immediate). */
+static int vla_sizeof_op_sub(int n)   { int a[n]; return (int)(sizeof a - 2); }
+static int vla_sizeof_op_add(int n)   { int a[n]; return (int)(sizeof a + 1); }
+static int vla_sizeof_op_and(int n)   { int a[n]; return (int)(sizeof a & 7); }
+static int vla_sizeof_op_mullhs(int n){ int a[n]; return (int)(3 * sizeof a); }
+static int vla_sizeof_op_mulrhs(int n){ int a[n]; return (int)(sizeof a * 3); }
+static int vla_sizeof_op_cmp(int n)   { int a[n]; return sizeof a == (unsigned)(n * sizeof(int)); }
+
+/* sizeof of a VLA used as a subscript index (run-time value). */
+static int vla_sizeof_subscript(int n)
+{
+    static int table[64];
+    int a[n];
+    int i;
+    for (i = 0; i < 64; i++)
+        table[i] = i + 1;
+    return table[sizeof a];             /* table[n*sizeof(int)] = n*sizeof(int)+1 */
+}
+
+/* sizeof of a VLA in ternary / comma / loop-condition contexts. */
+static int vla_sizeof_ternary(int n)
+{
+    int a[n];
+    return (sizeof a > sizeof a[0]) ? (int)(sizeof a / sizeof a[0]) : -1;   /* n for n>1 */
+}
+
 
 /* Three-dimensional VLA: variable outer, constant inner dims. */
 static int vla_3d(int n)
@@ -705,6 +971,47 @@ int main(void)
     check_int("fixed_sizeof_bounds", fixed_sizeof_bounds(123), 1);
     /* A cast of a constant bound is a fixed-size array, not a VLA. */
     check_int("fixed_cast_bounds", fixed_cast_bounds(), 1);
+
+    /* An unused VLA must not be pruned (would clobber the saved SP). */
+    check_int("unused_vla_prune_fallthrough",
+              unused_vla_prune_fallthrough(4), 22223);
+    check_int("unused_vla_prune_locals",
+              unused_vla_prune_locals(4), 666);
+    check_int("unused_vla_prune_sp_alias",
+              unused_vla_prune_sp_alias(4), 1234);
+    check_int("unused_vla_prune_same_decl",
+              unused_vla_prune_same_decl(4), 4321);
+
+    /* sizeof on a whole VLA yields its run-time size; expectations are written
+     * via sizeof(int) so they hold on both a 16-bit and a 32-bit int target. */
+    check_int("vla_sizeof_1d", vla_sizeof_1d(5), 5 * (int)sizeof(int));
+    check_int("vla_sizeof_2d", vla_sizeof_2d(4), 4 * 3 * (int)sizeof(int));
+    check_int("vla_sizeof_element", vla_sizeof_element(9), (int)sizeof(int));
+    check_int("vla_sizeof_count", vla_sizeof_count(7), 7);
+    check_int("vla_sizeof_2d_rows", vla_sizeof_2d_rows(4), 4);
+    check_int("vla_sizeof_2d_row", vla_sizeof_2d_row(4), 3 * (int)sizeof(int));
+    check_int("vla_sizeof_char", vla_sizeof_char(6), 6);
+    check_int("vla_sizeof_saved_once", vla_sizeof_saved_once(5), 5 * 1000 + 6);
+    check_int("vla_memset_sizeof", vla_memset_sizeof(6), 0);
+    /* nested-scope VLA sizeof (resolved at emit time, not AST-build time) */
+    check_int("vla_sizeof_nested_block", vla_sizeof_nested_block(6), 6);
+    check_int("vla_sizeof_if_body", vla_sizeof_if_body(6), 6);
+    check_int("vla_sizeof_deep_nested", vla_sizeof_deep_nested(6), 6);
+    check_int("vla_sizeof_loop_changes", vla_sizeof_loop_changes(5), 15);
+    check_int("vla_sizeof_first_after_second", vla_sizeof_first_after_second(6), 6 * 1000 + 11);
+    check_int("vla_sizeof_shadow_inner", vla_sizeof_shadow_inner(6), 6);
+    check_int("vla_sizeof_shadow_outer_after", vla_sizeof_shadow_outer_after(6), 6);
+    /* sizeof-of-VLA as an operand: must use the run-time value, not a stale
+     * folded immediate. */
+    check_int("vla_sizeof_op_sub", vla_sizeof_op_sub(6), 6 * (int)sizeof(int) - 2);
+    check_int("vla_sizeof_op_add", vla_sizeof_op_add(6), 6 * (int)sizeof(int) + 1);
+    check_int("vla_sizeof_op_and", vla_sizeof_op_and(6), (6 * (int)sizeof(int)) & 7);
+    check_int("vla_sizeof_op_mullhs", vla_sizeof_op_mullhs(6), 3 * 6 * (int)sizeof(int));
+    check_int("vla_sizeof_op_mulrhs", vla_sizeof_op_mulrhs(6), 6 * (int)sizeof(int) * 3);
+    check_int("vla_sizeof_op_cmp", vla_sizeof_op_cmp(6), 1);
+    check_int("vla_sizeof_subscript", vla_sizeof_subscript(6), 6 * (int)sizeof(int) + 1);
+    check_int("vla_sizeof_ternary", vla_sizeof_ternary(6), 6);
+
     /* 3-D VLA (variable outer, constant inner) for n=3 -> 45 */
     check_int("vla_3d", vla_3d(3), 45);
 

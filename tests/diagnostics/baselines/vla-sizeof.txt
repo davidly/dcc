@@ -1,4 +1,0 @@
-<source>:4: error DCC-E0001: sizeof applied to a variable-length array is not supported near ';'
-        return (int)sizeof a;
-                            ^
-dcc: 1 error(s)

@@ -443,6 +443,33 @@ void gen_pointer_cmp_operand_ast(const struct AstNode *n)
     }
 }
 
+static void gen_sizeof_expr_ast(const struct AstNode *n)
+{
+    long val;
+
+    if (n->kind == AST_SIZEOF_EXPR) {
+        /* Resolve the operand at EMIT time.  A local declared in a nested
+         * block only enters the symbol table when its declaration span is
+         * emitted, which happens before this node is walked but after the AST
+         * was built - so a build-time size would resolve the wrong (or no)
+         * symbol.  A whole VLA loads its stored run-time byte size; every
+         * other operand is a compile-time constant. */
+        struct Sym *vsym = ast_sizeof_whole_vla_sym(n->a);
+        if (vsym != NULL && vsym->vla_size_offset != 0) {
+            emit("\tpush ix\n\tpop hl\n");
+            fprintf(outf, "\tld de,%d\n\tadd hl,de\n", vsym->vla_size_offset);
+            emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");
+            g_expr_type = TYPE_INT;
+            return;
+        }
+        val = ast_sizeof_expr_value(n->a);
+    } else {
+        val = n->ival;
+    }
+    fprintf(outf, "\tld hl,%ld\n", val & 0xffffL);
+    g_expr_type = TYPE_INT;
+}
+
 void gen_pointer_cmp_ast(const struct AstNode *n)
 {
     gen_pointer_cmp_operand_ast(n->a);
@@ -3749,8 +3776,7 @@ void ast_gen_expr(const struct AstNode *n)
         break;
     case AST_SIZEOF_EXPR:
     case AST_SIZEOF_TYPE:
-        fprintf(outf, "\tld hl,%ld\n", n->ival & 0xffffL);
-        g_expr_type = TYPE_INT;
+        gen_sizeof_expr_ast(n);
         break;
     case AST_FLOAT_LIT:
         emit_load_float_bits(n->uval);

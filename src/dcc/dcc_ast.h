@@ -183,6 +183,14 @@ int ast_expr_has_side_effects(const struct AstNode *n);
  * deciding whether a multiply subexpression is float-valued for fusion). */
 int ast_expr_type_for_sizeof(const struct AstNode *n);
 
+/* Compute the constant byte size of a `sizeof expr` operand, and (separately)
+ * detect when that operand is a whole variable-length array.  Both resolve
+ * symbols by name, so they must be called at EMIT time - when a nested-block
+ * declaration's span has already run and its symbol is in scope - not at
+ * AST-build time, where such a symbol is not yet in the local table. */
+int ast_sizeof_expr_value(const struct AstNode *n);
+struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n);
+
 /* Detects a for-loop whose whole body is one assignment to an array-element
  * lvalue whose address is provably the same on every iteration (see
  * dcc_ast_gen_support.c for the full shape and rationale). Callable from
