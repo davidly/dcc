@@ -301,15 +301,35 @@ void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int inde
 
 void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
 {
+    unsigned long uv;
+
     if (type_is_bool(type))
         v = v ? 1 : 0;
+
+    if (local_offset_can_ix_direct(s, off, type_size(type))) {
+        /* Constant initializer at a frame-relative offset that fits
+         * (ix+d) directly (the plain scalar case, off == 0, but also an
+         * in-range array element or struct member): write the immediate
+         * bytes straight to their frame slots - no address computation
+         * and no register round-trip needed at all, unlike the generic
+         * path below. */
+        int d = s->offset + off;
+        uv = (unsigned long)v;
+        fprintf(outf, "\tld (ix%+d),%lu\n", d, uv & 0xffUL);
+        if (type_size(type) >= 2)
+            fprintf(outf, "\tld (ix%+d),%lu\n", d + 1, (uv >> 8) & 0xffUL);
+        if (type_size(type) == 4) {
+            fprintf(outf, "\tld (ix%+d),%lu\n", d + 2, (uv >> 16) & 0xffUL);
+            fprintf(outf, "\tld (ix%+d),%lu\n", d + 3, (uv >> 24) & 0xffUL);
+        }
+        return;
+    }
 
     emit_load_sym_addr(s);
     emit_add_const_to_hl(off);
     emit("\tpush hl\n");
 
     if (type_size(type) == 4) {
-        unsigned long uv;
         uv = (unsigned long)v;
         fprintf(outf, "\tld hl,%lu\n", uv & 0xffffUL);
         fprintf(outf, "\tld de,%lu\n", (uv >> 16) & 0xffffUL);
@@ -321,17 +341,56 @@ void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
     }
 }
 
+/* Store HL (or DE:HL for a 4-byte type) directly at frame-relative
+ * s->offset + off, once local_offset_can_ix_direct has confirmed it fits
+ * (ix+d). Mirrors emit_store_hl_to_sym_direct's plain-ix-direct byte
+ * layout, generalized to a possibly-nonzero offset (an array element or
+ * struct member) rather than just the whole of s's own extent. */
+static void emit_store_hl_direct_at(struct Sym *s, int off, int type)
+{
+    int d = s->offset + off;
+    if (type_size(type) == 1) {
+        fprintf(outf, "\tld (ix%+d),l\n", d);
+    } else if (type_size(type) == 4) {
+        fprintf(outf, "\tld (ix%+d),l\n", d);
+        fprintf(outf, "\tld (ix%+d),h\n", d + 1);
+        fprintf(outf, "\tld (ix%+d),e\n", d + 2);
+        fprintf(outf, "\tld (ix%+d),d\n", d + 3);
+    } else {
+        fprintf(outf, "\tld (ix%+d),l\n", d);
+        fprintf(outf, "\tld (ix%+d),h\n", d + 1);
+    }
+}
+
 void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
 {
-    emit_load_sym_addr(s);
-    emit_add_const_to_hl(off);
-    emit("\tpush hl\n");
+    /* Fast path: a frame-relative offset (the plain scalar case, off == 0,
+     * but also an in-range array element or struct member) that fits
+     * (ix+d) directly. The generic path below computes the destination
+     * address into HL, pushes it, evaluates the initializer, then stores
+     * back through the pushed address - wasteful push/pop-heavy address
+     * arithmetic for what a direct store can do once the value is in
+     * HL/DE:HL. This is exactly the codegen a separate `T x; x = expr;`
+     * assignment already gets via gen_assign_ast's sym_can_ix_direct fast
+     * paths; declaration-with-initializer (and array/struct member
+     * initializers) never shared it. */
+    int fast = local_offset_can_ix_direct(s, off, type_size(type));
+
+    if (!fast) {
+        emit_load_sym_addr(s);
+        emit_add_const_to_hl(off);
+        emit("\tpush hl\n");
+    }
 
     ast_emit_init_expr();
 
     if (type_is_bool(type)) {
         if (!type_is_bool(g_expr_type))
             emit_bool_normalize_hl(g_expr_type);
+        if (fast) {
+            emit_store_hl_direct_at(s, off, type);
+            return;
+        }
         emit("\tex de,hl\n\tpop hl\n");
         emit_store_de_to_addr_hl(type);
         return;
@@ -342,16 +401,28 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
             emit_convert_float_to_intlike(type);
         else if (!type_is_long(g_expr_type))
             emit_extend_to_long_typed(g_expr_type);
+        if (fast) {
+            emit_store_hl_direct_at(s, off, type);
+            return;
+        }
         emit_store_de_to_addr_hl(type);
     } else if (type_is_float(type)) {
         if (!type_is_float(g_expr_type))
             emit_convert_int_to_float(g_expr_type);
+        if (fast) {
+            emit_store_hl_direct_at(s, off, type);
+            return;
+        }
         emit_store_de_to_addr_hl(type);
     } else {
         if (type_is_float(g_expr_type))
             emit_convert_float_to_intlike(type);
         else if (type_size(type) > 1 && !type_is_long(g_expr_type))
             emit_promote_byte_to_int(g_expr_type);
+        if (fast) {
+            emit_store_hl_direct_at(s, off, type);
+            return;
+        }
         emit("\tex de,hl\n\tpop hl\n");
         emit_store_de_to_addr_hl(type);
     }
@@ -1104,34 +1175,58 @@ void gen_local_decl_after_type(int base)
             } else if (s->is_array && tok.kind == '{' && !(type & TYPE_STRUCT)) {
                 emit_init_auto_array_from_list(s, type);
             } else if (!s->is_array && tok.kind == '{') {
+                /* Same ix-direct fast path as the plain (no-braces) scalar
+                 * case below - this is just `T x = {expr};`, a legacy/GNU
+                 * brace-wrapped scalar initializer, not an array/struct. */
+                int fast = sym_can_ix_direct(s);
                 next_token();
-                emit_load_sym_addr(s);
-                emit("\tpush hl\n");
+                if (!fast) {
+                    emit_load_sym_addr(s);
+                    emit("\tpush hl\n");
+                }
                 ast_emit_init_expr();
                 if (type_is_long(type)) {
                     if (type_is_float(g_expr_type))
                         emit_convert_float_to_intlike(type);
                     else if (!type_is_long(g_expr_type))
                         emit_extend_to_long_typed(g_expr_type);
-                    emit_store_de_to_addr_hl(type);
+                    if (fast)
+                        emit_store_hl_to_sym_direct(s);
+                    else
+                        emit_store_de_to_addr_hl(type);
                 } else {
                     if (type_is_float(g_expr_type))
                         emit_convert_float_to_intlike(type);
                     else if (type_size(type) > 1 && !type_is_long(g_expr_type))
                         emit_promote_byte_to_int(g_expr_type);
-                    emit("\tex de,hl\n\tpop hl\n");
-                    emit_store_de_to_addr_hl(type);
+                    if (fast) {
+                        emit_store_hl_to_sym_direct(s);
+                    } else {
+                        emit("\tex de,hl\n\tpop hl\n");
+                        emit_store_de_to_addr_hl(type);
+                    }
                 }
                 accept(',');
                 expect('}');
             } else if (!s->is_array && (type & 15) == TYPE_FLOAT && type_ptr_depth(type) == 0) {
                 unsigned long bits;
+                int fast = sym_can_ix_direct(s);
                 if (parse_float_init_literal(&bits)) {
-                    emit_load_sym_addr(s);
-                    emit("\tpush hl\n");
-                    fprintf(outf, "\tld hl,%lu\n", bits & 0xffffUL);
-                    fprintf(outf, "\tld de,%lu\n", (bits >> 16) & 0xffffUL);
-                    emit_store_de_to_addr_hl(type);
+                    if (fast) {
+                        /* Compile-time-constant float bits: write the 4
+                         * immediate bytes straight to the frame slot, no
+                         * register round-trip needed at all. */
+                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset, bits & 0xffUL);
+                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset + 1, (bits >> 8) & 0xffUL);
+                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset + 2, (bits >> 16) & 0xffUL);
+                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset + 3, (bits >> 24) & 0xffUL);
+                    } else {
+                        emit_load_sym_addr(s);
+                        emit("\tpush hl\n");
+                        fprintf(outf, "\tld hl,%lu\n", bits & 0xffffUL);
+                        fprintf(outf, "\tld de,%lu\n", (bits >> 16) & 0xffffUL);
+                        emit_store_de_to_addr_hl(type);
+                    }
                 } else {
                     /* Extension beyond strict C89: allow automatic float
                      * declarations to use expression initializers, e.g.
@@ -1140,16 +1235,36 @@ void gen_local_decl_after_type(int base)
                      * assignment.  The constant fast path above stays for
                      * smaller code.
                      */
-                    emit_load_sym_addr(s);
-                    emit("\tpush hl\n");
+                    if (!fast) {
+                        emit_load_sym_addr(s);
+                        emit("\tpush hl\n");
+                    }
                     ast_emit_init_expr();
                     if (!type_is_float(g_expr_type))
                         emit_convert_int_to_float(g_expr_type);
-                    emit_store_de_to_addr_hl(type);
+                    if (fast)
+                        emit_store_hl_to_sym_direct(s);
+                    else
+                        emit_store_de_to_addr_hl(type);
                 }
             } else {
-                emit_load_sym_addr(s);
-                emit("\tpush hl\n");
+                /* Fast path: this plain scalar local (no struct/array/brace
+                 * initializer involved here) skips the address computation
+                 * entirely when its frame offset fits (ix+d) directly,
+                 * reusing emit_store_hl_to_sym_direct - the same helper a
+                 * separate `T x; x = expr;` assignment already gets via
+                 * gen_assign_ast's own sym_can_ix_direct fast paths. This was
+                 * the single biggest source of dcc's own generated code
+                 * being far slower than after dccpeep's cleanup: EVERY
+                 * `T x = expr;` declaration paid a push-ix/pop-hl/dec-hl
+                 * address computation plus a push/pop round trip for what a
+                 * one- or two-instruction direct store can do once the
+                 * value is in HL/DE:HL. */
+                int fast = sym_can_ix_direct(s);
+                if (!fast) {
+                    emit_load_sym_addr(s);
+                    emit("\tpush hl\n");
+                }
                 ast_emit_init_expr();
                 if (type_is_long(type)) {
                     /* For long locals, emit_store_de_to_addr_hl pops the
@@ -1158,14 +1273,22 @@ void gen_local_decl_after_type(int base)
                         emit_convert_float_to_intlike(type);
                     else if (!type_is_long(g_expr_type))
                         emit_extend_to_long_typed(g_expr_type);
-                    emit_store_de_to_addr_hl(type);
+                    if (fast) {
+                        emit_store_hl_to_sym_direct(s);
+                    } else {
+                        emit_store_de_to_addr_hl(type);
+                    }
                 } else {
                     if (type_is_float(g_expr_type))
                         emit_convert_float_to_intlike(type);
                     else if (type_size(type) > 1 && !type_is_long(g_expr_type))
                         emit_promote_byte_to_int(g_expr_type);
-                    emit("\tex de,hl\n\tpop hl\n");
-                    emit_store_de_to_addr_hl(type);
+                    if (fast) {
+                        emit_store_hl_to_sym_direct(s);
+                    } else {
+                        emit("\tex de,hl\n\tpop hl\n");
+                        emit_store_de_to_addr_hl(type);
+                    }
                 }
             }
         } else if (freshly_allocated && !local_name_used_ahead(source_name)) {

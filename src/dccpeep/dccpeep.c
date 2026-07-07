@@ -1224,7 +1224,16 @@ static int pass_elim_dead_ix_stores(void)
         /* Indirect IX-frame access pattern: push ix / pop hl / ld de,K / add hl,de
          * This computes HL = IX+K and then subsequent (hl) accesses read IX+K.
          * The (hl) instructions contain no "(ix" text, so we must handle this
-         * 4-instruction sequence explicitly to avoid false dead-store deletions. */
+         * 4-instruction sequence explicitly to avoid false dead-store deletions.
+         *
+         * The offset computation can also be CHAINED: array-of-struct element
+         * addressing emits "ld de,K1 / add hl,de" (element stride) followed by
+         * another "ld de,K2 / add hl,de" (field offset within the element),
+         * optionally followed by inc hl / dec hl (byte-granular adjustment
+         * within the field, e.g. reading the high byte of a multi-byte
+         * member). Only checking the FIRST pair - as this used to - marks the
+         * wrong (partial) offset range live and leaves the actual accessed
+         * bytes looking like dead stores, deleting real initializers. */
         if (strcmp(tmp, "push ix") == 0 &&
             i + 3 < nlines) {
             char t1[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
@@ -1237,18 +1246,49 @@ static int pass_elim_dead_ix_stores(void)
                 strncmp(t2, "ld de,", 6) == 0 &&
                 strcmp(t3, "add hl,de") == 0) {
                 kv = strtol(t2 + 6, &ep, 0);
-                if (*ep == 0 && kv >= -128 && kv <= 127) {
-                    int b;
-                    /* Address of frame offset K is taken via HL.  We do not
-                     * know how many bytes will be accessed through the
-                     * resulting pointer, so conservatively mark up to 4
-                     * consecutive bytes as live.  This covers char (1 byte),
-                     * int (2 bytes), and long/float (4 bytes) objects. */
-                    for (b = 0; b < 4; b++) {
-                        if (kv + b >= -128 && kv + b <= 127) {
-                            idx = (int)(kv + b) + 128;
-                            last_store[idx] = -1;
-                        }
+                if (*ep == 0) {
+                    int j = i + 4;
+                    for (;;) {
+                        char u1[MAX_LINE], u2[MAX_LINE];
+                        long kv2;
+                        char *ep2;
+                        if (j + 1 >= nlines) break;
+                        strip_peep_comment_copy(u1, lines[j]);
+                        strip_peep_comment_copy(u2, lines[j + 1]);
+                        if (strncmp(u1, "ld de,", 6) != 0 ||
+                            strcmp(u2, "add hl,de") != 0)
+                            break;
+                        kv2 = strtol(u1 + 6, &ep2, 0);
+                        if (*ep2 != 0) break;
+                        kv += kv2;
+                        j += 2;
+                    }
+                    while (j < nlines) {
+                        char u3[MAX_LINE];
+                        strip_peep_comment_copy(u3, lines[j]);
+                        if (strcmp(u3, "inc hl") == 0) { kv++; j++; }
+                        else if (strcmp(u3, "dec hl") == 0) { kv--; j++; }
+                        else break;
+                    }
+                    if (kv >= -128 && kv <= 127) {
+                        /* Address of frame offset K is taken via HL. There is
+                         * no bound, from plain assembly text alone, on how
+                         * many bytes get accessed through the resulting
+                         * pointer or where it ends up (immediately
+                         * dereferenced for a scalar load/store, saved via
+                         * push hl as a call argument, stored directly into
+                         * another local via a fast ix-direct pointer
+                         * assignment with no push at all, ...). A previous
+                         * version guessed "at most 4 bytes, unless the very
+                         * next line is push hl" - a real, confirmed bug: an
+                         * array/struct larger than 4 bytes (or a compound
+                         * literal) whose address escaped through ANY of
+                         * these routes had its later elements' initializers
+                         * wrongly deleted as "dead", since only the first
+                         * few bytes from the base were ever marked live.
+                         * Flushing every pending store is the only sound
+                         * choice whenever an address is taken this way. */
+                        memset(last_store, -1, sizeof(last_store));
                     }
                 }
             }
@@ -1277,13 +1317,10 @@ static int pass_elim_dead_ix_stores(void)
                     else break;
                 }
                 if (saw) {
-                    int b;
-                    for (b = 0; b < 4; b++) {
-                        if (kv + b >= -128 && kv + b <= 127) {
-                            idx = (int)(kv + b) + 128;
-                            last_store[idx] = -1;
-                        }
-                    }
+                    /* No sound bound on the access through this address -
+                     * see the identical reasoning at the ld de,K/add hl,de
+                     * variant above. Always flush rather than guess 4 bytes. */
+                    memset(last_store, -1, sizeof(last_store));
                 }
             }
         }

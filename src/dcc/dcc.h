@@ -725,6 +725,7 @@ int frame_sp_offset_for_sym(struct Sym *s);
 void emit_load_frame_addr_hl(struct Sym *s);
 void emit_load_sym_addr(struct Sym *s);
 int sym_can_ix_direct(struct Sym *s);
+int local_offset_can_ix_direct(struct Sym *s, int off, int size);
 int is_global_word_sym(struct Sym *s);
 void emit_load_global_word_direct(struct Sym *s);
 void emit_store_global_word_direct(struct Sym *s);

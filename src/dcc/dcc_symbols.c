@@ -751,6 +751,27 @@ int sym_can_ix_direct(struct Sym *s)
     return 1;
 }
 
+/* Like sym_can_ix_direct, but for a `size`-byte access at frame-relative
+ * `s->offset + off` rather than for the whole of `s`'s own type/extent -
+ * i.e. one element of a local array, or one member of a local struct, at a
+ * possibly nonzero byte offset from the symbol's base. Deliberately does
+ * NOT exclude s->is_array (an in-range element of an array is still a
+ * perfectly good (ix+d) direct access), but DOES exclude a VLA: its frame
+ * slot holds a runtime pointer to the actual (heap/stack-allocated)
+ * storage, not the data itself, so no fixed (ix+d) offset addresses its
+ * elements. */
+int local_offset_can_ix_direct(struct Sym *s, int off, int size)
+{
+    int lo, hi;
+    if (!s) return 0;
+    if (s->storage != SC_LOCAL && s->storage != SC_PARAM) return 0;
+    if (s->is_vla) return 0;
+    if (size < 1) size = 1;
+    lo = s->offset + off;
+    hi = lo + size - 1;
+    return lo >= -128 && hi <= 127;
+}
+
 /* True for global/extern 16-bit non-array variables that support direct word load/store. */
 int is_global_word_sym(struct Sym *s)
 {
