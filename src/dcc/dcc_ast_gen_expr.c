@@ -2820,6 +2820,31 @@ void gen_call_ast(const struct AstNode *n)
         return;
     }
 
+    /* Fastcall memcmp(s1,s2,n): DCCRTL's __cmpf takes s1 in DE, s2 in HL,
+     * n in BC directly - skipping both the general push-3-args/call/pop-3
+     * convention this call would otherwise use, and __mcmp's own ~20-
+     * instruction stack-argument-reconstruction prologue (see DCCRTL.MAC).
+     * Same rationale as strlen/strchr above, extended to three arguments:
+     * each earlier argument is pushed while the next is evaluated, then
+     * unwound directly into the target registers instead of the stack. */
+    if (n->list_len == 3 && !strcmp(name, "memcmp")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->list[0]);       /* HL = s1 */
+        emit("\tpush hl\n");
+        ast_gen_expr(n->list[1]);       /* HL = s2 */
+        emit("\tpush hl\n");
+        ast_gen_expr(n->list[2]);       /* HL = n */
+        expr_result_dead = old_dead;
+        emit("\tld b,h\n\tld c,l\n");   /* BC = n */
+        emit("\tpop hl\n");             /* HL = s2 */
+        emit("\tpop de\n");             /* DE = s1 */
+        emit_runtime_call("__cmpf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
     /* A real (non-inlined) call to any static function - inline-eligible or
      * not - is what its buffered body's dead-code elimination decision
      * hinges on. */

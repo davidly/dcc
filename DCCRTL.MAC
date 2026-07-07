@@ -1557,6 +1557,15 @@ nc1dn:
         pop     ix
         ret
 
+        public  __cmpf
+__cmpf:
+        ; fastcall int memcmp(const void *s1, const void *s2, size_t n)
+        ; Entry: DE = s1, HL = s2, BC = n (already the hot loop's own
+        ; layout below) - skips both the caller's push-3/call/pop-3 general
+        ; convention and this routine's own stack-reconstruction marshaling
+        ; entirely.  See dcc_ast_gen_expr.c's memcmp call-site codegen.
+        jr      mcmp_core
+
         public  __mcmp
 __mcmp:
         ; int memcmp(const void *s1, const void *s2, size_t n)
@@ -1580,6 +1589,7 @@ __mcmp:
         ex      de,hl           ; HL = s2
         pop     bc              ; BC = n
         pop     de              ; DE = s1
+mcmp_core:
         ld      a,b
         or      c
         jr      z,mc2eq         ; n == 0
