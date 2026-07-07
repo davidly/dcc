@@ -11569,12 +11569,24 @@ static int pass_findsolution_clear_board_loop(void)
 }
 
 /*
- * pass_cpir: Replace a byte-scan equality loop with the Z80 CPIR instruction.
+ * pass_cpir: Replace a byte-scan equality loop with a Z80 CPI-based loop.
  *
  * Detects the pattern produced by pass_deref_byte_cmp for loops of the form
  *   for (i = 0; i < c; i++) { if (*ptr != val) { fail-and-exit; } ptr++; }
  * where i is a local 16-bit counter, ptr is a local byte pointer, val is a
  * local byte, and c is a parameter or local count.
+ *
+ * NOTE: this must NOT be replaced with the auto-repeating CPIR instruction.
+ * CPIR stops at the FIRST byte that matches A (or when BC reaches 0),
+ * unconditionally - it has no way to keep scanning past a match. Since val
+ * is the fill byte, byte 0 of a correctly-filled buffer already matches, so
+ * a CPIR-based version would check exactly one byte and silently treat that
+ * as "all c bytes verified" - a real, confirmed miscompile (a corruption at
+ * any offset other than 0 goes completely undetected). The transformation
+ * below issues one CPI per byte with explicit branches instead, which is
+ * slower than (broken) CPIR but still several times faster than the
+ * original multi-instruction stack-relative loop, and - unlike CPIR -
+ * actually checks every byte.
  *
  * The pattern (in the peepholed output):
  *
@@ -11599,14 +11611,21 @@ static int pass_findsolution_clear_board_loop(void)
  * Replaced with:
  *
  *     ld l,(ix+C)  ld h,(ix+D)            ; HL = c (count)
- *     ld a,h  or l                        ; guard: CPIR with BC=0 is unsafe
+ *     ld a,h  or l                        ; guard: c == 0 is vacuously true
  *     jp z, Lexit
  *     push hl
  *     ld l,(ix+P)  ld h,(ix+Q)            ; HL = starting ptr
  *     pop bc                              ; BC = c
  *     ld a,(ix+V)                         ; A = byte to match
- *     cpir                                ; scan until mismatch or count=0
- *     jp z, Lexit                         ; Z=1 → all matched, success
+ *   Lhead:                                ; reuses the original loop-head label
+ *     cpi                                 ; A-(HL); HL++; BC--; Z set if matched
+ *     jp nz, Lmis                         ; mismatch → go fix up ptr, then fail
+ *     jp pe, Lhead                        ; BC != 0 → more bytes to check
+ *     jp Lexit                            ; BC == 0, last byte matched → success
+ *   Lmis:
+ *     dec hl                              ; HL now addresses the mismatched byte
+ *     ld (ix+P),l  ld (ix+Q),h            ; write back so the fail code's own
+ *                                         ; re-read of ptr reports the right byte
  *     [original fail code falls through]
  *   Lexit:
  *
@@ -11724,17 +11743,29 @@ static int pass_cpir(void)
           }
           if (!found) continue; }
 
-        /* All checks passed — apply CPIR transformation. */
+        /* All checks passed — apply the CPI-loop transformation (see the
+         * header comment for why this must not be a single CPIR). */
         {
+            static int mis_counter = 0;
             char s_lim_lo[160], s_lim_hi[160], s_ptr_lo[160], s_ptr_hi[160];
-            char s_val[160], s_jp_z_exit[160];
-            
-            sprintf(s_lim_lo,     "ld l,(ix%s)", lim_lo_off);
-            sprintf(s_lim_hi,     "ld h,(ix%s)", lim_hi_off);
-            sprintf(s_ptr_lo,     "ld l,(ix%s)", ptr_lo_off);
-            sprintf(s_ptr_hi,     "ld h,(ix%s)", ptr_hi_off);
-            sprintf(s_val,        "ld a,(ix%s)", val_off);
-            sprintf(s_jp_z_exit,  "jp z, %s", lexit);
+            char s_val[160], s_jp_z_exit[160], s_lhead[160];
+            char s_jp_nz_mis[160], s_jp_pe_lhead[160], s_mis_label[160];
+            char s_store_ptr_lo[160], s_store_ptr_hi[160];
+            char mis[32];
+
+            sprintf(s_lim_lo,      "ld l,(ix%s)", lim_lo_off);
+            sprintf(s_lim_hi,      "ld h,(ix%s)", lim_hi_off);
+            sprintf(s_ptr_lo,      "ld l,(ix%s)", ptr_lo_off);
+            sprintf(s_ptr_hi,      "ld h,(ix%s)", ptr_hi_off);
+            sprintf(s_val,         "ld a,(ix%s)", val_off);
+            sprintf(s_jp_z_exit,   "jp z, %s", lexit);
+            sprintf(s_lhead,       "%s:", lhead);
+            sprintf(mis,           "PCM%d", mis_counter++);
+            sprintf(s_jp_nz_mis,   "jp nz, %s", mis);
+            sprintf(s_jp_pe_lhead, "jp pe, %s", lhead);
+            sprintf(s_mis_label,   "%s:", mis);
+            sprintf(s_store_ptr_lo,"ld (ix%s),l", ptr_lo_off);
+            sprintf(s_store_ptr_hi,"ld (ix%s),h", ptr_hi_off);
 
             /* Delete end block first (lok label + ptr++ + counter++) so that
              * positions i..fail_start-1 are unchanged. */
@@ -11743,19 +11774,29 @@ static int pass_cpir(void)
             /* Delete head block (L4 label + condition + deref + jp z,Lok). */
             delete_n(i, fail_start - i);
 
-            /* Insert CPIR block at i (now the first line of the fail code). */
-            insert_line_tagged(i,      s_lim_lo,    "cpir");
+            /* Insert the CPI-loop at i (now the first line of the fail code).
+             * Lhead is reintroduced as the loop-back target (its original
+             * definition was just deleted above, freeing the name). */
+            insert_line_tagged(i,      s_lim_lo,    "cpiloop");
             insert_line(i +  1,        s_lim_hi);
             insert_line(i +  2,        "ld a,h");
             insert_line(i +  3,        "or l");
-            insert_line(i +  4,        s_jp_z_exit); /* skip on zero count */
+            insert_line(i +  4,        s_jp_z_exit);    /* zero count: vacuously true */
             insert_line(i +  5,        "push hl");
             insert_line(i +  6,        s_ptr_lo);
             insert_line(i +  7,        s_ptr_hi);
             insert_line(i +  8,        "pop bc");
             insert_line(i +  9,        s_val);
-            insert_line(i + 10,        "cpir");
-            insert_line(i + 11,        s_jp_z_exit); /* success: skip fail code */
+            insert_line(i + 10,        s_lhead);
+            insert_line(i + 11,        "cpi");
+            insert_line(i + 12,        s_jp_nz_mis);    /* mismatch: fix up ptr, then fail */
+            insert_line(i + 13,        s_jp_pe_lhead);  /* more bytes remain: loop */
+            insert_line(i + 14,        s_jp_z_exit);    /* BC==0 and last byte matched: success */
+            insert_line(i + 15,        s_mis_label);
+            insert_line(i + 16,        "dec hl");
+            insert_line(i + 17,        s_store_ptr_lo);
+            insert_line(i + 18,        s_store_ptr_hi);
+            /* original fail code falls through unchanged from here */
 
             changed = 1;
         }
