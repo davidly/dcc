@@ -189,21 +189,22 @@ void f(int n)
 - A **variable inner** dimension, e.g. `int a[n][m]`, because the row stride
   would be a run-time value. Only the outermost dimension may vary. Use an
   explicit index computation or `malloc` for a fully dynamic 2-D array.
-- `sizeof` applied to a **whole** VLA. Its size would be a run-time value; DCC
-  rejects it rather than silently return the wrong value. `sizeof a[0]` and
-  other constant-size subobjects are fine. Track the length yourself:
-
-  ```c
-  int a[n];
-  /* sizeof a;              -> error: not a compile-time size */
-  /* memset(a, 0, sizeof a) -> would be wrong; use the count: */
-  memset(a, 0, (size_t)n * sizeof a[0]);   /* sizeof a[0] is a constant */
-  ```
-
 - Jumping **into** a VLA's scope with `goto`, `case`, or `default` (which would
   bypass the allocation) is rejected, matching a conforming compiler. (Jumping
   *out of* a VLA scope is fine and reclaims the stack — see above.)
 - Variably-modified **types** beyond the array object itself — VLA `typedef`s,
   pointers-to-VLA (`int (*p)[n]`), and run-time-bound VLA function parameters —
   are not modelled.
+
+### `sizeof` on VLAs
+
+`sizeof` applied to a whole VLA produces the array's run-time byte size, matching
+standard C expectations for the supported VLA subset. Constant-size subobjects
+remain compile-time sizes:
+
+```c
+int a[n][3];
+memset(a, 0, sizeof a);        /* run-time value: n * 3 * sizeof(int) */
+sizeof a[0];                  /* compile-time row size: 3 * sizeof(int) */
+```
 

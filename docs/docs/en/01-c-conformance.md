@@ -103,7 +103,7 @@ portability surprises when code is moved from a hosted desktop compiler.
 | `long long` and 64-bit integer types | Not supported |
 | Variable-length arrays with a variable inner dimension (`a[n][m]`) | Not supported; the runtime row stride is not modelled (variable outermost dimension is supported, above) |
 | `goto`/`case` entry into VLA scopes | Not supported; a jump that would bypass a VLA's allocation is rejected. Jumps that *leave* VLA scopes — `break`, `continue`, `return`, and forward or backward `goto` — are fully supported and reclaim the stack correctly |
-| `sizeof` applied to a whole VLA | Not supported; the size is not a compile-time constant, so it is rejected rather than silently miscomputed (`sizeof vla[i]` on a constant-size subobject is fine) |
+| `sizeof` applied to a whole VLA | Supported for DCC's VLA subset; produces the VLA's run-time byte size |
 | `_Complex` and complex arithmetic | Not supported |
 | Full C99 compound literal value semantics | Partly supported only |
 | Flexible array member initialization | Not supported |

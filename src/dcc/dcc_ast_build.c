@@ -259,7 +259,7 @@ static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
     return 0;
 }
 
-static int ast_sizeof_expr_value(const struct AstNode *n)
+int ast_sizeof_expr_value(const struct AstNode *n)
 {
     struct Sym *s;
     struct FieldDef *fd;
@@ -274,8 +274,6 @@ static int ast_sizeof_expr_value(const struct AstNode *n)
     case AST_IDENT:
         s = find_sym(n->sval);
         if (s != NULL && s->is_array) {
-            if (s->is_vla && asm_suppress_depth == 0)
-                error_here("sizeof applied to a variable-length array is not supported");
             total = sym_array_total_elems(s);
             if (total <= 0)
                 total = 1;
@@ -306,6 +304,18 @@ static int ast_sizeof_expr_value(const struct AstNode *n)
     }
     t = ast_expr_type_for_sizeof(n);
     return type_size(t);
+}
+
+struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n)
+{
+    struct Sym *s;
+
+    if (n == NULL || n->kind != AST_IDENT)
+        return NULL;
+    s = find_sym(n->sval);
+    if (s == NULL || !s->is_vla)
+        return NULL;
+    return s;
 }
 
 static void ast_skip_braced_initializer(void)
@@ -526,7 +536,10 @@ static struct AstNode *p_unary(struct AstArena *ar)
             struct AstNode *n = ast_new(ar, AST_SIZEOF_EXPR);
             n->a = p_unary(ar);
             n->type = TYPE_INT;
-            n->ival = ast_sizeof_expr_value(n->a);
+            /* The operand's size is resolved at EMIT time (see
+             * gen_sizeof_expr_ast): a local declared in a nested block only
+             * enters the symbol table when its declaration span is emitted,
+             * which is after this node is built but before it is walked. */
             return n;
         }
     }

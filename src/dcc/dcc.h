@@ -246,6 +246,7 @@ struct Sym {
     int *init_sizes;
     int is_array;
     int is_vla;     /* C99 variable-length array: slot holds a runtime pointer */
+    int vla_size_offset; /* frame slot holding the runtime byte size for sizeof */
     int array_len;
     int elem_size; /* stride per first-dimension element */
     int dim_count; /* C array dimensions, e.g. a[2][3] -> 2 */

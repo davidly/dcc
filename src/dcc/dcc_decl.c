@@ -947,6 +947,15 @@ static void emit_vla_alloc(struct Sym *s)
     if (s->elem_size > 1)
         emit_mul_hl_const((long)s->elem_size);   /* HL = size in bytes */
 
+    if (s->vla_size_offset != 0) {
+        emit("\tpush hl\n");
+        emit("\tpush ix\n\tpop hl\n");
+        fprintf(outf, "\tld de,%d\n\tadd hl,de\n", s->vla_size_offset);
+        emit("\tpop de\n");
+        emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
+        emit("\tex de,hl\n");
+    }
+
     /* SP -= size; the new SP is the block base, stored into the slot. */
     emit("\tex de,hl\n");
     emit("\tld hl,0\n");
@@ -1113,6 +1122,7 @@ void gen_local_decl_after_type(int base)
                 if (s->elem_size <= 0) s->elem_size = 2;
                 copy_last_array_dims_to_sym(s);
                 if (g_vla_pending) {
+                    struct Sym *size_slot;
                     /* VLA: the frame slot holds a runtime pointer to the
                      * block.  Keep the elem_size set above - the element size
                      * for a[n], or the (constant) row stride for a[n][C] - so
@@ -1121,6 +1131,8 @@ void gen_local_decl_after_type(int base)
                     s->is_vla = 1;
                     s->array_len = 0;
                     if (s->elem_size <= 0) s->elem_size = 1;
+                    size_slot = add_local_alloc("#vlasz", TYPE_INT, 2);
+                    s->vla_size_offset = size_slot->offset;
                     /* Save SP once per scope, before its first VLA, so the
                      * scope's VLAs can be reclaimed at block/loop exit. */
                     {
@@ -1291,7 +1303,7 @@ void gen_local_decl_after_type(int base)
                     }
                 }
             }
-        } else if (freshly_allocated && !local_name_used_ahead(source_name)) {
+        } else if (freshly_allocated && !s->is_vla && !local_name_used_ahead(source_name)) {
             /* No initializer, and never referenced again in this scope:
              * add_local_alloc just appended this Sym as the last local and
              * reserved its frame space, so popping both back off is safe -
@@ -1299,10 +1311,14 @@ void gen_local_decl_after_type(int base)
              * anything above it yet. freshly_allocated (rather than just
              * !s->is_const_value) guards against the redefinition-error
              * recovery case, where s is an unrelated pre-existing symbol and
-             * bytes/nlocals do not describe it. Must match
-             * scan_local_decl_after_type's identical decision exactly, since
-             * that earlier frame-sizing pass already committed to the frame
-             * size this function's prologue was emitted with. */
+             * bytes/nlocals do not describe it. A VLA is never pruned: it has
+             * a side-effecting stack allocation plus hidden #vlasz/#vlasp
+             * slots whose offsets are already baked into emitted save/restore
+             * code, and its `bytes` (2, the pointer slot) does not describe
+             * the whole reservation. scan_local_decl_after_type skips the
+             * prune for the same case via its still-set g_vla_pending guard,
+             * so both passes must agree here (g_vla_pending is already cleared
+             * above in this pass, hence the s->is_vla test instead). */
             nlocals--;
             local_size -= bytes;
         }

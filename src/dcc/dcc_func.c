@@ -1666,12 +1666,15 @@ void scan_local_decl_after_type(int base)
                 if (s->elem_size <= 0) s->elem_size = 2;
                 copy_last_array_dims_to_sym(s);
                 if (g_vla_pending) {
+                    struct Sym *size_slot;
                     /* VLA: keep the elem_size set above (element size for
                      * a[n], row stride for a[n][C]); the slot holds a runtime
                      * pointer, mirrored by gen_local_decl_after_type. */
                     s->is_vla = 1;
                     s->array_len = 0;
                     if (s->elem_size <= 0) s->elem_size = 1;
+                    size_slot = add_local_alloc("#vlasz", TYPE_INT, 2);
+                    s->vla_size_offset = size_slot->offset;
                     /* Reserve this scope's SP-save slot (first VLA only) so the
                      * frame matches the codegen pass, which also emits it. */
                     vla_scope_ensure_save_slot();

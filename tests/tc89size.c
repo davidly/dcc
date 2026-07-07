@@ -22,6 +22,116 @@ static void chki(const char *name, int got, int expect)
     }
 }
 
+/* Arrays declared in a NESTED scope (a bare block, an if/for body, or several
+ * levels deep) enter the local symbol table only when their declaration is
+ * emitted, not when the enclosing block's AST is built.  sizeof of such an
+ * array must therefore be resolved at emit time.  Regression for a bug where
+ * nested-scope sizeof was computed at AST-build time - before the symbol was
+ * in scope - and silently collapsed to sizeof(int) (so the element-count
+ * idiom returned 1 instead of the true length).  Expectations use element
+ * counts / sizeof(int) so they are int-width independent. */
+static int nb_block_count(void)
+{
+    {
+        int a[10];
+        return (int)(sizeof a / sizeof a[0]);   /* 10 */
+    }
+}
+
+static int nb_block_bytes(void)
+{
+    {
+        int a[10];
+        return (int)sizeof a;                   /* 10 * sizeof(int) */
+    }
+}
+
+static int nb_if_count(int n)
+{
+    if (n > 0) {
+        int a[7];
+        return (int)(sizeof a / sizeof a[0]);   /* 7 */
+    }
+    return -1;
+}
+
+static int nb_loop_count(void)
+{
+    int i;
+    int last = 0;
+    for (i = 0; i < 3; i++) {
+        int a[6];
+        last = (int)(sizeof a / sizeof a[0]);   /* 6 */
+    }
+    return last;
+}
+
+static int nb_deep_count(void)
+{
+    {
+        {
+            {
+                int a[4];
+                return (int)(sizeof a / sizeof a[0]);   /* 4 */
+            }
+        }
+    }
+}
+
+static int nb_2d_rows(void)
+{
+    {
+        int a[5][3];
+        return (int)(sizeof a / sizeof a[0]);   /* 5 rows */
+    }
+}
+
+static int nb_2d_row_bytes(void)
+{
+    {
+        int a[5][3];
+        return (int)sizeof a[0];                /* 3 * sizeof(int) */
+    }
+}
+
+static int nb_char_bytes(void)
+{
+    {
+        char a[9];
+        return (int)sizeof a;                   /* 9 */
+    }
+}
+
+static int nb_between_locals(void)
+{
+    {
+        int guard = 1;
+        int a[8];
+        int tail = 2;
+        int r = (int)(sizeof a / sizeof a[0]);  /* 8 */
+        return r + guard - tail;                /* 8 + 1 - 2 = 7 */
+    }
+}
+
+static int nb_shadow_inner(void)
+{
+    int a[3];
+    {
+        int a[6];
+        return (int)(sizeof a / sizeof a[0]);   /* inner array */
+    }
+}
+
+static int nb_shadow_outer_after(void)
+{
+    int a[5];
+    {
+        int a[2];
+        (void)a;
+    }
+    return (int)(sizeof a / sizeof a[0]);       /* outer array */
+}
+
 int main(void)
 {
     struct SzOne s;
@@ -66,6 +176,19 @@ int main(void)
     chki("sizeof_expr_long", sizeof(ga[0] + 1L), 4);
     chki("sizeof_expr_uint", sizeof(ga[0] + 1U), 2);
     chki("sizeof_compare", sizeof(ga[0] < 1L), 2);
+
+    /* sizeof of arrays declared in nested scopes (resolved at emit time). */
+    chki("nb_block_count", nb_block_count(), 10);
+    chki("nb_block_bytes", nb_block_bytes(), 10 * (int)sizeof(int));
+    chki("nb_if_count", nb_if_count(1), 7);
+    chki("nb_loop_count", nb_loop_count(), 6);
+    chki("nb_deep_count", nb_deep_count(), 4);
+    chki("nb_2d_rows", nb_2d_rows(), 5);
+    chki("nb_2d_row_bytes", nb_2d_row_bytes(), 3 * (int)sizeof(int));
+    chki("nb_char_bytes", nb_char_bytes(), 9);
+    chki("nb_between_locals", nb_between_locals(), 7);
+    chki("nb_shadow_inner", nb_shadow_inner(), 6);
+    chki("nb_shadow_outer_after", nb_shadow_outer_after(), 5);
 
     if (fails) {
         printf("tc89size failed: %d\n", fails);
