@@ -9,6 +9,7 @@ if [ -z "$1" ]; then
     ./ma.sh ttt
     ./ma.sh pihex
     ./ma.sh mm
+    ./ma.sh tbig
 else
     ./ma.sh tstring nopeep
     ./ma.sh sieve nopeep
@@ -17,6 +18,7 @@ else
     ./ma.sh ttt nopeep
     ./ma.sh pihex nopeep
     ./ma.sh mm nopeep
+    ./ma.sh tbig nopeep
 fi
 
 # 2. Run the ntvcm commands
@@ -27,13 +29,14 @@ ntvcm -p build/TM
 ntvcm -p build/TTT 10
 ntvcm -p build/PIHEX
 ntvcm -p build/MM
+ntvcm -p build/TBIG
 
 # 3. List the files in build/ sorted by date
 # Note: Linux uses 'ls -t' to sort files by modification time (newest first).
 # If you want to see standard long listing, you can uncomment the ls line below.
 # ls -lt build/*.com
 
-for file in tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com; do
+for file in tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com tbig.com; do
     if [ -f "build/$file" ]; then
         # GNU stat (Linux) uses -c; BSD stat (macOS) uses -f with different format specifiers.
         stat -c "%s %n" "build/$file" 2>/dev/null || stat -f "%z %N" "build/$file"

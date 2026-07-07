@@ -9,6 +9,7 @@ if "%~1"=="" (
     call ma.bat ttt
     call ma.bat pihex
     call ma.bat mm
+    call ma.bat tbig
 ) else (
     call ma.bat tstring nopeep
     call ma.bat sieve nopeep
@@ -17,6 +18,7 @@ if "%~1"=="" (
     call ma.bat ttt nopeep
     call ma.bat pihex nopeep
     call ma.bat mm nopeep
+    call ma.bat tbig nopeep
 )
 
 ntvcm -c -p build\tstring
@@ -26,8 +28,9 @@ ntvcm -c -p build\tm
 ntvcm -c -p build\ttt 10
 ntvcm -c -p build\pihex
 ntvcm -c -p build\mm
+ntvcm -c -p build\tbig
 
-rem dir /OD tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com
+rem dir /OD tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com tbig.com
 
 @echo off
 for %%i in (tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com) do (
