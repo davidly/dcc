@@ -1581,7 +1581,12 @@ static int pass_posfunc_ix1_to_b(void)
                 has_call = 1;
                 break;
             }
-            if (eq(j, "ld (ix-1),a")) {
+            if (eq(j, "ld (ix-1),a") || eq(j, "ld (ix-1),l")) {
+                /* Either the old A-register store or the ix-direct
+                 * declaration-initializer fast path's L-register store
+                 * (dcc_decl.c) - both just mean "x's byte value was written
+                 * to its only frame slot", which is all this pass cares
+                 * about. */
                 stores++;
                 continue;
             }
@@ -1607,6 +1612,12 @@ static int pass_posfunc_ix1_to_b(void)
 
             if (eq(j, "ld (ix-1),a")) {
                 replace1_tagged(j, "ld b,a", "posfunc_ix1_to_b");
+                changed = 1;
+                continue;
+            }
+
+            if (eq(j, "ld (ix-1),l")) {
+                replace1_tagged(j, "ld b,l", "posfunc_ix1_to_b");
                 changed = 1;
                 continue;
             }
@@ -1659,27 +1670,65 @@ static int pass_posfunc_collapse_b_setup(void)
     char addr_k[128], addr_m[128];
     char new_ld_a[160];
     char tmp[MAX_LINE];
+    int bset_end;   /* position right after B = x is fully set up */
+    int mstart;     /* position of the "ld hl,_g_board+M" that follows */
+    int a_reload_at; /* index of a redundant "ld a,l" to fix up, or -1 */
 
     for (i = 0; i + 5 < nlines; i++) {
         if (!parse_ld_hl_imm(lines[i], addr_k)) continue;
         if (strncmp(addr_k, "_g_board", 8) != 0) continue;
 
-        if (!eq(i + 1, "ld a,(hl)")) continue;
+        /* Two possible preambles land B = x here: the classic "ld a,(hl);
+         * ld b,a" (2 lines), or the ix-direct declaration-initializer fast
+         * path's "ld l,(hl); ld h,0; ld b,l" (3 lines - dcc_decl.c emits a
+         * 16-bit-typed load/store even for a byte-sized x, zero-extending
+         * into h). Both just mean B ends up holding x's byte value. */
+        if (eq(i + 1, "ld a,(hl)")) {
+            strip_peep_comment_copy(tmp, lines[i + 2]);
+            if (strcmp(tmp, "ld b,a") != 0) continue;
+            bset_end = i + 3;
+        } else if (eq(i + 1, "ld l,(hl)") && eq(i + 2, "ld h,0")) {
+            strip_peep_comment_copy(tmp, lines[i + 3]);
+            if (strcmp(tmp, "ld b,l") != 0) continue;
+            bset_end = i + 4;
+        } else {
+            continue;
+        }
 
-        strip_peep_comment_copy(tmp, lines[i + 2]);
-        if (strcmp(tmp, "ld b,a") != 0) continue;
+        /* pass_store_l_reload_a may have already turned a later
+         * "ld a,(ix-1),l"-then-"ld a,(ix-1)" reload into "ld a,l" (since L
+         * still held x's value right after the store). Once collapsed to
+         * "ld b,(hl)", L is never loaded at all, so that reload must
+         * become "ld a,b" instead - not be silently skipped or deleted, or
+         * it would read a stale/wrong L. */
+        a_reload_at = -1;
+        mstart = bset_end;
+        if (eq(bset_end, "ld a,l")) {
+            a_reload_at = bset_end;
+            mstart = bset_end + 1;
+        }
 
-        if (!parse_ld_hl_imm(lines[i + 3], addr_m)) continue;
+        if (mstart + 2 >= nlines) continue;
+        if (!parse_ld_hl_imm(lines[mstart], addr_m)) continue;
         if (strncmp(addr_m, "_g_board", 8) != 0) continue;
 
-        if (!eq(i + 4, "cp (hl)")) continue;
-        if (!peep_is_jp_z_or_nz(lines[i + 5])) continue;
+        if (!eq(mstart + 1, "cp (hl)")) continue;
+        if (!peep_is_jp_z_or_nz(lines[mstart + 2])) continue;
 
         sprintf(new_ld_a, "ld a,(%s)", addr_m);
         replace1_tagged(i + 1, "ld b,(hl)", "posfunc_collapse_b_setup");
-        delete_n(i + 2, 1);              /* remove ld b,a */
-        replace1(i + 2, new_ld_a);      /* ld hl,_g_board+M → ld a,(_g_board+M) */
-        replace1(i + 3, "cp b");        /* cp (hl) → cp b */
+        delete_n(i + 2, bset_end - (i + 2));  /* remove the rest of the preamble */
+        if (a_reload_at >= 0) {
+            /* The "ld a,l" reload (now shifted to i+2 by the delete above)
+             * is entirely redundant once B holds x directly from memory -
+             * nothing reads A before it is overwritten just below. */
+            delete_n(i + 2, 1);
+            replace1(i + 2, new_ld_a);      /* ld hl,_g_board+M -> ld a,(_g_board+M) */
+            replace1(i + 3, "cp b");        /* cp (hl) -> cp b */
+        } else {
+            replace1(i + 2, new_ld_a);      /* ld hl,_g_board+M -> ld a,(_g_board+M) */
+            replace1(i + 3, "cp b");        /* cp (hl) -> cp b */
+        }
         changed = 1;
     }
 
@@ -11769,13 +11818,34 @@ static int pass_cpir(void)
         /* 7. Lexit label must follow */
         if (!line_is_label_name(k, lexit)) continue;
 
-        /* 8. Counter must start at 0: look back up to 20 lines for "ld de,-A"
-         *    which DCC emits when computing the frame address of the counter
-         *    during its zero-initialisation. */
-        { char de_init[32]; int found = 0;
+        /* 8. Counter must start at 0: look back up to 20 lines for evidence
+         * of zero-initialization. DCC used to always compute the counter's
+         * frame address via "ld de,-A / add hl,de" as part of storing its
+         * initializer, leaving a distinctive "ld de,-A" text marker to grep
+         * for. The ix-direct declaration-initializer fast path (dcc_decl.c)
+         * skips that address computation entirely, so a zero-initialized
+         * counter can now also appear as
+         *   ld hl,0 / ld (ix-A),l / ld (ix-B),h          (expression path)
+         * or
+         *   ld (ix-A),0 / ld (ix-B),0                    (immediate-const path)
+         * with no "ld de,-A" anywhere. Recognizing only the first shape
+         * silently stopped this whole pass from ever firing again on a
+         * loop whose counter takes either of the newer, faster
+         * initialization shapes - a real regression this project hit once
+         * already (tm.c/ttt.c both use `for (size_t i = 0; ...)`). */
+        { char de_init[32], ix_lo0[32], ix_hi0[32], ix_lo_l[32], ix_hi_h[32];
+          int found = 0;
           sprintf(de_init, "ld de,-%d", cnt_lo);
+          sprintf(ix_lo0, "ld (ix-%d),0", cnt_lo);
+          sprintf(ix_hi0, "ld (ix-%d),0", cnt_hi);
+          sprintf(ix_lo_l, "ld (ix-%d),l", cnt_lo);
+          sprintf(ix_hi_h, "ld (ix-%d),h", cnt_hi);
           for (k = i - 1; k >= 0 && k >= i - 20; k--) {
               if (eq(k, de_init)) { found = 1; break; }
+              if (eq(k, ix_lo0) && eq(k + 1, ix_hi0)) { found = 1; break; }
+              if (eq(k, "ld hl,0") && eq(k + 1, ix_lo_l) && eq(k + 2, ix_hi_h)) {
+                  found = 1; break;
+              }
               if (is_global_asm_label_line(k)) break;
           }
           if (!found) continue; }
