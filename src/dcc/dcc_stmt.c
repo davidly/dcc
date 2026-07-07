@@ -41,10 +41,11 @@ void gen_compound(void)
 {
     int dead;
 
+    /* Forward-goto VLA fixups are function-scoped; start each body run clean. */
+    g_vla_fwd_ngoto = 0;
     expect('{');
     enter_scope();
     dead = 0;
-
     while (tok.kind != TOK_EOF && tok.kind != '}') {
         if (tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();

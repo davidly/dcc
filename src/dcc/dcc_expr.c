@@ -972,9 +972,9 @@ int find_or_alloc_user_label_index(const char *name)
     ulabel_ids[nulabels] = new_label();
     ulabel_defined[nulabels] = 0;
     ulabel_referenced[nulabels] = 0;
-    ulabel_vla_depth[nulabels] = 0;
-    ulabel_ref_vla_depth[nulabels] = 0;
-    ulabel_ref_vla_restored[nulabels] = 0;
+    ulabel_vla_snap_depth[nulabels] = 0;
+    memset(ulabel_vla_snap_off[nulabels], 0, sizeof(ulabel_vla_snap_off[nulabels]));
+    ulabel_shallow_fwd_ref[nulabels] = 0;
     return nulabels++;
 }
 
@@ -995,7 +995,7 @@ int define_user_label(const char *name)
     if (ulabel_defined[i])
         error_here("duplicate goto label");
     ulabel_defined[i] = 1;
-    ulabel_vla_depth[i] = g_scope_depth;
+    vla_snapshot_user_label(i);
     return ulabel_ids[i];
 }
 

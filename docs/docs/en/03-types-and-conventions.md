@@ -174,7 +174,10 @@ void f(int n)
   ```
 
 - Reclamation happens on **every** normal exit from the block: fall-through,
-  `break`, `continue`, `return`, and a `goto` that leaves the scope.
+  `break`, `continue`, `return`, and a `goto` that leaves the scope. A `goto`
+  out of one or more VLA scopes is fully supported in **both** directions
+  (forward and backward) and restores the stack to exactly the target label's
+  scope, even when it leaves several nested VLA scopes at once.
 - Recursion works: each call frame gets its own VLA and releases it on return.
 - With `-fstack-check`, the run-time allocation is bounds-checked, so an
   oversized VLA aborts gracefully instead of colliding with the heap. VLAs draw
@@ -198,7 +201,8 @@ void f(int n)
   ```
 
 - Jumping **into** a VLA's scope with `goto`, `case`, or `default` (which would
-  bypass the allocation) is rejected, matching a conforming compiler.
+  bypass the allocation) is rejected, matching a conforming compiler. (Jumping
+  *out of* a VLA scope is fine and reclaims the stack — see above.)
 - Variably-modified **types** beyond the array object itself — VLA `typedef`s,
   pointers-to-VLA (`int (*p)[n]`), and run-time-bound VLA function parameters —
   are not modelled.

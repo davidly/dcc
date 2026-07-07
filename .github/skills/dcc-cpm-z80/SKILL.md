@@ -163,10 +163,17 @@ host-sized-int expectations, hosted byte-stream stdio behavior, wide-character
 Unicode library behavior, POSIX services, locale, signal, time, C11 threads, and
 C11 atomics.
 
-Automatic one-dimensional VLAs with a simple identifier bound, such as
-`char buf[n]`, are supported by reserving stack space at runtime. Keep them
-small: heap and stack still share the CP/M transient program area and have no
-guard beyond explicit stack checking.
+Automatic VLAs (local arrays whose **outermost** dimension is a run-time value)
+are supported by reserving stack space when the declaration is reached, e.g.
+`char buf[n]` or `int grid[n][3]` (inner dimensions must be compile-time
+constants). The storage is released at block-scope exit — including each loop
+iteration, `break`, `continue`, `return`, and a `goto` that leaves the scope
+(forward or backward, across nested VLA scopes). Rejected, never miscompiled:
+a variable **inner** dimension (`a[n][m]`), `sizeof` on a **whole** VLA (use
+`sizeof a[0]` times the count), and jumping **into** a VLA scope via `goto`,
+`case`, or `default`. Keep them small: heap and stack still share the CP/M
+transient program area and have no guard beyond explicit stack checking
+(`-fstack-check` bounds-checks each VLA allocation).
 
 **Identifiers:** full internal significance; externals stay distinct well past
 C89's 6-char minimum (verified to ~13 chars), and only ~16+ identical leading
