@@ -398,6 +398,76 @@ static int vla_pass2d(int rows)
     return vla_sum2d(rows, grid);
 }
 
+static int vla_ptr2d_deref_chain(int rows)
+{
+    int grid[rows][3];
+    int (*p)[3] = grid;
+    int i, j, s = 0;
+    for (i = 0; i < rows; i++)
+        for (j = 0; j < 3; j++)
+            *(*(p + i) + j) = i * 10 + j;
+    for (i = 0; i < rows; i++)
+        for (j = 0; j < 3; j++)
+            s += *(*(p + i) + j);
+    return s;
+}
+
+/* Three-dimensional pointer-to-array dereference chain: the explicit
+ * *(*(*(p + i) + j) + k) desugaring of p[i][j][k], written for both a store
+ * and a read, must match the bracket form. */
+static int vla_ptr3d_deref_chain(int rows)
+{
+    int cube[rows][2][3];
+    int (*p)[2][3] = cube;
+    int i, j, k, s = 0;
+    for (i = 0; i < rows; i++)
+        for (j = 0; j < 2; j++)
+            for (k = 0; k < 3; k++)
+                *(*(*(p + i) + j) + k) = i * 100 + j * 10 + k;
+    for (i = 0; i < rows; i++)
+        for (j = 0; j < 2; j++)
+            for (k = 0; k < 3; k++)
+                s += *(*(*(p + i) + j) + k);
+    return s;
+}
+
+/* Storing a long-typed RHS into an int VLA element uses the truncating element
+ * store path (the RHS is long because the literal 1000L is long, forcing long
+ * arithmetic).  Values are kept within 16 bits so the result is identical on a
+ * 16-bit-int target and a 32-bit host baseline. */
+static int vla_long_rhs_store(int n)
+{
+    int a[n];
+    int i, s = 0;
+    for (i = 0; i < n; i++)
+        a[i] = 1000L + i;
+    for (i = 0; i < n; i++)
+        s += a[i];
+    return s;                           /* sum(1000 + i) for i in [0, n) */
+}
+
+/* Ten-dimensional VLA (variable first dimension, constant inner dims) accessed
+ * through a full ten-level explicit dereference chain.  Confirms the chain
+ * lowering is fully generalised well beyond 2-D/3-D: C99/C11 5.2.4.1 guarantees
+ * support for at least 12 array declarators, and dcc caps rank at 12. */
+static int vla_ptr10d_deref_chain(int rows)
+{
+    int cube[rows][2][2][2][2][2][2][2][2][2];
+    int (*p)[2][2][2][2][2][2][2][2][2] = cube;
+    int a, b, c, d, e, f, g, h, i, j, s = 0;
+    for (a = 0; a < rows; a++)
+     for (b = 0; b < 2; b++) for (c = 0; c < 2; c++) for (d = 0; d < 2; d++)
+      for (e = 0; e < 2; e++) for (f = 0; f < 2; f++) for (g = 0; g < 2; g++)
+       for (h = 0; h < 2; h++) for (i = 0; i < 2; i++) for (j = 0; j < 2; j++)
+        *(*(*(*(*(*(*(*(*(*(p + a) + b) + c) + d) + e) + f) + g) + h) + i) + j) = 1;
+    for (a = 0; a < rows; a++)
+     for (b = 0; b < 2; b++) for (c = 0; c < 2; c++) for (d = 0; d < 2; d++)
+      for (e = 0; e < 2; e++) for (f = 0; f < 2; f++) for (g = 0; g < 2; g++)
+       for (h = 0; h < 2; h++) for (i = 0; i < 2; i++) for (j = 0; j < 2; j++)
+        s += *(*(*(*(*(*(*(*(*(*(p + a) + b) + c) + d) + e) + f) + g) + h) + i) + j);
+    return s;                           /* rows * 2^9 */
+}
+
 /* Forward goto whose target label is in the SAME VLA scope (no SP change). */
 static int vla_fwd_same(int n)
 {
@@ -555,6 +625,10 @@ int main(void)
     check_int("vla_ptr_diff", vla_ptr_diff(4), 7);
     check_int("vla_long_bound", vla_long_bound(5), 6);
     check_int("vla_pass2d", vla_pass2d(4), 30);
+    check_int("vla_ptr2d_deref_chain", vla_ptr2d_deref_chain(4), 192);
+    check_int("vla_ptr3d_deref_chain", vla_ptr3d_deref_chain(3), 1908);
+    check_int("vla_ptr10d_deref_chain", vla_ptr10d_deref_chain(2), 1024);
+    check_int("vla_long_rhs_store", vla_long_rhs_store(5), 5010);
 
     check_int("vla_fwd_same", vla_fwd_same(5), 10);
     check_int("vla_fwd_exit_inner", vla_fwd_exit_inner(4), 4);

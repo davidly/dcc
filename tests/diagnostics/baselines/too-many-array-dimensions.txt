@@ -1,0 +1,4 @@
+<source>:10: error DCC-E0603: too many array dimensions near ';'
+        int a[2][2][2][2][2][2][2][2][2][2][2][2][2];
+                                                    ^
+dcc: 1 error(s)

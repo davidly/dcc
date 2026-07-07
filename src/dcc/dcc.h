@@ -111,6 +111,19 @@
 #define MAX_ENUM_CONSTS 512
 #define MAX_INCLUDE_DIRS 32
 
+/*
+ * Maximum number of array dimensions for a single object (array rank), and the
+ * maximum subscript depth when indexing.  C99/C11 5.2.4.1 "Translation limits"
+ * requires a conforming implementation to support at least 12 pointer, array,
+ * and function declarators in any combination modifying one type, so array rank
+ * is capped at 12.  Indexing a pointer-to-array adds one subscript level beyond
+ * the pointed-to array's rank, so index/dereference-chain buffers are sized one
+ * larger.
+ */
+#define MAX_ARRAY_DIMS 12
+#define MAX_INDEX_DEPTH (MAX_ARRAY_DIMS + 1)
+
+
 /* ------------------------------------------------------------------------- *
  * Type-kind bit encoding. A "type" is an int: low bits select the base kind,
  * high bits are flags (pointer levels, unsignedness, struct). STRUCT_SHIFT
@@ -236,7 +249,7 @@ struct Sym {
     int array_len;
     int elem_size; /* stride per first-dimension element */
     int dim_count; /* C array dimensions, e.g. a[2][3] -> 2 */
-    int dims[8];   /* dims[0] may be 0 until inferred for a[][N] */
+    int dims[MAX_ARRAY_DIMS];   /* dims[0] may be 0 until inferred for a[][N] */
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
@@ -524,10 +537,10 @@ extern int g_proto_types[MAX_PROTO_PARAMS];
 extern int g_funcptr_decl_array_len;
 extern int g_funcptr_is_funcret_decl;
 extern int g_ptr_array_dim_count;
-extern int g_ptr_array_dims[8];
+extern int g_ptr_array_dims[MAX_ARRAY_DIMS];
 extern int g_ptr_array_elem_size;
 extern int g_last_array_dim_count;
-extern int g_last_array_dims[8];
+extern int g_last_array_dims[MAX_ARRAY_DIMS];
 
 /* C99 VLA: parse_array_declarator_dims() captures the first-dimension size
  * expression here when it is not a constant, so the local-declaration codegen

@@ -228,7 +228,7 @@ void copy_last_array_dims_to_sym(struct Sym *s)
     int i;
 
     s->dim_count = g_last_array_dim_count;
-    for (i = 0; i < 8; ++i)
+    for (i = 0; i < MAX_ARRAY_DIMS; ++i)
         s->dims[i] = (i < g_last_array_dim_count) ? g_last_array_dims[i] : 0;
 }
 

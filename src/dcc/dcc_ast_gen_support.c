@@ -31,6 +31,17 @@ int ast_expr_yields_bool01(const struct AstNode *n)
     }
 }
 
+/* RHS acceptable for storing into a plain-int (char/int) array or pointer
+ * element via assignment `n`.  A plain-int RHS always works.  A long-typed RHS
+ * is also accepted for a plain `=`: the element store path evaluates the RHS to
+ * DE:HL and writes only the low word (int) or low byte (char), i.e. it
+ * truncates to the element width - exactly the C conversion for `int_elem =
+ * long_value`.  Compound ops are left to the plain-int-only path. */
+static int ast_int_elem_assign_rhs_ok(const struct AstNode *n)
+{
+    return ast_value_is_plain_int(n->b) ||
+           (n->op == '=' && ast_value_is_long_word(n->b));
+}
 
 int ast_gen_supported(const struct AstNode *n)
 {
@@ -274,7 +285,7 @@ int ast_gen_supported(const struct AstNode *n)
                 if (!ast_is_plain_int_type(elem))
                     return 0;
                 return (type_size(elem) == 1 || type_size(elem) == 2) &&
-                       ast_value_is_plain_int(n->b);
+                       ast_int_elem_assign_rhs_ok(n);
             }
             if (ast_index_pointer_expr_elem_type(n->a, &elem)) {
                 if (type_is_long(elem))
@@ -291,7 +302,7 @@ int ast_gen_supported(const struct AstNode *n)
                 if (!ast_is_plain_int_type(elem))
                     return 0;
                 return (type_size(elem) == 1 || type_size(elem) == 2) &&
-                       ast_value_is_plain_int(n->b);
+                       ast_int_elem_assign_rhs_ok(n);
             }
             if (n->op == '=' && ast_index_addressable_addr(n->a)) {
                 if (ast_index_2d_array_elem_type(n->a, &elem)) {
@@ -348,7 +359,7 @@ int ast_gen_supported(const struct AstNode *n)
                 if (!ast_is_plain_int_type(elem))
                     return 0;
                 return (type_size(elem) == 1 || type_size(elem) == 2) &&
-                       ast_value_is_plain_int(n->b);
+                       ast_int_elem_assign_rhs_ok(n);
             }
             if (ast_index_pointer_array_elem_type(n->a, &elem)) {
                 if (n->op != '=')
@@ -408,7 +419,7 @@ int ast_gen_supported(const struct AstNode *n)
             if (!ast_index_plain_int_read(n->a))
                 return 0;
             if (n->a->a->kind == AST_IDENT) {
-                if (!ast_value_is_plain_int(n->b))
+                if (!ast_int_elem_assign_rhs_ok(n))
                     return 0;
                 base = find_sym(n->a->a->sval);
                 decayed = base->is_array ? type_add_ptr(base->type) : base->type;

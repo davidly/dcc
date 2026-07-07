@@ -76,6 +76,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "multiple storage classes in declaration")) return "DCC-E0540";
     if (dcc_msg_has(msg, "variable length arrays are not supported")) return "DCC-E0601";
     if (dcc_msg_has(msg, "subscripted value is not an array or pointer")) return "DCC-E0602";
+    if (dcc_msg_has(msg, "too many array dimensions")) return "DCC-E0603";
     if (dcc_msg_has(msg, "break statement outside loop or switch")) return "DCC-E0701";
     if (dcc_msg_has(msg, "continue statement outside loop")) return "DCC-E0702";
     if (dcc_msg_has(msg, "case label outside switch")) return "DCC-E0703";

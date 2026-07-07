@@ -375,7 +375,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             next_token();
         expect(')');
     } else if (tok.kind == '[') {
-        int dims[8];
+        int dims[MAX_ARRAY_DIMS];
         int ndims;
         int i;
         int n;
@@ -393,7 +393,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 expect(']');
             }
             if (n < 0) n = 0;
-            if (ndims < 8) dims[ndims++] = n;
+            if (ndims < MAX_ARRAY_DIMS) dims[ndims++] = n;
         }
 
         elem_bytes = type_size(ptype[0]);
@@ -408,7 +408,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         }
         g_ptr_array_dim_count = ndims;
         g_ptr_array_elem_size = total > 0 ? total * elem_bytes : elem_bytes;
-        for (i = 0; i < ndims && i < 8; ++i)
+        for (i = 0; i < ndims && i < MAX_ARRAY_DIMS; ++i)
             g_ptr_array_dims[i] = dims[i];
     }
 
@@ -701,15 +701,17 @@ void parse_array_declarator_dims(int base_type,
                                         int *first_stride_bytes,
                                         int allow_empty_first)
 {
-    int dims[8];
+    int dims[MAX_ARRAY_DIMS];
     int ndims;
     int i;
     int n;
     int elem_bytes;
     int total;
     int inner;
+    int overflowed;
 
     ndims = 0;
+    overflowed = 0;
     g_last_array_dim_count = 0;
     g_vla_pending = 0;
     memset(g_last_array_dims, 0, sizeof(g_last_array_dims));
@@ -756,8 +758,16 @@ void parse_array_declarator_dims(int base_type,
 
         if (n < 0)
             n = 0;
-        if (ndims < 8)
+        if (ndims < MAX_ARRAY_DIMS) {
             dims[ndims++] = n;
+        } else {
+            /* Array rank exceeds the supported maximum (C99/C11 5.2.4.1
+             * guarantees at least 12).  Emit one diagnostic and keep ndims
+             * capped so the dims[] buffer is never indexed out of range. */
+            if (!overflowed && asm_suppress_depth == 0)
+                error_here("too many array dimensions");
+            overflowed = 1;
+        }
     }
 
     if (ndims == 0) {
@@ -792,7 +802,7 @@ void parse_array_declarator_dims(int base_type,
     first_stride_bytes[0] = (ndims > 1 && inner > 0) ? inner * elem_bytes : elem_bytes;
 
     g_last_array_dim_count = ndims;
-    for (i = 0; i < ndims && i < 8; ++i)
+    for (i = 0; i < ndims && i < MAX_ARRAY_DIMS; ++i)
         g_last_array_dims[i] = dims[i];
 }
 
