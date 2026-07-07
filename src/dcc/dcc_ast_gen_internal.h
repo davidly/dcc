@@ -131,6 +131,7 @@ int ast_struct_copy_assign_supported(const struct AstNode *n);
 int ast_is_const_zero_condition(const struct AstNode *n);
 int ast_is_const_nonzero_condition(const struct AstNode *n);
 int ast_expr_yields_bool01(const struct AstNode *n);
+void ast_support_cache_begin(void);
 int ast_gen_supported(const struct AstNode *n);
 int ast_call_arg_word_supported(const struct AstNode *arg);
 int ast_call_struct_arg_supported(int want_type, const struct AstNode *arg);

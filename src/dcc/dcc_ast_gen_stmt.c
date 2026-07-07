@@ -690,8 +690,11 @@ int ast_scan_for_stmt(void)
     scan_mode = 1;
 
     n = ast_build_stmt(&g_ast_arena);
-    if (n != NULL && ast_stmt_supported(n))
-        ast_gen_stmt(n);
+    if (n != NULL) {
+        ast_support_cache_begin();
+        if (ast_stmt_supported(n))
+            ast_gen_stmt(n);
+    }
 
     ast_arena_reset(&g_ast_arena);
     scan_mode = s_scan_mode;
@@ -1065,6 +1068,9 @@ int ast_try_emit_statement(void)
     end_line = line_no;
     end_tok_line = tok_line;
     end_tok = tok;
+
+    if (n != NULL)
+        ast_support_cache_begin();
 
     if (n != NULL && ast_stmt_supported(n)) {
         g_for_seq = sv_for_seq;

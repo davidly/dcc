@@ -74,6 +74,8 @@ void gen_compound(void)
                 struct AstNode *n;
 
                 n = ast_build_stmt(&g_ast_arena);
+                if (n != NULL)
+                    ast_support_cache_begin();
                 if (n == NULL || !ast_stmt_supported(n))
                     fatal("unsupported AST statement");
                 if (ast_stmt_has_reentry_label(n)) {
