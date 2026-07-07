@@ -239,6 +239,10 @@ void emit_byte_operand_to_a(struct ByteOperand *op)
         } else {
             fprintf(outf, "\tld a,(%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
         }
+    } else if (op->kind == 4) {
+        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        emit("\tld a,(hl)\n");
     }
 }
 
@@ -261,12 +265,20 @@ void emit_cp_byte_operand(struct ByteOperand *op)
         } else {
             fprintf(outf, "\tcp (%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
         }
+    } else if (op->kind == 4) {
+        /* Unlike kind 3 (which needs the hl,de address math to reach an
+         * indexed global), loading the pointer's own value via ix-direct
+         * addressing touches only L and H, so A (already holding the LHS
+         * value) survives untouched with no save/restore needed. */
+        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        emit("\tcp (hl)\n");
     }
 }
 
 int byte_operand_can_be_lhs(struct ByteOperand *op)
 {
-    return op->kind == 1 || op->kind == 3;
+    return op->kind == 1 || op->kind == 3 || op->kind == 4;
 }
 
 void emit_byte_cmp_branch_after_cp(int op, int label, int branch_when_true)

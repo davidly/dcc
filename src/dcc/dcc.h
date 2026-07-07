@@ -332,7 +332,8 @@ struct ConstVal {
 
 /* One operand of a fast byte-comparison/branch peephole. */
 struct ByteOperand {
-    int kind;          /* 1 = IX direct byte, 2 = constant, 3 = global byte array[index] */
+    int kind;          /* 1 = IX direct byte, 2 = constant, 3 = global byte array[index],
+                         * 4 = *p, p an IX-direct pointer-to-unsigned-char local/param */
     struct Sym *sym;
     struct Sym *idx_sym;
     long val;

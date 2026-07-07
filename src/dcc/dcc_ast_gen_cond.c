@@ -394,9 +394,11 @@ int ast_is_const_plain_int_cmp_cond(const struct AstNode *n)
 }
 
 /* Translate a comparison operand expression into a ByteOperand, or return 0.
- * Recognises three kinds: kind 1 (IX-direct UNSIGNED char local/param),
- * kind 2 (0..255 constant), and kind 3 (global byte array element, indexed by
- * either a constant or an IX-direct UNSIGNED char local/param). The kind-3
+ * Recognises four kinds: kind 1 (IX-direct UNSIGNED char local/param),
+ * kind 2 (0..255 constant), kind 3 (global byte array element, indexed by
+ * either a constant or an IX-direct UNSIGNED char local/param), and kind 4
+ * (`*p`, p an IX-direct pointer-to-unsigned-char local/param - e.g. the very
+ * common `for (...) if (*p != val) ...; p++;` byte-scan loop). The kind-3
  * emitters (emit_byte_operand_to_a / emit_cp_byte_operand in dcc_cmp.c)
  * zero-extend op->idx_sym's single byte into D before the address add, so a
  * qualifying index must itself be a byte - a wider index is not handled here
@@ -451,6 +453,19 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
             return 1;
         }
         return 0;
+    }
+    if (e->kind == AST_UNARY && e->op == '*' &&
+        e->a != NULL && e->a->kind == AST_IDENT) {
+        int base;
+        struct Sym *ps = find_sym(e->a->sval);
+        if (ps == NULL || !sym_can_ix_direct(ps))
+            return 0;
+        base = type_decay_ptr(ps->type);
+        if (type_size(base) != 1 || !(base & TYPE_UNSIGNED))
+            return 0;
+        op->kind = 4;
+        op->sym = ps;
+        return 1;
     }
     return 0;
 }

@@ -11766,16 +11766,35 @@ static int pass_cpir(void)
         if (!eq(j, "sbc hl,de")) continue; j++;
         if (!parse_jp_nc_label(lines[j], lexit)) continue; j++;
 
-        /* 3. Byte deref and compare (6 lines) */
+        /* 3. Byte deref and compare. Two shapes reach here: the classic
+         * "ld l,(ix+V); cp l" (6 lines total), or dcc_cmp.c's byte-operand
+         * kind-4 fast path (ast_byte_operand/emit_cp_byte_operand), which
+         * compares directly against the ix-relative memory operand without
+         * first loading it into L - "cp (ix+V)" (5 lines total). */
         if (!peep_parse_ld_l_ix(lines[j], ptr_lo_off)) continue; j++;
         if (!peep_parse_ld_h_ix(lines[j], ptr_hi_off)) continue; j++;
         if (!parse_ix_off_numeric(ptr_lo_off, &ptr_lo_val)) continue;
         { int v; if (!parse_ix_off_numeric(ptr_hi_off, &v)) continue;
           if (v != ptr_lo_val + 1) continue; }
         if (!eq(j, "ld a,(hl)")) continue; j++;
-        if (!peep_parse_ld_l_ix(lines[j], val_off)) continue; j++;
-        if (!parse_ix_off_numeric(val_off, &val_val)) continue;
-        if (!eq(j, "cp l"))      continue; j++;
+        {
+            char cptmp[MAX_LINE];
+            strip_peep_comment_copy(cptmp, lines[j]);
+            if (strncmp(cptmp, "cp (ix", 6) == 0) {
+                const char *p2 = cptmp + 6;
+                int oi = 0;
+                while (*p2 && *p2 != ')' && oi < 31)
+                    val_off[oi++] = *p2++;
+                val_off[oi] = 0;
+                if (*p2 != ')' || p2[1] != 0) continue;
+                if (!parse_ix_off_numeric(val_off, &val_val)) continue;
+                j++;
+            } else {
+                if (!peep_parse_ld_l_ix(lines[j], val_off)) continue; j++;
+                if (!parse_ix_off_numeric(val_off, &val_val)) continue;
+                if (!eq(j, "cp l")) continue; j++;
+            }
+        }
         if (!parse_jp_z_label(lines[j], lok)) continue; j++;
         fail_start = j;  /* first line of fail code */
 
