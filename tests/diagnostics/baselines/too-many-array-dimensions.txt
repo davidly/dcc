@@ -1,4 +1,7 @@
 <source>:10: error DCC-E0603: too many array dimensions near ';'
         int a[2][2][2][2][2][2][2][2][2][2][2][2][2];
                                                     ^
-dcc: 1 error(s)
+<source>:11: error DCC-E1002: unsupported for statement near 'for'
+        for (int i0 = 0; i0 < 2; i0++) {
+        ^
+dcc: 2 error(s)

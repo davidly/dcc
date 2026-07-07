@@ -7,6 +7,29 @@
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
 
+#define AST_SUPPORT_CACHE_SIZE 4096
+
+struct AstSupportCacheEntry {
+    const struct AstNode *node;
+    unsigned stamp;
+    int dead;
+    int value;
+};
+
+static struct AstSupportCacheEntry ast_support_cache[AST_SUPPORT_CACHE_SIZE];
+static unsigned ast_support_cache_stamp = 1;
+
+static int ast_gen_supported_uncached(const struct AstNode *n);
+
+void ast_support_cache_begin(void)
+{
+    ast_support_cache_stamp++;
+    if (ast_support_cache_stamp == 0) {
+        memset(ast_support_cache, 0, sizeof(ast_support_cache));
+        ast_support_cache_stamp = 1;
+    }
+}
+
 
 int ast_expr_yields_bool01(const struct AstNode *n)
 {
@@ -44,6 +67,32 @@ static int ast_int_elem_assign_rhs_ok(const struct AstNode *n)
 }
 
 int ast_gen_supported(const struct AstNode *n)
+{
+    unsigned long h;
+    unsigned idx;
+    int dead;
+    int value;
+    struct AstSupportCacheEntry *e;
+
+    if (n == NULL)
+        return 0;
+
+    dead = expr_result_dead ? 1 : 0;
+    h = ((unsigned long)n >> 4) ^ (unsigned long)(n->kind * 131) ^ (unsigned long)dead;
+    idx = (unsigned)(h & (AST_SUPPORT_CACHE_SIZE - 1));
+    e = &ast_support_cache[idx];
+    if (e->stamp == ast_support_cache_stamp && e->node == n && e->dead == dead)
+        return e->value;
+
+    value = ast_gen_supported_uncached(n);
+    e->node = n;
+    e->stamp = ast_support_cache_stamp;
+    e->dead = dead;
+    e->value = value;
+    return value;
+}
+
+static int ast_gen_supported_uncached(const struct AstNode *n)
 {
     if (n == NULL)
         return 0;
