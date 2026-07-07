@@ -398,6 +398,100 @@ static int vla_pass2d(int rows)
     return vla_sum2d(rows, grid);
 }
 
+/* Forward goto whose target label is in the SAME VLA scope (no SP change). */
+static int vla_fwd_same(int n)
+{
+    int a[n];
+    int i, s = 0;
+    for (i = 0; i < n; i++)
+        a[i] = i;
+    if (a[0] == 0)
+        goto here;
+    s += 999;
+here:
+    for (i = 0; i < n; i++)
+        s += a[i];
+    return s;                     /* 0+1+2+3+4 = 10 for n=5 */
+}
+
+/* Forward goto that exits an inner VLA scope but stays inside an outer VLA
+ * scope; the outer VLA must remain valid after the jump. */
+static int vla_fwd_exit_inner(int n)
+{
+    int a[n];
+    int i, s = 0;
+    for (i = 0; i < n; i++)
+        a[i] = 1;
+    {
+        int b[n * 2];
+        for (i = 0; i < n * 2; i++)
+            b[i] = 2;
+        if (b[0] == 2)
+            goto done;            /* reclaim b, keep a */
+        s += 555;
+    }
+done:
+    for (i = 0; i < n; i++)
+        s += a[i];
+    return s;                     /* n for n>0 */
+}
+
+/* Forward goto that exits every VLA scope, landing on a non-VLA label. */
+static int vla_fwd_exit_all(int n)
+{
+    int s = 0;
+    {
+        int a[n];
+        int i;
+        for (i = 0; i < n; i++)
+            a[i] = 3;
+        if (a[0] == 3)
+            goto out;
+        s += 1;
+    }
+out:
+    return s + 7;                 /* 7 */
+}
+
+/* Forward goto inside a loop, jumping over work but staying in the VLA scope;
+ * the loop then reclaims and re-allocates the VLA each iteration. */
+static int vla_fwd_in_loop(int n)
+{
+    int i, s = 0;
+    for (i = 0; i < n; i++) {
+        int a[n];
+        int j;
+        for (j = 0; j < n; j++)
+            a[j] = j;
+        if (a[0] == 0)
+            goto skip;
+        s += 100;
+    skip:
+        s += a[i];
+    }
+    return s;                     /* 0+1+2+3+4 = 10 for n=5 */
+}
+
+/* Backward goto that exits an inner VLA scope while staying inside an outer VLA
+ * scope; the inner VLA must be reclaimed on every backward jump so SP does not
+ * leak, and the outer VLA must stay valid across the jumps. */
+static int vla_back_exit_inner(int iters, int n)
+{
+    int a[n];
+    int i = 0, s = 0;
+    a[0] = 7;
+again:
+    {
+        int b[n];
+        b[0] = i;
+        s = a[0] + (b[0] & 15);   /* a survives the backward jump */
+        i++;
+        if (i < iters)
+            goto again;           /* reclaim b, back into a's scope */
+    }
+    return s;                     /* i=2999 -> 7 + (2999&15) = 14 */
+}
+
 int main(void)
 {
     printf("tvla start\n");
@@ -461,6 +555,12 @@ int main(void)
     check_int("vla_ptr_diff", vla_ptr_diff(4), 7);
     check_int("vla_long_bound", vla_long_bound(5), 6);
     check_int("vla_pass2d", vla_pass2d(4), 30);
+
+    check_int("vla_fwd_same", vla_fwd_same(5), 10);
+    check_int("vla_fwd_exit_inner", vla_fwd_exit_inner(4), 4);
+    check_int("vla_fwd_exit_all", vla_fwd_exit_all(3), 7);
+    check_int("vla_fwd_in_loop", vla_fwd_in_loop(5), 10);
+    check_int("vla_back_exit_inner", vla_back_exit_inner(3000, 8), 14);
 
     printf("checks=%d failures=%d\n", checks, failures);
     if (failures != 0) {

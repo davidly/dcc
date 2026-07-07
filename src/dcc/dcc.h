@@ -452,6 +452,11 @@ int vla_active_scope_depth(void);
 void emit_vla_save_sp(int off);
 void emit_vla_restore_sp(int off);
 void emit_vla_restore_for_flow(int floor_depth);
+int  vla_record_fwd_goto(int label_index, int line);
+void vla_resolve_fwd_gotos(int label_index, int real_id);
+void vla_snapshot_user_label(int label_index);
+int  vla_jump_enters_label_scope(int label_index);
+void emit_vla_restore_to_label_scope(int label_index);
 struct Sym *find_local_decl(const char *name);
 
 extern int errors;
@@ -492,9 +497,11 @@ extern char ulabel_names[MAX_USER_LABELS][64];
 extern int  ulabel_ids[MAX_USER_LABELS];
 extern int  ulabel_defined[MAX_USER_LABELS];
 extern int  ulabel_referenced[MAX_USER_LABELS];
-extern int  ulabel_vla_depth[MAX_USER_LABELS];
-extern int  ulabel_ref_vla_depth[MAX_USER_LABELS];
-extern int  ulabel_ref_vla_restored[MAX_USER_LABELS];
+extern int  ulabel_vla_snap_depth[MAX_USER_LABELS];
+extern int  ulabel_vla_snap_off[MAX_USER_LABELS][MAX_SCOPE_DEPTH];
+/* A forward goto issued from OUTSIDE every VLA scope: if the label turns out to
+ * be inside a VLA scope, that jump enters the scope of a VLA and is rejected. */
+extern int  ulabel_shallow_fwd_ref[MAX_USER_LABELS];
 extern int  nulabels;
 
 /* enum constants (file-scoped) */
@@ -538,6 +545,24 @@ extern struct Token g_vla_dim_tok;
  * loop/switch entry so break/continue can reclaim the VLAs allocated inside. */
 extern int g_vla_scope_off[MAX_SCOPE_DEPTH];
 extern int flow_scope_depth[MAX_FLOW];
+
+/* C99 forward-goto VLA fixups.  A forward goto issued from within a VLA scope
+ * cannot know its target label's scope until the label is emitted later, so the
+ * jump is routed to a per-goto fixup stub.  Each pending entry snapshots the
+ * goto's active VLA save-slot offsets (offsets uniquely identify a scope
+ * instance); when the target label is reached, vla_resolve_fwd_gotos() emits
+ * each stub, restoring SP to reclaim exactly the VLA scopes the goto leaves and
+ * rejecting jumps that would enter a VLA scope. */
+#define MAX_VLA_FWD_GOTOS MAX_LOCALS
+struct VlaFwdGoto {
+    int label_index;                 /* target label (index into ulabel_*)   */
+    int fixup_id;                    /* stub label the goto jumps to          */
+    int snap_depth;                  /* g_scope_depth at the goto             */
+    int snap_off[MAX_SCOPE_DEPTH];   /* g_vla_scope_off snapshot at the goto  */
+    int line;                        /* goto source line, for diagnostics     */
+};
+extern struct VlaFwdGoto g_vla_fwd_gotos[MAX_VLA_FWD_GOTOS];
+extern int g_vla_fwd_ngoto;
 
 /* ------------------------------------------------------------------------- *
  * Cross-module function prototypes, grouped by owning module. (Generated to

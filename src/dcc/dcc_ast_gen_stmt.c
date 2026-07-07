@@ -816,41 +816,38 @@ void ast_gen_stmt(const struct AstNode *n)
             ulabel_referenced[li] = 1;
             active_depth = vla_active_scope_depth();
             if (ulabel_defined[li]) {
-                if (ulabel_vla_depth[li] > g_scope_depth) {
+                /* Backward goto: the label's scope is already known. */
+                if (vla_jump_enters_label_scope(li)) {
                     error_here("goto into a variable-length array scope is not supported");
-                } else if (active_depth != 0 && ulabel_vla_depth[li] < g_scope_depth) {
-                    emit_vla_restore_for_flow(ulabel_vla_depth[li]);
+                } else if (active_depth != 0) {
+                    emit_vla_restore_to_label_scope(li);
                 }
+                emit_jp_label("jp", ulabel_ids[li]);
             } else if (active_depth != 0) {
-                if (ulabel_ref_vla_depth[li] != 0 &&
-                    ulabel_ref_vla_depth[li] != g_scope_depth)
-                    error_here("goto across different variable-length array scopes is not supported");
-                ulabel_ref_vla_depth[li] = g_scope_depth;
+                /* Forward goto from within a VLA scope: the target label has not
+                 * been emitted yet, so route the jump through a deferred fixup
+                 * stub that vla_resolve_fwd_gotos() completes once the label's
+                 * own scope (and hence the exact SP to restore) is known. */
+                int fixup = vla_record_fwd_goto(li, n->line);
+                emit_jp_label("jp", fixup);
+            } else {
+                /* Forward goto from outside every VLA scope.  Nothing to
+                 * reclaim; if the label proves to be inside a VLA scope the
+                 * label site rejects it as a jump into that scope. */
+                ulabel_shallow_fwd_ref[li] = 1;
+                emit_jp_label("jp", ulabel_ids[li]);
             }
-            if (active_depth != 0 && !ulabel_defined[li]) {
-                /* One-pass codegen cannot know whether an unresolved forward label
-                 * will be inside this same VLA scope or outside it.  Emit the
-                 * safe form: restore now so forward goto-out is correct; if the
-                 * label later proves to be inside a VLA scope, diagnose it. */
-                emit_vla_restore_for_flow(0);
-                ulabel_ref_vla_restored[li] = 1;
-            }
-            emit_jp_label("jp", ulabel_ids[li]);
         }
         break;
     case AST_LABEL:
         {
             int li;
             li = find_or_alloc_user_label_index(n->sval);
-            if (vla_active_scope_depth() != 0 && ulabel_referenced[li] &&
-                ulabel_ref_vla_depth[li] != g_scope_depth)
+            if (vla_active_scope_depth() != 0 && ulabel_shallow_fwd_ref[li])
                 error_here("goto into a variable-length array scope is not supported");
-            if (vla_active_scope_depth() != 0 && ulabel_ref_vla_restored[li])
-                error_here("forward goto within a variable-length array scope is not supported");
-            if (vla_active_scope_depth() == 0 && ulabel_ref_vla_depth[li] != 0) {
-                ulabel_ref_vla_depth[li] = 0;
-                ulabel_ref_vla_restored[li] = 0;
-            }
+            /* Emit any deferred forward-goto fixup stubs before the real label
+             * (they jump to it and fall-through is guarded). */
+            vla_resolve_fwd_gotos(li, ulabel_ids[li]);
             emit_label(define_user_label(n->sval));
         }
         ast_gen_stmt(n->b);

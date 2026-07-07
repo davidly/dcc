@@ -168,9 +168,9 @@ char ulabel_names[MAX_USER_LABELS][64];
 int  ulabel_ids[MAX_USER_LABELS];
 int  ulabel_defined[MAX_USER_LABELS];
 int  ulabel_referenced[MAX_USER_LABELS];
-int  ulabel_vla_depth[MAX_USER_LABELS];
-int  ulabel_ref_vla_depth[MAX_USER_LABELS];
-int  ulabel_ref_vla_restored[MAX_USER_LABELS];
+int  ulabel_vla_snap_depth[MAX_USER_LABELS];
+int  ulabel_vla_snap_off[MAX_USER_LABELS][MAX_SCOPE_DEPTH];
+int  ulabel_shallow_fwd_ref[MAX_USER_LABELS];
 int  nulabels;
 
 /* Enum constants (file-scoped) */
@@ -206,3 +206,5 @@ int g_vla_dim_tok_line;
 struct Token g_vla_dim_tok;
 int g_vla_scope_off[MAX_SCOPE_DEPTH];
 int flow_scope_depth[MAX_FLOW];
+struct VlaFwdGoto g_vla_fwd_gotos[MAX_VLA_FWD_GOTOS];
+int g_vla_fwd_ngoto;

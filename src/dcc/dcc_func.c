@@ -1835,6 +1835,7 @@ void scan_function_body(void)
     g_scope_depth = 0;
     g_compound_literal_seq = 0;
     g_licm_seq = 0;
+    g_vla_fwd_ngoto = 0;
 
     expect('{');
     enter_scope();              /* function body block */

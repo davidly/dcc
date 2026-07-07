@@ -202,6 +202,185 @@ void emit_vla_restore_for_flow(int floor_depth)
     }
 }
 
+/*
+ * Record a forward goto issued from within a VLA scope.  Single-pass codegen
+ * cannot yet know whether the (not-yet-emitted) target label sits inside the
+ * same VLA scopes, an enclosing one, or outside them all, so the exact SP to
+ * restore is unknown here.  Snapshot the goto's active VLA save-slot offsets
+ * and hand back a fresh stub label id; the caller jumps there, and
+ * vla_resolve_fwd_gotos() later emits the stub once the label's scope is known.
+ * Returns the stub label id (a fresh label even on overflow so the emitted jump
+ * is still well-formed).
+ */
+int vla_record_fwd_goto(int label_index, int line)
+{
+    struct VlaFwdGoto *g;
+    int fixup;
+    int d, i, same;
+
+    /* Reuse an existing pending stub when another goto already targets this
+     * label with the identical active-VLA snapshot: same target and same
+     * scope offsets mean identical reclaim, so one shared stub suffices (and
+     * a fresh label is not consumed). */
+    for (i = 0; i < g_vla_fwd_ngoto; ++i) {
+        g = &g_vla_fwd_gotos[i];
+        if (g->label_index != label_index || g->snap_depth != g_scope_depth)
+            continue;
+        same = 1;
+        for (d = 0; d < MAX_SCOPE_DEPTH; ++d) {
+            int off = (d <= g_scope_depth) ? g_vla_scope_off[d] : 0;
+            if (g->snap_off[d] != off) { same = 0; break; }
+        }
+        if (same)
+            return g->fixup_id;
+    }
+
+    fixup = new_label();
+    if (g_vla_fwd_ngoto >= MAX_VLA_FWD_GOTOS) {
+        if (asm_suppress_depth == 0)
+            fatal("too many forward gotos out of variable-length array scopes");
+        return fixup;
+    }
+    g = &g_vla_fwd_gotos[g_vla_fwd_ngoto++];
+    g->label_index = label_index;
+    g->fixup_id = fixup;
+    g->line = line;
+    g->snap_depth = g_scope_depth;
+    for (d = 0; d < MAX_SCOPE_DEPTH; ++d)
+        g->snap_off[d] = (d <= g_scope_depth) ? g_vla_scope_off[d] : 0;
+    return fixup;
+}
+
+/* Is frame-slot offset `off` one of the VLA scopes currently active (i.e. an
+ * enclosing scope of the point being emitted)?  Offsets are monotonic and never
+ * reused, so a matching offset means the very same scope instance. */
+static int vla_off_active_now(int off)
+{
+    int d;
+    if (off == 0)
+        return 0;
+    for (d = 1; d <= g_scope_depth && d < MAX_SCOPE_DEPTH; ++d)
+        if (g_vla_scope_off[d] == off)
+            return 1;
+    return 0;
+}
+
+static int vla_off_in_label_scope(int label_index, int off)
+{
+    int d;
+    if (off == 0)
+        return 0;
+    for (d = 1; d <= ulabel_vla_snap_depth[label_index] && d < MAX_SCOPE_DEPTH; ++d)
+        if (ulabel_vla_snap_off[label_index][d] == off)
+            return 1;
+    return 0;
+}
+
+void vla_snapshot_user_label(int label_index)
+{
+    int d;
+    if (label_index < 0 || label_index >= MAX_USER_LABELS)
+        return;
+    ulabel_vla_snap_depth[label_index] = g_scope_depth;
+    for (d = 0; d < MAX_SCOPE_DEPTH; ++d)
+        ulabel_vla_snap_off[label_index][d] = (d <= g_scope_depth) ? g_vla_scope_off[d] : 0;
+}
+
+int vla_jump_enters_label_scope(int label_index)
+{
+    int d;
+    if (label_index < 0 || label_index >= MAX_USER_LABELS)
+        return 0;
+    for (d = 1; d <= ulabel_vla_snap_depth[label_index] && d < MAX_SCOPE_DEPTH; ++d) {
+        int off = ulabel_vla_snap_off[label_index][d];
+        if (off != 0 && !vla_off_active_now(off))
+            return 1;
+    }
+    return 0;
+}
+
+void emit_vla_restore_to_label_scope(int label_index)
+{
+    int d;
+    if (label_index < 0 || label_index >= MAX_USER_LABELS)
+        return;
+    for (d = 1; d <= g_scope_depth && d < MAX_SCOPE_DEPTH; ++d) {
+        int off = g_vla_scope_off[d];
+        if (off != 0 && !vla_off_in_label_scope(label_index, off)) {
+            emit_vla_restore_sp(off);
+            return;
+        }
+    }
+}
+
+/*
+ * Emit the deferred SP-fixup stubs for every forward goto that targeted this
+ * label from inside a VLA scope, now that the label's own scope is known.  For
+ * each such goto: verify the C99 constraint that the jump does not enter the
+ * scope of a VLA (every VLA scope still active at the label must also have been
+ * active at the goto), then restore SP to reclaim exactly the VLA scopes the
+ * goto is leaving before jumping to the real label.  Emits nothing when no
+ * forward goto targeted this label.  Must be called just before the real label
+ * is emitted; `real_id` is that label's id.
+ */
+void vla_resolve_fwd_gotos(int label_index, int real_id)
+{
+    int i, d, k;
+    int any;
+    int bad;
+
+    any = 0;
+    for (i = 0; i < g_vla_fwd_ngoto; ++i)
+        if (g_vla_fwd_gotos[i].label_index == label_index) { any = 1; break; }
+    if (!any)
+        return;
+
+    /* Fall-through from the preceding statement must land on the real label,
+     * not run into the stubs that sit just above it. */
+    emit_jp_label("jp", real_id);
+
+    for (i = 0; i < g_vla_fwd_ngoto; ++i) {
+        struct VlaFwdGoto *g = &g_vla_fwd_gotos[i];
+        if (g->label_index != label_index)
+            continue;
+
+        /* Jump-into check: each VLA scope active at the label must be one that
+         * was also active at the goto (same frame slot). */
+        bad = 0;
+        for (d = 1; d <= g_scope_depth && d < MAX_SCOPE_DEPTH; ++d) {
+            int off = g_vla_scope_off[d];
+            int seen = 0;
+            if (off == 0)
+                continue;
+            for (k = 1; k <= g->snap_depth && k < MAX_SCOPE_DEPTH; ++k)
+                if (g->snap_off[k] == off) { seen = 1; break; }
+            if (!seen) {
+                dcc_error_at(tok.file[0] ? tok.file :
+                                 (input_name ? input_name : "<input>"),
+                             g->line, -1,
+                             "goto into a variable-length array scope is not supported",
+                             NULL);
+                bad = 1;
+                break;
+            }
+        }
+        if (bad)
+            continue;
+
+        emit_label(g->fixup_id);
+        /* Reclaim the goto's inner VLA scopes the label is not within: restore
+         * the outermost such slot (which reclaims it and every deeper scope). */
+        for (k = 1; k <= g->snap_depth && k < MAX_SCOPE_DEPTH; ++k) {
+            int off = g->snap_off[k];
+            if (off != 0 && !vla_off_active_now(off)) {
+                emit_vla_restore_sp(off);
+                break;
+            }
+        }
+        emit_jp_label("jp", real_id);
+    }
+}
+
 void leave_scope(void)
 {
     if (g_scope_depth <= 0)
