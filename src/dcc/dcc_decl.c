@@ -1133,7 +1133,7 @@ void gen_local_decl_after_type(int base)
                 int pi;
                 s->elem_size = g_ptr_array_elem_size;
                 s->dim_count = g_ptr_array_dim_count;
-                for (pi = 0; pi < 8; ++pi)
+                for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
                     s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
         }

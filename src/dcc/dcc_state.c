@@ -193,10 +193,10 @@ int g_proto_types[MAX_PROTO_PARAMS];
 int g_funcptr_decl_array_len;
 int g_funcptr_is_funcret_decl;
 int g_ptr_array_dim_count;
-int g_ptr_array_dims[8];
+int g_ptr_array_dims[MAX_ARRAY_DIMS];
 int g_ptr_array_elem_size;
 int g_last_array_dim_count;
-int g_last_array_dims[8];
+int g_last_array_dims[MAX_ARRAY_DIMS];
 
 int g_vla_pending;
 long g_vla_dim_posi;

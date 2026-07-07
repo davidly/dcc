@@ -16,6 +16,13 @@ extern int ast_switch_gate_depth;
 extern struct AstSwCtx ast_sw_ctx[AST_MAX_SW_NEST];
 extern int ast_sw_depth;
 
+/* Maximum length of a pointer-to-array dereference chain
+ * (*(*(...(p + i0)...) + iN)).  A chain of N layers indexes a pointer whose
+ * element has N-1 array dimensions; the compiler caps array rank at
+ * MAX_ARRAY_DIMS, so the longest possible chain is MAX_ARRAY_DIMS + 1 layers. */
+#define DCC_MAX_DEREF_CHAIN MAX_INDEX_DEPTH
+
+
 int ident_supported(const char *name);
 int is_cmp_op(int op);
 int is_shift_op(int op);
@@ -43,6 +50,12 @@ int ast_index_symbol_nd_collect(const struct AstNode *n, struct Sym **out_sym,
 int ast_index_symbol_nd_elem_type(const struct AstNode *n, int *out_type);
 int ast_index_symbol_nd_addressable_addr(const struct AstNode *n);
 int ast_index_deref_pointer_array_collect(const struct AstNode *n,
+                                                 struct Sym **out_sym,
+                                                 const struct AstNode **out_base,
+                                                 const struct AstNode **idxs,
+                                                 int *out_count,
+                                                 int *out_type);
+int ast_deref_pointer_array_chain_collect(const struct AstNode *n,
                                                  struct Sym **out_sym,
                                                  const struct AstNode **out_base,
                                                  const struct AstNode **idxs,

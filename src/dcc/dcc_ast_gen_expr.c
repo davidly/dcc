@@ -289,6 +289,13 @@ void gen_unary_ast(const struct AstNode *n)
             gen_va_arg_deref_ast(n, base);
             return;
         }
+        if (ast_deref_pointer_array_chain_collect(n, NULL, NULL, NULL, NULL, &base)) {
+            gen_deref_addr_ast(n, &base);
+            emit_load_from_hl(base);
+            g_expr_type = base;
+            g_long_from16 = 0;
+            return;
+        }
         if (n->a->kind != AST_IDENT) {
             gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
             base = no_deref ? ptr_type : type_decay_ptr(ptr_type);
@@ -2157,7 +2164,7 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
     }
 
     if (ast_index_symbol_nd_addressable_addr(n)) {
-        const struct AstNode *idxs[8];
+        const struct AstNode *idxs[MAX_INDEX_DEPTH];
         struct Sym *ns;
         int count;
         int idx;
@@ -2199,7 +2206,7 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
     }
 
     {
-        const struct AstNode *idxs[8];
+        const struct AstNode *idxs[MAX_INDEX_DEPTH];
         const struct AstNode *base;
         struct Sym *ps;
         int count;
@@ -3439,9 +3446,47 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
 void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type)
 {
     struct Sym *s;
+    struct Sym *ps;
+    const struct AstNode *base_expr;
+    const struct AstNode *idxs[DCC_MAX_DEREF_CHAIN];
+    int idx_count;
     int no_deref;
     int ptr_type;
     int base;
+    int elem_size;
+
+    if (ast_deref_pointer_array_chain_collect(n, &ps, &base_expr, idxs,
+                                              &idx_count, &base)) {
+        int d;
+        int di;
+        gen_pointer_expr_ast(base_expr, &ptr_type, &no_deref);
+
+        for (d = 0; d < idx_count; ++d) {
+            /* Stride for dimension d is the element size scaled by the product
+             * of all inner dimensions from d onward: dimension 0 spans a whole
+             * pointed-to array object, the last index spans one element. */
+            elem_size = type_size(base);
+            if (elem_size <= 0)
+                elem_size = 2;
+            for (di = d; di < ps->dim_count; ++di)
+                if (ps->dims[di] > 0)
+                    elem_size *= ps->dims[di];
+
+            if (idxs[d]->kind == AST_INT_LIT) {
+                emit_add_const_to_hl(idxs[d]->ival * elem_size);
+            } else {
+                emit("\tpush hl\n");
+                gen_index_subscript_expr_ast(idxs[d]);
+                scale_hl_by_elem_size(elem_size);
+                emit("\tex de,hl\n");
+                emit("\tpop hl\n");
+                emit("\tadd hl,de\n");
+            }
+        }
+
+        *out_val_type = base;
+        return;
+    }
 
     if (n->a->kind == AST_POSTFIX &&
         (n->a->op == TOK_INC || n->a->op == TOK_DEC) &&

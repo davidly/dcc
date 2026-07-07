@@ -638,7 +638,7 @@ int ast_index_symbol_nd_collect(const struct AstNode *n, struct Sym **out_sym,
                                        const struct AstNode **idxs, int *out_count)
 {
     const struct AstNode *cur;
-    const struct AstNode *rev[8];
+    const struct AstNode *rev[MAX_INDEX_DEPTH];
     struct Sym *s;
     int count;
     int i;
@@ -646,7 +646,7 @@ int ast_index_symbol_nd_collect(const struct AstNode *n, struct Sym **out_sym,
     cur = n;
     count = 0;
     while (cur != NULL && cur->kind == AST_INDEX) {
-        if (count >= 8 || cur->b == NULL)
+        if (count >= MAX_INDEX_DEPTH || cur->b == NULL)
             return 0;
         rev[count++] = cur->b;
         cur = cur->a;
@@ -675,7 +675,7 @@ int ast_index_symbol_nd_collect(const struct AstNode *n, struct Sym **out_sym,
 
 int ast_index_symbol_nd_elem_type(const struct AstNode *n, int *out_type)
 {
-    const struct AstNode *idxs[8];
+    const struct AstNode *idxs[MAX_INDEX_DEPTH];
     struct Sym *s;
     int count;
 
@@ -698,7 +698,7 @@ int ast_index_deref_pointer_array_collect(const struct AstNode *n,
                                                  int *out_count,
                                                  int *out_type)
 {
-    const struct AstNode *rev[8];
+    const struct AstNode *rev[MAX_INDEX_DEPTH];
     const struct AstNode *root;
     const struct AstNode *base;
     struct Sym *s;
@@ -711,7 +711,7 @@ int ast_index_deref_pointer_array_collect(const struct AstNode *n,
     count = 0;
     root = n;
     while (root != NULL && root->kind == AST_INDEX) {
-        if (count >= 8 || root->b == NULL)
+        if (count >= MAX_INDEX_DEPTH || root->b == NULL)
             return 0;
         rev[count++] = root->b;
         root = root->a;
@@ -734,6 +734,132 @@ int ast_index_deref_pointer_array_collect(const struct AstNode *n,
         if (!ast_index_subscript_supported(rev[count - 1 - i]))
             return 0;
     }
+    if (out_sym != NULL)
+        *out_sym = s;
+    if (out_base != NULL)
+        *out_base = base;
+    if (out_count != NULL)
+        *out_count = count;
+    if (out_type != NULL)
+        *out_type = elem;
+    return 1;
+}
+
+/* Is `n` a bare identifier naming a pointer-to-array local/param (the base of
+ * a dereference chain)?  A pointer with one or more array dimensions
+ * (dim_count > 0) such as `int (*p)[3]` or `int (*p)[2][3]`. */
+static int ast_is_pointer_array_ident(const struct AstNode *n)
+{
+    struct Sym *s;
+
+    if (n == NULL || n->kind != AST_IDENT)
+        return 0;
+    s = find_sym(n->sval);
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
+        return 0;
+    return type_ptr_depth(s->type) > 0 && s->dim_count > 0;
+}
+
+/* Recognise an explicit pointer-to-array dereference chain that is the exact
+ * desugaring of a multidimensional subscript on a pointer-to-array:
+ *
+ *     *(*(p + i) + j)          <=> p[i][j]        (p is int (*)[C])
+ *     *(*(*(p + i) + j) + k)   <=> p[i][j][k]     (p is int (*)[B][C])
+ *
+ * Each `*( PTR + INDEX )` layer strips one dimension; the innermost PTR is the
+ * base pointer identifier and every outer PTR is the next inner layer.  A chain
+ * of `count` layers indexes a pointer whose element has `count - 1` array
+ * dimensions (the final `*` loads the scalar element).  Indices are returned in
+ * first-dimension-first order in idxs[] (caller supplies room for DCC_MAX_DEREF
+ * _CHAIN entries).  Declining (0) is always safe: the caller falls back to
+ * generic per-layer codegen. */
+int ast_deref_pointer_array_chain_collect(const struct AstNode *n,
+                                                 struct Sym **out_sym,
+                                                 const struct AstNode **out_base,
+                                                 const struct AstNode **idxs,
+                                                 int *out_count,
+                                                 int *out_type)
+{
+    const struct AstNode *rev[DCC_MAX_DEREF_CHAIN];
+    const struct AstNode *cur;
+    const struct AstNode *base;
+    struct Sym *s;
+    int count;
+    int elem;
+    int i;
+
+    count = 0;
+    base = NULL;
+    cur = n;
+
+    /* Peel `*( PTR + INDEX )` layers from the outside in. */
+    for (;;) {
+        const struct AstNode *add;
+        const struct AstNode *ptr_side;
+        const struct AstNode *idx_side;
+
+        if (cur == NULL || cur->kind != AST_UNARY || cur->op != '*' || cur->a == NULL)
+            return 0;
+        add = cur->a;
+        if (add->kind != AST_BINARY || add->op != '+' ||
+            add->a == NULL || add->b == NULL)
+            return 0;
+
+        /* The pointer operand is either the next inner deref layer (an
+         * AST_UNARY '*') or, at the innermost level, the base pointer-to-array
+         * identifier; the other operand is the subscript. */
+        if (add->a->kind == AST_UNARY && add->a->op == '*') {
+            ptr_side = add->a;
+            idx_side = add->b;
+        } else if (add->b->kind == AST_UNARY && add->b->op == '*') {
+            ptr_side = add->b;
+            idx_side = add->a;
+        } else if (ast_is_pointer_array_ident(add->a)) {
+            ptr_side = add->a;
+            idx_side = add->b;
+        } else if (ast_is_pointer_array_ident(add->b)) {
+            ptr_side = add->b;
+            idx_side = add->a;
+        } else {
+            return 0;
+        }
+
+        if (count >= DCC_MAX_DEREF_CHAIN)
+            return 0;
+        rev[count++] = idx_side;
+
+        if (ptr_side->kind == AST_IDENT) {
+            base = ptr_side;
+            break;
+        }
+        cur = ptr_side;
+    }
+
+    /* A single `*(p + i)` layer is an ordinary pointer read handled elsewhere;
+     * only genuine multidimensional chains (>= 2 layers) are claimed here. */
+    if (count < 2 || base == NULL)
+        return 0;
+
+    s = find_sym(base->sval);
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
+        return 0;
+    if (type_ptr_depth(s->type) <= 0 || s->dim_count != count - 1)
+        return 0;
+
+    elem = type_decay_ptr(s->type);
+    if ((elem & 15) == TYPE_VOID || type_size(elem) <= 0)
+        return 0;
+
+    /* rev[] holds indices outermost-first (last dimension first); reverse to
+     * first-dimension-first order and validate each subscript. */
+    for (i = 0; i < count; ++i) {
+        const struct AstNode *ix = rev[count - 1 - i];
+        if (!ast_index_subscript_supported(ix))
+            return 0;
+        if (idxs != NULL)
+            idxs[i] = ix;
+    }
+
     if (out_sym != NULL)
         *out_sym = s;
     if (out_base != NULL)
@@ -903,14 +1029,19 @@ int ast_index_reversed_pointer_expr_elem_type(const struct AstNode *n, int *out_
 
     if (n == NULL || n->kind != AST_INDEX || n->a == NULL || n->b == NULL)
         return 0;
-    if (!ast_index_subscript_supported(n->a))
-        return 0;
+    /* Check the (cheap) pointer operand first.  The subscript check on n->a can
+     * recurse through the whole index-support machinery, so for the common case
+     * where n->b is plainly not a pointer (e.g. an ordinary multidimensional
+     * array subscript arr[i][j]), bailing here avoids an exponential re-walk of
+     * a deeply nested index chain. */
     if (!ast_pointer_expr_type(n->b, &ptr_type, &no_deref) || no_deref)
         return 0;
     if (type_ptr_depth(ptr_type) <= 0)
         return 0;
     elem = type_decay_ptr(ptr_type);
     if ((elem & 15) == TYPE_VOID || type_size(elem) <= 0)
+        return 0;
+    if (!ast_index_subscript_supported(n->a))
         return 0;
     *out_type = elem;
     return 1;
@@ -1254,6 +1385,15 @@ int ast_deref_lvalue_plain_int_type(const struct AstNode *n, int *out_type)
 
     if (n == NULL || n->kind != AST_UNARY || n->op != '*')
         return 0;
+    if (ast_deref_pointer_array_chain_collect(n, NULL, NULL, NULL, NULL, &base)) {
+        if (!ast_is_plain_int_type(base))
+            return 0;
+        sz = type_size(base);
+        if (sz != 1 && sz != 2)
+            return 0;
+        *out_type = base;
+        return 1;
+    }
     if (n->a != NULL && n->a->kind == AST_POSTFIX &&
         (n->a->op == TOK_INC || n->a->op == TOK_DEC) &&
         n->a->a != NULL && n->a->a->kind == AST_IDENT) {
@@ -1296,6 +1436,10 @@ int ast_deref_lvalue_type(const struct AstNode *n, int *out_type)
 
     if (n == NULL || n->kind != AST_UNARY || n->op != '*')
         return 0;
+    if (ast_deref_pointer_array_chain_collect(n, NULL, NULL, NULL, NULL, &base)) {
+        *out_type = base;
+        return 1;
+    }
     if (n->a != NULL && n->a->kind == AST_POSTFIX &&
         (n->a->op == TOK_INC || n->a->op == TOK_DEC) &&
         n->a->a != NULL && n->a->a->kind == AST_IDENT) {
@@ -1651,6 +1795,9 @@ int ast_deref_plain_int_read(const struct AstNode *n)
     if (n->a == NULL)
         return 0;
     if (ast_va_arg_deref_type(n, &base))
+        return ast_is_plain_int_type(base) &&
+               (type_size(base) == 1 || type_size(base) == 2);
+    if (ast_deref_pointer_array_chain_collect(n, NULL, NULL, NULL, NULL, &base))
         return ast_is_plain_int_type(base) &&
                (type_size(base) == 1 || type_size(base) == 2);
     if (n->a->kind != AST_IDENT) {

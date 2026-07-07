@@ -574,7 +574,7 @@ int current_void_is_empty_param_list(void)
 
 void skip_prototype_array_suffixes(int *ptype)
 {
-    int dims[8];
+    int dims[MAX_ARRAY_DIMS];
     int ndims = 0;
     int i, n, inner, elem_bytes;
     int orig_type = *ptype;
@@ -603,7 +603,7 @@ void skip_prototype_array_suffixes(int *ptype)
             expect(']');
         }
         if (n < 0) n = 0;
-        if (ndims < 8) dims[ndims] = n;
+        if (ndims < MAX_ARRAY_DIMS) dims[ndims] = n;
         ndims++;
     }
 
@@ -629,7 +629,7 @@ void skip_prototype_array_suffixes(int *ptype)
 
     g_ptr_array_dim_count = ndims - 1;
     g_ptr_array_elem_size = (inner > 0) ? inner * elem_bytes : elem_bytes;
-    for (i = 0; i < ndims - 1 && i < 8; ++i)
+    for (i = 0; i < ndims - 1 && i < MAX_ARRAY_DIMS; ++i)
         g_ptr_array_dims[i] = dims[i + 1];
 }
 
@@ -828,7 +828,7 @@ void parse_old_style_param_declarations(void)
                 if (g_ptr_array_dim_count > 0) {
                     s->elem_size = g_ptr_array_elem_size;
                     s->dim_count = g_ptr_array_dim_count;
-                    for (pi = 0; pi < 8; ++pi)
+                    for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
                         s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
                 }
                 g_ptr_array_dim_count = 0;
@@ -934,7 +934,7 @@ void parse_param_list(void)
             if (ps && g_ptr_array_dim_count > 0) {
                 ps->elem_size = g_ptr_array_elem_size;
                 ps->dim_count = g_ptr_array_dim_count;
-                for (pi = 0; pi < 8; ++pi)
+                for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
                     ps->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
             g_ptr_array_dim_count = 0;
@@ -1680,7 +1680,7 @@ void scan_local_decl_after_type(int base)
                 int pi;
                 s->elem_size = g_ptr_array_elem_size;
                 s->dim_count = g_ptr_array_dim_count;
-                for (pi = 0; pi < 8; ++pi)
+                for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
                     s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
         }
@@ -3529,11 +3529,11 @@ void parse_function_or_global(int base_type)
             int first_dim = g_funcptr_decl_array_len;
             int base_size = type_size(type);
             int dim_count = 0;
-            int dims[8];
+            int dims[MAX_ARRAY_DIMS];
             int i;
             int inner_count;
 
-            for (i = 0; i < 8; ++i)
+            for (i = 0; i < MAX_ARRAY_DIMS; ++i)
                 dims[i] = 0;
 
             if (g_funcptr_decl_array_len > 0) {
@@ -3553,8 +3553,14 @@ void parse_function_or_global(int base_type)
                     d = parse_const_int_expr();
                     expect(']');
                 }
-                if (dim_count < 8)
+                if (dim_count < MAX_ARRAY_DIMS) {
                     dims[dim_count++] = d;
+                } else {
+                    /* Array rank exceeds the supported maximum (C99/C11
+                     * 5.2.4.1 guarantees at least 12); keep dim_count capped
+                     * so dims[] is never indexed out of range. */
+                    error_here("too many array dimensions");
+                }
             }
 
             if (dim_count > 0) {
@@ -3619,7 +3625,7 @@ void parse_function_or_global(int base_type)
                 s->is_array = 1;
                 s->array_len = arrlen;
                 s->dim_count = dim_count;
-                for (i = 0; i < 8; ++i)
+                for (i = 0; i < MAX_ARRAY_DIMS; ++i)
                     s->dims[i] = (i < dim_count) ? dims[i] : 0;
 
                 if (dim_count > 1)
@@ -3636,7 +3642,7 @@ void parse_function_or_global(int base_type)
                 int pi;
                 s->elem_size = g_ptr_array_elem_size;
                 s->dim_count = g_ptr_array_dim_count;
-                for (pi = 0; pi < 8; ++pi)
+                for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
                     s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
             g_ptr_array_dim_count = 0;
