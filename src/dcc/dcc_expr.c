@@ -746,7 +746,7 @@ void parse_array_declarator_dims(int base_type,
                     n = 0;
                 } else {
                     if (asm_suppress_depth == 0)
-                        error_here("variable length arrays are not supported; use malloc and an explicit pointer");
+                        error_here("variable inner dimensions in variable-length arrays are not supported; use malloc and an explicit pointer");
                     skip_array_dim_to_close();
                     n = 0;
                 }

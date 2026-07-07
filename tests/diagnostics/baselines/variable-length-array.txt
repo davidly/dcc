@@ -1,4 +1,4 @@
-<source>:3: error DCC-E0601: variable length arrays are not supported; use malloc and an explicit pointer near 'm'
+<source>:3: error DCC-E0601: variable inner dimensions in variable-length arrays are not supported; use malloc and an explicit pointer near 'm'
         int a[n][m];
                  ^
 dcc: 1 error(s)

@@ -412,6 +412,32 @@ static int vla_ptr2d_deref_chain(int rows)
     return s;
 }
 
+static int vla_ptr2d_deref_chain_while(int rows)
+{
+    int grid[rows][3];
+    int (*p)[3] = grid;
+    int i, j, s = 0;
+    i = 0;
+    while (i < rows) {
+        j = 0;
+        while (j < 3) {
+            *(*(p + i) + j) = i * 10 + j;
+            j++;
+        }
+        i++;
+    }
+    i = 0;
+    while (i < rows) {
+        j = 0;
+        while (j < 3) {
+            s += *(*(p + i) + j);
+            j++;
+        }
+        i++;
+    }
+    return s;
+}
+
 /* Three-dimensional pointer-to-array dereference chain: the explicit
  * *(*(*(p + i) + j) + k) desugaring of p[i][j][k], written for both a store
  * and a read, must match the bracket form. */
@@ -429,6 +455,89 @@ static int vla_ptr3d_deref_chain(int rows)
             for (k = 0; k < 3; k++)
                 s += *(*(*(p + i) + j) + k);
     return s;
+}
+
+static int vla_ptr3d_deref_chain_do(int rows)
+{
+    int cube[rows][2][3];
+    int (*p)[2][3] = cube;
+    int i, j, k, s = 0;
+    i = 0;
+    do {
+        j = 0;
+        do {
+            k = 0;
+            do {
+                *(*(*(p + i) + j) + k) = i * 100 + j * 10 + k;
+                k++;
+            } while (k < 3);
+            j++;
+        } while (j < 2);
+        i++;
+    } while (i < rows);
+    i = 0;
+    do {
+        j = 0;
+        do {
+            k = 0;
+            do {
+                s += *(*(*(p + i) + j) + k);
+                k++;
+            } while (k < 3);
+            j++;
+        } while (j < 2);
+        i++;
+    } while (i < rows);
+    return s;
+}
+
+static int vla_ptr2d_deref_chain_return(int rows)
+{
+    int grid[rows][3];
+    int (*p)[3] = grid;
+    *(*(p + 1) + 2) = 77;
+    return *(*(p + 1) + 2);
+}
+
+static int vla_ptr2d_deref_chain_switch(int rows, int (*p)[3])
+{
+    switch (rows) {
+    case 2:
+        *(*(p + 0) + 1) = 20;
+        break;
+    default:
+        *(*(p + 0) + 1) = 99;
+        break;
+    }
+    return *(*(p + 0) + 1);
+}
+
+static int vla_ptr2d_deref_chain_contexts(int rows)
+{
+    int grid[rows][3];
+    int (*p)[3] = grid;
+    int sw;
+
+    if (rows == 2)
+        *(*(p + 0) + 0) = 10;
+
+    sw = vla_ptr2d_deref_chain_switch(rows, p);
+
+    *(*(p + 0) + 2) = 30;
+    {
+        int x = *(*(p + 0) + 2);
+        return *(*(p + 0) + 0) + sw + x +
+               vla_ptr2d_deref_chain_return(rows);
+    }
+}
+
+static int vla_ptr2d_deref_chain_compound(int rows)
+{
+    int grid[rows][3];
+    int (*p)[3] = grid;
+    *(*(p + 1) + 2) = 40;
+    *(*(p + 1) + 2) += 2;
+    return *(*(p + 1) + 2);
 }
 
 /* Storing a long-typed RHS into an int VLA element uses the truncating element
@@ -626,7 +735,11 @@ int main(void)
     check_int("vla_long_bound", vla_long_bound(5), 6);
     check_int("vla_pass2d", vla_pass2d(4), 30);
     check_int("vla_ptr2d_deref_chain", vla_ptr2d_deref_chain(4), 192);
+    check_int("vla_ptr2d_deref_chain_while", vla_ptr2d_deref_chain_while(4), 192);
     check_int("vla_ptr3d_deref_chain", vla_ptr3d_deref_chain(3), 1908);
+    check_int("vla_ptr3d_deref_chain_do", vla_ptr3d_deref_chain_do(3), 1908);
+    check_int("vla_ptr2d_deref_chain_contexts", vla_ptr2d_deref_chain_contexts(2), 137);
+    check_int("vla_ptr2d_deref_chain_compound", vla_ptr2d_deref_chain_compound(2), 42);
     check_int("vla_ptr10d_deref_chain", vla_ptr10d_deref_chain(2), 1024);
     check_int("vla_long_rhs_store", vla_long_rhs_store(5), 5010);
 
