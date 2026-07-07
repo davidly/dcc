@@ -256,6 +256,14 @@ int ast_stmt_has_reentry_label(const struct AstNode *n);
 int ast_stmt_exits(const struct AstNode *n);
 int ast_last_statement_exits(void);
 
+/* Reset the per-statement support-probe caches (ast_gen_supported and
+ * friends memoize by AST node pointer within a single statement's checks;
+ * arena nodes are reused across statements, so the cache must be dropped
+ * before probing a freshly-built one - see dcc_ast_gen_support.c). Called
+ * from dcc_stmt.c's gen_compound before ast_stmt_supported on a new node,
+ * as well as from within the ast_gen_stmt* files themselves. */
+void ast_support_cache_begin(void);
+
 /* Pure-AST emission of a declaration initializer's assignment-expression.
  * Builds into the isolated g_ast_init_arena; fatal on unsupported constructs. */
 void ast_emit_init_expr(void);
