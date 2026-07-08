@@ -1061,17 +1061,6 @@ foreach ($result in $results) {
     }
 }
 
-$extendedPassed = $null
-if ($Extended) {
-    Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
-        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit
-    $extendedExitCode = $script:ExtendedSuiteExitCode
-    $extendedPassed = ($extendedExitCode -eq 0)
-    if (-not $extendedPassed) {
-        $failed++
-    }
-}
-
 $diagnosticsPassed = $null
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -1082,6 +1071,17 @@ $diagnosticsExitCode = $LASTEXITCODE
 $diagnosticsPassed = ($diagnosticsExitCode -eq 0)
 if (-not $diagnosticsPassed) {
     $failed++
+}
+
+$extendedPassed = $null
+if ($Extended) {
+    Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
+        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit
+    $extendedExitCode = $script:ExtendedSuiteExitCode
+    $extendedPassed = ($extendedExitCode -eq 0)
+    if (-not $extendedPassed) {
+        $failed++
+    }
 }
 
 Write-Host ""
