@@ -52,6 +52,10 @@ static void check_local_designators(void)
     struct Pair local_pair = { .b = 22, .a = 21 };
     struct Pair local_pairs[2] = { [1] = { .b = 42, .a = 41 }, [0] = { 39, 40 } };
     int local_values[4] = { [2] = 32, [0] = 30, 31, [3] = 33 };
+    static const struct Pair static_pairs[] = {
+        { .b = 52, .a = 51 },
+        { .b = 54, .a = 53 }
+    };
 
     check_int(local_pair.a, 21, "local_pair.a");
     check_int(local_pair.b, 22, "local_pair.b");
@@ -63,6 +67,10 @@ static void check_local_designators(void)
     check_int(local_values[1], 31, "local_values[1]");
     check_int(local_values[2], 32, "local_values[2]");
     check_int(local_values[3], 33, "local_values[3]");
+    check_int(static_pairs[0].a, 51, "static_pairs[0].a");
+    check_int(static_pairs[0].b, 52, "static_pairs[0].b");
+    check_int(static_pairs[1].a, 53, "static_pairs[1].a");
+    check_int(static_pairs[1].b, 54, "static_pairs[1].b");
 }
 
 int main(void)

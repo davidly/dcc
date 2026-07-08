@@ -1184,7 +1184,7 @@ void gen_local_decl_after_type(int base)
                 emit_init_auto_struct_array_from_list(s);
             } else if (!s->is_array && tok.kind == '{' && (type & TYPE_STRUCT) && type_ptr_depth(type) == 0) {
                 emit_init_auto_struct_from_list(s);
-            } else if (s->is_array && tok.kind == '{' && !(type & TYPE_STRUCT)) {
+            } else if (s->is_array && tok.kind == '{' && (!(type & TYPE_STRUCT) || type_ptr_depth(type) > 0)) {
                 emit_init_auto_array_from_list(s, type);
             } else if (!s->is_array && tok.kind == '{') {
                 /* Same ix-direct fast path as the plain (no-braces) scalar

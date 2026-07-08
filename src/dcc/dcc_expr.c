@@ -199,6 +199,46 @@ void gen_expr_no_comma(void);
 void gen_unary(void);
 void gen_snippet_lvalue_addr(const char *snippet, int *ptype);
 void gen_statement(void);
+
+static void parse_pointer_array_suffixes(int base_type)
+{
+    int dims[MAX_ARRAY_DIMS];
+    int ndims;
+    int i;
+    int n;
+    int elem_bytes;
+    int total;
+
+    ndims = 0;
+    memset(dims, 0, sizeof(dims));
+    while (accept('[')) {
+        if (tok.kind == ']') {
+            n = 0;
+            next_token();
+        } else {
+            n = parse_const_int_expr();
+            expect(']');
+        }
+        if (n < 0) n = 0;
+        if (ndims < MAX_ARRAY_DIMS) dims[ndims++] = n;
+    }
+
+    elem_bytes = type_size(base_type);
+    if (elem_bytes <= 0) elem_bytes = 2;
+    total = 1;
+    for (i = 0; i < ndims; ++i) {
+        if (dims[i] <= 0) {
+            total = 0;
+            break;
+        }
+        total *= dims[i];
+    }
+    g_ptr_array_dim_count = ndims;
+    g_ptr_array_elem_size = total > 0 ? total * elem_bytes : elem_bytes;
+    for (i = 0; i < ndims && i < MAX_ARRAY_DIMS; ++i)
+        g_ptr_array_dims[i] = dims[i];
+}
+
 int parse_funcptr_declarator(int *ptype, char *name, int namesz)
 {
     int type;
@@ -349,6 +389,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                     else if (tok.kind == ')') depth--;
                     next_token();
                 }
+            } else if (tok.kind == '[') {
+                parse_pointer_array_suffixes(ptype[0]);
             }
             type = type_add_ptr(ptype[0]);
             ptype[0] = type;
@@ -375,41 +417,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             next_token();
         expect(')');
     } else if (tok.kind == '[') {
-        int dims[MAX_ARRAY_DIMS];
-        int ndims;
-        int i;
-        int n;
-        int elem_bytes;
-        int total;
-
-        ndims = 0;
-        memset(dims, 0, sizeof(dims));
-        while (accept('[')) {
-            if (tok.kind == ']') {
-                n = 0;
-                next_token();
-            } else {
-                n = parse_const_int_expr();
-                expect(']');
-            }
-            if (n < 0) n = 0;
-            if (ndims < MAX_ARRAY_DIMS) dims[ndims++] = n;
-        }
-
-        elem_bytes = type_size(ptype[0]);
-        if (elem_bytes <= 0) elem_bytes = 2;
-        total = 1;
-        for (i = 0; i < ndims; ++i) {
-            if (dims[i] <= 0) {
-                total = 0;
-                break;
-            }
-            total *= dims[i];
-        }
-        g_ptr_array_dim_count = ndims;
-        g_ptr_array_elem_size = total > 0 ? total * elem_bytes : elem_bytes;
-        for (i = 0; i < ndims && i < MAX_ARRAY_DIMS; ++i)
-            g_ptr_array_dims[i] = dims[i];
+        parse_pointer_array_suffixes(ptype[0]);
     }
 
     ptype[0] = type;
