@@ -9,7 +9,9 @@ Builds all *.c files in tests/ folder using dccmake, executes each under the
 emulator, and compares output against per-app baselines in tests/baselines/
 (one <app>.txt per test). Comparison is keyed by app name, so test discovery
 order does not matter. Uses tests/_test_overrides.json for test-specific arguments and
-stack sizes.
+stack sizes. After the app suite, also runs the compile-fail diagnostics suite
+via scripts/run-diagnostics.ps1 and fails the run if any diagnostic baseline
+mismatches.
 
 Pass -Extended to also run scripts/runall-extended.ps1 after the main app suite,
 verifying the imported c-testsuite single-exec corpus as part of the same run.
@@ -1059,6 +1061,18 @@ foreach ($result in $results) {
     }
 }
 
+$diagnosticsPassed = $null
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+& pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
+$diagnosticsExitCode = $LASTEXITCODE
+$diagnosticsPassed = ($diagnosticsExitCode -eq 0)
+if (-not $diagnosticsPassed) {
+    $failed++
+}
+
 $extendedPassed = $null
 if ($Extended) {
     Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
@@ -1088,6 +1102,7 @@ Write-Host "  Skipped:      $skipped"
 if ($Extended) {
     Write-Host "  Extended:     $(if ($extendedPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($extendedPassed) { "Green" } else { "Red" })
 }
+Write-Host "  Diagnostics:  $(if ($diagnosticsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($diagnosticsPassed) { "Green" } else { "Red" })
 Write-Host "  Total time:   $suiteElapsedStr"
 Write-Host "  Optimisation: $optimisationSummary"
 
@@ -1101,6 +1116,10 @@ if ($failedApps.Count -gt 0) {
 if ($Extended -and -not $extendedPassed) {
     Write-Host ""
     Write-Host "Extended c-testsuite failed" -ForegroundColor Red
+}
+if (-not $diagnosticsPassed) {
+    Write-Host ""
+    Write-Host "Diagnostics suite failed" -ForegroundColor Red
 }
 
 if ($Report) {

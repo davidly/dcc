@@ -15,6 +15,10 @@
 #include "dcc.h"
 #include "dcc_ast.h"
 
+#ifdef _WIN32
+#include <direct.h>
+#endif
+
 void append_mem(char **outp, long *lenp, long *capp, const char *s, long n);
 
 long file_size(FILE *f)
@@ -140,9 +144,12 @@ char *read_file(const char *name, long *lenp)
 }
 
 #define MAX_INCLUDE_DEPTH 8
+#define MAX_PRAGMA_ONCE_FILES 256
 
 static const char *include_dirs[MAX_INCLUDE_DIRS];
 static int num_include_dirs;
+static char pragma_once_files[MAX_PRAGMA_ONCE_FILES][512];
+static int num_pragma_once_files;
 
 void add_include_dir(const char *dir)
 {
@@ -300,6 +307,341 @@ int report_include_error(const char *file, int line, const char *msg)
     return -1;
 }
 
+void canonical_include_path(const char *name, char *out, int outsz)
+{
+    char *p;
+
+    /*
+     * Let the platform routine allocate the buffer: realpath() may write up to
+     * PATH_MAX bytes (4096 on Linux), so a fixed on-stack buffer risks an
+     * overflow.  Both realpath(x, NULL) (POSIX.1-2008 / glibc / macOS) and
+     * _fullpath(NULL, x, 0) (MSVC) malloc a right-sized result for us.
+     */
+#ifdef _WIN32
+    p = _fullpath(NULL, name, 0);
+#else
+    p = realpath(name, NULL);
+#endif
+
+    if (!p) {
+        /* Not resolvable (e.g. file does not exist): fall back to the raw
+         * name; read_file() will report the real error later. */
+        if ((int)strlen(name) >= outsz)
+            fatal("include path too long");
+        strcpy(out, name);
+        return;
+    }
+
+    if ((int)strlen(p) >= outsz) {
+        free(p);
+        fatal("include path too long");
+    }
+
+    strcpy(out, p);
+    free(p);
+}
+
+int find_pragma_once_file(const char *path)
+{
+    int i;
+
+    for (i = 0; i < num_pragma_once_files; ++i) {
+        if (!strcmp(pragma_once_files[i], path))
+            return i;
+    }
+    return -1;
+}
+
+void mark_pragma_once_file(const char *path)
+{
+    if (find_pragma_once_file(path) >= 0)
+        return;
+
+    if (num_pragma_once_files >= MAX_PRAGMA_ONCE_FILES)
+        fatal("too many #pragma once files");
+
+    strcpy(pragma_once_files[num_pragma_once_files++], path);
+}
+
+/* Track #if/#ifdef/#ifndef/#elif/#else/#endif nesting during include splicing so
+ * that `#pragma once` (and recursion into #include) can be gated on the active
+ * region.  Returns 1 if the line is a conditional directive - the caller still
+ * emits its verbatim text so the later active-source filter pass sees it - or 0
+ * otherwise. */
+int include_cond_update(const char *line, long n,
+                        int *astk, int *btk, int *selse,
+                        int *spp, int *activep)
+{
+    const char *s = line;
+    const char *e = line + n;
+    char word[16];
+    int wi;
+    int sp = *spp;
+    int active = *activep;
+
+    while (s < e && (*s == ' ' || *s == '\t'))
+        s++;
+    if (s >= e || *s != '#')
+        return 0;
+    s++;
+    while (s < e && (*s == ' ' || *s == '\t'))
+        s++;
+    wi = 0;
+    while (s < e && is_ident_char((unsigned char)*s) && wi < (int)sizeof(word) - 1)
+        word[wi++] = *s++;
+    word[wi] = 0;
+
+    if (!strcmp(word, "ifdef") || !strcmp(word, "ifndef")) {
+        char name[64];
+        int ni;
+        int cond;
+        while (s < e && (*s == ' ' || *s == '\t'))
+            s++;
+        ni = 0;
+        while (s < e && is_ident_char((unsigned char)*s) && ni < (int)sizeof(name) - 1)
+            name[ni++] = *s++;
+        name[ni] = 0;
+        cond = (name[0] && find_define(name) >= 0);
+        if (!strcmp(word, "ifndef"))
+            cond = !cond;
+        if (sp < MAX_IFSTACK) {
+            astk[sp] = active;
+            btk[sp] = (active && cond) ? 1 : 0;
+            selse[sp] = 0;
+            active = active && cond;
+            sp++;
+        }
+    } else if (!strcmp(word, "if")) {
+        char expr[512];
+        int ei = 0;
+        int cond;
+        while (s < e && ei < (int)sizeof(expr) - 1)
+            expr[ei++] = *s++;
+        expr[ei] = 0;
+        strip_macro_replacement_comments(expr);
+        cond = pp_eval_simple_expr(expr);
+        if (sp < MAX_IFSTACK) {
+            astk[sp] = active;
+            btk[sp] = (active && cond) ? 1 : 0;
+            selse[sp] = 0;
+            active = active && cond;
+            sp++;
+        }
+    } else if (!strcmp(word, "elif")) {
+        if (sp > 0) {
+            int i = sp - 1;
+            int parent = astk[i];
+            if (selse[i] || btk[i]) {
+                active = 0;
+            } else {
+                char expr[512];
+                int ei = 0;
+                int cond;
+                while (s < e && ei < (int)sizeof(expr) - 1)
+                    expr[ei++] = *s++;
+                expr[ei] = 0;
+                strip_macro_replacement_comments(expr);
+                cond = pp_eval_simple_expr(expr);
+                active = parent && cond;
+                if (active)
+                    btk[i] = 1;
+            }
+        }
+    } else if (!strcmp(word, "else")) {
+        if (sp > 0) {
+            int i = sp - 1;
+            int parent = astk[i];
+            if (!selse[i]) {
+                active = parent && !btk[i];
+                btk[i] = 1;
+                selse[i] = 1;
+            } else {
+                active = 0;
+            }
+        }
+    } else if (!strcmp(word, "endif")) {
+        if (sp > 0) {
+            sp--;
+            active = astk[sp];
+        }
+    } else {
+        return 0;
+    }
+
+    *spp = sp;
+    *activep = active;
+    return 1;
+}
+
+int include_scan_macro_directive(const char *line, long n, int active)
+{
+    const char *s = line;
+    const char *e = line + n;
+    char word[16];
+    int wi;
+
+    while (s < e && (*s == ' ' || *s == '\t'))
+        s++;
+    if (s >= e || *s != '#')
+        return 0;
+    s++;
+    while (s < e && (*s == ' ' || *s == '\t'))
+        s++;
+
+    wi = 0;
+    while (s < e && is_ident_char((unsigned char)*s) && wi < (int)sizeof(word) - 1)
+        word[wi++] = *s++;
+    word[wi] = 0;
+
+    if (!strcmp(word, "undef")) {
+        char name[64];
+        int ni;
+
+        if (!active)
+            return 1;
+        while (s < e && (*s == ' ' || *s == '\t'))
+            s++;
+        ni = 0;
+        while (s < e && is_ident_char((unsigned char)*s) && ni < (int)sizeof(name) - 1)
+            name[ni++] = *s++;
+        name[ni] = 0;
+        if (name[0])
+            remove_define(name);
+        return 1;
+    }
+
+    if (!strcmp(word, "define")) {
+        char name[64];
+        char val[MAX_MACRO_TEXT];
+        char params[8][32];
+        int nargs;
+        int ni;
+        int vi;
+
+        if (!active)
+            return 1;
+        while (s < e && (*s == ' ' || *s == '\t'))
+            s++;
+        ni = 0;
+        while (s < e && is_ident_char((unsigned char)*s) && ni < (int)sizeof(name) - 1)
+            name[ni++] = *s++;
+        name[ni] = 0;
+        if (!name[0])
+            return 1;
+
+        memset(params, 0, sizeof(params));
+        nargs = 0;
+        if (s < e && *s == '(') {
+            s++;
+            while (s < e && *s != ')') {
+                char pname[32];
+                int pi;
+                while (s < e && (*s == ' ' || *s == '\t'))
+                    s++;
+                if (s >= e || *s == ')')
+                    break;
+
+                if (s + 2 < e && s[0] == '.' && s[1] == '.' && s[2] == '.') {
+                    s += 3;
+                    if (nargs < 8) {
+                        strcpy(params[nargs], "__VA_ARGS__");
+                        nargs++;
+                    }
+                    while (s < e && (*s == ' ' || *s == '\t'))
+                        s++;
+                    if (s < e && *s == ',')
+                        s++;
+                    continue;
+                }
+
+                pi = 0;
+                while (s < e && is_ident_char((unsigned char)*s) && pi < 31)
+                    pname[pi++] = *s++;
+                pname[pi] = 0;
+                if (pname[0] && nargs < 8) {
+                    strcpy(params[nargs], pname);
+                    nargs++;
+                }
+                while (s < e && (*s == ' ' || *s == '\t'))
+                    s++;
+                if (s < e && *s == ',') {
+                    s++;
+                } else if (s < e && *s != ')') {
+                    s++;
+                }
+            }
+            if (s < e && *s == ')')
+                s++;
+            while (s < e && (*s == ' ' || *s == '\t'))
+                s++;
+            vi = 0;
+            while (s < e && vi < (int)sizeof(val) - 1)
+                val[vi++] = *s++;
+            while (vi > 0 && (val[vi - 1] == ' ' || val[vi - 1] == '\t' || val[vi - 1] == '\r'))
+                vi--;
+            val[vi] = 0;
+            strip_macro_replacement_comments(val);
+            add_define_ex(name, val[0] ? val : "1", 1, nargs, params);
+        } else {
+            while (s < e && (*s == ' ' || *s == '\t'))
+                s++;
+            vi = 0;
+            while (s < e && vi < (int)sizeof(val) - 1)
+                val[vi++] = *s++;
+            while (vi > 0 && (val[vi - 1] == ' ' || val[vi - 1] == '\t' || val[vi - 1] == '\r'))
+                vi--;
+            val[vi] = 0;
+            strip_macro_replacement_comments(val);
+            add_define(name, val[0] ? val : "1");
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+int try_parse_pragma_once(const char *line, long n)
+{
+    long i;
+
+    i = 0;
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        i++;
+
+    if (i >= n || line[i] != '#')
+        return 0;
+    i++;
+
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        i++;
+
+    if (i + 6 > n || memcmp(line + i, "pragma", 6) != 0)
+        return 0;
+    i += 6;
+
+    if (i >= n || (line[i] != ' ' && line[i] != '\t'))
+        return 0;
+
+    while (i < n && (line[i] == ' ' || line[i] == '\t'))
+        i++;
+
+    if (i + 4 > n || memcmp(line + i, "once", 4) != 0)
+        return 0;
+    i += 4;
+
+    while (i < n && (line[i] == ' ' || line[i] == '\t' || line[i] == '\r'))
+        i++;
+
+    if (i == n)
+        return 1;
+
+    /* Tolerate a trailing comment after the directive (line or block form). */
+    if (i + 1 < n && line[i] == '/' && (line[i + 1] == '/' || line[i + 1] == '*'))
+        return 1;
+
+    return 0;
+}
+
 int try_parse_include(const char *line, long n, const char *file, int src_line,
                               char *name, int namesz, int *is_system)
 {
@@ -380,9 +722,23 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
     long line_start;
     long line_end;
     int src_line;
+    char once_path[512];
+    int if_active[MAX_IFSTACK];
+    int if_taken[MAX_IFSTACK];
+    int if_seen_else[MAX_IFSTACK];
+    int if_sp;
+    int active;
 
     if (depth > MAX_INCLUDE_DEPTH)
         fatal("too many nested includes");
+
+    canonical_include_path(name, once_path, sizeof(once_path));
+    if (find_pragma_once_file(once_path) >= 0) {
+        out = (char *)xmalloc(1);
+        out[0] = 0;
+        out_len[0] = 0;
+        return out;
+    }
 
     raw = read_file(name, &raw_len);
 
@@ -390,6 +746,8 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
     out_len2 = 0;
     out_cap = 0;
     src_line = 1;
+    if_sp = 0;
+    active = 1;
 
     append_line_directive(&out, &out_len2, &out_cap, 1, name);
 
@@ -407,13 +765,42 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
         {
             int is_system = 0;
             int include_status;
-            include_status = try_parse_include(raw + line_start,
-                                               line_end - line_start,
-                                               name,
-                                               src_line,
-                                               incname,
-                                               sizeof(incname),
-                                               &is_system);
+            if (include_cond_update(raw + line_start, line_end - line_start,
+                                    if_active, if_taken, if_seen_else,
+                                    &if_sp, &active)) {
+                /* Conditional directive: keep it verbatim so the later
+                 * active-source filter pass still balances #if/#endif. */
+                include_status = 0;
+            } else if (include_scan_macro_directive(raw + line_start,
+                                                    line_end - line_start,
+                                                    active)) {
+                /* Keep the directive in the stream; this mutation is only for
+                 * include-splice conditionals and is restored before filtering. */
+                include_status = 0;
+            } else if (try_parse_pragma_once(raw + line_start, line_end - line_start)) {
+                if (active) {
+                    mark_pragma_once_file(once_path);
+                    include_status = -1;
+                } else {
+                    /* Dead-code pragma (e.g. inside #if 0): do not honor it;
+                     * leave the line for the filter pass to drop. */
+                    include_status = 0;
+                }
+            } else {
+                include_status = try_parse_include(raw + line_start,
+                                                   line_end - line_start,
+                                                   name,
+                                                   src_line,
+                                                   incname,
+                                                   sizeof(incname),
+                                                   &is_system);
+                if (include_status > 0 && !active) {
+                    /* #include inside an inactive block: drop it instead of
+                     * recursively expanding the header (which would also mark
+                     * its #pragma once) from dead code. */
+                    include_status = -1;
+                }
+            }
             if (include_status > 0) {
                 if (is_system) {
                     /* For system includes (<foo.h>), try the local directory
@@ -436,6 +823,21 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
                     }
                 } else {
                     make_include_path(name, incname, incpath, sizeof(incpath));
+                    {
+                        FILE *probe = fopen(incpath, "rb");
+                        if (!probe) {
+                            /* A quoted user include that cannot be found is a
+                             * hard error.  Report it against the including file
+                             * and line (rather than letting read_file() abort
+                             * with a generic "cannot open input") so the
+                             * diagnostic points at the offending #include. */
+                            char diag[320];
+                            sprintf(diag, "cannot open include file '%s'", incname);
+                            report_include_error(name, src_line, diag);
+                            exit(1);
+                        }
+                        fclose(probe);
+                    }
                     incsrc = preprocess_includes_file(incpath, depth + 1, &inc_len);
                     append_mem(&out, &out_len2, &out_cap, incsrc, inc_len);
                     append_mem(&out, &out_len2, &out_cap, "\n", 1);
@@ -1124,7 +1526,24 @@ int main(int argc, char **argv)
     strncpy(current_file_name, input_name, sizeof(current_file_name) - 1);
     current_file_name[sizeof(current_file_name) - 1] = 0;
 
-    src = preprocess_includes_file(input_name, 0, &src_len);
+    {
+        int saved_ndefs;
+        struct Def *saved_defs;
+
+        /* Include splicing tracks active #define/#undef directives so that
+         * #pragma once under #if/#ifdef sees source-order macro state. Restore
+         * the table afterward: the expanded source still contains those
+         * directives, and the active-source filter must replay them normally. */
+        saved_defs = (struct Def *)xmalloc(sizeof(defs));
+        saved_ndefs = ndefs;
+        memcpy(saved_defs, defs, sizeof(defs));
+
+        src = preprocess_includes_file(input_name, 0, &src_len);
+
+        ndefs = saved_ndefs;
+        memcpy(defs, saved_defs, sizeof(defs));
+        free(saved_defs);
+    }
     {
         char *filtered_src;
         long filtered_len;

@@ -1359,10 +1359,22 @@ static int scan_compound_literal_if_present(void)
 
     add_compound_literal_local(type);
 
+    /* Walk the braced initializer, recursing into nested compound literals so
+     * each reserves its own frame slot in source order. The codegen pass
+     * re-parses this same initializer at emit time and allocates one frame
+     * slot per nested compound literal (add_compound_literal_local, reached
+     * through ast_emit_init_expr for each non-constant field). Emit consumes
+     * the initializer tokens in source order, so a source-order recursive walk
+     * here reserves exactly the same slots at the same offsets. Skipping the
+     * body (the old behavior) under-reserved the frame: the prologue is sized
+     * from this scan, so the nested literals then landed below SP where an
+     * intervening push/call clobbers them. */
     depth = 0;
     do {
         if (tok.kind == TOK_EOF)
             break;
+        if (depth >= 1 && tok.kind == '(' && scan_compound_literal_if_present())
+            continue;
         if (tok.kind == '{')
             depth++;
         else if (tok.kind == '}')
@@ -1999,6 +2011,8 @@ void scan_static_local_decl_after_type(int base)
         bytes = type_size(type);
         if (arrlen > 0)
             bytes = object_array_size(type, arrlen);
+        else if (g_last_array_dim_count > 0)
+            bytes = 0;
         else if (arrlen < 0)
             bytes = 0;
 
@@ -2016,7 +2030,7 @@ void scan_static_local_decl_after_type(int base)
         g->needs_extrn = 0;
         g->is_static = 1;
         g->size = bytes;
-        if (arrlen != 0) {
+        if (arrlen != 0 || g_last_array_dim_count > 0) {
             g->is_array = 1;
             g->array_len = arrlen > 0 ? arrlen : 0;
             g->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
@@ -2028,7 +2042,7 @@ void scan_static_local_decl_after_type(int base)
             l = add_local_known(name, type, SC_GLOBAL, 0, bytes);
             strncpy(l->link_name, backing_name, sizeof(l->link_name) - 1);
             l->link_name[sizeof(l->link_name) - 1] = 0;
-            if (arrlen != 0) {
+            if (arrlen != 0 || g_last_array_dim_count > 0) {
                 l->is_array = 1;
                 l->array_len = arrlen > 0 ? arrlen : 0;
                 l->elem_size = g->elem_size;
@@ -3366,6 +3380,8 @@ static int try_speculative_noix_function_body(const char *name, int type,
 {
     FILE *scratch;
     FILE *saved_outf_ptr;
+    int saved_stack_check;
+    int generated_stack_check;
     int implicit_zero_return;
     int c;
 
@@ -3377,7 +3393,9 @@ static int try_speculative_noix_function_body(const char *name, int type,
         fatal("cannot create speculative no-ix-frame temp file");
 
     saved_outf_ptr = outf;
+    saved_stack_check = opt_stack_check;
     outf = scratch;
+    opt_stack_check = s->stack_check_enabled;
     /* emit_runtime_extrn_if_needed (dcc_symbols.c) caches which runtime-
      * helper EXTRNs have already been emitted in a *persistent*,
      * compilation-wide table, so a helper's declaration is normally only
@@ -3410,6 +3428,8 @@ static int try_speculative_noix_function_body(const char *name, int type,
     gen_compound();
     emit_function_epilogue(implicit_zero_return);
     g_inline_body_buffering--;
+    generated_stack_check = opt_stack_check;
+    opt_stack_check = saved_stack_check;
     outf = saved_outf_ptr;
 
     /* check_undefined_user_labels() is deliberately not called above: if
@@ -3428,6 +3448,7 @@ static int try_speculative_noix_function_body(const char *name, int type,
         while ((c = fgetc(scratch)) != EOF)
             fputc(c, outf);
         fclose(scratch);
+        opt_stack_check = generated_stack_check;
         return 1;
     }
 
@@ -3485,6 +3506,7 @@ void parse_function_or_global(int base_type)
         int saved_param_offset;
         int saved_nenum_consts;
         int saved_nulabels;
+        int saved_stack_check;
 
         int base_is_func_typedef;
         int is_funcret_funcptr_decl;
@@ -3548,6 +3570,15 @@ void parse_function_or_global(int base_type)
             s = add_global(name, type, SC_FUNC);
             s->is_inline |= decl_is_inline;
             parse_function_return_type = type;
+            if (g_ptr_array_dim_count > 0) {
+                int pi;
+                s->elem_size = g_ptr_array_elem_size;
+                s->dim_count = g_ptr_array_dim_count;
+                for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
+                    s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
+                g_ptr_array_dim_count = 0;
+                g_ptr_array_elem_size = 0;
+            }
             if (decl_is_static) {
                 s->is_static = 1;
                 s->needs_extrn = 0;
@@ -3576,11 +3607,27 @@ void parse_function_or_global(int base_type)
                 strncpy(g_current_compiling_func, name, sizeof(g_current_compiling_func) - 1);
                 g_current_compiling_func[sizeof(g_current_compiling_func) - 1] = 0;
 
+                /* Capture the stack-check state in effect at the function's
+                 * opening brace.  This is the value baked into THIS function's
+                 * prologue and VLA guards (stored in s->stack_check_enabled
+                 * below and re-applied before the real codegen pass).
+                 *
+                 * Every body-inspection helper and frame-sizing scan below
+                 * tokenizes past the body, which processes any later
+                 * `#pragma stack_check(...)` and mutates the global
+                 * opt_stack_check as a side effect.  None of them READ
+                 * opt_stack_check (runtime-call emission is a no-op while
+                 * scanning - see emit_runtime_call's scan_mode guard), so a
+                 * single restore after the group re-synchronizes the flag with
+                 * the rewound source position; the two rewind blocks further
+                 * below each restore it again alongside posi/tok/nlocals. */
+                saved_stack_check = opt_stack_check;
                 record_inline_function_if_simple(s);
                 record_narrow_return_expr_if_simple(s);
                 if (function_body_mentions_multiuse_inline_call())
                     reserve_inline_temp_locals();
                 scan_function_body_ident_counts();
+                opt_stack_check = saved_stack_check;
 
                 saved_pos = posi;
                 saved_tok_start = tok_start_pos;
@@ -3617,6 +3664,7 @@ void parse_function_or_global(int base_type)
                 local_size = saved_local_size;
                 param_offset = saved_param_offset;
                 nenum_consts = saved_nenum_consts;
+                opt_stack_check = saved_stack_check;
                 /* ast_scan_for_stmt (called by scan_function_body via the AST
                  * builder/emitter for for-loops) can now reach a labeled
                  * statement inside a loop body and call define_user_label,
@@ -3638,9 +3686,11 @@ void parse_function_or_global(int base_type)
                 tok_line = saved_tok_line;
                 tok = saved_tok;
                 nenum_consts = saved_nenum_consts;
+                opt_stack_check = saved_stack_check;
 
                 s->is_defined = 1;
                 s->needs_extrn = 0;
+                s->stack_check_enabled = saved_stack_check;
 
                 nulabels = 0;
                 current_return_label = new_label();
@@ -3663,6 +3713,7 @@ void parse_function_or_global(int base_type)
                 g_static_local_seq = 0;
                 g_compound_literal_seq = 0;
                 g_licm_seq = 0;
+                opt_stack_check = s->stack_check_enabled;
                 if (static_inline_body_can_be_buffered(s)) {
                     FILE *saved_outf;
 

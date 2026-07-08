@@ -319,6 +319,46 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             struct Sym *base;
             int decayed;
             int elem;
+            if (ast_index_lvalue_elem_type(n->a, &elem)) {
+                if (type_is_long(elem)) {
+                    if (n->op == '=')
+                        return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b) ||
+                               ast_value_is_float_word(n->b);
+                    if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ)
+                        return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
+                    if (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
+                        n->op == TOK_MULEQ || n->op == TOK_DIVEQ || n->op == TOK_MODEQ ||
+                        n->op == TOK_ANDEQ || n->op == TOK_OREQ  || n->op == TOK_XOREQ)
+                        return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
+                    return 0;
+                }
+                if (type_is_float(elem)) {
+                    if (n->op == '=')
+                        return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                               ast_value_is_long_word(n->b);
+                    if (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
+                        n->op == TOK_MULEQ || n->op == TOK_DIVEQ)
+                        return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                               ast_value_is_long_word(n->b);
+                    return 0;
+                }
+            }
+            /* Deref-of-pointer-to-array subscript store `(*p)[i] = rhs` (p a
+             * pointer-to-array local/param, e.g. `int (*p)[4]`).  Long and
+             * float element stores are already accepted by the
+             * ast_index_lvalue_elem_type block above; add the plain-int and
+             * pointer element cases so `(*p)[i]` matches the address machine
+             * that gen_index_addr_ast already emits for this shape (via
+             * ast_index_deref_pointer_array_collect). */
+            if (n->op == '=' &&
+                ast_index_deref_pointer_array_collect(n->a, &base, NULL, NULL,
+                                                      NULL, &elem)) {
+                if (type_ptr_depth(elem) > 0)
+                    return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
+                if (ast_is_plain_int_type(elem))
+                    return (type_size(elem) == 1 || type_size(elem) == 2) &&
+                           ast_int_elem_assign_rhs_ok(n);
+            }
             if (ast_index_symbol_nd_elem_type(n->a, &elem)) {
                 if (type_is_long(elem))
                     return (n->op == '=' || (is_compound && expr_result_dead)) &&
@@ -515,10 +555,9 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             }
             return 1;
         }
-        /* Member lvalue store: s.f = rhs / p->f OP= rhs.  Restricted to an INT
-         * (size 2) plain scalar field so the general store lowering is used
-         * with no byte-field fast path intervening (the global struct byte-field
-         * fast path needs a size-1 field). */
+        /* Member lvalue store: s.f = rhs / p->f OP= rhs.  Plain int fields use
+         * the general store lowering; long and float fields also use the
+         * wide-value tail for the supported arithmetic compound operators. */
         if (n->a->kind == AST_MEMBER) {
             int field_type;
             if (ast_member_bitfield_lvalue_type(n->a, &field_type))
@@ -527,16 +566,25 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                 return 0;
             if (type_is_long(field_type)) {
                 if (n->op == '=')
-                    return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
+                    return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b) ||
+                           ast_value_is_float_word(n->b);
+                if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ)
+                    return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
                 if (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                     n->op == TOK_MULEQ || n->op == TOK_DIVEQ || n->op == TOK_MODEQ ||
                     n->op == TOK_ANDEQ || n->op == TOK_OREQ  || n->op == TOK_XOREQ)
                     return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
                 return 0;
             }
-            if (type_is_float(field_type))
-                return n->op == '=' &&
-                       (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
+            if (type_is_float(field_type)) {
+                if (n->op == '=')
+                    return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                           ast_value_is_long_word(n->b);
+                  return (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
+                        n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
+                       (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                        ast_value_is_long_word(n->b));
+            }
             if (type_is_bool(field_type))
                 return n->op == '=' &&
                        (ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b) || ast_value_is_float_word(n->b));
@@ -574,7 +622,7 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                 if (type_is_long(deref_type) &&
                     (n->op == TOK_SHLEQ || n->op == TOK_SHREQ))
                     return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
-                if (type_is_long(deref_type) && expr_result_dead &&
+                if (type_is_long(deref_type) &&
                     (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                      n->op == TOK_MULEQ || n->op == TOK_DIVEQ ||
                      n->op == TOK_MODEQ || n->op == TOK_ANDEQ ||
@@ -583,12 +631,15 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                 return type_is_float(deref_type) &&
                        (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                         n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
-                       (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
+                       (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                        ast_value_is_long_word(n->b));
             }
             if (type_is_long(deref_type))
-                return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
+                return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b) ||
+                       ast_value_is_float_word(n->b);
             if (type_is_float(deref_type))
-                return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b);
+                return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                       ast_value_is_long_word(n->b);
             if (type_ptr_depth(deref_type) > 0)
                 return type_size(deref_type) == 2 && ast_pointer_assign_rhs_supported(n->b);
             return 0;
@@ -605,15 +656,8 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                    ast_struct_return_call_assign_supported(s->type, n->b);
         if (type_is_float(s->type)) {
             if (n->op == '=')
-                return (sym_can_ix_direct(s) || expr_result_dead) &&
-                       (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
-                        ast_value_is_long_word(n->b));
-            if (!sym_can_ix_direct(s))
-                return expr_result_dead &&
-                       (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
-                        n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
-                       (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
-                        ast_value_is_long_word(n->b));
+                return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
+                       ast_value_is_long_word(n->b);
             if (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                 n->op == TOK_MULEQ || n->op == TOK_DIVEQ)
                 return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b) ||
@@ -622,25 +666,14 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         }
         if (type_is_long(s->type)) {
             if (n->op == '=')
-                return (sym_can_ix_direct(s) || expr_result_dead) &&
-                       (ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b) ||
-                        ast_value_is_float_word(n->b));
-            if ((n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
-                !sym_can_ix_direct(s) && expr_result_dead)
+                return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b) ||
+                       ast_value_is_float_word(n->b);
+            if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ)
                 return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
-            if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
-                 n->op == TOK_MULEQ || n->op == TOK_DIVEQ || n->op == TOK_MODEQ ||
-                 n->op == TOK_ANDEQ || n->op == TOK_OREQ  || n->op == TOK_XOREQ) &&
-                !sym_can_ix_direct(s) && expr_result_dead)
-                return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
-            if (!sym_can_ix_direct(s))
-                return 0;
             if (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                 n->op == TOK_MULEQ || n->op == TOK_DIVEQ || n->op == TOK_MODEQ ||
                 n->op == TOK_ANDEQ || n->op == TOK_OREQ  || n->op == TOK_XOREQ)
                 return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
-            if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ)
-                return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
             return 0;
         }
         if (!sym_can_ix_direct(s) && !is_global_word_sym(s) &&
@@ -1133,9 +1166,7 @@ int ast_value_is_long_word(const struct AstNode *arg)
             ast_deref_lvalue_type(arg->a, &lhs_type))
             return type_is_long(lhs_type);
         if (arg->a->kind == AST_INDEX &&
-            (ast_index_symbol_nd_elem_type(arg->a, &lhs_type) ||
-             ast_index_pointer_expr_elem_type(arg->a, &lhs_type) ||
-             ast_index_2d_array_elem_type(arg->a, &lhs_type)))
+            ast_index_lvalue_elem_type(arg->a, &lhs_type))
             return type_is_long(lhs_type);
         if (arg->a->kind == AST_MEMBER && ast_member_lvalue_type(arg->a, &lhs_type))
             return type_is_long(lhs_type);
@@ -1393,10 +1424,21 @@ int ast_value_is_float_word(const struct AstNode *arg)
     }
     if (arg->kind == AST_CAST && type_is_float(arg->type))
         return ast_gen_supported(arg);
-    if (arg->kind == AST_ASSIGN && arg->a != NULL && arg->a->kind == AST_IDENT) {
-        s = find_sym(arg->a->sval);
-        return s != NULL && !s->is_const_value && s->storage != SC_FUNC &&
-               !s->is_array && type_is_float(s->type);
+    if (arg->kind == AST_ASSIGN && arg->a != NULL) {
+        int lhs_type;
+        if (arg->a->kind == AST_IDENT) {
+            s = find_sym(arg->a->sval);
+            return s != NULL && !s->is_const_value && s->storage != SC_FUNC &&
+                   !s->is_array && type_is_float(s->type);
+        }
+        if (arg->a->kind == AST_UNARY && arg->a->op == '*' &&
+            ast_deref_lvalue_type(arg->a, &lhs_type))
+            return type_is_float(lhs_type);
+        if (arg->a->kind == AST_INDEX &&
+            ast_index_lvalue_elem_type(arg->a, &lhs_type))
+            return type_is_float(lhs_type);
+        if (arg->a->kind == AST_MEMBER && ast_member_lvalue_type(arg->a, &lhs_type))
+            return type_is_float(lhs_type);
     }
     if (arg->kind == AST_COND)
         return ast_cond_result_is_float(arg);

@@ -46,6 +46,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "expected \"FILENAME\" or <FILENAME>")) return "DCC-E0301";
     if (dcc_msg_has(msg, "include name too long")) return "DCC-E0302";
     if (dcc_msg_has(msg, "unterminated include name")) return "DCC-E0303";
+    if (dcc_msg_has(msg, "cannot open include file")) return "DCC-E0304";
     if (dcc_msg_has(msg, "not a valid preprocessor directive")) return "DCC-E0310";
     if (dcc_msg_has(msg, "unknown preprocessor directive")) return "DCC-E0310";
     if (dcc_msg_has(msg, "too many nested #if")) return "DCC-E0311";
@@ -55,6 +56,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "#endif without matching #if")) return "DCC-E0315";
     if (dcc_msg_has(msg, "too many arguments provided to function-like macro invocation")) return "DCC-E0320";
     if (dcc_msg_has(msg, "too few arguments provided to function-like macro invocation")) return "DCC-E0321";
+    if (dcc_msg_has(msg, "macro argument too long in function-like macro invocation")) return "DCC-E0322";
     if (dcc_msg_has(msg, "constant integer expression expected")) return "DCC-E0401";
     if (dcc_msg_has(msg, "division by zero in constant expression")) return "DCC-E0402";
     if (dcc_msg_has(msg, "expected an expression")) return "DCC-E0403";

@@ -1,0 +1,4 @@
+<source>:14: error DCC-E0312: #error stack_check pragma diagnostics smoke test
+    #error stack_check pragma diagnostics smoke test
+    ^
+dcc: 1 error(s)

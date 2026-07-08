@@ -1,0 +1,3 @@
+tpragstk start 7
+
+?stack overflow: exceeded by 0x{{HEX4}} limit 0x{{HEX4}}

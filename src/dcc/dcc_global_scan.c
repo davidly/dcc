@@ -130,6 +130,7 @@ void scan_global_write_info(void)
     int saved_line;
     int saved_tok_line;
     struct Token saved_tok;
+    int saved_stack_check;
     struct Def *saved_defs;
     int saved_ndefs;
     char *saved_src;
@@ -146,6 +147,7 @@ void scan_global_write_info(void)
     saved_line = line_no;
     saved_tok_line = tok_line;
     saved_tok = tok;
+    saved_stack_check = opt_stack_check;
 
     saved_defs = (struct Def *)xmalloc(sizeof(defs));
     saved_ndefs = ndefs;
@@ -165,6 +167,15 @@ void scan_global_write_info(void)
     saved_src = (char *)xmalloc((size_t)src_len + 1);
     memcpy(saved_src, src, (size_t)src_len + 1);
     saved_src_len = src_len;
+
+    /* This scan tokenises the whole file purely for its write/addr-taken
+     * bookkeeping; the real pass re-tokenises the same source afterward. Any
+     * lexer/preprocessor diagnostic here (over-long string literal, function-
+     * like macro arg-count mismatch, ...) would therefore be emitted twice, so
+     * suppress diagnostics for the duration - the real pass is the one that
+     * surfaces them to the user. This also keeps the scan from tripping the
+     * errors>40 fatal before real compilation begins. */
+    asm_suppress_depth++;
 
     posi = 0;
     tok_start_pos = 0;
@@ -245,6 +256,8 @@ void scan_global_write_info(void)
         next_token();
     }
 
+    asm_suppress_depth--;
+
     ndefs = saved_ndefs;
     memcpy(defs, saved_defs, sizeof(defs));
     free(saved_defs);
@@ -268,6 +281,7 @@ void scan_global_write_info(void)
     line_no = saved_line;
     tok_line = saved_tok_line;
     tok = saved_tok;
+    opt_stack_check = saved_stack_check;
 }
 
 /* Total number of textual write-context occurrences of `name` anywhere in

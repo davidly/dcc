@@ -603,6 +603,39 @@ static int parse_pragma_macro_name(const char *line, const char *op, char *name,
     return name[0] && *line == ')';
 }
 
+static int parse_pragma_stack_check(const char *line, int *enabled)
+{
+    const char *op;
+
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    op = "stack_check";
+    while (*op) {
+        if (*line++ != *op++)
+            return 0;
+    }
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    if (*line++ != '(')
+        return 0;
+    while (*line && isspace((unsigned char)*line))
+        line++;
+
+    if (!strncmp(line, "on", 2) && !is_ident_char((unsigned char)line[2])) {
+        line += 2;
+        *enabled = 1;
+    } else if (!strncmp(line, "off", 3) && !is_ident_char((unsigned char)line[3])) {
+        line += 3;
+        *enabled = 0;
+    } else {
+        return 0;
+    }
+
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    return *line == ')';
+}
+
 static void pp_push_macro(const char *name)
 {
     int di;
@@ -663,6 +696,7 @@ static void pp_pop_macro(const char *name)
 static void handle_pragma_line(const char *line)
 {
     char name[64];
+    int stack_check_enabled;
 
     if (parse_pragma_macro_name(line, "push_macro", name, sizeof(name))) {
         pp_push_macro(name);
@@ -670,6 +704,10 @@ static void handle_pragma_line(const char *line)
     }
     if (parse_pragma_macro_name(line, "pop_macro", name, sizeof(name))) {
         pp_pop_macro(name);
+        return;
+    }
+    if (parse_pragma_stack_check(line, &stack_check_enabled)) {
+        opt_stack_check = stack_check_enabled;
         return;
     }
 }
@@ -1539,8 +1577,17 @@ void strip_macro_replacement_comments(char *s)
 }
 
 static int macro_call_args_too_many;
+static int macro_call_arg_overflow;
 
-int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count)
+static void append_macro_call_arg_char(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int ai, int *ap, int c)
+{
+    if (*ap < MAX_MACRO_ARG_LEN - 1)
+        args[ai][(*ap)++] = (char)c;
+    else
+        macro_call_arg_overflow = 1;
+}
+
+int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *nargs, int variadic_named_count)
 {
     int c;
     int depth;
@@ -1558,7 +1605,8 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
     ap = 0;
     depth = 0;
     macro_call_args_too_many = 0;
-    memset(args, 0, 8 * 128);
+    macro_call_arg_overflow = 0;
+    memset(args, 0, MAX_MACRO_ARGS * MAX_MACRO_ARG_LEN);
 
     for (;;) {
         c = getc_src();
@@ -1566,13 +1614,13 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
             return 0;
 
         if (c == '"') {
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             while ((c = getc_src()) != 0) {
-                if (ap < 127) args[ai][ap++] = (char)c;
+                append_macro_call_arg_char(args, ai, &ap, c);
                 if (c == '\\') {
                     c = getc_src();
                     if (c == 0) return 0;
-                    if (ap < 127) args[ai][ap++] = (char)c;
+                    append_macro_call_arg_char(args, ai, &ap, c);
                 } else if (c == '"') {
                     break;
                 }
@@ -1581,13 +1629,13 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
         }
 
         if (c == '\'') {
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             while ((c = getc_src()) != 0) {
-                if (ap < 127) args[ai][ap++] = (char)c;
+                append_macro_call_arg_char(args, ai, &ap, c);
                 if (c == '\\') {
                     c = getc_src();
                     if (c == 0) return 0;
-                    if (ap < 127) args[ai][ap++] = (char)c;
+                    append_macro_call_arg_char(args, ai, &ap, c);
                 } else if (c == '\'') {
                     break;
                 }
@@ -1597,7 +1645,7 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
 
         if (c == '(' || c == '[' || c == '{') {
             depth++;
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             continue;
         }
 
@@ -1610,7 +1658,7 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
 
         if (c == ')' || c == ']' || c == '}') {
             depth--;
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             continue;
         }
 
@@ -1618,13 +1666,13 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
             if (variadic_named_count >= 0 && ai >= variadic_named_count) {
                 /* Inside the variadic tail: this comma belongs to the
                  * __VA_ARGS__ text itself, not an argument separator. */
-                if (ap < 127) args[ai][ap++] = (char)c;
+                append_macro_call_arg_char(args, ai, &ap, c);
                 continue;
             }
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
-            if (ai >= 8) {
+            if (ai >= MAX_MACRO_ARGS) {
                 macro_call_args_too_many = 1;
                 while ((c = getc_src()) != 0) {
                     if (c == '(' || c == '[' || c == '{')
@@ -1641,8 +1689,7 @@ int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count
             continue;
         }
 
-        if (ap < 127)
-            args[ai][ap++] = (char)c;
+        append_macro_call_arg_char(args, ai, &ap, c);
     }
 
     if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
@@ -1720,7 +1767,7 @@ int macro_param_index(int di, const char *ident)
 }
 
 
-void expand_function_macro(int di, char args[8][128], char *out, int outsz);
+void expand_function_macro(int di, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], char *out, int outsz);
 
 /* variadic_named_count: -1 for an ordinary macro (every top-level comma
  * starts a new argument, as before); for a variadic macro, the count of
@@ -1730,7 +1777,7 @@ void expand_function_macro(int di, char args[8][128], char *out, int outsz);
  * `#define FOO(x, ...)` yields args = { "a", "b, c" } - the source's own
  * comma/space formatting flows through unchanged since nothing is
  * synthesized here, matching how the C99 __VA_ARGS__ argument reads. */
-int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
+int read_macro_call_args_text(const char **pp, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *nargs,
                                      int variadic_named_count)
 {
     const char *p;
@@ -1750,7 +1797,8 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
     ai = 0;
     ap = 0;
     depth = 0;
-    memset(args, 0, 8 * 128);
+    macro_call_arg_overflow = 0;
+    memset(args, 0, MAX_MACRO_ARGS * MAX_MACRO_ARG_LEN);
 
     for (;;) {
         c = (unsigned char)*p++;
@@ -1758,13 +1806,13 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
             return 0;
 
         if (c == '"') {
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             while ((c = (unsigned char)*p++) != 0) {
-                if (ap < 127) args[ai][ap++] = (char)c;
+                append_macro_call_arg_char(args, ai, &ap, c);
                 if (c == '\\') {
                     c = (unsigned char)*p++;
                     if (c == 0) return 0;
-                    if (ap < 127) args[ai][ap++] = (char)c;
+                    append_macro_call_arg_char(args, ai, &ap, c);
                 } else if (c == '"') {
                     break;
                 }
@@ -1773,13 +1821,13 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
         }
 
         if (c == '\'') {
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             while ((c = (unsigned char)*p++) != 0) {
-                if (ap < 127) args[ai][ap++] = (char)c;
+                append_macro_call_arg_char(args, ai, &ap, c);
                 if (c == '\\') {
                     c = (unsigned char)*p++;
                     if (c == 0) return 0;
-                    if (ap < 127) args[ai][ap++] = (char)c;
+                    append_macro_call_arg_char(args, ai, &ap, c);
                 } else if (c == '\'') {
                     break;
                 }
@@ -1789,7 +1837,7 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
 
         if (c == '(' || c == '[' || c == '{') {
             depth++;
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             continue;
         }
 
@@ -1802,7 +1850,7 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
 
         if (c == ')' || c == ']' || c == '}') {
             depth--;
-            if (ap < 127) args[ai][ap++] = (char)c;
+            append_macro_call_arg_char(args, ai, &ap, c);
             continue;
         }
 
@@ -1810,20 +1858,19 @@ int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
             if (variadic_named_count >= 0 && ai >= variadic_named_count) {
                 /* Inside the variadic tail: this comma belongs to the
                  * __VA_ARGS__ text itself, not an argument separator. */
-                if (ap < 127) args[ai][ap++] = (char)c;
+                append_macro_call_arg_char(args, ai, &ap, c);
                 continue;
             }
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
-            if (ai >= 8)
+            if (ai >= MAX_MACRO_ARGS)
                 fatal("too many macro arguments");
             ap = 0;
             continue;
         }
 
-        if (ap < 127)
-            args[ai][ap++] = (char)c;
+        append_macro_call_arg_char(args, ai, &ap, c);
     }
 
     if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
@@ -1929,7 +1976,7 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
             if (di >= 0) {
                 if (defs[di].is_func) {
                     const char *after_ident;
-                    char args[8][128];
+                    char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN];
                     int nargs;
 
                     after_ident = p;
@@ -1937,6 +1984,8 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
                             defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                         char tmp[MAX_MACRO_TEXT];
                         char tmp2[MAX_MACRO_TEXT];
+                        if (macro_call_arg_overflow)
+                            fatal("macro argument too long in function-like macro invocation");
                         if (nargs != defs[di].nargs)
                             fatal("wrong number of macro arguments");
                         expand_function_macro(di, args, tmp, sizeof(tmp));
@@ -2036,7 +2085,7 @@ int replacement_param_raw_context(const char *start, const char *param_start, co
     return 0;
 }
 
-void expand_function_macro(int di, char args[8][128], char *out, int outsz)
+void expand_function_macro(int di, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], char *out, int outsz)
 {
     const char *v;
     int oi;
@@ -2044,11 +2093,11 @@ void expand_function_macro(int di, char args[8][128], char *out, int outsz)
     int j;
     char ident[64];
     int matched;
-    char expanded_args[8][MAX_MACRO_TEXT];
+    char expanded_args[MAX_MACRO_ARGS][MAX_MACRO_TEXT];
 
-    for (i = 0; i < 8; ++i)
+    for (i = 0; i < MAX_MACRO_ARGS; ++i)
         expanded_args[i][0] = 0;
-    for (i = 0; i < defs[di].nargs && i < 8; ++i)
+    for (i = 0; i < defs[di].nargs && i < MAX_MACRO_ARGS; ++i)
         macro_expand_argument_text(args[i], expanded_args[i], sizeof(expanded_args[i]), 0);
 
     v = defs[di].value;
@@ -2464,13 +2513,19 @@ void next_token(void)
 
             if (defs[di].is_func) {
                 long save_pos;
-                char args[8][128];
+                char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN];
                 int nargs;
-                char expbuf[512];
+                char expbuf[MAX_MACRO_TEXT];
 
                 save_pos = posi;
                 if (read_macro_call_args(args, &nargs,
                         defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
+                    if (macro_call_arg_overflow) {
+                        error_here("macro argument too long in function-like macro invocation");
+                        replace_source_range(tok_start_pos, posi, "0");
+                        next_token();
+                        return;
+                    }
                     if (nargs != defs[di].nargs) {
                         error_here(macro_call_args_too_many ?
                                    "too many arguments provided to function-like macro invocation" :

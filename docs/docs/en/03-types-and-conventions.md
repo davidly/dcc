@@ -46,7 +46,8 @@ From [errno.h](standard-lib/02-errno.md):
 
 ## Fixed-width integer names (`stdint.h`)
 
-[`stdint.h`](standard-lib/13-stdint.md) provides fixed-width typedefs that match the target model:
+[`stdint.h`](standard-lib/13-stdint.md) provides C99 integer typedefs and limit
+macros that match the target model:
 
 | Name | Definition |
 | --- | --- |
@@ -56,7 +57,14 @@ From [errno.h](standard-lib/02-errno.md):
 | `uint16_t` | unsigned 16-bit `int` |
 | `int32_t` | signed 32-bit `long` |
 | `uint32_t` | unsigned 32-bit `long` |
+| `int_leastN_t` / `uint_leastN_t` | smallest available 8-, 16-, or 32-bit type |
+| `int_fastN_t` / `uint_fastN_t` | fastest available 8-, 16-, or 32-bit type on Z80 |
+| `intmax_t` / `uintmax_t` | signed / unsigned 32-bit `long` |
+| `intptr_t` / `uintptr_t` | signed / unsigned 16-bit `int` |
 | `wchar_t` | unsigned 16-bit `int` |
+
+The runtime has no 64-bit integer support, so `stdint.h` intentionally stops at
+the 32-bit `long` family.
 
 ## Integer limits (`limits.h`)
 
@@ -134,6 +142,43 @@ int main(void)
   storage for their uninitialized globals so multiple modules do not overlap the
   final application's synthetic BSS range. The zeroing guarantee above describes
   the normal final app translation unit linked with `DCCRTL.MAC` / `RTLMIN.MAC`.
+
+## Supported pragmas
+
+DCC accepts `#pragma` directives for source compatibility. Unknown pragmas are
+ignored, so headers shared with other compilers can usually keep vendor-specific
+directives in place. The pragmas below have DCC-specific behavior:
+
+| Pragma | Effect |
+| --- | --- |
+| `#pragma once` | Marks the current source or header file as include-once. Later includes of the same canonical host path are skipped. The directive is honored only when it appears in an active preprocessor branch. |
+| `#pragma stack_check(on)` | Enables stack-overflow guard emission from this point forward in the translation unit. |
+| `#pragma stack_check(off)` | Disables stack-overflow guard emission from this point forward in the translation unit. |
+| `#pragma push_macro("NAME")` | Saves the current definition state of macro `NAME` on DCC's macro stack. |
+| `#pragma pop_macro("NAME")` | Restores the most recently pushed definition state for macro `NAME`; if the macro was not defined at push time, it is undefined. |
+
+`#pragma once` is handled during include splicing, before normal tokenization, so
+it works through relative-path aliases such as `"foo.h"` and `"./foo.h"` when
+they resolve to the same host file. It also follows DCC's active conditional
+state: a pragma inside `#if 0` is ignored, while a pragma made active by `#else`,
+`#elif`, `#ifdef`, `#ifndef`, or earlier active `#define` / `#undef` directives
+is honored.
+
+[`-fstack-check`](02-build-and-link.md#options-that-affect-the-runtime) sets
+the initial stack-check state for the translation unit. `#pragma stack_check(on)`
+and `#pragma stack_check(off)` then control guard emission in source order. The
+pragma affects function prologues and VLA allocations emitted after the directive;
+it does not retroactively change code already emitted.
+
+```c
+void normal_default(void) { }   /* uses the command-line/default state */
+
+#pragma stack_check(on)
+void guarded_region(void) { }   /* emits call __stchk */
+
+#pragma stack_check(off)
+void unguarded_region(void) { } /* no stack-check prologue */
+```
 
 ## Variable-length arrays
 

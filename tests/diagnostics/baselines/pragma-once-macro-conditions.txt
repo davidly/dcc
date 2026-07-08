@@ -1,0 +1,4 @@
+<source>:22: error DCC-E0312: #error macro-controlled pragma once conditions were handled correctly
+    #error macro-controlled pragma once conditions were handled correctly
+    ^
+dcc: 1 error(s)

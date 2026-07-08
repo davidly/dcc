@@ -494,6 +494,14 @@ int ast_index_struct_object_type(const struct AstNode *n, int *out_type)
         return 0;
     if (n->a == NULL)
         return 0;
+    if (ast_index_deref_pointer_array_collect(n, &s, NULL, NULL, NULL,
+                                              &elem_type)) {
+        if (!type_is_struct_object(elem_type))
+            return 0;
+        if (out_type)
+            *out_type = elem_type;
+        return 1;
+    }
     if (ast_index_symbol_nd_elem_type(n, &elem_type)) {
         if (!type_is_struct_object(elem_type))
             return 0;

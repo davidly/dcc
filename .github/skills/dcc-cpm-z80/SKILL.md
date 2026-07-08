@@ -19,17 +19,13 @@ host ABI expectations.
 
 ## Compiler conformance level
 
-- C89 is the baseline language, except where the Z80 data model makes a hosted
-  assumption impossible (`double`, `long long`, host-sized `int`, and host ABI
-  macros are not part of the target contract).
-- Target-appropriate C99/C11 front-end compatibility is supported when tested and
-  documented below.
-- Not-yet-implemented C99/C11/GNU front-end features are candidates for future
-  support, not permanent target exclusions.
-- True target/runtime exceptions are: `double`/`long double`, `long long`/64-bit
-  integers, host ABI assumptions, host-sized integer expectations, hosted
-  byte-stream stdio behavior, wide-character Unicode runtime behavior, POSIX,
-  locale, signal, time, threads, and atomics.
+- C89 is the baseline; target-appropriate C99/C11 front-end features are
+  supported where tested and documented below, and anything not yet implemented
+  is a future candidate, not a permanent exclusion.
+- Permanent target/runtime exceptions (the Z80/CP/M model wins over host ABI):
+  `double`/`long double`, `long long`/64-bit integers, host ABI and
+  host-sized-`int` assumptions, hosted byte-stream stdio, wide-character Unicode
+  runtime behavior, POSIX, locale, signal, time, threads, and atomics.
 
 ## When to use
 
@@ -89,6 +85,19 @@ you see that error.
 `"..."` header is fatal. If standard calls compile but misbehave, check that
 `-I` actually resolves the dcc headers.
 
+**`#pragma` support is selective.** Unknown pragmas are ignored for source
+compatibility, so vendor-specific directives usually do not block a build. dcc
+does give these pragmas target-specific behavior:
+
+- `#pragma once` marks the current source/header as include-once. It is honored
+  only in an active preprocessor branch, and later includes of the same
+  canonical host path are skipped.
+- `#pragma stack_check(on)` / `#pragma stack_check(off)` toggle stack-overflow
+  guard emission from that point forward in the translation unit. They affect
+  later function prologues and VLA allocations, not code already emitted.
+- `#pragma push_macro("NAME")` / `#pragma pop_macro("NAME")` save and restore a
+  macro definition state on dcc's macro stack.
+
 ## C99/C11 front-end compatibility dcc accepts (beyond C89)
 
 These behave as standard C99: `for`-init declarations with loop scope, `//` line
@@ -97,48 +106,15 @@ comments, and block-scoped declarations (inner blocks shadow outer names).
 constant-folds initializers only — not read-only memory).
 K&R function definitions are still accepted; prefer prototypes for new code.
 
-`static inline` is the supported inline form for small helper functions. dcc can
-inline simple return-expression helpers, early-return `if` chains lowered to
-conditional expressions, simple struct/pointer member accessors,
-statement-context `void` helpers made of one or more expression statements such
-as `*dst = value`, and scalar
-`int`/pointer/`long`/`float` expression helpers. A value-returning `if`-branch
-(or the top-level body) may also have side-effecting statements ahead of its
-`return`, e.g. `if (tp >= tend) return 0; return tc[tp++];` or
-`if (k > 0) { n++; return 1; } return 0;` — these are folded into comma
-expressions rather than requiring a bare `return`. `++`/`--` inside an inlined
-return expression is only allowed on operands that don't reach a parameter
-(globals are fine; incrementing a parameter verbatim would mutate the caller's
-argument expression once substituted). A guard `if` with no `return` and no
-`else`, e.g. `if (sp <= 0) die("empty");` ahead of a later `return`, or as a
-standalone statement in a `void` body, is also supported - the side effect
-runs conditionally but the surrounding code executes unconditionally either
-way. `void` helpers inline only when
-called as a statement; their assignment/store expressions may contain ordinary
-helper calls such as `*dst = clamp((long)*dst + v)`. When every call site inlines
-and the function address is not taken,
-the private out-of-line static helper body is removed; if a call cannot be
-inlined safely, or if the function address is used, dcc keeps and calls that
-private fallback body. Hidden
-caller-frame temporaries preserve single evaluation for multi-use 16-bit
-parameters such as `max(i++, j++)`; multi-use `long`/`float` parameters with
-side-effecting arguments, inline bodies with local declarations, and unsupported
-statement bodies fall back. Plain externally linked `inline` is parsed
-for source compatibility but does not yet have C99 external-inline linkage
-semantics or call-site inlining.
-
-Inlining a helper called from many sites (e.g. a bytecode VM's per-opcode
-memory accessor invoked from a dozen `switch` cases) duplicates its body at
-each call site; on CP/M's small fixed address space this can grow a `nopeep`
-(unoptimized) binary enough to shrink the room left for the program's own
-heap, so a memory-hungry workload can start failing with an out-of-memory
-error that has nothing to do with the inlined code's logic. This only
-showed up in the harness's `nopeep` build - the `fast` (peephole-optimized)
-build stayed small enough to pass - so treat a `nopeep`-only failure after
-adding `static inline` as a size regression to check, not necessarily a
-correctness bug: compare `.COM` size with and without the change, and
-prefer leaving a many-call-site helper as a real function if inlining it
-doesn't leave enough headroom.
+**Inlining — only `static inline`.** `static inline` is the *only* inline form
+dcc acts on; plain `inline` (external linkage) is **ignored** (parsed for source
+compatibility, but stays an ordinary out-of-line function). dcc inlines small
+helpers and drops the out-of-line copy when every call site inlines and the
+address isn't taken; an inlined body must not mutate a *parameter* (globals are
+fine). Size caveat: many-call-site inlining bloats the `.COM`, and a
+`dcc-peep=false` build can grow enough to starve the heap (an out-of-memory
+failure unrelated to logic) — prefer a real function there. Full rules:
+[references/library.md](./references/library.md).
 
 dcc has a first-class C99-style `_Bool` scalar type: it is 1 byte wide, and
 nonzero values normalize to `1` on `_Bool` stores, casts, initializers,
@@ -153,9 +129,16 @@ through anonymous struct/union members is supported. GNU
 `__attribute__((...))` annotations are skipped when they appear in supported
 declaration positions.
 
-Not implemented yet, but plausible front-end scope: C99 designated initializers,
-C99 array designators, C99 compound literals, C99 variadic macros, GNU statement
-expressions, `__builtin_expect`, and C11 `_Generic` for target-supported types.
+C99 designated initializers for struct and array members are supported,
+including out-of-order, nested, and array-index (`[k] = v`) designators, in both
+file-scope and block-scope objects. Compound literals are supported for
+file-scope constant initializers and for address-taken block-scope literals
+(`&(struct T){ ... }`); full block-scope compound-literal value/copy semantics
+are only partly supported. GNU range designators (`[0 ... 3]`) are not supported.
+
+Not implemented yet, but plausible front-end scope: C99 variadic macros, GNU
+statement expressions, `__builtin_expect`, and C11 `_Generic` for
+target-supported types.
 
 Target-inapplicable or runtime-inapplicable exceptions: `double`/`long double`,
 `long long`, 64-bit integer typedefs/operations, host ABI checks,
@@ -168,12 +151,14 @@ are supported by reserving stack space when the declaration is reached, e.g.
 `char buf[n]` or `int grid[n][3]` (inner dimensions must be compile-time
 constants). The storage is released at block-scope exit — including each loop
 iteration, `break`, `continue`, `return`, and a `goto` that leaves the scope
-(forward or backward, across nested VLA scopes). Rejected, never miscompiled:
-a variable **inner** dimension (`a[n][m]`), `sizeof` on a **whole** VLA (use
-`sizeof a[0]` times the count), and jumping **into** a VLA scope via `goto`,
-`case`, or `default`. Keep them small: heap and stack still share the CP/M
-transient program area and have no guard beyond explicit stack checking
-(`-fstack-check` bounds-checks each VLA allocation).
+(forward or backward, across nested VLA scopes). `sizeof` applied to a **whole**
+VLA is supported for this subset and yields the run-time byte size (`sizeof a[0]`
+times the element count still works too). Rejected, never miscompiled:
+a variable **inner** dimension (`a[n][m]`), a whole-VLA `sizeof` in a
+constant-expression context (array bound, `case`, `enum`, `#if`), and jumping
+**into** a VLA scope via `goto`, `case`, or `default`. Keep them small: heap and
+stack still share the CP/M transient program area and have no guard beyond
+explicit stack checking (`-fstack-check` bounds-checks each VLA allocation).
 
 **Identifiers:** full internal significance; externals stay distinct well past
 C89's 6-char minimum (verified to ~13 chars), and only ~16+ identical leading
@@ -190,6 +175,25 @@ directories first on `PATH`:
 export PATH="/Users/<USER_NAME_FOLDER>/GitHub/ntvcm:/Users/<USER_NAME_FOLDER>/GitHub/dcc:$PATH"
 ```
 
+**The pipeline — what each tool does.** `dccmake` orchestrates the whole CP/M
+build so you rarely call the stages directly (get each tool's own flags with
+`-h`, e.g. `dcc -h`, `dccpeep -h`, `dccrtlstrip -h`, `dccmake -h`):
+
+1. `dcc` — the C front end: compiles each `.c` to Z80 `.MAC` assembly
+   (`dcc app.c -o APP.MAC`); inputs after the first are compiled with `-module`.
+2. `dccpeep` — the peephole optimizer: rewrites `.MAC` → `.MAC` for smaller,
+   faster code. `dccmake dcc-peep=true` (the default) runs it; `dcc-peep=false`
+   skips it, giving a larger/slower `.COM`. dccpeep itself has `-Ot` (time,
+   default) and `-Os` (size) modes, but `dccmake` always uses the default `-Ot`
+   — choose `-Os` only by running `dccpeep` by hand. `dcc-allow-undocumented-z80=true`
+   forwards `-fundocumented-z80`.
+3. `dccrtlstrip` — the runtime stripper: reads the full runtime `DCCRTL.MAC` and
+   writes a per-app `RTLMIN.MAC` with only the routines your program references,
+   so the `.COM` isn't padded with the whole libc. It regenerates every build —
+   don't hand-edit `RTLMIN.MAC`.
+4. `M80` / `L80` — Microsoft's assembler and linker (run under `ntvcm`):
+   assemble the app `.MAC`s plus `RTLMIN.MAC`, then link the final `.COM`.
+
 **Build/run one program** (compile → peephole → strip runtime → M80 → L80):
 
 ```sh
@@ -198,24 +202,16 @@ ntvcm build/FOO.COM                          # run it
 ntvcm build/FOO.COM ARG1 ARG2                # with CP/M command-line args
 ```
 
-Use `dcc-peep=false` for an unoptimized build. `dccmake` also accepts common dcc
-options and settings, for example:
+Use `dcc-peep=false` for an unoptimized build. `dccmake` also accepts other
+settings, e.g.:
 
 ```sh
-dccmake foo.c dcc-output=FOO dcc-stack-bytes=768
-dccmake foo.c bar.c dcc-output=FOO
-dccmake foo.c dcc-output=FOO dcc-floatio=true
+dccmake foo.c bar.c dcc-output=FOO dcc-stack-bytes=768 dcc-floatio=true
 dccmake foo.c dcc-output=FOO dcc-include-directory=include dcc-define=DEBUG=1
 ```
 
-For repeatable local builds, put settings in `dccmake.txt`:
-
-```text
-dcc-input=foo.c, bar.c
-dcc-output=FOO
-dcc-peep=true
-dcc-stack-bytes=768
-```
+For repeatable local builds, put the same `dcc-*` settings (one per line) in a
+`dccmake.txt` in the working directory; command-line settings override it.
 
 > The source and output names used by `dccmake` must be 8.3-clean (base ≤ 8
 > chars, extension ≤ 3, no extra dots). ntvcm reports
@@ -223,7 +219,9 @@ dcc-stack-bytes=768
 > rename the file when you see it.
 
 **Useful `dcc` options:** `-o file` (output .mac), `-c`/`-module` (linkable
-module), `-f`/`-ffloatio` (float printf), `-stack N`/`-s N`/`--stack N` (reserve
+module), `-f`/`-ffloatio` (float printf), `-fl`/`-flongio` (32-bit `long`
+printf/scanf, e.g. `%ld`/`%lu`/`%lx`), `-fstack-check` (abort on stack
+overflow), `-stack N`/`-s N`/`--stack N` (reserve
 stack; default 512 — heap and stack share memory, **no guard**), `-I dir` (or
 joined `-Idir`; repeatable), `-Dname[=v]`,
 `-Uname`, `-v`, `-h`. `_DCC_=1` is always predefined.
@@ -238,11 +236,9 @@ bundled headers (`stdio.h`, `stdlib.h`, `string.h`, `math.h`, …) live in the
 - Building **elsewhere**: point dcc at the repo, e.g.
   `dcc -I /path/to/dcc myapp.c -o myapp.mac` (repeat `-I` for more dirs).
 
-Gotcha: a `<...>` header that isn't found is **silently ignored** (you lose its
-prototypes and fall back to implicit `int`, so calls still compile and link via
-the runtime but without type-checking); a missing `"..."` header is a fatal
-error. If standard calls compile yet misbehave, check that `-I` actually
-resolves the dcc headers.
+Gotcha (see Deviations): an unfound `<...>` header is **silently ignored**
+(implicit `int`, no type-checking); an unfound `"..."` header is fatal — so if
+standard calls compile yet misbehave, confirm `-I` resolves the dcc headers.
 
 Notes: M80 needs CRLF (`dccmake` handles this). `RTLMIN.MAC` is generated per-app by
 `dccrtlstrip` during the build — don't hand-edit it.
@@ -251,8 +247,8 @@ Notes: M80 needs CRLF (`dccmake` handles this). `RTLMIN.MAC` is generated per-ap
 
 The deviations above are the pitfalls. For worked examples (the `float` decimal
 parser, `%f`/`-ffloatio`, 16-bit overflow, signed `char`, CP/M 8.3 names, the
-stack/heap collision) see [references/pitfalls.md](./references/pitfalls.md);
-for the full function inventory and `printf`/`scanf` conversion tables see
+stack/heap collision, and supported pragmas), the full inlining rules, and the
+function inventory and `printf`/`scanf` conversion tables, see
 [references/library.md](./references/library.md).
 
 ## Workflow
@@ -260,12 +256,15 @@ for the full function inventory and `printf`/`scanf` conversion tables see
 1. **Plan for the deviations.** Floating point → single precision (no `double`);
   decimal parsing → dcc's `float`-returning `atof`, or a small parser if you
   need different semantics; `time`/`signal`/`locale` → don't exist.
-2. **Check the library** in [references/library.md](./references/library.md)
+2. **Keep pragma assumptions narrow.** `#pragma once`, `#pragma stack_check`,
+  and `#pragma push_macro`/`#pragma pop_macro` are supported; unknown pragmas
+  are ignored, not diagnosed.
+3. **Check the library** in [references/library.md](./references/library.md)
    before calling anything unverified — a missing function is a link error,
    not a compile error.
-3. **Match repo conventions.** Read a nearby working program first. In the dcc
+4. **Match repo conventions.** Read a nearby working program first. In the dcc
    repo, the exhaustive reference is
    [dcc-c89-reference-guide.md](dcc-c89-reference-guide.md) at the repo root.
-4. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`
+5. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`
   (set `dcc-floatio=true` if you use `%f`); redirect stdin for interactive apps
   and compare against expected output.

@@ -1,0 +1,4 @@
+<source>:16: error DCC-E0312: #error dead-code pragma once was correctly ignored
+    #error dead-code pragma once was correctly ignored
+    ^
+dcc: 1 error(s)

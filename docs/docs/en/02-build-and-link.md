@@ -336,7 +336,10 @@ Common options:
   return code `0FFh` instead of silently corrupting memory. The guard costs a
   few bytes and one call per function, so it is **off by default**; turn it on
     while developing or for deeply recursive code. The `stacksize` utility
-  (below) uses this guard to measure the minimum `-stack` reserve an app needs.
+    (below) uses this guard to measure the minimum `-stack` reserve an app needs.
+    This option sets the initial state for the translation unit; source can then
+    use [`#pragma stack_check(on)` / `#pragma stack_check(off)`](03-types-and-conventions.md#supported-pragmas)
+    to control guard emission in source order.
 - **`-Dname[=value]`** — predefine a macro. `_DCC_=1` is always defined.
 
 ### Measuring the stack an app needs
