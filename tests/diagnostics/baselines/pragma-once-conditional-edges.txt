@@ -1,0 +1,4 @@
+<source>:21: error DCC-E0312: #error conditional pragma once edges were handled correctly
+    #error conditional pragma once edges were handled correctly
+    ^
+dcc: 1 error(s)
