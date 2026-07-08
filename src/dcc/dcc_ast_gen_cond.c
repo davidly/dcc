@@ -22,20 +22,11 @@ int ast_return_stmt_supported(const struct AstNode *n)
     int rt = current_return_type;
 
     if (type_is_struct_object(rt)) {
-        struct Sym *rs;
         int src_type;
         if (n->a == NULL)
             return 0;
-        if (n->a->kind == AST_IDENT) {
-            rs = find_sym(n->a->sval);
-            return rs != NULL && !rs->is_const_value && rs->storage != SC_FUNC &&
-                   !rs->is_array && type_is_struct_object(rs->type) &&
-                   same_struct_type(rt, rs->type);
-        }
-        if (n->a->kind == AST_UNARY && n->a->op == '*' &&
-            ast_deref_lvalue_type(n->a, &src_type))
-            return type_is_struct_object(src_type) && same_struct_type(rt, src_type);
-        return 0;
+        return ast_struct_addr_expr_supported(n->a, &src_type) &&
+               same_struct_type(rt, src_type);
     }
     if (rt & (TYPE_PTR | TYPE_PTR2)) {
         int ptr_type;
@@ -87,13 +78,8 @@ void gen_return_ast(const struct AstNode *n)
 {
     if (n->a != NULL && type_is_struct_object(current_return_type)) {
         int src_type;
-        if (n->a->kind == AST_IDENT) {
-            struct Sym *rs = find_sym(n->a->sval);
-            emit_load_sym_addr(rs);
-        } else {
-            gen_deref_addr_ast(n->a, &src_type);
-            (void)src_type;
-        }
+        gen_struct_addr_expr_ast(n->a, &src_type);
+        (void)src_type;
         emit("\tex de,hl\n");
         emit("\tld l,(ix+4)\n\tld h,(ix+5)\n");
         emit_copy_de_to_hl_bytes(type_size(current_return_type));

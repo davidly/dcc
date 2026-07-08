@@ -54,6 +54,23 @@ static int check_macro_values(const char *channel, int row, ...)
     return ok;
 }
 
+static int check_wide_and_ptr(void *p1, ...)
+{
+    va_list ap;
+    unsigned long ul;
+    int i1;
+    int i2;
+    void *p2;
+
+    va_start(ap, p1);
+    i1 = va_arg(ap, int);
+    ul = va_arg(ap, unsigned long);
+    i2 = va_arg(ap, int);
+    p2 = va_arg(ap, void *);
+    va_end(ap);
+    return p1 == p2 && i1 == 1 && ul == 0x76214365UL && i2 == 2;
+}
+
 #define CHECK_MACRO_VALUES(...) check_macro_values("macro", __VA_ARGS__)
 
 int main(void)
@@ -82,6 +99,8 @@ int main(void)
                 macro_values[1][2],
                 macro_values[1][3],
                 macro_values[1][4])) ok = 0;
+
+    if (!check_wide_and_ptr(&ok, 1, 0x76214365UL, 2, &ok)) ok = 0;
 
     if (!ok) {
         printf("variadic test failed %d %ld\n", si, sl);

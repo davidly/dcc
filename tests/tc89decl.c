@@ -61,6 +61,15 @@ static void ttyp(void)
     chk("typedef_fp", y, 8);
 }
 
+static timpreg(a, b)
+    register a;
+    register int b;
+{
+    register c;
+    c = a + b;
+    return c;
+}
+
 int main(void)
 {
     printf("tc89decl start\n");
@@ -69,6 +78,7 @@ int main(void)
     tfpn();
     tfpa();
     ttyp();
+    chk("implicit_register_int", timpreg(11, 31), 42);
     if (fails) {
         printf("tc89decl failed: %d\n", fails);
         return 1;

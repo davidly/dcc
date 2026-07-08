@@ -51,7 +51,30 @@ int asm_name_must_mangle(const char *cname)
      * give them generated assembler names and do not make them PUBLIC.
      */
     s = find_global(cname);
-    return s && s->is_static;
+    if (s && s->is_static)
+        return 1;
+
+    if (s && s->is_defined) {
+        char aname[66];
+        sprintf(aname, "_%s", cname);
+        for (i = 0; i < nglobals; ++i) {
+            struct Sym *other = &globals[i];
+            char oname[66];
+
+            if (other == s || other->is_static)
+                continue;
+            if (!other->is_defined)
+                continue;
+            if (other->storage != SC_FUNC && other->storage != SC_GLOBAL &&
+                other->storage != SC_EXTERN)
+                continue;
+            sprintf(oname, "_%s", other->name);
+            if (asm_prefix_eq_ci(aname, oname, 6))
+                return 1;
+        }
+    }
+
+    return 0;
 }
 
 int asm_name_is_internal_public(const char *cname)
