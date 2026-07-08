@@ -1,3 +1,3 @@
 tvla start
-checks=73 failures=0
+checks=75 failures=0
 tvla ok

@@ -46,7 +46,8 @@ From [errno.h](standard-lib/02-errno.md):
 
 ## Fixed-width integer names (`stdint.h`)
 
-[`stdint.h`](standard-lib/13-stdint.md) provides fixed-width typedefs that match the target model:
+[`stdint.h`](standard-lib/13-stdint.md) provides C99 integer typedefs and limit
+macros that match the target model:
 
 | Name | Definition |
 | --- | --- |
@@ -56,7 +57,14 @@ From [errno.h](standard-lib/02-errno.md):
 | `uint16_t` | unsigned 16-bit `int` |
 | `int32_t` | signed 32-bit `long` |
 | `uint32_t` | unsigned 32-bit `long` |
+| `int_leastN_t` / `uint_leastN_t` | smallest available 8-, 16-, or 32-bit type |
+| `int_fastN_t` / `uint_fastN_t` | fastest available 8-, 16-, or 32-bit type on Z80 |
+| `intmax_t` / `uintmax_t` | signed / unsigned 32-bit `long` |
+| `intptr_t` / `uintptr_t` | signed / unsigned 16-bit `int` |
 | `wchar_t` | unsigned 16-bit `int` |
+
+The runtime has no 64-bit integer support, so `stdint.h` intentionally stops at
+the 32-bit `long` family.
 
 ## Integer limits (`limits.h`)
 
