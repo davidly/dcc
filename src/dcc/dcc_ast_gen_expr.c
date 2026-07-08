@@ -15,6 +15,7 @@ static int ast_long_byte_extract(const struct AstNode *n, const struct AstNode *
 static void emit_long_byte_from_reg(int byte_index);
 static int emit_low_byte_expr_to_a(const struct AstNode *n);
 static int emit_long_byte_shift_to_reg(const struct AstNode *n);
+static int emit_long_oreq_byte_lane(struct Sym *s, const struct AstNode *rhs);
 
 
 /* Recognize byte-truncation idioms that are common in hand-written portable C:
@@ -157,8 +158,17 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
 
     if (n == NULL)
         return 0;
-    if (n->kind == AST_CAST && type_size(n->type) == 1)
+    if (n->kind == AST_CAST) {
+        /* A cast (narrowing OR widening) between integer types never changes
+         * the low byte's bit pattern, so it's safe to look through it in
+         * either direction - e.g. `(long)b[0]` widens a char, but the low
+         * byte of the result is exactly b[0]'s bits. Casts touching a float
+         * on either side are real numeric conversions, not a bit
+         * reinterpretation, so those must not be unwrapped. */
+        if (n->a == NULL || type_is_float(n->type) || type_is_float(n->a->type))
+            return 0;
         return emit_low_byte_expr_to_a(n->a);
+    }
     if (ast_masked_byte_operand(n, &src))
         return emit_low_byte_expr_to_a(src);
     {
@@ -169,6 +179,24 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
             s = find_sym(byte_base->sval);
             if (s != NULL && sym_can_ix_direct(s) && type_is_long(s->type)) {
                 fprintf(outf, "\tld a,(ix%+d)\n", s->offset + byte_index);
+                return 1;
+            }
+        }
+    }
+    /* A bare `long_ident >> K` (K a multiple of 8): the caller already
+     * stripped an enclosing `& 0xff` via ast_masked_byte_operand() above, so
+     * ast_long_byte_extract()'s own `& 0xff`-wrapped shape can never match
+     * here even though this is exactly the byte it's looking for - e.g.
+     * fill_record()'s `(rec >> 24) & 0xff` arrives as a bare `rec >> 24` by
+     * the time it reaches this point. */
+    if (n->kind == AST_BINARY && n->op == TOK_SHR && n->a != NULL &&
+        n->a->kind == AST_IDENT) {
+        long shift;
+        if (ast_const_int_operand_value(n->b, &shift) &&
+            (shift == 0 || shift == 8 || shift == 16 || shift == 24)) {
+            s = find_sym(n->a->sval);
+            if (s != NULL && sym_can_ix_direct(s) && type_is_long(s->type)) {
+                fprintf(outf, "\tld a,(ix%+d)\n", s->offset + (int)(shift / 8));
                 return 1;
             }
         }
@@ -229,6 +257,45 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
         }
     }
     return 0;
+}
+
+/* Recognize `v |= (byte_expr & 0xff) << K` (K in {0,8,16,24}; K may be
+ * absent, meaning 0) when v is an ix-direct long local. The right-hand side
+ * only ever has one nonzero byte lane, so OR-ing it into v can touch just
+ * that one byte of v's stack storage - load the byte, `or (ix+d)`,
+ * `ld (ix+d),a` - instead of the generic path: reload all 4 bytes of v,
+ * evaluate the rhs through the widen/mask/shift chain into DE:HL, run a
+ * full 32-bit OR, and store all 4 bytes back. This is exactly the
+ * `v |= (byte) << K;` shape get_stamp()-style byte-assembly idioms use. */
+static int emit_long_oreq_byte_lane(struct Sym *s, const struct AstNode *rhs)
+{
+    const struct AstNode *src;
+    long sh;
+    int byte_index;
+
+    if (rhs == NULL)
+        return 0;
+
+    src = rhs;
+    sh = 0;
+    if (rhs->kind == AST_BINARY && rhs->op == TOK_SHL) {
+        if (!ast_const_int_operand_value(rhs->b, &sh))
+            return 0;
+        if (sh != 0 && sh != 8 && sh != 16 && sh != 24)
+            return 0;
+        src = rhs->a;
+    }
+
+    if (!ast_masked_byte_operand(src, &src))
+        return 0;
+
+    if (!emit_low_byte_expr_to_a(src))
+        return 0;
+
+    byte_index = (int)(sh / 8);
+    fprintf(outf, "\tor (ix%+d)\n", s->offset + byte_index);
+    fprintf(outf, "\tld (ix%+d),a\n", s->offset + byte_index);
+    return 1;
 }
 
 void gen_int_lit(const struct AstNode *n)
@@ -1247,6 +1314,19 @@ void gen_shift_ast(const struct AstNode *n)
 {
     int lhs_type;
 
+    /* `(byte_expr & 0xff) << K` (K a multiple of 8): materializing the whole
+     * long via emit_long_byte_shift_to_reg() is a handful of instructions
+     * (load the byte, drop it in the right DE:HL lane, zero the rest) versus
+     * evaluating the lhs generically first (widen/sign-extend to a full
+     * long) and only then applying the constant-shift fast path below. Must
+     * run before ast_gen_expr(n->a) - that call is the expensive path this
+     * is trying to avoid. */
+    if (n->op == TOK_SHL && emit_long_byte_shift_to_reg(n)) {
+        g_expr_type = TYPE_LONG | TYPE_UNSIGNED;
+        g_long_from16 = 0;
+        return;
+    }
+
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
     if (type_is_long(lhs_type)) {
@@ -1955,6 +2035,13 @@ void gen_assign_ast(const struct AstNode *n)
         else if (!type_is_long(g_expr_type))
             emit_extend_to_long_typed(g_expr_type);
         emit_store_hl_to_sym_direct(s);
+        g_expr_type = s->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    if (n->op == TOK_OREQ && type_is_long(s->type) && sym_can_ix_direct(s) &&
+        emit_long_oreq_byte_lane(s, n->b)) {
         g_expr_type = s->type;
         g_long_from16 = 0;
         return;
