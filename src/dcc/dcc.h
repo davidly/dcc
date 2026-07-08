@@ -269,6 +269,7 @@ struct Sym {
                                * elimination - both a static inline's fallback body
                                * and a plain (non-inline) static function's only body */
     int deferred_body_needed;
+    int stack_check_enabled;
     int has_proto;
     int proto_nargs;
     int proto_variadic;
