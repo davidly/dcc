@@ -16,6 +16,7 @@ static void emit_long_byte_from_reg(int byte_index);
 static int emit_low_byte_expr_to_a(const struct AstNode *n);
 static int emit_long_byte_shift_to_reg(const struct AstNode *n);
 static int emit_long_oreq_byte_lane(struct Sym *s, const struct AstNode *rhs);
+static void gen_compound_literal_ast(const struct AstNode *n);
 
 
 /* Recognize byte-truncation idioms that are common in hand-written portable C:
@@ -569,7 +570,7 @@ void gen_unary_ast(const struct AstNode *n)
             return;
         }
         if (n->a->kind == AST_COMPOUND_LITERAL) {
-            ast_gen_expr(n->a);
+            gen_compound_literal_ast(n->a);
             return;
         }
         s = find_sym(n->a->sval);
@@ -739,6 +740,18 @@ static void gen_compound_literal_ast(const struct AstNode *n)
 
     emit_load_sym_addr(clit_sym);
     g_expr_type = type_add_ptr(clit_type);
+}
+
+static void gen_compound_literal_value_ast(const struct AstNode *n)
+{
+    int clit_type = n->type;
+
+    gen_compound_literal_ast(n);
+    if (!type_is_struct_object(clit_type)) {
+        emit_load_from_hl(clit_type);
+        g_expr_type = clit_type;
+        g_long_from16 = 0;
+    }
 }
 
 void gen_pointer_cmp_operand_ast(const struct AstNode *n)
@@ -1532,6 +1545,25 @@ void ast_emit_struct_init_expr_assign(struct Sym *s)
         gen_struct_return_call_assign_ast(lhs, rhs);
         ast_arena_reset(&g_ast_init_arena);
         return;
+    }
+
+    /* Struct initializer from any struct-address expression - most notably a
+     * compound literal `struct T t = (struct T){ ... };` - is a whole-struct
+     * copy from the source object into the new local. */
+    if (rhs != NULL) {
+        int rhs_type;
+        if (ast_struct_addr_expr_supported(rhs, &rhs_type) &&
+            same_struct_type(s->type, rhs_type)) {
+            emit_load_sym_addr(s);                    /* HL = destination */
+            emit("\tpush hl\n");
+            gen_struct_addr_expr_ast(rhs, &rhs_type); /* HL = source       */
+            emit("\tex de,hl\n\tpop hl\n");           /* DE = source, HL = dest */
+            emit_copy_de_to_hl_bytes(type_size(s->type));
+            g_expr_type = s->type;
+            g_long_from16 = 0;
+            ast_arena_reset(&g_ast_init_arena);
+            return;
+        }
     }
 
     if (getenv("DCC_AST_REPORT") != NULL) {
@@ -3548,6 +3580,13 @@ void gen_struct_addr_expr_ast(const struct AstNode *n, int *out_type)
     case AST_MEMBER:
         gen_member_addr_ast(n, out_type);
         return;
+    case AST_COMPOUND_LITERAL:
+        /* Materialize the literal into its backing local; gen_compound_literal_ast
+         * emits the initializer and leaves the object's address in HL. */
+        gen_compound_literal_ast(n);
+        if (out_type)
+            *out_type = n->type;
+        return;
     default:
         fatal("gen_struct_addr_expr_ast: unsupported node");
     }
@@ -3679,6 +3718,10 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
             cur_type = TYPE_CHAR;
     } else if (!arrow && n->a->kind == AST_MEMBER) {
         gen_member_addr_ast(n->a, &cur_type);
+    } else if (!arrow && n->a->kind == AST_COMPOUND_LITERAL &&
+               type_is_struct_object(n->a->type)) {
+        gen_compound_literal_ast(n->a);
+        cur_type = n->a->type;
     } else {
         s = find_sym(n->a->sval);
         cur_type = s->type;
@@ -4343,7 +4386,7 @@ void ast_gen_expr(const struct AstNode *n)
         gen_cast_ast(n);
         break;
     case AST_COMPOUND_LITERAL:
-        gen_compound_literal_ast(n);
+        gen_compound_literal_value_ast(n);
         break;
     case AST_COMMA:
         ast_gen_expr(n->a);

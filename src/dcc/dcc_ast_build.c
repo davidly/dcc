@@ -445,12 +445,8 @@ static struct AstNode *p_primary(struct AstArena *ar)
     }
 }
 
-static struct AstNode *p_postfix(struct AstArena *ar)
+static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
 {
-    struct AstNode *n = p_primary(ar);
-    if (n == NULL)
-        return NULL;
-
     for (;;) {
         if (tok.kind == '[') {
             struct AstNode *m = ast_new(ar, AST_INDEX);
@@ -519,6 +515,14 @@ static struct AstNode *p_postfix(struct AstArena *ar)
     return n;
 }
 
+static struct AstNode *p_postfix(struct AstArena *ar)
+{
+    struct AstNode *n = p_primary(ar);
+    if (n == NULL)
+        return NULL;
+    return p_postfix_tail(ar, n);
+}
+
 static struct AstNode *p_unary(struct AstArena *ar)
 {
     int k = tok.kind;
@@ -563,7 +567,7 @@ static struct AstNode *p_unary(struct AstArena *ar)
         parse_type_name_decl(&cty, &csz); /* parse ( type-name */
         expect(')');
         if (tok.kind == '{')
-            return ast_build_compound_literal(ar, cty);
+            return p_postfix_tail(ar, ast_build_compound_literal(ar, cty));
         operand = p_unary(ar);
         return ast_cast(ar, cty, operand);
     }
