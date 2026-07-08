@@ -267,6 +267,7 @@ void ast_support_cache_begin(void);
 /* Pure-AST emission of a declaration initializer's assignment-expression.
  * Builds into the isolated g_ast_init_arena; fatal on unsupported constructs. */
 void ast_emit_init_expr(void);
+void ast_emit_struct_init_expr_assign(struct Sym *s);
 
 /* Statement hook.  Called from gen_statement to build the next statement from
  * the token stream and emit it from the AST.  Returns 0 only in scanner/debug

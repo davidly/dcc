@@ -1,5 +1,6 @@
 assign/arg 3 1000 7 1010
 return 4 2000 8 2012
+init-return 8 600 14 622
 array/multi 5 3000 9 5026
 nested 5 3000 9 11 12 3037
 return-as-arg 4136

@@ -146,6 +146,7 @@ int main(int argc, char **argv)
     struct Big bigarr[2];
     struct Big b;
     struct Big c;
+    struct Pair init_decl = proto_make_pair(8, 600, 14);
     int s;
 
     x.a = 3;
@@ -159,6 +160,8 @@ int main(int argc, char **argv)
     y = proto_make_pair(4, 2000, 8);
     s = proto_sum_pair(y);
     printf("return %d %d %d %d\n", y.a, y.b, y.c, s);
+
+    printf("init-return %d %d %d %d\n", init_decl.a, init_decl.b, init_decl.c, proto_sum_pair(init_decl));
 
     arr[0] = proto_make_pair(5, 3000, 9);
     arr[1] = y;

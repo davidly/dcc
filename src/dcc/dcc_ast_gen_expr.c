@@ -1494,6 +1494,75 @@ void ast_emit_init_expr(void)
     emit("\tld hl,0\n");
 }
 
+void ast_emit_struct_init_expr_assign(struct Sym *s)
+{
+    struct AstNode *rhs;
+    struct AstNode *lhs;
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    long end_pos;
+    long end_tok_start;
+    int end_line;
+    int end_tok_line;
+    struct Token end_tok;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    rhs = ast_build_assign_expr(&g_ast_init_arena);
+
+    end_pos = posi;
+    end_tok_start = tok_start_pos;
+    end_line = line_no;
+    end_tok_line = tok_line;
+    end_tok = tok;
+
+    lhs = ast_new(&g_ast_init_arena, AST_IDENT);
+    lhs->sval = ast_arena_strdup(&g_ast_init_arena, s->name);
+    lhs->sym = s;
+    lhs->type = s->type;
+
+    if (rhs != NULL && ast_struct_return_call_assign_supported(s->type, rhs)) {
+        gen_struct_return_call_assign_ast(lhs, rhs);
+        ast_arena_reset(&g_ast_init_arena);
+        return;
+    }
+
+    if (getenv("DCC_AST_REPORT") != NULL) {
+        if (rhs == NULL)
+            fprintf(stderr, "; AST-unsupported struct init build token=%d text='%s' line=%d\n",
+                    tok.kind, tok.text, tok_line);
+        else
+            fprintf(stderr, "; AST-unsupported struct init gate kind=%s line=%d\n",
+                    ast_kind_name(rhs->kind), tok_line);
+    }
+    ast_arena_reset(&g_ast_init_arena);
+
+    tok = sv_tok;
+    tok_line = sv_tok_line;
+    line_no = sv_line;
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    error_here(rhs == NULL ? "malformed initializer expression" : "unsupported struct initializer expression");
+
+    if (rhs != NULL) {
+        posi = end_pos;
+        tok_start_pos = end_tok_start;
+        line_no = end_line;
+        tok_line = end_tok_line;
+        tok = end_tok;
+    } else {
+        while (tok.kind != TOK_EOF && tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+            next_token();
+    }
+}
+
 static int ast_bool_bitand_const_rhs(const struct AstNode *n,
                                      const struct AstNode **out_value,
                                      unsigned int *out_mask)
@@ -1911,6 +1980,13 @@ void gen_assign_ast(const struct AstNode *n)
 
         emit("\tpush hl\n");                    /* save lvalue address */
         emit_load_from_hl(val_type);            /* HL = current value */
+        if (bf_width > 0) {
+            current_field_bit_width = bf_width;
+            current_field_bit_shift = bf_shift;
+            current_field_bit_mask = bf_mask;
+            g_expr_type = val_type;
+            emit_extract_bitfield();
+        }
         emit("\tpush hl\n");                    /* save current value */
 
         saved_dead = expr_result_dead;
@@ -1922,9 +1998,17 @@ void gen_assign_ast(const struct AstNode *n)
             emit("\tld b,l\n\tpop hl\n");
             emit_shift_loop(n->op, val_type);
             emit("\tex de,hl\n\tpop hl\n");
-            emit_store_de_to_addr_hl(val_type);
-            if (!want_dead)
-                emit("\tex de,hl\n");
+            if (bf_width > 0) {
+                current_field_bit_width = bf_width;
+                current_field_bit_shift = bf_shift;
+                current_field_bit_mask = bf_mask;
+                g_expr_type = val_type;   /* field type -> correct extract sign */
+                emit_store_bitfield_de_to_addr_hl(!want_dead);
+            } else {
+                emit_store_de_to_addr_hl(val_type);
+                if (!want_dead)
+                    emit("\tex de,hl\n");
+            }
             g_long_from16 = 0;
             return;
         }
@@ -1933,9 +2017,17 @@ void gen_assign_ast(const struct AstNode *n)
         common_type = common_arith_type(val_type, g_expr_type);
         gen_binop_typed(binop, common_type);    /* HL = result */
         emit("\tex de,hl\n\tpop hl\n");         /* DE = result, HL = address */
-        emit_store_de_to_addr_hl(val_type);
-        if (!want_dead)
-            emit("\tex de,hl\n");
+        if (bf_width > 0) {
+            current_field_bit_width = bf_width;
+            current_field_bit_shift = bf_shift;
+            current_field_bit_mask = bf_mask;
+            g_expr_type = val_type;   /* field type -> correct extract sign */
+            emit_store_bitfield_de_to_addr_hl(!want_dead);
+        } else {
+            emit_store_de_to_addr_hl(val_type);
+            if (!want_dead)
+                emit("\tex de,hl\n");
+        }
         g_long_from16 = 0;
         return;
     }
