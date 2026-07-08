@@ -127,6 +127,7 @@ Generally, dcc compares very well with all other compilers that target CP/M, esp
   - pihex.c: Computes PI in base 16. This is C-only and some of the compilers can't build or run it due to a variety of bugs. It measures unsigned long mod and floating point performance. I spent 90 minutes trying to get the two forms of ZCC to build and run it, ran into many compiler and C runtime bugs, and gave up. HiSoft v4.11 has a C runtime bug where if you cast 3.963512 to an int it gives you 4. After I worked around that and other bugs, code from that compiler ran really well -- faster than dcc.
   - mm.c: Another BYTE magazine classic from October 1982. Measures floating point initialization, addition, and multiplication performance.
   - tstring.c: Measures performance of strlen, strchr, strrchr, strstr, memcmp, memcpy, memset, memchr, rand, and integer modulus. Most compilers don't implement all of these and need them supplied.
+  - tbig.c: Test sequential and random file i/o on the biggest file size CP/M 2.2 supports: 8MB. 
 
 Benchmark times are in milliseconds on a 4Mhz Z80. CP/M file sizes are rounded up to the next multiple of 128 bytes due to how the file system works.
 
