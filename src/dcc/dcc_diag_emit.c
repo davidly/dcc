@@ -46,6 +46,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "expected \"FILENAME\" or <FILENAME>")) return "DCC-E0301";
     if (dcc_msg_has(msg, "include name too long")) return "DCC-E0302";
     if (dcc_msg_has(msg, "unterminated include name")) return "DCC-E0303";
+    if (dcc_msg_has(msg, "cannot open include file")) return "DCC-E0304";
     if (dcc_msg_has(msg, "not a valid preprocessor directive")) return "DCC-E0310";
     if (dcc_msg_has(msg, "unknown preprocessor directive")) return "DCC-E0310";
     if (dcc_msg_has(msg, "too many nested #if")) return "DCC-E0311";
