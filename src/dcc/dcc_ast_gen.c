@@ -225,6 +225,9 @@ int ast_value_is_plain_int(const struct AstNode *n)
         return ast_index_plain_int_read(n);
     case AST_MEMBER:
         return ast_member_plain_int_read(n) || ast_member_bitfield_read(n);
+    case AST_COMPOUND_LITERAL:
+        return ast_is_plain_int_type(n->type) && type_size(n->type) <= 2 &&
+               type_ptr_depth(n->type) == 0;
     case AST_CALL: {
         int rt;
         int callee_type;
@@ -1490,6 +1493,11 @@ int ast_member_base_type(const struct AstNode *n, int *out_type)
             return !no_deref;
         return ast_index_struct_object_type(n->a, out_type);
     }
+    if (n->op == '.' && n->a->kind == AST_COMPOUND_LITERAL &&
+        type_is_struct_object(n->a->type)) {
+        *out_type = n->a->type;
+        return 1;
+    }
     if (n->op == TOK_ARROW && ast_pointer_expr_type(n->a, out_type, &no_deref))
         return !no_deref;
     if (n->op == '.' && n->a->kind == AST_MEMBER &&
@@ -2596,6 +2604,15 @@ int ast_struct_addr_expr_supported(const struct AstNode *n, int *out_type)
             return 0;
         if (out_type)
             *out_type = t;
+        return 1;
+    case AST_COMPOUND_LITERAL:
+        /* A struct-typed compound literal materializes into its backing local
+         * and yields that object's address - exactly what the struct-value
+         * contexts (by-value argument, copy-assignment) consume. */
+        if (!type_is_struct_object(n->type))
+            return 0;
+        if (out_type)
+            *out_type = n->type;
         return 1;
     default:
         return 0;

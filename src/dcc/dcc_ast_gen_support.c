@@ -1147,6 +1147,8 @@ int ast_value_is_long_word(const struct AstNode *arg)
     }
     if (!ast_gen_supported(arg))
         return 0;
+    if (arg->kind == AST_COMPOUND_LITERAL)
+        return type_is_long(arg->type);
     if (arg->kind == AST_IDENT) {
         s = find_sym(arg->sval);
          return s != NULL && s->storage != SC_FUNC && !s->is_array &&
@@ -1409,6 +1411,8 @@ int ast_value_is_float_word(const struct AstNode *arg)
         return 0;
     if (arg->kind == AST_FLOAT_LIT)
         return 1;
+    if (arg->kind == AST_COMPOUND_LITERAL)
+        return type_is_float(arg->type);
     if (arg->kind == AST_UNARY && (arg->op == '-' || arg->op == '+') &&
         arg->a != NULL)
         return ast_value_is_float_word(arg->a);
