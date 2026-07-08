@@ -343,6 +343,22 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                     return 0;
                 }
             }
+            /* Deref-of-pointer-to-array subscript store `(*p)[i] = rhs` (p a
+             * pointer-to-array local/param, e.g. `int (*p)[4]`).  Long and
+             * float element stores are already accepted by the
+             * ast_index_lvalue_elem_type block above; add the plain-int and
+             * pointer element cases so `(*p)[i]` matches the address machine
+             * that gen_index_addr_ast already emits for this shape (via
+             * ast_index_deref_pointer_array_collect). */
+            if (n->op == '=' &&
+                ast_index_deref_pointer_array_collect(n->a, &base, NULL, NULL,
+                                                      NULL, &elem)) {
+                if (type_ptr_depth(elem) > 0)
+                    return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
+                if (ast_is_plain_int_type(elem))
+                    return (type_size(elem) == 1 || type_size(elem) == 2) &&
+                           ast_int_elem_assign_rhs_ok(n);
+            }
             if (ast_index_symbol_nd_elem_type(n->a, &elem)) {
                 if (type_is_long(elem))
                     return (n->op == '=' || (is_compound && expr_result_dead)) &&
