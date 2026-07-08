@@ -166,6 +166,15 @@ void scan_global_write_info(void)
     memcpy(saved_src, src, (size_t)src_len + 1);
     saved_src_len = src_len;
 
+    /* This scan tokenises the whole file purely for its write/addr-taken
+     * bookkeeping; the real pass re-tokenises the same source afterward. Any
+     * lexer/preprocessor diagnostic here (over-long string literal, function-
+     * like macro arg-count mismatch, ...) would therefore be emitted twice, so
+     * suppress diagnostics for the duration - the real pass is the one that
+     * surfaces them to the user. This also keeps the scan from tripping the
+     * errors>40 fatal before real compilation begins. */
+    asm_suppress_depth++;
+
     posi = 0;
     tok_start_pos = 0;
     line_no = 1;
@@ -244,6 +253,8 @@ void scan_global_write_info(void)
         (void)prev_text;
         next_token();
     }
+
+    asm_suppress_depth--;
 
     ndefs = saved_ndefs;
     memcpy(defs, saved_defs, sizeof(defs));
