@@ -436,6 +436,21 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
                     }
                 } else {
                     make_include_path(name, incname, incpath, sizeof(incpath));
+                    {
+                        FILE *probe = fopen(incpath, "rb");
+                        if (!probe) {
+                            /* A quoted user include that cannot be found is a
+                             * hard error.  Report it against the including file
+                             * and line (rather than letting read_file() abort
+                             * with a generic "cannot open input") so the
+                             * diagnostic points at the offending #include. */
+                            char diag[320];
+                            sprintf(diag, "cannot open include file '%s'", incname);
+                            report_include_error(name, src_line, diag);
+                            exit(1);
+                        }
+                        fclose(probe);
+                    }
                     incsrc = preprocess_includes_file(incpath, depth + 1, &inc_len);
                     append_mem(&out, &out_len2, &out_cap, incsrc, inc_len);
                     append_mem(&out, &out_len2, &out_cap, "\n", 1);
