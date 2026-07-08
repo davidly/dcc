@@ -93,6 +93,23 @@ long exp;
     }
 }
 
+static struct Leaf make_leaf(seed)
+int seed;
+{
+    struct Leaf leaf;
+    int i;
+
+    leaf.v = seed;
+    leaf.cv = (char)(seed + 1);
+    leaf.lv = (long)seed * 1000L;
+    for (i = 0; i < 4; ++i) {
+        leaf.a[i] = seed + i;
+        leaf.ca[i] = (char)(seed + 10 + i);
+        leaf.la[i] = (long)seed * 1000L + (long)i;
+    }
+    return leaf;
+}
+
 static void init_all()
 {
     int i, j, k;
@@ -597,6 +614,47 @@ static void touch_alias_mix()
     check_long("alias loa glmat end", glmat[2][3], -400007L);
 }
 
+static void touch_ptr_to_array_deref()
+{
+    int irow[4];
+    char crow[4];
+    int *prow[3];
+    struct Leaf leafrow[3];
+    int (*ip)[4];
+    char (*cp)[4];
+    int *(*pp)[3];
+    struct Leaf (*lp)[3];
+    int i;
+    int ix;
+
+    for (i = 0; i < 4; ++i) {
+        irow[i] = 0;
+        crow[i] = 0;
+    }
+    for (i = 0; i < 3; ++i) {
+        prow[i] = 0;
+        leafrow[i] = make_leaf(0);
+    }
+
+    ip = &irow;
+    cp = &crow;
+    pp = &prow;
+    lp = &leafrow;
+    ix = 2;
+
+    (*ip)[ix] = 501;
+    (*cp)[ix + 1] = 71;
+    (*pp)[1] = &gint[14];
+    (*lp)[ix] = make_leaf(70);
+
+    check_int("ptr-array int store", irow[2], 501);
+    check_char("ptr-array char store", crow[3], 71);
+    check_int("ptr-array pointer store", *prow[1], gint[14]);
+    check_int("ptr-array struct v", leafrow[2].v, 70);
+    check_char("ptr-array struct cv", leafrow[2].cv, 71);
+    check_long("ptr-array struct la", leafrow[2].la[3], 70003L);
+}
+
 int main()
 {
     struct Wrapper *wp;
@@ -621,6 +679,7 @@ int main()
     touch_params(&wp, &np, &lp, &ip, &cp, &longp);
 
     touch_alias_mix();
+    touch_ptr_to_array_deref();
 
     if (fails == 0) {
         printf("PASS\n");
