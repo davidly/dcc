@@ -1860,7 +1860,7 @@ int ast_va_arg_deref_type(const struct AstNode *n, int *out_type)
         find_sym(call->list[0]->sval) == NULL)
         return 0;
     if (type_ptr_depth(cast->type) > 0 && type_size(cast->type) == 2)
-        val_type = cast->type & ~(TYPE_PTR | TYPE_PTR2);
+        val_type = type_decay_ptr(cast->type);
     else if (type_size(cast->type) == 4)
         val_type = cast->type;
     else if (call->list[1]->ival > 2)
@@ -2613,6 +2613,25 @@ int ast_struct_copy_assign_supported(const struct AstNode *n)
         !ast_struct_addr_expr_supported(n->b, &rhs_type))
         return 0;
     return same_struct_type(lhs_type, rhs_type);
+}
+
+int ast_struct_chain_copy_assign_supported(const struct AstNode *n)
+{
+    int lhs_type;
+    int mid_type;
+    int rhs_type;
+    const struct AstNode *inner;
+
+    if (n == NULL || n->kind != AST_ASSIGN || n->op != '=' || !expr_result_dead)
+        return 0;
+    if (n->b == NULL || n->b->kind != AST_ASSIGN || n->b->op != '=')
+        return 0;
+    inner = n->b;
+    if (!ast_struct_addr_expr_supported(n->a, &lhs_type) ||
+        !ast_struct_addr_expr_supported(inner->a, &mid_type) ||
+        !ast_struct_addr_expr_supported(inner->b, &rhs_type))
+        return 0;
+    return same_struct_type(lhs_type, mid_type) && same_struct_type(mid_type, rhs_type);
 }
 
 int ast_is_const_zero_condition(const struct AstNode *n)

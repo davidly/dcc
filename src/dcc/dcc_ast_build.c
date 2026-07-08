@@ -244,8 +244,19 @@ static int ast_expr_is_array_row(const struct AstNode *n)
 
 static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
 {
+    const struct AstNode *cast;
+    const struct AstNode *call;
     if (n == NULL)
         return 0;
+    if (n->kind == AST_UNARY && n->op == '*' && n->a != NULL &&
+        n->a->kind == AST_CAST) {
+        cast = n->a;
+        call = cast->a;
+        if (call != NULL && call->kind == AST_CALL && call->a != NULL &&
+            call->a->kind == AST_IDENT && !strcmp(call->a->sval, "__va_arg") &&
+            type_ptr_depth(type_decay_ptr(cast->type)) > 0)
+            return 1;
+    }
     if (ast_expr_is_null_pointer_constant(n))
         return 1;
     if (type_ptr_depth(ast_expr_type_for_sizeof(n)) > 0)

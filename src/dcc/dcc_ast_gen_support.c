@@ -290,6 +290,8 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             return 1;
         if (ast_struct_member_copy_assign_supported(n))
             return 1;
+        if (ast_struct_chain_copy_assign_supported(n))
+            return 1;
         if (ast_struct_copy_assign_supported(n))
             return 1;
         if (ast_long_va_arg_self_assign_supported(n, NULL))
@@ -303,10 +305,12 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         {
             int rhs_ptr_type;
             int rhs_no_deref;
+            int rhs_va_type;
             if (!ast_gen_supported(n->b) && n->b->kind != AST_CAST &&
                 !ast_pointer_expr_type(n->b, &rhs_ptr_type, &rhs_no_deref) &&
                 !(n->b->kind == AST_CALL && ast_value_is_pointer_word(n->b) &&
                   ast_call_named_args_supported(n->b)) &&
+                !ast_va_arg_deref_type(n->b, &rhs_va_type) &&
                 !ast_value_is_long_word(n->b))
                 return 0;
         }
@@ -665,6 +669,9 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             return 0;
         }
         if (type_is_long(s->type)) {
+            int va_type;
+            if (n->op == '=' && ast_va_arg_deref_type(n->b, &va_type))
+                return type_is_long(va_type);
             if (n->op == '=')
                 return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b) ||
                        ast_value_is_float_word(n->b);
@@ -831,7 +838,7 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         cs = find_global(n->a->sval);
         rt = cs != NULL ? cs->type : TYPE_INT;
         if (type_is_struct_object(rt))
-            return 0;
+            return expr_result_dead;
         return 1;
     }
     case AST_POSTFIX:
@@ -1494,11 +1501,14 @@ int ast_pointer_assign_rhs_supported(const struct AstNode *n)
     const struct AstNode *value;
     int ptr_type;
     int no_deref;
+    int va_type;
     if (n == NULL)
         return 0;
     value = (n->kind == AST_CAST) ? n->a : n;
     if (ast_null_pointer_const(value))
         return 1;
+    if (ast_va_arg_deref_type(value, &va_type))
+        return type_ptr_depth(va_type) > 0;
     if (n->kind == AST_CAST && ast_gen_supported(value) &&
         ast_value_is_plain_int(value))
         return 1;
