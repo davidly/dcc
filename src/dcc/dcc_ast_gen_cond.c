@@ -1710,6 +1710,36 @@ void ast_gen_long_cmp_branch(const struct AstNode *n, int label,
     emit_branch_on_bool_hl(label, branch_when_true);
 }
 
+/* True if `n` is side-effect-free and guaranteed to evaluate to exactly 0 or
+ * 1: a relational/equality comparison, a logical-not, or any combination of
+ * such joined by &&, ||, or bitwise & / | . This is what makes a bitwise &
+ * or | over comparisons (e.g. `x+i<8 & y+i<8`, written that way instead of
+ * `&&` - seen in practice in a hand-written 8-queens solver) safe to
+ * evaluate the same short-circuited way &&/|| already are: since both
+ * operands can only ever be exactly 0 or 1, `a&b`/`a|b` and `a&&b`/`a||b`
+ * compute the identical result, so nothing observable changes by skipping
+ * the right operand once the left has already decided the outcome. */
+static int ast_is_pure_bool_valued(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_BINARY:
+        if (is_cmp_op(n->op))
+            return !ast_expr_has_side_effects(n);
+        if (n->op == '&' || n->op == '|')
+            return ast_is_pure_bool_valued(n->a) && ast_is_pure_bool_valued(n->b);
+        return 0;
+    case AST_LOGAND:
+    case AST_LOGOR:
+        return ast_is_pure_bool_valued(n->a) && ast_is_pure_bool_valued(n->b);
+    case AST_UNARY:
+        return n->op == '!' && !ast_expr_has_side_effects(n);
+    default:
+        return 0;
+    }
+}
+
 /* Emit the controlling expression of an if/while/do-while as a branch to
  * `label` taken when the condition is true (branch_when_true=1) or false (0).
  * A simple relational comparison uses the direct compare/branch; everything
@@ -1739,6 +1769,16 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
         } else {
             ast_gen_cond_branch(n->b, label, branch_when_true);
         }
+        return;
+    }
+    if (n != NULL && n->kind == AST_BINARY && (n->op == '&' || n->op == '|') &&
+        ast_is_pure_bool_valued(n->a) && ast_is_pure_bool_valued(n->b)) {
+        struct AstNode logical;
+        memset(&logical, 0, sizeof(logical));
+        logical.kind = (n->op == '&') ? AST_LOGAND : AST_LOGOR;
+        logical.a = (struct AstNode *)n->a;
+        logical.b = (struct AstNode *)n->b;
+        ast_gen_cond_branch(&logical, label, branch_when_true);
         return;
     }
     if (ast_is_range_check_cond(n, NULL, NULL, NULL)) {

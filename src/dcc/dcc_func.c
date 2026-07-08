@@ -1724,7 +1724,24 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
  * is_register is captured by the caller (from decl_is_register) rather
  * than read here, since nothing this function calls is expected to touch
  * that global, but relying on a value already in hand is more robust than
- * re-reading a global after a speculative parse. */
+ * re-reading a global after a speculative parse.
+ *
+ * Tried relaxing this to any plain int local (not just register-qualified)
+ * to narrow tests/00040.c's loop counter `i`: the regression suite
+ * immediately caught two real problems that is_register had incidentally
+ * been shielding, not just scope-limiting.
+ *   1. tfloat4 silently truncated an unrelated ~60000-valued `unsigned ui`
+ *      to a byte - narrow_member_needs_bound (dcc_array_narrow.c) never
+ *      required checking the narrowing TARGET's own bound unless some
+ *      other write also depended on it. Found, fixed, verified (kept -
+ *      it only makes the existing register-gated path stricter/safer).
+ *   2. tpromo32 failed to compile outright ("unsupported AST statement")
+ *      once a plain scalar earlier in the same function triggered a
+ *      speculative rescan that has to walk through a later nested `{ ... }`
+ *      block with its own local declarations - likely a symbol-table/frame
+ *      side effect from ast_build_stmt attempting that block, outside the
+ *      narrow-scan's save/restore set. Root-caused but not yet fixed.
+ * Reverted back to register-only until #2 is resolved. */
 int try_narrow_register_scalar(const char *name, int type, int is_register,
                                int arrlen, int total_elems)
 {

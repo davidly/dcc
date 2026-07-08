@@ -826,7 +826,17 @@ static int narrow_name_used_as_percent_divisor(const struct AstNode *n, const ch
 static int narrow_member_needs_bound(struct NarrowGroup *g, struct NarrowWalkState *st, int idx)
 {
     int i;
-    if (g->is_array[idx])
+    /* Member 0 is always the actual name being narrowed (narrow_is_byte_safe_impl
+     * adds it to the group before any dependency is discovered) - its own bound
+     * must always be checked regardless of whether anything else in the group
+     * depends on it. Every array target already took this path via is_array;
+     * a scalar target (narrow_scalar_is_byte_safe) did not, and its bound check
+     * was silently skipped whenever it happened not to also be a %-divisor or
+     * array-store source for some other write - e.g. a plain `unsigned ui;
+     * ui = 60000U;` with no other uses, which was wrongly approved to narrow to
+     * a byte (found via tests/tfloat4.c after widening try_narrow_register_scalar
+     * to non-register scalars, then minimized to an 8-line repro). */
+    if (idx == 0 || g->is_array[idx])
         return 1;
     for (i = 0; i < st->nwrites; ++i) {
         if (st->writes[i].rhs == NULL)
