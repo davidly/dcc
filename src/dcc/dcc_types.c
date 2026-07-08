@@ -780,8 +780,12 @@ int parse_base_type(void)
     }
 
     if (!saw_any) {
-        error_here("type expected");
-        t = TYPE_INT;
+        if (storage_class_seen) {
+            t = TYPE_INT;
+        } else {
+            error_here("type expected");
+            t = TYPE_INT;
+        }
     } else if (t == 0) {
         if (saw_bool) t = TYPE_BOOL;
         else if (saw_float) t = TYPE_FLOAT;

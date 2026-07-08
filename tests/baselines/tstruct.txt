@@ -3,6 +3,9 @@ l=4 2000 8
 a=5 22 6
 p=5 22 6
 n=1234 22
+chain=2000 2000 8 8
+retarr=5 22 6
+discard struct return ok
 Stack[0]: Karina, Winter
 Stack[1]: Giselle, Ningning
 tstruct completed with great success

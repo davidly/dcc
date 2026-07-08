@@ -2303,6 +2303,104 @@ static int parse_global_compound_literal_address(char *label, int labelsz)
     return 1;
 }
 
+static int parse_global_addr_suffix(int base_type, long *offset)
+{
+    int cur_type;
+    long idx;
+
+    cur_type = base_type;
+    while (tok.kind == '[' || tok.kind == '.' || tok.kind == TOK_ARROW) {
+        if (tok.kind == '[') {
+            int elem_size;
+            next_token();
+            idx = parse_const_long_expr();
+            expect(']');
+            elem_size = type_size(cur_type);
+            if (elem_size <= 0) elem_size = 2;
+            *offset += idx * elem_size;
+            continue;
+        }
+        if (tok.kind == TOK_ARROW)
+            cur_type = type_decay_ptr(cur_type);
+        next_token();
+        if (tok.kind != TOK_ID) {
+            error_here("field name expected in address initializer");
+            return 0;
+        }
+        {
+            int sid;
+            struct FieldDef *fd;
+            sid = type_struct_id(cur_type);
+            fd = find_field_def(sid, tok.text);
+            if (fd == NULL) {
+                error_here("unknown field in address initializer");
+                return 0;
+            }
+            *offset += fd->offset;
+            cur_type = fd->type;
+        }
+        next_token();
+    }
+    return 1;
+}
+
+static int parse_global_cast_null_member_address(long *val)
+{
+    int base_type;
+    long offset;
+
+    if (tok.kind != '(')
+        return 0;
+    next_token();
+    if (tok.kind != '(')
+        return 0;
+    next_token();
+    base_type = parse_type();
+    expect(')');
+    if (tok.kind != TOK_NUM || tok.val != 0)
+        return 0;
+    next_token();
+    expect(')');
+    if (tok.kind != TOK_ARROW)
+        return 0;
+    offset = 0;
+    if (!parse_global_addr_suffix(base_type, &offset))
+        return 0;
+    *val = offset;
+    return 1;
+}
+
+static int parse_global_symbol_member_address(char *label, int labelsz)
+{
+    struct Sym *ls;
+    const char *lname;
+    long offset;
+    int base_type;
+
+    if (tok.kind != TOK_ID)
+        return 0;
+    ls = find_sym(tok.text);
+    lname = ls ? sym_asm_name(ls) : tok.text;
+    base_type = ls ? ls->type : TYPE_INT;
+    if (ls && ls->is_array)
+        base_type = ls->type;
+    next_token();
+
+    offset = 0;
+    if (!parse_global_addr_suffix(base_type, &offset))
+        return 0;
+
+    if (label && labelsz > 0) {
+        const char *aname = asm_name_for(lname);
+        if (offset == 0)
+            snprintf(label, (size_t)labelsz, "%s", lname);
+        else
+            snprintf(label, (size_t)labelsz, "%s+%ld", aname, offset);
+        label[labelsz - 1] = 0;
+    }
+    return 1;
+}
+
 int parse_global_init_atom(long *val, char *label, int labelsz)
 {
     int sign;
@@ -2411,7 +2509,25 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
 
     if (tok.kind == '&') {
         next_token();
+        {
+            long save_pos = posi;
+            long save_tok_start = tok_start_pos;
+            int save_line = line_no;
+            int save_tok_line = tok_line;
+            struct Token save_tok = tok;
+            if (parse_global_cast_null_member_address(val)) {
+                if (label) label[0] = 0;
+                return 1;
+            }
+            posi = save_pos;
+            tok_start_pos = save_tok_start;
+            line_no = save_line;
+            tok_line = save_tok_line;
+            tok = save_tok;
+        }
         if (parse_global_compound_literal_address(label, labelsz))
+            return 2;
+        if (parse_global_symbol_member_address(label, labelsz))
             return 2;
         if (tok.kind == TOK_ID) {
             if (label && labelsz > 0) {

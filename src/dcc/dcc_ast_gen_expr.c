@@ -1711,6 +1711,11 @@ void gen_assign_ast(const struct AstNode *n)
         return;
     }
 
+    if (ast_struct_chain_copy_assign_supported(n)) {
+        gen_struct_chain_copy_assign_ast(n);
+        return;
+    }
+
     if (ast_long_va_arg_self_assign_supported(n, NULL)) {
         gen_long_va_arg_self_assign_ast(n);
         return;
@@ -3375,6 +3380,14 @@ void gen_call_ast(const struct AstNode *n)
     if (fn_sym->is_static)
         fn_sym->deferred_body_needed = 1;
 
+    if (expr_result_dead && type_is_struct_object(fn_sym->type)) {
+        gen_struct_return_call_arg_ast(n, fn_sym->type);
+        emit_cleanup_stack_bytes(type_size(fn_sym->type));
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
     /* Push arguments right-to-left, one 16-bit word each (prototype-16-bit /
      * default-int push), with call arguments forced live across evaluation. */
     old_dead = expr_result_dead;
@@ -3548,6 +3561,23 @@ void gen_struct_copy_assign_ast(const struct AstNode *n)
     gen_struct_addr_expr_ast(n->a, &lhs_type);  /* HL = destination */
     emit("\tpush hl\n");
     gen_struct_addr_expr_ast(n->b, &rhs_type);  /* HL = source */
+    (void)rhs_type;
+    emit("\tex de,hl\n\tpop hl\n");
+    emit_copy_de_to_hl_bytes(type_size(lhs_type));
+    g_expr_type = lhs_type;
+    g_long_from16 = 0;
+}
+
+void gen_struct_chain_copy_assign_ast(const struct AstNode *n)
+{
+    const struct AstNode *inner = n->b;
+    int lhs_type;
+    int rhs_type;
+
+    gen_struct_copy_assign_ast(inner);
+    gen_struct_addr_expr_ast(n->a, &lhs_type);
+    emit("\tpush hl\n");
+    gen_struct_addr_expr_ast(inner->a, &rhs_type);
     (void)rhs_type;
     emit("\tex de,hl\n\tpop hl\n");
     emit_copy_de_to_hl_bytes(type_size(lhs_type));
