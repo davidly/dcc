@@ -350,7 +350,8 @@ struct ConstVal {
 struct ByteOperand {
     int kind;          /* 1 = IX direct byte, 2 = constant, 3 = global byte array[index],
                          * 4 = *p, p an IX-direct pointer-to-unsigned-char local/param,
-                         * 5 = p[i], p an IX-direct pointer-to-byte and i const/IX-direct int,
+                         * 5 = p[i], p an IX-direct pointer-to-byte and i const/IX-direct int
+                         *     or unsigned byte (e.g. a narrowed loop counter),
                          * 6 = low byte of IX-direct scalar plus optional IX-direct scalar/const */
     struct Sym *sym;
     struct Sym *idx_sym;

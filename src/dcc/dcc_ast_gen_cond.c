@@ -532,7 +532,22 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
             if (type_size(base) == 1) {
                 if (e->b->kind == AST_IDENT) {
                     struct Sym *idx = find_sym(e->b->sval);
-                    if (idx != NULL && sym_can_ix_direct(idx) && type_size(idx->type) == 2) {
+                    /* A byte-sized (unsigned) index is just as valid as a
+                     * plain int one here - emit_byte_operand_to_a/
+                     * emit_cp_byte_operand (dcc_cmp.c) branch on the index
+                     * symbol's own size to zero-extend a byte or load both
+                     * bytes of an int, either way producing the right 16-bit
+                     * offset. Originally only the 2-byte case was handled;
+                     * once a loop counter narrows to a byte (e.g. via
+                     * try_narrow_for_counter), a `p[i]` comparison like
+                     * tests/tbig.c's `b[i] != (char)((rec+i)&0xff)` no
+                     * longer matched this fast path at all and fell all the
+                     * way back to full long-arithmetic codegen - a real
+                     * performance regression, not just a missed byte-sized
+                     * optimization. */
+                    if (idx != NULL && sym_can_ix_direct(idx) &&
+                        (type_size(idx->type) == 2 ||
+                         (type_size(idx->type) == 1 && (idx->type & TYPE_UNSIGNED)))) {
                         op->kind = 5;
                         op->sym = ps;
                         op->idx_sym = idx;

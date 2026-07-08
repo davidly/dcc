@@ -248,7 +248,10 @@ void emit_byte_operand_to_a(struct ByteOperand *op)
         fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         if (op->idx_sym) {
             fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
-            fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
+            if (type_size(op->idx_sym->type) == 1)
+                emit("\tld d,0\n");
+            else
+                fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
             emit("\tadd hl,de\n");
         } else if (op->val != 0) {
             fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
@@ -297,7 +300,10 @@ void emit_cp_byte_operand(struct ByteOperand *op)
         fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         if (op->idx_sym) {
             fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
-            fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
+            if (type_size(op->idx_sym->type) == 1)
+                emit("\tld d,0\n");
+            else
+                fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
             emit("\tadd hl,de\n");
         } else if (op->val != 0) {
             fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
