@@ -790,29 +790,79 @@ static void narrow_walk_seq(struct NarrowWalkState *st, const struct AstNode *bo
     }
 }
 
-/* Every member of the dependency group must have its own writes checked
- * against the [0,255] bound, full stop - matching this file's header
- * comment ("check every reassignment site for every name in the closure is
- * consistent with that assumption"). This used to skip the check for a
- * non-target member unless it was independently seen as a %-divisor or an
- * array-store source elsewhere - but narrow_expr_bound's AST_IDENT case
- * trusts ANY group member's contribution to a containing expression
- * unconditionally (`*out_bound = NARROW_TARGET_BOUND`), not just when it's
- * a %-divisor or stored value: e.g. `u16 = e;` (e a long-valued int32_t
- * dependency, never itself a %-divisor or array-store source) let e's own
- * assignment `e = 123456L;` go completely unchecked, wrongly approving u16
- * to narrow (found via tests/tpromo32.c while investigating narrowing
- * tests/00040.c's loop counter - a second, deeper gap than the idx==0-only
- * fix in narrow_scalar_is_byte_safe/narrow_array_is_byte_safe's target).
- * Skipping any member's check can only ever miss a real out-of-range write,
- * never invent one, so this direction is always safe; the only cost is
- * declining a few narrowings this could safely have allowed before. */
+/* Does `name` appear as the divisor (b operand) of a '%' anywhere in this
+ * subtree? A '%' result is bounded by its divisor, so a group member used
+ * this way needs its OWN value kept within the target bound - unlike a
+ * member used only as a '%'/'/' dividend (needs just nonneg) or in further
+ * arithmetic that never itself gets stored raw into a group member (e.g.
+ * e.c's `x` in `x = 10 * a[n-1] + x / n;` - x's own magnitude is never read
+ * into an array or copied into another member, so it never needs to be
+ * byte-sized, only nonneg - a real regression when this was briefly made
+ * unconditional, see below). */
+static int narrow_name_used_as_percent_divisor(const struct AstNode *n, const char *name)
+{
+    int i;
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_BINARY && n->op == '%' && n->b != NULL && n->b->kind == AST_IDENT &&
+        !strcmp(n->b->sval, name))
+        return 1;
+    if (narrow_name_used_as_percent_divisor(n->a, name) ||
+        narrow_name_used_as_percent_divisor(n->b, name) ||
+        narrow_name_used_as_percent_divisor(n->c, name) ||
+        narrow_name_used_as_percent_divisor(n->d, name))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (narrow_name_used_as_percent_divisor(n->list[i], name))
+            return 1;
+    return 0;
+}
+
+/* Does this group member's own value need to stay within the target bound,
+ * as opposed to merely nonneg? Always true for the narrowing target itself
+ * (idx 0 - narrow_is_byte_safe_impl adds it to the group before any
+ * dependency is discovered - and for an array, the entire point). For any
+ * other (dependency) member, true only if it is ever used as a '%' divisor
+ * (whose result's bound depends on the divisor's own bound) or copied raw
+ * (unwrapped) into ANY other group member, scalar or array - the two ways a
+ * dependency's own magnitude, not just its sign, can flow into something
+ * whose bound matters.
+ *
+ * Both real-world gaps found in this check share the same shape - a
+ * dependency's own magnitude flowing raw into something bound-sensitive
+ * without being one of the two patterns above:
+ *   - idx 0 (the actual narrowing target) used to be exempt when it wasn't
+ *     also independently a %-divisor or array-store source elsewhere - so a
+ *     plain `unsigned ui; ui = 60000U;` (idx 0, no other use) was wrongly
+ *     approved (tests/tfloat4.c).
+ *   - the "copied raw into another member" check used to require the
+ *     destination be specifically an array - so `u16 = e;` (e a dependency
+ *     copied raw into another SCALAR member) let e's own out-of-range
+ *     `e = 123456L;` go completely unchecked (tests/tpromo32.c).
+ * Both are fixed below; the %-divisor case (e.c's `n`) and the "only ever
+ * a dividend, never copied raw" case (e.c's `x`) are unchanged from this
+ * function's original design - skipping either check can only ever miss a
+ * real out-of-range write, never invent one, so declining more is always
+ * safe, but declining unconditionally (as a first attempt at fixing the two
+ * gaps above did) cost e.c its own narrowing as collateral damage: `x` is
+ * never bounded (it grows without limit computing digits of e), so
+ * requiring its own bound unconditionally made array `a[]`'s narrowing
+ * decline entirely. */
 static int narrow_member_needs_bound(struct NarrowGroup *g, struct NarrowWalkState *st, int idx)
 {
-    (void)g;
-    (void)st;
-    (void)idx;
-    return 1;
+    int i;
+    if (idx == 0 || g->is_array[idx])
+        return 1;
+    for (i = 0; i < st->nwrites; ++i) {
+        if (st->writes[i].rhs == NULL)
+            continue;
+        if (narrow_name_used_as_percent_divisor(st->writes[i].rhs, g->names[idx]))
+            return 1;
+        if (st->writes[i].rhs->kind == AST_IDENT &&
+            !strcmp(st->writes[i].rhs->sval, g->names[idx]))
+            return 1;
+    }
+    return 0;
 }
 
 /* Does `name` appear anywhere at all in this subtree? Used only to check
@@ -957,24 +1007,29 @@ static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *nam
         group_grew = 0;
         for (j = 0; j < n_deps; ++j) {
             int before;
-            /* A dependency already declared before this scan's own starting
-             * point (i.e. visible in the real, currently-live symbol table -
-             * find_local searches every enclosing scope) has a write history
-             * this forward-only speculative scan can never see: its own
-             * declaration/initializer and any prior assignment lie BEFORE the
-             * text this walk starts from. Trusting it anyway (the previous
-             * behavior) is a vacuous proof - no write is ever found for it, so
-             * "every write checked out" is trivially true regardless of the
-             * name's real value. Found via tests/tpromo32.c: `uint16_t u16;
-             * u16 = e;` inside a nested block, where `int32_t e = 123456L;`
-             * was declared earlier in the same function - e's own out-of-range
-             * initializer was invisible to the scan, so u16 was wrongly
-             * approved to narrow. A name first declared WITHIN the scanned
-             * window is unaffected (its entire lifetime is visible), which
-             * covers the motivating dependency shapes this file's header
-             * comment describes (e.g. e.c's register `n` used as a %-divisor,
-             * declared alongside the array being narrowed). */
-            if (find_local(deps[j]) != NULL)
+            struct Sym *dep_sym;
+            /* A dependency whose own declaration already initialized it (e.g.
+             * `int32_t e = 123456L;`) has a write this forward-only
+             * speculative scan can never see - that initializer runs before
+             * the text this walk starts from. Trusting it anyway (the
+             * original behavior) is a vacuous proof: no write is ever found
+             * for it, so "every write checked out" is trivially true
+             * regardless of the name's real value (tests/tpromo32.c:
+             * `uint16_t u16; u16 = e;` inside a nested block wrongly
+             * approved u16 to narrow this way).
+             *
+             * This is deliberately narrower than "already declared before
+             * this scan" (find_local(deps[j]) != NULL): a dependency merely
+             * declared earlier in the SAME scope, with no initializer, whose
+             * actual assignments all come later - textually within this
+             * scan's own window - is completely visible and safe to trust,
+             * e.c's exact shape (`int x;` declared before array `a[]`, but
+             * assigned only via `x = 0;` and `x = 10*a[n-1]+x/n;` later,
+             * both well within a[]'s own scan window). Declining on mere
+             * prior declaration broke that case as a first attempt at fixing
+             * tpromo32's gap; has_init is the precise distinguishing fact. */
+            dep_sym = find_local(deps[j]);
+            if (dep_sym != NULL && dep_sym->has_init)
                 return 0;
             before = group.n;
             if (narrow_group_add(&group, deps[j], dep_is_array[j]) < 0)
