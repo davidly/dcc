@@ -1131,10 +1131,22 @@ static int scan_compound_literal_if_present(void)
 
     add_compound_literal_local(type);
 
+    /* Walk the braced initializer, recursing into nested compound literals so
+     * each reserves its own frame slot in source order. The codegen pass
+     * re-parses this same initializer at emit time and allocates one frame
+     * slot per nested compound literal (add_compound_literal_local, reached
+     * through ast_emit_init_expr for each non-constant field). Emit consumes
+     * the initializer tokens in source order, so a source-order recursive walk
+     * here reserves exactly the same slots at the same offsets. Skipping the
+     * body (the old behavior) under-reserved the frame: the prologue is sized
+     * from this scan, so the nested literals then landed below SP where an
+     * intervening push/call clobbers them. */
     depth = 0;
     do {
         if (tok.kind == TOK_EOF)
             break;
+        if (depth >= 1 && tok.kind == '(' && scan_compound_literal_if_present())
+            continue;
         if (tok.kind == '{')
             depth++;
         else if (tok.kind == '}')

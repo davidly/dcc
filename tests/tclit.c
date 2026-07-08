@@ -59,9 +59,55 @@ static void check_block_literals(void)
     check_int(*ip, 1235, "scalar literal");
 }
 
+/* Nested, address-taken compound literals used to build a small tree inline,
+ * then walked recursively. A field initialized to the address of another
+ * compound literal (.left = &(struct Node){...}) re-enters the initializer
+ * emitter, so this exercises both the root-address capture and the frame
+ * reservation for every nested literal. */
+struct Node {
+    long v;
+    const struct Node *left;
+    const struct Node *right;
+};
+
+static long sum_tree(const struct Node *n)
+{
+    if (n == NULL)
+        return 0;
+    return n->v + sum_tree(n->left) + sum_tree(n->right);
+}
+
+static void check_nested_literals(void)
+{
+    const struct Node *tree = &(struct Node){
+        .v = 1L,
+        .left = &(struct Node){ .v = 20L },
+        .right = &(struct Node){ .v = 300L }
+    };
+    /* Same shape, but the nested literals are designated out of source order:
+     * the root must still resolve to the outer literal, not the last-built
+     * nested one. */
+    const struct Node *reordered = &(struct Node){
+        .v = 7L,
+        .right = &(struct Node){ .v = 500L },
+        .left = &(struct Node){ .v = 40L }
+    };
+
+    check_int((int)tree->v, 1, "tree.v");
+    check_int((int)tree->left->v, 20, "tree.left.v");
+    check_int((int)tree->right->v, 300, "tree.right.v");
+    check_int((int)sum_tree(tree), 321, "sum_tree");
+
+    check_int((int)reordered->v, 7, "reordered.v");
+    check_int((int)reordered->left->v, 40, "reordered.left.v");
+    check_int((int)reordered->right->v, 500, "reordered.right.v");
+    check_int((int)sum_tree(reordered), 547, "sum_tree reordered");
+}
+
 int main(void)
 {
     check_block_literals();
+    check_nested_literals();
     if (failures == 0)
         printf("test tclit completed with great success\n");
     return failures;

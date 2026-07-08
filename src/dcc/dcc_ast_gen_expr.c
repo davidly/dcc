@@ -704,6 +704,15 @@ static void gen_compound_literal_ast(const struct AstNode *n)
     int sv_line = line_no;
     int sv_tok_line = tok_line;
     struct Token sv_tok = tok;
+    /* Capture the fields we still need after the initializer is emitted.
+     * `n` itself lives in g_ast_init_arena, and emitting a non-constant field
+     * (e.g. .p = &(T){...}) re-enters ast_emit_init_expr, which builds into and
+     * then resets that same arena - overwriting this node with the last nested
+     * initializer. Reading n->sym/n->type afterwards would then yield the wrong
+     * (last nested) compound literal, so snapshot them now. The Sym pointer
+     * itself targets the stable locals[] table, so it stays valid. */
+    struct Sym *clit_sym = n->sym;
+    int clit_type = n->type;
 
     posi = sp->posi;
     tok_start_pos = sp->tok_start_pos;
@@ -711,15 +720,15 @@ static void gen_compound_literal_ast(const struct AstNode *n)
     tok_line = sp->tok_line;
     tok = sp->tok;
 
-    if ((n->type & TYPE_STRUCT) && type_ptr_depth(n->type) == 0) {
-        emit_init_auto_struct_from_list(n->sym);
+    if ((clit_type & TYPE_STRUCT) && type_ptr_depth(clit_type) == 0) {
+        emit_init_auto_struct_from_list(clit_sym);
     } else if (accept('{')) {
-        emit_init_auto_struct_scalar(n->sym, 0, n->type);
+        emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
         if (tok.kind == ',')
             next_token();
         expect('}');
     } else {
-        emit_init_auto_struct_scalar(n->sym, 0, n->type);
+        emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
     }
 
     posi = sv_posi;
@@ -728,8 +737,8 @@ static void gen_compound_literal_ast(const struct AstNode *n)
     tok_line = sv_tok_line;
     tok = sv_tok;
 
-    emit_load_sym_addr(n->sym);
-    g_expr_type = type_add_ptr(n->type);
+    emit_load_sym_addr(clit_sym);
+    g_expr_type = type_add_ptr(clit_type);
 }
 
 void gen_pointer_cmp_operand_ast(const struct AstNode *n)
