@@ -2392,10 +2392,13 @@ static int parse_global_symbol_member_address(char *label, int labelsz)
 
     if (label && labelsz > 0) {
         const char *aname = asm_name_for(lname);
-        if (offset == 0)
-            snprintf(label, (size_t)labelsz, "%s", lname);
-        else
-            snprintf(label, (size_t)labelsz, "%s+%ld", aname, offset);
+        if (offset == 0) {
+            strncpy(label, lname, (size_t)labelsz - 1);
+        } else {
+            char tmp[64];
+            sprintf(tmp, "%s+%ld", aname, offset);
+            strncpy(label, tmp, (size_t)labelsz - 1);
+        }
         label[labelsz - 1] = 0;
     }
     return 1;

@@ -25,6 +25,23 @@ static int asm_prefix_eq_ci(const char *a, const char *b, int n)
     return 1;
 }
 
+/* Write "_" + src, truncated to fit dst[dstsz], into dst. A bounded copy
+ * instead of sprintf(dst, "_%s", src): with sprintf, gcc's -Wformat-overflow
+ * cannot always prove src (other->name, a char[64] field) fits once this
+ * function's caller is partially inlined, and warns with a nonsensical huge
+ * bound estimate. */
+static void asm_name_prefix_underscore(char *dst, size_t dstsz, const char *src)
+{
+    size_t len;
+
+    len = strlen(src);
+    if (len > dstsz - 2)
+        len = dstsz - 2;
+    dst[0] = '_';
+    memcpy(dst + 1, src, len);
+    dst[1 + len] = 0;
+}
+
 int asm_name_must_mangle(const char *cname)
 {
     struct Sym *s;
@@ -56,7 +73,7 @@ int asm_name_must_mangle(const char *cname)
 
     if (s && s->is_defined) {
         char aname[66];
-        sprintf(aname, "_%s", cname);
+        asm_name_prefix_underscore(aname, sizeof(aname), cname);
         for (i = 0; i < nglobals; ++i) {
             struct Sym *other = &globals[i];
             char oname[66];
@@ -68,7 +85,7 @@ int asm_name_must_mangle(const char *cname)
             if (other->storage != SC_FUNC && other->storage != SC_GLOBAL &&
                 other->storage != SC_EXTERN)
                 continue;
-            sprintf(oname, "_%s", other->name);
+            asm_name_prefix_underscore(oname, sizeof(oname), other->name);
             if (asm_prefix_eq_ci(aname, oname, 6))
                 return 1;
         }
