@@ -275,6 +275,12 @@ struct Sym {
     int proto_types[MAX_PROTO_PARAMS];
     int is_const_value;        /* local const scalar folded as immediate */
     unsigned long const_value; /* raw integer bits or IEEE float bits */
+    int has_addr_cache;    /* this local array's address is materialized once
+                            * at function entry into addr_cache_offset instead
+                            * of being recomputed at every use (see dcc_func.c's
+                            * per-function address-cache scan) */
+    int addr_cache_offset; /* frame offset of the 2-byte pointer slot holding
+                            * this array's address, valid when has_addr_cache */
 };
 
 struct Def {
@@ -924,6 +930,7 @@ void parse_param_list(void);
 int current_function_param_count(void);
 int current_function_safe_to_omit_ix(int return_type, int local_bytes);
 void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
+void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name);
 void emit_function_epilogue(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
 void skip_initializer_or_decl_tail(void);

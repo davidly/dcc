@@ -698,6 +698,16 @@ int frame_sp_offset_for_sym(struct Sym *s)
 void emit_load_frame_addr_hl(struct Sym *s)
 {
     int n;
+    if (s->has_addr_cache) {
+        /* This local array's address was materialized once, unconditionally,
+         * right after the prologue allocated locals (see dcc_func.c) - it
+         * never changes for the life of the function, so every later
+         * reference just rereads the cached pointer instead of redoing the
+         * push ix/pop hl/ld de,N/add hl,de below. */
+        fprintf(outf, "\tld l,(ix%+d)\n", s->addr_cache_offset);
+        fprintf(outf, "\tld h,(ix%+d)\n", s->addr_cache_offset + 1);
+        return;
+    }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
         n = frame_sp_offset_for_sym(s);
         if (n == 0) {

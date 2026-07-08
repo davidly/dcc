@@ -521,6 +521,215 @@ static void reserve_inline_temp_locals(void)
     }
 }
 
+/* Local-array address caching: a local array's address (`&arr`, or the
+ * implicit decay when it's passed/used as a pointer) is a compile-time
+ * constant offset from IX for the entire life of the function, yet every
+ * reference recomputes it from scratch (push ix/pop hl/ld de,N/add hl,de -
+ * see emit_load_frame_addr_hl). When an array's address is materialized
+ * repeatedly - e.g. passed to two calls in the same loop iteration - that's
+ * pure waste: compute it once, unconditionally, right after the prologue
+ * allocates locals (so it's valid before any user statement runs, sidestepping
+ * any question of which control-flow path reaches which use first), and have
+ * every use site just reload the cached pointer.
+ *
+ * Two-step design, mirroring function_body_mentions_multiuse_inline_call():
+ *   1. A read-only token scan (this function) counts every identifier's bare
+ *      occurrences in the function body, without knowing yet which ones are
+ *      local arrays - declarations haven't been processed. For an array,
+ *      every bare occurrence except `sizeof`/`&` (which this simple count
+ *      doesn't try to distinguish - overcounting only costs an unneeded
+ *      cache slot, never correctness) is an address materialization, so
+ *      total occurrence count is a direct, if slightly conservative, proxy
+ *      for "how many times will this array's address be computed". Scalars
+ *      are deliberately excluded from this optimization entirely (see the
+ *      declaration hook in scan_local_decl_after_type): an ordinary scalar's
+ *      name is read/written directly via cheap ix-relative access without
+ *      ever calling emit_load_frame_addr_hl, so a bare occurrence count would
+ *      be a poor proxy for "how many times is its address actually taken".
+ *   2. When a local array's own declaration is later processed (in all three
+ *      passes over the function body - two frame-sizing scans plus the real
+ *      codegen pass - the pattern already used by everything else in this
+ *      file), if its name's count clears the threshold, reserve a 2-byte
+ *      cache slot right there via add_local_alloc (identically in all three
+ *      passes, since they replay the same declarations in the same order
+ *      from the same starting local_size) and record the (array offset,
+ *      cache slot offset) pair in g_addr_cache_arrays so the prologue -
+ *      emitted before the codegen pass re-declares anything - can still emit
+ *      the eager population using the last (identical) pass's values. */
+#define ADDR_CACHE_MIN_COUNT 3
+#define MAX_IDENT_COUNTS 128
+#define MAX_ADDR_CACHE_ARRAYS 16
+
+struct IdentCount { char name[64]; int count; };
+static struct IdentCount g_ident_counts[MAX_IDENT_COUNTS];
+static int g_ident_count_n;
+
+struct AddrCacheArrayInfo { int array_offset; int cache_slot_offset; };
+static struct AddrCacheArrayInfo g_addr_cache_arrays[MAX_ADDR_CACHE_ARRAYS];
+static int g_addr_cache_array_count;
+
+/* Set for the duration of the current function's three passes when its body
+ * directly calls exec()/execv(). Both are hand-written RTL (DCCRTL.MAC,
+ * __xmain) that computes a scratch "trampoline" region at a fixed offset (67
+ * bytes) below the BDOS entry point and zero-fills it - if the calling
+ * function's stack has grown deep enough to reach that region, the zero-fill
+ * corrupts the caller's own live stack. This is a pre-existing fragility
+ * completely independent of address-caching (confirmed empirically: adding
+ * ANY unrelated 2-byte local to such a caller's frame reproduces the same
+ * corruption with the optimization fully disabled) - but address-caching's
+ * extra 2-byte-per-array slot is exactly the kind of frame growth that can
+ * tip a marginal case over that edge, as it did for tests/texec.c. Rather
+ * than fix that RTL fragility (a separate, unrelated concern), just decline
+ * to grow the frame of any function that directly calls exec()/execv() at
+ * all - the narrowest, safest way to avoid ever being the change that
+ * triggers it. */
+static int g_addr_cache_calls_exec;
+
+static void bump_ident_count(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_ident_count_n; ++i) {
+        if (strcmp(g_ident_counts[i].name, name) == 0) {
+            g_ident_counts[i].count++;
+            return;
+        }
+    }
+    if (g_ident_count_n < MAX_IDENT_COUNTS) {
+        strncpy(g_ident_counts[g_ident_count_n].name, name, sizeof(g_ident_counts[0].name) - 1);
+        g_ident_counts[g_ident_count_n].name[sizeof(g_ident_counts[0].name) - 1] = 0;
+        g_ident_counts[g_ident_count_n].count = 1;
+        g_ident_count_n++;
+    }
+}
+
+static int ident_count_for(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_ident_count_n; ++i)
+        if (strcmp(g_ident_counts[i].name, name) == 0)
+            return g_ident_counts[i].count;
+    return 0;
+}
+
+/* Record (or update, on a later pass) that the array at this frame offset got
+ * a cache slot. Keyed on array_offset, NOT name: two distinct arrays with the
+ * same name can legitimately exist in the same function in separate,
+ * non-overlapping scopes (dcc's frame storage is monotonic - see
+ * leave_scope() - so they get different, permanent offsets, never reused).
+ * Keying on name would conflate them, silently dropping one's entry from this
+ * table when the other's got recorded later - its cache slot would then never
+ * be populated by the prologue while its use sites still unconditionally read
+ * from it (has_addr_cache is set independently per-Sym), reading garbage.
+ * Idempotent across the three passes over the same function body for the
+ * SAME instance: each pass computes identical offsets for it (array_offset
+ * comes from add_local_alloc's monotonic local_size counter, deterministic
+ * given identical declaration order each pass), so re-finding it and
+ * overwriting with the same values is harmless. */
+static void record_addr_cache_array(int array_offset, int cache_slot_offset)
+{
+    int i;
+
+    for (i = 0; i < g_addr_cache_array_count; ++i) {
+        if (g_addr_cache_arrays[i].array_offset == array_offset) {
+            g_addr_cache_arrays[i].cache_slot_offset = cache_slot_offset;
+            return;
+        }
+    }
+    if (g_addr_cache_array_count < MAX_ADDR_CACHE_ARRAYS) {
+        g_addr_cache_arrays[g_addr_cache_array_count].array_offset = array_offset;
+        g_addr_cache_arrays[g_addr_cache_array_count].cache_slot_offset = cache_slot_offset;
+        g_addr_cache_array_count++;
+    }
+}
+
+/* Give a local array a cache slot if its name's bare occurrence count (from
+ * the pre-scan below) clears the threshold. Called from the ordinary local
+ * array declaration path, once per pass; add_local_alloc's own local_size
+ * bookkeeping keeps the reserved slot's offset identical across all three
+ * passes, exactly like every other per-declaration frame reservation in this
+ * file. */
+void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name)
+{
+    struct Sym *cache_slot;
+    int would_be_offset;
+
+    if (ident_count_for(name) < ADDR_CACHE_MIN_COUNT)
+        return;
+    /* See g_addr_cache_calls_exec's comment: a function that directly calls
+     * exec()/execv() must not have its frame grown by this optimization at
+     * all, regardless of how many arrays would otherwise qualify. */
+    if (g_addr_cache_calls_exec)
+        return;
+    /* The cache slot is read/written via (ix+d) direct addressing (both in
+     * the prologue's eager store and at every use site in
+     * emit_load_frame_addr_hl), which the Z80 only encodes with a signed
+     * 8-bit displacement, -128..127. A function with a large enough frame
+     * can push this reservation past that range - confirmed by a real M80
+     * "out of range" assembly failure on tarray6.c's large frame - so decline
+     * the optimization entirely for this array rather than reserve a slot
+     * that can never actually be addressed this way. local_size is the
+     * running total BEFORE this reservation, matching what add_local_alloc
+     * itself is about to compute (local_size += bytes; offset = -local_size). */
+    would_be_offset = -(local_size + 2);
+    if (would_be_offset < -128)
+        return;
+    cache_slot = add_local_alloc("#addrcache", TYPE_INT, 2);
+    s->has_addr_cache = 1;
+    s->addr_cache_offset = cache_slot->offset;
+    record_addr_cache_array(s->offset, cache_slot->offset);
+}
+
+/* Token-scan pre-pass (read-only, saves/restores lexer position exactly like
+ * function_body_mentions_multiuse_inline_call): count every identifier's bare
+ * occurrences in the function body, and reset the per-function address-cache
+ * table for the upcoming three passes over this function; also sets
+ * g_addr_cache_calls_exec (declared above) when the body directly calls
+ * exec()/execv(). */
+static void scan_function_body_ident_counts(void)
+{
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    int depth;
+
+    g_ident_count_n = 0;
+    g_addr_cache_array_count = 0;
+    g_addr_cache_calls_exec = 0;
+
+    if (tok.kind != '{')
+        return;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    depth = 1;
+    next_token();
+    while (tok.kind != TOK_EOF && depth > 0) {
+        if (tok.kind == TOK_ID) {
+            bump_ident_count(tok.text);
+            if (strcmp(tok.text, "exec") == 0 || strcmp(tok.text, "execv") == 0)
+                g_addr_cache_calls_exec = 1;
+        } else if (tok.kind == '{')
+            depth++;
+        else if (tok.kind == '}')
+            depth--;
+        next_token();
+    }
+
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
+}
+
 void emit_needed_deferred_bodies(void)
 {
     int i;
@@ -1026,6 +1235,25 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
      * (the call follows the recognised push-ix/locals sequence). */
     if (opt_stack_check)
         emit_runtime_call("__stchk");
+
+    /* Materialize any address-cached local arrays' addresses exactly once,
+     * unconditionally, here - after the recognised prologue sequence above
+     * (so as not to disturb dccpeep's shared-frame-stub folding of it) but
+     * before any user statement runs. Function entry trivially dominates
+     * every use site, so this is always safe regardless of which control-flow
+     * path a given call takes - see maybe_reserve_addr_cache_for_array's
+     * comment for why a naive "cache at first use" scheme would not be. Only
+     * valid when IX is actually this function's frame pointer. */
+    if (!omit_ix_frame) {
+        int i;
+        for (i = 0; i < g_addr_cache_array_count; ++i) {
+            emit("\tpush ix\n\tpop hl\n");
+            if (g_addr_cache_arrays[i].array_offset != 0)
+                fprintf(outf, "\tld de,%d\n\tadd hl,de\n", g_addr_cache_arrays[i].array_offset);
+            fprintf(outf, "\tld (ix%+d),l\n", g_addr_cache_arrays[i].cache_slot_offset);
+            fprintf(outf, "\tld (ix%+d),h\n", g_addr_cache_arrays[i].cache_slot_offset + 1);
+        }
+    }
 }
 
 void emit_function_epilogue(int implicit_zero_return)
@@ -1678,6 +1906,13 @@ void scan_local_decl_after_type(int base)
                     /* Reserve this scope's SP-save slot (first VLA only) so the
                      * frame matches the codegen pass, which also emits it. */
                     vla_scope_ensure_save_slot();
+                } else {
+                    /* A VLA's slot holds a runtime pointer, not a fixed
+                     * address (see emit_load_sym_addr's is_vla branch), so
+                     * the address-caching optimization below - which assumes
+                     * the array's address never changes for the life of the
+                     * function - only applies to ordinary fixed arrays. */
+                    maybe_reserve_addr_cache_for_array(s, name);
                 }
             } else if (g_ptr_array_dim_count > 0) {
                 int pi;
@@ -3345,6 +3580,7 @@ void parse_function_or_global(int base_type)
                 record_narrow_return_expr_if_simple(s);
                 if (function_body_mentions_multiuse_inline_call())
                     reserve_inline_temp_locals();
+                scan_function_body_ident_counts();
 
                 saved_pos = posi;
                 saved_tok_start = tok_start_pos;

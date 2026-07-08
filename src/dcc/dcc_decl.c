@@ -1140,6 +1140,17 @@ void gen_local_decl_after_type(int base)
                         if (vsp_off != 0)
                             emit_vla_save_sp(vsp_off);
                     }
+                } else {
+                    /* Mirrors the identical hook in scan_local_decl_after_type
+                     * (dcc_func.c): a VLA's slot holds a runtime pointer, not
+                     * a fixed address, so address-caching only applies to
+                     * ordinary fixed arrays. Must run here too, not just in
+                     * the scan pass - gen_local_decl_after_type is a separate
+                     * declaration handler used only by the real codegen pass
+                     * (see gen_compound), with its own freshly-allocated Sym
+                     * that the scan pass's has_addr_cache/addr_cache_offset
+                     * never reaches. */
+                    maybe_reserve_addr_cache_for_array(s, name);
                 }
             } else if (g_ptr_array_dim_count > 0) {
                 int pi;
