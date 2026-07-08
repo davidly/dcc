@@ -91,6 +91,14 @@
 #define MAX_DEFINES    512
 #define MAX_MACRO_TEXT 8192
 
+/* Function-like macro invocation argument capture.  Each argument's text is
+ * stored raw, including the newlines and indentation of a multi-line call, so
+ * the per-argument length must be generous: a small cap silently drops the
+ * trailing argument(s) of an indented multi-line macro invocation (a
+ * multi-line variadic __VA_ARGS__ tail is especially easy to overflow). */
+#define MAX_MACRO_ARGS    8
+#define MAX_MACRO_ARG_LEN 4096
+
 /* C99 for-init declaration scoping limits */
 #define MAX_FOR_SCOPES 256
 #define MAX_FOR_SCOPE_RENAMES 16
@@ -653,15 +661,15 @@ int parse_charlit_string_value(const char *s, long *out);
 void replace_source_range(long start, long end, const char *text);
 void trim_arg(char *s);
 void strip_macro_replacement_comments(char *s);
-int read_macro_call_args(char args[8][128], int *nargs, int variadic_named_count);
+int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *nargs, int variadic_named_count);
 void append_macro_string_literal(const char *arg, char *out, int *oip, int outsz);
 int macro_param_index(int di, const char *ident);
-int read_macro_call_args_text(const char **pp, char args[8][128], int *nargs,
+int read_macro_call_args_text(const char **pp, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *nargs,
                                      int variadic_named_count);
 void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
 void paste_tokens_in_text(char *s);
 int replacement_param_raw_context(const char *start, const char *param_start, const char *param_end);
-void expand_function_macro(int di, char args[8][128], char *out, int outsz);
+void expand_function_macro(int di, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], char *out, int outsz);
 int macro_value_is_float_literal(const char *s);
 int macro_number_should_expand_textually(const char *s);
 int define_number_value(const char *name, long *out, int depth);
