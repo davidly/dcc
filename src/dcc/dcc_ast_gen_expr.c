@@ -2482,6 +2482,16 @@ void gen_assign_ast(const struct AstNode *n)
                 fprintf(outf, "\tld (ix%+d),a\n", s->offset);
                 g_expr_type = s->type;
                 g_long_from16 = 0;
+                /* This statement's value may itself be read by an enclosing
+                 * expression (e.g. a chained `outer = byte_var = other;`) -
+                 * the store above only wrote the byte, it never put the
+                 * (possibly sign/zero-extended) result in HL. Only bother
+                 * when the caller actually needs it: this exact gap (found
+                 * via tests/00040.c's `for (r=i=0; ...)` once `i` narrowed
+                 * to a byte) silently left HL holding unrelated leftover
+                 * register contents, corrupting the outer assignment. */
+                if (!expr_result_dead)
+                    emit_load_sym_value_direct(s);
                 return;
             }
         }
@@ -2490,11 +2500,15 @@ void gen_assign_ast(const struct AstNode *n)
                 fprintf(outf, "\tld (ix%+d),%d\n", s->offset, n->b->ival ? 1 : 0);
                 g_expr_type = s->type;
                 g_long_from16 = 0;
+                if (!expr_result_dead)
+                    emit_load_sym_value_direct(s);
                 return;
             }
             fprintf(outf, "\tld (ix%+d),%ld\n", s->offset, n->b->ival & 255);
             g_expr_type = s->type;
             g_long_from16 = 0;
+            if (!expr_result_dead)
+                emit_load_sym_value_direct(s);
             return;
         }
         if (type_size(s->type) == 1) {
@@ -2505,6 +2519,8 @@ void gen_assign_ast(const struct AstNode *n)
                 fprintf(outf, "\tld (ix%+d),%ld\n", s->offset, fv & 255);
                 g_expr_type = s->type;
                 g_long_from16 = 0;
+                if (!expr_result_dead)
+                    emit_load_sym_value_direct(s);
                 return;
             }
         }

@@ -790,64 +790,29 @@ static void narrow_walk_seq(struct NarrowWalkState *st, const struct AstNode *bo
     }
 }
 
-/* Does `name` appear as the divisor (b operand) of a '%' anywhere in this
- * subtree? A '%' result is bounded by its divisor, so a group member used
- * this way needs its OWN value kept within the target bound - unlike a
- * member used only as a '%' dividend (needs just nonneg) or in further
- * arithmetic that never itself gets stored into a group array (e.g. e.c's
- * `x` in `x = 10 * a[n-1] + x / n;` - x's own magnitude is never read
- * into an array, so it never needs to be byte-sized, only nonneg). */
-static int narrow_name_used_as_percent_divisor(const struct AstNode *n, const char *name)
-{
-    int i;
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_BINARY && n->op == '%' && n->b != NULL && n->b->kind == AST_IDENT &&
-        !strcmp(n->b->sval, name))
-        return 1;
-    if (narrow_name_used_as_percent_divisor(n->a, name) ||
-        narrow_name_used_as_percent_divisor(n->b, name) ||
-        narrow_name_used_as_percent_divisor(n->c, name) ||
-        narrow_name_used_as_percent_divisor(n->d, name))
-        return 1;
-    for (i = 0; i < n->list_len; ++i)
-        if (narrow_name_used_as_percent_divisor(n->list[i], name))
-            return 1;
-    return 0;
-}
-
-/* Does this group member's own value need to stay within the target
- * bound, as opposed to merely nonneg? Always true for an array (that is
- * the entire point); for a scalar, true only if it is ever used as a '%'
- * divisor (whose result's bound depends on the divisor's own bound) or
- * stored directly (unwrapped) into a group array - the two ways a
- * scalar's own magnitude, not just its sign, can flow into an array
- * element's value. */
+/* Every member of the dependency group must have its own writes checked
+ * against the [0,255] bound, full stop - matching this file's header
+ * comment ("check every reassignment site for every name in the closure is
+ * consistent with that assumption"). This used to skip the check for a
+ * non-target member unless it was independently seen as a %-divisor or an
+ * array-store source elsewhere - but narrow_expr_bound's AST_IDENT case
+ * trusts ANY group member's contribution to a containing expression
+ * unconditionally (`*out_bound = NARROW_TARGET_BOUND`), not just when it's
+ * a %-divisor or stored value: e.g. `u16 = e;` (e a long-valued int32_t
+ * dependency, never itself a %-divisor or array-store source) let e's own
+ * assignment `e = 123456L;` go completely unchecked, wrongly approving u16
+ * to narrow (found via tests/tpromo32.c while investigating narrowing
+ * tests/00040.c's loop counter - a second, deeper gap than the idx==0-only
+ * fix in narrow_scalar_is_byte_safe/narrow_array_is_byte_safe's target).
+ * Skipping any member's check can only ever miss a real out-of-range write,
+ * never invent one, so this direction is always safe; the only cost is
+ * declining a few narrowings this could safely have allowed before. */
 static int narrow_member_needs_bound(struct NarrowGroup *g, struct NarrowWalkState *st, int idx)
 {
-    int i;
-    /* Member 0 is always the actual name being narrowed (narrow_is_byte_safe_impl
-     * adds it to the group before any dependency is discovered) - its own bound
-     * must always be checked regardless of whether anything else in the group
-     * depends on it. Every array target already took this path via is_array;
-     * a scalar target (narrow_scalar_is_byte_safe) did not, and its bound check
-     * was silently skipped whenever it happened not to also be a %-divisor or
-     * array-store source for some other write - e.g. a plain `unsigned ui;
-     * ui = 60000U;` with no other uses, which was wrongly approved to narrow to
-     * a byte (found via tests/tfloat4.c after widening try_narrow_register_scalar
-     * to non-register scalars, then minimized to an 8-line repro). */
-    if (idx == 0 || g->is_array[idx])
-        return 1;
-    for (i = 0; i < st->nwrites; ++i) {
-        if (st->writes[i].rhs == NULL)
-            continue;
-        if (narrow_name_used_as_percent_divisor(st->writes[i].rhs, g->names[idx]))
-            return 1;
-        if (st->writes[i].is_array && st->writes[i].rhs->kind == AST_IDENT &&
-            !strcmp(st->writes[i].rhs->sval, g->names[idx]))
-            return 1;
-    }
-    return 0;
+    (void)g;
+    (void)st;
+    (void)idx;
+    return 1;
 }
 
 /* Does `name` appear anywhere at all in this subtree? Used only to check
@@ -991,7 +956,27 @@ static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *nam
 
         group_grew = 0;
         for (j = 0; j < n_deps; ++j) {
-            int before = group.n;
+            int before;
+            /* A dependency already declared before this scan's own starting
+             * point (i.e. visible in the real, currently-live symbol table -
+             * find_local searches every enclosing scope) has a write history
+             * this forward-only speculative scan can never see: its own
+             * declaration/initializer and any prior assignment lie BEFORE the
+             * text this walk starts from. Trusting it anyway (the previous
+             * behavior) is a vacuous proof - no write is ever found for it, so
+             * "every write checked out" is trivially true regardless of the
+             * name's real value. Found via tests/tpromo32.c: `uint16_t u16;
+             * u16 = e;` inside a nested block, where `int32_t e = 123456L;`
+             * was declared earlier in the same function - e's own out-of-range
+             * initializer was invisible to the scan, so u16 was wrongly
+             * approved to narrow. A name first declared WITHIN the scanned
+             * window is unaffected (its entire lifetime is visible), which
+             * covers the motivating dependency shapes this file's header
+             * comment describes (e.g. e.c's register `n` used as a %-divisor,
+             * declared alongside the array being narrowed). */
+            if (find_local(deps[j]) != NULL)
+                return 0;
+            before = group.n;
             if (narrow_group_add(&group, deps[j], dep_is_array[j]) < 0)
                 return 0;
             if (group.n > before)
@@ -1054,4 +1039,214 @@ int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
 int narrow_scalar_is_byte_safe(const struct AstNode *scope, const char *name)
 {
     return narrow_is_byte_safe_impl(scope, name, 0);
+}
+
+/* ------------------------------------------------------------------------- *
+ * narrow_for_counter_is_byte_safe: a second, much narrower and completely
+ * independent scalar-narrowing proof, purpose-built for exactly one shape -
+ * a plain (not necessarily register-qualified) local used solely as a
+ * simple counting for-loop's own induction variable, e.g. tests/00040.c's
+ * `for (r=i=0; i<8; i++) { ... }`.
+ *
+ * This deliberately does NOT reuse narrow_is_byte_safe_impl's general
+ * dependency-closure machinery above. That machinery is designed to trust a
+ * dependency's value once it is hypothesized into the group, verified only
+ * by checking whatever writes happen to be visible in the scanned scope -
+ * a design that (as its own history in this file records) has repeatedly
+ * had soundness gaps once broadened past its original register-qualified
+ * scope (a vacuous-dependency bug already found and fixed here, plus a
+ * wider regression - including tests/a1.c hanging outright - found but not
+ * fully triaged when tried more broadly). Rather than keep chasing gaps in
+ * a general mechanism, this is a small, self-contained, structurally exact
+ * match: no dependency closure, no hypothesize-then-verify, nothing to
+ * trust vacuously.
+ *
+ * Requires ALL of the following, declining (0) otherwise:
+ *   1. `scope` (everything from just after `name`'s own declaration to the
+ *      end of its enclosing block) contains exactly one `for` statement
+ *      whose init sets `name`, and `name` is never referenced anywhere
+ *      else in `scope` - not before that for statement, not after it.
+ *   2. The for's init sets `name` to a compile-time-constant literal >= 0,
+ *      either directly (`name = K;`) or through a chained assignment
+ *      (`other = name = K;`, matching tests/00040.c's `r = i = 0`).
+ *   3. The for's condition is exactly `name < K`, `name <= K`, `K > name`,
+ *      or `K >= name` for a literal K (either operand order, since C
+ *      allows writing the constant on either side).
+ *   4. The for's increment is exactly `name++` or `++name` - nothing else.
+ *   5. Nothing within the for's init/cond/incr/body declares anything
+ *      (no nested AST_DECL anywhere in it), so a shadowing inner variable
+ *      of the same name can never be misread as the outer counter by the
+ *      modification scan in #6.
+ *   6. `name` is not assigned, incremented/decremented, or address-taken
+ *      anywhere in the for's body - only the sanctioned increment clause
+ *      itself may ever change it.
+ *
+ * Given all six, `name`'s value is confined to [init_const, bound] (or
+ * [init_const, bound+1] for an inclusive <=/>= condition) for the rest of
+ * the enclosing scope's lifetime - narrowing to unsigned char is safe
+ * exactly when that whole range fits in [0,255].
+ * ------------------------------------------------------------------------- */
+
+/* Unwraps a (possibly chained, e.g. `r = i = 0`) assignment looking for an
+ * innermost `name = <literal>`. Declines (0) if `name` is assigned anything
+ * other than a literal, or isn't assigned at all. */
+static int narrow_for_init_const(const struct AstNode *init, const char *name, long *out_const)
+{
+    if (init == NULL || init->kind != AST_ASSIGN || init->op != '=')
+        return 0;
+    if (init->a != NULL && init->a->kind == AST_IDENT && init->a->sval != NULL &&
+        !strcmp(init->a->sval, name)) {
+        if (init->b != NULL && init->b->kind == AST_INT_LIT) {
+            *out_const = (long)init->b->ival;
+            return 1;
+        }
+        return 0;
+    }
+    return narrow_for_init_const(init->b, name, out_const);
+}
+
+/* Recognises `name < K`, `name <= K`, `K > name`, or `K >= name` for a
+ * literal K, in either operand order. *out_bound is K itself; *out_inclusive
+ * is 1 for <=/>=  (name can reach K itself before the loop stops) or 0 for
+ * </> (name stops strictly before K). */
+static int narrow_for_cond_bound(const struct AstNode *cond, const char *name,
+                                 long *out_bound, int *out_inclusive)
+{
+    if (cond == NULL || cond->kind != AST_BINARY)
+        return 0;
+    if (cond->a != NULL && cond->a->kind == AST_IDENT && cond->a->sval != NULL &&
+        !strcmp(cond->a->sval, name) && cond->b != NULL && cond->b->kind == AST_INT_LIT) {
+        if (cond->op == '<') { *out_bound = (long)cond->b->ival; *out_inclusive = 0; return 1; }
+        if (cond->op == TOK_LE) { *out_bound = (long)cond->b->ival; *out_inclusive = 1; return 1; }
+        return 0;
+    }
+    if (cond->b != NULL && cond->b->kind == AST_IDENT && cond->b->sval != NULL &&
+        !strcmp(cond->b->sval, name) && cond->a != NULL && cond->a->kind == AST_INT_LIT) {
+        if (cond->op == '>') { *out_bound = (long)cond->a->ival; *out_inclusive = 0; return 1; }
+        if (cond->op == TOK_GE) { *out_bound = (long)cond->a->ival; *out_inclusive = 1; return 1; }
+        return 0;
+    }
+    return 0;
+}
+
+/* Recognises exactly `name++` or `++name` - nothing else (not `name += K`,
+ * not `--name`, not anything on a different name). */
+static int narrow_for_incr_is_increment(const struct AstNode *incr, const char *name)
+{
+    if (incr == NULL)
+        return 0;
+    if ((incr->kind == AST_POSTFIX || incr->kind == AST_UNARY) && incr->op == TOK_INC &&
+        incr->a != NULL && incr->a->kind == AST_IDENT && incr->a->sval != NULL &&
+        !strcmp(incr->a->sval, name))
+        return 1;
+    return 0;
+}
+
+/* Does `n`'s subtree contain a declaration anywhere (an AST_DECL span, as
+ * captured for a nested block's own locals - see ast_build_decl_span in
+ * dcc_ast_build.c)? Used only to rule out a nested shadowing declaration of
+ * `name` before trusting the modification scan below to mean what it says. */
+static int narrow_tree_contains_decl(const struct AstNode *n)
+{
+    int i;
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_DECL)
+        return 1;
+    if (narrow_tree_contains_decl(n->a) || narrow_tree_contains_decl(n->b) ||
+        narrow_tree_contains_decl(n->c) || narrow_tree_contains_decl(n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (narrow_tree_contains_decl(n->list[i]))
+            return 1;
+    return 0;
+}
+
+/* Does `name` get assigned, incremented/decremented, or have its address
+ * taken anywhere in `n`? Recurses through every shape uniformly (including
+ * AST_CALL args, nested ifs/loops, everything) rather than declining
+ * outright on anything unrecognized - unlike dcc_licm.c's analogous
+ * licm_scan_modified, this only needs a single yes/no answer for one name,
+ * not a modified-name set, so there is no "unrecognized shape" case to
+ * conservatively bail out of: whatever the node kind, checking its
+ * children/list for a match is always correct and always terminates. */
+static int narrow_name_modified_in(const struct AstNode *n, const char *name)
+{
+    int i;
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_ASSIGN:
+        if (n->a != NULL && n->a->kind == AST_IDENT && !strcmp(n->a->sval, name))
+            return 1;
+        return narrow_name_modified_in(n->a, name) || narrow_name_modified_in(n->b, name);
+    case AST_UNARY:
+        if ((n->op == TOK_INC || n->op == TOK_DEC || n->op == '&') &&
+            n->a != NULL && n->a->kind == AST_IDENT && !strcmp(n->a->sval, name))
+            return 1;
+        return narrow_name_modified_in(n->a, name);
+    case AST_POSTFIX:
+        if ((n->op == TOK_INC || n->op == TOK_DEC) &&
+            n->a != NULL && n->a->kind == AST_IDENT && !strcmp(n->a->sval, name))
+            return 1;
+        return narrow_name_modified_in(n->a, name);
+    default:
+        if (narrow_name_modified_in(n->a, name) || narrow_name_modified_in(n->b, name) ||
+            narrow_name_modified_in(n->c, name) || narrow_name_modified_in(n->d, name))
+            return 1;
+        for (i = 0; i < n->list_len; ++i)
+            if (narrow_name_modified_in(n->list[i], name))
+                return 1;
+        return 0;
+    }
+}
+
+int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *name)
+{
+    int i;
+    int for_idx;
+    const struct AstNode *for_node;
+    long init_const = 0, bound;
+    int inclusive;
+
+    if (scope == NULL || scope->kind != AST_COMPOUND)
+        return 0;
+
+    for_idx = -1;
+    for_node = NULL;
+    for (i = 0; i < scope->list_len; ++i) {
+        const struct AstNode *stmt = scope->list[i];
+        long trial_const;
+
+        if (stmt != NULL && stmt->kind == AST_FOR && narrow_for_init_const(stmt->a, name, &trial_const)) {
+            if (for_idx >= 0)
+                return 0;   /* more than one candidate - decline, don't guess which */
+            for_idx = i;
+            for_node = stmt;
+            init_const = trial_const;
+        } else if (narrow_tree_references_name(stmt, name)) {
+            return 0;       /* name referenced outside the sanctioned for-loop shape */
+        }
+    }
+    if (for_node == NULL)
+        return 0;
+
+    if (!narrow_for_cond_bound(for_node->b, name, &bound, &inclusive))
+        return 0;
+    if (!narrow_for_incr_is_increment(for_node->c, name))
+        return 0;
+    if (narrow_tree_contains_decl(for_node->a) || narrow_tree_contains_decl(for_node->b) ||
+        narrow_tree_contains_decl(for_node->c) || narrow_tree_contains_decl(for_node->d))
+        return 0;
+    if (narrow_name_modified_in(for_node->d, name))
+        return 0;
+
+    if (init_const < 0 || init_const > NARROW_TARGET_BOUND)
+        return 0;
+    if (inclusive)
+        bound = bound + 1;
+    if (bound < 0 || bound > NARROW_TARGET_BOUND)
+        return 0;
+
+    return 1;
 }

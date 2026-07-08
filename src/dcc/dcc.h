@@ -948,9 +948,11 @@ int local_name_address_taken_ahead(const char *name);
 int local_name_used_ahead(const char *name);
 int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name);
 int narrow_scalar_is_byte_safe(const struct AstNode *scope, const char *name);
+int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *name);
 int try_narrow_local_int_array(const char *name, int type, int arrlen, int total_elems);
 int try_narrow_register_scalar(const char *name, int type, int is_register,
                                int arrlen, int total_elems);
+int try_narrow_for_counter(const char *name, int type, int arrlen, int total_elems);
 void scan_local_decl_after_type(int base);
 void scan_static_local_decl_after_type(int base);
 void scan_function_body(void);

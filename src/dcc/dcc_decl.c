@@ -1200,6 +1200,8 @@ void gen_local_decl_after_type(int base)
             current_field_array_elem_size = 0;
         } else if (try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
+        } else if (try_narrow_for_counter(name, type, arrlen, total_elems)) {
+            type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         }
 
         s = find_local_decl(name);

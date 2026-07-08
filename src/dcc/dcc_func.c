@@ -1728,20 +1728,49 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
  *
  * Tried relaxing this to any plain int local (not just register-qualified)
  * to narrow tests/00040.c's loop counter `i`: the regression suite
- * immediately caught two real problems that is_register had incidentally
- * been shielding, not just scope-limiting.
+ * immediately caught real problems that is_register had incidentally been
+ * shielding, not just scope-limiting.
  *   1. tfloat4 silently truncated an unrelated ~60000-valued `unsigned ui`
  *      to a byte - narrow_member_needs_bound (dcc_array_narrow.c) never
  *      required checking the narrowing TARGET's own bound unless some
- *      other write also depended on it. Found, fixed, verified (kept -
- *      it only makes the existing register-gated path stricter/safer).
- *   2. tpromo32 failed to compile outright ("unsupported AST statement")
- *      once a plain scalar earlier in the same function triggered a
- *      speculative rescan that has to walk through a later nested `{ ... }`
- *      block with its own local declarations - likely a symbol-table/frame
- *      side effect from ast_build_stmt attempting that block, outside the
- *      narrow-scan's save/restore set. Root-caused but not yet fixed.
- * Reverted back to register-only until #2 is resolved. */
+ *      other write also depended on it. Fixed by making it unconditional
+ *      (every group member's writes are checked, matching this file's own
+ *      header comment) - kept, only makes the existing path stricter.
+ *   2. tpromo32 failed to compile outright ("unsupported AST statement").
+ *      Root cause: a dependency (e.g. `u16 = e;`) pulled in by name via
+ *      narrow_collect_deps is trusted as bounded with NO write ever
+ *      checked when that name was already declared BEFORE the speculative
+ *      scan's own starting point (e's `int32_t e = 123456L;` initializer,
+ *      declared earlier in the same function, lies outside the
+ *      forward-only scan and is invisible to it) - a vacuously "verified"
+ *      dependency. Fixed in narrow_is_byte_safe_impl: decline outright if
+ *      a newly discovered dependency name already resolves via
+ *      find_local() (i.e. was declared before this scan began). Kept.
+ *   3. Even with #1 and #2 fixed, a broader regression-suite run still
+ *      showed 12 failures, including tests/a1.c (the 6502 emulator test)
+ *      hanging outright. This turned out to be a THIRD, unrelated bug -
+ *      not in either narrowing proof at all, but in gen_assign_ast
+ *      (dcc_ast_gen_expr.c): assigning a constant to a byte-sized ix-direct
+ *      local (`byteVar = K;`) took a fast path that stored the byte
+ *      directly and returned WITHOUT ever leaving the (possibly
+ *      sign/zero-extended) value in HL - fine when the assignment's own
+ *      result is unused (the overwhelmingly common case), but wrong when
+ *      it's a subexpression of an enclosing one, e.g. exactly
+ *      tests/00040.c's `for (r=i=0; ...)` once `i` narrows to a byte: HL
+ *      still held unrelated leftover register contents from the frame
+ *      setup, and that leaked into `r`. This bug is completely general -
+ *      reproduced identically with the plain `register` keyword too - and
+ *      was simply never exercised before, since narrowing a byte-sized
+ *      scalar used inside a chained assignment was rare. Fixed by emitting
+ *      a value reload (emit_load_sym_value_direct) after the store,
+ *      whenever expr_result_dead is false. This resolved #3 (a1 and the
+ *      rest of the 12 all pass now) with no further fallout found across
+ *      the full fast/nopeep/extended-C89/extended-C99 suites.
+ * Given all three are understood and fixed, try_narrow_for_counter below
+ * takes the narrower, purpose-built path the investigation converged on
+ * (see its own comment in dcc_array_narrow.c) rather than reusing this
+ * function's general dependency-closure machinery for non-register locals -
+ * this function's own trigger stays register-gated. */
 int try_narrow_register_scalar(const char *name, int type, int is_register,
                                int arrlen, int total_elems)
 {
@@ -1778,6 +1807,64 @@ int try_narrow_register_scalar(const char *name, int type, int is_register,
     seq = narrow_build_speculative_scope(&narrow_scalar_scratch_arena);
     asm_suppress_depth--;
     result = (seq != NULL) ? narrow_scalar_is_byte_safe(seq, name) : 0;
+
+    posi = sv_pos; tok_start_pos = sv_tok_start;
+    line_no = sv_line; tok_line = sv_tok_line;
+    tok = sv_tok;
+    nulabels = sv_nulabels;
+    g_for_seq = sv_for_seq; g_forren_n = sv_forren_n;
+    g_for_decl_seq = sv_for_decl_seq; g_for_decl_rename_index = sv_for_decl_rename_index;
+    g_for_decl_recording = sv_for_decl_recording; g_scope_depth = sv_scope_depth;
+    g_compound_literal_seq = sv_compound_literal_seq; g_licm_seq = sv_licm_seq;
+
+    return result;
+}
+
+/* Third narrowing trigger, independent of both of the above: proves a plain
+ * int local (register-qualified or not - unlike try_narrow_register_scalar,
+ * this does not require the keyword) is used solely as one simple counting
+ * for-loop's own induction variable, via narrow_for_counter_is_byte_safe's
+ * self-contained structural match (dcc_array_narrow.c) rather than the
+ * general dependency-closure proof. Motivated by tests/00040.c's
+ * `for (r=i=0; i<8; i++)`, after the general "narrow any plain scalar"
+ * relaxation attempt kept surfacing new soundness gaps (see the long
+ * comment on try_narrow_register_scalar above) - this is deliberately much
+ * smaller in scope than that attempt, so it carries none of that risk. */
+int try_narrow_for_counter(const char *name, int type, int arrlen, int total_elems)
+{
+    long sv_pos, sv_tok_start;
+    int sv_line, sv_tok_line;
+    struct Token sv_tok;
+    int sv_nulabels, sv_for_seq, sv_forren_n, sv_for_decl_seq, sv_for_decl_rename_index;
+    int sv_for_decl_recording, sv_scope_depth, sv_compound_literal_seq, sv_licm_seq;
+    static struct AstArena narrow_for_scratch_arena;
+    static int narrow_for_scratch_inited;
+    struct AstNode *seq;
+    int result;
+
+    if ((type & 15) != TYPE_INT || type_ptr_depth(type) != 0 ||
+        type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || tok.kind == '=')
+        return 0;
+
+    if (!narrow_for_scratch_inited) {
+        ast_arena_init(&narrow_for_scratch_arena);
+        narrow_for_scratch_inited = 1;
+    }
+    ast_arena_reset(&narrow_for_scratch_arena);
+
+    sv_pos = posi; sv_tok_start = tok_start_pos;
+    sv_line = line_no; sv_tok_line = tok_line;
+    sv_tok = tok;
+    sv_nulabels = nulabels;
+    sv_for_seq = g_for_seq; sv_forren_n = g_forren_n;
+    sv_for_decl_seq = g_for_decl_seq; sv_for_decl_rename_index = g_for_decl_rename_index;
+    sv_for_decl_recording = g_for_decl_recording; sv_scope_depth = g_scope_depth;
+    sv_compound_literal_seq = g_compound_literal_seq; sv_licm_seq = g_licm_seq;
+
+    asm_suppress_depth++;
+    seq = narrow_build_speculative_scope(&narrow_for_scratch_arena);
+    asm_suppress_depth--;
+    result = (seq != NULL) ? narrow_for_counter_is_byte_safe(seq, name) : 0;
 
     posi = sv_pos; tok_start_pos = sv_tok_start;
     line_no = sv_line; tok_line = sv_tok_line;
@@ -1898,6 +1985,8 @@ void scan_local_decl_after_type(int base)
              * type instead of silently keeping the stale, too-wide stride. */
             current_field_array_elem_size = 0;
         } else if (try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
+            type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
+        } else if (try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         }
 
