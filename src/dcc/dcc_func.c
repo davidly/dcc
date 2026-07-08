@@ -596,8 +596,18 @@ static void bump_ident_count(const char *name)
         }
     }
     if (g_ident_count_n < MAX_IDENT_COUNTS) {
-        strncpy(g_ident_counts[g_ident_count_n].name, name, sizeof(g_ident_counts[0].name) - 1);
-        g_ident_counts[g_ident_count_n].name[sizeof(g_ident_counts[0].name) - 1] = 0;
+        /* Manual bounded copy, not strncpy: name (63+NUL) is far smaller than
+         * a token's text (MAX_TOK_TEXT, 512), and GCC's fortify source flags
+         * that size disparity on strncpy as a possible truncation-without-
+         * termination bug even though the following assignment already
+         * null-terminates. snprintf would sidestep the warning but is C99,
+         * and this project builds its own source as strict C89
+         * (build-dcc.sh's default CFLAGS: -std=c89). */
+        size_t namelen = strlen(name);
+        size_t cap = sizeof(g_ident_counts[0].name) - 1;
+        if (namelen > cap) namelen = cap;
+        memcpy(g_ident_counts[g_ident_count_n].name, name, namelen);
+        g_ident_counts[g_ident_count_n].name[namelen] = 0;
         g_ident_counts[g_ident_count_n].count = 1;
         g_ident_count_n++;
     }
