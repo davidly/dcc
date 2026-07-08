@@ -69,10 +69,7 @@ optimizer pass.
 
 ## Engineering Notes
 
-DCC C Compiler was engineered agentically, with plenty of human supervision,
-patience, and love. It is unit tested against baselines grounded in modern desktop
-C compilers and a platform-appropriate subset of the community-driven
-[c-testsuite](https://github.com/c-testsuite/c-testsuite).
+DCC C Compiler was engineered agentically using [VS Code GitHub Copilot](https://code.visualstudio.com/docs/setup/copilot){: target="_blank" } and [Claude Code for VS Code](https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code){: target="_blank" }, with plenty of human intelligence, supervision, experience, and patience. It is unit tested against baselines grounded in modern C compilers and a platform-appropriate subset of the community-driven [c-testsuite](https://github.com/c-testsuite/c-testsuite).
 
 ## Contributions and Feedback Welcome
 
