@@ -22,6 +22,7 @@ static void chk4(const char *name, float *pf, unsigned char b0, unsigned char b1
 }
 
 struct Sflt { int tag; float f; };
+struct Core { float flux; float reserve; };
 
 static float gf;
 static float gg;
@@ -42,6 +43,21 @@ static void f_st(float x)
     gg = x;
 }
 
+static void core_rebalance(struct Core *core)
+{
+    core->reserve += core->flux * 0.125f;
+}
+
+static float core_rebalance_live(struct Core *core)
+{
+    return core->reserve += core->flux * 0.125f;
+}
+
+static float deref_add_live(float *p)
+{
+    return *p += 1.5f;
+}
+
 int main(void)
 {
     float lf;
@@ -49,6 +65,9 @@ int main(void)
     float lh;
     float la[2];
     struct Sflt s;
+    struct Core core;
+    float lc;
+    float ld;
 
     fails = 0;
     printf("tc89flta start\n");
@@ -77,6 +96,44 @@ int main(void)
 
     s.f = 1.0f;
     chk4("sf", &s.f, 0, 0, 128, 63);
+
+    core.flux = 3.5f;
+    core.reserve = 0.25f;
+    core_rebalance(&core);
+    chk4("core", &core.reserve, 0, 0, 48, 63);
+
+    core.flux = 3.5f;
+    core.reserve = 0.25f;
+    ld = core_rebalance_live(&core);
+    chk4("corelf", &core.reserve, 0, 0, 48, 63);
+    chk4("corelr", &ld, 0, 0, 48, 63);
+
+    gf = 2.0f;
+    ld = f_id(gf += 1.5f);
+    chk4("gfadd_f", &gf, 0, 0, 96, 64);
+    chk4("gfadd_r", &ld, 0, 0, 96, 64);
+
+    lc = 2.0f;
+    ld = deref_add_live(&lc);
+    chk4("dadd_f", &lc, 0, 0, 96, 64);
+    chk4("dadd_r", &ld, 0, 0, 96, 64);
+
+    ga[1] = 2.0f;
+    ld = f_id(ga[1] += 1.5f);
+    chk4("gaadd_f", &ga[1], 0, 0, 96, 64);
+    chk4("gaadd_r", &ld, 0, 0, 96, 64);
+    ga[1] = -3.0f;
+
+    /* local float assignment used as a live value (ix-direct store path) */
+    lc = 2.0f;
+    ld = (lc += 1.5f);            /* lc=3.5, ld=3.5 */
+    chk4("lcadd_f", &lc, 0, 0, 96, 64);
+    chk4("lcadd_r", &ld, 0, 0, 96, 64);
+
+    lc = 2.0f;
+    ld = (lc = 5.0f);            /* lc=5.0, ld=5.0 */
+    chk4("lcset_f", &lc, 0, 0, 160, 64);
+    chk4("lcset_r", &ld, 0, 0, 160, 64);
 
     lh = f_id(la[1]);
     chk4("fid", &lh, 0, 0, 0, 64);
