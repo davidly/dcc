@@ -69,6 +69,7 @@
     { "name": "sieveu", "ignore": true },
     { "name": "tttu", "ignore": true },
     { "name": "snake", "ignore": true },
-    { "name": "kbd", "ignore": true }
+    { "name": "kbd", "ignore": true },
+    { "name": "00040", "ignore": true }
   ]
 }

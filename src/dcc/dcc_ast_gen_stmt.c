@@ -588,6 +588,18 @@ void ast_gen_for_stmt(const struct AstNode *n)
         }
     }
 
+    /* General loop-invariant code motion (dcc_licm.c): only attempted when
+     * none of the three narrow hoists above already produced a rewritten
+     * body, to keep this new pass's interaction with them trivial - it
+     * covers loop bodies of any shape (multiple statements, nested ifs),
+     * unlike those three, which are all limited to a single-statement
+     * body. */
+    if (n->sym == NULL && hoist_body == NULL) {
+        struct AstNode *licm_rewritten = ast_licm_hoist_invariants(n);
+        if (licm_rewritten != NULL)
+            hoist_body = licm_rewritten;
+    }
+
     emit_label(ltop);
     if (!rotate && n->b != NULL)
         ast_gen_cond_branch(n->b, lend, 0);

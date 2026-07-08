@@ -221,6 +221,15 @@ int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
                                                   const struct AstNode **out_member,
                                                   int *out_val_type);
 
+/* General loop-invariant code motion for a for-loop's body (dcc_licm.c):
+ * hoists every pure scalar-arithmetic subexpression that doesn't depend on
+ * anything the loop's condition/increment/body modifies, computing it once
+ * before the loop into a fresh compiler-temp local instead of recomputing it
+ * every iteration. Unlike the three hoists above, this is not limited to a
+ * single-statement body. Returns a rewritten copy of for_node->d to use in
+ * its place, or NULL if nothing qualifies (use for_node->d unchanged). */
+struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node);
+
 /* Copy a NUL-terminated string into the arena. */
 char *ast_arena_strdup(struct AstArena *ar, const char *s);
 
