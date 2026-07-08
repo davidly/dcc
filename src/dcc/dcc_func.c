@@ -1776,6 +1776,8 @@ void scan_static_local_decl_after_type(int base)
         bytes = type_size(type);
         if (arrlen > 0)
             bytes = object_array_size(type, arrlen);
+        else if (g_last_array_dim_count > 0)
+            bytes = 0;
         else if (arrlen < 0)
             bytes = 0;
 
@@ -1793,7 +1795,7 @@ void scan_static_local_decl_after_type(int base)
         g->needs_extrn = 0;
         g->is_static = 1;
         g->size = bytes;
-        if (arrlen != 0) {
+        if (arrlen != 0 || g_last_array_dim_count > 0) {
             g->is_array = 1;
             g->array_len = arrlen > 0 ? arrlen : 0;
             g->elem_size = current_field_array_elem_size ? current_field_array_elem_size : type_size(type);
@@ -1805,7 +1807,7 @@ void scan_static_local_decl_after_type(int base)
             l = add_local_known(name, type, SC_GLOBAL, 0, bytes);
             strncpy(l->link_name, backing_name, sizeof(l->link_name) - 1);
             l->link_name[sizeof(l->link_name) - 1] = 0;
-            if (arrlen != 0) {
+            if (arrlen != 0 || g_last_array_dim_count > 0) {
                 l->is_array = 1;
                 l->array_len = arrlen > 0 ? arrlen : 0;
                 l->elem_size = g->elem_size;
@@ -3333,6 +3335,15 @@ void parse_function_or_global(int base_type)
             s = add_global(name, type, SC_FUNC);
             s->is_inline |= decl_is_inline;
             parse_function_return_type = type;
+            if (g_ptr_array_dim_count > 0) {
+                int pi;
+                s->elem_size = g_ptr_array_elem_size;
+                s->dim_count = g_ptr_array_dim_count;
+                for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
+                    s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
+                g_ptr_array_dim_count = 0;
+                g_ptr_array_elem_size = 0;
+            }
             if (decl_is_static) {
                 s->is_static = 1;
                 s->needs_extrn = 0;
