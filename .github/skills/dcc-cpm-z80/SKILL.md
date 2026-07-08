@@ -85,6 +85,19 @@ you see that error.
 `"..."` header is fatal. If standard calls compile but misbehave, check that
 `-I` actually resolves the dcc headers.
 
+**`#pragma` support is selective.** Unknown pragmas are ignored for source
+compatibility, so vendor-specific directives usually do not block a build. dcc
+does give these pragmas target-specific behavior:
+
+- `#pragma once` marks the current source/header as include-once. It is honored
+  only in an active preprocessor branch, and later includes of the same
+  canonical host path are skipped.
+- `#pragma stack_check(on)` / `#pragma stack_check(off)` toggle stack-overflow
+  guard emission from that point forward in the translation unit. They affect
+  later function prologues and VLA allocations, not code already emitted.
+- `#pragma push_macro("NAME")` / `#pragma pop_macro("NAME")` save and restore a
+  macro definition state on dcc's macro stack.
+
 ## C99/C11 front-end compatibility dcc accepts (beyond C89)
 
 These behave as standard C99: `for`-init declarations with loop scope, `//` line
@@ -234,8 +247,8 @@ Notes: M80 needs CRLF (`dccmake` handles this). `RTLMIN.MAC` is generated per-ap
 
 The deviations above are the pitfalls. For worked examples (the `float` decimal
 parser, `%f`/`-ffloatio`, 16-bit overflow, signed `char`, CP/M 8.3 names, the
-stack/heap collision), the full inlining rules, and the function inventory and
-`printf`/`scanf` conversion tables, see
+stack/heap collision, and supported pragmas), the full inlining rules, and the
+function inventory and `printf`/`scanf` conversion tables, see
 [references/library.md](./references/library.md).
 
 ## Workflow
@@ -243,12 +256,15 @@ stack/heap collision), the full inlining rules, and the function inventory and
 1. **Plan for the deviations.** Floating point → single precision (no `double`);
   decimal parsing → dcc's `float`-returning `atof`, or a small parser if you
   need different semantics; `time`/`signal`/`locale` → don't exist.
-2. **Check the library** in [references/library.md](./references/library.md)
+2. **Keep pragma assumptions narrow.** `#pragma once`, `#pragma stack_check`,
+  and `#pragma push_macro`/`#pragma pop_macro` are supported; unknown pragmas
+  are ignored, not diagnosed.
+3. **Check the library** in [references/library.md](./references/library.md)
    before calling anything unverified — a missing function is a link error,
    not a compile error.
-3. **Match repo conventions.** Read a nearby working program first. In the dcc
+4. **Match repo conventions.** Read a nearby working program first. In the dcc
    repo, the exhaustive reference is
    [dcc-c89-reference-guide.md](dcc-c89-reference-guide.md) at the repo root.
-4. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`
+5. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`
   (set `dcc-floatio=true` if you use `%f`); redirect stdin for interactive apps
   and compare against expected output.

@@ -65,6 +65,7 @@ Standard C89 `malloc`/`free`/`qsort`/`bsearch`/`atoi`/`strtol`/… are present;
 (size with `-stack`; keep big buffers `static`/global).
 
 **dcc extensions** (declared in `<stdlib.h>`, not C89):
+
 - `inp(port)`/`outp(port,val)` — direct Z80 8-bit port I/O. `inp` runs
   `IN A,(port)` and returns the byte zero-extended to `int` (0..255); `outp` runs
   `OUT (port),A` with the low byte of `val`. Only the low 8 bits of `port` are
@@ -137,7 +138,6 @@ digits**), and `sin`/`cos`/`tan` range-reduction via `fmodf` degrades for very
 large arguments. There is **no** `double`, `long double`, or `HUGE_VAL`, and
 printing a float (`%f`) requires `-ffloatio`.
 
-
 ## setjmp.h / stdarg.h / stddef.h
 
 Standard C89. dcc specifics: `jmp_buf` is 8 bytes (return address, SP, IX);
@@ -177,6 +177,21 @@ prototype. See `tbdos.c`, `crc.c` in the dcc repo.
 
 `<locale.h>`, `<signal.h>`, `<time.h>`. (`<stdbool.h>`/`<stdint.h>` are present
 as C99-style conveniences but are not C89.)
+
+## `#pragma` support
+
+dcc accepts `#pragma` lines for source compatibility. Unknown pragmas are
+ignored, so headers shared with other compilers can usually leave
+vendor-specific pragmas in place. The pragmas with dcc-specific behavior are:
+
+- `#pragma once`: marks the current source/header as include-once; later
+  includes of the same canonical host path are skipped. It is honored only in
+  an active preprocessor branch, so a pragma inside `#if 0` is ignored.
+- `#pragma stack_check(on)` / `#pragma stack_check(off)`: toggle stack-overflow
+  guard emission from that point forward in the translation unit. They affect
+  later function prologues and VLA allocations, not already-emitted code.
+- `#pragma push_macro("NAME")` / `#pragma pop_macro("NAME")`: save and restore
+  the definition state of macro `NAME` on dcc's macro stack.
 
 ## Pitfalls and worked examples
 

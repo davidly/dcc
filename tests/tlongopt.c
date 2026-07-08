@@ -1,6 +1,12 @@
 #include <stdio.h>
+#include <stdint.h>
 
 static int fails;
+
+struct LongBox { int32_t l; int32_t a[2]; };
+
+static int32_t glive;
+static int32_t glarr[2];
 
 static void chk(long got, long want, char *name)
 {
@@ -36,6 +42,10 @@ static int br_lt65535(int x) { if (x < 65535) return 1; return 0; }
 static int br_lt_hex_u(int x) { if (x < 0xffff) return 1; return 0; }
 static int br_ult_hex_u(unsigned int x) { if (x < 0xffff) return 1; return 0; }
 static int clamp_int_min(long a) { if (a < -32768L) return -32768; return (int)a; }
+static int32_t id32(int32_t value) { return value; }
+static int32_t ret_global_live_add(void) { return glive += 5L; }
+static int32_t ret_deref_live_add(int32_t *p) { return *p += 7L; }
+static int32_t ret_member_live_shr(struct LongBox *p) { return p->l >>= 2; }
 
 /* Compound long expressions that peek_simple_unary_type cannot predict: the
  * first term is 16-bit but the whole RHS is long.  The operator must still
@@ -395,6 +405,69 @@ static void test_compound_long_ops(void)
     chk(cb_ge(5, 30000, 60000L), 0L, "cb_ge 5>=90000");
 }
 
+/* A long assignment used as a live value must produce BOTH the stored lvalue and
+ * the propagated result correctly.  int32_t keeps the width identical on the
+ * clang host (32-bit int) and dcc (32-bit long). */
+static void test_local_long_assign_value(void)
+{
+    struct LongBox box;
+    int32_t a;
+    int32_t arr[2];
+    int32_t b;
+    int32_t *p;
+
+    a = 0L;
+    b = (a = 100000L);              /* chained plain = */
+    chk(a, 100000L, "chain= field");
+    chk(b, 100000L, "chain= result");
+
+    a = 100000L;
+    b = (a += 50000L);             /* compound += live */
+    chk(a, 150000L, "chain+= field");
+    chk(b, 150000L, "chain+= result");
+
+    a = 4L;
+    b = (a *= 100000L);            /* compound *= live */
+    chk(a, 400000L, "chain*= field");
+    chk(b, 400000L, "chain*= result");
+
+    a = 900000L;
+    b = (a -= 100000L);            /* compound -= live */
+    chk(a, 800000L, "chain-= field");
+    chk(b, 800000L, "chain-= result");
+
+    glive = 10L;
+    b = ret_global_live_add();
+    chk(glive, 15L, "global+= field");
+    chk(b, 15L, "global+= result");
+
+    a = 20L;
+    p = &a;
+    b = ret_deref_live_add(p);
+    chk(a, 27L, "deref+= field");
+    chk(b, 27L, "deref+= result");
+
+    box.l = 0x80L;
+    b = ret_member_live_shr(&box);
+    chk(box.l, 0x20L, "member>>= field");
+    chk(b, 0x20L, "member>>= result");
+
+    arr[1] = 9L;
+    b = id32(arr[1] *= 5L);
+    chk(arr[1], 45L, "index*= field");
+    chk(b, 45L, "index*= result");
+
+    glarr[1] = 100L;
+    b = id32(glarr[1] -= 58L);
+    chk(glarr[1], 42L, "gindex-= field");
+    chk(b, 42L, "gindex-= result");
+
+    box.a[1] = 0x10L;
+    b = id32(box.a[1] <<= 2);
+    chk(box.a[1], 0x40L, "mindex<<= field");
+    chk(b, 0x40L, "mindex<<= result");
+}
+
 int main(void)
 {
     test_widen_mul_edges();
@@ -404,6 +477,7 @@ int main(void)
     test_shift_edges();
     test_long_const_compare_edges();
     test_compound_long_ops();
+    test_local_long_assign_value();
 
     if (fails == 0)
         printf("tlongopt passed with great success\n");
