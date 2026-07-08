@@ -130,6 +130,7 @@ void scan_global_write_info(void)
     int saved_line;
     int saved_tok_line;
     struct Token saved_tok;
+    int saved_stack_check;
     struct Def *saved_defs;
     int saved_ndefs;
     char *saved_src;
@@ -146,6 +147,7 @@ void scan_global_write_info(void)
     saved_line = line_no;
     saved_tok_line = tok_line;
     saved_tok = tok;
+    saved_stack_check = opt_stack_check;
 
     saved_defs = (struct Def *)xmalloc(sizeof(defs));
     saved_ndefs = ndefs;
@@ -279,6 +281,7 @@ void scan_global_write_info(void)
     line_no = saved_line;
     tok_line = saved_tok_line;
     tok = saved_tok;
+    opt_stack_check = saved_stack_check;
 }
 
 /* Total number of textual write-context occurrences of `name` anywhere in

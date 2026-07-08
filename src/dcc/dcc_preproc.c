@@ -603,6 +603,39 @@ static int parse_pragma_macro_name(const char *line, const char *op, char *name,
     return name[0] && *line == ')';
 }
 
+static int parse_pragma_stack_check(const char *line, int *enabled)
+{
+    const char *op;
+
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    op = "stack_check";
+    while (*op) {
+        if (*line++ != *op++)
+            return 0;
+    }
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    if (*line++ != '(')
+        return 0;
+    while (*line && isspace((unsigned char)*line))
+        line++;
+
+    if (!strncmp(line, "on", 2) && !is_ident_char((unsigned char)line[2])) {
+        line += 2;
+        *enabled = 1;
+    } else if (!strncmp(line, "off", 3) && !is_ident_char((unsigned char)line[3])) {
+        line += 3;
+        *enabled = 0;
+    } else {
+        return 0;
+    }
+
+    while (*line && isspace((unsigned char)*line))
+        line++;
+    return *line == ')';
+}
+
 static void pp_push_macro(const char *name)
 {
     int di;
@@ -663,6 +696,7 @@ static void pp_pop_macro(const char *name)
 static void handle_pragma_line(const char *line)
 {
     char name[64];
+    int stack_check_enabled;
 
     if (parse_pragma_macro_name(line, "push_macro", name, sizeof(name))) {
         pp_push_macro(name);
@@ -670,6 +704,10 @@ static void handle_pragma_line(const char *line)
     }
     if (parse_pragma_macro_name(line, "pop_macro", name, sizeof(name))) {
         pp_pop_macro(name);
+        return;
+    }
+    if (parse_pragma_stack_check(line, &stack_check_enabled)) {
+        opt_stack_check = stack_check_enabled;
         return;
     }
 }

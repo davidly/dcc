@@ -143,6 +143,33 @@ int main(void)
   final application's synthetic BSS range. The zeroing guarantee above describes
   the normal final app translation unit linked with `DCCRTL.MAC` / `RTLMIN.MAC`.
 
+## Supported pragmas
+
+DCC accepts `#pragma` directives for source compatibility. Unknown pragmas are
+ignored, so headers shared with other compilers can usually keep vendor-specific
+directives in place. The pragmas below have DCC-specific behavior:
+
+| Pragma | Effect |
+| --- | --- |
+| `#pragma once` | Marks the current source or header file as include-once. Later includes of the same canonical host path are skipped. The directive is honored only when it appears in an active preprocessor branch. |
+| `#pragma stack_check(on)` | Enables stack-overflow guard emission from this point forward in the translation unit. |
+| `#pragma stack_check(off)` | Disables stack-overflow guard emission from this point forward in the translation unit. |
+| `#pragma push_macro("NAME")` | Saves the current definition state of macro `NAME` on DCC's macro stack. |
+| `#pragma pop_macro("NAME")` | Restores the most recently pushed definition state for macro `NAME`; if the macro was not defined at push time, it is undefined. |
+
+`#pragma once` is handled during include splicing, before normal tokenization, so
+it works through relative-path aliases such as `"foo.h"` and `"./foo.h"` when
+they resolve to the same host file. It also follows DCC's active conditional
+state: a pragma inside `#if 0` is ignored, while a pragma made active by `#else`,
+`#elif`, `#ifdef`, `#ifndef`, or earlier active `#define` / `#undef` directives
+is honored.
+
+[`-fstack-check`](02-build-and-link.md#options-that-affect-the-runtime) sets
+the initial stack-check state for the translation unit. `#pragma stack_check(on)`
+and `#pragma stack_check(off)` then control guard emission in source order. The
+pragma affects function prologues and VLA allocations emitted after the directive;
+it does not retroactively change code already emitted.
+
 ## Variable-length arrays
 
 DCC supports a practical subset of C99 variable-length arrays (VLAs):
