@@ -471,6 +471,90 @@ void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff,
 void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type);
 void skip_initializer_or_decl_tail(void);
 
+int emit_init_auto_struct_chained_designator(struct Sym *s, int baseoff, struct FieldDef *fd)
+{
+    int off;
+    int type;
+    int elem_size;
+    int is_array;
+    int count;
+
+    off = baseoff + fd->offset;
+    type = fd->is_array ? fd->elem_type : fd->type;
+    elem_size = fd->elem_size ? fd->elem_size : type_size(type);
+    if (elem_size <= 0) elem_size = 2;
+    is_array = fd->is_array;
+    count = fd->array_len;
+
+    if (tok.kind != '[' && tok.kind != '.')
+        return 0;
+
+    for (;;) {
+        if (tok.kind == '[') {
+            int idx;
+            if (!is_array) {
+                error_here("subscripted initializer designator is not an array");
+                skip_initializer_or_decl_tail();
+                return 1;
+            }
+            next_token();
+            idx = parse_const_int_expr();
+            expect(']');
+            if (idx < 0) {
+                error_here("negative array initializer designator");
+                idx = 0;
+            } else if (count > 0 && idx >= count) {
+                error_here("array initializer designator out of range");
+                idx = 0;
+            }
+            off += idx * elem_size;
+            is_array = 0;
+        } else if (tok.kind == '.') {
+            struct FieldDef *sub;
+            int sid;
+            if (!((type & TYPE_STRUCT) && type_ptr_depth(type) == 0)) {
+                error_here("field initializer designator is not a struct");
+                skip_initializer_or_decl_tail();
+                return 1;
+            }
+            next_token();
+            if (tok.kind != TOK_ID) {
+                error_here("expected a field designator, such as '.field = value'");
+                skip_initializer_or_decl_tail();
+                return 1;
+            }
+            sid = type_struct_id(type);
+            sub = find_field_def(sid, tok.text);
+            if (sub == NULL) {
+                error_here("unknown field initializer designator");
+                skip_initializer_or_decl_tail();
+                return 1;
+            }
+            off += sub->offset;
+            type = sub->is_array ? sub->elem_type : sub->type;
+            elem_size = sub->elem_size ? sub->elem_size : type_size(type);
+            if (elem_size <= 0) elem_size = 2;
+            is_array = sub->is_array;
+            count = sub->array_len;
+            fd = sub;
+            next_token();
+        } else {
+            break;
+        }
+    }
+
+    expect('=');
+    if (is_array)
+        emit_init_auto_struct_array(s, off, type, count, elem_size);
+    else if ((type & TYPE_STRUCT) && type_ptr_depth(type) == 0)
+        emit_init_auto_struct_type(s, off, type);
+    else if (fd->bit_width > 0)
+        error_here("bitfield chained initializer designator unsupported");
+    else
+        emit_init_auto_struct_scalar(s, off, type);
+    return 1;
+}
+
 void emit_init_auto_struct_scalar(struct Sym *s, int off, int type)
 {
     long v;
@@ -673,7 +757,11 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             }
             i = (int)(fd - field_defs);
             next_token();
-            expect('=');
+            if (tok.kind == '=') {
+                next_token();
+            } else if (tok.kind != '[' && tok.kind != '.') {
+                expect('=');
+            }
         } else {
             fd = &field_defs[i];
             if (fd->parent_struct_id != sid || fd->is_promoted)
@@ -682,6 +770,19 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
 
         if (fd->offset > used)
             emit_zero_local_bytes(s, baseoff + used, fd->offset - used);
+
+        if (tok.kind == '[' || tok.kind == '.') {
+            if (used <= fd->offset)
+                emit_zero_local_bytes(s, baseoff + fd->offset, fd->size);
+            if (emit_init_auto_struct_chained_designator(s, baseoff, fd)) {
+                end_used = fd->offset + fd->size;
+                if (end_used > used) used = end_used;
+                if (!accept(',')) break;
+                if (tok.kind == '}') break;
+                if (tok.kind == '.') i = -1;
+                continue;
+            }
+        }
 
         if (fd->bit_width > 0) {
             int unit_off;
@@ -1181,8 +1282,7 @@ void gen_local_decl_after_type(int base)
             }
         } else if (accept('=')) {
             if ((type & TYPE_STRUCT) && type_ptr_depth(type) == 0 && tok.kind != '{') {
-                error_here("struct initializer list expected");
-                skip_initializer_or_decl_tail();
+                ast_emit_struct_init_expr_assign(s);
             } else if (s->is_array && (type & 15) == TYPE_CHAR && type_ptr_depth(type) == 0 && tok.kind == TOK_STR) {
                 char *lit;
                 int is_wide;

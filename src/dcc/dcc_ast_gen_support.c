@@ -561,7 +561,7 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         if (n->a->kind == AST_MEMBER) {
             int field_type;
             if (ast_member_bitfield_lvalue_type(n->a, &field_type))
-                return n->op == '=' && ast_value_is_plain_int(n->b);
+                return ast_value_is_plain_int(n->b);
             if (!ast_member_lvalue_type(n->a, &field_type))
                 return 0;
             if (type_is_long(field_type)) {

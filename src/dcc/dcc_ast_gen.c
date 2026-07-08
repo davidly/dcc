@@ -2023,7 +2023,8 @@ int ast_preincdec_plain_int(const struct AstNode *n)
         return sz == 1 || sz == 2;
     }
     if (n->a->kind == AST_MEMBER) {
-        if (!ast_member_lvalue_type(n->a, &val_type))
+        if (!ast_member_bitfield_lvalue_type(n->a, &val_type) &&
+            !ast_member_lvalue_type(n->a, &val_type))
             return 0;
         if (type_is_long(val_type))
             return 1;
@@ -2148,7 +2149,8 @@ int ast_postfix_plain_int(const struct AstNode *n)
         return sz == 1 || sz == 2;
     }
     if (n->a->kind == AST_MEMBER) {
-        if (!ast_member_lvalue_type(n->a, &val_type))
+        if (!ast_member_bitfield_lvalue_type(n->a, &val_type) &&
+            !ast_member_lvalue_type(n->a, &val_type))
             return 0;
         if (!ast_is_plain_int_type(val_type))
             return 0;
