@@ -1108,6 +1108,10 @@ void gen_post_update_symbol_addr_value(struct Sym *s, int op)
 
 void gen_post_update_from_addr(int type, int op)
 {
+    int bf_width;
+    int bf_shift;
+    unsigned int bf_mask;
+
     if (type_is_long(type)) {
         if (expr_result_dead) {
             /* Statement context: just increment in place, no old value needed */
@@ -1145,6 +1149,37 @@ void gen_post_update_from_addr(int type, int op)
         emit("\tpop hl\n");              /* HL = low16_old  (return value low) */
         emit("\tpop de\n");              /* DE = high16_old (return value high) */
         g_expr_type = type;
+        return;
+    }
+
+    bf_width = current_field_bit_width;
+    bf_shift = current_field_bit_shift;
+    bf_mask = current_field_bit_mask;
+
+    if (bf_width > 0) {
+        emit("\tld b,h\n\tld c,l\n");
+        emit_load_from_hl(type);
+        current_field_bit_width = bf_width;
+        current_field_bit_shift = bf_shift;
+        current_field_bit_mask = bf_mask;
+        g_expr_type = type;
+        emit_extract_bitfield();
+        if (!expr_result_dead)
+            emit("\tpush hl\n");
+        if (op == TOK_INC)
+            emit("\tinc hl\n");
+        else
+            emit("\tdec hl\n");
+        emit("\tex de,hl\n");
+        emit("\tld h,b\n\tld l,c\n");
+        current_field_bit_width = bf_width;
+        current_field_bit_shift = bf_shift;
+        current_field_bit_mask = bf_mask;
+        emit_store_bitfield_de_to_addr_hl(0);
+        if (!expr_result_dead)
+            emit("\tpop hl\n");
+        g_expr_type = type;
+        g_long_from16 = 0;
         return;
     }
 
@@ -1371,6 +1406,51 @@ void emit_store_bitfield_from_hl(void)
     emit_store_de_to_addr_hl(TYPE_INT);
 }
 
+void emit_store_bitfield_de_to_addr_hl(int keep_result)
+{
+    int i;
+    unsigned int clear_mask;
+    unsigned int mask;
+
+    mask = current_field_bit_mask & 0xffffU;
+    clear_mask = (~mask) & 0xffffU;
+
+    /* keep_result: save the FIELD ADDRESS (not the raw value) so the live
+     * result can be read back from the stored field.  Returning the raw
+     * pre-store value would skip the field's width truncation / sign
+     * extension, e.g. `x = (s.bf3 += 5)` must yield the stored 3-bit value,
+     * not the untruncated sum.  g_expr_type must hold the field type at entry
+     * so emit_extract_bitfield sign- vs zero-extends correctly. */
+    if (keep_result)
+        emit("\tpush hl\n");
+    emit("\tpush hl\n");
+    emit("\tpush de\n");
+    emit_load_from_hl(TYPE_INT);
+
+    fprintf(outf, "\tld de,%u\n", clear_mask);
+    emit("\tld a,l\n\tand e\n\tld l,a\n");
+    emit("\tld a,h\n\tand d\n\tld h,a\n");
+
+    emit("\tpop de\n");
+    for (i = 0; i < current_field_bit_shift; ++i)
+        emit("\tsla e\n\trl d\n");
+
+    fprintf(outf, "\tld bc,%u\n", mask);
+    emit("\tld a,e\n\tand c\n\tld e,a\n");
+    emit("\tld a,d\n\tand b\n\tld d,a\n");
+    emit("\tld a,l\n\tor e\n\tld l,a\n");
+    emit("\tld a,h\n\tor d\n\tld h,a\n");
+
+    emit("\tex de,hl\n");
+    emit("\tpop hl\n");
+    emit_store_de_to_addr_hl(TYPE_INT);
+    if (keep_result) {
+        emit("\tpop hl\n");           /* HL = field address */
+        emit_load_from_hl(TYPE_INT);  /* HL = stored storage unit */
+        emit_extract_bitfield();      /* mask/shift/sign-extend to field value */
+    }
+}
+
 void emit_load_float_bits(unsigned long bits);
 void emit_load_const_sym_value(struct Sym *s);
 void emit_float_compare_call(int op);
@@ -1473,12 +1553,36 @@ void emit_pre_incdec_lvalue(int type, int op)
         emit("\tld a,e\n\tld (bc),a\n\tinc bc\n");
         emit("\tld a,d\n\tld (bc),a\n");
     } else {
-        emit("\tpush hl\n");
+        int bf_width = current_field_bit_width;
+        int bf_shift = current_field_bit_shift;
+        unsigned int bf_mask = current_field_bit_mask;
+
+        if (bf_width > 0)
+            emit("\tld b,h\n\tld c,l\n");
+        else
+            emit("\tpush hl\n");
         emit_load_from_hl(type);
+        if (bf_width > 0) {
+            current_field_bit_width = bf_width;
+            current_field_bit_shift = bf_shift;
+            current_field_bit_mask = bf_mask;
+            g_expr_type = type;
+            emit_extract_bitfield();
+        }
         emit_incdec_value_in_dehl(type, op);
-        emit("\tex de,hl\n\tpop hl\n");
-        emit_store_de_to_addr_hl(type);
         emit("\tex de,hl\n");
+        if (bf_width > 0) {
+            emit("\tld h,b\n\tld l,c\n");
+            current_field_bit_width = bf_width;
+            current_field_bit_shift = bf_shift;
+            current_field_bit_mask = bf_mask;
+            g_expr_type = type;   /* field type -> correct extract signedness */
+            emit_store_bitfield_de_to_addr_hl(1);
+        } else {
+            emit("\tpop hl\n");
+            emit_store_de_to_addr_hl(type);
+            emit("\tex de,hl\n");
+        }
     }
     g_expr_type = type;
 }

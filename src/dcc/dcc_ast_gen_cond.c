@@ -1031,7 +1031,8 @@ int ast_deadincdec_member_ok(const struct AstNode *e)
     int t;
     if (e->a == NULL || e->a->kind != AST_MEMBER)
         return 0;
-    if (!ast_member_lvalue_type(e->a, &t))
+    if (!ast_member_bitfield_lvalue_type(e->a, &t) &&
+        !ast_member_lvalue_type(e->a, &t))
         return 0;
     if (type_ptr_depth(t) > 0)
         return type_index_elem_size(t) == 1;
@@ -1112,7 +1113,8 @@ int ast_deadincdec_addr_lvalue_type(const struct AstNode *e, int *out_type)
         t = s->type;
         break;
     case AST_MEMBER:
-        if (!ast_member_lvalue_type(lv, &t))
+        if (!ast_member_bitfield_lvalue_type(lv, &t) &&
+            !ast_member_lvalue_type(lv, &t))
             return 0;
         break;
     case AST_UNARY:

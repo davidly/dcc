@@ -6,6 +6,16 @@ struct Pair {
     int b;
 };
 
+struct Rect {
+    int w;
+    int h;
+};
+
+struct Grid {
+    int n;
+    struct Rect cells[3];
+};
+
 struct Holder {
     struct Pair pair;
     struct Pair *ptr;
@@ -52,6 +62,11 @@ static void check_local_designators(void)
     struct Pair local_pair = { .b = 22, .a = 21 };
     struct Pair local_pairs[2] = { [1] = { .b = 42, .a = 41 }, [0] = { 39, 40 } };
     int local_values[4] = { [2] = 32, [0] = 30, 31, [3] = 33 };
+    struct Grid local_grid = {
+        .n = 3,
+        .cells[1] = { 2, 9 },
+        .cells[0].w = 1
+    };
     static const struct Pair static_pairs[] = {
         { .b = 52, .a = 51 },
         { .b = 54, .a = 53 }
@@ -67,6 +82,12 @@ static void check_local_designators(void)
     check_int(local_values[1], 31, "local_values[1]");
     check_int(local_values[2], 32, "local_values[2]");
     check_int(local_values[3], 33, "local_values[3]");
+    check_int(local_grid.n, 3, "local_grid.n");
+    check_int(local_grid.cells[0].w, 1, "local_grid.cells[0].w");
+    check_int(local_grid.cells[0].h, 0, "local_grid.cells[0].h");
+    check_int(local_grid.cells[1].w, 2, "local_grid.cells[1].w");
+    check_int(local_grid.cells[1].h, 9, "local_grid.cells[1].h");
+    check_int(local_grid.cells[2].w, 0, "local_grid.cells[2].w");
     check_int(static_pairs[0].a, 51, "static_pairs[0].a");
     check_int(static_pairs[0].b, 52, "static_pairs[0].b");
     check_int(static_pairs[1].a, 53, "static_pairs[1].a");

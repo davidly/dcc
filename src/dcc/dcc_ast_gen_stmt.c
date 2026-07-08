@@ -638,7 +638,10 @@ void ast_gen_for_stmt(const struct AstNode *n)
             } else {
                 int vt;
                 gen_deadincdec_addr_lvalue_ast(n->c, &vt);
-                emit_incdec_addr(vt, n->c->op);
+                if (current_field_bit_width > 0)
+                    emit_pre_incdec_lvalue(vt, n->c->op);
+                else
+                    emit_incdec_addr(vt, n->c->op);
             }
         } else {
             ast_gen_expr(n->c);
@@ -790,7 +793,10 @@ void ast_gen_stmt(const struct AstNode *n)
             } else {
                 int vt;
                 gen_deadincdec_addr_lvalue_ast(n->a, &vt);
-                emit_incdec_addr(vt, n->a->op);
+                if (current_field_bit_width > 0)
+                    emit_pre_incdec_lvalue(vt, n->a->op);
+                else
+                    emit_incdec_addr(vt, n->a->op);
             }
         } else if (ast_is_local_self_add_stmt(n->a)) {
             ast_emit_local_self_add_stmt(n->a);
