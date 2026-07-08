@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <setjmp.h>
 #include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 static int checks = 0;
 static int failures = 0;
@@ -290,6 +292,116 @@ static int vla_sizeof_char(int n)
 {
     char b[n];
     return (int)sizeof b;               /* n */
+}
+
+static int vla_sizeof_c99_type_bytes(int n)
+{
+    _Bool b[n];
+    bool ba[n];
+    signed char sc[n];
+    unsigned char uc[n];
+    short sh[n];
+    unsigned short ush[n];
+    unsigned int ui[n];
+    unsigned long ul[n];
+    float f[n];
+    int8_t i8[n];
+    uint8_t u8[n];
+    int16_t i16[n];
+    uint16_t u16[n];
+    int32_t i32[n];
+    uint32_t u32[n];
+        int_least8_t li8[n];
+        uint_least8_t lu8[n];
+        int_least16_t li16[n];
+        uint_least16_t lu16[n];
+        int_least32_t li32[n];
+        uint_least32_t lu32[n];
+        int_fast8_t fi8[n];
+        uint_fast8_t fu8[n];
+        int_fast16_t fi16[n];
+        uint_fast16_t fu16[n];
+        int_fast32_t fi32[n];
+        uint_fast32_t fu32[n];
+        intmax_t imax[n];
+        uintmax_t umax[n];
+    return (int)sizeof b + (int)sizeof ba +
+           (int)sizeof sc + (int)sizeof uc +
+           (int)sizeof sh + (int)sizeof ush +
+           (int)sizeof ui + (int)sizeof ul +
+           (int)sizeof f +
+           (int)sizeof i8 + (int)sizeof u8 +
+           (int)sizeof i16 + (int)sizeof u16 +
+            (int)sizeof i32 + (int)sizeof u32 +
+            (int)sizeof li8 + (int)sizeof lu8 +
+            (int)sizeof li16 + (int)sizeof lu16 +
+            (int)sizeof li32 + (int)sizeof lu32 +
+            (int)sizeof fi8 + (int)sizeof fu8 +
+            (int)sizeof fi16 + (int)sizeof fu16 +
+            (int)sizeof fi32 + (int)sizeof fu32 +
+            (int)sizeof imax + (int)sizeof umax;
+}
+
+static int vla_sizeof_c99_type_counts(int n)
+{
+    _Bool b[n];
+    bool ba[n];
+    signed char sc[n];
+    unsigned char uc[n];
+    short sh[n];
+    unsigned short ush[n];
+    unsigned int ui[n];
+    unsigned long ul[n];
+    float f[n];
+    int8_t i8[n];
+    uint8_t u8[n];
+    int16_t i16[n];
+    uint16_t u16[n];
+    int32_t i32[n];
+    uint32_t u32[n];
+        int_least8_t li8[n];
+        uint_least8_t lu8[n];
+        int_least16_t li16[n];
+        uint_least16_t lu16[n];
+        int_least32_t li32[n];
+        uint_least32_t lu32[n];
+        int_fast8_t fi8[n];
+        uint_fast8_t fu8[n];
+        int_fast16_t fi16[n];
+        uint_fast16_t fu16[n];
+        int_fast32_t fi32[n];
+        uint_fast32_t fu32[n];
+        intmax_t imax[n];
+        uintmax_t umax[n];
+    return (int)(sizeof b / sizeof b[0]) +
+           (int)(sizeof ba / sizeof ba[0]) +
+           (int)(sizeof sc / sizeof sc[0]) +
+           (int)(sizeof uc / sizeof uc[0]) +
+           (int)(sizeof sh / sizeof sh[0]) +
+           (int)(sizeof ush / sizeof ush[0]) +
+           (int)(sizeof ui / sizeof ui[0]) +
+           (int)(sizeof ul / sizeof ul[0]) +
+           (int)(sizeof f / sizeof f[0]) +
+           (int)(sizeof i8 / sizeof i8[0]) +
+           (int)(sizeof u8 / sizeof u8[0]) +
+           (int)(sizeof i16 / sizeof i16[0]) +
+           (int)(sizeof u16 / sizeof u16[0]) +
+            (int)(sizeof i32 / sizeof i32[0]) +
+            (int)(sizeof u32 / sizeof u32[0]) +
+            (int)(sizeof li8 / sizeof li8[0]) +
+            (int)(sizeof lu8 / sizeof lu8[0]) +
+            (int)(sizeof li16 / sizeof li16[0]) +
+            (int)(sizeof lu16 / sizeof lu16[0]) +
+            (int)(sizeof li32 / sizeof li32[0]) +
+            (int)(sizeof lu32 / sizeof lu32[0]) +
+            (int)(sizeof fi8 / sizeof fi8[0]) +
+            (int)(sizeof fu8 / sizeof fu8[0]) +
+            (int)(sizeof fi16 / sizeof fi16[0]) +
+            (int)(sizeof fu16 / sizeof fu16[0]) +
+            (int)(sizeof fi32 / sizeof fi32[0]) +
+            (int)(sizeof fu32 / sizeof fu32[0]) +
+            (int)(sizeof imax / sizeof imax[0]) +
+            (int)(sizeof umax / sizeof umax[0]);
 }
 
 /* The VLA bound (with a side effect) is evaluated exactly once; sizeof reads
@@ -991,6 +1103,23 @@ int main(void)
     check_int("vla_sizeof_2d_rows", vla_sizeof_2d_rows(4), 4);
     check_int("vla_sizeof_2d_row", vla_sizeof_2d_row(4), 3 * (int)sizeof(int));
     check_int("vla_sizeof_char", vla_sizeof_char(6), 6);
+    check_int("vla_sizeof_c99_type_bytes", vla_sizeof_c99_type_bytes(3),
+              3 * ((int)sizeof(_Bool) + (int)sizeof(bool) +
+                   (int)sizeof(signed char) + (int)sizeof(unsigned char) +
+                   (int)sizeof(short) + (int)sizeof(unsigned short) +
+                   (int)sizeof(unsigned int) + (int)sizeof(unsigned long) +
+                   (int)sizeof(float) +
+                   (int)sizeof(int8_t) + (int)sizeof(uint8_t) +
+                   (int)sizeof(int16_t) + (int)sizeof(uint16_t) +
+                   (int)sizeof(int32_t) + (int)sizeof(uint32_t) +
+                   (int)sizeof(int_least8_t) + (int)sizeof(uint_least8_t) +
+                   (int)sizeof(int_least16_t) + (int)sizeof(uint_least16_t) +
+                   (int)sizeof(int_least32_t) + (int)sizeof(uint_least32_t) +
+                   (int)sizeof(int_fast8_t) + (int)sizeof(uint_fast8_t) +
+                   (int)sizeof(int_fast16_t) + (int)sizeof(uint_fast16_t) +
+                   (int)sizeof(int_fast32_t) + (int)sizeof(uint_fast32_t) +
+                   (int)sizeof(intmax_t) + (int)sizeof(uintmax_t)));
+    check_int("vla_sizeof_c99_type_counts", vla_sizeof_c99_type_counts(3), 87);
     check_int("vla_sizeof_saved_once", vla_sizeof_saved_once(5), 5 * 1000 + 6);
     check_int("vla_memset_sizeof", vla_memset_sizeof(6), 0);
     /* nested-scope VLA sizeof (resolved at emit time, not AST-build time) */
