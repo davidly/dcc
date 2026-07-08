@@ -20,13 +20,18 @@ Supports per-test arguments (e.g., ttt with "10" as input) and custom stack
 size overrides (e.g., cobint needs 1536 bytes, triangle needs 768).
 
 Pass -Report to append per-app metrics to a CSV report while the suite runs; no
-separate benchmark pass is required. Report mode disables stack checking and
-forces serial execution so the measurements reflect normal builds without
-parallel-run noise. When using ntvcm, normal app runs explicitly use full speed
-(`-s:0`), while report mode runs apps at a fixed 400 MHz emulator clock by
-default and passes -p so ntvcm emits its own performance data at app exit. The
-report records, per optimisation mode, ntvcm's reported elapsed milliseconds and
-Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
+separate benchmark pass is required, and it runs in parallel like a normal
+suite run. Report mode disables stack checking (so the measurements reflect a
+normal, non-debug build), but every run - Report or not - always uses ntvcm's
+full, unthrottled speed (`-s:0`) and passes -p so ntvcm emits its own Z80 cycle
+count at app exit. The report records, per optimisation mode, that cycle count
+(host-independent), the .COM size, and an "ms at ReportClockHz" figure computed
+by simple arithmetic from the cycle count (cycles / ReportClockHz * 1000) - not
+measured by actually pacing the emulator down to that clock speed, which for a
+cycle-heavy app at a nominal historical clock rate could turn a sub-second run
+into many minutes of real wall-clock time for no benefit, since the exact same
+number is one division away from the cycle count ntvcm already reports at full
+speed:
     machine,os,utc-timestamp,app,peep_ms,peep_cycles,peep_size,
     nopeep_ms,nopeep_cycles,nopeep_size,clock_hz
 
@@ -66,13 +71,56 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
   Max concurrent apps in parallel mode (default: CPU core count).
 
 .PARAMETER Report
-    Append per-app performance metrics to the report CSV. Implies -NoStackCheck and -Serial.
+    Append per-app performance metrics to the historical, multi-machine report
+    CSV (see ReportFile). Implies -NoStackCheck (so the measurements reflect a
+    normal, non-debug build); runs in parallel like a normal suite run, and at
+    ntvcm's full unthrottled speed (-s:0) like a normal run too - the reported
+    "ms" figure is computed from the Z80 cycle count (see ReportClockHz), not
+    measured by actually pacing the emulator down to a slower clock. This is a
+    separate, opt-in, cross-machine performance log - it is NOT what backs the
+    on-by-default cycle-count regression check below (see PerfBaselineFile),
+    which needs no separate pass at all.
 
 .PARAMETER ReportFile
     CSV path for -Report output (default: "perf_results.csv").
 
 .PARAMETER ReportClockHz
-    ntvcm clock speed used for measured app runs in -Report mode (default: 400000000).
+    Nominal clock speed (Hz) used to compute the "ms" figure recorded in
+    -Report's CSV from ntvcm's reported Z80 cycle count (ms = cycles / this *
+    1000). Default: 400000000. Purely arithmetic - does not affect how fast
+    ntvcm actually runs the app (always -s:0, full speed).
+
+.PARAMETER NoPerfCheck
+    Skip the Z80 cycle-count regression check against PerfBaselineFile. The
+    check is ON by default and adds no separate run: every app already passes
+    -p to ntvcm, so its cycle count is parsed out of the same execution
+    already done for output verification, in whichever mode(s) this invocation
+    builds (-Mode fast/nopeep/full). The Z80 cycle count ntvcm reports is a
+    pure instruction-count total from the emulated CPU, independent of host
+    scheduling, so it is exactly as reliable measured under -ThrottleLimit
+    parallelism as it would be serially - no need to force -Serial for it.
+
+    The check itself is skipped (regardless of this switch) whenever
+    -NoStackCheck or -Report is in effect: the stack-check guard adds a
+    prologue check to every function, so a build without it is not
+    cycle-count-comparable to the baseline (captured under a plain default
+    run) at all - every app would show some spurious difference having
+    nothing to do with a real codegen change.
+
+.PARAMETER UpdatePerfBaseline
+    Instead of comparing against PerfBaselineFile, (re)write it from this run's
+    measured cycle counts. Only the column(s) for the mode(s) this invocation
+    actually built are touched (peep_cycles for -Mode fast, nopeep_cycles for
+    -Mode nopeep, both for -Mode full) - any other app/column already in the
+    file is left untouched. Use after an intentional, verified codegen change
+    changes cycle counts (an improvement, or an accepted tradeoff).
+
+.PARAMETER PerfBaselineFile
+    CSV path for the cycle-count regression baseline (default:
+    "tests/perf_baselines.csv"). One row per app, columns
+    app,peep_cycles,nopeep_cycles. Checked into the repo like the output
+    baselines in tests/baselines/, so a regression shows up as a diff in code
+    review the same way an output-baseline change would.
 
 .PARAMETER KeepBuild
     In parallel mode the suite builds into a per-invocation folder
@@ -89,6 +137,7 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
   pwsh ./scripts/runall.ps1 -Serial
   pwsh ./scripts/runall.ps1 -ThrottleLimit 8
     pwsh ./scripts/runall.ps1 -Report
+  pwsh ./scripts/runall.ps1 -Mode full -UpdatePerfBaseline
 
 .NOTES
   App overrides are loaded from tests/_test_overrides.json:
@@ -96,10 +145,21 @@ Z80 cycle count (host-independent), the .COM size, and the ntvcm clock rate:
         - stdin: text piped to app stdin during execution
     - stack_size: C stack reserve override (default 512)
     - ignore: set to true to skip building/running this app
+    - perf_ignore: set to true to exclude this app from the cycle-count
+      regression check entirely (never a regression, improvement, or new
+      baseline) - for a test whose cycle count is known to vary run-to-run
+      for reasons unrelated to codegen, e.g. tkbd (a keyboard-poll loop whose
+      iteration count depends on real host timing) or tdirent/cpmenumd
+      (directory enumeration order depends on real filesystem state).
+
+  Cycle-count regression checking (on by default, see NoPerfCheck above) only
+  compares/updates the mode(s) actually built this run - run with -Mode full
+  (or run both -Mode fast and -Mode nopeep separately) to keep both columns of
+  tests/perf_baselines.csv current.
 
   Exit codes:
-    0 = all tests passed
-    1 = one or more tests failed
+    0 = all tests passed (including no cycle-count regression)
+    1 = one or more tests failed, or a performance regression was found
 #>
 
 param(
@@ -117,6 +177,9 @@ param(
     [switch]$Report,
     [string]$ReportFile = "perf_results.csv",
     [long]$ReportClockHz = 400000000,
+    [switch]$NoPerfCheck,
+    [switch]$UpdatePerfBaseline,
+    [string]$PerfBaselineFile = "tests/perf_baselines.csv",
     [switch]$KeepBuild,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
@@ -144,8 +207,12 @@ if ($Help) {
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 Set-Location $script:RepoRoot
 
-# Parallel is the default; -Serial or -Report forces the sequential fallback.
-$Parallel = -not ($Serial -or $Report)
+# Parallel is the default; -Serial forces the sequential fallback. -Report no
+# longer needs to force serial: its "ms" figure is computed from ntvcm's own
+# reported Z80 cycle count divided by ReportClockHz (see Write-PerformanceReport
+# below) rather than measured via real-time clock pacing, so it is exactly as
+# reproducible under parallelism as the cycle count itself.
+$Parallel = -not $Serial
 
 # The lightweight stack-overflow guard (-fstack-check) is ON by default; pass
 # -NoStackCheck to build without it.
@@ -257,6 +324,7 @@ if (-not (Test-Path $appOverridesPath)) {
         if ($null -ne $app.dcc_floatio) { $appOverrides[$app.name]['dcc_floatio'] = $app.dcc_floatio }
         if ($null -ne $app.dcc_longio) { $appOverrides[$app.name]['dcc_longio'] = $app.dcc_longio }
         if ($app.ignore) { $appOverrides[$app.name]['ignore'] = $app.ignore }
+        if ($app.perf_ignore) { $appOverrides[$app.name]['perf_ignore'] = $app.perf_ignore }
     }
 }
 
@@ -346,6 +414,18 @@ function ConvertTo-BooleanSetting {
 function Get-IgnoreApp {
     param([string]$app)
     return ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['ignore'])
+}
+
+# True for an app whose cycle count is known to vary run-to-run for reasons
+# unrelated to codegen (e.g. a keyboard-poll loop whose iteration count
+# depends on real host timing, or directory enumeration whose order depends
+# on real filesystem state) - excluded from the perf-regression check
+# entirely (never counted as a regression, improvement, or new baseline)
+# rather than compared with a numeric tolerance, since the amount of noise
+# for these specific tests isn't a fixed percentage.
+function Get-PerfIgnoreApp {
+    param([string]$app)
+    return ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['perf_ignore'])
 }
 
 function Test-IsNtvcmEmulator {
@@ -794,14 +874,22 @@ $optimisationSummary = switch ($Mode) {
 
 $emulatorRunArgs = @()
 if (Test-IsNtvcmEmulator $Emulator) {
-    if ($Report) {
-        # -p makes ntvcm print performance info (elapsed ms, Z80 cycles, clock
-        # rate) at app exit; the report parses those values from stdout.
-        $emulatorRunArgs = @("-p", "-s:$ReportClockHz")
-    }
-    else {
-        $emulatorRunArgs = @("-s:0")
-    }
+    # -p makes ntvcm print performance info (elapsed ms, Z80 cycles, clock
+    # rate) at app exit; Invoke-AppTest always parses those values out of the
+    # captured stdout (and strips the block before baseline comparison), so
+    # this is passed unconditionally, not just under -Report.
+    #
+    # -s:0 ("as fast as possible", no throttling) is used in EVERY mode,
+    # including -Report. ntvcm's own -s:X (X > 0) does not just label its
+    # output as if it ran at that clock speed - it actually paces execution
+    # in real time to simulate it, which for a slower nominal rate like the
+    # previous default (400 MHz) can make a single cycle-heavy app take many
+    # minutes of real wall-clock time it would otherwise finish in a fraction
+    # of a second. -Report's "ms at ReportClockHz" figure is pure arithmetic
+    # (cycles / ReportClockHz * 1000), computed from the same Z80 cycle count
+    # ntvcm already reports under -s:0 - see Write-PerformanceReport - so
+    # there was never a need to actually run the emulator throttled to get it.
+    $emulatorRunArgs = @("-p", "-s:0")
 }
 
 # The CP/M data fixtures are derived once from the tests/ directory (see
@@ -885,6 +973,19 @@ function Write-PerformanceReport {
     $utcTimestamp = [System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     $rows = 0
 
+    # ms is computed from ntvcm's own reported Z80 cycle count (cycles /
+    # ReportClockHz * 1000) rather than read from ntvcm's own "elapsed
+    # milliseconds" line - the run itself is always at -s:0 (unthrottled) now,
+    # so that line reports real (fast, host-speed-dependent) wall-clock time,
+    # not a meaningful cross-machine figure. This is exactly the number
+    # ntvcm's own real-time pacing at -s:$ReportClockHz used to produce, just
+    # computed directly instead of by actually running that slowly.
+    function Get-MsAtClockHz {
+        param([string]$Cycles, [long]$ClockHz)
+        if (-not $Cycles -or $ClockHz -le 0) { return "" }
+        return [math]::Round(([double][long]$Cycles / $ClockHz) * 1000.0, 3)
+    }
+
     foreach ($app in $AppOrder) {
         if (-not $byApp.ContainsKey($app)) { continue }
         $metrics = $byApp[$app].Metrics
@@ -897,23 +998,19 @@ function Write-PerformanceReport {
         $nopeepMs = ""
         $nopeepCycles = ""
         $nopeepSize = ""
-        # clock_hz is the ntvcm-reported clock rate; identical for both modes.
-        $clockHz = ""
 
         if ($metrics.ContainsKey("peep")) {
-            $peepMs = $metrics["peep"].Ms
             $peepCycles = $metrics["peep"].Cycles
             $peepSize = $metrics["peep"].Size
-            if (-not $clockHz) { $clockHz = $metrics["peep"].ClockHz }
+            $peepMs = Get-MsAtClockHz -Cycles $peepCycles -ClockHz $ReportClockHz
         }
         if ($metrics.ContainsKey("nopeep")) {
-            $nopeepMs = $metrics["nopeep"].Ms
             $nopeepCycles = $metrics["nopeep"].Cycles
             $nopeepSize = $metrics["nopeep"].Size
-            if (-not $clockHz) { $clockHz = $metrics["nopeep"].ClockHz }
+            $nopeepMs = Get-MsAtClockHz -Cycles $nopeepCycles -ClockHz $ReportClockHz
         }
 
-        Add-Content -Path $OutputFile -Value "$MachineName,$OsName,$utcTimestamp,$app,$peepMs,$peepCycles,$peepSize,$nopeepMs,$nopeepCycles,$nopeepSize,$clockHz"
+        Add-Content -Path $OutputFile -Value "$MachineName,$OsName,$utcTimestamp,$app,$peepMs,$peepCycles,$peepSize,$nopeepMs,$nopeepCycles,$nopeepSize,$ReportClockHz"
         $rows++
     }
 
@@ -927,6 +1024,118 @@ function Write-PerformanceReport {
             "$ReportClockHz Hz"
         }
         Write-Host "  Clock:        ntvcm clock speed normalised to $clockLabel"
+    }
+}
+
+# Loads tests/perf_baselines.csv (one row per app: app,peep_cycles,nopeep_cycles)
+# into a hashtable keyed by app name. Returns an empty hashtable if the file
+# does not exist yet (e.g. before the first -UpdatePerfBaseline run).
+function Get-PerfBaselines {
+    param([string]$Path)
+    $result = @{}
+    if (-not (Test-Path $Path -PathType Leaf)) { return $result }
+    foreach ($row in (Import-Csv -Path $Path)) {
+        $result[$row.app] = @{
+            peep_cycles   = $row.peep_cycles
+            nopeep_cycles = $row.nopeep_cycles
+        }
+    }
+    return $result
+}
+
+# Writes a perf-baseline hashtable (same shape as Get-PerfBaselines returns)
+# back out as tests/perf_baselines.csv, one row per app, sorted by app name so
+# the file diffs cleanly in code review.
+function Set-PerfBaselines {
+    param(
+        [string]$Path,
+        [System.Collections.IDictionary]$Baselines
+    )
+    $rows = foreach ($app in ($Baselines.Keys | Sort-Object)) {
+        [pscustomobject]@{
+            app           = $app
+            peep_cycles   = $Baselines[$app].peep_cycles
+            nopeep_cycles = $Baselines[$app].nopeep_cycles
+        }
+    }
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path $parent -PathType Container)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $rows | Export-Csv -Path $Path -NoTypeInformation
+}
+
+# Compares this run's measured Z80 cycle counts (already collected as a side
+# effect of the normal build+run+verify pass - see the -p note above
+# $emulatorRunArgs) against tests/perf_baselines.csv, for whichever mode(s)
+# ("peep" and/or "nopeep") this invocation actually built. Only a passing
+# app's cycle count is trusted - a broken build/run's count means nothing.
+# Returns a hashtable with Regressions/Improvements/New arrays; the caller
+# decides how that affects the exit code and, under -UpdatePerfBaseline,
+# whether to write the file instead of comparing against it.
+function Test-PerfRegressions {
+    param(
+        [object[]]$Results,
+        [string[]]$ModesRun,
+        [string]$BaselineFile,
+        [string[]]$IgnoreApps = @(),
+        [switch]$UpdateBaseline
+    )
+    $ignoreSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$IgnoreApps)
+
+    $existing = Get-PerfBaselines -Path $BaselineFile
+    $updated = @{}
+    foreach ($app in $existing.Keys) {
+        $updated[$app] = @{ peep_cycles = $existing[$app].peep_cycles; nopeep_cycles = $existing[$app].nopeep_cycles }
+    }
+
+    $regressions = [System.Collections.Generic.List[object]]::new()
+    $improvements = [System.Collections.Generic.List[object]]::new()
+    $newEntries = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($result in $Results) {
+        if (-not $result.Passed) { continue }
+        if (-not $result.Metrics) { continue }
+        if ($ignoreSet.Contains($result.App)) { continue }
+        foreach ($modeKey in $ModesRun) {
+            if (-not $result.Metrics.ContainsKey($modeKey)) { continue }
+            $cyclesRaw = $result.Metrics[$modeKey].Cycles
+            if (-not $cyclesRaw) { continue }
+            $cycles = [long]$cyclesRaw
+            $col = "${modeKey}_cycles"
+
+            if ($UpdateBaseline) {
+                if (-not $updated.ContainsKey($result.App)) {
+                    $updated[$result.App] = @{ peep_cycles = ""; nopeep_cycles = "" }
+                }
+                $updated[$result.App][$col] = $cycles
+                continue
+            }
+
+            $hasBaseline = $existing.ContainsKey($result.App) -and $existing[$result.App][$col]
+            if (-not $hasBaseline) {
+                $newEntries.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Cycles = $cycles })
+                continue
+            }
+
+            $baseline = [long]$existing[$result.App][$col]
+            if ($cycles -gt $baseline) {
+                $regressions.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Baseline = $baseline; Actual = $cycles })
+            }
+            elseif ($cycles -lt $baseline) {
+                $improvements.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Baseline = $baseline; Actual = $cycles })
+            }
+        }
+    }
+
+    if ($UpdateBaseline) {
+        Set-PerfBaselines -Path $BaselineFile -Baselines $updated
+    }
+
+    return [pscustomobject]@{
+        Regressions  = $regressions.ToArray()
+        Improvements = $improvements.ToArray()
+        New          = $newEntries.ToArray()
     }
 }
 
@@ -1061,6 +1270,60 @@ foreach ($result in $results) {
     }
 }
 
+# Cycle-count regression check: on by default, needs no separate run (see the
+# -p note above $emulatorRunArgs) - it just compares/updates
+# tests/perf_baselines.csv using the Z80 cycle counts already captured during
+# the pass above, for whichever mode(s) this invocation built.
+#
+# Requires $StackCheck to be on, matching the build configuration the
+# baseline file is captured under (a plain default run). The stack-check
+# guard adds a prologue check to every function, so a -NoStackCheck (or
+# -Report, which implies it) build's cycle counts are not comparable to a
+# stack-checked baseline at all - every app would show some spurious
+# difference having nothing to do with a real codegen change (found via
+# -Report incorrectly flagging sieve as regressed by a tiny, build-config-
+# only amount immediately after this feature's first parallel/no-throttle
+# fix, since -Report was made to run the check too once it stopped forcing
+# -Serial).
+$perfCheck = $null
+if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -or $UpdatePerfBaseline)) {
+    $perfIgnoreApps = @($testFiles | Where-Object { Get-PerfIgnoreApp $_ })
+    $perfCheck = Test-PerfRegressions -Results $results -ModesRun $modes `
+        -BaselineFile $PerfBaselineFile -IgnoreApps $perfIgnoreApps -UpdateBaseline:$UpdatePerfBaseline
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "PERFORMANCE (Z80 CYCLE COUNT) CHECK" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    if ($UpdatePerfBaseline) {
+        Write-Host "  Updated $PerfBaselineFile for mode(s): $($modes -join ', ')" -ForegroundColor Cyan
+    }
+    else {
+        if ($perfCheck.Regressions.Count -eq 0) {
+            Write-Host "  Regressions:  0" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  Regressions:  $($perfCheck.Regressions.Count)" -ForegroundColor Red
+            foreach ($r in $perfCheck.Regressions) {
+                $pct = if ($r.Baseline -gt 0) { [math]::Round((($r.Actual - $r.Baseline) / $r.Baseline) * 100, 2) } else { 0 }
+                Write-Host ("    - {0,-12} ({1,-6}) {2:N0} -> {3:N0} cycles (+{4}%)" -f $r.App, $r.Mode, $r.Baseline, $r.Actual, $pct) -ForegroundColor Red
+            }
+            $failed += $perfCheck.Regressions.Count
+        }
+        if ($perfCheck.Improvements.Count -gt 0) {
+            Write-Host "  Improvements: $($perfCheck.Improvements.Count)" -ForegroundColor Green
+            foreach ($i in $perfCheck.Improvements) {
+                $pct = if ($i.Baseline -gt 0) { [math]::Round((($i.Baseline - $i.Actual) / $i.Baseline) * 100, 2) } else { 0 }
+                Write-Host ("    - {0,-12} ({1,-6}) {2:N0} -> {3:N0} cycles (-{4}%)" -f $i.App, $i.Mode, $i.Baseline, $i.Actual, $pct) -ForegroundColor Green
+            }
+            Write-Host "  (run -UpdatePerfBaseline to accept improved cycle counts)" -ForegroundColor DarkGray
+        }
+        if ($perfCheck.New.Count -gt 0) {
+            Write-Host "  No baseline yet for $($perfCheck.New.Count) app/mode pair(s); run -UpdatePerfBaseline to capture" -ForegroundColor DarkGray
+        }
+    }
+}
+
 $diagnosticsPassed = $null
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -1103,6 +1366,10 @@ if ($Extended) {
     Write-Host "  Extended:     $(if ($extendedPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($extendedPassed) { "Green" } else { "Red" })
 }
 Write-Host "  Diagnostics:  $(if ($diagnosticsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($diagnosticsPassed) { "Green" } else { "Red" })
+if ($perfCheck -and -not $UpdatePerfBaseline) {
+    $perfLabel = if ($perfCheck.Regressions.Count -eq 0) { "passed" } else { "$($perfCheck.Regressions.Count) regression(s)" }
+    Write-Host "  Performance:  $perfLabel" -ForegroundColor $(if ($perfCheck.Regressions.Count -eq 0) { "Green" } else { "Red" })
+}
 Write-Host "  Total time:   $suiteElapsedStr"
 Write-Host "  Optimisation: $optimisationSummary"
 
@@ -1120,6 +1387,13 @@ if ($Extended -and -not $extendedPassed) {
 if (-not $diagnosticsPassed) {
     Write-Host ""
     Write-Host "Diagnostics suite failed" -ForegroundColor Red
+}
+if ($perfCheck -and -not $UpdatePerfBaseline -and $perfCheck.Regressions.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Performance regressions (vs $PerfBaselineFile):" -ForegroundColor Red
+    foreach ($r in $perfCheck.Regressions) {
+        Write-Host "  - $($r.App) ($($r.Mode)): $($r.Baseline) -> $($r.Actual) cycles" -ForegroundColor Red
+    }
 }
 
 if ($Report) {
