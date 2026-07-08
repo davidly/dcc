@@ -170,6 +170,16 @@ and `#pragma stack_check(off)` then control guard emission in source order. The
 pragma affects function prologues and VLA allocations emitted after the directive;
 it does not retroactively change code already emitted.
 
+```c
+void normal_default(void) { }   /* uses the command-line/default state */
+
+#pragma stack_check(on)
+void guarded_region(void) { }   /* emits call __stchk */
+
+#pragma stack_check(off)
+void unguarded_region(void) { } /* no stack-check prologue */
+```
+
 ## Variable-length arrays
 
 DCC supports a practical subset of C99 variable-length arrays (VLAs):
