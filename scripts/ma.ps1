@@ -103,7 +103,7 @@ dcc options controlled by this helper:
     -I <dir>                    DCC_INCLUDE, path-separator separated; package include/ is added automatically
     -D<name>[=value], -U<name>  DCC_ARGS="-DNAME=1 -UOLD"
     -s, -stack <bytes>          DCC_STACK_SIZE=<bytes>; omitted when unset
-    -fstack-check               DCC_FORCE_STACK_CHECK=1, or source contains DCC_STACK_CHECK
+    -fstack-check               DCC_FORCE_STACK_CHECK=1 (or #pragma stack_check(on) in the source)
     -f, -ffloatio               DCC_FLOATIO=1
     -fl, -flongio               DCC_LONGIO=1
     -o <file>                   managed by dcc-ma
@@ -360,11 +360,10 @@ function Invoke-MaBuild {
     # matches direct dcc invocation unless the caller opts in.
     $dccFloatio = ($env:DCC_FLOATIO -eq "1")
     $dccLongio = ($env:DCC_LONGIO -eq "1")
-    $sourceContent = Get-Content -Path $sourceFile -Raw
 
     # Detect/enable stack check
     $dccStackChk = ""
-    if ($env:DCC_FORCE_STACK_CHECK -eq "1" -or $sourceContent -match 'DCC_STACK_CHECK') {
+    if ($env:DCC_FORCE_STACK_CHECK -eq "1") {
         $dccStackChk = "-fstack-check"
     }
 

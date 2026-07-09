@@ -32,7 +32,7 @@
     { "name": "tpromo2", "host": true },
     { "name": "trig", "host": true },
     { "name": "ts", "host": true },
-    { "name": "tstackov", "host": true, "dcc_args": "-fstack-check", "narrow_diff_ignore": true },
+    { "name": "tstackov", "host": true, "narrow_diff_ignore": true },
     { "name": "tpragstk", "narrow_diff_ignore": true },
     { "name": "tsvbuf2", "host": true },
     { "name": "ttype2", "host": true },

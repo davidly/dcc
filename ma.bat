@@ -64,16 +64,12 @@ if not errorlevel 1 (
     set "STRIP_FLAGS=%STRIP_FLAGS% -k _pflng"
 )
 
-rem Enable the lightweight stack-overflow guard when the source opts in with a
-rem DCC_STACK_CHECK marker, or when DCC_FORCE_STACK_CHECK=1 is set (runall.bat
-rem --stack-check guards the whole suite).
+rem Enable the lightweight stack-overflow guard when DCC_FORCE_STACK_CHECK=1
+rem is set (runall.bat --stack-check guards the whole suite). A source file
+rem can also opt itself in regardless of this setting via
+rem #pragma stack_check(on) (see tests/tstackov.c).
 if "%DCC_FORCE_STACK_CHECK%"=="1" (
     set "DCC_FLAGS=%DCC_FLAGS% -fstack-check"
-) else (
-    findstr /C:"DCC_STACK_CHECK" "%SOURCE_FILE%" >nul 2>&1
-    if not errorlevel 1 (
-        set "DCC_FLAGS=%DCC_FLAGS% -fstack-check"
-    )
 )
 
 rem DCC_STACK_SIZE overrides the default 512-byte C stack reserve (handy for

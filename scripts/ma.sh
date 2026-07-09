@@ -35,7 +35,7 @@ dcc options controlled by this helper:
     -I <dir>                    DCC_INCLUDE, path-separator separated; package include/ is added automatically
     -D<name>[=value], -U<name>  DCC_ARGS="-DNAME=1 -UOLD"
     -s, -stack <bytes>          DCC_STACK_SIZE=<bytes>; omitted when unset
-    -fstack-check               DCC_FORCE_STACK_CHECK=1, or source contains DCC_STACK_CHECK
+    -fstack-check               DCC_FORCE_STACK_CHECK=1 (or #pragma stack_check(on) in the source)
     -f, -ffloatio               DCC_FLOATIO=1
     -fl, -flongio               DCC_LONGIO=1
     -o <file>                   managed by dcc-ma
@@ -336,7 +336,7 @@ run_one() {
     fi
 
     dcc_stackchk=""
-    if [ "${DCC_FORCE_STACK_CHECK:-0}" = "1" ] || grep -q 'DCC_STACK_CHECK' "$source_file"; then
+    if [ "${DCC_FORCE_STACK_CHECK:-0}" = "1" ]; then
         dcc_stackchk="-fstack-check"
     fi
     dcc_stack_size="${DCC_STACK_SIZE:-}"

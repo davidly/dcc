@@ -1,17 +1,20 @@
 /*
  * tstackov.c - exercises the lightweight stack-overflow guard (dcc
- * -fstack-check).  The DCC_STACK_CHECK marker below tells ma.sh / ma.bat to
- * build this one program with -fstack-check; every other test stays unguarded.
+ * -fstack-check).  #pragma stack_check(on) below turns the guard on for the
+ * rest of this file, regardless of how the harness/build script that compiles
+ * it is otherwise configured (e.g. runall.ps1 -Report, which builds every app
+ * without the guard by default) - a source-level, self-contained request
+ * instead of a build-script convention every tool has to know about.
  *
  * Each recursion level allocates a local frame, so unbounded recursion walks
  * the C stack down into the heap region.  With the guard enabled the runtime
  * prints "?stack overflow" from the function prologue and exits to CP/M
  * (return code 0FFh) instead of silently corrupting memory.  Without the guard
  * the same recursion would scribble over the heap and crash unpredictably.
- *
- * DCC_STACK_CHECK
  */
 #include <stdio.h>
+
+#pragma stack_check(on)
 
 /* volatile-ish sink so the optimizer cannot discard the frame or the call. */
 int g_sink;
