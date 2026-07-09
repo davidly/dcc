@@ -372,6 +372,11 @@ extern int opt_longio;      /* -flongio: enable 32-bit (long) printf format spec
 extern int opt_module;      /* -c/-module: emit linkable helper module, not final app TU */
 extern int opt_stack_size;  /* bytes reserved above heap for C stack */
 extern int opt_stack_check; /* -fstack-check: emit a stack-overflow guard at function entry */
+extern int opt_no_narrow;   /* -fno-narrow: disable every int-array/scalar/for-counter
+                              * byte-narrowing pass (dcc_array_narrow.c), so a build can be
+                              * diffed against a normal one to isolate a narrowing-introduced
+                              * output difference from any other cause - see
+                              * scripts/runall.ps1 -NarrowDiff. */
 
 /* typedef table */
 extern struct TypeDef typedefs[MAX_TYPEDEFS];

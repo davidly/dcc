@@ -122,6 +122,18 @@ speed:
     baselines in tests/baselines/, so a regression shows up as a diff in code
     review the same way an output-baseline change would.
 
+.PARAMETER NarrowDiff
+    After the main suite, build every app a second and third time - once
+    normally, once with dcc's -fno-narrow (every int-array/scalar/for-counter
+    byte-narrowing pass disabled) - and diff the two runs' raw stdout directly
+    against each other, instead of against a recorded baseline. Narrowing is
+    supposed to be invisible (a storage-width optimization, never a value
+    change), so any difference is a real correctness bug in a narrowing pass -
+    caught without needing an external reference compiler, and without the
+    bug needing to already be reflected in some existing baseline's expected
+    text. Off by default (extra build+run work per app); a mismatch fails the
+    run just like an output-baseline mismatch does.
+
 .PARAMETER KeepBuild
     In parallel mode the suite builds into a per-invocation folder
     (build/run-<pid>) so concurrent runs stay isolated, and removes it on exit to
@@ -138,6 +150,7 @@ speed:
   pwsh ./scripts/runall.ps1 -ThrottleLimit 8
     pwsh ./scripts/runall.ps1 -Report
   pwsh ./scripts/runall.ps1 -Mode full -UpdatePerfBaseline
+  pwsh ./scripts/runall.ps1 -NarrowDiff
 
 .NOTES
   App overrides are loaded from tests/_test_overrides.json:
@@ -151,6 +164,13 @@ speed:
       for reasons unrelated to codegen, e.g. tkbd (a keyboard-poll loop whose
       iteration count depends on real host timing) or tdirent/cpmenumd
       (directory enumeration order depends on real filesystem state).
+    - narrow_diff_ignore: set to true to exclude this app from -NarrowDiff
+      entirely - for a test whose observable output is inherently sensitive
+      to overall stack/frame layout in a way unrelated to any narrowing bug,
+      e.g. tstackov/tpragstk (both intentionally recurse until the
+      stack-check guard fires, and print exactly how far the stack
+      overran - narrowing shrinks locals elsewhere in the program, shifting
+      that number even though nothing is actually wrong).
 
   Cycle-count regression checking (on by default, see NoPerfCheck above) only
   compares/updates the mode(s) actually built this run - run with -Mode full
@@ -180,6 +200,7 @@ param(
     [switch]$NoPerfCheck,
     [switch]$UpdatePerfBaseline,
     [string]$PerfBaselineFile = "tests/perf_baselines.csv",
+    [switch]$NarrowDiff,
     [switch]$KeepBuild,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
@@ -325,6 +346,7 @@ if (-not (Test-Path $appOverridesPath)) {
         if ($null -ne $app.dcc_longio) { $appOverrides[$app.name]['dcc_longio'] = $app.dcc_longio }
         if ($app.ignore) { $appOverrides[$app.name]['ignore'] = $app.ignore }
         if ($app.perf_ignore) { $appOverrides[$app.name]['perf_ignore'] = $app.perf_ignore }
+        if ($app.narrow_diff_ignore) { $appOverrides[$app.name]['narrow_diff_ignore'] = $app.narrow_diff_ignore }
     }
 }
 
@@ -426,6 +448,20 @@ function Get-IgnoreApp {
 function Get-PerfIgnoreApp {
     param([string]$app)
     return ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['perf_ignore'])
+}
+
+# True for an app whose observable output is inherently sensitive to overall
+# code size/frame layout in a way unrelated to any narrowing bug - e.g.
+# tests/tstackov.c and tests/tpragstk.c both intentionally recurse until the
+# stack-check guard fires, and print exactly how far the stack pointer
+# overran its reserve ("exceeded by 0xNNNN"); narrowing shrinks locals
+# elsewhere in the program, shifting the overall stack layout by a few bytes
+# and changing that number even though nothing is actually wrong. Excluded
+# from -NarrowDiff entirely, the same way perf_ignore excludes a
+# timing-sensitive app from the cycle-count check.
+function Get-NarrowDiffIgnoreApp {
+    param([string]$app)
+    return ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['narrow_diff_ignore'])
 }
 
 function Test-IsNtvcmEmulator {
@@ -774,6 +810,136 @@ function Invoke-AppTest {
         Elapsed = $sw.Elapsed
         Lines   = $lines.ToArray()
         Metrics = $modeMetrics
+    }
+}
+
+# Builds one app TWICE - once normally, once with dcc's -fno-narrow (every
+# int-array/scalar/for-counter byte-narrowing pass disabled) - and diffs the
+# two runs' raw stdout directly against each other, rather than against a
+# recorded baseline. Narrowing is supposed to be invisible (a storage-width
+# optimization, never a value change), so any difference here is a real
+# correctness bug in one of the narrowing passes - caught without needing the
+# bug to already be reflected in some existing baseline's expected text, and
+# without needing an external reference compiler. Motivated directly by this
+# session's narrowing bugs (a vacuous-dependency proof gap, a byte-assign
+# value-propagation bug) - both were only found by hand, by broadening a
+# narrowing trigger and noticing an EXISTING test's baseline stopped matching;
+# this generalizes that same check to run automatically, every time, for
+# every test, independent of whether its baseline happens to already encode
+# the affected value.
+function Invoke-NarrowDiffTest {
+    param(
+        [string]$AppName,
+        [string]$BuildDir,
+        [string]$Emulator,
+        [string]$RunArgs,
+        [string]$RunStdin,
+        [string]$StackSize,
+        [string]$DccArgs,
+        [object]$DccFloatio,
+        [object]$DccLongio,
+        [string[]]$EmulatorRunArgs,
+        [object[]]$Fixtures
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $stackSizeInt = if ($StackSize) { [int]$StackSize } else { 0 }
+    $upper = $AppName.ToUpper()
+
+    $narrowDir = Join-Path $BuildDir "narrow"
+    $noNarrowDir = Join-Path $BuildDir "nonarrow"
+    foreach ($d in @($narrowDir, $noNarrowDir)) {
+        if (-not (Test-Path $d -PathType Container)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+        foreach ($f in $Fixtures) { Copy-FixtureUpper -Fixture $f -DestDir $d }
+    }
+
+    $baseDccArgs = if ($DccArgs) { $DccArgs } else { "" }
+    $noNarrowDccArgs = ("$baseDccArgs -fno-narrow").Trim()
+
+    $okNarrow = $false
+    $okNoNarrow = $false
+    try {
+        $okNarrow = Invoke-DccMakeBuild -Name $AppName -Mode fast -BuildDir $narrowDir -Emulator $Emulator `
+            -StackSize $stackSizeInt -DccArgs $baseDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -Quiet
+    } catch { $okNarrow = $false }
+    try {
+        $okNoNarrow = Invoke-DccMakeBuild -Name $AppName -Mode fast -BuildDir $noNarrowDir -Emulator $Emulator `
+            -StackSize $stackSizeInt -DccArgs $noNarrowDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -Quiet
+    } catch { $okNoNarrow = $false }
+
+    if (-not $okNarrow -or -not $okNoNarrow) {
+        $sw.Stop()
+        $lines.Add("  Building $AppName (narrow-diff)... FAILED (narrow ok=$okNarrow, no-narrow ok=$okNoNarrow)")
+        return [pscustomobject]@{ App = $AppName; Passed = $false; Elapsed = $sw.Elapsed; Lines = $lines.ToArray() }
+    }
+
+    $narrowCom = Join-Path $narrowDir "$upper.COM"
+    $noNarrowCom = Join-Path $noNarrowDir "$upper.COM"
+    if (-not (Test-Path $narrowCom) -or -not (Test-Path $noNarrowCom)) {
+        $sw.Stop()
+        $lines.Add("  WARNING: $AppName - .COM not produced for narrow-diff build")
+        return [pscustomobject]@{ App = $AppName; Passed = $false; Elapsed = $sw.Elapsed; Lines = $lines.ToArray() }
+    }
+
+    $appArgs = if ($RunArgs) { @($RunArgs -split '\s+') } else { @() }
+    $nativeArgs = @($EmulatorRunArgs) + @("$upper.COM") + $appArgs
+
+    Push-Location $narrowDir
+    try {
+        $outNarrow = if ($RunStdin) { ($RunStdin | & $Emulator @nativeArgs 2>&1) -join "`n" } else { (& $Emulator @nativeArgs 2>&1) -join "`n" }
+    } finally { Pop-Location }
+    Push-Location $noNarrowDir
+    try {
+        $outNoNarrow = if ($RunStdin) { ($RunStdin | & $Emulator @nativeArgs 2>&1) -join "`n" } else { (& $Emulator @nativeArgs 2>&1) -join "`n" }
+    } finally { Pop-Location }
+
+    # Strip the ntvcm -p performance block: cycle counts legitimately differ
+    # between a narrowed and unnarrowed build (that's the whole point of
+    # narrowing), so it is not itself a correctness signal here.
+    $outNarrow = [regex]::Replace($outNarrow, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
+    $outNoNarrow = [regex]::Replace($outNoNarrow, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
+    $normNarrow = ($outNarrow -replace "`r`n", "`n").TrimEnd("`n")
+    $normNoNarrow = ($outNoNarrow -replace "`r`n", "`n").TrimEnd("`n")
+
+    # Normalize __DATE__/__TIME__-shaped text before comparing: these two
+    # builds are compiled moments apart, so a program that prints __DATE__ or
+    # __TIME__ (e.g. tests/tstdc.c) can legitimately differ across a real
+    # second/date boundary - unrelated to narrowing, and otherwise an
+    # intermittent false positive. Narrower than the baseline harness's full
+    # placeholder set deliberately: only these two specific volatile patterns
+    # are normalized, not general hex/uint numbers, since a wrong NUMBER
+    # printed by an actual narrowing bug is exactly the kind of difference
+    # this check exists to catch.
+    $normNarrow = [regex]::Replace($normNarrow, '[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}', '{{DATE}}')
+    $normNarrow = [regex]::Replace($normNarrow, '\d{2}:\d{2}:\d{2}', '{{TIME}}')
+    $normNoNarrow = [regex]::Replace($normNoNarrow, '[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}', '{{DATE}}')
+    $normNoNarrow = [regex]::Replace($normNoNarrow, '\d{2}:\d{2}:\d{2}', '{{TIME}}')
+
+    $match = ($normNarrow -ceq $normNoNarrow)
+    if (-not $match) {
+        $lines.Add("    NARROW-DIFF MISMATCH: narrowing changed observable output")
+        $narrowLines = @($normNarrow -split "`n")
+        $noNarrowLines = @($normNoNarrow -split "`n")
+        $maxLen = [Math]::Max($narrowLines.Count, $noNarrowLines.Count)
+        for ($i = 0; $i -lt $maxLen; $i++) {
+            $n = if ($i -lt $narrowLines.Count) { $narrowLines[$i] } else { $null }
+            $u = if ($i -lt $noNarrowLines.Count) { $noNarrowLines[$i] } else { $null }
+            if ($n -cne $u) {
+                $lines.Add("    DIFF- (narrow)    $n")
+                $lines.Add("    DIFF+ (no-narrow) $u")
+            }
+        }
+    }
+
+    $sw.Stop()
+    return [pscustomobject]@{
+        App     = $AppName
+        Passed  = $match
+        Elapsed = $sw.Elapsed
+        Lines   = $lines.ToArray()
     }
 }
 
@@ -1336,6 +1502,96 @@ if (-not $diagnosticsPassed) {
     $failed++
 }
 
+$narrowDiffPassed = $null
+if ($NarrowDiff) {
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "NARROW-DIFF CHECK (narrowing on vs -fno-narrow)" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    $narrowDiffBuildRoot = Join-Path $BuildDir "narrow-diff"
+    $narrowWorkItems = @($workItems | Where-Object { -not (Get-NarrowDiffIgnoreApp $_.App) })
+    $narrowSkipped = $workItems.Count - $narrowWorkItems.Count
+    if ($narrowSkipped -gt 0) {
+        Write-Host "  (skipping $narrowSkipped app(s) marked narrow_diff_ignore)" -ForegroundColor DarkGray
+    }
+    $narrowResults = @()
+    $narrowDone = 0
+    $narrowTotal = $narrowWorkItems.Count
+
+    if ($Parallel) {
+        $ndRepoRoot = (Get-Location).Path
+        $ndCfuDef   = ${function:Copy-FixtureUpper}.ToString()
+        $ndGdmDef   = ${function:Get-DccMakeCommand}.ToString()
+        $ndCtbsDef  = ${function:ConvertTo-BooleanSetting}.ToString()
+        $ndIdmbDef  = ${function:Invoke-DccMakeBuild}.ToString()
+        $ndIndtDef  = ${function:Invoke-NarrowDiffTest}.ToString()
+        $ndRunArgs  = @($emulatorRunArgs)
+
+        $narrowWorkItems | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+            $item = $_
+            Set-Location $using:ndRepoRoot
+            if ($using:StackCheck) { $env:DCC_FORCE_STACK_CHECK = "1" }
+            ${function:Copy-FixtureUpper}    = $using:ndCfuDef
+            ${function:Get-DccMakeCommand}   = $using:ndGdmDef
+            ${function:ConvertTo-BooleanSetting} = $using:ndCtbsDef
+            ${function:Invoke-DccMakeBuild}  = $using:ndIdmbDef
+            ${function:Invoke-NarrowDiffTest} = $using:ndIndtDef
+
+            $appBuildDir = Join-Path $using:narrowDiffBuildRoot $item.App
+            Invoke-NarrowDiffTest -AppName $item.App -BuildDir $appBuildDir -Emulator $using:Emulator `
+                -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
+                -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
+                -EmulatorRunArgs $using:ndRunArgs -Fixtures $using:fixtureList
+        } | ForEach-Object {
+            $result = $_
+            $narrowResults += $result
+            $narrowDone++
+            $status = if ($result.Passed) { "PASS" } else { "FAIL" }
+            $counter = "[{0,3}/{1}]" -f $narrowDone, $narrowTotal
+            $line = "$counter $status  $($result.App)"
+            if ($result.Passed) {
+                Write-Host $line -ForegroundColor Green
+            } else {
+                Write-Host $line -ForegroundColor Red
+                foreach ($detail in $result.Lines) { Write-Host "        $($detail.Trim())" -ForegroundColor Red }
+            }
+        }
+    }
+    else {
+        foreach ($item in $narrowWorkItems) {
+            $appBuildDir = Join-Path $narrowDiffBuildRoot $item.App
+            $result = Invoke-NarrowDiffTest -AppName $item.App -BuildDir $appBuildDir -Emulator $Emulator `
+                -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
+                -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
+                -EmulatorRunArgs $emulatorRunArgs -Fixtures $fixtureList
+            $narrowResults += $result
+            $narrowDone++
+            $status = if ($result.Passed) { "PASS" } else { "FAIL" }
+            $line = "[{0,3}/{1}] {2}  {3}" -f $narrowDone, $narrowTotal, $status, $result.App
+            if ($result.Passed) {
+                Write-Host $line -ForegroundColor Green
+            } else {
+                Write-Host $line -ForegroundColor Red
+                foreach ($detail in $result.Lines) { Write-Host "        $($detail.Trim())" -ForegroundColor Red }
+            }
+        }
+    }
+
+    if (-not $KeepBuild -and (Test-Path $narrowDiffBuildRoot -PathType Container)) {
+        Remove-Item -LiteralPath $narrowDiffBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $narrowFailedApps = @($narrowResults | Where-Object { -not $_.Passed } | ForEach-Object { $_.App })
+    $narrowDiffPassed = ($narrowFailedApps.Count -eq 0)
+    Write-Host ""
+    Write-Host "  Narrow-diff: $($narrowResults.Count - $narrowFailedApps.Count)/$($narrowResults.Count) matched" -ForegroundColor $(if ($narrowDiffPassed) { "Green" } else { "Red" })
+    if (-not $narrowDiffPassed) {
+        Write-Host "  Mismatched apps: $($narrowFailedApps -join ', ')" -ForegroundColor Red
+        $failed += $narrowFailedApps.Count
+    }
+}
+
 $extendedPassed = $null
 if ($Extended) {
     Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
@@ -1370,6 +1626,9 @@ if ($perfCheck -and -not $UpdatePerfBaseline) {
     $perfLabel = if ($perfCheck.Regressions.Count -eq 0) { "passed" } else { "$($perfCheck.Regressions.Count) regression(s)" }
     Write-Host "  Performance:  $perfLabel" -ForegroundColor $(if ($perfCheck.Regressions.Count -eq 0) { "Green" } else { "Red" })
 }
+if ($NarrowDiff) {
+    Write-Host "  Narrow-diff:  $(if ($narrowDiffPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($narrowDiffPassed) { "Green" } else { "Red" })
+}
 Write-Host "  Total time:   $suiteElapsedStr"
 Write-Host "  Optimisation: $optimisationSummary"
 
@@ -1387,6 +1646,10 @@ if ($Extended -and -not $extendedPassed) {
 if (-not $diagnosticsPassed) {
     Write-Host ""
     Write-Host "Diagnostics suite failed" -ForegroundColor Red
+}
+if ($NarrowDiff -and -not $narrowDiffPassed) {
+    Write-Host ""
+    Write-Host "Narrow-diff check failed: narrowing changed observable output for one or more apps (see detail above)" -ForegroundColor Red
 }
 if ($perfCheck -and -not $UpdatePerfBaseline -and $perfCheck.Regressions.Count -gt 0) {
     Write-Host ""

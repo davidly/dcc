@@ -1675,6 +1675,8 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
     struct AstNode *seq;
     int result;
 
+    if (opt_no_narrow)
+        return 0;
     if ((type & 15) != TYPE_INT || type_ptr_depth(type) != 0 || type_is_struct_object(type) ||
         (arrlen <= 0 && total_elems <= 0) || tok.kind == '=' || g_last_array_dim_count > 1)
         return 0;
@@ -1784,6 +1786,8 @@ int try_narrow_register_scalar(const char *name, int type, int is_register,
     struct AstNode *seq;
     int result;
 
+    if (opt_no_narrow)
+        return 0;
     if (!is_register || (type & 15) != TYPE_INT || type_ptr_depth(type) != 0 ||
         type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || tok.kind == '=')
         return 0;
@@ -1842,6 +1846,8 @@ int try_narrow_for_counter(const char *name, int type, int arrlen, int total_ele
     struct AstNode *seq;
     int result;
 
+    if (opt_no_narrow)
+        return 0;
     if ((type & 15) != TYPE_INT || type_ptr_depth(type) != 0 ||
         type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || tok.kind == '=')
         return 0;

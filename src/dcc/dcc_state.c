@@ -28,6 +28,7 @@ int opt_longio;      /* -flongio: enable 32-bit (long) printf format specifiers 
 int opt_module;      /* -c/-module: emit linkable helper module, not final app TU */
 int opt_stack_size;  /* bytes reserved above heap for C stack */
 int opt_stack_check; /* -fstack-check: emit a stack-overflow guard at function entry */
+int opt_no_narrow;   /* -fno-narrow: disable every byte-narrowing pass */
 
 /* ---- typedef table ----------------------------------------------------- */
 struct TypeDef typedefs[MAX_TYPEDEFS];

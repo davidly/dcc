@@ -51,6 +51,7 @@ struct Config {
     int floatio;
     int flongio;
     int stack_check;
+    int no_narrow;
     int stack_bytes;
     char includes[MAX_ITEMS][MAX_PATH_LEN];
     int include_count;
@@ -497,6 +498,7 @@ static void init_config(struct Config *cfg)
     cfg->floatio = getenv("DCC_FLOATIO") && !strcmp(getenv("DCC_FLOATIO"), "1");
     cfg->flongio = getenv("DCC_LONGIO") && !strcmp(getenv("DCC_LONGIO"), "1");
     cfg->stack_check = getenv("DCC_FORCE_STACK_CHECK") && !strcmp(getenv("DCC_FORCE_STACK_CHECK"), "1");
+    cfg->no_narrow = getenv("DCC_NO_NARROW") && !strcmp(getenv("DCC_NO_NARROW"), "1");
     cfg->stack_bytes = 512;
     cfg->peep = 1;
     cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
@@ -562,6 +564,14 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
             return 0;
         }
         cfg->stack_check = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-no-narrow")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->no_narrow = b;
         return 1;
     }
     if (!strcmp(key, "dcc-include-directory") || !strcmp(key, "dcc-include")) {
@@ -763,6 +773,7 @@ static void print_help(void)
     printf("    dcc-flongio=false\n");
     printf("    dcc-stack-bytes=512\n");
     printf("    dcc-stack-check=false\n");
+    printf("    dcc-no-narrow=false\n");
     printf("    dcc-include-directory=include, ../shared/include\n");
     printf("    dcc-define=DEBUG=1, TRACE\n");
     printf("    dcc-undefine=OLD\n");
@@ -775,6 +786,7 @@ static void print_help(void)
     printf("  dcc-flongio=false|true|1|0     pass -flongio to dcc and keep _pflng\n");
     printf("  dcc-stack-bytes=512            pass -stack bytes to dcc; default 512\n");
     printf("  dcc-stack-check=false|true|1|0 pass -fstack-check to dcc\n");
+    printf("  dcc-no-narrow=false|true|1|0   pass -fno-narrow to dcc (disable byte-narrowing passes)\n");
     printf("  dcc-include-directory=dir,...  include dirs; dcc-include is an alias\n");
     printf("  dcc-define=NAME[=value],...    pass -D values to dcc\n");
     printf("  dcc-undefine=NAME,...          pass -U values to dcc\n");
@@ -788,6 +800,7 @@ static void print_help(void)
     printf("  -fl, -flongio                  same as dcc-flongio=true\n");
     printf("  -s <bytes>, -stack <bytes>     same as dcc-stack-bytes=<bytes>\n");
     printf("  -fstack-check                  same as dcc-stack-check=true\n");
+    printf("  -fno-narrow                    same as dcc-no-narrow=true\n");
     printf("  -I <dir>, -Idir                add an include directory\n");
     printf("  -D <name>[=value], -Dname=val  pass a define to dcc\n");
     printf("  -U <name>, -Uname              pass an undefine to dcc\n");
@@ -849,6 +862,10 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         }
         if (!strcmp(arg, "-fstack-check")) {
             cfg->stack_check = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-fno-narrow")) {
+            cfg->no_narrow = 1;
             continue;
         }
         if (!strcmp(arg, "-s") || !strcmp(arg, "-stack")) {
@@ -1203,6 +1220,7 @@ static int build_dcc_command(struct Config *cfg, int index, const char *input,
     if (!cmd_arg(cmd, cmd_size, cfg->dcc)) return 0;
     if (index > 0 && !cmd_arg(cmd, cmd_size, "-module")) return 0;
     if (cfg->stack_check && !cmd_arg(cmd, cmd_size, "-fstack-check")) return 0;
+    if (cfg->no_narrow && !cmd_arg(cmd, cmd_size, "-fno-narrow")) return 0;
     if (!cmd_arg(cmd, cmd_size, "-stack")) return 0;
     snprintf(stack_buf, sizeof(stack_buf), "%d", cfg->stack_bytes);
     if (!cmd_arg(cmd, cmd_size, stack_buf)) return 0;
