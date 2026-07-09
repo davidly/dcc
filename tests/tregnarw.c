@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 
 /* Guards dcc_array_narrow.c's scalar narrowing (try_narrow_register_scalar)
  * and dccpeep's pass_byte_loop_counter_to_reg_c, which promotes a narrowed
@@ -65,12 +66,14 @@ int lusr(void)
  * silently corrupting the sum. Loop termination is deliberately driven by
  * `j` (unrelated to `i`) rather than by comparing `i` itself, so even a
  * regression of this fix gives a wrong SUM rather than an infinite loop
- * in the test suite. */
+ * in the test suite. total is int16_t (not plain int) so its expected
+ * overflow-wrapped sum is the same on dcc's 16-bit int and a host
+ * compiler's wider int. */
 int lbig(void)
 {
     register int i;
     int j;
-    int total;
+    int16_t total;
 
     total = 0;
     i = 0;

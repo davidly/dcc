@@ -7,11 +7,15 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 typedef float ftype;
 
+/* iC/ip/ipend use int16_t (not plain int) so the expected byte diff (800,
+ * i.e. sizeof(int16_t)*400) is the same on dcc's 16-bit int and a host
+ * compiler's wider int. */
 ftype fC[20][20];
-int iC[20][20];
+int16_t iC[20][20];
 ftype fD[400];
 
 int main()
@@ -20,8 +24,8 @@ int main()
     ftype * fpend = ( (ftype *) fC ) + ( 20 * 20 );
     int fdiff = (int) fpend - (int) fp;
 
-    int * ip = (int *) iC;
-    int * ipend = ( (int *) iC ) + ( 20 * 20 );
+    int16_t * ip = (int16_t *) iC;
+    int16_t * ipend = ( (int16_t *) iC ) + ( 20 * 20 );
     int idiff = (int) ipend - (int) ip;
 
     ftype * dp = (ftype *) fD;
