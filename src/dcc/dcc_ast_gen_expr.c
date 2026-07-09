@@ -2981,9 +2981,15 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
         s = find_sym(n->a->sval);
 
         /* Base load: a global pointer immediately subscripted loads its value with
-         * a direct ld hl,(nn); arrays and local pointers load their address. */
+         * a direct ld hl,(nn); an ix-direct local/param pointer loads its value
+         * directly too (ld l,(ix+d)/ld h,(ix+d+1)) instead of computing its
+         * frame address and then dereferencing it; arrays and any other
+         * pointer load their address. */
         if (is_global_word_sym(s) && !s->is_array && type_ptr_depth(s->type) > 0) {
             emit_load_global_word_direct(s);
+            global_ptr_preloaded = 1;
+        } else if (!s->is_array && type_ptr_depth(s->type) > 0 && sym_can_ix_direct(s)) {
+            emit_load_sym_value_direct(s);
             global_ptr_preloaded = 1;
         } else {
             emit_load_sym_addr(s);
