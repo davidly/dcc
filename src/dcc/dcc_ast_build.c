@@ -259,6 +259,19 @@ static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
     }
     if (ast_expr_is_null_pointer_constant(n))
         return 1;
+    /*
+     * A bare identifier that is not yet in the symbol table denotes a
+     * declaration from an inner block whose scope has not been entered at
+     * AST-build time (nested-block locals only register when emitted).  Its
+     * type is not knowable here, so ast_expr_type_for_sizeof would wrongly
+     * default it to int.  Do not treat that as an integer-to-pointer
+     * assignment; a genuinely undeclared identifier is diagnosed later.
+     * Enum constants are excluded: they are looked up in their own table,
+     * have a known int type, and must keep the precise E0920 diagnostic.
+     */
+    if (n->kind == AST_IDENT && find_sym(n->sval) == NULL &&
+        find_enum_const(n->sval) < 0)
+        return 1;
     if (type_ptr_depth(ast_expr_type_for_sizeof(n)) > 0)
         return 1;
     if (ast_expr_is_array_decay(n) || ast_expr_is_array_row(n) ||

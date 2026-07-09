@@ -805,6 +805,15 @@ unsigned int bitfield_init_part(struct FieldDef *fd, long v)
     return (unsigned int)(((unsigned long)v & mask) << fd->bit_shift);
 }
 
+/* Bit mask a bit-field occupies inside its 16-bit storage unit. */
+unsigned int bitfield_field_mask(struct FieldDef *fd)
+{
+    if (fd->bit_width <= 0)
+        return 0;
+    return (unsigned int)((((1UL << fd->bit_width) - 1UL) << fd->bit_shift) &
+                          0xffffUL);
+}
+
 int next_parent_field_index(int sid, int start)
 {
     int k;
@@ -828,6 +837,16 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
     int is_union;
     int had_brace;
     int end_used;
+    /* Bit-field storage units already stored at this struct level.  Out-of-
+     * order designators can revisit a unit after leaving it (e.g.
+     * `{ .a=1, .x=2, .b=3 }` with a and b sharing a unit); each unit store
+     * overwrites the whole 16-bit word, so a revisit must merge with the
+     * previously stored value (C99 last-designator-wins per field). */
+    int bf_unit_offs[32];
+    unsigned int bf_unit_vals[32];
+    int bf_nunits;
+
+    bf_nunits = 0;
 
     sid = type_struct_id(type);
     total = type_size(type);
@@ -929,10 +948,12 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             int k;
             int next;
             unsigned int unit;
+            unsigned int unit_mask;
             int stop;
 
             unit_off = fd->offset;
             unit = 0;
+            unit_mask = 0;
             stop = 0;
             k = i;
             while (k >= 0 && k < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}') {
@@ -941,7 +962,9 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
                 if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
                     if (bfd->bit_width <= 0 || bfd->offset != unit_off)
                         break;
+                    unit &= ~bitfield_field_mask(bfd);
                     unit |= bitfield_init_part(bfd, parse_struct_init_const_value());
+                    unit_mask |= bitfield_field_mask(bfd);
                     if (!accept(',')) {
                         stop = 1;
                         break;
@@ -950,6 +973,43 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
                         stop = 1;
                         break;
                     }
+                }
+                /*
+                 * A designated element (`.field = ...`) may follow.  When it
+                 * names another bit-field in the SAME storage unit, keep
+                 * accumulating it into `unit` so all designators for the unit
+                 * are packed with a single store (the unit store overwrites, so
+                 * they cannot be emitted one at a time).  A designator that
+                 * targets a different unit (or a non-bit-field) is left for the
+                 * outer field loop; the comma has already been consumed, which
+                 * is exactly where the outer loop expects to resume.
+                 */
+                if (tok.kind == '.') {
+                    long save_pos = posi;
+                    long save_tok_start = tok_start_pos;
+                    int save_line = line_no;
+                    int save_tok_line = tok_line;
+                    struct Token save_tok = tok;
+                    struct FieldDef *nf = NULL;
+
+                    next_token();
+                    if (tok.kind == TOK_ID)
+                        nf = find_field_def(sid, tok.text);
+                    if (nf != NULL && nf->bit_width > 0 && nf->offset == unit_off) {
+                        next_token();
+                        if (tok.kind == '=')
+                            next_token();
+                        else if (tok.kind != '[' && tok.kind != '.')
+                            expect('=');
+                        k = (int)(nf - field_defs);
+                        continue;
+                    }
+                    posi = save_pos;
+                    tok_start_pos = save_tok_start;
+                    line_no = save_line;
+                    tok_line = save_tok_line;
+                    tok = save_tok;
+                    break;
                 }
                 next = next_parent_field_index(sid, k + 1);
                 if (next < 0) {
@@ -966,6 +1026,24 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
                 }
                 k = next;
             }
+            {
+                int u;
+                int found = -1;
+                for (u = 0; u < bf_nunits; ++u) {
+                    if (bf_unit_offs[u] == unit_off) {
+                        found = u;
+                        break;
+                    }
+                }
+                if (found >= 0)
+                    unit = (bf_unit_vals[found] & ~unit_mask) | unit;
+                else if (bf_nunits < (int)(sizeof(bf_unit_offs) / sizeof(bf_unit_offs[0]))) {
+                    found = bf_nunits++;
+                    bf_unit_offs[found] = unit_off;
+                }
+                if (found >= 0)
+                    bf_unit_vals[found] = unit;
+            }
             emit_store_const_bitfield_unit_to_local(s, baseoff + unit_off, unit);
             end_used = unit_off + 2;
             if (end_used > used) used = end_used;
@@ -973,6 +1051,12 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
                 i = k - 1;
             if (stop)
                 break;
+            /* A designator for a different unit (or a non-bit-field) stopped
+             * the packing loop; restart the field scan so the outer loop's
+             * designator handling processes it even when this unit's owner
+             * was the last declared field. */
+            if (tok.kind == '.')
+                i = -1;
             continue;
         }
 

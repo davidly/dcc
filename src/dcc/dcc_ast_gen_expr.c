@@ -964,7 +964,8 @@ void gen_long_arith_ast(const struct AstNode *n)
      * divide / modulo / shift keep their signedness-aware paths. */
     if (!type_is_float(n->a->type) && !type_is_float(n->b->type) &&
         ast_const_fold_strict(n, &const_val)) {
-        common_type = common_arith_type(promote_int_type(n->a->type), n->peek_type);
+        common_type = common_arith_type(
+            promote_int_type(ast_expr_type_for_sizeof(n->a)), n->peek_type);
         fprintf(outf, "\tld hl,%ld\n", const_val & 0xffffL);
         fprintf(outf, "\tld de,%ld\n", (const_val >> 16) & 0xffffL);
         g_expr_type = common_type;
@@ -1114,6 +1115,7 @@ void gen_binary_ast(const struct AstNode *n)
     if (!type_is_long(n->a->type) && !type_is_float(n->a->type) &&
         !type_is_long(n->b->type) && !type_is_float(n->b->type) &&
         !type_is_long(n->peek_type) && !type_is_float(n->peek_type) &&
+        !type_is_long(ast_expr_type_for_sizeof(n)) &&
         ast_const_fold_strict(n, &const_val)) {
         int fold_type = is_cmp_op(n->op)
             ? TYPE_INT
@@ -2367,6 +2369,13 @@ void gen_assign_ast(const struct AstNode *n)
         emit_store_de_to_addr_hl(s->type);
         if (!want_dead)
             emit("\tex de,hl\n");
+        /* A long rhs was narrowed by storing only its low word; the live
+         * result in HL is that 16-bit word, so the expression's type is the
+         * lvalue's int type.  Leaving g_expr_type as TYPE_LONG would make an
+         * enclosing consumer (e.g. `y = (p = -32768L)`) treat leftover DE as
+         * the high word. */
+        if (type_is_long(g_expr_type))
+            g_expr_type = s->type;
         g_long_from16 = 0;
         return;
     }
@@ -3889,6 +3898,21 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
     }
 
     if (n->kind == AST_UNARY && n->op == '*') {
+        int decay_type;
+        int decay_stride;
+        /* `*P` where P is a pointer-to-array (int (*P)[N]) decays, as an
+         * rvalue, to a pointer to the array element.  Its value is simply P's
+         * stored pointer, so load P and perform no dereference. */
+        if (ast_deref_pointer_array_decay(n, &decay_type, &decay_stride)) {
+            ast_gen_expr(n->a);
+            g_expr_type = decay_type;
+            g_long_from16 = 0;
+            if (decay_stride > 0)
+                g_array_decay_stride = decay_stride;
+            *out_type = decay_type;
+            *out_no_deref = (decay_stride > 0);
+            return;
+        }
         gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
         if (no_deref) {
             *out_type = ptr_type;

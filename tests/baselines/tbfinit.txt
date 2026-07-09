@@ -1,0 +1,2 @@
+bfinit edge cases pass
+c9917 packed=F28A r=30 g=20 b=10

@@ -756,6 +756,42 @@ int ast_index_deref_pointer_array_collect(const struct AstNode *n,
     return 1;
 }
 
+/* Recognise `*P` where P is a bare pointer-to-array identifier such as
+ * `int (*P)[N]` or `int (*P)[A][B]`.  Dereferencing P yields the pointed-to
+ * array, which — used as an rvalue (a function argument or a pointer operand,
+ * as opposed to a `(*P)[i]` subscript) — decays to a pointer to that array's
+ * element.  The runtime value of that pointer is exactly P's own stored
+ * pointer, so no memory load is performed.  Returns the decayed element-pointer
+ * type in *out_type and, when the element is itself an array row (P has more
+ * than one dimension), the row stride in *out_stride (0 for a scalar element).
+ * Declining (0) is always safe. */
+int ast_deref_pointer_array_decay(const struct AstNode *n, int *out_type,
+                                  int *out_stride)
+{
+    struct Sym *s;
+    int base;
+
+    if (n == NULL || n->kind != AST_UNARY || n->op != '*' || n->a == NULL ||
+        n->a->kind != AST_IDENT)
+        return 0;
+    s = find_sym(n->a->sval);
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
+        return 0;
+    if (type_ptr_depth(s->type) <= 0 || s->dim_count <= 0)
+        return 0;
+    base = type_decay_ptr(s->type);
+    if ((base & 15) == TYPE_VOID)
+        base = TYPE_CHAR;
+    if (type_size(base) <= 0)
+        return 0;
+    if (out_type != NULL)
+        *out_type = type_add_ptr(base);
+    if (out_stride != NULL)
+        *out_stride = (s->dim_count > 1)
+            ? sym_pointer_array_index_elem_size(s, s->type, 1) : 0;
+    return 1;
+}
+
 /* Is `n` a bare identifier naming a pointer-to-array local/param (the base of
  * a dereference chain)?  A pointer with one or more array dimensions
  * (dim_count > 0) such as `int (*p)[3]` or `int (*p)[2][3]`. */
@@ -1221,6 +1257,17 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         }
         if (n->op != '*')
             return 0;
+        {
+            int decay_type;
+            int decay_stride;
+            /* `*P` where P is a pointer-to-array (int (*P)[N]) decays, as an
+             * rvalue, to a pointer to the array element (value == P). */
+            if (ast_deref_pointer_array_decay(n, &decay_type, &decay_stride)) {
+                *out_type = decay_type;
+                *out_no_deref = (decay_stride > 0);
+                return 1;
+            }
+        }
         if (!ast_pointer_expr_type(n->a, &ptr_type, &no_deref))
             return 0;
         base = no_deref ? ptr_type : type_decay_ptr(ptr_type);
