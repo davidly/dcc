@@ -104,6 +104,7 @@ int max_function_local_bytes;
 int current_omit_ix_frame;
 int current_function_has_call;
 int g_inline_body_buffering;
+struct Sym *g_bc_regalloc_sym;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];

@@ -766,6 +766,7 @@ int sym_can_ix_direct(struct Sym *s)
 {
     int sz;
     if (!s) return 0;
+    if (s->reg_alloc != REG_NONE) return 0;
     if (s->storage != SC_LOCAL && s->storage != SC_PARAM) return 0;
     if (s->is_array) return 0;
     sz = type_size(s->type);
@@ -787,6 +788,7 @@ int local_offset_can_ix_direct(struct Sym *s, int off, int size)
 {
     int lo, hi;
     if (!s) return 0;
+    if (s->reg_alloc != REG_NONE) return 0;
     if (s->storage != SC_LOCAL && s->storage != SC_PARAM) return 0;
     if (s->is_vla) return 0;
     if (size < 1) size = 1;
@@ -820,6 +822,11 @@ void emit_store_global_word_direct(struct Sym *s)
 
 void emit_load_sym_value_direct(struct Sym *s)
 {
+    if (s->reg_alloc == REG_BC) {
+        emit("\tld l,c\n");
+        emit("\tld h,b\n");
+        return;
+    }
     if (is_global_word_sym(s)) {
         emit_load_global_word_direct(s);
         return;
@@ -867,6 +874,11 @@ void emit_load_sym_value_direct(struct Sym *s)
 
 void emit_load_sym_de_direct(struct Sym *s)
 {
+    if (s->reg_alloc == REG_BC) {
+        emit("\tld e,c\n");
+        emit("\tld d,b\n");
+        return;
+    }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);

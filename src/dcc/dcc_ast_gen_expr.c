@@ -2988,6 +2988,9 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
         if (is_global_word_sym(s) && !s->is_array && type_ptr_depth(s->type) > 0) {
             emit_load_global_word_direct(s);
             global_ptr_preloaded = 1;
+        } else if (!s->is_array && type_ptr_depth(s->type) > 0 && s->reg_alloc == REG_BC) {
+            emit_load_sym_value_direct(s);
+            global_ptr_preloaded = 1;
         } else if (!s->is_array && type_ptr_depth(s->type) > 0 && sym_can_ix_direct(s)) {
             emit_load_sym_value_direct(s);
             global_ptr_preloaded = 1;

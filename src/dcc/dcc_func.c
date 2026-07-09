@@ -560,7 +560,7 @@ static void reserve_inline_temp_locals(void)
 #define MAX_IDENT_COUNTS 128
 #define MAX_ADDR_CACHE_ARRAYS 16
 
-struct IdentCount { char name[64]; int count; };
+struct IdentCount { char name[64]; int count; int addr_taken; int written; };
 static struct IdentCount g_ident_counts[MAX_IDENT_COUNTS];
 static int g_ident_count_n;
 
@@ -609,7 +609,27 @@ static void bump_ident_count(const char *name)
         memcpy(g_ident_counts[g_ident_count_n].name, name, namelen);
         g_ident_counts[g_ident_count_n].name[namelen] = 0;
         g_ident_counts[g_ident_count_n].count = 1;
+        g_ident_counts[g_ident_count_n].addr_taken = 0;
+        g_ident_counts[g_ident_count_n].written = 0;
         g_ident_count_n++;
+    }
+}
+
+/* Called immediately after bump_ident_count for the same identifier when the
+ * token immediately preceding it was '&' - i.e. its address was taken
+ * somewhere in the function body. Used by find_bc_regalloc_candidate to
+ * exclude a pointer parameter whose own storage location (not what it
+ * points to) might be read/written through that address - a BC-resident
+ * copy would silently desync from such an alias. */
+static void mark_ident_addr_taken(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_ident_count_n; ++i) {
+        if (strcmp(g_ident_counts[i].name, name) == 0) {
+            g_ident_counts[i].addr_taken = 1;
+            return;
+        }
     }
 }
 
@@ -621,6 +641,49 @@ static int ident_count_for(const char *name)
         if (strcmp(g_ident_counts[i].name, name) == 0)
             return g_ident_counts[i].count;
     return 0;
+}
+
+static int ident_addr_taken_for(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_ident_count_n; ++i)
+        if (strcmp(g_ident_counts[i].name, name) == 0)
+            return g_ident_counts[i].addr_taken;
+    return 0;
+}
+
+/* Called when an assignment-like operator ('=', +=/-=/etc., ++, --) is seen
+ * immediately following this identifier - i.e. it is written to somewhere in
+ * the function body. find_bc_regalloc_candidate restricts round 1 to
+ * read-only pointer parameters (only ever indexed/dereferenced/compared,
+ * never reassigned), so codegen this round only needs a load-into-BC entry
+ * point, never a store-into-BC path. */
+static void mark_ident_written(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_ident_count_n; ++i) {
+        if (strcmp(g_ident_counts[i].name, name) == 0) {
+            g_ident_counts[i].written = 1;
+            return;
+        }
+    }
+}
+
+static int ident_written_for(const char *name)
+{
+    int i;
+
+    for (i = 0; i < g_ident_count_n; ++i)
+        if (strcmp(g_ident_counts[i].name, name) == 0)
+            return g_ident_counts[i].written;
+    return 0;
+}
+
+static int tok_kind_is_write_op(int kind)
+{
+    return kind == '=' || (kind >= TOK_INC && kind <= TOK_SHREQ);
 }
 
 /* Record (or update, on a later pass) that the array at this frame offset got
@@ -705,6 +768,8 @@ static void scan_function_body_ident_counts(void)
     int sv_tok_line;
     struct Token sv_tok;
     int depth;
+    int prev_kind;
+    char prev_ident[64];
 
     g_ident_count_n = 0;
     g_addr_cache_array_count = 0;
@@ -720,16 +785,31 @@ static void scan_function_body_ident_counts(void)
     sv_tok = tok;
 
     depth = 1;
+    prev_kind = 0;
+    prev_ident[0] = 0;
     next_token();
     while (tok.kind != TOK_EOF && depth > 0) {
         if (tok.kind == TOK_ID) {
             bump_ident_count(tok.text);
+            if (prev_kind == '&')
+                mark_ident_addr_taken(tok.text);
             if (strcmp(tok.text, "exec") == 0 || strcmp(tok.text, "execv") == 0)
                 g_addr_cache_calls_exec = 1;
         } else if (tok.kind == '{')
             depth++;
         else if (tok.kind == '}')
             depth--;
+        else if (tok_kind_is_write_op(tok.kind) && prev_kind == TOK_ID && prev_ident[0])
+            mark_ident_written(prev_ident);
+        if (tok.kind == TOK_ID) {
+            size_t pl = strlen(tok.text);
+            if (pl > sizeof(prev_ident) - 1) pl = sizeof(prev_ident) - 1;
+            memcpy(prev_ident, tok.text, pl);
+            prev_ident[pl] = 0;
+        } else {
+            prev_ident[0] = 0;
+        }
+        prev_kind = tok.kind;
         next_token();
     }
 
@@ -738,6 +818,36 @@ static void scan_function_body_ident_counts(void)
     line_no = sv_line;
     tok_line = sv_tok_line;
     tok = sv_tok;
+}
+
+/* Round-1 BC register-residency candidate selection: the first pointer
+ * parameter referenced at least twice in the function body, whose address
+ * is never taken. Deliberately restricted to parameters, not locals
+ * declared inside the body - a parameter's Sym is added exactly once to
+ * locals[] and persists unchanged (same struct instance) across every
+ * scan/codegen pass over this function, whereas a body-local's Sym is
+ * freshly reallocated at the same offset but as a different struct
+ * instance on each pass; carrying reg_alloc across that reallocation would
+ * need plumbing this round doesn't build. `params_end` is nlocals right
+ * after parameters are registered but before any body-local declaration -
+ * exactly the range parse_param_list/parse_old_style_param_declarations
+ * populate. */
+#define BC_REGALLOC_MIN_REFS 2
+static struct Sym *find_bc_regalloc_candidate(int params_end)
+{
+    int i;
+
+    for (i = 0; i < params_end; ++i) {
+        struct Sym *p = &locals[i];
+        if (p->storage != SC_PARAM) continue;
+        if (p->is_array) continue;
+        if (type_ptr_depth(p->type) <= 0) continue;
+        if (ident_count_for(p->name) < BC_REGALLOC_MIN_REFS) continue;
+        if (ident_addr_taken_for(p->name)) continue;
+        if (ident_written_for(p->name)) continue;
+        return p;
+    }
+    return NULL;
 }
 
 void emit_needed_deferred_bodies(void)
@@ -1259,6 +1369,17 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
      * (the call follows the recognised push-ix/locals sequence). */
     if (opt_stack_check)
         emit_runtime_call("__stchk");
+
+    /* Load a BC-resident pointer parameter's value exactly once here, right
+     * after the frame is established but before any user statement runs -
+     * the same "materialize once at entry, dominates every use" placement
+     * as the address-cache block just below. g_bc_regalloc_sym is only ever
+     * set by try_speculative_bc_regalloc_function_body for the duration of
+     * one speculative generation attempt. */
+    if (!omit_ix_frame && g_bc_regalloc_sym != NULL) {
+        fprintf(outf, "\tld c,(ix%+d)\n", g_bc_regalloc_sym->offset);
+        fprintf(outf, "\tld b,(ix%+d)\n", g_bc_regalloc_sym->offset + 1);
+    }
 
     /* Materialize any address-cached local arrays' addresses exactly once,
      * unconditionally, here - after the recognised prologue sequence above
@@ -3805,6 +3926,247 @@ static int try_speculative_noix_function_body(const char *name, int type,
     return 0;
 }
 
+/* Cheap pre-filter for try_speculative_bc_regalloc_function_body: main() is
+ * excluded (never a hot leaf; the __mrun-shim emission after this codegen
+ * assumes the ordinary frame shape), and current_function_has_call must be
+ * false - this only detects an explicit C call syntactically present in the
+ * source (see the scan pass, dcc_func.c ~line 2295), NOT an implicit
+ * runtime-helper call (e.g. `call __mulu`) codegen may still insert for a
+ * `*`, `/`, `%`, or long/float operation with no visible call syntax at all -
+ * so it is only a pre-filter, never the actual safety proof. That proof is
+ * bc_regalloc_buffer_is_safe below, which also rejects any "call" found in
+ * the generated buffer regardless of what this pre-filter guessed. */
+static struct Sym *function_qualifies_for_speculative_bc_regalloc(const char *name,
+                                                                   int params_end)
+{
+    if (strcmp(name, "main") == 0)
+        return NULL;
+    if (current_function_has_call)
+        return NULL;
+    return find_bc_regalloc_candidate(params_end);
+}
+
+/* Ported from dccpeep.c's line_touches_reg_pair (proven correct there across
+ * today's dccpeep pass work) rather than reinvented: true if `s` references
+ * register B, C, or the BC pair as an operand anywhere in the line - as
+ * opposed to merely containing the letter 'b' or 'c' as part of some
+ * unrelated identifier or label, which a plain strstr would false-positive
+ * on. Z80 instructions that touch BC only implicitly (block/repeat opcodes)
+ * are matched by mnemonic; dcc's own codegen does not currently emit any of
+ * these, but the check costs nothing and avoids silently trusting that fact
+ * to remain true forever. */
+static int line_touches_bc_reg(const char *s)
+{
+    static const char *implicit_bc_mnemonics[] = {
+        "djnz ", "ldir", "lddr", "cpir", "cpdr",
+        "otir", "otdr", "inir", "indr",
+        "ldi", "ldd", "cpi", "cpd", "ini", "ind", "outi", "outd",
+        NULL
+    };
+    /* jp/jr/call's optional leading condition, or ret's sole operand, can be
+     * exactly "c" or "nc" meaning the carry flag - not register C. Only
+     * these four mnemonics ever take a flag condition as their first
+     * operand in dcc's own codegen, and dcc's labels are never literally
+     * named "c" or "nc", so this is exact, not a heuristic. Found via
+     * fill_record's `for (i = 4; i < RECSIZE; i++)` compiling to
+     * `cp 128` / `jp c, LABEL` - the very first real function this
+     * mechanism was tried on. */
+    static const char *cond_jump_mnemonics[] = { "jp", "jr", "call", "ret", NULL };
+    const char *p;
+    char tokbuf[16];
+    int ti, i;
+    int tok_index;
+    int first_is_cond_mnemonic;
+
+    for (i = 0; implicit_bc_mnemonics[i] != NULL; ++i)
+        if (strncmp(s, implicit_bc_mnemonics[i], strlen(implicit_bc_mnemonics[i])) == 0)
+            return 1;
+
+    if (strstr(s, "(bc)") != NULL)
+        return 1;
+
+    p = s;
+    tok_index = 0;
+    first_is_cond_mnemonic = 0;
+    while (*p) {
+        if (isalpha((unsigned char)*p) || *p == '_') {
+            ti = 0;
+            while ((isalnum((unsigned char)*p) || *p == '_') && ti < 15)
+                tokbuf[ti++] = *p++;
+            tokbuf[ti] = 0;
+            if (tok_index == 0) {
+                for (i = 0; cond_jump_mnemonics[i] != NULL; ++i)
+                    if (strcmp(tokbuf, cond_jump_mnemonics[i]) == 0)
+                        first_is_cond_mnemonic = 1;
+            } else if (tok_index == 1 && first_is_cond_mnemonic &&
+                       (strcmp(tokbuf, "c") == 0 || strcmp(tokbuf, "nc") == 0)) {
+                /* flag condition, not register C - not a touch */
+            } else if (strcmp(tokbuf, "b") == 0 || strcmp(tokbuf, "c") == 0 || strcmp(tokbuf, "bc") == 0) {
+                return 1;
+            }
+            tok_index++;
+        } else {
+            p++;
+        }
+    }
+    return 0;
+}
+
+/* Exact safety verification for try_speculative_bc_regalloc_function_body:
+ * every line in the speculative buffer that touches b, c, or bc must be
+ * exactly one of the small set of literal shapes this feature's own codegen
+ * hooks can produce for the candidate at frame offset `off` - the one-time
+ * entry load (emit_function_prologue) and the register-to-register moves
+ * into HL/DE (emit_load_sym_value_direct/emit_load_sym_de_direct in
+ * dcc_symbols.c, reached via gen_index_addr_ast's reg_alloc branch in
+ * dcc_ast_gen_expr.c). Anything else means some codegen path this round
+ * didn't teach about reg_alloc fell through to a stale frame read (a literal
+ * "(ix+off)" reference other than the two entry-load lines), or unrelated
+ * codegen collided with the live register - either way, exact by
+ * construction: a correctly-generated body for this feature can never
+ * contain anything else. A bare "call" anywhere also fails it outright: see
+ * function_qualifies_for_speculative_bc_regalloc's comment on why current_
+ * function_has_call alone cannot be trusted for this. */
+static int bc_regalloc_buffer_is_safe(FILE *f, int off)
+{
+    long size;
+    char *buf;
+    char *line, *nl;
+    char entry_c[32], entry_b[32];
+    int safe;
+
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    rewind(f);
+    if (size <= 0)
+        return 1;
+    buf = (char *)xmalloc((size_t)size + 1);
+    if (fread(buf, 1, (size_t)size, f) != (size_t)size)
+        fatal("cannot read speculative bc-regalloc temp file");
+    buf[size] = 0;
+
+    if (strstr(buf, "\tcall ") != NULL) {
+        free(buf);
+        return 0;
+    }
+
+    sprintf(entry_c, "\tld c,(ix%+d)", off);
+    sprintf(entry_b, "\tld b,(ix%+d)", off + 1);
+
+    safe = 1;
+    line = buf;
+    while (safe && line < buf + size) {
+        nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (strcmp(line, "\tld l,c") != 0 && strcmp(line, "\tld h,b") != 0 &&
+            strcmp(line, "\tld e,c") != 0 && strcmp(line, "\tld d,b") != 0 &&
+            strcmp(line, entry_c) != 0 && strcmp(line, entry_b) != 0 &&
+            line_touches_bc_reg(line))
+            safe = 0;
+        line = nl ? nl + 1 : buf + size;
+    }
+
+    free(buf);
+    return safe;
+}
+
+/* Speculatively generate `name`'s already-scanned body with `cand` (a
+ * read-only pointer parameter, chosen by find_bc_regalloc_candidate) BC-
+ * resident for the whole function instead of occupying a frame slot, and
+ * verify via bc_regalloc_buffer_is_safe. Modeled directly on try_speculative_
+ * noix_function_body: same tmpfile redirection, same g_inline_body_buffering
+ * guard (required for the same EXTRN-dedup-cache-desync reason), same
+ * commit-or-full-rewind discipline on failure. Unlike the no-IX-frame
+ * optimization this stacks with a normal IX frame - only `cand`'s own
+ * storage is affected, every other local/param is addressed exactly as
+ * before. */
+static int try_speculative_bc_regalloc_function_body(const char *name, int type,
+                                                       int local_bytes, struct Sym *s,
+                                                       struct Sym *cand,
+                                                       long body_start_pos,
+                                                       long body_start_tok_start,
+                                                       int body_start_line,
+                                                       int body_start_tok_line,
+                                                       struct Token body_start_tok,
+                                                       int body_start_nlocals,
+                                                       int body_start_local_size)
+{
+    FILE *scratch;
+    FILE *saved_outf_ptr;
+    int saved_stack_check;
+    int c;
+
+    scratch = tmpfile();
+    if (scratch == NULL)
+        fatal("cannot create speculative bc-regalloc temp file");
+
+    saved_outf_ptr = outf;
+    saved_stack_check = opt_stack_check;
+    outf = scratch;
+    opt_stack_check = s->stack_check_enabled;
+    g_inline_body_buffering++;
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    g_licm_seq = 0;
+    cand->reg_alloc = REG_BC;
+    g_bc_regalloc_sym = cand;
+    emit_function_prologue(name, local_bytes, current_function_safe_to_omit_ix(type, local_bytes));
+    gen_compound();
+    emit_function_epilogue(strcmp(name, "main") == 0 &&
+                            (type & 15) == TYPE_INT && type_ptr_depth(type) == 0);
+    g_bc_regalloc_sym = NULL;
+    g_inline_body_buffering--;
+    opt_stack_check = saved_stack_check;
+    outf = saved_outf_ptr;
+
+    /* Same rationale as try_speculative_noix_function_body's identical
+     * comment: skip check_undefined_user_labels() here on a path that might
+     * be discarded, to avoid double-reporting and stale nulabels state. */
+    if (bc_regalloc_buffer_is_safe(scratch, cand->offset)) {
+        check_undefined_user_labels();
+        rewind(scratch);
+        while ((c = fgetc(scratch)) != EOF)
+            fputc(c, outf);
+        fclose(scratch);
+        return 1;
+    }
+
+    fclose(scratch);
+    cand->reg_alloc = REG_NONE;
+
+    /* Undo every bit of per-function codegen state this discarded attempt
+     * touched, exactly like try_speculative_noix_function_body's own rewind. */
+    posi = body_start_pos;
+    tok_start_pos = body_start_tok_start;
+    line_no = body_start_line;
+    tok_line = body_start_tok_line;
+    tok = body_start_tok;
+    nlocals = body_start_nlocals;
+    local_size = body_start_local_size;
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    g_licm_seq = 0;
+    return 0;
+}
+
 void parse_function_or_global(int base_type)
 {
     int done;
@@ -3832,6 +4194,7 @@ void parse_function_or_global(int base_type)
         int saved_nenum_consts;
         int saved_nulabels;
         int saved_stack_check;
+        struct Sym *bc_regalloc_cand;
 
         int base_is_func_typedef;
         int is_funcret_funcptr_decl;
@@ -4061,6 +4424,14 @@ void parse_function_or_global(int base_type)
                                                                saved_nlocals, saved_local_size)) {
                     /* No-IX-frame body already generated and written to outf
                      * inside try_speculative_noix_function_body. */
+                } else if ((bc_regalloc_cand = function_qualifies_for_speculative_bc_regalloc(name, saved_nlocals)) != NULL &&
+                           try_speculative_bc_regalloc_function_body(name, type, current_local_bytes, s,
+                                                                      bc_regalloc_cand,
+                                                                      saved_pos, saved_tok_start, saved_line,
+                                                                      saved_tok_line, saved_tok,
+                                                                      saved_nlocals, saved_local_size)) {
+                    /* BC-resident body already generated and written to outf
+                     * inside try_speculative_bc_regalloc_function_body. */
                 } else if (plain_static_body_can_be_buffered(s, name)) {
                     FILE *saved_outf;
 

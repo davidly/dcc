@@ -295,7 +295,15 @@ struct Sym {
                             * per-function address-cache scan) */
     int addr_cache_offset; /* frame offset of the 2-byte pointer slot holding
                             * this array's address, valid when has_addr_cache */
+    int reg_alloc;         /* REG_NONE or REG_BC - this pointer parameter is
+                            * resident in BC for the whole function body
+                            * instead of a frame slot (see dcc_func.c's
+                            * find_bc_regalloc_candidate /
+                            * try_speculative_bc_regalloc_function_body) */
 };
+
+#define REG_NONE 0
+#define REG_BC   1
 
 struct Def {
     char name[64];
@@ -456,6 +464,7 @@ extern int max_function_local_bytes;
 extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
+extern struct Sym *g_bc_regalloc_sym;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
