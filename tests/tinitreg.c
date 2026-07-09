@@ -11,6 +11,14 @@ static char gstr2[] = "ab" "cd";
 static long glng1[3] = { 0x00010000L };
 static int gscl1 = { 1234 };
 
+struct Dist {
+    long d[4][4];
+};
+
+struct Deep {
+    int e[2][2][2];
+};
+
 static void cki(const char *n, int g, int e)
 {
     if (g != e) {
@@ -84,10 +92,57 @@ static void tauto(void)
     cki("x", x, 4321);
 }
 
+/* Nested aggregate initializer for a struct whose member is a 2D/3D array.
+ * Covers every brace spelling clang accepts (values verified at run time):
+ *   A  full braces           {{ {..},{..} }}
+ *   B  member brace, flat     {{ .. }}
+ *   C  full brace elision     { .. }
+ *   partial rows -> zero fill {{ {1}, {3} }}
+ *   3D  fully nested          {{ {{..},{..}}, ... }}
+ */
+static void tnest(void)
+{
+    struct Dist a = {{
+        { 0, 3, 99, 7 },
+        { 8, 0, 2, 99 },
+        { 5, 99, 0, 1 },
+        { 2, 99, 99, 0 }
+    }};
+    struct Dist b = {{ 10, 20, 30, 40, 50, 60, 70, 80,
+                       90, 100, 110, 120, 130, 140, 150, 160 }};
+    struct Dist c = { 1, 2, 3, 4 };
+    struct Dist p = {{ { 1 }, { 3 } }};
+    struct Deep q = {{ { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } }};
+
+    ckul("a d03", (unsigned long)a.d[0][3], 7UL);
+    ckul("a d10", (unsigned long)a.d[1][0], 8UL);
+    ckul("a d23", (unsigned long)a.d[2][3], 1UL);
+    ckul("a d33", (unsigned long)a.d[3][3], 0UL);
+
+    ckul("b d00", (unsigned long)b.d[0][0], 10UL);
+    ckul("b d33", (unsigned long)b.d[3][3], 160UL);
+
+    ckul("c d00", (unsigned long)c.d[0][0], 1UL);
+    ckul("c d03", (unsigned long)c.d[0][3], 4UL);
+    ckul("c d10", (unsigned long)c.d[1][0], 0UL);
+    ckul("c d33", (unsigned long)c.d[3][3], 0UL);
+
+    ckul("p d00", (unsigned long)p.d[0][0], 1UL);
+    ckul("p d01", (unsigned long)p.d[0][1], 0UL);
+    ckul("p d10", (unsigned long)p.d[1][0], 3UL);
+    ckul("p d33", (unsigned long)p.d[3][3], 0UL);
+
+    cki("q 000", q.e[0][0][0], 1);
+    cki("q 011", q.e[0][1][1], 4);
+    cki("q 100", q.e[1][0][0], 5);
+    cki("q 111", q.e[1][1][1], 8);
+}
+
 int main(void)
 {
     tglob();
     tauto();
+    tnest();
 
     if (fails) {
         printf("tinitreg: %d failure(s)\n", fails);
