@@ -2843,6 +2843,7 @@ static int peep_parse_ld_ix_byte_imm(const char *s, int *off, int *val)
 static int peep_parse_inc_ix_byte(const char *s, int *off);
 static int peep_parse_cp_const(const char *s, int *val);
 static int line_touches_bc(const char *s);
+static int line_touches_de(const char *s);
 
 /* This function's own boundaries: the most recent "public NAME" at or
  * before `from`, and the next "public NAME" after it (or nlines if this is
@@ -3062,6 +3063,187 @@ static int pass_byte_for_counter_to_reg_c(void)
         /* Prime the register in place of the old init store. */
         sprintf(prime, "ld c,%d", low_val);
         replace1_tagged(i - 1, prime, "byte_for_counter_to_reg_c");
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
+/*
+ * pass_byte_for_counter_to_reg_e:
+ *
+ * Like pass_byte_for_counter_to_reg_c above, but targets register E
+ * instead of C - for when C/BC is already claimed by something else in
+ * the same loop (most commonly pass_hoist_index_ptr_to_bc's pointer,
+ * which is exactly why this exists: tests/tbig.c's fill_record/
+ * check_record hoist their pointer into BC, which then blocks the C
+ * version of this pass outright). D/E are free in the same situation,
+ * since the whole family of these passes centers on a "zero-extend the
+ * counter into a 16-bit pair" shape that never involves B/C on its own.
+ * This matches z88dk's own zsdcc output for this exact loop shape: it
+ * keeps the counter in E for the whole loop and never touches the frame
+ * slot at all until (if ever) it's needed after the loop.
+ *
+ * One meaningful difference from the C version: since E is the SAME
+ * register the zero-extend shape already loads the counter into, "ld
+ * e,(ix+O)" is not just safe to redirect - once e IS the counter, that
+ * load is entirely redundant and is deleted rather than rewritten (one
+ * fewer instruction per occurrence than the C version manages).
+ *
+ * Same restrictions as pass_byte_for_counter_to_reg_c: single-entry,
+ * straight-line body (no internal label - this pass has not been proven
+ * safe with one the way pass_hoist_index_ptr_to_bc was), every reference
+ * to the counter's slot is one of the three whitelisted shapes, and every
+ * call is __mods/__divs.
+ */
+static int pass_byte_for_counter_to_reg_e(void)
+{
+    int i;
+    int changed;
+    int off;
+    int low_val;
+    int high_val;
+    char label[128];
+    char tgt[128];
+    int loop_end;
+    int k;
+    int ok;
+    char pat_ix[40];
+    char pat_lde[40];
+    char pat_lhl[40];
+    char pat_adda[40];
+    char prime[16];
+    char writeback[40];
+    char exp_lda[40];
+
+    changed = 0;
+
+    for (i = 1; i + 1 < nlines; ++i) {
+        int init_line;
+        int scan_limit;
+
+        if (!starts_label(lines[i]))
+            continue;
+
+        /* The counter's own init store is usually right before the label,
+         * but pass_hoist_index_ptr_to_bc may have inserted its own
+         * pointer-prime lines in between (it runs earlier in the fixed-
+         * point pass list) - scan backward a bounded distance to find it,
+         * stopping at the first label (a different construct entirely). */
+        init_line = -1;
+        scan_limit = i - 8;
+        if (scan_limit < 0) scan_limit = 0;
+        for (k = i - 1; k >= scan_limit; --k) {
+            if (starts_label(lines[k]))
+                break;
+            if (peep_parse_ld_ix_byte_imm(lines[k], &off, &low_val)) {
+                init_line = k;
+                break;
+            }
+        }
+        if (init_line < 0)
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        loop_end = -1;
+        for (k = i + 1; k < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;
+            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+                loop_end = k;
+                break;
+            }
+        }
+        if (loop_end < i + 4)
+            continue;
+
+        {
+            int inc_off;
+            if (!peep_parse_inc_ix_byte(lines[loop_end - 3], &inc_off) || inc_off != off)
+                continue;
+        }
+        sprintf(exp_lda, "ld a,(ix%+d)", off);
+        if (!eq(loop_end - 2, exp_lda))
+            continue;
+        if (!peep_parse_cp_const(lines[loop_end - 1], &high_val))
+            continue;
+        if (low_val < 0 || low_val > 255 || high_val < 0 || high_val > 255)
+            continue;
+
+        sprintf(pat_ix, "(ix%+d)", off);
+        /* Anything skipped between the init line and the label must not
+         * itself reference our counter's offset - it should only be an
+         * unrelated pass's own prime lines for some other variable. */
+        {
+            int bad_gap = 0;
+            for (k = init_line + 1; k < i; ++k) {
+                if (strstr(lines[k], pat_ix) != NULL) { bad_gap = 1; break; }
+            }
+            if (bad_gap)
+                continue;
+        }
+        sprintf(pat_lde, "ld e,(ix%+d)", off);
+        sprintf(pat_lhl, "ld l,(ix%+d)", off);
+        sprintf(pat_adda, "add a,(ix%+d)", off);
+
+        ok = 1;
+        for (k = i + 1; k < loop_end - 3 && ok; ++k) {
+            if (strncmp(lines[k], "call ", 5) == 0) {
+                if (!eq(k, "call __mods") && !eq(k, "call __divs")) { ok = 0; break; }
+                continue;
+            }
+            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
+                /* The zero-extend is almost always immediately consumed by
+                 * "add hl,de" (the address computation this whole family of
+                 * passes exists to speed up) - that's the expected, safe
+                 * use of the value just zero-extended into d/e, not some
+                 * other conflicting use of the pair. */
+                ++k;
+                if (eq(k + 1, "add hl,de"))
+                    ++k;
+                continue;
+            }
+            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) { ++k; continue; }
+            if (eq(k, pat_adda)) continue;
+            if (strstr(lines[k], pat_ix) != NULL) { ok = 0; break; }
+            /* D/E must be free for the whole loop body except the exact
+             * shapes above - the same guard pass_hoist_index_ptr_to_bc
+             * uses for B/C, parameterized for D/E instead. */
+            if (line_touches_de(lines[k])) { ok = 0; break; }
+        }
+        if (!ok)
+            continue;
+
+        /* Transform back-to-front: the "ld e,(ix+O)" deletion shifts every
+         * later line up by one, so process from the end of the range
+         * backward, exactly like pass_ix_frame_ptr_load_deadd's own
+         * delete+insert combo - each deletion then only affects indices
+         * already handled, never ones still to be checked. */
+        for (k = loop_end - 4; k >= i + 1; --k) {
+            if (eq(k, pat_lhl)) { replace1(k, "ld l,e"); continue; }
+            if (eq(k, pat_adda)) { replace1(k, "add a,e"); continue; }
+            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
+                delete_n(k, 1);
+                loop_end--;
+                continue;
+            }
+        }
+        replace1_tagged(loop_end - 3, "inc e", "byte_for_counter_to_reg_e");
+        replace1(loop_end - 2, "ld a,e");
+
+        /* Write the counter back to its frame slot once, right after the
+         * loop exits, same rationale as pass_byte_for_counter_to_reg_c. */
+        sprintf(writeback, "ld (ix%+d),e", off);
+        insert_line(loop_end + 1, writeback);
+
+        /* Prime the register in place of the old init store. */
+        sprintf(prime, "ld e,%d", low_val);
+        replace1_tagged(init_line, prime, "byte_for_counter_to_reg_e");
 
         changed = 1;
     }
@@ -10741,16 +10923,18 @@ static int hoistbc_parse_ld_l_ix_off(const char *s, int *off)
     return 1;
 }
 
-/* Conservative check: does this line reference register B, C, or the BC
- * pair in any way? Guards pass_hoist_index_ptr_to_bc's exclusive claim on
- * BC for the whole loop body. A false positive just declines the
- * optimization; a false negative could silently corrupt a live value, so
- * this errs deliberately broad - every Z80 mnemonic that touches B, C, or
- * BC implicitly (the block/repeat instructions all use BC as a counter)
- * is included, not just explicit "b"/"c"/"bc" operands. */
-static int line_touches_bc(const char *s)
+/* Conservative check: does this line reference register `lo`, `hi`, or
+ * the `pair` register pair (e.g. "b"/"c"/"bc") in any way? Guards a pass's
+ * exclusive claim on a register pair for the whole loop body. A false
+ * positive just declines the optimization; a false negative could
+ * silently corrupt a live value, so this errs deliberately broad - every
+ * Z80 mnemonic that touches a register pair implicitly (the block/repeat
+ * instructions all use BC as a counter and DE/HL as pointers) is
+ * included, not just explicit register-name operands. */
+static int line_touches_reg_pair(const char *s, const char *lo, const char *hi,
+                                 const char *pair)
 {
-    static const char *implicit_bc_mnemonics[] = {
+    static const char *implicit_pair_mnemonics[] = {
         "djnz ", "ldir", "lddr", "cpir", "cpdr",
         "otir", "otdr", "inir", "indr",
         "ldi", "ldd", "cpi", "cpd", "ini", "ind", "outi", "outd",
@@ -10758,14 +10942,16 @@ static int line_touches_bc(const char *s)
     };
     const char *p;
     char tok[16];
+    char paren[8];
     int ti;
     int i;
 
-    for (i = 0; implicit_bc_mnemonics[i] != NULL; ++i)
-        if (strncmp(s, implicit_bc_mnemonics[i], strlen(implicit_bc_mnemonics[i])) == 0)
+    for (i = 0; implicit_pair_mnemonics[i] != NULL; ++i)
+        if (strncmp(s, implicit_pair_mnemonics[i], strlen(implicit_pair_mnemonics[i])) == 0)
             return 1;
 
-    if (strstr(s, "(bc)") != NULL)
+    sprintf(paren, "(%s)", pair);
+    if (strstr(s, paren) != NULL)
         return 1;
 
     p = s;
@@ -10775,13 +10961,23 @@ static int line_touches_bc(const char *s)
             while ((isalnum((unsigned char)*p) || *p == '_') && ti < 15)
                 tok[ti++] = *p++;
             tok[ti] = 0;
-            if (strcmp(tok, "b") == 0 || strcmp(tok, "c") == 0 || strcmp(tok, "bc") == 0)
+            if (strcmp(tok, lo) == 0 || strcmp(tok, hi) == 0 || strcmp(tok, pair) == 0)
                 return 1;
         } else {
             p++;
         }
     }
     return 0;
+}
+
+static int line_touches_bc(const char *s)
+{
+    return line_touches_reg_pair(s, "b", "c", "bc");
+}
+
+static int line_touches_de(const char *s)
+{
+    return line_touches_reg_pair(s, "d", "e", "de");
 }
 
 /*
@@ -13011,6 +13207,7 @@ int main(int argc, char **argv)
         if (pass_reuse_array_byte_addr()) changed = 1;
         if (pass_byte_loop_counter_to_reg_c()) changed = 1;
         if (pass_byte_for_counter_to_reg_c()) changed = 1;
+        if (pass_byte_for_counter_to_reg_e()) changed = 1;
         if (pass_reuse_reg_array_byte_addr()) changed = 1;
         if (pass_ix_postdec_to_local()) changed = 1;
         if (pass_store_word_const_hl()) changed = 1;
