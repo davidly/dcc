@@ -506,6 +506,7 @@ You can also pass a compiler explicitly:
             if ($item.ignore) { $appOverrides[$item.name]['ignore'] = $item.ignore }
             if ($item.host) { $appOverrides[$item.name]['host'] = $item.host }
             if ($item.'requires-32bit-linux-host-compiler') { $appOverrides[$item.name]['requires32'] = $true }
+            if ($item.'requires-non-msvc-host-compiler') { $appOverrides[$item.name]['requiresNonMsvc'] = $true }
         }
     }
 
@@ -534,6 +535,11 @@ You can also pass a compiler explicitly:
     function Get-Requires32BitApp {
         param([string]$Name, [System.Collections.IDictionary]$Overrides)
         return ($Overrides.ContainsKey($Name) -and $Overrides[$Name]['requires32'])
+    }
+
+    function Get-RequiresNonMsvcApp {
+        param([string]$Name, [System.Collections.IDictionary]$Overrides)
+        return ($Overrides.ContainsKey($Name) -and $Overrides[$Name]['requiresNonMsvc'])
     }
 
     $Placeholders = [ordered]@{
@@ -596,6 +602,13 @@ You can also pass a compiler explicitly:
                 $skippedByHostConfig++
                 continue
             }
+        }
+        if ($compiler.Kind -eq "msvc" -and (Get-RequiresNonMsvcApp -Name $appName -Overrides $appOverrides)) {
+            # MSVC-specific C99 gaps (no VLAs, no array-parameter qualifiers,
+            # static _Bool initializers not normalized to 0/1) that gcc/clang
+            # handle fine - skip only on MSVC, still validate elsewhere.
+            $skippedByHostConfig++
+            continue
         }
         $appsToRun.Add($appName)
     }

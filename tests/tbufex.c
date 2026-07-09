@@ -30,6 +30,11 @@ int main(void)
 
     printf("sum of squares 1..20 = %ld\n", total);
 
+    /* Flush before detaching: switching buffers while output is still
+     * pending in the old one is unspecified behavior (some libc's drop it
+     * instead of auto-flushing). */
+    fflush(stdout);
+
     /* Detach the buffer before it goes out of scope / is reused, so the
      * automatic flush at exit uses the internal buffer. */
     setvbuf(stdout, (char *) 0, _IOLBF, 0);
