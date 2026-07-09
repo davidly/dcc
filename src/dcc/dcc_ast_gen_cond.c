@@ -1662,6 +1662,22 @@ void ast_gen_byte_cmp_branch(const struct AstNode *n, int label,
         lhs = rhs;
         rhs = tmp;
     }
+    /* A kind-6 operand (an arithmetic expression, e.g. `(rec + i) & 0xff`)
+     * needs A as scratch to compute, clobbering whatever the other
+     * operand's value was already loaded there - forcing emit_cp_byte_
+     * operand's own kind-6 case to park the other value in B (and the
+     * freshly computed one in C) before the actual compare. Every other
+     * kind's cp form reaches its value without ever touching A (a direct
+     * ix-relative/global cp, or address math using only e/d/hl), so if the
+     * kind-6 operand ends up on the right, swap it to the left instead:
+     * computing it into A first needs no preservation, and the original
+     * left operand's cheap cp form becomes the final step - no B/C at all. */
+    if (rhs.kind == 6 && lhs.kind != 6) {
+        op = invert_relop_for_swap(op);
+        tmp = lhs;
+        lhs = rhs;
+        rhs = tmp;
+    }
     emit_byte_operand_to_a(&lhs);
     emit_cp_byte_operand(&rhs);
     emit_byte_cmp_branch_after_cp(op, label, branch_when_true);

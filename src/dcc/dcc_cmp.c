@@ -276,12 +276,13 @@ void emit_cp_byte_operand(struct ByteOperand *op)
     } else if (op->kind == 3) {
         emit_extrn_if_needed(op->sym);
         if (op->idx_sym) {
-            emit("\tld b,a\n");
+            /* Like kind 4 below: the hl/de address math here never touches
+             * A, so the value already loaded there (the LHS) survives
+             * untouched with no save/restore needed. */
             fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(op->sym)));
             fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
             emit("\tld d,0\n");
             emit("\tadd hl,de\n");
-            emit("\tld a,b\n");
             emit("\tcp (hl)\n");
         } else {
             fprintf(outf, "\tcp (%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
@@ -295,7 +296,9 @@ void emit_cp_byte_operand(struct ByteOperand *op)
         fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         emit("\tcp (hl)\n");
     } else if (op->kind == 5) {
-        emit("\tld b,a\n");
+        /* Like kind 4: this address math (e/d/hl only) never touches A, so
+         * the LHS value already loaded there survives with no save/restore
+         * needed. */
         fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
         fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         if (op->idx_sym) {
@@ -309,7 +312,6 @@ void emit_cp_byte_operand(struct ByteOperand *op)
             fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
             emit("\tadd hl,de\n");
         }
-        emit("\tld a,b\n");
         emit("\tcp (hl)\n");
     } else if (op->kind == 6) {
         emit("\tld b,a\n");
