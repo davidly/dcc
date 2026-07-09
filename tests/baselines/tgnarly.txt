@@ -16,7 +16,7 @@ idx: 40 40
 comma idx: 40
 assign idx: 3 99
 my_func
-adj: AB
+adj: A
 sizeof: 2 5
 charconst: 65 2
 oldsum: 15

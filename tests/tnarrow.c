@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 
 #define NARR 50
 
@@ -59,12 +60,14 @@ int narwneg(void)
     return total;
 }
 
-/* Stores values above 255: must NOT narrow. */
+/* Stores values above 255: must NOT narrow. total is int16_t (not plain
+ * int) so its expected overflow-wrapped sum is the same on dcc's 16-bit
+ * int and a host compiler's wider int. */
 int narwbig(void)
 {
     int i;
     int c[10];
-    int total;
+    int16_t total;
 
     for (i = 0; i < 10; i++)
         c[i] = i * 1000;

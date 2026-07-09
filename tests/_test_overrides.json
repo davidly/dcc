@@ -14,7 +14,7 @@
     { "name": "tchess", "args": "-c -p:1" },
     { "name": "targs", "args": "a bb ccc dddd eeeee", "host": true },
     { "name": "tkbd", "stdin": "x", "perf_ignore": true },
-    { "name": "tscanin", "stdin": "42 -7 hello" },
+    { "name": "tscanin", "stdin": "42 -7 hello", "host": true },
     { "name": "tpfio", "dcc_floatio": true, "dcc_longio": false },
     { "name": "tplng", "dcc_floatio": false, "dcc_longio": true },
     { "name": "tvplain", "dcc_floatio": false, "dcc_longio": false },
@@ -33,7 +33,7 @@
     { "name": "trig", "host": true },
     { "name": "ts", "host": true },
     { "name": "tstackov", "host": true, "narrow_diff_ignore": true },
-    { "name": "tpragstk", "narrow_diff_ignore": true },
+    { "name": "tpragstk", "host": true, "narrow_diff_ignore": true },
     { "name": "tsvbuf2", "host": true },
     { "name": "ttype2", "host": true },
     { "name": "ttypesr", "host": true },
@@ -72,6 +72,11 @@
     { "name": "tttu", "ignore": true },
     { "name": "snake", "ignore": true },
     { "name": "kbd", "ignore": true },
-    { "name": "00040", "ignore": true }
+    { "name": "00040", "ignore": true },
+    { "name": "mm", "host": true },
+    { "name": "tfdedge", "host": true },
+    { "name": "tfmadd", "host": true },
+    { "name": "tfmedge", "host": true },
+    { "name": "tgnarly", "host": true }
   ]
 }

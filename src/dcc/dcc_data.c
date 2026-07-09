@@ -147,7 +147,7 @@ void emit_data(void)
             emit("\tdw ");
             col = 4; /* tab + "dw " */
 
-            for (j = 0; strings[i][j]; ++j) {
+            for (j = 0; j < string_len[i]; ++j) {
                 sprintf(buf, "%u", (unsigned char)strings[i][j]);
                 vlen = (int)strlen(buf);
                 if (j) {
@@ -176,7 +176,7 @@ void emit_data(void)
             emit("\tdb ");
             col = 4; /* tab + "db " */
 
-            for (j = 0; strings[i][j]; ++j) {
+            for (j = 0; j < string_len[i]; ++j) {
                 sprintf(buf, "%u", (unsigned char)strings[i][j]);
                 vlen = (int)strlen(buf);
                 if (j) {
