@@ -33,7 +33,7 @@ ntvcm -c -p build\tbig
 rem dir /OD tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com tbig.com
 
 @echo off
-for %%i in (tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com) do (
+for %%i in (tstring.com sieve.com e.com tm.com ttt.com pihex.com mm.com tbig.com) do (
     for /f "tokens=*" %%a in ('dir /OD build\"%%i" ^| findstr /R "^[0-9]"') do echo %%a
 )
 
