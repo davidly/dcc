@@ -546,20 +546,26 @@ struct Sym *add_param_alloc(const char *name, int type)
     return s;
 }
 
-int add_string_ex(const char *s, int is_wide)
+int add_string_ex(const char *s, int len, int is_wide)
 {
     int i;
+    char *copy;
     is_wide = is_wide ? 1 : 0;
     for (i = 0; i < nstrings; i++)
-        if (string_wide[i] == is_wide && strcmp(strings[i], s) == 0)
+        if (string_wide[i] == is_wide && string_len[i] == len &&
+            memcmp(strings[i], s, (size_t)len) == 0)
             return i;
     if (nstrings >= MAX_STRINGS) fatal("too many strings");
-    strings[nstrings] = xstrdup2(s);
+    copy = (char *)xmalloc((size_t)len + 1);
+    memcpy(copy, s, (size_t)len);
+    copy[len] = 0;
+    strings[nstrings] = copy;
     string_wide[nstrings] = is_wide;
+    string_len[nstrings] = len;
     return nstrings++;
 }
 
-char *read_adjacent_string_literals_ex(int *is_widep)
+char *read_adjacent_string_literals_ex(int *is_widep, int *lenp)
 {
     char *buf;
     int cap;
@@ -577,7 +583,12 @@ char *read_adjacent_string_literals_ex(int *is_widep)
         if (tok.kind == TOK_WSTR)
             is_wide = 1;
 
-        slen = (int)strlen(tok.text);
+        /*
+         * Use the lexer's recorded length, not strlen(tok.text): a literal
+         * containing a \0 escape has real bytes past that point, which
+         * strlen() would silently discard.
+         */
+        slen = tok.text_len;
         if (len + slen + 1 > cap) {
             char *nbuf;
             int ncap;
@@ -598,6 +609,8 @@ char *read_adjacent_string_literals_ex(int *is_widep)
 
     if (is_widep)
         *is_widep = is_wide;
+    if (lenp)
+        *lenp = len;
     return buf;
 }
 
@@ -1255,8 +1268,9 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
     if (tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
         char *lit;
         int is_wide;
-        lit = read_adjacent_string_literals_ex(&is_wide);
-        sz = (int)strlen(lit) + 1;
+        int litlen;
+        lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
+        sz = litlen + 1;
         if (is_wide)
             sz *= 2;
         free(lit);

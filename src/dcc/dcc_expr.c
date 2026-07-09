@@ -512,6 +512,7 @@ int char_array_string_initializer_size(int base_type)
     if (tok.kind == TOK_STR) {
         char *lit;
         int is_wide;
+        int litlen;
 
         /*
          * Omitted-size char arrays must be sized from the whole C string
@@ -524,11 +525,11 @@ int char_array_string_initializer_size(int base_type)
          * later emitted the concatenated four-byte initializer.  On CP/M this
          * overwrote the next local slot and sizeof(t) was also wrong.
          */
-        lit = read_adjacent_string_literals_ex(&is_wide);
+        lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
         if (is_wide)
             n = 0;
         else
-            n = (int)strlen(lit) + 1;
+            n = litlen + 1;
         free(lit);
     } else {
         n = 0;
@@ -936,13 +937,13 @@ int count_omitted_array_initializer_top_elems(void)
     return n;
 }
 
-void emit_init_auto_char_array_from_string(struct Sym *s, const char *str)
+void emit_init_auto_char_array_from_string(struct Sym *s, const char *str, int srclen)
 {
     int i;
     int n;
     int limit;
 
-    n = (int)strlen(str) + 1;
+    n = srclen + 1;
     limit = s->size;
     if (limit <= 0)
         limit = n;

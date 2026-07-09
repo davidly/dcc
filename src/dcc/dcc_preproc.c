@@ -2453,6 +2453,7 @@ void next_token(void)
         }
         if (peekc() == '"') getc_src();
         tok.kind = TOK_WSTR;
+        tok.text_len = i;
         return;
     }
 
@@ -2476,18 +2477,21 @@ void next_token(void)
             tok.kind = TOK_STR;
             strncpy(tok.text, predefined_date_text, sizeof(tok.text) - 1);
             tok.text[sizeof(tok.text) - 1] = 0;
+            tok.text_len = (int)strlen(tok.text);
             return;
         }
         if (!strcmp(tok.text, "__TIME__")) {
             tok.kind = TOK_STR;
             strncpy(tok.text, predefined_time_text, sizeof(tok.text) - 1);
             tok.text[sizeof(tok.text) - 1] = 0;
+            tok.text_len = (int)strlen(tok.text);
             return;
         }
         if (!strcmp(tok.text, "__FILE__")) {
             tok.kind = TOK_STR;
             strncpy(tok.text, tok.file, sizeof(tok.text) - 1);
             tok.text[sizeof(tok.text) - 1] = 0;
+            tok.text_len = (int)strlen(tok.text);
             return;
         }
         if (!strcmp(tok.text, "__LINE__")) {
@@ -2759,6 +2763,7 @@ void next_token(void)
         }
         if (peekc() == '"') getc_src();
         tok.kind = TOK_STR;
+        tok.text_len = i;
         return;
     }
 

@@ -380,7 +380,7 @@ void gen_str_lit(const struct AstNode *n)
      * 1:1 substitution at gen_expr preserves source order, so the assigned
      * string id remains stable. */
     int sid;
-    sid = add_string_ex(n->sval, (int)n->ival);
+    sid = add_string_ex(n->sval, (int)n->uval, (int)n->ival);
     fprintf(outf, "\tld hl,S%d\n", sid);
     g_expr_type = TYPE_CHAR | TYPE_PTR;
 }
@@ -3221,7 +3221,12 @@ static struct AstNode *clone_inline_expr(struct AstArena *ar, struct Sym *fn,
     dst->uval = src->uval;
     dst->str_index = src->str_index;
     dst->sym = src->sym;
-    dst->sval = src->sval ? ast_arena_strdup(ar, src->sval) : NULL;
+    if (src->sval == NULL)
+        dst->sval = NULL;
+    else if (src->kind == AST_STR_LIT)
+        dst->sval = ast_arena_memdup(ar, src->sval, (int)src->uval);
+    else
+        dst->sval = ast_arena_strdup(ar, src->sval);
     dst->peek_type = src->peek_type;
     dst->line = src->line;
 

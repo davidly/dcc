@@ -86,6 +86,8 @@ int pp_active = 1;
 /* ---- string-literal pool ----------------------------------------------- */
 char *strings[MAX_STRINGS];
 int string_wide[MAX_STRINGS];
+int string_len[MAX_STRINGS]; /* true byte length, may exceed strlen(strings[i])
+                              * if the literal has an embedded \0 escape */
 int nstrings;
 
 /* ---- deferred EXTRN emission list --------------------------------------- */

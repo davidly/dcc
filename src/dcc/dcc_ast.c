@@ -229,3 +229,19 @@ char *ast_arena_strdup(struct AstArena *ar, const char *s)
     memcpy(p, s, n);
     return p;
 }
+
+/*
+ * Like ast_arena_strdup, but copies exactly `len` bytes regardless of any
+ * embedded NUL (for a string literal containing a \0 escape) and appends
+ * one extra NUL terminator for safety.
+ */
+char *ast_arena_memdup(struct AstArena *ar, const char *s, int len)
+{
+    char *p;
+    if (s == NULL)
+        return NULL;
+    p = (char *)ast_arena_alloc(ar, (size_t)len + 1);
+    memcpy(p, s, (size_t)len);
+    p[len] = 0;
+    return p;
+}

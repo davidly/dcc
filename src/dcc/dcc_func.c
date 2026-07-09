@@ -2549,8 +2549,9 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
         {
             char *lit;
             int is_wide;
-            lit = read_adjacent_string_literals_ex(&is_wide);
-            sid = add_string_ex(lit, is_wide);
+            int litlen;
+            lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
+            sid = add_string_ex(lit, litlen, is_wide);
             free(lit);
         }
         if (label && labelsz > 0)
@@ -2896,12 +2897,10 @@ void append_global_char_array_string(struct Sym *s, int count, const char *str)
 
 void parse_global_init_type(struct Sym *s, int type, int size);
 
-static void global_init_write_char_array_string_at(struct Sym *s, int baseoff, int count, const char *str)
+static void global_init_write_char_array_string_at(struct Sym *s, int baseoff, int count, const char *str, int n)
 {
     int i;
-    int n;
 
-    n = (int)strlen(str);
     if (count <= 0)
         return;
 
@@ -2937,11 +2936,12 @@ static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, 
         tok.kind == TOK_STR) {
         char *lit;
         int is_wide;
-        lit = read_adjacent_string_literals_ex(&is_wide);
+        int litlen;
+        lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
         if (is_wide)
             error_here("wide string cannot initialize char array field");
         else
-            global_init_write_char_array_string_at(s, baseoff, count, lit);
+            global_init_write_char_array_string_at(s, baseoff, count, lit, litlen);
         free(lit);
         return;
     }

@@ -444,12 +444,10 @@ void emit_zero_local_bytes(struct Sym *s, int off, int count)
         emit_store_const_to_local_offset(s, off + i, TYPE_CHAR | TYPE_UNSIGNED, 0);
 }
 
-void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff, int count, const char *str)
+void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff, int count, const char *str, int n)
 {
     int i;
-    int n;
 
-    n = (int)strlen(str);
     if (count <= 0)
         return;
 
@@ -591,11 +589,12 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
         tok.kind == TOK_STR) {
         char *lit;
         int is_wide;
-        lit = read_adjacent_string_literals_ex(&is_wide);
+        int litlen;
+        lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
         if (is_wide)
             error_here("wide string cannot initialize char array field");
         else
-            emit_init_auto_char_array_at_offset_from_string(s, baseoff, count, lit);
+            emit_init_auto_char_array_at_offset_from_string(s, baseoff, count, lit, litlen);
         free(lit);
         return;
     }
@@ -1288,10 +1287,11 @@ void gen_local_decl_after_type(int base)
             } else if (s->is_array && (type & 15) == TYPE_CHAR && type_ptr_depth(type) == 0 && tok.kind == TOK_STR) {
                 char *lit;
                 int is_wide;
-                lit = read_adjacent_string_literals_ex(&is_wide);
+                int litlen;
+                lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
                 if (is_wide)
                     error_here("wide string cannot initialize char array");
-                emit_init_auto_char_array_from_string(s, lit);
+                emit_init_auto_char_array_from_string(s, lit, litlen);
                 free(lit);
             } else if (s->is_array && tok.kind == '{' && (type & TYPE_STRUCT) && type_ptr_depth(type) == 0) {
                 emit_init_auto_struct_array_from_list(s);

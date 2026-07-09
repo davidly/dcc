@@ -292,7 +292,7 @@ int ast_sizeof_expr_value(const struct AstNode *n)
         }
         break;
     case AST_STR_LIT:
-        return (int)strlen(n->sval) + 1;
+        return (int)n->uval + 1;
     case AST_INDEX:
         index_count = ast_index_root_and_count(n, &root);
         if (root != NULL && root->kind == AST_IDENT) {
@@ -411,12 +411,16 @@ static struct AstNode *p_primary(struct AstArena *ar)
             /* Concatenate adjacent string literals exactly like gen_primary;
              * this also advances the lexer past every piece.  Interning is a
              * codegen side effect, so it is deferred to the walker (the build
-             * must stay free of codegen side effects); ival carries is_wide. */
+             * must stay free of codegen side effects); ival carries is_wide,
+             * uval carries the true byte length (may exceed strlen(sval) if
+             * the literal has an embedded \0 escape). */
             int is_wide = 0;
-            char *lit = read_adjacent_string_literals_ex(&is_wide);
+            int litlen = 0;
+            char *lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
             n = ast_new(ar, AST_STR_LIT);
-            n->sval = ast_arena_strdup(ar, lit);
+            n->sval = ast_arena_memdup(ar, lit, litlen);
             n->ival = is_wide;
+            n->uval = (unsigned long)litlen;
             n->type = TYPE_CHAR | TYPE_PTR;
             free(lit);
             return n;

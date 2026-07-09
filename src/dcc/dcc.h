@@ -235,6 +235,11 @@ struct Token {
     long val;
     char text[MAX_TOK_TEXT];
     char file[256];
+    /* True byte length of text for TOK_STR/TOK_WSTR, since a string literal
+     * may contain an embedded NUL from a \0 escape and text[] alone (a plain
+     * C string) can't carry that past a strlen() call. Unused/undefined for
+     * other token kinds. */
+    int text_len;
 };
 
 struct AstNode;
@@ -434,6 +439,7 @@ extern int pp_active;
 /* string-literal pool */
 extern char *strings[MAX_STRINGS];
 extern int string_wide[MAX_STRINGS];
+extern int string_len[MAX_STRINGS];
 extern int nstrings;
 
 /* deferred EXTRN emission list */
@@ -753,8 +759,8 @@ struct Sym *add_local_known(const char *name, int type, int storage, int offset,
 struct Sym *add_local_alloc(const char *name, int type, int bytes);
 struct Sym *add_compound_literal_local(int type);
 struct Sym *add_param_alloc(const char *name, int type);
-int add_string_ex(const char *s, int is_wide);
-char *read_adjacent_string_literals_ex(int *is_widep);
+int add_string_ex(const char *s, int len, int is_wide);
+char *read_adjacent_string_literals_ex(int *is_widep, int *lenp);
 void emit_extrn_if_needed(struct Sym *s);
 void emit_deferred_extrns(void);
 void emit_runtime_extrn_if_needed(const char *name);
@@ -820,7 +826,7 @@ void parse_array_declarator_dims(int base_type, int *total_len, int *first_strid
 int count_initializer_atoms_level(void);
 int count_omitted_array_initializer_atoms(void);
 int count_omitted_array_initializer_top_elems(void);
-void emit_init_auto_char_array_from_string(struct Sym *s, const char *str);
+void emit_init_auto_char_array_from_string(struct Sym *s, const char *str, int srclen);
 int find_or_alloc_user_label_index(const char *name);
 int mark_user_label_reference(const char *name);
 int define_user_label(const char *name);
@@ -908,7 +914,7 @@ void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v);
 void emit_store_expr_to_local_offset(struct Sym *s, int off, int type);
 void emit_store_expr_to_local_array_elem(struct Sym *s, int elem_type, int index);
 void emit_zero_local_bytes(struct Sym *s, int off, int count);
-void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff, int count, const char *str);
+void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff, int count, const char *str, int n);
 void emit_init_auto_struct_scalar(struct Sym *s, int off, int type);
 void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int count, int elem_size);
 long parse_struct_init_const_value(void);

@@ -232,6 +232,7 @@ struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node);
 
 /* Copy a NUL-terminated string into the arena. */
 char *ast_arena_strdup(struct AstArena *ar, const char *s);
+char *ast_arena_memdup(struct AstArena *ar, const char *s, int len);
 
 /* ------------------------------------------------------------------------- *
  * AST builder + debug dump.
