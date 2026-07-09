@@ -825,6 +825,75 @@ int ast_is_float_cmp_cond(const struct AstNode *n)
  * only a conservative whitelist proven to reach the generic path; anything else
  * defers (always safe).  The while gate additionally excludes bare deref
  * conditions that belong to pointer-walk fast paths. */
+static int ast_cond_indexed_array_row_operand(const struct AstNode *n, int *out_count);
+
+static int ast_cond_not_indexed_scalar(const struct AstNode *n)
+{
+    int elem_type;
+
+    if (n == NULL || n->kind != AST_UNARY || n->op != '!' ||
+        n->a == NULL || n->a->kind != AST_INDEX)
+        return 0;
+    if (ast_cond_indexed_array_row_operand(n->a, NULL))
+        return 0;
+    if (!ast_index_lvalue_elem_type(n->a, &elem_type))
+        return 0;
+    return !type_is_struct_object(elem_type);
+}
+
+static int ast_cond_indexed_array_row_operand(const struct AstNode *n, int *out_count)
+{
+    const struct AstNode *root;
+    struct Sym *s;
+    int count;
+
+    if (n == NULL || n->kind != AST_INDEX)
+        return 0;
+
+    root = n;
+    count = 0;
+    while (root != NULL && root->kind == AST_INDEX) {
+        if (root->b == NULL || !ast_index_subscript_supported(root->b))
+            return 0;
+        count++;
+        root = root->a;
+    }
+
+    if (root == NULL || count <= 0)
+        return 0;
+    if (out_count != NULL)
+        *out_count = count;
+    if (root->kind == AST_IDENT) {
+        s = find_sym(root->sval);
+        if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
+            return 0;
+        if (s->is_array)
+            return s->dim_count > count;
+        return type_ptr_depth(s->type) > 0 && s->dim_count + 1 > count;
+    }
+    if (root->kind == AST_MEMBER) {
+        int cur_type;
+        int sid;
+        struct FieldDef *fd;
+
+        if (!ast_member_base_type(root, &cur_type))
+            return 0;
+        sid = base_struct_id_from_type(cur_type);
+        fd = find_field_def(sid, root->sval);
+        return fd != NULL && fd->is_array && fd->bit_width <= 0 &&
+               fd->dim_count > count;
+    }
+    return 0;
+}
+
+static int ast_cond_not_indexed_array_row(const struct AstNode *n)
+{
+    int count;
+
+    return n != NULL && n->kind == AST_UNARY && n->op == '!' &&
+           ast_cond_indexed_array_row_operand(n->a, &count) && count == 1;
+}
+
 int ast_cond_generic(const struct AstNode *n)
 {
     long cv;
@@ -856,6 +925,10 @@ int ast_cond_generic(const struct AstNode *n)
         (ast_value_is_float_word(n) || ast_value_is_pointer_word(n) ||
          ast_value_is_long_word(n)) &&
         !ast_node_is_const(n))
+        return 1;
+    if (ast_cond_not_indexed_array_row(n))
+        return 1;
+    if (ast_cond_not_indexed_scalar(n))
         return 1;
     if (!ast_gen_supported(n) || !ast_value_is_plain_int(n))
         return 0;
@@ -1386,7 +1459,8 @@ int ast_stmt_supported(const struct AstNode *n)
             if (n->b != NULL && !ast_cond_generic(n->b)) {
                 ok = 0;
             }
-            if (ok && n->c != NULL && !ast_dead_expr_supported(n->c)) {
+            if (ok && n->c != NULL &&
+                !ast_is_local_self_add_stmt(n->c) && !ast_dead_expr_supported(n->c)) {
                 ok = 0;
             }
             if (ok) {
@@ -1417,7 +1491,8 @@ int ast_stmt_supported(const struct AstNode *n)
         if (n->b != NULL && !ast_cond_generic(n->b)) {
             return 0;
         }
-        if (n->c != NULL && !ast_dead_expr_supported(n->c)) {
+        if (n->c != NULL &&
+            !ast_is_local_self_add_stmt(n->c) && !ast_dead_expr_supported(n->c)) {
             return 0;
         }
         old_nflow = nflow;
@@ -1838,6 +1913,12 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
     }
     if (ast_is_general_const_cmp_cond(n)) {
         ast_gen_cmp_branch(n, label, branch_when_true);
+        return;
+    }
+    if (ast_cond_not_indexed_array_row(n)) {
+        int row_type;
+        gen_index_addr_ast(n->a, &row_type);
+        emit_test_expr_nonzero(TYPE_INT | TYPE_PTR, label, !branch_when_true);
         return;
     }
     ast_gen_expr(n);

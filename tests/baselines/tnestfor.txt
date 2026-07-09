@@ -1,0 +1,3 @@
+tnestfor primes=22 gap=6 p79=1
+notidx l=0010 f=0100 p=0001 gpnull=1101 rownull=000
+stride sum=20 down=7

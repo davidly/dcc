@@ -655,6 +655,8 @@ void ast_gen_for_stmt(const struct AstNode *n)
                 else
                     emit_incdec_addr(vt, n->c->op);
             }
+        } else if (ast_is_local_self_add_stmt(n->c)) {
+            ast_emit_local_self_add_stmt(n->c);
         } else {
             ast_gen_expr(n->c);
         }
