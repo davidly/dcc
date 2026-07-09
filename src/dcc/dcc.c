@@ -1426,7 +1426,7 @@ void print_version(void)
 
 void usage(void)
 {
-    fprintf(stderr, "usage: dcc [-c|-module] [-f|-ffloatio] [-fl|-flongio] [-v] [-s|-stack bytes] [-Idir] [-Dname[=value]] [-Uname] input.c -o output.mac\n");
+    fprintf(stderr, "usage: dcc [-c|-module] [-f|-ffloatio] [-fl|-flongio] [-fstack-check] [-fno-narrow] [-v] [-h] [-s|-stack bytes] [-Idir] [-Dname[=value]] [-Uname] input.c -o output.mac\n");
     exit(1);
 }
 
