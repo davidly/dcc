@@ -614,7 +614,7 @@ static void skip_sizeof_array_dim_operand(void)
     }
 }
 
-static int array_dim_has_runtime_identifier(void)
+int array_dim_has_runtime_identifier(void)
 {
     long save_pos;
     long save_tok_start;
@@ -688,7 +688,7 @@ static int array_dim_has_runtime_identifier(void)
  * opening `[` of the dimension has already been consumed by the caller; on
  * return the closing `]` has been consumed too.
  */
-static void skip_array_dim_to_close(void)
+void skip_array_dim_to_close(void)
 {
     int depth = 0;
     while (tok.kind != TOK_EOF) {

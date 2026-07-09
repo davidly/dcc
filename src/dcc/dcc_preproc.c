@@ -2299,11 +2299,8 @@ int macro_number_should_expand_textually(const char *s)
      */
     if (*p == 'l' || *p == 'L')
         return 1;
-    if (*p == 'u' || *p == 'U') {
-        p++;
-        if (*p == 'l' || *p == 'L')
-            return 1;
-    }
+    if (*p == 'u' || *p == 'U')
+        return 1;
 
     v = strtoul(s, NULL, 0);
     return v > 0xffffUL || (is_nondecimal && v > 32767UL);
@@ -2568,6 +2565,19 @@ void next_token(void)
                     tok.kind = TOK_NUM;
                     tok.val = dv;
                     sprintf(tok.text, "%ld", dv);
+                    /*
+                     * This fast path bypasses the normal integer-literal
+                     * lexer, so it must re-establish the literal-type flags
+                     * itself; otherwise the previous token's L/U suffix leaks
+                     * onto this macro value (e.g. `1L << S` where `#define S
+                     * 16` would treat 16 as a long).  Classify the C89 decimal
+                     * type of the value: int in signed-16-bit range, otherwise
+                     * long.
+                     */
+                    g_tok_long_suffix = 0;
+                    g_tok_unsigned_suffix = 0;
+                    if (dv > 32767L || dv < -32768L)
+                        g_tok_long_suffix = 1;
                     return;
                 }
 

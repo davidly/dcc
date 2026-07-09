@@ -700,8 +700,19 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             if (type_ptr_depth(s->type) > 0)
                 return expr_result_dead && type_size(s->type) == 2 &&
                        ast_pointer_assign_rhs_supported(n->b);
-            if (!ast_value_is_plain_int(n->b))
-                return 0;
+            if (!ast_value_is_plain_int(n->b)) {
+                /* A long-word rhs narrows to a size-2 plain int by storing
+                 * only its low word.  The non-ix-direct store tail
+                 * (emit_store_de_to_addr_hl with a 2-byte type) already does
+                 * exactly that, so accept it the same way the ix-direct /
+                 * global-word path does.  Without this, an out-of-int-range
+                 * constant such as `p = -32768;` (a long literal on the
+                 * 16-bit target) is rejected only when the frame is large
+                 * enough to push the local out of ix-direct range. */
+                if (!(n->op == '=' && ast_is_plain_int_type(s->type) &&
+                      type_size(s->type) == 2 && ast_value_is_long_word(n->b)))
+                    return 0;
+            }
             if (!ast_is_plain_int_type(s->type))
                 return 0;
             if (type_size(s->type) != 1 && type_size(s->type) != 2)

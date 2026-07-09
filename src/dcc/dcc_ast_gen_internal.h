@@ -61,6 +61,8 @@ int ast_deref_pointer_array_chain_collect(const struct AstNode *n,
                                                  const struct AstNode **idxs,
                                                  int *out_count,
                                                  int *out_type);
+int ast_deref_pointer_array_decay(const struct AstNode *n, int *out_type,
+                                  int *out_stride);
 int ast_index_member_array_nd_collect(const struct AstNode *n,
                                              const struct AstNode **out_member,
                                              const struct AstNode **idxs,

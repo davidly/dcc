@@ -817,6 +817,20 @@ void skip_prototype_array_suffixes(int *ptype)
             next_token();
             expect(']');
             n = 0;
+        } else if (array_dim_has_runtime_identifier()) {
+            /* C99 variable-length-array parameter: `T p[n]` (with `n` another
+             * parameter or any run-time expression) is equivalent to `T *p`.
+             * The bound merely documents the length, so consume the dimension
+             * expression and let the array decay to a pointer just like `[]`.
+             * Only the FIRST dimension may be runtime: an inner runtime
+             * dimension (`T p[3][n]`) implies a runtime row stride, which this
+             * compiler does not model - reject it exactly like the local-VLA
+             * path does rather than silently computing wrong element
+             * addresses. */
+            if (ndims > 0 && asm_suppress_depth == 0)
+                error_here("variable inner dimensions in variable-length arrays are not supported; use malloc and an explicit pointer");
+            skip_array_dim_to_close();
+            n = 0;
         } else {
             n = parse_const_int_expr();
             expect(']');
@@ -3030,6 +3044,14 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
     int i;
     int is_union;
     int had_brace;
+    /* Bit-field storage units already written at this struct level; a revisit
+     * via out-of-order designators must merge with the earlier value because
+     * each unit write covers the whole 16-bit word. */
+    int bf_unit_offs[32];
+    unsigned int bf_unit_vals[32];
+    int bf_nunits;
+
+    bf_nunits = 0;
 
     sid = type_struct_id(type);
     is_union = (sid > 0 && sid <= nstruct_defs && struct_defs[sid - 1].is_union);
@@ -3104,10 +3126,12 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             int k;
             int next;
             unsigned int unit;
+            unsigned int unit_mask;
             int stop;
 
             unit_off = fd->offset;
             unit = 0;
+            unit_mask = 0;
             stop = 0;
             k = i;
             while (k >= 0 && k < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}') {
@@ -3116,7 +3140,9 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                 if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
                     if (bfd->bit_width <= 0 || bfd->offset != unit_off)
                         break;
+                    unit &= ~bitfield_field_mask(bfd);
                     unit |= bitfield_init_part(bfd, parse_struct_init_const_value());
+                    unit_mask |= bitfield_field_mask(bfd);
                     if (!accept(',')) {
                         stop = 1;
                         break;
@@ -3125,6 +3151,41 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                         stop = 1;
                         break;
                     }
+                }
+                /*
+                 * A designated element (`.field = ...`) may follow.  When it
+                 * names another bit-field in the SAME storage unit, keep
+                 * accumulating it into `unit` so all designators for the unit
+                 * are written with a single store.  A designator for a
+                 * different unit (or a non-bit-field) is left for the outer
+                 * field loop; the comma has already been consumed.
+                 */
+                if (tok.kind == '.') {
+                    long save_pos = posi;
+                    long save_tok_start = tok_start_pos;
+                    int save_line = line_no;
+                    int save_tok_line = tok_line;
+                    struct Token save_tok = tok;
+                    struct FieldDef *nf = NULL;
+
+                    next_token();
+                    if (tok.kind == TOK_ID)
+                        nf = find_field_def(sid, tok.text);
+                    if (nf != NULL && nf->bit_width > 0 && nf->offset == unit_off) {
+                        next_token();
+                        if (tok.kind == '=')
+                            next_token();
+                        else if (tok.kind != '[' && tok.kind != '.')
+                            expect('=');
+                        k = field_def_index(nf);
+                        continue;
+                    }
+                    posi = save_pos;
+                    tok_start_pos = save_tok_start;
+                    line_no = save_line;
+                    tok_line = save_tok_line;
+                    tok = save_tok;
+                    break;
                 }
                 next = next_parent_field_index(sid, k + 1);
                 if (next < 0) {
@@ -3141,11 +3202,34 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                 }
                 k = next;
             }
+            {
+                int u;
+                int found = -1;
+                for (u = 0; u < bf_nunits; ++u) {
+                    if (bf_unit_offs[u] == unit_off) {
+                        found = u;
+                        break;
+                    }
+                }
+                if (found >= 0)
+                    unit = (bf_unit_vals[found] & ~unit_mask) | unit;
+                else if (bf_nunits < (int)(sizeof(bf_unit_offs) / sizeof(bf_unit_offs[0]))) {
+                    found = bf_nunits++;
+                    bf_unit_offs[found] = unit_off;
+                }
+                if (found >= 0)
+                    bf_unit_vals[found] = unit;
+            }
             global_init_write_value_at(s, baseoff + unit_off, NULL, (long)(unit & 0xffffU), 2, 0);
             if (k > i)
                 i = k - 1;
             if (stop)
                 break;
+            /* Restart the field scan when a designator stopped the packing
+             * loop, so it is handled even when this unit's owner was the last
+             * declared field. */
+            if (tok.kind == '.')
+                i = -1;
             continue;
         }
 
