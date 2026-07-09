@@ -12,6 +12,20 @@
  * Source provenance: monolith src/ddc.c lines 17975-18841.
  */
 
+/*
+ * realpath() is a POSIX extension: under strict -std=c89, glibc/libc headers
+ * don't declare it in <stdlib.h> unless a feature-test macro asks for it
+ * (_POSIX_C_SOURCE 200809L alone isn't enough on this glibc; _DEFAULT_SOURCE
+ * is). Without a prototype in scope, C89's implicit-int rule assumes
+ * realpath returns int, silently truncating/corrupting the real pointer it
+ * returns - undefined behavior that happened not to crash under gcc's luck
+ * but is a real SEGV under clang. Must be defined before any system header
+ * is first included in this translation unit.
+ */
+#ifndef _WIN32
+#define _DEFAULT_SOURCE
+#endif
+
 #include "dcc.h"
 #include "dcc_ast.h"
 
