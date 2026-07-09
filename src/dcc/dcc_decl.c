@@ -468,6 +468,7 @@ void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff,
 
 void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type);
 void skip_initializer_or_decl_tail(void);
+static void emit_init_auto_struct_array_field(struct Sym *s, int baseoff, struct FieldDef *fd);
 
 int emit_init_auto_struct_chained_designator(struct Sym *s, int baseoff, struct FieldDef *fd)
 {
@@ -543,7 +544,7 @@ int emit_init_auto_struct_chained_designator(struct Sym *s, int baseoff, struct 
 
     expect('=');
     if (is_array)
-        emit_init_auto_struct_array(s, off, type, count, elem_size);
+        emit_init_auto_struct_array_field(s, off, fd);
     else if ((type & TYPE_STRUCT) && type_ptr_depth(type) == 0)
         emit_init_auto_struct_type(s, off, type);
     else if (fd->bit_width > 0)
@@ -574,6 +575,146 @@ void emit_init_auto_struct_scalar(struct Sym *s, int off, int type)
         emit_store_const_to_local_offset(s, off, type, v);
     else
         emit_store_expr_to_local_offset(s, off, type);
+}
+
+static int field_array_elems_from_level(struct FieldDef *fd, int level)
+{
+    int i;
+    int n;
+
+    if (fd->dim_count <= 0)
+        return fd->array_len;
+
+    if (level < 0)
+        level = 0;
+    if (level >= fd->dim_count)
+        return 1;
+
+    n = 1;
+    for (i = level; i < fd->dim_count; ++i) {
+        if (fd->dims[i] <= 0)
+            return fd->array_len;
+        n *= fd->dims[i];
+    }
+    return n;
+}
+
+static void emit_init_auto_struct_array_leaf(struct Sym *s, int off, int elem_type)
+{
+    if ((elem_type & TYPE_STRUCT) && type_ptr_depth(elem_type) == 0)
+        emit_init_auto_struct_type(s, off, elem_type);
+    else
+        emit_init_auto_struct_scalar(s, off, elem_type);
+}
+
+static void emit_init_auto_struct_array_field_level(struct Sym *s, int baseoff,
+                                                   struct FieldDef *fd,
+                                                   int *np, int level)
+{
+    int start;
+    int limit;
+    int maxn;
+    int leaf_size;
+    int total;
+    int had_brace;
+
+    leaf_size = type_size(fd->elem_type);
+    if (leaf_size <= 0) leaf_size = 2;
+
+    /* Total number of scalar leaves in the whole array member.  Every store /
+     * zero-fill offset is bounded by this so an over-long (already erroneous)
+     * initializer can never write past the object. */
+    total = field_array_elems_from_level(fd, 0);
+
+    /*
+     * A brace at this position opens a sub-aggregate for this level.  When it
+     * is absent the initializer is brace-elided (C99 6.7.9p20): consume only
+     * as many elements as this level holds, then hand the separating comma and
+     * any remaining elements back to the caller so sibling subobjects (or the
+     * enclosing struct's later members) get them.  Inner levels are only
+     * entered when the current token is '{', so had_brace is effectively
+     * always true there; the elided path only matters at the member's top
+     * level (e.g. `struct Dist x = { 1, 2, 3, 4 };`).
+     */
+    had_brace = accept('{');
+
+    start = np[0];
+    limit = start + field_array_elems_from_level(fd, level);
+    maxn = np[0];
+
+    while (tok.kind != TOK_EOF && tok.kind != '}') {
+        if (tok.kind == '[') {
+            int idx;
+            int span;
+
+            next_token();
+            idx = parse_const_int_expr();
+            expect(']');
+            expect('=');
+            span = field_array_elems_from_level(fd, level + 1);
+            if (span <= 0) span = 1;
+            if (idx < 0)
+                error_here("negative array initializer designator");
+            else
+                np[0] = start + idx * span;
+        }
+        if (tok.kind == '{' && fd->dim_count > 0 && level + 1 < fd->dim_count)
+            emit_init_auto_struct_array_field_level(s, baseoff, fd, np, level + 1);
+        else {
+            if (total > 0 && np[0] >= total) {
+                error_here("too many initializer elements");
+                skip_initializer_or_decl_tail();
+                break;
+            }
+            emit_init_auto_struct_array_leaf(s, baseoff + np[0] * leaf_size, fd->elem_type);
+            np[0] = np[0] + 1;
+        }
+        if (np[0] > maxn) maxn = np[0];
+
+        /* Brace-elided level: stop once full, leaving the comma for the
+         * caller.  The break happens before consuming the separator so the
+         * next sibling starts cleanly. */
+        if (!had_brace && np[0] >= limit)
+            break;
+
+        if (!accept(','))
+            break;
+        if (tok.kind == '}')
+            break;
+    }
+    if (had_brace)
+        expect('}');
+
+    if (maxn > np[0])
+        np[0] = maxn;
+    while (np[0] < limit && np[0] < total) {
+        emit_zero_local_bytes(s, baseoff + np[0] * leaf_size, leaf_size);
+        np[0] = np[0] + 1;
+    }
+}
+
+static void emit_init_auto_struct_array_field(struct Sym *s, int baseoff, struct FieldDef *fd)
+{
+    int n;
+    int total;
+    int leaf_size;
+
+    if (fd->dim_count <= 1) {
+        emit_init_auto_struct_array(s, baseoff, fd->elem_type, fd->array_len, fd->elem_size);
+        return;
+    }
+
+    leaf_size = type_size(fd->elem_type);
+    if (leaf_size <= 0) leaf_size = 2;
+
+    n = 0;
+    emit_init_auto_struct_array_field_level(s, baseoff, fd, &n, 0);
+
+    total = field_array_elems_from_level(fd, 0);
+    while (total > 0 && n < total) {
+        emit_zero_local_bytes(s, baseoff + n * leaf_size, leaf_size);
+        n++;
+    }
 }
 
 void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int count, int elem_size)
@@ -711,7 +852,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
 
         if (first && tok.kind != TOK_EOF && tok.kind != '}') {
             if (first->is_array)
-                emit_init_auto_struct_array(s, baseoff, first->elem_type, first->array_len, first->elem_size);
+                emit_init_auto_struct_array_field(s, baseoff, first);
             else if ((first->type & TYPE_STRUCT) && type_ptr_depth(first->type) == 0)
                 emit_init_auto_struct_type(s, baseoff, first->type);
             else
@@ -836,7 +977,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
         }
 
         if (fd->is_array)
-            emit_init_auto_struct_array(s, baseoff + fd->offset, fd->elem_type, fd->array_len, fd->elem_size);
+            emit_init_auto_struct_array_field(s, baseoff + fd->offset, fd);
         else if ((fd->type & TYPE_STRUCT) && type_ptr_depth(fd->type) == 0)
             emit_init_auto_struct_type(s, baseoff + fd->offset, fd->type);
         else
