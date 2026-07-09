@@ -10451,6 +10451,212 @@ static int pass_ix_frame_ptr_load_deadd(void)
     return changed;
 }
 
+static int hoistbc_parse_ld_l_ix_off(const char *s, int *off)
+{
+    char buf[MAX_LINE];
+    char *semi;
+    int n;
+    const char *p;
+    int sign;
+    int v;
+
+    strncpy(buf, s, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = 0;
+    semi = strchr(buf, ';');
+    if (semi) *semi = 0;
+    n = (int)strlen(buf);
+    while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+        buf[--n] = 0;
+
+    if (strncmp(buf, "ld l,(ix", 8) != 0)
+        return 0;
+    p = buf + 8;
+    if (*p == '+') { sign = 1; p++; }
+    else if (*p == '-') { sign = -1; p++; }
+    else return 0;
+    if (*p < '0' || *p > '9') return 0;
+    v = 0;
+    while (*p >= '0' && *p <= '9')
+        v = v * 10 + (*p++ - '0');
+    if (strcmp(p, ")") != 0) return 0;
+    *off = sign * v;
+    return 1;
+}
+
+/* Conservative check: does this line reference register B, C, or the BC
+ * pair in any way? Guards pass_hoist_index_ptr_to_bc's exclusive claim on
+ * BC for the whole loop body. A false positive just declines the
+ * optimization; a false negative could silently corrupt a live value, so
+ * this errs deliberately broad - every Z80 mnemonic that touches B, C, or
+ * BC implicitly (the block/repeat instructions all use BC as a counter)
+ * is included, not just explicit "b"/"c"/"bc" operands. */
+static int line_touches_bc(const char *s)
+{
+    static const char *implicit_bc_mnemonics[] = {
+        "djnz ", "ldir", "lddr", "cpir", "cpdr",
+        "otir", "otdr", "inir", "indr",
+        "ldi", "ldd", "cpi", "cpd", "ini", "ind", "outi", "outd",
+        NULL
+    };
+    const char *p;
+    char tok[16];
+    int ti;
+    int i;
+
+    for (i = 0; implicit_bc_mnemonics[i] != NULL; ++i)
+        if (strncmp(s, implicit_bc_mnemonics[i], strlen(implicit_bc_mnemonics[i])) == 0)
+            return 1;
+
+    if (strstr(s, "(bc)") != NULL)
+        return 1;
+
+    p = s;
+    while (*p) {
+        if (isalpha((unsigned char)*p) || *p == '_') {
+            ti = 0;
+            while ((isalnum((unsigned char)*p) || *p == '_') && ti < 15)
+                tok[ti++] = *p++;
+            tok[ti] = 0;
+            if (strcmp(tok, "b") == 0 || strcmp(tok, "c") == 0 || strcmp(tok, "bc") == 0)
+                return 1;
+        } else {
+            p++;
+        }
+    }
+    return 0;
+}
+
+/*
+ * pass_hoist_index_ptr_to_bc:
+ *
+ * Hoists a loop-invariant pointer parameter/local used as an array/pointer
+ * index base into BC for the duration of a straight-line for-loop body,
+ * eliminating a redundant frame reload every iteration:
+ *
+ *   LABEL:
+ *     ld l,(ix+P)
+ *     ld h,(ix+P+1)
+ *     ...
+ *     jp COND, LABEL          (closing branch, no internal label)
+ *
+ * becomes:
+ *
+ *     ld c,(ix+P)
+ *     ld b,(ix+P+1)
+ *   LABEL:
+ *     ld l,c
+ *     ld h,b
+ *     ...
+ *     jp COND, LABEL
+ *
+ * Declines (never misapplies) unless, across the WHOLE loop body:
+ *   - every reference to offset P or P+1 is exactly one of the two lines
+ *     above (so the frame slot is never written, and never read any other
+ *     way this pass doesn't already account for);
+ *   - B, C, and BC are never referenced by anything else (so hoisting the
+ *     pointer into BC can't clobber or be clobbered by anything else the
+ *     loop does); and
+ *   - every call in the body is on the small whitelist already used by
+ *     pass_byte_loop_counter_to_reg_c (__mods, __divs - documented to
+ *     preserve BC).
+ *
+ * No write-back is needed: the transform only ever READS (ix+P)/(ix+P+1),
+ * so the original frame slot is untouched and still correct for any use
+ * after the loop. Requires a single-entry, single-exit (no internal label)
+ * loop body, matching pass_byte_loop_counter_to_reg_c's own restriction.
+ */
+static int pass_hoist_index_ptr_to_bc(void)
+{
+    int i, k;
+    int changed;
+    char label[128];
+    char tgt[128];
+    int loop_end;
+    int off;
+    char pat_l[40];
+    char pat_h[40];
+    char probe_p[40];
+    char probe_p1[40];
+    int ok;
+    int found_pair;
+    char prime_c[40];
+    char prime_b[40];
+
+    changed = 0;
+
+    for (i = 0; i < nlines; ++i) {
+        if (!starts_label(lines[i]))
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        /* Find this loop's own closing branch back to LABEL, with no
+         * internal label in between (single-entry, straight-line body). */
+        loop_end = -1;
+        for (k = i + 1; k < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;
+            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+                loop_end = k;
+                break;
+            }
+        }
+        if (loop_end < 0)
+            continue;
+
+        /* Pick a candidate offset P from the first "ld l,(ix+P)" / "ld
+         * h,(ix+P+1)" consecutive pair found in the body. */
+        off = 0;
+        found_pair = 0;
+        for (k = i + 1; k < loop_end - 1 && !found_pair; ++k) {
+            char exp_h[40];
+            if (!hoistbc_parse_ld_l_ix_off(lines[k], &off))
+                continue;
+            sprintf(exp_h, "ld h,(ix%+d)", off + 1);
+            if (eq(k + 1, exp_h))
+                found_pair = 1;
+        }
+        if (!found_pair)
+            continue;
+
+        sprintf(pat_l, "ld l,(ix%+d)", off);
+        sprintf(pat_h, "ld h,(ix%+d)", off + 1);
+        sprintf(probe_p, "(ix%+d)", off);
+        sprintf(probe_p1, "(ix%+d)", off + 1);
+
+        ok = 1;
+        for (k = i + 1; k < loop_end && ok; ++k) {
+            if (strncmp(lines[k], "call ", 5) == 0) {
+                if (!eq(k, "call __mods") && !eq(k, "call __divs")) { ok = 0; break; }
+                continue;
+            }
+            if (eq(k, pat_l) || eq(k, pat_h))
+                continue;
+            if (strstr(lines[k], probe_p) != NULL || strstr(lines[k], probe_p1) != NULL) { ok = 0; break; }
+            if (line_touches_bc(lines[k])) { ok = 0; break; }
+        }
+        if (!ok)
+            continue;
+
+        for (k = i + 1; k < loop_end; ++k) {
+            if (eq(k, pat_l)) { replace1_tagged(k, "ld l,c", "hoist_index_ptr_to_bc"); continue; }
+            if (eq(k, pat_h)) { replace1_tagged(k, "ld h,b", "hoist_index_ptr_to_bc"); continue; }
+        }
+
+        sprintf(prime_c, "ld c,(ix%+d)", off);
+        sprintf(prime_b, "ld b,(ix%+d)", off + 1);
+        insert_line_tagged(i, prime_b, "hoist_index_ptr_to_bc");
+        insert_line_tagged(i, prime_c, "hoist_index_ptr_to_bc");
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_deref_byte_cmp(void)
 {
     int i;
@@ -12542,6 +12748,7 @@ int main(int argc, char **argv)
         if (pass_recover_index_from_sbc()) changed = 1;
         if (pass_ix_frame_ptr_load()) changed = 1;
         if (pass_ix_frame_ptr_load_deadd()) changed = 1;
+        if (pass_hoist_index_ptr_to_bc()) changed = 1;
         if (pass_global_ptr_word_predec_load()) changed = 1;
         if (pass_elim_ex_de_hl_before_ix_store()) changed = 1;
         if (pass_global_ptr_word_postinc_store_setup()) changed = 1;
