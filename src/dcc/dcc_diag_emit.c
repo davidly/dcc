@@ -256,6 +256,20 @@ void dcc_error_at(const char *file, int line, long ofs, const char *msg, const c
     const char *fn;
     const char *code;
 
+    /* Counted unconditionally, even while suppressed below - this is the
+     * only signal try_speculative_bc_regalloc_function_body (dcc_func.c) has
+     * that a genuine error occurred during a speculatively-generated,
+     * possibly-discarded function body: asm_suppress_depth prevents this
+     * function from printing or bumping the real `errors` counter (so a
+     * discarded attempt's error isn't shown to the user prematurely, before
+     * the real fallback pass re-encounters and correctly reports it exactly
+     * once), but silently committing a speculative attempt that hit a real
+     * error would ship broken code with NO diagnostic at all. Comparing this
+     * counter before/after a suppressed attempt lets that caller force a
+     * decline whenever it increased, regardless of what the regalloc-
+     * specific safety checks concluded. */
+    g_diag_error_count++;
+
     /* asm_suppress_depth marks source text being parsed for its structural
      * side effects only (dead code kept in sync for frame layout, a real
      * inline-asm block, or - see record_inline_function_if_simple/

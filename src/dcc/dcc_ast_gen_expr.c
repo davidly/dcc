@@ -456,8 +456,13 @@ void gen_ident(const struct AstNode *n)
         return;
     }
 
-    /* Local scalar reachable with a direct ix-relative load. */
-    if (sym_can_ix_direct(s)) {
+    /* Local scalar reachable with a direct ix-relative load, or resident in
+     * a register instead of the frame entirely (reg_alloc != REG_NONE) - the
+     * latter never satisfies sym_can_ix_direct (which unconditionally
+     * declines any register-resident symbol so every OTHER ix-direct fast
+     * path safely falls back instead of reading a stale frame slot), so it
+     * needs its own explicit check here rather than folding into that one. */
+    if (sym_can_ix_direct(s) || s->reg_alloc != REG_NONE) {
         emit_load_sym_value_direct(s);
         g_expr_type = s->type;
         return;
@@ -2350,7 +2355,7 @@ void gen_assign_ast(const struct AstNode *n)
         return;
     }
 
-    if (n->op == '=' && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
+    if (n->op == '=' && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
         ast_is_plain_int_type(s->type) &&
         (type_size(s->type) == 1 || type_size(s->type) == 2)) {
         int want_dead = expr_result_dead;
@@ -2380,7 +2385,7 @@ void gen_assign_ast(const struct AstNode *n)
         return;
     }
 
-    if (expr_result_dead && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
+    if (expr_result_dead && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
         (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
          n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
         ast_is_plain_int_type(s->type) &&
@@ -2505,7 +2510,7 @@ void gen_assign_ast(const struct AstNode *n)
             g_long_from16 = 0;
             return;
         }
-        if (type_size(s->type) == 1 && n->b->kind == AST_IDENT) {
+        if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE && n->b->kind == AST_IDENT) {
             struct Sym *rs = find_sym(n->b->sval);
             if (rs != NULL && sym_can_ix_direct(rs) &&
                 !type_is_float(rs->type) && !type_is_long(rs->type)) {
@@ -2533,7 +2538,7 @@ void gen_assign_ast(const struct AstNode *n)
                 return;
             }
         }
-        if (type_size(s->type) == 1 && n->b->kind == AST_INT_LIT) {
+        if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE && n->b->kind == AST_INT_LIT) {
             if (type_is_bool(s->type)) {
                 fprintf(outf, "\tld (ix%+d),%d\n", s->offset, n->b->ival ? 1 : 0);
                 g_expr_type = s->type;
@@ -2549,7 +2554,7 @@ void gen_assign_ast(const struct AstNode *n)
                 emit_load_sym_value_direct(s);
             return;
         }
-        if (type_size(s->type) == 1) {
+        if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE) {
             long fv;
             if (ast_int_const_cast_fold(n->b, &fv)) {
                 if (type_is_bool(s->type))
@@ -2611,7 +2616,7 @@ void gen_assign_ast(const struct AstNode *n)
         return;
     }
 
-    if (expr_result_dead && type_size(s->type) == 1 && !sym_can_ix_direct(s) &&
+    if (expr_result_dead && type_size(s->type) == 1 && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) &&
         (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ)) {
         if (n->op == TOK_ANDEQ)
             binop = '&';

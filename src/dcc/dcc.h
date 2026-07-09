@@ -304,6 +304,7 @@ struct Sym {
 
 #define REG_NONE 0
 #define REG_BC   1
+#define REG_E    2
 
 struct Def {
     char name[64];
@@ -466,6 +467,9 @@ extern int current_function_has_call;
 extern int g_inline_body_buffering;
 extern struct Sym *g_bc_regalloc_sym;
 extern int g_regalloc_address_escaped;
+extern int g_e_regalloc_claim_active;
+extern int g_e_regalloc_claimed;
+extern struct Sym *g_e_regalloc_sym;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -533,6 +537,7 @@ extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum *
 extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
+extern int  g_diag_error_count;
 extern int  g_compound_literal_seq;
 extern int  g_licm_seq;
 void flush_pending_asm(void);

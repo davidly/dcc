@@ -1306,6 +1306,7 @@ void gen_local_decl_after_type(int base)
     char source_name[64];
     struct Sym *s;
     int freshly_allocated;
+    int narrowed_as_counter;
 
     for (;;) {
         type = base;
@@ -1414,6 +1415,7 @@ void gen_local_decl_after_type(int base)
          * already reached for this same declarator during the earlier
          * frame-sizing pass - both independently re-run the same
          * speculative parse over the same source text, so they agree. */
+        narrowed_as_counter = 0;
         if (try_narrow_local_int_array(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             /* See the identical comment in scan_local_decl_after_type
@@ -1426,6 +1428,7 @@ void gen_local_decl_after_type(int base)
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         } else if (try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
+            narrowed_as_counter = 1;
         }
 
         s = find_local_decl(name);
@@ -1442,6 +1445,23 @@ void gen_local_decl_after_type(int base)
 
             s = add_local_alloc(name, type, bytes);
             freshly_allocated = 1;
+            /* Round 2 of codegen-time register residency (see dcc_func.c's
+             * find_bc_regalloc_candidate/try_speculative_bc_regalloc_
+             * function_body for round 1's pointer-in-BC case): a local
+             * narrowed by try_narrow_for_counter is, by that proof, used
+             * solely as one simple counting for-loop's own induction
+             * variable - dccpeep's existing pass_byte_for_counter_to_reg_e
+             * already promotes exactly this shape reactively, so codegen
+             * claiming it directly is the same class of change as round 1.
+             * Only claimed inside a speculative attempt (g_e_regalloc_claim_
+             * active), and only the first such local per attempt (a second
+             * counter in the same function falls back to its ordinary frame
+             * slot, matching round 1's "one candidate" scope). */
+            if (narrowed_as_counter && g_e_regalloc_claim_active && !g_e_regalloc_claimed) {
+                s->reg_alloc = REG_E;
+                g_e_regalloc_claimed = 1;
+                g_e_regalloc_sym = s;
+            }
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;

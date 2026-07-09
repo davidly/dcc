@@ -466,8 +466,8 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
         return 0;
     if (e->kind == AST_IDENT) {
         s = find_sym(e->sval);
-        if (s != NULL && sym_can_ix_direct(s) && type_size(s->type) == 1 &&
-            (s->type & TYPE_UNSIGNED)) {
+        if (s != NULL && (sym_can_ix_direct(s) || s->reg_alloc == REG_E) &&
+            type_size(s->type) == 1 && (s->type & TYPE_UNSIGNED)) {
             op->kind = 1;
             op->sym = s;
             return 1;
@@ -1091,7 +1091,7 @@ struct Sym *ast_deadincdec_sym_direct(const struct AstNode *e)
     s = find_sym(e->a->sval);
     if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
         return NULL;
-    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
+    if (s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s))
         return NULL;
     return s;
 }

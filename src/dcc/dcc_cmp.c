@@ -225,7 +225,10 @@ int invert_relop_for_swap(int op)
 void emit_byte_operand_to_a(struct ByteOperand *op)
 {
     if (op->kind == 1) {
-        fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
+        if (op->sym->reg_alloc == REG_E)
+            emit("\tld a,e\n");
+        else
+            fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
     } else if (op->kind == 2) {
         fprintf(outf, "\tld a,%ld\n", op->val & 255);
     } else if (op->kind == 3) {
@@ -270,7 +273,10 @@ void emit_byte_operand_to_a(struct ByteOperand *op)
 void emit_cp_byte_operand(struct ByteOperand *op)
 {
     if (op->kind == 1) {
-        fprintf(outf, "\tcp (ix%+d)\n", op->sym->offset);
+        if (op->sym->reg_alloc == REG_E)
+            emit("\tcp e\n");
+        else
+            fprintf(outf, "\tcp (ix%+d)\n", op->sym->offset);
     } else if (op->kind == 2) {
         fprintf(outf, "\tcp %ld\n", op->val & 255);
     } else if (op->kind == 3) {

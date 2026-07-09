@@ -106,6 +106,9 @@ int current_function_has_call;
 int g_inline_body_buffering;
 struct Sym *g_bc_regalloc_sym;
 int g_regalloc_address_escaped;
+int g_e_regalloc_claim_active;
+int g_e_regalloc_claimed;
+struct Sym *g_e_regalloc_sym;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];
@@ -164,6 +167,7 @@ int g_parse_type_was_enum;
 char pending_asm_buf[8192];
 int  pending_asm_len;
 int  asm_suppress_depth;
+int  g_diag_error_count;
 int  g_compound_literal_seq;
 int  g_licm_seq;
 char g_current_compiling_func[64];

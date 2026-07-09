@@ -843,6 +843,15 @@ void emit_load_sym_value_direct(struct Sym *s)
         emit("\tld h,b\n");
         return;
     }
+    if (s->reg_alloc == REG_E) {
+        /* Narrowed by try_narrow_for_counter to unsigned char, so a plain
+         * zero-extend is always correct - no signed-byte sign-extend branch
+         * needed (unlike the ix-direct byte case below, which serves both
+         * signed and unsigned bytes). */
+        emit("\tld l,e\n");
+        emit("\tld h,0\n");
+        return;
+    }
     if (is_global_word_sym(s)) {
         emit_load_global_word_direct(s);
         return;
@@ -895,6 +904,11 @@ void emit_load_sym_de_direct(struct Sym *s)
         emit("\tld d,b\n");
         return;
     }
+    if (s->reg_alloc == REG_E) {
+        /* s's own live value already sits in e; only d needs setting. */
+        emit("\tld d,0\n");
+        return;
+    }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);
@@ -927,6 +941,12 @@ void emit_load_sym_de_direct(struct Sym *s)
 
 void emit_store_hl_to_sym_direct(struct Sym *s)
 {
+    if (s->reg_alloc == REG_E) {
+        if (type_is_bool(s->type))
+            emit_bool_normalize_hl(s->type);
+        emit("\tld e,l\n");
+        return;
+    }
     if (is_global_word_sym(s)) {
         emit_store_global_word_direct(s);
         return;
@@ -1005,6 +1025,11 @@ int try_emit_post_update_sym_direct(struct Sym *s, int op)
 void emit_incdec_sym_direct(struct Sym *s, int op)
 {
     int done;
+
+    if (s->reg_alloc == REG_E) {
+        emit(op == TOK_INC ? "\tinc e\n" : "\tdec e\n");
+        return;
+    }
 
     /* Global 16-bit integer (non-pointer): ld hl,(nn); inc/dec hl; ld (nn),hl.
      * inc hl / dec hl are atomic 16-bit ops so no byte-by-byte ripple needed. */
@@ -1423,7 +1448,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
             }
         }
 
-        if (vla_whole && asm_suppress_depth == 0)
+        if (vla_whole)
             error_here("sizeof applied to a variable-length array is not supported");
     }
 
