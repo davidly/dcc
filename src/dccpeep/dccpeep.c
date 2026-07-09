@@ -2811,6 +2811,194 @@ static int pass_byte_loop_counter_to_reg_c(void)
     return changed;
 }
 
+static int peep_parse_ld_ix_byte_imm(const char *s, int *off, int *val)
+{
+    const char *p;
+    int sign;
+    int o;
+    int v;
+
+    if (strncmp(s, "ld (ix", 6) != 0)
+        return 0;
+    p = s + 6;
+    if (*p == '+') { sign = 1; p++; }
+    else if (*p == '-') { sign = -1; p++; }
+    else return 0;
+    if (*p < '0' || *p > '9') return 0;
+    o = 0;
+    while (*p >= '0' && *p <= '9')
+        o = o * 10 + (*p++ - '0');
+    if (strncmp(p, "),", 2) != 0) return 0;
+    p += 2;
+    if (*p < '0' || *p > '9') return 0;
+    v = 0;
+    while (*p >= '0' && *p <= '9')
+        v = v * 10 + (*p++ - '0');
+    if (*p != 0) return 0;
+    *off = sign * o;
+    *val = v;
+    return 1;
+}
+
+static int peep_parse_inc_ix_byte(const char *s, int *off);
+static int peep_parse_cp_const(const char *s, int *val);
+static int line_touches_bc(const char *s);
+
+/*
+ * pass_byte_for_counter_to_reg_c:
+ *
+ * The incrementing counterpart of pass_byte_loop_counter_to_reg_c above:
+ * promotes a byte-sized for-loop counter into Z80 register C, for the
+ * shape:
+ *
+ *   ld (ix+O),LOW              ; init, immediately before the loop label
+ * LABEL:
+ *   <body, every reference to (ix+O) one of exactly the two whitelisted
+ *    "zero-extend into a 16-bit register pair" shapes - ld e,(ix+O)/ld d,0
+ *    or ld l,(ix+O)/ld h,0 - and every call to __mods/__divs specifically>
+ *   inc (ix+O)
+ *   ld a,(ix+O)
+ *   cp HIGH
+ *   jp c, LABEL
+ *
+ * to:
+ *
+ *   ld c,LOW
+ * LABEL:
+ *   <body, with (ix+O) references rewritten to use c directly>
+ *   inc c
+ *   ld a,c
+ *   cp HIGH
+ *   jp c, LABEL
+ *   ld (ix+O),c                ; write back once, right after the loop -
+ *                                anything after the loop that still reads
+ *                                the slot sees the correct final value,
+ *                                without needing to prove it doesn't
+ *
+ * Declines (the safe default, missing the optimization but never
+ * misapplying it) if any other reference to the counter's slot, any other
+ * call, or any other label appears in the body - matches
+ * pass_byte_loop_counter_to_reg_c's own restriction to a single-entry,
+ * straight-line loop body.
+ */
+static int pass_byte_for_counter_to_reg_c(void)
+{
+    int i;
+    int changed;
+    int off;
+    int low_val;
+    int high_val;
+    char label[128];
+    char tgt[128];
+    int loop_end;
+    int k;
+    int ok;
+    char pat_ix[40];
+    char pat_lde[40];
+    char pat_lhl[40];
+    char pat_adda[40];
+    char prime[16];
+    char writeback[40];
+    char exp_lda[40];
+
+    changed = 0;
+
+    for (i = 1; i + 1 < nlines; ++i) {
+        if (!starts_label(lines[i]))
+            continue;
+        if (!peep_parse_ld_ix_byte_imm(lines[i - 1], &off, &low_val))
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        /* Find this loop's own closing conditional jump back to the
+         * label, with no other label in between (single-entry,
+         * straight-line body). */
+        loop_end = -1;
+        for (k = i + 1; k < nlines; ++k) {
+            if (starts_label(lines[k]))
+                break;
+            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+                loop_end = k;
+                break;
+            }
+        }
+        if (loop_end < i + 4)
+            continue;
+
+        /* The three lines immediately before the closing branch must be
+         * the increment/compare/test sequence for this same offset. */
+        {
+            int inc_off;
+            if (!peep_parse_inc_ix_byte(lines[loop_end - 3], &inc_off) || inc_off != off)
+                continue;
+        }
+        sprintf(exp_lda, "ld a,(ix%+d)", off);
+        if (!eq(loop_end - 2, exp_lda))
+            continue;
+        if (!peep_parse_cp_const(lines[loop_end - 1], &high_val))
+            continue;
+        if (low_val < 0 || low_val > 255 || high_val < 0 || high_val > 255)
+            continue;
+
+        sprintf(pat_ix, "(ix%+d)", off);
+        sprintf(pat_lde, "ld e,(ix%+d)", off);
+        sprintf(pat_lhl, "ld l,(ix%+d)", off);
+        sprintf(pat_adda, "add a,(ix%+d)", off);
+
+        ok = 1;
+        for (k = i + 1; k < loop_end - 3 && ok; ++k) {
+            if (strncmp(lines[k], "call ", 5) == 0) {
+                if (!eq(k, "call __mods") && !eq(k, "call __divs")) { ok = 0; break; }
+                continue;
+            }
+            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) { ++k; continue; }
+            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) { ++k; continue; }
+            /* The counter's own byte value used directly in arithmetic
+             * (e.g. `(rec + i) & 0xff`, added to another byte in A) - safe
+             * to read from c instead, same as the index-load shapes above. */
+            if (eq(k, pat_adda)) continue;
+            if (strstr(lines[k], pat_ix) != NULL) { ok = 0; break; }
+            /* B/C/BC must be free for the whole loop body except the exact
+             * shapes above - guards against another pass (e.g.
+             * pass_hoist_index_ptr_to_bc) having already claimed BC for
+             * something else in this same loop. */
+            if (line_touches_bc(lines[k])) { ok = 0; break; }
+        }
+        if (!ok)
+            continue;
+
+        /* In-place replacements first, while every index computed above is
+         * still valid (no lines inserted/deleted yet). */
+        for (k = i + 1; k < loop_end - 3; ++k) {
+            if (eq(k, pat_lde)) { replace1(k, "ld e,c"); continue; }
+            if (eq(k, pat_lhl)) { replace1(k, "ld l,c"); continue; }
+            if (eq(k, pat_adda)) { replace1(k, "add a,c"); continue; }
+        }
+        replace1_tagged(loop_end - 3, "inc c", "byte_for_counter_to_reg_c");
+        replace1(loop_end - 2, "ld a,c");
+
+        /* Write the counter back to its frame slot once, right after the
+         * loop exits (the very next line, whatever it is) - covers any use
+         * of the slot after the loop without needing to prove there isn't
+         * one. Farther from the label than the init replacement below, so
+         * do it first while index loop_end is still valid. */
+        sprintf(writeback, "ld (ix%+d),c", off);
+        insert_line(loop_end + 1, writeback);
+
+        /* Prime the register in place of the old init store. */
+        sprintf(prime, "ld c,%d", low_val);
+        replace1_tagged(i - 1, prime, "byte_for_counter_to_reg_c");
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 /*
  * IY is otherwise completely unused across dcc's own codegen and all of
  * DCCRTL.MAC (verified: zero occurrences), unlike BC which the codegen and
@@ -12731,6 +12919,7 @@ int main(int argc, char **argv)
         if (pass_ix_array_byte_addr()) changed = 1;
         if (pass_reuse_array_byte_addr()) changed = 1;
         if (pass_byte_loop_counter_to_reg_c()) changed = 1;
+        if (pass_byte_for_counter_to_reg_c()) changed = 1;
         if (pass_reuse_reg_array_byte_addr()) changed = 1;
         if (pass_ix_postdec_to_local()) changed = 1;
         if (pass_store_word_const_hl()) changed = 1;
