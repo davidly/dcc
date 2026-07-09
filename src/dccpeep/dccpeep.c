@@ -2915,6 +2915,88 @@ static int loop_body_internal_labels_safe(int lo, int hi)
     return 1;
 }
 
+/* Find the line index of the definition of label `name` within
+ * [lo, hi), or -1 if not found. */
+static int find_label_line(const char *name, int lo, int hi)
+{
+    int k;
+
+    for (k = lo; k < hi; ++k)
+        if (line_is_label_name(k, name))
+            return k;
+    return -1;
+}
+
+/* Trace forward from `start` following only unconditional control flow
+ * (label fall-through and unconditional jumps), for up to a bounded
+ * number of hops, to see whether this path reaches the function's own
+ * epilogue ("ld sp,ix") before referencing `pat_ix` anywhere. Used by a
+ * counter-registerization pass to prove that an early-exit path out of
+ * its loop (e.g. an `if (...) return X;` inside the loop body) never
+ * reads the counter's frame slot while it's stale - the register holds
+ * the authoritative value for the whole loop, and the write-back that
+ * resyncs the frame slot only runs once, at the loop's own normal exit,
+ * never on an early-exit path. A conditional jump (ambiguous which way
+ * execution goes), a call (could do anything), or running out of hops
+ * without reaching "ld sp,ix" is treated as unprovable - a decline, not a
+ * misapplication. */
+static int escape_path_reaches_epilogue_safely(int start, const char *pat_ix,
+                                               int func_end)
+{
+    int pos;
+    int hops;
+    char tgt[128];
+
+    pos = start;
+    for (hops = 0; hops < 60; ++hops) {
+        if (pos < 0 || pos >= func_end)
+            return 0;
+        if (eq(pos, "ld sp,ix"))
+            return 1;
+        if (strstr(lines[pos], pat_ix) != NULL)
+            return 0;
+        if (starts_label(lines[pos])) { ++pos; continue; }
+        if (is_uncond_jp(lines[pos])) {
+            if (!jump_target(lines[pos], tgt))
+                return 0;
+            pos = find_label_line(tgt, 0, func_end);
+            continue;
+        }
+        if (strncmp(lines[pos], "call ", 5) == 0)
+            return 0;
+        if (jump_target(lines[pos], tgt))
+            return 0;  /* a conditional jump - which way is ambiguous */
+        ++pos;
+    }
+    return 0;
+}
+
+/* For every jump within [lo, hi) whose target is OUTSIDE [lo, hi) (an
+ * early-exit path out of the loop), verify via
+ * escape_path_reaches_epilogue_safely that it never reads `pat_ix` before
+ * reaching the function's own epilogue. Returns 1 iff every such escape
+ * is safe (or there are none). */
+static int loop_body_escapes_safe_for_offset(int lo, int hi, const char *pat_ix)
+{
+    int func_start, func_end;
+    int k;
+    char tgt[128];
+
+    find_function_bounds(lo, &func_start, &func_end);
+    for (k = lo; k < hi; ++k) {
+        if (!jump_target(lines[k], tgt))
+            continue;
+        {
+            int target_line = find_label_line(tgt, func_start, func_end);
+            if (target_line >= lo && target_line < hi)
+                continue;  /* jumps back into the loop's own range - fine */
+            if (!escape_path_reaches_epilogue_safely(target_line, pat_ix, func_end))
+                return 0;
+        }
+    }
+    return 1;
+}
+
 /*
  * pass_byte_for_counter_to_reg_c:
  *
@@ -3150,16 +3232,30 @@ static int pass_byte_for_counter_to_reg_e(void)
         if (k > 0 && label[k - 1] == ':')
             label[k - 1] = 0;
 
+        /* Find the loop's own closing branch - the LAST line in the
+         * function that jumps back to the label (see
+         * pass_hoist_index_ptr_to_bc's own history for why "last", not
+         * "first"). An internal label (an if/early-return inside the loop
+         * body, e.g. tests/tbig.c's check_record) is fine PROVIDED
+         * loop_body_internal_labels_safe proves it's purely an intra-loop
+         * merge point, and loop_body_escapes_safe_for_offset proves every
+         * early-exit path out of the loop never reads the counter's frame
+         * slot before reaching the function's own epilogue - the register
+         * holds the authoritative value for the whole loop, and unlike
+         * pass_hoist_index_ptr_to_bc (which never writes the frame slot at
+         * all, so any read of it anywhere is always correct), this pass's
+         * write-back only runs once, at the loop's own NORMAL exit, never
+         * on an early-exit path. */
         loop_end = -1;
         for (k = i + 1; k < nlines; ++k) {
-            if (starts_label(lines[k]))
+            if (strncmp(lines[k], "public ", 7) == 0)
                 break;
-            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
                 loop_end = k;
-                break;
-            }
         }
         if (loop_end < i + 4)
+            continue;
+        if (!loop_body_internal_labels_safe(i + 1, loop_end))
             continue;
 
         {
@@ -3176,6 +3272,8 @@ static int pass_byte_for_counter_to_reg_e(void)
             continue;
 
         sprintf(pat_ix, "(ix%+d)", off);
+        if (!loop_body_escapes_safe_for_offset(i + 1, loop_end, pat_ix))
+            continue;
         /* Anything skipped between the init line and the label must not
          * itself reference our counter's offset - it should only be an
          * unrelated pass's own prime lines for some other variable. */
