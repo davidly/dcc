@@ -2844,6 +2844,76 @@ static int peep_parse_inc_ix_byte(const char *s, int *off);
 static int peep_parse_cp_const(const char *s, int *val);
 static int line_touches_bc(const char *s);
 
+/* This function's own boundaries: the most recent "public NAME" at or
+ * before `from`, and the next "public NAME" after it (or nlines if this is
+ * the last function in the file). Used to bound the label-reachability
+ * check below to the current function only, so it can never be fooled by
+ * a same-numbered label belonging to a different function. */
+static void find_function_bounds(int from, int *func_start, int *func_end)
+{
+    int k;
+
+    *func_start = 0;
+    for (k = from; k >= 0; --k) {
+        if (strncmp(lines[k], "public ", 7) == 0) { *func_start = k; break; }
+    }
+    *func_end = nlines;
+    for (k = from + 1; k < nlines; ++k) {
+        if (strncmp(lines[k], "public ", 7) == 0) { *func_end = k; break; }
+    }
+}
+
+/* True iff every jump anywhere in [scan_lo, scan_hi) that targets
+ * `label_name` has its OWN line number inside [range_lo, range_hi).  Used
+ * to admit an internal label into a loop's scanned body only when it is
+ * purely an intra-loop if/early-return merge point - never a re-entry
+ * point some other, unrelated code elsewhere in the same function jumps
+ * into - which a bare "ignore every internal label" scan cannot tell
+ * apart (see pass_hoist_index_ptr_to_bc's own history: an earlier,
+ * unconditional version of that relaxation let the scan run past one
+ * loop's real body into unrelated code and corrupted tests/cint.c and
+ * tests/fint.c; this reachability check is what makes it safe). */
+static int label_targeted_only_within(const char *label_name,
+                                      int scan_lo, int scan_hi,
+                                      int range_lo, int range_hi)
+{
+    int k;
+    char tgt[128];
+
+    for (k = scan_lo; k < scan_hi; ++k) {
+        if (jump_target(lines[k], tgt) && strcmp(tgt, label_name) == 0) {
+            if (k < range_lo || k >= range_hi)
+                return 0;
+        }
+    }
+    return 1;
+}
+
+/* Validates every internal label within [lo, hi) via
+ * label_targeted_only_within, bounded to the current function
+ * (find_function_bounds). Returns 1 iff the whole range is safe to treat
+ * as a single loop's straight-line-equivalent body. */
+static int loop_body_internal_labels_safe(int lo, int hi)
+{
+    int func_start, func_end;
+    int k;
+    char inner[128];
+    int n2;
+
+    find_function_bounds(lo, &func_start, &func_end);
+    for (k = lo; k < hi; ++k) {
+        if (!starts_label(lines[k]))
+            continue;
+        strcpy(inner, lines[k]);
+        n2 = (int)strlen(inner);
+        if (n2 > 0 && inner[n2 - 1] == ':')
+            inner[n2 - 1] = 0;
+        if (!label_targeted_only_within(inner, func_start, func_end, lo, hi))
+            return 0;
+    }
+    return 1;
+}
+
 /*
  * pass_byte_for_counter_to_reg_c:
  *
@@ -10750,10 +10820,11 @@ static int line_touches_bc(const char *s)
  *
  * No write-back is needed: the transform only ever READS (ix+P)/(ix+P+1),
  * so the original frame slot is untouched and still correct for any use
- * after the loop. Requires a single-entry, single-exit (no internal label)
- * loop body, matching pass_byte_loop_counter_to_reg_c's own restriction -
- * see the loop-end search below for why this can't safely be relaxed with
- * simple textual pattern matching.
+ * after the loop - including an early-return/if-guarded exit inside the
+ * loop body, as long as loop_body_internal_labels_safe proves every
+ * internal label the loop contains is only ever reached from within the
+ * loop itself (see that function's own comment for why this check exists
+ * and what it protects against).
  */
 static int pass_hoist_index_ptr_to_bc(void)
 {
@@ -10783,31 +10854,36 @@ static int pass_hoist_index_ptr_to_bc(void)
         if (k > 0 && label[k - 1] == ':')
             label[k - 1] = 0;
 
-        /* Find this loop's own closing branch back to LABEL, with no
-         * internal label in between (single-entry, straight-line body).
-         *
-         * A relaxed version of this search (tolerating internal labels, to
-         * cover an if/early-return inside the loop body - motivated by
-         * tests/tbig.c's check_record) was tried and reverted: it let the
-         * scan run past what was actually a single loop's own body into
-         * unrelated code reusing the same frame offset for a different,
-         * non-overlapping-scope variable (dcc's frame allocator reuses
-         * stack slots across disjoint lexical scopes), which this pass's
-         * purely textual pattern matching cannot safely tell apart from a
-         * genuine internal branch. Confirmed via a real, reproduced
-         * corruption in tests/cint.c and tests/fint.c. Doing this
-         * correctly would need real control-flow/scope analysis, not a
-         * peephole text scan. */
+        /* Find this loop's own closing branch back to LABEL - the LAST
+         * line in the function that jumps back to it, not the first: an
+         * if/else that both continue the same loop compiles to two
+         * separate backward jumps (e.g. "jp nz, LABEL" then, a couple of
+         * lines later, an unconditional "jp LABEL"), and stopping at the
+         * first one would silently exclude the rest of the loop's own body
+         * from every check below. An internal label (an if/early-return
+         * inside the loop body, e.g. tests/tbig.c's check_record) is fine
+         * PROVIDED loop_body_internal_labels_safe proves every such label
+         * is only ever targeted from within this same range - never a
+         * re-entry point some unrelated code elsewhere in the function
+         * jumps into. An earlier, unconditional version of this relaxation
+         * (ignoring every internal label outright) skipped that proof and
+         * let the scan run past what was actually a single loop's own body
+         * into unrelated code reusing the same frame offset for a
+         * different, non-overlapping-scope variable, corrupting
+         * tests/cint.c and tests/fint.c; this reachability check is what
+         * makes the relaxed scan safe. Bounded by the next function's own
+         * "public NAME" so a candidate that never loops back can't run
+         * past this function's own code. */
         loop_end = -1;
         for (k = i + 1; k < nlines; ++k) {
-            if (starts_label(lines[k]))
+            if (strncmp(lines[k], "public ", 7) == 0)
                 break;
-            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
                 loop_end = k;
-                break;
-            }
         }
         if (loop_end < 0)
+            continue;
+        if (!loop_body_internal_labels_safe(i + 1, loop_end))
             continue;
 
         /* Pick a candidate offset P from the first "ld l,(ix+P)" / "ld
