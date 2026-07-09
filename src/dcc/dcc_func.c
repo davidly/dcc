@@ -4119,6 +4119,7 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
     g_licm_seq = 0;
     cand->reg_alloc = REG_BC;
     g_bc_regalloc_sym = cand;
+    g_regalloc_address_escaped = 0;
     emit_function_prologue(name, local_bytes, current_function_safe_to_omit_ix(type, local_bytes));
     gen_compound();
     emit_function_epilogue(strcmp(name, "main") == 0 &&
@@ -4131,7 +4132,7 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
     /* Same rationale as try_speculative_noix_function_body's identical
      * comment: skip check_undefined_user_labels() here on a path that might
      * be discarded, to avoid double-reporting and stale nulabels state. */
-    if (bc_regalloc_buffer_is_safe(scratch, cand->offset)) {
+    if (!g_regalloc_address_escaped && bc_regalloc_buffer_is_safe(scratch, cand->offset)) {
         check_undefined_user_labels();
         rewind(scratch);
         while ((c = fgetc(scratch)) != EOF)

@@ -105,6 +105,7 @@ int current_omit_ix_frame;
 int current_function_has_call;
 int g_inline_body_buffering;
 struct Sym *g_bc_regalloc_sym;
+int g_regalloc_address_escaped;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];

@@ -465,6 +465,7 @@ extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
 extern struct Sym *g_bc_regalloc_sym;
+extern int g_regalloc_address_escaped;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];

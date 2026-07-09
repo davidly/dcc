@@ -711,6 +711,22 @@ int frame_sp_offset_for_sym(struct Sym *s)
 void emit_load_frame_addr_hl(struct Sym *s)
 {
     int n;
+    /* A register-resident symbol (reg_alloc != REG_NONE) has no meaningful
+     * frame slot content - its live value lives in a register, synced back
+     * to the frame only where the feature that promoted it explicitly does
+     * so (which, for every candidate kind this file currently supports, is
+     * never). Computing its frame ADDRESS at all means some caller wants to
+     * read or write through that address, which would silently touch stale
+     * memory instead of the live register - a real hazard the exact-text
+     * safety scans in dcc_func.c cannot see, since this function's own
+     * output (push ix/pop hl + a numeric ld de,N/add hl,de or a plain
+     * inc/dec hl run) never contains "(ix" or touches b/c/d/e as a
+     * register operand. Flagging it here, structurally, at the one shared
+     * choke point every local/param address computation goes through
+     * (emit_load_sym_addr calls this for SC_LOCAL/SC_PARAM unconditionally)
+     * is exact where a text scan cannot be. */
+    if (s->reg_alloc != REG_NONE)
+        g_regalloc_address_escaped = 1;
     if (s->has_addr_cache) {
         /* This local array's address was materialized once, unconditionally,
          * right after the prologue allocated locals (see dcc_func.c) - it
