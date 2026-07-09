@@ -10751,7 +10751,9 @@ static int line_touches_bc(const char *s)
  * No write-back is needed: the transform only ever READS (ix+P)/(ix+P+1),
  * so the original frame slot is untouched and still correct for any use
  * after the loop. Requires a single-entry, single-exit (no internal label)
- * loop body, matching pass_byte_loop_counter_to_reg_c's own restriction.
+ * loop body, matching pass_byte_loop_counter_to_reg_c's own restriction -
+ * see the loop-end search below for why this can't safely be relaxed with
+ * simple textual pattern matching.
  */
 static int pass_hoist_index_ptr_to_bc(void)
 {
@@ -10782,7 +10784,20 @@ static int pass_hoist_index_ptr_to_bc(void)
             label[k - 1] = 0;
 
         /* Find this loop's own closing branch back to LABEL, with no
-         * internal label in between (single-entry, straight-line body). */
+         * internal label in between (single-entry, straight-line body).
+         *
+         * A relaxed version of this search (tolerating internal labels, to
+         * cover an if/early-return inside the loop body - motivated by
+         * tests/tbig.c's check_record) was tried and reverted: it let the
+         * scan run past what was actually a single loop's own body into
+         * unrelated code reusing the same frame offset for a different,
+         * non-overlapping-scope variable (dcc's frame allocator reuses
+         * stack slots across disjoint lexical scopes), which this pass's
+         * purely textual pattern matching cannot safely tell apart from a
+         * genuine internal branch. Confirmed via a real, reproduced
+         * corruption in tests/cint.c and tests/fint.c. Doing this
+         * correctly would need real control-flow/scope analysis, not a
+         * peephole text scan. */
         loop_end = -1;
         for (k = i + 1; k < nlines; ++k) {
             if (starts_label(lines[k]))
