@@ -1173,10 +1173,12 @@ static int pass_elim_dead_ix_stores(void)
     char *endp;
     long v;
     int n;
+    int escaped_from;
 
     memset(is_dead, 0, sizeof(is_dead));
     memset(last_store, -1, sizeof(last_store));
     changed = 0;
+    escaped_from = 128;
 
     for (i = 0; i < nlines; i++) {
         strip_peep_comment_copy(tmp, lines[i]);
@@ -1197,10 +1199,12 @@ static int pass_elim_dead_ix_stores(void)
                 /* Segment boundary: flush (remaining stores from previous
                    segment are addressed by the old IX — not our problem) */
                 memset(last_store, -1, sizeof(last_store));
+                escaped_from = 128;
             } else {
                 /* Internal label: conservative flush — a branch from elsewhere
                    might rely on a pending store being present. */
                 memset(last_store, -1, sizeof(last_store));
+                escaped_from = 128;
             }
             continue;
         }
@@ -1211,6 +1215,7 @@ static int pass_elim_dead_ix_stores(void)
                 if (last_store[idx] >= 0)
                     is_dead[last_store[idx]] = 1;
             memset(last_store, -1, sizeof(last_store));
+            escaped_from = 128;
             continue;
         }
 
@@ -1218,6 +1223,7 @@ static int pass_elim_dead_ix_stores(void)
         if (strncmp(tmp, "jp ", 3) == 0 || strncmp(tmp, "jr ", 3) == 0 ||
             strncmp(tmp, "djnz ", 5) == 0) {
             memset(last_store, -1, sizeof(last_store));
+            escaped_from = 128;
             continue;
         }
 
@@ -1271,6 +1277,7 @@ static int pass_elim_dead_ix_stores(void)
                         else break;
                     }
                     if (kv >= -128 && kv <= 127) {
+                        char next1[MAX_LINE], next2[MAX_LINE];
                         /* Address of frame offset K is taken via HL. There is
                          * no bound, from plain assembly text alone, on how
                          * many bytes get accessed through the resulting
@@ -1289,6 +1296,34 @@ static int pass_elim_dead_ix_stores(void)
                          * Flushing every pending store is the only sound
                          * choice whenever an address is taken this way. */
                         memset(last_store, -1, sizeof(last_store));
+                        /* If the just-computed frame address is immediately
+                         * stored into another frame slot (a pointer/array-decay
+                         * local: `ld (ix+M),l` / `ld (ix+M+1),h`), the pointed-to
+                         * object is initialised later by DIRECT `ld (ix+K)`
+                         * stores and only read back through that saved pointer
+                         * (whose `(hl)` accesses this text pass cannot see).
+                         * Protect every store at offset >= K for the rest of
+                         * the segment so those initializers are not deleted.
+                         *
+                         * The `push hl` (address passed as a call argument)
+                         * case needs no such protection: dcc compiles member
+                         * and element stores to an object whose address has
+                         * escaped through HL-computed `(hl)` stores, never as
+                         * `ld (ix+K)`, so no direct-store initializer can follow
+                         * that route and be wrongly deleted. Excluding it keeps
+                         * ordinary `&local` argument passing from disabling the
+                         * dead-store pass for unrelated higher-offset locals. */
+                        next1[0] = 0;
+                        next2[0] = 0;
+                        if (j < nlines)
+                            strip_peep_comment_copy(next1, lines[j]);
+                        if (j + 1 < nlines)
+                            strip_peep_comment_copy(next2, lines[j + 1]);
+                        if (strncmp(next1, "ld (ix", 6) == 0 &&
+                            strstr(next1, "),l") != NULL &&
+                            strncmp(next2, "ld (ix", 6) == 0 &&
+                            strstr(next2, "),h") != NULL)
+                            escaped_from = (int)kv < escaped_from ? (int)kv : escaped_from;
                     }
                 }
             }
@@ -1320,7 +1355,23 @@ static int pass_elim_dead_ix_stores(void)
                     /* No sound bound on the access through this address -
                      * see the identical reasoning at the ld de,K/add hl,de
                      * variant above. Always flush rather than guess 4 bytes. */
+                    char nx1[MAX_LINE], nx2[MAX_LINE];
                     memset(last_store, -1, sizeof(last_store));
+                    /* Same narrow rule as the ld de,K variant: only protect the
+                     * escaped range when the address is saved into a frame
+                     * pointer slot (`ld (ix+M),l` / `ld (ix+M+1),h`), the shape
+                     * that precedes direct `ld (ix+K)` aggregate initializers. */
+                    nx1[0] = 0;
+                    nx2[0] = 0;
+                    if (j < nlines)
+                        strip_peep_comment_copy(nx1, lines[j]);
+                    if (j + 1 < nlines)
+                        strip_peep_comment_copy(nx2, lines[j + 1]);
+                    if (strncmp(nx1, "ld (ix", 6) == 0 &&
+                        strstr(nx1, "),l") != NULL &&
+                        strncmp(nx2, "ld (ix", 6) == 0 &&
+                        strstr(nx2, "),h") != NULL)
+                        escaped_from = (int)kv < escaped_from ? (int)kv : escaped_from;
                 }
             }
         }
@@ -1335,6 +1386,10 @@ static int pass_elim_dead_ix_stores(void)
             v = strtol(p, &endp, 0);
             if (*endp == ')' && *(endp+1) == ',' && v >= -128 && v <= 127) {
                 idx = (int)v + 128;
+                if ((int)v >= escaped_from) {
+                    last_store[idx] = -1;
+                    continue;
+                }
                 if (last_store[idx] >= 0)
                     is_dead[last_store[idx]] = 1;  /* overwritten → dead */
                 last_store[idx] = i;

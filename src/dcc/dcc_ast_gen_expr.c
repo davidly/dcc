@@ -1927,6 +1927,35 @@ void gen_assign_ast(const struct AstNode *n)
         default:        binop = '^'; break;   /* TOK_XOREQ */
         }
 
+        if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
+            type_ptr_depth(val_type) > 0 && type_size(val_type) == 2) {
+            int elem_size;
+
+            elem_size = type_index_elem_size(val_type);
+            emit("\tpush hl\n");                    /* save lvalue address */
+            emit_load_from_hl(val_type);            /* HL = current pointer */
+            emit("\tpush hl\n");                    /* save current pointer */
+
+            saved_dead = expr_result_dead;
+            expr_result_dead = 0;
+            ast_gen_expr(n->b);                     /* HL = element count */
+            expr_result_dead = saved_dead;
+            scale_hl_by_elem_size(elem_size);
+
+            emit("\tex de,hl\n\tpop hl\n");         /* DE = scaled count, HL = current pointer */
+            if (n->op == TOK_ADDEQ)
+                emit("\tadd hl,de\n");
+            else
+                emit("\tor a\n\tsbc hl,de\n");
+            emit("\tex de,hl\n\tpop hl\n");         /* DE = result, HL = address */
+            emit_store_de_to_addr_hl(val_type);
+            if (!want_dead)
+                emit("\tex de,hl\n");
+            g_expr_type = val_type;
+            g_long_from16 = 0;
+            return;
+        }
+
         if (type_size(val_type) == 4) {
             emit("\tpush hl\n");                    /* save lvalue address */
             emit_load_from_hl(val_type);             /* DE:HL = current value */

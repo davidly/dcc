@@ -130,6 +130,59 @@ static void cap4(void)
     ckl("lptr_minus_eq", *lp, 2000L);
 }
 
+struct Slice {
+    const int *data;
+    int count;
+};
+
+static struct Slice drop_first(struct Slice s, int n)
+{
+    if (n > s.count)
+        n = s.count;
+    s.data += n;
+    s.count -= n;
+    return s;
+}
+
+static int slice_sum(struct Slice s)
+{
+    int i;
+    int total;
+
+    total = 0;
+    for (i = 0; i < s.count; ++i)
+        total += s.data[i];
+    return total;
+}
+
+static int slice_max(struct Slice s)
+{
+    int i;
+    int best;
+
+    best = s.data[0];
+    for (i = 1; i < s.count; ++i) {
+        if (s.data[i] > best)
+            best = s.data[i];
+    }
+    return best;
+}
+
+static void cas5(void)
+{
+    static const int values[] = { 4, 8, 15, 16, 23, 42 };
+    struct Slice s;
+    struct Slice tail;
+
+    s.data = values;
+    s.count = 6;
+    tail = drop_first(s, 2);
+    cki("slice_ptr_member_plus_eq_first", tail.data[0], 15);
+    cki("slice_ptr_member_plus_eq_sum", slice_sum(tail), 96);
+    cki("slice_ptr_member_plus_eq_max", slice_max(tail), 42);
+    cki("slice_ptr_member_plus_eq_count", tail.count, 4);
+}
+
 int main(void)
 {
     printf("tc89comp start\n");
@@ -138,6 +191,7 @@ int main(void)
     cau2();
     cal3();
     cap4();
+    cas5();
     if (fails) {
         printf("tc89comp failed: %d\n", fails);
         return 1;

@@ -596,10 +596,8 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                 if (n->op == '=')
                     return type_size(field_type) == 2 &&
                            ast_pointer_assign_rhs_supported(n->b);
-                /* char* (size-1 element) compound += / -= needs no scaling, so
-                 * the unscaled compound tail is used directly. */
-                if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
-                    type_index_elem_size(field_type) == 1)
+                if (type_size(field_type) == 2 &&
+                    (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ))
                     return ast_value_is_plain_int(n->b);
                 return 0;
             }
