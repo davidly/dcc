@@ -64,6 +64,22 @@ int main()
     printf("%x\n", 2748);      /* abc */
     printf("%x\n", 32767);     /* 7fff */
 
+    /* %o octal -- minimal width */
+    printf("%o\n", 0);         /* 0 */
+    printf("%o\n", 8);         /* 10 */
+    printf("%o\n", 10);        /* 12 */
+    printf("%o\n", 511);       /* 777 */
+    printf("[%6o]\n", 10);     /* [    12] */
+
+    /* An unsupported flag ('+' force-sign, '#' alternate-form) must not
+     * desync the arguments that follow it on the same call - confirmed as
+     * a real bug: it used to shift every subsequent %-conversion's
+     * argument by one. Neither flag's own cosmetic effect is implemented
+     * (no '+' sign, no "0x"/leading-0 prefix), but everything after them
+     * must still read the right argument. */
+    printf("%+d %d %d\n", 1, 2, 3);        /* 1 2 3 */
+    printf("%#x %#o %d\n", 6, 4, 9);       /* 6 4 9 */
+
     /* %c character */
     printf("%c\n", 65);        /* A */
     printf("%c\n", 97);        /* a */
@@ -110,6 +126,23 @@ int main()
     printf("[%5s]\n", "ab");       /* [   ab] */
     printf("[%-5s]\n", "ab");      /* [ab   ] */
     printf("[%-3s:%3d:%6ld]\n", "x", 7, 12345L); /* [x  :  7: 12345] */
+
+    /* %.0f: an explicit zero precision must round to the nearest integer
+     * and print no decimal point at all - not fall back to the default of
+     * 6 decimal places (the previous behavior, since it couldn't tell
+     * "no precision given" from "precision explicitly 0"). */
+    printf("[%.0f]\n", 1.5);       /* [2] */
+    printf("[%.2f]\n", 1.5);       /* [1.50] */
+
+    /* %f field width: right-justified (space), left-justified (space),
+     * and the '0' flag (zero-fill, landing after a '-' sign rather than
+     * before it) - none of this was implemented at all previously; width
+     * was silently ignored for every %f conversion. */
+    printf("[%8.2f]\n", 1.5);      /* [    1.50] */
+    printf("[%-8.2f]\n", 1.5);     /* [1.50    ] */
+    printf("[%08.2f]\n", 1.5);     /* [00001.50] */
+    printf("[%08.2f]\n", -1.5);    /* [-0001.50] */
+    printf("[%12f]\n", 1.5);       /* [    1.500000] */
 
     // no real attempt to make printf conformant on a Z80 cppreference();
 

@@ -3260,6 +3260,22 @@ pf_pct_next:
         cp      '-'
         jp      z,pf_pct_left
 
+        ; '+' (force sign) and '#' (alternate form) are not implemented, but
+        ; must still be recognized and skipped as no-op flags here rather
+        ; than falling through to the unrecognized-conversion-character
+        ; path below: that path bails out without consuming an argument,
+        ; which silently desyncs every argument after it for the rest of
+        ; this printf() call (confirmed: "%+d %d %d", 1,2,3 printed
+        ; "+d 1 2" instead of failing locally). Recognizing them here as
+        ; true no-ops means the real conversion character that follows
+        ; (e.g. the 'd' in "%+d") still runs normally and consumes exactly
+        ; one argument, so only the '+'/'#' cosmetic effect itself is
+        ; missing - nothing after it in the call is corrupted.
+        cp      '+'
+        jp      z,pf_pct_next
+        cp      '#'
+        jp      z,pf_pct_next
+
         cp      '.'
         jp      z,pf_pct_dot
 
@@ -3368,6 +3384,8 @@ pf_pct_done_width:
         jp      z,pf_xl
         cp      'X'
         jp      z,pf_xu
+        cp      'o'
+        jp      z,pf_o
         cp      'l'
         jr      nz,pf_pct_not_l
         push    hl                      ; save fmt ptr before clobbering HL
@@ -3694,6 +3712,25 @@ pf_x:
         pop     hl
         jp      pf_loop
 
+pf_o:
+        push    hl
+        call    pf_arg_hl
+        push    de
+        call    pf_build_oct16  ; A = digit count, HL -> first octal digit
+        ld      (pf_digit),a
+        call    pf_zero_prec_blank
+        push    hl
+        xor     a               ; unsigned: no sign
+        call    pf_zsetup       ; honour the '0' zero-pad flag
+        call    pf_efflen       ; A = max(digits, precision)
+        call    pf_iprepad      ; emit leading spaces unless left-justified
+        pop     hl
+        call    pf_zfd          ; precision/zero-fill then emit digits
+        call    pf_ipostpad     ; emit trailing spaces when left-justified
+        pop     de
+        pop     hl
+        jp      pf_loop
+
 pf_done:
         ret                     ; count in BC; caller cleans up
 
@@ -3915,6 +3952,45 @@ pfh1:
         call    pf_emit_a
         ret
 
+; pf_build_oct16: convert HL (unsigned 16-bit) to minimal octal text.
+; Out: A = digit count, HL -> first digit in pf_decbuf, null-terminated.
+; Preserves BC and DE. Unlike decimal (base 10, needs a real divide) octal
+; digits come straight from the low 3 bits of HL via a 3-bit right shift
+; (dividing by 8), the same way pf_build_hex16 uses 4-bit nibbles for
+; base 16 - a 16-bit value needs at most 6 octal digits (2^16-1 = 177777
+; octal), which is exactly pf_decbuf's size including the terminator.
+pf_build_oct16:
+        push    ix
+        push    de
+        ld      ix,pf_decbuf+6
+        ld      (ix+0),0        ; null terminator
+pfbo1:
+        dec     ix
+        ld      a,l
+        and     7               ; remainder = low 3 bits
+        add     a,'0'
+        ld      (ix+0),a
+        srl     h               ; HL >>= 3 (unsigned)
+        rr      l
+        srl     h
+        rr      l
+        srl     h
+        rr      l
+        ld      a,h
+        or      l
+        jr      nz,pfbo1
+        push    ix
+        pop     hl              ; HL -> first digit
+        ld      de,pf_decbuf+6
+        ex      de,hl           ; DE -> first digit, HL = buffer end
+        or      a
+        sbc     hl,de           ; HL = digit count (end - first)
+        ld      a,l             ; A = digit count (<= 6)
+        ex      de,hl           ; HL -> first digit
+        pop     de
+        pop     ix
+        ret
+
 pf_width:
         db      0
 pf_digit:
@@ -4112,6 +4188,32 @@ pf_f:
         call    pf_arg_dehl     ; loads __pf32_l/__pf32_h with raw float bits, advances DE by 4
         push    de
 
+        ; Field width support: the sign/integer-part/fraction pipeline below
+        ; is tightly interleaved with emission (unlike %d/%x/%o, which build
+        ; their digits into pf_decbuf first and pad afterward), so doing the
+        ; same "know the length before padding" trick here would need a much
+        ; larger restructuring. Instead, when a width was requested, redirect
+        ; this whole conversion's output into a scratch buffer by reusing
+        ; pf_emit_a's existing sprintf-style buffer-write mode (pf_sink/
+        ; pf_bufptr) - the entire body below runs completely unchanged,
+        ; unaware it is writing to pf_fwbuf instead of the real destination.
+        ; pf_f_done then measures the buffered text, restores the real
+        ; sink, and pads+replays it via the existing pf_pad_a/pf_emstr
+        ; helpers. When no width was given, none of this runs at all, so
+        ; the common case is exactly as before.
+        ld      a,(pf_width)
+        or      a
+        jp      z,pf_f_nowidth
+        ld      hl,(pf_sink)
+        ld      (pf_fwsink),hl
+        ld      hl,(pf_bufptr)
+        ld      (pf_fwbptr),hl
+        ld      hl,0ffffh
+        ld      (pf_sink),hl
+        ld      hl,pf_fwbuf
+        ld      (pf_bufptr),hl
+pf_f_nowidth:
+
         ld      hl,(__pf32_l)
         ld      (pf_fl),hl
         ld      hl,(__pf32_h)
@@ -4130,10 +4232,17 @@ pf_f_absdone:
         ld      hl,(__pf32_l)
         ld      (pf_fl),hl
 
-        ; Printed precision: pf_prec==0 means default of 6 decimal places.
-        ld      a,(pf_prec)
+        ; Printed precision: default is 6 decimal places unless an explicit
+        ; precision was given (even %.0f, which must honor 0 exactly - the
+        ; previous check only tested pf_prec==0, indistinguishable from "no
+        ; precision given at all", so an explicit ".0" always fell back to
+        ; the default of 6 instead of printing no fractional digits).
+        ld      a,(pf_haveprec)
         or      a
-        jp      nz,pf_f_prec_known
+        jp      z,pf_f_prec_default
+        ld      a,(pf_prec)
+        jp      pf_f_prec_known
+pf_f_prec_default:
         ld      a,6
 pf_f_prec_known:
         ld      (pf_fcnt),a
@@ -4183,8 +4292,15 @@ pf_f_rounded:
 
         call    pf_print_u32
 
+        ; C89: an explicit zero precision (%.0f) prints no decimal point at
+        ; all, not just no fractional digits - pf_fcnt is the final chosen
+        ; precision (set above), so skip the '.' when it's 0.
+        ld      a,(pf_fcnt)
+        or      a
+        jp      z,pf_f_nodot
         ld      a,'.'
         call    pf_emit_a
+pf_f_nodot:
 
         ; pf_print_u32 destroys __pf32_l/__pf32_h; restore integer part from pf_ftl/pf_fth.
         ld      hl,(pf_ftl)
@@ -4251,9 +4367,103 @@ pf_f_digloop:
         ld      (pf_fcnt),a
         jp      pf_f_digloop
 pf_f_done:
+        ld      a,(pf_width)
+        or      a
+        jp      z,pf_f_done_nowidth
+
+        ; NUL-terminate the accumulated text (pf_bufptr still points into
+        ; pf_fwbuf here) so pf_emstr can replay it below, and measure its
+        ; length while pf_bufptr still reflects the scratch buffer.
+        ld      hl,(pf_bufptr)
+        ld      (hl),0
+        ld      de,pf_fwbuf
+        or      a
+        sbc     hl,de           ; HL = length
+        ld      a,l
+
+        ; Restore the real sink/bufptr now that the length is captured.
+        push    af
+        ld      hl,(pf_fwsink)
+        ld      (pf_sink),hl
+        ld      hl,(pf_fwbptr)
+        ld      (pf_bufptr),hl
+        pop     af
+        ld      (pf_digit),a    ; stash length - pf_digit is the same "content
+                                  ; length for padding" scratch pf_x/pf_u/pf_o
+                                  ; already use, and must survive the
+                                  ; pf_emstr call below to be reused for the
+                                  ; post-pad case.
+
+        ld      a,(pf_left)
+        or      a
+        jr      nz,pf_f_w_left  ; left-justified: '0' flag is always ignored
+
+        ; Right-justified: the '0' flag calls for zero-fill instead of
+        ; space-fill - but the fill must land AFTER a leading '-', matching
+        ; %05d's existing "-0042" (not "000-42") placement. The buffered
+        ; text already has the sign as its first byte if negative, so emit
+        ; that byte first when present, pad using the ORIGINAL total length
+        ; (the sign counts toward the field width either way), then replay
+        ; the rest of the buffer starting past the sign.
+        ld      a,(pf_zero)
+        or      a
+        jr      z,pf_f_w_spad
+        ld      a,(pf_fwbuf)
+        cp      '-'
+        jr      nz,pf_f_w_zpad_nosign
+        ld      a,'-'
+        call    pf_emit_a
+        ld      a,(pf_digit)
+        call    pf_zpad_a
+        ld      hl,pf_fwbuf+1
+        call    pf_emstr
+        jr      pf_f_done_nowidth
+pf_f_w_zpad_nosign:
+        ld      a,(pf_digit)
+        call    pf_zpad_a
+        ld      hl,pf_fwbuf
+        call    pf_emstr
+        jr      pf_f_done_nowidth
+pf_f_w_spad:
+        ld      a,(pf_digit)
+        call    pf_pad_a
+        ld      hl,pf_fwbuf
+        call    pf_emstr
+        jr      pf_f_done_nowidth
+
+pf_f_w_left:
+        ld      hl,pf_fwbuf
+        call    pf_emstr        ; '0' flag ignored: plain space post-pad only
+        ld      a,(pf_digit)
+        call    pf_pad_a
+pf_f_done_nowidth:
         pop     de
         pop     hl
         jp      pf_loop
+
+; Emit (pf_width - A) '0' characters, if positive. A is content length.
+; Same structure/contract as pf_pad_a, used only by %f's zero-pad path.
+pf_zpad_a:
+        push    af
+        ld      a,(pf_width)
+        ld      e,a
+        pop     af
+        ld      d,a
+        ld      a,e
+        sub     d
+        ret     c
+        ret     z
+        ld      d,a
+pf_zpad_loop:
+        ld      a,'0'
+        call    pf_emit_a
+        dec     d
+        jr      nz,pf_zpad_loop
+        ret
+
+pf_fwsink:  dw 0
+pf_fwbptr:  dw 0
+pf_fwbuf:   ds 32
 
 pf_fl:      dw 0
 pf_fh:      dw 0
