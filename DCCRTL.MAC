@@ -384,39 +384,40 @@ __pchr:
 
         public  __fpc
 __fpc:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
         ; int fputc(int c, FILE *fp)
         ; fp values 0/1/2 are stdin/stdout/stderr pseudo FILEs in this RTL.
-        ld      a,(ix+6)        ; low byte of fp/fd
+        pop     hl              ; return address
+        pop     de              ; c
+        pop     bc              ; fp/fd
+        push    bc              ; restore caller-cleanup fp argument
+        push    de              ; restore caller-cleanup c argument
+        push    hl              ; restore return address
+
+        ld      a,c             ; low byte of fp/fd
         cp      1
         jr      z,fputc_con
         cp      2
         jr      z,fputc_con
 
-        ; file path: store char in a one-byte buffer and call _write(fp,&ch,1)
-        ld      a,(ix+4)
+        ; File path: store char in a one-byte buffer and call _write(fp,&ch,1).
+        ld      a,e
         ld      (___fpc_ch),a
 
         ld      hl,1
         push    hl              ; count
         ld      hl,___fpc_ch
         push    hl              ; buf
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        push    hl              ; fp
+        push    bc              ; fp
         call    _write
 
-        ; clean 3 args while preserving _write return in HL
+        ; Clean 3 args while preserving _write return in HL.
         ex      de,hl
         ld      hl,6
         add     hl,sp
         ld      sp,hl
         ex      de,hl
 
-        ; success iff _write returned 1 byte
+        ; Success iff _write returned 1 byte.
         ld      a,h
         or      a
         jr      nz,fputc_bad
@@ -425,21 +426,19 @@ __fpc:
         jr      nz,fputc_bad
 
         ld      h,0
-        ld      l,(ix+4)        ; return written character
-        pop     ix
+        ld      a,(___fpc_ch)
+        ld      l,a             ; return written character
         ret
 
 fputc_con:
-        ld      e,(ix+4)
+        ; E still contains c.
         call    __conout
         ld      h,0
-        ld      l,(ix+4)
-        pop     ix
+        ld      l,e
         ret
 
 fputc_bad:
         ld      hl,0ffffh       ; EOF
-        pop     ix
         ret
 
 ___fpc_ch:
@@ -660,12 +659,13 @@ __putc:
         public  __fgetc
 __fgetc:
         ; int fgetc(FILE *fp) / int getc(FILE *fp)
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        pop     hl              ; return address
+        pop     bc              ; fp/fd
+        push    bc              ; restore caller-cleanup argument
+        push    hl              ; restore return address
 
         ; Check the per-fd pushback buffer set by ungetc().
-        ld      a,(ix+4)        ; fd (low byte)
+        ld      a,c             ; fd (low byte)
         cp      UGC_MAX
         jr      nc,fgc_no_pb    ; fd out of range
         ld      l,a
@@ -677,13 +677,12 @@ __fgetc:
         jr      z,fgc_no_pb
         xor     a
         ld      (hl),a          ; consume: clear valid flag
-        ld      l,(ix+4)
+        ld      l,c
         ld      h,0
         ld      de,__ugc
         add     hl,de
         ld      l,(hl)          ; return pushed-back char as int (0..255)
         ld      h,0
-        pop     ix
         ret
 
 fgc_no_pb:
@@ -691,9 +690,7 @@ fgc_no_pb:
         push    hl              ; count
         ld      hl,___getc_ch
         push    hl              ; buf
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        push    hl              ; fp/fd
+        push    bc              ; fp/fd
         call    _read
         ex      de,hl
         ld      hl,6
@@ -712,12 +709,10 @@ fgc_no_pb:
         ld      h,0
         ld      a,(___getc_ch)
         ld      l,a
-        pop     ix
         ret
 
 getc_bad:
         ld      hl,0ffffh       ; EOF
-        pop     ix
         ret
 
 ___getc_ch:
@@ -737,31 +732,33 @@ __getc:
 ; Only one character of pushback per stream is guaranteed (C89 7.9.7.11).
 ; Returns c on success, EOF on failure (c == EOF or fd out of range).
 _ungetc:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        pop     hl              ; return address
+        pop     de              ; c
+        pop     bc              ; stream/fd
+        push    bc              ; restore caller-cleanup stream argument
+        push    de              ; restore caller-cleanup c argument
+        push    hl              ; restore return address
 
-        ; c (ix+4/5) — fail if c == EOF (0xFFFF)
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      a,h
-        and     l
+        ; Fail if c == EOF (0xFFFF).
+        ld      a,d
+        and     e
         inc     a
-        jr      z,ugc_fail      ; h=ff and l=ff: c == -1
+        jr      z,ugc_fail      ; d=ff and e=ff: c == -1
 
-        ; check fd in range
-        ld      a,(ix+6)        ; stream/fd (low byte)
+        ; Check fd in range.
+        ld      a,c             ; stream/fd low byte
         cp      UGC_MAX
         jr      nc,ugc_fail
 
+        ; Keep the character byte in B; the fd remains in C.
+        ld      b,e
+
         ; __ugc[fd] = c & 0xff
-        ld      c,a             ; C = fd
         ld      h,0
         ld      l,c
         ld      de,__ugc
         add     hl,de
-        ld      a,(ix+4)        ; c low byte
-        ld      (hl),a
+        ld      (hl),b
 
         ; __ugv[fd] = 1
         ld      l,c
@@ -770,16 +767,13 @@ _ungetc:
         add     hl,de
         ld      (hl),1
 
-        ; return c & 0xff
+        ; Return c & 0xff.
         ld      h,0
-        ld      a,(ix+4)
-        ld      l,a
-        pop     ix
+        ld      l,b
         ret
 
 ugc_fail:
         ld      hl,0ffffh       ; EOF
-        pop     ix
         ret
 
         public  _remove
@@ -4451,12 +4445,10 @@ _pflio:
 
         public  _exit
 _exit:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        pop     ix
+        pop     bc                      ; return address
+        pop     hl                      ; exit code
+        push    hl                      ; restore caller-cleanup argument
+        push    bc                      ; restore return address
         push    hl                      ; save exit code across hooks + flush
         ; Call atexit handlers (LIFO) if any were registered.
         ld      hl,(__ae_hook)
@@ -4494,9 +4486,10 @@ ATEXIT_MAX      equ     32
 ; int atexit(void (*func)(void))
 ; Returns 0 on success, 1 if the table is full (ATEXIT_MAX registrations).
 _atexit:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        pop     bc                      ; return address
+        pop     de                      ; function pointer
+        push    de                      ; restore caller-cleanup argument
+        push    bc                      ; restore return address
 
         ; Point the _exit hook at our dispatcher (idempotent on repeat calls).
         ld      hl,__ae_dispatch
@@ -4512,10 +4505,8 @@ _atexit:
         ld      l,a
         ld      h,0
         add     hl,hl           ; hl = cnt * 2
-        ld      de,__ae_tbl
-        add     hl,de
-        ld      e,(ix+4)
-        ld      d,(ix+5)
+        ld      bc,__ae_tbl
+        add     hl,bc
         ld      (hl),e
         inc     hl
         ld      (hl),d
@@ -4526,12 +4517,10 @@ _atexit:
         ld      (__ae_cnt),hl
 
         ld      hl,0
-        pop     ix
         ret
 
 ae_reg_fail:
         ld      hl,1
-        pop     ix
         ret
 
 ; Called from _exit via __ae_hook_call trampoline.
@@ -4580,9 +4569,12 @@ _abort:
 ; ============================================================
         public  __asfl
 __asfl:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        pop     hl              ; return address
+        pop     de              ; caller-supplied message pointer
+        push    de              ; restore caller-cleanup argument
+        push    hl              ; restore return address
+        ld      (__asfl_msg),de
+
         ; Print "Assertion failed: " prefix.
         ld      hl,__asfl_pfx
 afpfx:
@@ -4595,8 +4587,7 @@ afpfx:
         jr      afpfx
 afmsg:
         ; Print the caller-supplied message string.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ld      hl,(__asfl_msg)
 afstr:
         ld      a,(hl)
         or      a
@@ -4611,6 +4602,8 @@ afnl:
         call    __cflush
         jp      0000h           ; abort: warm boot, no atexit handlers
 
+__asfl_msg:
+        dw      0
 __asfl_pfx:
         db      'Assertion failed: ',0
 
