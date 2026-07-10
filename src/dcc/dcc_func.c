@@ -887,18 +887,30 @@ static void scan_function_body_ident_counts(void)
     tok = sv_tok;
 }
 
-/* Round-1 BC register-residency candidate selection: the first pointer
- * parameter referenced at least twice in the function body, whose address
- * is never taken. Deliberately restricted to parameters, not locals
- * declared inside the body - a parameter's Sym is added exactly once to
- * locals[] and persists unchanged (same struct instance) across every
- * scan/codegen pass over this function, whereas a body-local's Sym is
- * freshly reallocated at the same offset but as a different struct
- * instance on each pass; carrying reg_alloc across that reallocation would
- * need plumbing this round doesn't build. `params_end` is nlocals right
- * after parameters are registered but before any body-local declaration -
- * exactly the range parse_param_list/parse_old_style_param_declarations
- * populate. */
+/* Round-1 BC register-residency candidate selection: the first plain
+ * 16-bit parameter (pointer or scalar int/unsigned - anything that fits in
+ * a register pair and isn't a struct/long/float, matching exactly the
+ * "plain 16-bit operand" gate ast_cmp_operand_ok in dcc_ast_gen_cond.c
+ * already uses for its own fast comparison path) referenced at least twice
+ * in the function body, whose address is never taken. Originally
+ * pointer-only; generalized once it became clear every codegen hook this
+ * relies on (emit_load_sym_value_direct, gen_ident's reg_alloc check,
+ * sym_can_ix_direct's universal reg_alloc bail) treats bc's contents as an
+ * opaque 16-bit value and never cared whether it was semantically a
+ * pointer - the only pointer-specific hook (gen_index_addr_ast's indexing
+ * branch) simply never fires for a non-pointer, which is fine. A `long`
+ * parameter (4 bytes) does not fit in bc and is out of scope here - it
+ * would need a materially different two-register-pair design.
+ *
+ * Deliberately restricted to parameters, not locals declared inside the
+ * body - a parameter's Sym is added exactly once to locals[] and persists
+ * unchanged (same struct instance) across every scan/codegen pass over
+ * this function, whereas a body-local's Sym is freshly reallocated at the
+ * same offset but as a different struct instance on each pass; carrying
+ * reg_alloc across that reallocation would need plumbing this round
+ * doesn't build. `params_end` is nlocals right after parameters are
+ * registered but before any body-local declaration - exactly the range
+ * parse_param_list/parse_old_style_param_declarations populate. */
 #define BC_REGALLOC_MIN_REFS 2
 static struct Sym *find_bc_regalloc_candidate(int params_end)
 {
@@ -908,7 +920,8 @@ static struct Sym *find_bc_regalloc_candidate(int params_end)
         struct Sym *p = &locals[i];
         if (p->storage != SC_PARAM) continue;
         if (p->is_array) continue;
-        if (type_ptr_depth(p->type) <= 0) continue;
+        if (type_is_struct_object(p->type) || type_is_long(p->type) || type_is_float(p->type)) continue;
+        if (type_size(p->type) != 2) continue;
         if (ident_count_for(p->name) < BC_REGALLOC_MIN_REFS) continue;
         if (ident_addr_taken_for(p->name)) continue;
         if (ident_written_for(p->name)) continue;
