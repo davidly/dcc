@@ -861,15 +861,65 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
 
     if (is_union) {
         struct FieldDef *first;
+        long save_pos;
+        long save_tok_start;
+        int save_line;
+        int save_tok_line;
+        struct Token save_tok;
+        int child_sid;
+        struct FieldDef *candidate;
         first = NULL;
+
+        /* A promoted designator can select an anonymous union member other
+         * than the first one.  Resolve that owner before recursively parsing
+         * the selected member's initializer. */
+        if (tok.kind == '.') {
+            save_pos = posi;
+            save_tok_start = tok_start_pos;
+            save_line = line_no;
+            save_tok_line = tok_line;
+            save_tok = tok;
+            next_token();
+            if (tok.kind == TOK_ID) {
+                for (i = 0; i < nfield_defs; ++i) {
+                    candidate = &field_defs[i];
+                    if (candidate->parent_struct_id != sid || candidate->is_promoted)
+                        continue;
+                    if (!strcmp(candidate->name, tok.text)) {
+                        first = candidate;
+                        break;
+                    }
+                    if ((candidate->type & TYPE_STRUCT) &&
+                        type_ptr_depth(candidate->type) == 0) {
+                        child_sid = type_struct_id(candidate->type);
+                        if (find_field_def(child_sid, tok.text) != NULL) {
+                            first = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+            posi = save_pos;
+            tok_start_pos = save_tok_start;
+            line_no = save_line;
+            tok_line = save_tok_line;
+            tok = save_tok;
+        }
         for (i = 0; i < nfield_defs; ++i) {
-            if (field_defs[i].parent_struct_id == sid && !field_defs[i].is_promoted) {
+            if (first == NULL && field_defs[i].parent_struct_id == sid &&
+                !field_defs[i].is_promoted) {
                 first = &field_defs[i];
                 break;
             }
         }
 
         if (first && tok.kind != TOK_EOF && tok.kind != '}') {
+            if (tok.kind == '.' && first->name[0] != 0) {
+                next_token();
+                if (tok.kind == TOK_ID)
+                    next_token();
+                expect('=');
+            }
             if (first->is_array)
                 emit_init_auto_struct_array_field(s, baseoff, first);
             else if ((first->type & TYPE_STRUCT) && type_ptr_depth(first->type) == 0)
@@ -959,7 +1009,8 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
             while (k >= 0 && k < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}') {
                 struct FieldDef *bfd;
                 bfd = &field_defs[k];
-                if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
+                if (bfd->parent_struct_id == sid &&
+                    (!bfd->is_promoted || fd->is_promoted)) {
                     if (bfd->bit_width <= 0 || bfd->offset != unit_off)
                         break;
                     unit &= ~bitfield_field_mask(bfd);
@@ -1073,7 +1124,8 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
         if (tok.kind == '}') break;
         if (tok.kind == '.') i = -1;
     }
-    expect('}');
+    if (had_brace)
+        expect('}');
 
     if (total > used)
         emit_zero_local_bytes(s, baseoff + used, total - used);

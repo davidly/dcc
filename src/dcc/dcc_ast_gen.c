@@ -1109,7 +1109,7 @@ int ast_index_pointer_array_elem_type(const struct AstNode *n, int *out_type)
     if (n->a == NULL || n->a->kind != AST_IDENT)
         return 0;
     s = find_sym(n->a->sval);
-    if (s == NULL || s->is_const_value || s->storage == SC_FUNC || !s->is_array)
+    if (s == NULL || s->storage == SC_FUNC || !s->is_array)
         return 0;
     if (s->dim_count > 1)
         return 0;
@@ -1118,15 +1118,8 @@ int ast_index_pointer_array_elem_type(const struct AstNode *n, int *out_type)
         return 0;
     if (n->b == NULL)
         return 0;
-    if (n->b->kind == AST_INT_LIT) {
-        if (!ast_value_is_plain_int(n->b))
-            return 0;
-    } else {
-        if (ast_node_is_const(n->b))
-            return 0;
-        if (!ast_gen_supported(n->b) || !ast_value_is_plain_int(n->b))
-            return 0;
-    }
+    if (!ast_value_is_plain_int(n->b))
+        return 0;
     *out_type = elem_type;
     return 1;
 }
