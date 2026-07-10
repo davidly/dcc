@@ -3571,6 +3571,36 @@ void gen_call_ast(const struct AstNode *n)
         return;
     }
 
+    /* Fastcall memset(dest,c,count): DCCRTL's __msf takes dest in HL, the
+     * fill byte in E, count in BC directly - skipping the general
+     * push-3-args/call/pop-3 convention and __mset's own ~10-instruction
+     * stack-argument-reconstruction prologue (see DCCRTL.MAC). Same
+     * rationale as memcmp above. memset is common enough (buffer/struct
+     * zeroing) that this pays off broadly.
+     *
+     * Named __msf, not __msetf: M80 truncates public symbols to 6
+     * significant characters, and __msetf truncates to __MSET, colliding
+     * with __mset's own name (a real "%Mult. Def. Global __MSET" linker
+     * warning plus a miscompile - call sites got linked to __mset's
+     * stack-marshaling entry instead). */
+    if (n->list_len == 3 && !strcmp(name, "memset")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->list[0]);       /* HL = dest */
+        emit("\tpush hl\n");
+        ast_gen_expr(n->list[1]);       /* HL = c */
+        emit("\tpush hl\n");
+        ast_gen_expr(n->list[2]);       /* HL = count */
+        expr_result_dead = old_dead;
+        emit("\tld b,h\n\tld c,l\n");   /* BC = count */
+        emit("\tpop de\n");             /* E = fill byte (low byte of c) */
+        emit("\tpop hl\n");             /* HL = dest */
+        emit_runtime_call("__msf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
     /* Fastcall bdos(fn,dearg): DCCRTL's __bdosf takes fn's low byte in C and
      * dearg in DE directly, skipping the general push-2-args/call/pop-2
      * convention this call would otherwise use - same rationale as

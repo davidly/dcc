@@ -1810,6 +1810,24 @@ mcpy_done:
         pop     hl
         ret
 
+        public  __msf
+__msf:
+        ; fastcall void *memset(void *dest, int c, int count)
+        ; Entry: HL = dest, E = fill byte, BC = count directly - skips
+        ; the general push-3/call/pop-3 convention and __mset's own
+        ; stack-marshaling prologue below entirely. See dcc_ast_gen_
+        ; expr.c's memset call-site codegen.
+        ;
+        ; Named __msf, not __msetf: M80 truncates public symbols to 6
+        ; significant characters, and __msetf truncates to __MSET, which
+        ; collides exactly with __mset's own (already 6-char) name -
+        ; confirmed the hard way (a real "%Mult. Def. Global __MSET"
+        ; linker warning, silently hidden by only checking the tail of
+        ; the build output, plus the miscompile it caused: __msetf's
+        ; call sites got linked to __mset's stack-marshaling entry point
+        ; instead, reading garbage stack data as dest/c/count).
+        jr      mset_core
+
         public  __mset
 __mset:
         ; void *memset(void *dest, int c, int count)
@@ -1829,8 +1847,10 @@ __mset:
         ld      b,(hl)          ; BC = count
         ex      de,hl           ; HL = dest
         pop     af              ; A = fill byte
-        push    hl              ; save dest for return value
         ld      e,a             ; E = fill byte across zero tests
+
+mset_core:
+        push    hl              ; save dest for return value
         ld      a,b
         or      c
         jr      z,ms_done       ; count == 0, nothing to do
