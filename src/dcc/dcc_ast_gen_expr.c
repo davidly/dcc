@@ -3407,6 +3407,26 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     return 1;
 }
 
+/* Evaluate one fastcall argument the same way the general per-argument
+ * call-evaluation loop below does: a pointer-typed expression (an array
+ * decaying to its address, e.g. `names[nn++]` from a 2D array) must go
+ * through gen_pointer_expr_ast, not plain ast_gen_expr, or it gets
+ * evaluated as a value-context dereference instead of an address - a real
+ * miscompile (crash: "not-implemented z80 instruction 0xdd") caught by a
+ * strcpy(names[nn++], text) call in tests/pint.c's identifier table,
+ * which every fastcall special case below had been skipping since none of
+ * their own hand-written tests happened to pass a 2D-array-row argument. */
+static void gen_fastcall_arg(const struct AstNode *arg)
+{
+    int ptr_type;
+    int no_deref;
+
+    if (ast_pointer_expr_type(arg, &ptr_type, &no_deref))
+        gen_pointer_expr_ast(arg, &ptr_type, &no_deref);
+    else
+        ast_gen_expr(arg);
+}
+
 void gen_call_ast(const struct AstNode *n)
 {
     const char *name;
@@ -3521,7 +3541,7 @@ void gen_call_ast(const struct AstNode *n)
     if (n->list_len == 1 && !strcmp(name, "strlen")) {
         old_dead = expr_result_dead;
         expr_result_dead = 0;
-        ast_gen_expr(n->list[0]);       /* HL = s */
+        gen_fastcall_arg(n->list[0]);       /* HL = s */
         expr_result_dead = old_dead;
         emit_runtime_call("__slf");
         g_expr_type = fn_sym->type;
@@ -3534,9 +3554,9 @@ void gen_call_ast(const struct AstNode *n)
     if (n->list_len == 2 && !strcmp(name, "strchr")) {
         old_dead = expr_result_dead;
         expr_result_dead = 0;
-        ast_gen_expr(n->list[0]);       /* HL = s */
+        gen_fastcall_arg(n->list[0]);       /* HL = s */
         emit("\tpush hl\n");
-        ast_gen_expr(n->list[1]);       /* HL = c */
+        gen_fastcall_arg(n->list[1]);       /* HL = c */
         expr_result_dead = old_dead;
         emit("\tld a,l\n");
         emit("\tpop hl\n");
@@ -3556,11 +3576,11 @@ void gen_call_ast(const struct AstNode *n)
     if (n->list_len == 3 && !strcmp(name, "memcmp")) {
         old_dead = expr_result_dead;
         expr_result_dead = 0;
-        ast_gen_expr(n->list[0]);       /* HL = s1 */
+        gen_fastcall_arg(n->list[0]);       /* HL = s1 */
         emit("\tpush hl\n");
-        ast_gen_expr(n->list[1]);       /* HL = s2 */
+        gen_fastcall_arg(n->list[1]);       /* HL = s2 */
         emit("\tpush hl\n");
-        ast_gen_expr(n->list[2]);       /* HL = n */
+        gen_fastcall_arg(n->list[2]);       /* HL = n */
         expr_result_dead = old_dead;
         emit("\tld b,h\n\tld c,l\n");   /* BC = n */
         emit("\tpop hl\n");             /* HL = s2 */
@@ -3586,11 +3606,11 @@ void gen_call_ast(const struct AstNode *n)
     if (n->list_len == 3 && !strcmp(name, "memset")) {
         old_dead = expr_result_dead;
         expr_result_dead = 0;
-        ast_gen_expr(n->list[0]);       /* HL = dest */
+        gen_fastcall_arg(n->list[0]);       /* HL = dest */
         emit("\tpush hl\n");
-        ast_gen_expr(n->list[1]);       /* HL = c */
+        gen_fastcall_arg(n->list[1]);       /* HL = c */
         emit("\tpush hl\n");
-        ast_gen_expr(n->list[2]);       /* HL = count */
+        gen_fastcall_arg(n->list[2]);       /* HL = count */
         expr_result_dead = old_dead;
         emit("\tld b,h\n\tld c,l\n");   /* BC = count */
         emit("\tpop de\n");             /* E = fill byte (low byte of c) */
@@ -3609,14 +3629,106 @@ void gen_call_ast(const struct AstNode *n)
     if (n->list_len == 2 && !strcmp(name, "bdos")) {
         old_dead = expr_result_dead;
         expr_result_dead = 0;
-        ast_gen_expr(n->list[0]);       /* HL = fn */
+        gen_fastcall_arg(n->list[0]);       /* HL = fn */
         emit("\tpush hl\n");
-        ast_gen_expr(n->list[1]);       /* HL = dearg */
+        gen_fastcall_arg(n->list[1]);       /* HL = dearg */
         expr_result_dead = old_dead;
         emit("\tex de,hl\n");           /* DE = dearg */
         emit("\tpop hl\n");             /* HL = fn */
         emit("\tld c,l\n");             /* C = fn low byte */
         emit_runtime_call("__bdosf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall memcpy(dst,src,n): DCCRTL's __mcf takes dst in DE, src in HL,
+     * n in BC directly - same rationale/shape as memcmp above, extended to
+     * memcpy's copy-not-compare semantics. memcpy is common enough
+     * (struct/buffer copies) that this pays off broadly. */
+    if (n->list_len == 3 && !strcmp(name, "memcpy")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = dst */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = src */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[2]);       /* HL = n */
+        expr_result_dead = old_dead;
+        emit("\tld b,h\n\tld c,l\n");   /* BC = n */
+        emit("\tpop hl\n");             /* HL = src */
+        emit("\tpop de\n");             /* DE = dst */
+        emit_runtime_call("__mcf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall memchr(s,c,n): DCCRTL's __mhf takes s in HL, c's low byte in
+     * E, n in BC directly - same rationale/shape as memset above. */
+    if (n->list_len == 3 && !strcmp(name, "memchr")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = s */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = c */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[2]);       /* HL = n */
+        expr_result_dead = old_dead;
+        emit("\tld b,h\n\tld c,l\n");   /* BC = n */
+        emit("\tpop de\n");             /* E = c (low byte) */
+        emit("\tpop hl\n");             /* HL = s */
+        emit_runtime_call("__mhf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall strcpy(dst,src): DCCRTL's __scf takes dst in DE, src in HL
+     * directly - same rationale as memcmp/bdos above, extended to strcpy's
+     * two pointer arguments. */
+    if (n->list_len == 2 && !strcmp(name, "strcpy")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = dst */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = src */
+        expr_result_dead = old_dead;
+        emit("\tpop de\n");             /* DE = dst */
+        emit_runtime_call("__scf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall strrchr(s,c): DCCRTL's __rcf takes s in HL and c's low byte
+     * in A - same shape as strchr above. */
+    if (n->list_len == 2 && !strcmp(name, "strrchr")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = s */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = c */
+        expr_result_dead = old_dead;
+        emit("\tld a,l\n");
+        emit("\tpop hl\n");
+        emit_runtime_call("__rcf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall strstr(haystack,needle): DCCRTL's __ssf takes haystack in
+     * DE, needle in HL directly - same shape as strcpy above. */
+    if (n->list_len == 2 && !strcmp(name, "strstr")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = haystack */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = needle */
+        expr_result_dead = old_dead;
+        emit("\tpop de\n");             /* DE = haystack */
+        emit_runtime_call("__ssf");
         g_expr_type = fn_sym->type;
         g_long_from16 = 0;
         return;

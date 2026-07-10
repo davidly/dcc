@@ -960,6 +960,24 @@ __slf:
         dec     hl
         ret
 
+        public  __scf
+__scf:
+        ; fastcall char *strcpy(char *dst, const char *src)
+        ; Entry: DE=dst, HL=src directly (matching __cmpf's DE/HL
+        ; convention). Named __scf, not __scpyf: __scpyf would 6-char-
+        ; truncate to __SCPY, colliding with __scpy itself.
+        ld      b,d
+        ld      c,e             ; BC = dst (return value) - scpy_core reads
+                                 ; the copy loop's dst progress from DE, but
+                                 ; the return value comes from BC, which the
+                                 ; general __scpy entry below also sets up
+                                 ; before falling into scpy_core. Missing
+                                 ; this the first time round produced a
+                                 ; correct copy but a garbage return value,
+                                 ; caught by a strcpy() == dst comparison
+                                 ; test rather than the copied content.
+        jr      scpy_core
+
         public  __scpy
 __scpy:
         ; char *strcpy(char *dst, const char *src)
@@ -972,6 +990,7 @@ __scpy:
         push    bc              ; restore return address
         ld      b,d
         ld      c,e             ; BC = original dst
+scpy_core:
 sc1:
         ld      a,(hl)
         ld      (de),a
@@ -1015,6 +1034,15 @@ sp3:
         ld      hl,0
         ret
 
+        public  __rcf
+__rcf:
+        ; fastcall char *strrchr(const char *s, int c)
+        ; Entry: HL=s, A = low byte of c (matching __chf's convention).
+        ; Named __rcf, not __srchf: __srchf would 6-char-truncate to
+        ; __SRCH, colliding with __srch itself.
+        ld      c,a
+        jr      srch_core
+
         public  __srch
 __srch:
         ; char *strrchr(const char *s, int c)
@@ -1026,6 +1054,7 @@ __srch:
         push    bc              ; restore c for caller cleanup
         push    hl              ; restore s for caller cleanup
         push    de              ; restore return address
+srch_core:
         ld      e,c             ; save target char in E (CPIR clobbers BC)
         xor     a               ; A = 0, search for NUL
         ld      c,a
@@ -1101,6 +1130,14 @@ schr_not_found:
         ld      hl,0
         ret
 
+        public  __ssf
+__ssf:
+        ; fastcall char *strstr(const char *haystack, const char *needle)
+        ; Entry: DE=haystack, HL=needle directly (matching __cmpf's DE/HL
+        ; convention). Named __ssf, not __sstrf: __sstrf would 6-char-
+        ; truncate to __SSTR, colliding with __sstr itself.
+        jr      sstr_core
+
         public  __sstr
 __sstr:
         ; char *strstr(const char *haystack, const char *needle)
@@ -1114,6 +1151,7 @@ __sstr:
         push    hl              ; restore caller arguments for caller cleanup
         push    de
         push    bc              ; restore return address
+sstr_core:
         ld      a,(hl)
         or      a
         jr      nz,sstr_ne2
@@ -1234,6 +1272,14 @@ sncmp_equal:
         ld      hl,0
         ret
 
+        public  __mhf
+__mhf:
+        ; fastcall void *memchr(const void *s, int c, size_t n)
+        ; Entry: HL=s, E=c (low byte), BC=n directly (matching __msf's
+        ; HL/E/BC convention). Named __mhf, not __mchrf: __mchrf would
+        ; 6-char-truncate to __MCHR, colliding with __mchr itself.
+        jr      mchr_core
+
         public  __mchr
 __mchr:
         ; void *memchr(const void *s, int c, size_t n)
@@ -1246,6 +1292,7 @@ __mchr:
         push    de              ; restore c
         push    hl              ; restore s
         push    af              ; restore return address
+mchr_core:
         ld      a,b
         or      c
         jr      z,mchr_none
@@ -1793,6 +1840,17 @@ snc_term:
         pop     hl
         ret
 
+        public  __mcf
+__mcf:
+        ; fastcall void *memcpy(void *dst, const void *src, size_t n)
+        ; Entry: DE=dst, HL=src, BC=n directly (matching __cmpf's DE/HL/BC
+        ; convention). Named __mcf, not __mcpyf: M80 truncates public
+        ; symbols to 6 significant characters, and __mcpyf truncates to
+        ; __MCPY, colliding with __mcpy itself (the same mistake as
+        ; __msf's first attempt, __msetf).
+        push    de              ; return dst
+        jr      mcpy_core
+
         public  __mcpy
 __mcpy:
         ; void *memcpy(void *dst, const void *src, size_t n)
@@ -1817,6 +1875,7 @@ __mcpy:
         pop     bc              ; BC = n
         pop     de              ; DE = dst
         push    de              ; return dst
+mcpy_core:
         ld      a,b
         or      c
         jr      z,mcpy_done
