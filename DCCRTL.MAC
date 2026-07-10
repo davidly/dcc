@@ -931,21 +931,20 @@ outp_prt:
         public  __slen
 __slen:
         ; size_t strlen(const char *s)
-        ; IX-free entry; use CPIR to scan for NUL.
+        ; IX-free entry; jumps into __slf's CPIR scan below once HL = s is
+        ; set up (no locals of its own to preserve). This must be an
+        ; explicit jump, not fall-through: dccrtlstrip extracts referenced
+        ; functions per public label and traces jr/jp/call targets, but a
+        ; naked fall-through across a public-label boundary is invisible to
+        ; it - a program that references __slen without ever referencing
+        ; __slf (e.g. strlen only called through a function pointer) would
+        ; otherwise get a __slen stub truncated at the label boundary,
+        ; falling through into whatever public symbol happens to follow.
         pop     bc              ; return address
         pop     hl              ; HL = s
         push    hl              ; restore caller argument for caller cleanup
         push    bc              ; restore return address
-        ld      e,l
-        ld      d,h             ; DE = original s
-        ld      bc,0ffffh
-        xor     a               ; search for NUL
-        cpir                    ; HL = byte after NUL
-        or      a
-        sbc     hl,de           ; bytes scanned including NUL
-        dec     hl              ; length excluding NUL
-        ret
-
+        jr      __slf
 
         public  __slf
 __slf:
@@ -1055,51 +1054,22 @@ __chf:
         ; char *strchr_fastcall(const char *s, int c)
         ; Entry: HL = s, A = low byte of c.  Return HL = match or 0.
         ld      c,a
-schrf_loop:
-        ld      a,(hl)
-        cp      c
-        ret     z
-        inc     hl
-        or      a
-        jr      z,schrf_not_found
-
-        ld      a,(hl)
-        cp      c
-        ret     z
-        inc     hl
-        or      a
-        jr      z,schrf_not_found
-
-        ld      a,(hl)
-        cp      c
-        ret     z
-        inc     hl
-        or      a
-        jr      z,schrf_not_found
-
-        ld      a,(hl)
-        cp      c
-        ret     z
-        inc     hl
-        or      a
-        jr      nz,schrf_loop
-schrf_not_found:
-        ld      hl,0
-        ret
+        jr      schr_core
 
         public  __schr
 __schr:
         ; char *strchr(const char *s, int c)
-        ; Unrolled scalar scan.  CPIR is unsafe without first finding NUL,
-        ; and a length-prefetch would scan long misses twice.  This keeps
-        ; strchr(s,'$') long misses to one pass while reducing loop branches.
+        ; IX-free argument setup, then shares __chf's unrolled scalar scan
+        ; below. CPIR is unsafe without first finding NUL, and a length-
+        ; prefetch would scan long misses twice.  This keeps strchr(s,'$')
+        ; long misses to one pass while reducing loop branches.
         pop     de              ; pop return address
         pop     hl              ; HL = s
         pop     bc              ; BC = c (C = char)
         push    bc              ; restore c for caller cleanup
         push    hl              ; restore s for caller cleanup
         push    de              ; restore return address
-schr_loop:
+schr_core:
         ld      a,(hl)
         cp      c
         ret     z
@@ -1126,7 +1096,7 @@ schr_loop:
         ret     z
         inc     hl
         or      a
-        jr      nz,schr_loop
+        jr      nz,schr_core
 schr_not_found:
         ld      hl,0
         ret
