@@ -1475,6 +1475,7 @@ void ast_emit_init_expr(void)
 
     if (n != NULL && (ast_gen_supported(n) || n->kind == AST_CAST ||
                       ast_numeric_value_supported(n) ||
+                      ast_pointer_assign_rhs_supported(n) ||
                       (n->kind == AST_CALL && ast_value_is_pointer_word(n) &&
                        ast_call_named_args_supported(n)))) {
         ast_gen_expr(n);
@@ -3640,7 +3641,7 @@ void gen_struct_addr_expr_ast(const struct AstNode *n, int *out_type)
 
     switch (n->kind) {
     case AST_IDENT:
-        s = find_sym(n->sval);
+        s = n->sym != NULL ? n->sym : find_sym(n->sval);
         emit_load_sym_addr(s);
         *out_type = s->type;
         return;
@@ -3795,6 +3796,27 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
                type_is_struct_object(n->a->type)) {
         gen_compound_literal_ast(n->a);
         cur_type = n->a->type;
+    } else if (!arrow && n->a->kind == AST_CALL && n->a->a != NULL &&
+               n->a->a->kind == AST_IDENT) {
+        struct AstNode lhs;
+        struct Sym *fn;
+        struct Sym *tmp;
+
+        fn = find_global(n->a->a->sval);
+        if (fn == NULL || fn->storage != SC_FUNC ||
+            !ast_struct_return_call_assign_supported(fn->type, n->a) ||
+            n->sym == NULL)
+            fatal("gen_member_addr_ast: unsupported struct-return member base");
+
+        tmp = n->sym;
+        memset(&lhs, 0, sizeof(lhs));
+        lhs.kind = AST_IDENT;
+        lhs.sval = tmp->name;
+        lhs.sym = tmp;
+        lhs.type = tmp->type;
+        gen_struct_return_call_assign_ast(&lhs, n->a);
+        emit_load_sym_addr(tmp);
+        cur_type = tmp->type;
     } else {
         s = find_sym(n->a->sval);
         cur_type = s->type;

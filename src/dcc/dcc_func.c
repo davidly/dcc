@@ -339,7 +339,6 @@ static void record_inline_function_if_simple(struct Sym *s)
     line_no = sv_line;
     tok_line = sv_tok_line;
     tok = sv_tok;
-
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
 
@@ -360,6 +359,74 @@ static void record_inline_function_if_simple(struct Sym *s)
         return;
 
     s->inline_return_expr = ret_expr;
+}
+
+static void scan_reserve_struct_return_member_temp(void)
+{
+    long sv_pos;
+    long sv_tok_start;
+    int sv_line;
+    int sv_tok_line;
+    struct Token sv_tok;
+    struct Sym *fn;
+    char name[64];
+    int depth;
+    int bytes;
+
+    if (tok.kind != TOK_ID)
+        return;
+    fn = find_global(tok.text);
+    if (fn == NULL || fn->storage != SC_FUNC || !type_is_struct_object(fn->type))
+        return;
+
+    sv_pos = posi;
+    sv_tok_start = tok_start_pos;
+    sv_line = line_no;
+    sv_tok_line = tok_line;
+    sv_tok = tok;
+
+    next_token();
+    if (tok.kind != '(') {
+        posi = sv_pos;
+        tok_start_pos = sv_tok_start;
+        line_no = sv_line;
+        tok_line = sv_tok_line;
+        tok = sv_tok;
+        return;
+    }
+
+    depth = 0;
+    do {
+        if (tok.kind == TOK_EOF)
+            break;
+        if (tok.kind == '(')
+            depth++;
+        else if (tok.kind == ')')
+            depth--;
+        next_token();
+    } while (depth > 0);
+
+    /* Parentheses around the call are transparent in the AST - `(mk()).f`
+     * builds the same member-on-call node as `mk().f` and allocates the same
+     * temp - so skip any run of closing parens before looking for the `.`.
+     * This can only OVER-reserve (e.g. `f(g(1)).x` also matches at `g`),
+     * which merely pads the frame; under-reserving is what corrupts it. */
+    while (tok.kind == ')')
+        next_token();
+
+    if (tok.kind == '.') {
+        bytes = type_size(fn->type);
+        if (bytes <= 0)
+            bytes = 2;
+        sprintf(name, "#sret%d", nlocals);
+        add_local_alloc(name, fn->type, bytes);
+    }
+
+    posi = sv_pos;
+    tok_start_pos = sv_tok_start;
+    line_no = sv_line;
+    tok_line = sv_tok_line;
+    tok = sv_tok;
 }
 
 static int static_inline_body_can_be_buffered(struct Sym *s)
@@ -1520,6 +1587,12 @@ static int scan_compound_literal_if_present(void)
             break;
         if (depth >= 1 && tok.kind == '(' && scan_compound_literal_if_present())
             continue;
+        /* Non-constant fields are re-parsed at emit time through
+         * ast_emit_init_expr, whose AST build allocates a hidden temp for a
+         * struct-return call member base (`mk(...).f`); reserve the same
+         * slot here so the scan-derived frame size matches. */
+        if (depth >= 1 && tok.kind == TOK_ID)
+            scan_reserve_struct_return_member_temp();
         if (tok.kind == '{')
             depth++;
         else if (tok.kind == '}')
@@ -1541,6 +1614,14 @@ static void scan_initializer_or_decl_tail(void)
 
         if (tok.kind == '(' && scan_compound_literal_if_present())
             continue;
+
+        /* A struct-return call member access `mk(...).field` inside a
+         * declaration initializer reserves a hidden temp during codegen's
+         * AST build (ast_add_struct_return_member_temp); reserve the same
+         * slot here so the scan-derived frame size matches, exactly as the
+         * statement-level else-branch in scan_function_body does. */
+        if (tok.kind == TOK_ID)
+            scan_reserve_struct_return_member_temp();
 
         if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') depth++;
         else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
@@ -2410,6 +2491,7 @@ void scan_function_body(void)
             }
             k = tok.kind;
             if (k == TOK_ID) {
+                scan_reserve_struct_return_member_temp();
                 next_token();
                 if (tok.kind == '(')
                     current_function_has_call = 1;
