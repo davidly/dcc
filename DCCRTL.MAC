@@ -17523,7 +17523,7 @@ SCL8:
         ret
 
 ; static function sc_digit (renamed sc_isdigit: collides with the unrelated
-; sc_digit byte variable in __stol/__stou's parse state, further down)
+; sc_digit byte variable in _fscanf's parse state, earlier in this file)
 ; Leaf helper: preserve the caller-cleaned argument while avoiding an IX frame.
 sc_isdigit:
         pop de                  ; return address
