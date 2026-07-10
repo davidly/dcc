@@ -2658,6 +2658,29 @@ void gen_assign_ast(const struct AstNode *n)
     }
 
     if (type_size(s->type) == 2 &&
+        (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
+        ast_value_is_long_word(n->b)) {
+        emit_load_sym_value_direct(s);
+        emit("\tpush hl\n");
+        saved_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->b);
+        expr_result_dead = saved_dead;
+        emit("\tex de,hl\n\tpop hl\n");
+        if (n->op == TOK_ANDEQ)
+            binop = '&';
+        else if (n->op == TOK_OREQ)
+            binop = '|';
+        else
+            binop = '^';
+        gen_binop_typed(binop, s->type);
+        emit_store_hl_to_sym_direct(s);
+        g_expr_type = s->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    if (type_size(s->type) == 2 &&
         (n->op == TOK_MULEQ || n->op == TOK_DIVEQ || n->op == TOK_MODEQ) &&
         ast_long_word_type(n->b, &common_type)) {
         int b32;
