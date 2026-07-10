@@ -3945,7 +3945,7 @@ static int try_speculative_noix_function_body(const char *name, int type,
  * runtime-helper call (e.g. `call __mulu`) codegen may still insert for a
  * `*`, `/`, `%`, or long/float operation with no visible call syntax at all -
  * so it is only a pre-filter, never the actual safety proof. That proof is
- * regalloc_buffer_is_safe below, which also rejects any "call" found in
+ * regalloc_buffer_finalize below, which also rejects any "call" found in
  * the generated buffer regardless of what this pre-filter guessed.
  *
  * Returns 1 whenever it's worth attempting speculative generation at all -
@@ -4046,28 +4046,55 @@ static int line_touches_de_reg(const char *s)
     return line_touches_reg_pair(s, "d", "e", "de");
 }
 
-/* Exact safety verification for try_speculative_bc_regalloc_function_body:
- * every line in the speculative buffer that touches b/c/bc (when bc_cand is
- * non-NULL) or d/e/de (when e_cand is non-NULL) must be exactly one of the
- * small set of literal shapes this feature's own codegen hooks can produce -
- * the one-time entry load for a BC pointer parameter (emit_function_
- * prologue), the register-to-register moves into HL/DE (emit_load_sym_
- * value_direct/emit_load_sym_de_direct/emit_store_hl_to_sym_direct/emit_
- * incdec_sym_direct in dcc_symbols.c, reached via gen_ident/gen_index_addr_
- * ast's reg_alloc branches). Anything else means some codegen path this
- * feature didn't teach about reg_alloc fell through to a stale frame read
- * (a literal "(ix+off)" reference other than the BC candidate's own two
- * entry-load lines), or unrelated codegen collided with a live register -
- * either way, exact by construction: a correctly-generated body can never
- * contain anything else. A bare "call" anywhere also fails it outright:
- * current_function_has_call only detects an explicit C call syntactically
- * present in the source, not an implicit runtime-helper call (e.g. `call
- * __mulu`) codegen may still insert for a `*`, `/`, `%`, or long/float
- * operation with no call syntax visible at all - this feature's leaf-only
- * gate depends on there being truly zero calls of any kind. Neither
- * candidate's own address may ever be taken either - see g_regalloc_
- * address_escaped (dcc_symbols.c), checked separately by the caller. */
-static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_cand)
+/* Exact safety verification and, for BC, on-demand-reload REWRITE, for
+ * try_speculative_bc_regalloc_function_body.
+ *
+ * E is unchanged from before: strict decline-only. Every line touching d/e/
+ * de (once e_cand's own value is live) must be one of the small recognized
+ * shapes emit_store_hl_to_sym_direct/emit_incdec_sym_direct/emit_load_sym_
+ * value_direct/ast_byte_operand's kind-1 hooks produce; anything else
+ * discards the whole attempt. E has no shadow to fall back on (its frame
+ * slot is never kept in sync - see gen_local_decl_after_type), so there is
+ * nothing to reload from; a real clobber here is unrecoverable, not just
+ * inconvenient.
+ *
+ * BC is different, and gets a genuinely more permissive treatment: bc_cand
+ * is read-only by construction (find_bc_regalloc_candidate excludes any
+ * candidate ever written to), so its ORIGINAL incoming-parameter stack slot
+ * (ix+off / ix+off+1) never changes for the life of the function - it is
+ * already a perfect, always-valid shadow, for free, with no bookkeeping
+ * needed to keep it in sync. So instead of declining outright the moment
+ * anything else touches b/c/bc (e.g. tbig.c's get_stamp parking a scratch
+ * value via push bc/pop bc for unrelated long arithmetic), this pass tracks
+ * whether bc is currently "trusted" (untouched by anything but a recognized
+ * line since the last known-good point) as it walks forward, and - the
+ * moment it's asked to trust bc again at a recognized value-read site while
+ * untrusted - REWRITES the buffer, inserting a fresh reload from that
+ * always-correct original slot right there, before continuing. This is
+ * deliberately conservative in one direction: it does not attempt to prove
+ * a "push bc ... pop bc" pair actually restores the original value (which
+ * it usually does) and skip the reload in that case - every untrusted point
+ * gets a reload whether or not one was strictly needed, trading a few extra
+ * instructions for staying exact rather than tracking real stack-balance
+ * semantics from flat text.
+ *
+ * A bare "call" anywhere still fails the whole attempt outright, for both
+ * candidates: current_function_has_call only detects an explicit C call
+ * syntactically present in the source, not an implicit runtime-helper call
+ * (e.g. `call __mulu`) codegen may still insert for a `*`, `/`, `%`, or
+ * long/float operation with no call syntax visible at all - this feature's
+ * leaf-only gate depends on there being truly zero calls of any kind, and a
+ * call's effect on bc/de is not something a reload can safely paper over
+ * (unlike a same-function scratch use, it's not visible in this text at
+ * all). Neither candidate's own address may ever be taken either - see
+ * g_regalloc_address_escaped (dcc_symbols.c), checked separately by the
+ * caller.
+ *
+ * On success, *out_f is a rewound tmpfile holding the (possibly BC-
+ * reload-rewritten) content to commit - the caller must fclose it. On
+ * failure, *out_f is untouched. */
+static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
+                                     FILE **out_f)
 {
     long size;
     char *buf;
@@ -4075,13 +4102,22 @@ static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_c
     char entry_c[32], entry_b[32];
     int safe;
     int e_live;
+    int bc_trusted;
     char prev1[32], prev2[32];
+    FILE *rewritten;
+
+    rewritten = tmpfile();
+    if (rewritten == NULL)
+        fatal("cannot create speculative regalloc rewrite temp file");
 
     fseek(f, 0, SEEK_END);
     size = ftell(f);
     rewind(f);
-    if (size <= 0)
+    if (size <= 0) {
+        rewind(rewritten);
+        *out_f = rewritten;
         return 1;
+    }
     buf = (char *)xmalloc((size_t)size + 1);
     if (fread(buf, 1, (size_t)size, f) != (size_t)size)
         fatal("cannot read speculative regalloc temp file");
@@ -4089,6 +4125,7 @@ static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_c
 
     if (strstr(buf, "\tcall ") != NULL) {
         free(buf);
+        fclose(rewritten);
         return 0;
     }
 
@@ -4099,10 +4136,13 @@ static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_c
 
     safe = 1;
     e_live = 0;
+    bc_trusted = 1;
     prev1[0] = 0;
     prev2[0] = 0;
     line = buf;
     while (safe && line < buf + size) {
+        int is_bc_value_read_start;
+        int is_bc_recognized_other;
         int is_recognized_e_line;
         int is_recognized_e_index_swap;
         int is_universally_safe_de_line;
@@ -4110,12 +4150,31 @@ static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_c
         nl = strchr(line, '\n');
         if (nl) *nl = 0;
 
-        if (bc_cand != NULL &&
-            strcmp(line, "\tld l,c") != 0 && strcmp(line, "\tld h,b") != 0 &&
-            strcmp(line, "\tld e,c") != 0 && strcmp(line, "\tld d,b") != 0 &&
-            strcmp(line, entry_c) != 0 && strcmp(line, entry_b) != 0 &&
-            line_touches_bc_reg(line))
-            safe = 0;
+        /* The two-line "ld l,c"/"ld h,b" or "ld e,c"/"ld d,b" pairs (emit_
+         * load_sym_value_direct/emit_load_sym_de_direct's REG_BC branches)
+         * are always emitted back-to-back with nothing in between, so the
+         * FIRST line of either pair is the one decision point: if bc is
+         * currently untrusted, insert a fresh reload from the candidate's
+         * own never-written original parameter slot right before it, and
+         * treat bc as trusted again from here on - the second line of the
+         * pair, and the two entry-load lines themselves, never need their
+         * own check. */
+        is_bc_value_read_start = bc_cand != NULL &&
+            (strcmp(line, "\tld l,c") == 0 || strcmp(line, "\tld e,c") == 0);
+        is_bc_recognized_other = bc_cand != NULL &&
+            (strcmp(line, "\tld h,b") == 0 || strcmp(line, "\tld d,b") == 0 ||
+             strcmp(line, entry_c) == 0 || strcmp(line, entry_b) == 0);
+
+        if (is_bc_value_read_start) {
+            if (!bc_trusted) {
+                fprintf(rewritten, "%s\n", entry_c);
+                fprintf(rewritten, "%s\n", entry_b);
+                bc_trusted = 1;
+            }
+        } else if (!is_bc_recognized_other && bc_cand != NULL && line_touches_bc_reg(line)) {
+            bc_trusted = 0;
+        }
+        fprintf(rewritten, "%s\n", line);
 
         is_recognized_e_line =
             strcmp(line, "\tld e,l") == 0 || strcmp(line, "\tld l,e") == 0 ||
@@ -4188,7 +4247,13 @@ static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_c
     }
 
     free(buf);
-    return safe;
+    if (!safe) {
+        fclose(rewritten);
+        return 0;
+    }
+    rewind(rewritten);
+    *out_f = rewritten;
+    return 1;
 }
 
 /* Speculatively generate `name`'s already-scanned body with `bc_cand` (a
@@ -4196,7 +4261,7 @@ static int regalloc_buffer_is_safe(FILE *f, struct Sym *bc_cand, struct Sym *e_c
  * candidate - may be NULL) BC-resident, and/or a loop-counter local claimed
  * during the walk itself into E (via g_e_regalloc_claim_active, set here;
  * see gen_local_decl_after_type in dcc_decl.c), instead of occupying a frame
- * slot - and verifies both via regalloc_buffer_is_safe. Modeled directly on
+ * slot - and verifies/finalizes both via regalloc_buffer_finalize. Modeled directly on
  * try_speculative_noix_function_body: same tmpfile redirection, same g_
  * inline_body_buffering guard (required for the same EXTRN-dedup-cache-
  * desync reason), same commit-or-full-rewind discipline on failure. Unlike
@@ -4272,14 +4337,17 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
      * be discarded, to avoid double-reporting and stale nulabels state. */
     if (g_diag_error_count == errors_before &&
         !g_regalloc_address_escaped &&
-        (bc_cand != NULL || g_e_regalloc_claimed) &&
-        regalloc_buffer_is_safe(scratch, bc_cand, g_e_regalloc_claimed ? g_e_regalloc_sym : NULL)) {
-        check_undefined_user_labels();
-        rewind(scratch);
-        while ((c = fgetc(scratch)) != EOF)
-            fputc(c, outf);
-        fclose(scratch);
-        return 1;
+        (bc_cand != NULL || g_e_regalloc_claimed)) {
+        FILE *finalized = NULL;
+        if (regalloc_buffer_finalize(scratch, bc_cand, g_e_regalloc_claimed ? g_e_regalloc_sym : NULL,
+                                      &finalized)) {
+            check_undefined_user_labels();
+            fclose(scratch);
+            while ((c = fgetc(finalized)) != EOF)
+                fputc(c, outf);
+            fclose(finalized);
+            return 1;
+        }
     }
 
     fclose(scratch);
