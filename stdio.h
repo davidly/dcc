@@ -149,6 +149,11 @@ FILE  *tmpfile(void);
 /* Formatted-string helpers */
 /** Formatted output into a caller-supplied string buffer. */
 int sprintf(char *s, const char *format, ...);
+/** Formatted output into a caller-supplied string buffer, bounded to at most
+ * n-1 characters plus a terminating NUL (C99); n=0 writes nothing at all,
+ * not even a NUL. Always returns the number of characters that would have
+ * been written had n been unbounded, matching sprintf's return value. */
+int snprintf(char *s, size_t n, const char *format, ...);
 /** Parse formatted input from a string. */
 int sscanf(const char *s, const char *format, ...);
 
@@ -159,5 +164,7 @@ int vprintf(const char *format, va_list ap);
 int vfprintf(FILE *stream, const char *format, va_list ap);
 /** Formatted string output from a va_list. */
 int vsprintf(char *s, const char *format, va_list ap);
+/** Formatted, bounded string output from a va_list (C99); see snprintf. */
+int vsnprintf(char *s, size_t n, const char *format, va_list ap);
 
 #endif /* _STDIO_H */

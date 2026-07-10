@@ -17,6 +17,7 @@
     { "name": "tscanin", "stdin": "42 -7 hello", "host": true },
     { "name": "tpfio", "dcc_floatio": true, "dcc_longio": false },
     { "name": "tplng", "dcc_floatio": false, "dcc_longio": true },
+    { "name": "tpflio", "dcc_floatio": true, "dcc_longio": true },
     { "name": "tvplain", "dcc_floatio": false, "dcc_longio": false },
     { "name": "tvla", "stack_size": 8192, "requires-non-msvc-host-compiler": true },
     { "name": "tvlax", "stack_size": 2048, "requires-non-msvc-host-compiler": true },

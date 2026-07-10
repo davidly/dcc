@@ -47,6 +47,7 @@ int asm_name_must_mangle(const char *cname)
     struct Sym *s;
     static const char *runtime_names[] = {
         "printf", "fprintf", "sprintf", "vprintf", "vfprintf", "vsprintf",
+        "snprintf", "vsnprintf",
         NULL
     };
     int i;
@@ -184,18 +185,36 @@ const char *asm_name_for(const char *cname)
 {
     int i;
 
-    if (!strcmp(cname, "printf")) {
-        if (opt_floatio && opt_longio) return "_pflio";
-        if (opt_floatio)               return "_pffio";
-        if (opt_longio)                return "_pflng";
-    }
+    /* printf-family functions share one set of hook-installing runtime entry
+     * points: -ffloatio/-flongio remap all eight of them the same way, so %f
+     * and %ld support is identical regardless of which function formats it
+     * (previously only plain printf() was remapped for -ffloatio, so %f
+     * silently failed through sprintf/fprintf/vprintf/vsprintf/vfprintf). */
+    {
+        static const struct {
+            const char *cname;
+            const char *lng;    /* -flongio only */
+            const char *fio;    /* -ffloatio only */
+            const char *flio;   /* both */
+        } pf_family[] = {
+            { "printf",     "_pflng", "_pffio", "_pflio" },
+            { "sprintf",    "_splng", "_spfio", "_splio" },
+            { "fprintf",    "_fplng", "_fpfio", "_fplio" },
+            { "vprintf",    "_vplng", "_vpfio", "_vplio" },
+            { "vsprintf",   "_vslng", "_vsfio", "_vslio" },
+            { "vfprintf",   "_vflng", "_vffio", "_vflio" },
+            { "snprintf",   "_snlng", "_snfio", "_snlio" },
+            { "vsnprintf",  "_vnlng", "_vnfio", "_vnlio" },
+        };
 
-    if (opt_longio) {
-        if (!strcmp(cname, "sprintf"))  return "_splng";
-        if (!strcmp(cname, "fprintf"))  return "_fplng";
-        if (!strcmp(cname, "vprintf"))  return "_vplng";
-        if (!strcmp(cname, "vsprintf")) return "_vslng";
-        if (!strcmp(cname, "vfprintf")) return "_vflng";
+        for (i = 0; i < (int)(sizeof(pf_family) / sizeof(pf_family[0])); ++i) {
+            if (strcmp(cname, pf_family[i].cname) != 0)
+                continue;
+            if (opt_floatio && opt_longio) return pf_family[i].flio;
+            if (opt_floatio)               return pf_family[i].fio;
+            if (opt_longio)                return pf_family[i].lng;
+            break;
+        }
     }
 
     {

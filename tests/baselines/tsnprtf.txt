@@ -1,0 +1,10 @@
+[hi 42] r=5
+[abcde] r=5
+[abcd] r=8
+[] r=3
+[Q] r=3
+[aa] r=2
+[bb] r=4
+[11-]
+[ans=42]
+tsnprtf ok

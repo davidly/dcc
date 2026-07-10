@@ -3743,11 +3743,38 @@ pf_emit_a:
         ld      a,h
         or      l
         jr      z,pfe_con       ; pf_sink=0  console
+        inc     a               ; a=h; sink=0FFFFh (unbounded buffer) -> h=0FFh -> wraps to 0
+        jr      z,pfe_buf       ; unbounded buffer: sprintf/fprintf/vsprintf/vfprintf
+
+; Bounded buffer (snprintf/vsnprintf, pf_sink=1): write only while pf_bufcnt <
+; pf_bufmax, discard past the cap. BC (the running char count returned to the
+; caller) still increments either way, which is exactly C99's "as if the
+; buffer had been unbounded" snprintf return value - no extra bookkeeping needed.
+pfe_bufn:
+        ; BC (not DE) holds pf_bufmax here: E still holds the character to
+        ; emit (loaded at entry), and ld de,(pf_bufmax) would clobber it.
+        ; BC is safe to reuse - the caller's BC is saved on the stack and
+        ; only restored at the epilogue below.
+        ld      hl,(pf_bufcnt)
+        ld      bc,(pf_bufmax)
+        or      a
+        sbc     hl,bc
+        jr      nc,pfe_epilogue         ; bufcnt >= bufmax: discard, skip the write
+        ld      hl,(pf_bufptr)
+        ld      (hl),e
+        inc     hl
+        ld      (pf_bufptr),hl
+        ld      hl,(pf_bufcnt)
+        inc     hl
+        ld      (pf_bufcnt),hl
+        jr      pfe_epilogue
+
 pfe_buf:
         ld      hl,(pf_bufptr)
         ld      (hl),e
         inc     hl
         ld      (pf_bufptr),hl
+pfe_epilogue:
         pop     bc
         pop     de
         pop     hl
@@ -4026,10 +4053,12 @@ pf_long_stub:
 pf_long_hook:
         dw      pf_long_stub
 
-; printf/sprintf/fprintf shared sink and buffer (here so they stay in the
-; _printf block; placing them elsewhere forces dccrtlstrip to keep that block)
-pf_sink:        dw      0       ; 0=console, 0FFFFh=buffer
-pf_bufptr:      dw      0       ; write pointer for sprintf/fprintf
+; printf/sprintf/fprintf/snprintf shared sink and buffer (here so they stay in
+; the _printf block; placing them elsewhere forces dccrtlstrip to keep that block)
+pf_sink:        dw      0       ; 0=console, 0FFFFh=unbounded buffer, 1=bounded buffer
+pf_bufptr:      dw      0       ; write pointer for sprintf/fprintf/snprintf
+pf_bufcnt:      dw      0       ; snprintf/vsnprintf: chars written into buf so far
+pf_bufmax:      dw      0       ; snprintf/vsnprintf: cap on pf_bufcnt (n-1, or 0 if n=0)
 __pf_cnt:       dw      0       ; char count saved by fprintf
 __pf_fbuf:      ds      256     ; static buffer for fprintf
 
@@ -4156,28 +4185,10 @@ __pf32_h:       dw      0
 ; ---- float-enabled printf (-ffloatio) ------------------------------
         public  _pffio
 _pffio:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        push    bc
-        push    de
-        ld      hl,0
-        ld      (pf_sink),hl            ; console mode
-        ld      hl,pf_f                 ; install float handler
-        ld      (pf_float_hook),hl
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      de,6
-        ld      bc,0
-        call    __pf_run
-        ld      hl,pf_float_stub        ; restore default handler
-        ld      (pf_float_hook),hl
-        ld      h,b
-        ld      l,c
-        pop     de
-        pop     bc
-        pop     ix
-        ret
+        ld      hl,pf_f                 ; install float handler (permanent - see
+        ld      (pf_float_hook),hl      ; _pflng: -ffloatio is a whole-program
+        jp      _printf                 ; flag, so every printf-family call in
+                                         ; this build wants it active)
 
 ; pf_f is the %f handler installed via pf_float_hook when _pffio is active.
 ; It lives in the _pffio block so dccrtlstrip omits it for non-float builds.
@@ -4266,15 +4277,27 @@ pf_f_prec_known:
         ld      d,(hl)
         ld      (pf_fth),de
 
+        ; Every float-arithmetic helper below (__faf/__fsf/__fmf/__ffi/__fif/
+        ; __fful/__fulf) freely clobbers B and C as scratch - completely fine
+        ; for their normal callers, but BC is also __pf_run's running output
+        ; character count for the whole printf call, live across every
+        ; pf_emit_a call in this routine. Left alone, each of these calls
+        ; would silently corrupt that count (and thus a caller's snprintf/
+        ; sprintf return value) every time %f rounds or builds a fractional
+        ; digit. Each call below is wrapped in push bc/pop bc for exactly
+        ; this reason - not to pass or receive a value, purely to protect the
+        ; count across a callee that doesn't know it needs protecting.
         ld      hl,(pf_fl)
         ld      de,(pf_fh)
+        push    bc
         push    de
         push    hl
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
         call    __faf
-        pop     bc
-        pop     bc
+        pop     af              ; discard the 2 pushed operand pairs via AF, not BC
+        pop     af
+        pop     bc              ; restore the running count
         ld      (pf_fl),hl
         ld      (pf_fh),de
 pf_f_rounded:
@@ -4282,7 +4305,9 @@ pf_f_rounded:
         ; Integer part = (unsigned long)abs(f).
         ld      hl,(pf_fl)
         ld      de,(pf_fh)
+        push    bc
         call    __fful
+        pop     bc
 
         ; Save integer part in pf_ftl/pf_fth; load __pf32_l/__pf32_h for pf_print_u32.
         ld      (__pf32_l),hl
@@ -4305,18 +4330,22 @@ pf_f_nodot:
         ; pf_print_u32 destroys __pf32_l/__pf32_h; restore integer part from pf_ftl/pf_fth.
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
+        push    bc
         call    __fulf
+        pop     bc
         ld      (pf_ftl),hl
         ld      (pf_fth),de
         ld      hl,(pf_fl)
         ld      de,(pf_fh)
+        push    bc
         push    de
         push    hl
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
         call    __fsf
-        pop     bc
-        pop     bc
+        pop     af              ; discard operands via AF, not BC - see __faf above
+        pop     af
+        pop     bc              ; restore the running count
         ld      (pf_fl),hl
         ld      (pf_fh),de
 
@@ -4328,18 +4357,22 @@ pf_f_digloop:
         ; frac *= 10.0f
         ld      hl,(pf_fl)
         ld      de,(pf_fh)
+        push    bc
         push    de
         push    hl
         ld      hl,0
         ld      de,16672        ; 10.0f = 0x41200000
         call    __fmf
-        pop     bc
-        pop     bc
+        pop     af              ; discard operands via AF, not BC - see __faf above
+        pop     af
+        pop     bc              ; restore the running count
         ld      (pf_fl),hl
         ld      (pf_fh),de
 
         ; digit = (int)frac
+        push    bc
         call    __ffi
+        pop     bc
         ld      (pf_fiw),hl
         ld      a,l
         add     a,'0'
@@ -4347,18 +4380,22 @@ pf_f_digloop:
 
         ; frac -= (float)digit
         ld      hl,(pf_fiw)
+        push    bc
         call    __fif
+        pop     bc
         ld      (pf_ftl),hl
         ld      (pf_fth),de
         ld      hl,(pf_fl)
         ld      de,(pf_fh)
+        push    bc
         push    de
         push    hl
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
         call    __fsf
-        pop     bc
-        pop     bc
+        pop     af              ; discard operands via AF, not BC - see __faf above
+        pop     af
+        pop     bc              ; restore the running count
         ld      (pf_fl),hl
         ld      (pf_fh),de
 
@@ -4497,27 +4534,12 @@ pf_rndtab:
         public  _vplng
         public  _vslng
         public  _vflng
+        public  _snlng
+        public  _vnlng
 _pflng:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        push    bc
-        push    de
-        ld      hl,0
-        ld      (pf_sink),hl            ; console mode
         ld      hl,pf_lng               ; install long handler (permanent)
         ld      (pf_long_hook),hl
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      de,6
-        ld      bc,0
-        call    __pf_run
-        ld      h,b
-        ld      l,c
-        pop     de
-        pop     bc
-        pop     ix
-        ret
+        jp      _printf
 
 ; pf_lng: the %l handler installed via pf_long_hook when _pflng (or _pflio) is
 ; active.  Lives in the _pflng block so dccrtlstrip omits it for non-long builds.
@@ -4770,36 +4792,133 @@ _vflng:
         ld      (pf_long_hook),hl
         jp      _vfprintf
 
+_snlng:
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _snprintf
+
+_vnlng:
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _vsnprintf
+
 ; ---- long+float printf (-ffloatio -flongio) ----------------------------------
 ; _pflio is a drop-in for printf that pre-installs both the float handler and the
 ; 32-bit integer handler before calling __pf_run.  The ld hl,pf_f and ld hl,pf_lng
 ; references inside _pflio cause dccrtlstrip to keep both _pffio and _pflng.
         public  _pflio
 _pflio:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        push    bc
-        push    de
-        ld      hl,0
-        ld      (pf_sink),hl            ; console mode
-        ld      hl,pf_f                 ; install float handler
+        ld      hl,pf_f                 ; install float handler (permanent)
         ld      (pf_float_hook),hl
-        ld      hl,pf_lng               ; install long handler
+        ld      hl,pf_lng               ; install long handler (permanent)
         ld      (pf_long_hook),hl
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      de,6
-        ld      bc,0
-        call    __pf_run
-        ld      hl,pf_float_stub        ; restore float hook; long hook stays
+        jp      _printf
+
+; Thin float-aware wrappers for the rest of the printf family (-ffloatio),
+; mirroring the *lng wrappers above: install pf_float_hook permanently, then
+; tail-jump to the corresponding original entry point. Before these existed,
+; -ffloatio only ever remapped plain printf() - sprintf/fprintf/vprintf/
+; vsprintf/vfprintf always used their float-blind base entry, so %f silently
+; printed a literal "f" when formatted through anything but printf().
+        public  _spfio
+        public  _fpfio
+        public  _vpfio
+        public  _vsfio
+        public  _vffio
+        public  _snfio
+        public  _vnfio
+_spfio:
+        ld      hl,pf_f
         ld      (pf_float_hook),hl
-        ld      h,b
-        ld      l,c
-        pop     de
-        pop     bc
-        pop     ix
-        ret
+        jp      _sprintf
+
+_fpfio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        jp      _fprintf
+
+_vpfio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        jp      _vprintf
+
+_vsfio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        jp      _vsprintf
+
+_vffio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        jp      _vfprintf
+
+_snfio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        jp      _snprintf
+
+_vnfio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        jp      _vsnprintf
+
+; Thin float+long wrappers (-ffloatio -flongio together) for the rest of the
+; printf family, mirroring _pflio above.
+        public  _splio
+        public  _fplio
+        public  _vplio
+        public  _vslio
+        public  _vflio
+        public  _snlio
+        public  _vnlio
+_splio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _sprintf
+
+_fplio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _fprintf
+
+_vplio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _vprintf
+
+_vslio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _vsprintf
+
+_vflio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _vfprintf
+
+_snlio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _snprintf
+
+_vnlio:
+        ld      hl,pf_f
+        ld      (pf_float_hook),hl
+        ld      hl,pf_lng
+        ld      (pf_long_hook),hl
+        jp      _vsnprintf
 
         public  _exit
 _exit:
@@ -9025,6 +9144,57 @@ _sprintf:
         ret
 
 ; ============================================================
+; _snprintf(buf, n, fmt, ...)   C99
+; IX+4=buf, IX+6=n (size_t), IX+8=fmt, IX+10=first vararg
+; pf_bufmax caps pf_bufcnt at n-1 (room for the NUL) so pf_emit_a's bounded
+; path (pfe_bufn) never overflows buf; n=0 leaves buf completely untouched,
+; not even a NUL, per C99. Returns the count as if the buffer were unbounded
+; (BC, from __pf_run) - same value _sprintf returns, snprintf just also caps
+; what actually lands in buf.
+; ============================================================
+        public  _snprintf
+_snprintf:
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        push    bc
+        push    de
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      (pf_bufptr),hl          ; pf_bufptr = buf
+        ld      l,(ix+6)
+        ld      h,(ix+7)                ; HL = n
+        ld      a,h
+        or      l
+        jr      z,snp_n_zero            ; n=0: cap stays 0, nothing gets written
+        dec     hl                      ; cap = n-1 (room for the NUL)
+snp_n_zero:
+        ld      (pf_bufmax),hl
+        ld      hl,0
+        ld      (pf_bufcnt),hl
+        ld      hl,1
+        ld      (pf_sink),hl            ; bounded-buffer mode
+        ld      l,(ix+8)
+        ld      h,(ix+9)                ; HL = fmt
+        ld      de,10                   ; first vararg at IX+10
+        ld      bc,0
+        call    __pf_run                ; IX = _snprintf's frame; varargs at IX+10+
+        ld      l,(ix+6)
+        ld      h,(ix+7)                ; reload n (IX still points at our frame)
+        ld      a,h
+        or      l
+        jr      z,snp_done              ; n=0: buf untouched, not even a NUL
+        ld      hl,(pf_bufptr)
+        ld      (hl),0                  ; NUL-terminate at the truncation point
+snp_done:
+        ld      h,b
+        ld      l,c                     ; return count (as if unbounded, per C99)
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; ============================================================
 ; _fprintf(fp, fmt, ...)
 ; IX+4=fp, IX+6=fmt, IX+8=first vararg
 ; Formats into __pf_fbuf, then writes to fp via _write.
@@ -9156,6 +9326,57 @@ _vsprintf:
         ld      (hl),0                  ; NUL-terminate
         ld      h,b
         ld      l,c                     ; return count
+        pop     de
+        pop     bc
+        pop     ix
+        ret
+
+; int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap)   C99
+; IX+4=buf, IX+6=n, IX+8=fmt, IX+10=ap
+; Same pf_bufmax/pf_bufcnt bounded-write scheme as _snprintf, but IX gets
+; repointed at ap (like _vsprintf) for __pf_run's vararg reads, so n is saved
+; on the stack across the call instead of being re-read via IX afterward.
+        public  _vsnprintf
+_vsnprintf:
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        push    bc
+        push    de
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      (pf_bufptr),hl          ; pf_bufptr = buf
+        ld      l,(ix+6)
+        ld      h,(ix+7)                ; HL = n
+        push    hl                      ; save n across the call (IX becomes ap below)
+        ld      a,h
+        or      l
+        jr      z,vsnp_n_zero           ; n=0: cap stays 0, nothing gets written
+        dec     hl                      ; cap = n-1 (room for the NUL)
+vsnp_n_zero:
+        ld      (pf_bufmax),hl
+        ld      hl,0
+        ld      (pf_bufcnt),hl
+        ld      hl,1
+        ld      (pf_sink),hl            ; bounded-buffer mode
+        ld      l,(ix+10)
+        ld      h,(ix+11)               ; HL = ap
+        push    hl
+        ld      l,(ix+8)
+        ld      h,(ix+9)                ; HL = fmt
+        pop     ix                      ; IX = ap
+        ld      de,0
+        ld      bc,0
+        call    __pf_run
+        pop     hl                      ; HL = saved n
+        ld      a,h
+        or      l
+        jr      z,vsnp_done             ; n=0: buf untouched, not even a NUL
+        ld      hl,(pf_bufptr)
+        ld      (hl),0                  ; NUL-terminate at the truncation point
+vsnp_done:
+        ld      h,b
+        ld      l,c                     ; return count (as if unbounded, per C99)
         pop     de
         pop     bc
         pop     ix
