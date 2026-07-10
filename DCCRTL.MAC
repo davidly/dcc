@@ -14347,16 +14347,19 @@ NXLT:   db      0
 
         public _expf
 _expf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-20
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ; float expf(float x)
+        ; IX-free; locals moved to static scratch (already non-reentrant).
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        ld (__expf_x),hl
+        ld (__expf_x+2),de
+
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld hl,(__expf_x)
+        ld de,(__expf_x+2)
         push de
         push hl
         ld hl,0
@@ -14375,10 +14378,8 @@ _expf:
         ld de,32639
         jp MFL1
 MFL2:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__expf_x)
+        ld de,(__expf_x+2)
         push de
         push hl
         ld hl,0
@@ -14400,10 +14401,8 @@ MFL2:
         ld de,0
         jp MFL1
 MFL4:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__expf_x)
+        ld de,(__expf_x+2)
         push de
         push hl
         ld hl,43579
@@ -14415,10 +14414,8 @@ MFL4:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__expf_xlog2e),hl
+        ld (__expf_xlog2e+2),de
         push de
         push hl
         ld hl,0
@@ -14433,10 +14430,8 @@ MFL4:
         ld a,h
         or l
         jr z,MFL6 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__expf_xlog2e)
+        ld de,(__expf_xlog2e+2)
         push de
         push hl
         ld hl,0
@@ -14449,16 +14444,12 @@ MFL4:
         pop bc
         pop bc
         call __ffl
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
+        ld (__expf_n),hl
+        ld (__expf_n+2),de
         jr MFL7 ; peep: jp_to_jr
 MFL6:
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__expf_xlog2e)
+        ld de,(__expf_xlog2e+2)
         push de
         push hl
         ld hl,0
@@ -14471,21 +14462,15 @@ MFL6:
         pop bc
         pop bc
         call __ffl
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
+        ld (__expf_n),hl
+        ld (__expf_n+2),de
 MFL7:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__expf_x)
+        ld de,(__expf_x+2)
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld hl,(__expf_n)
+        ld de,(__expf_n+2)
         call __flf
         push de
         push hl
@@ -14505,16 +14490,12 @@ MFL7:
         pop bc
         pop bc
         pop bc
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__expf_r),hl
+        ld (__expf_r+2),de
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__expf_r)
+        ld de,(__expf_r+2)
         push de
         push hl
         call __fmul
@@ -14522,18 +14503,14 @@ MFL7:
         pop bc
         pop bc
         pop bc
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
+        ld (__expf_r2),hl
+        ld (__expf_r2+2),de
         ld hl,0
         ld de,16256
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__expf_r)
+        ld de,(__expf_r+2)
         push de
         push hl
         call __fadd
@@ -14543,50 +14520,40 @@ MFL7:
         pop bc
         push de
         push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__expf_r2)
+        ld de,(__expf_r2+2)
         push de
         push hl
         ld hl,0
         ld de,16128
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__expf_r)
+        ld de,(__expf_r+2)
         push de
         push hl
         ld hl,43691
         ld de,15914
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__expf_r)
+        ld de,(__expf_r+2)
         push de
         push hl
         ld hl,43692
         ld de,15658
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__expf_r)
+        ld de,(__expf_r+2)
         push de
         push hl
         ld hl,34949
         ld de,15368
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__expf_r)
+        ld de,(__expf_r+2)
         push de
         push hl
         ld hl,2922
@@ -14661,19 +14628,12 @@ MFL7:
         pop bc
         pop bc
         pop bc
-        ld (ix-20),l
-        ld (ix-19),h
-        ld (ix-18),e
-        ld (ix-17),d
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld (__expf_poly),hl
+        ld (__expf_poly+2),de
+        ld hl,(__expf_n)
         push hl
-        ld l,(ix-20)
-        ld h,(ix-19)
-        ld e,(ix-18)
-        ld d,(ix-17)
+        ld hl,(__expf_poly)
+        ld de,(__expf_poly+2)
         push de
         push hl
         call _ldexpf
@@ -14681,22 +14641,31 @@ MFL7:
         pop bc
         pop bc
 MFL1:
-        ld sp,ix
-        pop ix
         ret
+
+__expf_x:       ds      4
+__expf_xlog2e:  ds      4
+__expf_n:       ds      4
+__expf_r:       ds      4
+__expf_r2:      ds      4
+__expf_poly:    ds      4
 
         public _logf
 _logf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-18
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ; float logf(float x)
+        ; IX-free; locals moved to static scratch (already non-reentrant).
+        ; __logf_e is passed to frexpf by address in place of a stack slot.
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        ld (__logf_x),hl
+        ld (__logf_x+2),de
+
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld hl,(__logf_x)
+        ld de,(__logf_x+2)
         push de
         push hl
         ld hl,0
@@ -14718,25 +14687,18 @@ _logf:
         ld d,a
         jp MFL8
 MFL9:
-        push ix
-        pop hl
-        dec hl
-        dec hl
+        ld hl,__logf_e
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__logf_x)
+        ld de,(__logf_x+2)
         push de
         push hl
         call _frexpf
         pop bc
         pop bc
         pop bc
-        ld (ix-6),l
-        ld (ix-5),h
-        ld (ix-4),e
-        ld (ix-3),d
+        ld (__logf_m),hl
+        ld (__logf_m+2),de
         push de
         push hl
         ld hl,1267
@@ -14751,26 +14713,18 @@ MFL9:
         ld a,h
         or l
         jr z,MFL12 ; peep: jp_to_jr
-        ld l,(ix-6)
-        ld h,(ix-5)
-        ld e,(ix-4)
-        ld d,(ix-3)
+        ld hl,(__logf_m)
+        ld de,(__logf_m+2)
         ld b,1
         call __fscale_pow2
-        ld (ix-6),l
-        ld (ix-5),h
-        ld (ix-4),e
-        ld (ix-3),d
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld (__logf_m),hl
+        ld (__logf_m+2),de
+        ld hl,(__logf_e)
         dec hl ; peep: sbc_de1_to_dec
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__logf_e),hl
 MFL12:
-        ld l,(ix-6)
-        ld h,(ix-5)
-        ld e,(ix-4)
-        ld d,(ix-3)
+        ld hl,(__logf_m)
+        ld de,(__logf_m+2)
         push de
         push hl
         ld hl,0
@@ -14784,10 +14738,8 @@ MFL12:
         pop bc
         push de
         push hl
-        ld l,(ix-6)
-        ld h,(ix-5)
-        ld e,(ix-4)
-        ld d,(ix-3)
+        ld hl,(__logf_m)
+        ld de,(__logf_m+2)
         push de
         push hl
         ld hl,0
@@ -14806,16 +14758,12 @@ MFL12:
         pop bc
         pop bc
         pop bc
-        ld (ix-10),l
-        ld (ix-9),h
-        ld (ix-8),e
-        ld (ix-7),d
+        ld (__logf_z),hl
+        ld (__logf_z+2),de
         push de
         push hl
-        ld l,(ix-10)
-        ld h,(ix-9)
-        ld e,(ix-8)
-        ld d,(ix-7)
+        ld hl,(__logf_z)
+        ld de,(__logf_z+2)
         push de
         push hl
         call __fmul
@@ -14823,14 +14771,10 @@ MFL12:
         pop bc
         pop bc
         pop bc
-        ld (ix-14),l
-        ld (ix-13),h
-        ld (ix-12),e
-        ld (ix-11),d
-        ld l,(ix-10)
-        ld h,(ix-9)
-        ld e,(ix-8)
-        ld d,(ix-7)
+        ld (__logf_z2),hl
+        ld (__logf_z2+2),de
+        ld hl,(__logf_z)
+        ld de,(__logf_z+2)
         ld b,1
         call __fscale_pow2
         push de
@@ -14839,40 +14783,32 @@ MFL12:
         ld de,16256
         push de
         push hl
-        ld l,(ix-14)
-        ld h,(ix-13)
-        ld e,(ix-12)
-        ld d,(ix-11)
+        ld hl,(__logf_z2)
+        ld de,(__logf_z2+2)
         push de
         push hl
         ld hl,43691
         ld de,16042
         push de
         push hl
-        ld l,(ix-14)
-        ld h,(ix-13)
-        ld e,(ix-12)
-        ld d,(ix-11)
+        ld hl,(__logf_z2)
+        ld de,(__logf_z2+2)
         push de
         push hl
         ld hl,52429
         ld de,15948
         push de
         push hl
-        ld l,(ix-14)
-        ld h,(ix-13)
-        ld e,(ix-12)
-        ld d,(ix-11)
+        ld hl,(__logf_z2)
+        ld de,(__logf_z2+2)
         push de
         push hl
         ld hl,18724
         ld de,15890
         push de
         push hl
-        ld l,(ix-14)
-        ld h,(ix-13)
-        ld e,(ix-12)
-        ld d,(ix-11)
+        ld hl,(__logf_z2)
+        ld de,(__logf_z2+2)
         push de
         push hl
         ld hl,36409
@@ -14940,12 +14876,9 @@ MFL12:
         pop bc
         pop bc
         pop bc
-        ld (ix-18),l
-        ld (ix-17),h
-        ld (ix-16),e
-        ld (ix-15),d
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld (__logf_poly),hl
+        ld (__logf_poly+2),de
+        ld hl,(__logf_e)
         call __fif
         push de
         push hl
@@ -14960,10 +14893,8 @@ MFL12:
         pop bc
         push de
         push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld e,(ix-16)
-        ld d,(ix-15)
+        ld hl,(__logf_poly)
+        ld de,(__logf_poly+2)
         push de
         push hl
         call __fadd
@@ -14972,9 +14903,14 @@ MFL12:
         pop bc
         pop bc
 MFL8:
-        ld sp,ix
-        pop ix
         ret
+
+__logf_x:       ds      4
+__logf_e:       dw      0
+__logf_m:       ds      4
+__logf_z:       ds      4
+__logf_z2:      ds      4
+__logf_poly:    ds      4
 
         public _log10f
 _log10f:
@@ -15008,16 +14944,27 @@ _log10f:
 
         public _powf
 _powf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-16
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
+        ; float powf(float x, float y)
+        ; IX-free; locals moved to static scratch (already non-reentrant).
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        ld (__powf_x),hl
+        ld (__powf_x+2),de
+        pop hl                  ; y low word
+        pop de                  ; y high word
+        ld (__powf_y),hl
+        ld (__powf_y+2),de
+
+        push de                 ; restore y high word
+        push hl                 ; restore y low word
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
         push de
         push hl
         ld hl,0
@@ -15036,10 +14983,8 @@ _powf:
         ld de,16256
         jp MFL14
 MFL15:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
         push de
         push hl
         ld hl,0
@@ -15058,10 +15003,8 @@ MFL15:
         ld de,0
         jp MFL14
 MFL17:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
         push de
         push hl
         ld hl,0
@@ -15076,16 +15019,12 @@ MFL17:
         ld a,h
         or l
         jr z,MFL19 ; peep: jp_to_jr
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
         push de
         push hl
         call _logf
@@ -15105,10 +15044,8 @@ MFL17:
         pop bc
         jp MFL14
 MFL19:
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
         push de
         push hl
         ld hl,0
@@ -15123,39 +15060,27 @@ MFL19:
         ld a,h
         or l
         jr z,MFL21 ; peep: jp_to_jr
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
         ld a,d
         xor 80h
         ld d,a
         jr MFL22 ; peep: jp_to_jr
 MFL21:
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
 MFL22:
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__powf_ay),hl
+        ld (__powf_ay+2),de
         call __ffl
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld (__powf_iy),hl
+        ld (__powf_iy+2),de
+        ld hl,(__powf_ay)
+        ld de,(__powf_ay+2)
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld hl,(__powf_iy)
+        ld de,(__powf_iy+2)
         call __flf
         push de
         push hl
@@ -15164,10 +15089,8 @@ MFL22:
         pop bc
         pop bc
         pop bc
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__powf_fy),hl
+        ld (__powf_fy+2),de
         push de
         push hl
         ld hl,0
@@ -15186,16 +15109,12 @@ MFL22:
         ld de,0
         jp MFL14
 MFL23:
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
         ld a,d
         xor 80h
         ld d,a
@@ -15216,14 +15135,10 @@ MFL23:
         call _expf
         pop bc
         pop bc
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld (__powf_result),hl
+        ld (__powf_result+2),de
+        ld hl,(__powf_iy)
+        ld de,(__powf_iy+2)
         push de
         push hl
         ld hl,1
@@ -15265,26 +15180,25 @@ MFL23:
         xor d
         or l
         jr z,MFL26 ; peep: jp_to_jr
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__powf_result)
+        ld de,(__powf_result+2)
         ld a,d
         xor 80h
         ld d,a
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
+        ld (__powf_result),hl
+        ld (__powf_result+2),de
 MFL26:
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__powf_result)
+        ld de,(__powf_result+2)
 MFL14:
-        ld sp,ix
-        pop ix
         ret
+
+__powf_x:       ds      4
+__powf_y:       ds      4
+__powf_ay:      ds      4
+__powf_iy:      ds      4
+__powf_fy:      ds      4
+__powf_result:  ds      4
 
         public _sinhf
 _sinhf:
@@ -15519,20 +15433,25 @@ __hyp_bhi:      dw      0
 
         public _sinf
 _sinf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-8
-        add hl,sp
-        ld sp,hl
+        ; float sinf(float x)
+        ; IX-free; x is a mutable range-reduction working value throughout
+        ; this function (not just a fetched argument), so it is kept as a
+        ; static (already non-reentrant) rather than only read once.
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld (__sinf_x),hl
+        ld (__sinf_x+2),de
+
         ld hl,4059
         ld de,16585
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         call _fmodf
@@ -15540,10 +15459,8 @@ _sinf:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__sinf_x),hl
+        ld (__sinf_x+2),de
         push de
         push hl
         ld hl,4059
@@ -15558,10 +15475,8 @@ _sinf:
         ld a,h
         or l
         jr z,MFL38 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15573,15 +15488,11 @@ _sinf:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__sinf_x),hl
+        ld (__sinf_x+2),de
 MFL38:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15599,10 +15510,8 @@ MFL38:
         ld a,h
         or l
         jr z,MFL40 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15614,15 +15523,11 @@ MFL38:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__sinf_x),hl
+        ld (__sinf_x+2),de
 MFL40:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15641,10 +15546,8 @@ MFL40:
         ld de,16457
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         call __fsub
@@ -15652,16 +15555,12 @@ MFL40:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__sinf_x),hl
+        ld (__sinf_x+2),de
         jp MFL42
 MFL41:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15686,10 +15585,8 @@ MFL41:
         ld d,a
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         call __fsub
@@ -15697,21 +15594,15 @@ MFL41:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__sinf_x),hl
+        ld (__sinf_x+2),de
 MFL42:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
         call __fmul
@@ -15719,26 +15610,18 @@ MFL42:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld (__sinf_x2),hl
+        ld (__sinf_x2+2),de
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__sinf_x)
+        ld de,(__sinf_x+2)
         push de
         push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__sinf_x2)
+        ld de,(__sinf_x2+2)
         push de
         push hl
         call __fmul
@@ -15755,20 +15638,16 @@ MFL42:
         ld d,a
         push de
         push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__sinf_x2)
+        ld de,(__sinf_x2+2)
         push de
         push hl
         ld hl,13635
         ld de,15368
         push de
         push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__sinf_x2)
+        ld de,(__sinf_x2+2)
         push de
         push hl
         ld hl,13550
@@ -15818,44 +15697,36 @@ MFL42:
         pop bc
         pop bc
         pop bc
-        ld sp,ix
-        pop ix
         ret
+
+__sinf_x:       ds      4
+__sinf_x2:      ds      4
 
         public _cosf
 _cosf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-12
-        add hl,sp
-        ld sp,hl
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        push hl
+        ; float cosf(float x)
+        ; IX-free; x is a mutable range-reduction working value throughout
+        ; this function (not just a fetched argument), so it is kept as a
+        ; static (already non-reentrant) rather than only read once.
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
+
         ld hl,0
         ld de,16256
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
+        ld (__cosf_sign),hl
+        ld (__cosf_sign+2),de
         ld hl,4059
         ld de,16585
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         call _fmodf
@@ -15863,10 +15734,8 @@ _cosf:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
         push de
         push hl
         ld hl,4059
@@ -15881,10 +15750,8 @@ _cosf:
         ld a,h
         or l
         jr z,MFL47 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15896,15 +15763,11 @@ _cosf:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
 MFL47:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15922,10 +15785,8 @@ MFL47:
         ld a,h
         or l
         jr z,MFL49 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15937,15 +15798,11 @@ MFL47:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
 MFL49:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         ld hl,4059
@@ -15964,10 +15821,8 @@ MFL49:
         ld de,16457
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         call __fsub
@@ -15975,25 +15830,19 @@ MFL49:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
         ld hl,0
         ld de,16256
         ld a,d
         xor 80h
         ld d,a
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__cosf_sign),hl
+        ld (__cosf_sign+2),de
         jp MFL51
 MFL50:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         ld hl,4059
@@ -16018,10 +15867,8 @@ MFL50:
         ld d,a
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         call __fsub
@@ -16029,30 +15876,22 @@ MFL50:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
         ld hl,0
         ld de,16256
         ld a,d
         xor 80h
         ld d,a
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__cosf_sign),hl
+        ld (__cosf_sign+2),de
 MFL51:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
         push de
         push hl
         call __fmul
@@ -16060,18 +15899,14 @@ MFL51:
         pop bc
         pop bc
         pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
+        ld (__cosf_x2),hl
+        ld (__cosf_x2+2),de
         ld hl,0
         ld de,16256
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld hl,(__cosf_x2)
+        ld de,(__cosf_x2+2)
         push de
         push hl
         ld hl,65296
@@ -16081,20 +15916,16 @@ MFL51:
         ld d,a
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld hl,(__cosf_x2)
+        ld de,(__cosf_x2+2)
         push de
         push hl
         ld hl,34790
         ld de,15658
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld hl,(__cosf_x2)
+        ld de,(__cosf_x2+2)
         push de
         push hl
         ld hl,27383
@@ -16144,20 +15975,14 @@ MFL51:
         pop bc
         pop bc
         pop bc
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld (__cosf_poly),hl
+        ld (__cosf_poly+2),de
+        ld hl,(__cosf_sign)
+        ld de,(__cosf_sign+2)
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__cosf_poly)
+        ld de,(__cosf_poly+2)
         push de
         push hl
         call __fmul
@@ -16165,33 +15990,34 @@ MFL51:
         pop bc
         pop bc
         pop bc
-        ld sp,ix
-        pop ix
         ret
+
+__cosf_x:       ds      4
+__cosf_sign:    ds      4
+__cosf_x2:      ds      4
+__cosf_poly:    ds      4
 
         public _tanf
 _tanf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-22
-        add hl,sp
-        ld sp,hl
-        push ix
-        pop hl
-        ld de,-6
-        add hl,de
-        ld (hl),0 ; peep: store_word_const
-        inc hl
-        ld (hl),0
+        ; float tanf(float x)
+        ; IX-free; locals moved to static scratch (already non-reentrant).
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        ld (__tanf_x),hl
+        ld (__tanf_x+2),de
+
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld hl,0
+        ld (__tanf_sign),hl
         ld hl,4059
         ld de,16457
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__tanf_x)
+        ld de,(__tanf_x+2)
         push de
         push hl
         call _fmodf
@@ -16199,10 +16025,8 @@ _tanf:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__tanf_r),hl
+        ld (__tanf_r+2),de
         push de
         push hl
         ld hl,4059
@@ -16217,10 +16041,8 @@ _tanf:
         ld a,h
         or l
         jr z,MFL55 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         ld hl,4059
@@ -16232,16 +16054,12 @@ _tanf:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__tanf_r),hl
+        ld (__tanf_r+2),de
         jp MFL56
 MFL55:
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         ld hl,4059
@@ -16259,10 +16077,8 @@ MFL55:
         ld a,h
         or l
         jr z,MFL56 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         ld hl,4059
@@ -16274,15 +16090,11 @@ MFL55:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__tanf_r),hl
+        ld (__tanf_r+2),de
 MFL56:
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         ld hl,4059
@@ -16301,10 +16113,8 @@ MFL56:
         ld de,16329
         push de
         push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         call __fsub
@@ -16312,19 +16122,14 @@ MFL56:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__tanf_r),hl
+        ld (__tanf_r+2),de
         ld hl,1
-        ld (ix-6),l
-        ld (ix-5),h
+        ld (__tanf_sign),hl
         jp MFL60
 MFL59:
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         ld hl,4059
@@ -16349,10 +16154,8 @@ MFL59:
         ld d,a
         push de
         push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         call __fsub
@@ -16360,24 +16163,17 @@ MFL59:
         pop bc
         pop bc
         pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
+        ld (__tanf_r),hl
+        ld (__tanf_r+2),de
         ld hl,1
-        ld (ix-6),l
-        ld (ix-5),h
+        ld (__tanf_sign),hl
 MFL60:
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         call __fmul
@@ -16385,24 +16181,18 @@ MFL60:
         pop bc
         pop bc
         pop bc
-        ld (ix-10),l
-        ld (ix-9),h
-        ld (ix-8),e
-        ld (ix-7),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld (__tanf_r2),hl
+        ld (__tanf_r2+2),de
+        ld hl,(__tanf_r)
+        ld de,(__tanf_r+2)
         push de
         push hl
         ld hl,0
         ld de,16752
         push de
         push hl
-        ld l,(ix-10)
-        ld h,(ix-9)
-        ld e,(ix-8)
-        ld d,(ix-7)
+        ld hl,(__tanf_r2)
+        ld de,(__tanf_r2+2)
         push de
         push hl
         call __fsub
@@ -16417,10 +16207,8 @@ MFL60:
         pop bc
         pop bc
         pop bc
-        ld (ix-14),l
-        ld (ix-13),h
-        ld (ix-12),e
-        ld (ix-11),d
+        ld (__tanf_num),hl
+        ld (__tanf_num+2),de
         ld hl,0
         ld de,16752
         push de
@@ -16429,10 +16217,8 @@ MFL60:
         ld de,16576
         push de
         push hl
-        ld l,(ix-10)
-        ld h,(ix-9)
-        ld e,(ix-8)
-        ld d,(ix-7)
+        ld hl,(__tanf_r2)
+        ld de,(__tanf_r2+2)
         push de
         push hl
         call __fmul
@@ -16447,10 +16233,8 @@ MFL60:
         pop bc
         pop bc
         pop bc
-        ld (ix-18),l
-        ld (ix-17),h
-        ld (ix-16),e
-        ld (ix-15),d
+        ld (__tanf_den),hl
+        ld (__tanf_den+2),de
         push de
         push hl
         ld hl,0
@@ -16469,16 +16253,12 @@ MFL60:
         ld de,0
         jp MFL54
 MFL63:
-        ld l,(ix-14)
-        ld h,(ix-13)
-        ld e,(ix-12)
-        ld d,(ix-11)
+        ld hl,(__tanf_num)
+        ld de,(__tanf_num+2)
         push de
         push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld e,(ix-16)
-        ld d,(ix-15)
+        ld hl,(__tanf_den)
+        ld de,(__tanf_den+2)
         push de
         push hl
         call __fdiv
@@ -16486,19 +16266,14 @@ MFL63:
         pop bc
         pop bc
         pop bc
-        ld (ix-22),l
-        ld (ix-21),h
-        ld (ix-20),e
-        ld (ix-19),d
-        ld l,(ix-6)
-        ld h,(ix-5)
+        ld (__tanf_result),hl
+        ld (__tanf_result+2),de
+        ld hl,(__tanf_sign)
         ld a,h
         or l
         jp z, MFL66
-        ld l,(ix-22)
-        ld h,(ix-21)
-        ld e,(ix-20)
-        ld d,(ix-19)
+        ld hl,(__tanf_result)
+        ld de,(__tanf_result+2)
         push de
         push hl
         ld hl,0
@@ -16521,10 +16296,8 @@ MFL67:
         ld de,16256
         push de
         push hl
-        ld l,(ix-22)
-        ld h,(ix-21)
-        ld e,(ix-20)
-        ld d,(ix-19)
+        ld hl,(__tanf_result)
+        ld de,(__tanf_result+2)
         push de
         push hl
         call __fdiv
@@ -16532,68 +16305,47 @@ MFL67:
         pop bc
         pop bc
         pop bc
-        ld (ix-22),l
-        ld (ix-21),h
-        ld (ix-20),e
-        ld (ix-19),d
+        ld (__tanf_result),hl
+        ld (__tanf_result+2),de
 MFL66:
-        ld l,(ix-22)
-        ld h,(ix-21)
-        ld e,(ix-20)
-        ld d,(ix-19)
+        ld hl,(__tanf_result)
+        ld de,(__tanf_result+2)
 MFL54:
-        ld sp,ix
-        pop ix
         ret
+
+__tanf_x:       ds      4
+__tanf_r:       ds      4
+__tanf_sign:    dw      0
+__tanf_r2:      ds      4
+__tanf_num:     ds      4
+__tanf_den:     ds      4
+__tanf_result:  ds      4
 
         public _atanf
 _atanf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-16
-        add hl,sp
-        ld sp,hl
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        push hl
+        ; float atanf(float x)
+        ; IX-free; x is a mutable range-reduction working value throughout
+        ; this function (not just a fetched argument), so it is kept as a
+        ; static (already non-reentrant) rather than only read once.
+        pop bc                  ; return address
+        pop hl                  ; x low word
+        pop de                  ; x high word
+        push de                 ; restore x high word
+        push hl                 ; restore x low word
+        push bc                 ; restore return address
+        ld (__atanf_x),hl
+        ld (__atanf_x+2),de
+
         ld hl,0
         ld de,16256
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        push ix
-        pop hl
-        ld de,-8
-        add hl,de
-        push hl
+        ld (__atanf_sign),hl
+        ld (__atanf_sign+2),de
         ld hl,0
         ld de,0
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld (__atanf_offset),hl
+        ld (__atanf_offset+2),de
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         ld hl,0
@@ -16613,26 +16365,18 @@ _atanf:
         ld a,d
         xor 80h
         ld d,a
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld (__atanf_sign),hl
+        ld (__atanf_sign+2),de
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         ld a,d
         xor 80h
         ld d,a
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__atanf_x),hl
+        ld (__atanf_x+2),de
 MFL71:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         ld hl,33402
@@ -16649,10 +16393,8 @@ MFL71:
         jr z,MFL72 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
+        ld (__atanf_offset),hl
+        ld (__atanf_offset+2),de
         ld hl,0
         ld de,16256
         ld a,d
@@ -16660,10 +16402,8 @@ MFL71:
         ld d,a
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         call __fdiv
@@ -16671,16 +16411,12 @@ MFL71:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__atanf_x),hl
+        ld (__atanf_x+2),de
         jp MFL73
 MFL72:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         ld hl,5069
@@ -16697,14 +16433,10 @@ MFL72:
         jp z, MFL73
         ld hl,4059
         ld de,16201
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld (__atanf_offset),hl
+        ld (__atanf_offset+2),de
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         ld hl,0
@@ -16718,10 +16450,8 @@ MFL72:
         pop bc
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         ld hl,0
@@ -16740,21 +16470,15 @@ MFL72:
         pop bc
         pop bc
         pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld (ix+6),e
-        ld (ix+7),d
+        ld (__atanf_x),hl
+        ld (__atanf_x+2),de
 MFL73:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
         call __fmul
@@ -16762,26 +16486,18 @@ MFL73:
         pop bc
         pop bc
         pop bc
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld (__atanf_x2),hl
+        ld (__atanf_x2+2),de
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
+        ld hl,(__atanf_x)
+        ld de,(__atanf_x+2)
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__atanf_x2)
+        ld de,(__atanf_x2+2)
         push de
         push hl
         call __fmul
@@ -16798,20 +16514,16 @@ MFL73:
         ld d,a
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__atanf_x2)
+        ld de,(__atanf_x2+2)
         push de
         push hl
         ld hl,48100
         ld de,15948
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__atanf_x2)
+        ld de,(__atanf_x2+2)
         push de
         push hl
         ld hl,32711
@@ -16821,10 +16533,8 @@ MFL73:
         ld d,a
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__atanf_x2)
+        ld de,(__atanf_x2+2)
         push de
         push hl
         ld hl,15746
@@ -16885,26 +16595,18 @@ MFL73:
         pop bc
         pop bc
         pop bc
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
+        ld (__atanf_poly),hl
+        ld (__atanf_poly+2),de
+        ld hl,(__atanf_sign)
+        ld de,(__atanf_sign+2)
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
+        ld hl,(__atanf_offset)
+        ld de,(__atanf_offset+2)
         push de
         push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__atanf_poly)
+        ld de,(__atanf_poly+2)
         push de
         push hl
         call __fadd
@@ -16919,9 +16621,13 @@ MFL73:
         pop bc
         pop bc
         pop bc
-        ld sp,ix
-        pop ix
         ret
+
+__atanf_x:      ds      4
+__atanf_sign:   ds      4
+__atanf_offset: ds      4
+__atanf_x2:     ds      4
+__atanf_poly:   ds      4
 
         public _atan2f
 _atan2f:
@@ -17864,19 +17570,27 @@ SCL29:
 
         public __stol
 __stol:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-18
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld (ix-2),l
-        ld (ix-1),h
+        ; long strtol(const char *nptr, char **endptr, int base)
+        ; IX-free; locals moved to static scratch (already non-reentrant,
+        ; matching the atol/atof/strtod convention). __stol_nptr keeps the
+        ; original pointer alive for the no-digits-consumed endptr case,
+        ; while __stol_p is the working cursor that advances.
+        pop bc                  ; return address
+        pop hl                  ; nptr
+        ld (__stol_nptr),hl
+        ld (__stol_p),hl        ; p = nptr
+        pop de                  ; endptr
+        ld (__stol_endptr),de
+        pop hl                  ; base
+        ld (__stol_base),hl
+
+        push hl                 ; restore base
+        push de                 ; restore endptr
+        ld hl,(__stol_nptr)
+        push hl                 ; restore nptr
+        push bc                 ; restore return address
 SCL38:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17889,18 +17603,14 @@ SCL38:
         ld a,h
         or l
         jr z,SCL39 ; peep: jp_to_jr
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stol_p),hl
         jr SCL38 ; peep: jp_to_jr
 SCL39:
         ld hl,0
-        ld (ix-4),l
-        ld (ix-3),h
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld (__stol_neg),hl
+        ld hl,(__stol_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17910,15 +17620,12 @@ SCL39:
         or a
         sbc hl,de
         jr nz,SCL40 ; peep: jp_to_jr
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stol_p),hl
         jr SCL41 ; peep: jp_to_jr
 SCL40:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17929,28 +17636,22 @@ SCL40:
         sbc hl,de
         jr nz,SCL41 ; peep: jp_to_jr
         ld hl,1
-        ld (ix-4),l
-        ld (ix-3),h
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld (__stol_neg),hl
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stol_p),hl
 SCL41:
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stol_base)
         ld a,h ; peep: cmp0_or_hl
         or l
         jr z,SCL48 ; peep: jp_to_jr
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stol_base)
         ld de,16 ; peep: push_lde_pop
         or a
         sbc hl,de
         jp nz, SCL44 ; peep: jump_thread
 SCL48:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17960,8 +17661,7 @@ SCL48:
         or a
         sbc hl,de
         jr nz,SCL44 ; peep: jp_to_jr
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
         ld a,l
@@ -17972,8 +17672,7 @@ SCL48:
         or a
         sbc hl,de
         jr z,SCL57 ; peep: jp_to_jr
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
         ld a,l
@@ -17985,24 +17684,19 @@ SCL48:
         sbc hl,de
         jr nz,SCL44 ; peep: jp_to_jr
 SCL57:
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de2_to_inc
         inc hl
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stol_p),hl
         ld hl,16
-        ld (ix+8),l
-        ld (ix+9),h
+        ld (__stol_base),hl
         jr SCL45 ; peep: jp_to_jr
 SCL44:
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stol_base)
         ld a,h ; peep: cmp0_or_hl
         or l
         jr nz,SCL45 ; peep: jp_to_jr
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18018,11 +17712,9 @@ SCL44:
 SCL68:
         ld hl,10
 SCL69:
-        ld (ix+8),l
-        ld (ix+9),h
+        ld (__stol_base),hl
 SCL45:
-        ld l,(ix-4)
-        ld h,(ix-3)
+        ld hl,(__stol_neg)
         ld a,h
         or l
         jr z,SCL70 ; peep: jp_to_jr
@@ -18033,14 +17725,11 @@ SCL70:
         ld hl,65535
         ld de,32767
 SCL71:
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
+        ld (__stol_cutoff),hl
+        ld (__stol_cutoff+2),de
         push de
         push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stol_base)
         ld a,h
         rlca
         sbc a,a
@@ -18058,16 +17747,12 @@ SCL71:
         ex de,hl
         ld d,b
         ld e,c
-        ld (ix-18),l
-        ld (ix-17),h
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld (__stol_cutlim),hl
+        ld hl,(__stol_cutoff)
+        ld de,(__stol_cutoff+2)
         push de
         push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stol_base)
         ld a,h
         rlca
         sbc a,a
@@ -18085,22 +17770,16 @@ SCL71:
         ex de,hl
         ld d,b
         ld e,c
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
+        ld (__stol_cutoff),hl
+        ld (__stol_cutoff+2),de
         ld hl,0
         ld de,0 ; peep: fold_const_sxt
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stol_acc),hl
+        ld (__stol_acc+2),de
         ld hl,0
-        ld (ix-6),l
-        ld (ix-5),h
+        ld (__stol_any),hl
 SCL72:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18110,10 +17789,8 @@ SCL72:
         push hl
         call sc_isdigit
         pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld e,(ix+8) ; peep: ix_pair_load_to_de
-        ld d,(ix+9)
+        ld (__stol_c),hl
+        ld de,(__stol_base)
         ld a,h
         xor 80h
         ld h,a
@@ -18123,8 +17800,7 @@ SCL72:
         or a
         sbc hl,de
         jp nc, SCL74 ; peep: branch_over_jump
-        ld l,(ix-6)
-        ld h,(ix-5)
+        ld hl,(__stol_any)
         ld de,32768 ; peep: signed_cmp_const_bias_fold
         ld a,h
         xor 80h
@@ -18132,16 +17808,12 @@ SCL72:
         or a
         sbc hl,de
         jp c, SCL83 ; peep: branch_over_jump
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__stol_acc)
+        ld de,(__stol_acc+2)
         push de
         push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__stol_cutoff)
+        ld de,(__stol_cutoff+2)
         push de
         push hl
         call __lgu
@@ -18153,16 +17825,12 @@ SCL72:
         ld a,h
         or l
         jp nz, SCL83 ; peep: branch_over_jump
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__stol_acc)
+        ld de,(__stol_acc+2)
         push de
         push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__stol_cutoff)
+        ld de,(__stol_cutoff+2)
         pop bc
         ld a,c
         xor l
@@ -18180,10 +17848,8 @@ SCL72:
         xor d
         or l
         jr nz,SCL77 ; peep: jp_to_jr
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-18) ; peep: ix_pair_load_to_de
-        ld d,(ix-17)
+        ld hl,(__stol_c)
+        ld de,(__stol_cutlim)
         ld a,h
         xor 80h
         ld h,a
@@ -18196,21 +17862,16 @@ SCL72:
         jr c,SCL77 ; peep: jp_to_jr
 SCL83:
         ld hl,65535
-        ld (ix-6),l
-        ld (ix-5),h
+        ld (__stol_any),hl
         jp SCL78
 SCL77:
         ld hl,1
-        ld (ix-6),l
-        ld (ix-5),h
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld (__stol_any),hl
+        ld hl,(__stol_acc)
+        ld de,(__stol_acc+2)
         push de
         push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stol_base)
         ld a,h
         rlca
         sbc a,a
@@ -18230,8 +17891,7 @@ SCL77:
         ld e,c
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
+        ld hl,(__stol_c)
         ld a,h
         rlca
         sbc a,a
@@ -18244,28 +17904,23 @@ SCL77:
         pop bc
         adc hl,bc
         ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stol_acc),hl
+        ld (__stol_acc+2),de
 SCL78:
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stol_p),hl
         jp SCL72
 SCL74:
-        ld a,(ix-5)
+        ld a,(__stol_any+1)
         or a
         jp m, SCL94
         jr nz,SCL92 ; peep: jp_to_jr
-        ld a,(ix-6)
+        ld a,(__stol_any)
         cp 0
         jr nc,SCL92 ; peep: jp_to_jr
 SCL94:
-        ld l,(ix-4)
-        ld h,(ix-3)
+        ld hl,(__stol_neg)
         ld a,h
         or l
         jr z,SCL95 ; peep: jp_to_jr
@@ -18293,17 +17948,14 @@ SCL95:
         ld hl,65535
         ld de,32767
 SCL96:
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stol_acc),hl
+        ld (__stol_acc+2),de
         ld hl,34
         ld de,0
         ld (_errno),hl
         jr SCL93 ; peep: jp_to_jr
 SCL92:
-        ld l,(ix-4)
-        ld h,(ix-3)
+        ld hl,(__stol_neg)
         ld a,h
         or l
         jr z,SCL93 ; peep: jp_to_jr
@@ -18311,10 +17963,8 @@ SCL92:
         ld de,0
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__stol_acc)
+        ld de,(__stol_acc+2)
         ld b,h
         ld c,l
         pop hl
@@ -18327,13 +17977,10 @@ SCL92:
         ld d,b
         ld e,c
         ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stol_acc),hl
+        ld (__stol_acc+2),de
 SCL93:
-        ld l,(ix+6)
-        ld h,(ix+7)
+        ld hl,(__stol_endptr)
         push hl
         ld hl,0
         ld de,0
@@ -18360,21 +18007,17 @@ SCL93:
         xor d
         or l
         jr z,SCL101 ; peep: jp_to_jr
-        ld l,(ix+6) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+7)
+        ld hl,(__stol_endptr) ; peep: ix_frame_ptr_deadd
         push hl
-        ld l,(ix-6)
-        ld h,(ix-5)
+        ld hl,(__stol_any)
         ld a,h
         or l
         jr z,SCL104 ; peep: jp_to_jr
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stol_p)
         ld de,0
         jr SCL105 ; peep: jp_to_jr
 SCL104:
-        ld l,(ix+4)
-        ld h,(ix+5)
+        ld hl,(__stol_nptr)
 SCL105:
         ex de,hl
         pop hl
@@ -18382,29 +18025,41 @@ SCL105:
         inc hl
         ld (hl),d
 SCL101:
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
-        ld sp,ix
-        pop ix
+        ld hl,(__stol_acc)
+        ld de,(__stol_acc+2)
         ret
+
+__stol_nptr:    dw      0
+__stol_endptr:  dw      0
+__stol_base:    dw      0
+__stol_p:       dw      0
+__stol_neg:     dw      0
+__stol_any:     dw      0
+__stol_c:       dw      0
+__stol_acc:     ds      4
+__stol_cutoff:  ds      4
+__stol_cutlim:  dw      0
 
         public __stou
 __stou:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-18
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld (ix-2),l
-        ld (ix-1),h
+        ; unsigned long strtoul(const char *nptr, char **endptr, int base)
+        ; IX-free; same static-scratch convention as __stol.
+        pop bc                  ; return address
+        pop hl                  ; nptr
+        ld (__stou_nptr),hl
+        ld (__stou_p),hl        ; p = nptr
+        pop de                  ; endptr
+        ld (__stou_endptr),de
+        pop hl                  ; base
+        ld (__stou_base),hl
+
+        push hl                 ; restore base
+        push de                 ; restore endptr
+        ld hl,(__stou_nptr)
+        push hl                 ; restore nptr
+        push bc                 ; restore return address
 SCL107:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18417,18 +18072,14 @@ SCL107:
         ld a,h
         or l
         jr z,SCL108 ; peep: jp_to_jr
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stou_p),hl
         jr SCL107 ; peep: jp_to_jr
 SCL108:
         ld hl,0
-        ld (ix-4),l
-        ld (ix-3),h
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld (__stou_neg),hl
+        ld hl,(__stou_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18438,15 +18089,12 @@ SCL108:
         or a
         sbc hl,de
         jr nz,SCL109 ; peep: jp_to_jr
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stou_p),hl
         jr SCL110 ; peep: jp_to_jr
 SCL109:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18457,28 +18105,22 @@ SCL109:
         sbc hl,de
         jr nz,SCL110 ; peep: jp_to_jr
         ld hl,1
-        ld (ix-4),l
-        ld (ix-3),h
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld (__stou_neg),hl
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stou_p),hl
 SCL110:
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stou_base)
         ld a,h ; peep: cmp0_or_hl
         or l
         jr z,SCL117 ; peep: jp_to_jr
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stou_base)
         ld de,16 ; peep: push_lde_pop
         or a
         sbc hl,de
         jp nz, SCL113 ; peep: jump_thread
 SCL117:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18488,8 +18130,7 @@ SCL117:
         or a
         sbc hl,de
         jr nz,SCL113 ; peep: jp_to_jr
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
         ld a,l
@@ -18500,8 +18141,7 @@ SCL117:
         or a
         sbc hl,de
         jr z,SCL126 ; peep: jp_to_jr
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
         ld a,l
@@ -18513,24 +18153,19 @@ SCL117:
         sbc hl,de
         jr nz,SCL113 ; peep: jp_to_jr
 SCL126:
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de2_to_inc
         inc hl
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stou_p),hl
         ld hl,16
-        ld (ix+8),l
-        ld (ix+9),h
+        ld (__stou_base),hl
         jr SCL114 ; peep: jp_to_jr
 SCL113:
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stou_base)
         ld a,h ; peep: cmp0_or_hl
         or l
         jr nz,SCL114 ; peep: jp_to_jr
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18546,15 +18181,13 @@ SCL113:
 SCL137:
         ld hl,10
 SCL138:
-        ld (ix+8),l
-        ld (ix+9),h
+        ld (__stou_base),hl
 SCL114:
         ld hl,65535
         ld de,65535
         push de
         push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stou_base)
         ld a,h
         rlca
         sbc a,a
@@ -18572,16 +18205,13 @@ SCL114:
         ex de,hl
         ld d,b
         ld e,c
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
+        ld (__stou_cutoff),hl
+        ld (__stou_cutoff+2),de
         ld hl,65535
         ld de,65535
         push de
         push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stou_base)
         ld a,h
         rlca
         sbc a,a
@@ -18599,20 +18229,15 @@ SCL114:
         ex de,hl
         ld d,b
         ld e,c
-        ld (ix-18),l
-        ld (ix-17),h
+        ld (__stou_cutlim),hl
         ld hl,0
         ld de,0 ; peep: fold_const_sxt
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stou_acc),hl
+        ld (__stou_acc+2),de
         ld hl,0
-        ld (ix-6),l
-        ld (ix-5),h
+        ld (__stou_any),hl
 SCL139:
-        ld l,(ix-2) ; peep: ix_frame_ptr
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -18622,10 +18247,8 @@ SCL139:
         push hl
         call sc_isdigit
         pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld e,(ix+8) ; peep: ix_pair_load_to_de
-        ld d,(ix+9)
+        ld (__stou_c),hl
+        ld de,(__stou_base)
         ld a,h
         xor 80h
         ld h,a
@@ -18635,8 +18258,7 @@ SCL139:
         or a
         sbc hl,de
         jp nc, SCL141 ; peep: branch_over_jump
-        ld l,(ix-6)
-        ld h,(ix-5)
+        ld hl,(__stou_any)
         ld de,32768 ; peep: signed_cmp_const_bias_fold
         ld a,h
         xor 80h
@@ -18644,16 +18266,12 @@ SCL139:
         or a
         sbc hl,de
         jp c, SCL150 ; peep: branch_over_jump
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__stou_acc)
+        ld de,(__stou_acc+2)
         push de
         push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__stou_cutoff)
+        ld de,(__stou_cutoff+2)
         push de
         push hl
         call __lgu
@@ -18665,16 +18283,12 @@ SCL139:
         ld a,h
         or l
         jp nz, SCL150 ; peep: branch_over_jump
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__stou_acc)
+        ld de,(__stou_acc+2)
         push de
         push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
+        ld hl,(__stou_cutoff)
+        ld de,(__stou_cutoff+2)
         pop bc
         ld a,c
         xor l
@@ -18692,10 +18306,8 @@ SCL139:
         xor d
         or l
         jr nz,SCL144 ; peep: jp_to_jr
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-18) ; peep: ix_pair_load_to_de
-        ld d,(ix-17)
+        ld hl,(__stou_c)
+        ld de,(__stou_cutlim)
         ld a,h
         xor 80h
         ld h,a
@@ -18708,21 +18320,16 @@ SCL139:
         jr c,SCL144 ; peep: jp_to_jr
 SCL150:
         ld hl,65535
-        ld (ix-6),l
-        ld (ix-5),h
+        ld (__stou_any),hl
         jp SCL145
 SCL144:
         ld hl,1
-        ld (ix-6),l
-        ld (ix-5),h
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld (__stou_any),hl
+        ld hl,(__stou_acc)
+        ld de,(__stou_acc+2)
         push de
         push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
+        ld hl,(__stou_base)
         ld a,h
         rlca
         sbc a,a
@@ -18742,8 +18349,7 @@ SCL144:
         ld e,c
         push de
         push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
+        ld hl,(__stou_c)
         ld a,h
         rlca
         sbc a,a
@@ -18756,39 +18362,32 @@ SCL144:
         pop bc
         adc hl,bc
         ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stou_acc),hl
+        ld (__stou_acc+2),de
 SCL145:
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (ix-2),l
-        ld (ix-1),h
+        ld (__stou_p),hl
         jp SCL139
 SCL141:
-        ld a,(ix-5)
+        ld a,(__stou_any+1)
         or a
         jp m, SCL161
         jr nz,SCL159 ; peep: jp_to_jr
-        ld a,(ix-6)
+        ld a,(__stou_any)
         cp 0
         jr nc,SCL159 ; peep: jp_to_jr
 SCL161:
         ld hl,65535
         ld de,65535
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stou_acc),hl
+        ld (__stou_acc+2),de
         ld hl,34
         ld de,0
         ld (_errno),hl
         jr SCL160 ; peep: jp_to_jr
 SCL159:
-        ld l,(ix-4)
-        ld h,(ix-3)
+        ld hl,(__stou_neg)
         ld a,h
         or l
         jr z,SCL160 ; peep: jp_to_jr
@@ -18796,10 +18395,8 @@ SCL159:
         ld de,0
         push de
         push hl
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
+        ld hl,(__stou_acc)
+        ld de,(__stou_acc+2)
         ld b,h
         ld c,l
         pop hl
@@ -18812,13 +18409,10 @@ SCL159:
         ld d,b
         ld e,c
         ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
+        ld (__stou_acc),hl
+        ld (__stou_acc+2),de
 SCL160:
-        ld l,(ix+6)
-        ld h,(ix+7)
+        ld hl,(__stou_endptr)
         push hl
         ld hl,0
         ld de,0
@@ -18845,21 +18439,17 @@ SCL160:
         xor d
         or l
         jr z,SCL165 ; peep: jp_to_jr
-        ld l,(ix+6) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+7)
+        ld hl,(__stou_endptr) ; peep: ix_frame_ptr_deadd
         push hl
-        ld l,(ix-6)
-        ld h,(ix-5)
+        ld hl,(__stou_any)
         ld a,h
         or l
         jr z,SCL168 ; peep: jp_to_jr
-        ld l,(ix-2)
-        ld h,(ix-1)
+        ld hl,(__stou_p)
         ld de,0
         jr SCL169 ; peep: jp_to_jr
 SCL168:
-        ld l,(ix+4)
-        ld h,(ix+5)
+        ld hl,(__stou_nptr)
 SCL169:
         ex de,hl
         pop hl
@@ -18867,13 +18457,20 @@ SCL169:
         inc hl
         ld (hl),d
 SCL165:
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
-        ld sp,ix
-        pop ix
+        ld hl,(__stou_acc)
+        ld de,(__stou_acc+2)
         ret
+
+__stou_nptr:    dw      0
+__stou_endptr:  dw      0
+__stou_base:    dw      0
+__stou_p:       dw      0
+__stou_neg:     dw      0
+__stou_any:     dw      0
+__stou_c:       dw      0
+__stou_acc:     ds      4
+__stou_cutoff:  ds      4
+__stou_cutlim:  dw      0
 
         public __stok
 ; char *strtok(char *s, const char *delim)
