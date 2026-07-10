@@ -987,12 +987,19 @@ void skip_prototype_array_suffixes(int *ptype)
     int ndims = 0;
     int i, n, inner, elem_bytes;
     int orig_type = *ptype;
+    int rt_count = 0;     /* runtime inner (ndims>0) dimensions seen */
+    int rt_dim = -1;      /* dimension index of the first such */
+    int rt_simple = 0;    /* first such dimension is a lone identifier `[name]` */
+    char rt_name[64];
+
+    rt_name[0] = 0;
 
     if (tok.kind != '[') return;
 
     /* Reset: we're taking over array suffix parsing from scratch. */
     g_ptr_array_dim_count = 0;
     g_ptr_array_elem_size = 0;
+    g_ptr_array_runtime_stride_name[0] = 0;
     memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
 
     while (accept('[')) {
@@ -1012,13 +1019,33 @@ void skip_prototype_array_suffixes(int *ptype)
              * parameter or any run-time expression) is equivalent to `T *p`.
              * The bound merely documents the length, so consume the dimension
              * expression and let the array decay to a pointer just like `[]`.
-             * Only the FIRST dimension may be runtime: an inner runtime
-             * dimension (`T p[3][n]`) implies a runtime row stride, which this
-             * compiler does not model - reject it exactly like the local-VLA
-             * path does rather than silently computing wrong element
-             * addresses. */
-            if (ndims > 0)
-                error_here("variable inner dimensions in variable-length arrays are not supported; use malloc and an explicit pointer");
+             * An inner (ndims>0) runtime dimension additionally implies a
+             * run-time row stride; note it here so the representable
+             * `T p[x][col]` shape (single inner bound, a lone identifier) can
+             * be lowered, while any other runtime inner shape is rejected
+             * below rather than silently miscompiled. */
+            if (ndims > 0) {
+                rt_count++;
+                if (rt_dim < 0) {
+                    rt_dim = ndims;
+                    if (tok.kind == TOK_ID) {
+                        long s_pos = posi;
+                        long s_ts = tok_start_pos;
+                        int s_ln = line_no;
+                        int s_tl = tok_line;
+                        struct Token s_tk = tok;
+                        strncpy(rt_name, tok.text, sizeof(rt_name) - 1);
+                        rt_name[sizeof(rt_name) - 1] = 0;
+                        next_token();
+                        rt_simple = (tok.kind == ']');
+                        posi = s_pos;
+                        tok_start_pos = s_ts;
+                        line_no = s_ln;
+                        tok_line = s_tl;
+                        tok = s_tk;
+                    }
+                }
+            }
             skip_array_dim_to_close();
             n = 0;
         } else {
@@ -1031,6 +1058,23 @@ void skip_prototype_array_suffixes(int *ptype)
     }
 
     if (ndims == 0) return;
+
+    /* A single runtime inner dimension that is a lone identifier and the only
+     * inner dimension (`T p[x][col]`) is representable as a pointer to a
+     * runtime-width row: keep its bound name for row-stride indexing.  Any
+     * other runtime inner shape - an expression bound (`[col+1]`, `[2*n]`), a
+     * three-or-more-dimensional array, or a runtime dimension followed by
+     * further dimensions - cannot be described by one stride symbol, so reject
+     * it rather than emit wrong element addresses. */
+    if (rt_count > 0) {
+        if (rt_count == 1 && rt_simple && ndims == 2 && rt_dim == 1) {
+            strncpy(g_ptr_array_runtime_stride_name, rt_name,
+                    sizeof(g_ptr_array_runtime_stride_name) - 1);
+            g_ptr_array_runtime_stride_name[sizeof(g_ptr_array_runtime_stride_name) - 1] = 0;
+        } else {
+            error_here("variable inner dimensions in variable-length arrays are not supported; use malloc and an explicit pointer");
+        }
+    }
 
     /* Any array parameter decays to a single pointer to its element group.
      * int a[]      -> int *a  (dim_count = 0, no inner dims)
@@ -1383,9 +1427,13 @@ void parse_param_list(void)
                 ps->dim_count = g_ptr_array_dim_count;
                 for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
                     ps->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
+                strncpy(ps->runtime_stride_name, g_ptr_array_runtime_stride_name,
+                        sizeof(ps->runtime_stride_name) - 1);
+                ps->runtime_stride_name[sizeof(ps->runtime_stride_name) - 1] = 0;
             }
             g_ptr_array_dim_count = 0;
             g_ptr_array_elem_size = 0;
+            g_ptr_array_runtime_stride_name[0] = 0;
         }
         (void)unnamed_id;
 

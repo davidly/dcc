@@ -1,1 +1,3 @@
 c9904 changed=12 first=25 last=25 avg=25
+grid sum=78 e32=12 e20=7
+cgrid sum=55

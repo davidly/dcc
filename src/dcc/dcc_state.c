@@ -212,6 +212,7 @@ int g_funcptr_proto_types[MAX_PROTO_PARAMS];
 int g_ptr_array_dim_count;
 int g_ptr_array_dims[MAX_ARRAY_DIMS];
 int g_ptr_array_elem_size;
+char g_ptr_array_runtime_stride_name[64];
 int g_last_array_dim_count;
 int g_last_array_dims[MAX_ARRAY_DIMS];
 
