@@ -990,6 +990,7 @@ void emit_function_epilogue(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
+int local_name_address_taken_in_function(const char *name);
 int local_name_used_ahead(const char *name);
 int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name);
 int narrow_scalar_is_byte_safe(const struct AstNode *scope, const char *name);

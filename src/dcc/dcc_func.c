@@ -682,9 +682,9 @@ static void bump_ident_count(const char *name)
     }
 }
 
-/* Called immediately after bump_ident_count for the same identifier when the
- * token immediately preceding it was '&' - i.e. its address was taken
- * somewhere in the function body. Used by find_bc_regalloc_candidate to
+/* Called immediately after bump_ident_count for an identifier reached through
+ * an address-of token with only parentheses in between - i.e. its address was
+ * taken somewhere in the function body. Used by find_bc_regalloc_candidate to
  * exclude a pointer parameter whose own storage location (not what it
  * points to) might be read/written through that address - a BC-resident
  * copy would silently desync from such an alias. */
@@ -718,6 +718,11 @@ static int ident_addr_taken_for(const char *name)
         if (strcmp(g_ident_counts[i].name, name) == 0)
             return g_ident_counts[i].addr_taken;
     return 0;
+}
+
+int local_name_address_taken_in_function(const char *name)
+{
+    return ident_addr_taken_for(name);
 }
 
 /* Called when an assignment-like operator ('=', +=/-=/etc., ++, --) is seen
@@ -836,6 +841,7 @@ static void scan_function_body_ident_counts(void)
     struct Token sv_tok;
     int depth;
     int prev_kind;
+    int address_pending;
     char prev_ident[64];
 
     g_ident_count_n = 0;
@@ -853,13 +859,15 @@ static void scan_function_body_ident_counts(void)
 
     depth = 1;
     prev_kind = 0;
+    address_pending = 0;
     prev_ident[0] = 0;
     next_token();
     while (tok.kind != TOK_EOF && depth > 0) {
         if (tok.kind == TOK_ID) {
             bump_ident_count(tok.text);
-            if (prev_kind == '&')
+            if (address_pending)
                 mark_ident_addr_taken(tok.text);
+            address_pending = 0;
             if (strcmp(tok.text, "exec") == 0 || strcmp(tok.text, "execv") == 0)
                 g_addr_cache_calls_exec = 1;
         } else if (tok.kind == '{')
@@ -876,6 +884,10 @@ static void scan_function_body_ident_counts(void)
         } else {
             prev_ident[0] = 0;
         }
+        if (tok.kind == '&')
+            address_pending = 1;
+        else if (address_pending && tok.kind != '(' && tok.kind != ')')
+            address_pending = 0;
         prev_kind = tok.kind;
         next_token();
     }

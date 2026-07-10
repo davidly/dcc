@@ -951,6 +951,30 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
         emit_store_global_word_direct(s);
         return;
     }
+    if ((s->storage == SC_LOCAL || s->storage == SC_PARAM) &&
+        type_size(s->type) <= 2 && !sym_can_ix_direct(s)) {
+        /* Frame slot is outside the (ix+d) signed-8-bit displacement range,
+         * so compute the address and store through it. Normalize a _Bool
+         * value up front (mirroring the plain (ix+d) path below) so the
+         * value left in HL on exit is the normalized 0/1, not just the
+         * stored byte - keeping this fallback's HL contract identical to the
+         * in-range path for a consumed assignment result.
+         *
+         * Only 1- and 2-byte objects need this: every caller that stores a
+         * 4-byte long/float to an out-of-range frame slot already computes
+         * the address itself and uses emit_store_de_to_addr_hl (see
+         * gen_assign_ast's !sym_can_ix_direct long/float branches), so a
+         * size-4 store only ever reaches the (ix+d) code below with an
+         * in-range offset. */
+        if (type_is_bool(s->type))
+            emit_bool_normalize_hl(s->type);
+        emit("\tpush hl\n");
+        emit_load_sym_addr(s);
+        emit("\tpop de\n");
+        emit_store_de_to_addr_hl(s->type);
+        emit("\tex de,hl\n");
+        return;
+    }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
         if (type_size(s->type) == 1) {
             if (type_is_bool(s->type))

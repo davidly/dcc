@@ -304,8 +304,70 @@ static int ast_for_first_iter_certain(const struct AstNode *n)
  * `A[i][k] * B[k][j]`-shaped expressions this targets; a hoistable read
  * reachable only through some other AST shape is simply left un-hoisted,
  * which is always safe, just less thorough. */
+
+/* True only for scalar arithmetic that contains no indirect memory read.
+ * Plain identifiers are allowed: when the body assigns a plain scalar, a
+ * different identifier denotes a different object. Dereferences, indexes,
+ * members, calls, and unrecognized shapes are rejected because they could
+ * read that scalar through an alias. */
+static int ast_expr_has_only_direct_scalar_reads(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 1;
+    switch (n->kind) {
+    case AST_INT_LIT:
+    case AST_IDENT:
+        return 1;
+    case AST_CAST:
+        return ast_expr_has_only_direct_scalar_reads(n->a);
+    case AST_UNARY:
+        if (n->op == '*')
+            return 0;                  /* dereference reads memory */
+        return ast_expr_has_only_direct_scalar_reads(n->a);
+    case AST_BINARY:
+        return ast_expr_has_only_direct_scalar_reads(n->a) &&
+               ast_expr_has_only_direct_scalar_reads(n->b);
+    default:
+        return 0;                      /* AST_INDEX/AST_MEMBER/AST_CALL/... */
+    }
+}
+
+/* True only when an unknown memory store cannot change this expression.
+ * Mutable locals and parameters are safe while their addresses have not
+ * escaped anywhere in the function; globals are conservatively rejected. */
+static int ast_expr_cannot_alias_memory_store(const struct AstNode *n)
+{
+    struct Sym *s;
+
+    if (n == NULL)
+        return 1;
+    switch (n->kind) {
+    case AST_INT_LIT:
+        return 1;
+    case AST_IDENT:
+        s = find_sym(n->sval);
+        if (s == NULL)
+            return 0;
+        if (s->is_const_value)
+            return 1;
+        return (s->storage == SC_LOCAL || s->storage == SC_PARAM) &&
+               !s->is_array && !s->is_vla &&
+               local_name_address_taken_in_function(s->name) == 0;
+    case AST_CAST:
+        return ast_expr_cannot_alias_memory_store(n->a);
+    case AST_UNARY:
+        return n->op != '*' && ast_expr_cannot_alias_memory_store(n->a);
+    case AST_BINARY:
+        return ast_expr_cannot_alias_memory_store(n->a) &&
+               ast_expr_cannot_alias_memory_store(n->b);
+    default:
+        return 0;
+    }
+}
+
 static struct AstNode *ast_hoist_row_invariant_2d_reads(const struct AstNode *rhs,
-                                                                const char *ivar_name)
+                                                        const char *ivar_name,
+                                                        const char *modified_name)
 {
     const struct AstNode *outer;
     const struct AstNode *row_idx;
@@ -320,7 +382,16 @@ static struct AstNode *ast_hoist_row_invariant_2d_reads(const struct AstNode *rh
     if (rhs->kind == AST_INDEX && ast_index_2d_addressable_addr(rhs)) {
         outer = rhs->a;
         row_idx = outer->b;
+        /* The row subscript must be provably unchanged by the body store.
+         * For a plain scalar target, reject both direct references to that
+         * target and indirect reads that could alias it. For an unknown
+         * memory target, only a compile-time-only row is independent of the
+         * store without further pointer-alias analysis. */
         if (!ast_expr_references_ident(row_idx, ivar_name) &&
+            (modified_name != NULL
+                ? (!ast_expr_references_ident(row_idx, modified_name) &&
+                   ast_expr_has_only_direct_scalar_reads(row_idx))
+                : ast_expr_cannot_alias_memory_store(row_idx)) &&
             !ast_expr_has_side_effects(row_idx) &&
             ast_index_2d_array_elem_type(rhs, &elem_val_type) &&
             !type_is_struct_object(elem_val_type)) {
@@ -357,8 +428,8 @@ static struct AstNode *ast_hoist_row_invariant_2d_reads(const struct AstNode *rh
     if (rhs->kind != AST_BINARY && rhs->kind != AST_UNARY)
         return (struct AstNode *)rhs;
 
-    na = ast_hoist_row_invariant_2d_reads(rhs->a, ivar_name);
-    nb = ast_hoist_row_invariant_2d_reads(rhs->b, ivar_name);
+    na = ast_hoist_row_invariant_2d_reads(rhs->a, ivar_name, modified_name);
+    nb = ast_hoist_row_invariant_2d_reads(rhs->b, ivar_name, modified_name);
     if (na == rhs->a && nb == rhs->b)
         return (struct AstNode *)rhs;
 
@@ -588,10 +659,18 @@ void ast_gen_for_stmt(const struct AstNode *n)
     {
         const char *rhs_ivar_name;
         const struct AstNode *rhs_orig;
+        const char *rhs_modified_name = NULL;
 
         if (n->sym == NULL &&
             ast_for_rhs_hoist_scan_supported(n, &rhs_ivar_name, &rhs_orig)) {
-            struct AstNode *rhs_rewritten = ast_hoist_row_invariant_2d_reads(rhs_orig, rhs_ivar_name);
+            struct AstNode *body_assign = hoist_body != NULL ? hoist_body->a : n->d->a;
+            struct AstNode *rhs_rewritten;
+
+            if (body_assign != NULL && body_assign->kind == AST_ASSIGN &&
+                body_assign->a != NULL && body_assign->a->kind == AST_IDENT)
+                rhs_modified_name = body_assign->a->sval;
+            rhs_rewritten = ast_hoist_row_invariant_2d_reads(
+                rhs_orig, rhs_ivar_name, rhs_modified_name);
 
             if (rhs_rewritten != rhs_orig) {
                 if (hoist_body != NULL) {
