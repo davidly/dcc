@@ -4019,11 +4019,7 @@ pf_f_prec_known:
         push    hl
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
-        push    de
-        push    hl
-        call    __fadd
-        pop     bc
-        pop     bc
+        call    __faf
         pop     bc
         pop     bc
         ld      (pf_fl),hl
@@ -4058,11 +4054,7 @@ pf_f_rounded:
         push    hl
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
-        push    de
-        push    hl
-        call    __fsub
-        pop     bc
-        pop     bc
+        call    __fsf
         pop     bc
         pop     bc
         ld      (pf_fl),hl
@@ -4104,11 +4096,7 @@ pf_f_digloop:
         push    hl
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
-        push    de
-        push    hl
-        call    __fsub
-        pop     bc
-        pop     bc
+        call    __fsf
         pop     bc
         pop     bc
         ld      (pf_fl),hl
@@ -5122,11 +5110,7 @@ atf_nfc:
         push    hl
         ld      hl,(__atf_mant)
         ld      de,(__atf_mant+2)
-        push    de
-        push    hl
-        call    __fadd
-        pop     bc
-        pop     bc
+        call    __faf
         pop     bc
         pop     bc
         ld      (__atf_mant),hl
@@ -11549,6 +11533,57 @@ __ffi:
 ; normalized finite numbers and signed zero are handled; NaN/Inf handling is
 ; conservative and returns the left operand for those uncommon bootstrap cases.
 
+        public  __faf
+__faf:
+        ; fastcall float a+b: DE:HL = b (live), a still on the stack (one
+        ; push, 4 bytes). Named __faf, not __faddf: M80 truncates public
+        ; symbols to 6 significant characters, and __faddf truncates to
+        ; __FADD, colliding with __fadd itself - the same mistake as
+        ; __msf's first attempt (__msetf) and __fmf's (__fmulf).
+        xor     a
+        ld      (FSUB),a
+        jp      FADDR0F
+
+        public  __fsf
+__fsf:
+        ; fastcall float a-b: DE:HL = b (live, the subtrahend - the
+        ; calling convention's "right"/last-pushed operand at every call
+        ; site), a still on the stack. Named __fsf, not __fsubf, for the
+        ; same 6-char-truncation reason (__fsubf -> __FSUB, colliding
+        ; with __fsub).
+        ld      a,1
+        ld      (FSUB),a
+FADDR0F:
+        ; Unpack b (still live in DE:HL, the CURRENTLY ACTIVE register
+        ; bank) before ix/the stack are touched at all - FUNR only
+        ; touches registers, so this works with no memory scratch and no
+        ; push, unlike __fmul/__fdiv's memory-scratch-based fastcall
+        ; unpack. Do NOT exx before this call: exx would swap DE:HL away
+        ; to the shadow set, losing b's live value before FUNR ever sees
+        ; it (the bug in an earlier version of this code, caught by a
+        ; printf("%f") correctness test producing garbled digits).
+        call    FUNR
+        ; __fsf's sign flip, while b's bank is still the active one.
+        ld      a,(FSUB)
+        or      a
+        jp      z,FAF_NOFLIP
+        ld      a,d
+        xor     80h
+        ld      d,a
+FAF_NOFLIP:
+        exx                     ; b now safely parked in the shadow bank;
+                                 ; the newly-active bank is free for a
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    FUNR            ; unpack a into the now-active bank
+        jp      FANOFL2         ; active=a, shadow=b - matches FANOFL2's
+                                 ; expectation exactly
+
         public  __fadd
 __fadd:
         push    ix
@@ -11605,7 +11640,9 @@ FADDR0:
         ld      d,a
 FANOFL:
         exx                     ; main bank (operand A) active again
-
+FANOFL2:
+        ; __faf/__fsf rejoin here: they already did their own equivalent
+        ; bank switch above, so they jump straight past this one.
         ; zero shortcuts: if A==0, result=B; if B==0, result=A. "Zero"
         ; means exponent and all three mantissa bytes are zero, matching
         ; the original memory-based check exactly (not just exponent==0).
@@ -13497,11 +13534,7 @@ FMDNZ:
         ld      h,(ix-7)
         ld      e,(ix-6)
         ld      d,(ix-5)
-        push    de              ; right operand prod
-        push    hl
-        call    __fsub
-        pop     bc
-        pop     bc
+        call    __fsf
         pop     bc
         pop     bc
 
@@ -13596,11 +13629,7 @@ FMSLP:
         pop     bc
         pop     bc
         pop     bc
-        push    de
-        push    hl
-        call    __fadd
-        pop     bc
-        pop     bc
+        call    __faf
         pop     bc
         pop     bc
         ld      b,0ffh            ; exact * 2^-1, replacing full multiply by 0.5f
@@ -14323,11 +14352,7 @@ MFL4:
         push hl
         ld hl,0
         ld de,16128
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __ffl
@@ -14341,11 +14366,7 @@ MFL6:
         push hl
         ld hl,0
         ld de,16128
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         call __ffl
@@ -14366,11 +14387,7 @@ MFL7:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__expf_r),hl
@@ -14390,11 +14407,7 @@ MFL7:
         push hl
         ld hl,(__expf_r)
         ld de,(__expf_r+2)
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         push de
@@ -14440,11 +14453,9 @@ MFL7:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        ; b = this __fmf's result, still live in DE:HL - no push needed
+        ; (same rationale as the __fmf conversions above).
+        call __faf
         pop bc
         pop bc
         ; b = this __fadd's result, still live in DE:HL - no push needed;
@@ -14454,41 +14465,25 @@ MFL7:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (__expf_poly),hl
@@ -14592,11 +14587,7 @@ MFL12:
         push hl
         ld hl,0
         ld de,16256
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         push de
@@ -14607,11 +14598,7 @@ MFL12:
         push hl
         ld hl,0
         ld de,16256
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         push de
@@ -14675,41 +14662,25 @@ MFL12:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
@@ -14730,11 +14701,7 @@ MFL12:
         push hl
         ld hl,(__logf_poly)
         ld de,(__logf_poly+2)
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
 MFL8:
@@ -14909,11 +14876,7 @@ MFL22:
         ld hl,(__powf_iy)
         ld de,(__powf_iy+2)
         call __flf
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__powf_fy),hl
@@ -15064,11 +15027,7 @@ _sinhf:
         push    hl
         ld      hl,(__hyp_blo)
         ld      de,(__hyp_bhi)
-        push    de
-        push    hl
-        call    __fsub
-        pop     bc
-        pop     bc
+        call    __fsf
         pop     bc
         pop     bc
         ld      b,-1
@@ -15114,11 +15073,7 @@ _coshf:
         push    hl
         ld      hl,(__hyp_blo)
         ld      de,(__hyp_bhi)
-        push    de
-        push    hl
-        call    __fadd
-        pop     bc
-        pop     bc
+        call    __faf
         pop     bc
         pop     bc
         ld      b,-1
@@ -15203,11 +15158,7 @@ tanh_calculate:
         push    hl
         ld      hl,0
         ld      de,16256
-        push    de
-        push    hl
-        call    __fsub
-        pop     bc
-        pop     bc
+        call    __fsf
         pop     bc
         pop     bc
         ld      (__hyp_blo),hl
@@ -15220,11 +15171,7 @@ tanh_calculate:
         push    hl
         ld      hl,0
         ld      de,16256
-        push    de
-        push    hl
-        call    __fadd
-        pop     bc
-        pop     bc
+        call    __faf
         pop     bc
         pop     bc
 
@@ -15304,11 +15251,7 @@ _sinf:
         push hl
         ld hl,4059
         ld de,16585
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__sinf_x),hl
@@ -15339,11 +15282,7 @@ MFL38:
         push hl
         ld hl,4059
         ld de,16585
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (__sinf_x),hl
@@ -15371,11 +15310,7 @@ MFL40:
         push hl
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__sinf_x),hl
@@ -15410,11 +15345,7 @@ MFL41:
         push hl
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__sinf_x),hl
@@ -15473,31 +15404,19 @@ MFL42:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ret
@@ -15559,11 +15478,7 @@ _cosf:
         push hl
         ld hl,4059
         ld de,16585
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__cosf_x),hl
@@ -15594,11 +15509,7 @@ MFL47:
         push hl
         ld hl,4059
         ld de,16585
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (__cosf_x),hl
@@ -15626,11 +15537,7 @@ MFL49:
         push hl
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__cosf_x),hl
@@ -15672,11 +15579,7 @@ MFL50:
         push hl
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__cosf_x),hl
@@ -15735,31 +15638,19 @@ MFL51:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (__cosf_poly),hl
@@ -15830,11 +15721,7 @@ _tanf:
         push hl
         ld hl,4059
         ld de,16457
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__tanf_r),hl
@@ -15866,11 +15753,7 @@ MFL55:
         push hl
         ld hl,4059
         ld de,16457
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (__tanf_r),hl
@@ -15898,11 +15781,7 @@ MFL56:
         push hl
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__tanf_r),hl
@@ -15939,11 +15818,7 @@ MFL59:
         push hl
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__tanf_r),hl
@@ -15972,11 +15847,7 @@ MFL60:
         push hl
         ld hl,(__tanf_r2)
         ld de,(__tanf_r2+2)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         call __fmf
@@ -15997,11 +15868,7 @@ MFL60:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld (__tanf_den),hl
@@ -16212,11 +16079,7 @@ MFL72:
         push hl
         ld hl,0
         ld de,16256
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         push de
@@ -16227,11 +16090,7 @@ MFL72:
         push hl
         ld hl,0
         ld de,16256
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         push de
@@ -16305,41 +16164,25 @@ MFL73:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (__atanf_poly),hl
@@ -16354,11 +16197,7 @@ MFL73:
         push hl
         ld hl,(__atanf_poly)
         ld de,(__atanf_poly+2)
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
@@ -16536,18 +16375,14 @@ atan2_x_not_negative:
         push    hl
         ld      hl,4059
         ld      de,16457
-        push    de
-        push    hl
         ld      a,(__atan2_yle)
         or      a
         jr      z,atan2_sub_pi
-        call    __fadd
+        call    __faf
         jr      atan2_adjust_done
 atan2_sub_pi:
-        call    __fsub
+        call    __fsf
 atan2_adjust_done:
-        pop     bc
-        pop     bc
         pop     bc
         pop     bc
         ret
@@ -16678,11 +16513,7 @@ MFL90:
         ld h,(ix+5)
         ld e,(ix+6)
         ld d,(ix+7)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ld b,-1
@@ -16744,11 +16575,7 @@ MFL90:
         ld d,(ix-17)
         ld b,1
         call __fscale_pow2
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         call __fmf
@@ -16829,41 +16656,25 @@ MFL92:
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         call __fmf
         pop bc
         pop bc
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
+        call __faf
         pop bc
         pop bc
         ld (ix-12),l
@@ -16908,11 +16719,7 @@ _acosf:
         call _asinf
         pop bc
         pop bc
-        push de                 ; pi/2 - result
-        push hl
-        call __fsub
-        pop bc
-        pop bc
+        call __fsf
         pop bc
         pop bc
         ret
@@ -17185,11 +16992,7 @@ modff_have_int:
         push    hl
         ld      de,(__modff_ihi)
         ld      hl,(__modff_ilo)
-        push    de
-        push    hl
-        call    __fsub
-        pop     bc
-        pop     bc
+        call    __fsf
         pop     bc
         pop     bc
         ret
