@@ -264,6 +264,7 @@ struct Sym {
     int elem_size; /* stride per first-dimension element */
     int dim_count; /* C array dimensions, e.g. a[2][3] -> 2 */
     int dims[MAX_ARRAY_DIMS];   /* dims[0] may be 0 until inferred for a[][N] */
+    char runtime_stride_name[64]; /* parameter name for a runtime inner VLA bound */
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
@@ -597,6 +598,7 @@ extern int g_funcptr_proto_types[MAX_PROTO_PARAMS];
 extern int g_ptr_array_dim_count;
 extern int g_ptr_array_dims[MAX_ARRAY_DIMS];
 extern int g_ptr_array_elem_size;
+extern char g_ptr_array_runtime_stride_name[64];
 extern int g_last_array_dim_count;
 extern int g_last_array_dims[MAX_ARRAY_DIMS];
 

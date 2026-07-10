@@ -2737,6 +2737,29 @@ static int emit_array_symbase_index(struct Sym *s, const struct AstNode *idx,
     return 1;
 }
 
+static int emit_runtime_pointer_array_stride(struct Sym *s)
+{
+    struct Sym *stride;
+    int elem;
+
+    if (s == NULL || s->runtime_stride_name[0] == 0)
+        return 0;
+
+    stride = find_sym(s->runtime_stride_name);
+    if (stride == NULL)
+        return 0;
+
+    emit("\tpush hl\n");
+    emit_load_sym_de_direct(stride);
+    emit("\tpop hl\n");
+    gen_binop_typed('*', TYPE_INT);
+    elem = type_size(type_decay_ptr(s->type));
+    if (elem <= 0)
+        elem = 2;
+    scale_hl_by_elem_size(elem);
+    return 1;
+}
+
 /* Emit a plain-int subscript read `base[index]` via the IDENTIFIER-ROOTED
  * subscript machine (NOT the postfix chain - the two use different base loads
  * and element-size helpers).  The gate (ast_index_plain_int_read) guarantees a
@@ -2807,7 +2830,8 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
             } else {
                 emit("\tpush hl\n");
                 gen_index_subscript_expr_ast(idxs[idx]);
-                scale_hl_by_elem_size(elem_size);
+                if (!(idx == 0 && emit_runtime_pointer_array_stride(ns)))
+                    scale_hl_by_elem_size(elem_size);
                 emit("\tex de,hl\n");
                 emit("\tpop hl\n");
                 emit("\tadd hl,de\n");
@@ -2842,7 +2866,8 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
                 } else {
                     emit("\tpush hl\n");
                     gen_index_subscript_expr_ast(idxs[idx]);
-                    scale_hl_by_elem_size(elem_size);
+                    if (!(idx == 0 && emit_runtime_pointer_array_stride(ps)))
+                        scale_hl_by_elem_size(elem_size);
                     emit("\tex de,hl\n");
                     emit("\tpop hl\n");
                     emit("\tadd hl,de\n");
@@ -4231,7 +4256,8 @@ void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type)
             } else {
                 emit("\tpush hl\n");
                 gen_index_subscript_expr_ast(idxs[d]);
-                scale_hl_by_elem_size(elem_size);
+                if (!(d == 0 && emit_runtime_pointer_array_stride(ps)))
+                    scale_hl_by_elem_size(elem_size);
                 emit("\tex de,hl\n");
                 emit("\tpop hl\n");
                 emit("\tadd hl,de\n");
