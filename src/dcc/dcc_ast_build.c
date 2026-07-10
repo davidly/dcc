@@ -380,6 +380,32 @@ static struct AstNode *ast_build_compound_literal(struct AstArena *ar, int type)
     return n;
 }
 
+static struct Sym *ast_add_struct_return_member_temp(struct AstArena *ar,
+                                                     const struct AstNode *base)
+{
+    struct Sym *fn;
+    struct Sym *tmp;
+    struct Sym *copy;
+    char name[64];
+    int bytes;
+
+    if (base == NULL || base->kind != AST_CALL || base->a == NULL ||
+        base->a->kind != AST_IDENT)
+        return NULL;
+    fn = find_global(base->a->sval);
+    if (fn == NULL || fn->storage != SC_FUNC || !type_is_struct_object(fn->type))
+        return NULL;
+
+    bytes = type_size(fn->type);
+    if (bytes <= 0)
+        bytes = 2;
+    sprintf(name, "#sret%d", nlocals);
+    tmp = add_local_alloc(name, fn->type, bytes);
+    copy = (struct Sym *)ast_arena_alloc(ar, sizeof(*copy));
+    memcpy(copy, tmp, sizeof(*copy));
+    return copy;
+}
+
 /* Forward declarations (mutually recursive grammar). */
 static struct AstNode *p_assign(struct AstArena *ar);
 
@@ -513,6 +539,8 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
             struct AstNode *m = ast_new(ar, AST_MEMBER);
             m->op = tok.kind;
             m->a = n;
+            if (tok.kind == '.')
+                m->sym = ast_add_struct_return_member_temp(ar, n);
             next_token();
             if (tok.kind == TOK_ID) {
                 m->sval = cur_text(ar);

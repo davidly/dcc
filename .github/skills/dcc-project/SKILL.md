@@ -104,7 +104,14 @@ text.
 
 When adding or changing a test, update `_test_overrides.json` for its runtime
 needs first, then regenerate or edit `tests/baselines/<app>.txt` only when the
-new output is the intended behavior.
+new output is the intended behavior. For every new runnable unit test, also add
+a `tests/perf_baselines.csv` row with both `peep_cycles` and `nopeep_cycles`.
+Measure those values with the normal `runall.ps1` stack-check build (for
+example `pwsh ./scripts/runall.ps1 -Mode full`, then copy the reported new
+app/mode cycle counts) rather than ad-hoc `dccmake` runs, because stack-check
+changes the cycle counts. Avoid broad `-UpdatePerfBaseline` updates unless the
+task is explicitly to refresh all performance baselines; otherwise add or edit
+only the new test's row.
 
 When running test apps directly under `ntvcm` for benchmarking or debugging,
 look up the app in `_test_overrides.json` first and pass the same `args`,

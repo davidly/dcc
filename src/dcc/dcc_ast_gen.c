@@ -1545,6 +1545,15 @@ int ast_member_base_type(const struct AstNode *n, int *out_type)
         *out_type = n->a->type;
         return 1;
     }
+    if (n->op == '.' && n->a->kind == AST_CALL && n->a->a != NULL &&
+        n->a->a->kind == AST_IDENT) {
+        s = find_global(n->a->a->sval);
+        if (s != NULL && s->storage == SC_FUNC && type_is_struct_object(s->type) &&
+            ast_call_named_args_supported(n->a)) {
+            *out_type = s->type;
+            return 1;
+        }
+    }
     if (n->op == TOK_ARROW && ast_pointer_expr_type(n->a, out_type, &no_deref))
         return !no_deref;
     if (n->op == '.' && n->a->kind == AST_MEMBER &&
