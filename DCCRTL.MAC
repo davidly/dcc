@@ -371,14 +371,15 @@ __cobuf:
 
         public  __pchr
 __pchr:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
+        ; IX-free argument setup; caller still cleans the argument.
+        pop     bc              ; return address
+        pop     hl              ; character
+        push    hl              ; restore argument
+        push    bc
+        ld      e,l
         call    __conout
         ld      h,0
         ld      l,e
-        pop     ix
         ret
 
         public  __fpc
@@ -447,12 +448,12 @@ ___fpc_ch:
         public  _clearerr
 _clearerr:
         ; void clearerr(FILE *fp)
-        ; Clear the EOF and error indicators for this stream's slot.  fd 0/1/2
-        ; are console pseudo-streams with no slot, so they are left alone.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)
+        ; Clear the EOF and error indicators for this stream's slot.
+        pop     bc              ; return address
+        pop     hl              ; fp
+        push    hl              ; restore argument
+        push    bc
+        ld      a,l
         sub     FIRSTFD
         jr      c,clrerr_done
         cp      NFILES
@@ -461,15 +462,14 @@ _clearerr:
         ld      l,a
         ld      de,__fdeof
         add     hl,de
-        ld      (hl),0                  ; clear EOF flag
+        ld      (hl),0
         ld      h,0
         ld      l,a
         ld      de,__fderr
         add     hl,de
-        ld      (hl),0                  ; clear error flag
+        ld      (hl),0
 clrerr_done:
         ld      hl,0
-        pop     ix
         ret
 
         public  _setbuf
@@ -593,11 +593,11 @@ __cobdflt:
         public  _strerror
 _strerror:
         ; char *strerror(int errnum)
-        ; Small errno message table for the errors this RTL commonly sets.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)
+        pop     bc              ; return address
+        pop     hl              ; errnum
+        push    hl              ; restore argument
+        push    bc
+        ld      a,l
         cp      ENOENT
         jr      z,__se02
         cp      EIO
@@ -610,44 +610,35 @@ _strerror:
         jr      z,__se24
         cp      ENOSPC
         jr      z,__se28
-        cp      33              ; EDOM
+        cp      33
         jr      z,__se33
-        cp      34              ; ERANGE
+        cp      34
         jr      z,__se34
         ld      hl,__seuk
-        pop     ix
         ret
 __se02:
         ld      hl,__sem02
-        pop     ix
         ret
 __se05:
         ld      hl,__sem05
-        pop     ix
         ret
 __se09:
         ld      hl,__sem09
-        pop     ix
         ret
 __se22:
         ld      hl,__sem22
-        pop     ix
         ret
 __se24:
         ld      hl,__sem24
-        pop     ix
         ret
 __se28:
         ld      hl,__sem28
-        pop     ix
         ret
 __se33:
         ld      hl,__sem33
-        pop     ix
         ret
 __se34:
         ld      hl,__sem34
-        pop     ix
         ret
 
 __seuk:         db      'Error',0
@@ -872,16 +863,16 @@ __gtch_poll:
 ;     operations, should read that memory after the call.
         public  _bdos
 _bdos:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      c,(ix+4)        ; function number
-        ld      e,(ix+6)        ; DE argument
-        ld      d,(ix+7)
+        pop     bc              ; return address
+        pop     hl              ; function number
+        pop     de              ; DE argument
+        push    de              ; restore arguments
+        push    hl
+        push    bc
+        ld      c,l
         call    5
         ld      l,a
         ld      h,0
-        pop     ix
         ret
 
 
@@ -903,32 +894,34 @@ _bdos:
 ; implemented on every target.  Being self-modifying, these are not re-entrant.
         public  _inp
 _inp:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)        ; port (low byte)
-        ld      (inp_prt),a     ; patch the IN immediate operand
-        db      0dbh            ; IN A,(n)
+        pop     bc              ; return address
+        pop     hl              ; port
+        push    hl              ; restore argument
+        push    bc
+        ld      a,l
+        ld      (inp_prt),a
+        db      0dbh
 inp_prt:
-        db      0               ; <- port byte, patched above
+        db      0
         ld      l,a
         ld      h,0
-        pop     ix
         ret
 
         public  _outp
 _outp:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)        ; port (low byte)
-        ld      (outp_prt),a    ; patch the OUT immediate operand
-        ld      a,(ix+6)        ; value (low byte)
-        db      0d3h            ; OUT (n),A
+        pop     bc              ; return address
+        pop     hl              ; port
+        pop     de              ; value
+        push    de              ; restore arguments
+        push    hl
+        push    bc
+        ld      a,l
+        ld      (outp_prt),a
+        ld      a,e
+        db      0d3h
 outp_prt:
-        db      0               ; <- port byte, patched above
-        ld      hl,0            ; void return
-        pop     ix
+        db      0
+        ld      hl,0
         ret
 
 
@@ -967,14 +960,16 @@ __slf:
 
         public  __scpy
 __scpy:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        push    de
+        ; char *strcpy(char *dst, const char *src)
+        ; IX-free entry. Preserve the caller-cleanup argument layout.
+        pop     bc              ; return address
+        pop     de              ; DE = dst
+        pop     hl              ; HL = src
+        push    hl              ; restore src
+        push    de              ; restore dst
+        push    bc              ; restore return address
+        ld      b,d
+        ld      c,e             ; BC = original dst
 sc1:
         ld      a,(hl)
         ld      (de),a
@@ -982,19 +977,20 @@ sc1:
         inc     de
         or      a
         jr      nz,sc1
-        pop     hl
-        pop     ix
+        ld      h,b
+        ld      l,c             ; return dst
         ret
 
         public  __scmp
 __scmp:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        ld      l,(ix+6)
-        ld      h,(ix+7)
+        ; int strcmp(const char *s1, const char *s2)
+        ; IX-free entry. Preserve the caller-cleanup argument layout.
+        pop     bc              ; return address
+        pop     de              ; DE = s1
+        pop     hl              ; HL = s2
+        push    hl              ; restore s2
+        push    de              ; restore s1
+        push    bc              ; restore return address
 sp1:
         ld      a,(de)
         cp      (hl)
@@ -1009,15 +1005,12 @@ sp2:
         sub     (hl)
         ld      l,a
         ld      h,0
-        jr      nc,sp4
+        ret     nc
         ld      h,0ffh
-sp4:
-        pop     ix
         ret
 
 sp3:
         ld      hl,0
-        pop     ix
         ret
 
         public  __srch
@@ -1234,15 +1227,15 @@ sstr_cpir_not_found:
         public  __ncmp
 __ncmp:
         ; int strncmp(const char *s1, const char *s2, size_t n)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      c,(ix+8)
-        ld      b,(ix+9)
+        ; IX-free entry. Preserve the caller-cleanup argument layout.
+        pop     af              ; return address
+        pop     de              ; DE = s1
+        pop     hl              ; HL = s2
+        pop     bc              ; BC = n
+        push    bc              ; restore n
+        push    hl              ; restore s2
+        push    de              ; restore s1
+        push    af              ; restore return address
 sncmp_loop:
         ld      a,b
         or      c
@@ -1261,52 +1254,50 @@ sncmp_diff:
         sub     (hl)
         ld      l,a
         ld      h,0
-        jr      nc,sncmp_ret
+        ret     nc
         ld      h,0ffh
-sncmp_ret:
-        pop     ix
         ret
 sncmp_equal:
         ld      hl,0
-        pop     ix
         ret
 
         public  __mchr
 __mchr:
         ; void *memchr(const void *s, int c, size_t n)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      c,(ix+8)
-        ld      b,(ix+9)
+        ; IX-free entry. Preserve the caller-cleanup argument layout.
+        pop     af              ; return address
+        pop     hl              ; HL = s
+        pop     de              ; E = c
+        pop     bc              ; BC = n
+        push    bc              ; restore n
+        push    de              ; restore c
+        push    hl              ; restore s
+        push    af              ; restore return address
         ld      a,b
         or      c
         jr      z,mchr_none
-        ld      a,(ix+6)
+        ld      a,e
         cpir
         jr      nz,mchr_none
         dec     hl              ; CPIR leaves HL one byte past the match
 mchr_found:
-        pop     ix
         ret
 mchr_none:
         ld      hl,0
-        pop     ix
         ret
 
         public  __scat
 __scat:
         ; char *strcat(char *dst, const char *src)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        push    de
+        ; IX-free entry. Preserve the caller-cleanup argument layout.
+        pop     bc              ; return address
+        pop     de              ; DE = dst
+        pop     hl              ; HL = src
+        push    hl              ; restore src
+        push    de              ; restore dst
+        push    bc              ; restore return address
+        ld      b,d
+        ld      c,e             ; BC = original dst
 scat_end:
         ld      a,(de)
         or      a
@@ -1320,8 +1311,8 @@ scat_copy:
         inc     de
         or      a
         jr      nz,scat_copy
-        pop     hl
-        pop     ix
+        ld      h,b
+        ld      l,c             ; return dst
         ret
 
 
@@ -1334,71 +1325,83 @@ __scol:
         public  _strxfrm
 _strxfrm:
         ; size_t strxfrm(char *s1, const char *s2, size_t n)
-        ; C89 7.11.4.5: transform s2 for strcoll comparison into s1.
-        ; For C locale the transform is identity: copies like strncpy.
-        ; Returns strlen(s2) regardless of n.
-        ; s1 @ IX+4/5, s2 @ IX+6/7, n @ IX+8/9
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      c,(ix+6)
-        ld      b,(ix+7)                ; BC = s2 (source)
-        ld      hl,0                    ; HL = strlen(s2) (return value)
+        ; C locale transform is identity.  IX-free implementation.
+        ; Load DE=s1, HL=s2, BC=n using the caller-cleanup stack layout.
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = s1
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = s2 temporary
+        inc     hl
+        ld      a,(hl)
+        inc     hl
+        ld      h,(hl)
+        ld      l,a             ; HL = n temporary
+        push    de              ; save s1
+        push    hl              ; save n
+        ld      h,b
+        ld      l,c             ; HL = s2
+        push    hl              ; save s2
+
+        ld      de,0            ; DE = strlen(s2)
 sxf_len:
-        ld      a,(bc)
+        ld      a,(hl)
         or      a
-        jr      z,sxf_copy
-        inc     bc
+        jr      z,sxf_have_len
         inc     hl
+        inc     de
         jr      sxf_len
-sxf_copy:
-        ld      c,(ix+6)
-        ld      b,(ix+7)                ; BC = s2 (reload)
-        ld      e,(ix+8)
-        ld      d,(ix+9)                ; DE = n
-        push    hl                      ; save return value
-        ld      a,d
-        or      e
-        jr      z,sxf_done              ; n==0: nothing to write
-        ld      l,(ix+4)
-        ld      h,(ix+5)                ; HL = s1 (dest)
+sxf_have_len:
+        ld      (sxf_lenv),de
+        pop     hl              ; HL = s2
+        pop     bc              ; BC = n
+        pop     de              ; DE = s1
+
+        ld      a,b
+        or      c
+        jr      z,sxf_done
 sxf_lp:
-        ld      a,(bc)
-        ld      (hl),a
+        ld      a,(hl)
+        ld      (de),a
         or      a
-        jr      z,sxf_done              ; wrote null terminator
+        jr      z,sxf_done
         inc     hl
-        inc     bc
-        dec     de
-        ld      a,d
-        or      e
+        inc     de
+        dec     bc
+        ld      a,b
+        or      c
         jr      nz,sxf_lp
-        ; wrote n chars without reaching null (src longer than n)
 sxf_done:
-        pop     hl                      ; HL = strlen(s2)
-        pop     ix
+        ld      hl,(sxf_lenv)
         ret
+sxf_lenv:
+        dw      0
 
         public  __scsp
 __scsp:
         ; size_t strcspn(const char *s, const char *reject)
-        ; Result is the length of the initial reject-free run, which equals
-        ; (current s - initial s); no running counter is needed.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = s
-
+        ; IX-free. HL walks s; reject is reloaded from the caller stack.
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl           ; HL = s
 scsp_outer:
         ld      a,(hl)
         or      a
         jr      z,scsp_ret_count
-
         push    hl              ; save current s
-        ld      e,(ix+6)
-        ld      d,(ix+7)        ; DE = reject
+        ld      hl,6            ; reject is at SP+6 after the push
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = reject
+        pop     hl              ; restore current s
 scsp_inner:
         ld      a,(de)
         or      a
@@ -1406,43 +1409,45 @@ scsp_inner:
         ld      c,a
         ld      a,(hl)
         cp      c
-        jr      z,scsp_match
+        jr      z,scsp_ret_count
         inc     de
         jr      scsp_inner
-
 scsp_no_match:
-        pop     hl
         inc     hl
         jr      scsp_outer
-
-scsp_match:
-        pop     hl
 scsp_ret_count:
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = initial s
+        ex      de,hl           ; DE = current s
+        ld      hl,2
+        add     hl,sp
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = initial s
+        ex      de,hl           ; HL = current s
         or      a
-        sbc     hl,de           ; HL = current s - initial s = count
-        pop     ix
+        sbc     hl,bc
         ret
 
         public  __spbr
 __spbr:
         ; char *strpbrk(const char *s, const char *accept)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = s
-
+        ; IX-free. HL walks s; accept is reloaded from the caller stack.
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl           ; HL = s
 spbr_outer:
         ld      a,(hl)
         or      a
         jr      z,spbr_none
-
         push    hl
-        ld      e,(ix+6)
-        ld      d,(ix+7)        ; DE = accept
+        ld      hl,6            ; accept is at SP+6 after the push
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        pop     hl
 spbr_inner:
         ld      a,(de)
         or      a
@@ -1453,68 +1458,60 @@ spbr_inner:
         jr      z,spbr_found
         inc     de
         jr      spbr_inner
-
 spbr_no_match:
-        pop     hl
         inc     hl
         jr      spbr_outer
-
 spbr_found:
-        pop     hl              ; return current s pointer
-        pop     ix
         ret
-
 spbr_none:
         ld      hl,0
-        pop     ix
         ret
 
         public  __sspn
 __sspn:
         ; size_t strspn(const char *s, const char *accept)
-        ; Result is the length of the initial accept-only run, which equals
-        ; (current s - initial s); no running counter is needed.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = s
-
+        ; IX-free. HL walks s; accept is reloaded from the caller stack.
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl           ; HL = s
 sspn_outer:
         ld      a,(hl)
         or      a
         jr      z,sspn_ret_count
-
-        push    hl              ; save current s
-        ld      e,(ix+6)
-        ld      d,(ix+7)        ; DE = accept
+        push    hl
+        ld      hl,6            ; accept is at SP+6 after the push
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        pop     hl
 sspn_inner:
         ld      a,(de)
         or      a
-        jr      z,sspn_no_match
+        jr      z,sspn_ret_count
         ld      c,a
         ld      a,(hl)
         cp      c
         jr      z,sspn_match
         inc     de
         jr      sspn_inner
-
 sspn_match:
-        pop     hl
         inc     hl
         jr      sspn_outer
-
-sspn_no_match:
-        pop     hl
 sspn_ret_count:
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = initial s
+        ex      de,hl           ; DE = current s
+        ld      hl,2
+        add     hl,sp
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = initial s
+        ex      de,hl
         or      a
-        sbc     hl,de           ; HL = current s - initial s = count
-        pop     ix
+        sbc     hl,bc
         ret
-
 
         public  __sdup
 __sdup:
@@ -1559,17 +1556,26 @@ __sdup_len:
         public  __ncpy
 __ncpy:
         ; char *strncpy(char *dst, const char *src, size_t n)
-        ; Copy at most n bytes and, if src ends first, pad the rest with NUL.
-        ; Keep private labels short/unique for M80/L80 symbol significance.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)        ; DE = dst
-        ld      d,(ix+5)
-        ld      l,(ix+6)        ; HL = src
-        ld      h,(ix+7)
-        ld      c,(ix+8)        ; BC = n
-        ld      b,(ix+9)
+        ; IX-free setup. DE=dst, HL=src, BC=n; saved dst is return value.
+        ld      hl,2
+        add     hl,sp
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = dst temporary
+        inc     hl
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = src temporary
+        inc     hl
+        ld      a,(hl)
+        inc     hl
+        ld      h,(hl)
+        ld      l,a             ; HL = n temporary
+        push    bc              ; save dst
+        push    hl              ; save n
+        ex      de,hl           ; HL = src
+        pop     bc              ; BC = n
+        pop     de              ; DE = dst
         push    de              ; return dst
 nc1lp:
         ld      a,b
@@ -1587,14 +1593,13 @@ nc1pd:
         ld      a,b
         or      c
         jr      z,nc1dn
-        xor     a
+        xor     a               ; count test above clobbered A
         ld      (de),a
         inc     de
         dec     bc
         jr      nc1pd
 nc1dn:
         pop     hl
-        pop     ix
         ret
 
         public  __cmpf
@@ -1698,89 +1703,84 @@ mc2dtl:
         public  __mmov
 __mmov:
         ; void *memmove(void *dst, const void *src, size_t n)
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; IX-free setup. DE=dst, HL=src, BC=n.
+        ld      hl,2
+        add     hl,sp
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = dst temporary
+        inc     hl
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = src temporary
+        inc     hl
+        ld      a,(hl)
+        inc     hl
+        ld      h,(hl)
+        ld      l,a             ; HL = n temporary
+        push    bc              ; save dst
+        push    hl              ; save n
+        ex      de,hl           ; HL = src
+        pop     bc              ; BC = n
+        pop     de              ; DE = dst
+        push    de              ; return dst
 
-        ; if n == 0, done
-        ld      c,(ix+8)
-        ld      b,(ix+9)
         ld      a,b
         or      c
-        jr      z,mmv_ret_dst
-
-        ; if dst == src, done
-        ld      a,(ix+4)
-        cp      (ix+6)
-        jr      nz,mmv_cmp
-        ld      a,(ix+5)
-        cp      (ix+7)
-        jr      z,mmv_ret_dst
-
-mmv_cmp:
-        ; Compare dst - src unsigned. If dst < src, copy forward.
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = dst
-        ld      e,(ix+6)
-        ld      d,(ix+7)        ; DE = src
-        or      a
-        sbc     hl,de
-        jr      c,mmv_do_forward
-
-        ; Backward copy: HL = src+n, DE = dst+n, BC = n.
-        ld      l,(ix+6)
-        ld      h,(ix+7)        ; HL = src
-        ld      c,(ix+8)
-        ld      b,(ix+9)
+        jr      z,mmv_done
+        ld      a,d
+        cp      h
+        jr      c,mmv_forward
+        jr      nz,mmv_backward
+        ld      a,e
+        cp      l
+        jr      c,mmv_forward
+        jr      z,mmv_done
+mmv_backward:
         add     hl,bc           ; HL = src+n
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = dst
         ex      de,hl           ; HL = dst, DE = src+n
         add     hl,bc           ; HL = dst+n
         ex      de,hl           ; HL = src+n, DE = dst+n
-        dec     hl              ; HL = last source byte (src+n-1)
-        dec     de              ; DE = last dest byte (dst+n-1)
-        lddr                    ; copy n bytes high->low (n != 0 guaranteed)
-        jr      mmv_ret_dst
-
-mmv_do_forward:
-        ; Forward copy: HL = src, DE = dst, BC = n.
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        ld      c,(ix+8)
-        ld      b,(ix+9)
+        dec     hl
+        dec     de
+        lddr
+        jr      mmv_done
+mmv_forward:
         ldir
-
-mmv_ret_dst:
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        pop     ix
+mmv_done:
+        pop     hl
         ret
 
         public  __ncat
 __ncat:
         ; char *strncat(char *dst, const char *src, size_t n)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = dst
-        ld      l,(ix+6)
-        ld      h,(ix+7)        ; HL = src
-        ld      c,(ix+8)
-        ld      b,(ix+9)        ; BC = n
+        ; IX-free setup. DE=dst, HL=src, BC=n; saved dst is return value.
+        ld      hl,2
+        add     hl,sp
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = dst temporary
+        inc     hl
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = src temporary
+        inc     hl
+        ld      a,(hl)
+        inc     hl
+        ld      h,(hl)
+        ld      l,a             ; HL = n temporary
+        push    bc
+        push    hl
+        ex      de,hl           ; HL = src
+        pop     bc              ; BC = n
+        pop     de              ; DE = dst
         push    de              ; return dst
-
-        ; find terminating NUL in dst, leaving DE at append position
 snc_find_end:
         ld      a,(de)
         or      a
         jr      z,snc_copy
         inc     de
         jr      snc_find_end
-
 snc_copy:
         ld      a,b
         or      c
@@ -1793,12 +1793,10 @@ snc_copy:
         inc     de
         dec     bc
         jr      snc_copy
-
 snc_term:
         xor     a
         ld      (de),a
-        pop     hl              ; return dst
-        pop     ix
+        pop     hl
         ret
 
         public  __mcpy
@@ -2202,35 +2200,31 @@ __ms_done:
         public  _abs
 _abs:
         ; int abs(int j)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        pop     bc              ; return address
+        pop     hl              ; j
+        push    hl              ; restore argument
+        push    bc
         bit     7,h
-        jr      z,abs_done
+        ret     z
         xor     a
         sub     l
         ld      l,a
         ld      a,0
         sbc     a,h
         ld      h,a
-abs_done:
-        pop     ix
         ret
 
         public  _labs
 _labs:
-        ; long labs(long j)
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
+        ; long labs(long j), returned in DE:HL
+        pop     bc              ; return address
+        pop     hl              ; low word
+        pop     de              ; high word
+        push    de              ; restore argument
+        push    hl
+        push    bc
         bit     7,d
-        jr      z,labs_done
+        ret     z
         ld      a,l
         cpl
         ld      l,a
@@ -2246,10 +2240,8 @@ _labs:
         inc     hl
         ld      a,h
         or      l
-        jr      nz,labs_done
+        ret     nz
         inc     de
-labs_done:
-        pop     ix
         ret
 
         public  _div
@@ -14984,19 +14976,22 @@ MFL8:
 
         public _log10f
 _log10f:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
+        ; Leaf-style wrapper: preserve the caller-cleanup argument on the
+        ; stack, duplicate it for _logf, then multiply by log10(e).
+        pop bc                  ; caller return address
+        pop hl                  ; x, low word
+        pop de                  ; x, high word
+        push de                 ; restore caller's argument
+        push hl
+        push bc                 ; restore caller return address
+
+        push de                 ; _logf(x)
         push hl
         call _logf
         pop bc
         pop bc
-        push de
+
+        push de                 ; logf(x) * log10(e)
         push hl
         ld hl,23513
         ld de,16094
@@ -15007,8 +15002,6 @@ _log10f:
         pop bc
         pop bc
         pop bc
-        ld sp,ix
-        pop ix
         ret
 
         public _powf
@@ -15293,236 +15286,234 @@ MFL14:
 
         public _sinhf
 _sinhf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-8
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        call _expf
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        call _expf
-        pop bc
-        pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld b,-1
-        call __fscale_pow2
-        ld sp,ix
-        pop ix
-        ret
+        ; sinhf(x) = (expf(x) - expf(-x)) / 2.
+        ; Preserve the caller-cleaned argument layout without an IX frame.
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        ld      (__hyp_xlo),hl
+        ld      (__hyp_xhi),de
+
+        push    de
+        push    hl
+        call    _expf
+        pop     bc
+        pop     bc
+        ld      (__hyp_alo),hl
+        ld      (__hyp_ahi),de
+
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        ld      a,d
+        xor     80h
+        ld      d,a
+        push    de
+        push    hl
+        call    _expf
+        pop     bc
+        pop     bc
+
+        ; Preserve the generated operand push order: exp(x), exp(-x).
+        ld      (__hyp_blo),hl
+        ld      (__hyp_bhi),de
+        ld      hl,(__hyp_alo)
+        ld      de,(__hyp_ahi)
+        push    de
+        push    hl
+        ld      hl,(__hyp_blo)
+        ld      de,(__hyp_bhi)
+        push    de
+        push    hl
+        call    __fsub
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      b,-1
+        jp      __fscale_pow2
 
         public _coshf
 _coshf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-8
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        call _expf
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        call _expf
-        pop bc
-        pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld b,-1
-        call __fscale_pow2
-        ld sp,ix
-        pop ix
-        ret
+        ; coshf(x) = (expf(x) + expf(-x)) / 2.
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        ld      (__hyp_xlo),hl
+        ld      (__hyp_xhi),de
+
+        push    de
+        push    hl
+        call    _expf
+        pop     bc
+        pop     bc
+        ld      (__hyp_alo),hl
+        ld      (__hyp_ahi),de
+
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        ld      a,d
+        xor     80h
+        ld      d,a
+        push    de
+        push    hl
+        call    _expf
+        pop     bc
+        pop     bc
+
+        ; Preserve the generated operand push order: exp(x), exp(-x).
+        ld      (__hyp_blo),hl
+        ld      (__hyp_bhi),de
+        ld      hl,(__hyp_alo)
+        ld      de,(__hyp_ahi)
+        push    de
+        push    hl
+        ld      hl,(__hyp_blo)
+        ld      de,(__hyp_bhi)
+        push    de
+        push    hl
+        call    __fadd
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      b,-1
+        jp      __fscale_pow2
 
         public _tanhf
 _tanhf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-4
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,16752
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL32 ; peep: jp_to_jr
-        ld hl,0
-        ld de,16256
-        jp MFL31
-MFL32:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,16752
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL34 ; peep: jp_to_jr
-        ld hl,0
-        ld de,16256
-        ld a,d
-        xor 80h
-        ld d,a
-        jp MFL31
-MFL34:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        ld b,1
-        call __fscale_pow2
-        push de
-        push hl
-        call _expf
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        push de
-        push hl
-        ld hl,0
-        ld de,16256
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        push de
-        push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld hl,0
-        ld de,16256
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-MFL31:
-        ld sp,ix
-        pop ix
+        ; Preserve x while retaining the public caller-cleanup convention.
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        ld      (__hyp_xlo),hl
+        ld      (__hyp_xhi),de
+
+        ; Keep the compiler-generated saturation thresholds exactly:
+        ; x < 10.0f => continue, otherwise return +1.0f.
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,16752
+        push    de
+        push    hl
+        call    __flt
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,tanh_check_negative
+        ld      hl,0
+        ld      de,16256
         ret
+
+tanh_check_negative:
+        ; x > -10.0f => continue, otherwise return -1.0f.
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,16752
+        ld      a,d
+        xor     80h
+        ld      d,a
+        push    de
+        push    hl
+        call    __fgt
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,tanh_calculate
+        ld      hl,0
+        ld      de,16256
+        ld      a,d
+        xor     80h
+        ld      d,a
+        ret
+
+tanh_calculate:
+        ; y = expf(2*x)
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        ld      b,1
+        call    __fscale_pow2
+        push    de
+        push    hl
+        call    _expf
+        pop     bc
+        pop     bc
+        ld      (__hyp_alo),hl
+        ld      (__hyp_ahi),de
+
+        ; numerator = y - 1.0f
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,16256
+        push    de
+        push    hl
+        call    __fsub
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      (__hyp_blo),hl
+        ld      (__hyp_bhi),de
+
+        ; denominator = y + 1.0f
+        ld      hl,(__hyp_alo)
+        ld      de,(__hyp_ahi)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,16256
+        push    de
+        push    hl
+        call    __fadd
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+
+        ; numerator / denominator. Preserve generated push order.
+        ld      (__hyp_xlo),hl
+        ld      (__hyp_xhi),de
+        ld      hl,(__hyp_blo)
+        ld      de,(__hyp_bhi)
+        push    de
+        push    hl
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        push    de
+        push    hl
+        call    __fdiv
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ret
+
+; Shared private scratch for the non-reentrant floating-point runtime wrappers.
+__hyp_xlo:      dw      0
+__hyp_xhi:      dw      0
+__hyp_alo:      dw      0
+__hyp_ahi:      dw      0
+__hyp_blo:      dw      0
+__hyp_bhi:      dw      0
 
         public _sinf
 _sinf:
@@ -16932,195 +16923,191 @@ MFL73:
 
         public _atan2f
 _atan2f:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-4
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jp z, MFL77
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL79 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16329
-        jp MFL76
-MFL79:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL81 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16329
-        ld a,d
-        xor 80h
-        ld d,a
-        jp MFL76
-MFL81:
-        ld hl,0
-        ld de,0
-        jp MFL76
-MFL77:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        ld l,(ix+8)
-        ld h,(ix+9)
-        ld e,(ix+10)
-        ld d,(ix+11)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL83 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        call _atanf
-        pop bc
-        pop bc
-        jp MFL76
-MFL83:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __fle
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL85 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        call _atanf
-        pop bc
-        pop bc
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        push de
-        push hl
-        call __fadd
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        jr MFL76 ; peep: jp_to_jr
-MFL85:
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        call _atanf
-        pop bc
-        pop bc
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-MFL76:
-        ld sp,ix
-        pop ix
+        ; Hand-written wrapper preserving the compiler-generated branch and
+        ; operation order without an IX frame or four-byte local quotient.
+        ; cdecl stack: return, y low, y high, x low, x high
+        pop     bc
+        pop     hl
+        ld      (__atan2_ylo),hl
+        pop     de
+        ld      (__atan2_yhi),de
+        pop     hl
+        ld      (__atan2_xlo),hl
+        pop     de
+        ld      (__atan2_xhi),de
+        push    de
+        push    hl
+        ld      de,(__atan2_yhi)
+        ld      hl,(__atan2_ylo)
+        push    de
+        push    hl
+        push    bc
+
+        ; if (x == 0.0f)
+        ld      de,(__atan2_xhi)
+        ld      hl,(__atan2_xlo)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,0
+        push    de
+        push    hl
+        call    __feq
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,atan2_nonzero_x
+
+        ; Preserve the former zero-denominator behavior exactly.
+        ld      de,(__atan2_yhi)
+        ld      hl,(__atan2_ylo)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,0
+        push    de
+        push    hl
+        call    __flt
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,atan2_check_positive_y
+        ld      hl,4059
+        ld      de,16329
         ret
+
+atan2_check_positive_y:
+        ld      de,(__atan2_yhi)
+        ld      hl,(__atan2_ylo)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,0
+        push    de
+        push    hl
+        call    __fgt
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,atan2_return_zero
+        ld      hl,4059
+        ld      de,16329
+        ld      a,d
+        xor     80h
+        ld      d,a
+        ret
+
+atan2_return_zero:
+        ld      hl,0
+        ld      de,0
+        ret
+
+atan2_nonzero_x:
+        ; q = y / x
+        ld      de,(__atan2_yhi)
+        ld      hl,(__atan2_ylo)
+        push    de
+        push    hl
+        ld      de,(__atan2_xhi)
+        ld      hl,(__atan2_xlo)
+        push    de
+        push    hl
+        call    __fdiv
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      (__atan2_qlo),hl
+        ld      (__atan2_qhi),de
+
+        ; if (x < 0.0f) return atanf(q)
+        ld      de,(__atan2_xhi)
+        ld      hl,(__atan2_xlo)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,0
+        push    de
+        push    hl
+        call    __flt
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,atan2_x_not_negative
+        ld      de,(__atan2_qhi)
+        ld      hl,(__atan2_qlo)
+        push    de
+        push    hl
+        call    _atanf
+        pop     bc
+        pop     bc
+        ret
+
+atan2_x_not_negative:
+        ; Evaluate atanf(q) once, then apply the same +/- pi correction.
+        ld      de,(__atan2_yhi)
+        ld      hl,(__atan2_ylo)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,0
+        push    de
+        push    hl
+        call    __fle
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        ld      (__atan2_yle),a
+
+        ld      de,(__atan2_qhi)
+        ld      hl,(__atan2_qlo)
+        push    de
+        push    hl
+        call    _atanf
+        pop     bc
+        pop     bc
+        push    de
+        push    hl
+        ld      hl,4059
+        ld      de,16457
+        push    de
+        push    hl
+        ld      a,(__atan2_yle)
+        or      a
+        jr      z,atan2_sub_pi
+        call    __fadd
+        jr      atan2_adjust_done
+atan2_sub_pi:
+        call    __fsub
+atan2_adjust_done:
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ret
+
+__atan2_ylo:   dw      0
+__atan2_yhi:   dw      0
+__atan2_xlo:   dw      0
+__atan2_xhi:   dw      0
+__atan2_qlo:   dw      0
+__atan2_qhi:   dw      0
+__atan2_yle:   db      0
 
         public _asinf
 _asinf:
@@ -17484,581 +17471,315 @@ MFL87:
 
         public _acosf
 _acosf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,4059
-        ld de,16329
-        push de
+        ; acosf(x) = pi/2 - asinf(x).  Preserve the original cdecl
+        ; argument while avoiding an IX frame solely for argument access.
+        pop bc                  ; caller return address
+        pop hl                  ; x, low word
+        pop de                  ; x, high word
+        push de                 ; restore caller's argument
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
+        push bc                 ; restore caller return address
+
+        ld bc,16329             ; pi/2, high word
+        push bc
+        ld bc,4059              ; pi/2, low word
+        push bc
+        push de                 ; asinf(x)
         push hl
         call _asinf
         pop bc
         pop bc
-        push de
+        push de                 ; pi/2 - result
         push hl
         call __fsub
         pop bc
         pop bc
         pop bc
         pop bc
-        ld sp,ix
-        pop ix
         ret
 
         public _frexpf
 _frexpf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-6
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL96 ; peep: jp_to_jr
-        ld l,(ix+8) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+9)
-        ld (hl),0 ; peep: store_word_const
-        inc hl
-        ld (hl),0
-        ld hl,0
-        ld de,0
-        jp MFL95
-MFL96:
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        inc hl
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ex de,hl
-        ld b,23
-MFL98:
-        ld a,b
-        or a
-        jr z,MFL99 ; peep: jp_to_jr
-        srl d
-        rr e
-        rr h
-        rr l
-        dec b
-        jr MFL98 ; peep: jp_to_jr
-MFL99:
-        push de
-        push hl
-        ld hl,255
-        ld de,0
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        ld (ix-6),l
-        ld (ix-5),h
-        ld l,(ix+8) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+9)
-        push hl
-        ld l,(ix-6)
-        ld h,(ix-5)
-        ld de,126 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        ex de,hl
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        push hl
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        inc hl
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ex de,hl
-        push de
-        push hl
-        ld hl,65535
-        ld de,32895
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        push de
-        push hl
-        ld hl,0
-        ld de,16128
-        pop bc
-        ld a,l
-        or c
-        ld l,a
-        ld a,h
-        or b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        or c
-        ld l,a
-        ld a,h
-        or b
-        ld h,a
-        ex de,hl
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        inc hl
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ex de,hl
-MFL95:
-        ld sp,ix
-        pop ix
+        ; Hand-written IEEE-style single-precision decomposition.  The
+        ; original compiler output built 32-bit masks and shifted the value
+        ; 23 times merely to obtain and replace the exponent field.
+        ;
+        ; cdecl stack: return, x low, x high, exponent pointer
+        pop     bc
+        pop     hl
+        ld      (__frexp_xlo),hl
+        pop     de
+        ld      (__frexp_xhi),de
+        pop     hl
+        ld      (__frexp_eptr),hl
+        push    hl
+        push    de
+        ld      hl,(__frexp_xlo)
+        push    hl
+        push    bc
+
+        ; Treat either signed zero as zero, matching the former __feq call.
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      nz,frexp_nonzero
+
+        ld      hl,(__frexp_eptr)
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        ld      hl,0
+        ld      de,0
         ret
+
+frexp_nonzero:
+        ; Biased exponent = ((D & 7fh) << 1) | (E >> 7).
+        ld      a,d
+        and     7fh
+        add     a,a
+        ld      c,a
+        ld      a,e
+        rlca
+        and     1
+        or      c
+        sub     126
+        ld      c,a
+        sbc     a,a
+        ld      b,a
+        ld      hl,(__frexp_eptr)
+        ld      (hl),c
+        inc     hl
+        ld      (hl),b
+
+        ; Preserve sign and fraction, but force biased exponent 126.
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        ld      a,e
+        and     7fh
+        ld      e,a
+        ld      a,d
+        and     80h
+        or      3fh
+        ld      d,a
+        ret
+
+__frexp_xlo:   dw      0
+__frexp_xhi:   dw      0
+__frexp_eptr:  dw      0
 
         public _ldexpf
 _ldexpf:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-6
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL101 ; peep: jp_to_jr
-        ld hl,0
-        ld de,0
-        jp MFL100
-MFL101:
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        inc hl
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ex de,hl
-        ld b,23
-MFL103:
-        ld a,b
-        or a
-        jr z,MFL104 ; peep: jp_to_jr
-        srl d
-        rr e
-        rr h
-        rr l
-        dec b
-        jr MFL103 ; peep: jp_to_jr
-MFL104:
-        push de
-        push hl
-        ld hl,255
-        ld de,0
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        ld e,(ix+8)
-        ld d,(ix+9)
-        add hl,de
-        ld (ix-6),l
-        ld (ix-5),h
-        ld de,33023 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr c,MFL105 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL107 ; peep: jp_to_jr
-        ld hl,51614
-        ld de,32639
-        ld a,d
-        xor 80h
-        ld d,a
-        jp MFL100 ; peep: jump_thread
-MFL107:
-        ld hl,51614
-        ld de,32639
-        jp MFL100
-MFL105:
-        ld l,(ix-6) ; peep: signed_le_zero
-        ld h,(ix-5)
-        ld a,h
-        or l
-        jr z,MFL111 ; peep: jp_to_jr
-        bit 7,h
-        jr z,MFL109 ; peep: jp_to_jr
-MFL111:
-        ld hl,0
-        ld de,0
-        jp MFL100
-MFL109:
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        push hl
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        inc hl
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ex de,hl
-        push de
-        push hl
-        ld hl,65535
-        ld de,32895
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        push de
-        push hl
-        ld l,(ix-6)
-        ld h,(ix-5)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        ld b,23
-MFL112:
-        ld a,b
-        or a
-        jr z,MFL113 ; peep: jp_to_jr
-        add hl,hl
-        rl e
-        rl d
-        dec b
-        jr MFL112 ; peep: jp_to_jr
-MFL113:
-        pop bc
-        ld a,l
-        or c
-        ld l,a
-        ld a,h
-        or b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        or c
-        ld l,a
-        ld a,h
-        or b
-        ld h,a
-        ex de,hl
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        push ix
-        pop hl
-        ld de,-4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        inc hl
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ex de,hl
-MFL100:
-        ld sp,ix
-        pop ix
+        ; Hand-written exponent adjustment.  This preserves the former
+        ; overflow/underflow policy while replacing the generated 23-bit
+        ; shift loops and 32-bit mask/or sequences with byte operations.
+        ;
+        ; cdecl stack: return, x low, x high, exponent adjustment
+        pop     bc
+        pop     hl
+        ld      (__ldexp_xlo),hl
+        pop     de
+        ld      (__ldexp_xhi),de
+        pop     hl
+        ld      (__ldexp_n),hl
+        push    hl
+        push    de
+        ld      hl,(__ldexp_xlo)
+        push    hl
+        push    bc
+
+        ; Treat either signed zero as zero.
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      nz,ldexp_nonzero
+        ld      hl,0
+        ld      de,0
         ret
+
+ldexp_nonzero:
+        ; Extract the old biased exponent and add the signed adjustment.
+        ld      a,d
+        and     7fh
+        add     a,a
+        ld      l,a
+        ld      a,e
+        rlca
+        and     1
+        or      l
+        ld      l,a
+        ld      h,0
+        ld      de,(__ldexp_n)
+        add     hl,de
+        ld      (__ldexp_newexp),hl
+
+        ; Signed comparison: new exponent >= 255.
+        ld      de,33023                ; 8000h-biased representation of 255
+        ld      a,h
+        xor     80h
+        ld      h,a
+        or      a
+        sbc     hl,de
+        jr      c,ldexp_not_overflow
+
+        ; Preserve the former saturation constant and the input sign.
+        ld      hl,51614
+        ld      de,32639
+        ld      a,(__ldexp_xhi+1)
+        and     80h
+        jr      z,ldexp_done
+        ld      a,d
+        xor     80h
+        ld      d,a
+ldexp_done:
+        ret
+
+ldexp_not_overflow:
+        ld      hl,(__ldexp_newexp)
+        ld      a,h
+        or      l
+        jr      z,ldexp_underflow
+        bit     7,h
+        jr      nz,ldexp_underflow
+
+        ; Install exponent bits directly into D:E.
+        ld      b,h
+        ld      c,l                     ; BC = new biased exponent
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        ld      a,c
+        and     1
+        rrca
+        ld      b,a                     ; bit 7 for E
+        ld      a,e
+        and     7fh
+        or      b
+        ld      e,a
+        ld      a,c
+        srl     a
+        and     7fh
+        ld      b,a
+        ld      a,d
+        and     80h
+        or      b
+        ld      d,a
+        ret
+
+ldexp_underflow:
+        ld      hl,0
+        ld      de,0
+        ret
+
+__ldexp_xlo:    dw      0
+__ldexp_xhi:    dw      0
+__ldexp_n:      dw      0
+__ldexp_newexp: dw      0
 
         public _modff
         public sc_isspace
         public sc_isdigit
 _modff:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-4
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __fle
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr z,MFL115 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        call _floorf
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        jr MFL116 ; peep: jp_to_jr
-MFL115:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        call _ceilf
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-MFL116:
-        ld l,(ix+8) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+9)
-        push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        ld b,d
-        ld c,e
-        pop de
-        ex de,hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        inc hl
-        ld (hl),c
-        inc hl
-        ld (hl),b
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        call __fsub
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld sp,ix
-        pop ix
+        ; Compiler-generated version used an IX frame and a four-byte local
+        ; solely to preserve the integral part across calls.  Save the three
+        ; arguments in private scratch storage and restore the caller-cleaned
+        ; stack exactly before doing any work.
+        pop     bc                      ; return address
+        pop     hl                      ; x low word
+        ld      (__modff_xlo),hl
+        pop     de                      ; x high word
+        ld      (__modff_xhi),de
+        pop     hl                      ; iptr
+        ld      (__modff_iptr),hl
+        push    hl                      ; restore iptr
+        push    de                      ; restore x high
+        ld      hl,(__modff_xlo)
+        push    hl                      ; restore x low
+        push    bc                      ; restore return address
+
+        ; Preserve the original test and operation order:
+        ;     i = (x <= 0.0f) ? floorf(x) : ceilf(x);
+        ld      de,(__modff_xhi)
+        ld      hl,(__modff_xlo)
+        push    de
+        push    hl
+        ld      hl,0
+        ld      de,0
+        push    de
+        push    hl
+        call    __fle
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,modff_use_ceil
+
+        ld      de,(__modff_xhi)
+        ld      hl,(__modff_xlo)
+        push    de
+        push    hl
+        call    _floorf
+        pop     bc
+        pop     bc
+        jr      modff_have_int
+
+modff_use_ceil:
+        ld      de,(__modff_xhi)
+        ld      hl,(__modff_xlo)
+        push    de
+        push    hl
+        call    _ceilf
+        pop     bc
+        pop     bc
+
+modff_have_int:
+        ld      (__modff_ilo),hl
+        ld      (__modff_ihi),de
+
+        ; *iptr = integral part
+        ld      bc,(__modff_iptr)
+        ld      a,l
+        ld      (bc),a
+        inc     bc
+        ld      a,h
+        ld      (bc),a
+        inc     bc
+        ld      a,e
+        ld      (bc),a
+        inc     bc
+        ld      a,d
+        ld      (bc),a
+
+        ; Return x - integral part in DE:HL.
+        ld      de,(__modff_xhi)
+        ld      hl,(__modff_xlo)
+        push    de
+        push    hl
+        ld      de,(__modff_ihi)
+        ld      hl,(__modff_ilo)
+        push    de
+        push    hl
+        call    __fsub
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
         ret
+
+__modff_xlo:    dw      0
+__modff_xhi:    dw      0
+__modff_iptr:   dw      0
+__modff_ilo:    dw      0
+__modff_ihi:    dw      0
 
 ; ================= END generated math functions =================
 
@@ -19153,96 +18874,83 @@ SCL165:
         ret
 
         public __stok
+; char *strtok(char *s, const char *delim)
+; Hand-written version.  strtok is inherently non-reentrant because it keeps
+; SCZ0007 as its saved position, so private scratch words do not weaken its
+; semantics.  The caller still removes both arguments.
 __stok:
-        push ix
-        ld ix,0
-        add ix,sp
-        dec sp ; peep: local_alloc_2
-        dec sp
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr nz,SCL172 ; peep: jp_to_jr
-        ld hl,(SCZ0007)
-        ld (ix+4),l
-        ld (ix+5),h
-SCL172:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr nz,SCL173 ; peep: jp_to_jr
-        ld hl,0
-        jp SCL170
-SCL173:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        push hl
-        ld l,(ix+6)
-        ld h,(ix+7)
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        push hl
-        call __sspn
-        pop bc
-        pop bc
-        ex de,hl
-        pop hl
-        add hl,de
-        ld (ix+4),l
-        ld (ix+5),h
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr nz,SCL175 ; peep: jp_to_jr
-        ld hl,0
-        ld (SCZ0007),hl
-        ld hl,0
-        jr SCL170 ; peep: jp_to_jr
-SCL175:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld (ix-2),l
-        ld (ix-1),h
-        ld l,(ix+6)
-        ld h,(ix+7)
-        push hl
-        ld l,(ix-2)
-        ld h,(ix-1)
-        push hl
-        call __spbr
-        pop bc
-        pop bc
-        ld (ix+4),l
-        ld (ix+5),h
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr nz,SCL177 ; peep: jp_to_jr
-        ld hl,0
-        ld (SCZ0007),hl
-        jr SCL178 ; peep: jp_to_jr
-SCL177:
-        ld l,(ix+4) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+5)
-        ld de,0 ; peep: push_lde_pop
-        ld (hl),e
-        ld l,(ix+4)
-        ld h,(ix+5)
-        inc hl ; peep: ld_de1_to_inc
-        ld (SCZ0007),hl
-SCL178:
-        ld l,(ix-2)
-        ld h,(ix-1)
-SCL170:
-        ld sp,ix
-        pop ix
+        pop     bc                      ; return address
+        pop     hl                      ; s
+        ld      (__stok_s),hl
+        pop     de                      ; delim
+        ld      (__stok_delim),de
+        push    de                      ; restore caller-cleanup stack
+        push    hl
+        push    bc
+
+        ld      a,h
+        or      l
+        jr      nz,stok_have_s
+        ld      hl,(SCZ0007)
+        ld      (__stok_s),hl
+stok_have_s:
+        ld      a,h
+        or      l
+        ret     z                       ; no saved string: return NULL
+
+        ; s += strspn(s, delim)
+        ld      hl,(__stok_delim)
+        push    hl
+        ld      hl,(__stok_s)
+        push    hl
+        call    __sspn
+        pop     bc
+        pop     bc
+        ex      de,hl                   ; DE = span length
+        ld      hl,(__stok_s)
+        add     hl,de
+        ld      (__stok_s),hl
+
+        ld      a,(hl)
+        or      a
+        jr      nz,stok_token
+        ld      hl,0
+        ld      (SCZ0007),hl
         ret
+
+stok_token:
+        ld      (__stok_token),hl
+
+        ; p = strpbrk(token, delim)
+        ld      de,(__stok_delim)
+        push    de
+        push    hl
+        call    __spbr
+        pop     bc
+        pop     bc
+        ld      a,h
+        or      l
+        jr      z,stok_last
+
+        xor     a
+        ld      (hl),a                   ; terminate this token
+        inc     hl
+        ld      (SCZ0007),hl
+        ld      hl,(__stok_token)
+        ret
+
+stok_last:
+        ld      hl,0
+        ld      (SCZ0007),hl
+        ld      hl,(__stok_token)
+        ret
+
+__stok_s:
+        dw      0
+__stok_delim:
+        dw      0
+__stok_token:
+        dw      0
 
 
 ; strtok saved-position state
