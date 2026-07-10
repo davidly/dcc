@@ -3554,6 +3554,21 @@ pf_s:
         push    hl
         call    pf__slen_hl       ; A = strlen(HL), HL preserved by stack below
         ld      (pf_digit),a
+        ; An explicit precision (%.Ns) caps both the field-width padding
+        ; calculation and the actual emit count at min(strlen, N) - C89's
+        ; "at most N characters, stopping at a NUL first" rule. Previously
+        ; pf_haveprec/pf_prec were parsed correctly but never consulted
+        ; here, so %.Ns always printed the whole string regardless of N.
+        ld      a,(pf_haveprec)
+        or      a
+        jr      z,pf_s_no_clamp
+        ld      a,(pf_digit)
+        ld      e,a
+        ld      a,(pf_prec)
+        cp      e
+        jr      nc,pf_s_no_clamp  ; precision >= strlen: nothing to clamp
+        ld      (pf_digit),a      ; clamp the printed/padded length to precision
+pf_s_no_clamp:
         ld      a,(pf_left)
         or      a
         jr      nz,pf_s_no_prepad
@@ -3561,12 +3576,22 @@ pf_s:
         call    pf_pad_a
 pf_s_no_prepad:
         pop     hl
+        ld      a,(pf_digit)
+        ld      e,a               ; E = characters left to emit. The caller's
+                                    ; own DE is safe on the stack below (pushed
+                                    ; above) and pf_emit_a itself preserves DE
+                                    ; across each call, so E is free to reuse
+                                    ; here as this loop's countdown.
 pf_s_loop:
+        ld      a,e
+        or      a
+        jr      z,pf_s_done       ; precision limit reached
         ld      a,(hl)
         or      a
-        jr      z,pf_s_done
+        jr      z,pf_s_done       ; NUL reached first
         inc     hl
         call    pf_emit_a
+        dec     e
         jr      pf_s_loop
 pf_s_done:
         ld      a,(pf_left)

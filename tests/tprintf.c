@@ -73,6 +73,14 @@ int main()
     printf("%s\n", "hello");
     printf("%s\n", "world");
 
+    /* %.Ns string precision: truncate to at most N characters, stopping
+     * at a NUL first if the string is shorter than N. */
+    printf("[%.4s]\n", "hello");       /* [hell] */
+    printf("[%.0s]\n", "hello");       /* [] */
+    printf("[%.20s]\n", "hi");         /* [hi] */
+    printf("[%10.3s]\n", "hello");     /* [       hel] */
+    printf("[%-10.3s]\n", "hello");    /* [hel       ] */
+
     /* %% literal percent */
     printf("100%%\n");
 

@@ -19,6 +19,11 @@ a
 0
 hello
 world
+[hell]
+[]
+[hi]
+[       hel]
+[hel       ]
 100%
 [     0]
 [    42]
