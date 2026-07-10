@@ -500,7 +500,9 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             if (n->a->a->kind == AST_MEMBER &&
                 ast_member_array_field_elem_type(n->a->a, &elem)) {
                 if (n->op != '=')
-                    return 0;
+                    return is_compound && expr_result_dead &&
+                           ast_is_plain_int_type(elem) && type_size(elem) == 2 &&
+                           ast_value_is_plain_int(n->b);
                 if (!ast_index_subscript_supported(n->a->b))
                     return 0;
                 if (type_is_float(elem))

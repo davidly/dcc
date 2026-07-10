@@ -1295,6 +1295,17 @@ int ast_for_init_expr_supported(const struct AstNode *e)
         ok = e->op == '=' && ast_gen_supported(e);
     else if (e->kind == AST_COMMA)
         ok = ast_gen_supported(e);
+    else if ((e->kind == AST_UNARY || e->kind == AST_POSTFIX) &&
+             (e->op == TOK_INC || e->op == TOK_DEC))
+        /* A for-init `++x` / `x--` (prefix or postfix, int/pointer/member/
+         * addressable lvalue) is a dead-result expression, identical to an
+         * expression statement and to the for-increment clause; gate it the
+         * same way (ast_dead_expr_supported) and emit it with the same
+         * dedicated inc/dec block (see ast_gen_for_stmt).  Using the plain
+         * ast_gen_supported value gate here wrongly rejected postfix pointer
+         * inc/dec, which has no value-context support but is a perfectly good
+         * dead-result store. */
+        ok = ast_dead_expr_supported(e);
     else
         ok = e->kind == AST_CALL && ast_gen_supported(e);
     expr_result_dead = old_dead;
@@ -1466,6 +1477,11 @@ int ast_stmt_supported(const struct AstNode *n)
             g_for_decl_rename_index = 0;
             g_for_decl_recording = 1;
             ast_emit_decl_span(n->a);
+            /* Declaration replay changes the symbols visible to the loop's
+             * condition, increment and body. Discard support decisions that
+             * may have been cached while the builder inspected those nodes
+             * before the for-init local existed. */
+            ast_support_cache_begin();
             g_for_decl_seq = s_decl_seq;
             g_for_decl_rename_index = s_decl_index;
             g_for_decl_recording = s_decl_recording;
