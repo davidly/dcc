@@ -323,6 +323,11 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             struct Sym *base;
             int decayed;
             int elem;
+            if (is_compound && expr_result_dead &&
+                ast_index_2d_array_elem_type(n->a, &elem) &&
+                ast_is_plain_int_type(elem) && type_size(elem) == 2 &&
+                ast_value_is_plain_int(n->b))
+                return 1;
             if (ast_index_lvalue_elem_type(n->a, &elem)) {
                 if (type_is_long(elem)) {
                     if (n->op == '=')
@@ -751,6 +756,10 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         if (type_size(s->type) == 2 &&
             (n->op == TOK_MULEQ || n->op == TOK_DIVEQ || n->op == TOK_MODEQ) &&
             ast_long_word_type(n->b, NULL))
+            return 1;
+        if (type_size(s->type) == 2 &&
+            (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
+            ast_value_is_long_word(n->b))
             return 1;
         if (type_size(s->type) == 2 && n->op == '=' &&
             n->b->kind == AST_CAST && n->b->a != NULL) {
