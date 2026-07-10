@@ -4755,6 +4755,7 @@ void parse_function_or_global(int base_type)
                 saved_nenum_consts = nenum_consts;
                 saved_nulabels = nulabels;
 
+                current_return_type = type;
                 current_function_has_call = 0;
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;

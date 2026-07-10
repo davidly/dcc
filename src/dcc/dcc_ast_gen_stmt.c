@@ -440,7 +440,27 @@ void ast_gen_for_stmt(const struct AstNode *n)
              * address-computed store fast path the gate already approved. */
             int saved_dead = expr_result_dead;
             expr_result_dead = 1;
-            ast_gen_expr(n->a);
+            if ((n->a->kind == AST_UNARY || n->a->kind == AST_POSTFIX) &&
+                (n->a->op == TOK_INC || n->a->op == TOK_DEC)) {
+                /* Same dedicated dead-result inc/dec emit the for-increment
+                 * clause and expression statements use, so a for-init
+                 * `++x`/`x--` (including postfix pointer, which has no
+                 * value-context lowering) stores correctly instead of routing
+                 * through the value path. */
+                struct Sym *s = ast_deadincdec_sym_direct(n->a);
+                if (s != NULL) {
+                    emit_incdec_sym_direct(s, n->a->op);
+                } else {
+                    int vt;
+                    gen_deadincdec_addr_lvalue_ast(n->a, &vt);
+                    if (current_field_bit_width > 0)
+                        emit_pre_incdec_lvalue(vt, n->a->op);
+                    else
+                        emit_incdec_addr(vt, n->a->op);
+                }
+            } else {
+                ast_gen_expr(n->a);
+            }
             expr_result_dead = saved_dead;
         }
     }

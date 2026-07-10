@@ -601,6 +601,9 @@ int ast_index_subscript_supported(const struct AstNode *idx)
         return ast_value_is_plain_int(idx);
     if (idx->kind == AST_SIZEOF_EXPR || idx->kind == AST_SIZEOF_TYPE)
         return ast_value_is_plain_int(idx);
+    if (idx->kind == AST_IDENT && ast_ident_is_const(idx->sval) &&
+        ast_value_is_plain_int(idx))
+        return 1;
     if (ast_index_subscript_binary_literal(idx))
         return 1;
     if (ast_const_plain_int_binary_supported(idx))
@@ -2392,8 +2395,7 @@ int ast_logical_operand_ok(const struct AstNode *n)
     if (n->kind == AST_LOGAND || n->kind == AST_LOGOR)
         return ast_logical_operand_ok(n->a) && ast_logical_operand_ok(n->b);
     if (n->kind == AST_BINARY && is_cmp_op(n->op))
-        return (ast_gen_supported(n) || ast_index_cmp_cond_supported(n)) &&
-               ast_value_is_plain_int(n);
+        return ast_cond_generic(n) && ast_value_is_plain_int(n);
     if (ast_gen_supported(n) &&
         (ast_value_is_plain_int(n) || ast_value_is_pointer_word(n) ||
          ast_value_is_float_word(n) || ast_value_is_long_word(n)))
