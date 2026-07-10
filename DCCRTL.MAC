@@ -18633,12 +18633,12 @@ _asctime:
 _ctime:
 _gmtime:
 __ltim:
-; All return NULL (no clock on CP/M 2.2)
-        ld      hl,0
-        ret
-
 _strftime:
-; size_t strftime(...) -- returns 0 (no clock on CP/M 2.2)
+; All return NULL/0 (no clock on CP/M 2.2). strftime returns size_t (0 =
+; wrote nothing) rather than a NULL pointer, but that's still HL=0 on
+; return, and none of these five functions ever read their arguments, so
+; the differing parameter lists don't matter for a shared stub that
+; ignores all of them.
         ld      hl,0
         ret
 
