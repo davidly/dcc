@@ -1,0 +1,7 @@
+version=2.7.15
+date=17/6/42
+reg=0/3/768
+sel=Z
+event=K/4,9
+message=OK/404
+anonymous init tests passed

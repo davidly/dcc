@@ -1,0 +1,2 @@
+status=ok/missing/busy/missing/busy/alpha
+const pointer-array tests passed
