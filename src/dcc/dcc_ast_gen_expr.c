@@ -3571,6 +3571,27 @@ void gen_call_ast(const struct AstNode *n)
         return;
     }
 
+    /* Fastcall bdos(fn,dearg): DCCRTL's __bdosf takes fn's low byte in C and
+     * dearg in DE directly, skipping the general push-2-args/call/pop-2
+     * convention this call would otherwise use - same rationale as
+     * strlen/strchr/memcmp above. BDOS calls are frequent enough in CP/M
+     * programs (console/file I/O) that this pays off broadly. */
+    if (n->list_len == 2 && !strcmp(name, "bdos")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->list[0]);       /* HL = fn */
+        emit("\tpush hl\n");
+        ast_gen_expr(n->list[1]);       /* HL = dearg */
+        expr_result_dead = old_dead;
+        emit("\tex de,hl\n");           /* DE = dearg */
+        emit("\tpop hl\n");             /* HL = fn */
+        emit("\tld c,l\n");             /* C = fn low byte */
+        emit_runtime_call("__bdosf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
     /* A real (non-inlined) call to any static function - inline-eligible or
      * not - is what its buffered body's dead-code elimination decision
      * hinges on. */

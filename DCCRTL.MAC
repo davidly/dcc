@@ -864,8 +864,17 @@ _bdos:
         push    hl
         push    bc
         ld      c,l
+        jr      bdos_core
+
+        public  __bdosf
+__bdosf:
+        ; fastcall int bdos(int fn, int dearg)
+        ; Entry: C = fn (low byte), DE = dearg - skips the general
+        ; push-2/call/pop-2 convention entirely. See dcc_ast_gen_expr.c's
+        ; bdos call-site codegen.
+bdos_core:
         call    5
-        ld      l,a
+        ld      l,a             ; only needed for non-conformant emulators
         ld      h,0
         ret
 
