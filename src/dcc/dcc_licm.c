@@ -535,9 +535,27 @@ struct LicmCseCandidateList {
     int count;
 };
 
-static void licm_cse_bump(struct LicmCseCandidateList *out, const struct AstNode *n)
+/* mod must be the set of names modified ANYWHERE in this loop's own body
+ * (not just between two occurrences of `n`): the shared temp this candidate
+ * may become is computed once, at the very top of the body, before every
+ * original statement runs, so its value can only stand in for every later
+ * occurrence if none of those occurrences' operands changes anywhere before
+ * them - the same bar licm_collect_candidates already holds the separate
+ * cross-iteration hoist to, just applied within a single iteration instead
+ * of across iterations. Without this check, `total = total + factor; total
+ * = total + factor;` (factor unmodified, but total reassigned by the very
+ * statement containing the first occurrence) was wrongly recognized as the
+ * same value twice and computed only once, silently dropping the second
+ * addition - found via tests/tbcint.c, a register-allocation regression
+ * test that happened to also contain this shape, unrelated to registers at
+ * all. */
+static void licm_cse_bump(struct LicmCseCandidateList *out, const struct AstNode *n,
+                          const struct LicmModifiedNames *mod)
 {
     int i;
+
+    if (licm_expr_depends_on_modified(n, mod))
+        return;
 
     for (i = 0; i < out->count; ++i) {
         if (licm_expr_equal(out->items[i].node, n)) {
@@ -553,45 +571,47 @@ static void licm_cse_bump(struct LicmCseCandidateList *out, const struct AstNode
 }
 
 /* Same maximality rule and statement-shape coverage as
- * licm_collect_candidates, but with no invariance requirement at all - this
- * counts every distinct maximal pure-scalar-arith subexpression found
- * anywhere in `n`, regardless of whether it depends on the loop's induction
- * variable. Used within a single if-statement's {cond, then, else}, so a
- * count of 2+ means the same value is computed twice for that one
- * statement. */
-static void licm_cse_collect(const struct AstNode *n, struct LicmCseCandidateList *out)
+ * licm_collect_candidates, but with no CROSS-ITERATION invariance
+ * requirement - this counts every distinct maximal pure-scalar-arith
+ * subexpression found anywhere in `n` whose operands aren't modified
+ * anywhere in the loop body (see licm_cse_bump), regardless of whether it
+ * also depends on the loop's induction variable. Used within a single
+ * if-statement's {cond, then, else}, so a count of 2+ means the same value
+ * is computed twice for that one statement. */
+static void licm_cse_collect(const struct AstNode *n, const struct LicmModifiedNames *mod,
+                             struct LicmCseCandidateList *out)
 {
     if (n == NULL)
         return;
 
     switch (n->kind) {
     case AST_IF:
-        licm_cse_collect(n->a, out);
-        licm_cse_collect(n->b, out);
-        licm_cse_collect(n->c, out);
+        licm_cse_collect(n->a, mod, out);
+        licm_cse_collect(n->b, mod, out);
+        licm_cse_collect(n->c, mod, out);
         return;
     case AST_EXPR_STMT:
-        licm_cse_collect(n->a, out);
+        licm_cse_collect(n->a, mod, out);
         return;
     case AST_ASSIGN:
-        licm_cse_collect(n->b, out);
+        licm_cse_collect(n->b, mod, out);
         if (n->a != NULL && (n->a->kind == AST_INDEX || n->a->kind == AST_MEMBER || n->a->kind == AST_UNARY))
-            licm_cse_collect(n->a, out);
+            licm_cse_collect(n->a, mod, out);
         return;
     case AST_MEMBER:
-        licm_cse_collect(n->a, out);
+        licm_cse_collect(n->a, mod, out);
         return;
     case AST_COND:
-        licm_cse_collect(n->a, out);
-        licm_cse_collect(n->b, out);
-        licm_cse_collect(n->c, out);
+        licm_cse_collect(n->a, mod, out);
+        licm_cse_collect(n->b, mod, out);
+        licm_cse_collect(n->c, mod, out);
         return;
     case AST_CAST:
-        licm_cse_collect(n->a, out);
+        licm_cse_collect(n->a, mod, out);
         return;
     case AST_COMMA:
-        licm_cse_collect(n->a, out);
-        licm_cse_collect(n->b, out);
+        licm_cse_collect(n->a, mod, out);
+        licm_cse_collect(n->b, mod, out);
         return;
     default:
         break;
@@ -605,16 +625,16 @@ static void licm_cse_collect(const struct AstNode *n, struct LicmCseCandidateLis
      * Stopping at the first pure match (right for the invariant hoist, which
      * wants the single largest hoistable chunk) would hide that repeat. */
     if ((n->kind == AST_BINARY || n->kind == AST_UNARY) && licm_is_pure_scalar_arith(n))
-        licm_cse_bump(out, n);
+        licm_cse_bump(out, n, mod);
 
     if (n->kind == AST_BINARY || n->kind == AST_LOGAND || n->kind == AST_LOGOR) {
-        licm_cse_collect(n->a, out);
-        licm_cse_collect(n->b, out);
+        licm_cse_collect(n->a, mod, out);
+        licm_cse_collect(n->b, mod, out);
     } else if (n->kind == AST_UNARY) {
-        licm_cse_collect(n->a, out);
+        licm_cse_collect(n->a, mod, out);
     } else if (n->kind == AST_INDEX) {
-        licm_cse_collect(n->a, out);
-        licm_cse_collect(n->b, out);
+        licm_cse_collect(n->a, mod, out);
+        licm_cse_collect(n->b, mod, out);
     }
 }
 
@@ -650,15 +670,16 @@ static struct AstNode *licm_cse_make_temp_assign(const struct AstNode *expr, str
  * does not, so only the condition subtree is scanned for an if; anything
  * else is scanned in full. Used only to decide what counts toward CSE
  * profitability - see the design note above. */
-static void licm_cse_collect_unconditional_stmt(const struct AstNode *stmt, struct LicmCseCandidateList *out)
+static void licm_cse_collect_unconditional_stmt(const struct AstNode *stmt, const struct LicmModifiedNames *mod,
+                                                struct LicmCseCandidateList *out)
 {
     if (stmt == NULL)
         return;
     if (stmt->kind == AST_IF) {
-        licm_cse_collect(stmt->a, out);
+        licm_cse_collect(stmt->a, mod, out);
         return;
     }
-    licm_cse_collect(stmt, out);
+    licm_cse_collect(stmt, mod, out);
 }
 
 /* Walk the loop body's top-level statement list (or treat a single bare
@@ -670,7 +691,8 @@ static void licm_cse_collect_unconditional_stmt(const struct AstNode *stmt, stru
  * occurrence of the candidate anywhere in the body (guarded bodies
  * included) is then rewritten to reference it. Returns `body` unchanged if
  * nothing qualifies. */
-static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body)
+static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body,
+                                                   const struct LicmModifiedNames *mod)
 {
     const struct AstNode *const *orig_list;
     const struct AstNode *single[1];
@@ -697,7 +719,7 @@ static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body)
 
     memset(&cands, 0, sizeof(cands));
     for (i = 0; i < orig_len; ++i)
-        licm_cse_collect_unconditional_stmt(orig_list[i], &cands);
+        licm_cse_collect_unconditional_stmt(orig_list[i], mod, &cands);
 
     memset(&filtered, 0, sizeof(filtered));
     for (j = 0; j < cands.count; ++j)
@@ -738,10 +760,17 @@ static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body)
     return wrapper;
 }
 
-/* Entry point: `for_node` is the AST_FOR node itself. First applies
+/* Entry point: `for_node` is the AST_FOR node itself. First scans the
+ * ORIGINAL condition/increment/body for modified names - so the
+ * within-statement CSE pass can decline any candidate whose operands are
+ * reassigned by an earlier statement in the very same iteration (see
+ * licm_cse_bump; this is a distinct concern from the cross-iteration
+ * invariance the pre-CSE candidates also need, and must be checked against
+ * the body as the user wrote it, not the CSE-rewritten one, since the CSE
+ * rewrite itself hasn't happened yet at this point) - then applies
  * within-statement CSE to the body's top-level if-statements (see above),
- * then scans the (possibly CSE-rewritten) condition/increment/body for
- * modified names - so the CSE passs's own inserted temp assignments are
+ * then re-scans the (now CSE-rewritten) condition/increment/body for
+ * modified names - so the CSE pass's own inserted temp assignments are
  * correctly seen as "modified every iteration", never mistaken for loop-
  * invariant - and finds every distinct loop-invariant candidate remaining,
  * emitting each one's value once (side effect of this call - HL is
@@ -752,6 +781,7 @@ static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body)
 struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node)
 {
     struct AstNode *cse_body;
+    struct LicmModifiedNames pre_cse_mod;
     struct LicmModifiedNames mod;
     struct LicmCandidateList cands;
     struct Sym *temps[MAX_LICM_CANDIDATES];
@@ -760,7 +790,11 @@ struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node)
     if (for_node == NULL || for_node->d == NULL)
         return NULL;
 
-    cse_body = licm_apply_cse_to_stmt_list(for_node->d);
+    memset(&pre_cse_mod, 0, sizeof(pre_cse_mod));
+    licm_scan_modified(for_node->b, &pre_cse_mod);
+    licm_scan_modified(for_node->c, &pre_cse_mod);
+    licm_scan_modified(for_node->d, &pre_cse_mod);
+    cse_body = licm_apply_cse_to_stmt_list(for_node->d, &pre_cse_mod);
 
     memset(&mod, 0, sizeof(mod));
     licm_scan_modified(for_node->b, &mod);
