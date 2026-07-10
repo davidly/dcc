@@ -2844,6 +2844,7 @@ static int peep_parse_inc_ix_byte(const char *s, int *off);
 static int peep_parse_cp_const(const char *s, int *val);
 static int line_touches_bc(const char *s);
 static int line_touches_de(const char *s);
+static int line_touches_hl(const char *s);
 
 /* This function's own boundaries: the most recent "public NAME" at or
  * before `from`, and the next "public NAME" after it (or nlines if this is
@@ -8006,6 +8007,67 @@ static int pass_array_base_push_to_de(void)
     return changed;
 }
 
+/*
+ * Guard for the local_alloc rewrites in pass_once: deleting
+ * "add hl,sp / ld sp,hl" also deletes the definition of HL (the address of
+ * the fresh allocation).  Only report HL dead when a forward scan
+ * proves the following code fully rewrites HL before reading it.  Any
+ * control transfer or instruction touching HL/H/L before a full write means
+ * HL must be treated as live (return 0).  The one call recognized as a kill
+ * is __stchk: its documented prologue-helper contract clobbers HL before the
+ * function body can depend on registers.
+ */
+static int local_alloc_hl_result_dead(int start)
+{
+    int j;
+    char tmp[MAX_LINE];
+    char off[32];
+    char hi_off[32];
+
+    for (j = start; j < nlines; j++) {
+        strip_peep_comment_copy(tmp, lines[j]);
+
+        if (is_blank_or_comment(tmp))
+            continue;
+
+        /* Full writes of HL without reading it first: HL is dead. */
+        if (strncmp(tmp, "ld hl,", 6) == 0) return 1;
+        if (strcmp(tmp, "pop hl") == 0) return 1;
+        if (peep_parse_ld_l_ix(tmp, off)) {
+            /* Loading L alone is only a partial write.  DCC's word-load
+             * shape writes H on the immediately following instruction; prove
+             * that second write rather than assuming it. */
+            if (j + 1 < nlines && peep_parse_ld_h_ix(lines[j + 1], hi_off))
+                return 1;
+            return 0;
+        }
+
+        /* DCC emits this immediately after frame allocation under
+         * -fstack-check.  DCCRTL.MAC documents that its normal path clobbers
+         * AF/DE/HL, so the allocation result cannot survive this call. */
+        if (strcmp(tmp, "call __stchk") == 0)
+            return 1;
+
+        /* A label does not read HL.  It is safe to continue into the labeled
+         * block: if its first HL touch is a full overwrite, the allocation
+         * result is dead both on fall-through and on every incoming edge. */
+        if (starts_label(tmp))
+            continue;
+
+        /* Control transfer: successor unknown, assume live. */
+        if (strncmp(tmp, "jp", 2) == 0 || strncmp(tmp, "jr", 2) == 0 ||
+            strncmp(tmp, "call", 4) == 0 || strncmp(tmp, "ret", 3) == 0 ||
+            strncmp(tmp, "djnz", 4) == 0 || strncmp(tmp, "rst", 3) == 0)
+            return 0;
+
+        /* Anything else touching HL/H/L before a full write: live. */
+        if (line_touches_hl(tmp)) return 0;
+
+        /* Neutral instruction: keep scanning. */
+    }
+    return 0; /* end of input without a full overwrite: assume live */
+}
+
 static int pass_once(void)
 {
     int i;
@@ -8604,10 +8666,18 @@ static int pass_once(void)
          *
          * and similarly for -2.  This is especially useful for the tiny
          * ttt posNfunc helpers that allocate one char local.
+         *
+         * The rewrite deletes the definition of HL (the address of the
+         * fresh allocation), so it must only fire when the following code
+         * fully rewrites HL before reading it (local_alloc_hl_result_dead).
+         * dcc's by-value struct/union argument copy uses HL from this very
+         * sequence as the copy destination; rewriting that shape corrupted
+         * the outgoing argument bytes and the stack.
          */
         if (eq(i, "ld hl,-1") &&
             eq(i + 1, "add hl,sp") &&
-            eq(i + 2, "ld sp,hl")) {
+            eq(i + 2, "ld sp,hl") &&
+            local_alloc_hl_result_dead(i + 3)) {
             replace1_tagged(i, "dec sp", "local_alloc_1");
             delete_n(i + 1, 2);
             changed = 1;
@@ -8617,7 +8687,8 @@ static int pass_once(void)
 
         if (eq(i, "ld hl,-2") &&
             eq(i + 1, "add hl,sp") &&
-            eq(i + 2, "ld sp,hl")) {
+            eq(i + 2, "ld sp,hl") &&
+            local_alloc_hl_result_dead(i + 3)) {
             replace1_tagged(i, "dec sp", "local_alloc_2");
             replace1(i + 1, "dec sp");
             delete_n(i + 2, 1);
@@ -11076,6 +11147,11 @@ static int line_touches_bc(const char *s)
 static int line_touches_de(const char *s)
 {
     return line_touches_reg_pair(s, "d", "e", "de");
+}
+
+static int line_touches_hl(const char *s)
+{
+    return line_touches_reg_pair(s, "l", "h", "hl");
 }
 
 /*

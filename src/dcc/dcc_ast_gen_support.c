@@ -943,6 +943,7 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             n->a->kind != AST_BINARY && n->a->kind != AST_UNARY &&
             n->a->kind != AST_COMMA && n->a->kind != AST_COND &&
             n->a->kind != AST_CAST &&
+            n->a->kind != AST_LOGAND && n->a->kind != AST_LOGOR &&
             n->a->kind != AST_SIZEOF_EXPR && n->a->kind != AST_SIZEOF_TYPE)
             return 0;                  /* avoid ptr-sub / folded const operands */
         if (n->a->a != NULL && n->a->a->kind == AST_IDENT &&
@@ -1165,13 +1166,18 @@ int ast_value_is_long_word(const struct AstNode *arg)
     }
     if (arg->kind == AST_CALL && arg->a != NULL && arg->a->kind == AST_IDENT) {
         s = find_global(arg->a->sval);
-        return s != NULL && type_is_long(s->type);
+        if (s != NULL && s->storage == SC_FUNC)
+            return type_is_long(s->type);
     }
     if (arg->kind == AST_CALL && ast_call_indirect_supported(arg)) {
         int callee_type;
         int no_deref;
         if (ast_pointer_expr_type(arg->a, &callee_type, &no_deref))
             return type_is_long(type_decay_ptr(callee_type));
+    }
+    if (arg->kind == AST_CALL && ast_call_star_indirect_supported(arg)) {
+        s = ast_indirect_call_proto_sym(arg);
+        return s != NULL && type_is_long(type_decay_ptr(s->type));
     }
     if (arg->kind == AST_ASSIGN && arg->a != NULL) {
         int lhs_type;
@@ -1348,6 +1354,22 @@ const struct AstNode *ast_call_star_indirect_base(const struct AstNode *n)
     return saw_star ? callee : NULL;
 }
 
+struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n)
+{
+    const struct AstNode *callee;
+
+    if (n == NULL || n->kind != AST_CALL || n->a == NULL)
+        return NULL;
+    callee = n->a;
+    while (callee != NULL && callee->kind == AST_UNARY && callee->op == '*')
+        callee = callee->a;
+    while (callee != NULL && callee->kind == AST_INDEX)
+        callee = callee->a;
+    if (callee != NULL && callee->kind == AST_IDENT)
+        return callee->sym != NULL ? callee->sym : find_sym(callee->sval);
+    return NULL;
+}
+
 int ast_call_star_indirect_supported(const struct AstNode *n)
 {
     const struct AstNode *base;
@@ -1355,6 +1377,7 @@ int ast_call_star_indirect_supported(const struct AstNode *n)
     int callee_type;
     int no_deref;
     int i;
+    struct Sym *proto;
 
     base = ast_call_star_indirect_base(n);
     if (base == NULL)
@@ -1377,8 +1400,13 @@ int ast_call_star_indirect_supported(const struct AstNode *n)
         if (type_ptr_depth(callee_type) <= 0 || type_size(callee_type) != 2)
             return 0;
     }
+    proto = ast_indirect_call_proto_sym(n);
+    if (proto != NULL && proto->has_proto &&
+        ((!proto->proto_variadic && n->list_len != proto->proto_nargs) ||
+         (proto->proto_variadic && n->list_len < proto->proto_nargs)))
+        return 0;
     for (i = 0; i < n->list_len; ++i) {
-        if (!ast_call_arg_supported(NULL, i, n->list[i]))
+        if (!ast_call_arg_supported(proto, i, n->list[i]))
             return 0;
     }
     return 1;
@@ -1390,6 +1418,7 @@ int ast_call_indirect_supported(const struct AstNode *n)
     int callee_type;
     int no_deref;
     int i;
+    struct Sym *proto;
 
     if (n == NULL || n->kind != AST_CALL || n->a == NULL)
         return 0;
@@ -1405,8 +1434,13 @@ int ast_call_indirect_supported(const struct AstNode *n)
         return 0;
     if (type_is_struct_object(type_decay_ptr(callee_type)))
         return 0;
+    proto = ast_indirect_call_proto_sym(n);
+    if (proto != NULL && proto->has_proto &&
+        ((!proto->proto_variadic && n->list_len != proto->proto_nargs) ||
+         (proto->proto_variadic && n->list_len < proto->proto_nargs)))
+        return 0;
     for (i = 0; i < n->list_len; ++i) {
-        if (!ast_call_arg_supported(NULL, i, n->list[i]))
+        if (!ast_call_arg_supported(proto, i, n->list[i]))
             return 0;
     }
     return 1;
@@ -1434,13 +1468,18 @@ int ast_value_is_float_word(const struct AstNode *arg)
     }
     if (arg->kind == AST_CALL && arg->a != NULL && arg->a->kind == AST_IDENT) {
         s = find_global(arg->a->sval);
-        return s != NULL && type_is_float(s->type);
+        if (s != NULL && s->storage == SC_FUNC)
+            return type_is_float(s->type);
     }
     if (arg->kind == AST_CALL && ast_call_indirect_supported(arg)) {
         int callee_type;
         int no_deref;
         if (ast_pointer_expr_type(arg->a, &callee_type, &no_deref))
             return type_is_float(type_decay_ptr(callee_type));
+    }
+    if (arg->kind == AST_CALL && ast_call_star_indirect_supported(arg)) {
+        s = ast_indirect_call_proto_sym(arg);
+        return s != NULL && type_is_float(type_decay_ptr(s->type));
     }
     if (arg->kind == AST_CAST && type_is_float(arg->type))
         return ast_gen_supported(arg);
