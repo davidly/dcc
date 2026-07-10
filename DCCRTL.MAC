@@ -6887,6 +6887,44 @@ __ldu:
         ld      l,(ix+10)
         ld      h,(ix+11)
         ld      (__ldv_dvd_h),hl
+        call    __ludivmod_core
+        ld      hl,(__ldv_quo_l)
+        ld      de,(__ldv_quo_h)
+        ld      sp,ix
+        pop     ix
+        ret
+
+; __lmodu: unsigned 32-bit modulo.  Returns DE:HL = LHS % RHS.
+        public  __lmu
+__lmu:
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      (__ldv_dvs_l),hl
+        ld      l,(ix+6)
+        ld      h,(ix+7)
+        ld      (__ldv_dvs_h),hl
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      (__ldv_dvd_l),hl
+        ld      l,(ix+10)
+        ld      h,(ix+11)
+        ld      (__ldv_dvd_h),hl
+        call    __ludivmod_core
+        ld      hl,(__ldv_rem_l)
+        ld      de,(__ldv_rem_h)
+        ld      sp,ix
+        pop     ix
+        ret
+
+; Shared unsigned 32-bit divide+modulo core: __ldu/__lmu call it directly
+; on their raw unsigned operands; __lds/__lms call it after negating their
+; operands to non-negative magnitudes in the same __ldv_dvd/__ldv_dvs
+; scratch, then apply the sign themselves to whichever of __ldv_quo/
+; __ldv_rem they return. Always computes BOTH outputs; clobbers AF/BC/DE/HL.
+__ludivmod_core:
         ld      hl,0
         ld      (__ldv_rem_l),hl
         ld      (__ldv_rem_h),hl
@@ -6896,9 +6934,9 @@ __ldu:
         ld      hl,(__ldv_dvs_h)
         ld      a,h
         or      l
-        jp      z,ldivu_dvs16
+        jp      z,ludm_dvs16
         ld      b,32
-ldivu_loop:
+ludm_loop:
         push    bc
         ; Shift {rem:dvd} left 1 (64-bit)
         ld      hl,(__ldv_dvd_l)
@@ -6923,7 +6961,7 @@ ldivu_loop:
         ld      hl,(__ldv_rem_h)
         ld      bc,(__ldv_dvs_h)
         sbc     hl,bc           ; HL = rem_h - dvs_h - borrow
-        jr      c,ldivu_no_sub
+        jr      c,ludm_no_sub
         ; rem >= dvs: store rem - dvs, set quotient bit
         ld      (__ldv_rem_h),hl
         ex      de,hl
@@ -6936,8 +6974,8 @@ ldivu_loop:
         ld      hl,(__ldv_quo_h)
         adc     hl,hl
         ld      (__ldv_quo_h),hl
-        jr      ldivu_next
-ldivu_no_sub:
+        jr      ludm_next
+ludm_no_sub:
         ld      hl,(__ldv_quo_l)
         or      a
         add     hl,hl
@@ -6945,124 +6983,32 @@ ldivu_no_sub:
         ld      hl,(__ldv_quo_h)
         adc     hl,hl
         ld      (__ldv_quo_h),hl
-ldivu_next:
+ludm_next:
         pop     bc
-        djnz    ldivu_loop
-        ld      hl,(__ldv_quo_l)
-        ld      de,(__ldv_quo_h)
-        ld      sp,ix
-        pop     ix
+        djnz    ludm_loop
         ret
 
-ldivu_dvs16:
-        ; 16-bit divisor fast path: 32-bit dividend / 16-bit divisor.
-        ; Build the 32-bit quotient in place in the dividend bytes (MSB-first)
-        ; and leave the 16-bit remainder in HL (unused for divide).
+ludm_dvs16:
+        ; 16-bit divisor fast path: build the 32-bit quotient MSB-first via
+        ; the shared ldqr_byte step, and keep the final 16-bit remainder
+        ; (its high word is always 0, since it is < the 16-bit divisor).
         ld      de,(__ldv_dvs_l)        ; DE = divisor
         ld      hl,0                    ; HL = partial remainder
         ld      a,(__ldv_dvd_h+1)       ; byte 3 (MSB)
         call    ldqr_byte
-        ld      (__ldv_dvd_h+1),a       ; quotient byte 3
+        ld      (__ldv_quo_h+1),a       ; quotient byte 3
         ld      a,(__ldv_dvd_h)         ; byte 2
         call    ldqr_byte
-        ld      (__ldv_dvd_h),a         ; quotient byte 2
+        ld      (__ldv_quo_h),a         ; quotient byte 2
         ld      a,(__ldv_dvd_l+1)       ; byte 1
         call    ldqr_byte
-        ld      (__ldv_dvd_l+1),a       ; quotient byte 1
+        ld      (__ldv_quo_l+1),a       ; quotient byte 1
         ld      a,(__ldv_dvd_l)         ; byte 0 (LSB)
         call    ldqr_byte
-        ld      (__ldv_dvd_l),a         ; quotient byte 0
-        ld      hl,(__ldv_dvd_l)        ; HL = quotient low word
-        ld      de,(__ldv_dvd_h)        ; DE = quotient high word
-        ld      sp,ix
-        pop     ix
-        ret
-
-; __lmodu: unsigned 32-bit modulo.  Returns DE:HL = LHS % RHS.
-        public  __lmu
-__lmu:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      (__ldv_dvs_l),hl
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      (__ldv_dvs_h),hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      (__ldv_dvd_l),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
-        ld      (__ldv_dvd_h),hl
+        ld      (__ldv_quo_l),a         ; quotient byte 0
+        ld      (__ldv_rem_l),hl        ; remainder low word
         ld      hl,0
-        ld      (__ldv_rem_l),hl
-        ld      (__ldv_rem_h),hl
-        ; Fast path: divisor fits in 16 bits  use compact register-based algorithm.
-        ; Keep DE = divisor and HL = 16-bit running remainder throughout.
-        ; Process the 32-bit dividend MSB-first, 8 bits per call to lmodu_byte.
-        ld      hl,(__ldv_dvs_h)
-        ld      a,h
-        or      l
-        jp      z,lmodu_dvs16
-        ld      b,32
-lmodu_loop:
-        push    bc
-        ld      hl,(__ldv_dvd_l)
-        or      a
-        add     hl,hl
-        ld      (__ldv_dvd_l),hl
-        ld      hl,(__ldv_dvd_h)
-        adc     hl,hl
-        ld      (__ldv_dvd_h),hl
-        ld      hl,(__ldv_rem_l)
-        adc     hl,hl
-        ld      (__ldv_rem_l),hl
-        ld      hl,(__ldv_rem_h)
-        adc     hl,hl
-        ld      (__ldv_rem_h),hl
-        ld      hl,(__ldv_rem_l)
-        ld      de,(__ldv_dvs_l)
-        or      a
-        sbc     hl,de
-        ex      de,hl
-        ld      hl,(__ldv_rem_h)
-        ld      bc,(__ldv_dvs_h)
-        sbc     hl,bc
-        jr      c,lmodu_no_sub
-        ld      (__ldv_rem_h),hl
-        ex      de,hl
-        ld      (__ldv_rem_l),hl
-lmodu_no_sub:
-        pop     bc
-        djnz    lmodu_loop
-        ld      hl,(__ldv_rem_l)
-        ld      de,(__ldv_rem_h)
-        ld      sp,ix
-        pop     ix
-        ret
-
-lmodu_dvs16:
-        ; Divisor is 16-bit (in __ldv_dvs_l).  Process the 32-bit dividend
-        ; byte-by-byte MSB-first, accumulating a 16-bit remainder in HL.
-        ; All four bytes are processed: a zero byte that follows a nonzero one
-        ; still shifts the remainder, so bytes must NOT be skipped.  The final
-        ; remainder is < divisor, so its high word is zero.
-        ld      de,(__ldv_dvs_l)        ; DE = divisor (stays in register)
-        ld      hl,0                    ; HL = partial remainder
-        ld      a,(__ldv_dvd_h+1)       ; byte 3 (MSB)
-        call    ldqr_byte
-        ld      a,(__ldv_dvd_h)         ; byte 2
-        call    ldqr_byte
-        ld      a,(__ldv_dvd_l+1)       ; byte 1
-        call    ldqr_byte
-        ld      a,(__ldv_dvd_l)         ; byte 0 (LSB)
-        call    ldqr_byte
-        ; HL = remainder; DE high word = 0 (remainder < 16-bit divisor)
-        ld      de,0
-        ld      sp,ix
-        pop     ix
+        ld      (__ldv_rem_h),hl        ; remainder high word = 0
         ret
 
 ldqr_byte:
@@ -7160,66 +7106,7 @@ ldivs_dvd_pos:
         sbc     hl,de
         ld      (__ldv_dvs_h),hl
 ldivs_dvs_pos:
-        ; Now do unsigned division using the scratch vars
-        ld      hl,0
-        ld      (__ldv_rem_l),hl
-        ld      (__ldv_rem_h),hl
-        ld      (__ldv_quo_l),hl
-        ld      (__ldv_quo_h),hl
-        ; Fast path: divisor magnitude fits in 16 bits.
-        ld      hl,(__ldv_dvs_h)
-        ld      a,h
-        or      l
-        jp      z,ldivs_dvs16
-        ld      b,32
-ldivs_loop:
-        push    bc
-        ld      hl,(__ldv_dvd_l)
-        or      a
-        add     hl,hl
-        ld      (__ldv_dvd_l),hl
-        ld      hl,(__ldv_dvd_h)
-        adc     hl,hl
-        ld      (__ldv_dvd_h),hl
-        ld      hl,(__ldv_rem_l)
-        adc     hl,hl
-        ld      (__ldv_rem_l),hl
-        ld      hl,(__ldv_rem_h)
-        adc     hl,hl
-        ld      (__ldv_rem_h),hl
-        ld      hl,(__ldv_rem_l)
-        ld      de,(__ldv_dvs_l)
-        or      a
-        sbc     hl,de
-        ex      de,hl
-        ld      hl,(__ldv_rem_h)
-        ld      bc,(__ldv_dvs_h)
-        sbc     hl,bc
-        jr      c,ldivs_no_sub
-        ld      (__ldv_rem_h),hl
-        ex      de,hl
-        ld      (__ldv_rem_l),hl
-        ld      hl,(__ldv_quo_l)
-        or      a
-        add     hl,hl
-        inc     l
-        ld      (__ldv_quo_l),hl
-        ld      hl,(__ldv_quo_h)
-        adc     hl,hl
-        ld      (__ldv_quo_h),hl
-        jr      ldivs_next
-ldivs_no_sub:
-        ld      hl,(__ldv_quo_l)
-        or      a
-        add     hl,hl
-        ld      (__ldv_quo_l),hl
-        ld      hl,(__ldv_quo_h)
-        adc     hl,hl
-        ld      (__ldv_quo_h),hl
-ldivs_next:
-        pop     bc
-        djnz    ldivs_loop
-ldivs_apply_sign:
+        call    __ludivmod_core
         ; Apply sign to quotient
         ld      a,(__ldv_sign)
         bit     7,a
@@ -7239,26 +7126,6 @@ ldivs_pos_result:
         ld      sp,ix
         pop     ix
         ret
-
-ldivs_dvs16:
-        ; 16-bit divisor magnitude fast path: build the 32-bit quotient of the
-        ; (already non-negative) dividend MSB-first using the shared ldqr_byte
-        ; step, then apply the result sign via the common tail.
-        ld      de,(__ldv_dvs_l)        ; DE = divisor
-        ld      hl,0                    ; HL = partial remainder
-        ld      a,(__ldv_dvd_h+1)       ; byte 3 (MSB)
-        call    ldqr_byte
-        ld      (__ldv_quo_h+1),a       ; quotient byte 3
-        ld      a,(__ldv_dvd_h)         ; byte 2
-        call    ldqr_byte
-        ld      (__ldv_quo_h),a         ; quotient byte 2
-        ld      a,(__ldv_dvd_l+1)       ; byte 1
-        call    ldqr_byte
-        ld      (__ldv_quo_l+1),a       ; quotient byte 1
-        ld      a,(__ldv_dvd_l)         ; byte 0 (LSB)
-        call    ldqr_byte
-        ld      (__ldv_quo_l),a         ; quotient byte 0
-        jp      ldivs_apply_sign
 
 ; __lmods: signed 32-bit modulo.  Returns DE:HL = LHS % RHS.
         public  __lms
@@ -7308,46 +7175,7 @@ lmods_dvd_pos:
         sbc     hl,de
         ld      (__ldv_dvs_h),hl
 lmods_dvs_pos:
-        ld      hl,0
-        ld      (__ldv_rem_l),hl
-        ld      (__ldv_rem_h),hl
-        ; Fast path: divisor magnitude fits in 16 bits.
-        ld      hl,(__ldv_dvs_h)
-        ld      a,h
-        or      l
-        jp      z,lmods_dvs16
-        ld      b,32
-lmods_loop:
-        push    bc
-        ld      hl,(__ldv_dvd_l)
-        or      a
-        add     hl,hl
-        ld      (__ldv_dvd_l),hl
-        ld      hl,(__ldv_dvd_h)
-        adc     hl,hl
-        ld      (__ldv_dvd_h),hl
-        ld      hl,(__ldv_rem_l)
-        adc     hl,hl
-        ld      (__ldv_rem_l),hl
-        ld      hl,(__ldv_rem_h)
-        adc     hl,hl
-        ld      (__ldv_rem_h),hl
-        ld      hl,(__ldv_rem_l)
-        ld      de,(__ldv_dvs_l)
-        or      a
-        sbc     hl,de
-        ex      de,hl
-        ld      hl,(__ldv_rem_h)
-        ld      bc,(__ldv_dvs_h)
-        sbc     hl,bc
-        jr      c,lmods_no_sub
-        ld      (__ldv_rem_h),hl
-        ex      de,hl
-        ld      (__ldv_rem_l),hl
-lmods_no_sub:
-        pop     bc
-        djnz    lmods_loop
-lmods_apply_sign:
+        call    __ludivmod_core
         ; Apply sign to remainder
         ld      a,(__ldv_sign)
         bit     7,a
@@ -7367,26 +7195,6 @@ lmods_pos_result:
         ld      sp,ix
         pop     ix
         ret
-
-lmods_dvs16:
-        ; 16-bit divisor magnitude fast path: compute the remainder of the
-        ; (already non-negative) dividend MSB-first using the shared ldqr_byte
-        ; step (quotient bytes in A are discarded), then apply the dividend
-        ; sign via the common tail.  Remainder < divisor so its high word is 0.
-        ld      de,(__ldv_dvs_l)        ; DE = divisor
-        ld      hl,0                    ; HL = partial remainder
-        ld      a,(__ldv_dvd_h+1)       ; byte 3 (MSB)
-        call    ldqr_byte
-        ld      a,(__ldv_dvd_h)         ; byte 2
-        call    ldqr_byte
-        ld      a,(__ldv_dvd_l+1)       ; byte 1
-        call    ldqr_byte
-        ld      a,(__ldv_dvd_l)         ; byte 0 (LSB)
-        call    ldqr_byte
-        ld      (__ldv_rem_l),hl        ; remainder low word
-        ld      hl,0
-        ld      (__ldv_rem_h),hl        ; remainder high word = 0
-        jp      lmods_apply_sign
 
 ; ---- 32-bit comparison functions ----
 ; Each returns HL=1 (true) or HL=0 (false).
