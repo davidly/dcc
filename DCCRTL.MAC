@@ -17571,26 +17571,58 @@ SCL29:
         public __stol
 __stol:
         ; long strtol(const char *nptr, char **endptr, int base)
-        ; IX-free; locals moved to static scratch (already non-reentrant,
-        ; matching the atol/atof/strtod convention). __stol_nptr keeps the
-        ; original pointer alive for the no-digits-consumed endptr case,
-        ; while __stol_p is the working cursor that advances.
+        ; Trampoline into the shared __stox_core: inject a "signed" flag
+        ; (1) as a hidden leading argument via jp, so __stox_core's own
+        ; entry sees exactly [retaddr][signed][nptr][endptr][base] and
+        ; the original external caller's return address is preserved.
+        pop bc
+        ld hl,1
+        push hl
+        push bc
+        jp __stox_core
+
+        public __stou
+__stou:
+        ; unsigned long strtoul(const char *nptr, char **endptr, int base)
+        ; Same trampoline as __stol, with signed=0.
+        pop bc
+        ld hl,0
+        push hl
+        push bc
+        jp __stox_core
+
+; Shared strtol/strtoul core. Not itself public - only ever reached via
+; the __stol/__stou trampolines above, which inject a hidden "signed"
+; flag as an extra leading argument (consumed here, never restored to
+; the stack, so the real 3-argument cdecl contract with the external
+; caller is unaffected). Locals live in static scratch (already
+; non-reentrant, matching the atol/atof/strtod convention).
+; __stox_nptr keeps the original pointer alive for the no-digits-
+; consumed endptr case, while __stox_p is the working cursor that
+; advances. The two places strtol/strtoul actually differ - the
+; overflow-cutoff dividend and the overflow clamp value - are the only
+; spots that branch on __stox_signed; everything else (whitespace/sign/
+; base parsing, the digit-accumulation loop, and endptr handling) is one
+; shared copy.
+__stox_core:
         pop bc                  ; return address
+        pop hl                  ; signed flag (1=strtol, 0=strtoul)
+        ld (__stox_signed),hl
         pop hl                  ; nptr
-        ld (__stol_nptr),hl
-        ld (__stol_p),hl        ; p = nptr
+        ld (__stox_nptr),hl
+        ld (__stox_p),hl        ; p = nptr
         pop de                  ; endptr
-        ld (__stol_endptr),de
+        ld (__stox_endptr),de
         pop hl                  ; base
-        ld (__stol_base),hl
+        ld (__stox_base),hl
 
         push hl                 ; restore base
         push de                 ; restore endptr
-        ld hl,(__stol_nptr)
+        ld hl,(__stox_nptr)
         push hl                 ; restore nptr
         push bc                 ; restore return address
 SCL38:
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17603,14 +17635,14 @@ SCL38:
         ld a,h
         or l
         jr z,SCL39 ; peep: jp_to_jr
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (__stol_p),hl
+        ld (__stox_p),hl
         jr SCL38 ; peep: jp_to_jr
 SCL39:
         ld hl,0
-        ld (__stol_neg),hl
-        ld hl,(__stol_p)
+        ld (__stox_neg),hl
+        ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17620,12 +17652,12 @@ SCL39:
         or a
         sbc hl,de
         jr nz,SCL40 ; peep: jp_to_jr
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (__stol_p),hl
+        ld (__stox_p),hl
         jr SCL41 ; peep: jp_to_jr
 SCL40:
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17636,22 +17668,22 @@ SCL40:
         sbc hl,de
         jr nz,SCL41 ; peep: jp_to_jr
         ld hl,1
-        ld (__stol_neg),hl
-        ld hl,(__stol_p)
+        ld (__stox_neg),hl
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (__stol_p),hl
+        ld (__stox_p),hl
 SCL41:
-        ld hl,(__stol_base)
+        ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
         or l
         jr z,SCL48 ; peep: jp_to_jr
-        ld hl,(__stol_base)
+        ld hl,(__stox_base)
         ld de,16 ; peep: push_lde_pop
         or a
         sbc hl,de
         jp nz, SCL44 ; peep: jump_thread
 SCL48:
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17661,7 +17693,7 @@ SCL48:
         or a
         sbc hl,de
         jr nz,SCL44 ; peep: jp_to_jr
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
         ld a,l
@@ -17672,7 +17704,7 @@ SCL48:
         or a
         sbc hl,de
         jr z,SCL57 ; peep: jp_to_jr
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
         ld a,l
@@ -17684,19 +17716,19 @@ SCL48:
         sbc hl,de
         jr nz,SCL44 ; peep: jp_to_jr
 SCL57:
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de2_to_inc
         inc hl
-        ld (__stol_p),hl
+        ld (__stox_p),hl
         ld hl,16
-        ld (__stol_base),hl
+        ld (__stox_base),hl
         jr SCL45 ; peep: jp_to_jr
 SCL44:
-        ld hl,(__stol_base)
+        ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
         or l
         jr nz,SCL45 ; peep: jp_to_jr
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17712,9 +17744,16 @@ SCL44:
 SCL68:
         ld hl,10
 SCL69:
-        ld (__stol_base),hl
+        ld (__stox_base),hl
 SCL45:
-        ld hl,(__stol_neg)
+        ; Overflow-cutoff dividend: sign-dependent magnitude for strtol
+        ; (LONG_MIN or LONG_MAX depending on neg), always ULONG_MAX for
+        ; strtoul.
+        ld hl,(__stox_signed)
+        ld a,h
+        or l
+        jr z,SCL45U ; peep: jp_to_jr
+        ld hl,(__stox_neg)
         ld a,h
         or l
         jr z,SCL70 ; peep: jp_to_jr
@@ -17724,12 +17763,16 @@ SCL45:
 SCL70:
         ld hl,65535
         ld de,32767
+        jr SCL71 ; peep: jp_to_jr
+SCL45U:
+        ld hl,65535
+        ld de,65535
 SCL71:
-        ld (__stol_cutoff),hl
-        ld (__stol_cutoff+2),de
+        ld (__stox_cutoff),hl
+        ld (__stox_cutoff+2),de
         push de
         push hl
-        ld hl,(__stol_base)
+        ld hl,(__stox_base)
         ld a,h
         rlca
         sbc a,a
@@ -17747,12 +17790,12 @@ SCL71:
         ex de,hl
         ld d,b
         ld e,c
-        ld (__stol_cutlim),hl
-        ld hl,(__stol_cutoff)
-        ld de,(__stol_cutoff+2)
+        ld (__stox_cutlim),hl
+        ld hl,(__stox_cutoff)
+        ld de,(__stox_cutoff+2)
         push de
         push hl
-        ld hl,(__stol_base)
+        ld hl,(__stox_base)
         ld a,h
         rlca
         sbc a,a
@@ -17770,16 +17813,16 @@ SCL71:
         ex de,hl
         ld d,b
         ld e,c
-        ld (__stol_cutoff),hl
-        ld (__stol_cutoff+2),de
+        ld (__stox_cutoff),hl
+        ld (__stox_cutoff+2),de
         ld hl,0
         ld de,0 ; peep: fold_const_sxt
-        ld (__stol_acc),hl
-        ld (__stol_acc+2),de
+        ld (__stox_acc),hl
+        ld (__stox_acc+2),de
         ld hl,0
-        ld (__stol_any),hl
+        ld (__stox_any),hl
 SCL72:
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
         rlca
@@ -17789,8 +17832,8 @@ SCL72:
         push hl
         call sc_isdigit
         pop bc
-        ld (__stol_c),hl
-        ld de,(__stol_base)
+        ld (__stox_c),hl
+        ld de,(__stox_base)
         ld a,h
         xor 80h
         ld h,a
@@ -17800,7 +17843,7 @@ SCL72:
         or a
         sbc hl,de
         jp nc, SCL74 ; peep: branch_over_jump
-        ld hl,(__stol_any)
+        ld hl,(__stox_any)
         ld de,32768 ; peep: signed_cmp_const_bias_fold
         ld a,h
         xor 80h
@@ -17808,12 +17851,12 @@ SCL72:
         or a
         sbc hl,de
         jp c, SCL83 ; peep: branch_over_jump
-        ld hl,(__stol_acc)
-        ld de,(__stol_acc+2)
+        ld hl,(__stox_acc)
+        ld de,(__stox_acc+2)
         push de
         push hl
-        ld hl,(__stol_cutoff)
-        ld de,(__stol_cutoff+2)
+        ld hl,(__stox_cutoff)
+        ld de,(__stox_cutoff+2)
         push de
         push hl
         call __lgu
@@ -17825,12 +17868,12 @@ SCL72:
         ld a,h
         or l
         jp nz, SCL83 ; peep: branch_over_jump
-        ld hl,(__stol_acc)
-        ld de,(__stol_acc+2)
+        ld hl,(__stox_acc)
+        ld de,(__stox_acc+2)
         push de
         push hl
-        ld hl,(__stol_cutoff)
-        ld de,(__stol_cutoff+2)
+        ld hl,(__stox_cutoff)
+        ld de,(__stox_cutoff+2)
         pop bc
         ld a,c
         xor l
@@ -17848,8 +17891,8 @@ SCL72:
         xor d
         or l
         jr nz,SCL77 ; peep: jp_to_jr
-        ld hl,(__stol_c)
-        ld de,(__stol_cutlim)
+        ld hl,(__stox_c)
+        ld de,(__stox_cutlim)
         ld a,h
         xor 80h
         ld h,a
@@ -17862,16 +17905,16 @@ SCL72:
         jr c,SCL77 ; peep: jp_to_jr
 SCL83:
         ld hl,65535
-        ld (__stol_any),hl
+        ld (__stox_any),hl
         jp SCL78
 SCL77:
         ld hl,1
-        ld (__stol_any),hl
-        ld hl,(__stol_acc)
-        ld de,(__stol_acc+2)
+        ld (__stox_any),hl
+        ld hl,(__stox_acc)
+        ld de,(__stox_acc+2)
         push de
         push hl
-        ld hl,(__stol_base)
+        ld hl,(__stox_base)
         ld a,h
         rlca
         sbc a,a
@@ -17891,7 +17934,7 @@ SCL77:
         ld e,c
         push de
         push hl
-        ld hl,(__stol_c)
+        ld hl,(__stox_c)
         ld a,h
         rlca
         sbc a,a
@@ -17904,23 +17947,29 @@ SCL77:
         pop bc
         adc hl,bc
         ex de,hl
-        ld (__stol_acc),hl
-        ld (__stol_acc+2),de
+        ld (__stox_acc),hl
+        ld (__stox_acc+2),de
 SCL78:
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
-        ld (__stol_p),hl
+        ld (__stox_p),hl
         jp SCL72
 SCL74:
-        ld a,(__stol_any+1)
+        ld a,(__stox_any+1)
         or a
         jp m, SCL94
         jr nz,SCL92 ; peep: jp_to_jr
-        ld a,(__stol_any)
+        ld a,(__stox_any)
         cp 0
         jr nc,SCL92 ; peep: jp_to_jr
 SCL94:
-        ld hl,(__stol_neg)
+        ; Overflow clamp: sign-dependent LONG_MIN/LONG_MAX for strtol,
+        ; unconditional ULONG_MAX for strtoul.
+        ld hl,(__stox_signed)
+        ld a,h
+        or l
+        jr z,SCL94U ; peep: jp_to_jr
+        ld hl,(__stox_neg)
         ld a,h
         or l
         jr z,SCL95 ; peep: jp_to_jr
@@ -17947,15 +17996,19 @@ SCL94:
 SCL95:
         ld hl,65535
         ld de,32767
+        jr SCL96 ; peep: jp_to_jr
+SCL94U:
+        ld hl,65535
+        ld de,65535
 SCL96:
-        ld (__stol_acc),hl
-        ld (__stol_acc+2),de
+        ld (__stox_acc),hl
+        ld (__stox_acc+2),de
         ld hl,34
         ld de,0
         ld (_errno),hl
         jr SCL93 ; peep: jp_to_jr
 SCL92:
-        ld hl,(__stol_neg)
+        ld hl,(__stox_neg)
         ld a,h
         or l
         jr z,SCL93 ; peep: jp_to_jr
@@ -17963,8 +18016,8 @@ SCL92:
         ld de,0
         push de
         push hl
-        ld hl,(__stol_acc)
-        ld de,(__stol_acc+2)
+        ld hl,(__stox_acc)
+        ld de,(__stox_acc+2)
         ld b,h
         ld c,l
         pop hl
@@ -17977,10 +18030,10 @@ SCL92:
         ld d,b
         ld e,c
         ex de,hl
-        ld (__stol_acc),hl
-        ld (__stol_acc+2),de
+        ld (__stox_acc),hl
+        ld (__stox_acc+2),de
 SCL93:
-        ld hl,(__stol_endptr)
+        ld hl,(__stox_endptr)
         push hl
         ld hl,0
         ld de,0
@@ -18007,17 +18060,17 @@ SCL93:
         xor d
         or l
         jr z,SCL101 ; peep: jp_to_jr
-        ld hl,(__stol_endptr) ; peep: ix_frame_ptr_deadd
+        ld hl,(__stox_endptr) ; peep: ix_frame_ptr_deadd
         push hl
-        ld hl,(__stol_any)
+        ld hl,(__stox_any)
         ld a,h
         or l
         jr z,SCL104 ; peep: jp_to_jr
-        ld hl,(__stol_p)
+        ld hl,(__stox_p)
         ld de,0
         jr SCL105 ; peep: jp_to_jr
 SCL104:
-        ld hl,(__stol_nptr)
+        ld hl,(__stox_nptr)
 SCL105:
         ex de,hl
         pop hl
@@ -18025,452 +18078,21 @@ SCL105:
         inc hl
         ld (hl),d
 SCL101:
-        ld hl,(__stol_acc)
-        ld de,(__stol_acc+2)
+        ld hl,(__stox_acc)
+        ld de,(__stox_acc+2)
         ret
 
-__stol_nptr:    dw      0
-__stol_endptr:  dw      0
-__stol_base:    dw      0
-__stol_p:       dw      0
-__stol_neg:     dw      0
-__stol_any:     dw      0
-__stol_c:       dw      0
-__stol_acc:     ds      4
-__stol_cutoff:  ds      4
-__stol_cutlim:  dw      0
-
-        public __stou
-__stou:
-        ; unsigned long strtoul(const char *nptr, char **endptr, int base)
-        ; IX-free; same static-scratch convention as __stol.
-        pop bc                  ; return address
-        pop hl                  ; nptr
-        ld (__stou_nptr),hl
-        ld (__stou_p),hl        ; p = nptr
-        pop de                  ; endptr
-        ld (__stou_endptr),de
-        pop hl                  ; base
-        ld (__stou_base),hl
-
-        push hl                 ; restore base
-        push de                 ; restore endptr
-        ld hl,(__stou_nptr)
-        push hl                 ; restore nptr
-        push bc                 ; restore return address
-SCL107:
-        ld hl,(__stou_p)
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld h,0
-        push hl
-        call sc_isspace
-        pop bc
-        ld a,h
-        or l
-        jr z,SCL108 ; peep: jp_to_jr
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de1_to_inc
-        ld (__stou_p),hl
-        jr SCL107 ; peep: jp_to_jr
-SCL108:
-        ld hl,0
-        ld (__stou_neg),hl
-        ld hl,(__stou_p)
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld de,43 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr nz,SCL109 ; peep: jp_to_jr
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de1_to_inc
-        ld (__stou_p),hl
-        jr SCL110 ; peep: jp_to_jr
-SCL109:
-        ld hl,(__stou_p)
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld de,45 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr nz,SCL110 ; peep: jp_to_jr
-        ld hl,1
-        ld (__stou_neg),hl
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de1_to_inc
-        ld (__stou_p),hl
-SCL110:
-        ld hl,(__stou_base)
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr z,SCL117 ; peep: jp_to_jr
-        ld hl,(__stou_base)
-        ld de,16 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jp nz, SCL113 ; peep: jump_thread
-SCL117:
-        ld hl,(__stou_p)
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld de,48 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr nz,SCL113 ; peep: jp_to_jr
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de1_to_inc
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld de,120 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr z,SCL126 ; peep: jp_to_jr
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de1_to_inc
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld de,88 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr nz,SCL113 ; peep: jp_to_jr
-SCL126:
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de2_to_inc
-        inc hl
-        ld (__stou_p),hl
-        ld hl,16
-        ld (__stou_base),hl
-        jr SCL114 ; peep: jp_to_jr
-SCL113:
-        ld hl,(__stou_base)
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr nz,SCL114 ; peep: jp_to_jr
-        ld hl,(__stou_p)
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld de,48 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr nz,SCL137 ; peep: jp_to_jr
-        ld hl,8
-        ld de,0 ; peep: fold_const_sxt
-        jr SCL138 ; peep: jp_to_jr
-SCL137:
-        ld hl,10
-SCL138:
-        ld (__stou_base),hl
-SCL114:
-        ld hl,65535
-        ld de,65535
-        push de
-        push hl
-        ld hl,(__stou_base)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        push de
-        push hl
-        call __ldu
-        ld b,d
-        ld c,e
-        ex de,hl
-        ld hl,8
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld d,b
-        ld e,c
-        ld (__stou_cutoff),hl
-        ld (__stou_cutoff+2),de
-        ld hl,65535
-        ld de,65535
-        push de
-        push hl
-        ld hl,(__stou_base)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        push de
-        push hl
-        call __lmu
-        ld b,d
-        ld c,e
-        ex de,hl
-        ld hl,8
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld d,b
-        ld e,c
-        ld (__stou_cutlim),hl
-        ld hl,0
-        ld de,0 ; peep: fold_const_sxt
-        ld (__stou_acc),hl
-        ld (__stou_acc+2),de
-        ld hl,0
-        ld (__stou_any),hl
-SCL139:
-        ld hl,(__stou_p)
-        ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
-        ld h,0
-        push hl
-        call sc_isdigit
-        pop bc
-        ld (__stou_c),hl
-        ld de,(__stou_base)
-        ld a,h
-        xor 80h
-        ld h,a
-        ld a,d
-        xor 80h
-        ld d,a
-        or a
-        sbc hl,de
-        jp nc, SCL141 ; peep: branch_over_jump
-        ld hl,(__stou_any)
-        ld de,32768 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jp c, SCL150 ; peep: branch_over_jump
-        ld hl,(__stou_acc)
-        ld de,(__stou_acc+2)
-        push de
-        push hl
-        ld hl,(__stou_cutoff)
-        ld de,(__stou_cutoff+2)
-        push de
-        push hl
-        call __lgu
-        ex de,hl
-        ld hl,8
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld a,h
-        or l
-        jp nz, SCL150 ; peep: branch_over_jump
-        ld hl,(__stou_acc)
-        ld de,(__stou_acc+2)
-        push de
-        push hl
-        ld hl,(__stou_cutoff)
-        ld de,(__stou_cutoff+2)
-        pop bc
-        ld a,c
-        xor l
-        ld l,a
-        ld a,b
-        xor h
-        or l
-        ld l,a
-        pop bc
-        ld a,c
-        xor e
-        or l
-        ld l,a
-        ld a,b
-        xor d
-        or l
-        jr nz,SCL144 ; peep: jp_to_jr
-        ld hl,(__stou_c)
-        ld de,(__stou_cutlim)
-        ld a,h
-        xor 80h
-        ld h,a
-        ld a,d
-        xor 80h
-        ld d,a
-        or a
-        sbc hl,de
-        jr z,SCL144 ; peep: jp_to_jr
-        jr c,SCL144 ; peep: jp_to_jr
-SCL150:
-        ld hl,65535
-        ld (__stou_any),hl
-        jp SCL145
-SCL144:
-        ld hl,1
-        ld (__stou_any),hl
-        ld hl,(__stou_acc)
-        ld de,(__stou_acc+2)
-        push de
-        push hl
-        ld hl,(__stou_base)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        push de
-        push hl
-        call __lmul
-        ld b,d
-        ld c,e
-        ex de,hl
-        ld hl,8
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld d,b
-        ld e,c
-        push de
-        push hl
-        ld hl,(__stou_c)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        pop bc
-        or a
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        ld (__stou_acc),hl
-        ld (__stou_acc+2),de
-SCL145:
-        ld hl,(__stou_p)
-        inc hl ; peep: ld_de1_to_inc
-        ld (__stou_p),hl
-        jp SCL139
-SCL141:
-        ld a,(__stou_any+1)
-        or a
-        jp m, SCL161
-        jr nz,SCL159 ; peep: jp_to_jr
-        ld a,(__stou_any)
-        cp 0
-        jr nc,SCL159 ; peep: jp_to_jr
-SCL161:
-        ld hl,65535
-        ld de,65535
-        ld (__stou_acc),hl
-        ld (__stou_acc+2),de
-        ld hl,34
-        ld de,0
-        ld (_errno),hl
-        jr SCL160 ; peep: jp_to_jr
-SCL159:
-        ld hl,(__stou_neg)
-        ld a,h
-        or l
-        jr z,SCL160 ; peep: jp_to_jr
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        ld hl,(__stou_acc)
-        ld de,(__stou_acc+2)
-        ld b,h
-        ld c,l
-        pop hl
-        or a
-        sbc hl,bc
-        ld b,h
-        ld c,l
-        pop hl
-        sbc hl,de
-        ld d,b
-        ld e,c
-        ex de,hl
-        ld (__stou_acc),hl
-        ld (__stou_acc+2),de
-SCL160:
-        ld hl,(__stou_endptr)
-        push hl
-        ld hl,0
-        ld de,0
-        pop bc
-        push de
-        push hl
-        ld h,b
-        ld l,c
-        ld de,0
-        pop bc
-        ld a,c
-        xor l
-        ld l,a
-        ld a,b
-        xor h
-        or l
-        ld l,a
-        pop bc
-        ld a,c
-        xor e
-        or l
-        ld l,a
-        ld a,b
-        xor d
-        or l
-        jr z,SCL165 ; peep: jp_to_jr
-        ld hl,(__stou_endptr) ; peep: ix_frame_ptr_deadd
-        push hl
-        ld hl,(__stou_any)
-        ld a,h
-        or l
-        jr z,SCL168 ; peep: jp_to_jr
-        ld hl,(__stou_p)
-        ld de,0
-        jr SCL169 ; peep: jp_to_jr
-SCL168:
-        ld hl,(__stou_nptr)
-SCL169:
-        ex de,hl
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-SCL165:
-        ld hl,(__stou_acc)
-        ld de,(__stou_acc+2)
-        ret
-
-__stou_nptr:    dw      0
-__stou_endptr:  dw      0
-__stou_base:    dw      0
-__stou_p:       dw      0
-__stou_neg:     dw      0
-__stou_any:     dw      0
-__stou_c:       dw      0
-__stou_acc:     ds      4
-__stou_cutoff:  ds      4
-__stou_cutlim:  dw      0
+__stox_signed:  dw      0
+__stox_nptr:    dw      0
+__stox_endptr:  dw      0
+__stox_base:    dw      0
+__stox_p:       dw      0
+__stox_neg:     dw      0
+__stox_any:     dw      0
+__stox_c:       dw      0
+__stox_acc:     ds      4
+__stox_cutoff:  ds      4
+__stox_cutlim:  dw      0
 
         public __stok
 ; char *strtok(char *s, const char *delim)
