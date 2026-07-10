@@ -1270,13 +1270,21 @@ __scat:
         push    de              ; restore dst
         push    bc              ; restore return address
         ld      b,d
-        ld      c,e             ; BC = original dst
-scat_end:
-        ld      a,(de)
-        or      a
-        jr      z,scat_copy
-        inc     de
-        jr      scat_end
+        ld      c,e             ; BC = original dst (needed only for the
+                                 ; return value at the end)
+        ; Find the NUL in dst via CPIR (same idiom as __ncat above and
+        ; __slf's strlen scan). BC (original dst) must be stashed since
+        ; CPIR clobbers it as an iteration counter; src (HL) survives for
+        ; free because CPIR only touches HL/BC/A, and DE (src) is untouched
+        ; by the swap below.
+        push    bc              ; save original dst
+        ex      de,hl           ; HL = dst, DE = src
+        ld      bc,0ffffh
+        xor     a
+        cpir                    ; HL = address of dst's NUL + 1
+        dec     hl              ; HL = address of dst's NUL
+        ex      de,hl           ; DE = dst's NUL position, HL = src (restored)
+        pop     bc              ; restore original dst
 scat_copy:
         ld      a,(hl)
         ld      (de),a
@@ -1754,12 +1762,19 @@ __ncat:
         pop     bc              ; BC = n
         pop     de              ; DE = dst
         push    de              ; return dst
-snc_find_end:
-        ld      a,(de)
-        or      a
-        jr      z,snc_copy
-        inc     de
-        jr      snc_find_end
+        ; Find the NUL in dst via CPIR (same idiom __slf uses for strlen)
+        ; instead of a byte-at-a-time loop. n (BC) must be stashed since
+        ; CPIR clobbers it as an iteration counter; src (HL) survives for
+        ; free because CPIR only touches HL/BC/A, and DE (src) is untouched
+        ; by the swap below.
+        push    bc              ; save n
+        ex      de,hl           ; HL = dst, DE = src
+        ld      bc,0ffffh
+        xor     a
+        cpir                    ; HL = address of dst's NUL + 1
+        dec     hl              ; HL = address of dst's NUL
+        ex      de,hl           ; DE = dst's NUL position, HL = src (restored)
+        pop     bc              ; restore n
 snc_copy:
         ld      a,b
         or      c
