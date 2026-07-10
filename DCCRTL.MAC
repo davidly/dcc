@@ -2373,24 +2373,32 @@ _ldiv:
 ; because the comparator may clobber every register.  Returns the matching
 ; element pointer, or 0 if not found.
 _bsearch:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; IX-free; the loop already reads everything back from static
+        ; scratch (the comparator may clobber every register), so entry
+        ; just pops each argument straight into its static slot instead
+        ; of reading it via (ix+n) and then storing it.
+        pop     bc              ; return address
+        pop     hl              ; key
         ld      (__bs_key),hl
-        ld      l,(ix+6)
-        ld      h,(ix+7)
+        pop     hl              ; base
         ld      (__bs_base),hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
+        pop     hl              ; num
         ld      (__bs_num),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
+        pop     hl              ; size
         ld      (__bs_size),hl
-        ld      l,(ix+12)
-        ld      h,(ix+13)
+        pop     hl              ; cmp
         ld      (__bs_cmp),hl
+
+        push    hl              ; restore cmp
+        ld      hl,(__bs_size)
+        push    hl              ; restore size
+        ld      hl,(__bs_num)
+        push    hl              ; restore num
+        ld      hl,(__bs_base)
+        push    hl              ; restore base
+        ld      hl,(__bs_key)
+        push    hl              ; restore key
+        push    bc              ; restore return address
 bs_loop:
         ld      hl,(__bs_num)
         ld      a,h
@@ -2437,11 +2445,9 @@ bs_lt:
         jp      bs_loop
 bs_found:
         ld      hl,(__bs_here)
-        pop     ix
         ret
 bs_nf:
         ld      hl,0
-        pop     ix
         ret
 __bs_key:       dw      0
 __bs_base:      dw      0
@@ -5600,11 +5606,16 @@ clio:
 ; Erases a CP/M file using BDOS fn 19.
 ; path @ IX+4/5.
 _unlink:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; int unlink(const char *path) - single pointer argument, used
+        ; once (immediately, via __mkfcb) and never needed again; IX-free
+        ; leaf.
+        pop     bc              ; return address
+        pop     hl              ; path
+        push    hl
+        push    bc
 
         ; Zero the scratch FCB (drive + 8-char name + 3-char ext = 12 bytes)
+        push    hl              ; save path across the clear loop below
         ld      hl,__ulfcb
         ld      b,12
         xor     a
@@ -5612,10 +5623,9 @@ ulclr:
         ld      (hl),a
         inc     hl
         djnz    ulclr
+        pop     hl              ; HL = path
 
         ; Build FCB from path string
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = path
         ld      de,__ulfcb      ; DE = scratch FCB
         call    __mkfcb
 
@@ -5628,12 +5638,10 @@ ulclr:
         cp      0ffh
         jr      z,ul_fail
         ld      hl,0
-        pop     ix
         ret
 ul_fail:
         call    __enoent
         ld      hl,0ffffh
-        pop     ix
         ret
 
 _read:
@@ -6422,9 +6430,19 @@ __ulfcb:
 ; ============================================================
         public  _rename
 _rename:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; int rename(const char *old, const char *new) - IX-free. old is
+        ; kept in DE across the clear loop below (which only touches
+        ; HL/B/A); new is stashed on the stack until it is needed after
+        ; the first __mkfcb call.
+        pop     bc              ; return address
+        pop     hl              ; old
+        pop     de              ; new
+        push    de              ; restore new (caller-cleanup argument)
+        push    hl              ; restore old (caller-cleanup argument)
+        push    bc              ; restore return address
+
+        push    de              ; stash new for later
+        ex      de,hl           ; DE = old
 
         ; Zero the 32-byte rename FCB.
         ld      hl,__rnfcb
@@ -6436,20 +6454,16 @@ rnclr:
         djnz    rnclr
 
         ; Old name -> FCB[0..11].
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ex      de,hl           ; HL = old
         ld      de,__rnfcb
         call    __mkfcb
 
         ; New name -> FCB[16..27].
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        push    hl              ; save newname ptr
         ld      hl,__rnfcb
         ld      de,16
         add     hl,de
         ex      de,hl           ; DE = __rnfcb + 16
-        pop     hl              ; HL = newname ptr
+        pop     hl              ; HL = new (stashed earlier)
         call    __mkfcb
 
         ; BDOS fn 23: rename file.
@@ -6460,12 +6474,10 @@ rnclr:
         cp      0ffh
         jr      z,rnfail
         ld      hl,0
-        pop     ix
         ret
 rnfail:
         call    __enoent
         ld      hl,0ffffh
-        pop     ix
         ret
 
 __rnfcb:        ds      32
@@ -7743,13 +7755,12 @@ __rl_thdr:      dw      0
 
         public  _free
 _free:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = ptr
+        ; void free(void *ptr) - single pointer argument; IX-free leaf.
+        pop     bc
+        pop     hl              ; HL = ptr
+        push    hl
+        push    bc
         call    __frcoal        ; mark free + coalesce neighbours (handles NULL)
-        pop     ix
         ret
 
         public  __frcoal
@@ -8840,11 +8851,12 @@ vfpcn:
 ; ============================================================
         public  _puts
 _puts:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)                ; str
+        ; int puts(const char *str) - single pointer argument, and __conout
+        ; preserves HL across every call in the loop; IX-free leaf.
+        pop     bc
+        pop     hl              ; str
+        push    hl
+        push    bc
 puts_loop:
         ld      a,(hl)
         or      a
@@ -8857,7 +8869,6 @@ puts_nl:
         ld      e,0ah
         call    __conout                ; '\n' (with CR+LF translation)
         ld      hl,0
-        pop     ix
         ret
 
 ; ============================================================
@@ -9436,10 +9447,12 @@ fseek_bad:
 ; ============================================================
         public  _ftell
 _ftell:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)
+        ; long ftell(FILE *fp) - fp/fd fits in a byte; IX-free leaf.
+        pop     bc
+        pop     hl
+        push    hl
+        push    bc
+        ld      a,l
         sub     FIRSTFD
         jr      c,ftell_bad
         cp      NFILES
@@ -9455,12 +9468,10 @@ _ftell:
         ld      h,(hl)
         ld      l,a                     ; HL = high 16 bits of file position
         ex      de,hl                   ; HL = low 16 bits, DE = high 16 bits
-        pop     ix
         ret
 ftell_bad:
         ld      hl,0FFFFh
         ld      de,0FFFFh
-        pop     ix
         ret
 
 ; ============================================================
@@ -9612,10 +9623,12 @@ rewind_ret:
 ; ============================================================
         public  _feof
 _feof:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)
+        ; int feof(FILE *fp) - fp/fd fits in a byte; IX-free leaf.
+        pop     bc
+        pop     hl
+        push    hl
+        push    bc
+        ld      a,l
         sub     FIRSTFD
         jr      c,feof_no
         cp      NFILES
@@ -9627,11 +9640,9 @@ _feof:
         ld      a,(hl)
         ld      l,a
         ld      h,0
-        pop     ix
         ret
 feof_no:
         ld      hl,0
-        pop     ix
         ret
 
 ; ============================================================
@@ -9639,10 +9650,12 @@ feof_no:
 ; ============================================================
         public  _ferror
 _ferror:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      a,(ix+4)
+        ; int ferror(FILE *fp) - fp/fd fits in a byte; IX-free leaf.
+        pop     bc
+        pop     hl
+        push    hl
+        push    bc
+        ld      a,l
         sub     FIRSTFD
         jr      c,ferr_no
         cp      NFILES
@@ -9654,11 +9667,9 @@ _ferror:
         ld      a,(hl)
         ld      l,a
         ld      h,0
-        pop     ix
         ret
 ferr_no:
         ld      hl,0
-        pop     ix
         ret
 
 ; ============================================================
@@ -10725,11 +10736,13 @@ __drent:        ds      13
 
         public  _perror
 _perror:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; void perror(const char *str) - single pointer argument, and
+        ; __conout preserves HL across every call in the loops below;
+        ; IX-free leaf.
+        pop     bc
+        pop     hl              ; str
+        push    hl
+        push    bc
         ld      a,h
         or      l
         jr      z,__prmsg
@@ -10763,7 +10776,6 @@ __prend:
         ld      e,0ah
         call    __conout
         ld      hl,0
-        pop     ix
         ret
 
 
@@ -13147,16 +13159,15 @@ FQ2:    db      0
 
         public  _fabsf
 _fabsf:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
+        ; float fabsf(float x) - single 4-byte argument fits in HL:DE
+        ; across the restore-and-call; IX-free leaf.
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
         call    __fabs
-        ld      sp,ix
-        pop     ix
         ret
 
         public  _floorf
