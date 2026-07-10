@@ -409,16 +409,23 @@ void parse_struct_definition(int struct_id)
         for (;;) {
             int is_funcptr_field;
             int is_anonymous_field;
+            int is_unnamed_bitfield;
             int field_index;
             while (accept('*')) { skip_type_qualifiers(); ftype = type_add_ptr(ftype); }
 
             is_funcptr_field = 0;
             is_anonymous_field = 0;
+            is_unnamed_bitfield = 0;
             if (parse_funcptr_declarator(&ftype, fname, sizeof(fname))) {
                 is_funcptr_field = 1;
             } else {
                 if (tok.kind != TOK_ID) {
-                    if (tok.kind == ';' && (ftype & TYPE_STRUCT) && type_ptr_depth(ftype) == 0) {
+                    if (tok.kind == ':' && (ftype & 15) == TYPE_INT &&
+                        type_ptr_depth(ftype) == 0) {
+                        fname[0] = 0;
+                        is_unnamed_bitfield = 1;
+                    } else if (tok.kind == ';' && (ftype & TYPE_STRUCT) &&
+                               type_ptr_depth(ftype) == 0) {
                         fname[0] = 0;
                         is_anonymous_field = 1;
                     } else {
@@ -444,11 +451,14 @@ void parse_struct_definition(int struct_id)
                     fatal("too many struct fields");
 
                 /* First-pass C89 bitfields: pack into 16-bit int units.
-                 * Zero-width fields force a new storage unit.  Named
-                 * zero-width fields are accepted but allocate no usable field.
+                 * A zero-width field forces the next field into a new storage
+                 * unit and allocates no field of its own (named or not).  It
+                 * still terminates a declarator, so consume the trailing ','
+                 * or leave the ';' for the caller.
                  */
                 if (bw == 0) {
                     bit_next = 0;
+                    if (!accept(',')) break;
                     continue;
                 }
                 if (bit_next == 0 || bit_next + bw > 16) {
@@ -459,6 +469,15 @@ void parse_struct_definition(int struct_id)
                         sd->size += 2;
                     }
                     bit_next = 0;
+                }
+
+                /* An unnamed bit-field reserves bits in the current unit but is
+                 * not addressable and does not consume an initializer slot, so
+                 * it gets no field_defs entry. */
+                if (is_unnamed_bitfield) {
+                    bit_next += bw;
+                    if (!accept(',')) break;
+                    continue;
                 }
 
                 memset(&field_defs[nfield_defs], 0, sizeof(field_defs[nfield_defs]));
