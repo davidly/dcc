@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <ctype.h>
+#include <string.h>
 
 #define RMCNT 20
 #define TUNC  3
@@ -77,7 +78,6 @@ static int prmt(char *s);
 static int rnd16(void);
 static int rndrm(void);
 static int rndix(int n);
-static int streq(char *a, char *b);
 static int cpint(int *d, int *s, int n);
 static int rdlin(char *buf, int siz);
 static int rdchr(void);
@@ -140,22 +140,6 @@ static int rndix(int n)
     if (n <= 0)
         return 0;
     return rnd16() % n;
-}
-
-static int streq(char *a, char *b)
-{
-    int ca, cb;
-
-    while (*a != '\0' && *b != '\0') {
-        ca = toupper(*a);
-        cb = toupper(*b);
-        if (ca != cb)
-            return NO;
-        ++a;
-        ++b;
-    }
-
-    return (*a == '\0' && *b == '\0');
 }
 
 static int cpint(int *d, int *s, int n)
@@ -722,7 +706,7 @@ static int pargs(int ac, char **av, int *cpu)
     *cpu = NO;
 
     for (i = 1; i < ac; ++i) {
-        if (streq(av[i], "-c") || streq(av[i], "C"))
+        if (stricmp(av[i], "-c") == 0 || stricmp(av[i], "C") == 0)
             *cpu = YES;
         else {
             printf("USAGE: %s [-c]\n", av[0]);

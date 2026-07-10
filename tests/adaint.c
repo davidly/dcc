@@ -163,15 +163,6 @@ static char *xstrdup2(const char *s)
     return p;
 }
 
-static int streqi(const char *a, const char *b)
-{
-    while (*a && *b) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
-        a++; b++;
-    }
-    return *a == 0 && *b == 0;
-}
-
 static void lower_copy(char *d, const char *s)
 {
     int i;
@@ -226,7 +217,7 @@ static void mark_set(struct Mark *m)
 
 static int isword(const char *s)
 {
-    return G->tok == T_ID && streqi(G->text, s);
+    return G->tok == T_ID && stricmp(G->text, s) == 0;
 }
 
 static void skip_ws(void)
@@ -272,8 +263,8 @@ static void next(void)
             else break;
         }
         G->text[i] = 0;
-        if (streqi(G->text, "true")) { G->tok = T_NUM; G->ival = 1; return; }
-        if (streqi(G->text, "false")) { G->tok = T_NUM; G->ival = 0; return; }
+        if (stricmp(G->text, "true") == 0) { G->tok = T_NUM; G->ival = 1; return; }
+        if (stricmp(G->text, "false") == 0) { G->tok = T_NUM; G->ival = 0; return; }
         G->tok = T_ID;
         return;
     }
@@ -526,11 +517,11 @@ static void primary(void)
                 emit(OP_CALL, fi, argc);
                 return;
             }
-            if (streqi(name, "command_line")) {
+            if (stricmp(name, "command_line") == 0) {
                 if (G->tok != ')') die("command line args");
                 need(')'); emit(OP_PUSH, 0, 0); return;
             }
-            if (streqi(name, "str_to_int")) {
+            if (stricmp(name, "str_to_int") == 0) {
                 if (G->tok != ')') { parse_expr(); emit(OP_POP, 0, 0); }
                 need(')'); emit(OP_PUSH, 0, 0); return;
             }
@@ -628,10 +619,10 @@ static void simple_call_or_assign(void)
     if (G->tok != T_ID) die("statement");
     strcpy(name, G->text);
     next();
-    if (streqi(name, "put")) {
+    if (stricmp(name, "put") == 0) {
         need('('); parse_put_call(); need(')'); need(';'); return;
     }
-    if (streqi(name, "new_line")) {
+    if (stricmp(name, "new_line") == 0) {
         if (acc('(')) need(')');
         emit(OP_NL, 0, 0); need(';'); return;
     }
