@@ -1553,13 +1553,11 @@ __sdup:
         ld      d,(hl)          ; DE = src
         ld      (__sdup_src),de
 
-        ; Compute length including NUL. __slen expects its argument pushed
-        ; on the stack (it pops return-addr/arg, then re-pushes both for
-        ; caller cleanup, per its own cdecl entry) - it does not read HL.
+        ; Compute length including NUL via __slf (fastcall entry: HL = s
+        ; in, HL = length out) - no push/pop needed at all, unlike the
+        ; general __slen entry this used to call.
         ex      de,hl           ; HL = src
-        push    hl              ; __slen's argument
-        call    __slen
-        pop     bc              ; caller cleanup of __slen's argument
+        call    __slf
         inc     hl
         ld      (__sdup_len),hl
 
