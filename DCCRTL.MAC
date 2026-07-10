@@ -7218,20 +7218,27 @@ lmods_pos_result:
 
         public  __ltu
 __ltu:
+        ; High word first: if it differs from the other operand's high
+        ; word, its carry alone decides the 32-bit unsigned comparison
+        ; and the low word is never read. Falls through to the low word
+        ; only when the high words are equal.
         push    ix
         ld      ix,0
         add     ix,sp
+        ld      l,(ix+10)
+        ld      h,(ix+11)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        or      a
+        sbc     hl,de
+        jr      nz,ltu_tail
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+4)
         ld      d,(ix+5)
         or      a
         sbc     hl,de
-        ld      l,(ix+10)
-        ld      h,(ix+11)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        sbc     hl,de
+ltu_tail:
         ld      hl,0
         jr      nc,ltu_done
         inc     l
@@ -7242,20 +7249,24 @@ ltu_done:
         public  __leu
 __leu:
         ; LHS <= RHS  <==>  NOT (LHS > RHS)  <==>  NOT (RHS < LHS)
+        ; High word first, same early-exit as __ltu above.
         push    ix
         ld      ix,0
         add     ix,sp
+        ld      l,(ix+6)
+        ld      h,(ix+7)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        or      a
+        sbc     hl,de
+        jr      nz,leu_tail
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+8)
         ld      d,(ix+9)
         or      a
         sbc     hl,de
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        sbc     hl,de
+leu_tail:
         ; carry set iff RHS < LHS, i.e. LHS > RHS
         ld      hl,1
         jr      nc,leu_done ; RHS >= LHS, so LHS <= RHS: return 1
@@ -7267,20 +7278,24 @@ leu_done:
         public  __lgu
 __lgu:
         ; LHS > RHS  <==>  RHS < LHS
+        ; High word first, same early-exit as __ltu above.
         push    ix
         ld      ix,0
         add     ix,sp
+        ld      l,(ix+6)
+        ld      h,(ix+7)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        or      a
+        sbc     hl,de
+        jr      nz,gtu_tail
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+8)
         ld      d,(ix+9)
         or      a
         sbc     hl,de
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        sbc     hl,de
+gtu_tail:
         ld      hl,0
         jr      nc,gtu_done
         inc     l
@@ -7291,20 +7306,24 @@ gtu_done:
         public  __lku
 __lku:
         ; LHS >= RHS  <==>  NOT (LHS < RHS)
+        ; High word first, same early-exit as __ltu above.
         push    ix
         ld      ix,0
         add     ix,sp
+        ld      l,(ix+10)
+        ld      h,(ix+11)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        or      a
+        sbc     hl,de
+        jr      nz,geu_tail
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+4)
         ld      d,(ix+5)
         or      a
         sbc     hl,de
-        ld      l,(ix+10)
-        ld      h,(ix+11)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        sbc     hl,de
+geu_tail:
         ld      hl,1
         jr      nc,geu_done
         ld      l,0
@@ -7327,20 +7346,21 @@ geu_done:
 
         public  __lts
 __lts:
+        ; High word first: the SIGNED comparison of the high words alone
+        ; decides whenever they differ (the low word only ever refines a
+        ; tie, and is compared unsigned since it is a pure magnitude
+        ; extension). Falls through to the low word only when the high
+        ; words are equal.
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        or      a
-        sbc     hl,de
         ld      l,(ix+10)
         ld      h,(ix+11)
         ld      e,(ix+6)
         ld      d,(ix+7)
+        or      a
         sbc     hl,de
+        jr      z,lts_eq
         ; Signed less-than: S xor P/V
         ; jp pe = jump if parity/overflow set; jp m = jump if sign (negative)
         ld      hl,0
@@ -7350,6 +7370,15 @@ __lts:
 lts_ov:
         jp      p,lts_true ; overflow + positive  LHS < RHS
         jr      lts_done
+lts_eq:
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+4)
+        ld      d,(ix+5)
+        or      a
+        sbc     hl,de
+        ld      hl,0
+        jr      nc,lts_done
 lts_true:
         inc     l
 lts_done:
@@ -7359,20 +7388,17 @@ lts_done:
         public  __lks
 __lks:
         ; LHS >= RHS: NOT (LHS < RHS)
+        ; High word first, same early-exit as __lts above.
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+4)
-        ld      d,(ix+5)
-        or      a
-        sbc     hl,de
         ld      l,(ix+10)
         ld      h,(ix+11)
         ld      e,(ix+6)
         ld      d,(ix+7)
+        or      a
         sbc     hl,de
+        jr      z,ges_eq
         ld      hl,1
         jp      pe,ges_ov
         jp      m,ges_false
@@ -7380,6 +7406,15 @@ __lks:
 ges_ov:
         jp      p,ges_false
         jr      ges_done
+ges_eq:
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+4)
+        ld      d,(ix+5)
+        or      a
+        sbc     hl,de
+        ld      hl,1
+        jr      nc,ges_done
 ges_false:
         ld      l,0
 ges_done:
@@ -7389,20 +7424,17 @@ ges_done:
         public  __lgs
 __lgs:
         ; LHS > RHS: RHS < LHS (swap operands, do signed-lt)
+        ; High word first, same early-exit as __lts above.
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+8)
-        ld      d,(ix+9)
-        or      a
-        sbc     hl,de
         ld      l,(ix+6)
         ld      h,(ix+7)
         ld      e,(ix+10)
         ld      d,(ix+11)
+        or      a
         sbc     hl,de
+        jr      z,gts_eq
         ld      hl,0
         jp      pe,gts_ov
         jp      m,gts_true
@@ -7410,6 +7442,15 @@ __lgs:
 gts_ov:
         jp      p,gts_true
         jr      gts_done
+gts_eq:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+8)
+        ld      d,(ix+9)
+        or      a
+        sbc     hl,de
+        ld      hl,0
+        jr      nc,gts_done
 gts_true:
         inc     l
 gts_done:
@@ -7419,20 +7460,17 @@ gts_done:
         public  __les
 __les:
         ; LHS <= RHS: NOT (RHS < LHS)
+        ; High word first, same early-exit as __lts above.
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+8)
-        ld      d,(ix+9)
-        or      a
-        sbc     hl,de
         ld      l,(ix+6)
         ld      h,(ix+7)
         ld      e,(ix+10)
         ld      d,(ix+11)
+        or      a
         sbc     hl,de
+        jr      z,les_eq
         ld      hl,1
         jp      pe,les_ov
         jp      m,les_false
@@ -7440,6 +7478,15 @@ __les:
 les_ov:
         jp      p,les_false
         jr      les_done
+les_eq:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+8)
+        ld      d,(ix+9)
+        or      a
+        sbc     hl,de
+        ld      hl,1
+        jr      nc,les_done
 les_false:
         ld      l,0
 les_done:
