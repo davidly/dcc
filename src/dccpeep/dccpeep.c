@@ -11256,6 +11256,40 @@ static int pass_hoist_index_ptr_to_bc(void)
         if (!loop_body_internal_labels_safe(i + 1, loop_end))
             continue;
 
+        /* The priming "ld c,(ix+P) / ld b,(ix+P+1)" is inserted textually
+         * immediately before LABEL, so LABEL's only fall-through
+         * predecessor becomes the priming itself: any path that falls into
+         * the header necessarily executes the priming first. The one way to
+         * reach the header WITHOUT passing through the priming is a jump
+         * whose target is LABEL and that originates OUTSIDE this loop's own
+         * body - it lands on the header AFTER the priming and bypasses it,
+         * leaving BC uninitialised so the rewritten "ld l,c / ld h,b" reads
+         * garbage. (A back-edge from within the body is fine: the priming
+         * already ran on first entry and BC is loop-invariant across the
+         * body, which the guards below enforce.) Decline if any such
+         * external branch to the header exists.
+         *
+         * Without this, tests/thoistbc.c - two while-loops sharing the frame
+         * variable "head" - was silently miscompiled: the second loop's
+         * header is reached by branches from the first loop, so the priming
+         * placed before it never ran. Note it is the HEADER label that must
+         * have no external entry; an external branch to a DIFFERENT label
+         * stacked ABOVE the priming (e.g. tests/tautolcs.c, where an outer
+         * "jp z, Lx" lands on a label sitting above the inserted priming and
+         * still flows through it) stays correct and must remain optimised. */
+        {
+            int func_start, func_end;
+            int external_entry = 0;
+            find_function_bounds(i, &func_start, &func_end);
+            for (k = func_start; k < func_end; ++k) {
+                if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+                    if (k <= i || k > loop_end) { external_entry = 1; break; }
+                }
+            }
+            if (external_entry)
+                continue;
+        }
+
         /* Pick a candidate offset P from the first "ld l,(ix+P)" / "ld
          * h,(ix+P+1)" consecutive pair found in the body. */
         off = 0;
