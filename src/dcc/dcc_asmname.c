@@ -148,6 +148,7 @@ const char *asm_name_for_runtime(const char *cname)
     if (!strcmp(cname, "strlen"))  return "__slen";
     if (!strcmp(cname, "strcpy"))  return "__scpy";
     if (!strcmp(cname, "strcmp"))  return "__scmp";
+    if (!strcmp(cname, "stricmp")) return "__sicm";
     if (!strcmp(cname, "strchr"))  return "__schr";
     if (!strcmp(cname, "strcat"))  return "__scat";
     if (!strcmp(cname, "strrchr")) return "__srch";

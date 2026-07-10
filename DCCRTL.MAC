@@ -1034,6 +1034,68 @@ sp3:
         ld      hl,0
         ret
 
+        public  __icf
+__icf:
+        ; fastcall int stricmp(const char *s1, const char *s2)
+        ; Entry: DE=s1, HL=s2 directly (matching __cmpf's DE/HL
+        ; convention). Named __icf, not __sicmpf: M80 truncates public
+        ; symbols to 6 significant characters, and __sicmpf truncates to
+        ; __SICMP, which doesn't collide with anything here, but __icf
+        ; keeps the same short "letter+f" fastcall style as __chf/__rcf
+        ; rather than inventing a new pattern for one function.
+        jr      sicm_core
+
+        public  __sicm
+__sicm:
+        ; int stricmp(const char *s1, const char *s2)
+        ; ASCII-only case-insensitive compare - CP/M has no locale, so
+        ; folding 'A'-'Z' to lowercase covers every byte that can appear.
+        ; IX-free entry, mirrors __scmp's own caller-cleanup argument
+        ; layout above.
+        pop     bc              ; return address
+        pop     de              ; DE = s1
+        pop     hl              ; HL = s2
+        push    hl              ; restore s2
+        push    de              ; restore s1
+        push    bc              ; restore return address
+sicm_core:
+        ld      a,(de)
+        cp      'A'
+        jr      c,sicm_s1_nf
+        cp      'Z'+1
+        jr      nc,sicm_s1_nf
+        add     a,20h
+sicm_s1_nf:
+        ld      b,a             ; B = fold(*s1)
+        ld      a,(hl)
+        cp      'A'
+        jr      c,sicm_s2_nf
+        cp      'Z'+1
+        jr      nc,sicm_s2_nf
+        add     a,20h
+sicm_s2_nf:
+        cp      b               ; fold(*s2) vs fold(*s1)
+        jr      nz,sicm_diff
+        ld      a,b
+        or      a               ; *s1 == 0 (folding never changes NUL)?
+        jr      z,sicm_eq
+        inc     de
+        inc     hl
+        jr      sicm_core
+sicm_diff:
+        ; A = fold(*s2), B = fold(*s1); want fold(*s1) - fold(*s2).
+        ld      c,a
+        ld      a,b
+        sub     c
+        ld      l,a
+        ld      h,0
+        ret     nc
+        ld      h,0ffh
+        ret
+sicm_eq:
+        ld      hl,0
+        ret
+
         public  __rcf
 __rcf:
         ; fastcall char *strrchr(const char *s, int c)

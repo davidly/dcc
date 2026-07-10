@@ -19,6 +19,8 @@ void *   memchr( const void *, int, size_t );
 size_t   strlen( const char * );
 /** Lexicographic string comparison. */
 int      strcmp( const char *, const char * );
+/** Case-insensitive lexicographic string comparison (ASCII only). */
+int      stricmp( const char *, const char * );
 /** Copy a string including its terminating NUL. */
 char *   strcpy( char *, const char * );
 /** Return text for an error number. */

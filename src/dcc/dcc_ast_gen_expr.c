@@ -447,10 +447,23 @@ void gen_ident(const struct AstNode *n)
 
     /* A function name used as a value decays to its address - a real
      * reference regardless of whether it's also inline-eligible, so any
-     * static function's buffered body must be kept. */
+     * static function's buffered body must be kept. A function defined in
+     * a different translation unit (any DCCRTL.MAC/library function, or an
+     * extern-only prototype) needs an EXTRN for that symbol here, exactly
+     * like the general call path already does before its own `call`
+     * (dcc_ast_gen_expr.c's emit_extrn_if_needed(fn_sym) right before
+     * "call %s") and like a global initializer's function-pointer value
+     * already does (dcc_data.c's mark_init_label_extrn). This local-value
+     * path was the one case that never called it - harmless for a
+     * same-file user function (its own `public` label needs no EXTRN),
+     * but a real link failure ("U ... ld hl,__mcmp") for a LOCAL function
+     * pointer initialized from any RTL function, found via a stricmp()
+     * test that happened to be the first one in this whole codebase to
+     * exercise a local (not global) RTL function-pointer variable. */
     if (s->storage == SC_FUNC) {
         if (s->is_static)
             s->deferred_body_needed = 1;
+        emit_extrn_if_needed(s);
         fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
         g_expr_type = type_add_ptr(s->type);
         return;
@@ -3729,6 +3742,22 @@ void gen_call_ast(const struct AstNode *n)
         expr_result_dead = old_dead;
         emit("\tpop de\n");             /* DE = haystack */
         emit_runtime_call("__ssf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall stricmp(s1,s2): DCCRTL's __icf takes s1 in DE, s2 in HL
+     * directly - same shape as strstr above. */
+    if (n->list_len == 2 && !strcmp(name, "stricmp")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = s1 */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = s2 */
+        expr_result_dead = old_dead;
+        emit("\tpop de\n");             /* DE = s1 */
+        emit_runtime_call("__icf");
         g_expr_type = fn_sym->type;
         g_long_from16 = 0;
         return;
