@@ -3067,11 +3067,14 @@ void gen_index_ast(const struct AstNode *n)
 void gen_call_star_indirect_ast(const struct AstNode *n)
 {
     const struct AstNode *base;
+    struct Sym *proto;
+    int callee_type;
     int arg_bytes;
     int old_dead;
     int i;
 
     base = ast_call_star_indirect_base(n);
+    proto = ast_indirect_call_proto_sym(n);
     arg_bytes = 0;
 
     old_dead = expr_result_dead;
@@ -3081,24 +3084,44 @@ void gen_call_star_indirect_ast(const struct AstNode *n)
         if (!ast_index_lvalue_elem_type(base, &elem_type) ||
             type_ptr_depth(elem_type) <= 0 || type_size(elem_type) != 2)
             elem_type = TYPE_INT | TYPE_PTR;
+        callee_type = elem_type;
         gen_index_addr_ast(base, &elem_type);
         emit_load_from_hl(elem_type);
         g_expr_type = elem_type;
     } else {
         ast_gen_expr(base);
+        callee_type = g_expr_type;
     }
     emit("\tpush hl\n");
     for (i = n->list_len - 1; i >= 0; --i) {
         int actual_type;
+        int want_type;
+        int have_want;
         int ptr_type;
         int no_deref;
 
+        have_want = expected_arg_type(proto, i, &want_type);
         if (ast_pointer_expr_type(n->list[i], &ptr_type, &no_deref))
             gen_pointer_expr_ast(n->list[i], &ptr_type, &no_deref);
         else
             ast_gen_expr(n->list[i]);
         actual_type = g_expr_type;
-        if (type_is_long(actual_type) || type_is_float(actual_type)) {
+        if (have_want && type_is_float(want_type)) {
+            if (!type_is_float(actual_type))
+                emit_convert_int_to_float(actual_type);
+            emit("\tpush de\n\tpush hl\n");
+            arg_bytes += 4;
+        } else if (have_want && type_is_long(want_type)) {
+            if (!type_is_long(actual_type))
+                emit_promote_int_to_long(actual_type, want_type);
+            emit("\tpush de\n\tpush hl\n");
+            arg_bytes += 4;
+        } else if (have_want) {
+            if (type_is_float(actual_type))
+                emit_convert_float_to_intlike(want_type);
+            emit("\tpush hl\n");
+            arg_bytes += 2;
+        } else if (type_is_long(actual_type) || type_is_float(actual_type)) {
             emit("\tpush de\n\tpush hl\n");
             arg_bytes += 4;
         } else {
@@ -3110,7 +3133,7 @@ void gen_call_star_indirect_ast(const struct AstNode *n)
 
     emit_call_hl_from_stack_offset(arg_bytes);
     emit_cleanup_stack_bytes(arg_bytes + 2);
-    g_expr_type = TYPE_INT;
+    g_expr_type = type_decay_ptr(callee_type);
     g_long_from16 = 0;
 }
 
@@ -3352,21 +3375,41 @@ void gen_call_ast(const struct AstNode *n)
     if (ast_call_indirect_supported(n)) {
         int callee_type;
         int no_deref;
+        struct Sym *proto;
+        proto = ast_indirect_call_proto_sym(n);
         gen_pointer_expr_ast(n->a, &callee_type, &no_deref);
         emit("\tpush hl\n");
         old_dead = expr_result_dead;
         expr_result_dead = 0;
         for (i = n->list_len - 1; i >= 0; --i) {
             int actual_type;
+            int want_type;
+            int have_want;
             int ptr_type;
             int arg_no_deref;
 
+            have_want = expected_arg_type(proto, i, &want_type);
             if (ast_pointer_expr_type(n->list[i], &ptr_type, &arg_no_deref))
                 gen_pointer_expr_ast(n->list[i], &ptr_type, &arg_no_deref);
             else
                 ast_gen_expr(n->list[i]);
             actual_type = g_expr_type;
-            if (type_is_long(actual_type) || type_is_float(actual_type)) {
+            if (have_want && type_is_float(want_type)) {
+                if (!type_is_float(actual_type))
+                    emit_convert_int_to_float(actual_type);
+                emit("\tpush de\n\tpush hl\n");
+                arg_bytes += 4;
+            } else if (have_want && type_is_long(want_type)) {
+                if (!type_is_long(actual_type))
+                    emit_promote_int_to_long(actual_type, want_type);
+                emit("\tpush de\n\tpush hl\n");
+                arg_bytes += 4;
+            } else if (have_want) {
+                if (type_is_float(actual_type))
+                    emit_convert_float_to_intlike(want_type);
+                emit("\tpush hl\n");
+                arg_bytes += 2;
+            } else if (type_is_long(actual_type) || type_is_float(actual_type)) {
                 emit("\tpush de\n\tpush hl\n");
                 arg_bytes += 4;
             } else {
@@ -3575,7 +3618,18 @@ void gen_struct_return_call_assign_ast(const struct AstNode *lhs,
     if (fn_sym != NULL && fn_sym->is_static)
         fn_sym->deferred_body_needed = 1;
 
-    gen_struct_addr_expr_ast(lhs, &lhs_type);
+    if (lhs == NULL) {
+        /* `return f(args);` in a struct-returning function: the destination
+         * is the caller's own hidden return buffer, whose pointer is the
+         * hidden first parameter at (ix+4/5).  Passing it straight through
+         * as f's destination writes the result in place - no temp, no copy. */
+        if (fn_sym == NULL)
+            fatal("struct-return callee missing after support gate");
+        emit("\tld l,(ix+4)\n\tld h,(ix+5)\n");
+        lhs_type = fn_sym->type;
+    } else {
+        gen_struct_addr_expr_ast(lhs, &lhs_type);
+    }
     emit("\tpush hl\n");
 
     old_dead = expr_result_dead;

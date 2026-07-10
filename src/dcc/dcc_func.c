@@ -1119,6 +1119,27 @@ void copy_parsed_prototype_to_sym(struct Sym *s)
         s->proto_types[i] = g_proto_types[i];
 }
 
+void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator)
+{
+    int i;
+
+    if (s == NULL || type_ptr_depth(s->type) <= 0)
+        return;
+    if (direct_declarator) {
+        s->has_proto = g_funcptr_has_proto;
+        s->proto_nargs = g_funcptr_proto_nargs;
+        s->proto_variadic = g_funcptr_proto_variadic;
+        for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+            s->proto_types[i] = g_funcptr_proto_types[i];
+    } else if (g_typedef_has_proto) {
+        s->has_proto = g_typedef_has_proto;
+        s->proto_nargs = g_typedef_proto_nargs;
+        s->proto_variadic = g_typedef_proto_variadic;
+        for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+            s->proto_types[i] = g_typedef_proto_types[i];
+    }
+}
+
 void remember_proto_param_type(int type)
 {
     g_proto_has = 1;
@@ -1271,6 +1292,7 @@ void parse_old_style_param_declarations(void)
 void parse_param_list(void)
 {
     int type;
+    int direct_funcptr;
     char name[64];
     int unnamed_id;
 
@@ -1302,6 +1324,7 @@ void parse_param_list(void)
         }
 
         type = parse_type();
+        direct_funcptr = 0;
         if (g_typedef_array_len > 0) {
             type = type_add_ptr(type);
             g_typedef_array_len = 0;
@@ -1315,7 +1338,7 @@ void parse_param_list(void)
         skip_type_qualifiers();
 
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
-            /* function pointer parameter */
+            direct_funcptr = 1;
         } else if (parse_abstract_funcptr_declarator(&type)) {
             sprintf(name, "__p%d", param_offset);
             unnamed_id = 1;
@@ -1354,6 +1377,7 @@ void parse_param_list(void)
             int pi;
             add_param_alloc(name, type);
             ps = find_local(name);
+            copy_funcptr_prototype_to_sym(ps, direct_funcptr);
             if (ps && g_ptr_array_dim_count > 0) {
                 ps->elem_size = g_ptr_array_elem_size;
                 ps->dim_count = g_ptr_array_dim_count;
@@ -2117,16 +2141,20 @@ void scan_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
     int total_elems;
+    int direct_funcptr;
     char name[64];
     char source_name[64];
     struct Sym *s;
 
     for (;;) {
         type = base;
+        direct_funcptr = 0;
 
         while (accept('*')) { skip_type_qualifiers(); type = type_add_ptr(type); }
 
-        if (!parse_funcptr_declarator(&type, name, sizeof(name))) {
+        if (parse_funcptr_declarator(&type, name, sizeof(name))) {
+            direct_funcptr = 1;
+        } else {
             if (tok.kind != TOK_ID) return;
 
             strncpy(name, tok.text, sizeof(name) - 1);
@@ -2249,6 +2277,7 @@ void scan_local_decl_after_type(int base)
         int freshly_allocated = 0;
         if (!s) {
             s = add_local_alloc(name, type, bytes);
+            copy_funcptr_prototype_to_sym(s, direct_funcptr);
             freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
@@ -4544,10 +4573,12 @@ void parse_function_or_global(int base_type)
 
         int base_is_func_typedef;
         int is_funcret_funcptr_decl;
+        int direct_funcptr_decl;
 
         type = base_type;
         base_is_func_typedef = g_typedef_is_func;
         is_funcret_funcptr_decl = 0;
+        direct_funcptr_decl = 0;
         name[0] = 0;
 
         /* Each declarator starts again from the shared declaration-specifier
@@ -4560,7 +4591,9 @@ void parse_function_or_global(int base_type)
             base_is_func_typedef = 0;
         }
 
-        if (!parse_funcptr_declarator(&type, name, sizeof(name))) {
+        if (parse_funcptr_declarator(&type, name, sizeof(name))) {
+            direct_funcptr_decl = 1;
+        } else {
             if (tok.kind != TOK_ID) {
                 error_here("identifier expected");
                 while (tok.kind != ';' && tok.kind != TOK_EOF) next_token();
@@ -4932,6 +4965,7 @@ void parse_function_or_global(int base_type)
             if (decl_is_extern) {
                 int already_declared = (find_global(name) != NULL);
                 s = add_global(name, type, SC_EXTERN);
+                copy_funcptr_prototype_to_sym(s, direct_funcptr_decl);
                 if (!already_declared && !asm_name_is_internal_public(name))
                     s->needs_extrn = 1;
                 else if (asm_name_is_internal_public(name))
@@ -4947,6 +4981,7 @@ void parse_function_or_global(int base_type)
             }
 
             s = add_global(name, type, SC_GLOBAL);
+            copy_funcptr_prototype_to_sym(s, direct_funcptr_decl);
             if (s->storage == SC_EXTERN)
                 s->storage = SC_GLOBAL;
             s->is_defined = 1;

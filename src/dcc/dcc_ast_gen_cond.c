@@ -25,6 +25,11 @@ int ast_return_stmt_supported(const struct AstNode *n)
         int src_type;
         if (n->a == NULL)
             return 0;
+        /* `return f(args);` where f returns this same struct type: emitted
+         * as a destination-passthrough call (gen_return_ast). */
+        if (n->a->kind == AST_CALL &&
+            ast_struct_return_call_assign_supported(rt, n->a))
+            return 1;
         return ast_struct_addr_expr_supported(n->a, &src_type) &&
                same_struct_type(rt, src_type);
     }
@@ -77,13 +82,22 @@ int ast_return_stmt_supported(const struct AstNode *n)
 void gen_return_ast(const struct AstNode *n)
 {
     if (n->a != NULL && type_is_struct_object(current_return_type)) {
-        int src_type;
-        gen_struct_addr_expr_ast(n->a, &src_type);
-        (void)src_type;
-        emit("\tex de,hl\n");
-        emit("\tld l,(ix+4)\n\tld h,(ix+5)\n");
-        emit_copy_de_to_hl_bytes(type_size(current_return_type));
-        g_expr_type = current_return_type;
+        if (n->a->kind == AST_CALL &&
+            ast_struct_return_call_assign_supported(current_return_type, n->a)) {
+            /* `return f(args);`: pass our own hidden return-buffer pointer
+             * straight through as f's destination - the callee writes the
+             * result in place, so no temp or copy is needed here. */
+            gen_struct_return_call_assign_ast(NULL, n->a);
+            g_expr_type = current_return_type;
+        } else {
+            int src_type;
+            gen_struct_addr_expr_ast(n->a, &src_type);
+            (void)src_type;
+            emit("\tex de,hl\n");
+            emit("\tld l,(ix+4)\n\tld h,(ix+5)\n");
+            emit_copy_de_to_hl_bytes(type_size(current_return_type));
+            g_expr_type = current_return_type;
+        }
     } else if (n->a != NULL && type_size(current_return_type) == 1) {
         if (n->a->kind == AST_IDENT) {
             struct Sym *rs = find_sym(n->a->sval);

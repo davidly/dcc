@@ -150,6 +150,7 @@ int ast_call_named_args_supported(const struct AstNode *n);
 const struct AstNode *ast_call_star_indirect_base(const struct AstNode *n);
 int ast_call_star_indirect_supported(const struct AstNode *n);
 int ast_call_indirect_supported(const struct AstNode *n);
+struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n);
 int ast_value_is_float_word(const struct AstNode *arg);
 int ast_value_is_pointer_word(const struct AstNode *n);
 int ast_pointer_assign_rhs_supported(const struct AstNode *n);

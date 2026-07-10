@@ -325,6 +325,10 @@ struct TypeDef {
     int type;
     int array_len; /* >0 when typedef is an array type, e.g. typedef int T[4] */
     int is_func;   /* typedef names a function type, e.g. typedef int F(int); */
+    int has_proto;
+    int proto_nargs;
+    int proto_variadic;
+    int proto_types[MAX_PROTO_PARAMS];
 };
 
 struct FieldDef {
@@ -571,6 +575,10 @@ extern int  nenum_consts;
 /* communicates array length from array-typedef through parse_base_type */
 extern int g_typedef_array_len;
 extern int g_typedef_is_func;
+extern int g_typedef_has_proto;
+extern int g_typedef_proto_nargs;
+extern int g_typedef_proto_variadic;
+extern int g_typedef_proto_types[MAX_PROTO_PARAMS];
 
 /* counter for naming anonymous structs/unions uniquely */
 extern int g_anon_struct_counter;
@@ -582,6 +590,10 @@ extern int g_proto_variadic;
 extern int g_proto_types[MAX_PROTO_PARAMS];
 extern int g_funcptr_decl_array_len;
 extern int g_funcptr_is_funcret_decl;
+extern int g_funcptr_has_proto;
+extern int g_funcptr_proto_nargs;
+extern int g_funcptr_proto_variadic;
+extern int g_funcptr_proto_types[MAX_PROTO_PARAMS];
 extern int g_ptr_array_dim_count;
 extern int g_ptr_array_dims[MAX_ARRAY_DIMS];
 extern int g_ptr_array_elem_size;
@@ -961,6 +973,7 @@ void skip_prototype_array_suffixes(int *ptype);
 void skip_prototype_function_suffix(void);
 void clear_parsed_prototype(void);
 void copy_parsed_prototype_to_sym(struct Sym *s);
+void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator);
 void remember_proto_param_type(int type);
 int old_style_param_list_starts(void);
 void recompute_param_offsets(void);

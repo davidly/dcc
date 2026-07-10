@@ -190,6 +190,10 @@ int  nenum_consts;
 /* Communicates array length from array-typedef through parse_base_type to declarators */
 int g_typedef_array_len;
 int g_typedef_is_func;
+int g_typedef_has_proto;
+int g_typedef_proto_nargs;
+int g_typedef_proto_variadic;
+int g_typedef_proto_types[MAX_PROTO_PARAMS];
 
 /* Counter for naming anonymous structs/unions uniquely */
 int g_anon_struct_counter;
@@ -201,6 +205,10 @@ int g_proto_variadic;
 int g_proto_types[MAX_PROTO_PARAMS];
 int g_funcptr_decl_array_len;
 int g_funcptr_is_funcret_decl;
+int g_funcptr_has_proto;
+int g_funcptr_proto_nargs;
+int g_funcptr_proto_variadic;
+int g_funcptr_proto_types[MAX_PROTO_PARAMS];
 int g_ptr_array_dim_count;
 int g_ptr_array_dims[MAX_ARRAY_DIMS];
 int g_ptr_array_elem_size;

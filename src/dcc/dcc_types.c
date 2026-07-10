@@ -558,6 +558,7 @@ int find_typedef(const char *name)
 void add_typedef_name_ex(const char *name, int type, int array_len, int is_func)
 {
     int i;
+    int pi;
 
     i = find_typedef(name);
     if (i < 0) {
@@ -570,6 +571,11 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func)
     typedefs[i].type = type;
     typedefs[i].array_len = array_len;
     typedefs[i].is_func = is_func;
+    typedefs[i].has_proto = g_funcptr_has_proto;
+    typedefs[i].proto_nargs = g_funcptr_proto_nargs;
+    typedefs[i].proto_variadic = g_funcptr_proto_variadic;
+    for (pi = 0; pi < MAX_PROTO_PARAMS; ++pi)
+        typedefs[i].proto_types[pi] = g_funcptr_proto_types[pi];
 }
 
 void add_typedef_name(const char *name, int type, int array_len)
@@ -605,6 +611,10 @@ int parse_base_type(void)
     storage_class_seen = 0;
     g_typedef_array_len = 0;
     g_typedef_is_func = 0;
+    g_typedef_has_proto = 0;
+    g_typedef_proto_nargs = 0;
+    g_typedef_proto_variadic = 0;
+    memset(g_typedef_proto_types, 0, sizeof(g_typedef_proto_types));
     decl_is_register = 0;
     decl_is_const = 0;
     decl_is_inline = 0;
@@ -772,6 +782,11 @@ int parse_base_type(void)
             t = typedefs[td].type;
             g_typedef_array_len = typedefs[td].array_len;
             g_typedef_is_func = typedefs[td].is_func;
+                 g_typedef_has_proto = typedefs[td].has_proto;
+                 g_typedef_proto_nargs = typedefs[td].proto_nargs;
+                 g_typedef_proto_variadic = typedefs[td].proto_variadic;
+                 memcpy(g_typedef_proto_types, typedefs[td].proto_types,
+                     sizeof(g_typedef_proto_types));
             saw_any = 1;
             next_token();
             break;

@@ -239,6 +239,86 @@ static void parse_pointer_array_suffixes(int base_type)
         g_ptr_array_dims[i] = dims[i];
 }
 
+static void clear_funcptr_prototype(void)
+{
+    g_funcptr_has_proto = 0;
+    g_funcptr_proto_nargs = 0;
+    g_funcptr_proto_variadic = 0;
+    memset(g_funcptr_proto_types, 0, sizeof(g_funcptr_proto_types));
+}
+
+/* Parse the parameter-type list after the opening `(` of a function-pointer
+ * declarator.  Function pointers use the ordinary stack ABI, so retaining
+ * these types is essential: an int actual passed to a long formal must be
+ * widened and pushed as four bytes even though the call is indirect. */
+static void parse_funcptr_prototype_suffix(void)
+{
+    int types[MAX_PROTO_PARAMS];
+    int nargs;
+    int variadic;
+    int has_proto;
+    int i;
+
+    nargs = 0;
+    variadic = 0;
+    has_proto = 0;
+    memset(types, 0, sizeof(types));
+
+    if (tok.kind == ')') {
+        next_token();                  /* C89: unspecified parameters */
+        clear_funcptr_prototype();
+        return;
+    }
+
+    for (;;) {
+        int type;
+
+        if (tok.kind == TOK_ELLIPSIS) {
+            has_proto = 1;
+            variadic = 1;
+            next_token();
+            break;
+        }
+
+        type = parse_type();
+        if (g_typedef_array_len > 0) {
+            type = type_add_ptr(type);
+            g_typedef_array_len = 0;
+        }
+        while (accept('*')) {
+            skip_type_qualifiers();
+            type = type_add_ptr(type);
+        }
+        skip_type_qualifiers();
+
+        /* Parameter names are optional in prototypes.  The common scalar and
+         * pointer forms need no declarator object, only the ABI type. */
+        if (tok.kind == TOK_ID && find_typedef(tok.text) < 0)
+            next_token();
+        skip_prototype_array_suffixes(&type);
+
+        if (type == TYPE_VOID && nargs == 0 && tok.kind == ')') {
+            has_proto = 1;
+            break;
+        }
+
+        has_proto = 1;
+        if (nargs < MAX_PROTO_PARAMS)
+            types[nargs] = type;
+        nargs++;
+        if (!accept(','))
+            break;
+    }
+    expect(')');
+
+    clear_funcptr_prototype();
+    g_funcptr_has_proto = has_proto;
+    g_funcptr_proto_nargs = nargs;
+    g_funcptr_proto_variadic = variadic;
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+        g_funcptr_proto_types[i] = types[i];
+}
+
 int parse_funcptr_declarator(int *ptype, char *name, int namesz)
 {
     int type;
@@ -250,6 +330,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
 
     g_funcptr_decl_array_len = 0;
     g_funcptr_is_funcret_decl = 0;
+    clear_funcptr_prototype();
     g_ptr_array_dim_count = 0;
     g_ptr_array_elem_size = 0;
     memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
@@ -413,9 +494,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     type = type_add_ptr(ptype[0]);
 
     if (accept('(')) {
-        while (tok.kind != ')' && tok.kind != TOK_EOF)
-            next_token();
-        expect(')');
+        parse_funcptr_prototype_suffix();
     } else if (tok.kind == '[') {
         parse_pointer_array_suffixes(ptype[0]);
     }

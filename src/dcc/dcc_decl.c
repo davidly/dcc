@@ -1302,6 +1302,7 @@ void gen_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
     int total_elems;
+    int direct_funcptr;
     char name[64];
     char source_name[64];
     struct Sym *s;
@@ -1310,10 +1311,13 @@ void gen_local_decl_after_type(int base)
 
     for (;;) {
         type = base;
+        direct_funcptr = 0;
 
         while (accept('*')) { skip_type_qualifiers(); type = type_add_ptr(type); }
 
-        if (!parse_funcptr_declarator(&type, name, sizeof(name))) {
+        if (parse_funcptr_declarator(&type, name, sizeof(name))) {
+            direct_funcptr = 1;
+        } else {
             if (tok.kind != TOK_ID) {
                 error_here("identifier expected");
                 break;
@@ -1444,6 +1448,7 @@ void gen_local_decl_after_type(int base)
                 bytes = object_array_size(type, total_elems);
 
             s = add_local_alloc(name, type, bytes);
+            copy_funcptr_prototype_to_sym(s, direct_funcptr);
             freshly_allocated = 1;
             /* Round 2 of codegen-time register residency (see dcc_func.c's
              * find_bc_regalloc_candidate/try_speculative_bc_regalloc_
