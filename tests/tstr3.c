@@ -140,6 +140,18 @@ static void test_strdup(void)
 
     check_s("strdup empty", p, "");
     free(p);
+
+    /* Long string: catches a strlen-argument-passing bug in __sdup where
+     * a garbage length let a short string appear to "work" by luck. */
+    p = strdup("this is a somewhat longer test string for strdup verification 1234567890");
+    if (p == 0) {
+        fail_msg("strdup long nonnull");
+        return;
+    }
+    check_i("strdup long length", (int)strlen(p), 72);
+    check_s("strdup long contents", p,
+        "this is a somewhat longer test string for strdup verification 1234567890");
+    free(p);
 }
 
 int main(void)

@@ -1516,40 +1516,46 @@ sspn_ret_count:
         public  __sdup
 __sdup:
         ; char *strdup(const char *s)
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; IX-free.  Save the source because __slen and _malloc may clobber
+        ; all registers; strdup is already non-reentrant through malloc.
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = src
+        ld      (__sdup_src),de
 
-        ; Compute length including NUL.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        push    hl              ; save src
+        ; Compute length including NUL. __slen expects its argument pushed
+        ; on the stack (it pops return-addr/arg, then re-pushes both for
+        ; caller cleanup, per its own cdecl entry) - it does not read HL.
+        ex      de,hl           ; HL = src
+        push    hl              ; __slen's argument
         call    __slen
+        pop     bc              ; caller cleanup of __slen's argument
         inc     hl
         ld      (__sdup_len),hl
 
         ; malloc(len)
         push    hl
         call    _malloc
-        pop     de              ; clean malloc arg
-        pop     de              ; DE = src
+        pop     bc              ; clean malloc arg
 
         ; If malloc failed, return NULL.
         ld      a,h
         or      l
-        jr      z,sdup_ret
+        ret     z
 
-        ; Copy len bytes from DE=src to HL=dest.
+        ; Copy len bytes and return the original destination.
         push    hl              ; save dest for return
-        ex      de,hl           ; HL = src, DE = dest
+        ex      de,hl           ; DE = dest
+        ld      hl,(__sdup_src) ; HL = src
         ld      bc,(__sdup_len)
         ldir
-        pop     hl              ; return dest
-
-sdup_ret:
-        pop     ix
+        pop     hl
         ret
 
+__sdup_src:
+        dw      0
 __sdup_len:
         dw      0
 
@@ -4723,11 +4729,12 @@ stchk_end:
 
         public  _atoi
 _atoi:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; Leaf parser: fetch nptr without an IX frame and restore the
+        ; caller-cleanup stack before parsing.
+        pop     bc                      ; return address
+        pop     hl                      ; nptr
+        push    hl
+        push    bc
         ld      de,0
         ld      b,0
 at_ws:
@@ -4784,7 +4791,6 @@ at_done_abs:
         sbc     a,h
         ld      h,a
 at_done:
-        pop     ix
         ret
 
         public  _atol
@@ -4794,11 +4800,12 @@ at_done:
 ; wraps modulo 2^32 (same defined-behaviour stance as atoi's 2^16 wrap).
 ; Returns the signed long in DE:HL (DE = high word).
 _atol:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; The implementation already uses private scratch state, so the IX
+        ; frame served only to fetch nptr.
+        pop     bc                      ; return address
+        pop     hl                      ; nptr
+        push    hl
+        push    bc
         ld      (__atl_p),hl            ; string pointer
         ld      hl,0
         ld      (__atl_acc),hl
@@ -4896,7 +4903,6 @@ atl_fin:
         jr      nz,atl_done
         inc     de
 atl_done:
-        pop     ix
         ret
 __atl_p:        dw      0
 __atl_acc:      ds      4
@@ -4915,12 +4921,14 @@ __atl_d:        db      0
 ; Note: standard C89 atof returns double; this returns float because
 ; dcc has no double type.
 _atof:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; All parser state is already private static storage; avoid an IX
+        ; frame that was used only to load nptr.
+        pop     bc                      ; return address
+        pop     hl                      ; nptr
+        push    hl
+        push    bc
         ld      (__atf_p),hl
+        ld      (__atf_orig),hl
         ld      hl,0
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),hl       ; mant = 0.0f
@@ -5128,8 +5136,7 @@ atf_mant_done:
         ld      a,(__atf_sd)
         or      a
         jr      nz,atf_md_go
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ld      hl,(__atf_orig)
         ld      (__atf_p),hl            ; endptr = original nptr
         ld      hl,0
         ld      de,0
@@ -5313,7 +5320,6 @@ atf_apply_sign:
         or      80h
         ld      d,a                     ; set IEEE 754 sign bit
 atf_ret:
-        pop     ix
         ret
 atf_make_inf:
         ld      hl,0
@@ -5324,6 +5330,7 @@ atf_make_zero:
         ld      de,0
         jr      atf_apply_sign
 __atf_p:        dw      0
+__atf_orig:     dw      0
 __atf_mant:     ds      4
 __atf_frac:     dw      0
 __atf_expo:     dw      0
@@ -5344,19 +5351,20 @@ _strtod:
 ; Note: C89 strtod returns double; dcc returns float (no double type).
 ; Delegates to _atof for the conversion; __atf_p is left pointing at the
 ; first character not consumed, which is stored through endptr if non-null.
-; nptr @ IX+4/5, endptr @ IX+6/7
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        pop     bc                      ; return address
+        pop     hl                      ; nptr
+        pop     de                      ; endptr
+        ld      (__std_endptr),de
+        push    de                      ; restore caller-cleanup arguments
+        push    hl
+        push    bc
+
         push    hl                      ; nptr arg for _atof
         call    _atof                   ; result: DE=high word, HL=low word
         pop     bc                      ; discard nptr; preserves DE:HL
         push    de
         push    hl                      ; save float result
-        ld      l,(ix+6)
-        ld      h,(ix+7)                ; HL = endptr
+        ld      hl,(__std_endptr)
         ld      a,h
         or      l
         jr      z,std_noep
@@ -5367,8 +5375,9 @@ _strtod:
 std_noep:
         pop     hl
         pop     de                      ; restore float result
-        pop     ix
         ret
+
+__std_endptr:   dw      0
 
         public  _fflush
 _fflush:
