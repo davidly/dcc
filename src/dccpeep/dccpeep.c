@@ -1276,7 +1276,7 @@ static int pass_elim_dead_ix_stores(void)
                         else if (strcmp(u3, "dec hl") == 0) { kv--; j++; }
                         else break;
                     }
-                    if (kv >= -128 && kv <= 127) {
+                    {
                         char next1[MAX_LINE], next2[MAX_LINE];
                         /* Address of frame offset K is taken via HL. There is
                          * no bound, from plain assembly text alone, on how
@@ -1294,7 +1294,24 @@ static int pass_elim_dead_ix_stores(void)
                          * wrongly deleted as "dead", since only the first
                          * few bytes from the base were ever marked live.
                          * Flushing every pending store is the only sound
-                         * choice whenever an address is taken this way. */
+                         * choice whenever an address is taken this way.
+                         *
+                         * This flush must NOT be gated on kv (the object's
+                         * own base offset) fitting in a signed-byte ix
+                         * displacement. A previous version required
+                         * kv>=-128 && kv<=127 before flushing at all - a
+                         * real, confirmed bug: an array/struct based more
+                         * than 127 bytes from IX (so its OWN base cannot be
+                         * expressed as (ix+d)) still has interior/tail bytes
+                         * that land in the trackable -128..127 window once
+                         * per-byte stores to it get folded to direct
+                         * (ix+d) form by an earlier pass. Skipping the flush
+                         * left those in-range stores looking unread at the
+                         * next `ret` and wrongly deleted, even though this
+                         * very escape is what reads them (e.g. a second
+                         * local array/struct, based out of ix+d range as a
+                         * whole, passed by address to printf/strcat/etc.
+                         * after being initialized element-by-element). */
                         memset(last_store, -1, sizeof(last_store));
                         /* If the just-computed frame address is immediately
                          * stored into another frame slot (a pointer/array-decay
