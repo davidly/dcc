@@ -3731,12 +3731,6 @@ pf_hnc_up:
         pop     af
         ret
 
-pf_print_x:
-        ld      a,h
-        call    pf_hex_byte
-        ld      a,l
-        call    pf_hex_byte
-        ret
 pf_hex_byte:
         push    af
         rrca
@@ -12171,37 +12165,6 @@ FSLA:
         ld      (AM2),a
         ret
 
-; compare A mantissa with B mantissa. Carry set if A < B, Z if equal.
-FCMPM:
-        ld      a,(AM2)
-        ld      b,a
-        ld      a,(BM2)
-        cp      b
-        jp      c,FCAGT
-        jp      nz,FCALT
-        ld      a,(AM1)
-        ld      b,a
-        ld      a,(BM1)
-        cp      b
-        jp      c,FCAGT
-        jp      nz,FCALT
-        ld      a,(AM0)
-        ld      b,a
-        ld      a,(BM0)
-        cp      b
-        jp      c,FCAGT
-        jp      nz,FCALT
-        xor     a              ; A == B: clear carry, set Z
-        ret
-FCAGT:
-        or      1              ; A > B: clear carry, force Z clear
-        ret
-FCALT:
-        or      1              ; A < B: force Z clear before setting carry
-        scf
-        ret
-
-
 
         public  __fmul
 __fmul:
@@ -18107,140 +18070,73 @@ MFL116:
 
 
 ; static function sc_isspace
+; Leaf helper: preserve the caller-cleaned argument while avoiding an IX frame.
 sc_isspace:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jr z,SCL4 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32777 ; peep: signed_cmp_const_bias_fold
+        pop de                  ; return address
+        pop hl                  ; int argument
+        push hl                 ; restore argument for caller cleanup
+        push de                 ; restore return address
         ld a,h
-        xor 80h
-        ld h,a
         or a
-        sbc hl,de
-        jr c,SCL8 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32781 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr z,SCL4 ; peep: jp_to_jr
-        jr c,SCL4 ; peep: jp_to_jr
-SCL8:
-        ld hl,0
-        jr SCL5 ; peep: jp_to_jr
+        jr nz,SCL8
+        ld a,l
+        cp 32
+        jr z,SCL4
+        cp 9
+        jr c,SCL8
+        cp 14
+        jr nc,SCL8
 SCL4:
         ld hl,1
-SCL5:
-        ld sp,ix
-        pop ix
+        ret
+SCL8:
+        ld hl,0
         ret
 
 ; static function sc_digit (renamed sc_isdigit: collides with the unrelated
 ; sc_digit byte variable in __stol/__stou's parse state, further down)
+; Leaf helper: preserve the caller-cleaned argument while avoiding an IX frame.
 sc_isdigit:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32816 ; peep: signed_cmp_const_bias_fold
+        pop de                  ; return address
+        pop hl                  ; int argument
+        push hl                 ; restore argument for caller cleanup
+        push de                 ; restore return address
         ld a,h
-        xor 80h
-        ld h,a
         or a
-        sbc hl,de
-        jr c,SCL13 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32825 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr z,SCL18 ; peep: jp_to_jr
-        jr nc,SCL13 ; peep: jp_to_jr
-SCL18:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,48 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        jp SCL12
+        jr nz,SCL29
+        ld a,l
+        cp '0'
+        jr c,SCL13
+        cp '9'+1
+        jr nc,SCL13
+        sub '0'
+        ld l,a
+        ld h,0
+        ret
 SCL13:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32865 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr c,SCL21 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32890 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr z,SCL26 ; peep: jp_to_jr
-        jr nc,SCL21 ; peep: jp_to_jr
-SCL26:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,97 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        ld de,10 ; peep: push_lde_pop
-        add hl,de
-        jr SCL12 ; peep: jp_to_jr
+        ld a,l
+        cp 'a'
+        jr c,SCL21
+        cp 'z'+1
+        jr nc,SCL21
+        sub 'a'
+        add a,10
+        ld l,a
+        ld h,0
+        ret
 SCL21:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32833 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr c,SCL29 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,32858 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jr z,SCL34 ; peep: jp_to_jr
-        jr nc,SCL29 ; peep: jp_to_jr
-SCL34:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,65 ; peep: push_lde_pop
-        or a
-        sbc hl,de
-        ld de,10 ; peep: push_lde_pop
-        add hl,de
-        jr SCL12 ; peep: jp_to_jr
+        ld a,l
+        cp 'A'
+        jr c,SCL29
+        cp 'Z'+1
+        jr nc,SCL29
+        sub 'A'
+        add a,10
+        ld l,a
+        ld h,0
+        ret
 SCL29:
         ld hl,99
-SCL12:
-        ld sp,ix
-        pop ix
         ret
 
         public __stol
