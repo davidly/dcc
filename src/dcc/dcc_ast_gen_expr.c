@@ -4255,6 +4255,31 @@ void gen_member_ast(const struct AstNode *n)
         emit_extract_bitfield();
 }
 
+/* Does `n` (a pointer-arithmetic operand) resolve - through any number of
+ * pointer casts, which only reinterpret a value and never change it - to a
+ * bare reference to a fixed-address global array? Its own address is then a
+ * link-time constant, so `arr + CONST` can fold straight into a single
+ * `ld hl,SYM+OFFSET` instead of loading the symbol, loading the constant, and
+ * adding them at runtime. Excludes VLAs (whose "array" is really a pointer
+ * loaded from a frame slot, not a fixed address) and multi-dimensional
+ * arrays (whose row-decay stride semantics this fold doesn't attempt to
+ * replicate). */
+static struct Sym *ast_const_ptr_array_base(const struct AstNode *n)
+{
+    struct Sym *s;
+
+    while (n != NULL && n->kind == AST_CAST)
+        n = n->a;
+    if (n == NULL || n->kind != AST_IDENT)
+        return NULL;
+    s = find_sym(n->sval);
+    if (s == NULL || !s->is_array || s->is_vla || s->dim_count > 1)
+        return NULL;
+    if (s->storage == SC_LOCAL || s->storage == SC_PARAM)
+        return NULL;
+    return s;
+}
+
 void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
                                  int *out_no_deref)
 {
@@ -4415,6 +4440,21 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
             *out_type = ptr_type;
             *out_no_deref = was_row_ptr;
             return;
+        }
+
+        if (n->op == '+' && !no_deref && n->b->kind == AST_INT_LIT) {
+            struct Sym *base_sym = ast_const_ptr_array_base(n->a);
+            if (base_sym != NULL) {
+                elem = type_index_elem_size(ptr_type);
+                emit_extrn_if_needed(base_sym);
+                fprintf(outf, "\tld hl,%s+%ld\n", asm_name_for(sym_asm_name(base_sym)),
+                        (n->b->ival * elem) & 0xffffL);
+                g_expr_type = ptr_type;
+                g_long_from16 = 0;
+                *out_type = ptr_type;
+                *out_no_deref = 0;
+                return;
+            }
         }
 
         gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
