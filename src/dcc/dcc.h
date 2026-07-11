@@ -386,8 +386,19 @@ struct ByteOperand {
 /* assembler symbol-name table + command-line options */
 extern struct AsmName asm_names[MAX_ASM_NAMES];
 extern int nasm_names;
+/* printf-family float/long/hex/octal support: tristate, not boolean.
+ * 0 = auto (default: per-call-site detection, conservative-assume-all for a
+ * non-literal format string), 1 = -f<x>io forces every call site to support
+ * it, -1 = -fno-<x>io forces every call site to NOT support it (even a
+ * literal format string that actually uses it, or the conservative
+ * non-literal fallback) - an explicit assertion by the caller that no call
+ * site anywhere in this translation unit needs it, for trimming the
+ * conservative fallback's cost when a non-literal format string is known to
+ * be safe. */
 extern int opt_floatio;
-extern int opt_longio;      /* -flongio: enable 32-bit (long) printf format specifiers */
+extern int opt_longio;      /* -flongio/-fno-longio: 32-bit (long) printf format specifiers */
+extern int opt_hexio;       /* -fhexio/-fno-hexio: %x/%X printf format specifiers */
+extern int opt_octio;       /* -foctio/-fno-octio: %o printf format specifiers */
 extern int opt_module;      /* -c/-module: emit linkable helper module, not final app TU */
 extern int opt_stack_size;  /* bytes reserved above heap for C stack */
 extern int opt_stack_check; /* -fstack-check: emit a stack-overflow guard at function entry */

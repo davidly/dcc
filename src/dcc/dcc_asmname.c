@@ -314,7 +314,10 @@ const char *asm_name_for(const char *cname)
     int i;
 
     {
-        const char *r = pf_family_lookup(cname, opt_floatio, opt_longio);
+        /* opt_floatio/opt_longio are tristate (-1/0/1); pf_family_lookup
+         * wants plain booleans, and a bare -1 is truthy in C, so normalize
+         * before passing it in. */
+        const char *r = pf_family_lookup(cname, opt_floatio > 0, opt_longio > 0);
         if (r)
             return r;
     }

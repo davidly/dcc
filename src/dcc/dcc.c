@@ -1426,7 +1426,7 @@ void print_version(void)
 
 void usage(void)
 {
-    fprintf(stderr, "usage: dcc [-c|-module] [-f|-ffloatio] [-fl|-flongio] [-fstack-check] [-fno-narrow] [-v] [-h] [-s|-stack bytes] [-Idir] [-Dname[=value]] [-Uname] input.c -o output.mac\n");
+    fprintf(stderr, "usage: dcc [-c|-module] [-f|-ffloatio|-fno-floatio] [-fl|-flongio|-fno-longio] [-fhexio|-fno-hexio] [-foctio|-fno-octio] [-fstack-check] [-fno-narrow] [-v] [-h] [-s|-stack bytes] [-Idir] [-Dname[=value]] [-Uname] input.c -o output.mac\n");
     exit(1);
 }
 
@@ -1442,7 +1442,17 @@ void print_help(void)
     printf("                   ones whose literal format string doesn't use it\n");
     printf("                   (normally auto-detected per call; only needed for a\n");
     printf("                   format string that isn't a compile-time literal)\n");
+    printf("  -fno-floatio     opposite: force every call to NOT support %%f, even\n");
+    printf("                   a literal that uses it, or the conservative fallback\n");
+    printf("                   for a non-literal format string - use only when you\n");
+    printf("                   know no call site anywhere needs it, to shrink the\n");
+    printf("                   fallback's cost\n");
     printf("  -fl, -flongio    same, but forces long formats (%%ld/%%lu/%%lx/%%lX/%%ls)\n");
+    printf("  -fno-longio      -fno-floatio, but for long formats\n");
+    printf("  -fhexio          force every call to support %%x/%%X\n");
+    printf("  -fno-hexio       -fno-floatio, but for %%x/%%X\n");
+    printf("  -foctio          force every call to support %%o\n");
+    printf("  -fno-octio       -fno-floatio, but for %%o\n");
     printf("  -s, -stack <bytes>   reserve <bytes> for the C stack (default 512)\n");
     printf("  -fstack-check    abort gracefully if the stack overflows its reserve\n");
     printf("  -fno-narrow      disable every int-array/scalar/for-counter byte-narrowing pass\n");
@@ -1472,8 +1482,20 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-ffloatio") || !strcmp(argv[i], "-f")) {
             opt_floatio = 1;
+        } else if (!strcmp(argv[i], "-fno-floatio")) {
+            opt_floatio = -1;
         } else if (!strcmp(argv[i], "-flongio") || !strcmp(argv[i], "-fl")) {
             opt_longio = 1;
+        } else if (!strcmp(argv[i], "-fno-longio")) {
+            opt_longio = -1;
+        } else if (!strcmp(argv[i], "-fhexio")) {
+            opt_hexio = 1;
+        } else if (!strcmp(argv[i], "-fno-hexio")) {
+            opt_hexio = -1;
+        } else if (!strcmp(argv[i], "-foctio")) {
+            opt_octio = 1;
+        } else if (!strcmp(argv[i], "-fno-octio")) {
+            opt_octio = -1;
         } else if (!strcmp(argv[i], "-fstack-check")) {
             opt_stack_check = 1;
         } else if (!strcmp(argv[i], "-fno-narrow")) {

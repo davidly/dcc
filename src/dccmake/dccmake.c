@@ -49,7 +49,13 @@ struct Config {
     char output[MAX_NAME_LEN];
     int output_set;
     int floatio;
+    int no_floatio;
     int flongio;
+    int no_longio;
+    int hexio;
+    int no_hexio;
+    int octio;
+    int no_octio;
     int stack_check;
     int no_narrow;
     int stack_bytes;
@@ -496,7 +502,13 @@ static void init_config(struct Config *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->floatio = getenv("DCC_FLOATIO") && !strcmp(getenv("DCC_FLOATIO"), "1");
+    cfg->no_floatio = getenv("DCC_NO_FLOATIO") && !strcmp(getenv("DCC_NO_FLOATIO"), "1");
     cfg->flongio = getenv("DCC_LONGIO") && !strcmp(getenv("DCC_LONGIO"), "1");
+    cfg->no_longio = getenv("DCC_NO_LONGIO") && !strcmp(getenv("DCC_NO_LONGIO"), "1");
+    cfg->hexio = getenv("DCC_HEXIO") && !strcmp(getenv("DCC_HEXIO"), "1");
+    cfg->no_hexio = getenv("DCC_NO_HEXIO") && !strcmp(getenv("DCC_NO_HEXIO"), "1");
+    cfg->octio = getenv("DCC_OCTIO") && !strcmp(getenv("DCC_OCTIO"), "1");
+    cfg->no_octio = getenv("DCC_NO_OCTIO") && !strcmp(getenv("DCC_NO_OCTIO"), "1");
     cfg->stack_check = getenv("DCC_FORCE_STACK_CHECK") && !strcmp(getenv("DCC_FORCE_STACK_CHECK"), "1");
     cfg->no_narrow = getenv("DCC_NO_NARROW") && !strcmp(getenv("DCC_NO_NARROW"), "1");
     cfg->stack_bytes = 512;
@@ -542,12 +554,60 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         cfg->floatio = b;
         return 1;
     }
+    if (!strcmp(key, "dcc-no-floatio")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->no_floatio = b;
+        return 1;
+    }
     if (!strcmp(key, "dcc-flongio")) {
         if (!parse_bool(value, &b)) {
             fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
             return 0;
         }
         cfg->flongio = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-no-longio")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->no_longio = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-hexio")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->hexio = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-no-hexio")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->no_hexio = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-octio")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->octio = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-no-octio")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->no_octio = b;
         return 1;
     }
     if (!strcmp(key, "dcc-stack-bytes")) {
@@ -786,7 +846,16 @@ static void print_help(void)
     printf("                                 (normally auto-detected per call from its own\n");
     printf("                                 literal format string; only needed when a format\n");
     printf("                                 string isn't a compile-time literal)\n");
+    printf("  dcc-no-floatio=false|true|1|0  opposite: force every call to NOT support %%f,\n");
+    printf("                                 even one whose literal uses it, or the fallback\n");
+    printf("                                 for a non-literal format string - use only when\n");
+    printf("                                 no call site anywhere needs it\n");
     printf("  dcc-flongio=false|true|1|0     same, but forces long formats (%%ld/%%lu/%%lx)\n");
+    printf("  dcc-no-longio=false|true|1|0   dcc-no-floatio, but for long formats\n");
+    printf("  dcc-hexio=false|true|1|0       force %%x/%%X support on every call\n");
+    printf("  dcc-no-hexio=false|true|1|0    dcc-no-floatio, but for %%x/%%X\n");
+    printf("  dcc-octio=false|true|1|0       force %%o support on every call\n");
+    printf("  dcc-no-octio=false|true|1|0    dcc-no-floatio, but for %%o\n");
     printf("  dcc-stack-bytes=512            pass -stack bytes to dcc; default 512\n");
     printf("  dcc-stack-check=false|true|1|0 pass -fstack-check to dcc\n");
     printf("  dcc-no-narrow=false|true|1|0   pass -fno-narrow to dcc (disable byte-narrowing passes)\n");
@@ -800,7 +869,13 @@ static void print_help(void)
     printf("\n");
     printf("dcc-style command options:\n");
     printf("  -f, -ffloatio                  same as dcc-floatio=true\n");
+    printf("  -fno-floatio                   same as dcc-no-floatio=true\n");
     printf("  -fl, -flongio                  same as dcc-flongio=true\n");
+    printf("  -fno-longio                    same as dcc-no-longio=true\n");
+    printf("  -fhexio                        same as dcc-hexio=true\n");
+    printf("  -fno-hexio                     same as dcc-no-hexio=true\n");
+    printf("  -foctio                        same as dcc-octio=true\n");
+    printf("  -fno-octio                     same as dcc-no-octio=true\n");
     printf("  -s <bytes>, -stack <bytes>     same as dcc-stack-bytes=<bytes>\n");
     printf("  -fstack-check                  same as dcc-stack-check=true\n");
     printf("  -fno-narrow                    same as dcc-no-narrow=true\n");
@@ -859,8 +934,32 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
             cfg->floatio = 1;
             continue;
         }
+        if (!strcmp(arg, "-fno-floatio")) {
+            cfg->no_floatio = 1;
+            continue;
+        }
         if (!strcmp(arg, "-fl") || !strcmp(arg, "-flongio")) {
             cfg->flongio = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-fno-longio")) {
+            cfg->no_longio = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-fhexio")) {
+            cfg->hexio = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-fno-hexio")) {
+            cfg->no_hexio = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-foctio")) {
+            cfg->octio = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-fno-octio")) {
+            cfg->no_octio = 1;
             continue;
         }
         if (!strcmp(arg, "-fstack-check")) {
@@ -1274,7 +1373,13 @@ static int build_dcc_command(struct Config *cfg, int index, const char *input,
     snprintf(stack_buf, sizeof(stack_buf), "%d", cfg->stack_bytes);
     if (!cmd_arg(cmd, cmd_size, stack_buf)) return 0;
     if (cfg->floatio && !cmd_arg(cmd, cmd_size, "-ffloatio")) return 0;
+    if (cfg->no_floatio && !cmd_arg(cmd, cmd_size, "-fno-floatio")) return 0;
     if (cfg->flongio && !cmd_arg(cmd, cmd_size, "-flongio")) return 0;
+    if (cfg->no_longio && !cmd_arg(cmd, cmd_size, "-fno-longio")) return 0;
+    if (cfg->hexio && !cmd_arg(cmd, cmd_size, "-fhexio")) return 0;
+    if (cfg->no_hexio && !cmd_arg(cmd, cmd_size, "-fno-hexio")) return 0;
+    if (cfg->octio && !cmd_arg(cmd, cmd_size, "-foctio")) return 0;
+    if (cfg->no_octio && !cmd_arg(cmd, cmd_size, "-fno-octio")) return 0;
     for (i = 0; i < cfg->include_count; i++) {
         if (!cmd_arg(cmd, cmd_size, "-I")) return 0;
         if (!cmd_arg(cmd, cmd_size, cfg->includes[i])) return 0;

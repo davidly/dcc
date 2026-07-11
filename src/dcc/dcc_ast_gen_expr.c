@@ -3848,8 +3848,8 @@ void gen_call_ast(const struct AstNode *n)
              * resolve to two different runtime entry points within one file
              * (e.g. one sprintf() call with no %f, another with %.2f), and
              * each one needs its own matching extrn. */
-            int needs_float = opt_floatio;
-            int needs_long = opt_longio;
+            int needs_float = 0;
+            int needs_long = 0;
             int needs_hex = 0;
             int needs_octal = 0;
             const struct AstNode *fmt_arg = n->list[fmt_idx];
@@ -3863,6 +3863,16 @@ void gen_call_ast(const struct AstNode *n)
                 needs_hex = 1;
                 needs_octal = 1;
             }
+            /* -f<x>io/-fno-<x>io are a blanket override: they win over
+             * whatever the literal scan (or the non-literal conservative
+             * fallback above) concluded, in either direction. This is the
+             * only way to claw back the fallback's "assume everything"
+             * cost for a format string that isn't a compile-time literal -
+             * see opt_floatio's declaration in dcc.h. */
+            if (opt_floatio > 0) needs_float = 1; else if (opt_floatio < 0) needs_float = 0;
+            if (opt_longio > 0) needs_long = 1; else if (opt_longio < 0) needs_long = 0;
+            if (opt_hexio > 0) needs_hex = 1; else if (opt_hexio < 0) needs_hex = 0;
+            if (opt_octio > 0) needs_octal = 1; else if (opt_octio < 0) needs_octal = 0;
             /* %x/%X and %o don't need a variant per printf-family function
              * (unlike float/long): the hook they install is independent of,
              * and composes freely with, whichever entry point the float/
