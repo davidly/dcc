@@ -1893,12 +1893,9 @@ static int pass_posfunc_b_cache(void)
     return changed;
 }
 
-/* Is `line` unsafe for pass_cache_noix_byte_param_reload to assume BC is
- * free and SP is stable across it? Three independent hazards:
- *   - "call"/"push"/"pop": a call can clobber BC through whatever it calls
- *     (no-IX-frame functions are otherwise leaf/call-free, but this pass
- *     must not silently rely on that going unchecked); push/pop shifts SP
- *     out from under the cached OFFSET+SP address.
+/* Is `line` unsafe to assume BC is free across it - i.e. could it clobber
+ * B, C, or BC? Three independent hazards:
+ *   - "call": can clobber BC through whatever it calls.
  *   - djnz/block-repeat instructions (ldir/lddr/cpir/cpdr/inir/indr/otir/
  *     otdr) use B or BC as an implicit counter without spelling out "b" or
  *     "bc" in their own operand text - a plain register-name text search
@@ -1908,13 +1905,13 @@ static int pass_posfunc_b_cache(void)
  *
  * "call __stchk" is explicitly exempted from the call check: -fstack-check
  * inserts it at the top of every function (the default build config, so
- * without this exemption this pass could never fire at all), and DCCRTL.MAC
- * shows it never touches B or C on any path that returns to the caller -
- * its fast/common path (no overflow) only uses HL/DE/AF, and its overflow
- * path, which does use C for a BDOS print call, ends in "jp 0000h" (CP/M
- * warm boot) without ever returning - so a clobbered C there is never
- * observed by anything. */
-static int line_could_use_bc(const char *line)
+ * without this exemption no BC-caching pass could ever fire at all), and
+ * DCCRTL.MAC shows it never touches B or C on any path that returns to the
+ * caller - its fast/common path (no overflow) only uses HL/DE/AF, and its
+ * overflow path, which does use C for a BDOS print call, ends in
+ * "jp 0000h" (CP/M warm boot) without ever returning - so a clobbered C
+ * there is never observed by anything. */
+static int line_clobbers_bc(const char *line)
 {
     char clean[MAX_LINE];
     const char *p;
@@ -1929,8 +1926,6 @@ static int line_could_use_bc(const char *line)
         return 1;
 
     if (strncmp(clean, "call ", 5) == 0 && strcmp(clean, "call __stchk") != 0)
-        return 1;
-    if (strncmp(clean, "push ", 5) == 0 || strncmp(clean, "pop ", 4) == 0)
         return 1;
 
     p = clean;
@@ -1948,6 +1943,22 @@ static int line_could_use_bc(const char *line)
         }
     }
     return 0;
+}
+
+/* pass_cache_noix_byte_param_reload additionally needs SP to be stable (it
+ * caches an SP-relative address, not just a value), so push/pop - which
+ * don't clobber BC but do shift SP - are hazards there even though they
+ * aren't for a plain register-value cache like
+ * pass_cache_global_word_reload's. */
+static int line_could_use_bc(const char *line)
+{
+    char clean[MAX_LINE];
+
+    if (line_clobbers_bc(line))
+        return 1;
+
+    strip_peep_comment_copy(clean, line);
+    return strncmp(clean, "push ", 5) == 0 || strncmp(clean, "pop ", 4) == 0;
 }
 
 /* Recognizes both known "read a stack parameter via SP-relative addressing"
@@ -10880,6 +10891,183 @@ static int peep_parse_ld_hl_symaddr(const char *s, char *sym)
     return i > 0;
 }
 
+/* Whole-file store count for a word-sized (int/pointer) global - used to
+ * prove a repeated "ld hl,(NAME)" reload's value can't have changed between
+ * two occurrences in the same hazard-free segment (see
+ * pass_cache_global_word_reload below): if NAME is stored to (via
+ * "ld (NAME),hl", the only word-store shape this codegen emits) at most
+ * once in the WHOLE file, nothing anywhere - including whatever a call in a
+ * *different* segment might do - can ever reassign it again. This is the
+ * same "write once, then read-only" assumption dcc_global_scan.c's own
+ * whole-file write-once proof already relies on for its (much narrower)
+ * global-hoist fast path, just re-derived here textually since dccpeep has
+ * no access to that C-source-level analysis. */
+static int global_write_count_in_file(const char *name)
+{
+    int i, n;
+    char sym[128];
+
+    n = 0;
+    for (i = 0; i < nlines; i++) {
+        if (peep_parse_ld_paren_sym_hl(lines[i], sym) && !strcmp(sym, name))
+            n++;
+    }
+    return n;
+}
+
+/* Is `name` stored to (via "ld (name),hl") anywhere in [start,end)? Even a
+ * symbol with at most one store in the WHOLE file (see
+ * global_write_count_in_file) is not a safe cache candidate if that one
+ * store falls INSIDE the very segment being cached - e.g.
+ * tests/tforblk.c's static_shadows_auto: `x++; inner = x;` on a
+ * function-static compiles to read/inc/store/read, and the store sits
+ * between the two reads. global_write_count_in_file alone doesn't catch
+ * this (it only proves nothing OUTSIDE this segment can have reassigned
+ * the symbol) - this closes the gap by refusing any segment that contains
+ * the write itself, mirroring dcc_global_scan.c's own
+ * global_text_written_in_function check for its narrower C-source-level
+ * version of the same proof. */
+static int symbol_written_in_range(const char *name, int start, int end)
+{
+    int i;
+    char sym[128];
+
+    for (i = start; i < end; i++) {
+        if (peep_parse_ld_paren_sym_hl(lines[i], sym) && !strcmp(sym, name))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * pass_cache_global_word_reload:
+ *
+ * "ld hl,(NAME)" for a word-sized global reloads it from memory at every
+ * reference, even when the same global is read more than once in a short
+ * span with no intervening call/push/pop (e.g. tests/cobint.c's central
+ * interpreter-state pointer G, referenced 365 times across the file for a
+ * value written exactly once at startup - exec_stmt_tokens's own loop
+ * condition alone rereads it three times back to back).
+ *
+ * Unlike pass_cache_noix_byte_param_reload, this doesn't require the whole
+ * function to be call-free - it partitions each function into hazard-free
+ * segments (split at whatever line_clobbers_bc flags: a call, djnz/block-
+ * repeat, or an explicit B/C mention) and caches independently within each
+ * segment. Deliberately does NOT split on push/pop the way the no-IX-frame
+ * pass does - those don't clobber BC and this pass isn't caching an SP-
+ * relative address, so they're not a hazard here. That's what makes it
+ * apply far more broadly than the no-IX-frame case: most ordinary
+ * functions call other functions somewhere, but a short run of field
+ * accesses (a loop condition, a handful of comparisons) with no call in
+ * between is common. Requires the symbol be stored to at most once in the
+ * WHOLE file (see global_write_count_in_file), not just within the
+ * segment, since a call inside a *different* segment could otherwise have
+ * reassigned it in between.
+ */
+static int pass_cache_global_word_reload(void)
+{
+    int i;
+    int changed = 0;
+    int segstart;
+
+    segstart = 0;
+    for (i = 0; i <= nlines; i++) {
+        int j, k;
+        char sym[128], best_sym[128];
+        int best_count;
+        struct { char name[128]; int count; } seen[32];
+        int nseen;
+        int occ[64];
+        int noc;
+        int delta;
+
+        /* A segment must never cross a label or a function boundary in
+         * addition to never crossing a BC-clobbering line: a label can be
+         * a jump target reached from some other point in the function (or,
+         * for a function marker, from an entirely unrelated call site)
+         * where BC does not hold whatever this segment cached - there is
+         * no reaching-definitions analysis here to prove otherwise, so
+         * treat every label as an unconditional hazard, exactly like a
+         * call. This is what an earlier version of this pass got wrong: it
+         * only checked line_clobbers_bc, so a segment could span from one
+         * function's tail straight into the next function's prologue
+         * whenever nothing in between happened to look like a call/djnz/
+         * register mention - confirmed as a real miscompile (cobint fails
+         * with "too many statements" instead of computing correctly)
+         * before this fix, not just a theoretical concern. */
+        if (i < nlines && !line_clobbers_bc(lines[i]) &&
+            !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
+            continue;
+
+        /* [segstart, i) is one hazard-free segment (i itself is the
+         * hazard, or end of file). Find the best repeated global-word
+         * reload within it. */
+        nseen = 0;
+        for (j = segstart; j < i; j++) {
+            if (!peep_parse_ld_hl_paren_sym(lines[j], sym))
+                continue;
+            for (k = 0; k < nseen; k++)
+                if (!strcmp(seen[k].name, sym)) break;
+            if (k == nseen) {
+                if (nseen < 32) { strcpy(seen[nseen].name, sym); seen[nseen].count = 1; nseen++; }
+            } else {
+                seen[k].count++;
+            }
+        }
+
+        best_count = 0;
+        best_sym[0] = 0;
+        for (k = 0; k < nseen; k++) {
+            if (seen[k].count > best_count) {
+                best_count = seen[k].count;
+                strcpy(best_sym, seen[k].name);
+            }
+        }
+
+        /* >= 3, not >= 2: caching costs a fixed 8 T-states (ld c,l/ld b,h),
+         * and each avoided reload saves exactly 8 T-states (ld hl,(nn) is
+         * 16 T-states; the ld l,c/ld h,b replacement is 8) - so 2
+         * occurrences is a wash, not a win, and rewriting the pattern also
+         * risks defeating some other, more specific existing pass that
+         * would otherwise have matched "ld hl,(NAME)" in its original form
+         * (confirmed as a real, measured regression on several small,
+         * otherwise-unrelated tests before this threshold was raised). */
+        if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
+            !symbol_written_in_range(best_sym, segstart, i)) {
+            noc = 0;
+            for (j = segstart; j < i; j++) {
+                if (!peep_parse_ld_hl_paren_sym(lines[j], sym)) continue;
+                if (strcmp(sym, best_sym) != 0) continue;
+                if (noc < 64) occ[noc++] = j;
+            }
+
+            delta = 0;
+            /* Last occurrence first: insert_line only ever shifts indices
+             * at or after the edit point, so earlier (not yet processed)
+             * entries in occ[], including occ[0], stay valid. */
+            for (k = noc - 1; k >= 1; k--) {
+                replace1_tagged(occ[k], "ld l,c", "global_word_cache_load");
+                insert_line(occ[k] + 1, "ld h,b");
+                delta += 1;
+                changed = 1;
+            }
+
+            /* occ[0] itself is left as the real load, keeping the cache
+             * fresh right after it. */
+            insert_line_tagged(occ[0] + 1, "ld c,l", "global_word_cache_store");
+            insert_line(occ[0] + 2, "ld b,h");
+            delta += 2;
+            changed = 1;
+
+            i += delta;
+        }
+
+        segstart = i + 1;
+    }
+
+    return changed;
+}
+
 /*
  * Collapse DCC's generic code for *(p = p - 1), where p is an int * global.
  * This is the hot pint popv() workaround shape.  The following dereference
@@ -13774,6 +13962,7 @@ int main(int argc, char **argv)
         if (pass_minmax_unsigned_compares()) changed = 1;
         if (pass_fix_main_argc_gt_one()) changed = 1;
         if (pass_cache_noix_byte_param_reload()) changed = 1;
+        if (pass_cache_global_word_reload()) changed = 1;
 /*        if (pass_replace_tstr_fake_strstr()) changed = 1; */
         if (pass_labels()) changed = 1;
         passes++;
