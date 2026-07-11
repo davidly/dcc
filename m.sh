@@ -1,6 +1,8 @@
 #!/bin/bash
-# Build dcc (C compiler), dccpeep, dccrtlstrip, and dccmake using gcc.
-# Equivalent of m.bat on Linux/macOS.
+# Build dcc (C compiler), dccpeep, dccrtlstrip, dccmake, and m80c using gcc.
+# Equivalent of m.bat on Linux/macOS. Each tool is an independent build (its
+# own source, its own output binary), so all five run in parallel; only the
+# final reporting is serialized so output doesn't interleave.
 
 set -e
 
@@ -21,23 +23,46 @@ if [ -z "${STATICFLAGS+set}" ]; then
 fi
 export STATICFLAGS
 
-echo "Building dcc..."
-pushd src/dcc
-./build-dcc.sh
-popd
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
 
-echo "Building dccpeep..."
-gcc -O2 -g $STATICFLAGS -o dccpeep src/dccpeep/dccpeep.c
+echo "Building dcc, dccpeep, dccrtlstrip, dccmake, and m80c in parallel..."
+
+src/dcc/build-dcc.sh                                                  > "$tmpdir/dcc.log"         2>&1 &
+pid_dcc=$!
+
+gcc -O2 -g $STATICFLAGS -o dccpeep src/dccpeep/dccpeep.c              > "$tmpdir/dccpeep.log"     2>&1 &
+pid_dccpeep=$!
 # cp dccpeep /mnt/c/users/david/onedrive/ntvcm/dcc
 
-echo "Building dccrtlstrip..."
-gcc -O2 -g $STATICFLAGS -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c
+gcc -O2 -g $STATICFLAGS -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c  > "$tmpdir/dccrtlstrip.log" 2>&1 &
+pid_dccrtlstrip=$!
 # cp dccrtlstrip /mnt/c/users/david/onedrive/ntvcm/dcc
 
-echo "Building dccmake..."
-gcc -O2 -g $STATICFLAGS -o dccmake src/dccmake/dccmake.c
+gcc -O2 -g $STATICFLAGS -o dccmake src/dccmake/dccmake.c              > "$tmpdir/dccmake.log"     2>&1 &
+pid_dccmake=$!
 
-echo "Building m80c..."
-gcc -std=c89 -O2 $STATICFLAGS -o m80c src/m80c/m80c.c
+gcc -std=c89 -O2 $STATICFLAGS -o m80c src/m80c/m80c.c                 > "$tmpdir/m80c.log"        2>&1 &
+pid_m80c=$!
 
+failed=0
+for name in dcc dccpeep dccrtlstrip dccmake m80c; do
+    pid_var="pid_$name"
+    echo ""
+    if wait "${!pid_var}"; then
+        echo "--- $name: OK ---"
+    else
+        echo "--- $name: FAILED ---"
+        failed=1
+    fi
+    cat "$tmpdir/$name.log"
+done
+
+if [ "$failed" -ne 0 ]; then
+    echo ""
+    echo "Build FAILED." >&2
+    exit 1
+fi
+
+echo ""
 echo "Done."
