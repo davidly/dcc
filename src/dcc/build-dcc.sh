@@ -32,11 +32,25 @@ CFLAGS=${CFLAGS:--std=c89 -Wall -Wextra -O2 -g}
 # On macOS, clang can emit large tentative definitions into __DATA,__common
 # with very high alignment (for large objects), which triggers an ld warning
 # about reducing alignment. Force normal definitions to avoid __common.
+#
+# On Linux, link statically by default so the binary is copyable/runnable on
+# another Linux box without matching the exact glibc version - this is a host
+# build tool, not the Z80 target, so that's the only reason to link it any
+# particular way. Not possible on macOS (no static libSystem to link
+# against), so this never applies there. Set STATICFLAGS before calling this
+# script to override (e.g. STATICFLAGS= to force dynamic linking if the
+# static libc dev package, e.g. glibc-static, isn't installed).
 case "$(uname)" in
     Darwin)
         CFLAGS="$CFLAGS -fno-common"
         ;;
 esac
+if [ -z "${STATICFLAGS+set}" ]; then
+    case "$(uname)" in
+        Linux) STATICFLAGS=-static ;;
+        *)     STATICFLAGS= ;;
+    esac
+fi
 
 OUT="$REPO_ROOT/dcc"
 
@@ -47,5 +61,5 @@ fi
 
 echo "Building modular dcc -> $OUT"
 # All .c files in this directory are module translation units linked together.
-( cd "$SCRIPT_DIR" && $CC $CFLAGS -I . -o "$OUT" ./*.c )
+( cd "$SCRIPT_DIR" && $CC $CFLAGS $STATICFLAGS -I . -o "$OUT" ./*.c )
 echo "Done."
