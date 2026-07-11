@@ -4075,6 +4075,27 @@ void gen_struct_member_copy_assign_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* Resolve one side of gen_byte_addr_copy_assign_ast to its address in HL.
+ * `n` is already known (via ast_is_byte_addr_lvalue) to be an AST_INDEX,
+ * AST_MEMBER, AST_UNARY deref, or a zero-arg static inline call that
+ * substitutes to one of those - so a bare call node here is resolved to its
+ * inline body first rather than falling into the deref catch-all below. */
+static void gen_byte_lvalue_addr_ast(const struct AstNode *n, int *out_type)
+{
+    const struct AstNode *sub;
+
+    if (n->kind == AST_INDEX) {
+        gen_index_addr_ast(n, out_type);
+    } else if (n->kind == AST_MEMBER) {
+        gen_member_addr_ast(n, out_type);
+    } else if (n->kind == AST_UNARY && n->op == '*') {
+        gen_deref_addr_ast(n, out_type);
+    } else {
+        sub = ast_zero_arg_inline_body(n);
+        gen_byte_lvalue_addr_ast(sub, out_type);
+    }
+}
+
 /* Emitter for ast_is_byte_addr_copy_assign: compute both addresses (lhs
  * first, matching the generic non-identifier-lvalue assignment path's
  * evaluation order just below in this file), then copy the single byte
@@ -4084,20 +4105,10 @@ void gen_byte_addr_copy_assign_ast(const struct AstNode *n)
 {
     int val_type;
 
-    if (n->a->kind == AST_INDEX)
-        gen_index_addr_ast(n->a, &val_type);   /* HL = destination address */
-    else if (n->a->kind == AST_MEMBER)
-        gen_member_addr_ast(n->a, &val_type);
-    else
-        gen_deref_addr_ast(n->a, &val_type);
+    gen_byte_lvalue_addr_ast(n->a, &val_type);   /* HL = destination address */
     emit("\tpush hl\n");
 
-    if (n->b->kind == AST_INDEX)
-        gen_index_addr_ast(n->b, &val_type);   /* HL = source address */
-    else if (n->b->kind == AST_MEMBER)
-        gen_member_addr_ast(n->b, &val_type);
-    else
-        gen_deref_addr_ast(n->b, &val_type);
+    gen_byte_lvalue_addr_ast(n->b, &val_type);   /* HL = source address */
 
     emit("\tpop de\n");        /* DE = destination address, HL = source address */
     emit("\tld a,(hl)\n");

@@ -224,10 +224,21 @@ uint8_t * get_mem( address ) uint16_t address;
 }
 #endif
 
-/* I wish these were inline functions but old C compilers can't do that */
-#define push( x ) ( * ( (uint8_t *) m_0000 + 0x0100 + cpu.sp-- ) = ( x ) )
-#define push_word( x ) ( * ( (uint16_t *) ( m_0000 + 0x0100 + --cpu.sp ) ) = ( x ) ), cpu.sp--
-#define pop() ( * ( (uint8_t *) m_0000 + 0x0100 + ++cpu.sp ) )
+static inline void push( uint8_t x )
+{
+    * ( (uint8_t *) m_0000 + 0x0100 + cpu.sp-- ) = x;
+}
+
+static inline void push_word( uint16_t x )
+{
+    * ( (uint16_t *) ( m_0000 + 0x0100 + --cpu.sp ) ) = x;
+    cpu.sp--;
+}
+
+static inline uint8_t pop( void )
+{
+    return * ( (uint8_t *) m_0000 + 0x0100 + ++cpu.sp );
+}
 
 void power_on()
 {

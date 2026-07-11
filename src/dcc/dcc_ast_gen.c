@@ -2570,16 +2570,42 @@ int ast_struct_member_copy_assign_supported(const struct AstNode *n)
            same_struct_type(lhs_type, rhs->type);
 }
 
+/* A zero-argument call to a "simple" static inline function (one whose body
+ * is a single captured return-expression - see record_inline_function_if_simple)
+ * substitutes to that expression verbatim: no parameters means no argument
+ * substitution or hidden-temp side-effect bookkeeping is needed at all, so
+ * the callee's own body can stand in for the call node directly. Returns
+ * NULL if `n` isn't such a call. */
+const struct AstNode *ast_zero_arg_inline_body(const struct AstNode *n)
+{
+    struct Sym *fn;
+
+    if (n == NULL || n->kind != AST_CALL || n->a == NULL ||
+        n->a->kind != AST_IDENT || n->list_len != 0)
+        return NULL;
+    fn = find_global(n->a->sval);
+    if (fn == NULL || !fn->is_static || !fn->is_inline ||
+        fn->proto_nargs != 0 || fn->inline_return_expr == NULL)
+        return NULL;
+    return fn->inline_return_expr;
+}
+
 /* Does `n` name an addressable byte lvalue (a struct/union member, an array
  * element, or a pointer dereference) of a plain 1-byte scalar type? Bitfields
  * are already excluded by ast_member_lvalue_type/ast_index_lvalue_elem_type
  * (both decline when the field has bit_width > 0). Pointers and _Bool are
  * excluded explicitly: a byte pointer element doesn't exist (pointers are
  * always 2 bytes), and _Bool's stored representation must stay normalized to
- * exactly 0/1, which this fast path deliberately does not handle. */
+ * exactly 0/1, which this fast path deliberately does not handle.
+ *
+ * Also looks through a zero-arg static inline call (e.g. `pop()`) to its
+ * substituted body, so a `dst = pop();`-shaped byte copy still gets the
+ * direct address-to-address fast path instead of falling back to the
+ * generic promote-through-a-register assignment path. */
 int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type)
 {
     int t;
+    const struct AstNode *sub;
 
     if (n == NULL)
         return 0;
@@ -2593,7 +2619,10 @@ int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type)
         if (!ast_deref_lvalue_type(n, &t))
             return 0;
     } else {
-        return 0;
+        sub = ast_zero_arg_inline_body(n);
+        if (sub == NULL)
+            return 0;
+        return ast_is_byte_addr_lvalue(sub, out_type);
     }
     if (type_size(t) != 1 || type_ptr_depth(t) > 0 || type_is_bool(t))
         return 0;

@@ -126,6 +126,7 @@ int ast_struct_return_call_assign_supported(int lhs_type,
 int ast_struct_deref_copy_assign_supported(const struct AstNode *n);
 int ast_struct_member_copy_assign_supported(const struct AstNode *n);
 int ast_struct_chain_copy_assign_supported(const struct AstNode *n);
+const struct AstNode *ast_zero_arg_inline_body(const struct AstNode *n);
 int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type);
 int ast_is_byte_addr_copy_assign(const struct AstNode *n);
 void gen_byte_addr_copy_assign_ast(const struct AstNode *n);

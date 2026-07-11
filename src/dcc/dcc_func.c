@@ -295,14 +295,15 @@ static void record_inline_function_if_simple(struct Sym *s)
     if (s == NULL || !s->is_static || !s->is_inline || tok.kind != '{')
         return;
     if ((s->type & 15) != TYPE_VOID &&
-        (!(type_size(s->type) == 2 || type_size(s->type) == 4) ||
+        (!(type_size(s->type) == 1 || type_size(s->type) == 2 || type_size(s->type) == 4) ||
          type_is_bool(s->type) || type_is_struct_object(s->type)))
         return;
 
     nparams = 0;
     for (i = 0; i < nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
         if (locals[i].storage == SC_PARAM) {
-            if (!(type_size(locals[i].type) == 2 || type_size(locals[i].type) == 4) ||
+            if (!(type_size(locals[i].type) == 1 || type_size(locals[i].type) == 2 ||
+                  type_size(locals[i].type) == 4) ||
                 type_is_struct_object(locals[i].type))
                 return;
             namelen = strlen(locals[i].name);
