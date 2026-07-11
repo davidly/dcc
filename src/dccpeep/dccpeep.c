@@ -1893,6 +1893,234 @@ static int pass_posfunc_b_cache(void)
     return changed;
 }
 
+/* Is `line` unsafe for pass_cache_noix_byte_param_reload to assume BC is
+ * free and SP is stable across it? Three independent hazards:
+ *   - "call"/"push"/"pop": a call can clobber BC through whatever it calls
+ *     (no-IX-frame functions are otherwise leaf/call-free, but this pass
+ *     must not silently rely on that going unchecked); push/pop shifts SP
+ *     out from under the cached OFFSET+SP address.
+ *   - djnz/block-repeat instructions (ldir/lddr/cpir/cpdr/inir/indr/otir/
+ *     otdr) use B or BC as an implicit counter without spelling out "b" or
+ *     "bc" in their own operand text - a plain register-name text search
+ *     would miss these.
+ *   - an explicit "b"/"c"/"bc" register-name token anywhere else in the
+ *     function body.
+ *
+ * "call __stchk" is explicitly exempted from the call check: -fstack-check
+ * inserts it at the top of every function (the default build config, so
+ * without this exemption this pass could never fire at all), and DCCRTL.MAC
+ * shows it never touches B or C on any path that returns to the caller -
+ * its fast/common path (no overflow) only uses HL/DE/AF, and its overflow
+ * path, which does use C for a BDOS print call, ends in "jp 0000h" (CP/M
+ * warm boot) without ever returning - so a clobbered C there is never
+ * observed by anything. */
+static int line_could_use_bc(const char *line)
+{
+    char clean[MAX_LINE];
+    const char *p;
+
+    strip_peep_comment_copy(clean, line);
+
+    if (strncmp(clean, "djnz", 4) == 0 ||
+        strncmp(clean, "ldir", 4) == 0 || strncmp(clean, "lddr", 4) == 0 ||
+        strncmp(clean, "cpir", 4) == 0 || strncmp(clean, "cpdr", 4) == 0 ||
+        strncmp(clean, "inir", 4) == 0 || strncmp(clean, "indr", 4) == 0 ||
+        strncmp(clean, "otir", 4) == 0 || strncmp(clean, "otdr", 4) == 0)
+        return 1;
+
+    if (strncmp(clean, "call ", 5) == 0 && strcmp(clean, "call __stchk") != 0)
+        return 1;
+    if (strncmp(clean, "push ", 5) == 0 || strncmp(clean, "pop ", 4) == 0)
+        return 1;
+
+    p = clean;
+    while (*p) {
+        if (isalnum((unsigned char)*p) || *p == '_') {
+            const char *start = p;
+            int n = 0;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_')) { p++; n++; }
+            if (n == 1 && (*start == 'b' || *start == 'c'))
+                return 1;
+            if (n == 2 && start[0] == 'b' && start[1] == 'c')
+                return 1;
+        } else {
+            p++;
+        }
+    }
+    return 0;
+}
+
+/* Recognizes both known "read a stack parameter via SP-relative addressing"
+ * shapes a no-IX-frame function emits, immediately following the common
+ * "ld hl,OFFSET / add hl,sp" address computation:
+ *   - byte parameter:  ld l,(hl)                                (1 line)
+ *   - int  parameter:  ld a,(hl) / inc hl / ld h,(hl) / ld l,a  (4 lines)
+ * Both leave the SAME (H,L) pair - the parameter's value - which is what
+ * makes one cache-and-reuse strategy work for either shape. Returns the
+ * total line count of "ld hl,OFFSET/add hl,sp" plus the matched
+ * continuation (3 for byte, 6 for int), or 0 if neither matches. */
+static int match_noix_param_read(int i, int fend)
+{
+    if (i + 1 >= fend || !eq(i + 1, "add hl,sp"))
+        return 0;
+    if (i + 2 < fend && eq(i + 2, "ld l,(hl)"))
+        return 3;
+    if (i + 5 < fend && eq(i + 2, "ld a,(hl)") && eq(i + 3, "inc hl") &&
+        eq(i + 4, "ld h,(hl)") && eq(i + 5, "ld l,a"))
+        return 6;
+    return 0;
+}
+
+/* Every "ld hl,off" in [fstart,fend) must match the expected read shape
+ * (len) - not just the ones this pass already found. A literal `off` used
+ * any other way here - most importantly a *write* through the same
+ * computed address, which would make a cached copy stale, but also just a
+ * same-valued constant used for an unrelated purpose - means this
+ * candidate cannot be trusted. */
+static int offset_used_only_as_expected_read(int fstart, int fend, int off, int len)
+{
+    int i;
+    char valbuf[128];
+    int v;
+
+    for (i = fstart; i < fend; i++) {
+        if (!parse_ld_hl_imm(lines[i], valbuf)) continue;
+        if (!parse_nonneg_int(valbuf, &v)) continue;
+        if (v != off) continue;
+        if (match_noix_param_read(i, fend) != len) return 0;
+    }
+    return 1;
+}
+
+/*
+ * pass_cache_noix_byte_param_reload:
+ *
+ * A no-IX-frame function accesses a stack parameter via:
+ *   ld hl,OFFSET
+ *   add hl,sp
+ *   <byte or int load - see match_noix_param_read>
+ * recomputed from scratch at EVERY reference - even when the same
+ * parameter is read more than once in the function body (e.g. tests/
+ * tchess.c's piece_side: separate 'A'-'Z' and 'a'-'z' range checks each
+ * reload the parameter; abs_i: sign check + negation both reload it).
+ * Since SP is provably unchanged between two such sequences whenever the
+ * function contains no push/pop/call anywhere - exactly the property that
+ * makes SP-relative addressing sound in the first place, see dcc_func.c's
+ * tmpfile_unsafe_for_noix - the (H,L) pair this sequence produces is
+ * bit-for-bit identical every time it appears for the same OFFSET.
+ *
+ * Cache it in BC after the first occurrence (verified unused anywhere else
+ * in the function, and that OFFSET is never used any other way - see the
+ * two helpers above) and replace every later occurrence with a 2-
+ * instruction register copy instead of a fresh recomputation.
+ *
+ * Scoped to one cached offset per function (only one spare register pair
+ * is claimed): the offset with the most repeated occurrences wins if a
+ * function has more than one multiply-referenced parameter.
+ */
+static int line_starts_function_marker(const char *line)
+{
+    return peep_is_public_line(line) || strncmp(line, "; static function ", 18) == 0;
+}
+
+static int pass_cache_noix_byte_param_reload(void)
+{
+    int fstart, fend;
+    int changed = 0;
+
+    fstart = 0;
+    while (fstart < nlines && !line_starts_function_marker(lines[fstart]))
+        fstart++;
+
+    while (fstart < nlines) {
+        int i, j;
+        int off, mlen;
+        int best_off = -1, best_count = 0, best_len = 0;
+        struct { int offset; int count; int len; } seen[32];
+        int nseen = 0;
+
+        fend = fstart + 1;
+        while (fend < nlines && !line_starts_function_marker(lines[fend]))
+            fend++;
+
+        for (i = fstart; i < fend; i++) {
+            char valbuf[128];
+            if (!parse_ld_hl_imm(lines[i], valbuf)) continue;
+            if (!parse_nonneg_int(valbuf, &off)) continue;
+            mlen = match_noix_param_read(i, fend);
+            if (mlen == 0) continue;
+
+            for (j = 0; j < nseen; j++)
+                if (seen[j].offset == off) break;
+            if (j == nseen) {
+                if (nseen < 32) {
+                    seen[nseen].offset = off;
+                    seen[nseen].count = 1;
+                    seen[nseen].len = mlen;
+                    nseen++;
+                }
+            } else {
+                seen[j].count++;
+                /* Same offset, different shape than before: one C variable
+                 * can't have two types, so this should never happen - but
+                 * if it somehow did, refuse the offset rather than guess. */
+                if (seen[j].len != mlen)
+                    seen[j].len = -1;
+            }
+        }
+
+        for (j = 0; j < nseen; j++) {
+            if (seen[j].len > 0 && seen[j].count > best_count) {
+                best_count = seen[j].count;
+                best_off = seen[j].offset;
+                best_len = seen[j].len;
+            }
+        }
+
+        if (best_count >= 2 && offset_used_only_as_expected_read(fstart, fend, best_off, best_len)) {
+            int safe = 1;
+            int occ[64];
+            int noc = 0;
+            int k;
+
+            for (i = fstart; i < fend; i++) {
+                if (line_could_use_bc(lines[i])) { safe = 0; break; }
+            }
+
+            if (safe) {
+                for (i = fstart; i < fend; i++) {
+                    char valbuf[128];
+                    if (!parse_ld_hl_imm(lines[i], valbuf)) continue;
+                    if (!parse_nonneg_int(valbuf, &off)) continue;
+                    if (off != best_off) continue;
+                    if (match_noix_param_read(i, fend) != best_len) continue;
+                    if (noc < 64) occ[noc++] = i;
+                }
+
+                /* Last occurrence first: delete_n only ever shifts indices
+                 * strictly after the edit point, so earlier (not yet
+                 * processed) entries in occ[], including occ[0], stay valid. */
+                for (k = noc - 1; k >= 1; k--) {
+                    replace1_tagged(occ[k], "ld l,c", "noix_param_cache_load");
+                    replace1(occ[k] + 1, "ld h,b");
+                    delete_n(occ[k] + 2, best_len - 2);
+                    fend -= (best_len - 2);
+                    changed = 1;
+                }
+
+                insert_line_tagged(occ[0] + best_len, "ld c,l", "noix_param_cache_store");
+                insert_line(occ[0] + best_len + 1, "ld b,h");
+                fend += 2;
+                changed = 1;
+            }
+        }
+
+        fstart = fend;
+    }
+
+    return changed;
+}
+
 /*
  * pass_posfunc_byte_return:
  *
@@ -13545,6 +13773,7 @@ int main(int argc, char **argv)
         if (pass_mulu_const()) changed = 1;
         if (pass_minmax_unsigned_compares()) changed = 1;
         if (pass_fix_main_argc_gt_one()) changed = 1;
+        if (pass_cache_noix_byte_param_reload()) changed = 1;
 /*        if (pass_replace_tstr_fake_strstr()) changed = 1; */
         if (pass_labels()) changed = 1;
         passes++;
