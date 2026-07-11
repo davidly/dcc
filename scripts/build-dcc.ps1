@@ -7,6 +7,8 @@ Build dcc, dccpeep, dccrtlstrip, and dccmake on Windows, macOS, and Linux.
 Compiles the host tools with the native compiler for the current platform:
 MSVC on Windows, clang on macOS, and gcc on Linux by default. Build artifacts
 are placed under build/; final commands are placed in the repository root.
+On Linux, the four tools are linked -static by default (see -NoStatic);
+macOS has no static libSystem to link against, so this never applies there.
 
 .PARAMETER OutputPath
   Output directory for build artifacts. Defaults to ./build.
@@ -15,16 +17,24 @@ are placed under build/; final commands are placed in the repository root.
   Override the C compiler used on macOS/Linux. Ignored on Windows, where MSVC
   cl.exe is used.
 
+.PARAMETER NoStatic
+  On Linux, link dcc/dccpeep/dccrtlstrip/dccmake dynamically instead of the
+  default -static (useful if the static libc dev package, e.g. glibc-static
+  on Fedora/RHEL, isn't installed). Ignored on macOS (no static linking
+  there - Apple's libSystem has no static archive) and Windows.
+
 .EXAMPLE
   pwsh ./scripts/build-dcc.ps1
   pwsh ./scripts/build-dcc.ps1 -OutputPath ./build-custom
   pwsh ./scripts/build-dcc.ps1 -CC clang
+  pwsh ./scripts/build-dcc.ps1 -NoStatic
 #>
 
 param(
     [string]$OutputPath = "build",
     [string]$CC,
-    [switch]$VerboseCommands
+    [switch]$VerboseCommands,
+    [switch]$NoStatic
 )
 
 $ErrorActionPreference = "Stop"
@@ -327,6 +337,17 @@ function Build-UnixNative {
         )
     }
 
+    # These are host build tools, not the Z80 target, so static linking is
+    # purely about making the resulting binaries easy to copy/run on a
+    # different Linux box without matching the exact glibc version - not
+    # something Apple's libSystem supports (there is no libSystem.a), so this
+    # only applies on Linux, and only if -NoStatic wasn't passed (e.g.
+    # because the static libc dev package isn't installed).
+    $linkFlags = @()
+    if ($IsLinux -and -not $NoStatic) {
+        $linkFlags = @("-static")
+    }
+
     Write-Host "`n=== Building dcc compiler ==="
     $dccObjDir = Join-Path $outputRoot "dcc"
     $dccOut = Join-Path $repoRoot "dcc"
@@ -340,7 +361,7 @@ function Build-UnixNative {
         $arguments = @($baseCflags) + @("-I", (Join-Path $repoRoot "src\dcc"), "-c", $source.FullName, "-o", $object)
         Invoke-Checked $compiler $arguments "compiling $($source.Name)"
     }
-    Invoke-Checked $compiler (@($baseCflags) + $dccObjects + @("-o", $dccOut)) "linking dcc"
+    Invoke-Checked $compiler (@($baseCflags) + $dccObjects + $linkFlags + @("-o", $dccOut)) "linking dcc"
 
     $tools = @(
         @{ Name = "dccpeep"; Source = Join-Path $repoRoot "src\dccpeep\dccpeep.c" },
@@ -356,7 +377,7 @@ function Build-UnixNative {
         New-BuildDirectory $toolObjDir
 
         Invoke-Checked $compiler (@($baseCflags) + @("-c", $tool.Source, "-o", $toolObject)) "compiling $($tool.Name)"
-        Invoke-Checked $compiler (@($baseCflags) + @($toolObject, "-o", $toolOut)) "linking $($tool.Name)"
+        Invoke-Checked $compiler (@($baseCflags) + @($toolObject) + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
     }
 
     return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"))
