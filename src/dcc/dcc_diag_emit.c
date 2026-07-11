@@ -177,78 +177,147 @@ void init_predefined_macro_texts(void)
     }
 }
 
-void source_location_at(long ofs, char *filebuf, int filebufsz, int *linep)
-{
-    long p;
-    long line_start;
-    long line_end;
+/* source_location_at is called once per token (next_token, dcc_preproc.c),
+ * so a #line-directive scan restarting from byte 0 of the source buffer on
+ * every call is O(tokens * average position) - quadratic in file size, and
+ * the dominant cost of compiling a large source (profiled: >95% of dcc's
+ * own runtime on tests/cobint.c, the largest generated .mac in the suite).
+ *
+ * Fix: precompute a table with one entry per source line (offset -> the
+ * effective line number/filename after applying any #line directive up to
+ * and including that line), built by a single linear scan, and answer each
+ * query with a binary search over it - O(nlines) once plus O(log nlines)
+ * per call, instead of O(ofs) every call.
+ *
+ * `src` isn't static for the whole compile, though: replace_source_range
+ * (dcc_preproc.c) rewrites it in place for every macro expansion, and
+ * dcc_global_scan.c's whole-file pre-pass saves/restores it around its own
+ * scan. A naive "cache the last position and resume forward" scheme was
+ * tried first and measured almost no improvement, because that isn't
+ * occasional - the compiler's speculative-parse machinery (narrowing,
+ * inlining, register allocation, the frame-sizing pre-pass) constantly
+ * saves lexer state and re-lexes from an earlier position, so >90% of
+ * calls turned out to be "rewinds" that a forward-only cache can't help.
+ * A table keyed to the buffer's actual content order doesn't care what
+ * order it's queried in, so it isn't defeated by that access pattern - it
+ * only needs to know when to rebuild. g_src_generation (bumped at every
+ * one of those `src` reassignments) is the invalidation signal: if it
+ * doesn't match the generation the table was built for, rebuild before
+ * answering. */
+struct SrcLineEntry {
+    long ofs;
     int line;
-    const char *fname;
+    char file[256];
+};
 
-    fname = input_name ? input_name : "<input>";
+static struct SrcLineEntry *g_srcline_table;
+static long g_srcline_count;
+static long g_srcline_built_for_generation = -1;
+
+static void build_srcline_table(void)
+{
+    long p, line_start, line_end;
+    long i;
+    int line;
+    char curfile[256];
+
+    free(g_srcline_table);
+    g_srcline_count = 1;
+    for (i = 0; i < src_len; ++i)
+        if (src[i] == '\n')
+            g_srcline_count++;
+    g_srcline_table = (struct SrcLineEntry *)xmalloc((size_t)g_srcline_count * sizeof(struct SrcLineEntry));
+
+    strncpy(curfile, input_name ? input_name : "<input>", sizeof(curfile) - 1);
+    curfile[sizeof(curfile) - 1] = 0;
     line = 1;
-    if (filebufsz > 0) {
-        strncpy(filebuf, fname, (size_t)filebufsz - 1);
-        filebuf[filebufsz - 1] = 0;
-    }
-
-    if (ofs < 0)
-        ofs = 0;
-    if (ofs > src_len)
-        ofs = src_len;
+    g_srcline_count = 0;
 
     p = 0;
-    while (p < ofs) {
-        int i;
+    for (;;) {
+        int j;
 
         line_start = p;
         while (p < src_len && src[p] != '\n')
             p++;
         line_end = p;
 
-        i = (int)line_start;
-        while (i < line_end && (src[i] == ' ' || src[i] == '\t'))
-            i++;
+        j = (int)line_start;
+        while (j < line_end && (src[j] == ' ' || src[j] == '\t'))
+            j++;
 
-        if (i + 5 <= line_end && src[i] == '#' &&
-            src[i + 1] == 'l' && src[i + 2] == 'i' &&
-            src[i + 3] == 'n' && src[i + 4] == 'e' &&
-            (i + 5 == line_end || src[i + 5] == ' ' || src[i + 5] == '\t')) {
-            int n;
-            int qi;
+        if (j + 5 <= line_end && src[j] == '#' &&
+            src[j + 1] == 'l' && src[j + 2] == 'i' &&
+            src[j + 3] == 'n' && src[j + 4] == 'e' &&
+            (j + 5 == line_end || src[j + 5] == ' ' || src[j + 5] == '\t')) {
+            int n, qi;
 
-            i += 5;
-            while (i < line_end && (src[i] == ' ' || src[i] == '\t'))
-                i++;
+            j += 5;
+            while (j < line_end && (src[j] == ' ' || src[j] == '\t'))
+                j++;
             n = 0;
-            while (i < line_end && src[i] >= '0' && src[i] <= '9') {
-                n = n * 10 + src[i] - '0';
-                i++;
+            while (j < line_end && src[j] >= '0' && src[j] <= '9') {
+                n = n * 10 + src[j] - '0';
+                j++;
             }
             if (n > 0)
                 line = n - 1;
 
-            while (i < line_end && (src[i] == ' ' || src[i] == '\t'))
-                i++;
-            if (i < line_end && src[i] == '"') {
-                i++;
+            while (j < line_end && (src[j] == ' ' || src[j] == '\t'))
+                j++;
+            if (j < line_end && src[j] == '"') {
+                j++;
                 qi = 0;
-                while (i < line_end && src[i] != '"' && qi < filebufsz - 1)
-                    filebuf[qi++] = src[i++];
-                if (filebufsz > 0)
-                    filebuf[qi] = 0;
+                while (j < line_end && src[j] != '"' && qi < (int)sizeof(curfile) - 1)
+                    curfile[qi++] = src[j++];
+                curfile[qi] = 0;
             }
         }
 
-        if (p >= ofs)
+        g_srcline_table[g_srcline_count].ofs = line_start;
+        g_srcline_table[g_srcline_count].line = line;
+        strcpy(g_srcline_table[g_srcline_count].file, curfile);
+        g_srcline_count++;
+
+        if (p >= src_len)
             break;
-        if (p < src_len && src[p] == '\n') {
-            p++;
-            line++;
+        line++;
+        p++; /* skip the newline */
+    }
+
+    g_srcline_built_for_generation = g_src_generation;
+}
+
+void source_location_at(long ofs, char *filebuf, int filebufsz, int *linep)
+{
+    long lo, hi, mid, best;
+
+    if (ofs < 0)
+        ofs = 0;
+    if (ofs > src_len)
+        ofs = src_len;
+
+    if (g_srcline_built_for_generation != g_src_generation)
+        build_srcline_table();
+
+    lo = 0;
+    hi = g_srcline_count - 1;
+    best = 0;
+    while (lo <= hi) {
+        mid = (lo + hi) / 2;
+        if (g_srcline_table[mid].ofs <= ofs) {
+            best = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
         }
     }
 
-    linep[0] = line;
+    linep[0] = g_srcline_table[best].line;
+    if (filebufsz > 0) {
+        strncpy(filebuf, g_srcline_table[best].file, (size_t)filebufsz - 1);
+        filebuf[filebufsz - 1] = 0;
+    }
 }
 
 void dcc_error_at(const char *file, int line, long ofs, const char *msg, const char *near_text)

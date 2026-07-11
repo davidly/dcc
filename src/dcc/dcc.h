@@ -429,6 +429,12 @@ extern unsigned int current_field_bit_mask;
 /* source buffer + lexer position + lookahead token */
 extern char *src;
 extern long src_len;
+/* Bumped every time `src`/`src_len` is reassigned to point at different
+ * text (initial preprocessing, replace_source_range's in-place macro
+ * expansion, dcc_global_scan.c's pre-pass save/restore) - lets
+ * source_location_at's precomputed line table (dcc_diag_emit.c) detect that
+ * it must rebuild rather than answer from stale text. */
+extern long g_src_generation;
 extern long posi;
 extern long tok_start_pos;
 extern int line_no;

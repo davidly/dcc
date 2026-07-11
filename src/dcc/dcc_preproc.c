@@ -1480,6 +1480,7 @@ void replace_source_range(long start, long end, const char *text)
     nsrc[start + n + rest] = 0;
     src = nsrc;
     src_len = start + n + rest;
+    g_src_generation++;
     posi = start;
 }
 

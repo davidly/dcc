@@ -1582,6 +1582,7 @@ int main(int argc, char **argv)
         memcpy(saved_defs, defs, sizeof(defs));
 
         src = preprocess_includes_file(input_name, 0, &src_len);
+        g_src_generation++;
 
         ndefs = saved_ndefs;
         memcpy(defs, saved_defs, sizeof(defs));
@@ -1617,6 +1618,7 @@ int main(int argc, char **argv)
         free(src);
         src = filtered_src;
         src_len = filtered_len;
+        g_src_generation++;
     }
     /* Function-like macros are now left in the filtered source and processed
      * by the normal lexer-level preprocessor in source order.  Do not pre-scan

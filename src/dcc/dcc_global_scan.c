@@ -269,6 +269,7 @@ void scan_global_write_info(void)
     free(src);
     src = saved_src;
     src_len = saved_src_len;
+    g_src_generation++;
 
     /* Position-keyed preprocessor state populated by that same macro
      * expansion (dcc_preproc.c's disabled-macro-range tracking and

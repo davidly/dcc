@@ -53,6 +53,7 @@ unsigned int current_field_bit_mask;
 /* ---- source buffer + lexer position + lookahead token ------------------ */
 char *src;
 long src_len;
+long g_src_generation;
 long posi;
 long tok_start_pos;
 int line_no;
