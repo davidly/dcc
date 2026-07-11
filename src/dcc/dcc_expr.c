@@ -1112,7 +1112,12 @@ void check_undefined_user_labels(void)
     for (i = 0; i < nulabels; ++i) {
         if (ulabel_referenced[i] && !ulabel_defined[i]) {
             char msg[96];
-            sprintf(msg, "undefined goto label '%s'", ulabel_names[i]);
+            /* ulabel_names[i] is char[64]; the explicit .63s precision
+             * (its declared size - 1) lets gcc prove the result always fits
+             * msg's 96 bytes, since it otherwise can't see the bound
+             * through the array index (-Wformat-overflow false positive -
+             * same class fixed in dccmake.c and asm_name_prefix_underscore). */
+            sprintf(msg, "undefined goto label '%.63s'", ulabel_names[i]);
             dcc_error_at(tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
                          tok_line, -1, msg, NULL);
         }
