@@ -26,6 +26,11 @@ static int param_shadow(int p)
     return got * 100 + p;
 }
 
+static int plus_one(int value)
+{
+    return value + 1;
+}
+
 int main(void)
 {
     int sum = 0;
@@ -145,6 +150,34 @@ int main(void)
             psum += *p;
         chk(*p, 2L, "pointer outer");
         chk(psum, 12L, "pointer sum");
+    }
+
+    /* Arrays and function pointers are automatic objects too.  Keep them
+     * distinct from direct function declarations, which C99/C11 do not allow
+     * in the declaration part of a for statement. */
+    {
+        int asum = 0;
+        int fvalue = 7;
+        for (int k = 0, vals[2] = { 3, 4 }; k < 2; k++)
+            asum += vals[k];
+        for (int (*fn)(int) = plus_one; fvalue < 9; fvalue = fn(fvalue))
+            ;
+        chk(asum, 7L, "array object declaration");
+        chk(fvalue, 9L, "function pointer object declaration");
+    }
+
+    /* auto and register are the only storage classes C99/C11 permit in a
+     * for-init declaration.  dcc has no Z80 register allocation, so the hint
+     * is a no-op and both behave as ordinary block-scoped auto locals. */
+    {
+        int rsum = 0;
+        int asum = 0;
+        for (register int r = 0; r < 3; r++)
+            rsum += r;
+        for (auto int a = 0; a < 3; a++)
+            asum += a;
+        chk(rsum, 3L, "register for-init");
+        chk(asum, 3L, "auto for-init");
     }
 
     /* a for-init declaration can shadow a parameter. */

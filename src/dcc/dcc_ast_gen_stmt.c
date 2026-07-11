@@ -271,6 +271,33 @@ static int ast_for_first_iter_certain(const struct AstNode *n)
     }
 }
 
+void ast_gen_dead_expr(const struct AstNode *n)
+{
+    if (n->kind == AST_COMMA) {
+        ast_gen_dead_expr(n->a);
+        ast_gen_dead_expr(n->b);
+    } else if (n->kind == AST_CAST && (n->type & 15) == TYPE_VOID) {
+        ast_gen_dead_expr(n->a);
+    } else if ((n->kind == AST_UNARY || n->kind == AST_POSTFIX) &&
+               (n->op == TOK_INC || n->op == TOK_DEC)) {
+        struct Sym *s = ast_deadincdec_sym_direct(n);
+        if (s != NULL) {
+            emit_incdec_sym_direct(s, n->op);
+        } else {
+            int vt;
+            gen_deadincdec_addr_lvalue_ast(n, &vt);
+            if (current_field_bit_width > 0)
+                emit_pre_incdec_lvalue(vt, n->op);
+            else
+                emit_incdec_addr(vt, n->op);
+        }
+    } else if (ast_is_local_self_add_stmt(n)) {
+        ast_emit_local_self_add_stmt(n);
+    } else {
+        ast_gen_expr(n);
+    }
+}
+
 /* Rewrites a copy of `rhs` (a for-loop body's assignment right-hand side),
  * hoisting the address of any 2D array read within it whose OUTER (row)
  * subscript does not reference `ivar_name` and has no side effects.
@@ -511,27 +538,7 @@ void ast_gen_for_stmt(const struct AstNode *n)
              * address-computed store fast path the gate already approved. */
             int saved_dead = expr_result_dead;
             expr_result_dead = 1;
-            if ((n->a->kind == AST_UNARY || n->a->kind == AST_POSTFIX) &&
-                (n->a->op == TOK_INC || n->a->op == TOK_DEC)) {
-                /* Same dedicated dead-result inc/dec emit the for-increment
-                 * clause and expression statements use, so a for-init
-                 * `++x`/`x--` (including postfix pointer, which has no
-                 * value-context lowering) stores correctly instead of routing
-                 * through the value path. */
-                struct Sym *s = ast_deadincdec_sym_direct(n->a);
-                if (s != NULL) {
-                    emit_incdec_sym_direct(s, n->a->op);
-                } else {
-                    int vt;
-                    gen_deadincdec_addr_lvalue_ast(n->a, &vt);
-                    if (current_field_bit_width > 0)
-                        emit_pre_incdec_lvalue(vt, n->a->op);
-                    else
-                        emit_incdec_addr(vt, n->a->op);
-                }
-            } else {
-                ast_gen_expr(n->a);
-            }
+            ast_gen_dead_expr(n->a);
             expr_result_dead = saved_dead;
         }
     }
@@ -741,24 +748,7 @@ void ast_gen_for_stmt(const struct AstNode *n)
     if (n->c != NULL) {
         int old_dead = expr_result_dead;
         expr_result_dead = 1;
-        if ((n->c->kind == AST_UNARY || n->c->kind == AST_POSTFIX) &&
-            (n->c->op == TOK_INC || n->c->op == TOK_DEC)) {
-            struct Sym *s = ast_deadincdec_sym_direct(n->c);
-            if (s != NULL) {
-                emit_incdec_sym_direct(s, n->c->op);
-            } else {
-                int vt;
-                gen_deadincdec_addr_lvalue_ast(n->c, &vt);
-                if (current_field_bit_width > 0)
-                    emit_pre_incdec_lvalue(vt, n->c->op);
-                else
-                    emit_incdec_addr(vt, n->c->op);
-            }
-        } else if (ast_is_local_self_add_stmt(n->c)) {
-            ast_emit_local_self_add_stmt(n->c);
-        } else {
-            ast_gen_expr(n->c);
-        }
+        ast_gen_dead_expr(n->c);
         expr_result_dead = old_dead;
     }
     if (rotate)
@@ -898,24 +888,7 @@ void ast_gen_stmt(const struct AstNode *n)
          * expr_result_dead set. */
         int old_dead = expr_result_dead;
         expr_result_dead = 1;
-        if ((n->a->kind == AST_UNARY || n->a->kind == AST_POSTFIX) &&
-            (n->a->op == TOK_INC || n->a->op == TOK_DEC)) {
-            struct Sym *s = ast_deadincdec_sym_direct(n->a);
-            if (s != NULL) {
-                emit_incdec_sym_direct(s, n->a->op);
-            } else {
-                int vt;
-                gen_deadincdec_addr_lvalue_ast(n->a, &vt);
-                if (current_field_bit_width > 0)
-                    emit_pre_incdec_lvalue(vt, n->a->op);
-                else
-                    emit_incdec_addr(vt, n->a->op);
-            }
-        } else if (ast_is_local_self_add_stmt(n->a)) {
-            ast_emit_local_self_add_stmt(n->a);
-        } else {
-            ast_gen_expr(n->a);
-        }
+        ast_gen_dead_expr(n->a);
         expr_result_dead = old_dead;
         break;
     }

@@ -493,6 +493,7 @@ extern int g_forren_n;
 extern int g_for_decl_seq;
 extern int g_for_decl_rename_index;
 extern int g_for_decl_recording;
+extern int g_for_decl_saw_nonobject;
 const char *resolve_local_rename(const char *name);
 void make_for_rename_name(char *dst, int dstsz, const char *from, int for_seq, int rename_index);
 void add_for_scope_rename(int for_seq, const char *from);

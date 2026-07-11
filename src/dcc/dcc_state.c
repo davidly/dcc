@@ -136,6 +136,7 @@ int g_forren_n;
 int g_for_decl_seq;
 int g_for_decl_rename_index;
 int g_for_decl_recording;
+int g_for_decl_saw_nonobject;
 
 /* General lexical block scope stack: the nlocals watermark saved at each open
  * { } block.  leave_scope truncates nlocals back so block-local names leave

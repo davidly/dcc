@@ -4837,7 +4837,12 @@ void ast_gen_expr(const struct AstNode *n)
         gen_compound_literal_value_ast(n);
         break;
     case AST_COMMA:
-        ast_gen_expr(n->a);
+        {
+            int old_dead = expr_result_dead;
+            expr_result_dead = 1;
+            ast_gen_dead_expr(n->a);
+            expr_result_dead = old_dead;
+        }
         ast_gen_expr(n->b);
         break;
     default:

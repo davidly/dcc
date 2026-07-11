@@ -1,0 +1,13 @@
+<source>:5: error DCC-E1002: unsupported for statement near 'for'
+        for (static int local_static = 0; local_static < 1; local_static++) ;
+        ^
+<source>:6: error DCC-E1002: unsupported for statement near 'for'
+        for (extern int external_value; external_value < 1; external_value++) ;
+        ^
+<source>:7: error DCC-E1002: unsupported for statement near 'for'
+        for (typedef int LocalInt; 0; ) ;
+        ^
+<source>:8: error DCC-E1002: unsupported for statement near 'for'
+        for (int function(void), object = 0; object < 1; object++) ;
+        ^
+dcc: 4 error(s)
