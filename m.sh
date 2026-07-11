@@ -4,7 +4,7 @@
 
 set -e
 
-rm -f dcc dccpeep dccrtlstrip dccmake
+rm -f dcc dccpeep dccrtlstrip dccmake m80c
 
 # These are host build tools, not the Z80 target, so link statically on
 # Linux by default: the binaries are then copyable/runnable on another Linux
@@ -36,5 +36,8 @@ gcc -O2 -g $STATICFLAGS -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c
 
 echo "Building dccmake..."
 gcc -O2 -g $STATICFLAGS -o dccmake src/dccmake/dccmake.c
+
+echo "Building m80c..."
+gcc -std=c89 -O2 $STATICFLAGS -o m80c src/m80c/m80c.c
 
 echo "Done."

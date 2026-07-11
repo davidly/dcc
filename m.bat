@@ -12,6 +12,8 @@ if exist dccrtlstrip del /q dccrtlstrip
 if exist dccrtlstrip.exe del /q dccrtlstrip.exe
 if exist dccmake del /q dccmake
 if exist dccmake.exe del /q dccmake.exe
+if exist m80c del /q m80c
+if exist m80c.exe del /q m80c.exe
 
 pushd src\dcc
 call build-dcc.bat
@@ -24,4 +26,6 @@ cl /nologo src\dccpeep\dccpeep.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /
 cl /nologo src\dccrtlstrip\dccrtlstrip.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 
 cl /nologo src\dccmake\dccmake.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
+
+cl /nologo src\m80c\m80c.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 

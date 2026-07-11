@@ -26,6 +26,7 @@
 #define LOCAL_DCC ".\\dcc"
 #define LOCAL_DCCPEEP ".\\dccpeep"
 #define LOCAL_DCCRTLSTRIP ".\\dccrtlstrip"
+#define LOCAL_M80C ".\\m80c"
 #else
 #include <unistd.h>
 #define MKDIR(path) mkdir(path, 0777)
@@ -35,6 +36,7 @@
 #define LOCAL_DCC "./dcc"
 #define LOCAL_DCCPEEP "./dccpeep"
 #define LOCAL_DCCRTLSTRIP "./dccrtlstrip"
+#define LOCAL_M80C "./m80c"
 #endif
 
 #define MAX_ITEMS 128
@@ -59,6 +61,7 @@ struct Config {
     int stack_check;
     int no_narrow;
     int stack_bytes;
+    int use_emulated_m80;
     char includes[MAX_ITEMS][MAX_PATH_LEN];
     int include_count;
     char dcc_args[MAX_ITEMS][MAX_PATH_LEN];
@@ -71,6 +74,7 @@ struct Config {
     char dccrtlstrip[MAX_PATH_LEN];
     char ntvcm[MAX_PATH_LEN];
     char m80[MAX_PATH_LEN];
+    char m80c[MAX_PATH_LEN];
     char l80[MAX_PATH_LEN];
     char runtime[MAX_PATH_LEN];
 };
@@ -484,6 +488,37 @@ static void resolve_tool_path(char *dst, size_t dst_size, const char *env_name,
     copy_text(dst, dst_size, fallback);
 }
 
+/* m80c, unlike dcc/dccpeep/dccrtlstrip, gets run via run_cmd_in_dir (needs
+ * cwd = build_dir, same reason ntvcm+M80 does) - so if resolve_tool_path
+ * picked the local-build fallback ("./m80c", relative to the ORIGINAL
+ * working directory), it would silently resolve to the wrong file once that
+ * chdir happens. Rewrite a same-directory relative path to absolute right
+ * away; a bare PATH name (no separator) or an explicit env override is left
+ * untouched, since those aren't cwd-relative in the first place. */
+static void make_local_tool_path_absolute(char *path, size_t path_size)
+{
+    char cwd[MAX_PATH_LEN];
+    char abs[MAX_PATH_LEN];
+    int n;
+    int has_sep = strchr(path, '/') != NULL || strchr(path, '\\') != NULL;
+
+    if (!has_sep)
+        return;
+#ifdef _WIN32
+    if (path[0] && path[1] == ':')
+        return;
+#else
+    if (path[0] == '/')
+        return;
+#endif
+    if (!GETCWD(cwd, sizeof(cwd)))
+        return;
+    n = snprintf(abs, sizeof(abs), "%.255s%c%.255s", cwd, PATH_SEP, path);
+    if (n < 0 || (size_t)n >= sizeof(abs))
+        return;
+    copy_text(path, path_size, abs);
+}
+
 /* Same env-override-then-local-file-then-fallback resolution as
  * resolve_tool_path, but for a plain data file (DCCRTL.MAC) rather than an
  * executable - no platform-specific ".exe" suffix applies. */
@@ -514,12 +549,18 @@ static void init_config(struct Config *cfg)
     cfg->stack_bytes = 512;
     cfg->peep = 1;
     cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
+    /* Native m80c is the default assembler (no Z80 emulation needed); set
+     * DCC_USE_EMULATED_M80=1 to fall back to the real M80.COM under ntvcm,
+     * e.g. to cross-check output or when m80c hasn't been built locally. */
+    cfg->use_emulated_m80 = getenv("DCC_USE_EMULATED_M80") && !strcmp(getenv("DCC_USE_EMULATED_M80"), "1");
     copy_text(cfg->build_dir, sizeof(cfg->build_dir), "build");
     resolve_tool_path(cfg->dcc, sizeof(cfg->dcc), "DCC", LOCAL_DCC, "dcc");
     resolve_tool_path(cfg->dccpeep, sizeof(cfg->dccpeep), "DCCPEEP", LOCAL_DCCPEEP, "dccpeep");
     resolve_tool_path(cfg->dccrtlstrip, sizeof(cfg->dccrtlstrip), "DCCRTLSTRIP", LOCAL_DCCRTLSTRIP, "dccrtlstrip");
     resolve_tool_path(cfg->ntvcm, sizeof(cfg->ntvcm), "NTVCM", NULL, "ntvcm");
     resolve_tool_path(cfg->m80, sizeof(cfg->m80), "M80", NULL, "m80");
+    resolve_tool_path(cfg->m80c, sizeof(cfg->m80c), "M80C", LOCAL_M80C, "m80c");
+    make_local_tool_path_absolute(cfg->m80c, sizeof(cfg->m80c));
     resolve_tool_path(cfg->l80, sizeof(cfg->l80), "L80", NULL, "l80");
     copy_text(cfg->runtime, sizeof(cfg->runtime), env_or_default("DCC_RUNTIME", "DCCRTL.MAC", "DCCRTL.MAC"));
     add_whitespace_args(cfg->dcc_args, &cfg->dcc_arg_count, getenv("DCC_ARGS"));
@@ -740,6 +781,21 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         trim(cfg->m80);
         return cfg->m80[0] != 0;
     }
+    if (!strcmp(key, "m80c-tool")) {
+        copy_text(cfg->m80c, sizeof(cfg->m80c), value);
+        trim(cfg->m80c);
+        if (cfg->m80c[0])
+            make_local_tool_path_absolute(cfg->m80c, sizeof(cfg->m80c));
+        return cfg->m80c[0] != 0;
+    }
+    if (!strcmp(key, "dcc-use-emulated-m80")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->use_emulated_m80 = b;
+        return 1;
+    }
     if (!strcmp(key, "l80-command")) {
         copy_text(cfg->l80, sizeof(cfg->l80), value);
         trim(cfg->l80);
@@ -816,7 +872,8 @@ static void print_help(void)
     printf("  dcc each .c file to .MAC; files after the first use -module\n");
     printf("  optionally run dccpeep on generated app .MAC files\n");
     printf("  run dccrtlstrip with the first .MAC as the runtime root\n");
-    printf("  assemble all .MAC files and RTLMIN.MAC with ntvcm M80\n");
+    printf("  assemble all .MAC files and RTLMIN.MAC with native m80c\n");
+    printf("  (or ntvcm M80.COM if dcc-use-emulated-m80=true)\n");
     printf("  link RTLMIN plus all app modules with ntvcm L80\n");
     printf("\n");
     printf("dccmake.txt format:\n");
@@ -866,6 +923,9 @@ static void print_help(void)
     printf("  dcc-allow-undocumented-z80=false|true|1|0\n");
     printf("                                 pass -fundocumented-z80 to dccpeep; default false\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
+    printf("  dcc-use-emulated-m80=false|true|1|0\n");
+    printf("                                 assemble with real M80.COM under ntvcm instead\n");
+    printf("                                 of native m80c; default false\n");
     printf("\n");
     printf("dcc-style command options:\n");
     printf("  -f, -ffloatio                  same as dcc-floatio=true\n");
@@ -879,6 +939,7 @@ static void print_help(void)
     printf("  -s <bytes>, -stack <bytes>     same as dcc-stack-bytes=<bytes>\n");
     printf("  -fstack-check                  same as dcc-stack-check=true\n");
     printf("  -fno-narrow                    same as dcc-no-narrow=true\n");
+    printf("  -femulated-m80                 same as dcc-use-emulated-m80=true\n");
     printf("  -I <dir>, -Idir                add an include directory\n");
     printf("  -D <name>[=value], -Dname=val  pass a define to dcc\n");
     printf("  -U <name>, -Uname              pass an undefine to dcc\n");
@@ -890,8 +951,9 @@ static void print_help(void)
     printf("  dcc-tool=dcc                  dcc compiler command\n");
     printf("  dccpeep-tool=dccpeep          peephole optimizer command\n");
     printf("  dccrtlstrip-tool=dccrtlstrip  runtime stripper command\n");
-    printf("  ntvcm-tool=ntvcm              emulator command for M80/L80\n");
-    printf("  m80-command=m80               CP/M assembler command passed to ntvcm\n");
+    printf("  ntvcm-tool=ntvcm              emulator command for M80 (if emulated)/L80\n");
+    printf("  m80-command=m80               CP/M assembler command passed to ntvcm (emulated M80 only)\n");
+    printf("  m80c-tool=m80c                native host assembler command (default, no ntvcm)\n");
     printf("  l80-command=l80               CP/M linker command passed to ntvcm\n");
     printf("  dcc-runtime=DCCRTL.MAC        runtime source used by dccrtlstrip\n");
     printf("\n");
@@ -968,6 +1030,10 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         }
         if (!strcmp(arg, "-fno-narrow")) {
             cfg->no_narrow = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-femulated-m80")) {
+            cfg->use_emulated_m80 = 1;
             continue;
         }
         if (!strcmp(arg, "-s") || !strcmp(arg, "-stack")) {
@@ -1393,6 +1459,28 @@ static int build_dcc_command(struct Config *cfg, int index, const char *input,
     return 1;
 }
 
+/* Builds the M80-style "obj,prn=source /X /O /Z /L" assembly command, either
+ * for native m80c (default: runs directly, no emulator) or, when
+ * cfg->use_emulated_m80 is set, for the real M80.COM under ntvcm (as
+ * before). mac_arg is the M80-style "=NAME.MAC" source argument. */
+static int build_m80_command(struct Config *cfg, const char *mac_arg,
+                              char *cmd, size_t cmd_size)
+{
+    cmd_init(cmd, cmd_size);
+    if (cfg->use_emulated_m80) {
+        if (!cmd_arg(cmd, cmd_size, cfg->ntvcm)) return 0;
+        if (!cmd_arg(cmd, cmd_size, cfg->m80)) return 0;
+    } else {
+        if (!cmd_arg(cmd, cmd_size, cfg->m80c)) return 0;
+    }
+    if (!cmd_arg(cmd, cmd_size, mac_arg)) return 0;
+    if (!cmd_arg(cmd, cmd_size, "/X")) return 0;
+    if (!cmd_arg(cmd, cmd_size, "/O")) return 0;
+    if (!cmd_arg(cmd, cmd_size, "/Z")) return 0;
+    if (!cmd_arg(cmd, cmd_size, "/L")) return 0;
+    return 1;
+}
+
 static int add_default_include(struct Config *cfg)
 {
     if (cfg->include_count >= MAX_ITEMS)
@@ -1541,15 +1629,9 @@ static int run_build(struct Config *cfg)
     }
 
     for (i = 0; i < cfg->input_count; i++) {
-        cmd_init(cmd, sizeof(cmd));
-        if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
-        if (!cmd_arg(cmd, sizeof(cmd), cfg->m80)) return 0;
         snprintf(tmp, sizeof(tmp), "=%.127s.MAC", uppers[i]);
-        if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
-        if (!cmd_arg(cmd, sizeof(cmd), "/X")) return 0;
-        if (!cmd_arg(cmd, sizeof(cmd), "/O")) return 0;
-        if (!cmd_arg(cmd, sizeof(cmd), "/Z")) return 0;
-        if (!cmd_arg(cmd, sizeof(cmd), "/L")) return 0;
+        if (!build_m80_command(cfg, tmp, cmd, sizeof(cmd)))
+            return 0;
         if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rels[i])) {
             fprintf(stderr, "assembly failed: %s was not produced\n", rels[i]);
             return 0;
@@ -1581,14 +1663,8 @@ static int run_build(struct Config *cfg)
     if (!run_cmd(cmd) || !file_exists(rtl_min) || !to_crlf(rtl_min))
         return 0;
 
-    cmd_init(cmd, sizeof(cmd));
-    if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), cfg->m80)) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), "=RTLMIN.MAC")) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), "/X")) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), "/O")) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), "/Z")) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), "/L")) return 0;
+    if (!build_m80_command(cfg, "=RTLMIN.MAC", cmd, sizeof(cmd)))
+        return 0;
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rtl_rel)) {
         fprintf(stderr, "runtime assembly failed: %s was not produced\n", rtl_rel);
         return 0;

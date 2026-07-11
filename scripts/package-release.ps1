@@ -54,7 +54,7 @@ function Copy-RequiredFile {
 }
 
 $exeExt = if ($IsWindows) { ".exe" } else { "" }
-$hostTools = @("dcc", "dccpeep", "dccrtlstrip", "dccmake")
+$hostTools = @("dcc", "dccpeep", "dccrtlstrip", "dccmake", "m80c")
 foreach ($tool in $hostTools) {
     Copy-RequiredFile -Source (Join-Path $repoRoot "$tool$exeExt") -Destination (Join-Path $binDir "$tool$exeExt")
 }
@@ -142,6 +142,8 @@ if ($AddToUserPath) {
 Write-Host "dcc installed to: $installPath"
 Write-Host "Tools: $installPath/bin"
 Write-Host "User environment variables set: DCC_HOME, DCC_INCLUDE, DCC_LIB, DCC_RUNTIME, M80, L80"
+Write-Host "Native m80c (bin/m80c) is used to assemble by default; M80 (real M80.COM under ntvcm)"
+Write-Host "is only used when dcc-use-emulated-m80=true / -femulated-m80 is passed to dccmake/ma."
 if ($AddToUserPath) {
     Write-Host "User PATH updated. Restart your terminal for PATH changes to take effect."
 }
@@ -265,12 +267,14 @@ export DCC_HOME="$PREFIX"
 export DCC_INCLUDE="\$DCC_HOME/include\${DCC_INCLUDE:+:\$DCC_INCLUDE}"
 export DCC_LIB="\$DCC_HOME/lib:\$DCC_HOME\${DCC_LIB:+:\$DCC_LIB}"
 export DCC_RUNTIME="\${DCC_RUNTIME:-\$DCC_HOME/lib/DCCRTL.MAC}"
+# M80 (real M80.COM under ntvcm) is only used when dcc-use-emulated-m80=true /
+# -femulated-m80 is passed; the default assembler is native m80c on bin/'s PATH.
 export M80="\${M80:-\$DCC_HOME/m80.com}"
 export L80="\${L80:-\$DCC_HOME/l80.com}"
 EOF
 
 mkdir -p "$LINK_DIR"
-for tool in dcc dccpeep dccrtlstrip dccmake ntvcm; do
+for tool in dcc dccpeep dccrtlstrip dccmake m80c ntvcm; do
     if [ -f "$PREFIX/bin/$tool" ]; then
         ln -sf "$PREFIX/bin/$tool" "$LINK_DIR/$tool"
     fi
@@ -291,7 +295,7 @@ PREFIX=${PREFIX:-"$HOME/.local/dcc-cpm-z80"}
 LINK_DIR=${LINK_DIR:-"$HOME/.local/bin"}
 
 rm -rf "$PREFIX"
-for tool in dcc dccpeep dccrtlstrip dccmake ntvcm; do
+for tool in dcc dccpeep dccrtlstrip dccmake m80c ntvcm; do
     if [ -L "$LINK_DIR/$tool" ] || [ -f "$LINK_DIR/$tool" ]; then
         rm -f "$LINK_DIR/$tool"
     fi
@@ -316,16 +320,18 @@ $packageReadmeTemplate = @'
 {{VERSION_LINE}}
 
 This package contains the dcc host tools, the ntvcm CP/M emulator, the CP/M
-assembler/linker tools used by the build pipeline, the DCC runtime, and the
-public standard-library headers.
+linker (and, optionally, assembler) tools used by the build pipeline, the DCC
+runtime, and the public standard-library headers.
 
 ## Layout
 
-- bin/ - dcc, dccpeep, dccrtlstrip, dccmake, and ntvcm for this host platform.
+- bin/ - dcc, dccpeep, dccrtlstrip, dccmake, m80c, and ntvcm for this host platform.
 - include/ - dcc public C headers.
 - lib/ - DCCRTL.MAC runtime library.
 - DCCRTL.MAC, m80.com, l80.com - staged at the package root for compatibility
-    with dccmake and the existing build pipeline.
+    with dccmake and the existing build pipeline. m80.com is only used when
+    dcc-use-emulated-m80=true is requested; dccmake assembles with native
+    m80c (from bin/) by default, with no ntvcm emulation needed for that step.
 
 ## Install
 
@@ -362,8 +368,9 @@ Linux/macOS:
 export PATH="$PWD/bin:$PATH"
 export DCC_HOME="$PWD"
 export DCC_RUNTIME="$PWD/lib/DCCRTL.MAC"
-export M80="$PWD/m80.com"
 export L80="$PWD/l80.com"
+# Assembling uses native m80c from bin/ (on PATH above) by default; only set
+# M80 and pass dcc-use-emulated-m80=true if you want the real M80.COM instead.
 dccmake hello.c dcc-include="$PWD/include"
 ```
 
@@ -373,8 +380,9 @@ Windows PowerShell:
 $env:PATH = "$PWD/bin$([IO.Path]::PathSeparator)$env:PATH"
 $env:DCC_HOME = "$PWD"
 $env:DCC_RUNTIME = "$PWD/lib/DCCRTL.MAC"
-$env:M80 = "$PWD/m80.com"
 $env:L80 = "$PWD/l80.com"
+# Assembling uses native m80c from bin/ (on PATH above) by default; only set
+# M80 and pass dcc-use-emulated-m80=true if you want the real M80.COM instead.
 dccmake hello.c dcc-include="$PWD/include"
 ```
 

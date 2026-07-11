@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-usage: dcc-ma name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND]
+usage: dcc-ma name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND] [--emulated-m80]
     dcc-ma --help
 
 examples:
@@ -11,6 +11,7 @@ examples:
   dcc-ma hello --source-path ./hello.c --build-dir build
   DCC_STACK_SIZE=1024 dcc-ma sieve fast
   DCC_ARGS="-DDEBUG=1" NTVCM_ARGS="-p -s:4000000" dcc-ma hello fast
+  dcc-ma sieve fast --emulated-m80   # assemble with real M80.COM under ntvcm instead of native m80c
 
 build modes:
     fast       run dccpeep after dcc (default)
@@ -24,11 +25,14 @@ script options:
     --source-path FILE  explicit C source path
     --build-dir DIR     build artifact directory (default: build)
     --emulator COMMAND  emulator command used for CP/M tools (default: ntvcm)
+    --emulated-m80      assemble with real M80.COM under ntvcm instead of
+                        native m80c (default); same as DCC_USE_EMULATED_M80=1
     --mode MODE         full, fast, or nopeep
     --help, -h          show this help
 
 dcc pipeline:
-    dcc -> dccpeep (fast mode) -> ntvcm M80 -> dccrtlstrip -> ntvcm M80 -> ntvcm L80
+    dcc -> dccpeep (fast mode) -> m80c -> dccrtlstrip -> m80c -> ntvcm L80
+    (or ntvcm M80.COM in place of m80c, with --emulated-m80)
 
 dcc options controlled by this helper:
     dcc option                  how to set it
@@ -56,7 +60,9 @@ dcc options not suitable for dcc-ma:
 
 tool and asset overrides:
     DCC, DCCPEEP, DCCRTLSTRIP   host tool paths or command names
-    NTVCM, M80, L80             emulator and CP/M tool command names
+    M80C                        native assembler command (default: m80c); used unless
+                                 --emulated-m80/DCC_USE_EMULATED_M80=1 selects real M80.COM
+    NTVCM, M80, L80             emulator and CP/M tool command names (M80/emulator path only)
     DCC_HOME                    package/install root for bin/, include/, lib/, m80.com, l80.com
     DCC_LIB                     extra runtime/tool asset roots, path-separator separated
     DCC_RUNTIME                 explicit DCCRTL.MAC path
@@ -91,6 +97,7 @@ mode="fast"
 build_dir="build"
 source_path=""
 emulator="ntvcm"
+use_emulated_m80="${DCC_USE_EMULATED_M80:-0}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -112,6 +119,10 @@ while [ $# -gt 0 ]; do
             if [ $# -lt 2 ]; then echo "missing value for $1" >&2; exit 1; fi
             emulator="$2"
             shift 2
+            ;;
+        --emulated-m80|-EmulatedM80)
+            use_emulated_m80=1
+            shift
             ;;
         --mode|-Mode)
             if [ $# -lt 2 ]; then echo "missing value for $1" >&2; exit 1; fi
@@ -235,7 +246,12 @@ run_one() {
     local DCCRTLSTRIP="${DCCRTLSTRIP:-dccrtlstrip}"
     local NTVCM="${NTVCM:-$emulator}"
     local M80="${M80:-m80}"
+    local M80C="${M80C:-m80c}"
     local L80="${L80:-l80}"
+    # Resolved once, outside the "cd $build_dir" subshell used for the
+    # assembly steps below, same as DCC/DCCPEEP/DCCRTLSTRIP above.
+    local m80c_resolved
+    m80c_resolved="$(resolve_command "$M80C")"
 
     mkdir -p "$build_dir"
 
@@ -386,7 +402,11 @@ run_one() {
 
     (
         cd "$build_dir"
-        "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=${upper_base}.MAC" /X /O /Z /L
+        if [ "$use_emulated_m80" = "1" ]; then
+            "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=${upper_base}.MAC" /X /O /Z /L
+        else
+            "$m80c_resolved" "=${upper_base}.MAC" /X /O /Z /L
+        fi
     )
 
     cp -f "$root_rtl_src" "$rtl_src"
@@ -399,7 +419,11 @@ run_one() {
 
     (
         cd "$build_dir"
-        "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=RTLMIN.MAC" /X /O /Z
+        if [ "$use_emulated_m80" = "1" ]; then
+            "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=RTLMIN.MAC" /X /O /Z
+        else
+            "$m80c_resolved" "=RTLMIN.MAC" /X /O /Z
+        fi
         "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$L80" "/P:100,RTLMIN,${upper_base},${upper_base}/N/E/Y"
     )
 

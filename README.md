@@ -104,6 +104,16 @@ I use my [ntvcm](https://github.com/davidly/ntvcm) CP/M 2.2 emulator to run m80.
 
 m80.com and l80.com are part of the M80 Assembler product from Microsoft. I didn't write them. They are included in this repo to ease development, but they can be found in dozens of locations on the internet.
 
+By default, dccmake/ma.sh/ma.ps1 assemble with `m80c`, a from-scratch, conservative
+clone of M80 (see `src/m80c/m80c.c`) that runs natively on the host instead of
+under CP/M emulation - no ntvcm involved for that step. L80 is still real M80
+Assembler-product software and still runs under ntvcm, since only the assembler
+was reimplemented. Pass `dcc-use-emulated-m80=true` to dccmake, `-femulated-m80`
+directly to dccmake, `--emulated-m80`/`-EmulatedM80` to ma.sh/ma.ps1, or
+`-UseEmulatedM80` to runall.ps1/runall-extended.ps1, to assemble with the real
+M80.COM under ntvcm instead (e.g. to cross-check output, or if m80c hasn't been
+built locally).
+
 ## C89+ language 
 
 The compiler accepts some syntax from later C standards including declaring variables where you like and initializing them with complex expressions. Only 4-byte floats are supported; 8-byte doubles are not. I'm certain more arcane C89 expressions/features aren't implemented (yet), but the test cases have pretty good coverage. Only a small subset of the C runtime is implemented in DCCRTL.MAC, but the samples implement a bunch more that you can copy/paste where needed. The register, volatile, and const keywords are ignored aside from constant folding for const variables.
@@ -166,7 +176,7 @@ dcc compiles on Windows, Linux, and macOS. The build scripts are in the root dir
 chmod +x mmacos.sh
 ./mmacos.sh
 ```
-This produces `dcc`, `dccpeep`, and `dccrtlstrip` in the dcc directory.
+This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, and `m80c` in the dcc directory.
 Requires the clang compiler from the Xcode Command Line Tools (install with `xcode-select --install`).
 
 **Linux:**
@@ -213,7 +223,9 @@ Once both projects are built, set up your environment as shown in the next secti
 The build scripts (`ma.sh`, `ma.bat`, `runall.sh`, `runall.bat`) resolve each
 tool the same way: they use an environment variable if you set one, otherwise
 they look for the tool on your `PATH`. The relevant tools are `dcc`, `dccpeep`,
-`dccrtlstrip`, `ntvcm`, and the `m80`/`l80` assembler/linker.
+`dccrtlstrip`, `m80c`, `ntvcm`, and the `l80` linker (and `m80`, only if you
+pass `-UseEmulatedM80`/`dcc-use-emulated-m80=true` to assemble with the real
+M80.COM instead of native `m80c`).
 
 The simplest setup, especially when building C apps in a project *outside* the
 dcc repo, is to add the directories containing the built `dcc` and `ntvcm`
@@ -226,7 +238,7 @@ Add this to your shell profile (e.g., `~/.zshrc`, `~/.bash_profile`, or
 
 ```bash
 # Add the directories that contain the built dcc and ntvcm binaries to PATH.
-# dcc's directory also provides dccpeep, dccrtlstrip, m80.com, l80.com, and DCCRTL.MAC.
+# dcc's directory also provides dccpeep, dccrtlstrip, m80c, m80.com, l80.com, and DCCRTL.MAC.
 export PATH="$PATH:/path/to/dcc:/path/to/ntvcm"
 ```
 
