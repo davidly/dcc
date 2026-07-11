@@ -4644,22 +4644,62 @@ static int pass_minmax_unsigned_compares(void)
 
 
 
+/* Is `line` inside the body of the function labeled `func`? Originally
+ * always scanned forward from line 0 to `line` on every call - O(line)
+ * every time, called once per line from the main peephole loop's per-line
+ * pattern checks (profiled: the single largest self-time contributor when
+ * compiling tests/cobint.c, the largest generated .mac in the suite - the
+ * only real caller passes "_main:", whose body sits near the top of the
+ * file with the next `public` boundary thousands of lines later, so almost
+ * every call scans nearly the whole file just to conclude "no").
+ *
+ * A first attempt scanned backward from `line` instead, expecting to stop
+ * at the nearest earlier `public` boundary - it didn't help, because that
+ * boundary is exactly as far away going backward as going forward (same
+ * gap, same iteration count), and unlike the forward version's short-
+ * circuited "start<0 so skip the public check" fast path, the backward
+ * version must check every line for "is this a public boundary" before it
+ * even knows whether `func`'s label is nearer, so it did strictly more
+ * work per iteration - a measured regression, not an improvement.
+ *
+ * The actual fix: `func`'s [start, end) range is the same answer for every
+ * query until the line table itself changes shape (an insert/delete
+ * shifting positions - replace1 rewrites a line's text in place without
+ * moving anything, so it can't invalidate this), so compute it once and
+ * reuse it - keyed on `nlines`, the cheapest-to-check proxy for "has
+ * anything shifted", already maintained by every insert/delete site. */
 static int peep_line_in_function(int line, const char *func)
 {
+    static char cached_func[128];
+    static int cached_nlines = -1;
+    static int cached_start = -1;
+    static int cached_end;
     int i;
-    int start;
 
-    start = -1;
-    for (i = 0; i < nlines; i++) {
-        if (strcmp(lines[i], func) == 0)
-            start = i;
-        else if (i > line)
-            break;
-        else if (start >= 0 && peep_is_public_line(lines[i]) && i != start)
-            start = -1;
+    if (line < 0 || line >= nlines)
+        return 0;
+
+    if (cached_nlines != nlines || strcmp(cached_func, func) != 0) {
+        int start = -1, end = nlines;
+
+        for (i = 0; i < nlines; i++) {
+            if (start < 0) {
+                if (strcmp(lines[i], func) == 0)
+                    start = i;
+            } else if (peep_is_public_line(lines[i])) {
+                end = i;
+                break;
+            }
+        }
+
+        strncpy(cached_func, func, sizeof(cached_func) - 1);
+        cached_func[sizeof(cached_func) - 1] = 0;
+        cached_nlines = nlines;
+        cached_start = start;
+        cached_end = end;
     }
 
-    return start >= 0 && line > start;
+    return cached_start >= 0 && line > cached_start && line < cached_end;
 }
 
 
