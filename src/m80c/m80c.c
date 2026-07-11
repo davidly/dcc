@@ -1732,7 +1732,10 @@ static void write_sym(Asm *a) {
 }
 static void default_ext(char *out,const char *in,const char *ext) {
     char *dot,*slash;
-    strcpy(out,in);
+    if(out!=in) strcpy(out,in); // parse_cmd's default_ext(a->src,a->src,".MAC") aliases out==in;
+                                 // a strcpy there is a self-copy (no-op) but macOS's fortified
+                                 // libc traps on any strcpy source/dest overlap, even identical
+                                 // pointers, so skip the copy entirely when there's nothing to do
     slash=strrchr(out,'/');
     {
         char *b=strrchr(out,'\\');
