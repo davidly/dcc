@@ -1204,6 +1204,52 @@ static int to_crlf(const char *path)
     return 1;
 }
 
+/* Scan an M80 listing (.PRN) file for its "N Fatal error(s)" summary line.
+ * M80 does not fail the process when it reports errors, and even lets L80
+ * link straight past an undefined external - so file-existence and exit-
+ * code checks alone can miss a build with real assembler errors. Confirmed
+ * by a real user hitting exactly this: a dccrtlstrip block-splitting bug
+ * left pf_hex_store_nz/pf_hforce declared public but never defined, M80
+ * printed "10 Fatal error(s)" for tests/adaint.c, and the pipeline still
+ * produced a .COM anyway. Returns 1 (clean) if the listing has no such
+ * line, or if the count on it is 0; 0 (fatal errors present) otherwise,
+ * after printing the offending line so the cause is visible. Missing file
+ * (e.g. the assembly step itself already failed and never wrote one) is
+ * not this function's concern - callers check file_exists separately. */
+static int check_no_fatal_errors(const char *prn_path)
+{
+    FILE *f;
+    char line[MAX_LINE_LEN];
+    int ok;
+
+    f = fopen(prn_path, "r");
+    if (!f)
+        return 1;
+
+    ok = 1;
+    while (fgets(line, sizeof(line), f)) {
+        char *p;
+        char *endptr;
+        long count;
+
+        trim(line);
+        p = line;
+        if (!isdigit((unsigned char)*p))
+            continue;
+        count = strtol(p, &endptr, 10);
+        if (endptr == p || count <= 0)
+            continue;
+        while (*endptr == ' ')
+            endptr++;
+        if (strncmp(endptr, "Fatal error", 11) == 0) {
+            fprintf(stderr, "assembler reported errors in %s: %s\n", prn_path, line);
+            ok = 0;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
 static int maybe_copy_tool(const char *name, const char *build_dir)
 {
     char dst[MAX_PATH_LEN];
@@ -1258,7 +1304,8 @@ static int run_build(struct Config *cfg)
     char uppers[MAX_ITEMS][MAX_NAME_LEN];
     char macs[MAX_ITEMS][MAX_PATH_LEN];
     char rels[MAX_ITEMS][MAX_PATH_LEN];
-    char prn[MAX_PATH_LEN];
+    char prns[MAX_ITEMS][MAX_PATH_LEN];
+    char rtl_prn[MAX_PATH_LEN];
     char cmd[MAX_CMD_LEN];
     char tmp[MAX_PATH_LEN];
     char rtl_src[MAX_PATH_LEN];
@@ -1333,14 +1380,15 @@ static int run_build(struct Config *cfg)
         snprintf(tmp, sizeof(tmp), "%s.REL", uppers[i]);
         path_join(rels[i], sizeof(rels[i]), cfg->build_dir, tmp);
         snprintf(tmp, sizeof(tmp), "%s.PRN", uppers[i]);
-        path_join(prn, sizeof(prn), cfg->build_dir, tmp);
+        path_join(prns[i], sizeof(prns[i]), cfg->build_dir, tmp);
         remove(macs[i]);
         remove(rels[i]);
-        remove(prn);
+        remove(prns[i]);
     }
     path_join(rtl_src, sizeof(rtl_src), cfg->build_dir, "DCCRTL.MAC");
     path_join(rtl_min, sizeof(rtl_min), cfg->build_dir, "RTLMIN.MAC");
     path_join(rtl_rel, sizeof(rtl_rel), cfg->build_dir, "RTLMIN.REL");
+    path_join(rtl_prn, sizeof(rtl_prn), cfg->build_dir, "RTLMIN.PRN");
     snprintf(tmp, sizeof(tmp), "%s.COM", output_upper);
     path_join(app_com, sizeof(app_com), cfg->build_dir, tmp);
     snprintf(tmp, sizeof(tmp), "%s.com", output_lower);
@@ -1348,6 +1396,7 @@ static int run_build(struct Config *cfg)
     remove(rtl_src);
     remove(rtl_min);
     remove(rtl_rel);
+    remove(rtl_prn);
     remove(app_com);
     remove(lower_com);
 
@@ -1395,6 +1444,8 @@ static int run_build(struct Config *cfg)
             fprintf(stderr, "assembly failed: %s was not produced\n", rels[i]);
             return 0;
         }
+        if (!check_no_fatal_errors(prns[i]))
+            return 0;
     }
 
     if (!copy_file(cfg->runtime, rtl_src) || !to_crlf(rtl_src))
@@ -1427,10 +1478,13 @@ static int run_build(struct Config *cfg)
     if (!cmd_arg(cmd, sizeof(cmd), "/X")) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), "/O")) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), "/Z")) return 0;
+    if (!cmd_arg(cmd, sizeof(cmd), "/L")) return 0;
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rtl_rel)) {
         fprintf(stderr, "runtime assembly failed: %s was not produced\n", rtl_rel);
         return 0;
     }
+    if (!check_no_fatal_errors(rtl_prn))
+        return 0;
 
     copy_text(link_arg, sizeof(link_arg), "/P:100,RTLMIN");
     for (i = 0; i < cfg->input_count; i++) {
