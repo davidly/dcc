@@ -28,6 +28,8 @@ struct Block {
     int start;
     int end;
     int keep;
+    int scanned;    /* has add_refs_from_line already run over [start,end)?
+                      * a line's refs never change, so this need happen once. */
     int dep;        /* block to keep when this block is kept, or -1 */
     char name[128];
 };
@@ -813,15 +815,29 @@ static void mark_reachable(void)
 {
     int changed;
     int i, b, pass_start, pass_end;
+    int roots_done;
 
     add_root("start");
+    roots_done = 0;
 
+    /* Worklist fixed point: a root's block mapping and a line's extracted
+     * refs are both pure functions of static data (the symbol table/blocks
+     * built once in build_blocks, and the line text), so re-resolving a root
+     * or re-scanning a block already processed in an earlier pass can only
+     * ever repeat the same answer. Track how far each has progressed so
+     * every root is resolved once and every kept block's lines are scanned
+     * for refs once, rather than the whole accumulated roots[]/blocks[] on
+     * every pass - this was previously O(passes * (nroots + kept lines)),
+     * dominated by find_sym_block's O(nlines) not-found fallback scan
+     * repeating for the same roots pass after pass (profiled: >80% of
+     * dccrtlstrip's runtime on a large app like cobint/tchess). */
     do {
         changed = 0;
 
-        for (i = 0; i < nroots; ++i)
+        for (i = roots_done; i < nroots; ++i)
             if (keep_block_for_symbol(roots[i]))
                 changed = 1;
+        roots_done = nroots;
 
         for (b = 0; b < nblocks; ++b) {
             if (!blocks[b].keep)
@@ -830,6 +846,9 @@ static void mark_reachable(void)
                 blocks[blocks[b].dep].keep = 1;
                 changed = 1;
             }
+            if (blocks[b].scanned)
+                continue;
+            blocks[b].scanned = 1;
 
             pass_start = blocks[b].start;
             pass_end = blocks[b].end;
