@@ -470,6 +470,7 @@ extern int max_function_local_bytes;
 extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
+extern int g_buffering_epoch;
 extern struct Sym *g_bc_regalloc_sym;
 extern int g_regalloc_address_escaped;
 extern int g_e_regalloc_claim_active;
@@ -649,6 +650,12 @@ const char *asm_name_for_runtime(const char *cname);
 const char *asm_name_for(const char *cname);
 void asm_name_check_public_collision(const char *cname);
 const char *sym_asm_name(struct Sym *s);
+
+/* ---- printf-family per-call-site entry-point selection ---- */
+int asm_printf_family_fmt_arg_index(const char *cname);
+void asm_scan_format_specifiers(const char *s, int *needs_float, int *needs_long,
+                                 int *needs_hex, int *needs_octal);
+const char *asm_name_for_pf_call(const char *cname, int needs_float, int needs_long);
 
 /* ---- diag_emit ---- */
 void fatal(const char *msg);

@@ -3835,8 +3835,51 @@ void gen_call_ast(const struct AstNode *n)
     }
     expr_result_dead = old_dead;
 
-    emit_extrn_if_needed(fn_sym);
-    fprintf(outf, "\tcall %s\n", asm_name_for(name));
+    {
+        int fmt_idx = asm_printf_family_fmt_arg_index(name);
+        if (fmt_idx >= 0 && fmt_idx < n->list_len) {
+            /* printf-family call: pick the runtime entry point this specific
+             * call needs from its own format-string literal (or the
+             * -ffloatio/-flongio override, or conservatively assume both
+             * when the format isn't a compile-time-visible literal) - see
+             * asm_name_for_pf_call. emit_runtime_call (not the usual Sym-
+             * based emit_extrn_if_needed/asm_name_for pairing) is used
+             * because two call sites for the same C function can legitimately
+             * resolve to two different runtime entry points within one file
+             * (e.g. one sprintf() call with no %f, another with %.2f), and
+             * each one needs its own matching extrn. */
+            int needs_float = opt_floatio;
+            int needs_long = opt_longio;
+            int needs_hex = 0;
+            int needs_octal = 0;
+            const struct AstNode *fmt_arg = n->list[fmt_idx];
+
+            if (fmt_arg->kind == AST_STR_LIT)
+                asm_scan_format_specifiers(fmt_arg->sval, &needs_float, &needs_long,
+                                            &needs_hex, &needs_octal);
+            else {
+                needs_float = 1;
+                needs_long = 1;
+                needs_hex = 1;
+                needs_octal = 1;
+            }
+            /* %x/%X and %o don't need a variant per printf-family function
+             * (unlike float/long): the hook they install is independent of,
+             * and composes freely with, whichever entry point the float/
+             * long decision above resolves to - see __pfehx/__pfeoc. Names
+             * deliberately differ within their first 6 characters (M80
+             * truncates PUBLIC symbols there) - __pf_ehx/__pf_eoc collided
+             * as "__PF_E" and caused a real miscompilation before this. */
+            if (needs_hex)
+                emit_runtime_call("__pfehx");
+            if (needs_octal)
+                emit_runtime_call("__pfeoc");
+            emit_runtime_call(asm_name_for_pf_call(name, needs_float, needs_long));
+        } else {
+            emit_extrn_if_needed(fn_sym);
+            fprintf(outf, "\tcall %s\n", asm_name_for(name));
+        }
+    }
     g_expr_type = fn_sym->type;
     g_long_from16 = 0;
 

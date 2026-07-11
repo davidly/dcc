@@ -782,8 +782,11 @@ static void print_help(void)
     printf("settings:\n");
     printf("  dcc-input=main.c,module1.c     comma-separated C sources; or pass .c files positionally\n");
     printf("  dcc-output=main                output base name; default first input base\n");
-    printf("  dcc-floatio=false|true|1|0     pass -ffloatio to dcc and keep _pffio\n");
-    printf("  dcc-flongio=false|true|1|0     pass -flongio to dcc and keep _pflng\n");
+    printf("  dcc-floatio=false|true|1|0     force %%f support on every printf-family call\n");
+    printf("                                 (normally auto-detected per call from its own\n");
+    printf("                                 literal format string; only needed when a format\n");
+    printf("                                 string isn't a compile-time literal)\n");
+    printf("  dcc-flongio=false|true|1|0     same, but forces long formats (%%ld/%%lu/%%lx)\n");
     printf("  dcc-stack-bytes=512            pass -stack bytes to dcc; default 512\n");
     printf("  dcc-stack-check=false|true|1|0 pass -fstack-check to dcc\n");
     printf("  dcc-no-narrow=false|true|1|0   pass -fno-narrow to dcc (disable byte-narrowing passes)\n");

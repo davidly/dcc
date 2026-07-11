@@ -4038,10 +4038,12 @@ static int try_speculative_noix_function_body(const char *name, int type,
      * line - producing a `call` with no matching declaration anywhere in
      * the actual output. g_inline_body_buffering is the existing mechanism
      * for exactly this hazard (see emit_runtime_extrn_if_needed and the
-     * static-inline-body-buffering branch above): it makes every EXTRN
-     * unconditionally self-contained in whatever `outf` currently points
-     * at, instead of relying on the global cache. */
+     * static-inline-body-buffering branch above): each buffered attempt gets
+     * its own EXTRN dedup scope (reset via g_buffering_epoch, bumped here),
+     * so a self-contained attempt's EXTRNs are complete and correct whether
+     * it's kept or discarded, instead of relying on the global cache. */
     g_inline_body_buffering++;
+    g_buffering_epoch++;
     nulabels = 0;
     current_return_label = new_label();
     g_for_seq = 0;
@@ -4479,6 +4481,7 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
     outf = scratch;
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
+    g_buffering_epoch++;
     nulabels = 0;
     current_return_label = new_label();
     g_for_seq = 0;
@@ -4852,6 +4855,7 @@ void parse_function_or_global(int base_type)
                     saved_outf = outf;
                     outf = s->deferred_body_file;
                     g_inline_body_buffering++;
+                    g_buffering_epoch++;
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                     gen_compound();
                     check_undefined_user_labels();
@@ -4882,6 +4886,7 @@ void parse_function_or_global(int base_type)
                     saved_outf = outf;
                     outf = s->deferred_body_file;
                     g_inline_body_buffering++;
+                    g_buffering_epoch++;
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                     gen_compound();
                     check_undefined_user_labels();

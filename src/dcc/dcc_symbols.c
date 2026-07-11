@@ -664,6 +664,9 @@ void emit_runtime_extrn_if_needed(const char *name)
 {
     static const char *emitted[64];
     static int nemitted;
+    static const char *buf_emitted[64];
+    static int n_buf_emitted;
+    static int buf_epoch;
     int i;
 
     /*
@@ -677,6 +680,33 @@ void emit_runtime_extrn_if_needed(const char *name)
         return;
 
     if (g_inline_body_buffering) {
+        /* Dedup within this one buffered/speculative attempt only - never
+         * against the persistent `emitted` cache below, which would
+         * reintroduce the exact hazard this branch exists to avoid (see the
+         * caller-side comment on g_inline_body_buffering). g_buffering_epoch
+         * is bumped at every g_inline_body_buffering++ site (dcc_func.c), so
+         * comparing it (not `outf`'s pointer value) is what detects "a new
+         * attempt started": outf points at a tmpfile(), and a closed
+         * tmpfile's freed FILE* can be reused by a later, unrelated
+         * tmpfile() at the exact same address - keying off outf identity
+         * caused a real miscompilation (tests/mm.c producing fewer output
+         * lines than expected) by wrongly treating an unrelated later
+         * attempt as a continuation of an earlier one and suppressing an
+         * EXTRN it still needed. Without any such reset, a function with
+         * many sequential calls to the same runtime helper (e.g. a
+         * usage()-style block of printf calls) emits one duplicate `extrn`
+         * per call when buffered - confirmed to send ntvcm's L80 emulation
+         * into a multi-minute stall on a real test (tests/a1.c) once printf
+         * itself started routing through this path. */
+        if (buf_epoch != g_buffering_epoch) {
+            buf_epoch = g_buffering_epoch;
+            n_buf_emitted = 0;
+        }
+        for (i = 0; i < n_buf_emitted; ++i)
+            if (!strcmp(buf_emitted[i], name))
+                return;
+        if (n_buf_emitted < 64)
+            buf_emitted[n_buf_emitted++] = name;
         fprintf(outf, "\textrn %s\n", name);
         return;
     }

@@ -1,0 +1,15 @@
+plain 42 ok
+plainsp 7
+float 1.50
+floatsp 2.50
+long -123456
+longsp -123456
+both 3.5 -123456
+dyn 4.5
+hex ff FF
+hexsp 1000
+oct 10
+octsp 777
+lx 89abcdef
+mix ff 1.5 10 -123456
+tpfauto ok

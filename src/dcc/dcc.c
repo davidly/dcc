@@ -1438,8 +1438,11 @@ void print_help(void)
     printf("options:\n");
     printf("  -o <file>        write M80 assembly to <file> ('-' for stdout)\n");
     printf("  -c, -module      emit a linkable helper module (not a final program)\n");
-    printf("  -f, -ffloatio    enable %%f formatting for printf\n");
-    printf("  -fl, -flongio    enable long printf formats (%%ld/%%lu/%%lx/%%lX/%%ls)\n");
+    printf("  -f, -ffloatio    force every printf-family call to support %%f, even\n");
+    printf("                   ones whose literal format string doesn't use it\n");
+    printf("                   (normally auto-detected per call; only needed for a\n");
+    printf("                   format string that isn't a compile-time literal)\n");
+    printf("  -fl, -flongio    same, but forces long formats (%%ld/%%lu/%%lx/%%lX/%%ls)\n");
     printf("  -s, -stack <bytes>   reserve <bytes> for the C stack (default 512)\n");
     printf("  -fstack-check    abort gracefully if the stack overflows its reserve\n");
     printf("  -fno-narrow      disable every int-array/scalar/for-counter byte-narrowing pass\n");

@@ -3381,11 +3381,23 @@ pf_pct_done_width:
         cp      'i'
         jp      z,pf_d
         cp      'x'
-        jp      z,pf_xl
+        jr      nz,pf_pct_not_xl
+        push    hl                      ; save fmt ptr before clobbering HL
+        ld      hl,(pf_hexl_hook)
+        jp      (hl)                    ; handler pops HL to restore fmt ptr
+pf_pct_not_xl:
         cp      'X'
-        jp      z,pf_xu
+        jr      nz,pf_pct_not_xu
+        push    hl
+        ld      hl,(pf_hexu_hook)
+        jp      (hl)
+pf_pct_not_xu:
         cp      'o'
-        jp      z,pf_o
+        jr      nz,pf_pct_not_o
+        push    hl
+        ld      hl,(pf_oct_hook)
+        jp      (hl)
+pf_pct_not_o:
         cp      'l'
         jr      nz,pf_pct_not_l
         push    hl                      ; save fmt ptr before clobbering HL
@@ -3686,6 +3698,11 @@ pf_d_tail:
         pop     hl
         jp      pf_loop
 
+; %x/%X hex support, installed via pf_hexl_hook/pf_hexu_hook only when a
+; call site's own format string is found (or conservatively assumed) to use
+; it - split into its own dccrtlstrip block so a program that never formats
+; hex pays nothing for this.
+        public  pf_xu
 pf_xu:
         ld      a,1                     ; %X -> uppercase A-F
         ld      (pf_hexup),a
@@ -3694,10 +3711,13 @@ pf_xl:
         xor     a                       ; %x -> lowercase a-f
         ld      (pf_hexup),a
 pf_x:
-        push    hl
+        ; HL (fmt ptr) already pushed by the %x/%X dispatch in
+        ; pf_pct_done_width (see pf_f's identical convention) - no push of
+        ; our own here; the pop hl at the end (paired with push de below)
+        ; retrieves that dispatch-pushed value, not a self-contained one.
         call    pf_arg_hl
         push    de
-        call    pf_build_hex16  ; A = digit count, HL -> first hex digit
+        call    pf_hxb16  ; A = digit count, HL -> first hex digit
         ld      (pf_digit),a
         call    pf_zero_prec_blank
         push    hl
@@ -3712,11 +3732,15 @@ pf_x:
         pop     hl
         jp      pf_loop
 
+; %o octal support, installed via pf_oct_hook only when needed - see pf_xu
+; above for why this is its own block.
+        public  pf_o
 pf_o:
-        push    hl
+        ; HL (fmt ptr) already pushed by the %o dispatch in
+        ; pf_pct_done_width - see pf_x's identical note above.
         call    pf_arg_hl
         push    de
-        call    pf_build_oct16  ; A = digit count, HL -> first octal digit
+        call    pf_ocb16  ; A = digit count, HL -> first octal digit
         ld      (pf_digit),a
         call    pf_zero_prec_blank
         push    hl
@@ -3731,6 +3755,10 @@ pf_o:
         pop     hl
         jp      pf_loop
 
+; pf_done is directly referenced by __pf_run's pf_loop (jp z,pf_done), so
+; marking it public here splits it out of the (now strippable) pf_o block
+; into its own always-kept block.
+        public  pf_done
 pf_done:
         ret                     ; count in BC; caller cleans up
 
@@ -3873,10 +3901,13 @@ pf_emstr:
         call    pf_emit_a
         jr      pf_emstr
 
-; pf_build_hex16: convert HL (unsigned 16-bit) to minimal hex text.
+; pf_hxb16: convert HL (unsigned 16-bit) to minimal hex text.
 ; Out: A = digit count, HL -> first digit in pf_decbuf, null-terminated.
 ; Uses pf_hexup to choose lowercase/uppercase.  Preserves BC and DE.
-pf_build_hex16:
+; Split into its own block (referenced by name from pf_xu's block above) so
+; it's stripped along with %x/%X support when a program never uses it.
+        public  pf_hxb16
+pf_hxb16:
         push    ix
         push    de
         ld      ix,pf_decbuf
@@ -3979,14 +4010,17 @@ pfh1:
         call    pf_emit_a
         ret
 
-; pf_build_oct16: convert HL (unsigned 16-bit) to minimal octal text.
+; pf_ocb16: convert HL (unsigned 16-bit) to minimal octal text.
 ; Out: A = digit count, HL -> first digit in pf_decbuf, null-terminated.
 ; Preserves BC and DE. Unlike decimal (base 10, needs a real divide) octal
 ; digits come straight from the low 3 bits of HL via a 3-bit right shift
-; (dividing by 8), the same way pf_build_hex16 uses 4-bit nibbles for
+; (dividing by 8), the same way pf_hxb16 uses 4-bit nibbles for
 ; base 16 - a 16-bit value needs at most 6 octal digits (2^16-1 = 177777
 ; octal), which is exactly pf_decbuf's size including the terminator.
-pf_build_oct16:
+; Split into its own block (referenced by name from pf_o's block above) so
+; it's stripped along with %o support when a program never uses it.
+        public  pf_ocb16
+pf_ocb16:
         push    ix
         push    de
         ld      ix,pf_decbuf+6
@@ -4018,6 +4052,15 @@ pfbo1:
         pop     ix
         ret
 
+; pf_width and everything below it through the printf/sprintf/fprintf/
+; snprintf sink+buffer data are universally-needed scratch/hook state,
+; always referenced directly from __pf_run (always-kept). Marking pf_width
+; itself public splits this data out of whatever code block precedes it
+; (pf_ocb16, textually) - without this, pf_ocb16's whole block (the octal
+; digit builder) was being kept unconditionally for every program, since
+; __pf_run's own reference to pf_width transitively kept the bundle it
+; happened to sit in.
+        public  pf_width
 pf_width:
         db      0
 pf_digit:
@@ -4052,6 +4095,27 @@ pf_long_stub:
         jp      pf_loop
 pf_long_hook:
         dw      pf_long_stub
+pf_hexl_stub:
+        pop     hl                      ; restore fmt ptr pushed by dispatch
+        ld      a,'x'
+        call    pf_emit_a
+        jp      pf_loop
+pf_hexl_hook:
+        dw      pf_hexl_stub
+pf_hexu_stub:
+        pop     hl
+        ld      a,'X'
+        call    pf_emit_a
+        jp      pf_loop
+pf_hexu_hook:
+        dw      pf_hexu_stub
+pf_oct_stub:
+        pop     hl
+        ld      a,'o'
+        call    pf_emit_a
+        jp      pf_loop
+pf_oct_hook:
+        dw      pf_oct_stub
 
 ; printf/sprintf/fprintf/snprintf shared sink and buffer (here so they stay in
 ; the _printf block; placing them elsewhere forces dccrtlstrip to keep that block)
@@ -4919,6 +4983,32 @@ _vnlio:
         ld      hl,pf_lng
         ld      (pf_long_hook),hl
         jp      _vsnprintf
+
+; __pfehx / __pfeoc: "ensure hex/octal support installed" helpers, called
+; by dcc-generated code (via emit_runtime_call, same mechanism as the other
+; fastcall RTL helpers) once per printf-family call site whose format string
+; is found (or conservatively assumed) to use %x/%X or %o. Unlike the float/
+; long wrappers above, %x/%X/%o support doesn't need a variant per printf-
+; family function: any call site needing it calls the ensure-helper first,
+; then the ordinary (already hook-resolved for float/long) entry point -
+; installing the hook is independent of, and composes freely with, whichever
+; of the float/long variants that same call also resolved to. Referencing
+; pf_xu/pf_xl/pf_o by name here is what causes dccrtlstrip to keep those
+; blocks (and pf_hxb16/pf_ocb16 transitively) only when actually
+; needed.
+        public  __pfehx
+__pfehx:
+        ld      hl,pf_xl
+        ld      (pf_hexl_hook),hl
+        ld      hl,pf_xu
+        ld      (pf_hexu_hook),hl
+        ret
+
+        public  __pfeoc
+__pfeoc:
+        ld      hl,pf_o
+        ld      (pf_oct_hook),hl
+        ret
 
         public  _exit
 _exit:

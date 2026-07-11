@@ -704,7 +704,7 @@ _crement_complete:
             case 0xec: { op_cmp( cpu.x, get_byte( get_word( cpu.pc + 1 ) ) ); break; } /* cpx a16 */
             case 0xf8: { cpu.fDecimal = true; break; }                                 /* sed */
             case 0xff: { m_halt(); goto _all_done; }                                   /* halt */
-            default: m_hard_exit( "unknown mos6502 opcode %02x\n", op );
+            default: { char errmsg[40]; sprintf( errmsg, "unknown mos6502 opcode %02x\n", op ); m_hard_exit( errmsg ); }
         }
 
         cpu.pc += ins_len_6502[ op ];
@@ -1061,9 +1061,9 @@ uint8_t m_hook()
     return OP_RTS;
 }
 
-void m_hard_exit( perror, val ) char * perror; uint16_t val;
+void m_hard_exit( msg )  char * msg;
 {
-    printf( perror, val );
+    printf( "%s", msg );
     exit( 1 );
 }
 

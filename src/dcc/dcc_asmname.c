@@ -181,40 +181,142 @@ const char *asm_name_for_runtime(const char *cname)
     return NULL;
 }
 
+/* printf-family functions share one set of hook-installing runtime entry
+ * points. Historically -ffloatio/-flongio were whole-program flags that
+ * remapped every call the same way; asm_name_for_pf_call (below) instead
+ * lets each call site pick its own variant based on what its own format
+ * string literal actually uses, so a program mixing a %f-free sprintf() in
+ * one file with a %.2f sprintf() in another links only what each call
+ * actually needs. -ffloatio/-flongio still work as a blanket override (see
+ * asm_name_for): passing one forces every call, literal or not, onto the
+ * matching variant. */
+static const struct {
+    const char *cname;
+    const char *plain;  /* neither flag needed for this call */
+    const char *lng;    /* long support only */
+    const char *fio;    /* float support only */
+    const char *flio;   /* both */
+} pf_family[] = {
+    { "printf",     "_printf",    "_pflng", "_pffio", "_pflio" },
+    { "sprintf",    "_sprintf",   "_splng", "_spfio", "_splio" },
+    { "fprintf",    "_fprintf",   "_fplng", "_fpfio", "_fplio" },
+    { "vprintf",    "_vprintf",   "_vplng", "_vpfio", "_vplio" },
+    { "vsprintf",   "_vsprintf",  "_vslng", "_vsfio", "_vslio" },
+    { "vfprintf",   "_vfprintf",  "_vflng", "_vffio", "_vflio" },
+    { "snprintf",   "_snprintf",  "_snlng", "_snfio", "_snlio" },
+    { "vsnprintf",  "_vsnprintf", "_vnlng", "_vnfio", "_vnlio" },
+};
+
+static const char *pf_family_lookup(const char *cname, int floatio, int longio)
+{
+    int i;
+
+    for (i = 0; i < (int)(sizeof(pf_family) / sizeof(pf_family[0])); ++i) {
+        if (strcmp(cname, pf_family[i].cname) != 0)
+            continue;
+        if (floatio && longio) return pf_family[i].flio;
+        if (floatio)           return pf_family[i].fio;
+        if (longio)            return pf_family[i].lng;
+        return pf_family[i].plain;
+    }
+    return NULL;
+}
+
+/* Index of the format-string argument for a printf-family call (0-based,
+ * matching source order), or -1 if cname isn't one of these functions. */
+int asm_printf_family_fmt_arg_index(const char *cname)
+{
+    if (!strcmp(cname, "printf"))    return 0;
+    if (!strcmp(cname, "vprintf"))   return 0;
+    if (!strcmp(cname, "sprintf"))   return 1;
+    if (!strcmp(cname, "fprintf"))   return 1;
+    if (!strcmp(cname, "vsprintf"))  return 1;
+    if (!strcmp(cname, "vfprintf"))  return 1;
+    if (!strcmp(cname, "snprintf"))  return 2;
+    if (!strcmp(cname, "vsnprintf")) return 2;
+    return -1;
+}
+
+/* Scan a decoded (escapes already resolved) format-string literal for `%f`,
+ * `%l`, `%x`/`%X`, and `%o` conversions, mirroring DCCRTL.MAC's own
+ * pf_pct_next/pf_pct_done_width parsing closely enough to avoid false
+ * negatives: skip flags/width/precision/'z', then check for a length
+ * modifier 'l' and the conversion character itself. Only ever sets flags to
+ * 1, never clears an already-true value, so callers can seed needs_*  from a
+ * blanket override and let this add to it. Scanning stops at the first NUL,
+ * matching how the runtime itself would process the string - any content
+ * dcc stored past an embedded '\0' escape is unreachable at runtime anyway.
+ *
+ * needs_hex/needs_octal are only set for the *plain* (no 'l' prefix)
+ * conversions: %lx/%lX print via pf_build_hex32 inside the already-gated
+ * -flongio path (pf_lng), which is entirely separate code from pf_xu/pf_xl/
+ * pf_build_hex16 - so a long-hex call only needs needs_long, not needs_hex.
+ * There is no %lo in this runtime at all (pf_lng has no 'o' case). */
+void asm_scan_format_specifiers(const char *s, int *needs_float, int *needs_long,
+                                 int *needs_hex, int *needs_octal)
+{
+    size_t i;
+    size_t len;
+
+    len = strlen(s);
+    i = 0;
+    while (i < len) {
+        if (s[i] != '%') {
+            ++i;
+            continue;
+        }
+        ++i;
+        if (i >= len)
+            break;
+        if (s[i] == '%') {
+            ++i;
+            continue;
+        }
+        while (i < len && (s[i] == '-' || s[i] == '+' || s[i] == '#' || s[i] == '0'))
+            ++i;
+        while (i < len && s[i] >= '0' && s[i] <= '9')
+            ++i;
+        if (i < len && s[i] == '.') {
+            ++i;
+            while (i < len && s[i] >= '0' && s[i] <= '9')
+                ++i;
+        }
+        if (i < len && s[i] == 'z')
+            ++i;
+        if (i < len && s[i] == 'l') {
+            *needs_long = 1;
+            ++i;
+        } else if (i < len && (s[i] == 'x' || s[i] == 'X')) {
+            *needs_hex = 1;
+        } else if (i < len && s[i] == 'o') {
+            *needs_octal = 1;
+        }
+        if (i < len && s[i] == 'f')
+            *needs_float = 1;
+        if (i < len)
+            ++i;
+    }
+}
+
+/* Per-call-site resolution: needs_float/needs_long are the caller's already-
+ * combined decision (override flag OR'd with whatever asm_scan_format_
+ * specifiers found in this call's own literal, OR 1/1 if the format wasn't
+ * a compile-time-visible literal at all). Falls back to asm_name_for for
+ * any cname that isn't part of the printf family. */
+const char *asm_name_for_pf_call(const char *cname, int needs_float, int needs_long)
+{
+    const char *r = pf_family_lookup(cname, needs_float, needs_long);
+    return r ? r : asm_name_for(cname);
+}
+
 const char *asm_name_for(const char *cname)
 {
     int i;
 
-    /* printf-family functions share one set of hook-installing runtime entry
-     * points: -ffloatio/-flongio remap all eight of them the same way, so %f
-     * and %ld support is identical regardless of which function formats it
-     * (previously only plain printf() was remapped for -ffloatio, so %f
-     * silently failed through sprintf/fprintf/vprintf/vsprintf/vfprintf). */
     {
-        static const struct {
-            const char *cname;
-            const char *lng;    /* -flongio only */
-            const char *fio;    /* -ffloatio only */
-            const char *flio;   /* both */
-        } pf_family[] = {
-            { "printf",     "_pflng", "_pffio", "_pflio" },
-            { "sprintf",    "_splng", "_spfio", "_splio" },
-            { "fprintf",    "_fplng", "_fpfio", "_fplio" },
-            { "vprintf",    "_vplng", "_vpfio", "_vplio" },
-            { "vsprintf",   "_vslng", "_vsfio", "_vslio" },
-            { "vfprintf",   "_vflng", "_vffio", "_vflio" },
-            { "snprintf",   "_snlng", "_snfio", "_snlio" },
-            { "vsnprintf",  "_vnlng", "_vnfio", "_vnlio" },
-        };
-
-        for (i = 0; i < (int)(sizeof(pf_family) / sizeof(pf_family[0])); ++i) {
-            if (strcmp(cname, pf_family[i].cname) != 0)
-                continue;
-            if (opt_floatio && opt_longio) return pf_family[i].flio;
-            if (opt_floatio)               return pf_family[i].fio;
-            if (opt_longio)                return pf_family[i].lng;
-            break;
-        }
+        const char *r = pf_family_lookup(cname, opt_floatio, opt_longio);
+        if (r)
+            return r;
     }
 
     {
