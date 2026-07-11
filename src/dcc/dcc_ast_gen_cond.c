@@ -913,6 +913,15 @@ int ast_cond_generic(const struct AstNode *n)
     long cv;
     if (n == NULL)
         return 0;
+    if (n->kind == AST_COMMA)
+        /* `a , b` as a controlling expression: `a` is evaluated for its side
+         * effects (value discarded) and `b` is the condition tested.  Gate the
+         * left operand as a dead-result expression (same rule the for-init /
+         * increment / expression-statement paths use, so a pointer postfix or
+         * `x += c` left operand that has no value-context lowering is still
+         * accepted) and require the right operand to be a generic condition. */
+        return (ast_is_local_self_add_stmt(n->a) || ast_dead_expr_supported(n->a)) &&
+               ast_cond_generic(n->b);
     if (ast_const_condition_fold(n, &cv))
         return 1;
     if (ast_is_const_cmp_cond(n))
@@ -1253,6 +1262,9 @@ int ast_dead_expr_supported(const struct AstNode *e)
     int ok;
     if (e == NULL)
         return 0;
+    if (e->kind == AST_COMMA)
+        return (ast_is_local_self_add_stmt(e->a) || ast_dead_expr_supported(e->a)) &&
+               (ast_is_local_self_add_stmt(e->b) || ast_dead_expr_supported(e->b));
     if ((e->kind == AST_UNARY || e->kind == AST_POSTFIX) &&
         (e->op == TOK_INC || e->op == TOK_DEC)) {
         /* Dead-result ++/-- statement: mirror the sym-direct fast path
@@ -1267,7 +1279,8 @@ int ast_dead_expr_supported(const struct AstNode *e)
         return 0;
     }
     if (e->kind == AST_CAST && (e->type & 15) == TYPE_VOID)
-        return e->a != NULL && ast_gen_supported(e->a);
+        return e->a != NULL &&
+               (ast_is_local_self_add_stmt(e->a) || ast_dead_expr_supported(e->a));
     if (ast_is_local_self_add_stmt(e))
         return 0;
     /* Evaluate the support gate in the SAME dead-result context the walker will
@@ -1285,31 +1298,23 @@ int ast_dead_expr_supported(const struct AstNode *e)
 
 int ast_for_init_expr_supported(const struct AstNode *e)
 {
-    int old_dead;
-    int ok;
+    /* The for-init clause is a full expression evaluated only for its side
+     * effects - its value is discarded - exactly like the third (increment)
+     * clause and an ordinary expression statement (C89 6.6.5 / C99-C11 6.8.5:
+     * `for ( expression_opt ; expression_opt ; expression_opt )`).  Gate it
+     * with the same dead-result rule those two paths use so every emittable
+     * side-effecting form is accepted uniformly: plain and compound assignment
+     * (`i = 0`, `i += 5`, `*p -= 1`, `a[k] |= m`), pre/post increment and
+     * decrement (including pointer postfix, which has no value-context
+     * lowering), comma expressions, function calls, the `x = a + b` local
+     * self-add shape, and a discarded `(void)` cast.  The walker emits the
+     * init through ast_gen_dead_expr, which mirrors this gate exactly, so
+     * anything accepted here is emittable and anything genuinely unsupported
+     * on the Z80 target is declined cleanly (the whole for statement falls
+     * back to the DCC-E1002 diagnostic rather than miscompiling). */
     if (e == NULL)
-        return 1;
-    old_dead = expr_result_dead;
-    expr_result_dead = 1;
-    if (e->kind == AST_ASSIGN)
-        ok = e->op == '=' && ast_gen_supported(e);
-    else if (e->kind == AST_COMMA)
-        ok = ast_gen_supported(e);
-    else if ((e->kind == AST_UNARY || e->kind == AST_POSTFIX) &&
-             (e->op == TOK_INC || e->op == TOK_DEC))
-        /* A for-init `++x` / `x--` (prefix or postfix, int/pointer/member/
-         * addressable lvalue) is a dead-result expression, identical to an
-         * expression statement and to the for-increment clause; gate it the
-         * same way (ast_dead_expr_supported) and emit it with the same
-         * dedicated inc/dec block (see ast_gen_for_stmt).  Using the plain
-         * ast_gen_supported value gate here wrongly rejected postfix pointer
-         * inc/dec, which has no value-context support but is a perfectly good
-         * dead-result store. */
-        ok = ast_dead_expr_supported(e);
-    else
-        ok = e->kind == AST_CALL && ast_gen_supported(e);
-    expr_result_dead = old_dead;
-    return ok;
+        return 1;                         /* empty init clause */
+    return ast_is_local_self_add_stmt(e) || ast_dead_expr_supported(e);
 }
 
 /* Is the expression-statement node `n` (n->a is the expression) AST-emittable?
@@ -1452,11 +1457,14 @@ int ast_stmt_supported(const struct AstNode *n)
             int s_decl_seq = g_for_decl_seq;
             int s_decl_index = g_for_decl_rename_index;
             int s_decl_recording = g_for_decl_recording;
+            int s_decl_nonobject = g_for_decl_saw_nonobject;
+            int decl_object_count;
+            int decl_saw_nonobject;
             int s_scan_mode = scan_mode;
             FILE *s_outf = outf;
             static FILE *sink = NULL;
 
-            ok = 1;
+            ok = ast_for_decl_storage_supported(n->a);
             /* Redirect emission to a throwaway sink so the suppressed replay
              * cannot leak partial output (scan_mode guards most but not every
              * emit path), and set scan_mode so nested AST build/gen and the
@@ -1476,7 +1484,11 @@ int ast_stmt_supported(const struct AstNode *n)
             g_for_decl_seq = for_seq;
             g_for_decl_rename_index = 0;
             g_for_decl_recording = 1;
-            ast_emit_decl_span(n->a);
+            g_for_decl_saw_nonobject = 0;
+            if (ok)
+                ast_emit_decl_span(n->a);
+            decl_object_count = g_for_decl_rename_index;
+            decl_saw_nonobject = g_for_decl_saw_nonobject;
             /* Declaration replay changes the symbols visible to the loop's
              * condition, increment and body. Discard support decisions that
              * may have been cached while the builder inspected those nodes
@@ -1485,8 +1497,12 @@ int ast_stmt_supported(const struct AstNode *n)
             g_for_decl_seq = s_decl_seq;
             g_for_decl_rename_index = s_decl_index;
             g_for_decl_recording = s_decl_recording;
+            g_for_decl_saw_nonobject = s_decl_nonobject;
 
-            if (n->b != NULL && !ast_cond_generic(n->b)) {
+            if (ok && (decl_object_count == 0 || decl_saw_nonobject)) {
+                ok = 0;
+            }
+            if (ok && n->b != NULL && !ast_cond_generic(n->b)) {
                 ok = 0;
             }
             if (ok && n->c != NULL &&
@@ -1884,6 +1900,17 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
                                 int branch_when_true)
 {
     long cv;
+    if (n != NULL && n->kind == AST_COMMA) {
+        /* Emit the left operand for its side effects (result discarded), then
+         * branch on the right operand - preserving left-to-right evaluation.
+         * Gated by ast_cond_generic's matching AST_COMMA case. */
+        int old_dead = expr_result_dead;
+        expr_result_dead = 1;
+        ast_gen_dead_expr(n->a);
+        expr_result_dead = old_dead;
+        ast_gen_cond_branch(n->b, label, branch_when_true);
+        return;
+    }
     if (ast_const_condition_fold(n, &cv)) {
         if ((cv != 0) == branch_when_true)
             emit_jp_label("jp", label);

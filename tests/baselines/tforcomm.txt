@@ -1,0 +1,7 @@
+both: 60 3 3
+iteration: 60 3 3
+initialization: 60 3 3
+condition: 60 4 4
+whilecond: 60 4
+value: 20 1
+statement: 1 1

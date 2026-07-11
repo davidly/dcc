@@ -1096,6 +1096,7 @@ struct DeclSpan {
     long tok_start_pos;
     int line_no;
     int tok_line;
+    int unsupported_for_storage;
     struct Token tok;
 };
 
@@ -1116,12 +1117,24 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
     sp->tok_start_pos = tok_start_pos;
     sp->line_no = line_no;
     sp->tok_line = tok_line;
+    sp->unsupported_for_storage = 0;
     sp->tok = tok;
 
     depth = 0;
     for (;;) {
         if (tok.kind == TOK_EOF)
             return NULL;
+        /* C99/C11 6.8.5p3 permits only object declarations with storage class
+         * auto or register in a for-init declaration.  dcc treats auto/register
+         * as ordinary automatic locals (no Z80 register allocation - the hint
+         * is a no-op, exactly as in block scope), so they are accepted.  The
+         * remaining explicit storage classes and function specifiers
+         * (static/extern/typedef/inline) are rejected here; direct function and
+         * type/tag-only declarations are caught separately during replay. */
+        if (depth == 0 &&
+            (tok.kind == TOK_EXTERN || tok.kind == TOK_STATIC ||
+             tok.kind == TOK_TYPEDEF || tok.kind == TOK_INLINE))
+            sp->unsupported_for_storage = 1;
         if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') {
             depth++;
         } else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
@@ -1138,6 +1151,16 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
     n->aux = sp;
     n->line = sp->tok_line;
     return n;
+}
+
+int ast_for_decl_storage_supported(const struct AstNode *n)
+{
+    const struct DeclSpan *sp;
+
+    if (n == NULL || n->kind != AST_DECL)
+        return 0;
+    sp = (const struct DeclSpan *)n->aux;
+    return sp != NULL && !sp->unsupported_for_storage;
 }
 
 /* Re-emit a captured local-declaration span (see ast_build_decl_span).  The

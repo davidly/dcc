@@ -963,9 +963,12 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         return ast_gen_supported(n->a);
     case AST_COMMA:
         /* `a , b`: evaluate the left operand (value discarded), then the
-         * right, whose value/type is the result.  A flat recursive walk emits
-         * that when both sides are supported. */
-        return ast_gen_supported(n->a) && ast_gen_supported(n->b);
+         * right, whose value/type is the result.  Gate the left under the same
+         * dead-result rules used by expression statements, so forms such as
+         * `(ptr++, *ptr)` do not require a nonexistent value-context lowering
+         * for the discarded pointer postfix result. */
+        return (ast_is_local_self_add_stmt(n->a) || ast_dead_expr_supported(n->a)) &&
+               ast_gen_supported(n->b);
     default:
         return 0;
     }

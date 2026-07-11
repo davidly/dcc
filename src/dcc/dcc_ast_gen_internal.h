@@ -241,9 +241,11 @@ int ast_index_lvalue_elem_type(const struct AstNode *n, int *out_type);
 int ast_deadincdec_addr_lvalue_type(const struct AstNode *e, int *out_type);
 void gen_deadincdec_addr_lvalue_ast(const struct AstNode *e, int *out_type);
 int ast_dead_expr_supported(const struct AstNode *e);
+void ast_gen_dead_expr(const struct AstNode *n);
 int ast_for_init_expr_supported(const struct AstNode *e);
 int ast_expr_stmt_supported(const struct AstNode *n);
 int ast_stmt_supported(const struct AstNode *n);
+int ast_for_decl_storage_supported(const struct AstNode *n);
 void ast_gen_cmp_branch(const struct AstNode *n, int label,
                                int branch_when_true);
 void ast_gen_const_cmp_branch(const struct AstNode *n, int label,

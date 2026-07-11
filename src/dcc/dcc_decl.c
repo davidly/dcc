@@ -1384,6 +1384,8 @@ void gen_local_decl_after_type(int base)
         source_name[sizeof(source_name) - 1] = 0;
 
         if (tok.kind == '(') {
+            if (g_for_decl_seq >= 0 && !direct_funcptr)
+                g_for_decl_saw_nonobject = 1;
             skip_prototype_function_suffix();
             if (!accept(','))
                 break;
