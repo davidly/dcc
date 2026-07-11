@@ -1,7 +1,7 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Build dcc, dccpeep, dccrtlstrip, and dccmake on Windows, macOS, and Linux.
+Build dcc, dccpeep, dccrtlstrip, dccmake, and m80c on Windows, macOS, and Linux.
 
 .DESCRIPTION
 Compiles the host tools with the native compiler for the current platform:
@@ -260,7 +260,8 @@ function Build-WindowsMsvc {
     $tools = @(
         @{ Name = "dccpeep"; Source = Join-Path $repoRoot "src\dccpeep\dccpeep.c" },
         @{ Name = "dccrtlstrip"; Source = Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c" },
-        @{ Name = "dccmake"; Source = Join-Path $repoRoot "src\dccmake\dccmake.c" }
+        @{ Name = "dccmake"; Source = Join-Path $repoRoot "src\dccmake\dccmake.c" },
+        @{ Name = "m80c"; Source = Join-Path $repoRoot "src\m80c\m80c.c" }
     )
 
     foreach ($tool in $tools) {
@@ -279,7 +280,7 @@ function Build-WindowsMsvc {
         Invoke-Checked "cl" $arguments "$($tool.Name) compilation"
     }
 
-    return @($dccOut, (Join-Path $repoRoot "dccpeep.exe"), (Join-Path $repoRoot "dccrtlstrip.exe"), (Join-Path $repoRoot "dccmake.exe"))
+    return @($dccOut, (Join-Path $repoRoot "dccpeep.exe"), (Join-Path $repoRoot "dccrtlstrip.exe"), (Join-Path $repoRoot "dccmake.exe"), (Join-Path $repoRoot "m80c.exe"))
 }
 
 function Get-UnixCompiler {
@@ -366,7 +367,8 @@ function Build-UnixNative {
     $tools = @(
         @{ Name = "dccpeep"; Source = Join-Path $repoRoot "src\dccpeep\dccpeep.c" },
         @{ Name = "dccrtlstrip"; Source = Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c" },
-        @{ Name = "dccmake"; Source = Join-Path $repoRoot "src\dccmake\dccmake.c" }
+        @{ Name = "dccmake"; Source = Join-Path $repoRoot "src\dccmake\dccmake.c" },
+        @{ Name = "m80c"; Source = Join-Path $repoRoot "src\m80c\m80c.c" }
     )
 
     foreach ($tool in $tools) {
@@ -380,7 +382,7 @@ function Build-UnixNative {
         Invoke-Checked $compiler (@($baseCflags) + @($toolObject) + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
     }
 
-    return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"))
+    return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"))
 }
 
 Write-Host "Build artifacts will go to: $outputPathDisplay"

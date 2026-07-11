@@ -1330,7 +1330,8 @@ function Invoke-ExtendedSuite {
         [string]$BuildDir,
         [bool]$StackCheck,
         [bool]$Serial,
-        [int]$ThrottleLimit
+        [int]$ThrottleLimit,
+        [bool]$UseEmulatedM80
     )
 
     $extendedScript = Join-Path $PSScriptRoot "runall-extended.ps1"
@@ -1347,6 +1348,7 @@ function Invoke-ExtendedSuite {
     )
     if (-not $StackCheck) { $extendedArgs += "-NoStackCheck" }
     if ($Serial) { $extendedArgs += "-Serial" }
+    if ($UseEmulatedM80) { $extendedArgs += "-UseEmulatedM80" }
 
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -1616,7 +1618,8 @@ if ($NarrowDiff) {
 $extendedPassed = $null
 if ($Extended) {
     Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
-        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit
+        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit `
+        -UseEmulatedM80 $UseEmulatedM80
     $extendedExitCode = $script:ExtendedSuiteExitCode
     $extendedPassed = ($extendedExitCode -eq 0)
     if (-not $extendedPassed) {
