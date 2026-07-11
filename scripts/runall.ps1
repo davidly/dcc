@@ -157,6 +157,11 @@ speed:
     - args: command-line arguments for the app
         - stdin: text piped to app stdin during execution
     - stack_size: C stack reserve override (default 512)
+    - fixtures: CP/M data files (from tests/) this app reads at runtime,
+      copied into its build dir under their UPPERCASE name before it runs -
+      e.g. cobint needs E.COB, but no other app does, so only cobint
+      declares it. Most apps read/write only their own scratch files and
+      need no fixtures at all (the default, an empty list).
     - ignore: set to true to skip building/running this app
     - perf_ignore: set to true to exclude this app from the cycle-count
       regression check entirely (never a regression, improvement, or new
@@ -347,6 +352,7 @@ if (-not (Test-Path $appOverridesPath)) {
         if ($app.ignore) { $appOverrides[$app.name]['ignore'] = $app.ignore }
         if ($app.perf_ignore) { $appOverrides[$app.name]['perf_ignore'] = $app.perf_ignore }
         if ($app.narrow_diff_ignore) { $appOverrides[$app.name]['narrow_diff_ignore'] = $app.narrow_diff_ignore }
+        if ($app.fixtures) { $appOverrides[$app.name]['fixtures'] = @($app.fixtures) }
     }
 }
 
@@ -436,6 +442,19 @@ function ConvertTo-BooleanSetting {
 function Get-IgnoreApp {
     param([string]$app)
     return ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['ignore'])
+}
+
+# CP/M data fixtures (interpreter source files, weight files, etc.) this
+# specific app reads at runtime, declared explicitly in the app's
+# _test_overrides.json entry - e.g. cobint needs E.COB, but no other app does.
+# Defaults to none: most apps read/write only their own scratch files and
+# need nothing staged.
+function Get-AppFixtures {
+    param([string]$app)
+    if ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['fixtures']) {
+        return @($appOverrides[$app]['fixtures'])
+    }
+    return @()
 }
 
 # True for an app whose cycle count is known to vary run-to-run for reasons
@@ -583,24 +602,11 @@ function Invoke-DccMakeBuild {
     return $false
 }
 
-# CP/M data fixtures are every file in tests/ that is not a C source or repo
-# metadata (.c, .json, .md, dotfiles). Each fixture is resolved once to its
-# source path so staging does not repeatedly rescan tests/ for every app.
-function Get-FixtureFiles {
-    if (-not (Test-Path "tests" -PathType Container)) { return @() }
-    return @(Get-ChildItem -Path "tests" -File |
-        Where-Object { $_.Name -notlike '.*' -and $_.Extension -notin '.c', '.json', '.md' } |
-        ForEach-Object {
-            [pscustomobject]@{
-                Name   = $_.Name
-                Source = $_.FullName
-            }
-        })
-}
-
-# Stage every CP/M data fixture into the shared build dir (serial mode). Some
-# interpreters read these files from the current working directory, and apps are
-# run from the build dir (below), so the fixtures must live there too.
+# Stage the declared CP/M data fixtures into the shared build dir (serial
+# mode) - the union of every app's own Get-AppFixtures list, not every file in
+# tests/: some interpreters read these files from the current working
+# directory, and apps are run from the build dir (below), so the fixtures
+# must live there too.
 function Stage-FixtureInputs {
     if (-not (Test-Path $BuildDir -PathType Container)) {
         New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
@@ -1058,10 +1064,6 @@ if (Test-IsNtvcmEmulator $Emulator) {
     $emulatorRunArgs = @("-p", "-s:0")
 }
 
-# The CP/M data fixtures are derived once from the tests/ directory (see
-# Get-FixtureFiles). Every app gets the same set staged into its run dir.
-$fixtureList = @(Get-FixtureFiles)
-
 # Build the list of work items up front (resolving per-app args/stack in the
 # parent), so parallel workers don't need the $appOverrides table.
 $workItems = [System.Collections.Generic.List[object]]::new()
@@ -1078,8 +1080,16 @@ foreach ($app in $testFiles) {
         DccArgs      = (Get-DccArgs $app)
         DccFloatio   = (Get-DccFloatio $app)
         DccLongio    = (Get-DccLongio $app)
+        Fixtures     = (Get-AppFixtures $app)
     })
 }
+
+# Union of every app's declared runtime fixtures - used only by the serial
+# shared build dir (Stage-FixtureInputs); parallel mode stages each app's own
+# subset individually (see $item.Fixtures at each Invoke-AppTest call below),
+# so most apps' build dirs get nothing copied at all instead of every fixture
+# in tests/.
+$fixtureList = @($workItems | ForEach-Object { $_.Fixtures } | Select-Object -Unique)
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -1381,7 +1391,7 @@ if ($Parallel) {
             -StackSize $item.StackSize -DccArgs $item.DccArgs `
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
             -EmulatorRunArgs $using:runArgs `
-            -Fixtures $using:fixtureList -StageFixtures $true
+            -Fixtures $item.Fixtures -StageFixtures $true
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -1542,7 +1552,7 @@ if ($NarrowDiff) {
             Invoke-NarrowDiffTest -AppName $item.App -BuildDir $appBuildDir -Emulator $using:Emulator `
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
-                -EmulatorRunArgs $using:ndRunArgs -Fixtures $using:fixtureList
+                -EmulatorRunArgs $using:ndRunArgs -Fixtures $item.Fixtures
         } | ForEach-Object {
             $result = $_
             $narrowResults += $result
@@ -1564,7 +1574,7 @@ if ($NarrowDiff) {
             $result = Invoke-NarrowDiffTest -AppName $item.App -BuildDir $appBuildDir -Emulator $Emulator `
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
-                -EmulatorRunArgs $emulatorRunArgs -Fixtures $fixtureList
+                -EmulatorRunArgs $emulatorRunArgs -Fixtures $item.Fixtures
             $narrowResults += $result
             $narrowDone++
             $status = if ($result.Passed) { "PASS" } else { "FAIL" }
