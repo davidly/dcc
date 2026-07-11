@@ -1480,11 +1480,16 @@ static int run_build(struct Config *cfg)
         else
             base_no_ext(names[i], sizeof(names[i]), cfg->inputs[i]);
         upper_copy(uppers[i], sizeof(uppers[i]), names[i]);
-        snprintf(tmp, sizeof(tmp), "%s.MAC", uppers[i]);
+        /* uppers[i] is char[MAX_NAME_LEN] (128); the explicit .127s
+         * precision (MAX_NAME_LEN-1) lets gcc prove the result always fits
+         * tmp's 512 bytes, since it otherwise can't see the bound through
+         * the array index and assumes an arbitrary-length string
+         * (-Wformat-truncation false positive). */
+        snprintf(tmp, sizeof(tmp), "%.127s.MAC", uppers[i]);
         path_join(macs[i], sizeof(macs[i]), cfg->build_dir, tmp);
-        snprintf(tmp, sizeof(tmp), "%s.REL", uppers[i]);
+        snprintf(tmp, sizeof(tmp), "%.127s.REL", uppers[i]);
         path_join(rels[i], sizeof(rels[i]), cfg->build_dir, tmp);
-        snprintf(tmp, sizeof(tmp), "%s.PRN", uppers[i]);
+        snprintf(tmp, sizeof(tmp), "%.127s.PRN", uppers[i]);
         path_join(prns[i], sizeof(prns[i]), cfg->build_dir, tmp);
         remove(macs[i]);
         remove(rels[i]);
@@ -1494,9 +1499,9 @@ static int run_build(struct Config *cfg)
     path_join(rtl_min, sizeof(rtl_min), cfg->build_dir, "RTLMIN.MAC");
     path_join(rtl_rel, sizeof(rtl_rel), cfg->build_dir, "RTLMIN.REL");
     path_join(rtl_prn, sizeof(rtl_prn), cfg->build_dir, "RTLMIN.PRN");
-    snprintf(tmp, sizeof(tmp), "%s.COM", output_upper);
+    snprintf(tmp, sizeof(tmp), "%.127s.COM", output_upper);
     path_join(app_com, sizeof(app_com), cfg->build_dir, tmp);
-    snprintf(tmp, sizeof(tmp), "%s.com", output_lower);
+    snprintf(tmp, sizeof(tmp), "%.127s.com", output_lower);
     path_join(lower_com, sizeof(lower_com), cfg->build_dir, tmp);
     remove(rtl_src);
     remove(rtl_min);
@@ -1539,7 +1544,7 @@ static int run_build(struct Config *cfg)
         cmd_init(cmd, sizeof(cmd));
         if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), cfg->m80)) return 0;
-        snprintf(tmp, sizeof(tmp), "=%s.MAC", uppers[i]);
+        snprintf(tmp, sizeof(tmp), "=%.127s.MAC", uppers[i]);
         if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), "/X")) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), "/O")) return 0;
