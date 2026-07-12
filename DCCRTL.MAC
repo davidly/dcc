@@ -17799,10 +17799,6 @@ __stox_core:
 SCL38:
         ld hl,(__stox_p)
         ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
         ld h,0
         push hl
         call sc_isspace
@@ -17999,10 +17995,6 @@ SCL71:
 SCL72:
         ld hl,(__stox_p)
         ld l,(hl)
-        ld a,l
-        rlca
-        sbc a,a
-        ld h,a
         ld h,0
         push hl
         call sc_isdigit
