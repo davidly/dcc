@@ -11024,6 +11024,28 @@ static int pass_cache_global_word_reload(void)
             }
         }
 
+        /* If the hazard ending this segment is itself an EXISTING
+         * "global_word_cache_load" (from a symbol this pass already cached
+         * in a completely separate, earlier-processed segment - possibly
+         * from a prior call to this same pass, on an earlier dccpeep
+         * fixed-point iteration), that load's correctness depends on BC
+         * being untouched all the way back to that OTHER symbol's cache
+         * store, which lives further back than segstart, outside this
+         * segment's own view. line_clobbers_bc correctly stops THIS
+         * segment right before that load (so we never overwrite the load
+         * instruction itself), but a NEW cache store anywhere in
+         * [segstart, i) would still sit between that earlier store and
+         * this pending load, clobbering BC before the load reads it.
+         * Confirmed as a real miscompile: tests/tptrlhs.c cached gpwrap in
+         * exactly such a segment, silently corrupting an unrelated
+         * gpleaf cache read sitting immediately after it. Refuse to start
+         * a brand new cache anywhere in a segment bounded by someone
+         * else's still-pending load - safe to leave as plain reloads
+         * either way, just forgoes a second, smaller-payoff cache in the
+         * same neighborhood. */
+        if (i < nlines && strstr(lines[i], "global_word_cache_load"))
+            best_count = 0;
+
         /* >= 3, not >= 2: caching costs a fixed 8 T-states (ld c,l/ld b,h),
          * and each avoided reload saves exactly 8 T-states (ld hl,(nn) is
          * 16 T-states; the ld l,c/ld h,b replacement is 8) - so 2

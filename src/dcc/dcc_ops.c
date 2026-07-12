@@ -212,6 +212,62 @@ void gen_binop32_typed(int op, int lhs_type)
 }
 
 
+/* Caps how many Z80 instructions the shift/add decomposition below may
+ * unroll to before emit_mul_hl_const gives up and falls back to __mulu.
+ * A struct/array element size like 36 (=32+4) decomposes to a handful of
+ * ops; a sparse, high-bit constant like 0xFFFF would need ~29 and isn't
+ * worth the code-size cost, so it still goes through __mulu. */
+#define MUL_CONST_MAX_OPS 10
+
+/* Number of instructions emit_mul_hl_const_general would emit for uv (a
+ * 16-bit unsigned pattern, uv != 0 and not already a single power of two):
+ * one "add hl,hl" per bit position below the highest set bit (the
+ * doublings), plus one "add hl,de" per OTHER set bit (the highest bit
+ * itself is free - it's the starting value). */
+static int mul_const_op_count(unsigned long uv)
+{
+    int bit;
+    int highest = -1;
+    int adds = 0;
+
+    for (bit = 15; bit >= 0; --bit) {
+        if (uv & (1uL << (unsigned)bit)) {
+            if (highest < 0)
+                highest = bit;
+            else
+                adds++;
+        }
+    }
+    if (highest <= 0)
+        return 0;
+    return highest + adds;
+}
+
+/* HL = HL * uv via a fully unrolled left-to-right binary-method shift/add
+ * sequence - no runtime loop, unlike __mulu. Same idea as the hand-written
+ * cases above (e.g. v==9/10), generalized to any constant whose op count
+ * clears MUL_CONST_MAX_OPS. Caller guarantees uv is nonzero, fits 16 bits,
+ * and is not a single power of two (those are handled separately). */
+static void emit_mul_hl_const_general(unsigned long uv)
+{
+    int bit;
+    int highest = -1;
+
+    for (bit = 15; bit >= 0; --bit) {
+        if (uv & (1uL << (unsigned)bit)) {
+            highest = bit;
+            break;
+        }
+    }
+    emit("\tld d,h\n");
+    emit("\tld e,l\n");
+    for (bit = highest - 1; bit >= 0; --bit) {
+        emit("\tadd hl,hl\n");
+        if (uv & (1uL << (unsigned)bit))
+            emit("\tadd hl,de\n");
+    }
+}
+
 void emit_mul_hl_const(long v)
 {
     /*
@@ -276,8 +332,13 @@ void emit_mul_hl_const(long v)
         emit("\tadd hl,de\n");   /* 9x */
         emit("\tadd hl,de\n");   /* 10x */
     } else {
-        emit_ld_de_const(v);
-        emit_runtime_call("__mulu");
+        unsigned long uv = (unsigned long)(v & 0xffffL);
+        if (uv != 0 && mul_const_op_count(uv) <= MUL_CONST_MAX_OPS) {
+            emit_mul_hl_const_general(uv);
+        } else {
+            emit_ld_de_const(v);
+            emit_runtime_call("__mulu");
+        }
     }
 }
 
