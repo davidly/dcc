@@ -3666,8 +3666,19 @@ static void scan_local_func_labels(void)
 
     n_local_func_labels = 0;
     for (i = 0; i + 1 < nlines; ++i) {
+        /* "; static function " is 18 characters, not 19 - an off-by-one
+         * here meant this branch never matched (strncmp saw the real
+         * function name's first character where the literal's implicit
+         * NUL was, at n=19), so scan_local_func_labels only ever recorded
+         * genuinely `public` functions, never `static` ones. That silently
+         * defeated the whole cross-function IY-collision check for calls
+         * between static functions - confirmed as the root cause of
+         * tests/too.c's corrupted output under -fundocumented-z80:
+         * gallery_init (static) calls hall_init (static) calls
+         * exhibit_init (static), and all three independently claimed IYL
+         * for their own loop, each stomping the others' live value. */
         if (strncmp(lines[i], "public ", 7) != 0 &&
-            strncmp(lines[i], "; static function ", 19) != 0)
+            strncmp(lines[i], "; static function ", 18) != 0)
             continue;
         if (!starts_label(lines[i + 1]))
             continue;
@@ -3696,9 +3707,15 @@ static int is_local_func_label(const char *name)
  * IYL counterpart of pass_byte_loop_counter_to_reg_c: the identical self-
  * guarding decrementing-loop-counter shape (see that pass's comment), but
  * promoted into IY's low byte via undocumented FD-prefixed opcodes instead
- * of register C. The opcodes are wrapped in M80 macros (IYDECL/IYLDA/IYSTA/
- * IYLDE - inserted once at the top of the file in main(), see there) since
- * M80 does not recognize the "iyl"/"iyh" mnemonic spellings directly.
+ * of register C, since M80 (and m80c) don't recognize the "iyl"/"iyh"
+ * mnemonic spellings directly: each use site emits the raw opcode bytes as
+ * "db 0FDh,xx" instead (DEC IYL=2Dh, LD A,IYL=7Dh, LD IYL,A=6Fh, LD E,IYL=
+ * 5Dh, INC IYL=2Ch). These used to be M80 MACRO/ENDM definitions invoked by
+ * name (IYDECL/IYLDA/IYSTA/IYLDE), but m80c - the native assembler that
+ * later became the default toolchain - never implemented MACRO/ENDM, so
+ * that indirection was replaced with the equivalent literal bytes at each
+ * site; the nested-loop collision check below now recognizes the "db
+ * 0FDh," prefix instead of an "IY" name prefix.
  *
  * Because nothing else touches IY (see scan_local_func_labels above), this
  * pass allows ANY call inside the loop body, not just __mods/__divs, except
@@ -3711,8 +3728,8 @@ static int is_local_func_label(const char *name)
  * encode "ld iyl,iyl" - there is no single-instruction undocumented form
  * that reads IYL into the real L register (E, unaffected by the H/L
  * substitution rule, has no such problem - "ld e,iyl" is a clean single
- * instruction). That whitelisted shape expands to two lines (IYLDA, then
- * "ld l,a") instead of a single-line replacement.
+ * instruction). That whitelisted shape expands to two lines (the LD A,IYL
+ * byte sequence, then "ld l,a") instead of a single-line replacement.
  */
 static int pass_byte_loop_counter_to_reg_iyl(void)
 {
@@ -3778,8 +3795,12 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
              * would silently clobber it. Decline outright - a real bug
              * here corrupted mm.c's matrix multiply (all three nested
              * i/j/k counters tried to claim IYL at once) before this check
-             * existed. */
-            if (strncmp(lines[k], "IY", 2) == 0) {
+             * existed. Detected by the literal "db 0FDh," prefix every
+             * IYDECL/IYLDA/IYSTA/IYLDE/IYINCL emission site below produces
+             * (was a "IY" prefix check back when these were M80 macro
+             * invocations by name; m80c has no MACRO/ENDM support at all,
+             * so they're emitted as raw opcode bytes directly now). */
+            if (strncmp(lines[k], "db 0FDh,", 8) == 0) {
                 ok = 0;
                 continue;
             }
@@ -3828,14 +3849,14 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
          * still valid. The "ld l,(ix+off)" shape is the one exception -
          * expanding to two lines shifts everything after it, so loop_end
          * and k are bumped in lockstep right there. */
-        replace1_tagged(i + 1, "IYDECL", "byte_loop_counter_to_reg_iyl");
+        replace1_tagged(i + 1, "db 0FDh,02Dh", "byte_loop_counter_to_reg_iyl");
         for (k = i + 3; k < loop_end; ++k) {
             if (eq(k, pat_lde)) {
-                replace1_tagged(k, "IYLDE", "byte_loop_counter_to_reg_iyl");
+                replace1_tagged(k, "db 0FDh,05Dh", "byte_loop_counter_to_reg_iyl");
                 continue;
             }
             if (eq(k, pat_lhl)) {
-                replace1_tagged(k, "IYLDA", "byte_loop_counter_to_reg_iyl");
+                replace1_tagged(k, "db 0FDh,07Dh", "byte_loop_counter_to_reg_iyl");
                 insert_line(k + 1, "ld l,a");
                 loop_end++;
                 ++k;
@@ -3848,14 +3869,14 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
          * (safe regardless of whether anything after the loop still reads
          * the slot). IYLDA/writeback don't touch flags, so the Z flag
          * IYDECL just set is still valid at the exit branch. */
-        insert_line_tagged(i + 2, "IYLDA", "byte_loop_counter_to_reg_iyl");
+        insert_line_tagged(i + 2, "db 0FDh,07Dh", "byte_loop_counter_to_reg_iyl");
         sprintf(writeback, "ld (ix%+d),a", off);
         insert_line(i + 3, writeback);
 
         /* Prime the register right before the loop label. */
         sprintf(prime, "ld a,(ix%+d)", off);
         insert_line(i, prime);
-        insert_line_tagged(i + 1, "IYSTA", "byte_loop_counter_to_reg_iyl");
+        insert_line_tagged(i + 1, "db 0FDh,06Fh", "byte_loop_counter_to_reg_iyl");
 
         changed = 1;
     }
@@ -3976,8 +3997,10 @@ static int pass_byte_incr_loop_counter_to_reg_iyl(void)
              * IYL by an earlier match in this same scan would silently
              * clobber it - see pass_byte_loop_counter_to_reg_iyl's comment
              * on the exact bug this caused in mm.c before this check
-             * existed (i/j/k all tried to claim IYL simultaneously). */
-            if (strncmp(lines[k], "IY", 2) == 0) {
+             * existed (i/j/k all tried to claim IYL simultaneously), and on
+             * why this checks for the literal "db 0FDh," prefix rather than
+             * an "IY" macro-name prefix. */
+            if (strncmp(lines[k], "db 0FDh,", 8) == 0) {
                 ok = 0;
                 continue;
             }
@@ -4009,11 +4032,11 @@ static int pass_byte_incr_loop_counter_to_reg_iyl(void)
          * two-line expansion (mirrors pass_byte_loop_counter_to_reg_iyl). */
         for (k = loop_start + 1; k < i; ++k) {
             if (eq(k, pat_lde)) {
-                replace1_tagged(k, "IYLDE", "byte_incr_loop_counter_to_reg_iyl");
+                replace1_tagged(k, "db 0FDh,05Dh", "byte_incr_loop_counter_to_reg_iyl");
                 continue;
             }
             if (eq(k, pat_lhl)) {
-                replace1_tagged(k, "IYLDA", "byte_incr_loop_counter_to_reg_iyl");
+                replace1_tagged(k, "db 0FDh,07Dh", "byte_incr_loop_counter_to_reg_iyl");
                 insert_line(k + 1, "ld l,a");
                 ++i;
                 ++k;
@@ -4021,8 +4044,8 @@ static int pass_byte_incr_loop_counter_to_reg_iyl(void)
             }
         }
 
-        replace1_tagged(i, "IYINCL", "byte_incr_loop_counter_to_reg_iyl");
-        replace1_tagged(i + 1, "IYLDA", "byte_incr_loop_counter_to_reg_iyl");
+        replace1_tagged(i, "db 0FDh,02Ch", "byte_incr_loop_counter_to_reg_iyl");
+        replace1_tagged(i + 1, "db 0FDh,07Dh", "byte_incr_loop_counter_to_reg_iyl");
         {
             char storeback[40];
             sprintf(storeback, "ld (ix%+d),a", off);
@@ -4036,7 +4059,7 @@ static int pass_byte_incr_loop_counter_to_reg_iyl(void)
             char primeload[40];
             sprintf(primeload, "ld a,(ix%+d)", off);
             insert_line(loop_start, primeload);
-            insert_line_tagged(loop_start + 1, "IYSTA", "byte_incr_loop_counter_to_reg_iyl");
+            insert_line_tagged(loop_start + 1, "db 0FDh,06Fh", "byte_incr_loop_counter_to_reg_iyl");
         }
 
         changed = 1;
@@ -13865,25 +13888,15 @@ int main(int argc, char **argv)
 
     if (allow_undocumented_z80) {
         /* M80 has no native "iyl"/"iyh" mnemonics, so pass_byte_loop_counter_
-         * to_reg_iyl's undocumented FD-prefixed opcodes are wrapped in
-         * macros, defined once here at the very top of the file (a MACRO/
-         * ENDM definition emits no code unless invoked, so this costs zero
-         * bytes in every program that doesn't end up using it). */
-        insert_line(0, "IYDECL MACRO");
-        insert_line(1, "db 0FDh,02Dh");
-        insert_line(2, "ENDM");
-        insert_line(3, "IYLDA MACRO");
-        insert_line(4, "db 0FDh,07Dh");
-        insert_line(5, "ENDM");
-        insert_line(6, "IYSTA MACRO");
-        insert_line(7, "db 0FDh,06Fh");
-        insert_line(8, "ENDM");
-        insert_line(9, "IYLDE MACRO");
-        insert_line(10, "db 0FDh,05Dh");
-        insert_line(11, "ENDM");
-        insert_line(12, "IYINCL MACRO");
-        insert_line(13, "db 0FDh,02Ch");
-        insert_line(14, "ENDM");
+         * to_reg_iyl's undocumented FD-prefixed opcodes are emitted directly
+         * as raw "db 0FDh,xx" bytes at each use site (see IYDECL/IYLDA/
+         * IYSTA/IYLDE/IYINCL's replace1_tagged/insert_line_tagged call sites
+         * below) rather than via M80 MACRO/ENDM definitions - m80c, the
+         * native assembler that later became the default toolchain, never
+         * implemented MACRO/ENDM at all, and each of these is a fixed,
+         * argument-free byte sequence anyway, so the macro indirection
+         * bought nothing beyond avoiding a few bytes of duplicated "db"
+         * text in the (rare) program that uses the same one twice. */
         scan_local_func_labels();
     }
 
