@@ -19,7 +19,12 @@ The runner honors tests/_test_overrides.json for per-app args, stdin, ignore,
 and host-only skip settings. Tests that explicitly depend on CP/M/Z80-only
 services (BDOS, direct port I/O, getch/kbhit console polling, #asm blocks, or
 CP/M vector reads) are skipped because host compilers cannot execute those
-semantics.
+semantics. A per-app "host-cflags" string in that same file fully replaces the
+default `-std=gnu99 -w -O2` for one test's host build only - e.g. a test whose
+own point is C89 implicit-int declarator grammar needs `-std=gnu89` to compile
+under a strict-by-default host compiler; a test whose correctness check is
+sensitive to a specific host compiler's optimizer (not to dcc, which is
+unaffected either way) may need `-O0` instead of `-O2`.
 
 .PARAMETER RunTimeout
     Max seconds to let a host test executable run (default: 10).
@@ -347,7 +352,8 @@ You can also pass a compiler explicitly:
             [string]$SourceFile,
             [string]$ExePath,
             [string]$WorkDir,
-            [string]$RepoRoot
+            [string]$RepoRoot,
+            [string]$HostCflags
         )
 
         # Force-included on every host build: supplies host-libc equivalents
@@ -366,7 +372,14 @@ You can also pass a compiler explicitly:
             return [pscustomobject]@{ Success = ($LASTEXITCODE -eq 0 -and (Test-Path $ExePath -PathType Leaf)); Output = ($output -join "`n") }
         }
 
-        $baseCflags = if ($env:CFLAGS) { @($env:CFLAGS -split "\s+" | Where-Object { $_ }) } else { @("-std=gnu99", "-w", "-O2") }
+        # A per-app tests/_test_overrides.json "host-cflags" string takes
+        # priority over $env:CFLAGS: it's a correctness requirement for that
+        # one test (e.g. -std=gnu89 for a K&R implicit-int regression test,
+        # or -O0 where a specific host compiler's optimizer doesn't preserve
+        # a property the test checks), not a general build preference.
+        $baseCflags = if ($HostCflags) { @($HostCflags -split "\s+" | Where-Object { $_ }) }
+                      elseif ($env:CFLAGS) { @($env:CFLAGS -split "\s+" | Where-Object { $_ }) }
+                      else { @("-std=gnu99", "-w", "-O2") }
         if ($baseCflags -notcontains "-fsigned-char") { $baseCflags += "-fsigned-char" }
         if ($IsMacOS -and ($baseCflags -notcontains "-fno-common")) { $baseCflags += "-fno-common" }
         $arguments = @($baseCflags) + @($Compiler.CFlags) + @("-include", $preludePath, $SourceFile, "-o", $ExePath, "-lm")
@@ -448,7 +461,8 @@ You can also pass a compiler explicitly:
         $exePath = Join-Path $appBuildDir $exeName
         Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
 
-        $compile = Invoke-HostCompile -Compiler $Compiler -SourceFile $sourceFile -ExePath $exePath -WorkDir $appBuildDir -RepoRoot $RepoRoot
+        $hostCflags = Get-AppHostCflags -Name $AppName -Overrides $Overrides
+        $compile = Invoke-HostCompile -Compiler $Compiler -SourceFile $sourceFile -ExePath $exePath -WorkDir $appBuildDir -RepoRoot $RepoRoot -HostCflags $hostCflags
         if (-not $compile.Success) {
             $sw.Stop()
             $lines.Add("    COMPILE FAILED")
@@ -518,6 +532,7 @@ You can also pass a compiler explicitly:
             if ($item.host) { $appOverrides[$item.name]['host'] = $item.host }
             if ($item.'requires-32bit-linux-host-compiler') { $appOverrides[$item.name]['requires32'] = $true }
             if ($item.'requires-non-msvc-host-compiler') { $appOverrides[$item.name]['requiresNonMsvc'] = $true }
+            if ($item.'host-cflags') { $appOverrides[$item.name]['hostCflags'] = $item.'host-cflags' }
         }
     }
 
@@ -551,6 +566,12 @@ You can also pass a compiler explicitly:
     function Get-RequiresNonMsvcApp {
         param([string]$Name, [System.Collections.IDictionary]$Overrides)
         return ($Overrides.ContainsKey($Name) -and $Overrides[$Name]['requiresNonMsvc'])
+    }
+
+    function Get-AppHostCflags {
+        param([string]$Name, [System.Collections.IDictionary]$Overrides)
+        if ($Overrides.ContainsKey($Name) -and $Overrides[$Name]['hostCflags']) { return $Overrides[$Name]['hostCflags'] }
+        return ""
     }
 
     $Placeholders = [ordered]@{
@@ -650,6 +671,7 @@ You can also pass a compiler explicitly:
         $cffhrDef = ${function:Copy-FixtureForHostRun}.ToString()
         $gaaDef  = ${function:Get-AppArgs}.ToString()
         $gasDef  = ${function:Get-AppStdin}.ToString()
+        $gahcDef = ${function:Get-AppHostCflags}.ToString()
 
         $appsToRun | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
             Set-Location $using:repoRootForWorkers
@@ -661,6 +683,7 @@ You can also pass a compiler explicitly:
             ${function:Copy-FixtureForHostRun}  = $using:cffhrDef
             ${function:Get-AppArgs}             = $using:gaaDef
             ${function:Get-AppStdin}            = $using:gasDef
+            ${function:Get-AppHostCflags}       = $using:gahcDef
 
             Invoke-AppValidation -AppName $_ -Compiler $using:compiler -Fixtures $using:fixtureList `
                 -Placeholders $using:Placeholders -BuildRoot $using:buildRoot -BaselineDir $using:BaselineDir `

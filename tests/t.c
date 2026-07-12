@@ -1,11 +1,21 @@
 #include <stdio.h>
 
+#ifdef _DCC_
 typedef unsigned char uint8_t;
 typedef signed char int8_t;
 typedef unsigned short uint16_t;
 typedef signed short int16_t;
 typedef unsigned long uint32_t;
 typedef signed long int32_t;
+#else
+/* A host's own <stdint.h> (pulled in transitively by <stdio.h> on some
+   platforms, e.g. macOS's <sys/_types/_int32_t.h>) already provides these
+   names - defining them again here would conflict (and disagree: this
+   file's int32_t is "long" to match dcc's own <stdint.h> on its 16-bit-int
+   Z80 target, not the host's 32-bit "int"). Let the host supply them
+   instead of duplicating under a different, host-specific width. */
+#include <stdint.h>
+#endif
 typedef int bool;
 enum { false, true };
 
