@@ -1182,6 +1182,7 @@ void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator)
 
     if (s == NULL || type_ptr_depth(s->type) <= 0)
         return;
+    s->is_funcptr = direct_declarator || g_typedef_has_proto;
     if (direct_declarator) {
         s->has_proto = g_funcptr_has_proto;
         s->proto_nargs = g_funcptr_proto_nargs;
@@ -1535,9 +1536,9 @@ void emit_debug_global(struct Sym *s)
         s->storage == SC_EXTERN || s->name[0] == '#')
         return;
     emit_debug_types_once();
-    fprintf(outf, ";@dcc-global \"%s\" \"%s\" %d %d %d %d %d ",
+    fprintf(outf, ";@dcc-global \"%s\" \"%s\" %d %d %d %d %d %d ",
             asm_name_for(sym_asm_name(s)), s->name, s->type, s->size,
-            s->is_array, s->is_vla, s->elem_size);
+            s->is_array, s->is_vla, s->elem_size, s->is_funcptr);
     emit_debug_dims(s->dims, s->dim_count);
     fputc('\n', outf);
 }
@@ -1547,9 +1548,10 @@ void emit_debug_variable(struct Sym *s)
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
         s->name[0] == '#' || s->reg_alloc != REG_NONE)
         return;
-    fprintf(outf, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d ",
+    fprintf(outf, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d ",
             current_debug_function, s->name, s->type, s->storage,
-            s->offset, s->size, s->is_array, s->is_vla, s->elem_size);
+            s->offset, s->size, s->is_array, s->is_vla, s->elem_size,
+            s->is_funcptr);
     emit_debug_dims(s->dims, s->dim_count);
     fputc('\n', outf);
 }

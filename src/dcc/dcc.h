@@ -289,6 +289,7 @@ struct Sym {
     int proto_nargs;
     int proto_variadic;
     int proto_types[MAX_PROTO_PARAMS];
+    int is_funcptr;           /* object has function-pointer declarator type */
     int is_const_value;        /* local const scalar folded as immediate */
     unsigned long const_value; /* raw integer bits or IEEE float bits */
     int has_addr_cache;    /* this local array's address is materialized once
