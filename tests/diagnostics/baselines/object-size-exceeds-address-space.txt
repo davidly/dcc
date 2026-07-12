@@ -1,0 +1,10 @@
+<source>:1: error DCC-E0605: object size exceeds 16-bit address space near ';'
+    int global_values[32768];
+                            ^
+<source>:4: error DCC-E0605: object size exceeds 16-bit address space near ';'
+        char member_values[256][256];
+                                    ^
+<source>:9: error DCC-E0605: object size exceeds 16-bit address space near ';'
+        char local_values[256][256];
+                                   ^
+dcc: 3 error(s)

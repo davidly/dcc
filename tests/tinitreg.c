@@ -2,13 +2,19 @@
 
 #include <stdio.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 static int fails;
 
 static int garr1[5] = { 1, 2 };
 static int gmat1[2][3] = { { 1, 2 }, { 3 } };
 static char gstr1[8] = "abc";
 static char gstr2[] = "ab" "cd";
-static long glng1[3] = { 0x00010000L };
+static long glng1[3] = { TEST_UINT32_MAX + 0x00010001 };
 static int gscl1 = { 1234 };
 
 struct Dist {

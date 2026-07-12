@@ -1,6 +1,12 @@
 #include <stdio.h>
 #include <stddef.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 static int fails;
 static void chk(const char *name, unsigned got, unsigned expect)
 {
@@ -21,7 +27,7 @@ int main(void)
     chk("first", (unsigned)offsetof(struct Outer, a), 0);
     chk("b", (unsigned)offsetof(struct Outer, b), 1);
     chk("arr", (unsigned)offsetof(struct Outer, arr), 3);
-    chk("arr3", (unsigned)offsetof(struct Outer, arr[3]), 6);
+    chk("arr3", (unsigned)offsetof(struct Outer, arr[TEST_UINT32_MAX + 4]), 6);
     chk("in", (unsigned)offsetof(struct Outer, in), 13);
     chk("nested_i", (unsigned)offsetof(struct Outer, in.i), 14);
     chk("long", (unsigned)offsetof(OuterTyp, l), 16);

@@ -958,7 +958,7 @@ static struct AstNode *ast_build_case_stmt(struct AstArena *ar)
     long cv;
 
     next_token();                        /* consume 'case' */
-    cv = parse_const_long_expr();
+    cv = parse_typed_const_long_expr();
     if (tok.kind != ':')
         return NULL;
     next_token();                        /* consume ':' */

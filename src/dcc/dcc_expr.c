@@ -216,7 +216,7 @@ static void parse_pointer_array_suffixes(int base_type)
             n = 0;
             next_token();
         } else {
-            n = parse_const_int_expr();
+            n = parse_typed_array_bound_expr();
             expect(']');
         }
         if (n < 0) n = 0;
@@ -424,7 +424,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             g_funcptr_decl_array_len = 0;
             next_token();
         } else {
-            g_funcptr_decl_array_len = parse_const_int_expr();
+            g_funcptr_decl_array_len = parse_typed_array_bound_expr();
             expect(']');
         }
     }
@@ -551,7 +551,7 @@ int parse_abstract_funcptr_declarator(int *ptype)
         while (accept('[')) {
             skip_parameter_array_qualifiers();
             if (tok.kind != ']')
-                (void)parse_const_int_expr();
+                (void)parse_typed_array_bound_expr();
             expect(']');
         }
     } else {
@@ -794,6 +794,7 @@ void parse_array_declarator_dims(int base_type,
     int i;
     int n;
     int elem_bytes;
+    int object_bytes;
     int total;
     int inner;
     int overflowed;
@@ -847,7 +848,7 @@ void parse_array_declarator_dims(int base_type,
                     n = 0;
                 }
             } else {
-                n = parse_const_int_expr();
+                n = parse_typed_array_bound_expr();
                 expect(']');
             }
         }
@@ -878,7 +879,10 @@ void parse_array_declarator_dims(int base_type,
             total = 0;
             break;
         }
-        total *= dims[i];
+        if (!target_size_multiply(total, dims[i], &total)) {
+            error_here("object size exceeds 16-bit address space");
+            break;
+        }
     }
 
     elem_bytes = type_size(base_type);
@@ -891,11 +895,21 @@ void parse_array_declarator_dims(int base_type,
             inner = 0;
             break;
         }
-        inner *= dims[i];
+        if (!target_size_multiply(inner, dims[i], &inner))
+            break;
     }
 
     total_len[0] = total;
-    first_stride_bytes[0] = (ndims > 1 && inner > 0) ? inner * elem_bytes : elem_bytes;
+    if (!target_size_multiply(total, elem_bytes, &object_bytes)) {
+        if (total > 0)
+            error_here("object size exceeds 16-bit address space");
+        total_len[0] = 0;
+    }
+    if (ndims > 1 && inner > 0 &&
+        target_size_multiply(inner, elem_bytes, &object_bytes))
+        first_stride_bytes[0] = object_bytes;
+    else
+        first_stride_bytes[0] = elem_bytes;
 
     g_last_array_dim_count = ndims;
     for (i = 0; i < ndims && i < MAX_ARRAY_DIMS; ++i)
@@ -1129,7 +1143,7 @@ void check_undefined_user_labels(void)
  * masks it back to the 16-bit target representation when emitted. */
 int parse_enum_const_value(void)
 {
-    return (int)parse_const_long_expr();
+    return parse_typed_enum_const_expr();
 }
 
 

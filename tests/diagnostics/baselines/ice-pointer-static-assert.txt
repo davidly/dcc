@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0401: constant integer expression expected near ','
+    _Static_assert((int *)1, "pointer is not an ICE");
+                           ^
+dcc: 1 error(s)

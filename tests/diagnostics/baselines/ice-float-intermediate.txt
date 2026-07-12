@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0401: constant integer expression expected near ','
+    _Static_assert((long)(float)5, "float intermediate is not an ICE");
+                                 ^
+dcc: 1 error(s)

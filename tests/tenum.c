@@ -1,6 +1,12 @@
 /* C89 enum regression test */
 #include <stdio.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 enum Color {
     RED,
     GREEN = 5,
@@ -24,6 +30,8 @@ enum Expr {
     EH = !0,
     EI = (sizeof(char) == 1),
     EJ = (EB < EC) && (EC != 0),
+    EK = ((TEST_UINT32_MAX + 1) == 0) ? 31 : 0,
+    EL = 1 / (EK == 31),
 };
 
 typedef enum Color ColorT;

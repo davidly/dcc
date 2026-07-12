@@ -1266,7 +1266,7 @@ int parse_offsetof_value(void)
             int idx;
             int elem;
             next_token();
-            idx = parse_const_int_expr();
+            idx = parse_typed_const_int_expr();
             expect(']');
             elem = fd->is_array ? fd->elem_size : type_size(t);
             if (elem <= 0)

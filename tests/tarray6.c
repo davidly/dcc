@@ -9,9 +9,15 @@
 
 #include <stdio.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 static int fails;
 
-int ga[2][2][2][2][2][2];
+int ga[TEST_UINT32_MAX + 3][2][2][2][2][2];
 char gc[2][2][2][2][2][2];
 long gl[2][2][2][2][2][2];
 

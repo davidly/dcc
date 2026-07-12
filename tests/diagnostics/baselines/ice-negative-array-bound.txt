@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0604: invalid array bound for 16-bit target near ']'
+    int values[-1];
+                 ^
+dcc: 1 error(s)

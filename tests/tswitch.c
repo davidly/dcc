@@ -1,9 +1,15 @@
 #include <stdio.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 int f(int op)
 {
     switch (op) {
-    case 0: return 10;
+    case TEST_UINT32_MAX + 1: return 10;
     case 1: return 11;
     case 2: return 12;
     case 3: return 13;
