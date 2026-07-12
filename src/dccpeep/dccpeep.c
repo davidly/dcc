@@ -273,23 +273,38 @@ static int is_jp_to_next_label(int i)
 {
     char target[128];
     char label[128];
-    int n;
+    int j, n;
 
     if (i + 1 >= nlines)
         return 0;
     if (!is_uncond_jp(lines[i]))
         return 0;
-    if (!starts_label(lines[i + 1]))
-        return 0;
-
     if (!jump_target(lines[i], target))
         return 0;
-    strcpy(label, lines[i + 1]);
-    n = (int)strlen(label);
-    if (n > 0 && label[n - 1] == ':')
-        label[n - 1] = 0;
 
-    return strcmp(target, label) == 0;
+    /*
+     * The jump is redundant if plain fall-through reaches a label matching
+     * its target with nothing but zero-width lines in between: blank
+     * lines, comments (notably the "@dcc-line" debug annotations that -g
+     * inserts between every statement, which otherwise hide this pattern
+     * from debug builds), and other labels. Scan past all of that looking
+     * for the target; stop at the first real instruction.
+     */
+    for (j = i + 1; j < nlines; j++) {
+        if (is_blank_or_comment(lines[j]))
+            continue;
+        if (!starts_label(lines[j]))
+            return 0;
+
+        strcpy(label, lines[j]);
+        n = (int)strlen(label);
+        if (n > 0 && label[n - 1] == ':')
+            label[n - 1] = 0;
+        if (strcmp(target, label) == 0)
+            return 1;
+    }
+
+    return 0;
 }
 
 

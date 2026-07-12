@@ -8,9 +8,7 @@
             "args": [
                 "-g",
                 "${file}",
-                "dcc-output=DCCDEBUG",
-                "dcc-peep=true",
-                "ntvcm-tool=/Users/dave/GitHub/ntvcm/ntvcm"
+                "dcc-output=DCCDEBUG"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
