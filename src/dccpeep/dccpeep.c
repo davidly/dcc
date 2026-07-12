@@ -3666,8 +3666,19 @@ static void scan_local_func_labels(void)
 
     n_local_func_labels = 0;
     for (i = 0; i + 1 < nlines; ++i) {
+        /* "; static function " is 18 characters, not 19 - an off-by-one
+         * here meant this branch never matched (strncmp saw the real
+         * function name's first character where the literal's implicit
+         * NUL was, at n=19), so scan_local_func_labels only ever recorded
+         * genuinely `public` functions, never `static` ones. That silently
+         * defeated the whole cross-function IY-collision check for calls
+         * between static functions - confirmed as the root cause of
+         * tests/too.c's corrupted output under -fundocumented-z80:
+         * gallery_init (static) calls hall_init (static) calls
+         * exhibit_init (static), and all three independently claimed IYL
+         * for their own loop, each stomping the others' live value. */
         if (strncmp(lines[i], "public ", 7) != 0 &&
-            strncmp(lines[i], "; static function ", 19) != 0)
+            strncmp(lines[i], "; static function ", 18) != 0)
             continue;
         if (!starts_label(lines[i + 1]))
             continue;
