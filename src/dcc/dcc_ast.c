@@ -101,6 +101,8 @@ void ast_arena_reset(struct AstArena *ar)
 struct AstNode *ast_new(struct AstArena *ar, int kind)
 {
     struct AstNode *n;
+    const char *file;
+    size_t file_len;
     n = (struct AstNode *)ast_arena_alloc(ar, sizeof(struct AstNode));
     n->kind = kind;
     n->type = 0;
@@ -119,6 +121,10 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->list_cap = 0;
     n->aux = NULL;
     n->peek_type = 0;
+    file = tok.file[0] ? tok.file : (input_name ? input_name : "<input>");
+    file_len = strlen(file) + 1;
+    n->file = (char *)ast_arena_alloc(ar, file_len);
+    memcpy(n->file, file, file_len);
     n->line = tok_line;
     return n;
 }

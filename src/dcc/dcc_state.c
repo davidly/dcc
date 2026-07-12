@@ -31,6 +31,7 @@ int opt_module;      /* -c/-module: emit linkable helper module, not final app T
 int opt_stack_size;  /* bytes reserved above heap for C stack */
 int opt_stack_check; /* -fstack-check: emit a stack-overflow guard at function entry */
 int opt_no_narrow;   /* -fno-narrow: disable every byte-narrowing pass */
+int opt_debug;       /* -g: emit source-level debug annotations */
 
 /* ---- typedef table ----------------------------------------------------- */
 struct TypeDef typedefs[MAX_TYPEDEFS];

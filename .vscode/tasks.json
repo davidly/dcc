@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build active DCC C file for debugging",
+            "type": "shell",
+            "command": "${workspaceFolder}/dccmake",
+            "args": [
+                "-g",
+                "${file}",
+                "dcc-output=DCCDEBUG",
+                "dcc-peep=true",
+                "ntvcm-tool=/Users/dave/GitHub/ntvcm/ntvcm"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

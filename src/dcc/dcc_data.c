@@ -220,6 +220,7 @@ void emit_data(void)
             asm_name_check_public_collision(sym_asm_name(s));
             fprintf(outf, "\tpublic %s\n", asm_name_for(sym_asm_name(s)));
         }
+        emit_debug_global(s);
         fprintf(outf, "%s:\n", asm_name_for(sym_asm_name(s)));
         if (s->has_init && s->init_count > 0) {
             int j;
@@ -283,6 +284,7 @@ void emit_data(void)
                     asm_name_check_public_collision(sym_asm_name(s));
                     fprintf(outf, "\tpublic %s\n", asm_name_for(sym_asm_name(s)));
                 }
+                emit_debug_global(s);
                 fprintf(outf, "%s:\n", asm_name_for(sym_asm_name(s)));
                 fprintf(outf, "\tds %d\n", bss_size);
             }
@@ -318,6 +320,7 @@ void emit_data(void)
             if ((s->has_init && s->init_count > 0) || (s->has_init && !s->is_array)) continue;
 
             bss_size = s->size > 0 ? s->size : 2;
+            emit_debug_global(s);
             fprintf(outf, "%s\tequ\t__bssb+%d\n", asm_name_for(sym_asm_name(s)), bss_off);
             bss_off += bss_size;
         }

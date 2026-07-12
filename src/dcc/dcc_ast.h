@@ -106,6 +106,7 @@ struct AstNode {
     int peek_type;          /* AST_BINARY: peek_simple_unary_type() of the   */
                             /* rhs, captured at build time so the walker     */
                             /* computes the arithmetic common-type choice    */
+    char *file;             /* arena-owned source filename                  */
     int line;               /* source line, for diagnostics                */
 };
 

@@ -1182,6 +1182,7 @@ void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator)
 
     if (s == NULL || type_ptr_depth(s->type) <= 0)
         return;
+    s->is_funcptr = direct_declarator || g_typedef_has_proto;
     if (direct_declarator) {
         s->has_proto = g_funcptr_has_proto;
         s->proto_nargs = g_funcptr_proto_nargs;
@@ -1494,15 +1495,95 @@ int current_function_safe_to_omit_ix(int return_type, int local_bytes)
     return 0;
 }
 
+static char current_debug_function[64];
+static char current_debug_function_source_name[64];
+static int debug_types_emitted;
+
+static void emit_debug_dims(const int *dims, int count)
+{
+    int i;
+    fputc('"', outf);
+    for (i = 0; i < count; ++i)
+        fprintf(outf, "%s%d", i ? "," : "", dims[i]);
+    fputc('"', outf);
+}
+
+void emit_debug_types_once(void)
+{
+    int i;
+    if (!opt_debug || scan_mode || debug_types_emitted)
+        return;
+    debug_types_emitted = 1;
+    for (i = 0; i < nstruct_defs; ++i)
+        fprintf(outf, ";@dcc-struct %d %d %d \"%s\"\n", i + 1,
+                struct_defs[i].size, struct_defs[i].is_union,
+                struct_defs[i].name);
+    for (i = 0; i < nfield_defs; ++i) {
+        struct FieldDef *f = &field_defs[i];
+        if (f->is_promoted)
+            continue;
+        fprintf(outf, ";@dcc-field %d \"%s\" %d %d %d %d %d %d %d ",
+                f->parent_struct_id, f->name, f->type, f->offset, f->size,
+                f->is_array, f->elem_size, f->bit_width, f->bit_shift);
+        emit_debug_dims(f->dims, f->dim_count);
+        fputc('\n', outf);
+    }
+}
+
+void emit_debug_global(struct Sym *s)
+{
+    if (!opt_debug || scan_mode || s == NULL || s->storage == SC_FUNC ||
+        s->storage == SC_EXTERN || s->name[0] == '#')
+        return;
+    emit_debug_types_once();
+    fprintf(outf, ";@dcc-global \"%s\" \"%s\" %d %d %d %d %d %d ",
+            asm_name_for(sym_asm_name(s)), s->name, s->type, s->size,
+            s->is_array, s->is_vla, s->elem_size, s->is_funcptr);
+    emit_debug_dims(s->dims, s->dim_count);
+    fputc('\n', outf);
+}
+
+void emit_debug_variable(struct Sym *s)
+{
+    if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
+        s->name[0] == '#' || s->reg_alloc != REG_NONE)
+        return;
+    fprintf(outf, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d ",
+            current_debug_function, s->name, s->type, s->storage,
+            s->offset, s->size, s->is_array, s->is_vla, s->elem_size,
+            s->is_funcptr);
+    emit_debug_dims(s->dims, s->dim_count);
+    fputc('\n', outf);
+}
+
+void emit_debug_variable_end(struct Sym *s)
+{
+    if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
+        s->name[0] == '#' || s->reg_alloc != REG_NONE)
+        return;
+    fprintf(outf, ";@dcc-var-end \"%s\" \"%s\" %d\n",
+            current_debug_function, s->name, s->offset);
+}
+
 void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame)
 {
     struct Sym *s;
     const char *aname;
+    int i;
 
     flush_pending_asm();
 
     s = find_global(name);
     aname = asm_name_for(name);
+    emit_debug_types_once();
+    strncpy(current_debug_function, aname, sizeof(current_debug_function) - 1);
+    current_debug_function[sizeof(current_debug_function) - 1] = 0;
+    strncpy(current_debug_function_source_name, name, sizeof(current_debug_function_source_name) - 1);
+    current_debug_function_source_name[sizeof(current_debug_function_source_name) - 1] = 0;
+
+    if (opt_debug && !scan_mode)
+        fprintf(outf, ";@dcc-func-begin \"%s\" \"%s\"\n",
+                current_debug_function, current_debug_function_source_name);
 
     if (!s || !s->is_static) {
         asm_name_check_public_collision(name);
@@ -1527,6 +1608,10 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
         emit("\tadd hl,sp\n");
         emit("\tld sp,hl\n");
     }
+
+    for (i = 0; i < nlocals; ++i)
+        if (locals[i].storage == SC_PARAM)
+            emit_debug_variable(&locals[i]);
 
     /* -fstack-check: after the frame (saved IX + locals) is allocated, verify
      * the stack has not grown past its reserve into the heap region.  Emitted
@@ -1579,6 +1664,11 @@ void emit_function_epilogue(int implicit_zero_return)
         emit("\tpop ix\n");
     }
     emit("\tret\n");
+    if (opt_debug && !scan_mode && current_debug_function[0])
+        fprintf(outf, ";@dcc-func-end \"%s\" \"%s\"\n",
+                current_debug_function, current_debug_function_source_name);
+    current_debug_function[0] = 0;
+    current_debug_function_source_name[0] = 0;
     current_omit_ix_frame = 0;
     flush_pending_asm();
 }
@@ -4866,14 +4956,15 @@ void parse_function_or_global(int base_type)
                     emit_function_epilogue(0);
                     g_inline_body_buffering--;
                     outf = saved_outf;
-                } else if (function_qualifies_for_speculative_noix(name, current_local_bytes) &&
+                } else if (!opt_debug &&
+                           function_qualifies_for_speculative_noix(name, current_local_bytes) &&
                            try_speculative_noix_function_body(name, type, current_local_bytes, s,
                                                                saved_pos, saved_tok_start, saved_line,
                                                                saved_tok_line, saved_tok,
                                                                saved_nlocals, saved_local_size)) {
                     /* No-IX-frame body already generated and written to outf
                      * inside try_speculative_noix_function_body. */
-                } else if (function_qualifies_for_speculative_regalloc(name) &&
+                } else if (!opt_debug && function_qualifies_for_speculative_regalloc(name) &&
                            try_speculative_bc_regalloc_with_e_fallback(name, type, current_local_bytes, s,
                                                                         bc_regalloc_cand,
                                                                         saved_pos, saved_tok_start, saved_line,

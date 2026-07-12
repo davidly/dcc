@@ -874,9 +874,28 @@ int ast_last_statement_exits(void)
     return g_ast_last_stmt_exits;
 }
 
+static void ast_emit_debug_line(const struct AstNode *n)
+{
+    const char *p;
+
+    if (!opt_debug || scan_mode || n->line <= 0)
+        return;
+
+    fputs(";@dcc-line \"", outf);
+    p = n->file ? n->file : (input_name ? input_name : "<input>");
+    while (*p) {
+        if (*p == '\\' || *p == '"')
+            fputc('\\', outf);
+        fputc(*p++, outf);
+    }
+    fprintf(outf, "\" %d\n", n->line);
+}
+
 /* Emit statement node `n` (gated by ast_stmt_supported). */
 void ast_gen_stmt(const struct AstNode *n)
 {
+    ast_emit_debug_line(n);
+
     switch (n->kind) {
     case AST_EMPTY:
         break;                            /* empty statement: emit nothing */

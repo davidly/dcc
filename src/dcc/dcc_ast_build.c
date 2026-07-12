@@ -1257,21 +1257,28 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
  * NULL result is reported as an unsupported AST shape. */
 struct AstNode *ast_build_stmt(struct AstArena *ar)
 {
+    struct AstNode *n;
+    struct Token start_tok;
+    int start_line;
+
+    start_tok = tok;
+    start_line = tok_line;
+
     switch (tok.kind) {
-    case '{':          return ast_build_compound_stmt(ar);
-    case ';':          next_token(); return ast_new(ar, AST_EMPTY);
-    case TOK_RETURN:   return ast_build_return_stmt(ar);
-    case TOK_BREAK:    return ast_build_jump_stmt(ar, AST_BREAK);
-    case TOK_CONTINUE: return ast_build_jump_stmt(ar, AST_CONTINUE);
-    case TOK_GOTO:     return ast_build_goto_stmt(ar);
-    case TOK_IF:       return ast_build_if_stmt(ar);
-    case TOK_WHILE:    return ast_build_while_stmt(ar);
-    case TOK_DO:       return ast_build_do_stmt(ar);
-    case TOK_FOR:      return ast_build_for_stmt(ar);
-    case TOK_SWITCH:   return ast_build_switch_stmt(ar);
-    case TOK_CASE:     return ast_build_case_stmt(ar);
-    case TOK_DEFAULT:  return ast_build_default_stmt(ar);
-    case TOK_ID:       return ast_build_label_stmt(ar);
+    case '{':          n = ast_build_compound_stmt(ar); break;
+    case ';':          next_token(); n = ast_new(ar, AST_EMPTY); break;
+    case TOK_RETURN:   n = ast_build_return_stmt(ar); break;
+    case TOK_BREAK:    n = ast_build_jump_stmt(ar, AST_BREAK); break;
+    case TOK_CONTINUE: n = ast_build_jump_stmt(ar, AST_CONTINUE); break;
+    case TOK_GOTO:     n = ast_build_goto_stmt(ar); break;
+    case TOK_IF:       n = ast_build_if_stmt(ar); break;
+    case TOK_WHILE:    n = ast_build_while_stmt(ar); break;
+    case TOK_DO:       n = ast_build_do_stmt(ar); break;
+    case TOK_FOR:      n = ast_build_for_stmt(ar); break;
+    case TOK_SWITCH:   n = ast_build_switch_stmt(ar); break;
+    case TOK_CASE:     n = ast_build_case_stmt(ar); break;
+    case TOK_DEFAULT:  n = ast_build_default_stmt(ar); break;
+    case TOK_ID:       n = ast_build_label_stmt(ar); break;
     /* Expression statements that do not begin with an identifier: a deref
      * store `*p = x;`, a parenthesised expression `(expr);`, an address-of or
      * unary-led expression, or a prefix ++/-- statement.  ast_build_expr_stmt
@@ -1280,9 +1287,16 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
      * mis-routing a non-expression lead is harmless. */
     case '*': case '(': case '&': case '-': case '+': case '!': case '~':
     case TOK_INC: case TOK_DEC: case TOK_SIZEOF:
-                       return ast_build_expr_stmt(ar);
+                       n = ast_build_expr_stmt(ar); break;
     default:           return NULL;
     }
+
+    if (n != NULL) {
+        n->file = ast_arena_strdup(ar, start_tok.file[0] ? start_tok.file :
+                                   (input_name ? input_name : "<input>"));
+        n->line = start_line;
+    }
+    return n;
 }
 
 /* ------------------------------------------------------------------------- *

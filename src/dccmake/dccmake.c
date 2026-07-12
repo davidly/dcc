@@ -60,6 +60,7 @@ struct Config {
     int no_octio;
     int stack_check;
     int no_narrow;
+    int debug;
     int stack_bytes;
     int use_emulated_m80;
     char includes[MAX_ITEMS][MAX_PATH_LEN];
@@ -546,6 +547,7 @@ static void init_config(struct Config *cfg)
     cfg->no_octio = getenv("DCC_NO_OCTIO") && !strcmp(getenv("DCC_NO_OCTIO"), "1");
     cfg->stack_check = getenv("DCC_FORCE_STACK_CHECK") && !strcmp(getenv("DCC_FORCE_STACK_CHECK"), "1");
     cfg->no_narrow = getenv("DCC_NO_NARROW") && !strcmp(getenv("DCC_NO_NARROW"), "1");
+    cfg->debug = getenv("DCC_DEBUG") && !strcmp(getenv("DCC_DEBUG"), "1");
     cfg->stack_bytes = 512;
     cfg->peep = 1;
     cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
@@ -564,6 +566,22 @@ static void init_config(struct Config *cfg)
     resolve_tool_path(cfg->l80, sizeof(cfg->l80), "L80", NULL, "l80");
     copy_text(cfg->runtime, sizeof(cfg->runtime), env_or_default("DCC_RUNTIME", "DCCRTL.MAC", "DCCRTL.MAC"));
     add_whitespace_args(cfg->dcc_args, &cfg->dcc_arg_count, getenv("DCC_ARGS"));
+}
+
+static void promote_debug_compiler_arg(struct Config *cfg)
+{
+    int i;
+    int kept = 0;
+    for (i = 0; i < cfg->dcc_arg_count; i++) {
+        if (!strcmp(cfg->dcc_args[i], "-g")) {
+            cfg->debug = 1;
+            continue;
+        }
+        if (kept != i)
+            copy_text(cfg->dcc_args[kept], sizeof(cfg->dcc_args[kept]), cfg->dcc_args[i]);
+        kept++;
+    }
+    cfg->dcc_arg_count = kept;
 }
 
 static int apply_setting(struct Config *cfg, const char *raw_key, const char *value)
@@ -743,6 +761,14 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         cfg->peep = b;
         return 1;
     }
+    if (!strcmp(key, "dcc-debug")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->debug = b;
+        return 1;
+    }
     if (!strcmp(key, "dcc-allow-undocumented-z80")) {
         if (!parse_bool(value, &b)) {
             fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
@@ -916,10 +942,12 @@ static void print_help(void)
     printf("  dcc-stack-bytes=512            pass -stack bytes to dcc; default 512\n");
     printf("  dcc-stack-check=false|true|1|0 pass -fstack-check to dcc\n");
     printf("  dcc-no-narrow=false|true|1|0   pass -fno-narrow to dcc (disable byte-narrowing passes)\n");
+    printf("  dcc-debug=false|true|1|0       emit final source debug metadata; requires native m80c\n");
     printf("  dcc-include-directory=dir,...  include dirs; dcc-include is an alias\n");
     printf("  dcc-define=NAME[=value],...    pass -D values to dcc\n");
     printf("  dcc-undefine=NAME,...          pass -U values to dcc\n");
     printf("  dcc-peep=true|false|1|0        run dccpeep; default true\n");
+    printf("                                 ignored with -g to preserve debug locations\n");
     printf("  dcc-allow-undocumented-z80=false|true|1|0\n");
     printf("                                 pass -fundocumented-z80 to dccpeep; default false\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
@@ -939,6 +967,7 @@ static void print_help(void)
     printf("  -s <bytes>, -stack <bytes>     same as dcc-stack-bytes=<bytes>\n");
     printf("  -fstack-check                  same as dcc-stack-check=true\n");
     printf("  -fno-narrow                    same as dcc-no-narrow=true\n");
+    printf("  -g                             same as dcc-debug=true\n");
     printf("  -femulated-m80                 same as dcc-use-emulated-m80=true\n");
     printf("  -I <dir>, -Idir                add an include directory\n");
     printf("  -D <name>[=value], -Dname=val  pass a define to dcc\n");
@@ -1030,6 +1059,10 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         }
         if (!strcmp(arg, "-fno-narrow")) {
             cfg->no_narrow = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-g")) {
+            cfg->debug = 1;
             continue;
         }
         if (!strcmp(arg, "-femulated-m80")) {
@@ -1415,6 +1448,167 @@ static int check_no_fatal_errors(const char *prn_path)
     return ok;
 }
 
+static int read_link_sizes(const char *path, long *code_size, long *data_size)
+{
+    FILE *f;
+    char line[MAX_LINE_LEN];
+
+    f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "cannot read link metadata: %s\n", path);
+        return 0;
+    }
+    *code_size = -1;
+    *data_size = -1;
+    while (fgets(line, sizeof(line), f)) {
+        (void)sscanf(line, "size code %ld", code_size);
+        (void)sscanf(line, "size data %ld", data_size);
+    }
+    fclose(f);
+    if (*code_size >= 0 && *data_size >= 0)
+        return 1;
+    fprintf(stderr, "missing segment size in link metadata: %s\n", path);
+    return 0;
+}
+
+static int remap_debug_type(int type, int struct_id_base)
+{
+    if (type & 128)
+        return (type & 255) | (((type >> 8) + struct_id_base) << 8);
+    return type;
+}
+
+static int append_absolute_debug(FILE *out, const char *path, long code_base, long data_base,
+                                 int *next_struct_id)
+{
+    FILE *in;
+    char line[MAX_LINE_LEN];
+    int struct_id_base = *next_struct_id - 1;
+    int max_struct_id = 0;
+
+    in = fopen(path, "r");
+    if (!in) {
+        fprintf(stderr, "cannot read debug metadata: %s\n", path);
+        return 0;
+    }
+    while (fgets(line, sizeof(line), in)) {
+        unsigned long offset;
+        long source_line;
+        char *quoted;
+        char first_name[128];
+        char second_name[128];
+        int type;
+        int id;
+        int size;
+        int is_union;
+        int consumed;
+        if (sscanf(line, "line code %lx %ld", &offset, &source_line) == 2) {
+            quoted = strchr(line, '"');
+            if (!quoted) {
+                fclose(in);
+                fprintf(stderr, "malformed debug line in %s\n", path);
+                return 0;
+            }
+            fprintf(out, "line %04lX %ld %s", (code_base + (long)offset) & 0xffffL,
+                    source_line, quoted);
+        } else if (sscanf(line, "symbol code %lx", &offset) == 1) {
+            quoted = strchr(line, '"');
+            if (quoted)
+                fprintf(out, "symbol %04lX %s", (code_base + (long)offset) & 0xffffL, quoted);
+        } else if (sscanf(line, "function-begin code %lx", &offset) == 1) {
+            quoted = strchr(line, '"');
+            if (quoted)
+                fprintf(out, "function-begin %04lX %s", (code_base + (long)offset) & 0xffffL, quoted);
+        } else if (sscanf(line, "function-end code %lx", &offset) == 1) {
+            quoted = strchr(line, '"');
+            if (quoted)
+                fprintf(out, "function-end %04lX %s", (code_base + (long)offset) & 0xffffL, quoted);
+        } else if (sscanf(line, "variable code %lx \"%127[^\"]\" \"%127[^\"]\" %d %n",
+                          &offset, first_name, second_name, &type, &consumed) == 4) {
+            fprintf(out, "variable %04lX \"%s\" \"%s\" %d %s",
+                    (code_base + (long)offset) & 0xffffL, first_name, second_name,
+                    remap_debug_type(type, struct_id_base), line + consumed);
+        } else if (sscanf(line, "variable-end code %lx", &offset) == 1) {
+            quoted = strchr(line, '"');
+            if (quoted)
+                fprintf(out, "variable-end %04lX %s", (code_base + (long)offset) & 0xffffL, quoted);
+        } else if (sscanf(line, "global data %lx \"%127[^\"]\" \"%127[^\"]\" %d %n",
+                          &offset, first_name, second_name, &type, &consumed) == 4) {
+            fprintf(out, "global %04lX \"%s\" \"%s\" %d %s",
+                    (data_base + (long)offset) & 0xffffL, first_name, second_name,
+                    remap_debug_type(type, struct_id_base), line + consumed);
+        } else if (sscanf(line, "global code %lx \"%127[^\"]\" \"%127[^\"]\" %d %n",
+                          &offset, first_name, second_name, &type, &consumed) == 4) {
+            fprintf(out, "global %04lX \"%s\" \"%s\" %d %s",
+                    (code_base + (long)offset) & 0xffffL, first_name, second_name,
+                    remap_debug_type(type, struct_id_base), line + consumed);
+        } else if (sscanf(line, "struct %d %d %d \"%127[^\"]\"", &id, &size,
+                          &is_union, first_name) == 4) {
+            fprintf(out, "struct %d %d %d \"%s\"\n", id + struct_id_base, size,
+                    is_union, first_name);
+            if (id > max_struct_id)
+                max_struct_id = id;
+        } else if (sscanf(line, "field %d \"%127[^\"]\" %d %n", &id, first_name,
+                          &type, &consumed) == 3) {
+            fprintf(out, "field %d \"%s\" %d %s", id + struct_id_base, first_name,
+                    remap_debug_type(type, struct_id_base), line + consumed);
+        }
+    }
+    fclose(in);
+    *next_struct_id += max_struct_id;
+    return 1;
+}
+
+static int finalize_debug_file(const char *output_path, const char *rtl_link,
+                               char debug_paths[MAX_ITEMS][MAX_PATH_LEN],
+                               char link_paths[MAX_ITEMS][MAX_PATH_LEN], int count)
+{
+    char tmp[MAX_PATH_LEN];
+    FILE *out;
+    long code_base;
+    long data_base;
+    long rtl_code_size;
+    long rtl_data_size;
+    long code_sizes[MAX_ITEMS];
+    long data_sizes[MAX_ITEMS];
+    int i;
+    int next_struct_id = 1;
+
+    if (snprintf(tmp, sizeof(tmp), "%s.tmp", output_path) < 0 || strlen(tmp) >= sizeof(tmp))
+        return 0;
+    if (!read_link_sizes(rtl_link, &rtl_code_size, &rtl_data_size))
+        return 0;
+    data_base = 0x100L + rtl_code_size;
+    for (i = 0; i < count; i++) {
+        if (!read_link_sizes(link_paths[i], &code_sizes[i], &data_sizes[i]))
+            return 0;
+        data_base += code_sizes[i];
+    }
+    data_base += rtl_data_size;
+    code_base = 0x100L + rtl_code_size;
+    out = fopen(tmp, "w");
+    if (!out) {
+        fprintf(stderr, "cannot create final debug metadata: %s\n", tmp);
+        return 0;
+    }
+    fprintf(out, "DCCDBG 2\n");
+    for (i = 0; i < count; i++) {
+        if (!append_absolute_debug(out, debug_paths[i], code_base, data_base, &next_struct_id)) {
+            fclose(out);
+            remove(tmp);
+            return 0;
+        }
+        code_base += code_sizes[i];
+        data_base += data_sizes[i];
+    }
+    if (fclose(out) != 0 || remove(output_path) != 0 || rename(tmp, output_path) != 0) {
+        fprintf(stderr, "cannot replace final debug metadata: %s\n", output_path);
+        remove(tmp);
+        return 0;
+    }
+    return 1;
+}
+
 static int maybe_copy_tool(const char *name, const char *build_dir)
 {
     char dst[MAX_PATH_LEN];
@@ -1435,6 +1629,7 @@ static int build_dcc_command(struct Config *cfg, int index, const char *input,
     if (index > 0 && !cmd_arg(cmd, cmd_size, "-module")) return 0;
     if (cfg->stack_check && !cmd_arg(cmd, cmd_size, "-fstack-check")) return 0;
     if (cfg->no_narrow && !cmd_arg(cmd, cmd_size, "-fno-narrow")) return 0;
+    if (cfg->debug && !cmd_arg(cmd, cmd_size, "-g")) return 0;
     if (!cmd_arg(cmd, cmd_size, "-stack")) return 0;
     snprintf(stack_buf, sizeof(stack_buf), "%d", cfg->stack_bytes);
     if (!cmd_arg(cmd, cmd_size, stack_buf)) return 0;
@@ -1498,13 +1693,17 @@ static int run_build(struct Config *cfg)
     char macs[MAX_ITEMS][MAX_PATH_LEN];
     char rels[MAX_ITEMS][MAX_PATH_LEN];
     char prns[MAX_ITEMS][MAX_PATH_LEN];
+    char dbgs[MAX_ITEMS][MAX_PATH_LEN];
+    char links[MAX_ITEMS][MAX_PATH_LEN];
     char rtl_prn[MAX_PATH_LEN];
+    char rtl_link[MAX_PATH_LEN];
     char cmd[MAX_CMD_LEN];
     char tmp[MAX_PATH_LEN];
     char rtl_src[MAX_PATH_LEN];
     char rtl_min[MAX_PATH_LEN];
     char rtl_rel[MAX_PATH_LEN];
     char app_com[MAX_PATH_LEN];
+    char app_dbg[MAX_PATH_LEN];
     char lower_com[MAX_PATH_LEN];
     char output_upper[MAX_NAME_LEN];
     char output_lower[MAX_NAME_LEN];
@@ -1522,6 +1721,10 @@ static int run_build(struct Config *cfg)
     }
     if (!validate_cpm_83_name("dcc-output", cfg->output, 0))
         return 0;
+    if (cfg->debug && cfg->use_emulated_m80) {
+        fprintf(stderr, "dcc debug metadata requires native m80c; disable dcc-use-emulated-m80\n");
+        return 0;
+    }
     for (i = 0; i < cfg->input_count; i++) {
         char input_label[64];
         char module_name[MAX_NAME_LEN];
@@ -1579,22 +1782,32 @@ static int run_build(struct Config *cfg)
         path_join(rels[i], sizeof(rels[i]), cfg->build_dir, tmp);
         snprintf(tmp, sizeof(tmp), "%.127s.PRN", uppers[i]);
         path_join(prns[i], sizeof(prns[i]), cfg->build_dir, tmp);
+        snprintf(tmp, sizeof(tmp), "%.127s.DBG", uppers[i]);
+        path_join(dbgs[i], sizeof(dbgs[i]), cfg->build_dir, tmp);
+        snprintf(tmp, sizeof(tmp), "%.127s.LNK", uppers[i]);
+        path_join(links[i], sizeof(links[i]), cfg->build_dir, tmp);
         remove(macs[i]);
         remove(rels[i]);
         remove(prns[i]);
+        remove(dbgs[i]);
+        remove(links[i]);
     }
     path_join(rtl_src, sizeof(rtl_src), cfg->build_dir, "DCCRTL.MAC");
     path_join(rtl_min, sizeof(rtl_min), cfg->build_dir, "RTLMIN.MAC");
     path_join(rtl_rel, sizeof(rtl_rel), cfg->build_dir, "RTLMIN.REL");
     path_join(rtl_prn, sizeof(rtl_prn), cfg->build_dir, "RTLMIN.PRN");
+    path_join(rtl_link, sizeof(rtl_link), cfg->build_dir, "RTLMIN.LNK");
     snprintf(tmp, sizeof(tmp), "%.127s.COM", output_upper);
     path_join(app_com, sizeof(app_com), cfg->build_dir, tmp);
+    snprintf(tmp, sizeof(tmp), "%.127s.DBG", output_upper);
+    path_join(app_dbg, sizeof(app_dbg), cfg->build_dir, tmp);
     snprintf(tmp, sizeof(tmp), "%.127s.com", output_lower);
     path_join(lower_com, sizeof(lower_com), cfg->build_dir, tmp);
     remove(rtl_src);
     remove(rtl_min);
     remove(rtl_rel);
     remove(rtl_prn);
+    remove(rtl_link);
     remove(app_com);
     remove(lower_com);
 
@@ -1603,7 +1816,7 @@ static int run_build(struct Config *cfg)
             return 0;
         if (!run_cmd(cmd) || !file_exists(macs[i]))
             return 0;
-        if (cfg->peep) {
+        if (cfg->peep && !cfg->debug) {
             int tmp_n = snprintf(tmp, sizeof(tmp), "%s%c_PEEPOUT_%d.MAC", cfg->build_dir, PATH_SEP, i);
             if (tmp_n < 0 || (size_t)tmp_n >= sizeof(tmp)) {
                 fprintf(stderr, "build path too long: %s\n", cfg->build_dir);
@@ -1638,6 +1851,10 @@ static int run_build(struct Config *cfg)
         }
         if (!check_no_fatal_errors(prns[i]))
             return 0;
+        if (cfg->debug && (!file_exists(dbgs[i]) || !file_exists(links[i]))) {
+            fprintf(stderr, "debug metadata assembly failed for %s\n", macs[i]);
+            return 0;
+        }
     }
 
     if (!copy_file(cfg->runtime, rtl_src) || !to_crlf(rtl_src))
@@ -1671,6 +1888,10 @@ static int run_build(struct Config *cfg)
     }
     if (!check_no_fatal_errors(rtl_prn))
         return 0;
+    if (cfg->debug && !file_exists(rtl_link)) {
+        fprintf(stderr, "runtime link metadata was not produced: %s\n", rtl_link);
+        return 0;
+    }
 
     copy_text(link_arg, sizeof(link_arg), "/P:100,RTLMIN");
     for (i = 0; i < cfg->input_count; i++) {
@@ -1690,6 +1911,9 @@ static int run_build(struct Config *cfg)
         return 0;
     }
 
+    if (cfg->debug && !finalize_debug_file(app_dbg, rtl_link, dbgs, links, cfg->input_count))
+        return 0;
+
     if (strcmp(output_lower, output_upper) != 0 && !same_file(app_com, lower_com))
         copy_file(app_com, lower_com);
 
@@ -1706,5 +1930,6 @@ int main(int argc, char **argv)
         return 1;
     if (!parse_args(&cfg, argc, argv))
         return 1;
+    promote_debug_compiler_arg(&cfg);
     return run_build(&cfg) ? 0 : 1;
 }
