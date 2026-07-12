@@ -4,29 +4,130 @@
     "Ignored tests below are either not-yet-implemented C99/C11/GNU front-end compatibility candidates or true CP/M 2.2/Z80 target-model/runtime mismatches. Target-model reasons are called out explicitly."
   ],
   "tests": [
-    { "name": "00081", "ignore": true, "reason": "Uses long long; dcc has no 64-bit integer type." },
-    { "name": "00082", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
-    { "name": "00104", "ignore": true, "reason": "Uses int64_t and 64-bit integer constants; dcc has no 64-bit integer type." },
-    { "name": "00119", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
-    { "name": "00123", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
-    { "name": "00128", "ignore": true, "reason": "Uses long long and unsigned long long assignment cases; dcc has no 64-bit integer type." },
-    { "name": "00135", "ignore": true, "reason": "Uses long long and unsigned long long constants; dcc has no 64-bit integer type." },
-    { "name": "00166", "ignore": true, "reason": "Assumes host-sized int can hold large octal/hex constants; dcc int is 16-bit on Z80." },
-    { "name": "00168", "ignore": true, "reason": "Expected output assumes int can hold 10!; dcc int is 16-bit on Z80 and wraps by the target data model." },
-    { "name": "00174", "ignore": true, "reason": "Expected output depends on C double precision for unsuffixed floating constants; dcc has float as its only floating type." },
-    { "name": "00178", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
-    { "name": "00187", "ignore": true, "reason": "Assumes hosted byte-stream stdio semantics; CP/M text files use Ctrl-Z EOF and dcc's stdio subset lacks fgetc/ungetc." },
-    { "name": "00195", "ignore": true, "reason": "Uses double; dcc has float as its only floating type." },
-    { "name": "00200", "ignore": true, "reason": "Uses long long generic-selection cases; dcc has no 64-bit integer type." },
-    { "name": "00203", "ignore": true, "reason": "Uses long long constants; dcc has no 64-bit integer type." },
-    { "name": "00204", "ignore": true, "reason": "Tests host ABI details with double, long double, long long, uint64_t, and int64_t; those are outside dcc's CP/M/Z80 model." },
-    { "name": "00207", "ignore": false, "reason": "C99 single-variable-dimension VLA (char test[argc]); dcc now supports VLAs whose only variable dimension is the outermost, so this builds and runs." },
-    { "name": "00212", "ignore": true, "reason": "Checks LLP64/LP64/ILP32 host data models; dcc is a 16-bit-pointer CP/M/Z80 target." },
-    { "name": "00213", "ignore": true, "reason": "GNU statement-expression support is not implemented yet." },
-    { "name": "00214", "ignore": true, "reason": "GNU statement-expression and __builtin_expect support is not implemented yet." },
-    { "name": "00216", "ignore": true, "reason": "Uses GNU range designators, flexible-array initialization, empty structs, and block-scope compound literal value/copy forms outside current dcc support." },
-    { "name": "00217", "ignore": true, "reason": "Uses unsigned long long; dcc has no 64-bit integer type." },
-    { "name": "00219", "ignore": true, "reason": "C11 _Generic support is not implemented yet, and the test also includes long long associations outside dcc's Z80 target model." },
-    { "name": "00220", "ignore": true, "reason": "Uses wchar.h and wide-character Unicode literals, outside the dcc CP/M runtime/header set." }
+    {
+      "name": "00040",
+      "ignore": true,
+      "reason": "Passes, but costs ~14.8 billion emulated Z80 cycles (~14s even unthrottled) - by far the single most expensive case in the whole extended suite, from a deliberately unpruned whole-board recheck per candidate cell in 8-queens. tests/00040b.c (run by the standard, non-extended suite) exercises the identical constructs - recursion with globals, calloc, K&R-style declarations, non-short-circuiting '&' in boolean context - at a smaller board size for ~8x less cost; see that file's header comment."
+    },
+    {
+      "name": "00081",
+      "ignore": true,
+      "reason": "Uses long long; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00082",
+      "ignore": true,
+      "reason": "Uses unsigned long long; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00104",
+      "ignore": true,
+      "reason": "Uses int64_t and 64-bit integer constants; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00119",
+      "ignore": true,
+      "reason": "Uses double; dcc has float as its only floating type."
+    },
+    {
+      "name": "00123",
+      "ignore": true,
+      "reason": "Uses double; dcc has float as its only floating type."
+    },
+    {
+      "name": "00128",
+      "ignore": true,
+      "reason": "Uses long long and unsigned long long assignment cases; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00135",
+      "ignore": true,
+      "reason": "Uses long long and unsigned long long constants; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00166",
+      "ignore": true,
+      "reason": "Assumes host-sized int can hold large octal/hex constants; dcc int is 16-bit on Z80."
+    },
+    {
+      "name": "00168",
+      "ignore": true,
+      "reason": "Expected output assumes int can hold 10!; dcc int is 16-bit on Z80 and wraps by the target data model."
+    },
+    {
+      "name": "00174",
+      "ignore": true,
+      "reason": "Expected output depends on C double precision for unsuffixed floating constants; dcc has float as its only floating type."
+    },
+    {
+      "name": "00178",
+      "ignore": true,
+      "reason": "Uses double; dcc has float as its only floating type."
+    },
+    {
+      "name": "00187",
+      "ignore": true,
+      "reason": "Assumes hosted byte-stream stdio semantics; CP/M text files use Ctrl-Z EOF and dcc's stdio subset lacks fgetc/ungetc."
+    },
+    {
+      "name": "00195",
+      "ignore": true,
+      "reason": "Uses double; dcc has float as its only floating type."
+    },
+    {
+      "name": "00200",
+      "ignore": true,
+      "reason": "Uses long long generic-selection cases; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00203",
+      "ignore": true,
+      "reason": "Uses long long constants; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00204",
+      "ignore": true,
+      "reason": "Tests host ABI details with double, long double, long long, uint64_t, and int64_t; those are outside dcc's CP/M/Z80 model."
+    },
+    {
+      "name": "00207",
+      "ignore": false,
+      "reason": "C99 single-variable-dimension VLA (char test[argc]); dcc now supports VLAs whose only variable dimension is the outermost, so this builds and runs."
+    },
+    {
+      "name": "00212",
+      "ignore": true,
+      "reason": "Checks LLP64/LP64/ILP32 host data models; dcc is a 16-bit-pointer CP/M/Z80 target."
+    },
+    {
+      "name": "00213",
+      "ignore": true,
+      "reason": "GNU statement-expression support is not implemented yet."
+    },
+    {
+      "name": "00214",
+      "ignore": true,
+      "reason": "GNU statement-expression and __builtin_expect support is not implemented yet."
+    },
+    {
+      "name": "00216",
+      "ignore": true,
+      "reason": "Uses GNU range designators, flexible-array initialization, empty structs, and block-scope compound literal value/copy forms outside current dcc support."
+    },
+    {
+      "name": "00217",
+      "ignore": true,
+      "reason": "Uses unsigned long long; dcc has no 64-bit integer type."
+    },
+    {
+      "name": "00219",
+      "ignore": true,
+      "reason": "C11 _Generic support is not implemented yet, and the test also includes long long associations outside dcc's Z80 target model."
+    },
+    {
+      "name": "00220",
+      "ignore": true,
+      "reason": "Uses wchar.h and wide-character Unicode literals, outside the dcc CP/M runtime/header set."
+    }
   ]
 }
