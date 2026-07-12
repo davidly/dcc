@@ -147,11 +147,13 @@ void gen_binop32(int op, int lhs_type)
     case '/': rname = (lhs_type & TYPE_UNSIGNED) ? "__ldu" : "__lds"; goto l32call;
     case '%': rname = (lhs_type & TYPE_UNSIGNED) ? "__lmu" : "__lms"; goto l32call;
     l32call:
-        /* push RHS (4 bytes) then call; runtime returns DE:HL; caller cleans 8 bytes */
-        emit("\tpush de\n\tpush hl\n");
+        /* fastcall: RHS is already live in DE:HL right here, so no push is
+         * needed for it (mirrors __faf/__fsf) - only the LHS, pushed earlier
+         * by the caller, is on the stack. Runtime returns DE:HL; caller
+         * cleans that one pushed 4-byte operand. */
         emit_runtime_call(rname);
         emit("\tld b,d\n\tld c,e\n\tex de,hl\n");
-        emit("\tld hl,8\n\tadd hl,sp\n\tld sp,hl\n");
+        emit("\tld hl,4\n\tadd hl,sp\n\tld sp,hl\n");
         emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
         break;
     default:

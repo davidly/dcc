@@ -2425,21 +2425,19 @@ _ldiv:
         ld      ix,0
         add     ix,sp
 
+        ; fastcall: denom (divisor/RHS) live in DE:HL at the call, matching
+        ; __lds/__lms's new convention; only numer (dividend/LHS) is pushed.
         ld      l,(ix+8)
         ld      h,(ix+9)        ; numer high word
         push    hl
         ld      l,(ix+6)
         ld      h,(ix+7)        ; numer low word
         push    hl
-        ld      l,(ix+12)
-        ld      h,(ix+13)       ; denom high word
-        push    hl
         ld      l,(ix+10)
-        ld      h,(ix+11)       ; denom low word
-        push    hl
+        ld      h,(ix+11)       ; denom low word -> HL (live)
+        ld      e,(ix+12)
+        ld      d,(ix+13)       ; denom high word -> DE (live)
         call    __lds           ; DE:HL = quotient
-        pop     bc
-        pop     bc
         pop     bc
         pop     bc
         ld      c,(ix+4)
@@ -2462,15 +2460,11 @@ _ldiv:
         ld      l,(ix+6)
         ld      h,(ix+7)        ; numer low word
         push    hl
-        ld      l,(ix+12)
-        ld      h,(ix+13)       ; denom high word
-        push    hl
         ld      l,(ix+10)
-        ld      h,(ix+11)       ; denom low word
-        push    hl
+        ld      h,(ix+11)       ; denom low word -> HL (live)
+        ld      e,(ix+12)
+        ld      d,(ix+13)       ; denom high word -> DE (live)
         call    __lms           ; DE:HL = remainder
-        pop     bc
-        pop     bc
         pop     bc
         pop     bc
         ld      c,(ix+4)
@@ -7127,38 +7121,41 @@ __rand_state:
 
 ; ============================================================
 ; 32-bit long arithmetic runtime routines
-; Calling convention: caller pushes LHS (push de; push hl),
-;   then RHS (push de; push hl), then calls.  After push ix;
-;   ld ix,0; add ix,sp: IX+4=RHS_L, IX+6=RHS_H,
-;   IX+8=LHS_L, IX+10=LHS_H.  Returns DE:HL (DE=high,
-;   HL=low).  Caller cleans 8 bytes of args after return.
+; Calling convention (fastcall, matching __faf/__fsf): caller pushes only
+;   LHS (push de; push hl); RHS is left live in DE:HL (DE=high, HL=low) -
+;   every dcc call site has RHS freshly evaluated into DE:HL right before
+;   the call anyway, so no push/pop round-trip is needed for it. After
+;   push ix; ld ix,0; add ix,sp: IX+4=LHS_L, IX+6=LHS_H. Returns DE:HL
+;   (DE=high, HL=low). Caller cleans 4 bytes of args (just the LHS) after
+;   return.
 ; ============================================================
 
         public  __lmul
 __lmul:
         ; long __lmul(long a, long b) -> a*b (mod 2^32) in DE:HL.
         ;
+        ; fastcall: Y (arg1/"b", the RHS at every dcc call site) is already
+        ; live in DE:HL at entry - the call site just finished evaluating it
+        ; and would otherwise push it right back, matching the __faf/__fsf
+        ; trick. Only X (arg0/"a", the LHS) is pushed by the caller.
+        ;
         ; 32x32 -> 32 via partial products.  With X = Xhi:Xlo and Y = Yhi:Ylo,
         ;   X*Y mod 2^32 = Xlo*Ylo + ((Xlo*Yhi + Xhi*Ylo) & 0xFFFF) << 16.
         ; The base term Xlo*Ylo is a register-only 16x16->32 (no per-iteration
         ; memory traffic, unlike the old shift/add-in-RAM loop); the two cross
         ; terms only need the low 16 bits, so they reuse the tuned 16x16->16
-        ; __mulu.  Y = arg0 (ix+4/6), X = arg1 (ix+8/10).
+        ; __mulu.  Y = live DE:HL at entry, X = arg0 (now ix+4/6).
+        ld      (__lm_rhs_l),hl         ; Ylo
+        ld      (__lm_rhs_h),de         ; Yhi
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      (__lm_lhs_l),hl         ; Xlo
-        ld      l,(ix+10)
-        ld      h,(ix+11)
-        ld      (__lm_lhs_h),hl         ; Xhi
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      (__lm_rhs_l),hl         ; Ylo
+        ld      (__lm_lhs_l),hl         ; Xlo
         ld      l,(ix+6)
         ld      h,(ix+7)
-        ld      (__lm_rhs_h),hl         ; Yhi
+        ld      (__lm_lhs_h),hl         ; Xhi
 
         ; --- base = Xlo * Ylo, register-only 16x16 -> 32 -------------------
         ; HL:DE is the 32-bit accumulator (HL high, DE low).  DE starts as the
@@ -7440,20 +7437,18 @@ lm1s_sg:        db      0
 ; __ldivu: unsigned 32-bit divide.  Returns DE:HL = LHS / RHS.
         public  __ldu
 __ldu:
+        ; fastcall: divisor (RHS at every dcc call site) already live in
+        ; DE:HL at entry; only the dividend (LHS) is pushed by the caller.
+        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvs_h),de
         push    ix
         ld      ix,0
         add     ix,sp
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvd_l),hl
         ld      l,(ix+6)
         ld      h,(ix+7)
-        ld      (__ldv_dvs_h),hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      (__ldv_dvd_l),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
         ld      (__ldv_dvd_h),hl
         call    __ludivmod_core
         ld      hl,(__ldv_quo_l)
@@ -7465,20 +7460,18 @@ __ldu:
 ; __lmodu: unsigned 32-bit modulo.  Returns DE:HL = LHS % RHS.
         public  __lmu
 __lmu:
+        ; fastcall: divisor (RHS at every dcc call site) already live in
+        ; DE:HL at entry; only the dividend (LHS) is pushed by the caller.
+        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvs_h),de
         push    ix
         ld      ix,0
         add     ix,sp
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvd_l),hl
         ld      l,(ix+6)
         ld      h,(ix+7)
-        ld      (__ldv_dvs_h),hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      (__ldv_dvd_l),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
         ld      (__ldv_dvd_h),hl
         call    __ludivmod_core
         ld      hl,(__ldv_rem_l)
@@ -7626,28 +7619,28 @@ ldqr_cont:
 ; __ldivs: signed 32-bit divide.  Returns DE:HL = LHS / RHS.
         public  __lds
 __lds:
+        ; fastcall: divisor (RHS at every dcc call site) already live in
+        ; DE:HL at entry; only the dividend (LHS) is pushed by the caller.
+        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvs_h),de
         push    ix
         ld      ix,0
         add     ix,sp
-        ; Load args and make positive, track sign
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      (__ldv_dvd_l),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
-        ld      (__ldv_dvd_h),hl
+        ; Load remaining arg (dividend) and make positive, track sign
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvd_l),hl
         ld      l,(ix+6)
         ld      h,(ix+7)
-        ld      (__ldv_dvs_h),hl
-        ; sign = sign(dvd) XOR sign(dvs)
-        ld      a,(ix+11)       ; high byte of LHS_H
-        xor     (ix+7)          ; XOR with high byte of RHS_H
+        ld      (__ldv_dvd_h),hl
+        ; sign = sign(dvd) XOR sign(dvs). D still holds dvs_h's high byte
+        ; unclobbered from entry (nothing between entry and here touches
+        ; D/E), so no memory re-read is needed for it.
+        ld      a,(ix+7)        ; high byte of LHS_H (dvd)
+        xor     d               ; XOR with high byte of RHS_H (dvs), live in D
         ld      (__ldv_sign),a  ; bit7 = result sign
         ; If dvd negative: negate it
-        ld      a,(ix+11)
+        ld      a,(ix+7)
         bit     7,a
         jr      z,ldivs_dvd_pos
         ld      de,(__ldv_dvd_l)
@@ -7660,8 +7653,10 @@ __lds:
         sbc     hl,de
         ld      (__ldv_dvd_h),hl
 ldivs_dvd_pos:
-        ; If dvs negative: negate it
-        ld      a,(ix+7)
+        ; If dvs negative: negate it. dvs is no longer on the stack, so
+        ; read its sign byte back from the scratch copy (address+1 = the
+        ; word's high byte, i.e. the original live D) rather than (ix+7).
+        ld      a,(__ldv_dvs_h+1)
         bit     7,a
         jr      z,ldivs_dvs_pos
         ld      de,(__ldv_dvs_l)
@@ -7698,23 +7693,21 @@ ldivs_pos_result:
 ; __lmods: signed 32-bit modulo.  Returns DE:HL = LHS % RHS.
         public  __lms
 __lms:
+        ; fastcall: divisor (RHS at every dcc call site) already live in
+        ; DE:HL at entry; only the dividend (LHS) is pushed by the caller.
+        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvs_h),de
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      (__ldv_dvd_l),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
-        ld      (__ldv_dvd_h),hl
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      (__ldv_dvs_l),hl
+        ld      (__ldv_dvd_l),hl
         ld      l,(ix+6)
         ld      h,(ix+7)
-        ld      (__ldv_dvs_h),hl
+        ld      (__ldv_dvd_h),hl
         ; sign of result = sign of dividend
-        ld      a,(ix+11)
+        ld      a,(ix+7)
         ld      (__ldv_sign),a
         ; If dvd negative: negate
         bit     7,a
@@ -7729,8 +7722,9 @@ __lms:
         sbc     hl,de
         ld      (__ldv_dvd_h),hl
 lmods_dvd_pos:
-        ; If dvs negative: negate
-        ld      a,(ix+7)
+        ; If dvs negative: negate. dvs is no longer on the stack, so read
+        ; its sign byte back from the scratch copy (address+1 = high byte).
+        ld      a,(__ldv_dvs_h+1)
         bit     7,a
         jr      z,lmods_dvs_pos
         ld      de,(__ldv_dvs_l)
@@ -17964,13 +17958,13 @@ SCL71:
         sbc a,a
         ld d,a
         ld e,a
-        push de
-        push hl
+        ; fastcall: RHS (the sign-extended base) already live in DE:HL, no
+        ; push needed for it - matches __lmu's new convention.
         call __lmu
         ld b,d
         ld c,e
         ex de,hl
-        ld hl,8
+        ld hl,4
         add hl,sp
         ld sp,hl
         ex de,hl
@@ -17987,13 +17981,13 @@ SCL71:
         sbc a,a
         ld d,a
         ld e,a
-        push de
-        push hl
+        ; fastcall: RHS (the sign-extended base) already live in DE:HL, no
+        ; push needed for it - matches __ldu's new convention.
         call __ldu
         ld b,d
         ld c,e
         ex de,hl
-        ld hl,8
+        ld hl,4
         add hl,sp
         ld sp,hl
         ex de,hl
@@ -18106,13 +18100,13 @@ SCL77:
         sbc a,a
         ld d,a
         ld e,a
-        push de
-        push hl
+        ; fastcall: RHS (the sign-extended base) already live in DE:HL, no
+        ; push needed for it - matches __lmul's new convention.
         call __lmul
         ld b,d
         ld c,e
         ex de,hl
-        ld hl,8
+        ld hl,4
         add hl,sp
         ld sp,hl
         ex de,hl
