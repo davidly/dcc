@@ -6282,7 +6282,6 @@ rd_dma:
         or      a
         jr      nz,rddone       ; EOF/error returns short count
         call    __rdsto         ; __dma now caches this (slot, record)
-        jr      rd_copy
 
 rd_copy:
         ; copy __chunk bytes from __dma+remainder to user buffer
@@ -6515,7 +6514,6 @@ lscur:
         ld      a,(hl)
         adc     a,(ix+9)
         ld      (hl),a
-        jr      lsret
 
 lsret:
         ; Return full 32-bit offset in DE:HL.
