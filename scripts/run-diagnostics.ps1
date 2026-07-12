@@ -10,6 +10,11 @@ compares it with tests/diagnostics/baselines/<name>.txt.
 
 Use -Update to refresh or create baselines after intentionally changing
 diagnostic wording.
+
+Runs in parallel by default (each test is a single, independent dcc
+invocation with its own build-dir output file, so there's no shared-file
+clobbering to guard against). Pass -Serial to force one-at-a-time
+execution, e.g. for easier debugging of a failure.
 #>
 
 param(
@@ -18,6 +23,8 @@ param(
     [string]$BaselineDir = "tests/diagnostics/baselines",
     [string]$BuildDir = "build/diagnostics",
     [switch]$Update,
+    [switch]$Serial,
+    [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [switch]$Help
 )
 
@@ -91,6 +98,104 @@ function Normalize-Output {
     return $normalized
 }
 
+# Runs one diagnostic test end to end and returns a result object; never
+# writes to the console itself so the parallel path can print results in a
+# stable, readable order as they stream back in.
+function Invoke-DiagnosticTest {
+    param(
+        [string]$TestPath,
+        [string]$TestName,
+        [string]$DccCommand,
+        [string]$BuildDir,
+        [string]$BaselineDir,
+        [bool]$Update
+    )
+
+    $outPath = Join-Path $BuildDir "$TestName.MAC"
+    $baselinePath = Join-Path $BaselineDir "$TestName.txt"
+
+    Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
+    $result = Invoke-Capture $DccCommand @($TestPath, "-o", $outPath)
+    $actual = Normalize-Output $result.Output $TestPath
+
+    if ($result.ExitCode -eq 0) {
+        return [pscustomobject]@{
+            Name = $TestName
+            Passed = $false
+            Updated = $false
+            Detail = "expected compile failure, got success"
+        }
+    }
+
+    if ($Update) {
+        [System.IO.File]::WriteAllText($baselinePath, $actual, [System.Text.UTF8Encoding]::new($false))
+        return [pscustomobject]@{
+            Name = $TestName
+            Passed = $true
+            Updated = $true
+            Detail = $null
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $baselinePath)) {
+        return [pscustomobject]@{
+            Name = $TestName
+            Passed = $false
+            Updated = $false
+            Detail = "missing baseline $baselinePath"
+        }
+    }
+
+    $expected = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $baselinePath).ProviderPath)
+    $expected = (($expected -replace "`r`n", "`n") -replace "`r", "`n")
+    if ($expected.Length -gt 0 -and -not $expected.EndsWith("`n")) {
+        $expected += "`n"
+    }
+
+    if ($actual -ne $expected) {
+        return [pscustomobject]@{
+            Name = $TestName
+            Passed = $false
+            Updated = $false
+            Detail = "diagnostic mismatch"
+            Expected = $expected
+            Actual = $actual
+        }
+    }
+
+    return [pscustomobject]@{
+        Name = $TestName
+        Passed = $true
+        Updated = $false
+        Detail = $null
+    }
+}
+
+function Show-DiagnosticResult {
+    param(
+        [pscustomobject]$Result,
+        [int]$Index,
+        [int]$Total
+    )
+
+    $counter = "[$Index/$Total]"
+    if ($Result.Updated) {
+        Write-Host "$counter UPDATE $($Result.Name).c" -ForegroundColor Yellow
+        return
+    }
+    if ($Result.Passed) {
+        Write-Host "$counter PASS $($Result.Name).c" -ForegroundColor Green
+        return
+    }
+    Write-Host "$counter FAIL $($Result.Name).c: $($Result.Detail)" -ForegroundColor Red
+    if ($Result.Detail -eq "diagnostic mismatch") {
+        Write-Host "--- expected"
+        Write-Host $Result.Expected
+        Write-Host "--- actual"
+        Write-Host $Result.Actual
+    }
+}
+
 $dccCommand = Resolve-DccCommand $Dcc
 
 if (-not (Test-Path -LiteralPath $TestDir -PathType Container)) {
@@ -110,52 +215,41 @@ if ($tests.Count -eq 0) {
 }
 
 $failures = 0
-$index = 0
-foreach ($test in $tests) {
-    $index++
-    $name = [System.IO.Path]::GetFileNameWithoutExtension($test.Name)
-    $outPath = Join-Path $BuildDir "$name.MAC"
-    $baselinePath = Join-Path $BaselineDir "$name.txt"
 
-    Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
-    $result = Invoke-Capture $dccCommand @($test.FullName, "-o", $outPath)
-    $actual = Normalize-Output $result.Output $test.FullName
-
-    if ($result.ExitCode -eq 0) {
-        Write-Host "[$index/$($tests.Count)] FAIL $($test.Name): expected compile failure, got success" -ForegroundColor Red
-        $failures++
-        continue
+if ($Serial) {
+    $index = 0
+    foreach ($test in $tests) {
+        $index++
+        $name = [System.IO.Path]::GetFileNameWithoutExtension($test.Name)
+        $result = Invoke-DiagnosticTest -TestPath $test.FullName -TestName $name `
+            -DccCommand $dccCommand -BuildDir $BuildDir -BaselineDir $BaselineDir -Update:$Update
+        Show-DiagnosticResult -Result $result -Index $index -Total $tests.Count
+        if (-not $result.Passed) { $failures++ }
     }
+}
+else {
+    # Each worker runs in its own runspace, so bring the needed functions
+    # and values in explicitly (module-scope functions/variables aren't
+    # visible inside -Parallel script blocks otherwise).
+    $icDef = ${function:Invoke-Capture}.ToString()
+    $noDef = ${function:Normalize-Output}.ToString()
+    $idtDef = ${function:Invoke-DiagnosticTest}.ToString()
 
-    if ($Update) {
-        [System.IO.File]::WriteAllText($baselinePath, $actual, [System.Text.UTF8Encoding]::new($false))
-        Write-Host "[$index/$($tests.Count)] UPDATE $($test.Name)" -ForegroundColor Yellow
-        continue
+    $done = 0
+    $tests | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+        $test = $_
+        ${function:Invoke-Capture} = $using:icDef
+        ${function:Normalize-Output} = $using:noDef
+        ${function:Invoke-DiagnosticTest} = $using:idtDef
+
+        $name = [System.IO.Path]::GetFileNameWithoutExtension($test.Name)
+        Invoke-DiagnosticTest -TestPath $test.FullName -TestName $name `
+            -DccCommand $using:dccCommand -BuildDir $using:BuildDir -BaselineDir $using:BaselineDir -Update:$using:Update
+    } | ForEach-Object {
+        $done++
+        Show-DiagnosticResult -Result $_ -Index $done -Total $tests.Count
+        if (-not $_.Passed) { $failures++ }
     }
-
-    if (-not (Test-Path -LiteralPath $baselinePath)) {
-        Write-Host "[$index/$($tests.Count)] FAIL $($test.Name): missing baseline $baselinePath" -ForegroundColor Red
-        $failures++
-        continue
-    }
-
-    $expected = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $baselinePath).ProviderPath)
-    $expected = (($expected -replace "`r`n", "`n") -replace "`r", "`n")
-    if ($expected.Length -gt 0 -and -not $expected.EndsWith("`n")) {
-        $expected += "`n"
-    }
-
-    if ($actual -ne $expected) {
-        Write-Host "[$index/$($tests.Count)] FAIL $($test.Name): diagnostic mismatch" -ForegroundColor Red
-        Write-Host "--- expected"
-        Write-Host $expected
-        Write-Host "--- actual"
-        Write-Host $actual
-        $failures++
-        continue
-    }
-
-    Write-Host "[$index/$($tests.Count)] PASS $($test.Name)" -ForegroundColor Green
 }
 
 if ($failures -ne 0) {
