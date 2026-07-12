@@ -2108,6 +2108,28 @@ static int pass_cache_noix_byte_param_reload(void)
                     if (noc < 64) occ[noc++] = i;
                 }
 
+                /* Textual order isn't execution order: a branch can reach a
+                 * later occurrence without ever running through occ[0], the
+                 * point the cache gets stored - e.g. tests/cint.c's
+                 * store_op(sc,esz,arr) reads esz on two sibling branches
+                 * (arr true vs arr false) of an early "if (arr)"; the first
+                 * occurrence establishes the cache only on the arr-true
+                 * side, and the arr-false side's own occurrence, reached by
+                 * jumping past the store entirely via its branch label,
+                 * loaded garbage from an never-written BC - a real
+                 * miscompile (confirmed: cint.c interpreting sieve.c hung
+                 * forever, load_op picking the wrong opcode from that
+                 * garbage). A label anywhere between occ[0] and a later
+                 * occurrence means some OTHER point in the function can
+                 * jump directly into that range, bypassing the store, so
+                 * refuse the whole optimization for this function rather
+                 * than risk it - occ[0] is always the earliest occurrence,
+                 * so this only needs one scan from occ[0] to the last one. */
+                for (i = occ[0]; i < occ[noc - 1]; i++) {
+                    if (starts_label(lines[i])) { safe = 0; break; }
+                }
+
+                if (safe) {
                 /* Last occurrence first: delete_n only ever shifts indices
                  * strictly after the edit point, so earlier (not yet
                  * processed) entries in occ[], including occ[0], stay valid. */
@@ -2123,6 +2145,7 @@ static int pass_cache_noix_byte_param_reload(void)
                 insert_line(occ[0] + best_len + 1, "ld b,h");
                 fend += 2;
                 changed = 1;
+                }
             }
         }
 
