@@ -1566,6 +1566,8 @@ void gen_local_decl_after_type(int base)
                     s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
         }
+        if (freshly_allocated)
+            emit_debug_variable(s);
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
 

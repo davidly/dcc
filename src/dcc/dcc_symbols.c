@@ -383,12 +383,17 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
 
 void leave_scope(void)
 {
+    int first;
+    int i;
     if (g_scope_depth <= 0)
         return;
     /* Block-local names leave scope.  local_size is intentionally left alone:
      * storage is monotonic (slots are never reused), so the frame size still
      * equals the sum over every scope. */
-    nlocals = g_scope_watermark[--g_scope_depth];
+    first = g_scope_watermark[--g_scope_depth];
+    for (i = first; i < nlocals; ++i)
+        emit_debug_variable_end(&locals[i]);
+    nlocals = first;
 }
 
 /* Lookup used while DECLARING a local: only the innermost open block is

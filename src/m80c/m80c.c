@@ -80,6 +80,24 @@ struct Fixup {
     Fixup *next;
 }
 ;
+typedef struct DebugLine DebugLine;
+struct DebugLine {
+    char *file;
+    long line;
+    long off;
+    int seg;
+    DebugLine *next;
+}
+;
+typedef struct DebugInfo DebugInfo;
+struct DebugInfo {
+    int kind;
+    char *args;
+    long off;
+    int seg;
+    DebugInfo *next;
+}
+;
 typedef struct ByteVec ByteVec;
 struct ByteVec {
     U8 *p;
@@ -89,7 +107,7 @@ struct ByteVec {
 ;
 typedef struct Asm Asm;
 struct Asm {
-    char src[MAXNAME], rel[MAXNAME], prn[MAXNAME], symfile[MAXNAME];
+    char src[MAXNAME], rel[MAXNAME], prn[MAXNAME], symfile[MAXNAME], dbgfile[MAXNAME], linkfile[MAXNAME];
     int want_rel, want_prn, want_sym, z80, list_hex, init_ds;
     int pass, errors, warnings;
     FILE *fp, *lst;
@@ -101,6 +119,10 @@ struct Asm {
     int seg;
     Sym *syms[SYMHASH];
     Fixup *fixups;
+    DebugLine *debug_lines;
+    DebugLine *debug_tail;
+    DebugInfo *debug_info;
+    DebugInfo *debug_info_tail;
     Fixup **fixup_idx_code;
     long fixup_idx_code_cap;
     Fixup **fixup_idx_data;
@@ -1191,6 +1213,74 @@ static void define_label(Asm *a,const char *name,int pub) {
     }
     if(pub) s->is_public=1;
 }
+static void record_debug_line(Asm *a,const char *orig) {
+    const char *p=orig;
+    char file[MAXLINE];
+    int n=0;
+    DebugLine *d;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if(strncmp(p,";@dcc-line",10)!=0 || !isspace((unsigned char)p[10])) return;
+    p+=10;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if(*p++!='\"') return;
+    while(*p && *p!='\"' && n+1<MAXLINE) {
+        if(*p=='\\' && p[1]) p++;
+        file[n++]=*p++;
+    }
+    file[n]=0;
+    if(*p!='\"') return;
+    p++;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if(!isdigit((unsigned char)*p)) return;
+    d=(DebugLine*)calloc(1,sizeof(DebugLine));
+    if(!d) { fprintf(stderr,"out of memory\n"); exit(1); }
+    d->file=xstrdup(file);
+    d->line=strtol(p,NULL,10);
+    d->off=*cur_lc_ptr(a);
+    d->seg=a->seg;
+    if(a->debug_tail) a->debug_tail->next=d;
+    else a->debug_lines=d;
+    a->debug_tail=d;
+}
+static void record_debug_info(Asm *a,const char *orig) {
+    const char *p=orig;
+    const char *args;
+    int kind=0;
+    DebugInfo *d;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if(strncmp(p,";@dcc-func-begin",16)==0 && isspace((unsigned char)p[16])) {
+        kind=1;
+        args=p+16;
+    } else if(strncmp(p,";@dcc-func-end",14)==0 && isspace((unsigned char)p[14])) {
+        kind=2;
+        args=p+14;
+    } else if(strncmp(p,";@dcc-var",9)==0 && isspace((unsigned char)p[9])) {
+        kind=3;
+        args=p+9;
+    } else if(strncmp(p,";@dcc-global",12)==0 && isspace((unsigned char)p[12])) {
+        kind=4;
+        args=p+12;
+    } else if(strncmp(p,";@dcc-struct",12)==0 && isspace((unsigned char)p[12])) {
+        kind=5;
+        args=p+12;
+    } else if(strncmp(p,";@dcc-field",11)==0 && isspace((unsigned char)p[11])) {
+        kind=6;
+        args=p+11;
+    } else if(strncmp(p,";@dcc-var-end",13)==0 && isspace((unsigned char)p[13])) {
+        kind=7;
+        args=p+13;
+    } else return;
+    while(*args && isspace((unsigned char)*args)) args++;
+    d=(DebugInfo*)calloc(1,sizeof(DebugInfo));
+    if(!d) { fprintf(stderr,"out of memory\n"); exit(1); }
+    d->kind=kind;
+    d->args=xstrdup(args);
+    d->off=*cur_lc_ptr(a);
+    d->seg=a->seg;
+    if(a->debug_info_tail) a->debug_info_tail->next=d;
+    else a->debug_info=d;
+    a->debug_info_tail=d;
+}
 static int db_arg_is_plain_string(char *s) {
     int q;
     char *p;
@@ -1383,6 +1473,10 @@ static void parse_line(Asm *a,char *line,char *orig) {
     char labbuf[MAXNAME];
     int pub=0, bol_label;
     a->last_err[0]=0;
+    if(a->pass==2) {
+        record_debug_line(a,orig);
+        record_debug_info(a,orig);
+    }
     p=line;
     bol_label=(*p && !isspace((unsigned char)*p));
     q=p;
@@ -1730,6 +1824,68 @@ static void write_sym(Asm *a) {
     }
     fclose(f);
 }
+static const char *debug_segment_name(int type) {
+    if(type==T_CODE || type==SEG_CODE) return "code";
+    if(type==T_DATA || type==SEG_DATA) return "data";
+    return "absolute";
+}
+static void write_debug(Asm *a) {
+    FILE *f;
+    DebugLine *d;
+    DebugInfo *di;
+    Sym *s;
+    int h;
+    const char *module=a->modname[0]?a->modname:a->src;
+    if(!a->debug_lines) {
+        remove(a->dbgfile);
+        return;
+    }
+    f=fopen(a->dbgfile,"w");
+    if(!f) {
+        fprintf(stderr,"cannot create %s\n",a->dbgfile);
+        return;
+    }
+    fprintf(f,"DCCDBG 1\nmodule \"%s\"\nsize code %ld\nsize data %ld\n",module,a->code.n,a->data.n);
+    for(d=a->debug_lines;d;d=d->next) {
+        const char *p=d->file;
+        fprintf(f,"line %s %04lX %ld \"",debug_segment_name(d->seg),d->off&0xffff,d->line);
+        while(*p) {
+            if(*p=='\\' || *p=='\"') fputc('\\',f);
+            fputc(*p++,f);
+        }
+        fprintf(f,"\"\n");
+    }
+    for(di=a->debug_info;di;di=di->next) {
+        const char *kind;
+        if(di->kind==4) {
+            char label[MAXNAME];
+            Sym *gs;
+            if(sscanf(di->args,"\"%127[^\"]\"",label)!=1) continue;
+            gs=sym_find(a,label,0);
+            if(!gs || !gs->defined) continue;
+            fprintf(f,"global %s %04lX %s",debug_segment_name(gs->type),gs->value&0xffff,di->args);
+        } else if(di->kind==5 || di->kind==6) {
+            fprintf(f,"%s %s",di->kind==5?"struct":"field",di->args);
+        } else {
+            kind=di->kind==1?"function-begin":(di->kind==2?"function-end":
+                 (di->kind==7?"variable-end":"variable"));
+            fprintf(f,"%s %s %04lX %s",kind,debug_segment_name(di->seg),di->off&0xffff,di->args);
+        }
+        if(di->args[0] && di->args[strlen(di->args)-1]!='\n') fputc('\n',f);
+    }
+    for(h=0;h<SYMHASH;h++) for(s=a->syms[h];s;s=s->next) if(s->defined)
+        fprintf(f,"symbol %s %04lX \"%s\"\n",debug_segment_name(s->type),s->value&0xffff,s->name);
+    fclose(f);
+}
+static void write_link_metadata(Asm *a) {
+    FILE *f=fopen(a->linkfile,"w");
+    if(!f) {
+        fprintf(stderr,"cannot create %s\n",a->linkfile);
+        return;
+    }
+    fprintf(f,"DCCLINK 1\nsize code %ld\nsize data %ld\n",a->code.n,a->data.n);
+    fclose(f);
+}
 static void default_ext(char *out,const char *in,const char *ext) {
     char *dot,*slash;
     /* parse_cmd's default_ext(a->src,a->src,".MAC") aliases out==in; a strcpy
@@ -1828,6 +1984,10 @@ static void parse_cmd(Asm *a,int argc,char **argv) {
     }
     default_ext(a->symfile,a->src,".SYM");
     uppercase_output_name(a->symfile);
+    default_ext(a->dbgfile,a->src,".DBG");
+    uppercase_output_name(a->dbgfile);
+    default_ext(a->linkfile,a->src,".LNK");
+    uppercase_output_name(a->linkfile);
 }
 int main(int argc,char **argv) {
     Asm a;
@@ -1836,6 +1996,8 @@ int main(int argc,char **argv) {
     if(!assemble_pass(&a,2)) return 1;
     write_rel(&a);
     write_sym(&a);
+    write_debug(&a);
+    write_link_metadata(&a);
     if(a.errors) {
         fprintf(stderr,"%d error(s)\n",a.errors);
         return 1;

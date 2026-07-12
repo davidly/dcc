@@ -408,6 +408,7 @@ extern int opt_no_narrow;   /* -fno-narrow: disable every int-array/scalar/for-c
                               * diffed against a normal one to isolate a narrowing-introduced
                               * output difference from any other cause - see
                               * scripts/runall.ps1 -NarrowDiff. */
+extern int opt_debug;       /* -g: emit source-level debug annotations */
 
 /* typedef table */
 extern struct TypeDef typedefs[MAX_TYPEDEFS];
@@ -1008,6 +1009,10 @@ void parse_param_list(void);
 int current_function_param_count(void);
 int current_function_safe_to_omit_ix(int return_type, int local_bytes);
 void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
+void emit_debug_variable(struct Sym *s);
+void emit_debug_variable_end(struct Sym *s);
+void emit_debug_types_once(void);
+void emit_debug_global(struct Sym *s);
 void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name);
 void emit_function_epilogue(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
