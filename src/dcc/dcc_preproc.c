@@ -1142,6 +1142,7 @@ int keyword_kind(const char *s)
     if (!strcmp(s, "long")) return TOK_LONG;
     if (!strcmp(s, "float")) return TOK_FLOAT;
     if (!strcmp(s, "_Bool")) return TOK_BOOL;
+    if (!strcmp(s, "_Static_assert")) return TOK_STATIC_ASSERT;
     if (!strcmp(s, "char")) return TOK_CHAR;
     if (!strcmp(s, "void")) return TOK_VOID;
     if (!strcmp(s, "unsigned")) return TOK_UNSIGNED;
@@ -2907,6 +2908,7 @@ static const char *expected_token_name(int k, char *buf)
         case TOK_LONG:     return "long";
         case TOK_FLOAT:    return "float";
         case TOK_BOOL:     return "_Bool";
+        case TOK_STATIC_ASSERT: return "_Static_assert";
         case TOK_EQ:       return "==";
         case TOK_NE:       return "!=";
         case TOK_LE:       return "<=";

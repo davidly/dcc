@@ -109,7 +109,9 @@ void cf_convert_to_type(struct ConstVal *v, int type)
     cf_cast_to_type(v, type);
 }
 
-int cf_parse_lor(struct ConstVal *out);
+static int cf_no_eval;
+
+int cf_parse_cond(struct ConstVal *out);
 
 unsigned long cf_parse_integer_literal_bits(const char *text)
 {
@@ -160,11 +162,35 @@ unsigned long cf_parse_integer_literal_bits(const char *text)
     return v & 0xffffffffUL;
 }
 
+static float cf_float_literal_value(void)
+{
+    union {
+        float f;
+        unsigned char b[4];
+    } value;
+    unsigned long bits;
+
+    bits = (unsigned long)tok.val & 0xffffffffUL;
+    value.b[0] = (unsigned char)(bits & 0xffUL);
+    value.b[1] = (unsigned char)((bits >> 8) & 0xffUL);
+    value.b[2] = (unsigned char)((bits >> 16) & 0xffUL);
+    value.b[3] = (unsigned char)((bits >> 24) & 0xffUL);
+    return value.f;
+}
+
 int cf_parse_primary(struct ConstVal *out)
 {
+    int i;
     long v;
     int t;
     int sz;
+
+    if (tok.kind == TOK_ID && strcmp(tok.text, "__offsetof") == 0) {
+        out->u = (unsigned long)parse_offsetof_value();
+        out->type = TYPE_INT | TYPE_UNSIGNED;
+        cf_cast_to_type(out, out->type);
+        return 1;
+    }
 
     if (tok.kind == TOK_NUM) {
         /* Do not use tok.val here.  On MSVC host long is 32-bit, so tokens
@@ -186,6 +212,18 @@ int cf_parse_primary(struct ConstVal *out)
         cf_cast_to_type(out, out->type);
         next_token();
         return 1;
+    }
+
+    if (tok.kind == TOK_ID) {
+        for (i = 0; i < nenum_consts; ++i) {
+            if (!strcmp(enum_const_names[i], tok.text)) {
+                out->u = (unsigned long)enum_const_values[i];
+                out->type = TYPE_INT;
+                cf_cast_to_type(out, out->type);
+                next_token();
+                return 1;
+            }
+        }
     }
 
     if (tok.kind == TOK_SIZEOF) {
@@ -215,9 +253,20 @@ int cf_parse_primary(struct ConstVal *out)
     if (tok.kind == '(') {
         next_token();
         if (starts_type()) {
+            float float_value;
             parse_type_name_decl(&t, &sz);
             expect(')');
-            if (!cf_parse_primary(out))
+            if (tok.kind == TOK_FLOATLIT && !type_is_float(t) &&
+                type_ptr_depth(t) == 0 && !(t & TYPE_STRUCT) &&
+                (t & 15) != TYPE_VOID) {
+                float_value = cf_float_literal_value();
+                out->u = (unsigned long)(long)float_value;
+                out->type = t;
+                cf_cast_to_type(out, t);
+                next_token();
+                return 1;
+            }
+            if (!cf_parse_unary(out))
                 return 0;
             /*
              * The cf_* engine is integer-only: it has no IEEE-754 rounding,
@@ -232,7 +281,7 @@ int cf_parse_primary(struct ConstVal *out)
             cf_cast_to_type(out, t);
             return 1;
         }
-        if (!cf_parse_lor(out))
+        if (!cf_parse_cond(out))
             return 0;
         if (!accept(')'))
             return 0;
@@ -253,6 +302,10 @@ int cf_parse_unary(struct ConstVal *out)
         if (!cf_parse_unary(out))
             return 0;
         cf_convert_to_type(out, cf_promote_type(out->type));
+        if (cf_no_eval) {
+            out->u = 0;
+            return 1;
+        }
         if (op == '+') {
             return 1;
         } else if (op == '-') {
@@ -293,7 +346,9 @@ int cf_parse_mul(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        if (op == '*') {
+        if (cf_no_eval) {
+            out->u = 0;
+        } else if (op == '*') {
             out->u = (out->u * rhs.u) & cf_mask_for_type(common);
         } else if (common & TYPE_UNSIGNED) {
             if ((rhs.u & cf_mask_for_type(common)) == 0)
@@ -336,7 +391,9 @@ int cf_parse_add(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        if (op == '+')
+        if (cf_no_eval)
+            out->u = 0;
+        else if (op == '+')
             out->u = (out->u + rhs.u) & cf_mask_for_type(common);
         else
             out->u = (out->u - rhs.u) & cf_mask_for_type(common);
@@ -364,6 +421,11 @@ int cf_parse_shift(struct ConstVal *out)
             return 0;
         lhs_type = cf_promote_type(out->type);
         cf_convert_to_type(out, lhs_type);
+        if (cf_no_eval) {
+            out->u = 0;
+            out->type = lhs_type;
+            continue;
+        }
         sc = cf_signed_value(rhs);
         if (sc < 0)
             return 0;
@@ -401,7 +463,9 @@ int cf_parse_rel(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        if (common & TYPE_UNSIGNED) {
+        if (cf_no_eval) {
+            r = 0;
+        } else if (common & TYPE_UNSIGNED) {
             unsigned long a = out->u & cf_mask_for_type(common);
             unsigned long b = rhs.u & cf_mask_for_type(common);
             r = (op == '<') ? (a < b) : (op == '>') ? (a > b) : (op == TOK_LE) ? (a <= b) : (a >= b);
@@ -433,7 +497,8 @@ int cf_parse_eq(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        r = ((out->u & cf_mask_for_type(common)) == (rhs.u & cf_mask_for_type(common)));
+        r = cf_no_eval ? 0 :
+            ((out->u & cf_mask_for_type(common)) == (rhs.u & cf_mask_for_type(common)));
         if (op == TOK_NE)
             r = !r;
         out->u = r ? 1UL : 0UL;
@@ -453,7 +518,7 @@ int cf_parse_band(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        out->u = (out->u & rhs.u) & cf_mask_for_type(common);
+        out->u = cf_no_eval ? 0 : (out->u & rhs.u) & cf_mask_for_type(common);
         out->type = common;
     }
     return 1;
@@ -470,7 +535,7 @@ int cf_parse_bxor(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        out->u = (out->u ^ rhs.u) & cf_mask_for_type(common);
+        out->u = cf_no_eval ? 0 : (out->u ^ rhs.u) & cf_mask_for_type(common);
         out->type = common;
     }
     return 1;
@@ -487,7 +552,7 @@ int cf_parse_bor(struct ConstVal *out)
         common = cf_common_arith_type(out->type, rhs.type);
         cf_convert_to_type(out, common);
         cf_convert_to_type(&rhs, common);
-        out->u = (out->u | rhs.u) & cf_mask_for_type(common);
+        out->u = cf_no_eval ? 0 : (out->u | rhs.u) & cf_mask_for_type(common);
         out->type = common;
     }
     return 1;
@@ -499,8 +564,18 @@ int cf_parse_land(struct ConstVal *out)
     if (!cf_parse_bor(out)) return 0;
     while (tok.kind == TOK_ANDAND) {
         next_token();
-        if (!cf_parse_bor(&rhs)) return 0;
-        out->u = (cf_signed_value(*out) != 0 && cf_signed_value(rhs) != 0) ? 1UL : 0UL;
+        if (cf_no_eval || cf_signed_value(*out) == 0) {
+            cf_no_eval++;
+            if (!cf_parse_bor(&rhs)) {
+                cf_no_eval--;
+                return 0;
+            }
+            cf_no_eval--;
+            out->u = 0;
+        } else {
+            if (!cf_parse_bor(&rhs)) return 0;
+            out->u = cf_signed_value(rhs) != 0 ? 1UL : 0UL;
+        }
         out->type = TYPE_INT;
     }
     return 1;
@@ -512,16 +587,69 @@ int cf_parse_lor(struct ConstVal *out)
     if (!cf_parse_land(out)) return 0;
     while (tok.kind == TOK_OROR) {
         next_token();
-        if (!cf_parse_land(&rhs)) return 0;
-        out->u = (cf_signed_value(*out) != 0 || cf_signed_value(rhs) != 0) ? 1UL : 0UL;
+        if (cf_no_eval || cf_signed_value(*out) != 0) {
+            cf_no_eval++;
+            if (!cf_parse_land(&rhs)) {
+                cf_no_eval--;
+                return 0;
+            }
+            cf_no_eval--;
+            out->u = cf_no_eval ? 0UL : 1UL;
+        } else {
+            if (!cf_parse_land(&rhs)) return 0;
+            out->u = cf_signed_value(rhs) != 0 ? 1UL : 0UL;
+        }
         out->type = TYPE_INT;
     }
     return 1;
 }
 
+int cf_parse_cond(struct ConstVal *out)
+{
+    struct ConstVal true_value;
+    struct ConstVal false_value;
+    int condition;
+    int common;
+
+    if (!cf_parse_lor(out))
+        return 0;
+    if (tok.kind != '?')
+        return 1;
+
+    condition = cf_signed_value(*out) != 0;
+    next_token();
+    if (cf_no_eval || !condition)
+        cf_no_eval++;
+    if (!cf_parse_cond(&true_value)) {
+        if (cf_no_eval || !condition)
+            cf_no_eval--;
+        return 0;
+    }
+    if (cf_no_eval || !condition)
+        cf_no_eval--;
+    if (!accept(':'))
+        return 0;
+    if (cf_no_eval || condition)
+        cf_no_eval++;
+    if (!cf_parse_cond(&false_value)) {
+        if (cf_no_eval || condition)
+            cf_no_eval--;
+        return 0;
+    }
+    if (cf_no_eval || condition)
+        cf_no_eval--;
+
+    common = cf_common_arith_type(true_value.type, false_value.type);
+    *out = condition ? true_value : false_value;
+    cf_convert_to_type(out, common);
+    if (cf_no_eval)
+        out->u = 0;
+    return 1;
+}
+
 int try_parse_const_expr_value(struct ConstVal *out)
 {
-    return cf_parse_lor(out);
+    return cf_parse_cond(out);
 }
 
 void emit_const_value(struct ConstVal v)

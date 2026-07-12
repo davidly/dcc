@@ -1,6 +1,9 @@
 #ifndef _ASSERT_H
 #define _ASSERT_H
 
+/** C11 spelling for the core _Static_assert declaration. */
+#define static_assert _Static_assert
+
 #ifdef NDEBUG
 /** Check expression unless assertions are disabled by NDEBUG. */
 #define assert(expression) ((void)0)

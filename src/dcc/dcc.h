@@ -222,6 +222,7 @@
 #define TOK_SHORT      315
 #define TOK_WSTR       314
 #define TOK_BOOL       316
+#define TOK_STATIC_ASSERT 317
 #define TOK_SWITCH     300
 #define TOK_CASE       301
 #define TOK_DEFAULT    302
@@ -799,6 +800,7 @@ long parse_const_long_andand(void);
 long parse_const_long_oror(void);
 long parse_const_long_expr(void);
 int parse_const_int_expr(void);
+void parse_static_assert_decl(void);
 int starts_type(void);
 
 /* ---- symbols ---- */
@@ -860,6 +862,7 @@ int cf_parse_bxor(struct ConstVal *out);
 int cf_parse_bor(struct ConstVal *out);
 int cf_parse_land(struct ConstVal *out);
 int cf_parse_lor(struct ConstVal *out);
+int cf_parse_cond(struct ConstVal *out);
 int try_parse_const_expr_value(struct ConstVal *out);
 void emit_const_value(struct ConstVal v);
 

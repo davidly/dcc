@@ -1,5 +1,30 @@
 /* tanonagg.c - C11 anonymous struct/union member lookup and initialization. */
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
+
+#ifdef _DCC_
+typedef uint32_t static_assert_u32;
+#else
+typedef unsigned int static_assert_u32;
+#endif
+
+_Static_assert(sizeof(int) >= 2, "int too small");
+_Static_assert(1 || (1 / 0), "unselected || operand must not be evaluated");
+_Static_assert(!(0 && (1 / 0)), "unselected && operand must not be evaluated");
+_Static_assert(0 ? (1 / 0) : 1, "unselected ?: operand must not be evaluated");
+_Static_assert((unsigned char)-1 == 255, "cast must truncate to 8 bits");
+_Static_assert((signed char)511 == -1, "cast must wrap to signed 8 bits");
+_Static_assert((int)1.0 == 1, "immediate floating constant cast");
+_Static_assert(sizeof(static_assert_u32) == 4, "oracle type must be 32 bits");
+_Static_assert((static_assert_u32)-1 + 1 == 0, "unsigned 32-bit addition wraps");
+_Static_assert((static_assert_u32)0 - 1 ==
+               (static_assert_u32)0xffffffffUL,
+               "unsigned 32-bit subtraction wraps");
+_Static_assert((static_assert_u32)0xffffffffUL * 2 ==
+               (static_assert_u32)0xfffffffeUL,
+               "unsigned 32-bit multiplication wraps");
 
 struct NestedAnon {
     int a;
@@ -22,7 +47,16 @@ struct NestedAnon {
 struct Pair {
     int x;
     int y;
+    _Static_assert(sizeof(int) >= 2, "member-scope static assertion");
 };
+
+#ifdef _DCC_
+_Static_assert(offsetof(struct Pair, y) == sizeof(int),
+               "offsetof must be an integer constant expression");
+#else
+_Static_assert(__builtin_offsetof(struct Pair, y) == sizeof(int),
+               "offsetof must be an integer constant expression");
+#endif
 
 struct InitAnon {
     int a;
@@ -86,6 +120,8 @@ static void check_local_initializers(void)
 
 int main(void)
 {
+    static_assert(sizeof(char) == 1, "char size changed");
+
     check_global_initializers();
     check_local_initializers();
 

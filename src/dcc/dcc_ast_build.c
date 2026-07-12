@@ -1188,7 +1188,9 @@ void ast_emit_decl_span(const struct AstNode *n)
      * expressions are emitted via ast_emit_init_expr, which builds into the
      * isolated g_ast_init_arena and so never disturbs the shared g_ast_arena
      * that still holds the surrounding AST statement's pending sibling nodes. */
-    if (tok.kind == TOK_TYPEDEF) {
+    if (tok.kind == TOK_STATIC_ASSERT) {
+        parse_static_assert_decl();
+    } else if (tok.kind == TOK_TYPEDEF) {
         parse_typedef_decl();
     } else {
         int t;
@@ -1230,7 +1232,7 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
         /* A typedef or any declaration is captured as a span and re-emitted
          * by declaration codegen at emit time (which rebuilds
          * locals[] / frame offsets identically to the frame-sizing scan). */
-        if (tok.kind == TOK_TYPEDEF || starts_type()) {
+        if (tok.kind == TOK_STATIC_ASSERT || tok.kind == TOK_TYPEDEF || starts_type()) {
             child = ast_build_decl_span(ar);
             if (child == NULL)
                 return NULL;

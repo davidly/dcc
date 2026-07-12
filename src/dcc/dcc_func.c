@@ -2566,6 +2566,9 @@ void scan_function_body(void)
              */
             ast_scan_for_stmt();
             can_decl = 1;
+        } else if (can_decl && tok.kind == TOK_STATIC_ASSERT) {
+            parse_static_assert_decl();
+            can_decl = 1;
         } else if (can_decl && tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
             can_decl = 1;
@@ -5135,7 +5138,9 @@ void parse_translation_unit(void)
     next_token();
 
     while (tok.kind != TOK_EOF) {
-        if (tok.kind == TOK_TYPEDEF) {
+        if (tok.kind == TOK_STATIC_ASSERT) {
+            parse_static_assert_decl();
+        } else if (tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
         } else if (starts_type()) {
             int t;

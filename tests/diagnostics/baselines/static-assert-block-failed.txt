@@ -1,0 +1,4 @@
+<source>:3: error DCC-E0404: static assertion failed: block assertion failed near '_Static_assert'
+        _Static_assert(0, "block assertion failed");
+        ^
+dcc: 1 error(s)

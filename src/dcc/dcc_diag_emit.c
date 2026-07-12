@@ -60,6 +60,8 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "constant integer expression expected")) return "DCC-E0401";
     if (dcc_msg_has(msg, "division by zero in constant expression")) return "DCC-E0402";
     if (dcc_msg_has(msg, "expected an expression")) return "DCC-E0403";
+    if (dcc_msg_has(msg, "static assertion failed")) return "DCC-E0404";
+    if (dcc_msg_has(msg, "static assertion")) return "DCC-E0405";
     if (dcc_msg_has(msg, "expected a field designator")) return "DCC-E0501";
     if (dcc_msg_has(msg, "unknown field initializer designator")) return "DCC-E0502";
     if (dcc_msg_has(msg, "field name expected in offsetof")) return "DCC-E0503";

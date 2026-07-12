@@ -1,0 +1,4 @@
+<source>:2: error DCC-E0404: static assertion failed: member assertion failed near '_Static_assert'
+        _Static_assert(sizeof(int) == 4, "member assertion failed");
+        ^
+dcc: 1 error(s)
