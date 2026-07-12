@@ -127,8 +127,8 @@ static int truth_memb(struct flt_box *s) { if (s->f) return 1; return 0; }
 /* (float) cast inside an integer constant expression must round in single
  * precision: (long)(float)16777217L is 16777216, not 16777217. */
 static long cfk_static = (long)(float)16777217L;
-static int  cfk_arr[(int)(float)5];
-enum { CFK_ENUM = (int)(float)5 };
+static int  cfk_arr[(int)5.0f];
+enum { CFK_ENUM = (int)5.0f };
 
 /* ---- conditional operator with mixed float / non-float arms ----
  * The usual arithmetic conversions make the whole ?: float if either result
@@ -190,10 +190,10 @@ static int truth_call(int y) { if (tf_ret(y)) return 1; return 0; }
 static int truth_not_memb(struct flt_box *s) { return !s->f; }
 
 /* ---- (float) cast in more integer-constant-expression contexts ----
- * negative, unsigned, and a case label all flow through parse_const_long_primary. */
+ * Covers negative and unsigned operands plus a case label. */
 static long cfk_neg = (long)(float)(-16777217L);
 static long cfk_un = (long)(unsigned)(float)5;
-static int cfk_case(long v) { switch (v) { case (long)(float)16777216L: return 1; default: return 0; } }
+static int cfk_case(long v) { switch (v) { case (long)16777216.0f: return 1; default: return 0; } }
 
 /* ---- conditional operator: oracle precision cases ----
  * float-returning call arm (leaf float), comparison-result arm (stays int),

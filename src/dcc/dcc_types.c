@@ -52,8 +52,6 @@ int is_unsupported_target_type_name(const char *name)
 {
     return name && (!strcmp(name, "double") || !strcmp(name, "int64_t") || !strcmp(name, "uint64_t"));
 }
-int parse_const_int_expr(void);
-
 int type_struct_id(int type)
 {
     return (type / 256) & 255;
@@ -110,6 +108,17 @@ int object_array_size(int type, int count)
         base_size = 2;
 
     return base_size * count;
+}
+
+int target_size_multiply(int left, int right, int *result)
+{
+    if (left < 0 || right < 0 || (right != 0 && left > 65535 / right)) {
+        result[0] = 0;
+        return 0;
+    }
+
+    result[0] = left * right;
+    return 1;
 }
 
 /*
@@ -447,7 +456,7 @@ void parse_struct_definition(int struct_id)
             if (tok.kind == ':') {
                 int bw;
                 next_token();
-                bw = parse_const_int_expr();
+                bw = parse_typed_const_int_expr();
                 if (bw < 0 || bw > 16) {
                     error_here("invalid bitfield width");
                     bw = 1;
@@ -534,14 +543,15 @@ void parse_struct_definition(int struct_id)
 
             while (accept('[')) {
                 int flen;
-                flen = parse_const_int_expr();
+                flen = parse_typed_array_bound_expr();
                 expect(']');
                 field_defs[nfield_defs].is_array = 1;
                 if (field_defs[nfield_defs].array_len == 0)
                     field_defs[nfield_defs].array_len = flen;
                 if (field_defs[nfield_defs].dim_count < 4)
                     field_defs[nfield_defs].dims[field_defs[nfield_defs].dim_count++] = flen;
-                bytes *= flen;
+                if (!target_size_multiply(bytes, flen, &bytes))
+                    error_here("object size exceeds 16-bit address space");
             }
 
             field_defs[nfield_defs].size = bytes;
@@ -554,7 +564,12 @@ void parse_struct_definition(int struct_id)
             if (sd->is_union) {
                 if (bytes > sd->size) sd->size = bytes;
             } else {
-                sd->size += bytes;
+                if (bytes > 65535 - sd->size) {
+                    error_here("object size exceeds 16-bit address space");
+                    sd->size = 0;
+                } else {
+                    sd->size += bytes;
+                }
             }
 
             if (is_anonymous_field)
@@ -759,6 +774,11 @@ int parse_base_type(void)
                         }
                     }
 
+                    if (cur_val < -32768 || cur_val > 32767) {
+                        error_here("enumerator value is not representable as 16-bit int");
+                        cur_val = 0;
+                    }
+
                     dup = 0;
                     for (ei = 0; ei < nenum_consts; ++ei) {
                         if (!strcmp(enum_const_names[ei], ename)) {
@@ -931,7 +951,7 @@ int parse_type_name_decl(int *typep, int *sizep)
             next_token();
             n = 0;
             if (tok.kind != ']')
-                n = parse_const_int_expr();
+                n = parse_typed_array_bound_expr();
             expect(']');
             if (n < 0)
                 n = 0;
@@ -967,5 +987,4 @@ int parse_type_name_decl(int *typep, int *sizep)
 }
 
 int parse_sizeof_expr_operand(void);
-long parse_const_long_expr(void);
 

@@ -58,6 +58,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "too few arguments provided to function-like macro invocation")) return "DCC-E0321";
     if (dcc_msg_has(msg, "macro argument too long in function-like macro invocation")) return "DCC-E0322";
     if (dcc_msg_has(msg, "constant integer expression expected")) return "DCC-E0401";
+    if (dcc_msg_has(msg, "integer constant expression out of range")) return "DCC-E0401";
     if (dcc_msg_has(msg, "division by zero in constant expression")) return "DCC-E0402";
     if (dcc_msg_has(msg, "expected an expression")) return "DCC-E0403";
     if (dcc_msg_has(msg, "static assertion failed")) return "DCC-E0404";
@@ -75,6 +76,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "invalid bitfield width")) return "DCC-E0511";
     if (dcc_msg_has(msg, "duplicate enum constant")) return "DCC-E0520";
     if (dcc_msg_has(msg, "enum constant name expected")) return "DCC-E0521";
+    if (dcc_msg_has(msg, "enumerator value is not representable as 16-bit int")) return "DCC-E0522";
     if (dcc_msg_has(msg, "struct/union name or '{' expected")) return "DCC-E0530";
     if (dcc_msg_has(msg, "type expected")) return "DCC-E0531";
     if (dcc_msg_has(msg, "multiple storage classes in declaration")) return "DCC-E0540";
@@ -82,6 +84,8 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "variable inner dimensions in variable-length arrays are not supported")) return "DCC-E0601";
     if (dcc_msg_has(msg, "subscripted value is not an array or pointer")) return "DCC-E0602";
     if (dcc_msg_has(msg, "too many array dimensions")) return "DCC-E0603";
+    if (dcc_msg_has(msg, "invalid array bound for 16-bit target")) return "DCC-E0604";
+    if (dcc_msg_has(msg, "object size exceeds 16-bit address space")) return "DCC-E0605";
     if (dcc_msg_has(msg, "break statement outside loop or switch")) return "DCC-E0701";
     if (dcc_msg_has(msg, "continue statement outside loop")) return "DCC-E0702";
     if (dcc_msg_has(msg, "case label outside switch")) return "DCC-E0703";
@@ -107,6 +111,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "too many union initializer elements")) return "DCC-E0911";
     if (dcc_msg_has(msg, "float initializer must be constant")) return "DCC-E0912";
     if (dcc_msg_has(msg, "negative array initializer designator")) return "DCC-E0913";
+    if (dcc_msg_has(msg, "array initializer designator out of range")) return "DCC-E0916";
     if (dcc_msg_has(msg, "wide string cannot initialize char array")) return "DCC-E0914";
     if (dcc_msg_has(msg, "bitfield initializer must be constant integer")) return "DCC-E0915";
     if (dcc_msg_has(msg, "incompatible integer to pointer assignment")) return "DCC-E0920";

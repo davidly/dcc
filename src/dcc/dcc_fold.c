@@ -110,6 +110,60 @@ void cf_convert_to_type(struct ConstVal *v, int type)
 }
 
 static int cf_no_eval;
+static int cf_ice_mode;
+static int cf_ice_invalid;
+
+static long cf_signed_min_for_type(int type)
+{
+    return type_is_long(type) ? (-2147483647L - 1L) : -32768L;
+}
+
+static long cf_signed_max_for_type(int type)
+{
+    return type_is_long(type) ? 2147483647L : 32767L;
+}
+
+static int cf_signed_add_overflows(long left, long right, int type)
+{
+    long min_value;
+    long max_value;
+
+    min_value = cf_signed_min_for_type(type);
+    max_value = cf_signed_max_for_type(type);
+    return (right > 0 && left > max_value - right) ||
+           (right < 0 && left < min_value - right);
+}
+
+static int cf_signed_sub_overflows(long left, long right, int type)
+{
+    long min_value;
+    long max_value;
+
+    min_value = cf_signed_min_for_type(type);
+    max_value = cf_signed_max_for_type(type);
+    return (right < 0 && left > max_value + right) ||
+           (right > 0 && left < min_value + right);
+}
+
+static int cf_signed_mul_overflows(long left, long right, int type)
+{
+    long min_value;
+    long max_value;
+
+    min_value = cf_signed_min_for_type(type);
+    max_value = cf_signed_max_for_type(type);
+    if (left == 0 || right == 0)
+        return 0;
+    if (left == -1)
+        return right == min_value;
+    if (right == -1)
+        return left == min_value;
+    if (left > 0)
+        return right > 0 ? left > max_value / right
+                         : right < min_value / left;
+    return right > 0 ? left < min_value / right
+                     : left < max_value / right;
+}
 
 int cf_parse_cond(struct ConstVal *out);
 
@@ -268,16 +322,22 @@ int cf_parse_primary(struct ConstVal *out)
             }
             if (!cf_parse_unary(out))
                 return 0;
-            /*
-             * The cf_* engine is integer-only: it has no IEEE-754 rounding,
-             * so it cannot represent a cast to float faithfully.  Folding
-             * (float)16777217L as the integer 16777217 is wrong, because the
-             * single-precision value rounds to 16777216.0f.  Decline so the
-             * expression falls through to the runtime float code path, which
-             * converts and compares with correct single-precision semantics.
-             */
-            if (type_is_float(t))
-                return 0;
+            if (type_is_float(t)) {
+                float rounded;
+
+                if (cf_ice_mode)
+                    cf_ice_invalid = 1;
+                if (out->type & TYPE_UNSIGNED)
+                    rounded = (float)(out->u & cf_mask_for_type(out->type));
+                else
+                    rounded = (float)cf_signed_value(*out);
+                out->u = (unsigned long)(long)rounded;
+                out->type = TYPE_LONG;
+                cf_cast_to_type(out, out->type);
+                return 1;
+            }
+            if (cf_ice_mode && type_ptr_depth(t) != 0)
+                cf_ice_invalid = 1;
             cf_cast_to_type(out, t);
             return 1;
         }
@@ -309,10 +369,10 @@ int cf_parse_unary(struct ConstVal *out)
         if (op == '+') {
             return 1;
         } else if (op == '-') {
-            if (out->type & TYPE_UNSIGNED)
-                out->u = (0UL - out->u) & cf_mask_for_type(out->type);
-            else
-                out->u = (unsigned long)(-cf_signed_value(*out));
+            if (cf_ice_mode && !(out->type & TYPE_UNSIGNED) &&
+                cf_signed_value(*out) == cf_signed_min_for_type(out->type))
+                cf_ice_invalid = 1;
+            out->u = (0UL - out->u) & cf_mask_for_type(out->type);
             cf_cast_to_type(out, out->type);
             return 1;
         } else if (op == '~') {
@@ -349,19 +409,34 @@ int cf_parse_mul(struct ConstVal *out)
         if (cf_no_eval) {
             out->u = 0;
         } else if (op == '*') {
+            if (cf_ice_mode && !(common & TYPE_UNSIGNED) &&
+                cf_signed_mul_overflows(cf_signed_value(*out),
+                                        cf_signed_value(rhs), common))
+                cf_ice_invalid = 1;
             out->u = (out->u * rhs.u) & cf_mask_for_type(common);
         } else if (common & TYPE_UNSIGNED) {
-            if ((rhs.u & cf_mask_for_type(common)) == 0)
+            if ((rhs.u & cf_mask_for_type(common)) == 0) {
+                error_here("division by zero in constant expression");
                 return 0;
+            }
             if (op == '/')
                 out->u = (out->u & cf_mask_for_type(common)) / (rhs.u & cf_mask_for_type(common));
             else
                 out->u = (out->u & cf_mask_for_type(common)) % (rhs.u & cf_mask_for_type(common));
         } else {
             rs = cf_signed_value(rhs);
-            if (rs == 0)
+            if (rs == 0) {
+                error_here("division by zero in constant expression");
                 return 0;
+            }
             ls = cf_signed_value(*out);
+            if (cf_ice_mode && ls == cf_signed_min_for_type(common) && rs == -1) {
+                cf_ice_invalid = 1;
+                out->u = (unsigned long)ls & cf_mask_for_type(common);
+                out->type = common;
+                cf_cast_to_type(out, common);
+                continue;
+            }
             if (op == '/')
                 out->u = (unsigned long)(ls / rs);
             else
@@ -393,10 +468,19 @@ int cf_parse_add(struct ConstVal *out)
         cf_convert_to_type(&rhs, common);
         if (cf_no_eval)
             out->u = 0;
-        else if (op == '+')
+        else if (op == '+') {
+            if (cf_ice_mode && !(common & TYPE_UNSIGNED) &&
+                cf_signed_add_overflows(cf_signed_value(*out),
+                                        cf_signed_value(rhs), common))
+                cf_ice_invalid = 1;
             out->u = (out->u + rhs.u) & cf_mask_for_type(common);
-        else
+        } else {
+            if (cf_ice_mode && !(common & TYPE_UNSIGNED) &&
+                cf_signed_sub_overflows(cf_signed_value(*out),
+                                        cf_signed_value(rhs), common))
+                cf_ice_invalid = 1;
             out->u = (out->u - rhs.u) & cf_mask_for_type(common);
+        }
         out->type = common;
         cf_cast_to_type(out, common);
     }
@@ -433,6 +517,11 @@ int cf_parse_shift(struct ConstVal *out)
         if (sc >= width)
             return 0;
         if (op == TOK_SHL) {
+            if (cf_ice_mode && !(lhs_type & TYPE_UNSIGNED) &&
+                (cf_signed_value(*out) < 0 ||
+                 cf_signed_value(*out) >
+                    (cf_signed_max_for_type(lhs_type) >> (int)sc)))
+                cf_ice_invalid = 1;
             out->u = (out->u << (int)sc) & cf_mask_for_type(lhs_type);
         } else if (lhs_type & TYPE_UNSIGNED) {
             out->u = (out->u & cf_mask_for_type(lhs_type)) >> (int)sc;
@@ -650,6 +739,25 @@ int cf_parse_cond(struct ConstVal *out)
 int try_parse_const_expr_value(struct ConstVal *out)
 {
     return cf_parse_cond(out);
+}
+
+int try_parse_integer_const_expr_value(struct ConstVal *out)
+{
+    int parsed;
+    int saved_invalid;
+
+    /* Save the caller's ICE-invalid state so a nested evaluation tracks its
+     * own validity without clobbering an outer pending result. */
+    saved_invalid = cf_ice_invalid;
+    cf_ice_mode++;
+    cf_ice_invalid = 0;
+    parsed = cf_parse_cond(out);
+    cf_ice_mode--;
+    parsed = parsed && !cf_ice_invalid &&
+             type_ptr_depth(out->type) == 0 && !(out->type & TYPE_STRUCT) &&
+             !type_is_float(out->type);
+    cf_ice_invalid = saved_invalid;
+    return parsed;
 }
 
 void emit_const_value(struct ConstVal v)

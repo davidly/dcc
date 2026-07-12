@@ -1,0 +1,4 @@
+<source>:2: error DCC-E0522: enumerator value is not representable as 16-bit int near '}'
+    enum E { VALUE = (long)INT_MAX + 1L };
+                                        ^
+dcc: 1 error(s)

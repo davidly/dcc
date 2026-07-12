@@ -1,0 +1,4 @@
+<source>:2: error DCC-E0401: constant integer expression expected near '}'
+    enum E { VALUE = INT_MAX + 1 };
+                                 ^
+dcc: 1 error(s)

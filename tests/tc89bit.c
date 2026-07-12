@@ -1,7 +1,13 @@
 #include <stdio.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 struct B1 {
-    unsigned a:1;
+    unsigned a:TEST_UINT32_MAX + 2;
     unsigned b:3;
     unsigned c:4;
     unsigned d:8;

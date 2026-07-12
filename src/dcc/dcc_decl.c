@@ -497,7 +497,7 @@ int emit_init_auto_struct_chained_designator(struct Sym *s, int baseoff, struct 
                 return 1;
             }
             next_token();
-            idx = parse_const_int_expr();
+            idx = parse_typed_designator_index_expr();
             expect(']');
             if (idx < 0) {
                 error_here("negative array initializer designator");
@@ -648,7 +648,7 @@ static void emit_init_auto_struct_array_field_level(struct Sym *s, int baseoff,
             int span;
 
             next_token();
-            idx = parse_const_int_expr();
+            idx = parse_typed_designator_index_expr();
             expect(']');
             expect('=');
             span = field_array_elems_from_level(fd, level + 1);
@@ -748,7 +748,7 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
     while (tok.kind != TOK_EOF && tok.kind != '}') {
         if (tok.kind == '[') {
             next_token();
-            n = parse_const_int_expr();
+            n = parse_typed_designator_index_expr();
             expect(']');
             expect('=');
         }
@@ -1238,7 +1238,7 @@ void emit_init_auto_array_level(struct Sym *s, int elem_type, int *np, int level
             int span;
 
             next_token();
-            idx = parse_const_int_expr();
+            idx = parse_typed_designator_index_expr();
             expect(']');
             expect('=');
             span = sym_array_elems_from_level(s, level + 1);

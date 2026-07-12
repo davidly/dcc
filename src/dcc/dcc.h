@@ -764,6 +764,7 @@ int type_is_long(int type);
 int type_is_float(int type);
 int type_is_bool(int type);
 int object_array_size(int type, int count);
+int target_size_multiply(int left, int right, int *result);
 int type_ptr_depth(int type);
 int type_add_ptr(int type);
 int type_decay_ptr(int type);
@@ -787,19 +788,12 @@ void skip_type_name_param_list(void);
 int parse_type_name_decl(int *typep, int *sizep);
 
 /* ---- constexpr ---- */
-long parse_const_long_primary(void);
-long parse_const_long_mul(void);
-long parse_const_long_add(void);
-long parse_const_long_shift(void);
-long parse_const_long_rel(void);
-long parse_const_long_eq(void);
-long parse_const_long_band(void);
-long parse_const_long_xor(void);
-long parse_const_long_bitor(void);
-long parse_const_long_andand(void);
-long parse_const_long_oror(void);
-long parse_const_long_expr(void);
-int parse_const_int_expr(void);
+int parse_typed_const_int_expr(void);
+int parse_typed_array_bound_expr(void);
+int parse_typed_designator_index_expr(void);
+long parse_typed_const_expr_long(void);
+int parse_typed_enum_const_expr(void);
+long parse_typed_const_long_expr(void);
 void parse_static_assert_decl(void);
 int starts_type(void);
 
@@ -864,6 +858,7 @@ int cf_parse_land(struct ConstVal *out);
 int cf_parse_lor(struct ConstVal *out);
 int cf_parse_cond(struct ConstVal *out);
 int try_parse_const_expr_value(struct ConstVal *out);
+int try_parse_integer_const_expr_value(struct ConstVal *out);
 void emit_const_value(struct ConstVal v);
 
 /* ---- expr ---- */

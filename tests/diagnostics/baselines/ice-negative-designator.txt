@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0913: negative array initializer designator near ']'
+    int values[2] = { [-1] = 1 };
+                         ^
+dcc: 1 error(s)

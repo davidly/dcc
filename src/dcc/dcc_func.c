@@ -1062,7 +1062,7 @@ void skip_prototype_array_suffixes(int *ptype)
             skip_array_dim_to_close();
             n = 0;
         } else {
-            n = parse_const_int_expr();
+            n = parse_typed_array_bound_expr();
             expect(']');
         }
         if (n < 0) n = 0;
@@ -2664,7 +2664,7 @@ void parse_typedef_decl(void)
                 typedef_array_len = 0;
                 next_token();
             } else {
-                typedef_array_len = parse_const_int_expr();
+                typedef_array_len = parse_typed_array_bound_expr();
                 expect(']');
             }
             /* Multidimensional array typedefs (typedef T A[2][3]) collapse to a
@@ -2675,7 +2675,7 @@ void parse_typedef_decl(void)
             while (tok.kind == '[') {
                 next_token();
                 if (tok.kind != ']') {
-                    int inner = parse_const_int_expr();
+                    int inner = parse_typed_array_bound_expr();
                     if (typedef_array_len > 0 && inner > 0)
                         typedef_array_len *= inner;
                 }
@@ -2747,7 +2747,7 @@ static int parse_global_addr_suffix(int base_type, long *offset)
         if (tok.kind == '[') {
             int elem_size;
             next_token();
-            idx = parse_const_long_expr();
+            idx = parse_typed_const_long_expr();
             expect(']');
             elem_size = type_size(cur_type);
             if (elem_size <= 0) elem_size = 2;
@@ -2855,7 +2855,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
     if (tok.kind == TOK_NUM || tok.kind == TOK_CHARLIT ||
         tok.kind == '-' || tok.kind == '+' || tok.kind == '(' ||
         tok.kind == TOK_SIZEOF) {
-        val[0] = parse_const_long_expr();
+        val[0] = parse_typed_const_expr_long();
         if (label) label[0] = 0;
         return 1;
     }
@@ -2890,7 +2890,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
          * emit numeric data instead of dw _BLUE / dw _RED.
          */
         if (find_enum_const(tok.text) >= 0) {
-            val[0] = parse_const_long_expr();
+            val[0] = parse_typed_const_expr_long();
             if (label) label[0] = 0;
             return 1;
         }
@@ -3281,7 +3281,7 @@ static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, 
             break;
         if (had_brace && tok.kind == '[') {
             next_token();
-            n = parse_const_int_expr();
+            n = parse_typed_designator_index_expr();
             expect(']');
             expect('=');
         }
@@ -3683,7 +3683,7 @@ void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level)
             int span;
 
             next_token();
-            idx = parse_const_int_expr();
+            idx = parse_typed_designator_index_expr();
             expect(']');
             expect('=');
             span = sym_array_elems_from_level(s, level + 1);
@@ -3849,7 +3849,7 @@ void parse_global_init_list(struct Sym *s)
             int target;
 
             next_token();
-            idx = parse_const_int_expr();
+            idx = parse_typed_designator_index_expr();
             expect(']');
             expect('=');
 
@@ -4968,9 +4968,12 @@ void parse_function_or_global(int base_type)
             int dims[MAX_ARRAY_DIMS];
             int i;
             int inner_count;
+            int object_size;
 
             for (i = 0; i < MAX_ARRAY_DIMS; ++i)
                 dims[i] = 0;
+            if (base_size <= 0)
+                base_size = 2;
 
             if (g_funcptr_decl_array_len > 0) {
                 total_count = g_funcptr_decl_array_len;
@@ -4986,7 +4989,7 @@ void parse_function_or_global(int base_type)
                     d = 0;
                     next_token();
                 } else {
-                    d = parse_const_int_expr();
+                    d = parse_typed_array_bound_expr();
                     expect(']');
                 }
                 if (dim_count < MAX_ARRAY_DIMS) {
@@ -5008,7 +5011,10 @@ void parse_function_or_global(int base_type)
                         total_count = 0;
                         break;
                     }
-                    total_count *= dims[i];
+                    if (!target_size_multiply(total_count, dims[i], &total_count)) {
+                        error_here("object size exceeds 16-bit address space");
+                        break;
+                    }
                 }
             }
 
@@ -5028,8 +5034,16 @@ void parse_function_or_global(int base_type)
                         inner_count = 1;
                         break;
                     }
-                    inner_count *= dims[i];
+                    if (!target_size_multiply(inner_count, dims[i], &inner_count))
+                        break;
                 }
+            }
+
+            object_size = 0;
+            if (total_count > 0 &&
+                !target_size_multiply(total_count, base_size, &object_size)) {
+                error_here("object size exceeds 16-bit address space");
+                total_count = 0;
             }
 
             if (decl_is_extern) {
@@ -5066,14 +5080,15 @@ void parse_function_or_global(int base_type)
                 for (i = 0; i < MAX_ARRAY_DIMS; ++i)
                     s->dims[i] = (i < dim_count) ? dims[i] : 0;
 
-                if (dim_count > 1)
-                    s->elem_size = inner_count * base_size;
-                else
+                if (dim_count > 1) {
+                    if (!target_size_multiply(inner_count, base_size, &s->elem_size))
+                        s->elem_size = 0;
+                } else
                     s->elem_size = base_size;
                 if (s->elem_size <= 0) s->elem_size = 2;
 
                 if (total_count > 0)
-                    s->size = object_array_size(type, total_count);
+                    s->size = object_size;
                 else
                     s->size = 0;
             } else if (g_ptr_array_dim_count > 0) {

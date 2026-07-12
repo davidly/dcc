@@ -1,6 +1,12 @@
 /* tc99init.c - C99 designated initializers and compound literals. */
 #include <stdio.h>
 
+#ifdef _DCC_
+#define TEST_UINT32_MAX 0xffffffffUL
+#else
+#define TEST_UINT32_MAX 0xffffffffU
+#endif
+
 struct Pair {
     int a;
     int b;
@@ -27,7 +33,7 @@ static int target = 27;
 
 static struct Pair reordered = { .b = 20, .a = 10 };
 static struct Pair *literal_pair = &(struct Pair){ .b = 4, .a = 3 };
-static struct Pair pairs[2] = { [1] = { .b = 8, .a = 7 }, [0] = { 5, 6 } };
+static struct Pair pairs[2] = { [TEST_UINT32_MAX + 2] = { .b = 8, .a = 7 }, [0] = { 5, 6 } };
 static struct Holder holder = {
     .values = { [2] = 12, [0] = 10, 11 },
     .ptr = &reordered,
@@ -61,7 +67,7 @@ static void check_local_designators(void)
 {
     struct Pair local_pair = { .b = 22, .a = 21 };
     struct Pair local_pairs[2] = { [1] = { .b = 42, .a = 41 }, [0] = { 39, 40 } };
-    int local_values[4] = { [2] = 32, [0] = 30, 31, [3] = 33 };
+    int local_values[4] = { [TEST_UINT32_MAX + 3] = 32, [0] = 30, 31, [3] = 33 };
     struct Grid local_grid = {
         .n = 3,
         .cells[1] = { 2, 9 },
