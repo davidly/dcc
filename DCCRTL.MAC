@@ -18122,13 +18122,12 @@ SCL78:
         ld (__stox_p),hl
         jp SCL72
 SCL74:
+        ; __stox_any is only ever 0 (no digits), 1 (digits, no overflow), or
+        ; 65535/-1 (overflow) - so this is exactly a sign test on the high
+        ; byte, not a full 16-bit comparison.
         ld a,(__stox_any+1)
         or a
-        jp m, SCL94
-        jr nz,SCL92 ; peep: jp_to_jr
-        ld a,(__stox_any)
-        cp 0
-        jr nc,SCL92 ; peep: jp_to_jr
+        jp p, SCL92
 SCL94:
         ; Overflow clamp: sign-dependent LONG_MIN/LONG_MAX for strtol,
         ; unconditional ULONG_MAX for strtoul.
@@ -18140,25 +18139,13 @@ SCL94:
         ld a,h
         or l
         jr z,SCL95 ; peep: jp_to_jr
+        ; Signed negative overflow: return LONG_MIN. This is not "negate
+        ; LONG_MIN's magnitude" happening to need no work; LONG_MIN
+        ; (0x80000000) is its own two's-complement negation, so the
+        ; complement-and-increment this replaced always produced the exact
+        ; bytes already loaded here.
         ld hl,0
         ld de,32768
-        ld a,l
-        cpl
-        ld l,a
-        ld a,h
-        cpl
-        ld h,a
-        ld a,e
-        cpl
-        ld e,a
-        ld a,d
-        cpl
-        ld d,a
-        inc hl
-        ld a,h
-        or l
-        jr nz,SCL96 ; peep: jp_to_jr
-        inc de
         jr SCL96 ; peep: jp_to_jr
 SCL95:
         ld hl,65535

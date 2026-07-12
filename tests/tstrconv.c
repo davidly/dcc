@@ -121,6 +121,15 @@ int main(void)
     okl("strtol ovf val", lv, LONG_MAX);
     oki("strtol ovf errno", errno, ERANGE);
 
+    /* one decimal digit more negative than LONG_MIN -> guaranteed negative
+     * overflow at any width; the sign-and-overflow clamp path (distinct
+     * from the positive-overflow path above) is only reached this way. */
+    sprintf(bov, "%ld0", LONG_MIN);
+    errno = 0;
+    lv = strtol(bov, NULL, 10);
+    okl("strtol neg ovf val", lv, LONG_MIN);
+    oki("strtol neg ovf errno", errno, ERANGE);
+
     /* ---- strtoul ---- */
     sprintf(bumax, "%lu", ULONG_MAX);
     okul("strtoul max", strtoul(bumax, NULL, 10), ULONG_MAX);
