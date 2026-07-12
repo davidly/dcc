@@ -122,6 +122,7 @@ and recursion, and worked examples — see
 | Anonymous `struct` members | Supported |
 | Anonymous `union` members | Supported |
 | Initialization through anonymous aggregate members | Supported |
+| `_Static_assert` declarations | Supported at file, block, and `struct`/`union` member scope; `<assert.h>` also defines `static_assert` |
 
 ## Missing from C11
 
