@@ -50,13 +50,8 @@ struct Pair {
     _Static_assert(sizeof(int) >= 2, "member-scope static assertion");
 };
 
-#ifdef _DCC_
 _Static_assert(offsetof(struct Pair, y) == sizeof(int),
                "offsetof must be an integer constant expression");
-#else
-_Static_assert(__builtin_offsetof(struct Pair, y) == sizeof(int),
-               "offsetof must be an integer constant expression");
-#endif
 
 struct InitAnon {
     int a;
@@ -120,7 +115,7 @@ static void check_local_initializers(void)
 
 int main(void)
 {
-    static_assert(sizeof(char) == 1, "char size changed");
+    _Static_assert(sizeof(char) == 1, "char size changed");
 
     check_global_initializers();
     check_local_initializers();

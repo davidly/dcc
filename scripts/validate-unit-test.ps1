@@ -346,12 +346,22 @@ You can also pass a compiler explicitly:
             [object]$Compiler,
             [string]$SourceFile,
             [string]$ExePath,
-            [string]$WorkDir
+            [string]$WorkDir,
+            [string]$RepoRoot
         )
+
+        # Force-included on every host build: supplies host-libc equivalents
+        # for dcc RTL extensions (e.g. stricmp) that tests use directly by
+        # their dcc name. See the header itself for what belongs here vs. in
+        # tests/_test_overrides.json's host/ignore flags. Absolute path:
+        # MSVC's /FI does not reliably fall back to searching the process's
+        # current directory for a relative force-include the way gcc/clang's
+        # -include (and a plain #include "...") do.
+        $preludePath = Join-Path $RepoRoot "tests/host-validate-prelude.h"
 
         if ($Compiler.Kind -eq "msvc") {
             $objPath = Join-Path $WorkDir ([System.IO.Path]::GetFileNameWithoutExtension($ExePath) + ".obj")
-            $arguments = @("/nologo", "/w", "/O2", "/Zc:__STDC__", "/std:c11", "/Fe:$ExePath", "/Fo:$objPath", $SourceFile)
+            $arguments = @("/nologo", "/w", "/O2", "/Zc:__STDC__", "/std:c11", "/FI", $preludePath, "/Fe:$ExePath", "/Fo:$objPath", $SourceFile)
             $output = & $Compiler.Command @arguments 2>&1
             return [pscustomobject]@{ Success = ($LASTEXITCODE -eq 0 -and (Test-Path $ExePath -PathType Leaf)); Output = ($output -join "`n") }
         }
@@ -359,7 +369,7 @@ You can also pass a compiler explicitly:
         $baseCflags = if ($env:CFLAGS) { @($env:CFLAGS -split "\s+" | Where-Object { $_ }) } else { @("-std=gnu99", "-w", "-O2") }
         if ($baseCflags -notcontains "-fsigned-char") { $baseCflags += "-fsigned-char" }
         if ($IsMacOS -and ($baseCflags -notcontains "-fno-common")) { $baseCflags += "-fno-common" }
-        $arguments = @($baseCflags) + @($Compiler.CFlags) + @($SourceFile, "-o", $ExePath, "-lm")
+        $arguments = @($baseCflags) + @($Compiler.CFlags) + @("-include", $preludePath, $SourceFile, "-o", $ExePath, "-lm")
         $output = & $Compiler.Command @arguments 2>&1
         return [pscustomobject]@{ Success = ($LASTEXITCODE -eq 0 -and (Test-Path $ExePath -PathType Leaf)); Output = ($output -join "`n") }
     }
@@ -413,7 +423,8 @@ You can also pass a compiler explicitly:
             [string]$BuildRoot,
             [string]$BaselineDir,
             [int]$RunTimeout,
-            [System.Collections.IDictionary]$Overrides
+            [System.Collections.IDictionary]$Overrides,
+            [string]$RepoRoot
         )
 
         $lines = [System.Collections.Generic.List[string]]::new()
@@ -437,7 +448,7 @@ You can also pass a compiler explicitly:
         $exePath = Join-Path $appBuildDir $exeName
         Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
 
-        $compile = Invoke-HostCompile -Compiler $Compiler -SourceFile $sourceFile -ExePath $exePath -WorkDir $appBuildDir
+        $compile = Invoke-HostCompile -Compiler $Compiler -SourceFile $sourceFile -ExePath $exePath -WorkDir $appBuildDir -RepoRoot $RepoRoot
         if (-not $compile.Success) {
             $sw.Stop()
             $lines.Add("    COMPILE FAILED")
@@ -619,7 +630,7 @@ You can also pass a compiler explicitly:
         foreach ($appName in $appsToRun) {
             $result = Invoke-AppValidation -AppName $appName -Compiler $compiler -Fixtures $fixtureList `
                 -Placeholders $Placeholders -BuildRoot $buildRoot -BaselineDir $BaselineDir `
-                -RunTimeout $RunTimeout -Overrides $appOverrides
+                -RunTimeout $RunTimeout -Overrides $appOverrides -RepoRoot $repoRoot
             $results += $result
             Show-AppResult $result
         }
@@ -653,7 +664,7 @@ You can also pass a compiler explicitly:
 
             Invoke-AppValidation -AppName $_ -Compiler $using:compiler -Fixtures $using:fixtureList `
                 -Placeholders $using:Placeholders -BuildRoot $using:buildRoot -BaselineDir $using:BaselineDir `
-                -RunTimeout $using:RunTimeout -Overrides $using:appOverrides
+                -RunTimeout $using:RunTimeout -Overrides $using:appOverrides -RepoRoot $using:repoRootForWorkers
         } | ForEach-Object {
             $results += $_
             Show-AppResult $_
