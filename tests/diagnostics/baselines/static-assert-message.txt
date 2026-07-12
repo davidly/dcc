@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0405: string literal expected in static assertion near 'not_a_string'
+    _Static_assert(1, not_a_string);
+                      ^
+dcc: 1 error(s)

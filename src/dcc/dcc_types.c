@@ -404,6 +404,12 @@ void parse_struct_definition(int struct_id)
     bit_unit_offset = 0;
 
     while (tok.kind != TOK_EOF && tok.kind != '}') {
+        /* C11 6.7.2.1: a static_assert-declaration is a valid struct-declaration.
+         * It contributes no member and is consumed (through its ';') here. */
+        if (tok.kind == TOK_STATIC_ASSERT) {
+            parse_static_assert_decl();
+            continue;
+        }
         ftype = parse_type();
 
         for (;;) {

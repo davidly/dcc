@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0404: static assertion failed: int must be four bytes near '_Static_assert'
+    _Static_assert(sizeof(int) == 4, "int must be " "four bytes");
+    ^
+dcc: 1 error(s)

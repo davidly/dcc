@@ -47,7 +47,9 @@ void gen_compound(void)
     enter_scope();
     dead = 0;
     while (tok.kind != TOK_EOF && tok.kind != '}') {
-        if (tok.kind == TOK_TYPEDEF) {
+        if (tok.kind == TOK_STATIC_ASSERT) {
+            parse_static_assert_decl();
+        } else if (tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
         } else if (current_identifier_starts_label()) {
             gen_statement();
