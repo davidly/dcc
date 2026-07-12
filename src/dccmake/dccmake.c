@@ -68,6 +68,7 @@ struct Config {
     char dcc_args[MAX_ITEMS][MAX_PATH_LEN];
     int dcc_arg_count;
     int peep;
+    int peep_debug;
     int dccpeep_undoc;
     char build_dir[MAX_PATH_LEN];
     char dcc[MAX_PATH_LEN];
@@ -550,6 +551,16 @@ static void init_config(struct Config *cfg)
     cfg->debug = getenv("DCC_DEBUG") && !strcmp(getenv("DCC_DEBUG"), "1");
     cfg->stack_bytes = 512;
     cfg->peep = 1;
+    /* Off by default: debug builds normally skip dccpeep entirely so every
+     * "@dcc-line" source-line marker m80c records stays exactly where dcc
+     * put it (dccpeep's text-level passes have no concept of preserving
+     * those markers through a delete/move, so peephole + -g can misattribute
+     * source lines in the resulting .DBG). Opt in with dcc-peep-debug=true
+     * when you specifically need to debug a bug that only reproduces in an
+     * optimized binary; expect source-line stepping/breakpoints to be
+     * unreliable in that mode - fall back to disassembly/instruction
+     * stepping, which reflects the real optimized code correctly regardless. */
+    cfg->peep_debug = getenv("DCC_PEEP_DEBUG") && !strcmp(getenv("DCC_PEEP_DEBUG"), "1");
     cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
     /* Native m80c is the default assembler (no Z80 emulation needed); set
      * DCC_USE_EMULATED_M80=1 to fall back to the real M80.COM under ntvcm,
@@ -761,6 +772,14 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         cfg->peep = b;
         return 1;
     }
+    if (!strcmp(key, "dcc-peep-debug")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->peep_debug = b;
+        return 1;
+    }
     if (!strcmp(key, "dcc-debug")) {
         if (!parse_bool(value, &b)) {
             fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
@@ -947,7 +966,16 @@ static void print_help(void)
     printf("  dcc-define=NAME[=value],...    pass -D values to dcc\n");
     printf("  dcc-undefine=NAME,...          pass -U values to dcc\n");
     printf("  dcc-peep=true|false|1|0        run dccpeep; default true\n");
-    printf("                                 ignored with -g to preserve debug locations\n");
+    printf("                                 ignored with -g unless dcc-peep-debug=true,\n");
+    printf("                                 to preserve debug locations by default\n");
+    printf("  dcc-peep-debug=false|true|1|0  run dccpeep even with -g; default false.\n");
+    printf("                                 Use only to debug a bug that reproduces solely\n");
+    printf("                                 in an optimized binary: dccpeep's text-level\n");
+    printf("                                 passes don't preserve @dcc-line source markers,\n");
+    printf("                                 so source-line stepping/breakpoints become\n");
+    printf("                                 unreliable in the resulting build - rely on\n");
+    printf("                                 disassembly/instruction stepping instead, which\n");
+    printf("                                 always reflects the real optimized code\n");
     printf("  dcc-allow-undocumented-z80=false|true|1|0\n");
     printf("                                 pass -fundocumented-z80 to dccpeep; default false\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
@@ -1759,6 +1787,15 @@ static int run_build(struct Config *cfg)
         }
     }
 
+    if (cfg->debug && cfg->peep && cfg->peep_debug) {
+        fprintf(stderr,
+                "warning: dcc-peep-debug=true - dccpeep will run on this -g build.\n"
+                "         Source-line stepping/breakpoints may land on the wrong line:\n"
+                "         dccpeep's passes don't preserve @dcc-line markers when they\n"
+                "         delete or move code. Disassembly/instruction stepping still\n"
+                "         reflects the real optimized code correctly.\n");
+    }
+
     add_default_include(cfg);
     maybe_copy_tool("m80.com", cfg->build_dir);
     maybe_copy_tool("l80.com", cfg->build_dir);
@@ -1816,7 +1853,7 @@ static int run_build(struct Config *cfg)
             return 0;
         if (!run_cmd(cmd) || !file_exists(macs[i]))
             return 0;
-        if (cfg->peep && !cfg->debug) {
+        if (cfg->peep && (!cfg->debug || cfg->peep_debug)) {
             int tmp_n = snprintf(tmp, sizeof(tmp), "%s%c_PEEPOUT_%d.MAC", cfg->build_dir, PATH_SEP, i);
             if (tmp_n < 0 || (size_t)tmp_n >= sizeof(tmp)) {
                 fprintf(stderr, "build path too long: %s\n", cfg->build_dir);

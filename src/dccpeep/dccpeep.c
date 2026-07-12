@@ -4603,6 +4603,34 @@ static int peep_in_function_range(const char *func, int *startp, int *endp)
 }
 
 /*
+ * True if any line in [start,end) is a "-g" debug annotation
+ * (";@dcc-line", ";@dcc-var", ";@dcc-var-end", etc: anything starting with
+ * ";@dcc-").  Used as a blanket guard for the pass_minmax_ and
+ * pass_shrink_minmax_ family (and any other pass built the same way): those passes
+ * were written and validated only against release-mode (non -g) codegen,
+ * by pattern-matching long runs of strictly adjacent instructions with no
+ * regard for what might sit in between. -g's per-statement comments can
+ * land inside those runs and either break a match outright (harmless,
+ * just a missed optimization) or - worse, and what actually happened here -
+ * silently change which instructions a still-succeeding match captures,
+ * producing a real miscompile rather than just imprecise debug info. Making
+ * each such pass provably safe under -g individually is exactly the kind of
+ * open-ended, error-prone audit that isn't worth it for a handful of
+ * program-specific passes: just decline all of them outright when debug
+ * annotations are present in range, and fall back to their unoptimized (but
+ * always correct) input for that one function.
+ */
+static int peep_range_has_debug_annotations(int start, int end)
+{
+    int i;
+
+    for (i = start; i < end; i++)
+        if (strncmp(lines[i], ";@dcc-", 6) == 0)
+            return 1;
+    return 0;
+}
+
+/*
  * Replace ld de,N; [extrn __mulu;] call __mulu with inline shift-add sequences
  * for small constants (10, 20, 40, 80, 160).  Uses DE as a scratch register to
  * save the original HL value; this matches what the caller already expects
@@ -5018,6 +5046,8 @@ static int pass_minmax_unsigned_compares(void)
     changed = 0;
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     for (i = start; i + 6 < end; i++) {
@@ -7375,6 +7405,8 @@ static int pass_minmax_winner_result_no_temp(void)
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
         return 0;
+    if (peep_range_has_debug_annotations(start, end))
+        return 0;
 
     /*
      * The winner-function result is returned in L.  The generated code stores
@@ -7431,6 +7463,8 @@ static int pass_minmax_score_b_cache(void)
     changed = 0;
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     /*
@@ -7493,6 +7527,8 @@ static int pass_shrink_minmax_frame3_after_score_cache(void)
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
         return 0;
+    if (peep_range_has_debug_annotations(start, end))
+        return 0;
 
     for (i = start; i < end; ++i) {
         if (strstr(lines[i], "(ix-4)") != NULL)
@@ -7519,6 +7555,8 @@ static int pass_shrink_minmax_frame_after_callptr_temp_removed(void)
     int uses_temp;
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     uses_temp = 0;
@@ -7570,6 +7608,8 @@ static int pass_minmax_loop_ctr_b(void)
     char tmp[MAX_LINE];
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     /* Only run after:
@@ -7646,6 +7686,8 @@ static int pass_shrink_minmax_frame2_after_loop_ctr_b(void)
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
         return 0;
+    if (peep_range_has_debug_annotations(start, end))
+        return 0;
 
     for (i = start; i < end; ++i) {
         if (strstr(lines[i], "(ix-3)") != NULL)
@@ -7692,6 +7734,8 @@ static int pass_minmax_value_c(void)
     char tmp[MAX_LINE];
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     /* Guard: pass_minmax_loop_ctr_b must have committed (ld b,c present,
@@ -7773,6 +7817,8 @@ static int pass_shrink_minmax_frame1_after_value_c(void)
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
         return 0;
+    if (peep_range_has_debug_annotations(start, end))
+        return 0;
 
     for (i = start; i < end; i++) {
         if (strstr(lines[i], "(ix-1)") != NULL)
@@ -7828,6 +7874,8 @@ static int pass_minmax_board_ptr_loop(void)
     char cond[16];
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     for (i = start; i + 8 < end; i++) {
@@ -7885,6 +7933,8 @@ static int pass_minmax_byte_returns(void)
     int exit_label_line = -1;
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     /* Find the exit label: the last label before "ld sp,ix; pop ix; ret". */
@@ -8005,6 +8055,8 @@ static int pass_minmax_pack_frame(void)
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
         return 0;
+    if (peep_range_has_debug_annotations(start, end))
+        return 0;
 
     /* Guard: only run while (ix+10) references still exist. */
     {
@@ -8045,6 +8097,8 @@ static int pass_minmax_pack_call(void)
     char newline[MAX_LINE];
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     /* Guard: only run after frame translation (ix+10 gone, ix+5 present). */
@@ -8236,7 +8290,8 @@ static int pass_minmax_pack_call(void)
      */
     {
         int fs_start, fs_end;
-        if (peep_in_function_range("_FindSolution:", &fs_start, &fs_end)) {
+        if (peep_in_function_range("_FindSolution:", &fs_start, &fs_end) &&
+            !peep_range_has_debug_annotations(fs_start, fs_end)) {
             for (i = fs_start; i + 12 < fs_end; i++) {
                 int j, npopcnt;
                 char off[32];
@@ -8318,6 +8373,8 @@ static int pass_minmax_save_board_addr(void)
     char addr[128], tmp[MAX_LINE];
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
+        return 0;
+    if (peep_range_has_debug_annotations(start, end))
         return 0;
 
     for (i = start; i + 12 < end; i++) {
