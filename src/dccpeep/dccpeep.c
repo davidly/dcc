@@ -1595,6 +1595,104 @@ static int pass_elim_long_store_reload(void)
     return changed;
 }
 
+/*
+ * pass_skip_ix_reload_across_label:
+ *
+ * A 32-bit DEHL store to (ix+N)..(ix+N+3) that falls straight into a label
+ * which is immediately followed by the matching reload of those same four
+ * bytes:
+ *
+ *   ld (ix+N),l
+ *   ld (ix+N+1),h
+ *   ld (ix+N+2),e
+ *   ld (ix+N+3),d
+ *   L1:
+ *       ld l,(ix+N)
+ *       ld h,(ix+N+1)
+ *       ld e,(ix+N+2)
+ *       ld d,(ix+N+3)
+ *
+ * pass_elim_long_store_reload refuses to touch this shape because L1 may be
+ * a branch target: some other predecessor jumps straight to L1 without
+ * having just stored DEHL, so the reload is genuinely needed on that path.
+ * But DEHL still holds the stored value on the fall-through path (stores
+ * don't change the source registers), so that path can jump straight past
+ * the reload instead of redoing it:
+ *
+ *   ld (ix+N),l
+ *   ld (ix+N+1),h
+ *   ld (ix+N+2),e
+ *   ld (ix+N+3),d
+ *   jr Lskip            ; new
+ *   L1:
+ *       ld l,(ix+N)
+ *       ld h,(ix+N+1)
+ *       ld e,(ix+N+2)
+ *       ld d,(ix+N+3)
+ *   Lskip:               ; new
+ *
+ * The jump-in path is untouched. Saves four ix-relative loads on the
+ * fall-through path at the cost of one always-taken jr.
+ */
+static int pass_skip_ix_reload_across_label(void)
+{
+    int i, ival, k, changed;
+    char tmp[MAX_LINE], expect[MAX_LINE];
+    char off0[32], off1[32], off2[32], off3[32];
+    char lab[128];
+    const char *p;
+
+    changed = 0;
+
+    for (i = 0; i + 8 < nlines; i++) {
+        strip_peep_comment_copy(tmp, lines[i]);
+        if (strncmp(tmp, "ld (ix", 6) != 0)
+            continue;
+        p = tmp + 6;
+        k = 0;
+        while (*p && *p != ')' && k < 30)
+            off0[k++] = *p++;
+        off0[k] = 0;
+        if (*p != ')' || p[1] != ',' || p[2] != 'l' || p[3] != 0 || k == 0)
+            continue;
+
+        ival = (int)strtol(off0, NULL, 0);
+        peep_format_ix_off(off1, ival + 1);
+        peep_format_ix_off(off2, ival + 2);
+        peep_format_ix_off(off3, ival + 3);
+
+        sprintf(expect, "ld (ix%s),h", off1);
+        if (!eq(i + 1, expect)) continue;
+        sprintf(expect, "ld (ix%s),e", off2);
+        if (!eq(i + 2, expect)) continue;
+        sprintf(expect, "ld (ix%s),d", off3);
+        if (!eq(i + 3, expect)) continue;
+
+        /* Must fall straight into a label ... */
+        if (!label_name_at(i + 4, lab))
+            continue;
+
+        /* ... immediately followed by the matching reload. */
+        if (!peep_match_long_reload_at(i + 5, off0, off1, off2, off3))
+            continue;
+
+        {
+            char skip_label[160], jr_line[192], skip_def[168];
+
+            sprintf(skip_label, "Lpeep_skiprl_%d", i);
+            sprintf(jr_line, "jr %s", skip_label);
+            sprintf(skip_def, "%s:", skip_label);
+
+            insert_line_tagged(i + 4, jr_line, "skip_ix_reload_across_label");
+            insert_line(i + 10, skip_def);
+        }
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int peep_is_pos_func_label(const char *s)
 {
     if (s[0] == '_' &&
@@ -14005,6 +14103,7 @@ int main(int argc, char **argv)
         if (pass_byte_postdec_copy()) changed = 1;
         if (pass_elim_redundant_ld_h_zero()) changed = 1;
         if (pass_elim_long_store_reload()) changed = 1;
+        if (pass_skip_ix_reload_across_label()) changed = 1;
         if (pass_branch_over_jump()) changed = 1;
         if (pass_jump_thread()) changed = 1;
         if (pass_global_board_const_offsets()) changed = 1;
