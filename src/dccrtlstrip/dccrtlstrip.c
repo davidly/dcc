@@ -19,6 +19,8 @@
 #define MAX_SYMS    20000
 #define MAX_ROOTS   20000
 #define MAX_LINE      512
+#define MAX_SCAN_SYMS 60000
+#define SCAN_HASH_SIZE 65521
 
 struct Line {
     char *s;
@@ -47,6 +49,15 @@ static int nblocks;
 
 static struct SymMap syms[MAX_SYMS];
 static int nsyms;
+
+/* Comprehensive name->block index covering every label and PUBLIC-mentioned
+ * name in every already-classified block, built once by build_scan_index()
+ * so find_sym_block's not-in-syms[] case is an O(1) lookup instead of the
+ * O(nlines) rescan find_symbol_block_by_scan used to do on every call. */
+static struct SymMap scan_syms[MAX_SCAN_SYMS];
+static int scan_next[MAX_SCAN_SYMS];
+static int scan_buckets[SCAN_HASH_SIZE];
+static int n_scan_syms;
 
 static char roots[MAX_ROOTS][128];
 static int nroots;
@@ -204,58 +215,108 @@ static int str_ieq(const char *a, const char *b)
     return *a == 0 && *b == 0;
 }
 
-static int line_public_mentions(const char *line, const char *name)
-{
-    char clean[MAX_LINE];
-    const char *p;
-    char sym[128];
-
-    strip_comment_copy(line, clean, sizeof(clean));
-    p = skipws(clean);
-    if (ci_strncmp(p, "public", 6) != 0 ||
-        !(p[6] == ' ' || p[6] == '\t'))
-        return 0;
-    p += 6;
-
-    for (;;) {
-        p = skipws(p);
-        if (!parse_ident_token(&p, sym))
-            break;
-        if (str_ieq(sym, name))
-            return 1;
-        p = skipws(p);
-        if (*p == ',') {
-            p++;
-            continue;
-        }
-        break;
-    }
-    return 0;
-}
-
 static int line_label_is(const char *line, const char *name)
 {
     char lab[128];
     return parse_label(line, lab) && str_ieq(lab, name);
 }
 
-static int find_symbol_block_by_scan(const char *name)
+static unsigned scan_hash(const char *name)
+{
+    unsigned h = 0;
+    while (*name) {
+        h = h * 131u + (unsigned char)tolower((unsigned char)*name);
+        name++;
+    }
+    return h % SCAN_HASH_SIZE;
+}
+
+static void scan_index_insert(const char *name, int block)
+{
+    unsigned h;
+    int i;
+
+    if (!name || !name[0])
+        return;
+    h = scan_hash(name);
+    for (i = scan_buckets[h]; i >= 0; i = scan_next[i]) {
+        if (str_ieq(scan_syms[i].name, name))
+            return; /* first occurrence wins, matching the original
+                      * block-then-line scan order below */
+    }
+    if (n_scan_syms >= MAX_SCAN_SYMS) {
+        fprintf(stderr, "too many symbols\n");
+        exit(1);
+    }
+    strncpy(scan_syms[n_scan_syms].name, name, sizeof(scan_syms[n_scan_syms].name) - 1);
+    scan_syms[n_scan_syms].name[sizeof(scan_syms[n_scan_syms].name) - 1] = 0;
+    scan_syms[n_scan_syms].block = block;
+    scan_next[n_scan_syms] = scan_buckets[h];
+    scan_buckets[h] = n_scan_syms;
+    n_scan_syms++;
+}
+
+static int scan_index_lookup(const char *name)
+{
+    unsigned h = scan_hash(name);
+    int i;
+
+    for (i = scan_buckets[h]; i >= 0; i = scan_next[i]) {
+        if (str_ieq(scan_syms[i].name, name))
+            return scan_syms[i].block;
+    }
+    return -1;
+}
+
+/* Builds, once, the same name->block mapping find_symbol_block_by_scan used
+ * to recompute from scratch on every call: every label (parse_label) and
+ * every PUBLIC-mentioned name in every already-classified block. This is
+ * deliberately independent of the symbol table built by build_blocks(), so
+ * an app EXTRN can still keep a runtime block even if PUBLIC parsing missed
+ * that symbol or case differs after M80/L80 folding. Blocks/lines are
+ * walked in the same order the old per-query scan used, and
+ * scan_index_insert keeps only the first occurrence of a name, so lookups
+ * are identical to what that scan would have returned - just O(1) instead
+ * of O(nlines) per query. */
+static void build_scan_index(void)
 {
     int b, i;
 
-    /* Last-resort block ownership check.  This is deliberately independent
-     * of the symbol table built by build_blocks(), so an app EXTRN can still
-     * keep a runtime block even if PUBLIC parsing missed that symbol or case
-     * differs after M80/L80 folding. */
+    for (i = 0; i < SCAN_HASH_SIZE; ++i)
+        scan_buckets[i] = -1;
+    n_scan_syms = 0;
+
     for (b = 0; b < nblocks; ++b) {
         for (i = blocks[b].start; i < blocks[b].end; ++i) {
-            if (line_public_mentions(lines[i].s, name) ||
-                line_label_is(lines[i].s, name))
-                return b;
+            const char *line = lines[i].s;
+            char clean[MAX_LINE];
+            const char *p;
+            char sym[128];
+            char lab[128];
+
+            if (parse_label(line, lab))
+                scan_index_insert(lab, b);
+
+            strip_comment_copy(line, clean, sizeof(clean));
+            p = skipws(clean);
+            if (ci_strncmp(p, "public", 6) != 0 ||
+                !(p[6] == ' ' || p[6] == '\t'))
+                continue;
+            p += 6;
+            for (;;) {
+                p = skipws(p);
+                if (!parse_ident_token(&p, sym))
+                    break;
+                scan_index_insert(sym, b);
+                p = skipws(p);
+                if (*p == ',') {
+                    p++;
+                    continue;
+                }
+                break;
+            }
         }
     }
-
-    return -1;
 }
 
 static int find_sym_block(const char *name)
@@ -264,7 +325,7 @@ static int find_sym_block(const char *name)
     for (i = 0; i < nsyms; ++i)
         if (!strcmp(syms[i].name, name) || str_ieq(syms[i].name, name))
             return syms[i].block;
-    return find_symbol_block_by_scan(name);
+    return scan_index_lookup(name);
 }
 
 static int parse_label(const char *line, char *lab)
@@ -1008,6 +1069,7 @@ int main(int argc, char **argv)
 
     read_runtime(rt);
     build_blocks();
+    build_scan_index();
 
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-r") || !strcmp(argv[i], "-o")) {
