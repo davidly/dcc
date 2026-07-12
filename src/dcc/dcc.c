@@ -1721,7 +1721,13 @@ int main(int argc, char **argv)
     if (!strcmp(output_name, "-")) {
         outf = stdout;
     } else {
-        outf = fopen(output_name, "w");
+        /* "w+" (not "w"): emit_function_epilogue's elide_redundant_tail_jp
+         * (-g builds only) needs to seek back and read a few just-written
+         * bytes to verify a tail "jp" is safe to elide before truncating it
+         * away. Read-write vs. write-only otherwise behaves identically for
+         * this file (still created/truncated fresh, still written
+         * sequentially). */
+        outf = fopen(output_name, "w+");
         if (!outf) fatal("cannot open output");
     }
 

@@ -101,6 +101,8 @@ int nused_extrns;
 /* ---- per-function code-generation state -------------------------------- */
 int label_id;
 int current_return_label;
+long g_return_jp_check_pos = -1;
+int g_return_jp_check_label = -1;
 int current_return_type;
 int parse_function_return_type;
 int current_local_bytes;

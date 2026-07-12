@@ -150,6 +150,22 @@ void gen_return_ast(const struct AstNode *n)
             g_expr_type = current_return_type;
         }
     }
+    /*
+     * Record where this tail jump lands in `outf` so emit_function_epilogue
+     * can elide it when this return turns out to be the function's last
+     * statement (nothing else gets written before the epilogue label it
+     * targets). Debug (-g) builds only: dccpeep already removes this
+     * redundant jump in optimized builds, and -g skips dccpeep entirely for
+     * debug-stepping fidelity, so this is the only place it would otherwise
+     * survive to the final .mac.
+     */
+    if (opt_debug && !scan_mode) {
+        fflush(outf);
+        g_return_jp_check_pos = ftell(outf);
+        g_return_jp_check_label = current_return_label;
+    } else {
+        g_return_jp_check_pos = -1;
+    }
     emit_jp_label("jp", current_return_label);
 }
 

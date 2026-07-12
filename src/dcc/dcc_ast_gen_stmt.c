@@ -1004,17 +1004,33 @@ void ast_gen_stmt(const struct AstNode *n)
         break;
     }
     case AST_IF: {
+        if (n->c == NULL) {
+            /* No else: branch straight to the join point on a false
+             * condition instead of routing through a separate empty-else
+             * label. Avoids emitting an unconditional jump that would just
+             * land on the very next instruction (skipping a zero-width
+             * else), which was left for the peephole optimizer to clean up
+             * and therefore visible verbatim in -g builds, which skip
+             * peephole entirely for debug-stepping fidelity. */
+            int lend = new_label();
+            ast_gen_cond_branch(n->a, lend, 0);
+            ast_gen_stmt(n->b);
+            emit_label(lend);
+            break;
+        }
+
         /* Generic if/else condition shape, including the label allocation
          * order (lelse, lend before the condition). */
-        int lelse = new_label();
-        int lend = new_label();
-        ast_gen_cond_branch(n->a, lelse, 0);
-        ast_gen_stmt(n->b);
-        emit_jp_label("jp", lend);
-        emit_label(lelse);
-        if (n->c != NULL)
+        {
+            int lelse = new_label();
+            int lend = new_label();
+            ast_gen_cond_branch(n->a, lelse, 0);
+            ast_gen_stmt(n->b);
+            emit_jp_label("jp", lend);
+            emit_label(lelse);
             ast_gen_stmt(n->c);
-        emit_label(lend);
+            emit_label(lend);
+        }
         break;
     }
     case AST_WHILE: {

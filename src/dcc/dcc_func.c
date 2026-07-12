@@ -10,8 +10,22 @@
  * Source provenance: monolith src/ddc.c lines 15880-17705.
  */
 
+#ifndef _WIN32
+/* fileno()/ftruncate() (used by emit_function_epilogue's dead-tail-jump
+ * elision) are POSIX, not ISO C89, so -std=c89 hides their declarations in
+ * <stdio.h>/<unistd.h> unless a POSIX feature-test macro is visible before
+ * those headers are first included - which happens via dcc.h below, so this
+ * must come first. */
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "dcc.h"
 #include "dcc_ast.h"
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 static int inline_param_index(struct Sym *s, const char *name)
 {
@@ -1651,10 +1665,108 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     }
 }
 
+/* Every byte in buf[0..n) belongs to a complete comment line: each line
+ * starts with ';' and ends with '\n' (a trailing partial line - no final
+ * '\n' - fails this, since it means something is still being written). */
+static int all_comment_lines(const char *buf, long n)
+{
+    long i = 0;
+
+    while (i < n) {
+        if (buf[i] != ';')
+            return 0;
+        while (i < n && buf[i] != '\n')
+            i++;
+        if (i >= n)
+            return 0;   /* no closing '\n': last line is incomplete */
+        i++;
+    }
+    return 1;
+}
+
+/*
+ * If a "jp L<label>\n" sits at file offset jp_pos in `outf`, it is the tail
+ * jump gen_return_ast just emitted for a `return` that turned out to be the
+ * function's last statement: fall-through already reaches `label` (emitted
+ * right after this call returns), so the jump is dead weight. Whatever has
+ * been written since jp_pos, if anything, is either nothing, or a run of
+ * "@dcc-var-end" scope-exit comments (-g emits one per local as it leaves
+ * scope) - either way there is no real code in between. Verify the exact
+ * bytes are there before touching anything: any mismatch (real code
+ * followed, or the position doesn't line up) leaves the file untouched,
+ * forgoing the optimization rather than risking dropping a jump that was
+ * actually needed. Trailing comments are preserved (read into `tail`,
+ * written back after truncating away just the jp line) so debug-info
+ * fidelity is unaffected.
+ */
+static void elide_redundant_tail_jp(long jp_pos, int label)
+{
+    char expect[32];
+    char actual[32];
+    char tail[4096];
+    long len, end_pos, tail_len;
+
+    if (jp_pos < 0)
+        return;
+    sprintf(expect, "\tjp L%d\n", label);
+    len = (long)strlen(expect);
+    if (len >= (long)sizeof(expect))
+        return;
+
+    fflush(outf);
+    end_pos = ftell(outf);
+    if (end_pos < 0 || end_pos < jp_pos + len)
+        return;
+    tail_len = end_pos - jp_pos - len;
+    if (tail_len >= (long)sizeof(tail))
+        return;
+
+    if (fseek(outf, jp_pos, SEEK_SET) != 0)
+        return;
+    if (fread(actual, 1, (size_t)len, outf) != (size_t)len) {
+        fseek(outf, end_pos, SEEK_SET);
+        return;
+    }
+    actual[len] = 0;
+    if (strcmp(actual, expect) != 0) {
+        fseek(outf, end_pos, SEEK_SET);
+        return;
+    }
+
+    if (tail_len > 0) {
+        if (fread(tail, 1, (size_t)tail_len, outf) != (size_t)tail_len) {
+            fseek(outf, end_pos, SEEK_SET);
+            return;
+        }
+        if (!all_comment_lines(tail, tail_len)) {
+            fseek(outf, end_pos, SEEK_SET);
+            return;
+        }
+    }
+
+    fflush(outf);
+#ifdef _WIN32
+    if (_chsize(_fileno(outf), jp_pos) != 0)
+        return;
+#else
+    if (ftruncate(fileno(outf), jp_pos) != 0)
+        return;
+#endif
+    fseek(outf, jp_pos, SEEK_SET);
+    if (tail_len > 0)
+        fwrite(tail, 1, (size_t)tail_len, outf);
+}
+
 void emit_function_epilogue(int implicit_zero_return)
 {
-    if (implicit_zero_return)
+    if (implicit_zero_return) {
         emit("\tld hl,0\n");
+    } else if (opt_debug && !scan_mode &&
+               g_return_jp_check_label == current_return_label) {
+        elide_redundant_tail_jp(g_return_jp_check_pos, current_return_label);
+    }
+    g_return_jp_check_pos = -1;
+    g_return_jp_check_label = -1;
     emit_label(current_return_label);
     /* Always emit ld sp,ix so returns from nested control flow restore the
      * caller stack reliably. pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra

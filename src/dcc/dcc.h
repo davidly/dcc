@@ -483,6 +483,12 @@ extern int nused_extrns;
 /* per-function code-generation state */
 extern int label_id;
 extern int current_return_label;
+/* Position in `outf` of a "jp current_return_label" tail jump gen_return_ast
+ * just emitted (byte offset right before it), and the label it targets, or
+ * (-1, -1) if none is pending. Debug (-g) builds only - see
+ * emit_function_epilogue's elide_redundant_tail_jp. */
+extern long g_return_jp_check_pos;
+extern int g_return_jp_check_label;
 extern int current_return_type;
 extern int parse_function_return_type;
 extern int current_local_bytes;
