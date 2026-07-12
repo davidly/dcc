@@ -302,8 +302,9 @@ Common options:
 | --- | --- |
 | `-o file` | Write M80 assembly to `file`; default is `out.mac`, `-` is stdout. |
 | `-c`, `-module` | Emit a separately compilable module, not a final program translation unit. |
-| `-f`, `-ffloatio` | Enable `%f` formatting for `printf`. |
-| `-fl`, `-flongio` | Enable 32-bit `long` `printf`-family format specifiers (`%ld`, `%lu`, `%lx`, `%lX`, `%ls`). |
+| `-f`, `-ffloatio` | Force `%f` support on every `printf`-family call. |
+| `-fl`, `-flongio` | Force 32-bit `long` formats on every `printf`-family call. |
+| `-fno-floatio`, `-fno-longio` | Force the corresponding format paths off, overriding automatic detection. |
 | `-fstack-check` | Emit a lightweight stack-overflow guard in each function prologue. |
 | `-s bytes`, `-stack bytes`, `--stack bytes` | Reserve stack bytes; default is 512. |
 | `-s=bytes`, `-stack=bytes`, `--stack=bytes` | Equivalent attached forms for the stack size. |
@@ -315,15 +316,21 @@ Common options:
 
 ## Options that affect the runtime
 
-- **`-f` / `-ffloatio`** — link floating-point `%f` support for `printf`.
-    You **must** pass this if a `printf` format string uses `%f`; otherwise float
-    formatting is not linked in. This does not enable floating-point `scanf`
-    input, and it does not enable `%f` for `sprintf`, `fprintf`, or the `v...`
-    variants. This is also the single biggest code-size lever — see the
-    [appendix](appendix/01-dccrtlstrip.md).
-- **`-fl` / `-flongio`** — enable 32-bit `long` `printf`-family format
-    specifiers (`%ld`, `%lu`, `%lx`, `%lX`, `%ls`). Use this when formatting
-    `long` values; without it, long formatting support is not linked.
+For each `printf`-family call with a compile-time literal format, dcc detects
+`%f`, long, hexadecimal, and octal conversions and selects the smallest matching
+runtime entry automatically. Calls with non-literal formats conservatively
+include all of those conversion paths.
+
+- **`-f` / `-ffloatio`** — force floating-point `%f` support on every
+    `printf`-family call, including calls whose literal format does not use it.
+    This is normally useful only when forcing a whole-program policy; non-literal
+    formats already use a conservative fallback.
+- **`-fl` / `-flongio`** — similarly force 32-bit `long` formats (`%ld`, `%lu`,
+    `%lx`, `%lX`, `%ls`) on every `printf`-family call.
+- **`-fno-floatio` / `-fno-longio`** — force the corresponding support off,
+    even for a literal that uses it or a non-literal fallback. Use these
+    size-oriented overrides only when no affected conversion can reach any call.
+    None of these options adds floating-point `scanf` input.
 - **`-s` / `-stack` / `--stack`** — reserve stack space (default 512; accepted
   range 0..32767). The heap used by `malloc` lives between the end of BSS and
   the bottom of the stack, so growing the stack shrinks the heap and vice versa.

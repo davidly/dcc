@@ -65,8 +65,10 @@ dcc-ma cobint --mode fast --build-dir mybuild
 
 - `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
 - `DCC_FORCE_STACK_CHECK` — Force `-fstack-check` on all builds
-- `DCC_FLOATIO` — Set to `1` to pass `-ffloatio` and keep float `printf` runtime support
-- `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
+- `DCC_FLOATIO` — Set to `1` to force `%f` support on every `printf`-family call
+- `DCC_NO_FLOATIO` — Set to `1` to force `%f` support off on every `printf`-family call
+- `DCC_LONGIO` — Set to `1` to force long-format support on every `printf`-family call
+- `DCC_NO_LONGIO` — Set to `1` to force long-format support off on every `printf`-family call
 - `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
 - `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
 - `DCC_HOME` — DCC C Compiler package/install root; used to find `include/`, `lib/`, and CP/M tools
@@ -131,7 +133,7 @@ dccmake tests/attnc99.c dcc-output=ATTNC99 dcc-stack-bytes=768 dcc-peep=true
 settings:
 
 ```sh
-dccmake tests/tprintf.c dcc-output=TPRINTF -ffloatio
+dccmake tests/tprintf.c dcc-output=TPRINTF -ffloatio  # blanket force-on override
 dccmake tests/app.c dcc-output=APP -I include -DDEBUG=1 -UOLD
 dccmake tests/app.c dcc-output=APP -stack 1024 -fstack-check
 ```
@@ -151,8 +153,6 @@ configuration into source control without hard-coding checkout-specific paths.
 # dccmake configuration for ATTNC99
 dcc-input=attnc99.c
 dcc-output=ATTNC99
-dcc-floatio=false
-dcc-flongio=false
 dcc-peep=true
 dcc-build-dir=build
 dcc-runtime=${DCC_DIR}/DCCRTL.MAC
@@ -197,8 +197,10 @@ dccmake dcc-peep=false
 | ------- | ------- | ------- |
 | `dcc-input` | (required) | Comma-separated C sources; positional `.c` arguments are also accepted |
 | `dcc-output` | First input base name | CP/M 8-character output base name |
-| `dcc-floatio` | Environment/default | Pass `-ffloatio` to `dcc` and keep float `printf` runtime support |
-| `dcc-flongio` | Environment/default | Pass `-flongio` to `dcc` and keep long integer `printf` runtime support |
+| `dcc-floatio` | `false` | Force `%f` support on every `printf`-family call when true; literal formats are normally detected per call |
+| `dcc-no-floatio` | `false` | Force `%f` support off even for matching literals or the non-literal fallback |
+| `dcc-flongio` | `false` | Force long-format support on every `printf`-family call when true; literal formats are normally detected per call |
+| `dcc-no-longio` | `false` | Force long-format support off even for matching literals or the non-literal fallback |
 | `dcc-stack-bytes` | `512` | Stack reserve passed to `dcc` with `-stack` |
 | `dcc-stack-check` | Environment/default | Pass `-fstack-check` to `dcc` |
 | `dcc-include-directory` | Auto-adds `.` when standard headers are in the current directory | Comma-separated include directories; `dcc-include` is an alias |
@@ -214,6 +216,13 @@ dccmake dcc-peep=false
 | `m80-command` | `M80` or `m80` | CP/M assembler command passed to `ntvcm` |
 | `l80-command` | `L80` or `l80` | CP/M linker command passed to `ntvcm` |
 
+With all four float/long settings at their default `false`, `dccmake` passes no
+formatted-I/O override to dcc and adds no forced keep root to `dccrtlstrip`.
+dcc therefore performs its normal per-call format detection. In particular,
+`dcc-floatio=false` and `dcc-flongio=false` are neutral; use
+`dcc-no-floatio=true` or `dcc-no-longio=true` only when support must be forced
+off.
+
 Source input basenames and the output name must be CP/M 8.3-clean. For example,
 `module1.c` is valid, but a generated module output base longer than eight
 characters is not.
@@ -223,7 +232,9 @@ characters is not.
 | Option | Equivalent setting |
 | ------ | ------------------ |
 | `-f`, `-ffloatio` | `dcc-floatio=true` |
+| `-fno-floatio` | `dcc-no-floatio=true` |
 | `-fl`, `-flongio` | `dcc-flongio=true` |
+| `-fno-longio` | `dcc-no-longio=true` |
 | `-s <bytes>`, `-stack <bytes>`, `-stack=<bytes>` | `dcc-stack-bytes=<bytes>` |
 | `-fstack-check` | `dcc-stack-check=true` |
 | `-I <dir>`, `-Idir` | Add an include directory |
@@ -432,8 +443,8 @@ one test, keyed by `name`:
 | `stdin` | string | no | `""` | Text piped to the program's standard input during execution (for keyboard/input-driven tests) |
 | `stack_size` | integer | no | `512` | C stack reserve in bytes, passed to `dcc` as `-stack`. Used by recursive apps that need more headroom |
 | `dcc_args` | string | no | `""` | Extra DCC C Compiler build arguments passed through `dccmake` (for example `-DNAME=1 -UOLD`) |
-| `dcc_floatio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-floatio` and dcc `-ffloatio` for this app |
-| `dcc_longio` | boolean | no | environment/default | When set, controls `dccmake` `dcc-flongio` and dcc `-flongio` for this app |
+| `dcc_floatio` | boolean | no | environment/default | True forces `-ffloatio`; false leaves per-call auto-detection active for this app |
+| `dcc_longio` | boolean | no | environment/default | True forces `-flongio`; false leaves per-call auto-detection active for this app |
 | `ignore` | boolean | no | `false` | When `true`, the test is skipped entirely (not built or run) |
 
 Entries with none of the optional properties have no effect, so an app only

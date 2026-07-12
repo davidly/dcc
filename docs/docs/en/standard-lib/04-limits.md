@@ -15,8 +15,8 @@ is signed, so `CHAR_MIN` and `CHAR_MAX` match `SCHAR_MIN` and `SCHAR_MAX`.
 The header also provides `UINT32_MAX` for compatibility with code that uses the
 32-bit unsigned limit name alongside `stdint.h`.
 
-The DCC C Compiler has no locale or multibyte-character support, so locale-related C89 limits
-such as `MB_LEN_MAX` are not defined.
+The runtime uses a fixed single-byte C/ASCII locale (`MB_CUR_MAX` is 1 in
+`stdlib.h`). `limits.h` does not currently define `MB_LEN_MAX`.
 
 ## Range choices
 
@@ -31,5 +31,7 @@ if (total > INT_MAX)
     puts("needs long formatting");
 ```
 
-For formatted output of 32-bit values, compile with `-fl` / `-flongio` and use
-the `l` length modifier. See [Console and file I/O](05-stdio.md#printf-family-output).
+For formatted output of 32-bit values, use the `l` length modifier. Literal
+formats are detected automatically; `-fl` / `-flongio` only forces long-format
+support on every call. See
+[Console and file I/O](05-stdio.md#printf-family-output).

@@ -22,7 +22,7 @@ These limits apply at every language level.
 | `double`, `long double` | not distinct types; use `float` |
 | `long long` | not supported |
 | hosted environment | outside the CP/M 2.2 target model |
-| processes, threads, signals, locales | outside the CP/M 2.2 target model |
+| processes, threads, asynchronous signals, locale databases | outside the CP/M 2.2 target model; C89 signal/locale APIs provide documented CP/M stubs/defaults |
 
 ## Practical implications of the target model
 
@@ -65,8 +65,8 @@ portability surprises when code is moved from a hosted desktop compiler.
 | --- | --- |
 | Distinct `double` and `long double` arithmetic | Not supported |
 | Full hosted C library behavior | Outside the CP/M 2.2 target model |
-| Locale-sensitive execution environment | Outside the CP/M 2.2 target model |
-| Standard signal environment | Outside the CP/M 2.2 target model |
+| Locale-sensitive execution environment | Fixed to the `C` locale; no external locale database |
+| Standard signal environment | APIs exist, but CP/M has no asynchronous delivery; see the header contracts |
 | Wide-character library behavior | Outside the CP/M 2.2 target model |
 | Read-only storage for `const` objects | Outside the CP/M 2.2 memory model |
 | Strict `volatile` memory/device access semantics | Outside the CP/M 2.2 memory model |
