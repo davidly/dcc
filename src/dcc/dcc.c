@@ -721,6 +721,62 @@ void append_line_directive(char **outp, long *lenp, long *capp,
     append_mem(outp, lenp, capp, buf, (long)strlen(buf));
 }
 
+/* preprocess_includes_file's #include/#pragma once/#if splicing pass runs
+ * before real tokenization, on raw lines, and each of its detector functions
+ * (include_cond_update, include_scan_macro_directive, try_parse_pragma_once,
+ * try_parse_include) just checks whether a line starts with '#' - they have
+ * no notion of still being inside a slash-star block comment opened on an
+ * earlier line, so e.g. a comment that happens to mention "#include" at the
+ * start of one of its lines was misparsed as a real directive and could
+ * fail with a bogus "expected FILENAME" error.
+ *
+ * This scans one line, carrying *in_comment across calls (one call per
+ * line, in order), and returns the state the line STARTED in so the caller
+ * can skip the directive checks for a line that opens inside an
+ * already-open comment. Skips over string/char literals so a comment
+ * delimiter inside one (e.g. in a printf format string) doesn't corrupt the
+ * tracked state; a line (double-slash) comment is confined to its own line
+ * and never affects this multi-line state either way. */
+int line_starts_inside_comment(const char *line, long n, int *in_comment)
+{
+    long i = 0;
+    int was_in_comment = *in_comment;
+
+    while (i < n) {
+        if (*in_comment) {
+            if (line[i] == '*' && i + 1 < n && line[i + 1] == '/') {
+                *in_comment = 0;
+                i += 2;
+            } else {
+                i++;
+            }
+            continue;
+        }
+        if (line[i] == '/' && i + 1 < n && line[i + 1] == '*') {
+            *in_comment = 1;
+            i += 2;
+            continue;
+        }
+        if (line[i] == '/' && i + 1 < n && line[i + 1] == '/')
+            break;
+        if (line[i] == '"' || line[i] == '\'') {
+            char quote = line[i];
+            i++;
+            while (i < n && line[i] != quote) {
+                if (line[i] == '\\' && i + 1 < n)
+                    i += 2;
+                else
+                    i++;
+            }
+            if (i < n)
+                i++;
+            continue;
+        }
+        i++;
+    }
+    return was_in_comment;
+}
+
 char *preprocess_includes_file(const char *name, int depth, long *out_len)
 {
     char *raw;
@@ -742,6 +798,7 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
     int if_seen_else[MAX_IFSTACK];
     int if_sp;
     int active;
+    int in_comment;
 
     if (depth > MAX_INCLUDE_DEPTH)
         fatal("too many nested includes");
@@ -762,6 +819,7 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
     src_line = 1;
     if_sp = 0;
     active = 1;
+    in_comment = 0;
 
     append_line_directive(&out, &out_len2, &out_cap, 1, name);
 
@@ -779,7 +837,14 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
         {
             int is_system = 0;
             int include_status;
-            if (include_cond_update(raw + line_start, line_end - line_start,
+            int line_opened_in_comment = line_starts_inside_comment(
+                raw + line_start, line_end - line_start, &in_comment);
+
+            if (line_opened_in_comment) {
+                /* This line's own leading '#' (if any) is inside a block
+                 * comment opened on an earlier line - not a real directive. */
+                include_status = 0;
+            } else if (include_cond_update(raw + line_start, line_end - line_start,
                                     if_active, if_taken, if_seen_else,
                                     &if_sp, &active)) {
                 /* Conditional directive: keep it verbatim so the later
@@ -914,6 +979,7 @@ char *filter_active_preprocessor_source(long *lenp)
     int active;
     int in_asm;
     int logical_line;
+    int in_comment;
 
     out = NULL;
     out_len = 0;
@@ -923,6 +989,7 @@ char *filter_active_preprocessor_source(long *lenp)
     active = 1;
     in_asm = 0;
     logical_line = 1;
+    in_comment = 0;
 
     while (p < src_len) {
         const char *s;
@@ -930,6 +997,7 @@ char *filter_active_preprocessor_source(long *lenp)
         char word[32];
         int is_directive;
         int next_logical_line;
+        int line_opened_in_comment;
 
         line_start = p;
         while (p < src_len && src[p] != '\n')
@@ -940,12 +1008,18 @@ char *filter_active_preprocessor_source(long *lenp)
         line_no = logical_line;
         next_logical_line = logical_line + 1;
 
+        line_opened_in_comment = line_starts_inside_comment(
+            src + line_start, line_end - line_start, &in_comment);
+
         s = src + line_start;
         e = src + line_end;
         while (s < e && (*s == ' ' || *s == '\t'))
             s++;
 
-        is_directive = (s < e && *s == '#');
+        /* A line whose leading '#' (if any) is inside a block comment opened
+         * on an earlier line is not a real directive - see
+         * line_starts_inside_comment's comment for the motivating bug. */
+        is_directive = (!line_opened_in_comment) && (s < e && *s == '#');
 
         /* Inside a #asm block: intercept all lines. */
         if (in_asm) {
