@@ -11890,7 +11890,7 @@ __fle_slow:
         jp      z,__fle0        ; unordered
         cp      3
         jp      z,__fle0        ; greater
-        jp      __fle1          ; less or equal
+        ; falls through: less or equal
 __fle1:
         ld      hl,1
         ld      sp,ix
@@ -12383,7 +12383,6 @@ FBNEGL:
         ld      h,a
         ld      l,a
         exx
-        jp      FSIGNC
 
 FSIGNC:
         ; compare signs (both operands now share the same exponent)
@@ -12470,7 +12469,6 @@ FBBIG:
         ld      a,b
         exx                       ; main active
         ld      d,a               ; ASGN := BSGN
-        jp      FNORMR
 
 FNORMR:
         ; Register-resident renormalize, identical logic/stopping
@@ -13570,7 +13568,6 @@ FQINF:
         xor     a
         ld      (AM1),a
         ld      (AM0),a
-        jp      FQBRIDGE
 
 FQBRIDGE:
         ld      a,(AEXP)
@@ -17764,12 +17761,12 @@ __stol:
         public __stou
 __stou:
         ; unsigned long strtoul(const char *nptr, char **endptr, int base)
-        ; Same trampoline as __stol, with signed=0.
+        ; Same trampoline as __stol, with signed=0. Falls straight through
+        ; into __stox_core below - no jp needed, this is its last instruction.
         pop bc
         ld hl,0
         push hl
         push bc
-        jp __stox_core
 
 ; Shared strtol/strtoul core. Not itself public - only ever reached via
 ; the __stol/__stou trampolines above, which inject a hidden "signed"
