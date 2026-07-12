@@ -10,6 +10,8 @@ PASS: 6. Function-like Macro Argument Pre-expansion
 PASS: 7. Pasted Token Rescan
 PASS: 8. #if defined/expression
 PASS: 9. #undef and #elif
+PASS: 10. Directive-lookalike text inside a comment is not a real directive
+PASS: 11. Real directive after such a comment still works
 
 ----------------------------------------
 ALL COMBINED PREPROCESSOR TESTS PASSED WITH GREAT SUCCESS!

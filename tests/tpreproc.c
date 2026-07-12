@@ -58,6 +58,31 @@ static void verify_str(const char *actual, const char *expected, const char *tes
 #define UNDEF_VALUE -2
 #endif
 
+/* Regression test: two raw-line scanners run before/around real
+   tokenization (the #include-splicing pass and the #if/#ifdef dead-code
+   filter pass) used to have no notion of still being inside an
+   already-open block comment, so a line that merely started with a
+   directive-like word here - after leading whitespace, exactly as a real
+   directive would look - was misparsed as one. Every '#' line below is
+   comment text, not a directive; if any were mistakenly treated as real,
+   this file would fail to compile outright (bad #include target, or a
+   spurious #error), or COMMENT_MACRO_SHOULD_NOT_EXIST would leak into
+   scope below.
+   #include this has no filename after it, just like the original crash
+   #include "totally-not-a-real-file-xyz123.h"
+   #define COMMENT_MACRO_SHOULD_NOT_EXIST 999
+   #if 0
+   #error this #error must never be reached
+   #endif
+   still just a comment. */
+#define REAL_MACRO_AFTER_COMMENT 55
+
+#ifdef COMMENT_MACRO_SHOULD_NOT_EXIST
+#define COMMENT_LEAKED 1
+#else
+#define COMMENT_LEAKED 0
+#endif
+
 int main(void) {
     int PREFIX_SUB_MACRO_VAL = 777;
 
@@ -74,6 +99,8 @@ int main(void) {
     verify_int(MAKE_VALUE(7), 123, "7. Pasted Token Rescan");
     verify_int(CONDITIONAL_VALUE, 456, "8. #if defined/expression");
     verify_int(UNDEF_VALUE, 789, "9. #undef and #elif");
+    verify_int(COMMENT_LEAKED, 0, "10. Directive-lookalike text inside a comment is not a real directive");
+    verify_int(REAL_MACRO_AFTER_COMMENT, 55, "11. Real directive after such a comment still works");
 
     printf("\n----------------------------------------\n");
     if (g_failed == 0) {
