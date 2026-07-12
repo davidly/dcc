@@ -15,12 +15,17 @@ and the single source-of-truth runtime.
 ## Library limits
 
 - **DCCRTL is a CP/M runtime subset, not hosted libc.** No pthreads, C11
-  threads, POSIX process APIs, signals, locale, or time library are provided.
+  threads, or POSIX process APIs are provided. The C89 locale, signal, and time
+  APIs exist, but return documented `C`-locale, no-op, or unavailable results
+  where CP/M 2.2 has no matching service.
 - **`scanf` is integer/string only.** Floating input, scansets, `%n`, and `%p`
   are not implemented.
 - **No `+`/space/`#` printf flags and no `*` width/precision.** Use literal
   field widths.
-- **`%f` needs `-ffloatio`.** Without that flag, float formatting isn't linked.
+- **Formatted-I/O support is selected per call.** Literal `printf`-family
+  formats automatically select float, long, hexadecimal, and octal runtime
+  paths; non-literal formats conservatively include them. The `-f*io` and
+  `-fno-*io` options are force overrides, not normal opt-ins.
 - **Wide-character Unicode library behavior is not implemented.** `wchar_t` is a
   16-bit integer typedef, but the DCC C Compiler does not provide a hosted wide-character
   Unicode runtime.

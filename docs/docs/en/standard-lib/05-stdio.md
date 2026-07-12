@@ -59,14 +59,14 @@ The `v…` variants take a `va_list` (from
 [`stdarg.h`](10-stdarg.md)) for wrappers that forward a format string; see the worked
 [logging-wrapper example](../12-examples.md#a-printf-style-logging-wrapper).
 
-!!! note "Compiler options for wider formatting"
-    Compile with `-fl` / `-flongio` when any `printf`-family format uses
-    `%ld`, `%lu`, `%lx`, `%lX`, or `%ls`. Compile with `-f` / `-ffloatio` when
-    `printf` itself uses `%f`; the compiler maps `printf` to a float-enabled
-    wrapper, but does not enable `%f` for `sprintf`, `fprintf`, or the `v...`
-    variants. Use both options when `printf` needs both float and long output.
-    These options do not add floating-point input; the `scanf` family remains
-    integer/string only.
+!!! note "Automatic runtime selection"
+  For a compile-time literal format, dcc detects float, long, hexadecimal, and
+  octal conversions at each call and selects the smallest matching runtime
+  entry. A non-literal format conservatively includes all optional paths.
+  `-f` / `-ffloatio` and `-fl` / `-flongio` force float or long support on
+  every `printf`-family call; they are not required for literal formats. The
+  `-fno-*io` forms force paths off and are unsafe when a matching conversion
+  can reach a call. These options do not add floating-point input.
 
 ### printf conversions
 
@@ -74,17 +74,17 @@ The `v…` variants take a `va_list` (from
 | --- | --- |
 | `%d`, `%i` | Signed 16-bit decimal. |
 | `%u` | Unsigned 16-bit decimal. |
+| `%o` | Unsigned 16-bit octal. |
 | `%x`, `%X` | Unsigned 16-bit hex (lower / upper case). |
 | `%c` | Single character. |
 | `%s` | NUL-terminated string. |
-| `%f` | 32-bit float, fixed decimal notation for `printf` only. **Requires `-f` / `-ffloatio`.** |
+| `%f` | 32-bit float in fixed decimal notation. |
 | `%%` | A literal percent sign. |
 
 Length modifiers:
 
 - `l` — 32-bit `long` conversions: `%ld`, `%lu`, `%lx`, `%lX`. `%ls` prints a
-  16-bit wide string by emitting each character's low byte. **Requires `-fl` /
-  `-flongio`.**
+  16-bit wide string by emitting each character's low byte.
 - `z` — `size_t` width. Since `size_t` is 16-bit here, `%zu` / `%zd` and friends
   behave like the plain 16-bit conversions.
 
@@ -107,14 +107,14 @@ Field width and flags:
 ```c
 printf("|%6d|%-6d|%.4d|\n", 42, 42, 42);   /* |    42|42    |0042| */
 printf("%lu items, %lx flags\n", count, mask);
-printf("%.2f\n", ratio);                    /* needs -ffloatio */
+printf("%.2f\n", ratio);
 ```
 
 Not supported: the `+`, space, and `#` flags, and `*` (run-time) width or
-precision. Output conversions such as `%o`, `%e`, `%g`, `%p`, and `%n` are not
-implemented. `%f` is not implemented for `sprintf`, `fprintf`, `vprintf`,
-`vsprintf`, or `vfprintf`. Use fixed widths and precisions in the format
-string.
+precision. Output conversions such as `%e`, `%g`, `%p`, and `%n` are not
+implemented. `%f` is supported across `printf`, `sprintf`, `fprintf`, their
+`v...` variants, `snprintf`, and `vsnprintf`. Use fixed widths and precisions in
+the format string.
 
 ### scanf-family input
 

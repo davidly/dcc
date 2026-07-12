@@ -25,7 +25,9 @@ host ABI expectations.
 - Permanent target/runtime exceptions (the Z80/CP/M model wins over host ABI):
   `double`/`long double`, `long long`/64-bit integers, host ABI and
   host-sized-`int` assumptions, hosted byte-stream stdio, wide-character Unicode
-  runtime behavior, POSIX, locale, signal, time, threads, and atomics.
+  runtime behavior, POSIX, threads, and atomics. The C89 locale, signal, and time
+  headers exist, but expose only CP/M-appropriate `C`-locale and unavailable/no-op
+  service behavior where CP/M 2.2 has no corresponding facility.
 
 ## When to use
 
@@ -54,18 +56,21 @@ Multi-byte values are little-endian (Z80-native).
 
 - Write `float`; unsuffixed constants (`3.14`) are already `float`, not `double`.
 - No `float`→`double` promotion in varargs (there is no double), so
-  `printf("%f", x)` consumes a 32-bit `float` directly — but **requires the
-  `-ffloatio` build flag**; without it `%f` silently does nothing.
+  `printf("%f", x)` consumes a 32-bit `float` directly. For a compile-time
+  literal format, dcc detects `%f` at that call site and selects the float-capable
+  runtime entry automatically.
 - `<math.h>` provides the full single-precision set (`sinf`/`expf`/`powf`/… each
   with an unsuffixed alias that stays single-precision), but the transcendentals
   are ~5–6-digit polynomial approximations.
-- `atof` is a dcc extension returning `float` (not `double`); `strtod` is absent.
+- `atof` and `strtod` return `float` rather than the standard `double` because
+  dcc has no distinct double type.
 
 **The library is a subset.** A missing function is a **link** error
 (`unresolved external`), not a compile error, so check
 [references/library.md](./references/library.md) before assuming one exists.
-Notably absent: `strtod`, `<locale.h>`/`<signal.h>`/`<time.h>`, and
-some stdio entries (`fgetc`, `ungetc`, `rename`, …).
+The shipped C89 headers include stdio, stdlib, locale, signal, and time surfaces,
+with target-specific behavior documented in the reference; hosted POSIX and
+Unicode facilities remain outside the runtime.
 
 **printf/scanf are a subset.** No `+`/space/`#` flags and no `*`
 width/precision; scanf is integer/string only (no `%f`, scansets, `%n`, `%p`).
@@ -136,15 +141,19 @@ file-scope constant initializers and for address-taken block-scope literals
 (`&(struct T){ ... }`); full block-scope compound-literal value/copy semantics
 are only partly supported. GNU range designators (`[0 ... 3]`) are not supported.
 
-Not implemented yet, but plausible front-end scope: C99 variadic macros, GNU
-statement expressions, `__builtin_expect`, and C11 `_Generic` for
-target-supported types.
+C99 variadic macros and `__VA_ARGS__`, including empty variadic arguments, are
+supported. C11 `_Static_assert` declarations are supported at file, block, and
+`struct`/`union` member scope; `<assert.h>` defines `static_assert` as an alias.
+
+Not implemented yet, but plausible front-end scope: GNU statement expressions,
+`__builtin_expect`, and C11 `_Generic` for target-supported types.
 
 Target-inapplicable or runtime-inapplicable exceptions: `double`/`long double`,
 `long long`, 64-bit integer typedefs/operations, host ABI checks,
 host-sized-int expectations, hosted byte-stream stdio behavior, wide-character
-Unicode library behavior, POSIX services, locale, signal, time, C11 threads, and
-C11 atomics.
+Unicode library behavior, POSIX services, C11 threads, and C11 atomics. CP/M has
+no asynchronous signals, locale database, processor clock, or real-time clock;
+the corresponding C89 APIs therefore return documented stub/default results.
 
 Automatic VLAs (local arrays whose **outermost** dimension is a run-time value)
 are supported by reserving stack space when the declaration is reached, e.g.
@@ -191,10 +200,12 @@ build so you rarely call the stages directly (get each tool's own flags with
    writes a per-app `RTLMIN.MAC` with only the routines your program references,
    so the `.COM` isn't padded with the whole libc. It regenerates every build —
    don't hand-edit `RTLMIN.MAC`.
-4. `M80` / `L80` — Microsoft's assembler and linker (run under `ntvcm`):
-   assemble the app `.MAC`s plus `RTLMIN.MAC`, then link the final `.COM`.
+4. `m80c` / `L80` — `dccmake` assembles the app `.MAC`s plus `RTLMIN.MAC` with
+  the native host `m80c` by default, then runs Microsoft's `L80` under `ntvcm`
+  to link the final `.COM`. Set `dcc-use-emulated-m80=true` to assemble with
+  Microsoft's `M80` under `ntvcm` instead.
 
-**Build/run one program** (compile → peephole → strip runtime → M80 → L80):
+**Build/run one program** (compile → peephole → strip runtime → m80c → L80):
 
 ```sh
 dccmake foo.c dcc-output=FOO dcc-peep=true   # foo.c -> build/FOO.COM
@@ -210,6 +221,13 @@ dccmake foo.c bar.c dcc-output=FOO dcc-stack-bytes=768 dcc-floatio=true
 dccmake foo.c dcc-output=FOO dcc-include-directory=include dcc-define=DEBUG=1
 ```
 
+Literal `printf`-family format strings do not need `dcc-floatio=true` or
+`dcc-flongio=true`: dcc selects float and long runtime variants independently at
+each call site. A non-literal format string conservatively selects both. These
+settings remain available as blanket force-on overrides; the corresponding
+`dcc-no-floatio=true` / `dcc-no-longio=true` settings force support off and must
+only be used when no affected conversion can reach any call site.
+
 For repeatable local builds, put the same `dcc-*` settings (one per line) in a
 `dccmake.txt` in the working directory; command-line settings override it.
 
@@ -219,9 +237,10 @@ For repeatable local builds, put the same `dcc-*` settings (one per line) in a
 > rename the file when you see it.
 
 **Useful `dcc` options:** `-o file` (output .mac), `-c`/`-module` (linkable
-module), `-f`/`-ffloatio` (float printf), `-fl`/`-flongio` (32-bit `long`
-printf/scanf, e.g. `%ld`/`%lu`/`%lx`), `-fstack-check` (abort on stack
-overflow), `-stack N`/`-s N`/`--stack N` (reserve
+module), `-f`/`-ffloatio` (force `%f` support on every `printf`-family call),
+`-fl`/`-flongio` (force 32-bit `long` formats on every `printf`-family call),
+`-fno-floatio`/`-fno-longio` (force those paths off), `-fstack-check` (abort on
+stack overflow), `-stack N`/`-s N`/`--stack N` (reserve
 stack; default 512 — heap and stack share memory, **no guard**), `-I dir` (or
 joined `-Idir`; repeatable), `-Dname[=v]`,
 `-Uname`, `-v`, `-h`. `_DCC_=1` is always predefined.
@@ -240,13 +259,15 @@ Gotcha (see Deviations): an unfound `<...>` header is **silently ignored**
 (implicit `int`, no type-checking); an unfound `"..."` header is fatal — so if
 standard calls compile yet misbehave, confirm `-I` resolves the dcc headers.
 
-Notes: M80 needs CRLF (`dccmake` handles this). `RTLMIN.MAC` is generated per-app by
-`dccrtlstrip` during the build — don't hand-edit it.
+Notes: when `dcc-use-emulated-m80=true`, M80 needs CRLF (`dccmake` handles this).
+`RTLMIN.MAC` is generated per-app by `dccrtlstrip` during the build — don't
+hand-edit it.
 
 ## Top pitfalls
 
 The deviations above are the pitfalls. For worked examples (the `float` decimal
-parser, `%f`/`-ffloatio`, 16-bit overflow, signed `char`, CP/M 8.3 names, the
+parser, formatted-I/O auto-detection and overrides, 16-bit overflow, signed
+`char`, CP/M 8.3 names, the
 stack/heap collision, and supported pragmas), the full inlining rules, and the
 function inventory and `printf`/`scanf` conversion tables, see
 [references/library.md](./references/library.md).
@@ -265,6 +286,6 @@ function inventory and `printf`/`scanf` conversion tables, see
 4. **Match repo conventions.** Read a nearby working program first. In the dcc
    repo, the exhaustive reference is
    [dcc-c89-reference-guide.md](dcc-c89-reference-guide.md) at the repo root.
-5. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`
-  (set `dcc-floatio=true` if you use `%f`); redirect stdin for interactive apps
-  and compare against expected output.
+5. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`;
+  literal `%f` and long formats are detected automatically. Redirect stdin for
+  interactive apps and compare against expected output.

@@ -23,10 +23,11 @@ runtime*, not about authoring CP/M apps (use `dcc-cpm-z80` for that).
 One `.c` file becomes a `.COM` through a short pipeline (each stage hands a file
 to the next):
 
-`dcc` (.c → .MAC) → `dccpeep` (.MAC → .MAC, optional) → `M80` (assemble) +
-`dccrtlstrip` (DCCRTL.MAC → RTLMIN.MAC, keep only referenced routines) → `M80` →
-`L80` (link → .COM). `M80`/`L80` are Microsoft's assembler/linker, run under
-ntvcm.
+`dcc` (.c → .MAC) → `dccpeep` (.MAC → .MAC, optional) + `dccrtlstrip`
+(DCCRTL.MAC → RTLMIN.MAC, keep only referenced routines) → `m80c` (assemble) →
+`L80` (link → .COM). `dccmake` uses native host `m80c` by default and runs
+Microsoft's `L80` under ntvcm; `dcc-use-emulated-m80=true` selects Microsoft's
+`M80` under ntvcm for assembly instead.
 
 ## Source layout
 
@@ -46,11 +47,11 @@ case-sensitive (Linux) filesystems.
 
 ## Prerequisites
 
-The scripts expect the `ntvcm` emulator on your `PATH` (it runs `M80`/`L80` and
-the built `.COM` files), along with the host tools `dcc`, `dccpeep`, and
-`dccrtlstrip` — these land in the repo root after a build, so add the repo root
-and ntvcm's directory to `PATH`. Override any tool individually with the
-`NTVCM`/`DCC`/`DCCPEEP`/`DCCRTLSTRIP`/`M80`/`L80` env vars if it isn't on `PATH`.
+The scripts expect the `ntvcm` emulator on your `PATH` (it runs `L80`, optional
+emulated `M80`, and the built `.COM` files), along with the host tools `dcc`,
+`dccpeep`, `dccrtlstrip`, and `m80c` — these land in the repo root after a build,
+so add the repo root and ntvcm's directory to `PATH`. Override tools with the
+corresponding environment/settings controls when they are not on `PATH`.
 
 ## Run the regression tests
 
@@ -141,8 +142,13 @@ output base must be CP/M 8.3-clean. Common settings are:
 ```sh
 dccmake tests/app.c dcc-output=APP dcc-peep=true dcc-stack-bytes=768
 dccmake main.c module.c dcc-output=APP dcc-include-directory=include
-dccmake tests/e.c dcc-output=E dcc-floatio=true dcc-flongio=true
+dccmake tests/e.c dcc-output=E
 ```
+
+Literal `printf`-family formats select float and long runtime variants per call
+without flags. Use `dcc-floatio=true` / `dcc-flongio=true` only when a test must
+force those variants globally; the suite's explicit overrides are also used to
+exercise each formatted-I/O runtime entry point deliberately.
 
 To compare a suspected optimizer bug, build once with `dcc-peep=true` and once
 with `dcc-peep=false`, then diff the run output or generated `build/<NAME>.MAC`.

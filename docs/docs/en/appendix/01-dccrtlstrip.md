@@ -41,8 +41,9 @@ linking. Its flow:
 - **Transitivity is automatic** — keeping `_printf` re-scans its body and links
   the `pf_*` helpers; keeping a float op links the classify helpers.
 - **The fallback scan is deliberately over-conservative** — any mention of a
-  runtime symbol's exact name keeps it, which is why float `printf` (`_pffio`)
-  is reliably retained when `-ffloatio` is used.
+  runtime symbol's exact name keeps it. dcc emits the matching formatted-output
+  entry point after per-call format analysis, so its selected float/long paths
+  are retained automatically.
 - **Unused features cost nothing** — a program that never does `float`
   arithmetic keeps none of the float blocks.
 
@@ -93,8 +94,10 @@ nearly free. This is why the `marginal` column on the
     the whole low-level file-I/O core. For console-only output prefer
     `putchar`/`puts`/`printf`.
 
-- **Formatted I/O.** Integer `printf` is a self-contained monolith; float
-  `printf` (`-ffloatio`) links the entire float stack on top of it.
+- **Formatted I/O.** Integer `printf` is a self-contained monolith; a
+  `printf`-family call whose format needs `%f` links the entire float stack on
+  top of it. Literal formats are analyzed automatically; non-literal formats
+  conservatively select all optional paths.
   `sprintf`/`vprintf`/`vsprintf` reuse the formatter for free, while
   `fprintf`/`vfprintf` carry the file-I/O core.
 - **`scanf` family.** `scanf`/`sscanf` are tiny stubs that jump into the shared
@@ -122,8 +125,8 @@ so it inherits the whole `malloc` chain.
 1. **Console-only output is cheap.** `putchar`, `puts`, and integer `printf`
    only touch already-present code or are self-contained. Avoid
    `fputc`/`fputs`/`fprintf` for console work — they link the file-I/O core.
-2. **`printf` is an 842-line monolith** but links nothing else. **Float printf
-   (`-ffloatio`) roughly triples that** by linking the entire float stack.
+2. **`printf` is an 842-line monolith** but links nothing else. **A `%f`
+  formatted-output call roughly triples that** by linking the entire float stack.
    `vprintf`/`vsprintf` reuse that engine for free; `vfprintf` carries the
    file-I/O core like `fprintf`.
 3. **Any single low-level file call links the whole FCB/DMA core (~470 lines).**

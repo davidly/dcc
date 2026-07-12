@@ -35,18 +35,23 @@ in SKILL.md; `wchar_t` is 16-bit `unsigned int`.
 
 `FILE` is `int`; `stdin`/`stdout`/`stderr` exist. `fopen` modes: `"r"`/`"w"`/`"a"`
 with optional `"+"`/`"b"`. The `v…` variants (`vprintf`/`vfprintf`/`vsprintf`)
-share `printf`'s engine and conversion subset. Assume the rest of C89 stdio is
-present *except* the absentees below.
-
-**Not present (link error if called):** `fgetc`, `rename`, `tmpfile`, `tmpnam`,
-`freopen`, `setvbuf`, `gets`, `ungetc`, `fgetpos`/`fsetpos`.
+share `printf`'s engine and conversion subset. The C89 stdio surface is present,
+including `fgetc`, `rename`, temporary files, `freopen`, buffering controls,
+`ungetc`, and file-position APIs. dcc also provides C99 `snprintf`/`vsnprintf`.
 
 ### printf-family conversions
 
-Supported: `%d %i %u %x %X %c %s %%`, plus `%f` (**requires `-ffloatio`**) and the
-`l` length modifier for 32-bit `long` (`%ld %li %lu %lx %lX`, **requires
-`-flongio`**); `z` → `size_t` (16-bit, same as plain). Field width and `-`
-left-justify work (`%-6d`, `%10s`); integer precision zero-fills (`%.4d`).
+Supported: `%d %i %u %o %x %X %c %s %f %%`, plus the `l` length modifier for
+32-bit `long` (`%ld %li %lu %lx %lX %ls`); `z` → `size_t` (16-bit, same as
+plain). Field width and `-` left-justify work (`%-6d`, `%10s`); integer precision
+zero-fills (`%.4d`). `%f` works across `printf`, `sprintf`, `fprintf`, their
+`v...` forms, `snprintf`, and `vsnprintf`.
+
+For a compile-time literal format, dcc detects float, long, hexadecimal, and
+octal conversions per call and selects the smallest matching runtime entry.
+Non-literal formats conservatively include all of those paths. `-ffloatio` and
+`-flongio` are blanket force-on overrides, not normal opt-ins; `-fno-floatio`
+and `-fno-longio` force the paths off even when a literal uses them.
 **Not supported:** `+`/space/`#` flags and `*` run-time width/precision — use
 literal widths.
 
@@ -73,10 +78,11 @@ Standard C89 `malloc`/`free`/`qsort`/`bsearch`/`atoi`/`strtol`/… are present;
 - `bdos(fn, dearg)` — calls the CP/M BDOS directly (`fn`→C, `dearg`→DE; byte
   result in the low byte). FCB/DMA-style calls return data through the memory
   `dearg` points at, not the return value. See `tbdos.c`/`crc.c`.
-- `atof` returns `float` (single precision), not `double` — `strtod` is absent.
+- `atof` and `strtod` return `float` (single precision), not `double`.
 
-**Not present:** `abort`, `atexit`, `getenv`, `system`, the multibyte functions
-(`mblen`/`mbtowc`/`wctomb`/…), `MB_CUR_MAX`, and `strtod`.
+The full C89 stdlib surface is present. CP/M-specific limits still apply:
+`getenv` always returns `NULL`, `system` always returns `-1`, and multibyte
+conversion uses the single-byte C/ASCII locale (`MB_CUR_MAX == 1`).
 
 ## Heap and stack sizing
 
@@ -124,7 +130,7 @@ case-sensitive (fold manually for a case-insensitive search); plus `strdup`
 
 ## ctype.h
 
-Full C89 set **except** `isgraph` and `isblank`.
+Full C89 set, including `isgraph`. C99 `isblank` is not provided.
 
 ## math.h (single precision)
 
@@ -135,8 +141,9 @@ source compiles unchanged. `nextafterf` is a dcc extra.
 
 Caveats: transcendentals are polynomial approximations (~**5–6 correct decimal
 digits**), and `sin`/`cos`/`tan` range-reduction via `fmodf` degrades for very
-large arguments. There is **no** `double`, `long double`, or `HUGE_VAL`, and
-printing a float (`%f`) requires `-ffloatio`.
+large arguments. There is **no** `double` or `long double`; `HUGE_VAL` is the
+largest finite 32-bit float, and literal `%f` formats are detected automatically
+by dcc.
 
 ## setjmp.h / stdarg.h / stddef.h
 
@@ -173,10 +180,14 @@ FCB/DMA-style calls (directory/file ops) return their data through the memory
 `extern int bdos();` still compiles — the K&R declaration is compatible with the
 prototype. See `tbdos.c`, `crc.c` in the dcc repo.
 
-## C89 standard headers that DO NOT exist in dcc
+## C89 environment headers on CP/M
 
-`<locale.h>`, `<signal.h>`, `<time.h>`. (`<stdbool.h>`/`<stdint.h>` are present
-as C99-style conveniences but are not C89.)
+`<locale.h>`, `<signal.h>`, and `<time.h>` are present, but CP/M 2.2 lacks the
+corresponding hosted services. Locale is fixed to `"C"`; `signal` returns
+`SIG_ERR`; non-`SIGABRT` raises are no-ops; clock/calendar queries return their
+documented unavailable values; and time conversion/formatting routines return
+`NULL` or `0` as documented in the headers. `<stdbool.h>`/`<stdint.h>` are also
+present as C99-style conveniences.
 
 ## `#pragma` support
 
@@ -202,22 +213,24 @@ detail for the ones that need it. (Anything not covered behaves as standard C89.
 
 `atof` is available in dcc as an extension (`#include <stdlib.h>`). It returns
 `float` (IEEE 754 single precision) rather than `double` — C89 `atof` normally
-returns `double`, but dcc has no `double` type. `strtod` is absent entirely.
+returns `double`, but dcc has no `double` type. `strtod` is also available and
+returns `float`, while retaining the standard `endptr` behavior.
 
-### `%f` needs the `-ffloatio` build flag
+### Formatted-I/O runtime selection is automatic
 
-Symptom: `printf("%f", x)` produces nothing useful. Float formatting is only
-linked when you compile with `-f` / `-ffloatio`, so any program that prints
-floats must be built with that flag.
+For a call such as `printf("%f", x)` or `sprintf(buf, "%ld", value)`, dcc reads
+the literal format and selects the required runtime variant at that call site.
+No float/long option is needed. This applies independently to every call in the
+`printf` family, including the `v...` and bounded-output forms.
 
-### `%ld`/`%lu`/`%lx` need the `-flongio` build flag
+When the format is not a compile-time literal, dcc cannot know which conversions
+will arrive at run time and conservatively enables float, long, hexadecimal, and
+octal support. Use `-f` / `-ffloatio` or `-fl` / `-flongio` only to force the
+corresponding support on for every call. The `-fno-*io` forms are size-oriented
+force-off overrides and are unsafe if an affected conversion can reach a call.
 
-Symptom: a `long` printed with `%ld`/`%li`/`%lu`/`%lx`/`%lX`/`%ls` comes out
-wrong (or as a 16-bit value). The 32-bit `long` conversions are only linked when
-you compile with `-fl` / `-flongio`; without it the `l` length modifier isn't
-honored. Build with that flag whenever you print or `scanf` 32-bit values
-(`dccmake dcc-flongio=true`, or `-fl` directly). This is independent of
-`-ffloatio` — use both if a program prints both `long` and `float`.
+The `scanf` family is separate: its supported `l` modifier does not depend on
+the printf-family long-I/O override.
 
 ### CP/M filename gotcha (beyond the 8.3 rule in SKILL.md)
 

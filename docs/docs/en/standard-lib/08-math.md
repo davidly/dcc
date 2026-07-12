@@ -63,16 +63,17 @@ float heading(float y, float x)
 
 ## Printing floats
 
-To print floats with `printf`, compile with `-f` / `-ffloatio` and use `%f`:
+Use `%f` to print a float. dcc detects literal formats automatically:
 
 ```c
 float r = sqrtf(2.0f);
-printf("%f\n", r);          /* needs -ffloatio */
+printf("%f\n", r);
 ```
 
-The `-ffloatio` option enables `%f` for `printf` itself. It does not add
-floating-point `scanf` input and does not enable `%f` for `sprintf`, `fprintf`,
-or the `v...` formatted-output variants. See
+The `-ffloatio` option forces `%f` support on every `printf`-family call; it is
+not required for a literal format and does not add floating-point `scanf` input.
+Float output is supported by `printf`, `sprintf`, `fprintf`, their `v...` forms,
+`snprintf`, and `vsnprintf`. See
 [Console and file I/O](05-stdio.md#printf-family-output) for the full formatted
 I/O subset.
 

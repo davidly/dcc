@@ -40,5 +40,5 @@ struct rec {
 Use the ordinary C types when you only need the natural target word size.
 
 For formatted output, use the underlying DCC C Compiler type. For example, `uint32_t` is an
-`unsigned long`, so print it with `%lu` or `%lx` and compile with `-fl` /
-`-flongio`.
+`unsigned long`, so print it with `%lu` or `%lx`. Literal formats select long
+support automatically; `-fl` / `-flongio` is only a blanket force-on override.
