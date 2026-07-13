@@ -1248,6 +1248,9 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
 
     if (tok.kind != '}')
         return NULL;
+    n->end_file = ast_arena_strdup(ar, tok.file[0] ? tok.file :
+                                   (input_name ? input_name : "<input>"));
+    n->end_line = tok_line;
     next_token();                        /* consume '}' */
     return n;
 }
