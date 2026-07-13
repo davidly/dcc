@@ -14044,6 +14044,47 @@ FQBRIDGE_R:
         jp      FANOFL
 
 
+        public  __fdf
+__fdf:
+        ; fastcall float a/b: DE:HL = b (live, the divisor - matches the
+        ; pattern at every internal call site this session's audit
+        ; found: the divisor is always freshly loaded into DE:HL
+        ; immediately before the call), a still on the stack (one push,
+        ; 4 bytes). Named __fdf, not __fdivf, for the same 6-char-
+        ; truncation reason as __faf/__fsf/__fmf (see __faf's comment).
+        ;
+        ; Unlike __fmf, this can NOT just call FUNB (on the live b)
+        ; immediately and FUNA (from the stack) second, even though
+        ; that's exactly __fmf's own order: the division loop below
+        ; FDBODY has an undocumented register-level dependency beyond
+        ; AEXP/BEXP/AM*/BM* in memory - whichever of FUNA/FUNB runs LAST
+        ; leaves its own B register holding the mantissa byte it just
+        ; wrote (BM2, if FUNB ran last - "B=BM2 survives from FUNB" per
+        ; the loop's own comment further down), and the loop reads B
+        ; directly rather than reloading from memory. __fdiv's own
+        ; prologue always calls FUNA then FUNB, satisfying this by
+        ; construction; multiply has no such dependency, so __fmf's
+        ; "b live first, a from stack second" order is fine there but
+        ; silently computes b/a instead of a/b here if copied verbatim.
+        ;
+        ; Fix: stash b in the shadow register bank (exx) while unpacking
+        ; a from the stack via FUNA, then exx back and unpack b via FUNB
+        ; last - preserving FUNB-runs-last with no extra stack traffic
+        ; (two exx instead of a push/pop pair, which would give up the
+        ; whole point of this being a fastcall in the first place).
+        exx                     ; b -> shadow bank, out of FUNA's way
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    FUNA            ; unpack a (numerator)
+        exx                     ; b <- back from shadow bank
+        call    FUNB            ; unpack b (denominator), LAST
+        jp      FDBODY
+
         public  __fdiv
 __fdiv:
         push    ix
@@ -14063,6 +14104,7 @@ __fdiv:
         ld      d,(ix+7)
         call    FUNB
 
+FDBODY:
         ; sign = ASGN xor BSGN
         ld      a,(ASGN)
         ld      c,a
