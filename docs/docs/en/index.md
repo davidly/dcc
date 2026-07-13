@@ -10,6 +10,14 @@ CP/M Z80 emulators run those programs, as do real Z80 CP/M 2.2 and 3.0 systems.
 
 ![DCC C Compiler banner](images/dcc-retro-banner.svg)
 
+!!! tip "Integrated VS Code debugging"
+  Debug DCC programs directly in Visual Studio Code with source breakpoints,
+  source and instruction stepping, call stacks, variables and watches, memory
+  inspection, and linked Z80 disassembly. See
+  [VS Code debugging](00-vscode-debugging.md) for setup and usage.
+
+![DCC source debugging in VS Code with a breakpoint, local variables, Z80 registers, call stack, and debug controls](images/source-debugging.png)
+
 This manual describes the language accepted by the DCC C Compiler, the runtime library, and the
 build path from C source to `.COM` file.
 

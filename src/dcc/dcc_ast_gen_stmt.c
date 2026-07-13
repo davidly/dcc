@@ -874,7 +874,7 @@ int ast_last_statement_exits(void)
     return g_ast_last_stmt_exits;
 }
 
-static void ast_emit_debug_location(const char *file, int line)
+void ast_emit_debug_location(const char *file, int line)
 {
     const char *p;
 

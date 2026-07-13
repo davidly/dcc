@@ -286,6 +286,7 @@ void ast_emit_struct_init_expr_assign(struct Sym *s);
  * the token stream and emit it from the AST.  Returns 0 only in scanner/debug
  * paths that deliberately bypass AST codegen. */
 int ast_try_emit_statement(void);
+void ast_emit_debug_location(const char *file, int line);
 
 /* For scan_function_body's frame-sizing scan (dcc_func.c): build and replay
  * the for-statement at the current token position through the same AST

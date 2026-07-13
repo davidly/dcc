@@ -57,14 +57,20 @@ void gen_compound(void)
         } else if (starts_type()) {
             int t;
             int is_static_local;
+            int decl_line;
+            struct Token decl_tok;
             decl_is_extern = 0;
             is_static_local = (tok.kind == TOK_STATIC);
+            decl_line = tok_line;
+            decl_tok = tok;
             t = parse_base_type();
             if (tok.kind == ';') {
                 next_token();
             } else if (is_static_local) {
                 scan_static_local_decl_after_type(t);
             } else {
+                if (!decl_is_extern && !dead)
+                    ast_emit_debug_location(decl_tok.file, decl_line);
                 if (dead)
                     asm_suppress_depth++;
                 gen_local_decl_after_type(t);
@@ -92,6 +98,8 @@ void gen_compound(void)
         }
     }
 
+    if (!dead && tok.kind == '}')
+        ast_emit_debug_location(tok.file, tok_line);
     leave_scope();
     expect('}');
 }
