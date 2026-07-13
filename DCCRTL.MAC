@@ -14745,27 +14745,60 @@ _sqrtf:
         add     hl,sp
         ld      sp,hl
 
-        ; if (x <= 0.0f) return 0.0f;
+        ; C99 7.12.7.5 domain/special-value handling, checked before the
+        ; Newton's-method loop below (which assumes x is a positive
+        ; finite value and has no self-correction for anything else -
+        ; left alone, sqrtf(-1) silently returned 0 instead of NaN, and
+        ; sqrtf(+Inf) fed Inf/Inf into the iteration's own division and
+        ; landed on NaN instead of +Inf, taking 8 wasted iterations to
+        ; get the wrong answer). Uses the already-tested __fnan/__finf/
+        ; __fzro predicates directly (DE:HL in, no ix frame) rather than
+        ; the heavier push/call/pop __fge comparison this replaced.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,0
-        push    de
-        push    hl
-        call    __fge             ; generated convention for x <= 0.0f
-        pop     bc
-        pop     bc
-        pop     bc
-        pop     bc
+        call    __fnan
         ld      a,h
         or      l
-        jp      z,FMSPOS
+        jp      nz,FMSNAN       ; x is NaN: propagate
+
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMSNOTINF
+        ld      d,(ix+7)
+        bit     7,d
+        jp      nz,FMSNAN       ; x is -Inf: domain error -> NaN
+        jp      FMSID           ; x is +Inf: sqrt(+Inf) = +Inf, unchanged
+FMSNOTINF:
+
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fzro
+        ld      a,h
+        or      l
+        jp      nz,FMSID        ; x is +0.0 or -0.0: unchanged (keeps sign)
+
+        ld      d,(ix+7)
+        bit     7,d
+        jp      z,FMSPOS        ; x > 0 and finite: the ordinary case
+FMSNAN:
+        ld      d,7fh
+        ld      e,0c0h
         ld      hl,0
-        ld      de,0
+        jp      FMSRET
+FMSID:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
         jp      FMSRET
 
 FMSPOS:
