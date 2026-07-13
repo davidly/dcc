@@ -103,6 +103,13 @@ int label_id;
 int current_return_label;
 long g_return_jp_check_pos = -1;
 int g_return_jp_check_label = -1;
+/* Closing-brace source location of the current function body when the body
+ * always exits (every path returns), so no in-block closing-brace marker was
+ * emitted. emit_function_epilogue emits it at the shared return label so an
+ * early `return` that jumps to the epilogue maps to the closing brace rather
+ * than inheriting the previous statement's source line. 0 = none. */
+int g_func_close_line;
+char g_func_close_file[256];
 int current_return_type;
 int parse_function_return_type;
 int current_local_bytes;
