@@ -14649,6 +14649,56 @@ _fmodf:
         add     hl,sp
         ld      sp,hl
 
+        ; C99 7.12.10.1: x infinite, or y zero, is a domain error -> NaN
+        ; (also propagate an already-NaN operand); y infinite with x
+        ; finite is well-defined and returns x unchanged. None of this
+        ; was checked before the q=x/y computation below, which has no
+        ; self-correction: for x=Inf, (long)(Inf/y) truncates to some
+        ; finite iq (long can't represent infinity), so the pipeline
+        ; silently produced Inf back out of the final "x - prod"
+        ; subtraction instead of the required NaN; for y=Inf, x/Inf
+        ; correctly gives 0 (an earlier fix this session), but then
+        ; prod = 0*Inf correctly gives NaN too (0*Inf is invalid), which
+        ; propagated through "x - prod" and gave NaN instead of x.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMDNAN
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMDNAN
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      nz,FMDNAN       ; x is +/-Inf: domain error -> NaN
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMDNOTYINF
+        ld      l,(ix+4)        ; y is +/-Inf (x finite, not NaN):
+        ld      h,(ix+5)        ; x unchanged
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        jp      FMDRET
+FMDNOTYINF:
+
         ; if (y == 0.0f) return quiet NaN (0x7fc00000).
         ; Treat both +0 and -0 as zero.
         ld      a,(ix+11)
@@ -14665,6 +14715,11 @@ _fmodf:
         jp      nz,FMDNZ
         ld      hl,0
         ld      de,7fc0h
+        jp      FMDRET
+FMDNAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
         jp      FMDRET
 
 FMDNZ:
