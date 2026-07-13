@@ -4,11 +4,12 @@
  * dispatch (__fif, __flf), by calling them straight from raw IEEE-754 bit
  * patterns via inline asm.
  *
- * None of these are reachable from portable C: dcc has no isnan/isinf/
- * signbit front-end wiring, and __fsgn in particular is never called from
- * anywhere else in dccrtl.mac (or dcc's own codegen) at all, so this is the
- * only way to exercise it. Written to catch a regression in dccrtl.mac's
- * hand-written Z80, not as a portable test - it deliberately depends on the
+ * math.h now wires isnan/isinf/isfinite/signbit up to these same helpers
+ * (see tests/tisnan.c for that portable entry point) via thin _isnan/_isinf/
+ * _isfinite/_signbit wrappers in dccrtl.mac. This file stays: it exercises
+ * __fzro/__fnan/__finf/__fsgn/__fif/__flf directly against raw bit patterns,
+ * bypassing the wrapper layer, to catch a regression in dccrtl.mac's
+ * hand-written Z80 independent of the wrappers. Deliberately depends on the
  * DE:HL raw-float calling convention documented throughout dccrtl.mac.
  *
  * Wrapper names are kept short and distinct in their first 6 characters:

@@ -5,6 +5,36 @@
 
 /** Value returned on overflow; equals FLT_MAX (dcc has no double). */
 #define HUGE_VAL 3.40282347e+38F
+/** C99 float-flavored HUGE_VAL; true IEEE-754 infinity, unlike HUGE_VAL. */
+#define HUGE_VALF INFINITY
+
+/**
+ * IEEE-754 positive infinity, as a genuine compile-time constant: dcc's
+ * float-literal parser hands the source text to the host's atof(), and
+ * 1e40 already exceeds FLT_MAX, so the host overflows it to (double)
+ * infinity before it's narrowed to float. No runtime code, no RTL linkage;
+ * usable anywhere a float constant expression is, including static
+ * initializers.
+ */
+#define INFINITY 1e40F
+/**
+ * IEEE-754 quiet NaN. Unlike INFINITY, this has no spelling as a numeric
+ * literal token, so it is a real extern float object (defined in
+ * DCCRTL.MAC) rather than a constant expression: usable in ordinary
+ * expressions and local initializers, but NOT in a static/global
+ * initializer.
+ */
+extern const float dcc_nan;
+#define NAN dcc_nan
+
+/** True if x is a NaN (quiet or signaling). */
+int isnan(float x);
+/** True if x is +Inf or -Inf. */
+int isinf(float x);
+/** True if x is neither NaN nor +/-Inf. */
+int isfinite(float x);
+/** True if x's sign bit is set (negative, including -0.0 and -NaN). */
+int signbit(float x);
 
 /** Absolute value. */
 float fabsf(float x);

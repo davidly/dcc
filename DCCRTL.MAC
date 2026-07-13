@@ -11560,6 +11560,86 @@ __fsgn:
         inc     l
         ret
 
+        public  __ffin
+__ffin:
+        ; input DE:HL raw float. return HL=1 if finite (not +/-Inf, not NaN).
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      nz,__ffi1
+        bit     7,e
+        jr      z,__ffi1
+        ld      hl,0
+        ret
+__ffi1:
+        ld      hl,1
+        ret
+
+; ---- C99 <math.h> classification wrappers ------------------------------
+; Each pops the caller-pushed 4-byte float argument into DE:HL (the
+; register convention __fnan/__finf/__fsgn/__ffin expect), restores the
+; stack exactly as _fabsf does, and relays to the shared predicate. Each is
+; its own public block so dccrtlstrip links only the ones a program calls.
+
+        public  _isnan
+_isnan:
+        ; int isnan(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __fnan
+        ret
+
+        public  _isinf
+_isinf:
+        ; int isinf(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __finf
+        ret
+
+        public  _isfinite
+_isfinite:
+        ; int isfinite(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __ffin
+        ret
+
+        public  _signbit
+_signbit:
+        ; int signbit(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __fsgn
+        ret
+
+        public  _dcc_nan
+_dcc_nan:
+        ; A quiet-NaN bit pattern (7FC00000h), for math.h's NAN macro.
+        ; dcc's numeric-literal lexer has no syntax for a NaN token (unlike
+        ; INFINITY, which is a real 1e40f compile-time literal), so this is
+        ; a genuine extern object rather than a constant expression: usable
+        ; in ordinary expressions and local initializers, but not in a
+        ; static/global initializer.
+        dw      0
+        dw      32704
+
         public  __feq
 __feq:
         ; int __feq(float a, float b)
