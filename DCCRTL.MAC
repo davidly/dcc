@@ -12603,7 +12603,24 @@ FOVERF:
         rr      l
         set     7,c
         inc     b
+        ; If that increment carried the exponent to 255, the true sum
+        ; genuinely exceeds the largest finite float (both operands
+        ; already had valid exponents <=254, and this is the ONLY renormalize
+        ; step that ever grows the exponent - subtraction can only shrink
+        ; or hold it) - correct IEEE result is a signed Infinity, not
+        ; whatever mantissa bits happen to remain after the shift (packing
+        ; those as-is would land on a NaN-shaped bit pattern instead).
+        ld      a,b
+        cp      255
+        jp      z,FA_OVERINF
         jp      FPACKR
+FA_OVERINF:
+        ld      a,d             ; A = sign (0x80 or 0x00)
+        or      7fh
+        ld      d,a             ; D = sign | exponent's top 7 bits (all 1)
+        ld      e,80h           ; E = exponent's low bit | mantissa top 7 (0)
+        ld      hl,0
+        jp      FARET
 
 FSUBTR:
         ; different signs: subtract, result sign = sign of the bigger
@@ -13047,6 +13064,18 @@ FMNAN:
         ret
 
 FM_ORDINARY:
+        ; sign = ASGN xor BSGN, computed before the zero/subnormal
+        ; shortcut below (not after, as originally written) so every exit
+        ; through FMZERO - including a zero operand, not just exponent
+        ; underflow - can return a correctly signed zero via FMZERO's own
+        ; "ld a,(ASGN)" (matching FMINF's existing pattern).
+        ld      a,(ASGN)
+        ld      b,a
+        ld      a,(BSGN)
+        xor     b
+        and     80h
+        ld      (ASGN),a
+
         ; zero/subnormal shortcut: this phase treats exponent-zero values as 0.
         ld      a,(AEXP)
         or      a
@@ -13054,14 +13083,6 @@ FM_ORDINARY:
         ld      a,(BEXP)
         or      a
         jp      z,FMZERO
-
-        ; sign = ASGN xor BSGN
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        xor     b
-        and     80h
-        ld      (ASGN),a
 
         ; exponent = AEXP + BEXP - 127
         ld      a,(AEXP)
@@ -13364,8 +13385,13 @@ FMPAK:
         pop     ix
         ret
 FMZERO:
+        ; IEEE-754 sign-of-zero: (ASGN) holds the combined sign by the time
+        ; every caller reaches here, now that FM_ORDINARY computes it
+        ; before its zero shortcuts instead of after.
         ld      hl,0
-        ld      de,0
+        ld      a,(ASGN)
+        ld      d,a
+        ld      e,0
         ld      sp,ix
         pop     ix
         ret
@@ -13424,6 +13450,99 @@ __fmadd:
         call    FUNR
         exx
 
+        ; sign = a's D xor b's D, computed immediately and written to
+        ; (ASGN) - in addition to (not replacing) the original stash-in-
+        ; E'-then-finalize-into-D dance further below, which the ordinary
+        ; multiply path still needs D to carry for FQFB1/FQFB2/FQOVF2.
+        ; Gives every special-case exit below (Inf, NaN, and - see FQZERO
+        ; - zero) a place to read the final sign from immediately, without
+        ; needing to track which bank is active at each one.
+        ld      a,d
+        exx
+        xor     d
+        exx
+        and     80h
+        ld      (ASGN),a
+
+        ; IEEE-754 Inf/NaN special cases for the a*b product, checked
+        ; before the ordinary zero/exponent path below: its zero-shortcut
+        ; would otherwise treat 0*Inf as plain 0 (invalid -> NaN), and the
+        ; exponent-overflow clamp further down only accidentally produces
+        ; the right answer for Inf*finite when the finite operand's own
+        ; exponent happens to be large enough to trip it - not for every
+        ; finite magnitude. Same reasoning as __fmul's equivalent fix,
+        ; adapted to this routine's register-resident (FUNR) unpack.
+        ld      a,b
+        cp      255
+        jp      z,FQ_ASPEC
+        exx
+        ld      a,b
+        exx
+        cp      255
+        jp      z,FQ_BSPEC
+        jp      FQ_ORDINARY
+
+FQ_ASPEC:
+        ; a's exponent is 255: nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        jp      nz,FQ_QNAN      ; a is NaN
+        ; a is Infinity: check b.
+        exx
+        ld      a,b             ; b's exponent
+        or      a
+        jp      z,FQ_QNAN       ; b is zero: Inf*0 = NaN
+        cp      255
+        jp      nz,FQ_QINF      ; b finite nonzero: signed Infinity
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FQ_QNAN      ; b is NaN
+        jp      FQ_QINF         ; b is Infinity too: Inf*Inf = signed Inf
+
+FQ_BSPEC:
+        ; a finite (any value, including 0), b's exponent is 255.
+        exx
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FQ_QNAN      ; b is NaN
+        ; b is Infinity: 0*Inf = NaN; finite(!=0)*Inf = signed Infinity.
+        ld      a,b             ; a's exponent (main bank active)
+        or      a
+        jp      z,FQ_QNAN
+        jp      FQ_QINF
+
+FQ_QINF:
+        ld      a,255
+        ld      (AEXP),a
+        ld      a,80h
+        ld      (AM2),a
+        xor     a
+        ld      (AM1),a
+        ld      (AM0),a
+        jp      FQBRIDGE
+
+FQ_QNAN:
+        xor     a
+        ld      (ASGN),a        ; canonical NaN: fixed positive sign
+        ld      a,255
+        ld      (AEXP),a
+        ld      a,0c0h          ; implicit bit + nonzero payload -> NaN
+        ld      (AM2),a
+        xor     a
+        ld      (AM1),a
+        ld      (AM0),a
+        jp      FQBRIDGE
+
+FQ_ORDINARY:
         ; zero shortcuts (register-resident: exponent|mantissa all zero)
         ld      a,b
         or      c
@@ -13812,12 +13931,14 @@ FQNOC:
         jp      FQBRIDGE
 
 FQZERO:
-        ; matches __fmul's own FMZERO exactly: always +0, sign dropped -
-        ; a pre-existing dcc quirk (not introduced here), preserved for
-        ; consistency with a separate __fmul+__fadd call pair.
+        ; IEEE-754 sign-of-zero: (ASGN) already holds the correct combined
+        ; sign from the upfront computation above, for every one of this
+        ; label's three callers (matches __fmul's own now-fixed FMZERO;
+        ; previously this unconditionally dropped the sign, "for
+        ; consistency" with FMZERO's old behavior - now it's consistent
+        ; with FMZERO's fixed behavior instead).
         xor     a
         ld      (AEXP),a
-        ld      (ASGN),a
         ld      (AM0),a
         ld      (AM1),a
         ld      (AM2),a
@@ -13941,20 +14062,12 @@ FD_BSPEC:
         ld      a,(BM0)
         or      c
         jp      nz,FDNAN        ; B is NaN
-        jp      FD_SGNZRO       ; B is Infinity: finite/Inf = signed zero
+        jp      FDZRO           ; B is Infinity: finite/Inf = signed zero (FDZRO preserves it)
 
 FDNAN:
         ld      d,7fh
         ld      e,0c0h
         ld      hl,0
-        ld      sp,ix
-        pop     ix
-        ret
-FD_SGNZRO:
-        ld      hl,0
-        ld      a,(ASGN)
-        ld      d,a
-        ld      e,0
         ld      sp,ix
         pop     ix
         ret
@@ -14230,8 +14343,15 @@ FDPAK:
         pop     ix
         ret
 FDZRO:
+        ; IEEE-754 sign-of-zero: (ASGN) already holds the correct combined
+        ; sign by the time any caller reaches here (computed once, right
+        ; after the operands unpack, well before every jump into this
+        ; label - unlike __fmul's FMZERO, whose sign computation used to
+        ; run after its first two zero-shortcut jumps).
         ld      hl,0
-        ld      de,0
+        ld      a,(ASGN)
+        ld      d,a
+        ld      e,0
         ld      sp,ix
         pop     ix
         ret
