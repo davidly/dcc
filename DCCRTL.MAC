@@ -16061,22 +16061,26 @@ _powf:
         ld de,16256
         jp MFL14
 MFL15:
+        ; if (x == 0.0f) ... - y != 0 is already established by the
+        ; check above, so only its sign matters here. C99 7.12.7.4: x==0
+        ; with y<0 is a pole error -> Infinity, not the 0.0f mathf.c's
+        ; original C source unconditionally returned regardless of y's
+        ; sign (correct only for y>0, silently wrong - a bare 0 instead
+        ; of a pole error - for y<0).
         ld hl,(__powf_x)
         ld de,(__powf_x+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
-        pop bc
-        pop bc
+        call __fzro
         ld a,h
         or l
-        jr z,MFL17 ; peep: jp_to_jr
+        jp z,MFL17              ; x != 0: ordinary path continues
+        ld a,(__powf_y+3)
+        bit 7,a
+        jp z,MFPOWZP            ; y > 0: return 0.0f, unchanged
+        ld d,7fh                ; y < 0: pole error -> +Infinity
+        ld e,80h
+        ld hl,0
+        jp MFL14
+MFPOWZP:
         ld hl,0
         ld de,0
         jp MFL14
