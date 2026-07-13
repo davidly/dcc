@@ -17631,6 +17631,93 @@ _atan2f:
         push    hl
         push    bc
 
+        ; C99 7.12.4.4 special-value table (Inf/NaN combinations), checked
+        ; before the existing x==0/ratio-based computation below. That
+        ; computation has no self-correction for infinite operands: y/x
+        ; with x infinite correctly gives 0 (an ordinary finite/Inf
+        ; division), but atan2(Inf,Inf) computes y/x = Inf/Inf = NaN (an
+        ; earlier fix this session, correctly invalid) and poisons the
+        ; whole result instead of the well-defined +/-pi/4 (or +/-3pi/4)
+        ; the standard requires.
+        ld      hl,(__atan2_ylo)
+        ld      de,(__atan2_yhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MATAN2NAN
+        ld      hl,(__atan2_xlo)
+        ld      de,(__atan2_xhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MATAN2NAN
+
+        ld      hl,(__atan2_xlo)
+        ld      de,(__atan2_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MATAN2XORD    ; x finite: check y-infinite next
+        ; x is +/-Inf.
+        ld      hl,(__atan2_ylo)
+        ld      de,(__atan2_yhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MATAN2XIYF    ; y finite, x infinite
+        ; both infinite: +/-pi/4 (x>0) or +/-3pi/4 (x<0), sign = sign(y).
+        ld      a,(__atan2_xhi+1)
+        bit     7,a
+        jp      nz,MATAN2_3Q
+        ld      hl,4059
+        ld      de,16201        ; pi/4
+        jp      MATAN2SGNY
+MATAN2_3Q:
+        ld      hl,52196
+        ld      de,16406        ; 3pi/4
+        jp      MATAN2SGNY
+
+MATAN2XIYF:
+        ; x is +/-Inf, y finite: +/-0 (x>0) or +/-pi (x<0), sign=sign(y).
+        ld      a,(__atan2_xhi+1)
+        bit     7,a
+        jp      nz,MATAN2_PI
+        ld      hl,0
+        ld      de,0
+        jp      MATAN2SGNY
+MATAN2_PI:
+        ld      hl,4059
+        ld      de,16457        ; pi
+        jp      MATAN2SGNY
+
+MATAN2SGNY:
+        ; apply sign(y) to the positive magnitude currently in DE:HL (D's
+        ; sign bit is always clear going into this label).
+        ld      a,(__atan2_yhi+1)
+        and     80h
+        or      d
+        ld      d,a
+        ret
+
+MATAN2NAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        ret
+
+MATAN2XORD:
+        ; x finite; check if y is infinite (+/-Inf, x finite -> +/-HALF_PI).
+        ld      hl,(__atan2_ylo)
+        ld      de,(__atan2_yhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MATAN2ORD
+        ld      hl,4059
+        ld      de,16329        ; half_pi
+        jp      MATAN2SGNY
+MATAN2ORD:
+
         ; if (x == 0.0f)
         ld      de,(__atan2_xhi)
         ld      hl,(__atan2_xlo)
@@ -17695,9 +17782,20 @@ atan2_check_positive_y:
         ret
 
 atan2_return_zero:
+        ; y == 0 (either sign) and x == 0 (either sign): C99's table
+        ; distinguishes all four sign combinations - x>=0 gives a zero
+        ; with y's sign, x<0 gives PI with y's sign (previously always a
+        ; bare +0.0f regardless of either sign).
+        ld      a,(__atan2_xhi+1)
+        bit     7,a
+        jp      nz,MATAN2_00N
         ld      hl,0
         ld      de,0
-        ret
+        jp      MATAN2SGNY
+MATAN2_00N:
+        ld      hl,4059
+        ld      de,16457        ; pi
+        jp      MATAN2SGNY
 
 atan2_nonzero_x:
         ; q = y / x
