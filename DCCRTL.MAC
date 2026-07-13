@@ -17817,8 +17817,14 @@ MFL89:
         ld a,h
         or l
         jr z,MFL90 ; peep: jp_to_jr
+        ; |x| > 1.0: domain error per C99 7.12.4.2 -> NaN (was a bare
+        ; 0.0f, silently wrong - confirmed |x|==1.0 exactly still takes
+        ; the ordinary path below and is already correct, so only the
+        ; return value on this branch needed to change, not the
+        ; threshold test itself).
+        ld d,7fh
+        ld e,0c0h
         ld hl,0
-        ld de,0
         jp MFL87
 MFL90:
         ld l,(ix+4)
