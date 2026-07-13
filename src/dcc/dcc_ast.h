@@ -108,6 +108,8 @@ struct AstNode {
                             /* computes the arithmetic common-type choice    */
     char *file;             /* arena-owned source filename                  */
     int line;               /* source line, for diagnostics                */
+    char *end_file;         /* AST_COMPOUND closing-brace source filename  */
+    int end_line;           /* AST_COMPOUND closing-brace source line      */
 };
 
 #define AST_INT_UVAL_CHARLIT       1UL

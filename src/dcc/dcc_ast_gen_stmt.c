@@ -874,21 +874,26 @@ int ast_last_statement_exits(void)
     return g_ast_last_stmt_exits;
 }
 
-static void ast_emit_debug_line(const struct AstNode *n)
+static void ast_emit_debug_location(const char *file, int line)
 {
     const char *p;
 
-    if (!opt_debug || scan_mode || n->line <= 0)
+    if (!opt_debug || scan_mode || line <= 0)
         return;
 
     fputs(";@dcc-line \"", outf);
-    p = n->file ? n->file : (input_name ? input_name : "<input>");
+    p = file ? file : (input_name ? input_name : "<input>");
     while (*p) {
         if (*p == '\\' || *p == '"')
             fputc('\\', outf);
         fputc(*p++, outf);
     }
-    fprintf(outf, "\" %d\n", n->line);
+    fprintf(outf, "\" %d\n", line);
+}
+
+static void ast_emit_debug_line(const struct AstNode *n)
+{
+    ast_emit_debug_location(n->file, n->line);
 }
 
 /* Emit statement node `n` (gated by ast_stmt_supported). */
@@ -1117,6 +1122,8 @@ void ast_gen_stmt(const struct AstNode *n)
         if (!dead && g_scope_depth < MAX_SCOPE_DEPTH &&
             g_vla_scope_off[g_scope_depth] != 0)
             emit_vla_restore_sp(g_vla_scope_off[g_scope_depth]);
+        if (!dead)
+            ast_emit_debug_location(n->end_file, n->end_line);
         leave_scope();
         break;
     }
