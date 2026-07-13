@@ -4290,6 +4290,55 @@ pf_f:
         ld      (pf_bufptr),hl
 pf_f_nowidth:
 
+        ; C99 7.19.6.1p6: a NaN or infinite value ignores the '0' flag
+        ; (always space-padded, never zero-padded) and prints as
+        ; "nan"/"-nan" or "inf"/"-inf" instead of running the normal
+        ; integer/fraction digit pipeline - precision is ignored too, since
+        ; that pipeline never runs. Reuses the already-tested __fnan/__finf
+        ; predicates rather than re-deriving the bit tests here.
+        ld      hl,(__pf32_l)
+        ld      de,(__pf32_h)
+        call    __fnan
+        ld      a,h
+        or      l
+        jr      nz,pf_f_shownan
+        ld      hl,(__pf32_l)
+        call    __finf
+        ld      a,h
+        or      l
+        jr      nz,pf_f_showinf
+        jr      pf_f_normal
+
+pf_f_shownan:
+        xor     a
+        ld      (pf_zero),a
+        ld      hl,(__pf32_h)
+        bit     7,h
+        jr      z,pf_f_nan_pos
+        ld      a,'-'
+        call    pf_emit_a
+pf_f_nan_pos:
+        ld      hl,pf_nan_text
+        call    pf_emstr
+        jp      pf_f_done
+
+pf_f_showinf:
+        xor     a
+        ld      (pf_zero),a
+        ld      hl,(__pf32_h)
+        bit     7,h
+        jr      z,pf_f_inf_pos
+        ld      a,'-'
+        call    pf_emit_a
+pf_f_inf_pos:
+        ld      hl,pf_inf_text
+        call    pf_emstr
+        jp      pf_f_done
+
+pf_nan_text:    db      'nan',0
+pf_inf_text:    db      'inf',0
+
+pf_f_normal:
         ld      hl,(__pf32_l)
         ld      (pf_fl),hl
         ld      hl,(__pf32_h)
