@@ -15743,36 +15743,61 @@ _logf:
         ; float logf(float x)
         ; IX-free; locals moved to static scratch (already non-reentrant).
         ; __logf_e is passed to frexpf by address in place of a stack slot.
+        ;
+        ; C99 7.12.6.7 domain/special-value handling, checked before the
+        ; frexpf-based Taylor series below (which has no self-correction
+        ; for anything outside "positive finite x"): logf(x<0) used to
+        ; return a finite -3.4e38f approximation instead of NaN, logf(0)
+        ; returned that same finite approximation instead of a real
+        ; -Infinity (a pole error, not a domain error - x==0 is not
+        ; negative), and logf(+Inf) silently fell all the way through
+        ; frexpf and the series, landing on a plausible-looking but wrong
+        ; finite value (88.72...) instead of +Infinity.
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
         ld (__logf_x),hl
         ld (__logf_x+2),de
-
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
+
         ld hl,(__logf_x)
         ld de,(__logf_x+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __fge
-        pop bc
-        pop bc
-        pop bc
-        pop bc
+        call __fnan
         ld a,h
         or l
-        jr z,MFL9 ; peep: jp_to_jr
-        ld hl,51614
-        ld de,32639
-        ld a,d
-        xor 80h
-        ld d,a
+        jp nz,MFLOGNAN          ; x is NaN: propagate
+
+        ld hl,(__logf_x)
+        ld de,(__logf_x+2)
+        call __fzro
+        ld a,h
+        or l
+        jp nz,MFLOGNINF         ; x == +0.0 or -0.0: pole error -> -Infinity
+
+        ld a,(__logf_x+3)
+        bit 7,a
+        jp nz,MFLOGNAN          ; x < 0 (and not -0.0, ruled out above): NaN
+
+        ld hl,(__logf_x)
+        ld de,(__logf_x+2)
+        call __finf
+        ld a,h
+        or l
+        jp z,MFL9               ; x is positive finite: the ordinary case
+        ld hl,(__logf_x)        ; x == +Infinity: logf(+Inf) = +Infinity
+        ld de,(__logf_x+2)
+        jp MFL8
+MFLOGNAN:
+        ld d,7fh
+        ld e,0c0h
+        ld hl,0
+        jp MFL8
+MFLOGNINF:
+        ld d,0ffh
+        ld e,80h
+        ld hl,0
         jp MFL8
 MFL9:
         ld hl,__logf_e
