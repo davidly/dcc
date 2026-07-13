@@ -11498,11 +11498,9 @@ __fzro:
         or      e
         or      h
         or      l
-        jp      z,__fzr1
         ld      hl,0
-        ret
-__fzr1:
-        ld      hl,1
+        ret     nz
+        inc     l
         ret
 
         public  __fnan
@@ -11511,15 +11509,14 @@ __fnan:
         ld      a,d
         and     7fh
         cp      7fh
-        jp      nz,__fnn0
-        ld      a,e
-        and     80h
-        jp      z,__fnn0
+        jr      nz,__fnn0
+        bit     7,e
+        jr      z,__fnn0
         ld      a,e
         and     7fh
         or      h
         or      l
-        jp      z,__fnn0
+        jr      z,__fnn0
         ld      hl,1
         ret
 __fnn0:
@@ -11532,15 +11529,14 @@ __finf:
         ld      a,d
         and     7fh
         cp      7fh
-        jp      nz,__fif0
-        ld      a,e
-        and     80h
-        jp      z,__fif0
+        jr      nz,__fif0
+        bit     7,e
+        jr      z,__fif0
         ld      a,e
         and     7fh
         or      h
         or      l
-        jp      nz,__fif0
+        jr      nz,__fif0
         ld      hl,1
         ret
 __fif0:
@@ -11566,12 +11562,10 @@ __fchs:
         public  __fsgn
 __fsgn:
         ; input DE:HL raw float. return HL=1 if sign bit set, else 0.
-        bit     7,d
-        jp      nz,__fsg1
         ld      hl,0
-        ret
-__fsg1:
-        ld      hl,1
+        bit     7,d
+        ret     z
+        inc     l
         ret
 
         public  __feq
@@ -12110,9 +12104,7 @@ FUFND:
         public  __fif
 __fif:
         bit     7,h
-        jp      nz,FIFNG
-        jp      __fuf
-FIFNG:
+        jp      z,__fuf
         ld      a,h
         cpl
         ld      h,a
@@ -14556,9 +14548,7 @@ FULL:   db      0
         public  __flf
 __flf:
         bit     7,d
-        jp      nz,FLFN
-        jp      __fulf
-FLFN:
+        jp      z,__fulf
         ld      a,l
         cpl
         ld      l,a
