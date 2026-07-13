@@ -15499,15 +15499,39 @@ NXLT:   db      0
 _expf:
         ; float expf(float x)
         ; IX-free; locals moved to static scratch (already non-reentrant).
+        ;
+        ; C99 7.12.6.19 special-value handling, checked before the two
+        ; range comparisons below. Those already happen to return the
+        ; right ANSWER for -Inf (correctly less than -88.0, so it falls
+        ; into the x<-88 underflow-to-0 case) and for +Inf (correctly
+        ; NOT less than 88.0, so it falls into the same branch as
+        ; ordinary overflow - just needed that branch's return value
+        ; upgraded from a finite 3.4e38f approximation to a real
+        ; +Infinity, below). NaN was the real gap: it compares false
+        ; against everything, so "x < 88.0" was false and it fell all
+        ; the way to the overflow branch, silently returning 3.4e38f
+        ; instead of propagating NaN.
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
         ld (__expf_x),hl
         ld (__expf_x+2),de
-
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
+
+        ld hl,(__expf_x)
+        ld de,(__expf_x+2)
+        call __fnan
+        ld a,h
+        or l
+        jp z,MFEXPNOTNAN
+        ld d,7fh
+        ld e,0c0h
+        ld hl,0
+        jp MFL1
+MFEXPNOTNAN:
+
         ld hl,(__expf_x)
         ld de,(__expf_x+2)
         push de
@@ -15524,8 +15548,9 @@ _expf:
         ld a,h
         or l
         jr z,MFL2 ; peep: jp_to_jr
-        ld hl,51614
-        ld de,32639
+        ld d,7fh                ; x >= 88.0 (including +Infinity): overflow
+        ld e,80h                ; -> +Infinity (was a finite 3.4e38f
+        ld hl,0                 ; approximation)
         jp MFL1
 MFL2:
         ld hl,(__expf_x)
