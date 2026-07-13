@@ -14489,6 +14489,37 @@ _floorf:
         add     hl,sp
         ld      sp,hl
 
+        ; C99 7.12.9.2: if x is infinite or NaN, the result is x
+        ; unmodified. The (long)x round-trip below has no self-
+        ; correction for either: converting Inf/NaN to long is
+        ; undefined in C, and whatever finite substitute __ffl produces
+        ; silently loses the original value instead of preserving it.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMFID
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMFORD
+FMFID:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        ld      sp,ix
+        pop     ix
+        ret
+FMFORD:
+
         ; l = (long)x
         ld      l,(ix+4)
         ld      h,(ix+5)
@@ -14571,6 +14602,34 @@ _ceilf:
         ld      hl,-8
         add     hl,sp
         ld      sp,hl
+
+        ; C99 7.12.9.1: if x is infinite or NaN, the result is x
+        ; unmodified - see _floorf's identical guard just above for why.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMCID
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMCORD
+FMCID:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        ld      sp,ix
+        pop     ix
+        ret
+FMCORD:
 
         ; l = (long)x
         ld      l,(ix+4)
@@ -18274,6 +18333,40 @@ _modff:
         ld      hl,(__modff_xlo)
         push    hl                      ; restore x low
         push    bc                      ; restore return address
+
+        ; C99 7.12.6.12: if x is infinite, *iptr = x and the return value
+        ; is a zero with the same sign as x - NaN needs no special case
+        ; (floorf(NaN) now correctly gives NaN for *iptr, from the fix
+        ; just above, and NaN-NaN correctly stays NaN for the return
+        ; value too), but Inf does: floorf(Inf)/ceilf(Inf) now correctly
+        ; give Inf for *iptr, but "x - ip" below would then compute
+        ; Inf-Inf, an invalid operation that correctly gives NaN (an
+        ; earlier fix this session) - not the required signed zero.
+        ld      hl,(__modff_xlo)
+        ld      de,(__modff_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MFMODFORD
+        ld      hl,(__modff_iptr)
+        ld      a,(__modff_xlo)
+        ld      (hl),a
+        inc     hl
+        ld      a,(__modff_xlo+1)
+        ld      (hl),a
+        inc     hl
+        ld      a,(__modff_xhi)
+        ld      (hl),a
+        inc     hl
+        ld      a,(__modff_xhi+1)
+        ld      (hl),a
+        ld      a,(__modff_xhi+1)
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      hl,0
+        ret
+MFMODFORD:
 
         ; Preserve the original test and operation order:
         ;     i = (x <= 0.0f) ? floorf(x) : ceilf(x);
