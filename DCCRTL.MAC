@@ -15483,9 +15483,15 @@ NXRET:
 NXLT:   db      0
 
 
-; ================= BEGIN generated math functions (from mathf.c, peephole-optimized) =================
+; ================= BEGIN math functions =================
 ; sinf cosf tanf asinf acosf atanf atan2f expf logf log10f powf
-; sinhf coshf tanhf frexpf ldexpf modff  -- regenerate: dcc -c mathf.c | dccpeep | rename L<n>->MFL<n>
+; sinhf coshf tanhf frexpf ldexpf modff
+;
+; Originally generated from mathf.c (dcc -c | dccpeep | rename L<n>->MFL<n>)
+; but now hand-maintained directly here, like the rest of DCCRTL.MAC -
+; mathf.c is no longer the source of truth and must not be used to
+; regenerate this block. The MFL<n>-style local labels are cosmetic
+; leftovers from that history, not a sign this is machine-generated.
 
 
 
