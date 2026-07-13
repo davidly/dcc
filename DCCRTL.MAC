@@ -18148,6 +18148,37 @@ _frexpf:
         push    hl
         push    bc
 
+        ; C99 7.12.6.4: if x is infinite or NaN, return x unmodified
+        ; (*exp is unspecified). The exponent extraction below has no
+        ; self-correction for either: it happily reads the raw
+        ; exponent-255 field, computes *eptr=129 from it, and forces
+        ; the returned value's exponent to 126 regardless - Inf's
+        ; all-zero mantissa comes back looking exactly like the
+        ; ordinary value 0.5 instead of staying Inf, and NaN's payload
+        ; bits get the same treatment instead of staying NaN.
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MFREXPID
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MFREXPORD
+MFREXPID:
+        ld      hl,(__frexp_eptr)
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        ret
+MFREXPORD:
+
         ; Treat either signed zero as zero, matching the former __feq call.
         ld      hl,(__frexp_xlo)
         ld      de,(__frexp_xhi)
@@ -18222,6 +18253,32 @@ _ldexpf:
         push    hl
         push    bc
 
+        ; ldexp(Inf, n) = Inf and ldexp(NaN, n) = NaN, x unmodified in
+        ; both cases (IEEE-754 semantics; not a case the C99 base text
+        ; calls out, but every real libm agrees). The exponent-adjust
+        ; below has no self-correction for either: it happily reads the
+        ; raw exponent-255 field, adds n, and treats the (near-certain)
+        ; overflow like any ordinary one - Inf/NaN's mantissa bits come
+        ; back as the finite 3.4e38f overflow substitute (see below)
+        ; instead of staying Inf/NaN.
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MLDEXPID
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MLDEXPORD
+MLDEXPID:
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        ret
+MLDEXPORD:
+
         ; Treat either signed zero as zero.
         ld      hl,(__ldexp_xlo)
         ld      de,(__ldexp_xhi)
@@ -18260,9 +18317,13 @@ ldexp_nonzero:
         sbc     hl,de
         jr      c,ldexp_not_overflow
 
-        ; Preserve the former saturation constant and the input sign.
-        ld      hl,51614
-        ld      de,32639
+        ; Overflow: signed Infinity (was a finite 3.4e38f saturation
+        ; constant - upgraded to match the real-Infinity overflow
+        ; convention this session's expf fix already established, now
+        ; that real Infinity is cheaply available and isinf() can
+        ; detect it).
+        ld      hl,0
+        ld      de,7f80h
         ld      a,(__ldexp_xhi+1)
         and     80h
         jr      z,ldexp_done
