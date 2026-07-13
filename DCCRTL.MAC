@@ -12509,8 +12509,30 @@ FANZ_ENTRY:
         or      h
         or      l
         jp      nz,FANZ
-        ; A is zero: pack B (alternate bank) directly and return.
+        ; A is zero. If B is nonzero, it's unaffected by adding/
+        ; subtracting a zero and returns as-is (the original shortcut).
+        ; If B is ALSO zero, IEEE-754 6.3's zero-sum rule applies and
+        ; "return B as-is" is wrong whenever the signs differ (0 + -0
+        ; must give +0 in round-to-nearest, the only rounding mode this
+        ; runtime has - returning B here would give -0 instead): same
+        ; sign keeps that sign, opposite signs give +0.
         exx
+        ld      a,b
+        or      c
+        or      h
+        or      l
+        jp      nz,FA_PACKB     ; B nonzero: return B as-is (alt bank active)
+        ld      a,d             ; A = BSGN (alt bank active)
+        exx                     ; main bank active; A preserved
+        cp      d               ; compare against ASGN
+        jp      z,FA_PACKA      ; same sign: either zero works, return A
+        ld      hl,0            ; opposite signs: +0
+        ld      de,0
+        jp      FARET
+FA_PACKB:
+        call    FPKR
+        jp      FARET
+FA_PACKA:
         call    FPKR
         jp      FARET
 FANZ:
@@ -12762,7 +12784,14 @@ FPKR:
         ld      e,a             ; E = final byte2  [final]
         ret
 FPKRZ:
-        ld      d,0
+        ; IEEE-754 sign-of-zero: preserve D's sign bit instead of always
+        ; packing +0. Every caller (FA_RETA/FA_RETB, the "pack whichever
+        ; operand is zero" shortcuts, and FPACKR's normal-path tail) has
+        ; already set D to a real sign (0x80 or 0) by this point, so this
+        ; was always available - just discarded.
+        ld      a,d
+        and     80h
+        ld      d,a
         ld      e,0
         ld      h,0
         ld      l,0

@@ -88,6 +88,20 @@ int main(void)
     okf("5-3", five - three, 2.0f);
     okf("5+(-5)", five + negfive, zero);
 
+    /* IEEE-754 6.3 zero-sum sign rule: same-signed zeros keep that sign,
+     * opposite-signed zeros give +0 (round-to-nearest, the only rounding
+     * mode this runtime has). Also covers FPKR's shared pack routine,
+     * used by every add/sub/fmadd exit that reaches it with a mantissa
+     * of exactly zero. */
+    okb("0+0 sign", signbit(zero + zero), 0);
+    okb("0+-0 sign", signbit(zero + negzero), 0);
+    okb("-0+0 sign", signbit(negzero + zero), 0);
+    okb("-0+-0 sign", signbit(negzero + negzero), 1);
+    okb("0-0 sign", signbit(zero - zero), 0);
+    okb("0-(-0) sign", signbit(zero - negzero), 0);
+    okb("-0-0 sign", signbit(negzero - zero), 1);
+    okb("-0-(-0) sign", signbit(negzero - negzero), 0);
+
     /* multiplication: 0*Inf (both operand orders), plus propagation */
     okb("inf*0 isnan", isnan(pinf * zero), 1);
     okb("0*inf isnan", isnan(zero * pinf), 1);
