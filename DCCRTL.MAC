@@ -11551,14 +11551,6 @@ __fabs:
         ld      d,a
         ret
 
-        public  __fchs
-__fchs:
-        ; input/output DE:HL raw float. toggle sign bit.
-        ld      a,d
-        xor     80h
-        ld      d,a
-        ret
-
         public  __fsgn
 __fsgn:
         ; input DE:HL raw float. return HL=1 if sign bit set, else 0.
