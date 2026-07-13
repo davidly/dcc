@@ -5891,12 +5891,8 @@ atf_neg_net:
         push    de
         push    hl                      ; left = mant (numerator)
         ld      de,04120h
-        ld      hl,0
-        push    de
-        push    hl                      ; right = 10.0f (denominator)
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      hl,0                    ; right = 10.0f (divisor), live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         ld      (__atf_mant),hl
@@ -14834,12 +14830,8 @@ FMDNZ:
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
-        ld      d,(ix+11)
-        push    de              ; right operand y
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      d,(ix+11)       ; right operand y, live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
 
@@ -15003,12 +14995,8 @@ FMSLP:
         ld      l,(ix-4)
         ld      h,(ix-3)
         ld      e,(ix-2)
-        ld      d,(ix-1)
-        push    de
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      d,(ix-1)        ; g (divisor), live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         call    __faf
@@ -16036,12 +16024,8 @@ MFL12:
         ld de,16256
         call __faf
         pop bc
-        pop bc
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        pop bc          ; m+1 (divisor), live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__logf_z),hl
@@ -16623,12 +16607,8 @@ tanh_calculate:
         push    de
         push    hl
         ld      hl,(__hyp_xlo)
-        ld      de,(__hyp_xhi)
-        push    de
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      de,(__hyp_xhi)  ; denominator, live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         ret
@@ -17336,12 +17316,8 @@ MFL63:
         push de
         push hl
         ld hl,(__tanf_den)
-        ld de,(__tanf_den+2)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        ld de,(__tanf_den+2)    ; denominator, live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__tanf_result),hl
@@ -17375,12 +17351,8 @@ MFL67:
         push de
         push hl
         ld hl,(__tanf_result)
-        ld de,(__tanf_result+2)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        ld de,(__tanf_result+2)        ; denominator, live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__tanf_result),hl
@@ -17481,12 +17453,8 @@ MFL71:
         push de
         push hl
         ld hl,(__atanf_x)
-        ld de,(__atanf_x+2)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        ld de,(__atanf_x+2)     ; denominator, live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__atanf_x),hl
@@ -17532,12 +17500,8 @@ MFL72:
         ld de,16256
         call __faf
         pop bc
-        pop bc
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        pop bc          ; x+1 (divisor), live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__atanf_x),hl
@@ -17846,12 +17810,8 @@ atan2_nonzero_x:
         push    de
         push    hl
         ld      de,(__atan2_xhi)
-        ld      hl,(__atan2_xlo)
-        push    de
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      hl,(__atan2_xlo)        ; denominator, live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         ld      (__atan2_qlo),hl
