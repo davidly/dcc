@@ -12432,14 +12432,19 @@ FANOFL2:
         ; B's sign (D, alternate bank) already reflects __fsf's negation
         ; when this is a subtraction, so "same sign" below means "same
         ; sign after that flip" - exactly what inf-inf (via __fsub) needs.
+        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
+        ; cp 255) to test it (4T vs 7T; A is dead either way once the
+        ; flags are read) - neither operand's exponent is 255 on almost
+        ; every call, so this dispatch is written to cost as little as
+        ; possible on that overwhelmingly common path.
         ld      a,b             ; A = AEXP
-        cp      255
-        jp      z,FA_ASPEC
+        inc     a
+        jr      z,FA_ASPEC
         exx
         ld      a,b             ; A = BEXP
         exx                     ; main bank active again; flags preserved
-        cp      255
-        jp      z,FA_BSPEC
+        inc     a
+        jr      z,FA_BSPEC
         jp      FANZ_ENTRY      ; neither operand special: ordinary path
 
 FA_ASPEC:
@@ -12991,12 +12996,17 @@ FMBODY:
         ; produces the right answer for Inf*finite when the finite
         ; operand's own exponent happens to be large enough to push the
         ; combined exponent past 255 - not for every finite magnitude.
+        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
+        ; cp 255) to test it (4T vs 7T; A is dead either way once the
+        ; flags are read) - neither operand's exponent is 255 on almost
+        ; every call, so this dispatch is written to cost as little as
+        ; possible on that overwhelmingly common path.
         ld      a,(AEXP)
-        cp      255
-        jp      z,FM_ASPEC
+        inc     a
+        jr      z,FM_ASPEC
         ld      a,(BEXP)
-        cp      255
-        jp      z,FM_BSPEC
+        inc     a
+        jr      z,FM_BSPEC
         jp      FM_ORDINARY
 
 FM_ASPEC:
@@ -13450,20 +13460,6 @@ __fmadd:
         call    FUNR
         exx
 
-        ; sign = a's D xor b's D, computed immediately and written to
-        ; (ASGN) - in addition to (not replacing) the original stash-in-
-        ; E'-then-finalize-into-D dance further below, which the ordinary
-        ; multiply path still needs D to carry for FQFB1/FQFB2/FQOVF2.
-        ; Gives every special-case exit below (Inf, NaN, and - see FQZERO
-        ; - zero) a place to read the final sign from immediately, without
-        ; needing to track which bank is active at each one.
-        ld      a,d
-        exx
-        xor     d
-        exx
-        and     80h
-        ld      (ASGN),a
-
         ; IEEE-754 Inf/NaN special cases for the a*b product, checked
         ; before the ordinary zero/exponent path below: its zero-shortcut
         ; would otherwise treat 0*Inf as plain 0 (invalid -> NaN), and the
@@ -13472,14 +13468,28 @@ __fmadd:
         ; exponent happens to be large enough to trip it - not for every
         ; finite magnitude. Same reasoning as __fmul's equivalent fix,
         ; adapted to this routine's register-resident (FUNR) unpack.
+        ;
+        ; Neither operand's exponent is 255 on almost every call in a hot
+        ; loop (matrix multiply and similar - the whole reason this
+        ; routine exists), so this dispatch is written to cost as little
+        ; as possible on that path: no sign precompute here (unlike an
+        ; earlier version of this fix) - D in both banks still holds each
+        ; operand's own untouched sign at every point below that actually
+        ; needs one (FQZERO, FQ_QINF), computed there instead, lazily, on
+        ; the rare paths that use it. jr instead of jp for the not-taken
+        ; case (7T vs 10T; M80 assembles jr fine here, both targets are
+        ; only a few instructions away). inc a instead of cp 255 (4T vs
+        ; 7T): the exponent value in A is dead either way once the flags
+        ; are read, so incrementing it and testing for the resulting
+        ; wraparound-to-zero is an equivalent, cheaper Z-flag test.
         ld      a,b
-        cp      255
-        jp      z,FQ_ASPEC
+        inc     a
+        jr      z,FQ_ASPEC
         exx
         ld      a,b
         exx
-        cp      255
-        jp      z,FQ_BSPEC
+        inc     a
+        jr      z,FQ_BSPEC
         jp      FQ_ORDINARY
 
 FQ_ASPEC:
@@ -13521,6 +13531,18 @@ FQ_BSPEC:
         jp      FQ_QINF
 
 FQ_QINF:
+        ; sign = a's D xor b's D - correct regardless of which bank is
+        ; currently active (reads whichever is active, swaps, reads the
+        ; other, swaps back), since neither bank's D has been touched
+        ; since the FUNR unpacks above. Computed here rather than
+        ; upfront: this path is rare (an actual Inf operand), so paying
+        ; for it here costs nothing on the far hotter ordinary case.
+        ld      a,d
+        exx
+        xor     d
+        exx
+        and     80h
+        ld      (ASGN),a
         ld      a,255
         ld      (AEXP),a
         ld      a,80h
@@ -13931,12 +13953,22 @@ FQNOC:
         jp      FQBRIDGE
 
 FQZERO:
-        ; IEEE-754 sign-of-zero: (ASGN) already holds the correct combined
-        ; sign from the upfront computation above, for every one of this
-        ; label's three callers (matches __fmul's own now-fixed FMZERO;
-        ; previously this unconditionally dropped the sign, "for
-        ; consistency" with FMZERO's old behavior - now it's consistent
-        ; with FMZERO's fixed behavior instead).
+        ; IEEE-754 sign-of-zero: sign = a's D xor b's D, computed lazily
+        ; here rather than upfront on every call (this path only runs
+        ; when an operand is actually zero) - correct regardless of which
+        ; bank is active, same reasoning as FQ_QINF above. All three of
+        ; this label's callers reach it with the main bank active and
+        ; neither bank's D touched since the FUNR unpacks, so this is
+        ; safe (matches __fmul's own now-fixed FMZERO; previously this
+        ; unconditionally dropped the sign, "for consistency" with
+        ; FMZERO's old behavior - now it's consistent with FMZERO's fixed
+        ; behavior instead).
+        ld      a,d
+        exx
+        xor     d
+        exx
+        and     80h
+        ld      (ASGN),a
         xor     a
         ld      (AEXP),a
         ld      (AM0),a
@@ -14015,12 +14047,17 @@ __fdiv:
         ; (exponent 0) from "nonzero exponent" and clamps to Infinity on
         ; overflow, so it cannot tell Inf/NaN (exponent 255) apart from an
         ; ordinary large finite value without this check running first.
+        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
+        ; cp 255) to test it (4T vs 7T; A is dead either way once the
+        ; flags are read) - neither operand's exponent is 255 on almost
+        ; every call, so this dispatch is written to cost as little as
+        ; possible on that overwhelmingly common path.
         ld      a,(AEXP)
-        cp      255
-        jp      z,FD_ASPEC
+        inc     a
+        jr      z,FD_ASPEC
         ld      a,(BEXP)
-        cp      255
-        jp      z,FD_BSPEC
+        inc     a
+        jr      z,FD_BSPEC
         jp      FD_ORDINARY
 
 FD_ASPEC:
