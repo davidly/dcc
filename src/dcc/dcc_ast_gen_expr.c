@@ -3387,7 +3387,7 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     char temp_name_buf[MAX_PROTO_PARAMS][64];
     int i;
 
-    if (fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
+    if (opt_debug || fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
         inline_substitution_body(fn_sym) == NULL)
         return 0;
     if ((fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL) &&

@@ -2580,6 +2580,14 @@ const struct AstNode *ast_zero_arg_inline_body(const struct AstNode *n)
 {
     struct Sym *fn;
 
+    /* Under -g, keep static inline functions as real out-of-line callables so
+     * breakpoints and stepping resolve to their bodies (same reason
+     * try_gen_inline_call_ast declines when opt_debug is set). Without this the
+     * byte-copy fast paths that look through a zero-arg inline call (see
+     * ast_is_byte_addr_lvalue / ast_is_byte_addr_copy_assign) would still
+     * substitute the body and drop the function from the debug info. */
+    if (opt_debug)
+        return NULL;
     if (n == NULL || n->kind != AST_CALL || n->a == NULL ||
         n->a->kind != AST_IDENT || n->list_len != 0)
         return NULL;
