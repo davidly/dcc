@@ -16,4 +16,4 @@
 
 [TEST 4] Edge cases:
   -> logf(0.0)  = -inf
-  -> logf(-5.0) = 0.000000
+  -> logf(-5.0) = nan

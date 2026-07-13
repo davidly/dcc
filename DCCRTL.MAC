@@ -12420,6 +12420,82 @@ FANOFL:
 FANOFL2:
         ; __faf/__fsf rejoin here: they already did their own equivalent
         ; bank switch above, so they jump straight past this one.
+
+        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
+        ; zero/align/add path below: its zero-shortcut treats "exponent and
+        ; mantissa both zero", which correctly excludes exponent 255, but
+        ; the align/add path that follows was never written to expect
+        ; exponent 255 either - left alone it would try to exponent-align
+        ; and mantissa-add/subtract Inf/NaN's bit pattern like an ordinary
+        ; large finite value, only accidentally landing on the right answer
+        ; when the other operand's exponent happens to be far enough away.
+        ; B's sign (D, alternate bank) already reflects __fsf's negation
+        ; when this is a subtraction, so "same sign" below means "same
+        ; sign after that flip" - exactly what inf-inf (via __fsub) needs.
+        ld      a,b             ; A = AEXP
+        cp      255
+        jp      z,FA_ASPEC
+        exx
+        ld      a,b             ; A = BEXP
+        exx                     ; main bank active again; flags preserved
+        cp      255
+        jp      z,FA_BSPEC
+        jp      FANZ_ENTRY      ; neither operand special: ordinary path
+
+FA_ASPEC:
+        ; A's exponent is 255: nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        jp      nz,FA_NAN       ; A is NaN
+        ; A is Infinity: check B.
+        exx
+        ld      a,b             ; A = BEXP
+        cp      255
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FA_RETA      ; B finite (incl. 0): Inf+finite = that Inf
+        exx
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FA_NAN       ; B is NaN
+        ; both Infinity: same sign -> that Infinity, opposite -> NaN.
+        ld      a,d             ; A = ASGN
+        exx
+        cp      d               ; compare against BSGN (post-__fsf-flip)
+        exx
+        jp      nz,FA_NAN       ; Inf + (-Inf) = NaN
+        jp      FA_RETA
+
+FA_BSPEC:
+        ; A finite (any value, including 0), B's exponent is 255.
+        exx
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FA_NAN       ; B is NaN
+        jp      FA_RETB         ; B is Infinity: finite+Inf = that Inf
+
+FA_RETA:
+        call    FPKR
+        jp      FARET
+FA_RETB:
+        exx
+        call    FPKR
+        jp      FARET
+FA_NAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        jp      FARET
+
+FANZ_ENTRY:
         ; zero shortcuts: if A==0, result=B; if B==0, result=A. "Zero"
         ; means exponent and all three mantissa bytes are zero, matching
         ; the original memory-based check exactly (not just exponent==0).
@@ -12891,6 +12967,86 @@ __fmul:
         call    FUNB
 
 FMBODY:
+        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
+        ; zero/exponent path below: its zero-shortcut would otherwise treat
+        ; 0*Inf as plain 0 (it's actually invalid -> NaN), and the
+        ; exponent-overflow-to-Inf clamp further down only accidentally
+        ; produces the right answer for Inf*finite when the finite
+        ; operand's own exponent happens to be large enough to push the
+        ; combined exponent past 255 - not for every finite magnitude.
+        ld      a,(AEXP)
+        cp      255
+        jp      z,FM_ASPEC
+        ld      a,(BEXP)
+        cp      255
+        jp      z,FM_BSPEC
+        jp      FM_ORDINARY
+
+FM_ASPEC:
+        ; A's exponent is 255: nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,(AM2)
+        and     7fh
+        ld      b,a
+        ld      a,(AM1)
+        or      b
+        ld      b,a
+        ld      a,(AM0)
+        or      b
+        jp      nz,FMNAN        ; A is NaN
+        ; A is Infinity: Inf*0 and Inf*NaN are NaN; Inf*finite(!=0) is a
+        ; signed Infinity, and so is Inf*Inf.
+        ld      a,(BEXP)
+        or      a
+        jp      z,FMNAN         ; B is zero: Inf*0 = NaN
+        cp      255
+        jp      nz,FM_SGNINF    ; B finite nonzero: signed Infinity
+        ld      a,(BM2)
+        and     7fh
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        ld      b,a
+        ld      a,(BM0)
+        or      b
+        jp      nz,FMNAN        ; B is NaN
+        jp      FM_SGNINF       ; B is Infinity too: Inf*Inf = signed Inf
+
+FM_BSPEC:
+        ; A finite (any value, including 0), B's exponent is 255.
+        ld      a,(BM2)
+        and     7fh
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        ld      b,a
+        ld      a,(BM0)
+        or      b
+        jp      nz,FMNAN        ; B is NaN
+        ; B is Infinity: 0*Inf = NaN; finite(!=0)*Inf = signed Infinity.
+        ld      a,(AEXP)
+        or      a
+        jp      z,FMNAN
+        jp      FM_SGNINF
+
+FM_SGNINF:
+        ld      a,(ASGN)
+        ld      b,a
+        ld      a,(BSGN)
+        xor     b
+        and     80h
+        ld      (ASGN),a
+        jp      FMINF
+
+FMNAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+FM_ORDINARY:
         ; zero/subnormal shortcut: this phase treats exponent-zero values as 0.
         ld      a,(AEXP)
         or      a
@@ -13733,10 +13889,87 @@ __fdiv:
         and     80h
         ld      (ASGN),a
 
-        ; 0 / anything = 0.  This phase treats subnormals as zero.
+        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
+        ; zero/exponent path below: that path only distinguishes "zero"
+        ; (exponent 0) from "nonzero exponent" and clamps to Infinity on
+        ; overflow, so it cannot tell Inf/NaN (exponent 255) apart from an
+        ; ordinary large finite value without this check running first.
+        ld      a,(AEXP)
+        cp      255
+        jp      z,FD_ASPEC
+        ld      a,(BEXP)
+        cp      255
+        jp      z,FD_BSPEC
+        jp      FD_ORDINARY
+
+FD_ASPEC:
+        ; A's exponent is 255: a nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,(AM2)
+        and     7fh
+        ld      c,a
+        ld      a,(AM1)
+        or      c
+        ld      c,a
+        ld      a,(AM0)
+        or      c
+        jp      nz,FDNAN        ; A is NaN
+        ; A is Infinity: Inf/finite (incl. 0) = signed Inf; Inf/Inf and
+        ; Inf/NaN need B checked too.
+        ld      a,(BEXP)
+        cp      255
+        jp      nz,FDINF
+        ld      a,(BM2)
+        and     7fh
+        ld      c,a
+        ld      a,(BM1)
+        or      c
+        ld      c,a
+        ld      a,(BM0)
+        or      c
+        jp      nz,FDNAN        ; B is NaN
+        jp      FDNAN           ; Inf/Inf = NaN
+
+FD_BSPEC:
+        ; A finite (any value, including 0), B's exponent is 255.
+        ld      a,(BM2)
+        and     7fh
+        ld      c,a
+        ld      a,(BM1)
+        or      c
+        ld      c,a
+        ld      a,(BM0)
+        or      c
+        jp      nz,FDNAN        ; B is NaN
+        jp      FD_SGNZRO       ; B is Infinity: finite/Inf = signed zero
+
+FDNAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+FD_SGNZRO:
+        ld      hl,0
+        ld      a,(ASGN)
+        ld      d,a
+        ld      e,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+FD_ORDINARY:
+        ; 0 / 0 = NaN (invalid); 0 / nonzero = 0.  This phase treats
+        ; subnormals as zero for both operands.
         ld      a,(AEXP)
         or      a
-        jp      z,FDZRO
+        jp      nz,FD_ANZ
+        ld      a,(BEXP)
+        or      a
+        jp      z,FDNAN         ; 0/0 = NaN
+        jp      FDZRO           ; 0/nonzero = 0
+FD_ANZ:
 
         ; divide by zero => signed infinity
         ld      a,(BEXP)
