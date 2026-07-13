@@ -489,6 +489,11 @@ extern int current_return_label;
  * emit_function_epilogue's elide_redundant_tail_jp. */
 extern long g_return_jp_check_pos;
 extern int g_return_jp_check_label;
+/* Closing-brace source location of the current function body, captured when
+ * the body always exits so emit_function_epilogue can map the shared return
+ * label to the closing brace. 0 = none. */
+extern int g_func_close_line;
+extern char g_func_close_file[256];
 extern int current_return_type;
 extern int parse_function_return_type;
 extern int current_local_bytes;

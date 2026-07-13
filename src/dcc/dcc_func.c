@@ -1768,6 +1768,12 @@ void emit_function_epilogue(int implicit_zero_return)
     g_return_jp_check_pos = -1;
     g_return_jp_check_label = -1;
     emit_label(current_return_label);
+    /* Map the shared return label to the function's closing brace when the
+     * body always exits, so an early `return` that jumps here shows the
+     * closing brace instead of inheriting the previous statement's line. */
+    if (opt_debug && !scan_mode && g_func_close_line > 0)
+        ast_emit_debug_location(g_func_close_file, g_func_close_line);
+    g_func_close_line = 0;
     /* Always emit ld sp,ix so returns from nested control flow restore the
      * caller stack reliably. pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra
      * instruction for functions that never actually need the stack restore. */

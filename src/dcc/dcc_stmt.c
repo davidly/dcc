@@ -43,6 +43,7 @@ void gen_compound(void)
 
     /* Forward-goto VLA fixups are function-scoped; start each body run clean. */
     g_vla_fwd_ngoto = 0;
+    g_func_close_line = 0;
     expect('{');
     enter_scope();
     dead = 0;
@@ -98,8 +99,22 @@ void gen_compound(void)
         }
     }
 
-    if (!dead && tok.kind == '}')
-        ast_emit_debug_location(tok.file, tok_line);
+    if (tok.kind == '}') {
+        if (!dead) {
+            /* Body falls through: the closing brace is a reachable step in
+             * this scope, emitted here before the epilogue. */
+            ast_emit_debug_location(tok.file, tok_line);
+        } else {
+            /* Body always exits: no in-block closing-brace marker is emitted,
+             * so hand the location to emit_function_epilogue, which maps the
+             * shared return label to it (early returns jump there). */
+            const char *cf = tok.file[0] ? tok.file :
+                             (input_name ? input_name : "<input>");
+            strncpy(g_func_close_file, cf, sizeof(g_func_close_file) - 1);
+            g_func_close_file[sizeof(g_func_close_file) - 1] = 0;
+            g_func_close_line = tok_line;
+        }
+    }
     leave_scope();
     expect('}');
 }
