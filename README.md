@@ -17,6 +17,8 @@ dccrtlstrip.c is an app that examines the code of your .c file and strips portio
 
 The 3 compiler apps dcc, dccpeep, and dccrtlstrip all build and run on Windows, Linux, and MacOS. They are too big to run on CP/M. Use m.bat, m.sh, mmacos.sh to build these apps using msvc (Windows), gcc (Linux), or clang (MacOS) respectively. You may need to chmod 777 *.sh on Linux and MacOS prior to running dcc's scripts.
 
+Dcc has been built and had regression tests run on AMD64 (Linux and Windows), Arm64(Linux, Windows, MacOS), Arm32 (Linux), and RISC-V 64 (Linux).
+
 ## Documentation
 
 Two reference documents in the [docs](docs) directory cover the runtime in depth:
