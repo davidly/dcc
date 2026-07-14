@@ -2399,7 +2399,7 @@ void gen_assign_ast(const struct AstNode *n)
         return;
     }
 
-    if (expr_result_dead && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
+    if (s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
         (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
          n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
         ast_is_plain_int_type(s->type) &&

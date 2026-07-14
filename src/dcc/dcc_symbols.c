@@ -934,6 +934,8 @@ void emit_load_sym_value_direct(struct Sym *s)
 
 void emit_load_sym_de_direct(struct Sym *s)
 {
+    if (s == NULL)
+        fatal("emit_load_sym_de_direct: missing symbol");
     if (s->reg_alloc == REG_BC) {
         emit("\tld e,c\n");
         emit("\tld d,b\n");
@@ -944,7 +946,27 @@ void emit_load_sym_de_direct(struct Sym *s)
         emit("\tld d,0\n");
         return;
     }
+    if (is_global_word_sym(s)) {
+        emit("\tpush hl\n");
+        emit_load_global_word_direct(s);
+        emit("\tex de,hl\n\tpop hl\n");
+        return;
+    }
+    if ((s->storage == SC_GLOBAL || s->storage == SC_EXTERN) &&
+        !s->is_array && type_size(s->type) == 1) {
+        emit("\tpush hl\n");
+        emit_load_sym_addr(s);
+        emit("\tld e,(hl)\n\tpop hl\n");
+        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
+            emit("\tld d,0\n");
+        else
+            emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
+        if (type_is_bool(s->type))
+            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
+        return;
+    }
     if (current_omit_ix_frame && s->storage == SC_PARAM) {
+        emit("\tpush hl\n");
         if (type_size(s->type) == 1) {
             emit_load_frame_addr_hl(s);
             emit("\tld e,(hl)\n");
@@ -958,8 +980,11 @@ void emit_load_sym_de_direct(struct Sym *s)
             emit_load_frame_addr_hl(s);
             emit("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n");
         }
+        emit("\tpop hl\n");
         return;
     }
+    if (!sym_can_ix_direct(s))
+        fatal("emit_load_sym_de_direct: symbol is not directly loadable");
     if (type_size(s->type) == 1) {
         fprintf(outf, "\tld e,(ix%+d)\n", s->offset);
         if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
