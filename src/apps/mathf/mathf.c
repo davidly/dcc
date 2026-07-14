@@ -1,27 +1,13 @@
 /*
  * mathf.c - single-precision <math.h> transcendental functions for dcc.
  *
- * SOURCE OF TRUTH for the math routines that are folded into DCCRTL.MAC.
- * These are written in portable dcc C89 on top of the runtime's existing
- * float primitives (__fmul/__fadd/... and _sqrtf/_floorf/_ceilf/_fmodf).
- *
- * Build/merge procedure (see also docs and repo memory):
- *   1. dcc -c mathf.c -o mathf.mac
- *   2. dccpeep mathf.mac mathf.peep.mac   (ma.sh peeps apps but NOT the runtime,
- *      so the merged blocks must be pre-optimized here)
- *   3. strip: lines starting with "extrn " (those runtime helpers are defined
- *      in DCCRTL.MAC and resolve locally), the "; dcc stage-1d" banner, the
- *      "cseg" line, and everything from "; string literals" to end.
- *   4. rename local labels L<n> -> MFL<n> (perl -pe 's/\bL(\d+)\b/MFL$1/g').
- *      This is REQUIRED: dcc names locals L1,L2,...; every app does too, and
- *      dccrtlstrip's whole-token fallback scan would otherwise match an app's
- *      L<n> against a merged block's L<n> label and keep the whole math closure
- *      (bloating RTLMIN.MAC until L80 runs out of memory) for non-math programs.
- *   5. splice the remaining public blocks into DCCRTL.MAC before "end start".
- *
- * Every routine is an ordinary (non-static, public) function so that
- * dccrtlstrip can treat each as its own keep/strip block and pull shared
- * helpers (expf, logf, atanf, ...) in transitively via their call references.
+ * HISTORICAL ONLY. This originally generated the math routines merged into
+ * DCCRTL.MAC (see git history for the build/merge procedure that used to
+ * apply). That block is now hand-maintained directly in DCCRTL.MAC, has
+ * diverged from this file, and must NOT be regenerated from here - doing
+ * so would silently discard hand-applied fixes (e.g. Inf/NaN/domain
+ * handling) that only exist in the assembly. Kept for reference/context,
+ * not as a build input.
  *
  * Constraints honoured: no double (32-bit float only), 16-bit int, 32-bit long.
  * Trig/inverse-trig polynomials are the verified approximations from trig.c.

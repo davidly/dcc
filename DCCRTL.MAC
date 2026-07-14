@@ -4290,6 +4290,55 @@ pf_f:
         ld      (pf_bufptr),hl
 pf_f_nowidth:
 
+        ; C99 7.19.6.1p6: a NaN or infinite value ignores the '0' flag
+        ; (always space-padded, never zero-padded) and prints as
+        ; "nan"/"-nan" or "inf"/"-inf" instead of running the normal
+        ; integer/fraction digit pipeline - precision is ignored too, since
+        ; that pipeline never runs. Reuses the already-tested __fnan/__finf
+        ; predicates rather than re-deriving the bit tests here.
+        ld      hl,(__pf32_l)
+        ld      de,(__pf32_h)
+        call    __fnan
+        ld      a,h
+        or      l
+        jr      nz,pf_f_shownan
+        ld      hl,(__pf32_l)
+        call    __finf
+        ld      a,h
+        or      l
+        jr      nz,pf_f_showinf
+        jr      pf_f_normal
+
+pf_f_shownan:
+        xor     a
+        ld      (pf_zero),a
+        ld      hl,(__pf32_h)
+        bit     7,h
+        jr      z,pf_f_nan_pos
+        ld      a,'-'
+        call    pf_emit_a
+pf_f_nan_pos:
+        ld      hl,pf_nan_text
+        call    pf_emstr
+        jp      pf_f_done
+
+pf_f_showinf:
+        xor     a
+        ld      (pf_zero),a
+        ld      hl,(__pf32_h)
+        bit     7,h
+        jr      z,pf_f_inf_pos
+        ld      a,'-'
+        call    pf_emit_a
+pf_f_inf_pos:
+        ld      hl,pf_inf_text
+        call    pf_emstr
+        jp      pf_f_done
+
+pf_nan_text:    db      'nan',0
+pf_inf_text:    db      'inf',0
+
+pf_f_normal:
         ld      hl,(__pf32_l)
         ld      (pf_fl),hl
         ld      hl,(__pf32_h)
@@ -5842,12 +5891,8 @@ atf_neg_net:
         push    de
         push    hl                      ; left = mant (numerator)
         ld      de,04120h
-        ld      hl,0
-        push    de
-        push    hl                      ; right = 10.0f (denominator)
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      hl,0                    ; right = 10.0f (divisor), live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         ld      (__atf_mant),hl
@@ -11498,11 +11543,9 @@ __fzro:
         or      e
         or      h
         or      l
-        jp      z,__fzr1
         ld      hl,0
-        ret
-__fzr1:
-        ld      hl,1
+        ret     nz
+        inc     l
         ret
 
         public  __fnan
@@ -11511,15 +11554,14 @@ __fnan:
         ld      a,d
         and     7fh
         cp      7fh
-        jp      nz,__fnn0
-        ld      a,e
-        and     80h
-        jp      z,__fnn0
+        jr      nz,__fnn0
+        bit     7,e
+        jr      z,__fnn0
         ld      a,e
         and     7fh
         or      h
         or      l
-        jp      z,__fnn0
+        jr      z,__fnn0
         ld      hl,1
         ret
 __fnn0:
@@ -11532,15 +11574,14 @@ __finf:
         ld      a,d
         and     7fh
         cp      7fh
-        jp      nz,__fif0
-        ld      a,e
-        and     80h
-        jp      z,__fif0
+        jr      nz,__fif0
+        bit     7,e
+        jr      z,__fif0
         ld      a,e
         and     7fh
         or      h
         or      l
-        jp      nz,__fif0
+        jr      nz,__fif0
         ld      hl,1
         ret
 __fif0:
@@ -11555,24 +11596,94 @@ __fabs:
         ld      d,a
         ret
 
-        public  __fchs
-__fchs:
-        ; input/output DE:HL raw float. toggle sign bit.
-        ld      a,d
-        xor     80h
-        ld      d,a
-        ret
-
         public  __fsgn
 __fsgn:
         ; input DE:HL raw float. return HL=1 if sign bit set, else 0.
+        ld      hl,0
         bit     7,d
-        jp      nz,__fsg1
+        ret     z
+        inc     l
+        ret
+
+        public  __ffin
+__ffin:
+        ; input DE:HL raw float. return HL=1 if finite (not +/-Inf, not NaN).
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      nz,__ffi1
+        bit     7,e
+        jr      z,__ffi1
         ld      hl,0
         ret
-__fsg1:
+__ffi1:
         ld      hl,1
         ret
+
+; ---- C99 <math.h> classification wrappers ------------------------------
+; Each pops the caller-pushed 4-byte float argument into DE:HL (the
+; register convention __fnan/__finf/__fsgn/__ffin expect), restores the
+; stack exactly as _fabsf does, and relays to the shared predicate. Each is
+; its own public block so dccrtlstrip links only the ones a program calls.
+
+        public  _isnan
+_isnan:
+        ; int isnan(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __fnan
+        ret
+
+        public  _isinf
+_isinf:
+        ; int isinf(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __finf
+        ret
+
+        public  _isfinite
+_isfinite:
+        ; int isfinite(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __ffin
+        ret
+
+        public  _signbit
+_signbit:
+        ; int signbit(float x)
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __fsgn
+        ret
+
+        public  _dcc_nan
+_dcc_nan:
+        ; A quiet-NaN bit pattern (7FC00000h), for math.h's NAN macro.
+        ; dcc's numeric-literal lexer has no syntax for a NaN token (unlike
+        ; INFINITY, which is a real 1e40f compile-time literal), so this is
+        ; a genuine extern object rather than a constant expression: usable
+        ; in ordinary expressions and local initializers, but not in a
+        ; static/global initializer.
+        dw      0
+        dw      32704
 
         public  __feq
 __feq:
@@ -12110,9 +12221,7 @@ FUFND:
         public  __fif
 __fif:
         bit     7,h
-        jp      nz,FIFNG
-        jp      __fuf
-FIFNG:
+        jp      z,__fuf
         ld      a,h
         cpl
         ld      h,a
@@ -12307,6 +12416,87 @@ FANOFL:
 FANOFL2:
         ; __faf/__fsf rejoin here: they already did their own equivalent
         ; bank switch above, so they jump straight past this one.
+
+        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
+        ; zero/align/add path below: its zero-shortcut treats "exponent and
+        ; mantissa both zero", which correctly excludes exponent 255, but
+        ; the align/add path that follows was never written to expect
+        ; exponent 255 either - left alone it would try to exponent-align
+        ; and mantissa-add/subtract Inf/NaN's bit pattern like an ordinary
+        ; large finite value, only accidentally landing on the right answer
+        ; when the other operand's exponent happens to be far enough away.
+        ; B's sign (D, alternate bank) already reflects __fsf's negation
+        ; when this is a subtraction, so "same sign" below means "same
+        ; sign after that flip" - exactly what inf-inf (via __fsub) needs.
+        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
+        ; cp 255) to test it (4T vs 7T; A is dead either way once the
+        ; flags are read) - neither operand's exponent is 255 on almost
+        ; every call, so this dispatch is written to cost as little as
+        ; possible on that overwhelmingly common path.
+        ld      a,b             ; A = AEXP
+        inc     a
+        jr      z,FA_ASPEC
+        exx
+        ld      a,b             ; A = BEXP
+        exx                     ; main bank active again; flags preserved
+        inc     a
+        jr      z,FA_BSPEC
+        jp      FANZ_ENTRY      ; neither operand special: ordinary path
+
+FA_ASPEC:
+        ; A's exponent is 255: nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        jp      nz,FA_NAN       ; A is NaN
+        ; A is Infinity: check B.
+        exx
+        ld      a,b             ; A = BEXP
+        cp      255
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FA_RETA      ; B finite (incl. 0): Inf+finite = that Inf
+        exx
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FA_NAN       ; B is NaN
+        ; both Infinity: same sign -> that Infinity, opposite -> NaN.
+        ld      a,d             ; A = ASGN
+        exx
+        cp      d               ; compare against BSGN (post-__fsf-flip)
+        exx
+        jp      nz,FA_NAN       ; Inf + (-Inf) = NaN
+        jp      FA_RETA
+
+FA_BSPEC:
+        ; A finite (any value, including 0), B's exponent is 255.
+        exx
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FA_NAN       ; B is NaN
+        jp      FA_RETB         ; B is Infinity: finite+Inf = that Inf
+
+FA_RETA:
+        call    FPKR
+        jp      FARET
+FA_RETB:
+        exx
+        call    FPKR
+        jp      FARET
+FA_NAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        jp      FARET
+
+FANZ_ENTRY:
         ; zero shortcuts: if A==0, result=B; if B==0, result=A. "Zero"
         ; means exponent and all three mantissa bytes are zero, matching
         ; the original memory-based check exactly (not just exponent==0).
@@ -12315,8 +12505,30 @@ FANOFL2:
         or      h
         or      l
         jp      nz,FANZ
-        ; A is zero: pack B (alternate bank) directly and return.
+        ; A is zero. If B is nonzero, it's unaffected by adding/
+        ; subtracting a zero and returns as-is (the original shortcut).
+        ; If B is ALSO zero, IEEE-754 6.3's zero-sum rule applies and
+        ; "return B as-is" is wrong whenever the signs differ (0 + -0
+        ; must give +0 in round-to-nearest, the only rounding mode this
+        ; runtime has - returning B here would give -0 instead): same
+        ; sign keeps that sign, opposite signs give +0.
         exx
+        ld      a,b
+        or      c
+        or      h
+        or      l
+        jp      nz,FA_PACKB     ; B nonzero: return B as-is (alt bank active)
+        ld      a,d             ; A = BSGN (alt bank active)
+        exx                     ; main bank active; A preserved
+        cp      d               ; compare against ASGN
+        jp      z,FA_PACKA      ; same sign: either zero works, return A
+        ld      hl,0            ; opposite signs: +0
+        ld      de,0
+        jp      FARET
+FA_PACKB:
+        call    FPKR
+        jp      FARET
+FA_PACKA:
         call    FPKR
         jp      FARET
 FANZ:
@@ -12414,7 +12626,24 @@ FOVERF:
         rr      l
         set     7,c
         inc     b
+        ; If that increment carried the exponent to 255, the true sum
+        ; genuinely exceeds the largest finite float (both operands
+        ; already had valid exponents <=254, and this is the ONLY renormalize
+        ; step that ever grows the exponent - subtraction can only shrink
+        ; or hold it) - correct IEEE result is a signed Infinity, not
+        ; whatever mantissa bits happen to remain after the shift (packing
+        ; those as-is would land on a NaN-shaped bit pattern instead).
+        ld      a,b
+        cp      255
+        jp      z,FA_OVERINF
         jp      FPACKR
+FA_OVERINF:
+        ld      a,d             ; A = sign (0x80 or 0x00)
+        or      7fh
+        ld      d,a             ; D = sign | exponent's top 7 bits (all 1)
+        ld      e,80h           ; E = exponent's low bit | mantissa top 7 (0)
+        ld      hl,0
+        jp      FARET
 
 FSUBTR:
         ; different signs: subtract, result sign = sign of the bigger
@@ -12551,7 +12780,14 @@ FPKR:
         ld      e,a             ; E = final byte2  [final]
         ret
 FPKRZ:
-        ld      d,0
+        ; IEEE-754 sign-of-zero: preserve D's sign bit instead of always
+        ; packing +0. Every caller (FA_RETA/FA_RETB, the "pack whichever
+        ; operand is zero" shortcuts, and FPACKR's normal-path tail) has
+        ; already set D to a real sign (0x80 or 0) by this point, so this
+        ; was always available - just discarded.
+        ld      a,d
+        and     80h
+        ld      d,a
         ld      e,0
         ld      h,0
         ld      l,0
@@ -12778,6 +13014,103 @@ __fmul:
         call    FUNB
 
 FMBODY:
+        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
+        ; zero/exponent path below: its zero-shortcut would otherwise treat
+        ; 0*Inf as plain 0 (it's actually invalid -> NaN), and the
+        ; exponent-overflow-to-Inf clamp further down only accidentally
+        ; produces the right answer for Inf*finite when the finite
+        ; operand's own exponent happens to be large enough to push the
+        ; combined exponent past 255 - not for every finite magnitude.
+        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
+        ; cp 255) to test it (4T vs 7T; A is dead either way once the
+        ; flags are read) - neither operand's exponent is 255 on almost
+        ; every call, so this dispatch is written to cost as little as
+        ; possible on that overwhelmingly common path.
+        ld      a,(AEXP)
+        inc     a
+        jr      z,FM_ASPEC
+        ld      a,(BEXP)
+        inc     a
+        jr      z,FM_BSPEC
+        jp      FM_ORDINARY
+
+FM_ASPEC:
+        ; A's exponent is 255: nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,(AM2)
+        and     7fh
+        ld      b,a
+        ld      a,(AM1)
+        or      b
+        ld      b,a
+        ld      a,(AM0)
+        or      b
+        jp      nz,FMNAN        ; A is NaN
+        ; A is Infinity: Inf*0 and Inf*NaN are NaN; Inf*finite(!=0) is a
+        ; signed Infinity, and so is Inf*Inf.
+        ld      a,(BEXP)
+        or      a
+        jp      z,FMNAN         ; B is zero: Inf*0 = NaN
+        cp      255
+        jp      nz,FM_SGNINF    ; B finite nonzero: signed Infinity
+        ld      a,(BM2)
+        and     7fh
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        ld      b,a
+        ld      a,(BM0)
+        or      b
+        jp      nz,FMNAN        ; B is NaN
+        jp      FM_SGNINF       ; B is Infinity too: Inf*Inf = signed Inf
+
+FM_BSPEC:
+        ; A finite (any value, including 0), B's exponent is 255.
+        ld      a,(BM2)
+        and     7fh
+        ld      b,a
+        ld      a,(BM1)
+        or      b
+        ld      b,a
+        ld      a,(BM0)
+        or      b
+        jp      nz,FMNAN        ; B is NaN
+        ; B is Infinity: 0*Inf = NaN; finite(!=0)*Inf = signed Infinity.
+        ld      a,(AEXP)
+        or      a
+        jp      z,FMNAN
+        jp      FM_SGNINF
+
+FM_SGNINF:
+        ld      a,(ASGN)
+        ld      b,a
+        ld      a,(BSGN)
+        xor     b
+        and     80h
+        ld      (ASGN),a
+        jp      FMINF
+
+FMNAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+FM_ORDINARY:
+        ; sign = ASGN xor BSGN, computed before the zero/subnormal
+        ; shortcut below (not after, as originally written) so every exit
+        ; through FMZERO - including a zero operand, not just exponent
+        ; underflow - can return a correctly signed zero via FMZERO's own
+        ; "ld a,(ASGN)" (matching FMINF's existing pattern).
+        ld      a,(ASGN)
+        ld      b,a
+        ld      a,(BSGN)
+        xor     b
+        and     80h
+        ld      (ASGN),a
+
         ; zero/subnormal shortcut: this phase treats exponent-zero values as 0.
         ld      a,(AEXP)
         or      a
@@ -12785,14 +13118,6 @@ FMBODY:
         ld      a,(BEXP)
         or      a
         jp      z,FMZERO
-
-        ; sign = ASGN xor BSGN
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        xor     b
-        and     80h
-        ld      (ASGN),a
 
         ; exponent = AEXP + BEXP - 127
         ld      a,(AEXP)
@@ -13095,8 +13420,13 @@ FMPAK:
         pop     ix
         ret
 FMZERO:
+        ; IEEE-754 sign-of-zero: (ASGN) holds the combined sign by the time
+        ; every caller reaches here, now that FM_ORDINARY computes it
+        ; before its zero shortcuts instead of after.
         ld      hl,0
-        ld      de,0
+        ld      a,(ASGN)
+        ld      d,a
+        ld      e,0
         ld      sp,ix
         pop     ix
         ret
@@ -13155,6 +13485,111 @@ __fmadd:
         call    FUNR
         exx
 
+        ; IEEE-754 Inf/NaN special cases for the a*b product, checked
+        ; before the ordinary zero/exponent path below: its zero-shortcut
+        ; would otherwise treat 0*Inf as plain 0 (invalid -> NaN), and the
+        ; exponent-overflow clamp further down only accidentally produces
+        ; the right answer for Inf*finite when the finite operand's own
+        ; exponent happens to be large enough to trip it - not for every
+        ; finite magnitude. Same reasoning as __fmul's equivalent fix,
+        ; adapted to this routine's register-resident (FUNR) unpack.
+        ;
+        ; Neither operand's exponent is 255 on almost every call in a hot
+        ; loop (matrix multiply and similar - the whole reason this
+        ; routine exists), so this dispatch is written to cost as little
+        ; as possible on that path: no sign precompute here (unlike an
+        ; earlier version of this fix) - D in both banks still holds each
+        ; operand's own untouched sign at every point below that actually
+        ; needs one (FQZERO, FQ_QINF), computed there instead, lazily, on
+        ; the rare paths that use it. jr instead of jp for the not-taken
+        ; case (7T vs 10T; M80 assembles jr fine here, both targets are
+        ; only a few instructions away). inc a instead of cp 255 (4T vs
+        ; 7T): the exponent value in A is dead either way once the flags
+        ; are read, so incrementing it and testing for the resulting
+        ; wraparound-to-zero is an equivalent, cheaper Z-flag test.
+        ld      a,b
+        inc     a
+        jr      z,FQ_ASPEC
+        exx
+        ld      a,b
+        exx
+        inc     a
+        jr      z,FQ_BSPEC
+        jp      FQ_ORDINARY
+
+FQ_ASPEC:
+        ; a's exponent is 255: nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        jp      nz,FQ_QNAN      ; a is NaN
+        ; a is Infinity: check b.
+        exx
+        ld      a,b             ; b's exponent
+        or      a
+        jp      z,FQ_QNAN       ; b is zero: Inf*0 = NaN
+        cp      255
+        jp      nz,FQ_QINF      ; b finite nonzero: signed Infinity
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FQ_QNAN      ; b is NaN
+        jp      FQ_QINF         ; b is Infinity too: Inf*Inf = signed Inf
+
+FQ_BSPEC:
+        ; a finite (any value, including 0), b's exponent is 255.
+        exx
+        ld      a,c
+        and     7fh
+        or      h
+        or      l
+        exx                     ; main bank active again; flags preserved
+        jp      nz,FQ_QNAN      ; b is NaN
+        ; b is Infinity: 0*Inf = NaN; finite(!=0)*Inf = signed Infinity.
+        ld      a,b             ; a's exponent (main bank active)
+        or      a
+        jp      z,FQ_QNAN
+        jp      FQ_QINF
+
+FQ_QINF:
+        ; sign = a's D xor b's D - correct regardless of which bank is
+        ; currently active (reads whichever is active, swaps, reads the
+        ; other, swaps back), since neither bank's D has been touched
+        ; since the FUNR unpacks above. Computed here rather than
+        ; upfront: this path is rare (an actual Inf operand), so paying
+        ; for it here costs nothing on the far hotter ordinary case.
+        ld      a,d
+        exx
+        xor     d
+        exx
+        and     80h
+        ld      (ASGN),a
+        ld      a,255
+        ld      (AEXP),a
+        ld      a,80h
+        ld      (AM2),a
+        xor     a
+        ld      (AM1),a
+        ld      (AM0),a
+        jp      FQBRIDGE
+
+FQ_QNAN:
+        xor     a
+        ld      (ASGN),a        ; canonical NaN: fixed positive sign
+        ld      a,255
+        ld      (AEXP),a
+        ld      a,0c0h          ; implicit bit + nonzero payload -> NaN
+        ld      (AM2),a
+        xor     a
+        ld      (AM1),a
+        ld      (AM0),a
+        jp      FQBRIDGE
+
+FQ_ORDINARY:
         ; zero shortcuts (register-resident: exponent|mantissa all zero)
         ld      a,b
         or      c
@@ -13543,12 +13978,24 @@ FQNOC:
         jp      FQBRIDGE
 
 FQZERO:
-        ; matches __fmul's own FMZERO exactly: always +0, sign dropped -
-        ; a pre-existing dcc quirk (not introduced here), preserved for
-        ; consistency with a separate __fmul+__fadd call pair.
+        ; IEEE-754 sign-of-zero: sign = a's D xor b's D, computed lazily
+        ; here rather than upfront on every call (this path only runs
+        ; when an operand is actually zero) - correct regardless of which
+        ; bank is active, same reasoning as FQ_QINF above. All three of
+        ; this label's callers reach it with the main bank active and
+        ; neither bank's D touched since the FUNR unpacks, so this is
+        ; safe (matches __fmul's own now-fixed FMZERO; previously this
+        ; unconditionally dropped the sign, "for consistency" with
+        ; FMZERO's old behavior - now it's consistent with FMZERO's fixed
+        ; behavior instead).
+        ld      a,d
+        exx
+        xor     d
+        exx
+        and     80h
+        ld      (ASGN),a
         xor     a
         ld      (AEXP),a
-        ld      (ASGN),a
         ld      (AM0),a
         ld      (AM1),a
         ld      (AM2),a
@@ -13593,6 +14040,47 @@ FQBRIDGE_R:
         jp      FANOFL
 
 
+        public  __fdf
+__fdf:
+        ; fastcall float a/b: DE:HL = b (live, the divisor - matches the
+        ; pattern at every internal call site this session's audit
+        ; found: the divisor is always freshly loaded into DE:HL
+        ; immediately before the call), a still on the stack (one push,
+        ; 4 bytes). Named __fdf, not __fdivf, for the same 6-char-
+        ; truncation reason as __faf/__fsf/__fmf (see __faf's comment).
+        ;
+        ; Unlike __fmf, this can NOT just call FUNB (on the live b)
+        ; immediately and FUNA (from the stack) second, even though
+        ; that's exactly __fmf's own order: the division loop below
+        ; FDBODY has an undocumented register-level dependency beyond
+        ; AEXP/BEXP/AM*/BM* in memory - whichever of FUNA/FUNB runs LAST
+        ; leaves its own B register holding the mantissa byte it just
+        ; wrote (BM2, if FUNB ran last - "B=BM2 survives from FUNB" per
+        ; the loop's own comment further down), and the loop reads B
+        ; directly rather than reloading from memory. __fdiv's own
+        ; prologue always calls FUNA then FUNB, satisfying this by
+        ; construction; multiply has no such dependency, so __fmf's
+        ; "b live first, a from stack second" order is fine there but
+        ; silently computes b/a instead of a/b here if copied verbatim.
+        ;
+        ; Fix: stash b in the shadow register bank (exx) while unpacking
+        ; a from the stack via FUNA, then exx back and unpack b via FUNB
+        ; last - preserving FUNB-runs-last with no extra stack traffic
+        ; (two exx instead of a push/pop pair, which would give up the
+        ; whole point of this being a fastcall in the first place).
+        exx                     ; b -> shadow bank, out of FUNA's way
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    FUNA            ; unpack a (numerator)
+        exx                     ; b <- back from shadow bank
+        call    FUNB            ; unpack b (denominator), LAST
+        jp      FDBODY
+
         public  __fdiv
 __fdiv:
         push    ix
@@ -13612,6 +14100,7 @@ __fdiv:
         ld      d,(ix+7)
         call    FUNB
 
+FDBODY:
         ; sign = ASGN xor BSGN
         ld      a,(ASGN)
         ld      c,a
@@ -13620,10 +14109,84 @@ __fdiv:
         and     80h
         ld      (ASGN),a
 
-        ; 0 / anything = 0.  This phase treats subnormals as zero.
+        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
+        ; zero/exponent path below: that path only distinguishes "zero"
+        ; (exponent 0) from "nonzero exponent" and clamps to Infinity on
+        ; overflow, so it cannot tell Inf/NaN (exponent 255) apart from an
+        ; ordinary large finite value without this check running first.
+        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
+        ; cp 255) to test it (4T vs 7T; A is dead either way once the
+        ; flags are read) - neither operand's exponent is 255 on almost
+        ; every call, so this dispatch is written to cost as little as
+        ; possible on that overwhelmingly common path.
+        ld      a,(AEXP)
+        inc     a
+        jr      z,FD_ASPEC
+        ld      a,(BEXP)
+        inc     a
+        jr      z,FD_BSPEC
+        jp      FD_ORDINARY
+
+FD_ASPEC:
+        ; A's exponent is 255: a nonzero mantissa payload (implicit bit
+        ; stripped) means NaN, all-zero means Infinity.
+        ld      a,(AM2)
+        and     7fh
+        ld      c,a
+        ld      a,(AM1)
+        or      c
+        ld      c,a
+        ld      a,(AM0)
+        or      c
+        jp      nz,FDNAN        ; A is NaN
+        ; A is Infinity: Inf/finite (incl. 0) = signed Inf; Inf/Inf and
+        ; Inf/NaN need B checked too.
+        ld      a,(BEXP)
+        cp      255
+        jp      nz,FDINF
+        ld      a,(BM2)
+        and     7fh
+        ld      c,a
+        ld      a,(BM1)
+        or      c
+        ld      c,a
+        ld      a,(BM0)
+        or      c
+        jp      nz,FDNAN        ; B is NaN
+        jp      FDNAN           ; Inf/Inf = NaN
+
+FD_BSPEC:
+        ; A finite (any value, including 0), B's exponent is 255.
+        ld      a,(BM2)
+        and     7fh
+        ld      c,a
+        ld      a,(BM1)
+        or      c
+        ld      c,a
+        ld      a,(BM0)
+        or      c
+        jp      nz,FDNAN        ; B is NaN
+        jp      FDZRO           ; B is Infinity: finite/Inf = signed zero (FDZRO preserves it)
+
+FDNAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+FD_ORDINARY:
+        ; 0 / 0 = NaN (invalid); 0 / nonzero = 0.  This phase treats
+        ; subnormals as zero for both operands.
         ld      a,(AEXP)
         or      a
-        jp      z,FDZRO
+        jp      nz,FD_ANZ
+        ld      a,(BEXP)
+        or      a
+        jp      z,FDNAN         ; 0/0 = NaN
+        jp      FDZRO           ; 0/nonzero = 0
+FD_ANZ:
 
         ; divide by zero => signed infinity
         ld      a,(BEXP)
@@ -13884,8 +14447,15 @@ FDPAK:
         pop     ix
         ret
 FDZRO:
+        ; IEEE-754 sign-of-zero: (ASGN) already holds the correct combined
+        ; sign by the time any caller reaches here (computed once, right
+        ; after the operands unpack, well before every jump into this
+        ; label - unlike __fmul's FMZERO, whose sign computation used to
+        ; run after its first two zero-shortcut jumps).
         ld      hl,0
-        ld      de,0
+        ld      a,(ASGN)
+        ld      d,a
+        ld      e,0
         ld      sp,ix
         pop     ix
         ret
@@ -13956,6 +14526,37 @@ _floorf:
         ld      hl,-8
         add     hl,sp
         ld      sp,hl
+
+        ; C99 7.12.9.2: if x is infinite or NaN, the result is x
+        ; unmodified. The (long)x round-trip below has no self-
+        ; correction for either: converting Inf/NaN to long is
+        ; undefined in C, and whatever finite substitute __ffl produces
+        ; silently loses the original value instead of preserving it.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMFID
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMFORD
+FMFID:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        ld      sp,ix
+        pop     ix
+        ret
+FMFORD:
 
         ; l = (long)x
         ld      l,(ix+4)
@@ -14040,6 +14641,34 @@ _ceilf:
         add     hl,sp
         ld      sp,hl
 
+        ; C99 7.12.9.1: if x is infinite or NaN, the result is x
+        ; unmodified - see _floorf's identical guard just above for why.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMCID
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMCORD
+FMCID:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        ld      sp,ix
+        pop     ix
+        ret
+FMCORD:
+
         ; l = (long)x
         ld      l,(ix+4)
         ld      h,(ix+5)
@@ -14117,6 +14746,56 @@ _fmodf:
         add     hl,sp
         ld      sp,hl
 
+        ; C99 7.12.10.1: x infinite, or y zero, is a domain error -> NaN
+        ; (also propagate an already-NaN operand); y infinite with x
+        ; finite is well-defined and returns x unchanged. None of this
+        ; was checked before the q=x/y computation below, which has no
+        ; self-correction: for x=Inf, (long)(Inf/y) truncates to some
+        ; finite iq (long can't represent infinity), so the pipeline
+        ; silently produced Inf back out of the final "x - prod"
+        ; subtraction instead of the required NaN; for y=Inf, x/Inf
+        ; correctly gives 0 (an earlier fix this session), but then
+        ; prod = 0*Inf correctly gives NaN too (0*Inf is invalid), which
+        ; propagated through "x - prod" and gave NaN instead of x.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMDNAN
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,FMDNAN
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      nz,FMDNAN       ; x is +/-Inf: domain error -> NaN
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMDNOTYINF
+        ld      l,(ix+4)        ; y is +/-Inf (x finite, not NaN):
+        ld      h,(ix+5)        ; x unchanged
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        jp      FMDRET
+FMDNOTYINF:
+
         ; if (y == 0.0f) return quiet NaN (0x7fc00000).
         ; Treat both +0 and -0 as zero.
         ld      a,(ix+11)
@@ -14134,6 +14813,11 @@ _fmodf:
         ld      hl,0
         ld      de,7fc0h
         jp      FMDRET
+FMDNAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        jp      FMDRET
 
 FMDNZ:
         ; q = x / y
@@ -14146,12 +14830,8 @@ FMDNZ:
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
-        ld      d,(ix+11)
-        push    de              ; right operand y
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      d,(ix+11)       ; right operand y, live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
 
@@ -14213,27 +14893,60 @@ _sqrtf:
         add     hl,sp
         ld      sp,hl
 
-        ; if (x <= 0.0f) return 0.0f;
+        ; C99 7.12.7.5 domain/special-value handling, checked before the
+        ; Newton's-method loop below (which assumes x is a positive
+        ; finite value and has no self-correction for anything else -
+        ; left alone, sqrtf(-1) silently returned 0 instead of NaN, and
+        ; sqrtf(+Inf) fed Inf/Inf into the iteration's own division and
+        ; landed on NaN instead of +Inf, taking 8 wasted iterations to
+        ; get the wrong answer). Uses the already-tested __fnan/__finf/
+        ; __fzro predicates directly (DE:HL in, no ix frame) rather than
+        ; the heavier push/call/pop __fge comparison this replaced.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,0
-        push    de
-        push    hl
-        call    __fge             ; generated convention for x <= 0.0f
-        pop     bc
-        pop     bc
-        pop     bc
-        pop     bc
+        call    __fnan
         ld      a,h
         or      l
-        jp      z,FMSPOS
+        jp      nz,FMSNAN       ; x is NaN: propagate
+
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,FMSNOTINF
+        ld      d,(ix+7)
+        bit     7,d
+        jp      nz,FMSNAN       ; x is -Inf: domain error -> NaN
+        jp      FMSID           ; x is +Inf: sqrt(+Inf) = +Inf, unchanged
+FMSNOTINF:
+
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fzro
+        ld      a,h
+        or      l
+        jp      nz,FMSID        ; x is +0.0 or -0.0: unchanged (keeps sign)
+
+        ld      d,(ix+7)
+        bit     7,d
+        jp      z,FMSPOS        ; x > 0 and finite: the ordinary case
+FMSNAN:
+        ld      d,7fh
+        ld      e,0c0h
         ld      hl,0
-        ld      de,0
+        jp      FMSRET
+FMSID:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
         jp      FMSRET
 
 FMSPOS:
@@ -14282,12 +14995,8 @@ FMSLP:
         ld      l,(ix-4)
         ld      h,(ix-3)
         ld      e,(ix-2)
-        ld      d,(ix-1)
-        push    de
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      d,(ix-1)        ; g (divisor), live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         call    __faf
@@ -14556,9 +15265,7 @@ FULL:   db      0
         public  __flf
 __flf:
         bit     7,d
-        jp      nz,FLFN
-        jp      __fulf
-FLFN:
+        jp      z,__fulf
         ld      a,l
         cpl
         ld      l,a
@@ -14920,9 +15627,15 @@ NXRET:
 NXLT:   db      0
 
 
-; ================= BEGIN generated math functions (from mathf.c, peephole-optimized) =================
+; ================= BEGIN math functions =================
 ; sinf cosf tanf asinf acosf atanf atan2f expf logf log10f powf
-; sinhf coshf tanhf frexpf ldexpf modff  -- regenerate: dcc -c mathf.c | dccpeep | rename L<n>->MFL<n>
+; sinhf coshf tanhf frexpf ldexpf modff
+;
+; Originally generated from mathf.c (dcc -c | dccpeep | rename L<n>->MFL<n>)
+; but now hand-maintained directly here, like the rest of DCCRTL.MAC -
+; mathf.c is no longer the source of truth and must not be used to
+; regenerate this block. The MFL<n>-style local labels are cosmetic
+; leftovers from that history, not a sign this is machine-generated.
 
 
 
@@ -14930,15 +15643,39 @@ NXLT:   db      0
 _expf:
         ; float expf(float x)
         ; IX-free; locals moved to static scratch (already non-reentrant).
+        ;
+        ; C99 7.12.6.19 special-value handling, checked before the two
+        ; range comparisons below. Those already happen to return the
+        ; right ANSWER for -Inf (correctly less than -88.0, so it falls
+        ; into the x<-88 underflow-to-0 case) and for +Inf (correctly
+        ; NOT less than 88.0, so it falls into the same branch as
+        ; ordinary overflow - just needed that branch's return value
+        ; upgraded from a finite 3.4e38f approximation to a real
+        ; +Infinity, below). NaN was the real gap: it compares false
+        ; against everything, so "x < 88.0" was false and it fell all
+        ; the way to the overflow branch, silently returning 3.4e38f
+        ; instead of propagating NaN.
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
         ld (__expf_x),hl
         ld (__expf_x+2),de
-
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
+
+        ld hl,(__expf_x)
+        ld de,(__expf_x+2)
+        call __fnan
+        ld a,h
+        or l
+        jp z,MFEXPNOTNAN
+        ld d,7fh
+        ld e,0c0h
+        ld hl,0
+        jp MFL1
+MFEXPNOTNAN:
+
         ld hl,(__expf_x)
         ld de,(__expf_x+2)
         push de
@@ -14955,8 +15692,9 @@ _expf:
         ld a,h
         or l
         jr z,MFL2 ; peep: jp_to_jr
-        ld hl,51614
-        ld de,32639
+        ld d,7fh                ; x >= 88.0 (including +Infinity): overflow
+        ld e,80h                ; -> +Infinity (was a finite 3.4e38f
+        ld hl,0                 ; approximation)
         jp MFL1
 MFL2:
         ld hl,(__expf_x)
@@ -15174,36 +15912,61 @@ _logf:
         ; float logf(float x)
         ; IX-free; locals moved to static scratch (already non-reentrant).
         ; __logf_e is passed to frexpf by address in place of a stack slot.
+        ;
+        ; C99 7.12.6.7 domain/special-value handling, checked before the
+        ; frexpf-based Taylor series below (which has no self-correction
+        ; for anything outside "positive finite x"): logf(x<0) used to
+        ; return a finite -3.4e38f approximation instead of NaN, logf(0)
+        ; returned that same finite approximation instead of a real
+        ; -Infinity (a pole error, not a domain error - x==0 is not
+        ; negative), and logf(+Inf) silently fell all the way through
+        ; frexpf and the series, landing on a plausible-looking but wrong
+        ; finite value (88.72...) instead of +Infinity.
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
         ld (__logf_x),hl
         ld (__logf_x+2),de
-
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
+
         ld hl,(__logf_x)
         ld de,(__logf_x+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __fge
-        pop bc
-        pop bc
-        pop bc
-        pop bc
+        call __fnan
         ld a,h
         or l
-        jr z,MFL9 ; peep: jp_to_jr
-        ld hl,51614
-        ld de,32639
-        ld a,d
-        xor 80h
-        ld d,a
+        jp nz,MFLOGNAN          ; x is NaN: propagate
+
+        ld hl,(__logf_x)
+        ld de,(__logf_x+2)
+        call __fzro
+        ld a,h
+        or l
+        jp nz,MFLOGNINF         ; x == +0.0 or -0.0: pole error -> -Infinity
+
+        ld a,(__logf_x+3)
+        bit 7,a
+        jp nz,MFLOGNAN          ; x < 0 (and not -0.0, ruled out above): NaN
+
+        ld hl,(__logf_x)
+        ld de,(__logf_x+2)
+        call __finf
+        ld a,h
+        or l
+        jp z,MFL9               ; x is positive finite: the ordinary case
+        ld hl,(__logf_x)        ; x == +Infinity: logf(+Inf) = +Infinity
+        ld de,(__logf_x+2)
+        jp MFL8
+MFLOGNAN:
+        ld d,7fh
+        ld e,0c0h
+        ld hl,0
+        jp MFL8
+MFLOGNINF:
+        ld d,0ffh
+        ld e,80h
+        ld hl,0
         jp MFL8
 MFL9:
         ld hl,__logf_e
@@ -15261,12 +16024,8 @@ MFL12:
         ld de,16256
         call __faf
         pop bc
-        pop bc
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        pop bc          ; m+1 (divisor), live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__logf_z),hl
@@ -15442,22 +16201,26 @@ _powf:
         ld de,16256
         jp MFL14
 MFL15:
+        ; if (x == 0.0f) ... - y != 0 is already established by the
+        ; check above, so only its sign matters here. C99 7.12.7.4: x==0
+        ; with y<0 is a pole error -> Infinity, not the 0.0f mathf.c's
+        ; original C source unconditionally returned regardless of y's
+        ; sign (correct only for y>0, silently wrong - a bare 0 instead
+        ; of a pole error - for y<0).
         ld hl,(__powf_x)
         ld de,(__powf_x+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
-        pop bc
-        pop bc
+        call __fzro
         ld a,h
         or l
-        jr z,MFL17 ; peep: jp_to_jr
+        jp z,MFL17              ; x != 0: ordinary path continues
+        ld a,(__powf_y+3)
+        bit 7,a
+        jp z,MFPOWZP            ; y > 0: return 0.0f, unchanged
+        ld d,7fh                ; y < 0: pole error -> +Infinity
+        ld e,80h
+        ld hl,0
+        jp MFL14
+MFPOWZP:
         ld hl,0
         ld de,0
         jp MFL14
@@ -15844,12 +16607,8 @@ tanh_calculate:
         push    de
         push    hl
         ld      hl,(__hyp_xlo)
-        ld      de,(__hyp_xhi)
-        push    de
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      de,(__hyp_xhi)  ; denominator, live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         ret
@@ -16557,12 +17316,8 @@ MFL63:
         push de
         push hl
         ld hl,(__tanf_den)
-        ld de,(__tanf_den+2)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        ld de,(__tanf_den+2)    ; denominator, live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__tanf_result),hl
@@ -16596,12 +17351,8 @@ MFL67:
         push de
         push hl
         ld hl,(__tanf_result)
-        ld de,(__tanf_result+2)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        ld de,(__tanf_result+2)        ; denominator, live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__tanf_result),hl
@@ -16702,12 +17453,8 @@ MFL71:
         push de
         push hl
         ld hl,(__atanf_x)
-        ld de,(__atanf_x+2)
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        ld de,(__atanf_x+2)     ; denominator, live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__atanf_x),hl
@@ -16753,12 +17500,8 @@ MFL72:
         ld de,16256
         call __faf
         pop bc
-        pop bc
-        push de
-        push hl
-        call __fdiv
-        pop bc
-        pop bc
+        pop bc          ; x+1 (divisor), live for __fdf
+        call __fdf
         pop bc
         pop bc
         ld (__atanf_x),hl
@@ -16894,6 +17637,93 @@ _atan2f:
         push    hl
         push    bc
 
+        ; C99 7.12.4.4 special-value table (Inf/NaN combinations), checked
+        ; before the existing x==0/ratio-based computation below. That
+        ; computation has no self-correction for infinite operands: y/x
+        ; with x infinite correctly gives 0 (an ordinary finite/Inf
+        ; division), but atan2(Inf,Inf) computes y/x = Inf/Inf = NaN (an
+        ; earlier fix this session, correctly invalid) and poisons the
+        ; whole result instead of the well-defined +/-pi/4 (or +/-3pi/4)
+        ; the standard requires.
+        ld      hl,(__atan2_ylo)
+        ld      de,(__atan2_yhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MATAN2NAN
+        ld      hl,(__atan2_xlo)
+        ld      de,(__atan2_xhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MATAN2NAN
+
+        ld      hl,(__atan2_xlo)
+        ld      de,(__atan2_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MATAN2XORD    ; x finite: check y-infinite next
+        ; x is +/-Inf.
+        ld      hl,(__atan2_ylo)
+        ld      de,(__atan2_yhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MATAN2XIYF    ; y finite, x infinite
+        ; both infinite: +/-pi/4 (x>0) or +/-3pi/4 (x<0), sign = sign(y).
+        ld      a,(__atan2_xhi+1)
+        bit     7,a
+        jp      nz,MATAN2_3Q
+        ld      hl,4059
+        ld      de,16201        ; pi/4
+        jp      MATAN2SGNY
+MATAN2_3Q:
+        ld      hl,52196
+        ld      de,16406        ; 3pi/4
+        jp      MATAN2SGNY
+
+MATAN2XIYF:
+        ; x is +/-Inf, y finite: +/-0 (x>0) or +/-pi (x<0), sign=sign(y).
+        ld      a,(__atan2_xhi+1)
+        bit     7,a
+        jp      nz,MATAN2_PI
+        ld      hl,0
+        ld      de,0
+        jp      MATAN2SGNY
+MATAN2_PI:
+        ld      hl,4059
+        ld      de,16457        ; pi
+        jp      MATAN2SGNY
+
+MATAN2SGNY:
+        ; apply sign(y) to the positive magnitude currently in DE:HL (D's
+        ; sign bit is always clear going into this label).
+        ld      a,(__atan2_yhi+1)
+        and     80h
+        or      d
+        ld      d,a
+        ret
+
+MATAN2NAN:
+        ld      d,7fh
+        ld      e,0c0h
+        ld      hl,0
+        ret
+
+MATAN2XORD:
+        ; x finite; check if y is infinite (+/-Inf, x finite -> +/-HALF_PI).
+        ld      hl,(__atan2_ylo)
+        ld      de,(__atan2_yhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MATAN2ORD
+        ld      hl,4059
+        ld      de,16329        ; half_pi
+        jp      MATAN2SGNY
+MATAN2ORD:
+
         ; if (x == 0.0f)
         ld      de,(__atan2_xhi)
         ld      hl,(__atan2_xlo)
@@ -16958,9 +17788,20 @@ atan2_check_positive_y:
         ret
 
 atan2_return_zero:
+        ; y == 0 (either sign) and x == 0 (either sign): C99's table
+        ; distinguishes all four sign combinations - x>=0 gives a zero
+        ; with y's sign, x<0 gives PI with y's sign (previously always a
+        ; bare +0.0f regardless of either sign).
+        ld      a,(__atan2_xhi+1)
+        bit     7,a
+        jp      nz,MATAN2_00N
         ld      hl,0
         ld      de,0
-        ret
+        jp      MATAN2SGNY
+MATAN2_00N:
+        ld      hl,4059
+        ld      de,16457        ; pi
+        jp      MATAN2SGNY
 
 atan2_nonzero_x:
         ; q = y / x
@@ -16969,12 +17810,8 @@ atan2_nonzero_x:
         push    de
         push    hl
         ld      de,(__atan2_xhi)
-        ld      hl,(__atan2_xlo)
-        push    de
-        push    hl
-        call    __fdiv
-        pop     bc
-        pop     bc
+        ld      hl,(__atan2_xlo)        ; denominator, live for __fdf
+        call    __fdf
         pop     bc
         pop     bc
         ld      (__atan2_qlo),hl
@@ -17139,8 +17976,14 @@ MFL89:
         ld a,h
         or l
         jr z,MFL90 ; peep: jp_to_jr
+        ; |x| > 1.0: domain error per C99 7.12.4.2 -> NaN (was a bare
+        ; 0.0f, silently wrong - confirmed |x|==1.0 exactly still takes
+        ; the ordinary path below and is already correct, so only the
+        ; return value on this branch needed to change, not the
+        ; threshold test itself).
+        ld d,7fh
+        ld e,0c0h
         ld hl,0
-        ld de,0
         jp MFL87
 MFL90:
         ld l,(ix+4)
@@ -17405,6 +18248,37 @@ _frexpf:
         push    hl
         push    bc
 
+        ; C99 7.12.6.4: if x is infinite or NaN, return x unmodified
+        ; (*exp is unspecified). The exponent extraction below has no
+        ; self-correction for either: it happily reads the raw
+        ; exponent-255 field, computes *eptr=129 from it, and forces
+        ; the returned value's exponent to 126 regardless - Inf's
+        ; all-zero mantissa comes back looking exactly like the
+        ; ordinary value 0.5 instead of staying Inf, and NaN's payload
+        ; bits get the same treatment instead of staying NaN.
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MFREXPID
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MFREXPORD
+MFREXPID:
+        ld      hl,(__frexp_eptr)
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        ret
+MFREXPORD:
+
         ; Treat either signed zero as zero, matching the former __feq call.
         ld      hl,(__frexp_xlo)
         ld      de,(__frexp_xhi)
@@ -17479,6 +18353,32 @@ _ldexpf:
         push    hl
         push    bc
 
+        ; ldexp(Inf, n) = Inf and ldexp(NaN, n) = NaN, x unmodified in
+        ; both cases (IEEE-754 semantics; not a case the C99 base text
+        ; calls out, but every real libm agrees). The exponent-adjust
+        ; below has no self-correction for either: it happily reads the
+        ; raw exponent-255 field, adds n, and treats the (near-certain)
+        ; overflow like any ordinary one - Inf/NaN's mantissa bits come
+        ; back as the finite 3.4e38f overflow substitute (see below)
+        ; instead of staying Inf/NaN.
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        call    __fnan
+        ld      a,h
+        or      l
+        jp      nz,MLDEXPID
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MLDEXPORD
+MLDEXPID:
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        ret
+MLDEXPORD:
+
         ; Treat either signed zero as zero.
         ld      hl,(__ldexp_xlo)
         ld      de,(__ldexp_xhi)
@@ -17517,9 +18417,13 @@ ldexp_nonzero:
         sbc     hl,de
         jr      c,ldexp_not_overflow
 
-        ; Preserve the former saturation constant and the input sign.
-        ld      hl,51614
-        ld      de,32639
+        ; Overflow: signed Infinity (was a finite 3.4e38f saturation
+        ; constant - upgraded to match the real-Infinity overflow
+        ; convention this session's expf fix already established, now
+        ; that real Infinity is cheaply available and isinf() can
+        ; detect it).
+        ld      hl,0
+        ld      de,7f80h
         ld      a,(__ldexp_xhi+1)
         and     80h
         jr      z,ldexp_done
@@ -17590,6 +18494,40 @@ _modff:
         ld      hl,(__modff_xlo)
         push    hl                      ; restore x low
         push    bc                      ; restore return address
+
+        ; C99 7.12.6.12: if x is infinite, *iptr = x and the return value
+        ; is a zero with the same sign as x - NaN needs no special case
+        ; (floorf(NaN) now correctly gives NaN for *iptr, from the fix
+        ; just above, and NaN-NaN correctly stays NaN for the return
+        ; value too), but Inf does: floorf(Inf)/ceilf(Inf) now correctly
+        ; give Inf for *iptr, but "x - ip" below would then compute
+        ; Inf-Inf, an invalid operation that correctly gives NaN (an
+        ; earlier fix this session) - not the required signed zero.
+        ld      hl,(__modff_xlo)
+        ld      de,(__modff_xhi)
+        call    __finf
+        ld      a,h
+        or      l
+        jp      z,MFMODFORD
+        ld      hl,(__modff_iptr)
+        ld      a,(__modff_xlo)
+        ld      (hl),a
+        inc     hl
+        ld      a,(__modff_xlo+1)
+        ld      (hl),a
+        inc     hl
+        ld      a,(__modff_xhi)
+        ld      (hl),a
+        inc     hl
+        ld      a,(__modff_xhi+1)
+        ld      (hl),a
+        ld      a,(__modff_xhi+1)
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      hl,0
+        ret
+MFMODFORD:
 
         ; Preserve the original test and operation order:
         ;     i = (x <= 0.0f) ? floorf(x) : ceilf(x);
