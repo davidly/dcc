@@ -695,8 +695,7 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                             (n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
                              n->op == TOK_XOREQ))) {
             if (n->op != '=') {
-                if (expr_result_dead &&
-                    (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
+                if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                      n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
                      n->op == TOK_XOREQ) &&
                     ast_is_plain_int_type(s->type) &&
@@ -733,7 +732,11 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                 return 1;
             if (n->b->kind == AST_IDENT) {
                 struct Sym *rs = find_sym(n->b->sval);
-                return sym_can_ix_direct(rs) || is_global_word_sym(rs);
+                return sym_can_ix_direct(rs) || is_global_word_sym(rs) ||
+                       (rs != NULL &&
+                        (rs->storage == SC_GLOBAL || rs->storage == SC_EXTERN) &&
+                        !rs->is_array && type_size(rs->type) == 1 &&
+                        ast_is_plain_int_type(rs->type));
             }
             if (ast_const_plain_int_binary_supported(n->b))
                 return 1;
