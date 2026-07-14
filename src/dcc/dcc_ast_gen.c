@@ -1330,6 +1330,12 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         return 1;
 
     case AST_INDEX:
+        if (ast_index_symbol_nd_elem_type(n, &member_type) &&
+            type_ptr_depth(member_type) > 0 && type_size(member_type) == 2) {
+            *out_type = member_type;
+            *out_no_deref = 0;
+            return 1;
+        }
         if (ast_index_array_row_ptr_type(n, &member_type)) {
             *out_type = member_type;
             *out_no_deref = 1;

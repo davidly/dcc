@@ -106,9 +106,14 @@ static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
     return find_field_def(sid, n->sval);
 }
 
+static int ast_index_root_and_count(const struct AstNode *n,
+                                    const struct AstNode **root);
+
 int ast_expr_type_for_sizeof(const struct AstNode *n)
 {
     struct Sym *s;
+    const struct AstNode *root;
+    int index_count;
     int lt;
     int rt;
     struct FieldDef *fd;
@@ -128,6 +133,15 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
             return TYPE_INT;
         return s->type;
     case AST_INDEX:
+        index_count = ast_index_root_and_count(n, &root);
+        if (root != NULL && root->kind == AST_IDENT) {
+            s = find_sym(root->sval);
+            if (s != NULL &&
+                ((s->is_array && s->dim_count == index_count) ||
+                 (!s->is_array && type_ptr_depth(s->type) > 0 &&
+                  s->dim_count + 1 == index_count)))
+                return s->is_array ? s->type : type_decay_ptr(s->type);
+        }
         lt = ast_expr_type_for_sizeof(n->a);
         if (n->a != NULL && n->a->kind == AST_IDENT) {
             s = find_sym(n->a->sval);
