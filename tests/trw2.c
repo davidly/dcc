@@ -44,10 +44,8 @@ int main( argc, argv ) int argc; char * argv[];
                 show_error( "unable to write to file" );
         }
 
-#if 0
         fdatasync( fd );
         fsync( fd );
-#endif
         close( fd );
     
         fd = open( TRW_FILE, O_RDONLY );
