@@ -4293,27 +4293,27 @@ pf_f_nowidth:
         ; C99 7.19.6.1p6: a NaN or infinite value ignores the '0' flag
         ; (always space-padded, never zero-padded) and prints as
         ; "nan"/"-nan" or "inf"/"-inf" instead of running the normal
-        ; integer/fraction digit pipeline - precision is ignored too, since
-        ; that pipeline never runs. Reuses the already-tested __fnan/__finf
-        ; predicates rather than re-deriving the bit tests here.
+        ; integer/fraction digit pipeline. Classify exponent-255 values once
+        ; here rather than calling both __fnan and __finf.
         ld      hl,(__pf32_l)
         ld      de,(__pf32_h)
-        call    __fnan
-        ld      a,h
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      nz,pf_f_normal
+        bit     7,e
+        jr      z,pf_f_normal
+        ld      a,e
+        and     7fh
+        or      h
         or      l
         jr      nz,pf_f_shownan
-        ld      hl,(__pf32_l)
-        call    __finf
-        ld      a,h
-        or      l
-        jr      nz,pf_f_showinf
-        jr      pf_f_normal
+        jr      pf_f_showinf
 
 pf_f_shownan:
         xor     a
         ld      (pf_zero),a
-        ld      hl,(__pf32_h)
-        bit     7,h
+        bit     7,d
         jr      z,pf_f_nan_pos
         ld      a,'-'
         call    pf_emit_a
@@ -4325,8 +4325,7 @@ pf_f_nan_pos:
 pf_f_showinf:
         xor     a
         ld      (pf_zero),a
-        ld      hl,(__pf32_h)
-        bit     7,h
+        bit     7,d
         jr      z,pf_f_inf_pos
         ld      a,'-'
         call    pf_emit_a
@@ -11635,8 +11634,7 @@ _isnan:
         push    de
         push    hl
         push    bc
-        call    __fnan
-        ret
+        jp      __fnan
 
         public  _isinf
 _isinf:
@@ -11647,8 +11645,7 @@ _isinf:
         push    de
         push    hl
         push    bc
-        call    __finf
-        ret
+        jp      __finf
 
         public  _isfinite
 _isfinite:
@@ -11659,8 +11656,7 @@ _isfinite:
         push    de
         push    hl
         push    bc
-        call    __ffin
-        ret
+        jp      __ffin
 
         public  _signbit
 _signbit:
@@ -11671,8 +11667,7 @@ _signbit:
         push    de
         push    hl
         push    bc
-        call    __fsgn
-        ret
+        jp      __fsgn
 
         public  _dcc_nan
 _dcc_nan:
@@ -11688,138 +11683,110 @@ _dcc_nan:
         public  __feq
 __feq:
         ; int __feq(float a, float b)
-        ; IEEE-aware equality for phase 1: NaN compares false, +0 == -0.
+        ; Compare raw bits first. Identical values are equal unless NaN;
+        ; differing values can only be equal when both are signed zero.
         push    ix
         ld      ix,0
         add     ix,sp
 
-        ; if a is NaN, false
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fnan
-        ld      a,h
-        or      l
-        jp      nz,__feq0
-
-        ; if b is NaN, false
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fnan
-        ld      a,h
-        or      l
-        jp      nz,__feq0
-
-        ; if a is zero, true only when b is also zero
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fzro
-        ld      a,h
-        or      l
-        jp      z,__feq_cmp
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fzro
-        ld      a,h
-        or      l
-        jp      nz,__feq1
-        jp      __feq0
-
-__feq_cmp:
-        ; raw bit compare for all non-zero, non-NaN values
         ld      a,(ix+4)
         cp      (ix+8)
-        jp      nz,__feq0
+        jr      nz,__feq_diff
         ld      a,(ix+5)
         cp      (ix+9)
-        jp      nz,__feq0
+        jr      nz,__feq_diff
         ld      a,(ix+6)
         cp      (ix+10)
-        jp      nz,__feq0
+        jr      nz,__feq_diff
         ld      a,(ix+7)
         cp      (ix+11)
-        jp      nz,__feq0
-__feq1:
+        jr      nz,__feq_diff
+
+        ; Raw-identical NaNs still compare unequal.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        ld      a,l
+        xor     1
+        ld      l,a
+        jp      __feq_ret
+
+__feq_diff:
+        ; Raw-different values compare equal only for +0 versus -0.
+        ld      a,(ix+7)
+        and     7fh
+        or      (ix+6)
+        or      (ix+5)
+        or      (ix+4)
+        jr      nz,__feq_false
+        ld      a,(ix+11)
+        and     7fh
+        or      (ix+10)
+        or      (ix+9)
+        or      (ix+8)
+        jr      nz,__feq_false
         ld      hl,1
-        ld      sp,ix
-        pop     ix
-        ret
-__feq0:
+        jr      __feq_ret
+
+__feq_false:
         ld      hl,0
+__feq_ret:
         ld      sp,ix
         pop     ix
         ret
 
         public  __fneq
 __fneq:
-        ; int __fneq(float a, float b) -- logical inverse of __feq.
+        ; int __fneq(float a, float b)
+        ; Stack-correct raw-first inverse of __feq. This must not call __feq:
+        ; doing so adds a return address and shifts __feq's stack arguments.
         push    ix
         ld      ix,0
         add     ix,sp
 
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fnan
-        ld      a,h
-        or      l
-        jp      nz,__fnq1
-
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fnan
-        ld      a,h
-        or      l
-        jp      nz,__fnq1
-
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fzro
-        ld      a,h
-        or      l
-        jp      z,__fnq_cmp
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fzro
-        ld      a,h
-        or      l
-        jp      nz,__fnq0
-        jp      __fnq1
-
-__fnq_cmp:
         ld      a,(ix+4)
         cp      (ix+8)
-        jp      nz,__fnq1
+        jr      nz,__fneq_diff
         ld      a,(ix+5)
         cp      (ix+9)
-        jp      nz,__fnq1
+        jr      nz,__fneq_diff
         ld      a,(ix+6)
         cp      (ix+10)
-        jp      nz,__fnq1
+        jr      nz,__fneq_diff
         ld      a,(ix+7)
         cp      (ix+11)
-        jp      nz,__fnq1
-__fnq0:
+        jr      nz,__fneq_diff
+
+        ; Raw-identical values are unequal only when they are NaN.
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    __fnan
+        jp      __fneq_ret
+
+__fneq_diff:
+        ; Raw-different values are equal only for +0 versus -0.
+        ld      a,(ix+7)
+        and     7fh
+        or      (ix+6)
+        or      (ix+5)
+        or      (ix+4)
+        jr      nz,__fneq_true
+        ld      a,(ix+11)
+        and     7fh
+        or      (ix+10)
+        or      (ix+9)
+        or      (ix+8)
+        jr      nz,__fneq_true
         ld      hl,0
-        ld      sp,ix
-        pop     ix
-        ret
-__fnq1:
+        jr      __fneq_ret
+
+__fneq_true:
         ld      hl,1
+__fneq_ret:
         ld      sp,ix
         pop     ix
         ret
@@ -13014,6 +12981,14 @@ __fmul:
         call    FUNB
 
 FMBODY:
+        ; Compute the result sign once for both ordinary and special paths.
+        ld      a,(ASGN)
+        ld      b,a
+        ld      a,(BSGN)
+        xor     b
+        and     80h
+        ld      (ASGN),a
+
         ; IEEE-754 Inf/NaN special cases, checked before the ordinary
         ; zero/exponent path below: its zero-shortcut would otherwise treat
         ; 0*Inf as plain 0 (it's actually invalid -> NaN), and the
@@ -13082,12 +13057,6 @@ FM_BSPEC:
         jp      FM_SGNINF
 
 FM_SGNINF:
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        xor     b
-        and     80h
-        ld      (ASGN),a
         jp      FMINF
 
 FMNAN:
@@ -13099,18 +13068,8 @@ FMNAN:
         ret
 
 FM_ORDINARY:
-        ; sign = ASGN xor BSGN, computed before the zero/subnormal
-        ; shortcut below (not after, as originally written) so every exit
-        ; through FMZERO - including a zero operand, not just exponent
-        ; underflow - can return a correctly signed zero via FMZERO's own
-        ; "ld a,(ASGN)" (matching FMINF's existing pattern).
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        xor     b
-        and     80h
-        ld      (ASGN),a
-
+        ; The result sign was computed before special-value dispatch so every
+        ; exit through FMZERO and FMINF uses the same correctly signed result.
         ; zero/subnormal shortcut: this phase treats exponent-zero values as 0.
         ld      a,(AEXP)
         or      a
@@ -14139,21 +14098,13 @@ FD_ASPEC:
         ld      a,(AM0)
         or      c
         jp      nz,FDNAN        ; A is NaN
-        ; A is Infinity: Inf/finite (incl. 0) = signed Inf; Inf/Inf and
-        ; Inf/NaN need B checked too.
+        ; A is Infinity: Inf/finite (including zero) is signed Inf.
+        ; If B also has exponent 255, both Inf/Inf and Inf/NaN are NaN, so
+        ; B's mantissa payload does not need to be inspected.
         ld      a,(BEXP)
         cp      255
         jp      nz,FDINF
-        ld      a,(BM2)
-        and     7fh
-        ld      c,a
-        ld      a,(BM1)
-        or      c
-        ld      c,a
-        ld      a,(BM0)
-        or      c
-        jp      nz,FDNAN        ; B is NaN
-        jp      FDNAN           ; Inf/Inf = NaN
+        jp      FDNAN
 
 FD_BSPEC:
         ; A finite (any value, including 0), B's exponent is 255.
