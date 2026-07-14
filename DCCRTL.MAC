@@ -4279,7 +4279,7 @@ pf_f:
         ; the common case is exactly as before.
         ld      a,(pf_width)
         or      a
-        jp      z,pf_f_nowidth
+        jr      z,pf_f_nowidth
         ld      hl,(pf_sink)
         ld      (pf_fwsink),hl
         ld      hl,(pf_bufptr)
@@ -4311,26 +4311,18 @@ pf_f_nowidth:
         jr      pf_f_showinf
 
 pf_f_shownan:
-        xor     a
-        ld      (pf_zero),a
-        bit     7,d
-        jr      z,pf_f_nan_pos
-        ld      a,'-'
-        call    pf_emit_a
-pf_f_nan_pos:
         ld      hl,pf_nan_text
-        call    pf_emstr
-        jp      pf_f_done
-
+        jr      pf_f_show_special
 pf_f_showinf:
+        ld      hl,pf_inf_text
+pf_f_show_special:
         xor     a
         ld      (pf_zero),a
         bit     7,d
-        jr      z,pf_f_inf_pos
+        jr      z,pf_f_special_pos
         ld      a,'-'
         call    pf_emit_a
-pf_f_inf_pos:
-        ld      hl,pf_inf_text
+pf_f_special_pos:
         call    pf_emstr
         jp      pf_f_done
 
@@ -4345,7 +4337,7 @@ pf_f_normal:
 
         ; Sign and absolute value.
         bit     7,h
-        jp      z,pf_f_absdone
+        jr      z,pf_f_absdone
         ld      a,'-'
         call    pf_emit_a
         ld      hl,(__pf32_h)
@@ -4353,8 +4345,6 @@ pf_f_normal:
         ld      (__pf32_h),hl
         ld      (pf_fh),hl
 pf_f_absdone:
-        ld      hl,(__pf32_l)
-        ld      (pf_fl),hl
 
         ; Printed precision: default is 6 decimal places unless an explicit
         ; precision was given (even %.0f, which must honor 0 exactly - the
@@ -4363,9 +4353,9 @@ pf_f_absdone:
         ; the default of 6 instead of printing no fractional digits).
         ld      a,(pf_haveprec)
         or      a
-        jp      z,pf_f_prec_default
+        jr      z,pf_f_prec_default
         ld      a,(pf_prec)
-        jp      pf_f_prec_known
+        jr      pf_f_prec_known
 pf_f_prec_default:
         ld      a,6
 pf_f_prec_known:
@@ -4373,7 +4363,7 @@ pf_f_prec_known:
 
         ; Round before splitting integer/fractional parts: add 0.5*10^-prec.
         cp      10
-        jp      nc,pf_f_rounded     ; no table entry for larger precisions
+        jr      nc,pf_f_rounded     ; no table entry for larger precisions
         add     a,a                 ; offset = precision * 4
         add     a,a
         ld      e,a
@@ -4435,7 +4425,7 @@ pf_f_rounded:
         ; precision (set above), so skip the '.' when it's 0.
         ld      a,(pf_fcnt)
         or      a
-        jp      z,pf_f_nodot
+        jr      z,pf_f_nodot
         ld      a,'.'
         call    pf_emit_a
 pf_f_nodot:
@@ -11590,9 +11580,7 @@ __fif0:
         public  __fabs
 __fabs:
         ; input/output DE:HL raw float. clear sign bit.
-        ld      a,d
-        and     7fh
-        ld      d,a
+        res     7,d
         ret
 
         public  __fsgn
@@ -11711,7 +11699,7 @@ __feq:
         ld      a,l
         xor     1
         ld      l,a
-        jp      __feq_ret
+        jr      __feq_ret
 
 __feq_diff:
         ; Raw-different values compare equal only for +0 versus -0.
@@ -11765,7 +11753,7 @@ __fneq:
         ld      e,(ix+6)
         ld      d,(ix+7)
         call    __fnan
-        jp      __fneq_ret
+        jr      __fneq_ret
 
 __fneq_diff:
         ; Raw-different values are equal only for +0 versus -0.
@@ -11819,39 +11807,39 @@ __flt:
         ld      a,(ix+11)
         or      b               ; both sign bits must be 0
         and     80h
-        jp      nz,__flt_slow
+        jr      nz,__flt_slow
         ld      a,(ix+7)
         and     7fh
         cp      7fh
-        jp      z,__flt_slow    ; a: D&7F==7F => might be NaN/Inf
+        jr      z,__flt_slow    ; a: D&7F==7F => might be NaN/Inf
         ld      a,(ix+11)
         and     7fh
         cp      7fh
-        jp      z,__flt_slow    ; b: D&7F==7F => might be NaN/Inf
+        jr      z,__flt_slow    ; b: D&7F==7F => might be NaN/Inf
         ld      a,(ix+7)
         cp      (ix+11)
-        jp      c,__flt1
-        jp      nz,__flt0
+        jr      c,__flt1
+        jr      nz,__flt0
         ld      a,(ix+6)
         cp      (ix+10)
-        jp      c,__flt1
-        jp      nz,__flt0
+        jr      c,__flt1
+        jr      nz,__flt0
         ld      a,(ix+5)
         cp      (ix+9)
-        jp      c,__flt1
-        jp      nz,__flt0
+        jr      c,__flt1
+        jr      nz,__flt0
         ld      a,(ix+4)
         cp      (ix+8)
-        jp      c,__flt1
-        jp      __flt0
+        jr      c,__flt1
+        jr      __flt0
 
 __flt_slow:
         ; cold path: classify once with the shared ordered comparator.
         ; __fcmps returns A = 0 unordered, 1 a<b, 2 a==b, 3 a>b.
         call    __fcmps
         cp      1
-        jp      z,__flt1        ; a < b
-        jp      __flt0
+        jr      z,__flt1        ; a < b
+        jr      __flt0
 __flt1:
         ld      hl,1
         ld      sp,ix
@@ -11876,38 +11864,38 @@ __fgt:
         ld      a,(ix+11)
         or      b
         and     80h
-        jp      nz,__fgt_slow
+        jr      nz,__fgt_slow
         ld      a,(ix+7)
         and     7fh
         cp      7fh
-        jp      z,__fgt_slow
+        jr      z,__fgt_slow
         ld      a,(ix+11)
         and     7fh
         cp      7fh
-        jp      z,__fgt_slow
+        jr      z,__fgt_slow
         ld      a,(ix+11)       ; compare b vs a (b < a means a > b)
         cp      (ix+7)
-        jp      c,__fgt1
-        jp      nz,__fgt0
+        jr      c,__fgt1
+        jr      nz,__fgt0
         ld      a,(ix+10)
         cp      (ix+6)
-        jp      c,__fgt1
-        jp      nz,__fgt0
+        jr      c,__fgt1
+        jr      nz,__fgt0
         ld      a,(ix+9)
         cp      (ix+5)
-        jp      c,__fgt1
-        jp      nz,__fgt0
+        jr      c,__fgt1
+        jr      nz,__fgt0
         ld      a,(ix+8)
         cp      (ix+4)
-        jp      c,__fgt1
-        jp      __fgt0
+        jr      c,__fgt1
+        jr      __fgt0
 
 __fgt_slow:
         ; cold path: a > b is true only for the greater classification.
         call    __fcmps
         cp      3
-        jp      z,__fgt1        ; a > b
-        jp      __fgt0
+        jr      z,__fgt1        ; a > b
+        jr      __fgt0
 __fgt1:
         ld      hl,1
         ld      sp,ix
@@ -11932,40 +11920,40 @@ __fle:
         ld      a,(ix+11)
         or      b
         and     80h
-        jp      nz,__fle_slow
+        jr      nz,__fle_slow
         ld      a,(ix+7)
         and     7fh
         cp      7fh
-        jp      z,__fle_slow
+        jr      z,__fle_slow
         ld      a,(ix+11)
         and     7fh
         cp      7fh
-        jp      z,__fle_slow
+        jr      z,__fle_slow
         ld      a,(ix+7)
         cp      (ix+11)
-        jp      c,__fle1
-        jp      nz,__fle0
+        jr      c,__fle1
+        jr      nz,__fle0
         ld      a,(ix+6)
         cp      (ix+10)
-        jp      c,__fle1
-        jp      nz,__fle0
+        jr      c,__fle1
+        jr      nz,__fle0
         ld      a,(ix+5)
         cp      (ix+9)
-        jp      c,__fle1
-        jp      nz,__fle0
+        jr      c,__fle1
+        jr      nz,__fle0
         ld      a,(ix+4)
         cp      (ix+8)
-        jp      c,__fle1
-        jp      nz,__fle0
-        jp      __fle1          ; equal => a <= b
+        jr      c,__fle1
+        jr      nz,__fle0
+        jr      __fle1          ; equal => a <= b
 
 __fle_slow:
         ; cold path: a <= b is true for less or equal, false if unordered.
         call    __fcmps
         or      a
-        jp      z,__fle0        ; unordered
+        jr      z,__fle0        ; unordered
         cp      3
-        jp      z,__fle0        ; greater
+        jr      z,__fle0        ; greater
         ; falls through: less or equal
 __fle1:
         ld      hl,1
@@ -11991,38 +11979,38 @@ __fge:
         ld      a,(ix+11)
         or      b
         and     80h
-        jp      nz,__fge_slow
+        jr      nz,__fge_slow
         ld      a,(ix+7)
         and     7fh
         cp      7fh
-        jp      z,__fge_slow
+        jr      z,__fge_slow
         ld      a,(ix+11)
         and     7fh
         cp      7fh
-        jp      z,__fge_slow
+        jr      z,__fge_slow
         ld      a,(ix+7)
         cp      (ix+11)
-        jp      c,__fge0        ; a_byte < b_byte => a < b
-        jp      nz,__fge1       ; a_byte > b_byte => a > b
+        jr      c,__fge0        ; a_byte < b_byte => a < b
+        jr      nz,__fge1       ; a_byte > b_byte => a > b
         ld      a,(ix+6)
         cp      (ix+10)
-        jp      c,__fge0
-        jp      nz,__fge1
+        jr      c,__fge0
+        jr      nz,__fge1
         ld      a,(ix+5)
         cp      (ix+9)
-        jp      c,__fge0
-        jp      nz,__fge1
+        jr      c,__fge0
+        jr      nz,__fge1
         ld      a,(ix+4)
         cp      (ix+8)
-        jp      c,__fge0
-        jp      __fge1          ; equal or a_byte >= b_byte => a >= b
+        jr      c,__fge0
+        jr      __fge1          ; equal or a_byte >= b_byte => a >= b
 
 __fge_slow:
         ; cold path: a >= b is true for greater or equal, false if unordered.
         call    __fcmps
         cp      2
-        jp      nc,__fge1       ; equal or greater
-        jp      __fge0          ; unordered or less
+        jr      nc,__fge1       ; equal or greater
+        jr      __fge0          ; unordered or less
 __fge1:
         ld      hl,1
         ld      sp,ix
@@ -12041,47 +12029,58 @@ __fge0:
 ; Assumes the caller's IX frame is live; preserves IX.
 ; ---------------------------------------------------------------------------
 __fcmps:
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fnan
-        ld      a,h
-        or      l
-        jp      nz,__fcun       ; a is NaN -> unordered
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fnan
-        ld      a,h
-        or      l
-        jp      nz,__fcun       ; b is NaN -> unordered
-        ; zero handling: +0 and -0 are equal to each other
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fzro
-        push    hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fzro          ; HL = (b == 0)
-        pop     de              ; DE = (a == 0)
-        ld      a,d
-        or      e
-        jp      z,__fcsg        ; a != 0 -> compare by sign/magnitude
-        ld      a,h
-        or      l
-        jp      nz,__fceq       ; a == 0 and b == 0 -> equal
+        ; Inline NaN and zero classification here.  This is the cold path for
+        ; ordered comparisons, but it is also used for every negative operand;
+        ; avoiding four helper calls materially reduces that cost.
+
+        ; a is NaN only when exponent == 255 and fraction != 0.
+        ld      a,(ix+7)
+        and     7fh
+        cp      7fh
+        jr      nz,__fcmps_bnan
+        bit     7,(ix+6)
+        jr      z,__fcmps_bnan
+        ld      a,(ix+6)
+        and     7fh
+        or      (ix+5)
+        or      (ix+4)
+        jp      nz,__fcun
+
+__fcmps_bnan:
+        ; b is NaN only when exponent == 255 and fraction != 0.
+        ld      a,(ix+11)
+        and     7fh
+        cp      7fh
+        jr      nz,__fcmps_zero
+        bit     7,(ix+10)
+        jr      z,__fcmps_zero
+        ld      a,(ix+10)
+        and     7fh
+        or      (ix+9)
+        or      (ix+8)
+        jp      nz,__fcun
+
+__fcmps_zero:
+        ; +0 and -0 compare equal.  If a is nonzero, proceed directly to the
+        ; sign/magnitude comparison.  If a is zero, only a zero b is equal.
+        ld      a,(ix+7)
+        and     7fh
+        or      (ix+6)
+        or      (ix+5)
+        or      (ix+4)
+        jr      nz,__fcsg
+        ld      a,(ix+11)
+        and     7fh
+        or      (ix+10)
+        or      (ix+9)
+        or      (ix+8)
+        jp      z,__fceq
         ; a == 0, b != 0: fall through to sign/magnitude compare
 __fcsg:
         ld      a,(ix+7)
         xor     (ix+11)
         and     80h
-        jp      z,__fcsm        ; same sign
+        jr      z,__fcsm        ; same sign
         ; different signs: the negative operand is the smaller
         ld      a,(ix+7)
         bit     7,a
@@ -12090,7 +12089,7 @@ __fcsg:
 __fcsm:
         ld      a,(ix+7)
         bit     7,a
-        jp      nz,__fcsn
+        jr      nz,__fcsn
         ; both positive: raw magnitude order matches numeric order
         jp      __frcmp         ; tail: A = 1/2/3 maps to less/equal/greater
 __fcsn:
@@ -12099,7 +12098,7 @@ __fcsn:
         cp      1
         jp      z,__fcgt        ; a_raw < b_raw -> a > b
         cp      3
-        jp      z,__fclt        ; a_raw > b_raw -> a < b
+        jr      z,__fclt        ; a_raw > b_raw -> a < b
         ret                     ; equal stays equal (A = 2)
 __fcun:
         xor     a               ; 0 = unordered
@@ -12119,20 +12118,20 @@ __fcgt:
 __frcmp:
         ld      a,(ix+7)
         cp      (ix+11)
-        jp      c,__frcl
-        jp      nz,__frcg
+        jr      c,__frcl
+        jr      nz,__frcg
         ld      a,(ix+6)
         cp      (ix+10)
-        jp      c,__frcl
-        jp      nz,__frcg
+        jr      c,__frcl
+        jr      nz,__frcg
         ld      a,(ix+5)
         cp      (ix+9)
-        jp      c,__frcl
-        jp      nz,__frcg
+        jr      c,__frcl
+        jr      nz,__frcg
         ld      a,(ix+4)
         cp      (ix+8)
-        jp      c,__frcl
-        jp      nz,__frcg
+        jr      c,__frcl
+        jr      nz,__frcg
         ld      a,2
         ret
 __frcl:
@@ -12156,29 +12155,27 @@ __frcg:
 __fuf:
         ld      a,h
         or      l
-        jp      nz,FUFNZ
+        jr      nz,FUFNZ
         ld      de,0
         ret
 FUFNZ:
         ld      b,142          ; exponent for bit 15
 FUFN1:
         bit     7,h
-        jp      nz,FUFND
+        jr      nz,FUFND
         add     hl,hl
         dec     b
-        jp      FUFN1
+        jr      FUFN1
 FUFND:
         ld      c,h            ; C = normalized high byte
         ld      a,l
         ld      h,a            ; HL low word = (norm_low << 8)
         ld      l,0
         ld      a,b
+        srl     a              ; A = exponent >> 1, carry = exponent bit 0
         ld      d,a
-        srl     d              ; D = exponent >> 1
-        and     1
-        rrca                    ; A = exponent low bit in bit 7
-        and     80h
-        ld      e,a
+        ld      e,0
+        rr      e              ; exponent bit 0 -> packed E bit 7
         ld      a,c
         and     7fh            ; mantissa bits 22..16
         or      e
@@ -12188,7 +12185,7 @@ FUFND:
         public  __fif
 __fif:
         bit     7,h
-        jp      z,__fuf
+        jr      z,__fuf
         ld      a,h
         cpl
         ld      h,a
@@ -12197,29 +12194,23 @@ __fif:
         ld      l,a
         inc     hl
         call    __fuf
-        ld      a,d
-        or      80h
-        ld      d,a
+        set     7,d
         ret
 
         public  __ffu
 __ffu:
         ; Get unbiased exponent from high word DE.  Sign is ignored here.
-        ld      a,d
-        and     7fh
-        add     a,a
-        ld      c,a
         ld      a,e
-        rlca
-        and     1
-        or      c              ; A = exponent
+        add     a,a             ; carry = exponent bit 0
+        ld      a,d
+        rla                     ; A = exponent; sign bit is shifted out
         cp      127
-        jp      nc,FFU_GE1
+        jr      nc,FFU_GE1
         ld      hl,0
         ret
 FFU_GE1:
         cp      143
-        jp      c,FFU_OK
+        jr      c,FFU_OK
         ld      hl,0ffffh      ; saturate overflow/inf/nan-ish cases
         ret
 FFU_OK:
@@ -12236,10 +12227,10 @@ FFU_OK:
         inc     b
 FFUS1:
         dec     b
-        jp      z,FFUDN
+        jr      z,FFUDN
         srl     h
         rr      l
-        jp      FFUS1
+        jr      FFUS1
 FFUDN:
         ret
 
@@ -12250,8 +12241,7 @@ __ffi:
         push    af
         res     7,d
         call    __ffu
-        pop     af
-        or      a
+        pop     af              ; restores Z from the original sign test
         ret     z
         ld      a,h
         cpl
@@ -12306,7 +12296,7 @@ FADDR0F:
         ; __fsf's sign flip, while b's bank is still the active one.
         ld      a,(FSUB)
         or      a
-        jp      z,FAF_NOFLIP
+        jr      z,FAF_NOFLIP
         ld      a,d
         xor     80h
         ld      d,a
@@ -12331,7 +12321,7 @@ __fadd:
         add     ix,sp
         xor     a
         ld      (FSUB),a
-        jp      FADDR0
+        jr      FADDR0
 
         public  __fsub
 __fsub:
@@ -12374,7 +12364,7 @@ FADDR0:
         ; __fsub: flip B's sign (alternate bank's D is active here)
         ld      a,(FSUB)
         or      a
-        jp      z,FANOFL
+        jr      z,FANOFL
         ld      a,d
         xor     80h             ; flip IEEE sign bit, not bit 0
         ld      d,a
@@ -12407,8 +12397,8 @@ FANOFL2:
         ld      a,b             ; A = BEXP
         exx                     ; main bank active again; flags preserved
         inc     a
-        jr      z,FA_BSPEC
-        jp      FANZ_ENTRY      ; neither operand special: ordinary path
+        jp      nz,FANZ_ENTRY   ; ordinary finite path: one branch, not jr+jp
+        jp      FA_BSPEC
 
 FA_ASPEC:
         ; A's exponent is 255: nonzero mantissa payload (implicit bit
@@ -12447,8 +12437,8 @@ FA_BSPEC:
         or      h
         or      l
         exx                     ; main bank active again; flags preserved
-        jp      nz,FA_NAN       ; B is NaN
-        jp      FA_RETB         ; B is Infinity: finite+Inf = that Inf
+        jr      nz,FA_NAN       ; B is NaN
+        jr      FA_RETB         ; B is Infinity: finite+Inf = that Inf
 
 FA_RETA:
         call    FPKR
@@ -12484,11 +12474,11 @@ FANZ_ENTRY:
         or      c
         or      h
         or      l
-        jp      nz,FA_PACKB     ; B nonzero: return B as-is (alt bank active)
+        jr      nz,FA_PACKB     ; B nonzero: return B as-is (alt bank active)
         ld      a,d             ; A = BSGN (alt bank active)
         exx                     ; main bank active; A preserved
         cp      d               ; compare against ASGN
-        jp      z,FA_PACKA      ; same sign: either zero works, return A
+        jr      z,FA_PACKA      ; same sign: either zero works, return A
         ld      hl,0            ; opposite signs: +0
         ld      de,0
         jp      FARET
@@ -12505,7 +12495,7 @@ FANZ:
         or      h
         or      l
         exx                     ; back to main; EXX doesn't touch flags
-        jp      nz,FALGNR
+        jr      nz,FALGNR
         ; B is zero: pack A (main bank, already active) and return.
         call    FPKR
         jp      FARET
@@ -12526,7 +12516,7 @@ FALGNR:
 
         ; BEXP > AEXP: shift A's mantissa right by A(=diff), then AEXP:=BEXP
         cp      24
-        jp      nc,FANEGL       ; diff >= 24: A's contribution negligible
+        jr      nc,FANEGL       ; diff >= 24: A's contribution negligible
         call    FSHR            ; shift main's C:H:L right by A bits
         ld      a,e
         ld      b,a             ; AEXP := BEXP
@@ -12547,11 +12537,11 @@ FAEXPB:
         ; nothing needs preserving/restoring the way BEXP did above.
         neg
         cp      24
-        jp      nc,FBNEGL       ; diff >= 24: B's contribution negligible
+        jr      nc,FBNEGL       ; diff >= 24: B's contribution negligible
         exx                     ; alternate active (operand B's mantissa)
         call    FSHR            ; shift alternate's C:H:L right by A bits
         exx                     ; main active again
-        jp      FSIGNC
+        jr      FSIGNC
 FBNEGL:
         ; B negligible relative to A: zero B's mantissa (alternate bank)
         exx
@@ -12584,9 +12574,8 @@ FSIGNC:
         exx                     ; main active; A (sum high byte) preserved
         pop     hl              ; main's HL = sum's low16
         ld      c,a             ; main's C = sum's high byte
-        jp      c,FOVERF        ; carry: mantissa overflowed bit 23
-        jp      FNORMR
-FOVERF:
+        jp      nc,FNORMR       ; no carry: normalize ordinary result
+
         ; overflow: shift right 1, restore the implicit bit, exponent++
         srl     c
         rr      h
@@ -12602,9 +12591,8 @@ FOVERF:
         ; those as-is would land on a NaN-shaped bit pattern instead).
         ld      a,b
         cp      255
-        jp      z,FA_OVERINF
-        jp      FPACKR
-FA_OVERINF:
+        jp      nz,FPACKR       ; finite overflow result: one branch, not jp+jp
+
         ld      a,d             ; A = sign (0x80 or 0x00)
         or      7fh
         ld      d,a             ; D = sign | exponent's top 7 bits (all 1)
@@ -12632,7 +12620,7 @@ FSUBTR:
         sbc     hl,de            ; HL = A_low16 - B_low16
         sbc     a,c              ; A = AM2-BM2-borrow -> diff high byte;
                                 ; final borrow-out in carry
-        jp      c,FBBIG          ; A_mantissa < B_mantissa
+        jr      c,FBBIG          ; A_mantissa < B_mantissa
         ; A_mantissa >= B_mantissa: diff (A-B) is correct, sign stays A's
         push    hl
         exx                      ; main active; A (diff high byte) preserved
@@ -12672,10 +12660,10 @@ FNORMR:
         ld      a,c
         or      h
         or      l
-        jp      z,FZERO
+        jr      z,FZERO
 FNORMR_LP:
         bit     7,c
-        jp      nz,FPACKR
+        jr      nz,FPACKR
         add     hl,hl           ; 16-bit shift left of the low 16 bits
         rl      c               ; carry out rolls into the high byte's bit 0
         djnz    FNORMR_LP       ; also decrements the exponent copy in B
@@ -12688,7 +12676,7 @@ FARET:
 FZERO:
         ld      hl,0
         ld      de,0
-        jp      FARET
+        jr      FARET
 
 ; Unpack whichever register bank is currently active (transparent to
 ; EXX): entry D=sign+exp_hi7 E=exp_lo1+mant_hi7 H=mant_mid L=mant_lo (the
@@ -12698,28 +12686,23 @@ FZERO:
 ; register-resident __fadd/__fsub above - unrelated to FUNA/FUNB, which
 ; __fmul/__fdiv still use to unpack into memory scratch.
 FUNR:
-        ld      a,d
-        and     7fh
-        add     a,a
-        ld      b,a
-        ld      a,e
-        rlca
-        and     1
-        or      b
-        ld      b,a             ; B = exponent (final)
+        ; Extract sign first, then use packed E bit 7 as carry into packed D,
+        ; directly forming exponent=(D.low7<<1)|E.bit7.
         ld      a,d
         and     80h
-        ld      d,a             ; D = sign (final) - safe, done with D's
-                                ; incoming value
+        ld      c,a             ; temporary sign
         ld      a,e
-        and     7fh
-        ld      c,a             ; C = mantissa high byte candidate
+        add     a,a             ; carry = packed exponent low bit
+        ld      a,d
+        rla
+        ld      b,a             ; B = exponent (final)
+        ld      d,c             ; D = sign (final)
+        res     7,e
+        ld      c,e             ; C = mantissa high byte candidate
         ld      a,b
         or      a
-        jp      z,FUNRZ
-        ld      a,c
-        or      80h
-        ld      c,a
+        jr      z,FUNRZ
+        set     7,c
 FUNRZ:
         ret
 
@@ -12730,20 +12713,15 @@ FUNRZ:
 FPKR:
         ld      a,b
         or      a
-        jp      z,FPKRZ
-        ld      e,a             ; E = exponent (preserved copy; E is
-                                ; spare/free by pack time)
-        srl     a
+        jr      z,FPKRZ
+        srl     a               ; carry = exponent bit 0
+        ld      e,0
+        rr      e               ; E = exponent bit 0 in bit 7
         or      d
         ld      d,a             ; D = sign | (exp>>1)  [final]
-        ld      a,e
-        and     1
-        rrca
-        and     80h
-        ld      b,a             ; B's exponent role is done now
         ld      a,c
         and     7fh
-        or      b
+        or      e
         ld      e,a             ; E = final byte2  [final]
         ret
 FPKRZ:
@@ -12768,14 +12746,22 @@ FPKRZ:
 ; FALGN_BSHR, just reusable across both operands via EXX instead of
 ; duplicated per-operand.
 FSHR:
-FSHR_BC:
+        ; A is 1..23.  Test the common 1..7-bit case first, then use direct
+        ; 8- or 16-bit register skips before the residual bit loop.
         cp      8
-        jp      c,FSHR_RE
+        jr      c,FSHR_RE
+        cp      16
+        jr      nc,FSHR_16
         sub     8
         ld      l,h
         ld      h,c
         ld      c,0
-        jp      FSHR_BC
+        jr      FSHR_RE
+FSHR_16:
+        sub     16
+        ld      l,c
+        ld      h,0
+        ld      c,0
 FSHR_RE:
         or      a
         ret     z
@@ -12789,176 +12775,153 @@ FSHR_BL:
 
 ; unpack DE:HL to A scratch
 FUNA:
+        ; Build contiguous ASGN:AEXP in DE and store the pair once.
         ld      a,d
         and     80h
-        ld      (ASGN),a
-        ld      a,d
-        and     7fh
+        ld      c,a             ; C = sign
+        ; Use packed E bit 7 as carry into packed D, directly forming
+        ; exponent=(D.low7<<1)|E.bit7.
+        ld      a,e
         add     a,a
-        ld      b,a
-        ld      a,e
-        rlca
-        and     1
-        or      b
-        ld      (AEXP),a
-        ld      c,a             ; cache the exponent - avoids reloading it
-                                ; from memory below, once A is clobbered
-        ld      a,e
-        and     7fh
-        ld      b,a
-        ld      a,c
+        ld      a,d
+        rla
+        ld      d,a             ; D = exponent
+        res     7,e
+        ld      b,e             ; B = mantissa high byte candidate
+        ld      a,d
         or      a
-        jp      z,FUNAZ
-        ld      a,b
-        or      80h
-        ld      b,a
+        jr      z,FUNAZ
+        set     7,b
 FUNAZ:
+        ld      e,c             ; E = sign; DE = exponent:sign
+        ld      (ASGN),de
         ld      a,b
         ld      (AM2),a
-        ld      a,h
-        ld      (AM1),a
-        ld      a,l
-        ld      (AM0),a
+        ld      (AM0),hl
         ret
 ; unpack DE:HL to B scratch
 FUNB:
+        ; Build contiguous BSGN:BEXP in DE and store the pair once.
         ld      a,d
         and     80h
-        ld      (BSGN),a
-        ld      a,d
-        and     7fh
+        ld      c,a             ; C = sign
+        ; Use packed E bit 7 as carry into packed D, directly forming
+        ; exponent=(D.low7<<1)|E.bit7.
+        ld      a,e
         add     a,a
-        ld      b,a
-        ld      a,e
-        rlca
-        and     1
-        or      b
-        ld      (BEXP),a
-        ld      c,a             ; cache the exponent - avoids reloading it
-                                ; from memory below, once A is clobbered
-        ld      a,e
-        and     7fh
-        ld      b,a
-        ld      a,c
+        ld      a,d
+        rla
+        ld      d,a             ; D = exponent
+        res     7,e
+        ld      b,e             ; B = mantissa high byte candidate
+        ld      a,d
         or      a
-        jp      z,FUNBZ
-        ld      a,b
-        or      80h
-        ld      b,a
+        jr      z,FUNBZ
+        set     7,b
 FUNBZ:
+        ld      e,c             ; E = sign; DE = exponent:sign
+        ld      (BSGN),de
         ld      a,b
         ld      (BM2),a
-        ld      a,h
-        ld      (BM1),a
-        ld      a,l
-        ld      (BM0),a
+        ld      (BM0),hl
         ret
 
 ; pack A scratch to DE:HL
 FPA:
-        ld      a,(AEXP)
+        ; ASGN and AEXP are contiguous.  Load both once: L=sign, H=exponent.
+        ld      hl,(ASGN)
+        ld      a,h
         or      a
-        jp      z,FPAZ
-        ld      b,a
+        jr      z,FPAZ
         srl     a
+        or      l
         ld      d,a
-        ld      a,(ASGN)
-        or      d
-        ld      d,a
-        ld      a,b
-        and     1
-        rrca
-        and     80h
-        ld      b,a
         ld      a,(AM2)
         and     7fh
-        or      b
+        bit     0,h             ; exponent low bit becomes packed E bit 7
+        jr      z,FPAE0
+        or      80h
+FPAE0:
         ld      e,a
-        ld      a,(AM1)
-        ld      h,a
-        ld      a,(AM0)
-        ld      l,a
+        ld      hl,(AM0)
         ret
 FPAZ:
         ld      hl,0
         ld      de,0
         ret
-FPB:
-        ld      a,(BEXP)
-        ld      (AEXP),a
-        ld      a,(BSGN)
-        ld      (ASGN),a
-        ld      a,(BM2)
-        ld      (AM2),a
-        ld      a,(BM1)
-        ld      (AM1),a
-        ld      a,(BM0)
-        ld      (AM0),a
-        jp      FPA
-
-FSRA:
-        ld      a,(AM2)
-        srl     a
-        ld      (AM2),a
-        ld      a,(AM1)
-        rr      a
-        ld      (AM1),a
-        ld      a,(AM0)
-        rr      a
-        ld      (AM0),a
-        ret
-FSRB:
-        ld      a,(BM2)
-        srl     a
-        ld      (BM2),a
-        ld      a,(BM1)
-        rr      a
-        ld      (BM1),a
-        ld      a,(BM0)
-        rr      a
-        ld      (BM0),a
-        ret
-FSLA:
-        ld      a,(AM0)
-        add     a,a
-        ld      (AM0),a
-        ld      a,(AM1)
-        rla
-        ld      (AM1),a
-        ld      a,(AM2)
-        rla
-        ld      (AM2),a
-        ret
-
 
         public  __fmf
 __fmf:
         ; fastcall float fmul(float a [caller pushes 4 bytes], float b [live DE:HL])
-        ; Entry: DE:HL = b, one operand live in registers instead of pushed -
-        ; skips the general entry's second push/pop pair (fmul is
-        ; commutative, so it doesn't matter which conceptual operand this
-        ; is; the caller passes whichever one it already has in DE:HL,
-        ; often the previous call's own result in a chained expression).
-        ; The other operand (a) still travels via a single stack push: both
-        ; 4-byte floats don't fit in the register file alongside what
-        ; FUNA/FUNB/FMBODY need. Same rationale as the other DCCRTL.MAC
-        ; fastcall pairs (__msf, __cmpf, __chf, __slf, __bdosf).
-        ;
-        ; Named __fmf, not __fmulf: M80 truncates public symbols to 6
-        ; significant characters, and __fmulf truncates to __FMUL, which
-        ; collides exactly with __fmul's own name (a real "%Mult. Def.
-        ; Global __FMUL" linker warning - the same mistake as __msf's
-        ; first attempt, __msetf; see project notes).
-        call    FUNB            ; unpack b (still live in DE:HL) before the
-                                 ; ix-frame setup below clobbers HL/DE
+        ; Register-resident multiply convention on entry to FMBODY:
+        ;   main:      BC = Alo, HL = Blo, E = combined result sign
+        ;   alternate: C' = A exponent, B' = B exponent,
+        ;              D' = A high mantissa byte, E' = B high mantissa byte
+        ; The ordinary multiply path no longer uses AM0/BM0 scratch.
+
+        ; Unpack live right operand.  HL already contains Blo.
+        ld      a,d
+        and     80h
+        ld      c,a             ; temporary B sign
+        ; Packed E bit 7 becomes carry into packed D, directly forming
+        ; exponent=(D.low7<<1)|E.bit7.
+        ld      a,e
+        add     a,a
+        ld      a,d
+        rla
+        ld      b,a             ; temporary B exponent
+        res     7,e
+        ld      d,e             ; temporary B high mantissa byte
+        ld      a,b
+        or      a
+        jr      z,FMFUB_Z
+        set     7,d
+FMFUB_Z:
+        ld      a,b
+        exx
+        ld      b,a             ; B' = B exponent
+        exx
+        ld      a,d
+        exx
+        ld      e,a             ; E' = B high mantissa byte
+        exx
+        ld      e,c             ; E = B sign
+
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    FUNA
+
+        ; Combine signs before C is reused for Alo.
+        ld      a,(ix+7)
+        and     80h
+        xor     e
+        ld      e,a
+
+        ; Unpack stacked left operand directly into BC plus C'/D'.
+        ld      c,(ix+4)
+        ld      b,(ix+5)        ; BC = Alo
+        ld      a,(ix+6)
+        ld      d,a             ; cache packed A high mantissa byte
+        add     a,a             ; carry = packed exponent low bit
+        ld      a,(ix+7)
+        rla
+        exx
+        ld      c,a             ; C' = A exponent
+        exx
+        ld      a,d             ; reuse cached packed high mantissa byte
+        and     7fh
+        ld      d,a             ; temporary A high mantissa byte
+        exx
+        ld      a,c             ; A = A exponent from C'
+        exx
+        or      a
+        jr      z,FMFUA_Z
+        set     7,d
+FMFUA_Z:
+        ld      a,d
+        exx
+        ld      d,a             ; D' = A high mantissa byte
+        exx
         jp      FMBODY
 
         public  __fmul
@@ -12967,383 +12930,356 @@ __fmul:
         ld      ix,0
         add     ix,sp
 
-        ; unpack left operand into A scratch
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    FUNA
-        ; unpack right operand into B scratch
+        ; General register-resident multiply unpack.  Exponents and high
+        ; mantissa bytes live in the alternate bank; low mantissas stay in
+        ; main BC/HL for zero tests and the partial-product schedule.
+
+        ; A exponent -> C'.  Cache the packed high-mantissa byte in D;
+        ; it supplies both exponent bit 0 and the mantissa high seven bits.
+        ld      a,(ix+10)
+        ld      d,a             ; cache packed A high mantissa byte
+        add     a,a             ; carry = packed exponent low bit
+        ld      a,(ix+11)
+        rla
+        exx
+        ld      c,a
+        exx
+
+        ; A high mantissa byte -> D'.
+        ld      a,d
+        and     7fh
+        ld      d,a
+        exx
+        ld      a,c
+        exx
+        or      a
+        jr      z,FMUA_Z
+        set     7,d
+FMUA_Z:
+        ld      a,d
+        exx
+        ld      d,a
+        exx
+
+        ; B exponent -> B'.  Reuse D to cache B's packed high-mantissa
+        ; byte after A's high byte has already been transferred to D'.
+        ld      a,(ix+6)
+        ld      d,a             ; cache packed B high mantissa byte
+        add     a,a             ; carry = packed exponent low bit
+        ld      a,(ix+7)
+        rla
+        exx
+        ld      b,a
+        exx
+
+        ; B high mantissa byte -> E'.
+        ld      a,d
+        and     7fh
+        ld      d,a
+        exx
+        ld      a,b
+        exx
+        or      a
+        jr      z,FMUB_Z
+        set     7,d
+FMUB_Z:
+        ld      a,d
+        exx
+        ld      e,a
+        exx
+
+        ; Low mantissas and combined sign remain in the main bank.
+        ld      c,(ix+8)
+        ld      b,(ix+9)        ; BC = Alo
         ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    FUNB
+        ld      h,(ix+5)        ; HL = Blo
+        ld      a,(ix+11)
+        xor     (ix+7)
+        and     80h
+        ld      e,a
 
 FMBODY:
-        ; Compute the result sign once for both ordinary and special paths.
-        ld      a,(ASGN)
-        ld      b,a
-        ld      a,(BSGN)
-        xor     b
-        and     80h
-        ld      (ASGN),a
+        ; Entry from both multiply front ends:
+        ;   main:      BC = Alo, HL = Blo, E = combined result sign
+        ;   alternate: C' = AEXP, B' = BEXP, D' = Ahi, E' = Bhi
+        ;
+        ; Classify both exponents and form their sum during one alternate-bank
+        ; window.  The overwhelmingly common ordinary finite path therefore
+        ; pays only one EXX pair before exponent range handling.
+        exx
+        ld      a,c
+        inc     a
+        jr      z,FM_ASPEC_ALT
+        ld      a,b
+        inc     a
+        jr      z,FM_BSPEC_ALT
+        ld      a,c
+        or      a
+        jr      z,FM_ZERO_ALT
+        ld      a,b
+        or      a
+        jr      z,FM_ZERO_ALT
+        ld      a,c
+        add     a,b
+        exx
+        jr      c,FMEXP_HI
+        sub     127
+        jp      c,FMZERO_E
+        jp      z,FMZERO_E
+        jr      FMEXP_OK
 
-        ; IEEE-754 Inf/NaN special cases, checked before the ordinary
-        ; zero/exponent path below: its zero-shortcut would otherwise treat
-        ; 0*Inf as plain 0 (it's actually invalid -> NaN), and the
-        ; exponent-overflow-to-Inf clamp further down only accidentally
-        ; produces the right answer for Inf*finite when the finite
-        ; operand's own exponent happens to be large enough to push the
-        ; combined exponent past 255 - not for every finite magnitude.
-        ; jr (not jp) for the not-taken case (7T vs 10T) and inc a (not
-        ; cp 255) to test it (4T vs 7T; A is dead either way once the
-        ; flags are read) - neither operand's exponent is 255 on almost
-        ; every call, so this dispatch is written to cost as little as
-        ; possible on that overwhelmingly common path.
-        ld      a,(AEXP)
-        inc     a
-        jr      z,FM_ASPEC
-        ld      a,(BEXP)
-        inc     a
-        jr      z,FM_BSPEC
-        jp      FM_ORDINARY
+FM_ASPEC_ALT:
+        exx
+        jr      FM_ASPEC
+
+FM_BSPEC_ALT:
+        exx
+        jp      FM_BSPEC
+
+FM_ZERO_ALT:
+        exx
+        jp      FMZERO_E
 
 FM_ASPEC:
-        ; A's exponent is 255: nonzero mantissa payload (implicit bit
-        ; stripped) means NaN, all-zero means Infinity.
-        ld      a,(AM2)
+        ; A exponent is 255: nonzero payload means NaN.
+        exx
+        ld      a,d
+        exx
         and     7fh
-        ld      b,a
-        ld      a,(AM1)
         or      b
-        ld      b,a
-        ld      a,(AM0)
-        or      b
-        jp      nz,FMNAN        ; A is NaN
-        ; A is Infinity: Inf*0 and Inf*NaN are NaN; Inf*finite(!=0) is a
-        ; signed Infinity, and so is Inf*Inf.
-        ld      a,(BEXP)
-        or      a
-        jp      z,FMNAN         ; B is zero: Inf*0 = NaN
-        cp      255
-        jp      nz,FM_SGNINF    ; B finite nonzero: signed Infinity
-        ld      a,(BM2)
-        and     7fh
-        ld      b,a
-        ld      a,(BM1)
-        or      b
-        ld      b,a
-        ld      a,(BM0)
-        or      b
-        jp      nz,FMNAN        ; B is NaN
-        jp      FM_SGNINF       ; B is Infinity too: Inf*Inf = signed Inf
-
-FM_BSPEC:
-        ; A finite (any value, including 0), B's exponent is 255.
-        ld      a,(BM2)
-        and     7fh
-        ld      b,a
-        ld      a,(BM1)
-        or      b
-        ld      b,a
-        ld      a,(BM0)
-        or      b
-        jp      nz,FMNAN        ; B is NaN
-        ; B is Infinity: 0*Inf = NaN; finite(!=0)*Inf = signed Infinity.
-        ld      a,(AEXP)
+        or      c
+        jp      nz,FMNAN
+        ; A is infinity.  B exponent zero means 0*Inf -> NaN.
+        exx
+        ld      a,b
+        exx
         or      a
         jp      z,FMNAN
-        jp      FM_SGNINF
+        cp      255
+        jp      nz,FMINF_E
+        ; B exponent is also 255: distinguish NaN from infinity.
+        exx
+        ld      a,e
+        exx
+        and     7fh
+        or      h
+        or      l
+        jp      nz,FMNAN
+        jp      FMINF_E
 
-FM_SGNINF:
-        jp      FMINF
+FM_BSPEC:
+        ; A finite, B exponent 255.
+        exx
+        ld      a,e
+        exx
+        and     7fh
+        or      h
+        or      l
+        jr      nz,FMNAN
+        exx
+        ld      a,c
+        exx
+        or      a
+        jr      z,FMNAN
+        jp      FMINF_E
 
 FMNAN:
-        ld      d,7fh
-        ld      e,0c0h
+        ld      de,7fc0h
         ld      hl,0
         ld      sp,ix
         pop     ix
         ret
 
-FM_ORDINARY:
-        ; The result sign was computed before special-value dispatch so every
-        ; exit through FMZERO and FMINF uses the same correctly signed result.
-        ; zero/subnormal shortcut: this phase treats exponent-zero values as 0.
-        ld      a,(AEXP)
-        or      a
-        jp      z,FMZERO
-        ld      a,(BEXP)
-        or      a
-        jp      z,FMZERO
+FMEXP_HI:
+        cp      126
+        jp      nc,FMINF_E
+        add     a,129
+        jr      FMEXP_OK
 
-        ; exponent = AEXP + BEXP - 127
-        ld      a,(AEXP)
-        ld      l,a
-        ld      h,0
-        ld      a,(BEXP)
-        ld      e,a
-        ld      d,0
-        add     hl,de
-        ld      de,127
-        or      a
-        sbc     hl,de
-        bit     7,h
-        jp      nz,FMZERO
+FMEXP_OK:
+        ; Spill only the final sign/exponent pair needed by late exits/packing.
+        ; Preserve HL, which still holds Blo for the zero dispatch and
+        ; partial-product schedule.  E already contains the result sign.
+        ld      d,a
+        ld      (ASGN),de
+
+        ; Zero-dispatch directly from register-resident low mantissas.
+        ; Favor the common nonzero/nonzero case with short untaken branches;
+        ; only the rare zero specializations pay the absolute jump.
+        ld      a,b
+        or      c
+        jr      nz,FM_ALO_NZ
+        jp      FMAZ
+FM_ALO_NZ:
         ld      a,h
-        or      a
-        jp      nz,FMINF
-        ld      a,l
-        cp      255
-        jp      nc,FMINF
-        ld      (AEXP),a
+        or      l
+        jr      nz,FM_BLO_NZ
+        jp      FMANBZ
+FM_BLO_NZ:
 
-        ; Mantissa multiply: compute only the top 32 bits of the 24x24-bit
-        ; product AM2:AM1:AM0 * BM2:BM1:BM0, landing directly in FP2:FP3:
-        ; FP4:FP5 - the only bytes the code below this point ever reads
-        ; (FP0/FP1, the low 16 bits of the true 48-bit product, were
-        ; computed by the old bit-serial loop but never read afterward).
-        ;
-        ; Replaces a 24-iteration bit-serial shift-and-add loop, where every
-        ; iteration touched a 6-byte accumulator and a 6-byte shifted
-        ; multiplicand entirely through memory, with up to four calls to
-        ; __m1u - the same fully register-resident, unrolled 16x16->32
-        ; unsigned multiply dcc's own long multiply already relies on (see
-        ; __m1u above) - plus a small, fixed number of accumulator updates.
-        ;
-        ; Splitting each 24-bit mantissa into an 8-bit high part and 16-bit
-        ; low part (A = Ahi*2^16 + Alo, B = Bhi*2^16 + Blo):
-        ;
-        ;   top32(A*B) = (Ahi*Bhi)<<16 + Ahi*Blo + Alo*Bhi + (Alo*Blo>>16)
-        ;
-        ; Every term is non-negative and A,B both lie in [2^23,2^24) (the
-        ; implicit leading mantissa bit is always set here), so A*B lies in
-        ; [2^46,2^48) and top32(A*B) is guaranteed to fit in 32 bits - a
-        ; plain carry-propagating accumulator can never overflow while
-        ; adding these four terms in any order.
-        ;
-        ; Small integer-valued floats (2.0, 3.0, ... up to 256.0) have Alo
-        ; and/or Blo entirely zero, since their whole significant mantissa
-        ; fits in the top byte - the old bit-serial loop special-cased this
-        ; (skipping guaranteed-zero low iterations) and this workload is
-        ; common enough (e.g. small-integer matrix benchmarks) that losing
-        ; the shortcut was a measurable regression. Recover it here: any
-        ; term whose Alo or Blo factor is entirely zero is mathematically
-        ; zero and its __m1u call is skipped outright, rather than replacing
-        ; the algorithm.
-        ld      a,(AM0)
-        ld      b,a
-        ld      a,(AM1)
-        or      b
-        jp      nz,FMANZ        ; Alo != 0
-        ld      a,(BM0)
-        ld      b,a
-        ld      a,(BM1)
-        or      b
-        jp      nz,FMAZBN       ; Alo == 0, Blo != 0
-        jp      FMABZ           ; Alo == 0, Blo == 0
+        ; General case: __m1u preserves BC, so only Blo needs saving.
+        ; The high 16 bits returned in DE seed FP2; the low 16 bits are discarded.
+        push    hl              ; Blo
+        call    __m1u
+        pop     hl              ; restore Blo; BC still contains Alo
+        ld      (FP2),de
+        ld      de,0
+        ld      (FP4),de
 
-FMANZ:
-        ld      a,(BM0)
-        ld      b,a
-        ld      a,(BM1)
-        or      b
-        jp      z,FMANBZ        ; Alo != 0, Blo == 0
-
-        ; Alo != 0, Blo != 0: general case, all four terms.
-        ;
-        ; term = Alo*Blo -> DE:HL (32-bit); only DE (the high 16 bits)
-        ; is needed - it seeds the accumulator directly.
-        ld      a,(AM0)
-        ld      c,a
-        ld      a,(AM1)
-        ld      b,a             ; BC = Alo
-        ld      a,(BM0)
-        ld      l,a
-        ld      a,(BM1)
-        ld      h,a             ; HL = Blo
-        call    __m1u           ; DE:HL = Alo*Blo
-        ld      a,e
-        ld      (FP2),a
+        ; Ahi*Blo.  Keep Alo saved through both the multiply and accumulation.
+        push    bc
+        ld      b,h
+        ld      c,l
+        exx
         ld      a,d
-        ld      (FP3),a
-        xor     a
-        ld      (FP4),a
-        ld      (FP5),a         ; accumulator = high16(Alo*Blo), high half 0
+        exx
+        call    __m8u
+        ld      c,e
+        ld      b,l
+        ld      e,h
+        ld      hl,(FP2)
+        add     hl,bc
+        ld      (FP2),hl
+        ld      d,0
+        ld      hl,(FP4)
+        adc     hl,de
+        ld      (FP4),hl
+        pop     bc              ; BC = Alo for the next partial product
 
-        ; term = Ahi*Blo (8x16) -> HL:E (24-bit); add in full at offset 0.
-        ld      a,(BM0)
-        ld      c,a
-        ld      a,(BM1)
-        ld      b,a             ; BC = Blo (multiplicand)
-        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
-        call    __m8u           ; HL:E = Ahi*Blo (byte0=E,byte1=L,byte2=H)
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
+        ; Alo*Bhi.  BC still contains Alo.
+        exx
+        ld      a,e
+        exx
+        call    __m8u
+        ld      c,e
+        ld      b,l
+        ld      e,h
+        ld      hl,(FP2)
+        add     hl,bc
+        ld      (FP2),hl
+        ld      d,0
+        ld      hl,(FP4)
+        adc     hl,de
+        ld      (FP4),hl
 
-        ; term = Alo*Bhi (16x8) -> HL:E (24-bit); add in full at offset 0.
-        ld      a,(AM0)
+        ; Ahi*Bhi.
+        exx
+        ld      a,e
+        exx
         ld      c,a
-        ld      a,(AM1)
-        ld      b,a             ; BC = Alo (multiplicand)
-        ld      a,(BM2)         ; A = Bhi (8-bit multiplier)
-        call    __m8u           ; HL:E = Alo*Bhi (byte0=E,byte1=L,byte2=H)
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
+        ld      b,0
+        exx
+        ld      a,d
+        exx
+        call    __m8u
+        ld      c,e
+        ld      b,l
+        ld      hl,(FP4)
+        add     hl,bc
+        ld      (FP4),hl
+        jp      FMDONE
 
-        ; term = Ahi*Bhi (8x8) -> HL:E; product fits in 16 bits (H = 0), so
-        ; the value is L:E - add its two bytes at offset 16.
-        ld      a,(BM2)
+FMAZ:
+        ; Alo == 0.  Distinguish Blo zero/nonzero without scratch memory.
+        ; Blo != 0 is the usual one-zero specialization, so let it fall
+        ; through instead of taking an unconditional jump.
+        ld      a,h
+        or      l
+        jp      z,FMABZ
+
+
+        ; Alo == 0, Blo != 0: Ahi*Blo plus Ahi*Bhi.
+        ld      b,h
+        ld      c,l
+        exx
+        ld      a,d
+        exx
+        call    __m8u
+        ld      c,e
+        ld      b,l
+        ld      (FP2),bc
+        ld      e,h
+        ld      d,0
+        ld      (FP4),de
+
+        exx
+        ld      a,e
+        exx
         ld      c,a
-        ld      b,0             ; BC = 0:Bhi (multiplicand)
-        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
-        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
-        ld      a,(FP4)
-        add     a,e
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,l
-        ld      (FP5),a
+        ld      b,0
+        exx
+        ld      a,d
+        exx
+        call    __m8u
+        ld      c,e
+        ld      b,l
+        ld      hl,(FP4)
+        add     hl,bc
+        ld      (FP4),hl
         jp      FMDONE
 
 FMANBZ:
-        ; Alo != 0, Blo == 0: only Ahi*Bhi and Alo*Bhi survive. Both terms
-        ; have an 8-bit operand (Bhi, Ahi respectively), so __m8u (half the
-        ; iterations of __m1u) applies to both, same as the general case.
-        xor     a
-        ld      (FP2),a
-        ld      (FP3),a
-        ld      (FP4),a
-        ld      (FP5),a
+        ; Alo != 0, Blo == 0: Alo*Bhi plus Ahi*Bhi.
+        exx
+        ld      a,e
+        exx
+        call    __m8u           ; BC = Alo
+        ld      c,e
+        ld      b,l
+        ld      (FP2),bc
+        ld      e,h
+        ld      d,0
+        ld      (FP4),de
 
-        ld      a,(AM0)
+        exx
+        ld      a,e
+        exx
         ld      c,a
-        ld      a,(AM1)
-        ld      b,a             ; BC = Alo (multiplicand)
-        ld      a,(BM2)         ; A = Bhi (8-bit multiplier)
-        call    __m8u           ; HL:E = Alo*Bhi (byte0=E,byte1=L,byte2=H)
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
-
-        ld      a,(BM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Bhi (multiplicand)
-        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
-        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
-        ld      a,(FP4)
-        add     a,e
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,l
-        ld      (FP5),a
-        jp      FMDONE
-
-FMAZBN:
-        ; Alo == 0, Blo != 0: only Ahi*Bhi and Ahi*Blo survive; both terms
-        ; have an 8-bit operand (Ahi both times), same __m8u treatment.
-        xor     a
-        ld      (FP2),a
-        ld      (FP3),a
-        ld      (FP4),a
-        ld      (FP5),a
-
-        ld      a,(BM0)
-        ld      c,a
-        ld      a,(BM1)
-        ld      b,a             ; BC = Blo (multiplicand)
-        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
-        call    __m8u           ; HL:E = Ahi*Blo (byte0=E,byte1=L,byte2=H)
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
-
-        ld      a,(BM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Bhi (multiplicand)
-        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
-        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
-        ld      a,(FP4)
-        add     a,e
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,l
-        ld      (FP5),a
+        ld      b,0
+        exx
+        ld      a,d
+        exx
+        call    __m8u
+        ld      c,e
+        ld      b,l
+        ld      hl,(FP4)
+        add     hl,bc
+        ld      (FP4),hl
         jp      FMDONE
 
 FMABZ:
-        ; Alo == 0, Blo == 0: only Ahi*Bhi survives, landing at offset 16
-        ; with nothing to add to (accumulator would otherwise be zero).
-        ; Both operands are 8-bit, so __m8u applies directly.
-        xor     a
-        ld      (FP2),a
-        ld      (FP3),a
-        ld      a,(BM2)
-        ld      c,a
-        ld      b,0             ; BC = 0:Bhi (multiplicand)
-        ld      a,(AM2)         ; A = Ahi (8-bit multiplier)
-        call    __m8u           ; HL:E = Ahi*Bhi (H = 0, value = L:E)
+        ; Both low words are zero: only Ahi*Bhi survives.
+        ld      de,0
+        ld      (FP2),de
+        exx
         ld      a,e
-        ld      (FP4),a
-        ld      a,l
-        ld      (FP5),a
+        exx
+        ld      c,a
+        ld      b,0
+        exx
+        ld      a,d
+        exx
+        call    __m8u
+        ld      h,l
+        ld      l,e
+        ld      (FP4),hl
 
 FMDONE:
-        ; If product bit 47 is set, mantissa = product >> 24 and exponent++.
-        ld      a,(FP5)
-        bit     7,a
-        jp      z,FMNOC
+        ; Load FP5:FP4 once.  Both normalization paths now leave the final
+        ; 23-bit fraction in C:HL and the unbiased packed exponent in A, then
+        ; share a register-only pack.  This avoids writing AM0..AM2 only to
+        ; have FPA immediately reload them, and removes FPA's call/return from
+        ; every ordinary finite multiply.
+        ld      de,(FP4)
+        bit     7,d
+        jr      z,FMNOC
         ld      a,(AEXP)
         inc     a
         cp      255
         jp      nc,FMINF
-        ld      (AEXP),a
-        ld      a,(FP3)
-        ld      (AM0),a
-        ld      a,(FP4)
-        ld      (AM1),a
-        ld      a,(FP5)
-        ld      (AM2),a
-        jp      FMPAK
+        ld      hl,(FP3)        ; low 16 fraction bits after product >> 24
+        ld      c,d             ; high fraction byte (implicit bit stripped below)
+        jr      FMPACKR
 
 FMNOC:
         ; Mantissa = (product >> 23) & 0FFFFFFh.  The 32-bit value in
@@ -13353,42 +13289,55 @@ FMNOC:
         ; and therefore
         ;   (V >> 7) & 0FFFFFFh  ==  bytes 1..3 of (V << 1).
         ; That collapses the old seven-step right shift (28 shift ops) into a
-        ; single 32-bit left shift plus three byte stores.
-        ld      a,(FP2)
-        ld      l,a
-        ld      a,(FP3)
-        ld      h,a
-        ld      a,(FP4)
-        ld      e,a
-        ld      a,(FP5)
-        ld      d,a             ; DEHL = FP5:FP4:FP3:FP2 (D = high byte)
+        ; single 32-bit left shift.  Keep the resulting fraction in C:HL for
+        ; the shared register-only pack below instead of spilling to AM0..AM2.
+        ld      hl,(FP2)        ; DE already holds FP5:FP4 from FMDONE
         sla     l
         rl      h
         rl      e
         rl      d               ; DEHL <<= 1 (discarded top bit was 0)
-        ld      a,h
-        ld      (AM0),a         ; AM0 = byte 1 of (V<<1) = low byte of V>>7
-        ld      a,e
-        ld      (AM1),a         ; AM1 = byte 2
-        ld      a,d
-        ld      (AM2),a         ; AM2 = byte 3
+        ld      l,h
+        ld      h,e
+        ld      c,d
+        ld      a,(AEXP)
 
-FMPAK:
-        call    FPA
-        ld      sp,ix
-        pop     ix
-        ret
-FMZERO:
-        ; IEEE-754 sign-of-zero: (ASGN) holds the combined sign by the time
-        ; every caller reaches here, now that FM_ORDINARY computes it
-        ; before its zero shortcuts instead of after.
-        ld      hl,0
-        ld      a,(ASGN)
+FMPACKR:
+        ; Pack sign/exponent plus C:HL fraction directly to DE:HL.  SRL leaves
+        ; exponent bit 0 in carry, which is exactly packed bit 7 of E.  Build
+        ; that byte directly instead of saving/reloading and masking exponent.
+        srl     a               ; A = exponent >> 1, carry = exponent bit 0
         ld      d,a
-        ld      e,0
+        ld      a,0             ; LD preserves carry
+        rra                     ; A = exponent bit 0 in bit 7
+        res     7,c             ; strip the implicit mantissa bit
+        or      c
+        ld      e,a
+        ld      a,(ASGN)
+        or      d
+        ld      d,a
         ld      sp,ix
         pop     ix
         ret
+FMZERO_E:
+        ; Early zero/underflow exit before ASGN:AEXP have been spilled.
+        ld      d,e
+        ld      hl,0
+        ld      e,l
+        ld      sp,ix
+        pop     ix
+        ret
+
+FMINF_E:
+        ; Early special/exponent-overflow exit while the result sign is in E.
+        ld      a,e
+        ld      hl,0
+        ld      de,7f80h
+        or      d
+        ld      d,a
+        ld      sp,ix
+        pop     ix
+        ret
+
 FMINF:
         ld      hl,0
         ld      de,7f80h
@@ -13512,99 +13461,86 @@ FQ_BSPEC:
         ld      a,b             ; a's exponent (main bank active)
         or      a
         jp      z,FQ_QNAN
-        jp      FQ_QINF
+        jr      FQ_QINF
 
 FQ_QINF:
         ; sign = a's D xor b's D - correct regardless of which bank is
         ; currently active (reads whichever is active, swaps, reads the
         ; other, swaps back), since neither bank's D has been touched
-        ; since the FUNR unpacks above. Computed here rather than
-        ; upfront: this path is rare (an actual Inf operand), so paying
-        ; for it here costs nothing on the far hotter ordinary case.
+        ; since the FUNR unpacks above.  Return the unpacked Infinity
+        ; directly in the established FQBRIDGE_R register convention.
         ld      a,d
         exx
         xor     d
         exx
         and     80h
-        ld      (ASGN),a
-        ld      a,255
-        ld      (AEXP),a
-        ld      a,80h
-        ld      (AM2),a
-        xor     a
-        ld      (AM1),a
-        ld      (AM0),a
-        jp      FQBRIDGE
+        ld      d,a             ; result sign
+        ld      b,255           ; exponent
+        ld      c,80h           ; implicit mantissa bit, zero payload
+        ld      hl,0
+        jp      FQBRIDGE_R
 
 FQ_QNAN:
-        xor     a
-        ld      (ASGN),a        ; canonical NaN: fixed positive sign
-        ld      a,255
-        ld      (AEXP),a
-        ld      a,0c0h          ; implicit bit + nonzero payload -> NaN
-        ld      (AM2),a
-        xor     a
-        ld      (AM1),a
-        ld      (AM0),a
-        jp      FQBRIDGE
+        ; Canonical positive quiet NaN, already in bridge registers.
+        ld      d,0
+        ld      b,255
+        ld      c,0c0h          ; implicit bit + nonzero payload
+        ld      hl,0
+        jp      FQBRIDGE_R
 
 FQ_ORDINARY:
-        ; zero shortcuts (register-resident: exponent|mantissa all zero)
+        ; zero shortcuts (register-resident: exponent|mantissa all zero).
+        ; Favor the overwhelmingly common nonzero/nonzero path with short
+        ; untaken relative branches; only an actual zero operand pays the
+        ; absolute jump to the distant handler.
         ld      a,b
         or      c
         or      h
         or      l
-        jp      z,FQZERO
+        jr      nz,FQ_A_NONZERO
+        jp      FQZERO
+FQ_A_NONZERO:
         exx
         ld      a,b
         or      c
         or      h
         or      l
         exx
-        jp      z,FQZERO
+        jr      nz,FQ_B_NONZERO
+        jp      FQZERO
+FQ_B_NONZERO:
 
-        ; sign = ASGN xor BSGN, stashed in the alternate bank's spare E'
-        ; for now - D(main) needs to stay free for the exponent's 16-bit
-        ; computation just below, so the final sign doesn't move into
-        ; D(main) until after that completes.
-        ld      a,d
+        ; Compute the product sign and fetch BEXP during one alternate-bank
+        ; window.  A and the flags survive EXX, so after returning to the
+        ; main bank A holds BEXP and B still holds AEXP.  This avoids a
+        ; second EXX round trip on every ordinary fused multiply-add.
+        ld      a,d             ; a sign
         exx
-        xor     d
+        xor     d               ; a sign xor b sign
         and     80h
-        ld      e,a
+        ld      e,a             ; stash result sign in spare E'
+        ld      a,b             ; BEXP
         exx
 
-        ; exponent = AEXP + BEXP - 127 (16-bit, matching __fmul's exact
-        ; overflow/underflow checks - see FMDONE's comment above for why
-        ; this needs to be 16-bit, not a plain 8-bit add). HL is needed as
-        ; scratch for this, but HL is also where Alo (AM1:AM0) lives from
-        ; the FUNR unpack - stash it on the stack first. If this hits an
-        ; early FQZERO/FQOVF exit, the push is simply discarded by the
-        ; shared epilogue's "ld sp,ix" reset; otherwise it's popped back
-        ; explicitly right after, once HL is free again.
-        push    hl
-        ld      a,b
-        ld      l,a
-        ld      h,0
-        exx
-        ld      a,b
-        exx
-        ld      e,a
-        ld      d,0
-        add     hl,de
-        ld      de,127
-        or      a
-        sbc     hl,de
-        bit     7,h
-        jp      nz,FQZERO
-        ld      a,h
-        or      a
-        jp      nz,FQOVF
-        ld      a,l
-        cp      255
+        ; exponent = AEXP + BEXP - 127.  Use the same exact 8-bit,
+        ; carry-aware range calculation already validated in __fmul.
+        ; This preserves HL=Alo throughout and avoids the old push/pop and
+        ; 16-bit scratch arithmetic.
+        add     a,b             ; BEXP + AEXP
+        jr      c,FQEXP_HI
+        sub     127
+        jr      c,FQEXP_ZERO
+        jr      nz,FQEXP_OK
+FQEXP_ZERO:
+        jp      FQZERO
+
+FQEXP_HI:
+        cp      126
         jp      nc,FQOVF
+        add     a,129
+
+FQEXP_OK:
         ld      b,a             ; B(main) = result exponent
-        pop     hl              ; restore Alo (main H:L)
 
         ; move the stashed sign into its final home now that D(main) is
         ; free again (the exponent computation is done with it)
@@ -13633,24 +13569,22 @@ FQ_ORDINARY:
         ; stack first and restore it right after the __m8u call, once the
         ; 0:Bhi value it's needed for as an argument has been consumed.
         push    bc              ; stash exponent(B) + Ahi(C)
-        ld      a,c             ; A = Ahi (main), the __m8u multiplier
-        exx                      ; alternate active; A preserved
-        ld      b,0
-        push    bc               ; stack: 0:Bhi
-        exx                       ; main active; A preserved
-        pop     bc                ; BC(main) = 0:Bhi (multiplicand)
-        call    __m8u             ; HL:E = Ahi*Bhi (H=0, value=L:E)
-        pop     bc                ; restore B(exponent):C(Ahi, no longer needed)
+        ld      a,c             ; A = Ahi, the __m8u multiplier
+        ld      c,(ix+6)        ; packed b mantissa-high byte
+        set     7,c             ; restore its implicit leading bit
+        ld      b,0             ; BC = 0:Bhi, the multiplicand
+        call    __m8u           ; HL:E = Ahi*Bhi (H=0, value=L:E)
+        pop     bc              ; restore B(exponent):C(Ahi, no longer needed)
 
         bit     7,l
-        jp      z,FQFNOC
+        jr      z,FQFNOC
         ld      c,l
         ld      h,e
         ld      l,0
         inc     b
         ld      a,b
-        cp      255
-        jp      nc,FQOVF2
+        inc     a               ; overflow only if exponent became 255
+        jr      z,FQOVF2
         jp      FQBRIDGE_R
 FQFNOC:
         ; no-carry case: same "(V>>7)&0xFFFFFF == bytes1..3 of (V<<1)"
@@ -13668,8 +13602,7 @@ FQOVF2:
         ; mantissa-carry pushed the exponent to overflow; sign is already
         ; final in D at this point (set before the fast path ran).
         ld      a,d
-        ld      (ASGN),a
-        jp      FQINF
+        jp      FQINF_A
 
 FQOVF:
         ; exponent overflow before the multiply even starts; the sign is
@@ -13678,324 +13611,246 @@ FQOVF:
         exx
         ld      a,e
         exx
-        ld      (ASGN),a
-        jp      FQINF
+        jp      FQINF_A
 
 FQFB1:
         ; Alo != 0: no fast path. Store both operands to the same memory
         ; locations __fmul's unchanged FUNA/FUNB would have, then jump
         ; into FQANZ, whose own header re-checks Blo to pick the full
         ; four-term computation or FQANBZ - exactly the check this path
-        ; still needs, so no work is duplicated.
-        ld      a,b
-        ld      (AEXP),a
-        ld      a,d
-        ld      (ASGN),a
+        ; still needs, so no work is duplicated.  ASGN:AEXP are contiguous,
+        ; so write them together without routing both bytes through A.
+        ld      e,d             ; E=sign
+        ld      d,b             ; D=exponent
+        ld      (ASGN),de
         ld      a,c
         ld      (AM2),a
-        ld      a,h
-        ld      (AM1),a
-        ld      a,l
-        ld      (AM0),a
+        ld      (AM0),hl
         exx
         ld      a,c
         ld      (BM2),a
-        ld      a,h
-        ld      (BM1),a
-        ld      a,l
-        ld      (BM0),a
+        ld      (BM0),hl
         exx
         jp      FQANZ
 
 FQFB2:
         ; Alo == 0, Blo != 0: store the same way, then jump directly into
         ; FQAZBN - its precondition is already exactly established here,
-        ; so no re-check is needed.
-        ld      a,b
-        ld      (AEXP),a
-        ld      a,d
-        ld      (ASGN),a
+        ; so no re-check is needed.  Store sign/exponent as one word.
+        ld      e,d             ; E=sign
+        ld      d,b             ; D=exponent
+        ld      (ASGN),de
         ld      a,c
         ld      (AM2),a
-        ld      a,h
-        ld      (AM1),a
-        ld      a,l
-        ld      (AM0),a
+        ld      (AM0),hl
         exx
         ld      a,c
         ld      (BM2),a
-        ld      a,h
-        ld      (BM1),a
-        ld      a,l
-        ld      (BM0),a
+        ld      (BM0),hl
         exx
         jp      FQAZBN
 
 FQANZ:
-        ld      a,(BM0)
-        ld      b,a
-        ld      a,(BM1)
-        or      b
+        ld      bc,(BM0)
+        ld      a,b
+        or      c
         jp      z,FQANBZ
 
-        ld      a,(AM0)
-        ld      c,a
-        ld      a,(AM1)
-        ld      b,a
-        ld      a,(BM0)
-        ld      l,a
-        ld      a,(BM1)
-        ld      h,a
+        ; BC already contains Blo from the zero test above.  Move it to HL
+        ; directly instead of rereading the same word from memory.
+        ld      h,b
+        ld      l,c
+        ld      bc,(AM0)
         call    __m1u
-        ld      a,e
-        ld      (FP2),a
-        ld      a,d
-        ld      (FP3),a
-        xor     a
-        ld      (FP4),a
-        ld      (FP5),a
+        ld      (FP2),de
+        ld      de,0
+        ld      (FP4),de
 
-        ld      a,(BM0)
-        ld      c,a
-        ld      a,(BM1)
-        ld      b,a
+        ld      bc,(BM0)
         ld      a,(AM2)
         call    __m8u
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      e,h
+        ld      hl,(FP2)
+        add     hl,bc
+        ld      (FP2),hl
+        ld      d,0
+        ld      hl,(FP4)
+        adc     hl,de
+        ld      (FP4),hl
 
-        ld      a,(AM0)
-        ld      c,a
-        ld      a,(AM1)
-        ld      b,a
+        ld      bc,(AM0)
         ld      a,(BM2)
         call    __m8u
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      e,h
+        ld      hl,(FP2)
+        add     hl,bc
+        ld      (FP2),hl
+        ld      d,0
+        ld      hl,(FP4)
+        adc     hl,de
+        ld      (FP4),hl
 
         ld      a,(BM2)
         ld      c,a
         ld      b,0
         ld      a,(AM2)
         call    __m8u
-        ld      a,(FP4)
-        add     a,e
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,l
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      hl,(FP4)
+        add     hl,bc
+        ld      (FP4),hl
         jp      FQDONE
 
 FQANBZ:
-        xor     a
-        ld      (FP2),a
-        ld      (FP3),a
-        ld      (FP4),a
-        ld      (FP5),a
-
-        ld      a,(AM0)
-        ld      c,a
-        ld      a,(AM1)
-        ld      b,a
+        ld      bc,(AM0)
         ld      a,(BM2)
         call    __m8u
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      (FP2),bc
+        ld      e,h
+        ld      d,0
+        ld      (FP4),de
 
         ld      a,(BM2)
         ld      c,a
         ld      b,0
         ld      a,(AM2)
         call    __m8u
-        ld      a,(FP4)
-        add     a,e
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,l
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      hl,(FP4)
+        add     hl,bc
+        ld      (FP4),hl
         jp      FQDONE
 
 FQAZBN:
-        xor     a
-        ld      (FP2),a
-        ld      (FP3),a
-        ld      (FP4),a
-        ld      (FP5),a
-
-        ld      a,(BM0)
-        ld      c,a
-        ld      a,(BM1)
-        ld      b,a
+        ld      bc,(BM0)
         ld      a,(AM2)
         call    __m8u
-        ld      a,(FP2)
-        add     a,e
-        ld      (FP2),a
-        ld      a,(FP3)
-        adc     a,l
-        ld      (FP3),a
-        ld      a,(FP4)
-        adc     a,h
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,0
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      (FP2),bc
+        ld      e,h
+        ld      d,0
+        ld      (FP4),de
 
         ld      a,(BM2)
         ld      c,a
         ld      b,0
         ld      a,(AM2)
         call    __m8u
-        ld      a,(FP4)
-        add     a,e
-        ld      (FP4),a
-        ld      a,(FP5)
-        adc     a,l
-        ld      (FP5),a
+        ld      c,e
+        ld      b,l
+        ld      hl,(FP4)
+        add     hl,bc
+        ld      (FP4),hl
         jp      FQDONE
 
-FQABZ:
-        xor     a
-        ld      (FP2),a
-        ld      (FP3),a
+
+        ld      de,0
+        ld      (FP2),de
         ld      a,(BM2)
         ld      c,a
         ld      b,0
         ld      a,(AM2)
         call    __m8u
-        ld      a,e
-        ld      (FP4),a
-        ld      a,l
-        ld      (FP5),a
+        ld      h,l
+        ld      l,e
+        ld      (FP4),hl
 
 FQDONE:
-        ld      a,(FP5)
-        bit     7,a
-        jp      z,FQNOC
-        ld      a,(AEXP)
-        inc     a
-        cp      255
-        jp      nc,FQINF
-        ld      (AEXP),a
-        ld      a,(FP3)
-        ld      (AM0),a
-        ld      a,(FP4)
-        ld      (AM1),a
-        ld      a,(FP5)
-        ld      (AM2),a
-        jp      FQBRIDGE
+        ; Load FP5:FP4 once and reuse it in both normalization paths, matching
+        ; the already-validated __fmul final-product handling above.  Load the
+        ; contiguous sign/exponent pair once as well: C=sign, B=exponent.
+        ; Preserve the sign in A before C is reused for the mantissa high byte.
+        ld      de,(FP4)
+        ld      bc,(ASGN)
+        ld      a,c
+        bit     7,d
+        jr      z,FQNOC
+        inc     b
+        ld      c,d             ; C=mantissa high byte
+        ld      d,a             ; D=result sign
+        ld      a,b
+        inc     a               ; overflow only if exponent became 255
+        jr      z,FQINF
+        ld      hl,(FP3)        ; L=FP3, H=FP4
+        jp      FQBRIDGE_R
 
 FQNOC:
-        ld      a,(FP2)
-        ld      l,a
-        ld      a,(FP3)
-        ld      h,a
-        ld      a,(FP4)
-        ld      e,a
-        ld      a,(FP5)
-        ld      d,a
+        ld      hl,(FP2)        ; DE already holds FP5:FP4 from FQDONE
         sla     l
         rl      h
         rl      e
         rl      d
-        ld      a,h
-        ld      (AM0),a
-        ld      a,e
-        ld      (AM1),a
-        ld      a,d
-        ld      (AM2),a
-        jp      FQBRIDGE
+        ld      c,d             ; C=mantissa high byte
+        ld      d,a             ; D=result sign
+        ld      l,h             ; L=mantissa low byte
+        ld      h,e             ; H=mantissa middle byte
+        jp      FQBRIDGE_R
 
 FQZERO:
         ; IEEE-754 sign-of-zero: sign = a's D xor b's D, computed lazily
-        ; here rather than upfront on every call (this path only runs
-        ; when an operand is actually zero) - correct regardless of which
-        ; bank is active, same reasoning as FQ_QINF above. All three of
-        ; this label's callers reach it with the main bank active and
-        ; neither bank's D touched since the FUNR unpacks, so this is
-        ; safe (matches __fmul's own now-fixed FMZERO; previously this
-        ; unconditionally dropped the sign, "for consistency" with
-        ; FMZERO's old behavior - now it's consistent with FMZERO's fixed
-        ; behavior instead).
+        ; here rather than upfront on every call.  Return the unpacked
+        ; signed zero directly in bridge registers.
         ld      a,d
         exx
         xor     d
         exx
         and     80h
-        ld      (ASGN),a
-        xor     a
-        ld      (AEXP),a
-        ld      (AM0),a
-        ld      (AM1),a
-        ld      (AM2),a
-        jp      FQBRIDGE
+        ld      d,a
+        ld      bc,0
+        ld      hl,0
+        jp      FQBRIDGE_R
 
 FQINF:
-        ; matches the unpacked form of __fmul's own FMINF packed output
-        ; (7f80h | sign): AEXP=255, AM2=80h (FUNR would merge the implicit
-        ; bit into any nonzero-exponent value, including this one), AM1/
-        ; AM0=0.
-        ld      a,255
-        ld      (AEXP),a
-        ld      a,80h
-        ld      (AM2),a
-        xor     a
-        ld      (AM1),a
-        ld      (AM0),a
-
-FQBRIDGE:
-        ld      a,(AEXP)
-        ld      b,a
+        ; Entry used by late overflow paths after multiply helpers have
+        ; clobbered the live sign; recover it from scratch, then use the
+        ; direct-register Infinity constructor below.
         ld      a,(ASGN)
+FQINF_A:
+        and     80h
         ld      d,a
-        ld      a,(AM2)
-        ld      c,a
-        ld      a,(AM1)
-        ld      h,a
-        ld      a,(AM0)
-        ld      l,a
+        ld      b,255
+        ld      c,80h
+        ld      hl,0
+        jr      FQBRIDGE_R
 
 FQBRIDGE_R:
-        ; entry point for callers that already have B=exponent,
-        ; C=mantissa-hi, H=mantissa-mid, L=mantissa-low, D=sign resident
-        ; in registers (the fast path below) - skips the memory reads
-        ; above entirely.
+        ; Entry point for callers that already have the unpacked product in
+        ; the main bank.  Unpack c directly into the alternate bank instead
+        ; of calling FUNR: every __fmadd reaches this bridge exactly once,
+        ; so inlining removes a CALL/RET pair from the common path while
+        ; preserving FUNR's exact register convention.
         exx
         ld      l,(ix+12)
         ld      h,(ix+13)
         ld      e,(ix+14)
         ld      d,(ix+15)
-        call    FUNR
+        ; Extract sign, then use packed E bit 7 as carry into packed D,
+        ; directly forming exponent=(D.low7<<1)|E.bit7.
+        ld      a,d
+        and     80h
+        ld      c,a             ; temporary sign
+        ld      a,e
+        add     a,a
+        ld      a,d
+        rla
+        ld      b,a
+        ld      d,c
+        res     7,e
+        ld      c,e
+        ld      a,b
+        or      a
+        jr      z,FQBRIDGE_CZERO
+        set     7,c
+FQBRIDGE_CZERO:
         jp      FANOFL
 
 
@@ -14116,7 +13971,7 @@ FD_BSPEC:
         ld      c,a
         ld      a,(BM0)
         or      c
-        jp      nz,FDNAN        ; B is NaN
+        jr      nz,FDNAN        ; B is NaN
         jp      FDZRO           ; B is Infinity: finite/Inf = signed zero (FDZRO preserves it)
 
 FDNAN:
@@ -14132,7 +13987,7 @@ FD_ORDINARY:
         ; subnormals as zero for both operands.
         ld      a,(AEXP)
         or      a
-        jp      nz,FD_ANZ
+        jr      nz,FD_ANZ
         ld      a,(BEXP)
         or      a
         jp      z,FDNAN         ; 0/0 = NaN
@@ -14173,38 +14028,40 @@ FD_ANZ:
         ; Two register banks, swapped via EXX:
         ;   "arithmetic" bank (active by default): H=BM2,L=BM1,D=BM0 is the
         ;     constant divisor; B=R2,C=R1,E=R0 is the 24-bit remainder R.
-        ;   "control" bank (reached via EXX): H=FQ1,L=FQ0,B=FQ2 is the
+        ;   "control" bank (reached via EXX): H=FQ1,L=FQ0,D=FQ2 is the
         ;     24-bit quotient Q being built; C=RHI is an explicit 0/1 flag
         ;     standing in for R's 25th bit (R is bounded to stay under
         ;     2*divisor < 2^25, so one flag bit suffices instead of a full
-        ;     4th byte); D is the loop counter.
+        ;     4th byte); B is the loop counter, allowing DJNZ in the hot loop.
         ; EXX does not touch AF, so A/flags are free to use as scratch
         ; across bank switches without disturbing either bank's state.
         ;
-        ; H=BM2, L=BM1, D=BM0 in the arithmetic bank are constant
-        ; throughout; B=BM2 survives from FUNB; BM0/BM1 must reload from
-        ; memory because the exponent computation above clobbers H, L, D,
-        ; and E.
-        ld      h,b             ; H = BM2  (B preserved through exponent computation)
-        ld      a,(BM1)
-        ld      l,a             ; L = BM1
+        ; H:L:D = BM2:BM1:BM0 is the constant divisor in the
+        ; arithmetic bank.  B:C:E = AM2:AM1:AM0 is the remainder.
+        ; Pair loads avoid rebuilding the upper 16 bits byte-by-byte and
+        ; remove the old dependency on B being left as BM2 by FUNB.
+        ld      hl,(BM1)        ; H = BM2, L = BM1
         ld      a,(BM0)
         ld      d,a             ; D = BM0
 
-        ld      a,(AM2)
-        ld      b,a             ; R2 = AM2
-        ld      a,(AM1)
-        ld      c,a             ; R1 = AM1
+        ld      bc,(AM1)        ; B = AM2, C = AM1
         ld      a,(AM0)
-        ld      e,a             ; R0 = AM0
+        ld      e,a             ; E = AM0
 
         exx
         ; control bank: Q = 0, RHI = 0, loop counter = 24
-        ld      b,0             ; FQ2 = 0
+        ld      d,0             ; FQ2 = 0
         ld      hl,0            ; FQ1:FQ0 = 0
         ld      c,0             ; RHI = 0
-        ld      d,24            ; loop counter
+        ld      b,24            ; loop counter for DJNZ
 FDLUP:
+        ; Shift Q once at the top of the iteration.  The new low bit is
+        ; initially zero; a successful subtraction sets it with INC L.
+        ; Doing this here avoids duplicating the 24-bit shift in both the
+        ; subtract and no-subtract paths.
+        add     hl,hl
+        rl      d
+
         ; --- check RHI (control bank active) ---
         ld      a,c
         or      a
@@ -14215,11 +14072,11 @@ FDLUP:
         ld      a,b
         cp      h               ; R2 - BM2
         jp      c,FDNOSB        ; R < B
-        jp      nz,FDDOSB       ; R > B
+        jr      nz,FDDOSB       ; R > B
         ld      a,c
         cp      l               ; R1 - BM1
         jp      c,FDNOSB
-        jp      nz,FDDOSB
+        jr      nz,FDDOSB
         ld      a,e
         cp      d               ; R0 - BM0
         jp      c,FDNOSB        ; R < B; fall through if R >= B
@@ -14234,12 +14091,11 @@ FDDOSB:
         sbc     a,h             ; R2 - BM2 - borrow
         ld      b,a
         exx                     ; back to control bank
-        ld      e,1             ; SUBFLAG = 1 (a subtract happened)
-        jp      FDSHQ
+        inc     l               ; subtraction sets the new quotient bit
+        jr      FDSHR
 FDNOSB:
         exx                     ; back to control bank
-        ld      e,0             ; SUBFLAG = 0
-        jp      FDSHQ
+        jr      FDSHR           ; no subtraction: new quotient bit stays zero
 
 FDFSUB:
         ; RHI was 1, meaning R (conceptually RHI*2^24 + R-main) is
@@ -14249,8 +14105,7 @@ FDFSUB:
         ; R-main < 2*divisor - 2^24 <= divisor - 1), so the subtract always
         ; borrows and the new RHI is always 0 - true regardless of RHI's
         ; incoming value, so clear it unconditionally before subtracting.
-        xor     a
-        ld      c,a             ; RHI = 0
+        ld      c,0             ; RHI = 0
         exx                     ; to arithmetic bank
         ld      a,e
         sub     d
@@ -14262,137 +14117,100 @@ FDFSUB:
         sbc     a,h
         ld      b,a
         exx                     ; back to control bank
-        ld      e,1             ; SUBFLAG = 1
+        ; Subtraction succeeded.  The quotient shift at the top of the
+        ; iteration cleared bit 0, so INC L sets it without carry.
+        inc     l
 
-FDSHQ:
-        ; --- Q <<= 1 (control bank: H:L = FQ1:FQ0, B = FQ2). Must happen
-        ; BEFORE consulting SUBFLAG: the original algorithm shifts Q first
-        ; (producing a fresh, zero bit 0) and only then ORs in the new low
-        ; bit, so SUBFLAG has to be carried across this shift rather than
-        ; applied before it. ---
-        add     hl,hl
-        rl      b
-        ld      a,e             ; SUBFLAG
-        or      a
-        jp      z,FDNOLS
-        ld      a,l
-        or      1
-        ld      l,a             ; Q's freshly-shifted-in low bit set
-FDNOLS:
+FDSHR:
         ; --- R <<= 1 (arithmetic bank); carry-out becomes the new RHI ---
         exx
-        ld      a,e
-        add     a,a
-        ld      e,a
-        ld      a,c
-        rla
-        ld      c,a
-        ld      a,b
-        rla
-        ld      b,a
+        ; Shift the 24-bit remainder directly in registers.  The final
+        ; carry from RL B is R's new 25th bit; EXX preserves it for the
+        ; carry-to-RHI conversion below.
+        sla     e
+        rl      c
+        rl      b
         exx                     ; back to control bank; EXX preserves carry
-        jp      c,FDSRHI
-        xor     a
-        ld      c,a             ; RHI = 0
-        jp      FDCNT
-FDSRHI:
-        ld      a,1
-        ld      c,a             ; RHI = 1
-FDCNT:
-        dec     d
-        jp      nz,FDLUP
+        ; Materialize the carry-out directly as RHI = 0 or 1.
+        ld      a,0             ; LD preserves carry
+        adc     a,a
+        ld      c,a
+        djnz    FDLUP
 
-        ; Copy the register-resident R, RHI and Q back to the memory
-        ; locations the unchanged rounding/normalize code below expects.
+        ; The final shift left leaves 2*remainder in the arithmetic
+        ; bank and the quotient in the control bank.  Round directly from
+        ; those registers instead of spilling remainder and quotient to
+        ; FP*/FQ* and immediately loading them again.
+        ;
+        ; control bank here: C=RHI, D:H:L=quotient
         ld      a,c
-        ld      (FP3),a
-        ld      a,l
-        ld      (FQ0),a
-        ld      a,h
-        ld      (FQ1),a
-        ld      a,b
-        ld      (FQ2),a
-        exx                     ; back to arithmetic bank for R2:R1:R0
-        ld      a,e
-        ld      (FP0),a
-        ld      a,c
-        ld      (FP1),a
-        ld      a,b
-        ld      (FP2),a
-
-        ; Round division result.  At this point FP3:FP2:FP1:FP0 holds
-        ; 2*remainder from the final quotient step.  If that value is at
-        ; least the divisor mantissa, round the 24-bit quotient up.  This is
-        ; round-half-up rather than full round-to-nearest-even, but it fixes
-        ; the dominant truncation error without changing the ABI or helper
-        ; calling convention.
-        ld      a,(FP3)
         or      a
-        jp      nz,FDRUP
-        ld      a,(FP2)
-        ld      c,a
-        ld      a,(BM2)
-        cp      c
-        jp      c,FDRUP
-        jp      nz,FDRNO
-        ld      a,(FP1)
-        ld      c,a
-        ld      a,(BM1)
-        cp      c
-        jp      c,FDRUP
-        jp      nz,FDRNO
-        ld      a,(FP0)
-        ld      c,a
-        ld      a,(BM0)
-        cp      c
-        jp      c,FDRUP
-        jp      nz,FDRNO
-FDRUP:
-        ld      a,(FQ0)
-        inc     a
-        ld      (FQ0),a
-        jp      nz,FDRNO
-        ld      a,(FQ1)
-        inc     a
-        ld      (FQ1),a
-        jp      nz,FDRNO
-        ld      a,(FQ2)
-        inc     a
-        ld      (FQ2),a
-        jp      nz,FDRNO
-        ; Quotient overflowed from 0ffffffh to 1000000h.  Renormalize to
+        jr      nz,FDRREGUP     ; 25th remainder bit => definitely round
+
+        ; RHI is zero. Compare B:C:E remainder against H:L:D divisor in
+        ; the arithmetic bank. Round when remainder >= divisor.
+        exx
+        ld      a,b
+        cp      h
+        jr      c,FDRREGNOA
+        jr      nz,FDRREGUPA
+        ld      a,c
+        cp      l
+        jr      c,FDRREGNOA
+        jr      nz,FDRREGUPA
+        ld      a,e
+        cp      d
+        jr      c,FDRREGNOA
+
+FDRREGUPA:
+        exx                     ; back to control bank
+FDRREGUP:
+        ; Increment the 24-bit quotient D:H:L in registers.
+        inc     l
+        jr      nz,FDRREGSTORE
+        inc     h
+        jr      nz,FDRREGSTORE
+        inc     d
+        jr      nz,FDRREGSTORE
+
+        ; Quotient overflowed from 0ffffffh to 1000000h. Renormalize to
         ; 800000h and bump exponent.
-        ld      a,80h
-        ld      (FQ2),a
-        xor     a
-        ld      (FQ1),a
-        ld      (FQ0),a
+        ld      d,80h
+        ld      hl,0
         ld      a,(AEXP)
         inc     a
         cp      255
         jp      nc,FDINF
         ld      (AEXP),a
-FDRNO:
+        jr      FDRREGSTORE
 
-        ; Q is the mantissa candidate. Normalize left if the hidden bit is clear.
-        ld      a,(FQ0)
-        ld      (AM0),a
-        ld      a,(FQ1)
-        ld      (AM1),a
-        ld      a,(FQ2)
-        ld      (AM2),a
-FDNOR:
-        ld      a,(AM2)
-        bit     7,a
-        jp      nz,FDPAK
-        call    FSLA
+FDRREGNOA:
+        exx                     ; no round; back to control bank
+FDRREGSTORE:
+        ; Normalize the 24-bit quotient directly in D:H:L before storing it.
+        ; The old path stored it to AM0..AM2, then repeatedly called FSLA,
+        ; which loaded and stored the same bytes for every leading zero bit.
+        ; This is the identical one-bit left normalization in registers.
+
+        bit     7,d
+        jr      nz,FDRSTORE
+        ; Keep the exponent in A across all normalization shifts.  The old
+        ; loop reloaded and rewrote AEXP for every leading zero bit.
         ld      a,(AEXP)
+FDNORL:
+        add     hl,hl
+        rl      d
         dec     a
-        ld      (AEXP),a
         jp      z,FDZRO
-        jp      FDNOR
+        bit     7,d
+        jr      z,FDNORL
+        ld      (AEXP),a
 
-FDPAK:
+FDRSTORE:
+        ld      (AM0),hl
+        ld      a,d
+        ld      (AM2),a
+
         call    FPA
         ld      sp,ix
         pop     ix
@@ -14431,21 +14249,10 @@ BEXP:   db      0
 BM0:    db      0
 BM1:    db      0
 BM2:    db      0
-FP0:    db      0
-FP1:    db      0
 FP2:    db      0
 FP3:    db      0
 FP4:    db      0
 FP5:    db      0
-FM0:    db      0
-FM1:    db      0
-FM2:    db      0
-FM3:    db      0
-FM4:    db      0
-FM5:    db      0
-FQ0:    db      0
-FQ1:    db      0
-FQ2:    db      0
 
 
 ; ---------------------------------------------------------------------------
@@ -14490,7 +14297,7 @@ _floorf:
         call    __fnan
         ld      a,h
         or      l
-        jp      nz,FMFID
+        jr      nz,FMFID
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
@@ -14498,7 +14305,7 @@ _floorf:
         call    __finf
         ld      a,h
         or      l
-        jp      z,FMFORD
+        jr      z,FMFORD
 FMFID:
         ld      l,(ix+4)
         ld      h,(ix+5)
@@ -14563,10 +14370,10 @@ FMFORD:
         dec     hl
         ld      a,l
         cp      0ffh
-        jp      nz,FMFDEC
+        jr      nz,FMFDEC
         ld      a,h
         cp      0ffh
-        jp      nz,FMFDEC
+        jr      nz,FMFDEC
         dec     de
 FMFDEC:
         call    __flf
@@ -14601,7 +14408,7 @@ _ceilf:
         call    __fnan
         ld      a,h
         or      l
-        jp      nz,FMCID
+        jr      nz,FMCID
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
@@ -14609,7 +14416,7 @@ _ceilf:
         call    __finf
         ld      a,h
         or      l
-        jp      z,FMCORD
+        jr      z,FMCORD
 FMCID:
         ld      l,(ix+4)
         ld      h,(ix+5)
@@ -14671,7 +14478,7 @@ FMCORD:
         inc     hl
         ld      a,h
         or      l
-        jp      nz,FMCCNV
+        jr      nz,FMCCNV
         inc     de
 FMCCNV:
         call    __flf
@@ -14739,7 +14546,7 @@ _fmodf:
         call    __finf
         ld      a,h
         or      l
-        jp      z,FMDNOTYINF
+        jr      z,FMDNOTYINF
         ld      l,(ix+4)        ; y is +/-Inf (x finite, not NaN):
         ld      h,(ix+5)        ; x unchanged
         ld      e,(ix+6)
@@ -14760,7 +14567,7 @@ FMDNOTYINF:
         ld      b,a
         ld      a,(ix+8)
         or      b
-        jp      nz,FMDNZ
+        jr      nz,FMDNZ
         ld      hl,0
         ld      de,7fc0h
         jp      FMDRET
@@ -14869,7 +14676,7 @@ _sqrtf:
         call    __finf
         ld      a,h
         or      l
-        jp      z,FMSNOTINF
+        jr      z,FMSNOTINF
         ld      d,(ix+7)
         bit     7,d
         jp      nz,FMSNAN       ; x is -Inf: domain error -> NaN
@@ -14883,7 +14690,7 @@ FMSNOTINF:
         call    __fzro
         ld      a,h
         or      l
-        jp      nz,FMSID        ; x is +0.0 or -0.0: unchanged (keeps sign)
+        jr      nz,FMSID        ; x is +0.0 or -0.0: unchanged (keeps sign)
 
         ld      d,(ix+7)
         bit     7,d
@@ -15030,7 +14837,7 @@ FMSDONE:
         inc     hl
         ld      a,h
         or      l
-        jp      nz,FMSST
+        jr      nz,FMSST
         inc     de
 FMSST:
         ld      (ix-4),l
@@ -15072,23 +14879,20 @@ __fscale_pow2:
         ; been saved; otherwise scaling 2.0f by 2 could preserve the scratch
         ; byte as a mantissa bit and produce 4.03125 instead of 4.0.
 
-        ; exp = ((D & 7f) << 1) | (E >> 7)
-        ld      a,d
-        and     7fh
-        add     a,a
-        ld      c,a
+        ; exp = ((D & 7f) << 1) | (E >> 7).  Use E bit 7 as
+        ; carry into RLA; the shift also discards D's sign bit.
         ld      a,e
-        rlca
-        and     1
-        or      c              ; A = biased exponent
+        add     a,a             ; carry = exponent bit 0
+        ld      a,d
+        rla                     ; A = complete biased exponent
 
         ; zero/subnormal: preserve signed zero / treat subnormal as zero.
         or      a
-        jp      z,FSCL_RET
+        jr      z,FSCL_RET
 
         ; NaN/Inf: preserve input.
         cp      255
-        jp      z,FSCL_RET
+        jr      z,FSCL_RET
 
         ; Preserve original float bits before using DE/HL as integer scratch.
         push    de
@@ -15098,11 +14902,11 @@ __fscale_pow2:
         ld      l,a
         ld      h,0
         bit     7,b
-        jp      z,FSCL_POS
+        jr      z,FSCL_POS
         ld      a,b
         ld      e,a
         ld      d,0ffh
-        jp      FSCL_ADD
+        jr      FSCL_ADD
 FSCL_POS:
         ld      e,b
         ld      d,0
@@ -15124,23 +14928,21 @@ FSCL_ADD:
         jp      nc,FSCL_INF
 
         ; Install new biased exponent A into original D/E, preserving sign and
-        ; mantissa.  Restore original raw bits first.
-        ld      c,a            ; C = new exponent
+        ; mantissa.  Restore original raw bits first.  Capture exponent bit 0
+        ; directly from the carry produced by SRL, as in FPKR.
         pop     hl
         pop     de
-        srl     a              ; A = exp >> 1
+        srl     a              ; A = exp >> 1, carry = exponent bit 0
+        ld      c,0
+        rr      c              ; C = exponent bit 0 in bit 7
         ld      b,a
         ld      a,d
         and     80h            ; sign bit
         or      b
         ld      d,a
-        ld      a,c
-        and     1
-        rrca                   ; exp low bit -> bit 7
-        ld      b,a
         ld      a,e
         and     7fh            ; preserve mantissa high 7 bits
-        or      b
+        or      c
         ld      e,a
         ret
 
@@ -15175,48 +14977,40 @@ __fulf:
         or      e
         or      h
         or      l
-        jp      nz,FUL1
+        jr      nz,FUL1
         ld      de,0
         ret
 FUL1:
         ld      b,158          ; exponent for bit 31
 FUL2:
         bit     7,d
-        jp      nz,FUL3
+        jr      nz,FUL3
         add     hl,hl
         rl      e
         rl      d
         dec     b
-        jp      FUL2
+        jr      FUL2
 FUL3:
-        ld      a,e
-        ld      (FULM),a       ; mantissa bits 23..16
-        ld      a,h
-        ld      (FULL),a       ; mantissa bits 15..8
-        ld      c,d            ; normalized top byte, bit 7 hidden
+        ; DE:HL is normalized with D bit 7 as the hidden mantissa bit.
+        ; Pack directly from the live registers: fraction bytes are D.low7,
+        ; E, H; exponent bit 0 becomes packed E bit 7.
+        ld      c,d            ; save normalized top byte
+        ld      l,h            ; packed mantissa low byte = original H
+        ld      h,e            ; packed mantissa middle byte = original E
         ld      a,b
-        ld      d,a
-        srl     d              ; D = exponent >> 1, sign clear
-        and     1
-        rrca
-        and     80h
-        ld      e,a
-        ld      a,c
-        and     7fh            ; mantissa bits 22..16
-        or      e
-        ld      e,a
-        ld      a,(FULM)
-        ld      h,a
-        ld      a,(FULL)
-        ld      l,a
+        srl     a              ; A = exponent >> 1, carry = exponent bit 0
+        ld      d,a            ; packed sign/exponent byte, sign is zero
+        ld      e,c
+        res     7,e            ; remove hidden mantissa bit
+        jr      nc,FUL4
+        set     7,e            ; install exponent bit 0
+FUL4:
         ret
-FULM:   db      0
-FULL:   db      0
 
         public  __flf
 __flf:
         bit     7,d
-        jp      z,__fulf
+        jr      z,__fulf
         ld      a,l
         cpl
         ld      l,a
@@ -15230,37 +15024,31 @@ __flf:
         cpl
         ld      d,a
         inc     l
-        jp      nz,FLF1
+        jr      nz,FLF1
         inc     h
-        jp      nz,FLF1
+        jr      nz,FLF1
         inc     e
-        jp      nz,FLF1
+        jr      nz,FLF1
         inc     d
 FLF1:
         call    __fulf
-        ld      a,d
-        or      80h
-        ld      d,a
+        set     7,d
         ret
 
         public  __fful
 __fful:
-        ld      a,d
-        and     7fh
-        add     a,a
-        ld      b,a
         ld      a,e
-        rlca
-        and     1
-        or      b              ; A = biased exponent
+        add     a,a             ; carry = exponent bit 0
+        ld      a,d
+        rla                     ; A = biased exponent; sign bit is shifted out
         cp      127
-        jp      nc,FFUL1
+        jr      nc,FFUL1
         ld      de,0
         ld      hl,0
         ret
 FFUL1:
         cp      159
-        jp      c,FFUL2
+        jr      c,FFUL2
         ld      de,0ffffh
         ld      hl,0ffffh
         ret
@@ -15274,17 +15062,16 @@ FFUL2:
         ; H and L are already mantissa low bytes from input float.
         ld      a,c
         cp      150
-        jp      z,FFULD
-        jp      c,FFURS
+        jr      z,FFULD
+        jr      c,FFURS
         sub     150
         ld      b,a
 FFULS:
         add     hl,hl
         rl      e
         rl      d
-        dec     b
-        jp      nz,FFULS
-        jp      FFULD
+        djnz    FFULS
+        jr      FFULD
 FFURS:
         ld      a,150
         sub     c
@@ -15294,8 +15081,7 @@ FFUR1:
         rr      e
         rr      h
         rr      l
-        dec     b
-        jp      nz,FFUR1
+        djnz    FFUR1
 FFULD:
         ret
 
@@ -15306,8 +15092,7 @@ __ffl:
         push    af
         res     7,d
         call    __fful
-        pop     af
-        or      a
+        pop     af              ; restores Z from the original sign test
         ret     z
         ld      a,l
         cpl
@@ -15387,13 +15172,13 @@ _nextafterf:
         ld      d,(ix+7)
         ld      a,l
         cp      0ffh
-        jp      nz,NXFMAX_NE
+        jr      nz,NXFMAX_NE
         ld      a,h
         cp      0ffh
-        jp      nz,NXFMAX_NE
+        jr      nz,NXFMAX_NE
         ld      a,e
         cp      07fh
-        jp      nz,NXFMAX_NE
+        jr      nz,NXFMAX_NE
         ld      a,d
         cp      07fh
         jp      z,NXRET
@@ -15405,7 +15190,7 @@ NXFMAX_NE:
         or      e
         or      h
         or      l
-        jp      nz,NXFMAX_NZ
+        jr      nz,NXFMAX_NZ
         ld      hl,1
         ld      de,0
         jp      NXRET
@@ -15502,8 +15287,8 @@ NXGEN:
         ; For negative x, x<y means decrement raw bits; otherwise increment.
         ld      a,d
         and     80h
-        jp      nz,NXNEG
-NXPOS:
+        jr      nz,NXNEG
+
         ld      a,(NXLT)
         or      a
         jp      nz,NXINC
@@ -15557,16 +15342,16 @@ NXDEC:
         ld      h,0ffh
         ld      a,e
         or      a
-        jp      nz,NXDE
+        jr      nz,NXDE
         ld      e,0ffh
         dec     d
-        jp      NXRET
+        jr      NXRET
 NXDE:
         dec     e
-        jp      NXRET
+        jr      NXRET
 NXDH:
         dec     h
-        jp      NXRET
+        jr      NXRET
 NXDL:
         dec     l
 
@@ -15620,7 +15405,7 @@ _expf:
         call __fnan
         ld a,h
         or l
-        jp z,MFEXPNOTNAN
+        jr z,MFEXPNOTNAN
         ld d,7fh
         ld e,0c0h
         ld hl,0
@@ -16166,7 +15951,7 @@ MFL15:
         jp z,MFL17              ; x != 0: ordinary path continues
         ld a,(__powf_y+3)
         bit 7,a
-        jp z,MFPOWZP            ; y > 0: return 0.0f, unchanged
+        jr z,MFPOWZP            ; y > 0: return 0.0f, unchanged
         ld d,7fh                ; y < 0: pole error -> +Infinity
         ld e,80h
         ld hl,0
@@ -17625,7 +17410,7 @@ _atan2f:
         ; both infinite: +/-pi/4 (x>0) or +/-3pi/4 (x<0), sign = sign(y).
         ld      a,(__atan2_xhi+1)
         bit     7,a
-        jp      nz,MATAN2_3Q
+        jr      nz,MATAN2_3Q
         ld      hl,4059
         ld      de,16201        ; pi/4
         jp      MATAN2SGNY
@@ -17638,14 +17423,14 @@ MATAN2XIYF:
         ; x is +/-Inf, y finite: +/-0 (x>0) or +/-pi (x<0), sign=sign(y).
         ld      a,(__atan2_xhi+1)
         bit     7,a
-        jp      nz,MATAN2_PI
+        jr      nz,MATAN2_PI
         ld      hl,0
         ld      de,0
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY
 MATAN2_PI:
         ld      hl,4059
         ld      de,16457        ; pi
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY
 
 MATAN2SGNY:
         ; apply sign(y) to the positive magnitude currently in DE:HL (D's
@@ -17669,7 +17454,7 @@ MATAN2XORD:
         call    __finf
         ld      a,h
         or      l
-        jp      z,MATAN2ORD
+        jr      z,MATAN2ORD
         ld      hl,4059
         ld      de,16329        ; half_pi
         jp      MATAN2SGNY
@@ -17745,7 +17530,7 @@ atan2_return_zero:
         ; bare +0.0f regardless of either sign).
         ld      a,(__atan2_xhi+1)
         bit     7,a
-        jp      nz,MATAN2_00N
+        jr      nz,MATAN2_00N
         ld      hl,0
         ld      de,0
         jp      MATAN2SGNY
@@ -18212,13 +17997,13 @@ _frexpf:
         call    __fnan
         ld      a,h
         or      l
-        jp      nz,MFREXPID
+        jr      nz,MFREXPID
         ld      hl,(__frexp_xlo)
         ld      de,(__frexp_xhi)
         call    __finf
         ld      a,h
         or      l
-        jp      z,MFREXPORD
+        jr      z,MFREXPORD
 MFREXPID:
         ld      hl,(__frexp_eptr)
         xor     a
@@ -18317,13 +18102,13 @@ _ldexpf:
         call    __fnan
         ld      a,h
         or      l
-        jp      nz,MLDEXPID
+        jr      nz,MLDEXPID
         ld      hl,(__ldexp_xlo)
         ld      de,(__ldexp_xhi)
         call    __finf
         ld      a,h
         or      l
-        jp      z,MLDEXPORD
+        jr      z,MLDEXPORD
 MLDEXPID:
         ld      hl,(__ldexp_xlo)
         ld      de,(__ldexp_xhi)
@@ -19017,7 +18802,7 @@ SCL74:
         ld a,(__stox_any+1)
         or a
         jp p, SCL92
-SCL94:
+
         ; Overflow clamp: sign-dependent LONG_MIN/LONG_MAX for strtol,
         ; unconditional ULONG_MAX for strtoul.
         ld hl,(__stox_signed)
