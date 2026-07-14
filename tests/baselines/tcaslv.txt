@@ -56,6 +56,37 @@ PASS (s.x/=4) val = 5
 PASS (s.x/=4) = 5
 PASS (s.x|=1) val = 13
 PASS (s.x|=1) = 13
+PASS global += global = 39
+PASS global += global local = 40
+PASS global -= global = 39
+PASS global += local = 39
+PASS local += global = 39
+PASS global = global + global = 39
+PASS global += signed char global = 39
+PASS global += unsigned char global = 42
+PASS global += bool global = 41
+PASS signed char global += global = 39
+PASS (signed char global += global) value = 38
+PASS unsigned global += signed global = 39
+PASS global *= global = 60
+PASS global /= global = 20
+PASS global %= global = 2
+PASS global &= global = 0
+PASS global |= global = 15
+PASS global ^= global = 12
+PASS global <<= global = 12
+PASS global >>= global = 3
+PASS (global += global) value = 39
+PASS (global -= global) value = 40
+PASS global pointer += global = 1
+PASS global pointer -= global = 1
+PASS long global += global = 1
+PASS (long global -= global) value = 1
+PASS float global += global = 1
+PASS (float global -= global) value = 1
+PASS global += param = 39
+PASS global += no-ix param = 39
+PASS local += repeated param = 36
 PASS carr0 = 7
 PASS a=b=9 a = 9
 PASS a=b=9 b = 9
