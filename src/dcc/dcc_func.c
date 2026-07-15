@@ -4500,14 +4500,18 @@ static int bc_label_name_index(char names[][16], int n, const char *name)
  * whole pass already makes for "push bc ... pop bc" (see the comment above
  * regalloc_buffer_finalize). */
 static void bc_regalloc_find_loop_headers(const char *buf, long size,
-                                           char headers[][16], int *n_headers)
+                                           char headers[][16],
+                                           long header_offs[], long body_end_offs[],
+                                           int *n_headers)
 {
     char seen_names[MAX_BC_LOOP_LABELS][16];
+    long seen_offs[MAX_BC_LOOP_LABELS];
     int n_seen;
     const char *p;
     const char *nl;
     char linebuf[64];
     size_t ll;
+    long line_off;
 
     n_seen = 0;
     *n_headers = 0;
@@ -4518,29 +4522,98 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
         if (ll >= sizeof(linebuf)) ll = sizeof(linebuf) - 1;
         memcpy(linebuf, p, ll);
         linebuf[ll] = 0;
+        line_off = (long)(p - buf);
 
         if (linebuf[0] == 'L' && isdigit((unsigned char)linebuf[1])) {
             char *colon = strchr(linebuf, ':');
             if (colon != NULL && n_seen < MAX_BC_LOOP_LABELS) {
                 *colon = 0;
                 dcc_copy_str(seen_names[n_seen], sizeof(seen_names[0]), linebuf);
+                seen_offs[n_seen] = line_off;
                 n_seen++;
             }
         } else if (strncmp(linebuf, "\tjp ", 4) == 0 || strncmp(linebuf, "\tjr ", 4) == 0) {
             char *comma = strrchr(linebuf, ',');
             char *tok = comma ? comma + 1 : linebuf + 4;
             while (*tok == ' ') tok++;
-            if (tok[0] == 'L' && isdigit((unsigned char)tok[1]) &&
-                bc_label_name_index(seen_names, n_seen, tok) >= 0 &&
-                *n_headers < MAX_BC_LOOP_LABELS &&
-                bc_label_name_index(headers, *n_headers, tok) < 0) {
-                dcc_copy_str(headers[*n_headers], sizeof(headers[0]), tok);
-                (*n_headers)++;
+            if (tok[0] == 'L' && isdigit((unsigned char)tok[1])) {
+                int si = bc_label_name_index(seen_names, n_seen, tok);
+                if (si >= 0) {
+                    long end_off = (long)((nl ? nl + 1 : buf + size) - buf);
+                    int hi = bc_label_name_index(headers, *n_headers, tok);
+                    if (hi < 0 && *n_headers < MAX_BC_LOOP_LABELS) {
+                        dcc_copy_str(headers[*n_headers], sizeof(headers[0]), tok);
+                        header_offs[*n_headers] = seen_offs[si];
+                        body_end_offs[*n_headers] = end_off;
+                        (*n_headers)++;
+                    } else if (hi >= 0 && end_off > body_end_offs[hi]) {
+                        /* a second (e.g. "continue"-style) back-edge to the
+                         * same header - widen the body span to cover it too */
+                        body_end_offs[hi] = end_off;
+                    }
+                }
             }
         }
 
         p = nl ? nl + 1 : buf + size;
     }
+}
+
+/* Precise per-loop refinement of the above: a label only truly NEEDS bc
+ * forced untrusted if its own body is not internally self-consistent - i.e.
+ * simulating the exact same trust-transition rules regalloc_buffer_finalize
+ * uses below, starting from bc_trusted=1 (the state the label is in by the
+ * time of its second and later visits, after any reload the real scan
+ * already inserts on the first, fall-through visit), the body does NOT end
+ * back at bc_trusted=1 by its own back-edge. If it does, every iteration is
+ * identical to the first, and forcing a reload at the header is pure waste
+ * (found via tests/tbig.c's fill_record: a leaf loop that reads the bc-
+ * resident pointer every iteration and never writes b/c/bc at all, yet paid
+ * for a fresh two-byte reload on all 124 iterations under the older,
+ * unconditional version of this pass).
+ *
+ * This mirrors, rather than reimplements, regalloc_buffer_finalize's own
+ * is_bc_value_read_start / is_bc_recognized_other / line_touches_bc_reg
+ * predicates on purpose - a hand-rolled second classifier could silently
+ * diverge from what the real scan actually does and reintroduce exactly the
+ * kind of blind spot this whole mechanism exists to avoid. */
+static int bc_loop_body_self_consistent(const char *buf, long start, long end,
+                                         const char *entry_c, const char *entry_b)
+{
+    const char *p, *nl;
+    char linebuf[64], prev1[64];
+    size_t ll;
+    int bc_trusted;
+    int is_bc_value_read_start, is_bc_recognized_other;
+
+    bc_trusted = 1;
+    prev1[0] = 0;
+    p = buf + start;
+    while (p < buf + end) {
+        nl = memchr(p, '\n', (size_t)(buf + end - p));
+        ll = nl ? (size_t)(nl - p) : (size_t)(buf + end - p);
+        if (ll >= sizeof(linebuf)) ll = sizeof(linebuf) - 1;
+        memcpy(linebuf, p, ll);
+        linebuf[ll] = 0;
+
+        is_bc_value_read_start =
+            ((strcmp(linebuf, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") != 0) ||
+             (strcmp(linebuf, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") != 0));
+        is_bc_recognized_other =
+            (strcmp(linebuf, "\tld h,b") == 0 || strcmp(linebuf, "\tld d,b") == 0 ||
+             strcmp(linebuf, entry_c) == 0 || strcmp(linebuf, entry_b) == 0 ||
+             (strcmp(linebuf, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") == 0) ||
+             (strcmp(linebuf, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") == 0));
+
+        if (is_bc_value_read_start)
+            bc_trusted = 1;
+        else if (!is_bc_recognized_other && line_touches_bc_reg(linebuf))
+            bc_trusted = 0;
+
+        dcc_copy_str(prev1, sizeof(prev1), linebuf);
+        p = nl ? nl + 1 : buf + end;
+    }
+    return bc_trusted;
 }
 
 /* Exact safety verification and, for BC, on-demand-reload REWRITE, for
@@ -4629,9 +4702,23 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
     }
 
     if (bc_cand != NULL) {
+        char all_headers[MAX_BC_LOOP_LABELS][16];
+        long header_offs[MAX_BC_LOOP_LABELS];
+        long body_end_offs[MAX_BC_LOOP_LABELS];
+        int n_all, hi;
+
         sprintf(entry_c, "\tld c,(ix%+d)", bc_cand->offset);
         sprintf(entry_b, "\tld b,(ix%+d)", bc_cand->offset + 1);
-        bc_regalloc_find_loop_headers(buf, size, loop_headers, &n_loop_headers);
+        bc_regalloc_find_loop_headers(buf, size, all_headers, header_offs, body_end_offs, &n_all);
+
+        n_loop_headers = 0;
+        for (hi = 0; hi < n_all; hi++) {
+            if (!bc_loop_body_self_consistent(buf, header_offs[hi], body_end_offs[hi],
+                                               entry_c, entry_b)) {
+                dcc_copy_str(loop_headers[n_loop_headers], sizeof(loop_headers[0]), all_headers[hi]);
+                n_loop_headers++;
+            }
+        }
     } else {
         n_loop_headers = 0;
     }
