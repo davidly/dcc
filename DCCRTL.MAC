@@ -2060,12 +2060,21 @@ mu2:
         pop     bc
         ret
 
+        public  __udivmod
         public  __divu
         public  __modu
         public  __divs
         public  __mods
-DRSU:
-        ; Unsigned 16-bit divide, hybrid bounded.
+        public  __sdivmod
+__udivmod:
+        ; Unsigned 16-bit divide, hybrid bounded. Also directly callable as
+        ; a fused divmod: both results are always computed together, so a
+        ; caller that already knows it wants both x/y and x%y (the compiler,
+        ; when it has proven a % and a / share identical operands - see
+        ; dcc_ast_gen_support.c's divmod fusion pass) can call this directly
+        ; and skip __divu's/__modu's own cache-check overhead entirely,
+        ; which exists only to detect that same redundancy at runtime when
+        ; the compiler could not prove it up front.
         ; Input:  HL = dividend, DE = divisor
         ; Output: HL = quotient, DE = remainder
         ;
@@ -2115,7 +2124,7 @@ dms_rs_done:
         ret
 
 ; Divide-result cache shared by __divu, __modu, __divs, __mods.
-; Lives in the DRSU prelude so dccrtlstrip keeps it whenever any of
+; Lives in the __udivmod prelude so dccrtlstrip keeps it whenever any of
 ; those entry points is referenced, without forcing __mods: to be kept.
 __dmval:
         db      0
@@ -2168,7 +2177,7 @@ du_miss_save:
         ld      (__dmc_rhs),hl
         ex      de,hl
 
-        call    DRSU        ; HL = quotient, DE = remainder
+        call    __udivmod   ; HL = quotient, DE = remainder
 
         ld      (__dmquot),hl
         ex      de,hl
@@ -2180,7 +2189,7 @@ du_miss_save:
 
 __modu:
         ; Cache-aware unsigned modulo.  Same cache as __divu, so x%n then x/n
-        ; (or x/n then x%n) with identical operands calls DRSU once.
+        ; (or x/n then x%n) with identical operands calls __udivmod once.
         ; Input:  HL = dividend, DE = divisor
         ; Output: HL = remainder
         ld      a,(__dmval)
@@ -2213,7 +2222,7 @@ dm_miss:
         ex      de,hl
         ld      (__dmc_rhs),hl
         ex      de,hl
-        call    DRSU  ; HL = quotient, DE = remainder
+        call    __udivmod  ; HL = quotient, DE = remainder
         ld      (__dmquot),hl
         ex      de,hl
         ld      (__dmrem),hl    ; HL = remainder
@@ -2227,11 +2236,12 @@ dm_miss:
 ; Output: HL = quotient (__divs) or remainder (__mods)
 ; Semantics: quotient truncates toward zero; remainder has dividend sign.
 ;
-; CONTRACT: __divs, __mods, __divu, and __modu all preserve BC across the
-; call (the fast paths never touch it; the slow paths and DRSU explicitly
-; push/pop it). dccpeep's pass_byte_loop_counter_to_reg_c relies on this to
-; keep a loop counter live in C across a call to one of these without any
-; spill/reload - if that ever changes, update this comment and the pass's
+; CONTRACT: __divs, __mods, __divu, __modu, __udivmod, and __sdivmod all
+; preserve BC across the call (the fast paths never touch it; the slow
+; paths explicitly push/pop it). dccpeep's pass_byte_loop_counter_to_reg_c
+; relies on this to keep a loop counter live in C across a call to one of
+; these without any spill/reload - if that ever changes, update this
+; comment and the pass's
 ; whitelist of safe-to-cross call targets together.
 __divs:
         ; Fast path: if both operands are non-negative, signed division is
@@ -2327,6 +2337,82 @@ __ms_rpos:
         sbc     a,h
         ld      h,a
 __ms_done:
+        pop     bc
+        ret
+
+; Fused signed divmod: quotient and remainder in one call, for the compiler
+; to target when it has proven (at compile time, not via __divu's/__modu's
+; runtime cache) that a % and a / share identical operands - see
+; dcc_ast_gen_support.c's divmod fusion pass. Calls __udivmod directly, not
+; __divs/__mods, so it never touches the __divu/__modu result cache at all:
+; there is nothing for that cache to usefully remember here, since the one
+; redundant division it exists to catch has already been eliminated by the
+; caller having proven both operations share operands ahead of time.
+; Input:  HL = signed dividend, DE = signed divisor
+; Output: HL = quotient (truncates toward zero), DE = remainder (dividend's
+;         sign) - both computed together, matching __udivmod's own contract.
+__sdivmod:
+        ; Fast path: both non-negative -> identical to unsigned divmod.
+        ld      a,h
+        or      d
+        jp      p,__udivmod
+        push    bc
+        ld      b,0             ; b: dividend was negative? (remainder sign)
+        ld      c,0             ; c: quotient negative? (xor of both signs)
+        ld      a,h
+        or      a
+        jp      p,__sdm_lpos
+        ld      b,1
+        ld      c,1
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+__sdm_lpos:
+        ld      a,d
+        or      a
+        jp      p,__sdm_rpos
+        ld      a,c
+        xor     1
+        ld      c,a
+        ex      de,hl
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+        ex      de,hl
+__sdm_rpos:
+        call    __udivmod       ; HL = quotient, DE = remainder (both operands now non-negative)
+        ld      a,c
+        or      a
+        jr      z,__sdm_qdone
+        push    de              ; save remainder while negating the quotient
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+        pop     de
+__sdm_qdone:
+        ld      a,b
+        or      a
+        jr      z,__sdm_done
+        push    hl              ; save quotient while negating the remainder
+        ex      de,hl
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+        ex      de,hl
+        pop     hl
+__sdm_done:
         pop     bc
         ret
 
@@ -3841,7 +3927,7 @@ pfsl2:
 ; Preserves DE and IX.  BC is saved/restored.
 ;
 ; Fixed 16-step shift-subtract divider specialised for divisor 10.  Unlike
-; DRSU (repeated subtraction, O(quotient)) this is bounded, so printing an
+; __udivmod (repeated subtraction, O(quotient)) this is bounded, so printing an
 ; N-digit number is O(N*16) instead of O(value) -- e.g. ~44x faster for
 ; values in the tens of thousands.
 pf_div10:
