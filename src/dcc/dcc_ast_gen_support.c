@@ -1700,6 +1700,7 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
     long b;
     struct Sym *s;
     int ei;
+    int op_unsigned;
 
     if (n == NULL)
         return 0;
@@ -1742,21 +1743,55 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
     case AST_LOGOR:
         if (!ast_const_scalar_fold(n->a, &a) || !ast_const_scalar_fold(n->b, &b))
             return 0;
+        /* a/b are host `long` - 64-bit on Linux/Mac (LP64) but only 32-bit
+         * on Windows (LLP64, both MSVC and MinGW). A target `unsigned long`
+         * literal that doesn't fit in a signed 32-bit range (e.g. the
+         * 4294967295UL in tests/tlmod.c) round-trips correctly as a large
+         * positive host long on a 64-bit host, but the exact same source
+         * value becomes -1 once %, /, a comparison, or >> apply plain
+         * signed host arithmetic to it on a 32-bit-long host - not a
+         * different BUG per host, the same stored bits, but two different
+         * (both self-consistent) interpretations of them, and only the
+         * signed operators care which one is in play. Reinterpreting
+         * through the host's own (unsigned long) - whatever width that
+         * happens to be locally - for an operand whose *source* type is
+         * unsigned recovers the correct result on both, since the value was
+         * originally parsed (strtoul, dcc_ast_build.c) using that same
+         * host's unsigned long semantics to begin with. */
+        op_unsigned = n->kind == AST_BINARY &&
+            ((ast_expr_type_for_sizeof(n->a) & TYPE_UNSIGNED) ||
+             (ast_expr_type_for_sizeof(n->b) & TYPE_UNSIGNED));
         switch (n->kind == AST_BINARY ? n->op : n->kind) {
         case '+': *out = a + b; return 1;
         case '-': *out = a - b; return 1;
         case '*': *out = a * b; return 1;
-        case '/': if (b == 0) return 0; *out = a / b; return 1;
-        case '%': if (b == 0) return 0; *out = a % b; return 1;
+        case '/':
+            if (b == 0) return 0;
+            *out = op_unsigned ? (long)((unsigned long)a / (unsigned long)b) : a / b;
+            return 1;
+        case '%':
+            if (b == 0) return 0;
+            *out = op_unsigned ? (long)((unsigned long)a % (unsigned long)b) : a % b;
+            return 1;
         case TOK_SHL: *out = a << b; return 1;
-        case TOK_SHR: *out = a >> b; return 1;
+        case TOK_SHR:
+            *out = op_unsigned ? (long)((unsigned long)a >> b) : a >> b;
+            return 1;
         case '&': *out = a & b; return 1;
         case '^': *out = a ^ b; return 1;
         case '|': *out = a | b; return 1;
-        case '<': *out = a < b; return 1;
-        case '>': *out = a > b; return 1;
-        case TOK_LE: *out = a <= b; return 1;
-        case TOK_GE: *out = a >= b; return 1;
+        case '<':
+            *out = op_unsigned ? (unsigned long)a < (unsigned long)b : a < b;
+            return 1;
+        case '>':
+            *out = op_unsigned ? (unsigned long)a > (unsigned long)b : a > b;
+            return 1;
+        case TOK_LE:
+            *out = op_unsigned ? (unsigned long)a <= (unsigned long)b : a <= b;
+            return 1;
+        case TOK_GE:
+            *out = op_unsigned ? (unsigned long)a >= (unsigned long)b : a >= b;
+            return 1;
         case TOK_EQ: *out = a == b; return 1;
         case TOK_NE: *out = a != b; return 1;
         case AST_LOGAND: *out = (a != 0) && (b != 0); return 1;
@@ -1816,6 +1851,7 @@ int ast_const_fold_strict(const struct AstNode *n, long *out)
 {
     long a;
     long b;
+    int op_unsigned;
 
     if (n == NULL)
         return 0;
@@ -1852,6 +1888,23 @@ int ast_const_fold_strict(const struct AstNode *n, long *out)
     case AST_BINARY:
         if (!ast_const_fold_strict(n->a, &a) || !ast_const_fold_strict(n->b, &b))
             return 0;
+        /* The a<0/b<0 checks below are meant to ask "is this operand's SOURCE
+         * TYPE unsigned" - genuinely unsigned values are never negative, so
+         * there is no signed/unsigned ambiguity to reject at all - but they
+         * ask it by inspecting the HOST long's raw sign bit instead, which
+         * only matches the source type's signedness by coincidence: host
+         * `long` is 64-bit on Linux/Mac (LP64), so any 32-bit unsigned target
+         * value fits as a positive host long with room to spare, but on
+         * Windows (LLP64, MSVC and MinGW both keep `long` at 32 bits) the
+         * exact same target value - e.g. 4294967295UL, tests/tlmod.c - is
+         * stored as a negative host long (its bit pattern reinterpreted
+         * as -1), tripping `a<0` and wrongly declining a fold that is not
+         * actually ambiguous at all. Check the operand's real source type
+         * first; only fall back to the host-sign heuristic (correct for
+         * genuinely signed operands, where a negative host value really can
+         * be a negative target value) when the type says signed. */
+        op_unsigned = (common_arith_type(ast_expr_type_for_sizeof(n->a),
+                                          ast_expr_type_for_sizeof(n->b)) & TYPE_UNSIGNED) != 0;
         switch (n->op) {
         case '+': *out = a + b; return 1;
         case '-': *out = a - b; return 1;
@@ -1862,13 +1915,49 @@ int ast_const_fold_strict(const struct AstNode *n, long *out)
         case TOK_SHL: if (b < 0 || b >= 32) return 0; *out = (long)((unsigned long)a << (unsigned int)b); return 1;
         case TOK_EQ: *out = (a == b); return 1;
         case TOK_NE: *out = (a != b); return 1;
-        case '/': if (a < 0 || b <= 0) return 0; *out = a / b; return 1;
-        case '%': if (a < 0 || b <= 0) return 0; *out = a % b; return 1;
-        case TOK_SHR: if (a < 0 || b < 0 || b >= 32) return 0; *out = a >> b; return 1;
-        case '<': if (a < 0 || b < 0) return 0; *out = (a < b); return 1;
-        case '>': if (a < 0 || b < 0) return 0; *out = (a > b); return 1;
-        case TOK_LE: if (a < 0 || b < 0) return 0; *out = (a <= b); return 1;
-        case TOK_GE: if (a < 0 || b < 0) return 0; *out = (a >= b); return 1;
+        case '/':
+            if (op_unsigned) {
+                if (b == 0) return 0;
+                *out = (long)((unsigned long)a / (unsigned long)b);
+                return 1;
+            }
+            if (a < 0 || b <= 0) return 0;
+            *out = a / b;
+            return 1;
+        case '%':
+            if (op_unsigned) {
+                if (b == 0) return 0;
+                *out = (long)((unsigned long)a % (unsigned long)b);
+                return 1;
+            }
+            if (a < 0 || b <= 0) return 0;
+            *out = a % b;
+            return 1;
+        case TOK_SHR:
+            if (op_unsigned) {
+                if (b < 0 || b >= 32) return 0;
+                *out = (long)((unsigned long)a >> (unsigned int)b);
+                return 1;
+            }
+            if (a < 0 || b < 0 || b >= 32) return 0;
+            *out = a >> b;
+            return 1;
+        case '<':
+            if (op_unsigned) { *out = (unsigned long)a < (unsigned long)b; return 1; }
+            if (a < 0 || b < 0) return 0;
+            *out = (a < b); return 1;
+        case '>':
+            if (op_unsigned) { *out = (unsigned long)a > (unsigned long)b; return 1; }
+            if (a < 0 || b < 0) return 0;
+            *out = (a > b); return 1;
+        case TOK_LE:
+            if (op_unsigned) { *out = (unsigned long)a <= (unsigned long)b; return 1; }
+            if (a < 0 || b < 0) return 0;
+            *out = (a <= b); return 1;
+        case TOK_GE:
+            if (op_unsigned) { *out = (unsigned long)a >= (unsigned long)b; return 1; }
+            if (a < 0 || b < 0) return 0;
+            *out = (a >= b); return 1;
         default: return 0;
         }
     default:
