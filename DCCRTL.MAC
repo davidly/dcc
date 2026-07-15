@@ -5353,9 +5353,7 @@ __stchk:
         ld      de,(__hlimit)
         or      a
         sbc     hl,de           ; carry set iff SP < __hlimit
-        jr      c,stchk_over
-        ret
-stchk_over:
+        ret     nc              ; no overflow: return; carry set falls straight through
         ; HL = SP - __hlimit (negative). Negate to get overflow = __hlimit - SP.
         ld      a,l
         cpl
