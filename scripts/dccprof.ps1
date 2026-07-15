@@ -174,4 +174,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "done: open $OutDir/${lowerBase}_profile_summary.md"
+Write-Host "done: open $(Join-Path $OutDir "${lowerBase}_profile_summary.md")"
