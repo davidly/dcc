@@ -165,6 +165,82 @@ the size, bake it in by building with `DCC_STACK_SIZE=<n> ./ma.sh <app>` or, for
 the regression suite, add it to the per-app `stack_size_for` table in
 `runall.sh` (and the matching block in `runall.bat`).
 
+## `dccprof.sh` / `dccprof.bat` / `dccprof.py`
+
+Builds an app (peep-optimized, the real shipped build), runs it under
+`ntvcm`'s per-PC execution-count profiler (`-g:<file>`), and correlates the
+result against the build's `.PRN`/`.SYM` listings into a hot-function
+summary plus per-line annotated listings you can open directly in an
+editor - no manual address correlation required.
+
+### Purpose
+
+`ntvcm -g:<file>` writes a raw `pc,count,asm` CSV of every executed
+address, but a dcc build links two separately-assembled modules (the app
+and the stripped runtime, `RTLMIN.MAC`) at final addresses that differ from
+each module's own standalone `.PRN` listing by a different offset per
+module - and a `.PRN` listing's address column is the address *after* each
+line's own emitted bytes, not its start (see `dccprof.py`'s own module
+docstring for how this was confirmed against known Z80 instruction
+encodings). Getting either of these wrong silently shifts hit counts to
+the wrong function or line with no crash to reveal the mistake.
+`dccprof.py` formalizes the correlation once, correctly, instead of
+requiring it be re-derived by hand for every profiling investigation - it
+is also directly reusable on its own against an already-built app and an
+already-captured profile.
+
+### Usage
+
+```sh
+scripts/dccprof.sh <app> [--source-path FILE] [--build-dir DIR] [--out-dir DIR] [--clock HZ] [-- program-args...]
+```
+
+```bat
+scripts\dccprof.bat <app> [-SourcePath FILE] [-BuildDir DIR] [-OutDir DIR] [-Clock HZ] [-- program-args...]
+```
+
+`dccprof.bat` delegates the build itself to `ma.ps1` (via `pwsh`, like this
+repo's other Windows orchestration) rather than reimplementing the dcc
+pipeline; both wrappers add the same profiling-specific steps on top:
+regenerating `RTLMIN.PRN` (a normal build only assembles it without the
+`/L` listing flag, since nothing else needs it), running the app under
+`ntvcm -g`, and invoking `dccprof.py`.
+
+### Examples
+
+```sh
+scripts/dccprof.sh tbig
+scripts/dccprof.sh tbig -- 20000
+scripts/dccprof.sh mm --build-dir /tmp/profmm
+```
+
+### Output
+
+Written to `-OutDir`/`--out-dir` (default: same as the build directory):
+
+- `<app>_profile_summary.md` — ranked hot-function table (hits, % of
+  total, module, function name). Open directly, or in VS Code's Markdown
+  preview.
+- `<app>_profile_app.txt` — the app's own `.MAC`, with every instruction
+  line prefixed by its own hit count, in original `.PRN` address/line-
+  number order.
+- `<app>_profile_rtl.txt` — the same, for whichever `DCCRTL.MAC` routines
+  were actually hit (routines never reached are omitted - the full runtime
+  is large and a given run typically touches only a small slice of it).
+
+Open an annotated listing directly in any editor and use search / go-to-
+line to jump to a specific hot address or line called out in the summary.
+
+### Calling `dccprof.py` directly
+
+Given an already-built app (its `.PRN`/`.SYM`/`.MAC`, plus a regenerated
+`RTLMIN.PRN`) and an already-captured profile CSV, skip the build+run
+steps entirely:
+
+```sh
+python3 scripts/dccprof.py --app tbig --build-dir build/dccprof/tbig --profile-csv build/dccprof/tbig/tbig_profile.csv
+```
+
 ## `ma.ps1`
 
 Cross-platform build driver (Windows PowerShell 5.1 and PowerShell 7+ equivalent of `ma.sh`). Compiles a
