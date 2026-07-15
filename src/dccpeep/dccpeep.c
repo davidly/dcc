@@ -11803,6 +11803,41 @@ static int hoistbc_parse_ld_l_ix_off(const char *s, int *off)
     return 1;
 }
 
+/* Same as hoistbc_parse_ld_l_ix_off, for "ld c,(ix+N)" - the compiler's own
+ * BC-regalloc load shape (see function_has_bc_regalloc_entry) rather than
+ * this pass's own hoist-candidate shape. */
+static int hoistbc_parse_ld_c_ix_off(const char *s, int *off)
+{
+    char buf[MAX_LINE];
+    char *semi;
+    int n;
+    const char *p;
+    int sign;
+    int v;
+
+    strncpy(buf, s, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = 0;
+    semi = strchr(buf, ';');
+    if (semi) *semi = 0;
+    n = (int)strlen(buf);
+    while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+        buf[--n] = 0;
+
+    if (strncmp(buf, "ld c,(ix", 8) != 0)
+        return 0;
+    p = buf + 8;
+    if (*p == '+') { sign = 1; p++; }
+    else if (*p == '-') { sign = -1; p++; }
+    else return 0;
+    if (*p < '0' || *p > '9') return 0;
+    v = 0;
+    while (*p >= '0' && *p <= '9')
+        v = v * 10 + (*p++ - '0');
+    if (strcmp(p, ")") != 0) return 0;
+    *off = sign * v;
+    return 1;
+}
+
 /* Conservative check: does this line reference register `lo`, `hi`, or
  * the `pair` register pair (e.g. "b"/"c"/"bc") in any way? Guards a pass's
  * exclusive claim on a register pair for the whole loop body. A false
@@ -11863,6 +11898,43 @@ static int line_touches_de(const char *s)
 static int line_touches_hl(const char *s)
 {
     return line_touches_reg_pair(s, "l", "h", "hl");
+}
+
+/* True iff [func_start, func_end) contains the compiler's own BC-regalloc
+ * load shape: "ld c,(ix+N)" immediately followed by "ld b,(ix+N+1)" for the
+ * same N, wherever it appears (the function's initial load of the cached
+ * parameter, or any later on-demand reload dcc_func.c's regalloc_buffer_
+ * finalize inserted at a loop header). That exact two-line pair is only
+ * ever emitted for a bc-resident parameter (dcc_symbols.c's REG_BC
+ * candidate) - nothing else in codegen produces it - so its presence means
+ * BC is already claimed for the life of this function, for a value this
+ * pass has no way to know is safe to clobber.
+ *
+ * Without this check, pass_hoist_index_ptr_to_bc and this pass raced for
+ * the same register: dcc reserves BC for a read-only parameter for the
+ * whole function, but this peephole pass runs later and has no visibility
+ * into that reservation, so it could just as easily decide to hoist an
+ * unrelated loop counter/pointer into BC too - silently overwriting the
+ * cached parameter the moment the loop's own header (or any reload dcc
+ * inserted) next reads it. Found via tests/tvla.c and tests/tautolcs.c
+ * after tightening dcc_func.c's own reload insertion to be conditional on
+ * an actual clobber: without that context, dcc's conditional reload logic
+ * cannot see a hoist THIS pass performs after dcc has already finished, so
+ * the only place left that can reliably avoid the collision is here. */
+static int function_has_bc_regalloc_entry(int func_start, int func_end)
+{
+    int k;
+    int off;
+
+    for (k = func_start; k + 1 < func_end; ++k) {
+        if (hoistbc_parse_ld_c_ix_off(lines[k], &off)) {
+            char exp_b[40];
+            sprintf(exp_b, "ld b,(ix%+d)", off + 1);
+            if (eq(k + 1, exp_b))
+                return 1;
+        }
+    }
+    return 0;
 }
 
 /*
@@ -11992,6 +12064,15 @@ static int pass_hoist_index_ptr_to_bc(void)
             int func_start, func_end;
             int external_entry = 0;
             find_function_bounds(i, &func_start, &func_end);
+            /* dcc itself may already have BC claimed for the whole function
+             * (a read-only parameter cached across every call site - see
+             * function_has_bc_regalloc_entry). This pass has no visibility
+             * into that reservation and no way to safely coexist with it -
+             * the "no other line touches bc" check below only covers this
+             * one loop's body, not the reload dcc may have planted at a
+             * DIFFERENT loop's header elsewhere in the same function. */
+            if (function_has_bc_regalloc_entry(func_start, func_end))
+                continue;
             for (k = func_start; k < func_end; ++k) {
                 if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
                     if (k <= i || k > loop_end) { external_entry = 1; break; }
