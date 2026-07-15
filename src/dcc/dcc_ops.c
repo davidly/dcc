@@ -883,19 +883,28 @@ void emit_float_compare_call(int op)
     int k;
 
     /* The evaluation sequence pushes the left operand first, computes and
-     * pushes the right operand second.  That means the C-style helper sees
-     * arguments in reversed order: arg1=right, arg2=left.  Use the inverse
-     * ordered helper where necessary.
+     * leaves the right operand live in DE:HL second.  That means the
+     * C-style helper sees arguments in reversed order: arg1 ("a", live)
+     * =right, arg2 ("b", pushed)=left.  Use the inverse ordered helper
+     * where necessary.
+     *
+     * The "f" suffix on each of these is DCCRTL.MAC's fastcall
+     * convention (matching __faf/__fsf/__fmf/__fdf/__fmaf): arg1 taken
+     * live in DE:HL instead of via a second push/pop round trip - the
+     * caller here only pushes the left operand now.  __fnef, not
+     * __fneqf, sidesteps M80's 6-significant-character public-symbol
+     * truncation, which would otherwise collide with __fneq itself (the
+     * same pitfall __fmaf's own name was chosen to avoid).
      */
-    if (op == TOK_EQ) helper = "__feq";
-    else if (op == TOK_NE) helper = "__fneq";
-    else if (op == '<') helper = "__fgt";      /* rhs > lhs */
-    else if (op == '>') helper = "__flt";      /* rhs < lhs */
-    else if (op == TOK_LE) helper = "__fge";   /* rhs >= lhs */
-    else helper = "__fle";                     /* rhs <= lhs */
+    if (op == TOK_EQ) helper = "__feqf";
+    else if (op == TOK_NE) helper = "__fnef";
+    else if (op == '<') helper = "__fgtf";     /* rhs > lhs */
+    else if (op == '>') helper = "__fltf";     /* rhs < lhs */
+    else if (op == TOK_LE) helper = "__fgef";  /* rhs >= lhs */
+    else helper = "__flef";                    /* rhs <= lhs */
 
     emit_runtime_call(helper);
-    for (k = 0; k < 4; ++k)
+    for (k = 0; k < 2; ++k)
         emit("\tpop bc\n");
     g_expr_type = TYPE_INT;
 }

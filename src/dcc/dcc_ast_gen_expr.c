@@ -1205,7 +1205,9 @@ void gen_binary_ast(const struct AstNode *n)
         ast_gen_expr(n->b);
         if (!type_is_float(g_expr_type))
             emit_convert_int_to_float(g_expr_type);
-        emit("\tpush de\n\tpush hl\n");
+        /* n->b is still live in DE:HL right here - emit_float_compare_call
+         * now emits the fastcall comparison variants, which take it that
+         * way instead of via a second push/pop round trip. */
         emit_float_compare_call(n->op);
         g_expr_type = TYPE_INT;
         g_long_from16 = 0;

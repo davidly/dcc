@@ -1866,7 +1866,8 @@ void ast_gen_float_cmp_branch(const struct AstNode *n, int label,
     ast_gen_expr(n->b);
     if (!type_is_float(g_expr_type))
         emit_convert_int_to_float(g_expr_type);
-    emit("\tpush de\n\tpush hl\n");
+    /* n->b is still live in DE:HL right here - see the fastcall call
+     * site in gen_binary_ast for why this skips a second push. */
     emit_float_compare_call(n->op);
     emit_branch_on_bool_hl(label, branch_when_true);
 }

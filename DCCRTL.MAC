@@ -11668,6 +11668,131 @@ _dcc_nan:
         dw      0
         dw      32704
 
+; ---------------------------------------------------------------------------
+; Fastcall float comparisons.  emit_float_compare_call's own header (see
+; dcc_ops.c) explains the operand order these all share: the codegen
+; evaluation sequence pushes the left C-level operand first, then computes
+; the right one last, so every comparison helper's own "a" (its first
+; declared parameter, landing at ix+4 in the classic two-push cdecl frame
+; below) is really the RIGHT operand - live in DE:HL at every call site,
+; exactly like __faf/__fsf/__fmf/__fdf's live operand - and "b" (ix+8) is
+; the left operand, still requiring one push. These take "a" live and only
+; push "b", matching that existing fastcall convention; only the single
+; pushed operand's ix offset shifts down from ix+8 to ix+4, with "a"
+; sourced from D/E/H/L directly wherever the cdecl body read ix+4..7.
+; ---------------------------------------------------------------------------
+
+        public  __feqf
+__feqf:
+        ; fastcall int __feqf(float a [live DE:HL], float b [pushed]).
+        ; "__feqf" is exactly 6 characters, M80's public-symbol
+        ; significant-character limit, and doesn't collide with "__feq"
+        ; (5 characters, a different string) - unlike __fnef below,
+        ; this one needed no workaround name.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+
+        ld      a,l
+        cp      (ix+4)
+        jr      nz,__feqf_diff
+        ld      a,h
+        cp      (ix+5)
+        jr      nz,__feqf_diff
+        ld      a,e
+        cp      (ix+6)
+        jr      nz,__feqf_diff
+        ld      a,d
+        cp      (ix+7)
+        jr      nz,__feqf_diff
+
+        ; Raw-identical -> still unequal if NaN.  a is unchanged in
+        ; DE:HL (the byte comparisons above only ever wrote to A), so
+        ; __fnan can be called directly - no reload needed, unlike
+        ; __feq's own cdecl body which has to fetch its bytes from the
+        ; stack first.
+        call    __fnan
+        ld      a,l
+        xor     1
+        ld      l,a
+        jr      __feqf_ret
+
+__feqf_diff:
+        ; Raw-different -> equal only for +0 vs -0.
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      nz,__feqf_false
+        ld      a,(ix+7)
+        and     7fh
+        or      (ix+6)
+        or      (ix+5)
+        or      (ix+4)
+        jr      nz,__feqf_false
+        ld      hl,1
+        jr      __feqf_ret
+
+__feqf_false:
+        ld      hl,0
+__feqf_ret:
+        ld      sp,ix
+        pop     ix
+        ret
+
+        public  __fnef
+__fnef:
+        ; fastcall int __fnef(float a [live DE:HL], float b [pushed]).
+        ; Named __fnef, not __fneqf: M80 truncates public symbols to 6
+        ; significant characters, and __fneqf truncates to __fneq,
+        ; colliding with __fneq itself - the same __fmaddf/__fmadd
+        ; pitfall hit earlier (see __fmaf's header in this file for the
+        ; full story), avoided here up front instead of at link time.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+
+        ld      a,l
+        cp      (ix+4)
+        jr      nz,__fnef_diff
+        ld      a,h
+        cp      (ix+5)
+        jr      nz,__fnef_diff
+        ld      a,e
+        cp      (ix+6)
+        jr      nz,__fnef_diff
+        ld      a,d
+        cp      (ix+7)
+        jr      nz,__fnef_diff
+
+        ; Raw-identical -> unequal only if NaN.  a still live in DE:HL.
+        call    __fnan
+        jr      __fnef_ret
+
+__fnef_diff:
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      nz,__fnef_true
+        ld      a,(ix+7)
+        and     7fh
+        or      (ix+6)
+        or      (ix+5)
+        or      (ix+4)
+        jr      nz,__fnef_true
+        ld      hl,0
+        jr      __fnef_ret
+
+__fnef_true:
+        ld      hl,1
+__fnef_ret:
+        ld      sp,ix
+        pop     ix
+        ret
+
         public  __feq
 __feq:
         ; int __feq(float a, float b)
@@ -11791,6 +11916,344 @@ __fneq_ret:
 ; Calling convention: first arg at IX+4..IX+7, second arg at IX+8..IX+11.
 ; Return HL=1 for true, HL=0 for false.
 ; ---------------------------------------------------------------------------
+
+; __fcmpsf / __frcmpf: fastcall ports of __fcmps/__frcmp below (see their
+; own header for the algorithm), for the cold paths of the fastcall
+; ordered comparisons (__fltf/__fgtf/__flef/__fgef).  a is already live
+; in D/E/H/L and b is already at the caller's own ix+4..7 (the only
+; pushed operand in that 2-push frame) - exactly like the fast-path
+; register substitutions above, every "(ix+7)"/(ix+11) a/b byte pair in
+; the originals becomes a plain register read (a) paired with
+; (ix+7)/(ix+6)/(ix+5)/(ix+4) (b).  An earlier version of this instead
+; reconstructed a classic a@ix+4,b@ix+8 frame on the stack (six pushes,
+; six pops, two exx's) purely to reuse __fcmps unmodified - correct, but
+; its overhead outweighed the fastcall calling-convention savings for
+; any code exercising this cold path often (caught by tc89fcmp.c's
+; perf baseline regressing ~8.5% despite every correctness check still
+; passing). Porting the body directly, the same way __flt/etc.'s own
+; fast paths were ported, costs nothing extra to call at all: no setup,
+; no restoration, ix is never touched.
+__fcmpsf:
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      nz,__fcmpsf_bnan
+        bit     7,e
+        jr      z,__fcmpsf_bnan
+        ld      a,e
+        and     7fh
+        or      h
+        or      l
+        jp      nz,__fcunf
+
+__fcmpsf_bnan:
+        ld      a,(ix+7)
+        and     7fh
+        cp      7fh
+        jr      nz,__fcmpsf_zero
+        bit     7,(ix+6)
+        jr      z,__fcmpsf_zero
+        ld      a,(ix+6)
+        and     7fh
+        or      (ix+5)
+        or      (ix+4)
+        jp      nz,__fcunf
+
+__fcmpsf_zero:
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      nz,__fcsgf
+        ld      a,(ix+7)
+        and     7fh
+        or      (ix+6)
+        or      (ix+5)
+        or      (ix+4)
+        jp      z,__fceqf
+__fcsgf:
+        ld      a,d
+        xor     (ix+7)
+        and     80h
+        jr      z,__fcsmf
+        ld      a,d
+        bit     7,a
+        jp      nz,__fcltf
+        jp      __fcgtf
+__fcsmf:
+        ld      a,d
+        bit     7,a
+        jr      nz,__fcsnf
+        jp      __frcmpf
+__fcsnf:
+        call    __frcmpf
+        cp      1
+        jp      z,__fcgtf
+        cp      3
+        jr      z,__fcltf
+        ret
+__fcunf:
+        xor     a
+        ret
+__fcltf:
+        ld      a,1
+        ret
+__fceqf:
+        ld      a,2
+        ret
+__fcgtf:
+        ld      a,3
+        ret
+
+__frcmpf:
+        ld      a,d
+        cp      (ix+7)
+        jr      c,__frclf
+        jr      nz,__frcgf
+        ld      a,e
+        cp      (ix+6)
+        jr      c,__frclf
+        jr      nz,__frcgf
+        ld      a,h
+        cp      (ix+5)
+        jr      c,__frclf
+        jr      nz,__frcgf
+        ld      a,l
+        cp      (ix+4)
+        jr      c,__frclf
+        jr      nz,__frcgf
+        ld      a,2
+        ret
+__frclf:
+        ld      a,1
+        ret
+__frcgf:
+        ld      a,3
+        ret
+
+        public  __fltf
+__fltf:
+        ; fastcall int __fltf(float a [live DE:HL], float b [pushed]) -
+        ; a < b.  Direct port of __flt's own fast path: every (ix+7)/
+        ; (ix+11) pair reading a's/b's byte from the classic two-push
+        ; frame becomes a register read (a is live) paired with
+        ; (ix+7)/(ix+6)/(ix+5)/(ix+4) (b, now the only pushed operand,
+        ; one push closer to the return address than before).
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      a,d
+        ld      b,a
+        ld      a,(ix+7)
+        or      b               ; both sign bits must be 0
+        and     80h
+        jr      nz,__fltf_slow
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      z,__fltf_slow   ; a: D&7F==7F => might be NaN/Inf
+        ld      a,(ix+7)
+        and     7fh
+        cp      7fh
+        jr      z,__fltf_slow   ; b: D&7F==7F => might be NaN/Inf
+        ld      a,d
+        cp      (ix+7)
+        jr      c,__fltf1
+        jr      nz,__fltf0
+        ld      a,e
+        cp      (ix+6)
+        jr      c,__fltf1
+        jr      nz,__fltf0
+        ld      a,h
+        cp      (ix+5)
+        jr      c,__fltf1
+        jr      nz,__fltf0
+        ld      a,l
+        cp      (ix+4)
+        jr      c,__fltf1
+        jr      __fltf0
+
+__fltf_slow:
+        call    __fcmpsf
+        cp      1
+        jr      z,__fltf1       ; a < b
+        jr      __fltf0
+__fltf1:
+        ld      hl,1
+        ld      sp,ix
+        pop     ix
+        ret
+__fltf0:
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+        public  __fgtf
+__fgtf:
+        ; fastcall int __fgtf(float a [live DE:HL], float b [pushed]) -
+        ; a > b == b < a.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      a,d
+        ld      b,a
+        ld      a,(ix+7)
+        or      b
+        and     80h
+        jr      nz,__fgtf_slow
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      z,__fgtf_slow
+        ld      a,(ix+7)
+        and     7fh
+        cp      7fh
+        jr      z,__fgtf_slow
+        ld      a,(ix+7)        ; compare b vs a (b < a means a > b)
+        cp      d
+        jr      c,__fgtf1
+        jr      nz,__fgtf0
+        ld      a,(ix+6)
+        cp      e
+        jr      c,__fgtf1
+        jr      nz,__fgtf0
+        ld      a,(ix+5)
+        cp      h
+        jr      c,__fgtf1
+        jr      nz,__fgtf0
+        ld      a,(ix+4)
+        cp      l
+        jr      c,__fgtf1
+        jr      __fgtf0
+
+__fgtf_slow:
+        call    __fcmpsf
+        cp      3
+        jr      z,__fgtf1       ; a > b
+        jr      __fgtf0
+__fgtf1:
+        ld      hl,1
+        ld      sp,ix
+        pop     ix
+        ret
+__fgtf0:
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+        public  __flef
+__flef:
+        ; fastcall int __flef(float a [live DE:HL], float b [pushed]) -
+        ; a <= b, false if unordered.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      a,d
+        ld      b,a
+        ld      a,(ix+7)
+        or      b
+        and     80h
+        jr      nz,__flef_slow
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      z,__flef_slow
+        ld      a,(ix+7)
+        and     7fh
+        cp      7fh
+        jr      z,__flef_slow
+        ld      a,d
+        cp      (ix+7)
+        jr      c,__flef1
+        jr      nz,__flef0
+        ld      a,e
+        cp      (ix+6)
+        jr      c,__flef1
+        jr      nz,__flef0
+        ld      a,h
+        cp      (ix+5)
+        jr      c,__flef1
+        jr      nz,__flef0
+        ld      a,l
+        cp      (ix+4)
+        jr      c,__flef1
+        jr      nz,__flef0
+        jr      __flef1         ; equal => a <= b
+
+__flef_slow:
+        call    __fcmpsf
+        or      a
+        jr      z,__flef0       ; unordered
+        cp      3
+        jr      z,__flef0       ; greater
+        ; falls through: less or equal
+__flef1:
+        ld      hl,1
+        ld      sp,ix
+        pop     ix
+        ret
+__flef0:
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
+
+        public  __fgef
+__fgef:
+        ; fastcall int __fgef(float a [live DE:HL], float b [pushed]) -
+        ; a >= b, false if unordered.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      a,d
+        ld      b,a
+        ld      a,(ix+7)
+        or      b
+        and     80h
+        jr      nz,__fgef_slow
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      z,__fgef_slow
+        ld      a,(ix+7)
+        and     7fh
+        cp      7fh
+        jr      z,__fgef_slow
+        ld      a,d
+        cp      (ix+7)
+        jr      c,__fgef0       ; a_byte < b_byte => a < b
+        jr      nz,__fgef1      ; a_byte > b_byte => a > b
+        ld      a,e
+        cp      (ix+6)
+        jr      c,__fgef0
+        jr      nz,__fgef1
+        ld      a,h
+        cp      (ix+5)
+        jr      c,__fgef0
+        jr      nz,__fgef1
+        ld      a,l
+        cp      (ix+4)
+        jr      c,__fgef0
+        jr      __fgef1         ; equal or a_byte >= b_byte => a >= b
+
+__fgef_slow:
+        call    __fcmpsf
+        cp      2
+        jr      nc,__fgef1      ; equal or greater
+        jr      __fgef0         ; unordered or less
+__fgef1:
+        ld      hl,1
+        ld      sp,ix
+        pop     ix
+        ret
+__fgef0:
+        ld      hl,0
+        ld      sp,ix
+        pop     ix
+        ret
 
         public  __flt
 __flt:
