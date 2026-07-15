@@ -13374,12 +13374,13 @@ __fmadd:
 
         ; Register-resident unpack of 'a' (main bank) and 'b' (alternate
         ; bank) via FUNR - see __fadd's design notes. Unlike the memory-
-        ; based FUNA/FUNB (still used by __fmul above and by the memory-
-        ; based fallback below), this never touches named memory for
-        ; AM0-2/BM0-2/AEXP/BEXP/ASGN/BSGN - which matters because the
-        ; common case (both operands small-integer-valued, e.g. mm.c-style
-        ; matrices) hits the fast path further down and never needs memory
-        ; at all for the mantissa multiply.
+        ; based FUNA/FUNB (used only by __fdiv/__fdf; __fmul/__fmf and the
+        ; general-case fallback below are both register-resident too), this
+        ; never touches named memory for AM0-2/BM0-2/AEXP/BEXP/ASGN/BSGN -
+        ; which matters because the common case (both operands small-
+        ; integer-valued, e.g. mm.c-style matrices) hits the fast path
+        ; further down and never needs memory at all for the mantissa
+        ; multiply.
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
@@ -13614,60 +13615,52 @@ FQOVF:
         jp      FQINF_A
 
 FQFB1:
-        ; Alo != 0: no fast path. Store both operands to the same memory
-        ; locations __fmul's unchanged FUNA/FUNB would have, then jump
-        ; into FQANZ, whose own header re-checks Blo to pick the full
-        ; four-term computation or FQANBZ - exactly the check this path
-        ; still needs, so no work is duplicated.  ASGN:AEXP are contiguous,
-        ; so write them together without routing both bytes through A.
+        ; Alo != 0: general case, computed fully in registers - a
+        ; structural port of __fmul's own register-resident redesign
+        ; (see FMBODY/FM_BLO_NZ) to this routine's native layout, in
+        ; place of the old spill to AM0-2/BM0-2 and the four redundant
+        ; memory rereads that came with it.  Sign/exponent are already
+        ; final here, so stash them first, exactly as before.
         ld      e,d             ; E=sign
         ld      d,b             ; D=exponent
         ld      (ASGN),de
-        ld      a,c
-        ld      (AM2),a
-        ld      (AM0),hl
-        exx
-        ld      a,c
-        ld      (BM2),a
-        ld      (BM0),hl
-        exx
-        jp      FQANZ
 
-FQFB2:
-        ; Alo == 0, Blo != 0: store the same way, then jump directly into
-        ; FQAZBN - its precondition is already exactly established here,
-        ; so no re-check is needed.  Store sign/exponent as one word.
-        ld      e,d             ; E=sign
-        ld      d,b             ; D=exponent
-        ld      (ASGN),de
+        ; Move Ahi into the alt bank to join Bhi (alt C'), freeing main
+        ; C and letting both mantissa-high bytes be fetched via a cheap
+        ; exx round trip for the rest of this computation.  A survives
+        ; exx, and __m8u below never touches A/B/C/D, so a value fetched
+        ; this way also survives an __m8u call - only __m1u, used once
+        ; for the Alo*Blo term, clobbers A (and HL).
         ld      a,c
-        ld      (AM2),a
-        ld      (AM0),hl
         exx
-        ld      a,c
-        ld      (BM2),a
-        ld      (BM0),hl
+        ld      d,a             ; alt D'=Ahi (alt C'=Bhi, untouched)
         exx
-        jp      FQAZBN
 
-FQANZ:
-        ld      bc,(BM0)
-        ld      a,b
-        or      c
-        jp      z,FQANBZ
+        exx
+        ld      a,h
+        or      l
+        exx
+        jp      z,FQANBZ        ; Alo != 0, Blo == 0
 
-        ; BC already contains Blo from the zero test above.  Move it to HL
-        ; directly instead of rereading the same word from memory.
-        ld      h,b
-        ld      l,c
-        ld      bc,(AM0)
-        call    __m1u
+        ; Alo != 0, Blo != 0: all four partial products.  Move Blo to
+        ; the main bank via the stack; HL (main) still holds Alo,
+        ; untouched since entry.
+        exx
+        push    hl
+        exx
+        pop     bc              ; BC=Blo
+        push    hl              ; stash Alo (__m1u clobbers HL)
+        call    __m1u           ; BC=Blo, HL=Alo -> DE:HL = Alo*Blo
         ld      (FP2),de
         ld      de,0
         ld      (FP4),de
+        pop     hl              ; HL=Alo restored
 
-        ld      bc,(BM0)
-        ld      a,(AM2)
+        ; Ahi*Blo: A=Ahi (alt D'), BC=Blo (still preserved from __m1u).
+        exx
+        ld      a,d
+        exx
+        push    hl              ; stash Alo (__m8u clobbers HL)
         call    __m8u
         ld      c,e
         ld      b,l
@@ -13679,10 +13672,16 @@ FQANZ:
         ld      hl,(FP4)
         adc     hl,de
         ld      (FP4),hl
+        pop     hl              ; HL=Alo restored
 
-        ld      bc,(AM0)
-        ld      a,(BM2)
-        call    __m8u
+        ; Alo*Bhi: A=Bhi (alt C'), BC=Alo (just restored above).
+        exx
+        ld      a,c
+        exx
+        ld      b,h
+        ld      c,l
+        call    __m8u           ; __m8u preserves A, so it still holds
+                                 ; Bhi for the term below.
         ld      c,e
         ld      b,l
         ld      e,h
@@ -13694,10 +13693,13 @@ FQANZ:
         adc     hl,de
         ld      (FP4),hl
 
-        ld      a,(BM2)
+        ; Ahi*Bhi: A still holds Bhi (see above); only Ahi needs a
+        ; fresh fetch.  BC=0:Bhi.
         ld      c,a
         ld      b,0
-        ld      a,(AM2)
+        exx
+        ld      a,d
+        exx
         call    __m8u
         ld      c,e
         ld      b,l
@@ -13707,9 +13709,15 @@ FQANZ:
         jp      FQDONE
 
 FQANBZ:
-        ld      bc,(AM0)
-        ld      a,(BM2)
-        call    __m8u
+        ; Alo != 0, Blo == 0: Alo*Bhi plus Ahi*Bhi only (both terms
+        ; involving Blo vanish).  HL still holds Alo since FQFB1's
+        ; entry; alt D'=Ahi, alt C'=Bhi from the relocation above.
+        exx
+        ld      a,c             ; A=Bhi
+        exx
+        ld      b,h
+        ld      c,l             ; BC=Alo
+        call    __m8u           ; A=Bhi, BC=Alo -> HL:E = Alo*Bhi
         ld      c,e
         ld      b,l
         ld      (FP2),bc
@@ -13717,10 +13725,12 @@ FQANBZ:
         ld      d,0
         ld      (FP4),de
 
-        ld      a,(BM2)
+        ; Ahi*Bhi: A still holds Bhi (__m8u preserves it).
         ld      c,a
         ld      b,0
-        ld      a,(AM2)
+        exx
+        ld      a,d             ; A=Ahi
+        exx
         call    __m8u
         ld      c,e
         ld      b,l
@@ -13729,10 +13739,21 @@ FQANBZ:
         ld      (FP4),hl
         jp      FQDONE
 
-FQAZBN:
-        ld      bc,(BM0)
-        ld      a,(AM2)
-        call    __m8u
+FQFB2:
+        ; Alo == 0, Blo != 0: Ahi*Blo plus Ahi*Bhi only.  Ahi is not
+        ; relocated to the alt bank on this path (that only happens in
+        ; FQFB1, above), so fetch it from main C directly, before it's
+        ; overwritten below.
+        ld      e,d             ; E=sign
+        ld      d,b             ; D=exponent
+        ld      (ASGN),de
+        ld      a,c             ; A=Ahi
+
+        exx
+        push    hl              ; Blo
+        exx
+        pop     bc              ; BC=Blo
+        call    __m8u           ; A=Ahi, BC=Blo -> HL:E = Ahi*Blo
         ld      c,e
         ld      b,l
         ld      (FP2),bc
@@ -13740,10 +13761,18 @@ FQAZBN:
         ld      d,0
         ld      (FP4),de
 
-        ld      a,(BM2)
-        ld      c,a
-        ld      b,0
-        ld      a,(AM2)
+        ; Ahi*Bhi: A still holds Ahi (__m8u preserves it).  Bhi is
+        ; still in alt C', untouched; move it to the main bank via the
+        ; stack (two bare exx's would cancel out and just restore the
+        ; stale main-bank BC instead of promoting the alt-bank value -
+        ; the stack, not a write-then-swap-back, is what actually
+        ; crosses banks, matching the Blo transfer above).  A (Ahi)
+        ; is never disturbed by any of this.
+        exx
+        ld      b,0             ; alt B'=0; alt C'=Bhi untouched
+        push    bc              ; push {0,Bhi}
+        exx
+        pop     bc              ; BC(main) = {0, Bhi} = 0:Bhi
         call    __m8u
         ld      c,e
         ld      b,l
@@ -13751,18 +13780,6 @@ FQAZBN:
         add     hl,bc
         ld      (FP4),hl
         jp      FQDONE
-
-
-        ld      de,0
-        ld      (FP2),de
-        ld      a,(BM2)
-        ld      c,a
-        ld      b,0
-        ld      a,(AM2)
-        call    __m8u
-        ld      h,l
-        ld      l,e
-        ld      (FP4),hl
 
 FQDONE:
         ; Load FP5:FP4 once and reuse it in both normalization paths, matching
