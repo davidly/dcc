@@ -12458,6 +12458,305 @@ static int pass_walk_hoisted_index_ptr(void)
     return changed;
 }
 
+/*
+ * pass_walk_row_cached_float_index:
+ *
+ * A float 2D array indexed as ROW[k] inside a k-loop, where ROW is itself a
+ * loop-invariant row-base pointer already cached in a frame slot (by the
+ * compiler's own row-invariant-2D-read hoist) - tests/mm.c's matmult()/
+ * fmatmult(): A[i][k] inside the k-loop, with A[i]'s row address cached once
+ * per (i,j) pair - still recomputes the element address from that cached
+ * row base plus k*4 (the float stride) from scratch every iteration:
+ *
+ *   ld l,(ix-R)
+ *   ld h,(ix-R-1)
+ *   push hl
+ *   ld l,(ix-K)
+ *   ld h,0
+ *   add hl,hl
+ *   add hl,hl
+ *   ex de,hl
+ *   pop hl
+ *   add hl,de          ; hl = row_base + k*4
+ *   ld e,(hl)           ; 4-byte float read follows...
+ *   inc hl
+ *   ld d,(hl)
+ *   inc hl
+ *   ld a,(hl)
+ *   inc hl
+ *   ld h,(hl)
+ *   ld l,a
+ *   ex de,hl
+ *   push de
+ *   push hl             ; ...packed as a stack argument for a call
+ *
+ * IY is otherwise free here (see pass_byte_loop_counter_to_reg_iyl's own
+ * comment: nothing else in dcc's codegen or DCCRTL.MAC ever touches it) -
+ * primed once, before the loop, to exactly this element's address, IY can
+ * then just walk forward by the float stride (4) every iteration instead of
+ * rebuilding the address from the cached row base and k from scratch:
+ *
+ *   push iy              ; copy the walking pointer into hl for the read
+ *   pop hl
+ *   ld e,(hl)             ; unchanged 4-byte read
+ *   ...
+ *   ld l,a
+ *   ex de,hl
+ *   push de
+ *   push hl
+ *   ld de,4               ; borrowed here: de is dead from just after this
+ *   add iy,de              ; "push hl" until the next statement's own fresh
+ *                           ; "ld d,.." write (verified below)
+ *
+ * Unlike a direct memory read, IY's own indexed addressing mode carries a
+ * real per-access tax (19T vs 7T for the same read through HL) that would
+ * eat the whole saving if the 4-byte float read were done directly through
+ * IY - so IY only ever holds the address; the read itself still goes
+ * through HL, via a one-instruction-pair copy ("push iy"/"pop hl") that is
+ * far cheaper than rebuilding the address from the row base and k.
+ *
+ * Every precondition is verified from the generated text, not assumed:
+ *   - exactly one occurrence of the full address+read+pack shape above
+ *     (more than one, or none, declines outright);
+ *   - the row-base frame slot (ix-R)/(ix-R-1) is referenced nowhere else in
+ *     the loop body (so it truly is loop-invariant, matching what the
+ *     upstream row-invariant-2D-read hoist already proved when it created
+ *     that slot - reverified here rather than trusted);
+ *   - the counter's own frame slot (ix-K) is incremented by exactly one
+ *     "inc (ix-K)" per iteration, matching this loop's own k++;
+ *   - immediately after the argument-packing "push hl", D and E are free
+ *     until the very next fresh "ld d,X" write, with no read of the stale
+ *     value in between (verified by a bounded forward scan) - that gap is
+ *     where the once-per-iteration "+4" borrows DE without needing its own
+ *     push/pop.
+ * Declining (0) is always safe: the loop keeps recomputing the address the
+ * ordinary way.
+ */
+static int pass_walk_row_cached_float_index(void)
+{
+    int i, k;
+    int changed;
+    char label[128];
+    char tgt[128];
+    int loop_end;
+    int match_k;
+    int row_off;
+    int k_off;
+    int match_count;
+    int row_ok;
+    int inc_count;
+    int de_gap;
+    int init_off, init_val;
+    int found_init;
+    int scan_limit;
+
+    changed = 0;
+
+    for (i = 0; i < nlines; ++i) {
+        if (!starts_label(lines[i]))
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        loop_end = -1;
+        for (k = i + 1; k < nlines; ++k) {
+            if (strncmp(lines[k], "public ", 7) == 0)
+                break;
+            if (jump_target_any(lines[k], tgt) && strcmp(tgt, label) == 0)
+                loop_end = k;
+        }
+        if (loop_end < i + 22)
+            continue;
+        if (!loop_body_internal_labels_safe(i + 1, loop_end))
+            continue;
+
+        /* IY is a single register: a call anywhere in this loop's body to
+         * another function defined in this same file, which might itself
+         * have a loop promoted to IY (by this same pass or pass_byte_loop_
+         * counter_to_reg_iyl), would silently clobber this loop's live
+         * walking pointer across the call - the exact hazard scan_local_
+         * func_labels/is_local_func_label exist to catch (see
+         * pass_byte_loop_counter_to_reg_iyl's own identical check). An RTL
+         * call (e.g. __fmaf) is fine - DCCRTL.MAC never touches IY. */
+        {
+            int call_ok = 1;
+            for (k = i + 1; k < loop_end && call_ok; ++k) {
+                char callee[128];
+                const char *p;
+                /* A nested loop already promoted to IYL (undocumented-Z80
+                 * mode only) inside this loop's own body is the same
+                 * collision one level down - same declines-outright
+                 * treatment pass_byte_loop_counter_to_reg_iyl gives it. */
+                if (strncmp(lines[k], "db 0FDh,", 8) == 0) {
+                    call_ok = 0;
+                    continue;
+                }
+                if (strncmp(lines[k], "call ", 5) != 0)
+                    continue;
+                strip_peep_comment_copy(callee, lines[k]);
+                p = callee + 5;
+                while (*p == ' ' || *p == '\t')
+                    p++;
+                if (is_local_func_label(p))
+                    call_ok = 0;
+            }
+            if (!call_ok)
+                continue;
+        }
+
+        match_k = -1;
+        match_count = 0;
+        row_off = 0;
+        k_off = 0;
+        for (k = i + 1; k + 20 < loop_end; ++k) {
+            int r, kc;
+            char exp_h[40];
+
+            if (!stride_parse_ld_r_ix_neg(lines[k], 'l', &r))
+                continue;
+            sprintf(exp_h, "ld h,(ix-%d)", r - 1);
+            if (!eq(k + 1, exp_h))
+                continue;
+            if (!eq(k + 2, "push hl"))
+                continue;
+            if (!stride_parse_ld_r_ix_neg(lines[k + 3], 'l', &kc))
+                continue;
+            if (!eq(k + 4, "ld h,0")) continue;
+            if (!eq(k + 5, "add hl,hl")) continue;
+            if (!eq(k + 6, "add hl,hl")) continue;
+            if (!eq(k + 7, "ex de,hl")) continue;
+            if (!eq(k + 8, "pop hl")) continue;
+            if (!eq(k + 9, "add hl,de")) continue;
+            if (!eq(k + 10, "ld e,(hl)")) continue;
+            if (!eq(k + 11, "inc hl")) continue;
+            if (!eq(k + 12, "ld d,(hl)")) continue;
+            if (!eq(k + 13, "inc hl")) continue;
+            if (!eq(k + 14, "ld a,(hl)")) continue;
+            if (!eq(k + 15, "inc hl")) continue;
+            if (!eq(k + 16, "ld h,(hl)")) continue;
+            if (!eq(k + 17, "ld l,a")) continue;
+            if (!eq(k + 18, "ex de,hl")) continue;
+            if (!eq(k + 19, "push de")) continue;
+            if (!eq(k + 20, "push hl")) continue;
+
+            if (match_count == 0) {
+                match_k = k;
+                row_off = r;
+                k_off = kc;
+            }
+            match_count++;
+        }
+        if (match_count != 1)
+            continue;
+
+        row_ok = 1;
+        {
+            char pat_row_lo[40], pat_row_hi[40];
+            sprintf(pat_row_lo, "(ix-%d)", row_off);
+            sprintf(pat_row_hi, "(ix-%d)", row_off - 1);
+            for (k = i + 1; k < loop_end && row_ok; ++k) {
+                if (k == match_k || k == match_k + 1)
+                    continue;
+                if (strstr(lines[k], pat_row_lo) != NULL ||
+                    strstr(lines[k], pat_row_hi) != NULL)
+                    row_ok = 0;
+            }
+        }
+        if (!row_ok)
+            continue;
+
+        inc_count = 0;
+        {
+            char pat_inc[40];
+            sprintf(pat_inc, "inc (ix-%d)", k_off);
+            for (k = i + 1; k < loop_end; ++k)
+                if (eq(k, pat_inc))
+                    inc_count++;
+        }
+        if (inc_count != 1)
+            continue;
+
+        de_gap = -1;
+        for (k = match_k + 21; k < loop_end; ++k) {
+            char tmp[MAX_LINE];
+            strip_peep_comment_copy(tmp, lines[k]);
+            if (strncmp(tmp, "ld d,", 5) == 0) {
+                de_gap = k;
+                break;
+            }
+            if (line_touches_de(lines[k]))
+                break;
+        }
+        if (de_gap < 0)
+            continue;
+
+        /* Unlike pass_byte_for_counter_to_reg_e's own backward scan for the
+         * same shape of line (bounded to 8 lines back, since that pass's
+         * loops are typically entered directly), this loop's counter init
+         * sits right after the ENCLOSING loop's own label, with the row-
+         * base and other per-outer-iteration address setup in between
+         * (tests/mm.c: ~38 lines from k's own "ld (ix-K),0" to the k-loop's
+         * label) - so this scan is bounded much further back, relying on
+         * the starts_label() stop below as the real, correct boundary (an
+         * intervening label means the init is not simply upstream in the
+         * same basic block, which is unprovable here and correctly
+         * declines) rather than an arbitrary nearby distance. */
+        found_init = 0;
+        init_val = 0;
+        scan_limit = i - 200;
+        if (scan_limit < 0) scan_limit = 0;
+        for (k = i - 1; k >= scan_limit; --k) {
+            if (starts_label(lines[k]))
+                break;
+            if (peep_parse_ld_ix_byte_imm(lines[k], &init_off, &init_val) &&
+                init_off == -k_off) {
+                found_init = 1;
+                break;
+            }
+        }
+        if (!found_init)
+            continue;
+
+        /* Commit back-to-front (highest index first) so earlier indices
+         * stay valid for later edits: de_gap, then match_k, then i. */
+        insert_line_tagged(de_gap, "ld de,4", "walk_row_cached_float_index");
+        insert_line_tagged(de_gap + 1, "add iy,de", "walk_row_cached_float_index");
+
+        delete_n(match_k, 10);
+        insert_line_tagged(match_k, "push iy", "walk_row_cached_float_index");
+        insert_line_tagged(match_k + 1, "pop hl", "walk_row_cached_float_index");
+
+        /* insert_line_tagged(i, ...) always pushes whatever is currently at
+         * i - including an earlier insertion made at this same i - one
+         * further down, so building up a multi-line block in the desired
+         * execution order means inserting the LAST line first and working
+         * backward (as pass_walk_hoisted_index_ptr's own analogous offset
+         * priming above does). */
+        {
+            char ld_row_lo[40], ld_row_hi[40];
+            sprintf(ld_row_lo, "ld l,(ix-%d)", row_off);
+            sprintf(ld_row_hi, "ld h,(ix-%d)", row_off - 1);
+            insert_line_tagged(i, "pop iy", "walk_row_cached_float_index");
+            insert_line_tagged(i, "push hl", "walk_row_cached_float_index");
+            if (init_val > 0) {
+                char ld_de_off[40];
+                sprintf(ld_de_off, "ld de,%d", init_val * 4);
+                insert_line_tagged(i, "add hl,de", "walk_row_cached_float_index");
+                insert_line_tagged(i, ld_de_off, "walk_row_cached_float_index");
+            }
+            insert_line_tagged(i, ld_row_hi, "walk_row_cached_float_index");
+            insert_line_tagged(i, ld_row_lo, "walk_row_cached_float_index");
+        }
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_deref_byte_cmp(void)
 {
     int i;
@@ -14463,19 +14762,14 @@ int main(int argc, char **argv)
 
     read_file(infile);
 
-    if (allow_undocumented_z80) {
-        /* M80 has no native "iyl"/"iyh" mnemonics, so pass_byte_loop_counter_
-         * to_reg_iyl's undocumented FD-prefixed opcodes are emitted directly
-         * as raw "db 0FDh,xx" bytes at each use site (see IYDECL/IYLDA/
-         * IYSTA/IYLDE/IYINCL's replace1_tagged/insert_line_tagged call sites
-         * below) rather than via M80 MACRO/ENDM definitions - m80c, the
-         * native assembler that later became the default toolchain, never
-         * implemented MACRO/ENDM at all, and each of these is a fixed,
-         * argument-free byte sequence anyway, so the macro indirection
-         * bought nothing beyond avoiding a few bytes of duplicated "db"
-         * text in the (rare) program that uses the same one twice. */
-        scan_local_func_labels();
-    }
+    /* Needed by both pass_byte_loop_counter_to_reg_iyl (undocumented-Z80
+     * only, gated below) and pass_walk_row_cached_float_index (always on -
+     * it uses only standard, documented IY opcodes) - either way, a call to
+     * another function in this same file that itself gets a loop promoted
+     * to IY would silently stomp this one's live value if that collision
+     * were not checked; see scan_local_func_labels's own comment for the
+     * tests/too.c regression this exact check exists to prevent. */
+    scan_local_func_labels();
 
     passes = 0;
     do {
@@ -14543,6 +14837,7 @@ int main(int argc, char **argv)
         if (pass_ix_frame_ptr_load_deadd()) changed = 1;
         if (pass_hoist_index_ptr_to_bc()) changed = 1;
         if (pass_walk_hoisted_index_ptr()) changed = 1;
+        if (pass_walk_row_cached_float_index()) changed = 1;
         if (pass_global_ptr_word_predec_load()) changed = 1;
         if (pass_elim_ex_de_hl_before_ix_store()) changed = 1;
         if (pass_global_ptr_word_postinc_store_setup()) changed = 1;
