@@ -5341,21 +5341,19 @@ csr_not_minus1:
 ; instead of silently corrupting memory it prints a diagnostic and exits to
 ; CP/M with return code 0FFh.
 ;
-; Clobbers AF/DE/HL on the normal path.  This is fine because dcc emits it in
+; Clobbers AF/HL on the normal path.  This is fine because dcc emits it in
 ; the generated C function prologue before the body can depend on registers.
 ; Own public block so dccrtlstrip drops it from programs not built with
 ; -fstack-check.
 ; ------------------------------------------------------------
         public  __stchk
-
 __stchk:
-        ld      hl,(__hlimit)
-        dec     hl              ; compare SP against __hlimit - 1
-        or      a               ; clear carry
-        sbc     hl,sp
-        ret     c               ; carry iff SP >= __hlimit
-                                ; overflow falls through
-        ; HL = SP - __hlimit (negative). Negate to get overflow = __hlimit - SP.
+        ld      hl,(__hlimit)   ; lowest valid stack address
+        or      a               ; clear carry before SBC
+        sbc     hl,sp           ; compare __hlimit with SP
+        ret     c               ; SP > __hlimit: stack within limits
+                                ; SP <= __hlimit falls through
+
         ld      a,l
         cpl
         ld      l,a
