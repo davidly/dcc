@@ -2244,7 +2244,13 @@ int ast_postfix_plain_int(const struct AstNode *n)
     sz = type_size(s->type);
     if (sz != 1 && sz != 2)
         return 0;
-    if (!sym_can_ix_direct(s) && !is_global_word_sym(s) && s->storage != SC_LOCAL)
+    /* Accept IX-direct locals/params, global/extern words, any SC_LOCAL, and
+     * global/extern BYTES.  A global byte is not is_global_word_sym (that is
+     * word-only), so it needs its own clause; gen_postfix_ast lowers it through
+     * emit_load_sym_addr + gen_post_update_from_addr, the same address path the
+     * SC_LOCAL byte case uses. */
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s) && s->storage != SC_LOCAL &&
+        !((s->storage == SC_GLOBAL || s->storage == SC_EXTERN) && sz == 1))
         return 0;
     return 1;
 }

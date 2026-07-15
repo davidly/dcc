@@ -7,3 +7,5 @@ int post++: old=10 new=11
 int post--: old=11 new=10
 int ptr+1 post++: old=200 new=201
 int ptr+k post--: old=300 new=299
+static u8 idx: buf=AB len=2
+global u8 idx: buf=XYZ len=3

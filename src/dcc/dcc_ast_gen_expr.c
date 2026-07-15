@@ -4836,6 +4836,21 @@ void gen_postfix_ast(const struct AstNode *n)
         return;
     }
 
+    /* Global/static byte scalar (uint8_t/char): try_emit_post_update_sym_direct
+     * handles global WORDS (is_global_word_sym) and IX-direct locals but
+     * declines a global BYTE, and emit_load_sym_value_direct's byte branch
+     * assumes an (ix+d) frame slot.  Route it through its address like the
+     * SC_LOCAL case above so the load/increment/store and byte wrap are
+     * correct. */
+    if (s != NULL && (s->storage == SC_GLOBAL || s->storage == SC_EXTERN) &&
+        !s->is_array && ast_is_plain_int_type(s->type) &&
+        type_size(s->type) == 1) {
+        emit_load_sym_addr(s);
+        gen_post_update_from_addr(s->type, n->op);
+        g_long_from16 = 0;
+        return;
+    }
+
     /* long identifiers: update the full 32-bit value with carry ripple across
      * all four bytes via the address-based helper, which also selects an
      * in-place statement-context fast path when the result is dead (e.g. a
