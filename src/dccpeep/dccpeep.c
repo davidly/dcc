@@ -12051,6 +12051,263 @@ static int pass_hoist_index_ptr_to_bc(void)
     return changed;
 }
 
+/* Same target-label parse as jump_target above, but also accepts "jr "
+ * forms - jump_target alone only recognises "jp ", which is all
+ * pass_hoist_index_ptr_to_bc and pass_byte_for_counter_to_reg_e need since
+ * both run early enough in the fixed-point loop to see the closing branch
+ * while it is still a "jp"; by the time pass_walk_hoisted_index_ptr below
+ * runs (after both, consuming their output), an earlier same-iteration or
+ * prior-iteration jp_to_jr pass may already have shrunk that same branch to
+ * "jr", so this pass needs to recognise either spelling to keep finding the
+ * loop's own bounds regardless of exactly when in the fixed-point sequence
+ * it happens to run. */
+static int jump_target_any(const char *s, char *out)
+{
+    const char *p;
+    int i;
+
+    if (strncmp(s, "jp ", 3) == 0 || strncmp(s, "jr ", 3) == 0)
+        p = s + 3;
+    else
+        return 0;
+
+    while (*p && *p != ',')
+        p++;
+
+    if (*p == ',') {
+        p++;
+        while (*p == ' ' || *p == '\t')
+            p++;
+    } else {
+        p = s + 3;
+        while (*p == ' ' || *p == '\t')
+            p++;
+    }
+
+    if (*p == 0)
+        return 0;
+
+    i = 0;
+    while (*p && *p != ' ' && *p != '\t' && i < 120)
+        out[i++] = *p++;
+    out[i] = 0;
+    return i > 0;
+}
+
+/*
+ * pass_walk_hoisted_index_ptr:
+ *
+ * pass_hoist_index_ptr_to_bc hoists a loop-invariant array/pointer base into
+ * BC; pass_byte_for_counter_to_reg_e (its counterpart, triggered precisely
+ * because that hoist already claimed C/BC) promotes the loop's own byte
+ * counter into E. Between them the per-iteration element address is cheap
+ * to each build, but still gets recombined into HL from scratch every single
+ * iteration:
+ *
+ *   ld l,c
+ *   ld h,b
+ *   ld d,0
+ *   add hl,de
+ *   ld (hl),a
+ *
+ * Since BC's cached value and E's counter both only ever advance by exactly
+ * 1 in lockstep every iteration (proved below, not assumed), BC itself can
+ * walk forward by one byte per iteration instead of being recombined with E
+ * from scratch each time:
+ *
+ *   ld (bc),a
+ *   inc bc
+ *
+ * BC's original (ix+P)/(ix+P+1) frame slot is never written by
+ * pass_hoist_index_ptr_to_bc - only ever read, once, to prime BC before the
+ * loop - so nothing outside the loop can observe BC walking away from that
+ * value; the frame slot remains authoritative for any later use of the
+ * pointer, and no write-back is needed here either, mirroring that pass's
+ * own reasoning.
+ *
+ * This does not trust pass_hoist_index_ptr_to_bc's/pass_byte_for_counter_to_
+ * reg_e's own comment tags as a safety proof (nothing else in this file
+ * gates correctness on another pass's tag, and this should not be the first
+ * exception) - every precondition is independently reverified here:
+ *   - exactly one "ld l,c / ld h,b / ld d,0 / add hl,de" occurs in the loop
+ *     body, eventually followed by "ld (hl),a" with nothing touching H or L
+ *     in between (the rhs value is computed after the address, so the store
+ *     is not necessarily the very next line - but nothing may disturb HL
+ *     before it runs); more than one candidate occurrence declines outright
+ *     rather than guessing which, if any, is safe to walk;
+ *   - B, C, and BC are referenced nowhere else in the loop body (so this
+ *     really is a loop-invariant pointer with nothing else relying on BC
+ *     holding its original, unwalked value mid-loop);
+ *   - D and E are referenced nowhere else in the loop body except exactly
+ *     one "inc e" (so E - and hence the recombined address - provably
+ *     advances by exactly 1 every iteration, matching the +1 pointer walk
+ *     this transform performs).
+ * Declining (0) is always safe: the loop keeps recomputing its address the
+ * ordinary way.
+ */
+static int pass_walk_hoisted_index_ptr(void)
+{
+    int i, k;
+    int changed;
+    char label[128];
+    char tgt[128];
+    int loop_end;
+    int match_k;
+    int store_k;
+    int match_count;
+    int inc_e_count;
+    int bc_ok;
+    int de_ok;
+
+    changed = 0;
+
+    for (i = 0; i < nlines; ++i) {
+        if (!starts_label(lines[i]))
+            continue;
+
+        strcpy(label, lines[i]);
+        k = (int)strlen(label);
+        if (k > 0 && label[k - 1] == ':')
+            label[k - 1] = 0;
+
+        loop_end = -1;
+        for (k = i + 1; k < nlines; ++k) {
+            if (strncmp(lines[k], "public ", 7) == 0)
+                break;
+            if (jump_target_any(lines[k], tgt) && strcmp(tgt, label) == 0)
+                loop_end = k;
+        }
+        if (loop_end < i + 5)
+            continue;
+        if (!loop_body_internal_labels_safe(i + 1, loop_end))
+            continue;
+
+        match_k = -1;
+        match_count = 0;
+        for (k = i + 1; k + 4 < loop_end; ++k) {
+            if (eq(k, "ld l,c") && eq(k + 1, "ld h,b") &&
+                eq(k + 2, "ld d,0") && eq(k + 3, "add hl,de")) {
+                if (match_count == 0)
+                    match_k = k;
+                match_count++;
+            }
+        }
+        if (match_count != 1)
+            continue;
+
+        /* The rhs value (e.g. "ld a,(ix+4) / add a,e") is computed AFTER
+         * the address, so the store is not necessarily the very next line -
+         * scan forward for it, requiring every intervening line to leave HL
+         * alone (a-only/e-only arithmetic is fine; anything touching H or L
+         * is not, since it would corrupt the very address just built). */
+        store_k = -1;
+        for (k = match_k + 4; k < loop_end; ++k) {
+            if (eq(k, "ld (hl),a")) {
+                store_k = k;
+                break;
+            }
+            if (line_touches_hl(lines[k]))
+                break;
+        }
+        if (store_k < 0)
+            continue;
+
+        bc_ok = 1;
+        for (k = i + 1; k < loop_end && bc_ok; ++k) {
+            if (k == match_k || k == match_k + 1)
+                continue;
+            if (line_touches_bc(lines[k]))
+                bc_ok = 0;
+        }
+        if (!bc_ok)
+            continue;
+
+        /* D must never be written except the matched "ld d,0", and E never
+         * written except the one "inc e" - together proving the recombined
+         * address advances by exactly 1 every iteration. Reading e (e.g.
+         * "add a,e" for the rhs arithmetic, the normal shape once the
+         * counter is e-resident) is not a hazard and is explicitly
+         * whitelisted rather than caught by the blanket line_touches_de
+         * check below, same narrow-whitelist style pass_byte_for_counter_
+         * to_reg_e itself uses for the pre-promotion "add a,(ix+off)" shape
+         * this becomes once e holds the counter. */
+        de_ok = 1;
+        inc_e_count = 0;
+        for (k = i + 1; k < loop_end && de_ok; ++k) {
+            if (k == match_k + 2 || k == match_k + 3)
+                continue;
+            if (eq(k, "inc e")) {
+                inc_e_count++;
+                continue;
+            }
+            if (eq(k, "add a,e") || eq(k, "cp e") || eq(k, "ld a,e"))
+                continue;
+            if (line_touches_de(lines[k]))
+                de_ok = 0;
+        }
+        if (!de_ok || inc_e_count != 1)
+            continue;
+
+        /* BC is primed with the pointer's raw base (element 0), but the
+         * loop's first iteration needs to store at base+INIT - in the
+         * original code that offset came from e's own initial value
+         * (primed by pass_byte_for_counter_to_reg_e as "ld e,INIT"), folded
+         * in by the first iteration's own "add hl,de". Walking bc directly
+         * skips that fold entirely, so it must be added once, up front, to
+         * bc's own priming instead - missing this exact adjustment first
+         * showed up as fill_record silently writing every byte 4 positions
+         * too early (confirmed via tests/tbig.c: record 0's stamp read back
+         * as 0x04030201 instead of 0, i.e. bytes 4..7's values landing in
+         * bytes 0..3). Scan backward a bounded distance for that priming
+         * line, matching pass_byte_for_counter_to_reg_e's own backward-scan
+         * distance for the same line when it first inserted it. */
+        {
+            int init_val;
+            int found_init;
+            int scan_limit;
+
+            found_init = 0;
+            init_val = 0;
+            scan_limit = i - 8;
+            if (scan_limit < 0) scan_limit = 0;
+            for (k = i - 1; k >= scan_limit; --k) {
+                if (starts_label(lines[k]))
+                    break;
+                if (peep_parse_ld_e_imm8(lines[k], &init_val)) {
+                    found_init = 1;
+                    break;
+                }
+            }
+            if (!found_init)
+                continue;
+
+            if (init_val > 0) {
+                char ld_hl_init[40];
+                sprintf(ld_hl_init, "ld hl,%d", init_val);
+                insert_line_tagged(i, "ld c,l", "walk_hoisted_index_ptr");
+                insert_line_tagged(i, "ld b,h", "walk_hoisted_index_ptr");
+                insert_line_tagged(i, "add hl,bc", "walk_hoisted_index_ptr");
+                insert_line_tagged(i, ld_hl_init, "walk_hoisted_index_ptr");
+                i += 4;
+                loop_end += 4;
+                match_k += 4;
+                store_k += 4;
+            }
+        }
+
+        {
+            int store_after_delete = store_k - 4;
+            delete_n(match_k, 4);
+            replace1_tagged(store_after_delete, "ld (bc),a", "walk_hoisted_index_ptr");
+            insert_line_tagged(store_after_delete + 1, "inc bc", "walk_hoisted_index_ptr");
+        }
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_deref_byte_cmp(void)
 {
     int i;
@@ -14135,6 +14392,7 @@ int main(int argc, char **argv)
         if (pass_ix_frame_ptr_load()) changed = 1;
         if (pass_ix_frame_ptr_load_deadd()) changed = 1;
         if (pass_hoist_index_ptr_to_bc()) changed = 1;
+        if (pass_walk_hoisted_index_ptr()) changed = 1;
         if (pass_global_ptr_word_predec_load()) changed = 1;
         if (pass_elim_ex_de_hl_before_ix_store()) changed = 1;
         if (pass_global_ptr_word_postinc_store_setup()) changed = 1;
