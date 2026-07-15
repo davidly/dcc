@@ -165,7 +165,7 @@ the size, bake it in by building with `DCC_STACK_SIZE=<n> ./ma.sh <app>` or, for
 the regression suite, add it to the per-app `stack_size_for` table in
 `runall.sh` (and the matching block in `runall.bat`).
 
-## `dccprof.sh` / `dccprof.bat` / `dccprof.py`
+## `dccprof.ps1` / `dccprof.py`
 
 Builds an app (peep-optimized, the real shipped build), runs it under
 `ntvcm`'s per-PC execution-count profiler (`-g:<file>`), and correlates the
@@ -191,32 +191,28 @@ already-captured profile.
 
 ### Usage
 
-```sh
-scripts/dccprof.sh <app> [--source-path FILE] [--build-dir DIR] [--out-dir DIR] [--clock HZ] [-- program-args...]
+```pwsh
+pwsh ./scripts/dccprof.ps1 <app> [-SourcePath FILE] [-BuildDir DIR] [-OutDir DIR] [-Clock HZ] [-ProgramArgs ...]
 ```
 
-```bat
-scripts\dccprof.bat <app> [-SourcePath FILE] [-BuildDir DIR] [-OutDir DIR] [-Clock HZ] [-- program-args...]
-```
-
-`dccprof.bat` delegates the build itself to `ma.ps1` (via `pwsh`, like this
-repo's other Windows orchestration) rather than reimplementing the dcc
-pipeline; both wrappers add the same profiling-specific steps on top:
-regenerating `RTLMIN.PRN` (a normal build only assembles it without the
-`/L` listing flag, since nothing else needs it), running the app under
-`ntvcm -g`, and invoking `dccprof.py`.
+One cross-platform script (Windows/macOS/Linux, like `ma.ps1`/`runall.ps1`)
+rather than separate shell/batch wrappers - it delegates the build itself
+to `ma.ps1` and adds the profiling-specific steps on top: regenerating
+`RTLMIN.PRN` (a normal build only assembles it without the `/L` listing
+flag, since nothing else needs it), running the app under `ntvcm -g`, and
+invoking `dccprof.py`.
 
 ### Examples
 
-```sh
-scripts/dccprof.sh tbig
-scripts/dccprof.sh tbig -- 20000
-scripts/dccprof.sh mm --build-dir /tmp/profmm
+```pwsh
+pwsh ./scripts/dccprof.ps1 tbig
+pwsh ./scripts/dccprof.ps1 tbig -ProgramArgs 20000
+pwsh ./scripts/dccprof.ps1 mm -BuildDir /tmp/profmm
 ```
 
 ### Output
 
-Written to `-OutDir`/`--out-dir` (default: same as the build directory):
+Written to `-OutDir` (default: same as `-BuildDir`):
 
 - `<app>_profile_summary.md` — ranked hot-function table (hits, % of
   total, module, function name). Open directly, or in VS Code's Markdown
@@ -240,6 +236,14 @@ steps entirely:
 ```sh
 python3 scripts/dccprof.py --app tbig --build-dir build/dccprof/tbig --profile-csv build/dccprof/tbig/tbig_profile.csv
 ```
+
+### Environment Variables
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `M80C` | `m80c` | Native assembler used to regenerate `RTLMIN.PRN` |
+| `NTVCM` | `ntvcm` | Emulator command |
+| `PYTHON` | `python3` (falls back to `python`) | Python launcher used for `dccprof.py` |
 
 ## `ma.ps1`
 
