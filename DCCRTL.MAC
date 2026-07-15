@@ -7237,17 +7237,41 @@ lmul_b:
         push    hl                      ; save base high
 
         ; --- result high = base_high + low16(Xlo*Yhi) + low16(Xhi*Ylo) ------
+        ; Skip a cross term entirely when its "hi" factor is 0 - it can only
+        ; contribute 0, and skipping means never entering __mulu's own loop
+        ; (which, even in its fastest case, still costs the better part of
+        ; an 8-iteration loop deriving a foregone 0 - see __lmu's leading-
+        ; zero-byte fix for the same class of waste). Both hi factors are 0
+        ; whenever both 32-bit operands actually fit in 16 bits - a common
+        ; shape for bounded values, e.g. modular arithmetic where every
+        ; operand stays under some 16-bit modulus - in which case this
+        ; degenerates to the base term alone, skipping __mulu entirely.
+        ld      hl,(__lm_rhs_h)         ; Yhi
+        ld      a,h
+        or      l
+        jr      z,lmul_skip1            ; Yhi==0: Xlo*Yhi term is 0
+
         ld      hl,(__lm_lhs_l)         ; Xlo
         ld      de,(__lm_rhs_h)         ; Yhi
         call    __mulu                  ; HL = low16(Xlo*Yhi), BC preserved
         pop     de                      ; DE = base high
         add     hl,de
         push    hl                      ; save partial high
+lmul_skip1:
         ld      hl,(__lm_lhs_h)         ; Xhi
+        ld      a,h
+        or      l
+        jr      z,lmul_skip2            ; Xhi==0: Xhi*Ylo term is 0
+
         ld      de,(__lm_rhs_l)         ; Ylo
         call    __mulu                  ; HL = low16(Xhi*Ylo)
-        pop     de                      ; DE = partial high
+        pop     de                      ; DE = partial high (base, or base+term1)
         add     hl,de                   ; HL = result high
+        jr      lmul_done
+lmul_skip2:
+        pop     hl                      ; HL = result high (base, or base+term1 -
+                                         ; whichever is on top; term2 contributes 0)
+lmul_done:
         ex      de,hl                   ; DE = result high
         ld      hl,(__lm_res_l)         ; HL = result low
         ld      sp,ix
