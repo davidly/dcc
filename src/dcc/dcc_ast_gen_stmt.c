@@ -904,6 +904,34 @@ void ast_gen_stmt(const struct AstNode *n)
     switch (n->kind) {
     case AST_EMPTY:
         break;                            /* empty statement: emit nothing */
+    case AST_DIVMOD_CALL: {
+        /* Compiler-synthesized only (see dcc_ast.h and ast_divmod_fuse_
+         * compound in dcc_ast_gen_support.c): a and b are both bare int
+         * identifiers by construction of the pass that built this node, so
+         * evaluating them needs none of gen_binary_ast's general-purpose
+         * machinery (promotion, pointer arithmetic, float paths, constant
+         * folding) - just the standard "lhs into HL, push, rhs into HL,
+         * ex de,hl/pop hl to land lhs in HL and rhs in DE" sequence used
+         * throughout this file for a plain two-operand evaluation. */
+        struct Sym *rem_sym = find_sym(n->sval);
+        ast_gen_expr(n->a);
+        emit("\tpush hl\n");
+        ast_gen_expr(n->b);
+        emit("\tex de,hl\n");
+        emit("\tpop hl\n");
+        emit_runtime_call(n->ival ? "__sdivmod" : "__udivmod");
+        /* Stash the remainder (DE) on the stack before storing the quotient:
+         * emit_store_hl_to_sym_direct's out-of-range-(ix+d) fallback (see
+         * dcc_symbols.c) uses DE as scratch and only guarantees HL holds the
+         * stored value on return, not that DE survives untouched - true for
+         * e.c's own #dmq/#dmr temps once its frame grows past IX's +-127
+         * range. Do not rely on DE surviving across that call. */
+        emit("\tpush de\n");
+        emit_store_hl_to_sym_direct(n->sym);   /* HL = quotient */
+        emit("\tpop hl\n");                     /* HL = remainder */
+        emit_store_hl_to_sym_direct(rem_sym);
+        break;
+    }
     case AST_DECL:
         ast_emit_decl_span(n);            /* declaration codegen replay */
         break;
@@ -1097,16 +1125,29 @@ void ast_gen_stmt(const struct AstNode *n)
          * enter/leave emit nothing. */
         int i;
         int dead;
+        const struct AstNode *fused;
+        const struct AstNode *body;
+        /* ast_divmod_fuse_compound (see dcc_ast_gen_support.c) is the one
+         * hoist in this file NOT anchored to ast_gen_for_stmt/dcc_licm.c -
+         * its target shape (two adjacent statements sharing a %/ operand
+         * pair) is not loop-specific at all, so it hooks in generically
+         * here instead, where every compound block in the program - a
+         * function body, a while/if/for body, any nested block - already
+         * passes through uniformly. Only ever rewrites `body`'s own list
+         * for the walk below; n itself is untouched, exactly like every
+         * other hoist's "n->d itself is untouched" discipline. */
+        fused = ast_divmod_fuse_compound(n);
+        body = fused != NULL ? fused : n;
         enter_scope();
         dead = 0;
-        for (i = 0; i < n->list_len; ++i) {
-            if (dead && !ast_stmt_has_reentry_label(n->list[i])) {
+        for (i = 0; i < body->list_len; ++i) {
+            if (dead && !ast_stmt_has_reentry_label(body->list[i])) {
                 int j;
-                if (n->list[i]->kind == AST_DECL) {
-                    for (j = i + 1; j < n->list_len; ++j) {
-                        if (ast_stmt_has_reentry_label(n->list[j])) {
+                if (body->list[i]->kind == AST_DECL) {
+                    for (j = i + 1; j < body->list_len; ++j) {
+                        if (ast_stmt_has_reentry_label(body->list[j])) {
                             asm_suppress_depth++;
-                            ast_gen_stmt(n->list[i]);
+                            ast_gen_stmt(body->list[i]);
                             asm_suppress_depth--;
                             break;
                         }
@@ -1114,8 +1155,8 @@ void ast_gen_stmt(const struct AstNode *n)
                 }
                 continue;
             }
-            ast_gen_stmt(n->list[i]);
-            dead = ast_stmt_exits(n->list[i]);
+            ast_gen_stmt(body->list[i]);
+            dead = ast_stmt_exits(body->list[i]);
         }
         /* Reclaim this scope's VLAs on fall-through exit (unreachable when the
          * block always exits; break/continue/return reclaim on their own). */

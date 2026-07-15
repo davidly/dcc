@@ -399,6 +399,16 @@ int new_label(void)
 
 void flush_pending_asm(void)
 {
+    /* Never flush into a suppressed/speculative context (asm_suppress_depth>0,
+     * e.g. the inline-candidate double-scan in dcc_func.c, or a dead-code
+     * replay in ast_gen_stmt's AST_COMPOUND case): that output either goes to
+     * a throwaway buffer or is discarded outright if the speculative attempt
+     * is abandoned, silently losing content that was legitimately buffered
+     * earlier during a real (non-suppressed) pass. Leave pending_asm_len
+     * untouched so the content survives to the next real flush point instead
+     * of being written once into a doomed buffer and considered "done". */
+    if (asm_suppress_depth > 0)
+        return;
     if (pending_asm_len > 0 && outf) {
         fwrite(pending_asm_buf, 1, (size_t)pending_asm_len, outf);
         pending_asm_len = 0;

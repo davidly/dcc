@@ -76,7 +76,16 @@ enum AstKind {
     AST_CONTINUE,
     AST_GOTO,           /* sym/str_index identifies the target label       */
     AST_LABEL,          /* user label: b = following statement             */
-    AST_EMPTY           /* lone ';'                                        */
+    AST_EMPTY,          /* lone ';'                                        */
+    AST_DIVMOD_CALL     /* compiler-synthesized only (never built by the    */
+                        /* parser - see ast_divmod_fuse_compound): a = div-  */
+                        /* idend, b = divisor (both bare int idents), sym =  */
+                        /* quotient temp, sval = remainder temp's name, ival */
+                        /* = 1 for signed (__sdivmod) / 0 for unsigned       */
+                        /* (__udivmod). Evaluates both operands, makes one   */
+                        /* fused call, stores quotient and remainder into    */
+                        /* their own temps for the statements that used to   */
+                        /* separately compute a%b and a/b to read instead.   */
 };
 
 /* ------------------------------------------------------------------------- *
@@ -232,6 +241,19 @@ int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
  * single-statement body. Returns a rewritten copy of for_node->d to use in
  * its place, or NULL if nothing qualifies (use for_node->d unchanged). */
 struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node);
+
+/* Detects two ADJACENT statements in a compound block whose list one
+ * contains `X % Y` and the other `X / Y` (either order, bare-identifier
+ * operands only in v1), and rewrites them to share one DCCRTL.MAC
+ * __udivmod/__sdivmod call instead of each independently calling __modu/
+ * __divu (or __mods/__divs) - see dcc_ast_gen_support.c for the full shape/
+ * rationale/safety argument (tests/e.c's `a[n] = x % n; x = ...+ x/n;` is
+ * the motivating case, found via dccprof profiling). Unlike the for-loop-
+ * specific hoists above, this applies to ANY compound block - callable
+ * from ast_gen_stmt's own AST_COMPOUND case, not just for-loop bodies.
+ * Returns a rewritten copy of the compound to use in its place, or NULL if
+ * nothing qualifies (use the original compound unchanged). */
+struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n);
 
 /* Copy a NUL-terminated string into the arena. */
 char *ast_arena_strdup(struct AstArena *ar, const char *s);

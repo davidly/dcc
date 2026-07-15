@@ -2753,20 +2753,38 @@ void scan_function_body(void)
             next_token();
             leave_scope();
             can_decl = 1;
-        } else if (tok.kind == TOK_FOR) {
+        } else if (tok.kind == TOK_FOR || tok.kind == TOK_WHILE ||
+                   tok.kind == TOK_DO || tok.kind == TOK_IF) {
             /*
-             * Build and replay the whole for-statement (header + body)
-             * through the AST builder/emitter (ast_scan_for_stmt, output
-             * suppressed) instead of hand-walking tokens. This is the exact
-             * same builder+emitter the real codegen pass uses, so frame
-             * sizing - declarations inside the body, C99 for-init renaming,
-             * and any AST-level for-loop fast path that reserves extra frame
-             * space - stays in sync with the real pass by construction,
-             * rather than needing a hand-written parallel scanner kept in
-             * sync by hand. (That hand-written scanner used to live here;
-             * see git history for its final form and the cast-vs-declaration
-             * bug it once had to work around - both are now moot since this
-             * runs the real parser instead of guessing at token shapes.)
+             * Build and replay the whole statement (header + body) through
+             * the AST builder/emitter (ast_scan_for_stmt, output suppressed)
+             * instead of hand-walking tokens. This is the exact same
+             * builder+emitter the real codegen pass uses, so frame sizing -
+             * declarations inside the body, C99 for-init renaming, any
+             * AST-level for-loop fast path that reserves extra frame space,
+             * and (originally for-only, now also reachable from while/do/if
+             * bodies) ast_divmod_fuse_compound's #dmq/#dmr temps - stays in
+             * sync with the real pass by construction, rather than needing a
+             * hand-written parallel scanner kept in sync by hand. (That
+             * hand-written scanner used to live here; see git history for
+             * its final form and the cast-vs-declaration bug it once had to
+             * work around - both are now moot since this runs the real
+             * parser instead of guessing at token shapes.)
+             *
+             * while/do/if were added alongside for once ast_divmod_fuse_
+             * compound (dcc_ast_gen_support.c) proved that a non-loop-
+             * specific AST_COMPOUND hoist can synthesize new frame locals
+             * from ANY of these bodies, not just a for-loop's - see
+             * tests/e.c's own `while(--n) { a[n]=x%n; x=10*a[n-1]+x/n; }`,
+             * which motivated this pass and is not itself inside a for loop.
+             * ast_try_emit_statement (the real pass's per-statement
+             * dispatcher) treats ast_stmt_supported()==false as a hard
+             * compile error for every statement kind uniformly, not just
+             * for-loops - so any program that reaches real codegen without
+             * a diagnostic is guaranteed to have every top-level while/do/if
+             * pass the identical ast_stmt_supported() check this scan uses,
+             * meaning this extension can never newly desync from the real
+             * pass on already-compiling input.
              *
              * A 0 return (AST build declined) is left alone: it only happens
              * for malformed/unsupported input that the real pass will report

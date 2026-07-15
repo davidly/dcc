@@ -2155,6 +2155,255 @@ int ast_expr_has_side_effects(const struct AstNode *n)
     return 0;
 }
 
+/* Finds a '%' or '/' AST_BINARY node reachable UNCONDITIONALLY from `n` -
+ * i.e. not nested under a ?: / && / ||, any of which can skip evaluating
+ * one side - with both operands bare plain-int (not char/bool - the exact
+ * 16-bit width DCCRTL.MAC's __udivmod/__sdivmod expect, sidestepping any
+ * question of whether a narrower type's promotion is already reflected in
+ * a bare identifier read) identifiers of the same signedness. Returns the
+ * first match found via a left-to-right, depth-first walk, or NULL.
+ * Declines (NULL) on anything not specifically recognized - v1 has no
+ * general expression-equality checker, only this exact bare-identifier
+ * shape (matching tests/e.c and the bignum-style tests in this suite that
+ * motivated it - see ast_divmod_fuse_compound below). */
+static const struct AstNode *ast_find_unconditional_divmod_op(const struct AstNode *n, int op)
+{
+    const struct AstNode *found;
+
+    if (n == NULL)
+        return NULL;
+    if (n->kind == AST_COND || n->kind == AST_LOGAND || n->kind == AST_LOGOR)
+        return NULL;
+    if (n->kind == AST_BINARY && n->op == op &&
+        n->a != NULL && n->a->kind == AST_IDENT && n->a->sval != NULL &&
+        n->b != NULL && n->b->kind == AST_IDENT && n->b->sval != NULL) {
+        /* AST_IDENT nodes carry no reliable ->type of their own until
+         * codegen actually evaluates them (gen_ident resolves the symbol
+         * and sets g_expr_type at that point, not stored back onto the
+         * node) - ast_expr_type_for_sizeof is the existing static
+         * inference path built for exactly this "need a node's type
+         * before/without running its codegen" situation. */
+        /* Promote each operand's type before comparing, the same as C's own
+         * usual-arithmetic-conversions would before evaluating % or / - a
+         * char/bool-narrowed identifier (e.g. a register-allocated loop
+         * counter narrowed by try_narrow_for_counter) always promotes to
+         * plain signed int regardless of its own narrowed storage's
+         * unsigned-ness, exactly like a real `char` operand would. Checking
+         * the raw unpromoted types here would wrongly reject e.g. `int x`
+         * paired with a narrowed-to-unsigned-char `int n` as a signedness
+         * mismatch, when C itself treats that pairing as signed-int/signed-
+         * int throughout. */
+        int a_type = promote_int_type(ast_expr_type_for_sizeof(n->a));
+        int b_type = promote_int_type(ast_expr_type_for_sizeof(n->b));
+        if ((a_type & 15) == TYPE_INT && !(a_type & (TYPE_PTR | TYPE_PTR2 | TYPE_STRUCT)) &&
+            (b_type & 15) == TYPE_INT && !(b_type & (TYPE_PTR | TYPE_PTR2 | TYPE_STRUCT)) &&
+            (a_type & TYPE_UNSIGNED) == (b_type & TYPE_UNSIGNED))
+            return n;
+    }
+    if ((found = ast_find_unconditional_divmod_op(n->a, op)) != NULL) return found;
+    if ((found = ast_find_unconditional_divmod_op(n->b, op)) != NULL) return found;
+    if ((found = ast_find_unconditional_divmod_op(n->c, op)) != NULL) return found;
+    if ((found = ast_find_unconditional_divmod_op(n->d, op)) != NULL) return found;
+    return NULL;
+}
+
+/* Returns a copy of `tree` with every occurrence of `target` (found by
+ * pointer identity) replaced by `replacement`, sharing every subtree that
+ * did not itself need to change (the same copy-on-write-while-propagating-
+ * up shape as ast_hoist_row_invariant_2d_reads above) - or `tree` itself,
+ * completely unchanged, if `target` is not reachable from it at all (the
+ * common case when called against the ONE of the two fused statements
+ * that does not contain a given target - a safe no-op, not an error). */
+static struct AstNode *ast_replace_subtree(const struct AstNode *tree,
+                                                  const struct AstNode *target,
+                                                  struct AstNode *replacement)
+{
+    struct AstNode *na, *nb, *nc, *nd;
+    struct AstNode *copy;
+
+    if (tree == NULL)
+        return NULL;
+    if (tree == target)
+        return replacement;
+
+    na = ast_replace_subtree(tree->a, target, replacement);
+    nb = ast_replace_subtree(tree->b, target, replacement);
+    nc = ast_replace_subtree(tree->c, target, replacement);
+    nd = ast_replace_subtree(tree->d, target, replacement);
+    if (na == tree->a && nb == tree->b && nc == tree->c && nd == tree->d)
+        return (struct AstNode *)tree;
+
+    copy = ast_new(&g_ast_arena, tree->kind);
+    *copy = *tree;
+    copy->a = na;
+    copy->b = nb;
+    copy->c = nc;
+    copy->d = nd;
+    return copy;
+}
+
+/* Detects two ADJACENT statements in a compound block's own list - one
+ * containing `X % Y`, the other `X / Y` (either order), both reachable
+ * unconditionally and both bare-identifier operands of identical name and
+ * signedness - and rewrites them to share one DCCRTL.MAC __udivmod/
+ * __sdivmod call instead of each separately calling __modu/__divu (or
+ * __mods/__divs), which independently do the same division: DCCRTL.MAC
+ * already has a *runtime* cache for exactly this pattern (see __modu's own
+ * comment), but the cache-check itself costs real instructions on every
+ * call whether it hits or misses, and profiling tests/e.c (via dccprof,
+ * after fixing a real attribution bug it exposed) found that program's
+ * division family - __udivmod's now-exposed core plus __divu's/__modu's
+ * own cache-check overhead - at very roughly 60% of its ENTIRE runtime.
+ *
+ * v1 is deliberately narrow, matching this file's usual discipline:
+ *   - both statements must be exactly `IDENT_OR_LVALUE = RHS;` (a plain
+ *     AST_EXPR_STMT wrapping a plain '=' AST_ASSIGN) - nothing else yet;
+ *   - the matched operands must be bare identifiers, not general matching
+ *     subtrees - no expression-equality checker exists yet;
+ *   - the FIRST of the two statements (in program order - whichever list
+ *     index is lower, regardless of which one holds the % vs the /) must
+ *     not modify X or Y anywhere, including as its own assignment target:
+ *     the fused call captures both values before EITHER statement runs, so
+ *     if the first statement could change one of them before the second
+ *     statement's own original operator would have read it, the fused
+ *     value would be stale. The SECOND statement may freely reassign X or
+ *     Y as its own top-level assignment target (exactly tests/e.c's own
+ *     `x = 10*a[n-1] + x/n;`) - C's own "evaluate the whole rhs before the
+ *     assignment takes effect" rule already guarantees that read sees the
+ *     pre-assignment value, identical to what the fused call captured -
+ *     but not through any other, less obvious side effect;
+ *   - neither statement's lvalue address computation or rhs may have any
+ *     OTHER side effect at all (ast_expr_has_side_effects, unmodified - a
+ *     matched node's own two bare-identifier operands can never trip it).
+ *
+ * Returns a rewritten copy of `n` (only ever the first qualifying pair
+ * found, scanning adjacent statements in order) to use in its place, or
+ * NULL if nothing qualifies (use `n` unchanged) - n itself, and the two
+ * original statement nodes, are never mutated, matching every other hoist
+ * in this file.
+ */
+struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
+{
+    int i, j;
+
+    if (n == NULL || n->kind != AST_COMPOUND)
+        return NULL;
+
+    for (i = 0; i + 1 < n->list_len; ++i) {
+        const struct AstNode *s1 = n->list[i];
+        const struct AstNode *s2 = n->list[i + 1];
+        const struct AstNode *mod_node;
+        const struct AstNode *div_node;
+        const char *x_name;
+        const char *y_name;
+        int is_signed;
+        struct Sym *quot_sym;
+        struct Sym *rem_sym;
+        struct AstNode *call_node;
+        struct AstNode *quot_ident;
+        struct AstNode *rem_ident;
+        struct AstNode *new_s1_rhs;
+        struct AstNode *new_s2_rhs;
+        struct AstNode *new_s1_assign;
+        struct AstNode *new_s2_assign;
+        struct AstNode *new_s1_stmt;
+        struct AstNode *new_s2_stmt;
+        struct AstNode *compound;
+        char qname[24];
+        char rname[24];
+
+        if (s1 == NULL || s1->kind != AST_EXPR_STMT || s1->a == NULL ||
+            s1->a->kind != AST_ASSIGN || s1->a->op != '=' ||
+            s1->a->a == NULL || s1->a->b == NULL)
+            continue;
+        if (s2 == NULL || s2->kind != AST_EXPR_STMT || s2->a == NULL ||
+            s2->a->kind != AST_ASSIGN || s2->a->op != '=' ||
+            s2->a->a == NULL || s2->a->b == NULL)
+            continue;
+
+        mod_node = ast_find_unconditional_divmod_op(s1->a->b, '%');
+        div_node = ast_find_unconditional_divmod_op(s2->a->b, '/');
+        if (mod_node == NULL || div_node == NULL) {
+            mod_node = ast_find_unconditional_divmod_op(s2->a->b, '%');
+            div_node = ast_find_unconditional_divmod_op(s1->a->b, '/');
+            if (mod_node == NULL || div_node == NULL)
+                continue;
+        }
+
+        if (strcmp(mod_node->a->sval, div_node->a->sval) != 0 ||
+            strcmp(mod_node->b->sval, div_node->b->sval) != 0)
+            continue;
+
+        x_name = mod_node->a->sval;
+        y_name = mod_node->b->sval;
+        is_signed = !(promote_int_type(ast_expr_type_for_sizeof(mod_node->a)) & TYPE_UNSIGNED);
+
+        if (ast_expr_has_side_effects(s1->a->a) || ast_expr_has_side_effects(s1->a->b))
+            continue;
+        if (s1->a->a->kind == AST_IDENT && s1->a->a->sval != NULL &&
+            (!strcmp(s1->a->a->sval, x_name) || !strcmp(s1->a->a->sval, y_name)))
+            continue;
+        if (ast_expr_has_side_effects(s2->a->a) || ast_expr_has_side_effects(s2->a->b))
+            continue;
+
+        if (!ast_gen_supported(s1->a->a) || !ast_gen_supported(s1->a->b) ||
+            !ast_gen_supported(s2->a->a) || !ast_gen_supported(s2->a->b))
+            continue;
+
+        sprintf(qname, "#dmq%d", g_licm_seq++);
+        sprintf(rname, "#dmr%d", g_licm_seq++);
+        quot_sym = add_local_alloc(qname, is_signed ? TYPE_INT : (TYPE_INT | TYPE_UNSIGNED), 2);
+        rem_sym = add_local_alloc(rname, is_signed ? TYPE_INT : (TYPE_INT | TYPE_UNSIGNED), 2);
+
+        call_node = ast_new(&g_ast_arena, AST_DIVMOD_CALL);
+        call_node->a = (struct AstNode *)mod_node->a;
+        call_node->b = (struct AstNode *)mod_node->b;
+        call_node->sym = quot_sym;
+        call_node->sval = ast_arena_strdup(&g_ast_arena, rem_sym->name);
+        call_node->ival = is_signed;
+
+        quot_ident = ast_new(&g_ast_arena, AST_IDENT);
+        quot_ident->sval = ast_arena_strdup(&g_ast_arena, quot_sym->name);
+        quot_ident->type = quot_sym->type;
+        rem_ident = ast_new(&g_ast_arena, AST_IDENT);
+        rem_ident->sval = ast_arena_strdup(&g_ast_arena, rem_sym->name);
+        rem_ident->type = rem_sym->type;
+
+        new_s1_rhs = ast_replace_subtree(s1->a->b, mod_node, rem_ident);
+        new_s1_rhs = ast_replace_subtree(new_s1_rhs, div_node, quot_ident);
+        new_s2_rhs = ast_replace_subtree(s2->a->b, mod_node, rem_ident);
+        new_s2_rhs = ast_replace_subtree(new_s2_rhs, div_node, quot_ident);
+
+        new_s1_assign = ast_new(&g_ast_arena, AST_ASSIGN);
+        *new_s1_assign = *(s1->a);
+        new_s1_assign->b = new_s1_rhs;
+        new_s1_stmt = ast_new(&g_ast_arena, AST_EXPR_STMT);
+        new_s1_stmt->a = new_s1_assign;
+
+        new_s2_assign = ast_new(&g_ast_arena, AST_ASSIGN);
+        *new_s2_assign = *(s2->a);
+        new_s2_assign->b = new_s2_rhs;
+        new_s2_stmt = ast_new(&g_ast_arena, AST_EXPR_STMT);
+        new_s2_stmt->a = new_s2_assign;
+
+        compound = ast_new(&g_ast_arena, AST_COMPOUND);
+        *compound = *n;
+        compound->list = (struct AstNode **)ast_arena_alloc(&g_ast_arena,
+            sizeof(struct AstNode *) * (size_t)(n->list_len + 1));
+        compound->list_len = n->list_len + 1;
+        compound->list_cap = n->list_len + 1;
+        for (j = 0; j < i; ++j)
+            compound->list[j] = n->list[j];
+        compound->list[i] = call_node;
+        compound->list[i + 1] = new_s1_stmt;
+        compound->list[i + 2] = new_s2_stmt;
+        for (j = i + 2; j < n->list_len; ++j)
+            compound->list[j + 1] = n->list[j];
+        return compound;
+    }
+    return NULL;
+}
+
 /* Detects a for-loop whose entire body is exactly one assignment (plain '='
  * or arithmetic compound +=/-=/ *=// =) to an array-element lvalue whose
  * address does not depend on the loop's own induction variable and has no
