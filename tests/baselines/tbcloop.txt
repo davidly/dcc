@@ -1,0 +1,2 @@
+checks=4 failures=0
+RESULT: PASS

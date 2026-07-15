@@ -4462,6 +4462,89 @@ static int line_touches_de_reg(const char *s)
     return line_touches_reg_pair(s, "d", "e", "de");
 }
 
+#define MAX_BC_LOOP_LABELS 512
+
+static int bc_label_name_index(char names[][16], int n, const char *name)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (!strcmp(names[i], name))
+            return i;
+    return -1;
+}
+
+/* regalloc_buffer_finalize's bc_trusted tracking below is a single linear
+ * scan of the generated text with no notion of control flow: it is sound for
+ * straight-line code and for if/else (each branch is its own straight-line
+ * span, visited once, correctly reflecting that branch's own history up to
+ * that point), but not for a loop. A label that is both fallen into once
+ * AND reached again via a backward jump (the loop's back-edge) is only
+ * visited ONCE by the linear scan, in file order - any bc-clobbering that
+ * happens later in the loop body, between that label and the jump back to
+ * it, is invisible to the scan on every visit after the first, because there
+ * is no second textual visit to react to. Found via tests/tlongidx.c: `long
+ * i` incremented as an array index (`in[i++]`) inside a while loop clobbers
+ * bc (used as scratch for the 32-bit increment's address), gets correctly
+ * reloaded before the loop's own later, first-encountered use, but the scan
+ * has already permanently marked bc "trusted" by the time it reaches the
+ * loop header text again on paper - so the second real iteration silently
+ * reused stale bc instead of the reloaded value.
+ *
+ * Scans the whole buffer once up front for every "LNN:" label that is the
+ * target of a "jp"/"jr" (conditional or not) appearing AFTER that label's
+ * own definition in the text - i.e. a genuine backward jump, not a forward
+ * skip - and returns the set of such labels. The caller forces bc_trusted
+ * false at every one of them, which costs at most one possibly-unneeded
+ * reload on the label's first (fall-through) visit, in exchange for
+ * correctness on every subsequent (looped) visit - the same trade-off this
+ * whole pass already makes for "push bc ... pop bc" (see the comment above
+ * regalloc_buffer_finalize). */
+static void bc_regalloc_find_loop_headers(const char *buf, long size,
+                                           char headers[][16], int *n_headers)
+{
+    char seen_names[MAX_BC_LOOP_LABELS][16];
+    int n_seen;
+    const char *p;
+    const char *nl;
+    char linebuf[64];
+    size_t ll;
+
+    n_seen = 0;
+    *n_headers = 0;
+    p = buf;
+    while (p < buf + size) {
+        nl = memchr(p, '\n', (size_t)(buf + size - p));
+        ll = nl ? (size_t)(nl - p) : (size_t)(buf + size - p);
+        if (ll >= sizeof(linebuf)) ll = sizeof(linebuf) - 1;
+        memcpy(linebuf, p, ll);
+        linebuf[ll] = 0;
+
+        if (linebuf[0] == 'L' && isdigit((unsigned char)linebuf[1])) {
+            char *colon = strchr(linebuf, ':');
+            if (colon != NULL && n_seen < MAX_BC_LOOP_LABELS) {
+                *colon = 0;
+                strncpy(seen_names[n_seen], linebuf, sizeof(seen_names[0]) - 1);
+                seen_names[n_seen][sizeof(seen_names[0]) - 1] = 0;
+                n_seen++;
+            }
+        } else if (strncmp(linebuf, "\tjp ", 4) == 0 || strncmp(linebuf, "\tjr ", 4) == 0) {
+            char *comma = strrchr(linebuf, ',');
+            char *tok = comma ? comma + 1 : linebuf + 4;
+            while (*tok == ' ') tok++;
+            if (tok[0] == 'L' && isdigit((unsigned char)tok[1]) &&
+                bc_label_name_index(seen_names, n_seen, tok) >= 0 &&
+                *n_headers < MAX_BC_LOOP_LABELS &&
+                bc_label_name_index(headers, *n_headers, tok) < 0) {
+                strncpy(headers[*n_headers], tok, sizeof(headers[0]) - 1);
+                headers[*n_headers][sizeof(headers[0]) - 1] = 0;
+                (*n_headers)++;
+            }
+        }
+
+        p = nl ? nl + 1 : buf + size;
+    }
+}
+
 /* Exact safety verification and, for BC, on-demand-reload REWRITE, for
  * try_speculative_bc_regalloc_function_body.
  *
@@ -4521,6 +4604,8 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
     int bc_trusted;
     char prev1[32], prev2[32];
     FILE *rewritten;
+    char loop_headers[MAX_BC_LOOP_LABELS][16];
+    int n_loop_headers;
 
     rewritten = tmpfile();
     if (rewritten == NULL)
@@ -4548,6 +4633,9 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
     if (bc_cand != NULL) {
         sprintf(entry_c, "\tld c,(ix%+d)", bc_cand->offset);
         sprintf(entry_b, "\tld b,(ix%+d)", bc_cand->offset + 1);
+        bc_regalloc_find_loop_headers(buf, size, loop_headers, &n_loop_headers);
+    } else {
+        n_loop_headers = 0;
     }
 
     safe = 1;
@@ -4574,12 +4662,53 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
          * own never-written original parameter slot right before it, and
          * treat bc as trusted again from here on - the second line of the
          * pair, and the two entry-load lines themselves, never need their
-         * own check. */
+         * own check.
+         *
+         * But "ld l,c"/"ld e,c" are not unique to that pair: gen_post_
+         * update_from_addr and several long/pointer helpers (dcc_expr.c,
+         * dcc_ast_gen_expr.c, dcc_ast_gen.c, dcc_ops.c) save an unrelated
+         * address in BC as scratch and later restore it with "ld h,b"/"ld
+         * l,c" (or "ld d,b"/"ld e,c") - textually the SAME two lines as the
+         * value-read pair, but in the OPPOSITE order and for a completely
+         * different purpose (BC already holds a scratch address there, not
+         * the cached parameter). Misreading that restore's second line as a
+         * fresh value-read-start inserted a reload mid-restore, splicing the
+         * parameter's low byte into what should have been the scratch
+         * address's low byte - found via tests/tlongidx.c hanging (long i;
+         * ... in[i++] inside a while loop, with `in` the sole candidate
+         * parameter). Disambiguate by checking the immediately preceding
+         * line: "ld l,c"/"ld e,c" only starts a value-read when it is NOT
+         * immediately preceded by "ld h,b"/"ld d,b" respectively - in that
+         * case it is the restore pair's own second line, already covered by
+         * is_bc_recognized_other so it does not disturb bc_trusted (which
+         * was correctly cleared when the scratch address was first loaded
+         * into bc). */
+        /* Loop back-edge target: force bc untrusted here (see
+         * bc_regalloc_find_loop_headers) regardless of how trusted the
+         * single linear scan thinks bc is on this, its only textual visit -
+         * a later iteration reaching this same label at runtime may not
+         * share that history. */
+        if (n_loop_headers > 0 && line[0] == 'L' && isdigit((unsigned char)line[1])) {
+            size_t llen = strlen(line);
+            if (llen > 0 && line[llen - 1] == ':') {
+                char labelbuf[16];
+                size_t nlen = llen - 1;
+                if (nlen >= sizeof(labelbuf)) nlen = sizeof(labelbuf) - 1;
+                memcpy(labelbuf, line, nlen);
+                labelbuf[nlen] = 0;
+                if (bc_label_name_index(loop_headers, n_loop_headers, labelbuf) >= 0)
+                    bc_trusted = 0;
+            }
+        }
+
         is_bc_value_read_start = bc_cand != NULL &&
-            (strcmp(line, "\tld l,c") == 0 || strcmp(line, "\tld e,c") == 0);
+            ((strcmp(line, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") != 0) ||
+             (strcmp(line, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") != 0));
         is_bc_recognized_other = bc_cand != NULL &&
             (strcmp(line, "\tld h,b") == 0 || strcmp(line, "\tld d,b") == 0 ||
-             strcmp(line, entry_c) == 0 || strcmp(line, entry_b) == 0);
+             strcmp(line, entry_c) == 0 || strcmp(line, entry_b) == 0 ||
+             (strcmp(line, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") == 0) ||
+             (strcmp(line, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") == 0));
 
         if (is_bc_value_read_start) {
             if (!bc_trusted) {
