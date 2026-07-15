@@ -162,6 +162,34 @@ class PrnListing:
 # RTL routine may pre-declare a whole batch of "public NAME" entry points
 # far above the labels they actually apply to - see this file's own module
 # docstring), then matched against each label as it's encountered.
+#
+# A label matching neither pattern is normally left attributed to whatever
+# function came before it - correct for an ordinary internal label (a loop
+# target, an early-return merge point, etc. - all reached by falling
+# through or branching from that same function's own preceding code, no
+# matter what instruction happens to sit textually just above the label).
+# An EARLIER version of this function instead asked "was the previous line
+# an unconditional ret/jp/jr" - plausible-sounding, but wrong: those are
+# completely ordinary within a single routine's own control flow (an early-
+# return path's own "ret" immediately followed by the label the normal
+# path merges back into, e.g.), so that check fired constantly on labels
+# that were never anything but a continuation of the current function,
+# fragmenting it into several spuriously-separate rows.
+#
+# The one pattern that DOES need special handling is different and much
+# narrower: a label reached directly after one or more "public NAME" lines
+# that have not yet been matched to any label at all - a shared preamble
+# several public entry points jump INTO from below, pre-declared together
+# far above it (see PrnListing's own public_names collection). This is
+# exactly DCCRTL.MAC's DRSU: __divu/__modu/__divs/__mods are all declared
+# public together, then DRSU's own label (matching none of those four
+# names) follows directly - and without this check, DRSU's execution
+# count (the vast majority of a division-heavy program's total) was
+# silently misattributed to __conout, merely because __conout was the
+# last successfully-matched public function several dozen lines above.
+# Once DRSU is recognized here, __divu's own eventual "__divu:" label
+# further down correctly reclaims the rest of that shared implementation,
+# exactly as it always did for a directly-matching label.
 # ---------------------------------------------------------------------- #
 def attribute_functions(listing):
     """Returns a new list of (line_dict, function_name) in original order.
@@ -169,12 +197,22 @@ def attribute_functions(listing):
     function label."""
     current = None
     out = []
+    pending_public = False
     for line in listing.lines:
         if line['label'] is not None:
             if line['display_name'] is not None:
                 current = line['display_name']
+                pending_public = False
             elif line['label'].upper() in listing.public_names:
                 current = line['label']
+                pending_public = False
+            elif pending_public:
+                current = line['label']
+                pending_public = False
+        else:
+            code_part = line['text'].split(';', 1)[0].strip()
+            if code_part:
+                pending_public = bool(_PUBLIC_RE.match(code_part))
         out.append((line, current))
     return out
 
