@@ -11805,22 +11805,39 @@ __fnef_ret:
 ; Return HL=1 for true, HL=0 for false.
 ; ---------------------------------------------------------------------------
 
-; __fcmpsf / __frcmpf: fastcall ports of __fcmps/__frcmp below (see their
-; own header for the algorithm), for the cold paths of the fastcall
-; ordered comparisons (__fltf/__fgtf/__flef/__fgef).  a is already live
-; in D/E/H/L and b is already at the caller's own ix+4..7 (the only
-; pushed operand in that 2-push frame) - exactly like the fast-path
-; register substitutions above, every "(ix+7)"/(ix+11) a/b byte pair in
-; the originals becomes a plain register read (a) paired with
+; __fcmpsf / __frcmpf: fastcall ports of the (now-removed) cdecl __fcmps/
+; __frcmp's own algorithm, for the cold paths of the fastcall ordered
+; comparisons (__fltf/__fgtf/__flef/__fgef).  a is already live in
+; D/E/H/L and b is already at the caller's own ix+4..7 (the only pushed
+; operand in that 2-push frame) - exactly like the fast-path register
+; substitutions above, every "(ix+7)"/(ix+11) a/b byte pair the old
+; cdecl version read becomes a plain register read (a) paired with
 ; (ix+7)/(ix+6)/(ix+5)/(ix+4) (b).  An earlier version of this instead
 ; reconstructed a classic a@ix+4,b@ix+8 frame on the stack (six pushes,
-; six pops, two exx's) purely to reuse __fcmps unmodified - correct, but
-; its overhead outweighed the fastcall calling-convention savings for
-; any code exercising this cold path often (caught by tc89fcmp.c's
-; perf baseline regressing ~8.5% despite every correctness check still
-; passing). Porting the body directly, the same way __flt/etc.'s own
-; fast paths were ported, costs nothing extra to call at all: no setup,
-; no restoration, ix is never touched.
+; six pops, two exx's) purely to reuse the old cdecl __fcmps unmodified
+; - correct, but its overhead outweighed the fastcall calling-convention
+; savings for any code exercising this cold path often (caught by
+; tc89fcmp.c's perf baseline regressing ~8.5% despite every correctness
+; check still passing). Porting the body directly, the same way
+; __flt/etc.'s own fast paths were ported, costs nothing extra to call
+; at all: no setup, no restoration, ix is never touched.
+;
+; Marked public (unlike FUNR) so dccrtlstrip - which treats each PUBLIC
+; as its own keep/strip block boundary - gives this its own block
+; instead of silently appending it to whatever public routine happens
+; to precede it in the file (__fnef, at the time this was first
+; written). Without this, any program using __fltf/__fgtf/__flef/
+; __fgef's cold path but never __fnef (typical - not every program uses
+; !=) pulled in __fnef's entire unrelated body too, just because
+; __fcmpsf/__frcmpf physically lived inside its block range; caught by
+; pihex.com growing ~400 bytes for no reason tied to what pihex.c
+; actually calls. This exact fix was lost once already - overwritten by
+; a same-session recovery that pulled a stale pre-fix copy of this
+; block from git history after an unrelated deletion mistake elsewhere
+; - and only caught this second time because mm.com grew too, for a
+; program (mm.c) that only ever calls __fnef and has no business
+; linking __fcmpsf in at all.
+        public  __fcmpsf
 __fcmpsf:
         ld      a,d
         and     7fh
