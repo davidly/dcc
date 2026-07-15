@@ -109,18 +109,24 @@ speed:
 
 .PARAMETER UpdatePerfBaseline
     Instead of comparing against PerfBaselineFile, (re)write it from this run's
-    measured cycle counts. Only the column(s) for the mode(s) this invocation
-    actually built are touched (peep_cycles for -Mode fast, nopeep_cycles for
-    -Mode nopeep, both for -Mode full) - any other app/column already in the
-    file is left untouched. Use after an intentional, verified codegen change
-    changes cycle counts (an improvement, or an accepted tradeoff).
+    measured cycle counts and .COM sizes. Only the column(s) for the mode(s)
+    this invocation actually built are touched (peep_cycles/peep_size for
+    -Mode fast, nopeep_cycles/nopeep_size for -Mode nopeep, all four for
+    -Mode full) - any other app/column already in the file is left untouched.
+    Use after an intentional, verified change moves cycle counts or .COM
+    sizes (an improvement, or an accepted tradeoff).
 
 .PARAMETER PerfBaselineFile
-    CSV path for the cycle-count regression baseline (default:
-    "tests/perf_baselines.csv"). One row per app, columns
-    app,peep_cycles,nopeep_cycles. Checked into the repo like the output
-    baselines in tests/baselines/, so a regression shows up as a diff in code
-    review the same way an output-baseline change would.
+    CSV path for the cycle-count and .COM-size regression baseline (default:
+    "tests/perf_baselines.csv"). One row per app, columns app,peep_cycles,
+    nopeep_cycles,peep_size,nopeep_size. Checked into the repo like the
+    output baselines in tests/baselines/, so a regression shows up as a diff
+    in code review the same way an output-baseline change would. Size
+    catches a class of regression cycle count alone cannot: dead code linked
+    in but never executed (e.g. dccrtlstrip pulling in an RTL block a
+    program never calls, because it happens to share a keep/strip unit with
+    one it does) changes nothing on any executed path, so it's invisible to
+    cycle counts but shows up immediately as a larger .COM.
 
 .PARAMETER NarrowDiff
     After the main suite, build every app a second and third time - once
@@ -1210,9 +1216,10 @@ function Write-PerformanceReport {
     }
 }
 
-# Loads tests/perf_baselines.csv (one row per app: app,peep_cycles,nopeep_cycles)
-# into a hashtable keyed by app name. Returns an empty hashtable if the file
-# does not exist yet (e.g. before the first -UpdatePerfBaseline run).
+# Loads tests/perf_baselines.csv (one row per app: app,peep_cycles,
+# nopeep_cycles,peep_size,nopeep_size) into a hashtable keyed by app name.
+# Returns an empty hashtable if the file does not exist yet (e.g. before the
+# first -UpdatePerfBaseline run).
 function Get-PerfBaselines {
     param([string]$Path)
     $result = @{}
@@ -1221,6 +1228,8 @@ function Get-PerfBaselines {
         $result[$row.app] = @{
             peep_cycles   = $row.peep_cycles
             nopeep_cycles = $row.nopeep_cycles
+            peep_size     = $row.peep_size
+            nopeep_size   = $row.nopeep_size
         }
     }
     return $result
@@ -1239,6 +1248,8 @@ function Set-PerfBaselines {
             app           = $app
             peep_cycles   = $Baselines[$app].peep_cycles
             nopeep_cycles = $Baselines[$app].nopeep_cycles
+            peep_size     = $Baselines[$app].peep_size
+            nopeep_size   = $Baselines[$app].nopeep_size
         }
     }
     $parent = Split-Path -Parent $Path
@@ -1248,14 +1259,20 @@ function Set-PerfBaselines {
     $rows | Export-Csv -Path $Path -NoTypeInformation
 }
 
-# Compares this run's measured Z80 cycle counts (already collected as a side
-# effect of the normal build+run+verify pass - see the -p note above
-# $emulatorRunArgs) against tests/perf_baselines.csv, for whichever mode(s)
-# ("peep" and/or "nopeep") this invocation actually built. Only a passing
-# app's cycle count is trusted - a broken build/run's count means nothing.
-# Returns a hashtable with Regressions/Improvements/New arrays; the caller
-# decides how that affects the exit code and, under -UpdatePerfBaseline,
-# whether to write the file instead of comparing against it.
+# Compares this run's measured Z80 cycle counts and .COM sizes (both already
+# collected as a side effect of the normal build+run+verify pass - see the -p
+# note above $emulatorRunArgs for cycles; size is just the built .COM's byte
+# length) against tests/perf_baselines.csv, for whichever mode(s) ("peep"
+# and/or "nopeep") this invocation actually built. Only a passing app's
+# metrics are trusted - a broken build/run's numbers mean nothing. Returns a
+# hashtable with Regressions/Improvements/New arrays (each entry tagged with
+# which Metric - "cycles" or "bytes" - it's about, since the two are
+# independent: dead code linked in but never executed moves size without
+# moving any executed path's cycle count, and vice versa a codegen change
+# that shuffles instructions without changing what's linked in can move
+# cycles without moving size); the caller decides how that affects the exit
+# code and, under -UpdatePerfBaseline, whether to write the file instead of
+# comparing against it.
 function Test-PerfRegressions {
     param(
         [object[]]$Results,
@@ -1269,12 +1286,22 @@ function Test-PerfRegressions {
     $existing = Get-PerfBaselines -Path $BaselineFile
     $updated = @{}
     foreach ($app in $existing.Keys) {
-        $updated[$app] = @{ peep_cycles = $existing[$app].peep_cycles; nopeep_cycles = $existing[$app].nopeep_cycles }
+        $updated[$app] = @{
+            peep_cycles   = $existing[$app].peep_cycles
+            nopeep_cycles = $existing[$app].nopeep_cycles
+            peep_size     = $existing[$app].peep_size
+            nopeep_size   = $existing[$app].nopeep_size
+        }
     }
 
     $regressions = [System.Collections.Generic.List[object]]::new()
     $improvements = [System.Collections.Generic.List[object]]::new()
     $newEntries = [System.Collections.Generic.List[object]]::new()
+
+    $perfMetrics = @(
+        @{ Suffix = "cycles"; Prop = "Cycles"; Label = "cycles" },
+        @{ Suffix = "size";   Prop = "Size";   Label = "bytes" }
+    )
 
     foreach ($result in $Results) {
         if (-not $result.Passed) { continue }
@@ -1282,31 +1309,33 @@ function Test-PerfRegressions {
         if ($ignoreSet.Contains($result.App)) { continue }
         foreach ($modeKey in $ModesRun) {
             if (-not $result.Metrics.ContainsKey($modeKey)) { continue }
-            $cyclesRaw = $result.Metrics[$modeKey].Cycles
-            if (-not $cyclesRaw) { continue }
-            $cycles = [long]$cyclesRaw
-            $col = "${modeKey}_cycles"
+            foreach ($metric in $perfMetrics) {
+                $valueRaw = $result.Metrics[$modeKey].($metric.Prop)
+                if (-not $valueRaw) { continue }
+                $value = [long]$valueRaw
+                $col = "${modeKey}_$($metric.Suffix)"
 
-            if ($UpdateBaseline) {
-                if (-not $updated.ContainsKey($result.App)) {
-                    $updated[$result.App] = @{ peep_cycles = ""; nopeep_cycles = "" }
+                if ($UpdateBaseline) {
+                    if (-not $updated.ContainsKey($result.App)) {
+                        $updated[$result.App] = @{ peep_cycles = ""; nopeep_cycles = ""; peep_size = ""; nopeep_size = "" }
+                    }
+                    $updated[$result.App][$col] = $value
+                    continue
                 }
-                $updated[$result.App][$col] = $cycles
-                continue
-            }
 
-            $hasBaseline = $existing.ContainsKey($result.App) -and $existing[$result.App][$col]
-            if (-not $hasBaseline) {
-                $newEntries.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Cycles = $cycles })
-                continue
-            }
+                $hasBaseline = $existing.ContainsKey($result.App) -and $existing[$result.App][$col]
+                if (-not $hasBaseline) {
+                    $newEntries.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Metric = $metric.Label; Value = $value })
+                    continue
+                }
 
-            $baseline = [long]$existing[$result.App][$col]
-            if ($cycles -gt $baseline) {
-                $regressions.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Baseline = $baseline; Actual = $cycles })
-            }
-            elseif ($cycles -lt $baseline) {
-                $improvements.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Baseline = $baseline; Actual = $cycles })
+                $baseline = [long]$existing[$result.App][$col]
+                if ($value -gt $baseline) {
+                    $regressions.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Metric = $metric.Label; Baseline = $baseline; Actual = $value })
+                }
+                elseif ($value -lt $baseline) {
+                    $improvements.Add([pscustomobject]@{ App = $result.App; Mode = $modeKey; Metric = $metric.Label; Baseline = $baseline; Actual = $value })
+                }
             }
         }
     }
@@ -1480,7 +1509,7 @@ if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -o
 
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "PERFORMANCE (Z80 CYCLE COUNT) CHECK" -ForegroundColor Cyan
+    Write-Host "PERFORMANCE (CYCLE COUNT & .COM SIZE) CHECK" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     if ($UpdatePerfBaseline) {
         Write-Host "  Updated $PerfBaselineFile for mode(s): $($modes -join ', ')" -ForegroundColor Cyan
@@ -1493,7 +1522,7 @@ if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -o
             Write-Host "  Regressions:  $($perfCheck.Regressions.Count)" -ForegroundColor Red
             foreach ($r in $perfCheck.Regressions) {
                 $pct = if ($r.Baseline -gt 0) { [math]::Round((($r.Actual - $r.Baseline) / $r.Baseline) * 100, 2) } else { 0 }
-                Write-Host ("    - {0,-12} ({1,-6}) {2:N0} -> {3:N0} cycles (+{4}%)" -f $r.App, $r.Mode, $r.Baseline, $r.Actual, $pct) -ForegroundColor Red
+                Write-Host ("    - {0,-12} ({1,-6}) {2:N0} -> {3:N0} {4} (+{5}%)" -f $r.App, $r.Mode, $r.Baseline, $r.Actual, $r.Metric, $pct) -ForegroundColor Red
             }
             $failed += $perfCheck.Regressions.Count
         }
@@ -1501,12 +1530,12 @@ if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -o
             Write-Host "  Improvements: $($perfCheck.Improvements.Count)" -ForegroundColor Green
             foreach ($i in $perfCheck.Improvements) {
                 $pct = if ($i.Baseline -gt 0) { [math]::Round((($i.Baseline - $i.Actual) / $i.Baseline) * 100, 2) } else { 0 }
-                Write-Host ("    - {0,-12} ({1,-6}) {2:N0} -> {3:N0} cycles (-{4}%)" -f $i.App, $i.Mode, $i.Baseline, $i.Actual, $pct) -ForegroundColor Green
+                Write-Host ("    - {0,-12} ({1,-6}) {2:N0} -> {3:N0} {4} (-{5}%)" -f $i.App, $i.Mode, $i.Baseline, $i.Actual, $i.Metric, $pct) -ForegroundColor Green
             }
-            Write-Host "  (run -UpdatePerfBaseline to accept improved cycle counts)" -ForegroundColor DarkGray
+            Write-Host "  (run -UpdatePerfBaseline to accept improved cycle counts/sizes)" -ForegroundColor DarkGray
         }
         if ($perfCheck.New.Count -gt 0) {
-            Write-Host "  No baseline yet for $($perfCheck.New.Count) app/mode pair(s); run -UpdatePerfBaseline to capture" -ForegroundColor DarkGray
+            Write-Host "  No baseline yet for $($perfCheck.New.Count) app/mode/metric combination(s); run -UpdatePerfBaseline to capture" -ForegroundColor DarkGray
         }
     }
 }
@@ -1679,7 +1708,7 @@ if ($perfCheck -and -not $UpdatePerfBaseline -and $perfCheck.Regressions.Count -
     Write-Host ""
     Write-Host "Performance regressions (vs $PerfBaselineFile):" -ForegroundColor Red
     foreach ($r in $perfCheck.Regressions) {
-        Write-Host "  - $($r.App) ($($r.Mode)): $($r.Baseline) -> $($r.Actual) cycles" -ForegroundColor Red
+        Write-Host "  - $($r.App) ($($r.Mode)): $($r.Baseline) -> $($r.Actual) $($r.Metric)" -ForegroundColor Red
     }
 }
 
