@@ -7585,20 +7585,68 @@ ludm_dvs16:
         ; 16-bit divisor fast path: build the 32-bit quotient MSB-first via
         ; the shared ldqr_byte step, and keep the final 16-bit remainder
         ; (its high word is always 0, since it is < the 16-bit divisor).
+        ;
+        ; Skip ldqr_byte entirely for each LEADING zero byte of the
+        ; dividend: with the remainder (HL) still 0 (true only until the
+        ; first nonzero byte is processed), feeding ldqr_byte a zero byte
+        ; is a proven no-op (bit0..7 = 0 -> the "would subtract" trial
+        ; always underflows and gets restored, quotient bit stays 0, HL
+        ; ends the call exactly as it started: 0) - so the leading-zero
+        ; case is just skipped, not computed differently, and cannot
+        ; diverge from calling ldqr_byte unconditionally the way the
+        ; original code did. Interior/trailing zero bytes (after the
+        ; first nonzero one) still go through ldqr_byte normally, since
+        ; the remainder is no longer guaranteed 0 by then.
+        ;
+        ; This matters because a workload like modular exponentiation
+        ; over a modulus that starts small and grows (e.g. pihex.c's
+        ; powermod16) spends most of its 32-bit-typed mod operations on
+        ; values whose high bytes are actually zero - profiled via
+        ; ntvcm's -g execution-count output, __lmu alone was ~40% of all
+        ; instructions executed running pihex.c, entirely in this
+        ; routine, entirely from processing leading zero bytes it didn't
+        ; need to.
         ld      de,(__ldv_dvs_l)        ; DE = divisor
         ld      hl,0                    ; HL = partial remainder
+
         ld      a,(__ldv_dvd_h+1)       ; byte 3 (MSB)
-        call    ldqr_byte
-        ld      (__ldv_quo_h+1),a       ; quotient byte 3
+        or      a
+        jr      nz,ludm_b3
+        ld      (__ldv_quo_h+1),a       ; A already 0; remainder still 0
+
         ld      a,(__ldv_dvd_h)         ; byte 2
-        call    ldqr_byte
-        ld      (__ldv_quo_h),a         ; quotient byte 2
+        or      a
+        jr      nz,ludm_b2
+        ld      (__ldv_quo_h),a
+
         ld      a,(__ldv_dvd_l+1)       ; byte 1
-        call    ldqr_byte
-        ld      (__ldv_quo_l+1),a       ; quotient byte 1
+        or      a
+        jr      nz,ludm_b1
+        ld      (__ldv_quo_l+1),a
+
         ld      a,(__ldv_dvd_l)         ; byte 0 (LSB)
+        or      a
+        jr      nz,ludm_b0
+        ld      (__ldv_quo_l),a         ; dividend was entirely zero
+        jr      ludm_dvs16_done
+
+ludm_b3:
         call    ldqr_byte
-        ld      (__ldv_quo_l),a         ; quotient byte 0
+        ld      (__ldv_quo_h+1),a
+        ld      a,(__ldv_dvd_h)         ; byte 2
+ludm_b2:
+        call    ldqr_byte
+        ld      (__ldv_quo_h),a
+        ld      a,(__ldv_dvd_l+1)       ; byte 1
+ludm_b1:
+        call    ldqr_byte
+        ld      (__ldv_quo_l+1),a
+        ld      a,(__ldv_dvd_l)         ; byte 0
+ludm_b0:
+        call    ldqr_byte
+        ld      (__ldv_quo_l),a
+
+ludm_dvs16_done:
         ld      (__ldv_rem_l),hl        ; remainder low word
         ld      hl,0
         ld      (__ldv_rem_h),hl        ; remainder high word = 0
