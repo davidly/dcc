@@ -1259,12 +1259,18 @@ void gen_binary_ast(const struct AstNode *n)
         ast_gen_expr(n->b);
         if (!type_is_float(g_expr_type))
             emit_convert_int_to_float(g_expr_type);
-        emit("\tpush de\n\tpush hl\n");
-        float_helper = (n->op == '+') ? "__fadd" :
-                       (n->op == '-') ? "__fsub" :
-                       (n->op == '*') ? "__fmul" : "__fdiv";
+        /* n->b is still live in DE:HL right here - the fastcall variants
+         * (__faf/__fsf/__fmf/__fdf) take it that way instead of via a
+         * second push/pop round trip, exactly like __fmaf above. These
+         * already exist and are already used by DCCRTL.MAC's own
+         * internal call sites; this is the same technique applied to
+         * ordinary generated '+'/'-'/'*'/'/' float arithmetic, which
+         * until now still paid for both operands' stack traffic. */
+        float_helper = (n->op == '+') ? "__faf" :
+                       (n->op == '-') ? "__fsf" :
+                       (n->op == '*') ? "__fmf" : "__fdf";
         emit_runtime_call(float_helper);
-        emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+        emit("\tpop bc\n\tpop bc\n");
         g_expr_type = TYPE_FLOAT;
         g_long_from16 = 0;
         return;
@@ -1738,12 +1744,13 @@ static void emit_float_compound_rhs(const struct AstNode *n, int saved_dead)
     expr_result_dead = saved_dead;
     if (!type_is_float(g_expr_type))
         emit_convert_int_to_float(g_expr_type);
-    emit("\tpush de\n\tpush hl\n");
-    helper = n->op == TOK_ADDEQ ? "__fadd" :
-             n->op == TOK_SUBEQ ? "__fsub" :
-             n->op == TOK_MULEQ ? "__fmul" : "__fdiv";
+    /* n->b is still live in DE:HL right here - see the fastcall call
+     * site in gen_binary_ast above for why this skips a second push. */
+    helper = n->op == TOK_ADDEQ ? "__faf" :
+             n->op == TOK_SUBEQ ? "__fsf" :
+             n->op == TOK_MULEQ ? "__fmf" : "__fdf";
     emit_runtime_call(helper);
-    emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+    emit("\tpop bc\n\tpop bc\n");
 }
 
 void gen_assign_ast(const struct AstNode *n)
