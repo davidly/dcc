@@ -12683,8 +12683,9 @@ FZERO:
 ; packed float already loaded into DEHL); exit B=exponent C=mantissa high
 ; byte (implicit bit merged in) H=mantissa mid byte (unchanged from entry)
 ; L=mantissa low byte (unchanged from entry) D=sign. Used by the
-; register-resident __fadd/__fsub above - unrelated to FUNA/FUNB, which
-; __fmul/__fdiv still use to unpack into memory scratch.
+; register-resident __fadd/__fsub above (and __fmadd below) - unrelated to
+; FUNA/FUNB, which only __fdiv/__fdf still use to unpack into memory
+; scratch.
 FUNR:
         ; Extract sign first, then use packed E bit 7 as carry into packed D,
         ; directly forming exponent=(D.low7<<1)|E.bit7.
@@ -13366,11 +13367,66 @@ FMINF:
 ; Stack args: caller pushes c, then a, then b (b closest to the return
 ; address, matching __fmul/__fadd's existing push order for their own two
 ; operands): ix+4..7 = b, ix+8..11 = a, ix+12..15 = c.
+        public  __fmaf
+__fmaf:
+        ; fastcall a*b+c. Named __fmaf, not __fmaddf: M80 truncates public
+        ; symbols to 6 significant characters, and __fmaddf truncates to
+        ; __FMAD, colliding with __fmadd itself - the same mistake
+        ; __faf/__fsf/__fmf's own names were chosen to avoid (see __faf's
+        ; header above), caught here only at link time ("Mult. Def. Global
+        ; __FMAD") since M80 doesn't diagnose it any earlier.
+        ;
+        ; DE:HL = b (live, the last-pushed operand at
+        ; the __fmaf call site - see ast_is_float_madd_rhs's codegen,
+        ; which evaluates the two multiplicands left-to-right and calls
+        ; with the second one still live), a and c still on the stack
+        ; (2 pushes instead of 3): ix+4..7 = a, ix+8..11 = c - NOT the
+        ; same offsets as __fmadd's own ix+8=a/ix+12=c below. An earlier
+        ; version of this tried reconciling the two by shifting ix by -4
+        ; instead of 0, so ix+8/ix+12 would still land on a/c - but
+        ; FARET's shared epilogue ("ld sp,ix / pop ix / ret", used by
+        ; every path through this routine via __fadd's FANOFL) requires
+        ; ix to point exactly at the [old ix, return address] pair
+        ; "push ix" just created; shifting it breaks that unwind and
+        ; crashes on return, caught by tfmadd.c producing no output at
+        ; all. FQBRIDGE_R below instead checks FMAFAST (set here,
+        ; cleared by __fmadd's own prologue) to pick the right offset
+        ; for 'c' - the only place the two conventions actually diverge,
+        ; since 'a' is consumed here, not shared.
+        ;
+        ; Unpack b first while it's still the live/active bank (the
+        ; __faf/__fsf technique - FUNR only touches registers, so this
+        ; needs no memory scratch and no push). Do NOT exx before this:
+        ; exx would swap b away to the shadow bank before FUNR ever
+        ; sees it.
+        call    FUNR            ; unpack b into the active bank
+        exx                     ; b now parked in the (now) alternate
+                                 ; bank; the newly-active bank is free
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        call    FUNR            ; unpack a into the now-active bank
+        ld      a,1
+        ld      (FMAFAST),a
+        ; Net effect, with only one exx instead of __fmadd's two: active
+        ; bank = a, alternate bank = b - the same logical state
+        ; FMADD_UNPACKED expects, regardless of which physical register
+        ; set that maps to (exx has no absolute "main" identity, only
+        ; active-vs-other, so this is exactly equivalent).
+        jp      FMADD_UNPACKED
+
         public  __fmadd
 __fmadd:
         push    ix
         ld      ix,0
         add     ix,sp
+        xor     a
+        ld      (FMAFAST),a     ; FQBRIDGE_R: fetch c from ix+12 (this
+                                 ; cdecl frame), not __fmaf's ix+8
 
         ; Register-resident unpack of 'a' (main bank) and 'b' (alternate
         ; bank) via FUNR - see __fadd's design notes. Unlike the memory-
@@ -13416,6 +13472,11 @@ __fmadd:
         ; 7T): the exponent value in A is dead either way once the flags
         ; are read, so incrementing it and testing for the resulting
         ; wraparound-to-zero is an equivalent, cheaper Z-flag test.
+FMADD_UNPACKED:
+        ; Shared entry once a and b are unpacked (active bank=a,
+        ; alternate bank=b) and ix is set up so ix+12..15=c - reached
+        ; either by falling through from __fmadd's own unpack just
+        ; above, or by a jump from __fmaf's fastcall unpack below.
         ld      a,b
         inc     a
         jr      z,FQ_ASPEC
@@ -13569,11 +13630,25 @@ FQEXP_OK:
         ; result exponent. Save the whole BC pair (exponent+Ahi) on the
         ; stack first and restore it right after the __m8u call, once the
         ; 0:Bhi value it's needed for as an argument has been consumed.
+        ;
+        ; Bhi used to be refetched from (ix+6), the packed byte at b's
+        ; stack slot - but __fmaf's fastcall convention has no such slot
+        ; (b arrives live in DE:HL, never pushed), so that only worked
+        ; for __fmadd's own cdecl entry. FUNR's alt-bank C' already holds
+        ; this same byte with the implicit bit merged in (this fast path
+        ; is only reached once FQEXP_ZERO/FQZERO have ruled out a zero
+        ; exponent, the same precondition the old "set 7,c" relied on),
+        ; so fetch it from there instead - correct for both entry points,
+        ; and one instruction shorter. The stack (not a second bare exx)
+        ; carries {0,Bhi} across to the main-active bank, same reasoning
+        ; as the FQFB2 fix above.
         push    bc              ; stash exponent(B) + Ahi(C)
         ld      a,c             ; A = Ahi, the __m8u multiplier
-        ld      c,(ix+6)        ; packed b mantissa-high byte
-        set     7,c             ; restore its implicit leading bit
-        ld      b,0             ; BC = 0:Bhi, the multiplicand
+        exx
+        ld      b,0             ; alt B'=0, alt C'=Bhi untouched
+        push    bc              ; push {0,Bhi}
+        exx
+        pop     bc              ; BC(main) = 0:Bhi, the multiplicand
         call    __m8u           ; HL:E = Ahi*Bhi (H=0, value=L:E)
         pop     bc              ; restore B(exponent):C(Ahi, no longer needed)
 
@@ -13842,14 +13917,30 @@ FQINF_A:
 FQBRIDGE_R:
         ; Entry point for callers that already have the unpacked product in
         ; the main bank.  Unpack c directly into the alternate bank instead
-        ; of calling FUNR: every __fmadd reaches this bridge exactly once,
-        ; so inlining removes a CALL/RET pair from the common path while
-        ; preserving FUNR's exact register convention.
+        ; of calling FUNR: every __fmadd/__fmaf reaches this bridge exactly
+        ; once, so inlining removes a CALL/RET pair from the common path
+        ; while preserving FUNR's exact register convention.
         exx
+        ; c sits at a different ix offset depending on which entry point
+        ; got here - __fmadd's 3-push cdecl frame (ix+12) or __fmaf's
+        ; 2-push fastcall frame (ix+8, b never pushed at all). FMAFAST,
+        ; set/cleared by each entry point's own prologue, picks the right
+        ; one; see __fmaf's header for why the offsets can't be reconciled
+        ; by adjusting ix itself instead of branching here.
+        ld      a,(FMAFAST)
+        or      a
+        jr      nz,FQBRIDGE_FAST
         ld      l,(ix+12)
         ld      h,(ix+13)
         ld      e,(ix+14)
         ld      d,(ix+15)
+        jr      FQBRIDGE_GOTC
+FQBRIDGE_FAST:
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      e,(ix+10)
+        ld      d,(ix+11)
+FQBRIDGE_GOTC:
         ; Extract sign, then use packed E bit 7 as carry into packed D,
         ; directly forming exponent=(D.low7<<1)|E.bit7.
         ld      a,d
@@ -14256,6 +14347,9 @@ FDINF:
         ret
 
 FSUB:   db      0
+FMAFAST: db     0               ; 0 = __fmadd's cdecl frame (c at ix+12),
+                                 ; nonzero = __fmaf's fastcall frame (c at
+                                 ; ix+8) - see FQBRIDGE_R
 ASGN:   db      0
 AEXP:   db      0
 AM0:    db      0

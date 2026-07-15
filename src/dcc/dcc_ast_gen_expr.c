@@ -1221,13 +1221,18 @@ void gen_binary_ast(const struct AstNode *n)
          * e.g. sinf/cosf/atanf's minimax approximations) otherwise evaluates
          * the multiply into DE:HL, pushes it, and calls __fadd separately -
          * two runtime calls and two push/pop round trips through the IEEE
-         * packing where one __fmadd(addend, b, c) call does both. n->a (the
+         * packing where one __fmaf(addend, b, c) call does both. n->a (the
          * addend) is already evaluated above; mirrors emit_float_compound_rhs's
-         * '+='-only fusion but for the general binary '+' case.
+         * '+='-only fusion but for the general binary '+' case. __fmaf is
+         * the fastcall entry point (b arrives live in DE:HL - see its header
+         * in DCCRTL.MAC): it just jumps into __fmadd's own body once
+         * unpacked, so linking it in costs only its small unpack prologue,
+         * not a second copy of the multiply/normalize logic.
          *
-         * Trade-off (measured via perf_results.csv A/B across all 220 tests):
-         * a program that newly starts using __fmadd here pays a one-time
-         * +640/+768 byte cost to link in its RTL routine (a deliberate full
+         * Trade-off (measured via perf_results.csv A/B across all 220 tests,
+         * against the original 3-push __fmadd, before the fastcall variant
+         * existed): a program that newly starts using this fusion pays a
+         * one-time link-in cost for the RTL routine (a deliberate full
          * duplicate of __fmul's body, not shared code), but every affected
          * program's cycle count improves (-0.2% to -1.3%); none regressed. */
         if (n->op == '+' && ast_is_float_madd_rhs(n->b)) {
@@ -1239,9 +1244,12 @@ void gen_binary_ast(const struct AstNode *n)
             ast_gen_expr(n->b->b);
             if (!type_is_float(g_expr_type))
                 emit_convert_int_to_float(g_expr_type);
-            emit("\tpush de\n\tpush hl\n");
-            emit_runtime_call("__fmadd");
-            emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+            /* n->b->b (the second multiplicand) is still live in DE:HL
+             * right here - __fmaf takes it that way instead of via a
+             * third push/pop round trip, matching __faf/__fsf/__fmf's
+             * fastcall convention. */
+            emit_runtime_call("__fmaf");
+            emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
             g_expr_type = TYPE_FLOAT;
             g_long_from16 = 0;
             return;
@@ -1717,10 +1725,11 @@ static void emit_float_compound_rhs(const struct AstNode *n, int saved_dead)
         ast_gen_expr(n->b->b);
         if (!type_is_float(g_expr_type))
             emit_convert_int_to_float(g_expr_type);
-        emit("\tpush de\n\tpush hl\n");
         expr_result_dead = saved_dead;
-        emit_runtime_call("__fmadd");
-        emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
+        /* n->b->b is still live in DE:HL right here - see __fmaf's
+         * call site above for why this skips a third push/pop. */
+        emit_runtime_call("__fmaf");
+        emit("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n");
         return;
     }
 
