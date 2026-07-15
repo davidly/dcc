@@ -4523,8 +4523,7 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
             char *colon = strchr(linebuf, ':');
             if (colon != NULL && n_seen < MAX_BC_LOOP_LABELS) {
                 *colon = 0;
-                strncpy(seen_names[n_seen], linebuf, sizeof(seen_names[0]) - 1);
-                seen_names[n_seen][sizeof(seen_names[0]) - 1] = 0;
+                dcc_copy_str(seen_names[n_seen], sizeof(seen_names[0]), linebuf);
                 n_seen++;
             }
         } else if (strncmp(linebuf, "\tjp ", 4) == 0 || strncmp(linebuf, "\tjr ", 4) == 0) {
@@ -4535,8 +4534,7 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
                 bc_label_name_index(seen_names, n_seen, tok) >= 0 &&
                 *n_headers < MAX_BC_LOOP_LABELS &&
                 bc_label_name_index(headers, *n_headers, tok) < 0) {
-                strncpy(headers[*n_headers], tok, sizeof(headers[0]) - 1);
-                headers[*n_headers][sizeof(headers[0]) - 1] = 0;
+                dcc_copy_str(headers[*n_headers], sizeof(headers[0]), tok);
                 (*n_headers)++;
             }
         }
