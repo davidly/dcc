@@ -2296,6 +2296,8 @@ struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
         const struct AstNode *div_node;
         const char *x_name;
         const char *y_name;
+        struct Sym *x_sym;
+        struct Sym *y_sym;
         int is_signed;
         struct Sym *quot_sym;
         struct Sym *rem_sym;
@@ -2336,7 +2338,22 @@ struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
 
         x_name = mod_node->a->sval;
         y_name = mod_node->b->sval;
+        x_sym = find_sym(x_name);
+        y_sym = find_sym(y_name);
         is_signed = !(promote_int_type(ast_expr_type_for_sizeof(mod_node->a)) & TYPE_UNSIGNED);
+
+        /* Capturing both operands before s1 is only safe when s1 cannot
+         * modify either through an alias. The direct-target check below
+         * catches `x = x % n`; address-taken information catches indirect
+         * forms such as `*p = x % n` when p points at x. */
+        if (x_sym == NULL || y_sym == NULL ||
+            ((x_sym->storage == SC_GLOBAL || x_sym->storage == SC_EXTERN) ?
+                global_text_addr_taken_count(x_name) != 0 :
+                local_name_address_taken_in_function(x_name) != 0) ||
+            ((y_sym->storage == SC_GLOBAL || y_sym->storage == SC_EXTERN) ?
+                global_text_addr_taken_count(y_name) != 0 :
+                local_name_address_taken_in_function(y_name) != 0))
+            continue;
 
         if (ast_expr_has_side_effects(s1->a->a) || ast_expr_has_side_effects(s1->a->b))
             continue;
