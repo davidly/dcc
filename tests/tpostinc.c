@@ -1,5 +1,31 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+
+static char g_buffer[16];
+static uint8_t g_static_len;
+uint8_t g_global_len;
+
+/* Regression: a global/static uint8_t post-incremented inside an array
+ * subscript (buffer[len++] = ...) used to be rejected with DCC-E1002. */
+static void test_global_byte_index(void)
+{
+    memset(g_buffer, 0, sizeof(g_buffer));
+    g_static_len = 0;
+    g_global_len = 0;
+
+    g_buffer[g_static_len++] = 'A';
+    g_buffer[g_static_len++] = 'B';
+    printf("static u8 idx: buf=%c%c len=%u\n",
+           g_buffer[0], g_buffer[1], (unsigned)g_static_len); /* AB 2 */
+
+    g_buffer[g_global_len++] = 'X';
+    g_buffer[g_global_len++] = 'Y';
+    g_buffer[g_global_len++] = 'Z';
+    printf("global u8 idx: buf=%c%c%c len=%u\n",
+           g_buffer[0], g_buffer[1], g_buffer[2],
+           (unsigned)g_global_len);                            /* XYZ 3 */
+}
 
 static void test_char_simple(void)
 {
@@ -70,5 +96,6 @@ extern int main()
     test_char_ptr_math();
     test_int_simple();
     test_int_ptr_math();
+    test_global_byte_index();
     return 0;
 }
