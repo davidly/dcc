@@ -189,6 +189,42 @@ static void test_first_stmt_reassigns_operand(void)
     ck(x, 18, "t6b-x");
 }
 
+/* Test 7: a standalone nested compound is AST-emitted as a unit during real
+ * codegen, so the frame-sizing scan must replay it too and reserve the two
+ * hidden fused-result locals. */
+static void test_bare_compound_frame(void)
+{
+    int x, n, q, r;
+    x = 23;
+    n = 5;
+    q = 0;
+    r = 0;
+    {
+        q = x % n;
+        r = x / n;
+    }
+    ck(q, 3, "t7-q");
+    ck(r, 4, "t7-r");
+}
+
+/* Test 8: the first assignment may modify a shared operand through an alias.
+ * Fusion must decline because the following division observes the stored
+ * remainder, not the operand value captured before that store. */
+static void test_first_stmt_aliases_operand(void)
+{
+    int x, n, once;
+    int *p;
+    x = 23;
+    n = 5;
+    once = 1;
+    p = &x;
+    while (once--) {
+        *p = x % n;
+        x = 100 + x / n;
+    }
+    ck(x, 100, "t8-x");
+}
+
 int main(void)
 {
     test_for_plain_int();
@@ -198,6 +234,8 @@ int main(void)
     test_signed_negative();
     test_nonadjacent_pair();
     test_first_stmt_reassigns_operand();
+    test_bare_compound_frame();
+    test_first_stmt_aliases_operand();
 
     printf("checks=%d failures=%d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");
