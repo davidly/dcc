@@ -5347,13 +5347,14 @@ csr_not_minus1:
 ; -fstack-check.
 ; ------------------------------------------------------------
         public  __stchk
+
 __stchk:
-        ld      hl,0
-        add     hl,sp           ; HL = SP after CALL's return-address push
-        ld      de,(__hlimit)
-        or      a
-        sbc     hl,de           ; carry set iff SP < __hlimit
-        ret     nc              ; no overflow: return; carry set falls straight through
+        ld      hl,(__hlimit)
+        dec     hl              ; compare SP against __hlimit - 1
+        or      a               ; clear carry
+        sbc     hl,sp
+        ret     c               ; carry iff SP >= __hlimit
+                                ; overflow falls through
         ; HL = SP - __hlimit (negative). Negate to get overflow = __hlimit - SP.
         ld      a,l
         cpl
