@@ -742,6 +742,8 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
                 return 1;
             if (n->b->kind == AST_MEMBER && ast_member_plain_int_read(n->b))
                 return 1;
+            if (type_ptr_depth(s->type) > 0)
+                return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
         }
         if (type_ptr_depth(s->type) > 0) {
             if (n->op != '=' || type_size(s->type) != 2)

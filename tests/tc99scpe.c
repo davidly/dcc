@@ -171,6 +171,23 @@ static int pointer_mid_block(void)
     return sum;  /* 10 + 20 + 30 = 60 */
 }
 
+/* Test: pointer for-init with a sizeof-based compound update */
+static int pointer_for_init_sizeof(void)
+{
+    static const char prefix[] = "abc";
+    static const char fallback[] = "none";
+    const char text[] = "abcx";
+    int result = 0;
+
+    for (const char *cursor = text; *cursor != '\0'; cursor++) {
+        if (*cursor == prefix[0])
+            cursor += sizeof(prefix) - 1;
+        result += *cursor;
+    }
+
+    return result + (int)sizeof(fallback);  /* 'x' + 5 = 125 */
+}
+
 int main(void)
 {
     fails = 0;
@@ -201,6 +218,7 @@ int main(void)
     
     /* Test pointer declaration in loop. */
     chk(pointer_mid_block(), 60, "pointer_mid_block");
+    chk(pointer_for_init_sizeof(), 125, "pointer_for_init_sizeof");
     
     if (fails == 0)
         printf("tc99scpe passed with great success\n");

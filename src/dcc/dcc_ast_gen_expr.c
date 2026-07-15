@@ -2484,7 +2484,8 @@ void gen_assign_ast(const struct AstNode *n)
                 (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
                 !type_is_long(s->type) && !type_is_float(s->type) &&
         (n->b->kind == AST_INT_LIT || n->b->kind == AST_IDENT ||
-         ast_const_plain_int_binary_supported(n->b))) {
+         ast_const_plain_int_binary_supported(n->b) ||
+         (type_ptr_depth(s->type) > 0 && ast_value_is_plain_int(n->b)))) {
         emit_load_sym_value_direct(s);
         if (n->b->kind == AST_INT_LIT) {
             long scaled = n->b->ival;
