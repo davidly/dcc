@@ -11793,119 +11793,7 @@ __fnef_ret:
         pop     ix
         ret
 
-        public  __feq
-__feq:
-        ; int __feq(float a, float b)
-        ; Compare raw bits first. Identical values are equal unless NaN;
-        ; differing values can only be equal when both are signed zero.
-        push    ix
-        ld      ix,0
-        add     ix,sp
 
-        ld      a,(ix+4)
-        cp      (ix+8)
-        jr      nz,__feq_diff
-        ld      a,(ix+5)
-        cp      (ix+9)
-        jr      nz,__feq_diff
-        ld      a,(ix+6)
-        cp      (ix+10)
-        jr      nz,__feq_diff
-        ld      a,(ix+7)
-        cp      (ix+11)
-        jr      nz,__feq_diff
-
-        ; Raw-identical NaNs still compare unequal.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fnan
-        ld      a,l
-        xor     1
-        ld      l,a
-        jr      __feq_ret
-
-__feq_diff:
-        ; Raw-different values compare equal only for +0 versus -0.
-        ld      a,(ix+7)
-        and     7fh
-        or      (ix+6)
-        or      (ix+5)
-        or      (ix+4)
-        jr      nz,__feq_false
-        ld      a,(ix+11)
-        and     7fh
-        or      (ix+10)
-        or      (ix+9)
-        or      (ix+8)
-        jr      nz,__feq_false
-        ld      hl,1
-        jr      __feq_ret
-
-__feq_false:
-        ld      hl,0
-__feq_ret:
-        ld      sp,ix
-        pop     ix
-        ret
-
-        public  __fneq
-__fneq:
-        ; int __fneq(float a, float b)
-        ; Stack-correct raw-first inverse of __feq. This must not call __feq:
-        ; doing so adds a return address and shifts __feq's stack arguments.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ld      a,(ix+4)
-        cp      (ix+8)
-        jr      nz,__fneq_diff
-        ld      a,(ix+5)
-        cp      (ix+9)
-        jr      nz,__fneq_diff
-        ld      a,(ix+6)
-        cp      (ix+10)
-        jr      nz,__fneq_diff
-        ld      a,(ix+7)
-        cp      (ix+11)
-        jr      nz,__fneq_diff
-
-        ; Raw-identical values are unequal only when they are NaN.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fnan
-        jr      __fneq_ret
-
-__fneq_diff:
-        ; Raw-different values are equal only for +0 versus -0.
-        ld      a,(ix+7)
-        and     7fh
-        or      (ix+6)
-        or      (ix+5)
-        or      (ix+4)
-        jr      nz,__fneq_true
-        ld      a,(ix+11)
-        and     7fh
-        or      (ix+10)
-        or      (ix+9)
-        or      (ix+8)
-        jr      nz,__fneq_true
-        ld      hl,0
-        jr      __fneq_ret
-
-__fneq_true:
-        ld      hl,1
-__fneq_ret:
-        ld      sp,ix
-        pop     ix
-        ret
-
-
-; ---------------------------------------------------------------------------
 ; IEEE-754 single precision ordered comparisons, phase 2.
 ;
 ; C-style ordered comparisons return false when either operand is NaN.
@@ -12253,355 +12141,6 @@ __fgef0:
         ld      hl,0
         ld      sp,ix
         pop     ix
-        ret
-
-        public  __flt
-__flt:
-        ; int __flt(float a, float b) -- a < b
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ; Fast path: both positive non-NaN. For positive IEEE singles (sign=0,
-        ; exp<255), raw byte ordering matches numeric ordering, so skip NaN/zero
-        ; checks and compare directly.
-        ld      a,(ix+7)
-        ld      b,a
-        ld      a,(ix+11)
-        or      b               ; both sign bits must be 0
-        and     80h
-        jr      nz,__flt_slow
-        ld      a,(ix+7)
-        and     7fh
-        cp      7fh
-        jr      z,__flt_slow    ; a: D&7F==7F => might be NaN/Inf
-        ld      a,(ix+11)
-        and     7fh
-        cp      7fh
-        jr      z,__flt_slow    ; b: D&7F==7F => might be NaN/Inf
-        ld      a,(ix+7)
-        cp      (ix+11)
-        jr      c,__flt1
-        jr      nz,__flt0
-        ld      a,(ix+6)
-        cp      (ix+10)
-        jr      c,__flt1
-        jr      nz,__flt0
-        ld      a,(ix+5)
-        cp      (ix+9)
-        jr      c,__flt1
-        jr      nz,__flt0
-        ld      a,(ix+4)
-        cp      (ix+8)
-        jr      c,__flt1
-        jr      __flt0
-
-__flt_slow:
-        ; cold path: classify once with the shared ordered comparator.
-        ; __fcmps returns A = 0 unordered, 1 a<b, 2 a==b, 3 a>b.
-        call    __fcmps
-        cp      1
-        jr      z,__flt1        ; a < b
-        jr      __flt0
-__flt1:
-        ld      hl,1
-        ld      sp,ix
-        pop     ix
-        ret
-__flt0:
-        ld      hl,0
-        ld      sp,ix
-        pop     ix
-        ret
-
-        public  __fgt
-__fgt:
-        ; int __fgt(float a, float b) -- a > b == b < a
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ; Fast path: both positive non-NaN -- a > b iff b_raw < a_raw.
-        ld      a,(ix+7)
-        ld      b,a
-        ld      a,(ix+11)
-        or      b
-        and     80h
-        jr      nz,__fgt_slow
-        ld      a,(ix+7)
-        and     7fh
-        cp      7fh
-        jr      z,__fgt_slow
-        ld      a,(ix+11)
-        and     7fh
-        cp      7fh
-        jr      z,__fgt_slow
-        ld      a,(ix+11)       ; compare b vs a (b < a means a > b)
-        cp      (ix+7)
-        jr      c,__fgt1
-        jr      nz,__fgt0
-        ld      a,(ix+10)
-        cp      (ix+6)
-        jr      c,__fgt1
-        jr      nz,__fgt0
-        ld      a,(ix+9)
-        cp      (ix+5)
-        jr      c,__fgt1
-        jr      nz,__fgt0
-        ld      a,(ix+8)
-        cp      (ix+4)
-        jr      c,__fgt1
-        jr      __fgt0
-
-__fgt_slow:
-        ; cold path: a > b is true only for the greater classification.
-        call    __fcmps
-        cp      3
-        jr      z,__fgt1        ; a > b
-        jr      __fgt0
-__fgt1:
-        ld      hl,1
-        ld      sp,ix
-        pop     ix
-        ret
-__fgt0:
-        ld      hl,0
-        ld      sp,ix
-        pop     ix
-        ret
-
-        public  __fle
-__fle:
-        ; int __fle(float a, float b) -- a <= b, false if unordered.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ; Fast path: both positive non-NaN -- a <= b iff a_raw <= b_raw.
-        ld      a,(ix+7)
-        ld      b,a
-        ld      a,(ix+11)
-        or      b
-        and     80h
-        jr      nz,__fle_slow
-        ld      a,(ix+7)
-        and     7fh
-        cp      7fh
-        jr      z,__fle_slow
-        ld      a,(ix+11)
-        and     7fh
-        cp      7fh
-        jr      z,__fle_slow
-        ld      a,(ix+7)
-        cp      (ix+11)
-        jr      c,__fle1
-        jr      nz,__fle0
-        ld      a,(ix+6)
-        cp      (ix+10)
-        jr      c,__fle1
-        jr      nz,__fle0
-        ld      a,(ix+5)
-        cp      (ix+9)
-        jr      c,__fle1
-        jr      nz,__fle0
-        ld      a,(ix+4)
-        cp      (ix+8)
-        jr      c,__fle1
-        jr      nz,__fle0
-        jr      __fle1          ; equal => a <= b
-
-__fle_slow:
-        ; cold path: a <= b is true for less or equal, false if unordered.
-        call    __fcmps
-        or      a
-        jr      z,__fle0        ; unordered
-        cp      3
-        jr      z,__fle0        ; greater
-        ; falls through: less or equal
-__fle1:
-        ld      hl,1
-        ld      sp,ix
-        pop     ix
-        ret
-__fle0:
-        ld      hl,0
-        ld      sp,ix
-        pop     ix
-        ret
-
-        public  __fge
-__fge:
-        ; int __fge(float a, float b) -- a >= b, false if unordered.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-
-        ; Fast path: both positive non-NaN -- a >= b iff a_raw >= b_raw.
-        ld      a,(ix+7)
-        ld      b,a
-        ld      a,(ix+11)
-        or      b
-        and     80h
-        jr      nz,__fge_slow
-        ld      a,(ix+7)
-        and     7fh
-        cp      7fh
-        jr      z,__fge_slow
-        ld      a,(ix+11)
-        and     7fh
-        cp      7fh
-        jr      z,__fge_slow
-        ld      a,(ix+7)
-        cp      (ix+11)
-        jr      c,__fge0        ; a_byte < b_byte => a < b
-        jr      nz,__fge1       ; a_byte > b_byte => a > b
-        ld      a,(ix+6)
-        cp      (ix+10)
-        jr      c,__fge0
-        jr      nz,__fge1
-        ld      a,(ix+5)
-        cp      (ix+9)
-        jr      c,__fge0
-        jr      nz,__fge1
-        ld      a,(ix+4)
-        cp      (ix+8)
-        jr      c,__fge0
-        jr      __fge1          ; equal or a_byte >= b_byte => a >= b
-
-__fge_slow:
-        ; cold path: a >= b is true for greater or equal, false if unordered.
-        call    __fcmps
-        cp      2
-        jr      nc,__fge1       ; equal or greater
-        jr      __fge0          ; unordered or less
-__fge1:
-        ld      hl,1
-        ld      sp,ix
-        pop     ix
-        ret
-__fge0:
-        ld      hl,0
-        ld      sp,ix
-        pop     ix
-        ret
-
-; ---------------------------------------------------------------------------
-; Shared ordered float comparator.  Classifies a@IX+4 vs b@IX+8 once; the
-; individual __flt/__fgt/__fle/__fge cold paths map the result to a boolean.
-; Returns A = 0 unordered (either NaN), 1 a<b, 2 a==b (incl +0==-0), 3 a>b.
-; Assumes the caller's IX frame is live; preserves IX.
-; ---------------------------------------------------------------------------
-__fcmps:
-        ; Inline NaN and zero classification here.  This is the cold path for
-        ; ordered comparisons, but it is also used for every negative operand;
-        ; avoiding four helper calls materially reduces that cost.
-
-        ; a is NaN only when exponent == 255 and fraction != 0.
-        ld      a,(ix+7)
-        and     7fh
-        cp      7fh
-        jr      nz,__fcmps_bnan
-        bit     7,(ix+6)
-        jr      z,__fcmps_bnan
-        ld      a,(ix+6)
-        and     7fh
-        or      (ix+5)
-        or      (ix+4)
-        jp      nz,__fcun
-
-__fcmps_bnan:
-        ; b is NaN only when exponent == 255 and fraction != 0.
-        ld      a,(ix+11)
-        and     7fh
-        cp      7fh
-        jr      nz,__fcmps_zero
-        bit     7,(ix+10)
-        jr      z,__fcmps_zero
-        ld      a,(ix+10)
-        and     7fh
-        or      (ix+9)
-        or      (ix+8)
-        jp      nz,__fcun
-
-__fcmps_zero:
-        ; +0 and -0 compare equal.  If a is nonzero, proceed directly to the
-        ; sign/magnitude comparison.  If a is zero, only a zero b is equal.
-        ld      a,(ix+7)
-        and     7fh
-        or      (ix+6)
-        or      (ix+5)
-        or      (ix+4)
-        jr      nz,__fcsg
-        ld      a,(ix+11)
-        and     7fh
-        or      (ix+10)
-        or      (ix+9)
-        or      (ix+8)
-        jp      z,__fceq
-        ; a == 0, b != 0: fall through to sign/magnitude compare
-__fcsg:
-        ld      a,(ix+7)
-        xor     (ix+11)
-        and     80h
-        jr      z,__fcsm        ; same sign
-        ; different signs: the negative operand is the smaller
-        ld      a,(ix+7)
-        bit     7,a
-        jp      nz,__fclt       ; a negative -> a < b
-        jp      __fcgt          ; a positive, b negative -> a > b
-__fcsm:
-        ld      a,(ix+7)
-        bit     7,a
-        jr      nz,__fcsn
-        ; both positive: raw magnitude order matches numeric order
-        jp      __frcmp         ; tail: A = 1/2/3 maps to less/equal/greater
-__fcsn:
-        ; both negative: raw magnitude order is reversed
-        call    __frcmp
-        cp      1
-        jp      z,__fcgt        ; a_raw < b_raw -> a > b
-        cp      3
-        jr      z,__fclt        ; a_raw > b_raw -> a < b
-        ret                     ; equal stays equal (A = 2)
-__fcun:
-        xor     a               ; 0 = unordered
-        ret
-__fclt:
-        ld      a,1
-        ret
-__fceq:
-        ld      a,2
-        ret
-__fcgt:
-        ld      a,3
-        ret
-
-; Raw unsigned 3-way magnitude compare of a@IX+4 vs b@IX+8.
-; Returns A = 1 (a_raw < b_raw), 2 (a_raw == b_raw), 3 (a_raw > b_raw).
-__frcmp:
-        ld      a,(ix+7)
-        cp      (ix+11)
-        jr      c,__frcl
-        jr      nz,__frcg
-        ld      a,(ix+6)
-        cp      (ix+10)
-        jr      c,__frcl
-        jr      nz,__frcg
-        ld      a,(ix+5)
-        cp      (ix+9)
-        jr      c,__frcl
-        jr      nz,__frcg
-        ld      a,(ix+4)
-        cp      (ix+8)
-        jr      c,__frcl
-        jr      nz,__frcg
-        ld      a,2
-        ret
-__frcl:
-        ld      a,1
-        ret
-__frcg:
-        ld      a,3
         ret
 
 
@@ -14926,11 +14465,7 @@ FMFORD:
         ld      h,(ix-7)
         ld      e,(ix-6)
         ld      d,(ix-5)
-        push    de
-        push    hl
-        call    __fgt             ; y > x
-        pop     bc
-        pop     bc
+        call    __fgtf             ; y > x
         pop     bc
         pop     bc
         ld      a,h
@@ -15034,11 +14569,7 @@ FMCORD:
         ld      h,(ix-7)
         ld      e,(ix-6)
         ld      d,(ix-5)
-        push    de
-        push    hl
-        call    __flt             ; y < x
-        pop     bc
-        pop     bc
+        call    __fltf             ; y < x
         pop     bc
         pop     bc
         ld      a,h
@@ -15378,8 +14909,9 @@ FMSDONE:
         call    __fmf
         pop     bc
         pop     bc
-        ; Save product, then call __flt(product, x).  The C calling
-        ; convention pushes arguments right-to-left, so push x first.
+        ; Save product, then call __fltf(product, x): x is pushed, product
+        ; stays live in DE:HL for the fastcall convention (see __fltf's
+        ; header in DCCRTL.MAC).
         ld      (ix-10),l
         ld      (ix-9),h
         ld      (ix-8),e
@@ -15394,11 +14926,7 @@ FMSDONE:
         ld      h,(ix-9)
         ld      e,(ix-8)
         ld      d,(ix-7)
-        push    de
-        push    hl
-        call    __flt             ; g*g < x ?
-        pop     bc
-        pop     bc
+        call    __fltf             ; g*g < x ?
         pop     bc
         pop     bc
         ld      a,h
@@ -15806,11 +15334,7 @@ NXGEN:
         ld      h,(ix+9)
         ld      e,(ix+10)
         ld      d,(ix+11)
-        push    de
-        push    hl
-        call    __feq
-        pop     bc
-        pop     bc
+        call    __feqf
         pop     bc
         pop     bc
         ld      a,h
@@ -15828,8 +15352,10 @@ NXGEN:
         jp      nz,NXZERO
 
         ; lt = x < y
-        ; __flt follows the normal dcc call ABI: the first argument must be
-        ; the last value pushed, so push y first, then x.
+        ; __fltf's fastcall convention: its "first" argument (x here) stays
+        ; live in DE:HL instead of being pushed, so push y, then leave x
+        ; live - the fastcall mirror of the old cdecl ABI's "last value
+        ; pushed is the first argument" rule this comment used to describe.
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
@@ -15840,11 +15366,7 @@ NXGEN:
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        push    de
-        push    hl
-        call    __flt
-        pop     bc
-        pop     bc
+        call    __fltf
         pop     bc
         pop     bc
         ld      a,h
@@ -15992,11 +15514,7 @@ MFEXPNOTNAN:
         push hl
         ld hl,0
         ld de,17072
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -16016,11 +15534,7 @@ MFL2:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -16045,11 +15559,7 @@ MFL4:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __fle
-        pop bc
-        pop bc
+        call __flef
         pop bc
         pop bc
         ld a,h
@@ -16295,11 +15805,7 @@ MFL9:
         push hl
         ld hl,1267
         ld de,16181
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -16497,11 +16003,7 @@ _powf:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
+        call __feqf
         pop bc
         pop bc
         ld a,h
@@ -16541,11 +16043,7 @@ MFL17:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -16578,11 +16076,7 @@ MFL19:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -16619,11 +16113,7 @@ MFL22:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __fneq
-        pop bc
-        pop bc
+        call __fnef
         pop bc
         pop bc
         ld a,h
@@ -16831,11 +16321,7 @@ _tanhf:
         push    hl
         ld      hl,0
         ld      de,16752
-        push    de
-        push    hl
-        call    __flt
-        pop     bc
-        pop     bc
+        call    __fltf
         pop     bc
         pop     bc
         ld      a,h
@@ -16856,11 +16342,7 @@ tanh_check_negative:
         ld      a,d
         xor     80h
         ld      d,a
-        push    de
-        push    hl
-        call    __fgt
-        pop     bc
-        pop     bc
+        call    __fgtf
         pop     bc
         pop     bc
         ld      a,h
@@ -16965,11 +16447,7 @@ _sinf:
         push hl
         ld hl,4059
         ld de,16457
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -16996,11 +16474,7 @@ MFL38:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17024,11 +16498,7 @@ MFL40:
         push hl
         ld hl,4059
         ld de,16329
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -17056,11 +16526,7 @@ MFL41:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17192,11 +16658,7 @@ _cosf:
         push hl
         ld hl,4059
         ld de,16457
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -17223,11 +16685,7 @@ MFL47:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17251,11 +16709,7 @@ MFL49:
         push hl
         ld hl,4059
         ld de,16329
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -17290,11 +16744,7 @@ MFL50:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17435,11 +16885,7 @@ _tanf:
         push hl
         ld hl,4059
         ld de,16329
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -17467,11 +16913,7 @@ MFL55:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17495,11 +16937,7 @@ MFL56:
         push hl
         ld hl,4059
         ld de,16201
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -17529,11 +16967,7 @@ MFL59:
         ld a,d
         xor 80h
         ld d,a
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17607,11 +17041,7 @@ MFL60:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
+        call __feqf
         pop bc
         pop bc
         ld a,h
@@ -17642,11 +17072,7 @@ MFL63:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __feq
-        pop bc
-        pop bc
+        call __feqf
         pop bc
         pop bc
         ld a,h
@@ -17710,11 +17136,7 @@ _atanf:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -17741,11 +17163,7 @@ MFL71:
         push hl
         ld hl,33402
         ld de,16410
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -17777,11 +17195,7 @@ MFL72:
         push hl
         ld hl,5069
         ld de,16084
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -18041,11 +17455,7 @@ MATAN2ORD:
         push    hl
         ld      hl,0
         ld      de,0
-        push    de
-        push    hl
-        call    __feq
-        pop     bc
-        pop     bc
+        call    __feqf
         pop     bc
         pop     bc
         ld      a,h
@@ -18059,11 +17469,7 @@ MATAN2ORD:
         push    hl
         ld      hl,0
         ld      de,0
-        push    de
-        push    hl
-        call    __flt
-        pop     bc
-        pop     bc
+        call    __fltf
         pop     bc
         pop     bc
         ld      a,h
@@ -18080,11 +17486,7 @@ atan2_check_positive_y:
         push    hl
         ld      hl,0
         ld      de,0
-        push    de
-        push    hl
-        call    __fgt
-        pop     bc
-        pop     bc
+        call    __fgtf
         pop     bc
         pop     bc
         ld      a,h
@@ -18134,11 +17536,7 @@ atan2_nonzero_x:
         push    hl
         ld      hl,0
         ld      de,0
-        push    de
-        push    hl
-        call    __flt
-        pop     bc
-        pop     bc
+        call    __fltf
         pop     bc
         pop     bc
         ld      a,h
@@ -18161,11 +17559,7 @@ atan2_x_not_negative:
         push    hl
         ld      hl,0
         ld      de,0
-        push    de
-        push    hl
-        call    __fle
-        pop     bc
-        pop     bc
+        call    __flef
         pop     bc
         pop     bc
         ld      a,h
@@ -18237,11 +17631,7 @@ _asinf:
         push hl
         ld hl,0
         ld de,0
-        push de
-        push hl
-        call __fgt
-        pop bc
-        pop bc
+        call __fgtf
         pop bc
         pop bc
         ld a,h
@@ -18276,11 +17666,7 @@ MFL89:
         push hl
         ld hl,0
         ld de,16256
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -18304,11 +17690,7 @@ MFL90:
         push hl
         ld hl,0
         ld de,16128
-        push de
-        push hl
-        call __flt
-        pop bc
-        pop bc
+        call __fltf
         pop bc
         pop bc
         ld a,h
@@ -18847,11 +18229,7 @@ MFMODFORD:
         push    hl
         ld      hl,0
         ld      de,0
-        push    de
-        push    hl
-        call    __fle
-        pop     bc
-        pop     bc
+        call    __flef
         pop     bc
         pop     bc
         ld      a,h
