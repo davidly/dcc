@@ -12094,6 +12094,91 @@ static int jump_target_any(const char *s, char *out)
     return i > 0;
 }
 
+/* True iff "a" or "af" appears as a whole token anywhere in `s` (comment
+ * stripped first). Used only by a_dead_or_overwritten_from's conservative
+ * liveness proof below - unlike line_touches_reg_pair's b/c/d/e callers,
+ * there is no flag-condition mnemonic spelled "a" to special-case. */
+static int line_touches_a(const char *s)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    char tok[16];
+    int ti;
+
+    strip_peep_comment_copy(tmp, s);
+    p = tmp;
+    while (*p) {
+        if (isalpha((unsigned char)*p) || *p == '_') {
+            ti = 0;
+            while ((isalnum((unsigned char)*p) || *p == '_') && ti < 15)
+                tok[ti++] = *p++;
+            tok[ti] = 0;
+            if (strcmp(tok, "a") == 0 || strcmp(tok, "af") == 0)
+                return 1;
+        } else {
+            p++;
+        }
+    }
+    return 0;
+}
+
+static int is_uncond_jr(const char *s)
+{
+    const char *p;
+
+    if (strncmp(s, "jr ", 3) != 0)
+        return 0;
+    p = s + 3;
+    while (*p) {
+        if (*p == ',')
+            return 0;
+        p++;
+    }
+    return 1;
+}
+
+/* Trace forward from `start`, following only unconditional control flow
+ * (label fall-through, unconditional jp/jr), for up to a bounded number of
+ * hops: true iff A is provably overwritten by a fresh "ld a,X" - so nothing
+ * later on this path can observe whatever this pass just left in A - or
+ * execution reaches the function's own epilogue ("ld sp,ix") with A never
+ * referenced at all. A conditional jump (ambiguous which way execution
+ * goes), a call (could return a value in A), or running out of hops without
+ * resolving either way is treated as unprovable - a decline, not a
+ * misapplication. Modelled directly on escape_path_reaches_epilogue_safely
+ * above, checking A-liveness instead of a frame-offset pattern. */
+static int a_dead_or_overwritten_from(int start, int func_end)
+{
+    int pos;
+    int hops;
+    char tmp[MAX_LINE];
+    char tgt[128];
+
+    pos = start;
+    for (hops = 0; hops < 60; ++hops) {
+        if (pos < 0 || pos >= func_end)
+            return 0;
+        if (eq(pos, "ld sp,ix"))
+            return 1;
+        strip_peep_comment_copy(tmp, lines[pos]);
+        if (strncmp(tmp, "ld a,", 5) == 0)
+            return 1;
+        if (line_touches_a(lines[pos]))
+            return 0;
+        if (starts_label(lines[pos])) { ++pos; continue; }
+        if (strncmp(lines[pos], "call ", 5) == 0)
+            return 0;
+        if (jump_target_any(lines[pos], tgt)) {
+            if (!is_uncond_jp(lines[pos]) && !is_uncond_jr(lines[pos]))
+                return 0;  /* a conditional jump - which way is ambiguous */
+            pos = find_label_line(tgt, 0, func_end);
+            continue;
+        }
+        ++pos;
+    }
+    return 0;
+}
+
 /*
  * pass_walk_hoisted_index_ptr:
  *
@@ -12108,15 +12193,31 @@ static int jump_target_any(const char *s, char *out)
  *   ld h,b
  *   ld d,0
  *   add hl,de
- *   ld (hl),a
+ *   ld (hl),a          ; or: cp (hl)
  *
  * Since BC's cached value and E's counter both only ever advance by exactly
  * 1 in lockstep every iteration (proved below, not assumed), BC itself can
  * walk forward by one byte per iteration instead of being recombined with E
- * from scratch each time:
+ * from scratch each time. A store becomes a direct write through BC:
  *
  *   ld (bc),a
  *   inc bc
+ *
+ * A compare (tests/tbig.c's check_record: `if (b[i] != rhs) ...`) is
+ * trickier - Z80 has no "cp (bc)" - so the rhs already sitting in A is
+ * parked in D first, the array byte is fetched into A instead, and the two
+ * are compared the other way around (equivalent: (a==b) == (b==a)):
+ *
+ *   ld d,a
+ *   ld a,(bc)
+ *   cp d
+ *   inc bc
+ *
+ * unlike "cp (hl)", this leaves A holding the array byte afterward rather
+ * than the original rhs - harmless for a flags-only compare (both forms set
+ * the same Z flag), but only when A's old value is never read again, which
+ * a_dead_or_overwritten_from proves separately for the compare case before
+ * this pass ever touches such a loop.
  *
  * BC's original (ix+P)/(ix+P+1) frame slot is never written by
  * pass_hoist_index_ptr_to_bc - only ever read, once, to prime BC before the
@@ -12130,11 +12231,17 @@ static int jump_target_any(const char *s, char *out)
  * gates correctness on another pass's tag, and this should not be the first
  * exception) - every precondition is independently reverified here:
  *   - exactly one "ld l,c / ld h,b / ld d,0 / add hl,de" occurs in the loop
- *     body, eventually followed by "ld (hl),a" with nothing touching H or L
- *     in between (the rhs value is computed after the address, so the store
- *     is not necessarily the very next line - but nothing may disturb HL
- *     before it runs); more than one candidate occurrence declines outright
- *     rather than guessing which, if any, is safe to walk;
+ *     body, eventually followed by "ld (hl),a" or "cp (hl)" with nothing
+ *     touching H or L in between (the rhs value is computed after the
+ *     address, so the access is not necessarily the very next line - but
+ *     nothing may disturb HL before it runs); more than one candidate
+ *     occurrence declines outright rather than guessing which, if any, is
+ *     safe to walk;
+ *   - for a compare specifically, the line right after "cp (hl)" is a
+ *     conditional jump, and a_dead_or_overwritten_from proves A is dead (or
+ *     freshly overwritten) on BOTH the fall-through path and the jump's own
+ *     target before this pass commits to leaving the array byte in A
+ *     instead of the original rhs;
  *   - B, C, and BC are referenced nowhere else in the loop body (so this
  *     really is a loop-invariant pointer with nothing else relying on BC
  *     holding its original, unwalked value mid-loop);
@@ -12153,11 +12260,13 @@ static int pass_walk_hoisted_index_ptr(void)
     char tgt[128];
     int loop_end;
     int match_k;
-    int store_k;
+    int access_k;
+    int access_is_cmp;
     int match_count;
     int inc_e_count;
     int bc_ok;
     int de_ok;
+    int func_start, func_end;
 
     changed = 0;
 
@@ -12196,21 +12305,55 @@ static int pass_walk_hoisted_index_ptr(void)
             continue;
 
         /* The rhs value (e.g. "ld a,(ix+4) / add a,e") is computed AFTER
-         * the address, so the store is not necessarily the very next line -
+         * the address, so the access is not necessarily the very next line -
          * scan forward for it, requiring every intervening line to leave HL
          * alone (a-only/e-only arithmetic is fine; anything touching H or L
          * is not, since it would corrupt the very address just built). */
-        store_k = -1;
+        access_k = -1;
+        access_is_cmp = 0;
         for (k = match_k + 4; k < loop_end; ++k) {
             if (eq(k, "ld (hl),a")) {
-                store_k = k;
+                access_k = k;
+                access_is_cmp = 0;
+                break;
+            }
+            if (eq(k, "cp (hl)")) {
+                access_k = k;
+                access_is_cmp = 1;
                 break;
             }
             if (line_touches_hl(lines[k]))
                 break;
         }
-        if (store_k < 0)
+        if (access_k < 0)
             continue;
+
+        /* A compare leaves the array byte in A afterward instead of the
+         * original rhs (see the pass's own doc comment) - only safe when
+         * nothing downstream ever reads that stale rhs value again. The
+         * compare's own result is only ever consulted via flags, through
+         * the conditional jump immediately following it - anything else
+         * there is a shape this pass does not understand, so decline. */
+        if (access_is_cmp) {
+            char jtgt[128];
+
+            if (access_k + 1 >= loop_end)
+                continue;
+            if (!(is_uncond_jp(lines[access_k + 1]) == 0 &&
+                  is_uncond_jr(lines[access_k + 1]) == 0 &&
+                  jump_target_any(lines[access_k + 1], jtgt)))
+                continue;
+
+            find_function_bounds(i, &func_start, &func_end);
+            if (!a_dead_or_overwritten_from(access_k + 2, func_end))
+                continue;
+            {
+                int jtgt_line = find_label_line(jtgt, func_start, func_end);
+                if (jtgt_line < 0 ||
+                    !a_dead_or_overwritten_from(jtgt_line, func_end))
+                    continue;
+            }
+        }
 
         bc_ok = 1;
         for (k = i + 1; k < loop_end && bc_ok; ++k) {
@@ -12291,15 +12434,22 @@ static int pass_walk_hoisted_index_ptr(void)
                 i += 4;
                 loop_end += 4;
                 match_k += 4;
-                store_k += 4;
+                access_k += 4;
             }
         }
 
         {
-            int store_after_delete = store_k - 4;
+            int access_after_delete = access_k - 4;
             delete_n(match_k, 4);
-            replace1_tagged(store_after_delete, "ld (bc),a", "walk_hoisted_index_ptr");
-            insert_line_tagged(store_after_delete + 1, "inc bc", "walk_hoisted_index_ptr");
+            if (access_is_cmp) {
+                replace1_tagged(access_after_delete, "ld d,a", "walk_hoisted_index_ptr");
+                insert_line_tagged(access_after_delete + 1, "ld a,(bc)", "walk_hoisted_index_ptr");
+                insert_line_tagged(access_after_delete + 2, "cp d", "walk_hoisted_index_ptr");
+                insert_line_tagged(access_after_delete + 3, "inc bc", "walk_hoisted_index_ptr");
+            } else {
+                replace1_tagged(access_after_delete, "ld (bc),a", "walk_hoisted_index_ptr");
+                insert_line_tagged(access_after_delete + 1, "inc bc", "walk_hoisted_index_ptr");
+            }
         }
 
         changed = 1;
