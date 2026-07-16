@@ -1256,7 +1256,12 @@ function Set-PerfBaselines {
     if ($parent -and -not (Test-Path $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    $rows | Export-Csv -Path $Path -NoTypeInformation
+    $csv = $rows | ConvertTo-Csv -NoTypeInformation
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText(
+        $Path,
+        (($csv -join "`n") + "`n"),
+        $utf8NoBom)
 }
 
 # Compares this run's measured Z80 cycle counts and .COM sizes (both already
