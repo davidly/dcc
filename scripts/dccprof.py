@@ -4,9 +4,9 @@ dccprof.py - correlate an ntvcm "-g:<file>" per-PC execution-count profile
 with dcc-generated .PRN/.SYM listings, producing:
   - a Markdown summary ranking the hottest functions
   - annotated listings (app + touched RTL routines), each in two forms:
-      .txt  - a per-line hit count and opcode bytes prefixed onto every
+      .txt  - a per-line cycle count and opcode bytes prefixed onto every
               instruction line, directly viewable/searchable in any editor
-      .html - the same content, self-contained, with each line's hit count
+      .html - the same content, self-contained, with each line's cycle count
               cell color-coded on a log-scaled heatmap (open in a browser)
 
 This is the formalized version of the ad-hoc address-correlation scripts
@@ -30,7 +30,7 @@ those iterations necessary, both handled correctly here:
      listed with address 0002, not 0000). A line's own true starting
      address is therefore the PREVIOUS line's listed address (or the
      module's base address for the first line). Getting this backwards
-     silently shifts every hit count by one listing line - there is no
+     silently shifts every cycle count by one listing line - there is no
      crash to reveal the mistake, so this is verified against several
      independent instructions of different byte-lengths before trusting it
      anywhere in this file.
@@ -340,27 +340,27 @@ def write_summary_md(out_path, app_name, correlated_lines, uncorrelated_pcs,
 
     with open(out_path, 'w') as f:
         f.write("# %s profile summary\n\n" % app_name)
-        f.write("Total instruction executions counted: **%d**\n\n" % total_hits)
+        f.write("Total cycles counted: **%d**\n\n" % total_hits)
         if uncorrelated_pcs:
             uncorrelated_total = sum(uncorrelated_pcs.values())
             frac = uncorrelated_total / total_hits if total_hits else 0.0
             addr_list = ", ".join("0x%04X" % pc for pc in sorted(uncorrelated_pcs))
             if frac < 0.01:
                 f.write("_%d profiled address(es) outside %s/RTLMIN.MAC entirely "
-                        "(%s) - %.2f%% of total hits, almost certainly CP/M's "
+                        "(%s) - %.2f%% of total cycles, almost certainly CP/M's "
                         "BDOS entry vector (0x0005) and/or ntvcm's own BDOS trap "
                         "handlers, not a correlation problem._\n\n"
                         % (len(uncorrelated_pcs), app_name, addr_list, 100.0 * frac))
             else:
                 f.write("_Warning: %d profiled addresses (%s) could not be "
-                        "matched to any listing line - %.1f%% of total hits. "
+                        "matched to any listing line - %.1f%% of total cycles. "
                         "This is too large to be just CP/M/emulator system "
                         "vectors; the build used to generate the profile may "
                         "not match the .PRN/.SYM files in this build "
                         "directory._\n\n"
                         % (len(uncorrelated_pcs), addr_list, 100.0 * frac))
         f.write("## Hottest functions\n\n")
-        f.write("| Hits | % of total | Module | Function |\n")
+        f.write("| Cycles | % of total | Module | Function |\n")
         f.write("|---:|---:|---|---|\n")
         for (module, func), hits in ranked:
             if hits == 0:
@@ -371,7 +371,7 @@ def write_summary_md(out_path, app_name, correlated_lines, uncorrelated_pcs,
         for label, path in annotated_paths:
             f.write("- [%s](%s)\n" % (label, os.path.basename(path)))
         f.write("\nEach annotated listing prefixes every instruction line "
-                "with its own hit count, in original .PRN address/line-"
+                "with its own cycle count, in original .PRN address/line-"
                 "number order - open one directly and use your editor's "
                 "search/go-to-line to jump to a specific address or line "
                 "number called out above.\n")
@@ -404,7 +404,7 @@ def write_annotated_listing(out_path, module_name, correlated_lines):
     module_lines = [cl for cl in correlated_lines if cl.module == module_name]
     with open(out_path, 'w') as f:
         f.write("; dccprof annotated listing for %s\n" % module_name)
-        f.write("; format: <hits> | <addr> <opcode bytes>  <line#>  <original .PRN line>\n\n")
+        f.write("; format: <cycles> | <addr> <opcode bytes>  <line#>  <original .PRN line>\n\n")
         for cl in module_lines:
             if cl.is_instr:
                 count_field = "%10d" % cl.count
@@ -426,7 +426,7 @@ def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
     with open(out_path, 'w') as f:
         f.write("; dccprof annotated listing for %s "
                 "(functions with at least one hit only)\n" % rtl_module_name)
-        f.write("; format: <hits> | <addr> <opcode bytes>  <line#>  <original .PRN line>\n\n")
+        f.write("; format: <cycles> | <addr> <opcode bytes>  <line#>  <original .PRN line>\n\n")
         for cl in correlated_lines:
             if cl.module != rtl_module_name:
                 continue
@@ -444,7 +444,7 @@ def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
 
 # ---------------------------------------------------------------------- #
 # HTML listings - same content as the .txt listings above, but with the
-# hit count's own cell background color-coded (a one-hue sequential ramp,
+# cycle count's own cell background color-coded (a one-hue sequential ramp,
 # log-scaled so a handful of dominant loop bodies don't wash out everything
 # else down at bucket 1). Plain text can't carry that, hence a second
 # format alongside (not instead of) the grep/search-friendly .txt.
@@ -452,7 +452,7 @@ def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
 
 # Sequential blue ramp, light->dark (6 buckets pulled from a 13-step scale)
 # paired with the text color that stays readable on each: bucket 0 is "no
-# hits" and gets no fill at all, so a mostly-cold listing still reads as
+# cycles" and gets no fill at all, so a mostly-cold listing still reads as
 # plain code, not a wall of pale blue.
 _HEAT_COLORS = [
     None,
@@ -517,17 +517,17 @@ _HTML_STYLE = """<style>
     border-bottom: 1px solid var(--border);
   }
   td { padding: 1px 10px; white-space: pre; }
-  td.hits { text-align: right; color: var(--ink-secondary); }
+  td.cycles { text-align: right; color: var(--ink-secondary); }
   td.addr { color: var(--ink-muted); }
   td.bytes { color: var(--ink-secondary); }
   td.lineno { text-align: right; color: var(--ink-muted); }
   tr:hover td { background: var(--row-hover) !important; }
-  tr.heat1 td.hits { background: #cde2fb; color: #0b0b0b; }
-  tr.heat2 td.hits { background: #9ec5f4; color: #0b0b0b; }
-  tr.heat3 td.hits { background: #5598e7; color: #0b0b0b; }
-  tr.heat4 td.hits { background: #2a78d6; color: #ffffff; }
-  tr.heat5 td.hits { background: #184f95; color: #ffffff; }
-  tr.heat6 td.hits { background: #0d366b; color: #ffffff; }
+  tr.heat1 td.cycles { background: #cde2fb; color: #0b0b0b; }
+  tr.heat2 td.cycles { background: #9ec5f4; color: #0b0b0b; }
+  tr.heat3 td.cycles { background: #5598e7; color: #0b0b0b; }
+  tr.heat4 td.cycles { background: #2a78d6; color: #ffffff; }
+  tr.heat5 td.cycles { background: #184f95; color: #ffffff; }
+  tr.heat6 td.cycles { background: #0d366b; color: #ffffff; }
 </style>
 """
 
@@ -561,27 +561,27 @@ def _write_html_listing(out_path, title, subtitle, module_lines):
             for i in range(1, 7):
                 f.write('<span class="swatch" style="background:%s"></span>'
                          % _HEAT_COLORS[i][0])
-            f.write('<span>hot &mdash; log-scaled by hit count</span></div>\n')
+            f.write('<span>hot &mdash; log-scaled by cycle count</span></div>\n')
         f.write('<table>\n<thead><tr>'
-                '<th>Hits</th><th>Addr</th><th>Bytes</th><th>Line#</th><th>Source</th>'
+                '<th>Cycles</th><th>Addr</th><th>Bytes</th><th>Line#</th><th>Source</th>'
                 '</tr></thead>\n<tbody>\n')
         for cl in module_lines:
             bucket = 0
-            hits_text = ''
+            cycles_text = ''
             bytes_text = ''
             bytes_title = ''
             if cl.is_instr:
                 bucket = _heat_bucket(cl.count, max_count)
-                hits_text = format(cl.count, ',d')
+                cycles_text = format(cl.count, ',d')
                 bytes_text = format_opcode_bytes(cl.opcode_bytes)
                 if cl.opcode_bytes and len(cl.opcode_bytes) > MAX_DISPLAY_BYTES:
                     bytes_title = ' title="%s"' % html.escape(
                         format_opcode_bytes(cl.opcode_bytes, max_bytes=len(cl.opcode_bytes)))
             row_class = ' class="heat%d"' % bucket if bucket else ''
-            f.write('<tr%s><td class="hits">%s</td><td class="addr">%04X</td>'
+            f.write('<tr%s><td class="cycles">%s</td><td class="addr">%04X</td>'
                      '<td class="bytes"%s>%s</td><td class="lineno">%d</td>'
                      '<td class="src">%s</td></tr>\n' % (
-                         row_class, hits_text, cl.addr, bytes_title,
+                         row_class, cycles_text, cl.addr, bytes_title,
                          html.escape(bytes_text), cl.lineno, html.escape(cl.text)))
         f.write('</tbody>\n</table>\n</body>\n</html>\n')
 
@@ -700,7 +700,7 @@ def main():
     print("wrote %s" % rtl_out_html)
     if uncorrelated_pcs:
         print("warning: %d profiled addresses were not correlated to any "
-              "listing line (%d total hits)" % (
+              "listing line (%d total cycles)" % (
                   len(uncorrelated_pcs), sum(uncorrelated_pcs.values())),
               file=sys.stderr)
 
