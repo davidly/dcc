@@ -5350,17 +5350,21 @@ csr_not_minus1:
 __stchk:
         ld      hl,(__hlimit)   ; lowest valid stack address
         or      a               ; clear carry before SBC
-        sbc     hl,sp           ; compare __hlimit with SP
+        sbc     hl,sp           ; HL = __hlimit - SP
         ret     c               ; SP > __hlimit: stack within limits
                                 ; SP <= __hlimit falls through
 
-        ld      a,l
-        cpl
-        ld      l,a
-        ld      a,h
-        cpl
-        ld      h,a
-        inc     hl              ; HL = overflow bytes (positive)
+        ; Falling through means the sbc above did NOT borrow, i.e.
+        ; __hlimit >= SP, so HL already holds the true non-negative
+        ; difference __hlimit - SP - exactly the overflow byte count, with
+        ; no sign inversion needed.  A previous version of this routine
+        ; (written for an older, opposite-sign convention where HL held
+        ; SP - __hlimit and so genuinely needed negating) kept negating HL
+        ; here after that convention flipped, silently printing the two's-
+        ; complement of the real overflow count (e.g. "0xFFED" instead of
+        ; "0x0013") - the guard still aborted at the right point, only the
+        ; diagnostic byte count was wrong. Confirmed via tests/tstackov.c:
+        ; the negating version printed 0xFFED where 0x0013 is correct.
         call    __cflush        ; preserves all regs except F
         ld      de,stchk_msg
         ld      c,9
