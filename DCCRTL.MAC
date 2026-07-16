@@ -122,16 +122,23 @@ __hlimit:       dw      0
 ; FTRSIZE bytes after `size` bytes of user data (i.e. at addr+HDRSIZE+
 ; size). Every block state change in the allocator goes through this, so
 ; there is one place that can get the header/footer pairing wrong instead
-; of several. Kept in this always-linked startup block (like __hbase/
-; __brk/__hlimit above) rather than inside __mlh's or __frcoal's own block,
-; so that neither malloc-only nor free-only programs are forced to pull in
-; the other's block just to reach this helper. It sits AFTER start's own
-; code (which is never reached by fall-through - CP/M begins executing at
-; the very first byte of the linked image, with no jump to `start`, so
-; anything placed before `start:` in this block would execute first, with
-; garbage register state, rather than through an explicit call).
+; of several. Has its own PUBLIC (below) rather than sharing __mlh's or
+; __frcoal's block, so that neither malloc-only nor free-only programs are
+; forced to pull in the other's block just to reach this helper.
+;
+; It used to sit here with no PUBLIC of its own, physically inside the
+; same always-linked block as __hbase/__brk/__hlimit above - which meant
+; dccrtlstrip's block-splitting (drawn at PUBLIC-label positions, not at
+; real dependency edges) silently swept it into __hlimit's block, and
+; __hlimit is a reachability root for every program (start: writes it
+; unconditionally). Net effect: this heap-internals helper shipped in
+; every .COM file ever produced, including ones that never call malloc/
+; calloc/realloc/free at all. Giving it its own PUBLIC restores the
+; original intent (shared by neither malloc-only nor free-only builds)
+; without that side effect.
 ; Entry: HL=addr, DE=packed, BC=size (true, even user size).
 ; Exit: HL clobbered (ends at footer+2). AF clobbered. DE, BC preserved.
+        public  __wr_hf
 __wr_hf:
         ld      (hl),e
         inc     hl
@@ -7178,6 +7185,18 @@ rnfail:
 
 __rnfcb:        ds      32
 
+; This state belongs to the shared low-level file-I/O core (used by
+; open/read/write/close/fopen/fseek/... - see __nospc's block, which
+; shares the same core), NOT to _rename specifically. It has its own
+; PUBLIC run (below) rather than sharing textual space after _rename's
+; body, because dccrtlstrip's block-splitting is drawn at PUBLIC-label
+; positions, not at real dependency edges: with no PUBLIC of its own,
+; this data physically fell inside _rename's block, and _rename's own
+; (unrelated, rarely-called) CP/M-rename body shipped in every program
+; that so much as opened a file, even when rename() itself was never
+; called. Confirmed via tests/tfio.c, tests/texfile.c, tests/wumpus.c -
+; none call rename(), all three linked _rename's body anyway.
+        public  __rdcv,__rdck,__fdeof,__fderr,__fduse,__fdoff
 ; Read sector cache: records which 128-byte file record currently resides in
 ; the shared __dma buffer, so consecutive small reads of the same record
 ; (e.g. fgets reading one byte at a time) skip the BDOS random read entirely.
