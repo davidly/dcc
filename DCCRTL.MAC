@@ -1245,10 +1245,11 @@ __ssf:
         public  __sstr
 __sstr:
         ; char *strstr(const char *haystack, const char *needle)
-        ; Length-bounded CPIR outer scan, with a quick second-character
-        ; precheck before saving full retry state.  This is especially good
-        ; for repeated misses like strstr(s,"gfe") against alphabetic data:
-        ; many candidates match needle[0], almost all fail at needle[1].
+        ; Single forward scan for needle[0], stopping at haystack's own NUL,
+        ; with a quick second-character precheck before saving full retry
+        ; state.  This is especially good for repeated misses like
+        ; strstr(s,"gfe") against alphabetic data: many candidates match
+        ; needle[0], almost all fail at needle[1].
         pop     bc              ; return address
         pop     de              ; DE = haystack
         pop     hl              ; HL = needle
@@ -1262,30 +1263,32 @@ sstr_core:
         ex      de,hl           ; empty needle => return haystack
         ret
 sstr_ne2:
-        ; Compute remaining haystack span including the terminating NUL.
-        push    hl              ; save needle
-        push    de              ; save haystack/current pointer
-        ex      de,hl           ; HL = haystack
-        ld      bc,0ffffh
-        xor     a
-        cpir                    ; find NUL, BC has one's-complement count left
-        ld      a,c
-        cpl
-        ld      c,a
-        ld      a,b
-        cpl
-        ld      b,a             ; BC = strlen(haystack) + 1
-        pop     de              ; DE = current haystack search pointer
-        pop     hl              ; HL = needle
-        ld      a,(hl)          ; A = needle[0]
+        ld      c,a             ; C = needle[0], the byte sstr_scan_loop hunts for
 sstr_cpir_scan:
         push    hl              ; save original needle pointer
         ld      h,d
         ld      l,e             ; HL = current haystack pointer
-        cpir                    ; search A within remaining span
-        jr      nz,sstr_cpir_not_found
+sstr_scan_loop:
+        ; Find the next occurrence of needle[0] or haystack's own NUL,
+        ; whichever comes first, in one pass - not a separate CPIR pass
+        ; that precomputes strlen(haystack) purely to bound this same
+        ; search (the previous approach). Under a string-heavy workload
+        ; (dccprof -g's cycle-weighted profiler) that precompute alone was
+        ; the single hottest line in all of DCCRTL, since it re-scanned the
+        ; *entire* haystack on every strstr() call even when the real
+        ; match, or NUL, was found almost immediately.
+        ld      a,(hl)
+        cp      c
+        jr      z,sstr_scan_hit
+        inc     hl
+        or      a
+        jr      nz,sstr_scan_loop
+        jr      sstr_cpir_not_found     ; hit NUL without a match
 
-        ; Found first char.  HL is one past candidate, BC is remaining after it.
+sstr_scan_hit:
+        inc     hl              ; HL = one past candidate (CPIR left it there too)
+
+        ; Found first char.  HL is one past candidate.
         ; Fast path: check needle[1] before pushing full retry state.
         pop     de              ; DE = original needle pointer
         inc     de              ; DE = needle + 1
@@ -1297,7 +1300,6 @@ sstr_cpir_scan:
 
         ; First two characters matched.  Save retry/return state and compare
         ; the rest of the needle.
-        push    bc              ; save remaining span after candidate first byte
         push    de              ; save needle+1
         push    hl              ; save candidate+1
 sstr_cpir_cmp_rest:
@@ -1311,25 +1313,25 @@ sstr_cpir_cmp_rest:
         jr      sstr_cpir_cmp_rest
 
 sstr_cpir_fast_fail:
-        ; DE = needle+1, HL = candidate+1, BC = remaining span.
+        ; DE = needle+1, HL = candidate+1.
         dec     de              ; DE = original needle
         ex      de,hl           ; HL = original needle, DE = next haystack
-        ld      a,(hl)          ; A = needle[0] for CPIR
+        ld      a,(hl)          ; A = needle[0]
+        ld      c,a
         jr      sstr_cpir_scan
 
 sstr_cpir_fail:
         pop     hl              ; HL = candidate+1
         pop     de              ; DE = needle+1
-        pop     bc              ; BC = remaining span after candidate first byte
         dec     de              ; DE = original needle
         ex      de,hl           ; HL = original needle, DE = next haystack
-        ld      a,(hl)          ; A = needle[0] for CPIR
+        ld      a,(hl)          ; A = needle[0]
+        ld      c,a
         jr      sstr_cpir_scan
 
 sstr_cpir_found:
         pop     hl              ; HL = candidate+1
         pop     de              ; discard saved needle+1
-        pop     bc              ; discard saved remaining span
 sstr_cpir_onechar:
         dec     hl              ; return candidate start
         ret
