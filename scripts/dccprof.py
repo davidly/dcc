@@ -377,12 +377,27 @@ def write_summary_md(out_path, app_name, correlated_lines, uncorrelated_pcs,
                 "number called out above.\n")
 
 
-def format_opcode_bytes(opcode_bytes):
+# A real instruction is at most 4 bytes; this cap is for the occasional
+# "db ...(long run of data)" listing line - a string literal or a large
+# zero-filled buffer reservation (e.g. ttt's console buffer) - whose byte
+# count can run into the hundreds. Left uncapped, one such line would
+# force every row's Bytes column (a shared table width in the HTML report)
+# wide enough to shove the source text far off to the right for every
+# line, not just that one.
+MAX_DISPLAY_BYTES = 8
+
+
+def format_opcode_bytes(opcode_bytes, max_bytes=MAX_DISPLAY_BYTES):
     """Space-separated uppercase hex, e.g. 'DD E5' - or '' if unavailable
-    (no .COM was found, or the address fell outside it)."""
+    (no .COM was found, or the address fell outside it). Truncated past
+    max_bytes with a '+N more' suffix rather than left uncapped."""
     if not opcode_bytes:
         return ''
-    return ' '.join('%02X' % b for b in opcode_bytes)
+    shown = ' '.join('%02X' % b for b in opcode_bytes[:max_bytes])
+    extra = len(opcode_bytes) - max_bytes
+    if extra > 0:
+        shown += ' +%d more' % extra
+    return shown
 
 
 def write_annotated_listing(out_path, module_name, correlated_lines):
@@ -397,7 +412,7 @@ def write_annotated_listing(out_path, module_name, correlated_lines):
             else:
                 count_field = " " * 10
                 bytes_field = ''
-            f.write("%s | %04X %-14s %6d  %s\n" % (
+            f.write("%s | %04X %-34s %6d  %s\n" % (
                 count_field, cl.addr, bytes_field, cl.lineno, cl.text))
 
 
@@ -423,7 +438,7 @@ def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
             else:
                 count_field = " " * 10
                 bytes_field = ''
-            f.write("%s | %04X %-14s %6d  %s\n" % (
+            f.write("%s | %04X %-34s %6d  %s\n" % (
                 count_field, cl.addr, bytes_field, cl.lineno, cl.text))
 
 
@@ -554,16 +569,20 @@ def _write_html_listing(out_path, title, subtitle, module_lines):
             bucket = 0
             hits_text = ''
             bytes_text = ''
+            bytes_title = ''
             if cl.is_instr:
                 bucket = _heat_bucket(cl.count, max_count)
                 hits_text = format(cl.count, ',d')
                 bytes_text = format_opcode_bytes(cl.opcode_bytes)
+                if cl.opcode_bytes and len(cl.opcode_bytes) > MAX_DISPLAY_BYTES:
+                    bytes_title = ' title="%s"' % html.escape(
+                        format_opcode_bytes(cl.opcode_bytes, max_bytes=len(cl.opcode_bytes)))
             row_class = ' class="heat%d"' % bucket if bucket else ''
             f.write('<tr%s><td class="hits">%s</td><td class="addr">%04X</td>'
-                     '<td class="bytes">%s</td><td class="lineno">%d</td>'
+                     '<td class="bytes"%s>%s</td><td class="lineno">%d</td>'
                      '<td class="src">%s</td></tr>\n' % (
-                         row_class, hits_text, cl.addr, html.escape(bytes_text),
-                         cl.lineno, html.escape(cl.text)))
+                         row_class, hits_text, cl.addr, bytes_title,
+                         html.escape(bytes_text), cl.lineno, html.escape(cl.text)))
         f.write('</tbody>\n</table>\n</body>\n</html>\n')
 
 
