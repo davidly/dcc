@@ -3,9 +3,11 @@
 dccprof.py - correlate an ntvcm "-g:<file>" per-PC execution-count profile
 with dcc-generated .PRN/.SYM listings, producing:
   - a Markdown summary ranking the hottest functions
-  - annotated listings (app + touched RTL routines) with a per-line hit
-    count prefixed onto every instruction line, directly viewable/
-    searchable in any editor
+  - annotated listings (app + touched RTL routines), each in two forms:
+      .txt  - a per-line hit count and opcode bytes prefixed onto every
+              instruction line, directly viewable/searchable in any editor
+      .html - the same content, self-contained, with each line's hit count
+              cell color-coded on a log-scaled heatmap (open in a browser)
 
 This is the formalized version of the ad-hoc address-correlation scripts
 built by hand during interactive profiling investigations this session
@@ -46,6 +48,8 @@ Designed for two audiences equally:
     time.
 """
 import argparse
+import html
+import math
 import os
 import re
 import sys
@@ -241,10 +245,24 @@ def parse_profile_csv(path):
 # ---------------------------------------------------------------------- #
 # Correlation.
 # ---------------------------------------------------------------------- #
-class CorrelatedLine:
-    __slots__ = ('module', 'lineno', 'text', 'addr', 'is_instr', 'count', 'func')
 
-    def __init__(self, module, lineno, text, addr, is_instr, count, func):
+# CP/M's fixed TPA (transient program area) load address: every .COM file's
+# first byte lands at 0100H in memory, so a final linked address's offset
+# into the .COM *file* on disk is simply (address - COM_LOAD_ADDR). Verified
+# empirically against a real build (MM.COM): the linked address for
+# _filla's "push ix" (1729H) landed on bytes DD E5 at file offset 1629H,
+# exactly address-0100H, and the following "ld ix,0" (4 bytes, DD 21 00 00)
+# confirmed it - not something to rederive per-app, this is a CP/M OS
+# convention, not a toolchain choice.
+COM_LOAD_ADDR = 0x0100
+
+
+class CorrelatedLine:
+    __slots__ = ('module', 'lineno', 'text', 'addr', 'is_instr', 'count',
+                 'func', 'opcode_bytes')
+
+    def __init__(self, module, lineno, text, addr, is_instr, count, func,
+                 opcode_bytes):
         self.module = module
         self.lineno = lineno
         self.text = text
@@ -252,16 +270,20 @@ class CorrelatedLine:
         self.is_instr = is_instr
         self.count = count
         self.func = func
+        self.opcode_bytes = opcode_bytes  # bytes, or None if unavailable
 
 
 def correlate(app_listing, app_offset, app_module_name,
               rtl_listing, rtl_offset, rtl_module_name,
-              profile_counts):
+              profile_counts, com_data):
     """Returns (correlated_lines, uncorrelated_pcs).
     correlated_lines: list of CorrelatedLine, one per .PRN line across both
     modules, in (module, original-file-order) groups.
     uncorrelated_pcs: profiled addresses that landed in neither module's
-    address range at all - diagnostic only, should normally be empty."""
+    address range at all - diagnostic only, should normally be empty.
+    com_data: the linked .COM file's raw bytes (for pulling each
+    instruction's own encoded opcode bytes), or None if unavailable - in
+    which case every line's opcode_bytes is None."""
     remaining = dict(profile_counts)
     correlated = []
 
@@ -275,6 +297,7 @@ def correlate(app_listing, app_offset, app_module_name,
             end = line['end'] + offset
             is_instr = end != start
             count = 0
+            opcode_bytes = None
             if is_instr:
                 # A multi-byte instruction is only ever recorded once, at
                 # its own first byte's address (ntvcm increments the count
@@ -282,9 +305,16 @@ def correlate(app_listing, app_offset, app_module_name,
                 # an exact match at `start` is the correct (and only)
                 # lookup, not a range scan over [start, end).
                 count = remaining.pop(start, 0)
+                if com_data is not None:
+                    file_start = start - COM_LOAD_ADDR
+                    file_end = end - COM_LOAD_ADDR
+                    if 0 <= file_start and file_end <= len(com_data):
+                        chunk = com_data[file_start:file_end]
+                        if len(chunk) == end - start:
+                            opcode_bytes = chunk
             correlated.append(CorrelatedLine(
                 module_name, line['lineno'], line['text'], start, is_instr,
-                count, func))
+                count, func, opcode_bytes))
 
     uncorrelated_pcs = remaining
     return correlated, uncorrelated_pcs
@@ -347,18 +377,28 @@ def write_summary_md(out_path, app_name, correlated_lines, uncorrelated_pcs,
                 "number called out above.\n")
 
 
+def format_opcode_bytes(opcode_bytes):
+    """Space-separated uppercase hex, e.g. 'DD E5' - or '' if unavailable
+    (no .COM was found, or the address fell outside it)."""
+    if not opcode_bytes:
+        return ''
+    return ' '.join('%02X' % b for b in opcode_bytes)
+
+
 def write_annotated_listing(out_path, module_name, correlated_lines):
     module_lines = [cl for cl in correlated_lines if cl.module == module_name]
     with open(out_path, 'w') as f:
         f.write("; dccprof annotated listing for %s\n" % module_name)
-        f.write("; format: <hits> | <original .PRN line>\n\n")
+        f.write("; format: <hits> | <addr> <opcode bytes>  <line#>  <original .PRN line>\n\n")
         for cl in module_lines:
             if cl.is_instr:
                 count_field = "%10d" % cl.count
+                bytes_field = format_opcode_bytes(cl.opcode_bytes)
             else:
                 count_field = " " * 10
-            f.write("%s | %04X %6d  %s\n" % (
-                count_field, cl.addr, cl.lineno, cl.text))
+                bytes_field = ''
+            f.write("%s | %04X %-14s %6d  %s\n" % (
+                count_field, cl.addr, bytes_field, cl.lineno, cl.text))
 
 
 def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
@@ -371,7 +411,7 @@ def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
     with open(out_path, 'w') as f:
         f.write("; dccprof annotated listing for %s "
                 "(functions with at least one hit only)\n" % rtl_module_name)
-        f.write("; format: <hits> | <original .PRN line>\n\n")
+        f.write("; format: <hits> | <addr> <opcode bytes>  <line#>  <original .PRN line>\n\n")
         for cl in correlated_lines:
             if cl.module != rtl_module_name:
                 continue
@@ -379,10 +419,172 @@ def write_filtered_rtl_listing(out_path, correlated_lines, rtl_module_name):
                 continue
             if cl.is_instr:
                 count_field = "%10d" % cl.count
+                bytes_field = format_opcode_bytes(cl.opcode_bytes)
             else:
                 count_field = " " * 10
-            f.write("%s | %04X %6d  %s\n" % (
-                count_field, cl.addr, cl.lineno, cl.text))
+                bytes_field = ''
+            f.write("%s | %04X %-14s %6d  %s\n" % (
+                count_field, cl.addr, bytes_field, cl.lineno, cl.text))
+
+
+# ---------------------------------------------------------------------- #
+# HTML listings - same content as the .txt listings above, but with the
+# hit count's own cell background color-coded (a one-hue sequential ramp,
+# log-scaled so a handful of dominant loop bodies don't wash out everything
+# else down at bucket 1). Plain text can't carry that, hence a second
+# format alongside (not instead of) the grep/search-friendly .txt.
+# ---------------------------------------------------------------------- #
+
+# Sequential blue ramp, light->dark (6 buckets pulled from a 13-step scale)
+# paired with the text color that stays readable on each: bucket 0 is "no
+# hits" and gets no fill at all, so a mostly-cold listing still reads as
+# plain code, not a wall of pale blue.
+_HEAT_COLORS = [
+    None,
+    ('#cde2fb', '#0b0b0b'),
+    ('#9ec5f4', '#0b0b0b'),
+    ('#5598e7', '#0b0b0b'),
+    ('#2a78d6', '#ffffff'),
+    ('#184f95', '#ffffff'),
+    ('#0d366b', '#ffffff'),
+]
+
+_HTML_STYLE = """<style>
+  :root {
+    color-scheme: light dark;
+    --surface: #fcfcfb;
+    --page: #f9f9f7;
+    --ink: #0b0b0b;
+    --ink-secondary: #52514e;
+    --ink-muted: #898781;
+    --border: rgba(11,11,11,0.10);
+    --row-hover: rgba(37,106,191,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19;
+      --page: #0d0d0d;
+      --ink: #ffffff;
+      --ink-secondary: #c3c2b7;
+      --ink-muted: #898781;
+      --border: rgba(255,255,255,0.10);
+      --row-hover: rgba(57,135,229,0.18);
+    }
+  }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 24px;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .meta { color: var(--ink-secondary); font-size: 13px; margin-bottom: 16px; }
+  .legend { display: flex; align-items: center; gap: 6px; margin-bottom: 20px; font-size: 12px; color: var(--ink-secondary); }
+  .legend .swatch { width: 20px; height: 14px; border-radius: 2px; border: 1px solid var(--border); }
+  table {
+    border-collapse: collapse;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    background: var(--surface);
+    width: 100%;
+  }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--surface);
+    color: var(--ink-muted);
+    text-align: left;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 1px 10px; white-space: pre; }
+  td.hits { text-align: right; color: var(--ink-secondary); }
+  td.addr { color: var(--ink-muted); }
+  td.bytes { color: var(--ink-secondary); }
+  td.lineno { text-align: right; color: var(--ink-muted); }
+  tr:hover td { background: var(--row-hover) !important; }
+  tr.heat1 td.hits { background: #cde2fb; color: #0b0b0b; }
+  tr.heat2 td.hits { background: #9ec5f4; color: #0b0b0b; }
+  tr.heat3 td.hits { background: #5598e7; color: #0b0b0b; }
+  tr.heat4 td.hits { background: #2a78d6; color: #ffffff; }
+  tr.heat5 td.hits { background: #184f95; color: #ffffff; }
+  tr.heat6 td.hits { background: #0d366b; color: #ffffff; }
+</style>
+"""
+
+
+def _heat_bucket(count, max_count):
+    """1-6, log-scaled against this listing's own hottest line - 0 means
+    'not an instruction' or 'never executed', which gets no fill."""
+    if count <= 0 or max_count <= 0:
+        return 0
+    frac = math.log1p(count) / math.log1p(max_count)
+    return min(6, 1 + int(frac * 6))
+
+
+def _write_html_listing(out_path, title, subtitle, module_lines):
+    total_hits = sum(cl.count for cl in module_lines if cl.is_instr)
+    instr_counts = [cl.count for cl in module_lines if cl.is_instr and cl.count > 0]
+    max_count = max(instr_counts) if instr_counts else 0
+
+    with open(out_path, 'w') as f:
+        f.write("<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n")
+        f.write("<title>%s</title>\n" % html.escape(title))
+        f.write(_HTML_STYLE)
+        f.write("</head>\n<body>\n")
+        f.write("<h1>%s</h1>\n" % html.escape(title))
+        f.write('<div class="meta">%s &mdash; %s instruction executions counted, '
+                'hottest line %s</div>\n' % (
+                    html.escape(subtitle), format(total_hits, ',d'),
+                    format(max_count, ',d')))
+        if max_count > 0:
+            f.write('<div class="legend"><span>cold</span>')
+            for i in range(1, 7):
+                f.write('<span class="swatch" style="background:%s"></span>'
+                         % _HEAT_COLORS[i][0])
+            f.write('<span>hot &mdash; log-scaled by hit count</span></div>\n')
+        f.write('<table>\n<thead><tr>'
+                '<th>Hits</th><th>Addr</th><th>Bytes</th><th>Line#</th><th>Source</th>'
+                '</tr></thead>\n<tbody>\n')
+        for cl in module_lines:
+            bucket = 0
+            hits_text = ''
+            bytes_text = ''
+            if cl.is_instr:
+                bucket = _heat_bucket(cl.count, max_count)
+                hits_text = format(cl.count, ',d')
+                bytes_text = format_opcode_bytes(cl.opcode_bytes)
+            row_class = ' class="heat%d"' % bucket if bucket else ''
+            f.write('<tr%s><td class="hits">%s</td><td class="addr">%04X</td>'
+                     '<td class="bytes">%s</td><td class="lineno">%d</td>'
+                     '<td class="src">%s</td></tr>\n' % (
+                         row_class, hits_text, cl.addr, html.escape(bytes_text),
+                         cl.lineno, html.escape(cl.text)))
+        f.write('</tbody>\n</table>\n</body>\n</html>\n')
+
+
+def write_annotated_listing_html(out_path, module_name, correlated_lines, app_name):
+    module_lines = [cl for cl in correlated_lines if cl.module == module_name]
+    _write_html_listing(out_path, "%s profile: %s" % (app_name, module_name),
+                         module_name, module_lines)
+
+
+def write_filtered_rtl_listing_html(out_path, correlated_lines, rtl_module_name,
+                                     app_name):
+    totals = build_function_totals(correlated_lines)
+    hot_funcs = {func for (module, func), hits in totals.items()
+                 if module == rtl_module_name and hits > 0}
+    module_lines = [cl for cl in correlated_lines
+                     if cl.module == rtl_module_name
+                     and (cl.func or '(top level)') in hot_funcs]
+    _write_html_listing(
+        out_path, "%s profile: %s" % (app_name, rtl_module_name),
+        "%s (functions with at least one hit only)" % rtl_module_name,
+        module_lines)
 
 
 # ---------------------------------------------------------------------- #
@@ -408,6 +610,7 @@ def main():
     app_prn = os.path.join(build_dir, app_upper + '.PRN')
     app_sym = os.path.join(build_dir, app_upper + '.SYM')
     rtl_prn = os.path.join(build_dir, 'RTLMIN.PRN')
+    app_com = os.path.join(build_dir, app_upper + '.COM')
 
     for required in (app_prn, app_sym, rtl_prn, args.profile_csv):
         if not os.path.isfile(required):
@@ -439,24 +642,43 @@ def main():
     profile_counts = parse_profile_csv(args.profile_csv)
     total_hits = sum(profile_counts.values())
 
+    com_data = None
+    if os.path.isfile(app_com):
+        with open(app_com, 'rb') as f:
+            com_data = f.read()
+    else:
+        print("warning: %s not found - opcode-bytes columns will be blank"
+              % app_com, file=sys.stderr)
+
     correlated_lines, uncorrelated_pcs = correlate(
         app_listing, app_offset, app_upper + '.MAC',
         rtl_listing, rtl_offset, 'RTLMIN.MAC',
-        profile_counts)
+        profile_counts, com_data)
 
     app_out = os.path.join(out_dir, '%s_profile_app.txt' % args.app)
     rtl_out = os.path.join(out_dir, '%s_profile_rtl.txt' % args.app)
+    app_out_html = os.path.join(out_dir, '%s_profile_app.html' % args.app)
+    rtl_out_html = os.path.join(out_dir, '%s_profile_rtl.html' % args.app)
     summary_out = os.path.join(out_dir, '%s_profile_summary.md' % args.app)
 
     write_annotated_listing(app_out, app_upper + '.MAC', correlated_lines)
     write_filtered_rtl_listing(rtl_out, correlated_lines, 'RTLMIN.MAC')
+    write_annotated_listing_html(app_out_html, app_upper + '.MAC', correlated_lines,
+                                  args.app)
+    write_filtered_rtl_listing_html(rtl_out_html, correlated_lines, 'RTLMIN.MAC',
+                                     args.app)
     write_summary_md(summary_out, args.app, correlated_lines, uncorrelated_pcs,
                       total_hits,
-                      [(app_upper + '.MAC', app_out), ('RTLMIN.MAC (hot routines only)', rtl_out)])
+                      [(app_upper + '.MAC (plain text)', app_out),
+                       (app_upper + '.MAC (color-coded HTML)', app_out_html),
+                       ('RTLMIN.MAC (hot routines only, plain text)', rtl_out),
+                       ('RTLMIN.MAC (hot routines only, color-coded HTML)', rtl_out_html)])
 
     print("wrote %s" % summary_out)
     print("wrote %s" % app_out)
     print("wrote %s" % rtl_out)
+    print("wrote %s" % app_out_html)
+    print("wrote %s" % rtl_out_html)
     if uncorrelated_pcs:
         print("warning: %d profiled addresses were not correlated to any "
               "listing line (%d total hits)" % (

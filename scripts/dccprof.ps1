@@ -78,8 +78,10 @@ hot-function summary plus per-line annotated listings.
 
 outputs (in -OutDir, default same as -BuildDir):
     <name>_profile_summary.md   ranked hot-function table
-    <name>_profile_app.txt      the app's own .MAC, hit count per line
+    <name>_profile_app.txt      the app's own .MAC, hit count + opcode bytes per line
     <name>_profile_rtl.txt      same, for RTL routines that were hit
+    <name>_profile_app.html     same as _app.txt, with hit counts color-coded (open in a browser)
+    <name>_profile_rtl.html     same as _rtl.txt, with hit counts color-coded (open in a browser)
 
 examples:
     dccprof.ps1 tbig
