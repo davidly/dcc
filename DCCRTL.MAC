@@ -98,7 +98,7 @@ bss_done:
         ; unreachable
 
 mem_low_msg:
-        db      0dh,0ah,'?not enough memory: TPA too small for this program',0dh,0ah,'$'
+        db      0dh,0ah,'?out of ram: TPA too small',0dh,0ah,'$'
 
 ; Heap state used by start/free/malloc.  Kept in this always-kept startup
 ; block (data, not code, so its position relative to start: doesn't matter
