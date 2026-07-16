@@ -33,23 +33,38 @@ ENOSPC   equ     28
 ; named entry point, so anything placed before start: in this always-kept
 ; block (even zeroed data, which happens to decode as NOP) executes first.
 start:
-        ; Startup memory-sufficiency check.  On a small-TPA machine, the live
-        ; SP CP/M handed us on entry may not leave room for the compiled
-        ; program+BSS [ending at __hstart] plus the full stack reserve
-        ; [__stack_size] below it - i.e. SP must be > __hstart+__stack_size.
-        ; Checked BEFORE computing __hlimit (= SP - __stack_size) on purpose:
-        ; if SP < __stack_size that subtraction underflows to a huge
-        ; (near-0xffff) value, and a later "__hlimit > __hbase" style check
-        ; would be fooled by the wraparound into looking fine instead of
-        ; catching the real problem.  __hstart+__stack_size is entirely
-        ; compile/link-time known (a relocatable label plus an absolute
-        ; equ), so the assembler/linker folds it into a single immediate -
-        ; no runtime arithmetic needed for the threshold itself, and (unlike
-        ; computing __hlimit first) nothing here can underflow.
-        ld      hl,__hstart+__stack_size
+        ; Startup memory-sufficiency check (wrap-safe), fused with heap init.
+        ; On a small-TPA machine the live SP CP/M handed us on entry may not
+        ; leave room for the compiled program+BSS [ending at __hstart] plus
+        ; the full stack reserve [__stack_size] below it.  Compute the
+        ; would-be heap limit __hlimit = SP - __stack_size at RUNTIME and
+        ; require it to be both (a) non-underflowing (SP >= __stack_size) and
+        ; (b) >= __hstart.
+        ;
+        ; Done with two runtime 16-bit subtractions, each guarded by its own
+        ; borrow test, rather than the old compile-time `ld hl,__hstart+
+        ; __stack_size` immediate: that sum is only 16 bits wide and WRAPS
+        ; modulo 65536 whenever __hstart is high (e.g. a large BSS) plus a
+        ; large stack reserve - the wrapped-low threshold then passed the
+        ; unsigned compare against the high entry SP and let an impossible
+        ; layout (heap limit below heap start) through.  Neither subtraction
+        ; below can be fooled by wraparound because each borrow is tested.
+        ;
+        ; The first subtraction already produces __hlimit, so it is stored
+        ; here and NOT recomputed below - keeping this wrap-safe check within
+        ; a couple of cycles of the old single-compare version.
+        ld      hl,0
+        add     hl,sp           ; HL = entry SP
+        ld      de,__stack_size
         or      a
-        sbc     hl,sp           ; HL = required floor - SP
-        jr      c,mem_ok        ; borrow: required floor < SP, proceed
+        sbc     hl,de           ; HL = SP - __stack_size (candidate __hlimit)
+        jr      c,mem_low       ; SP < __stack_size: underflow, TPA too small
+        ld      (__hlimit),hl   ; commit __hlimit (validated just below)
+        ld      de,__hstart
+        or      a
+        sbc     hl,de           ; carry iff candidate __hlimit < __hstart
+        jr      nc,mem_ok       ; __hlimit >= __hstart: enough room
+mem_low:
         ld      de,mem_low_msg
         ld      c,9
         call    5
@@ -57,14 +72,7 @@ start:
         call    __cpm_set_retcode
         jp      0000h
 mem_ok:
-        ; Initialize heap allocator.
-        ; __hlimit = initial SP - __stack_size
-        ld      hl,0
-        add     hl,sp
-        ld      de,__stack_size
-        or      a
-        sbc     hl,de
-        ld      (__hlimit),hl
+        ; __hlimit was stored above.
         ; __brk = __hbase = __hstart (label at end of user module)
         ld      hl,__hstart
         ld      (__hbase),hl
@@ -5386,10 +5394,15 @@ __stchk:
         or      a               ; clear carry before SBC
         sbc     hl,sp           ; HL = __hlimit - SP
         ret     c               ; SP > __hlimit: stack within limits
-                                ; SP <= __hlimit falls through
+        ret     z               ; SP == __hlimit: exactly at the lowest valid
+                                ; stack address, still within the reserve (the
+                                ; heap's exclusive upper bound is __hlimit, so
+                                ; the byte at __hlimit belongs to the stack) -
+                                ; only SP < __hlimit is a real overflow.
+                                ; SP < __hlimit falls through
 
-        ; Falling through means the sbc above did NOT borrow, i.e.
-        ; __hlimit >= SP, so HL already holds the true non-negative
+        ; Falling through means the sbc above did NOT borrow AND was non-zero,
+        ; i.e. __hlimit > SP, so HL already holds the true positive
         ; difference __hlimit - SP - exactly the overflow byte count, with
         ; no sign inversion needed.  A previous version of this routine
         ; (written for an older, opposite-sign convention where HL held

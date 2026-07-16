@@ -4677,6 +4677,8 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
     FILE *rewritten;
     char loop_headers[MAX_BC_LOOP_LABELS][16];
     int n_loop_headers;
+    char fwd_untrusted[MAX_BC_LOOP_LABELS][16];
+    int n_fwd_untrusted;
 
     rewritten = tmpfile();
     if (rewritten == NULL)
@@ -4726,6 +4728,7 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
     safe = 1;
     e_live = 0;
     bc_trusted = 1;
+    n_fwd_untrusted = 0;
     prev1[0] = 0;
     prev2[0] = 0;
     line = buf;
@@ -4773,7 +4776,8 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
          * single linear scan thinks bc is on this, its only textual visit -
          * a later iteration reaching this same label at runtime may not
          * share that history. */
-        if (n_loop_headers > 0 && line[0] == 'L' && isdigit((unsigned char)line[1])) {
+        if ((n_loop_headers > 0 || n_fwd_untrusted > 0) &&
+            line[0] == 'L' && isdigit((unsigned char)line[1])) {
             size_t llen = strlen(line);
             if (llen > 0 && line[llen - 1] == ':') {
                 char labelbuf[16];
@@ -4781,7 +4785,17 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
                 if (nlen >= sizeof(labelbuf)) nlen = sizeof(labelbuf) - 1;
                 memcpy(labelbuf, line, nlen);
                 labelbuf[nlen] = 0;
-                if (bc_label_name_index(loop_headers, n_loop_headers, labelbuf) >= 0)
+                /* Force bc untrusted at this label if it is a non-self-
+                 * consistent loop back-edge target (loop_headers) OR the
+                 * target of any forward jump taken while bc was untrusted
+                 * (fwd_untrusted).  The latter closes the branch-join hole:
+                 * the linear scan reflects only the textually-preceding
+                 * (fall-through) edge, so at an if/else join whose then-arm
+                 * clobbers bc and jumps here while the else-arm falls through
+                 * trusted, the scan would otherwise leave bc "trusted" and
+                 * skip the reload the then-arm path needs. */
+                if (bc_label_name_index(loop_headers, n_loop_headers, labelbuf) >= 0 ||
+                    bc_label_name_index(fwd_untrusted, n_fwd_untrusted, labelbuf) >= 0)
                     bc_trusted = 0;
             }
         }
@@ -4805,6 +4819,40 @@ static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_
             bc_trusted = 0;
         }
         fprintf(rewritten, "%s\n", line);
+
+        /* Forward-branch path-sensitivity (companion to the label barrier
+         * above): record the target of any jp/jr taken while bc is
+         * untrusted, so when the scan later reaches that label it forces a
+         * reload regardless of the (possibly trusted) fall-through edge.
+         * bc_trusted is unchanged by a jump line itself - jp/jr never write
+         * b/c/bc, and a "c"/"nc" flag condition is excluded by
+         * line_touches_bc_reg - so it still reflects the taken edge's trust
+         * here.  Backward/loop edges are covered by loop_headers +
+         * bc_loop_body_self_consistent, not this. */
+        if (bc_cand != NULL && !bc_trusted &&
+            (strncmp(line, "\tjp ", 4) == 0 || strncmp(line, "\tjr ", 4) == 0)) {
+            const char *comma = strrchr(line, ',');
+            const char *jt = comma ? comma + 1 : line + 4;
+            while (*jt == ' ') jt++;
+            if (jt[0] == 'L' && isdigit((unsigned char)jt[1])) {
+                char jname[16];
+                int ji = 0;
+                while (jt[ji] && jt[ji] != ' ' && jt[ji] != '\t' &&
+                       ji < (int)sizeof(jname) - 1) {
+                    jname[ji] = jt[ji];
+                    ji++;
+                }
+                jname[ji] = 0;
+                if (bc_label_name_index(fwd_untrusted, n_fwd_untrusted, jname) < 0) {
+                    if (n_fwd_untrusted >= MAX_BC_LOOP_LABELS) {
+                        safe = 0;
+                    } else {
+                        dcc_copy_str(fwd_untrusted[n_fwd_untrusted++],
+                                     sizeof(fwd_untrusted[0]), jname);
+                    }
+                }
+            }
+        }
 
         is_recognized_e_line =
             strcmp(line, "\tld e,l") == 0 || strcmp(line, "\tld l,e") == 0 ||

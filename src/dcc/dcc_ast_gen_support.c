@@ -1694,13 +1694,103 @@ int ast_unary_float_const_fold(const struct AstNode *n, unsigned long *out)
     return 0;
 }
 
+/* Fold one integer binary operator with TARGET semantics (16-bit int,
+ * 32-bit long) so a compile-time fold produces exactly what the same
+ * expression computes at run time.  Applies the usual arithmetic
+ * conversions - both operands are cast to the operation's common type
+ * before the operator, and the arithmetic/bitwise result is wrapped back to
+ * that common type's width - and evaluates through unsigned host arithmetic
+ * so a target-defined wrap (e.g. `65535u + 1u == 0`, or `-1 == 65535u`)
+ * neither trips host signed-overflow UB nor depends on host long width
+ * (64-bit LP64 vs 32-bit LLP64).  Shifts follow their own C rule instead:
+ * each operand is promoted independently and the result type / signedness
+ * come from the promoted LEFT operand, never a two-operand common type.
+ *
+ * type_a / type_b are the operands' own (pre-promotion) source types.
+ * Returns 1 with *out set (as a sign/zero-extended host long matching the
+ * result type), or 0 to decline the fold (divide/modulo by zero, signed
+ * minimum divided/modulo -1, or an out-of-range shift count). */
+static int ast_fold_binary_target(int op, int type_a, int type_b,
+                                  long a, long b, long *out)
+{
+    int common;
+    int unsigned_op;
+    unsigned long ua, ub;
+    unsigned long width_mask;
+
+    if (op == TOK_SHL || op == TOK_SHR) {
+        int lt = promote_int_type(type_a);
+        int lbits;
+        if (type_is_float(lt))
+            return 0;
+        lbits = type_is_long(lt) ? 32 : 16;
+        if (b < 0 || b >= lbits)
+            return 0;
+        a = ast_const_apply_int_cast(a, lt);
+        if (op == TOK_SHL) {
+            *out = ast_const_apply_int_cast(
+                (long)((unsigned long)a << (unsigned int)b), lt);
+        } else if (lt & TYPE_UNSIGNED) {
+            unsigned long m = type_is_long(lt) ? 0xffffffffUL : 0xffffUL;
+            *out = ast_const_apply_int_cast(
+                (long)(((unsigned long)a & m) >> (unsigned int)b), lt);
+        } else {
+            *out = ast_const_apply_int_cast(
+                (long)((unsigned long)(a >> (unsigned int)b)), lt);
+        }
+        return 1;
+    }
+
+    common = common_arith_type(type_a, type_b);
+    if (type_is_float(common))
+        return 0;
+    unsigned_op = (common & TYPE_UNSIGNED) != 0;
+    width_mask = type_is_long(common) ? 0xffffffffUL : 0xffffUL;
+
+    a = ast_const_apply_int_cast(a, common);
+    b = ast_const_apply_int_cast(b, common);
+    ua = (unsigned long)a & width_mask;
+    ub = (unsigned long)b & width_mask;
+
+    switch (op) {
+    case '+': *out = ast_const_apply_int_cast((long)(ua + ub), common); return 1;
+    case '-': *out = ast_const_apply_int_cast((long)(ua - ub), common); return 1;
+    case '*': *out = ast_const_apply_int_cast((long)(ua * ub), common); return 1;
+    case '&': *out = ast_const_apply_int_cast((long)(ua & ub), common); return 1;
+    case '|': *out = ast_const_apply_int_cast((long)(ua | ub), common); return 1;
+    case '^': *out = ast_const_apply_int_cast((long)(ua ^ ub), common); return 1;
+    case '/':
+        if (b == 0) return 0;
+        if (!unsigned_op && b == -1 &&
+            a == (type_is_long(common) ? (-2147483647L - 1L) : -32768L))
+            return 0;
+        *out = unsigned_op ? ast_const_apply_int_cast((long)(ua / ub), common)
+                           : ast_const_apply_int_cast((long)(a / b), common);
+        return 1;
+    case '%':
+        if (b == 0) return 0;
+        if (!unsigned_op && b == -1 &&
+            a == (type_is_long(common) ? (-2147483647L - 1L) : -32768L))
+            return 0;
+        *out = unsigned_op ? ast_const_apply_int_cast((long)(ua % ub), common)
+                           : ast_const_apply_int_cast((long)(a % b), common);
+        return 1;
+    case '<':    *out = unsigned_op ? (ua <  ub) : (a <  b); return 1;
+    case '>':    *out = unsigned_op ? (ua >  ub) : (a >  b); return 1;
+    case TOK_LE: *out = unsigned_op ? (ua <= ub) : (a <= b); return 1;
+    case TOK_GE: *out = unsigned_op ? (ua >= ub) : (a >= b); return 1;
+    case TOK_EQ: *out = (ua == ub); return 1;
+    case TOK_NE: *out = (ua != ub); return 1;
+    default: return 0;
+    }
+}
+
 int ast_const_scalar_fold(const struct AstNode *n, long *out)
 {
     long a;
     long b;
     struct Sym *s;
     int ei;
-    int op_unsigned;
 
     if (n == NULL)
         return 0;
@@ -1743,61 +1833,18 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
     case AST_LOGOR:
         if (!ast_const_scalar_fold(n->a, &a) || !ast_const_scalar_fold(n->b, &b))
             return 0;
-        /* a/b are host `long` - 64-bit on Linux/Mac (LP64) but only 32-bit
-         * on Windows (LLP64, both MSVC and MinGW). A target `unsigned long`
-         * literal that doesn't fit in a signed 32-bit range (e.g. the
-         * 4294967295UL in tests/tlmod.c) round-trips correctly as a large
-         * positive host long on a 64-bit host, but the exact same source
-         * value becomes -1 once %, /, a comparison, or >> apply plain
-         * signed host arithmetic to it on a 32-bit-long host - not a
-         * different BUG per host, the same stored bits, but two different
-         * (both self-consistent) interpretations of them, and only the
-         * signed operators care which one is in play. Reinterpreting
-         * through the host's own (unsigned long) - whatever width that
-         * happens to be locally - for an operand whose *source* type is
-         * unsigned recovers the correct result on both, since the value was
-         * originally parsed (strtoul, dcc_ast_build.c) using that same
-         * host's unsigned long semantics to begin with. */
-        op_unsigned = n->kind == AST_BINARY &&
-            ((ast_expr_type_for_sizeof(n->a) & TYPE_UNSIGNED) ||
-             (ast_expr_type_for_sizeof(n->b) & TYPE_UNSIGNED));
-        switch (n->kind == AST_BINARY ? n->op : n->kind) {
-        case '+': *out = a + b; return 1;
-        case '-': *out = a - b; return 1;
-        case '*': *out = a * b; return 1;
-        case '/':
-            if (b == 0) return 0;
-            *out = op_unsigned ? (long)((unsigned long)a / (unsigned long)b) : a / b;
-            return 1;
-        case '%':
-            if (b == 0) return 0;
-            *out = op_unsigned ? (long)((unsigned long)a % (unsigned long)b) : a % b;
-            return 1;
-        case TOK_SHL: *out = a << b; return 1;
-        case TOK_SHR:
-            *out = op_unsigned ? (long)((unsigned long)a >> b) : a >> b;
-            return 1;
-        case '&': *out = a & b; return 1;
-        case '^': *out = a ^ b; return 1;
-        case '|': *out = a | b; return 1;
-        case '<':
-            *out = op_unsigned ? (unsigned long)a < (unsigned long)b : a < b;
-            return 1;
-        case '>':
-            *out = op_unsigned ? (unsigned long)a > (unsigned long)b : a > b;
-            return 1;
-        case TOK_LE:
-            *out = op_unsigned ? (unsigned long)a <= (unsigned long)b : a <= b;
-            return 1;
-        case TOK_GE:
-            *out = op_unsigned ? (unsigned long)a >= (unsigned long)b : a >= b;
-            return 1;
-        case TOK_EQ: *out = a == b; return 1;
-        case TOK_NE: *out = a != b; return 1;
-        case AST_LOGAND: *out = (a != 0) && (b != 0); return 1;
-        case AST_LOGOR: *out = (a != 0) || (b != 0); return 1;
-        default: return 0;
-        }
+        if (n->kind == AST_LOGAND) { *out = (a != 0) && (b != 0); return 1; }
+        if (n->kind == AST_LOGOR)  { *out = (a != 0) || (b != 0); return 1; }
+        /* Evaluate the operator with target-width semantics (see
+         * ast_fold_binary_target): operands converted to the operation's
+         * common type, wrapping arithmetic done at the target width through
+         * unsigned host math, so the fold matches the target's runtime
+         * result on every host and never leaks host long width or signed
+         * overflow into the folded constant. */
+        return ast_fold_binary_target(n->op,
+                                      ast_expr_type_for_sizeof(n->a),
+                                      ast_expr_type_for_sizeof(n->b),
+                                      a, b, out);
     default:
         return 0;
     }
@@ -1833,25 +1880,23 @@ int ast_const_condition_fold(const struct AstNode *n, long *out)
 }
 
 /*
- * Strict constant fold. Like ast_const_scalar_fold, but returns 1 only when the
- * folded value is guaranteed identical under BOTH the target's signed and
- * unsigned interpretations at every step. ast_const_scalar_fold evaluates in
- * signed host `long`, so divide, modulo, right-shift and relational operators
- * can disagree with the 16-/32-bit target result once an operand is negative;
- * this walker rejects (returns 0) exactly those ambiguous cases. Callers may
- * therefore emit the folded immediate (masked to the result width) directly.
- *
- * Signedness-independent low-bit operators (+ - * & | ^ and the two-value
- * unary/equality forms) always fold. Left-shift folds for valid target-width
- * counts via unsigned host arithmetic. Divide/modulo require both operands >= 0;
- * right-shift requires a non-negative left operand; relational operators
- * require both operands >= 0 so the signed host comparison matches the target.
+ * Strict constant fold. Like ast_const_scalar_fold, it evaluates an integer
+ * constant expression with exact target semantics (both walkers now share
+ * ast_fold_binary_target, so a folded value equals what the target computes
+ * at run time regardless of host long width or operand sign). The remaining
+ * difference is caller intent: ast_const_fold_strict is the entry point used
+ * where the whole node is about to be replaced by an emitted immediate
+ * (gen_binary_ast / gen_long_arith_ast), and it declines (returns 0) the two
+ * cases with no defined target value - divide/modulo by zero, signed minimum
+ * divided/modulo -1, and an out-of-range shift count - so the caller falls
+ * back to ordinary codegen rather than baking in a bogus constant. Callers
+ * may emit the folded immediate (masked to the result width) directly
+ * whenever it returns 1.
  */
 int ast_const_fold_strict(const struct AstNode *n, long *out)
 {
     long a;
     long b;
-    int op_unsigned;
 
     if (n == NULL)
         return 0;
@@ -1888,78 +1933,17 @@ int ast_const_fold_strict(const struct AstNode *n, long *out)
     case AST_BINARY:
         if (!ast_const_fold_strict(n->a, &a) || !ast_const_fold_strict(n->b, &b))
             return 0;
-        /* The a<0/b<0 checks below are meant to ask "is this operand's SOURCE
-         * TYPE unsigned" - genuinely unsigned values are never negative, so
-         * there is no signed/unsigned ambiguity to reject at all - but they
-         * ask it by inspecting the HOST long's raw sign bit instead, which
-         * only matches the source type's signedness by coincidence: host
-         * `long` is 64-bit on Linux/Mac (LP64), so any 32-bit unsigned target
-         * value fits as a positive host long with room to spare, but on
-         * Windows (LLP64, MSVC and MinGW both keep `long` at 32 bits) the
-         * exact same target value - e.g. 4294967295UL, tests/tlmod.c - is
-         * stored as a negative host long (its bit pattern reinterpreted
-         * as -1), tripping `a<0` and wrongly declining a fold that is not
-         * actually ambiguous at all. Check the operand's real source type
-         * first; only fall back to the host-sign heuristic (correct for
-         * genuinely signed operands, where a negative host value really can
-         * be a negative target value) when the type says signed. */
-        op_unsigned = (common_arith_type(ast_expr_type_for_sizeof(n->a),
-                                          ast_expr_type_for_sizeof(n->b)) & TYPE_UNSIGNED) != 0;
-        switch (n->op) {
-        case '+': *out = a + b; return 1;
-        case '-': *out = a - b; return 1;
-        case '*': *out = a * b; return 1;
-        case '&': *out = a & b; return 1;
-        case '|': *out = a | b; return 1;
-        case '^': *out = a ^ b; return 1;
-        case TOK_SHL: if (b < 0 || b >= 32) return 0; *out = (long)((unsigned long)a << (unsigned int)b); return 1;
-        case TOK_EQ: *out = (a == b); return 1;
-        case TOK_NE: *out = (a != b); return 1;
-        case '/':
-            if (op_unsigned) {
-                if (b == 0) return 0;
-                *out = (long)((unsigned long)a / (unsigned long)b);
-                return 1;
-            }
-            if (a < 0 || b <= 0) return 0;
-            *out = a / b;
-            return 1;
-        case '%':
-            if (op_unsigned) {
-                if (b == 0) return 0;
-                *out = (long)((unsigned long)a % (unsigned long)b);
-                return 1;
-            }
-            if (a < 0 || b <= 0) return 0;
-            *out = a % b;
-            return 1;
-        case TOK_SHR:
-            if (op_unsigned) {
-                if (b < 0 || b >= 32) return 0;
-                *out = (long)((unsigned long)a >> (unsigned int)b);
-                return 1;
-            }
-            if (a < 0 || b < 0 || b >= 32) return 0;
-            *out = a >> b;
-            return 1;
-        case '<':
-            if (op_unsigned) { *out = (unsigned long)a < (unsigned long)b; return 1; }
-            if (a < 0 || b < 0) return 0;
-            *out = (a < b); return 1;
-        case '>':
-            if (op_unsigned) { *out = (unsigned long)a > (unsigned long)b; return 1; }
-            if (a < 0 || b < 0) return 0;
-            *out = (a > b); return 1;
-        case TOK_LE:
-            if (op_unsigned) { *out = (unsigned long)a <= (unsigned long)b; return 1; }
-            if (a < 0 || b < 0) return 0;
-            *out = (a <= b); return 1;
-        case TOK_GE:
-            if (op_unsigned) { *out = (unsigned long)a >= (unsigned long)b; return 1; }
-            if (a < 0 || b < 0) return 0;
-            *out = (a >= b); return 1;
-        default: return 0;
-        }
+        /* Target-width fold via the shared helper: operands converted to the
+         * common type, wrapping arithmetic at the target width through
+         * unsigned host math, shifts typed from the promoted left operand.
+         * Declines only for operations with no defined target value; every
+         * other integer binary operator folds to its exact target value, so
+         * the emitted immediate matches the target's runtime result
+         * regardless of host long width or operand sign. */
+        return ast_fold_binary_target(n->op,
+                                      ast_expr_type_for_sizeof(n->a),
+                                      ast_expr_type_for_sizeof(n->b),
+                                      a, b, out);
     default:
         return 0;
     }
