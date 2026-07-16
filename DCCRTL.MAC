@@ -33,6 +33,30 @@ ENOSPC   equ     28
 ; named entry point, so anything placed before start: in this always-kept
 ; block (even zeroed data, which happens to decode as NOP) executes first.
 start:
+        ; Startup memory-sufficiency check.  On a small-TPA machine, the live
+        ; SP CP/M handed us on entry may not leave room for the compiled
+        ; program+BSS [ending at __hstart] plus the full stack reserve
+        ; [__stack_size] below it - i.e. SP must be > __hstart+__stack_size.
+        ; Checked BEFORE computing __hlimit (= SP - __stack_size) on purpose:
+        ; if SP < __stack_size that subtraction underflows to a huge
+        ; (near-0xffff) value, and a later "__hlimit > __hbase" style check
+        ; would be fooled by the wraparound into looking fine instead of
+        ; catching the real problem.  __hstart+__stack_size is entirely
+        ; compile/link-time known (a relocatable label plus an absolute
+        ; equ), so the assembler/linker folds it into a single immediate -
+        ; no runtime arithmetic needed for the threshold itself, and (unlike
+        ; computing __hlimit first) nothing here can underflow.
+        ld      hl,__hstart+__stack_size
+        or      a
+        sbc     hl,sp           ; HL = required floor - SP
+        jr      c,mem_ok        ; borrow: required floor < SP, proceed
+        ld      de,mem_low_msg
+        ld      c,9
+        call    5
+        ld      hl,00ffh
+        call    __cpm_set_retcode
+        jp      0000h
+mem_ok:
         ; Initialize heap allocator.
         ; __hlimit = initial SP - __stack_size
         ld      hl,0
@@ -72,6 +96,9 @@ bss_done:
         push    hl                      ; pass main() return value to exit
         call    _exit                   ; -> __cflush, __cpm_set_retcode, jp 0000h
         ; unreachable
+
+mem_low_msg:
+        db      0dh,0ah,'?not enough memory: TPA too small for this program',0dh,0ah,'$'
 
 ; Heap state used by start/free/malloc.  Kept in this always-kept startup
 ; block (data, not code, so its position relative to start: doesn't matter
