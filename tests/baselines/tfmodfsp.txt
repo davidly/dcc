@@ -1,2 +1,2 @@
-checks=12 failures=0
+checks=27 failures=0
 RESULT: PASS
