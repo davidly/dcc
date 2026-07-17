@@ -5,7 +5,7 @@
             "name": "DCC CP/M: Debug active C file",
             "type": "cppdbg",
             "request": "launch",
-            "preLaunchTask": "Build active DCC C file for debugging",
+            "preLaunchTask": "Build and stage active DCC C file for debugging",
             "program": "${workspaceFolder}/build/DCCDEBUG.COM",
             "cwd": "${workspaceFolder}/build",
             "MIMode": "gdb",
