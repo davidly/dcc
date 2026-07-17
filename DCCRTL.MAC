@@ -1277,6 +1277,35 @@ sstr_scan_loop:
         ; the single hottest line in all of DCCRTL, since it re-scanned the
         ; *entire* haystack on every strstr() call even when the real
         ; match, or NUL, was found almost immediately.
+        ;
+        ; Unrolled 4x.  Because each load is preceded by its own inc hl,
+        ; HL still points AT the candidate byte at every match test, so all
+        ; four iterations share one sstr_scan_hit target.  Only the fourth
+        ; iteration pays the taken 12T loop back-branch (the other three
+        ; replace it with a fall-through NUL test); the un-unrolled loop
+        ; paid that taken back-branch on every byte and was the profiler's
+        ; single hottest instruction in the whole runtime.
+        ld      a,(hl)
+        cp      c
+        jr      z,sstr_scan_hit
+        inc     hl
+        or      a
+        jr      z,sstr_cpir_not_found
+
+        ld      a,(hl)
+        cp      c
+        jr      z,sstr_scan_hit
+        inc     hl
+        or      a
+        jr      z,sstr_cpir_not_found
+
+        ld      a,(hl)
+        cp      c
+        jr      z,sstr_scan_hit
+        inc     hl
+        or      a
+        jr      z,sstr_cpir_not_found
+
         ld      a,(hl)
         cp      c
         jr      z,sstr_scan_hit

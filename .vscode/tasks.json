@@ -14,6 +14,24 @@
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "Stage debug data files",
+            "type": "shell",
+            "command": "mkdir -p build && find \"${fileDirname}\" -maxdepth 1 -type f \\( -name '*.WTS' -o -name '*.IN' -o -name '*.DAT' \\) -exec cp -f {} build/ \\;",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build and stage active DCC C file for debugging",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build active DCC C file for debugging",
+                "Stage debug data files"
+            ],
+            "problemMatcher": []
         }
     ]
 }
