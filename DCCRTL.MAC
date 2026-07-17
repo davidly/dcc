@@ -1264,10 +1264,9 @@ sstr_core:
         ret
 sstr_ne2:
         ld      c,a             ; C = needle[0], the byte sstr_scan_loop hunts for
-sstr_cpir_scan:
-        push    hl              ; save original needle pointer
-        ld      h,d
-        ld      l,e             ; HL = current haystack pointer
+        inc     hl              ; save needle+1: all candidate checks start there
+        ld      b,(hl)          ; B = needle[1], invariant across candidates
+        ex      de,hl           ; DE = needle+1, HL = current haystack pointer
 sstr_scan_loop:
         ; Find the next occurrence of needle[0] or haystack's own NUL,
         ; whichever comes first, in one pass - not a separate CPIR pass
@@ -1318,10 +1317,8 @@ sstr_scan_hit:
         inc     hl              ; HL = one past candidate (CPIR left it there too)
 
         ; Found first char.  HL is one past candidate.
-        ; Fast path: check needle[1] before pushing full retry state.
-        pop     de              ; DE = original needle pointer
-        inc     de              ; DE = needle + 1
-        ld      a,(de)
+        ; Fast path: check needle[1] before pushing retry state.
+        ld      a,b
         or      a
         jr      z,sstr_cpir_onechar
         cp      (hl)            ; compare needle[1] with candidate[1]
@@ -1342,21 +1339,13 @@ sstr_cpir_cmp_rest:
         jr      sstr_cpir_cmp_rest
 
 sstr_cpir_fast_fail:
-        ; DE = needle+1, HL = candidate+1.
-        dec     de              ; DE = original needle
-        ex      de,hl           ; HL = original needle, DE = next haystack
-        ld      a,(hl)          ; A = needle[0]
-        ld      c,a
-        jr      sstr_cpir_scan
+        ; DE = needle+1, HL = candidate+1, C = needle[0].
+        jr      sstr_scan_loop
 
 sstr_cpir_fail:
         pop     hl              ; HL = candidate+1
         pop     de              ; DE = needle+1
-        dec     de              ; DE = original needle
-        ex      de,hl           ; HL = original needle, DE = next haystack
-        ld      a,(hl)          ; A = needle[0]
-        ld      c,a
-        jr      sstr_cpir_scan
+        jr      sstr_scan_loop
 
 sstr_cpir_found:
         pop     hl              ; HL = candidate+1
@@ -1366,7 +1355,6 @@ sstr_cpir_onechar:
         ret
 
 sstr_cpir_not_found:
-        pop     hl              ; discard saved needle pointer
         ld      hl,0
         ret
 
