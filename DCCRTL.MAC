@@ -2601,19 +2601,30 @@ _ldiv:
         ld      a,d
         ld      (bc),a
 
-        ld      l,(ix+8)
-        ld      h,(ix+9)        ; numer high word
-        push    hl
-        ld      l,(ix+6)
-        ld      h,(ix+7)        ; numer low word
-        push    hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)       ; denom low word -> HL (live)
-        ld      e,(ix+12)
-        ld      d,(ix+13)       ; denom high word -> DE (live)
-        call    __lms           ; DE:HL = remainder
-        pop     bc
-        pop     bc
+        ; __lds's shared core computed the unsigned remainder too.  Apply
+        ; the dividend sign here instead of repeating the complete division.
+        ld      hl,(__ldv_rem_l)
+        ld      de,(__ldv_rem_h)
+        bit     7,(ix+9)
+        jr      z,ldiv_rem_ready
+        ld      a,l
+        cpl
+        ld      l,a
+        ld      a,h
+        cpl
+        ld      h,a
+        ld      a,e
+        cpl
+        ld      e,a
+        ld      a,d
+        cpl
+        ld      d,a
+        inc     hl
+        ld      a,h
+        or      l
+        jr      nz,ldiv_rem_ready
+        inc     de
+ldiv_rem_ready:
         ld      c,(ix+4)
         ld      b,(ix+5)
         inc     bc
@@ -10238,11 +10249,22 @@ _fread:
         ld      a,h
         or      l
         jr      z,frd_zero
+        ld      a,h
+        or      a
+        jr      nz,frd_generic
+        ld      a,l
+        cp      1
+        jr      nz,frd_generic
+        ld      l,(ix+8)
+        ld      h,(ix+9)                ; size == 1: nbytes = count
+        jr      frd_have_nbytes
+frd_generic:
         ; nbytes = size * count, rejecting 16-bit overflow
         ld      e,(ix+8)
         ld      d,(ix+9)                ; DE = count
         call    __ckmul                 ; HL = size*count; carry set on overflow
         jr      c,frd_zero              ; overflow -> read nothing
+frd_have_nbytes:
         ld      (__frw_nb),hl
         ; _read(fp, buf, nbytes)
         push    hl                      ; nbytes
@@ -10275,9 +10297,17 @@ _fread:
 frd_neof:
         pop     hl                      ; bytes_read
         ; return bytes_read / size
+        ld      a,(ix+7)
+        or      a
+        jr      nz,frd_divide
+        ld      a,(ix+6)
+        cp      1
+        jr      z,frd_return
+frd_divide:
         ld      e,(ix+6)
         ld      d,(ix+7)
         call    __divu                  ; HL = items read
+frd_return:
         pop     ix
         ret
 frd_zero:
@@ -10303,11 +10333,22 @@ _fwrite:
         ld      a,h
         or      l
         jr      z,fwr_zero
+        ld      a,h
+        or      a
+        jr      nz,fwr_generic
+        ld      a,l
+        cp      1
+        jr      nz,fwr_generic
+        ld      l,(ix+8)
+        ld      h,(ix+9)                ; size == 1: nbytes = count
+        jr      fwr_have_nbytes
+fwr_generic:
         ; nbytes = size * count, rejecting 16-bit overflow
         ld      e,(ix+8)
         ld      d,(ix+9)
         call    __ckmul                 ; HL = size*count; carry set on overflow
         jr      c,fwr_zero              ; overflow -> write nothing
+fwr_have_nbytes:
         ; _write(fp, buf, nbytes)
         push    hl                      ; nbytes
         ld      l,(ix+4)
@@ -10323,9 +10364,17 @@ _fwrite:
         ld      sp,hl
         ex      de,hl                   ; HL = bytes_written
         ; return bytes_written / size
+        ld      a,(ix+7)
+        or      a
+        jr      nz,fwr_divide
+        ld      a,(ix+6)
+        cp      1
+        jr      z,fwr_return
+fwr_divide:
         ld      e,(ix+6)
         ld      d,(ix+7)
         call    __divu
+fwr_return:
         pop     ix
         ret
 fwr_zero:
@@ -11220,15 +11269,10 @@ sc_is_space:
         cp      ' '
         jr      z,sc_space_yes
         cp      9
-        jr      z,sc_space_yes
-        cp      10
-        jr      z,sc_space_yes
-        cp      11
-        jr      z,sc_space_yes
-        cp      12
-        jr      z,sc_space_yes
-        cp      13
-        jr      z,sc_space_yes
+        jr      c,sc_space_no
+        cp      14              ; C-locale whitespace bytes 9 through 13
+        jr      c,sc_space_yes
+sc_space_no:
         or      a
         ret
 sc_space_yes:
@@ -11270,34 +11314,52 @@ sc_digit_bad:
         ret
 
 sc_muladd_digit:
-        ld      hl,0
-        ld      (sc_tmp_l),hl
-        ld      (sc_tmp_h),hl
-        ld      a,(sc_base)
-        ld      b,a
-sc_muladd_loop:
-        ld      hl,(sc_tmp_l)
-        ld      de,(sc_val_l)
-        add     hl,de
-        ld      (sc_tmp_l),hl
-        ld      hl,(sc_tmp_h)
-        ld      de,(sc_val_h)
-        adc     hl,de
-        ld      (sc_tmp_h),hl
-        djnz    sc_muladd_loop
-        ld      hl,(sc_tmp_l)
-        ld      (sc_val_l),hl
-        ld      hl,(sc_tmp_h)
-        ld      (sc_val_h),hl
         ld      hl,(sc_val_l)
-        ld      a,(sc_digit)
-        ld      e,a
-        ld      d,0
-        add     hl,de
+        ld      de,(sc_val_h)
+        add     hl,hl           ; value * 2
+        rl      e
+        rl      d
+        ld      a,(sc_base)
+        cp      10
+        jr      nz,sc_muladd_not10
+        ld      (sc_tmp_l),hl   ; save value * 2
+        ld      (sc_tmp_h),de
+        add     hl,hl           ; value * 4
+        rl      e
+        rl      d
+        add     hl,hl           ; value * 8
+        rl      e
+        rl      d
+        ld      bc,(sc_tmp_l)
+        add     hl,bc           ; value * 10
+        ld      bc,(sc_tmp_h)
+        ex      de,hl
+        adc     hl,bc
+        ex      de,hl
+        jr      sc_muladd_store
+sc_muladd_not10:
+        add     hl,hl           ; value * 4
+        rl      e
+        rl      d
+        add     hl,hl           ; value * 8
+        rl      e
+        rl      d
+        cp      8
+        jr      z,sc_muladd_store
+        add     hl,hl           ; value * 16
+        rl      e
+        rl      d
+sc_muladd_store:
         ld      (sc_val_l),hl
+        ld      (sc_val_h),de
+        ld      a,(sc_digit)
+        ld      c,a
+        ld      b,0
+        add     hl,bc
+        ld      (sc_val_l),hl
+        ret     nc
         ld      hl,(sc_val_h)
-        ld      de,0
-        adc     hl,de
+        inc     hl
         ld      (sc_val_h),hl
         ret
 
@@ -14644,236 +14706,141 @@ _fabsf:
         ret
 
         public  _floorf
+        public  _ceilf
+        public  __frint
 _floorf:
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      hl,-8
-        add     hl,sp
-        ld      sp,hl
-
-        ; C99 7.12.9.2: if x is infinite or NaN, the result is x
-        ; unmodified. The (long)x round-trip below has no self-
-        ; correction for either: converting Inf/NaN to long is
-        ; undefined in C, and whatever finite substitute __ffl produces
-        ; silently loses the original value instead of preserving it.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        call    __fnan
-        ld      a,h
-        or      l
-        jr      nz,FMFID
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __finf
-        ld      a,h
-        or      l
-        jr      z,FMFORD
-FMFID:
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        ld      sp,ix
-        pop     ix
-        ret
-FMFORD:
+        xor     a                       ; mode 0 = floor
+        jp      __frint
 
-        ; l = (long)x
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __ffl
-        ld      (ix-4),l
-        ld      (ix-3),h
-        ld      (ix-2),e
-        ld      (ix-1),d
-
-        ; y = (float)l
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        call    __flf
-        ld      (ix-8),l
-        ld      (ix-7),h
-        ld      (ix-6),e
-        ld      (ix-5),d
-
-        ; if (x < y) l--, y = (float)l.
-        ; Do the adjustment in integer space.  This avoids depending on
-        ; opposite-sign __fsub edge cases while preserving floor semantics
-        ; for negative non-integral values.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        push    de
-        push    hl
-        ld      l,(ix-8)
-        ld      h,(ix-7)
-        ld      e,(ix-6)
-        ld      d,(ix-5)
-        call    __fgtf             ; y > x
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jp      z,FMFRET
-
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        dec     hl
-        ld      a,l
-        cp      0ffh
-        jr      nz,FMFDEC
-        ld      a,h
-        cp      0ffh
-        jr      nz,FMFDEC
-        dec     de
-FMFDEC:
-        call    __flf
-        ld      (ix-8),l
-        ld      (ix-7),h
-        ld      (ix-6),e
-        ld      (ix-5),d
-FMFRET:
-        ld      l,(ix-8)
-        ld      h,(ix-7)
-        ld      e,(ix-6)
-        ld      d,(ix-5)
-        ld      sp,ix
-        pop     ix
-        ret
-
-        public  _ceilf
 _ceilf:
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      hl,-8
-        add     hl,sp
-        ld      sp,hl
-
-        ; C99 7.12.9.1: if x is infinite or NaN, the result is x
-        ; unmodified - see _floorf's identical guard just above for why.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        call    __fnan
-        ld      a,h
-        or      l
-        jr      nz,FMCID
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __finf
-        ld      a,h
-        or      l
-        jr      z,FMCORD
-FMCID:
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        ld      sp,ix
-        pop     ix
-        ret
-FMCORD:
+        ld      a,1                     ; mode 1 = ceil
+        jp      __frint
 
-        ; l = (long)x
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __ffl
-        ld      (ix-4),l
-        ld      (ix-3),h
-        ld      (ix-2),e
-        ld      (ix-1),d
-
-        ; y = (float)l
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        call    __flf
-        ld      (ix-8),l
-        ld      (ix-7),h
-        ld      (ix-6),e
-        ld      (ix-5),d
-
-        ; if (x > y) l++, y = (float)l.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        push    de
-        push    hl
-        ld      l,(ix-8)
-        ld      h,(ix-7)
-        ld      e,(ix-6)
-        ld      d,(ix-5)
-        call    __fltf             ; y < x
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jp      z,FMCRET
-
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
+; Direct binary32 floor/ceil. A selects floor (0) or ceil (1), DE:HL is x,
+; and IX is the caller frame. Values already integral, infinities, and NaNs
+; return unchanged. Other values are truncated by clearing fraction bits and
+; adjusted by one integer unit only when their sign and direction require it.
+__frint:
+        ld      (__frint_mode),a
+        ld      a,d
+        and     80h
+        ld      (__frint_sign),a
+        ld      a,e
+        add     a,a
+        ld      a,d
+        rla                              ; A = raw exponent
+        cp      150                     ; unbiased exponent >= 23
+        jp      nc,frint_ret             ; includes infinities and NaNs
+        cp      127
+        jr      c,frint_small
+        ld      c,a
+        ld      a,150
+        sub     c
+        ld      (__frint_bits),a         ; fractional bit count (1..23)
+        ld      b,a
+        ld      c,0                      ; any discarded bit was nonzero
+frint_right:
+        ld      a,l
+        and     1
+        or      c
+        ld      c,a
+        srl     d
+        rr      e
+        rr      h
+        rr      l
+        djnz    frint_right
+        ld      a,c
+        or      a
+        jr      z,frint_restore
+        ld      a,(__frint_mode)
+        or      a
+        jr      z,frint_floor_adjust
+        ld      a,(__frint_sign)
+        or      a
+        jr      nz,frint_restore         ; ceil negative: toward zero
+        jr      frint_increment
+frint_floor_adjust:
+        ld      a,(__frint_sign)
+        or      a
+        jr      z,frint_restore          ; floor positive: toward zero
+frint_increment:
         inc     hl
         ld      a,h
         or      l
-        jr      nz,FMCCNV
+        jr      nz,frint_restore
         inc     de
-FMCCNV:
-        call    __flf
-        ld      (ix-8),l
-        ld      (ix-7),h
-        ld      (ix-6),e
-        ld      (ix-5),d
-FMCRET:
-        ld      l,(ix-8)
-        ld      h,(ix-7)
-        ld      e,(ix-6)
-        ld      d,(ix-5)
-        ld      sp,ix
+frint_restore:
+        ld      a,(__frint_bits)
+        ld      b,a
+frint_left:
+        add     hl,hl
+        rl      e
+        rl      d
+        djnz    frint_left
+        ld      a,(__frint_sign)
+        or      d
+        ld      d,a
+        jr      frint_ret
+frint_small:
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      z,frint_ret              ; preserve signed zero
+        ld      a,(__frint_mode)
+        or      a
+        jr      z,frint_small_floor
+        bit     7,d
+        jr      nz,frint_neg_zero
+        ld      de,3f80h                 ; ceil(positive fraction) = +1
+        ld      hl,0
+        jr      frint_ret
+frint_small_floor:
+        bit     7,d
+        jr      z,frint_pos_zero
+        ld      de,0bf80h                ; floor(negative fraction) = -1
+        ld      hl,0
+        jr      frint_ret
+frint_neg_zero:
+        ld      de,8000h                 ; ceil(negative fraction) = -0
+        ld      hl,0
+        jr      frint_ret
+frint_pos_zero:
+        ld      de,0
+        ld      hl,0
+frint_ret:
         pop     ix
         ret
+__frint_mode:  db      0
+__frint_bits:  db      0
+__frint_sign:  db      0
 
         public  _fmodf
 _fmodf:
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      hl,-12
-        add     hl,sp
-        ld      sp,hl
 
         ; C99 7.12.10.1: x infinite, or y zero, is a domain error -> NaN
         ; (also propagate an already-NaN operand); y infinite with x
-        ; finite is well-defined and returns x unchanged. None of this
-        ; was checked before the q=x/y computation below, which has no
-        ; self-correction: for x=Inf, (long)(Inf/y) truncates to some
-        ; finite iq (long can't represent infinity), so the pipeline
-        ; silently produced Inf back out of the final "x - prod"
-        ; subtraction instead of the required NaN; for y=Inf, x/Inf
-        ; correctly gives 0 (an earlier fix this session), but then
-        ; prod = 0*Inf correctly gives NaN too (0*Inf is invalid), which
-        ; propagated through "x - prod" and gave NaN instead of x.
+        ; finite is well-defined and returns x unchanged.  These special
+        ; values must be filtered out before the significand reduction
+        ; below, which assumes finite, in-range operands.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
@@ -14937,69 +14904,267 @@ FMDNAN:
         jp      FMDRET
 
 FMDNZ:
-        ; q = x / y
+        ; Compute the remainder directly on the 24-bit significands while
+        ; descending x's exponent toward y's.  Normal and subnormal finite
+        ; operands are both handled: each significand is normalized so bit 23
+        ; is set and its true biased exponent is tracked as a SIGNED 16-bit
+        ; value (a normalized subnormal has exponent <= 0, down to -22), which
+        ; keeps the reduction-loop invariant "remainder < 2*divisor" valid for
+        ; every input.  value = significand * 2^(exp-150) throughout.
+        ; (y == 0 and the Inf/NaN cases were already handled above.)
+
+        ; ---- load + normalize x ----
+        ld      a,(ix+6)
+        add     a,a
+        ld      a,(ix+7)
+        rla                             ; A = x biased exponent field
+        ld      c,80h                   ; implicit leading bit (normal)
+        or      a
+        jr      nz,fmd_xld
+        inc     a                       ; subnormal field 0 -> effective exp 1
+        ld      c,0                     ; no implicit bit
+fmd_xld:
+        ld      h,0
+        ld      l,a
+        ld      (__fmd_xexp),hl         ; 16-bit signed exponent
+        ld      a,(ix+6)
+        and     7fh
+        or      c
+        ld      (__fmd_xhi),a
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      (__fmd_xlo),hl
+        ld      a,(__fmd_xhi)
+        or      h
+        or      l
+        jr      nz,fmd_xnrm             ; x significand != 0
+        ld      a,(ix+7)                ; x == 0: fmod(0,y) = signed zero
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      hl,0
+        jp      FMDRET
+fmd_xnrm:
+        ld      a,(__fmd_xhi)
+        bit     7,a
+        jr      nz,fmd_xnrm_done
+        ld      hl,(__fmd_xlo)
+        add     hl,hl
+        ld      (__fmd_xlo),hl
+        ld      a,(__fmd_xhi)
+        adc     a,a
+        ld      (__fmd_xhi),a
+        ld      hl,(__fmd_xexp)
+        dec     hl
+        ld      (__fmd_xexp),hl
+        jr      fmd_xnrm
+fmd_xnrm_done:
+
+        ; ---- load + normalize y (y != 0 guaranteed) ----
+        ld      a,(ix+10)
+        add     a,a
+        ld      a,(ix+11)
+        rla
+        ld      c,80h
+        or      a
+        jr      nz,fmd_yld
+        inc     a
+        ld      c,0
+fmd_yld:
+        ld      h,0
+        ld      l,a
+        ld      (__fmd_yexp),hl
+        ld      a,(ix+10)
+        and     7fh
+        or      c
+        ld      (__fmd_yhi),a
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      (__fmd_ylo),hl
+fmd_ynrm:
+        ld      a,(__fmd_yhi)
+        bit     7,a
+        jr      nz,fmd_ynrm_done
+        ld      hl,(__fmd_ylo)
+        add     hl,hl
+        ld      (__fmd_ylo),hl
+        ld      a,(__fmd_yhi)
+        adc     a,a
+        ld      (__fmd_yhi),a
+        ld      hl,(__fmd_yexp)
+        dec     hl
+        ld      (__fmd_yexp),hl
+        jr      fmd_ynrm
+fmd_ynrm_done:
+
+        xor     a
+        ld      (__fmd_xcarry),a
+
+        ; if xexp < yexp (signed): |x| < |y| -> remainder is x unchanged
+        ld      hl,(__fmd_xexp)
+        ld      de,(__fmd_yexp)
+        or      a
+        sbc     hl,de                   ; range fits 16-bit signed, no overflow
+        bit     7,h
+        jr      z,FMDMOD_LOOP           ; xexp >= yexp
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        push    de              ; left operand x
-        push    hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)       ; right operand y, live for __fdf
-        call    __fdf
-        pop     bc
-        pop     bc
+        jp      FMDRET
 
-        ; iq = (long)q, truncating toward zero.
-        call    __ffl
+FMDMOD_LOOP:
+        ; Compare the current 24-bit remainder with y's significand.
+        ld      a,(__fmd_xcarry)
+        or      a
+        jr      nz,FMDMOD_SUB
+        ld      a,(__fmd_yhi)
+        ld      b,a
+        ld      a,(__fmd_xhi)
+        cp      b
+        jr      c,FMDMOD_NOSUB
+        jr      nz,FMDMOD_SUB
+        ld      hl,(__fmd_xlo)
+        ld      de,(__fmd_ylo)
+        or      a
+        sbc     hl,de
+        jr      c,FMDMOD_NOSUB
+FMDMOD_SUB:
+        ld      hl,(__fmd_xlo)
+        ld      de,(__fmd_ylo)
+        or      a
+        sbc     hl,de
+        ld      (__fmd_xlo),hl
+        ld      a,(__fmd_yhi)
+        ld      b,a
+        ld      a,(__fmd_xhi)
+        sbc     a,b
+        ld      (__fmd_xhi),a
+        xor     a
+        ld      (__fmd_xcarry),a
+FMDMOD_NOSUB:
+        ld      hl,(__fmd_xexp)
+        ld      de,(__fmd_yexp)
+        or      a
+        sbc     hl,de
+        ld      a,h
+        or      l
+        jr      z,FMDMOD_NORMALIZE      ; xexp == yexp -> reduction complete
+        ld      hl,(__fmd_xlo)
+        add     hl,hl
+        ld      (__fmd_xlo),hl
+        ld      a,(__fmd_xhi)
+        adc     a,a
+        ld      (__fmd_xhi),a
+        ld      a,0
+        adc     a,a
+        ld      (__fmd_xcarry),a
+        ld      hl,(__fmd_xexp)
+        dec     hl
+        ld      (__fmd_xexp),hl
+        jr      FMDMOD_LOOP
 
-        ; tq = (float)iq
-        call    __flf
-        ld      (ix-4),l
-        ld      (ix-3),h
-        ld      (ix-2),e
-        ld      (ix-1),d
-
-        ; prod = tq * y
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        push    de              ; left operand tq
-        push    hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        ld      e,(ix+10)
-        ld      d,(ix+11)
-        call    __fmf
-        pop     bc
-        pop     bc
-        ld      (ix-8),l
-        ld      (ix-7),h
-        ld      (ix-6),e
-        ld      (ix-5),d
-
-        ; return x - prod
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        push    de              ; left operand x
-        push    hl
-        ld      l,(ix-8)
-        ld      h,(ix-7)
-        ld      e,(ix-6)
-        ld      d,(ix-5)
-        call    __fsf
-        pop     bc
-        pop     bc
+FMDMOD_NORMALIZE:
+        ; remainder significand in xhi:xlo at exponent xexp(==yexp); < y_sig.
+        ld      hl,(__fmd_xlo)
+        ld      a,(__fmd_xhi)
+        or      h
+        or      l
+        jr      nz,FMDMOD_NORM_LOOP
+        ld      a,(ix+7)                ; exact remainder zero keeps x's sign
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      hl,0
+        jp      FMDRET
+FMDMOD_NORM_LOOP:
+        ld      a,(__fmd_xhi)
+        bit     7,a
+        jr      nz,FMDMOD_HAVE_EXP
+        ld      hl,(__fmd_xlo)
+        add     hl,hl
+        ld      (__fmd_xlo),hl
+        ld      a,(__fmd_xhi)
+        adc     a,a
+        ld      (__fmd_xhi),a
+        ld      hl,(__fmd_xexp)
+        dec     hl
+        ld      (__fmd_xexp),hl
+        jr      FMDMOD_NORM_LOOP
+FMDMOD_HAVE_EXP:
+        ; significand normalized (bit 23 set), exponent signed in __fmd_xexp.
+        ld      hl,(__fmd_xexp)
+        bit     7,h
+        jr      nz,FMDMOD_DENORM        ; exp < 0 -> subnormal result
+        ld      a,h
+        or      l
+        jr      z,FMDMOD_DENORM         ; exp == 0 -> subnormal result
+        ; exp >= 1: normal.  Low byte is the exponent field (1..254).
+        ld      hl,(__fmd_xlo)
+        ld      a,(__fmd_xexp)
+        srl     a
+        ld      d,a
+        ld      e,0
+        rr      e
+        ld      a,(__fmd_xhi)
+        and     7fh
+        or      e
+        ld      e,a
+        ld      a,(ix+7)
+        and     80h
+        or      d
+        ld      d,a
+        jp      FMDRET
+FMDMOD_DENORM:
+        ; subnormal: mantissa = significand >> (1 - exp), exponent field 0.
+        ld      hl,1
+        ld      de,(__fmd_xexp)
+        or      a
+        sbc     hl,de                   ; HL = 1 - exp = right-shift count (>=1)
+        ld      a,h
+        or      a
+        jr      nz,FMDMOD_UNDERFLOW     ; shift >= 256 -> underflow to zero
+        ld      a,l
+        cp      24
+        jr      nc,FMDMOD_UNDERFLOW     ; shift >= 24 -> underflow to zero
+        ld      b,l
+FMDMOD_DENORM_LOOP:
+        ld      a,(__fmd_xhi)
+        srl     a
+        ld      (__fmd_xhi),a
+        ld      hl,(__fmd_xlo)
+        rr      h
+        rr      l
+        ld      (__fmd_xlo),hl
+        djnz    FMDMOD_DENORM_LOOP
+        ld      hl,(__fmd_xlo)
+        ld      a,(__fmd_xhi)
+        and     7fh
+        ld      e,a
+        ld      a,(ix+7)
+        and     80h
+        ld      d,a                     ; sign, exponent field 0
+        jp      FMDRET
+FMDMOD_UNDERFLOW:
+        ld      a,(ix+7)
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      hl,0
+        jp      FMDRET
 
 FMDRET:
         ld      sp,ix
         pop     ix
         ret
+
+__fmd_xlo:     dw      0
+__fmd_ylo:     dw      0
+__fmd_xhi:     db      0
+__fmd_yhi:     db      0
+__fmd_xcarry:  db      0
+__fmd_xexp:    dw      0
+__fmd_yexp:    dw      0
 
         public  _sqrtf
 _sqrtf:

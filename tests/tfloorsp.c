@@ -55,6 +55,24 @@ int main(void)
     okf("floorf(-3.7)", floorf(-3.7f), -4.0f);
     okf("ceilf(-3.2)", ceilf(-3.2f), -3.0f);
 
+    /* Values with |x| < 1 exercise the sub-1.0 magnitude path, where the
+     * result is a fixed +/-0 or +/-1 rather than a truncated significand.
+     * A malformed M80 hex literal (bf80h instead of 0bf80h, parsed as an
+     * undefined symbol = 0) once made floorf of a negative fraction return
+     * +0.0 instead of -1.0; the old |x|>1 cases above never touched it. */
+    okf("floorf(0.25)", floorf(0.25f), 0.0f);
+    okf("ceilf(0.25)", ceilf(0.25f), 1.0f);
+    okf("floorf(-0.25)", floorf(-0.25f), -1.0f);
+    okf("floorf(-0.75)", floorf(-0.75f), -1.0f);
+    okf("ceilf(0.75)", ceilf(0.75f), 1.0f);
+    okf("ceilf(-0.25)", ceilf(-0.25f), 0.0f);
+    okb("ceilf(-0.25) is -0", signbit(ceilf(-0.25f)), 1);
+    okb("floorf(0.25) is +0", signbit(floorf(0.25f)), 0);
+    okb("floorf(+0) is +0", signbit(floorf(0.0f)), 0);
+    okb("ceilf(+0) is +0", signbit(ceilf(0.0f)), 0);
+    okb("floorf(-0) is -0", signbit(floorf(-0.0f)), 1);
+    okb("ceilf(-0) is -0", signbit(ceilf(-0.0f)), 1);
+
     fp = modff(pinf, &ip);
     okb("modff(inf) ip isinf", isinf(ip), 1);
     okf("modff(inf) fp", fp, 0.0f);
