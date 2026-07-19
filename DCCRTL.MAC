@@ -6328,9 +6328,9 @@ _close:
         push    af
         ld      a,(__slot)
         call    __usep
-        ld      (hl),0
         ; invalidate the read sector cache: this slot is closing
         xor     a
+        ld      (hl),a
         ld      (__rdcv),a
         pop     af
         cp      0ffh
@@ -6609,7 +6609,6 @@ wrdone:
         ret
 
 wrcon:
-        ld      hl,(__rwcnt)
         ; initialize console write vars
         ld      l,(ix+6)
         ld      h,(ix+7)
@@ -6770,8 +6769,6 @@ lsend:
         add     hl,de
 
         ; Add offset high bytes plus carry from low word.
-        ld      e,a
-        ld      a,e
         adc     a,(ix+8)
         ld      b,a             ; result byte 2
 
@@ -6825,7 +6822,6 @@ __chkfd:
         ld      a,(hl)
         or      a
         jr      z,cfbad
-        or      a               ; clear carry
         ret
 cfbad:
         scf
@@ -6843,7 +6839,6 @@ __rdhit:
         ld      hl,__rdck
         cp      (hl)
         jr      nz,rdh_miss             ; different slot
-        ld      a,(__slot)
         call    __fcbp
         ld      de,33
         add     hl,de                   ; HL -> FCB random-record bytes
@@ -6872,13 +6867,8 @@ __rdsto:
         ld      de,33
         add     hl,de                   ; HL -> FCB random-record bytes
         ld      de,__rdck+1
-        ld      b,3
-rds_cpy:
-        ld      a,(hl)
-        ld      (de),a
-        inc     hl
-        inc     de
-        djnz    rds_cpy
+        ld      bc,3
+        ldir
         ld      a,1
         ld      (__rdcv),a
         ret
@@ -7053,12 +7043,10 @@ __advio:
 
 __zerdm:
         ld      hl,__dma
-        ld      b,128
-        ld      a,1ah           ; Ctrl-Z: CP/M text-file EOF sentinel
-zdm1:
-        ld      (hl),a
-        inc     hl
-        djnz    zdm1
+        ld      (hl),1ah        ; Ctrl-Z: CP/M text-file EOF sentinel
+        ld      de,__dma+1
+        ld      bc,127
+        ldir
         ret
 
 ; HL = filename string, DE = FCB address.
@@ -9894,20 +9882,6 @@ fo_doit:
         ld      hl,__fderr
         add     hl,de
         ld      (hl),a
-        ; Initialize file position to zero for this slot
-        ld      hl,__fdoff
-        add     hl,de           ; HL = __fdoff + slot
-        add     hl,de           ; HL = __fdoff + slot*2
-        add     hl,de           ; HL = __fdoff + slot*3
-        add     hl,de           ; HL = __fdoff + slot*4
-        xor     a               ; A already 0 but be explicit
-        ld      (hl),a
-        inc     hl
-        ld      (hl),a
-        inc     hl
-        ld      (hl),a
-        inc     hl
-        ld      (hl),a
         pop     hl                      ; restore fd = FILE*
         pop     ix
         ret
@@ -9921,16 +9895,7 @@ fo_fail:
 ; ============================================================
         public  _fclose
 _fclose:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        push    hl                      ; fp
-        call    _close
-        pop     de                      ; clean 2 bytes
-        pop     ix
-        ret                             ; HL = 0 (ok) or -1 (error)
+        jp      _close                  ; same stack ABI and return value
 
 ; ============================================================
 ; tmpnam / tmpfile  (C89 7.9.4.3 / 7.9.4.4)
