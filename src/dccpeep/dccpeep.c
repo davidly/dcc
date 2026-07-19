@@ -12175,6 +12175,19 @@ static int jump_target_any(const char *s, char *out)
     return i > 0;
 }
 
+static int zero_cond_jump_target_any(const char *s, char *out)
+{
+    char tmp[MAX_LINE];
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "jp z,", 5) != 0 &&
+        strncmp(tmp, "jp nz,", 6) != 0 &&
+        strncmp(tmp, "jr z,", 5) != 0 &&
+        strncmp(tmp, "jr nz,", 6) != 0)
+        return 0;
+    return jump_target_any(tmp, out);
+}
+
 /* True iff "a" or "af" appears as a whole token anywhere in `s` (comment
  * stripped first). Used only by a_dead_or_overwritten_from's conservative
  * liveness proof below - unlike line_touches_reg_pair's b/c/d/e callers,
@@ -12318,11 +12331,12 @@ static int a_dead_or_overwritten_from(int start, int func_end)
  *     nothing may disturb HL before it runs); more than one candidate
  *     occurrence declines outright rather than guessing which, if any, is
  *     safe to walk;
- *   - for a compare specifically, the line right after "cp (hl)" is a
- *     conditional jump, and a_dead_or_overwritten_from proves A is dead (or
- *     freshly overwritten) on BOTH the fall-through path and the jump's own
- *     target before this pass commits to leaving the array byte in A
- *     instead of the original rhs;
+ *   - for a compare specifically, the line right after "cp (hl)" is a z/nz
+ *     jump (operand reversal preserves equality, but not ordered flags), and
+ *     a_dead_or_overwritten_from proves A is dead (or freshly overwritten)
+ *     on BOTH the fall-through path and the jump's own target before this
+ *     pass commits to leaving the array byte in A instead of the original
+ *     rhs;
  *   - B, C, and BC are referenced nowhere else in the loop body (so this
  *     really is a loop-invariant pointer with nothing else relying on BC
  *     holding its original, unwalked value mid-loop);
@@ -12420,9 +12434,7 @@ static int pass_walk_hoisted_index_ptr(void)
 
             if (access_k + 1 >= loop_end)
                 continue;
-            if (!(is_uncond_jp(lines[access_k + 1]) == 0 &&
-                  is_uncond_jr(lines[access_k + 1]) == 0 &&
-                  jump_target_any(lines[access_k + 1], jtgt)))
+            if (!zero_cond_jump_target_any(lines[access_k + 1], jtgt))
                 continue;
 
             find_function_bounds(i, &func_start, &func_end);
