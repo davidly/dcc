@@ -70,13 +70,30 @@ actualcode:
 
         ; set all array entries to true:  for (i = 0; i <= SIZE; i++) flags[i] = TRUE;
 
-        ld         hl, flags
-        ld         (hl), 1
-        ld         d, h
-        ld         e, l
-        inc        de
-        ld         bc, size+2
-        ldir
+        ld         hl, 0
+        add        hl, sp
+        ld         (SaveSP), hl
+        ld         hl, flags + size + 2
+        ld         sp, hl
+        ld         hl, 0101h
+        ld         bc, 0002h
+  fillagain:
+        push       hl
+        push       hl
+        push       hl
+        push       hl
+        push       hl
+        push       hl
+        push       hl
+        push       hl
+        dec        b
+        jp         nz, fillagain
+        dec        c
+        jp         nz, fillagain
+        ld         hl, (SaveSP)
+        ld         sp, hl
+        ld         hl, flags + size + 2   ; one guaranteed-true sentinel byte just past
+        ld         (hl), 1                 ; the array proper; kloop can never reach or clear it
 
         ; iterate through array entries and count primes
         ; register usage:
@@ -87,25 +104,24 @@ actualcode:
   nextprime:
         ld         hl, flags
         add        hl, bc
-        ld         d, b             ; save the current i in de
-        ld         e, c
-        ld         bc, 0            ; a value of 1 will be found, even if it's 1 byte past the end of the array
-        ld         a, 1
-        cpir
 
-        inc        bc               ; bc and hl are modified even if there is a match on the first byte
-        dec        hl
-        ex         de, hl           ; update bc to be the i. first save hl for later
-        sbc        hl, bc
-        ld         b, h
-        ld         c, l
-        ex         de, hl           ; restore hl -- & flags[ i ]
-
-        ld         a, 20h           ; did we go past the end of the array?
-        cp         b
-        jp         z, checknextiter
+  npshortcut:
+        ld         a, (hl)
+        or         a
+        jp         nz, flagison
+        inc        bc
+        inc        hl
+        jp         npshortcut
 
   flagison:
+        ld         a, 23h           ; did we reach the guaranteed-true sentinel just past the array?
+        cp         h
+        jp         nz, flaginbounds
+        ld         a, 0
+        cp         l
+        jp         z, checknextiter
+
+  flaginbounds:
         ex         de, hl
         ld         hl, 3
         add        hl, bc
@@ -128,11 +144,9 @@ actualcode:
         inc        hl
         ld         (COUNT), hl
 
-  flagisoff:                        ; check if outer loop is done
+  flagisoff:                        ; loop back for the next candidate; the boundary is caught in flagison
         inc        bc
-        ld         a, 20h           ; past 8192 byes?
-        cp         b
-        jp         nz, nextprime
+        jp         nextprime
 
   checknextiter:                    ; are we done iterating loops times?
         ld         a, (ITER)
