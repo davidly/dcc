@@ -27,7 +27,6 @@ extern uint8_t m_ff00[ 256 ];   /* woz monitor */
 #define OP_HALT 0xff
 #define OP_RTS 0x60
 
-extern bool fits_in_ram();
 extern void emulate();
 extern void end_emulation();
 extern void soft_reset();
@@ -461,37 +460,6 @@ char * render_flags()
     return ac_flags;
 }
 #endif //APPLE1_TRACE
-
-/* this is only approximate as the linker can put the arrays anywhere in RAM */
-/* the 2k is for the stack (which really only needs a few bytes) and other bss after the array */
-bool fits_in_ram()
-{
-    uint16_t bdos_address, bottom_of_stack, address;
-
-    bdos_address = * (uint16_t *) 6;
-    /* printf( "bdos: %04x\n", bdos_address ); */
-    bottom_of_stack = bdos_address - 2048;
-    /* printf( "bottom_of_stack: %04x\n", bottom_of_stack ); */
-    address = (uint16_t) ( (uint8_t *) ( & m_0000 ) + sizeof( m_0000 ) - 1 );
-    /* printf( "m_0000: %04x\n", m_0000 ); */
-    /* printf( "end of m_0000: %04x\n", address ); */
-
-    if ( address < bottom_of_stack && address > (uint16_t) m_0000 ) /* too high or wrapped */
-    {
-#if defined( APPLE1_32K ) || defined( APPLE1_24K )
-        address = (uint16_t) ( (uint8_t *) ( & m_4000 ) + sizeof( m_4000 ) - 1 ); /* too high or wrapped */
-        /* printf( "m4_0000: %04x\n", m_4000 ); */
-        /* printf( "end of m4_0000: %04x\n", address ); */
-        if ( address < bottom_of_stack && address > (uint16_t) m_4000 )
-            return true;
-#else
-        return true;
-#endif
-    }
-
-    printf( "uninitialized data area %04x collides with stack and/or BDOS %04x\n", address, bottom_of_stack );
-    return false;
-}
 
 void emulate()
 {
@@ -1420,12 +1388,6 @@ int main( argc, argv ) int argc; char * argv[];
     int i;
     char * pcHEX, *parg, c, lower;
     pcHEX = 0;
-
-    if ( !fits_in_ram() )
-    {
-        printf( "a1 is too large to fit in RAM; adjust ARM size in a1.c\n" );
-        exit( 1 );
-    }
 
     for ( i = 1; i < argc; i++ )
     {
