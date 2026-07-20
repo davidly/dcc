@@ -288,7 +288,27 @@ static void t_large(void)
     r = (unsigned char *)malloc(65000U);
     if (r != 0)
         fail("large wrap malloc accepted impossible request");
+    r = (unsigned char *)malloc(65535U);
+    if (r != 0)
+        fail("large odd-wrap malloc accepted impossible request");
     free(q);
+}
+
+static void t_realloc_size_overflow(void)
+{
+    unsigned char *p;
+    unsigned char *r;
+
+    p = (unsigned char *)malloc(32U);
+    if (p == 0)
+        fail("realloc overflow setup malloc failed");
+    fill(p, 32U, 29);
+
+    r = (unsigned char *)realloc(p, 65535U);
+    if (r != 0)
+        fail("realloc odd-wrap request did not fail");
+    check(p, 32U, 29, "realloc odd-wrap freed or damaged old block");
+    free(p);
 }
 
 static void t_calloc(void)
@@ -551,6 +571,113 @@ static void t_grow_top(void)
     free(q);
 }
 
+static void t_grow_next_free(void)
+{
+    unsigned char *p;
+    unsigned char *next;
+    unsigned char *guard;
+    unsigned char *q;
+
+    p = (unsigned char *)malloc(50U);
+    next = (unsigned char *)malloc(100U);
+    guard = (unsigned char *)malloc(16U);
+    if (p == 0 || next == 0 || guard == 0)
+        fail("grow-next setup malloc failed");
+    fill(p, 50U, 23);
+    free(next);
+
+    q = (unsigned char *)realloc(p, 120U);
+    if (q != p)
+        fail("grow into next free block did not stay in place");
+    check(q, 50U, 23, "grow into next free block lost contents");
+    fill(q, 120U, 24);
+    check(q, 120U, 24, "grown next-free block not fully usable");
+    free(q);
+    free(guard);
+}
+
+static void t_grow_absorb_nosplit(void)
+{
+    unsigned char *p;
+    unsigned char *next;
+    unsigned char *guard;
+    unsigned char *r;
+    unsigned char *t;
+
+    /* Grow into an adjacent free block where the leftover slack after growing
+     * is below the split threshold (< 6 bytes).  The absorbed block must be
+     * merged into the returned block, not left marked free: otherwise a later
+     * allocation would hand out memory overlapping the grown block. */
+    p = (unsigned char *)malloc(48U);
+    next = (unsigned char *)malloc(4U);
+    guard = (unsigned char *)malloc(16U);
+    if (p == 0 || next == 0 || guard == 0)
+        fail("grow-absorb setup malloc failed");
+    fill(p, 48U, 25);
+    free(next);
+
+    /* combined = 48 + (2+2) + 4 = 56; new = 54 leaves slack 2 (< 6), so the
+     * resize keeps the whole merged block without splitting a tail. */
+    r = (unsigned char *)realloc(p, 54U);
+    if (r != p)
+        fail("grow-absorb did not stay in place");
+    check(r, 48U, 25, "grow-absorb lost contents");
+
+    /* Probe BEFORE writing into the absorbed region: if the next block is
+     * still (wrongly) marked free, this first-fit request reuses it and the
+     * returned pointer falls inside the grown block. */
+    t = (unsigned char *)malloc(4U);
+    if (t == 0)
+        fail("grow-absorb probe malloc failed");
+    if ((unsigned)t >= (unsigned)r && (unsigned)t < (unsigned)r + 54U)
+        fail("grow-absorb left overlapping free block");
+
+    fill(r, 54U, 26);
+    check(r, 54U, 26, "grow-absorb block not fully usable");
+
+    free(t);
+    free(guard);
+    free(r);
+}
+
+static void t_grow_next_too_small(void)
+{
+    unsigned char *dest;
+    unsigned char *separator;
+    unsigned char *p;
+    unsigned char *next;
+    unsigned char *guard;
+    unsigned char *r;
+    unsigned int i;
+
+    /* The adjacent free block cannot satisfy the growth, so realloc must use
+     * the earlier free destination and copy only p's original 48 bytes. */
+    dest = (unsigned char *)malloc(100U);
+    separator = (unsigned char *)malloc(8U);
+    p = (unsigned char *)malloc(48U);
+    next = (unsigned char *)malloc(4U);
+    guard = (unsigned char *)malloc(16U);
+    if (dest == 0 || separator == 0 || p == 0 || next == 0 || guard == 0)
+        fail("grow-too-small setup malloc failed");
+    fill(dest, 100U, 27);
+    fill(p, 48U, 28);
+    free(dest);
+    free(next);
+
+    r = (unsigned char *)realloc(p, 80U);
+    if (r != dest)
+        fail("grow-too-small did not use fallback block");
+    check(r, 48U, 28, "grow-too-small lost contents");
+    for (i = 48U; i < 80U; i++) {
+        if (r[i] != patt(27, i))
+            fail("grow-too-small copied beyond old block");
+    }
+
+    free(r);
+    free(separator);
+    free(guard);
+}
+
 static void t_trim(void)
 {
     unsigned char *p;
@@ -603,6 +730,7 @@ int main(void)
     t_bridge();
     t_sizes();
     t_large();
+    t_realloc_size_overflow();
     t_zero();
     t_calloc();
     t_realloc();
@@ -610,6 +738,9 @@ int main(void)
     t_recoalesce();
     t_rezero_coalesce();
     t_shrink_inplace();
+    t_grow_next_free();
+    t_grow_absorb_nosplit();
+    t_grow_next_too_small();
     t_grow_top();
     t_trim();
     t_calloc_overflow();

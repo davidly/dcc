@@ -20,12 +20,14 @@ documented with the CP/M services rather than treated as portable C APIs.
 
 ## Dynamic memory
 
-The allocator is a first-fit free list with a 3-byte block header. Freeing a
-block coalesces it with adjacent free neighbours (including blocks freed via
-`realloc(p, 0)` and the old block released by a growing `realloc`), which keeps
-fragmentation down. The heap grows on demand between the end of BSS and the
-stack. On CP/M this space is bounded by the program's TPA: code, data, runtime
-support, heap, and stack all share the same transient program area.
+The allocator uses a first-fit heap walk with two-byte packed boundary tags at
+the start and end of each block. Freeing a block coalesces it with adjacent free
+neighbours (including blocks freed via `realloc(p, 0)` and the old block
+released by a growing `realloc`), which keeps fragmentation down. `realloc`
+also grows in place at the heap top or into an immediately following free
+block. The heap grows on demand between the end of BSS and the stack. On CP/M
+this space is bounded by the program's TPA: code, data, runtime support, heap,
+and stack all share the same transient program area.
 
 ```c
 char *p = malloc(256);
