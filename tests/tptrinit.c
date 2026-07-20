@@ -58,6 +58,17 @@ static void list_free(struct Cell *head)
     }
 }
 
+static int array_pointer_offsets(void)
+{
+    char buffer[32];
+    char *left;
+    char *right;
+
+    left = buffer + (3 * 4);
+    right = 4 + buffer;
+    return (left - buffer) + (right - buffer);
+}
+
 int main(void)
 {
     struct Cell *head;
@@ -73,8 +84,8 @@ int main(void)
     head = list_reverse(head);
     first_after = head->value;
     sum = list_fold(head, &count);
-    printf("c8906 count=%d sum=%ld first_before=%d first_after=%d\n",
-           count, sum, first_before, first_after);
+    printf("c8906 count=%d sum=%ld first_before=%d first_after=%d offsets=%d\n",
+           count, sum, first_before, first_after, array_pointer_offsets());
     list_free(head);
     return 0;
 }

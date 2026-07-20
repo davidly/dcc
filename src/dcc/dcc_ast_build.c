@@ -108,6 +108,7 @@ static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
 
 static int ast_index_root_and_count(const struct AstNode *n,
                                     const struct AstNode **root);
+static int ast_expr_is_array_row(const struct AstNode *n);
 
 int ast_expr_type_for_sizeof(const struct AstNode *n)
 {
@@ -172,6 +173,10 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
     case AST_CAST:
         return n->type;
     case AST_BINARY:
+    {
+        int lhs_pointer;
+        int rhs_pointer;
+
         lt = ast_expr_type_for_sizeof(n->a);
         rt = ast_expr_type_for_sizeof(n->b);
         if (n->op == '<' || n->op == '>' || n->op == TOK_LE || n->op == TOK_GE ||
@@ -179,14 +184,22 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
             return TYPE_INT;
         if (n->op == TOK_SHL || n->op == TOK_SHR)
             return promote_int_type(lt);
-        if ((n->op == '+' || n->op == '-') && type_ptr_depth(lt) > 0) {
-            if (n->op == '-' && type_ptr_depth(rt) > 0)
+
+        lhs_pointer = type_ptr_depth(lt) > 0 ||
+                      ast_expr_is_array_decay(n->a) ||
+                      ast_expr_is_array_row(n->a);
+        rhs_pointer = type_ptr_depth(rt) > 0 ||
+                      ast_expr_is_array_decay(n->b) ||
+                      ast_expr_is_array_row(n->b);
+        if ((n->op == '+' || n->op == '-') && lhs_pointer) {
+            if (n->op == '-' && rhs_pointer)
                 return TYPE_INT;
-            return lt;
+            return type_ptr_depth(lt) > 0 ? lt : type_add_ptr(lt);
         }
-        if (n->op == '+' && type_ptr_depth(rt) > 0)
-            return rt;
+        if (n->op == '+' && rhs_pointer)
+            return type_ptr_depth(rt) > 0 ? rt : type_add_ptr(rt);
         return common_arith_type(lt, rt);
+    }
     case AST_LOGAND:
     case AST_LOGOR:
         return TYPE_INT;
