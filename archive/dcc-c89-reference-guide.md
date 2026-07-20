@@ -448,11 +448,12 @@ Include [stdlib.h](stdlib.h).
 | `void *realloc(void *p, size_t n)`        | Resize a block, preserving contents.           |
 | `void free(void *p)`                      | Return a block to the heap.                    |
 
-The allocator is a first-fit free list with a 3-byte block header. Freeing a
-block coalesces it with adjacent free neighbors (including blocks freed via
-`realloc(p, 0)` and the old block released by a growing `realloc`), which keeps
-fragmentation down. The heap grows on demand between the end of BSS and the
-stack.
+The allocator uses a first-fit heap walk with two-byte packed boundary tags at
+the start and end of each block. Freeing a block coalesces it with adjacent free
+neighbors (including blocks freed via `realloc(p, 0)` and the old block
+released by a growing `realloc`), which keeps fragmentation down. `realloc`
+also grows in place at the heap top or into an immediately following free
+block. The heap grows on demand between the end of BSS and the stack.
 
 ```c
 char *p = malloc(256);

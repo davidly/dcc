@@ -8312,30 +8312,23 @@ les_done:
         ret
 
 ; ============================================================
-; Heap allocator: first-fit, 3-byte block headers.
+; Heap allocator: first-fit, packed 2-byte headers and 2-byte footers.
 ;
-; Header layout:
-;   byte 0-1 = user data size in bytes, unsigned 16-bit
-;   byte 2   = flags: bit 0 set means free, zero means in use
-;
-; Older DCCRTL stored the free flag in bit 15 of the size word.  That made
-; malloc(32768) unrepresentable: freeing such a block looked like freeing a
-; zero-sized block and corrupted the heap walk.  Keep the flag in a separate
-; byte instead.  The one-byte header cost is worth allowing any allocation that
-; fits in CP/M memory.
+; Header/footer layout: bit 0 is the free flag; bits 15-1 are the even user
+; size.  See __wr_hf for the boundary-tag invariants.
 ;
 ; __hbase / __brk / __hlimit are set by start:.
 ; ============================================================
 
         public  _malloc
 _malloc:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = requested size
+        ; IX-free single-argument wrapper.  Restore the caller-cleanup stack
+        ; before entering the register-ABI allocator helper.
+        pop     bc              ; return address
+        pop     hl              ; requested size
+        push    hl
+        push    bc
         call    __mlh
-        pop     ix
         ret
 
         public  __ckmul
@@ -8441,6 +8434,9 @@ rl_have_ptr:
         and     1
         jr      z,rl_sz_even
         inc     hl
+        ld      a,h
+        or      l
+        jp      z,rl_size_oom           ; 0ffffh rounded past size_t range
 rl_sz_even:
         ld      (__rl_size),hl
 
@@ -8467,6 +8463,7 @@ rl_alloc:
         ld      (__rl_cnt),de           ; __rl_cnt = old user size
 
         ; ---- In-place fast paths (avoid allocate + copy + free) ----
+rl_resize_in_place:
         ld      hl,(__rl_cnt)           ; old size
         ld      de,(__rl_size)          ; new size (already rounded to even)
         or      a
@@ -8534,18 +8531,61 @@ rl_keep_whole:
         ret
 
 rl_try_grow:
-        ; new > old.  Grow in place only when this is the top heap block,
-        ; i.e. its end (== ptr+old_size+FTRSIZE) is __brk, and the larger
-        ; end still fits below __hlimit.
+        ; new > old.  First try to absorb an immediately following free
+        ; block.  The combined extent is then handled by the shrink/split
+        ; path above, which keeps the pointer and returns any useful tail.
         ld      hl,(__rl_old)
         ld      de,(__rl_cnt)
         add     hl,de
         ld      de,FTRSIZE
-        add     hl,de                   ; HL = block end = ptr+old_size+FTRSIZE
+        add     hl,de                   ; HL = next header / current block end
         ld      de,(__brk)
         or      a
         sbc     hl,de
-        jp      nz,rl_do_alloc          ; not the top block
+        jr      z,rl_try_grow_top       ; current block is at the heap top
+
+        ; The next header is below __brk.  It can be absorbed only if free.
+        add     hl,de                   ; restore next header after comparison
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)                  ; DE = next block's packed size
+        ld      a,e
+        and     1
+        jp      z,rl_do_alloc           ; next block is used
+        ld      a,e
+        and     0feh
+        ld      e,a                     ; DE = next block's true size
+        ld      hl,(__rl_cnt)
+        ld      bc,HDRSIZE+FTRSIZE
+        add     hl,bc
+        add     hl,de                   ; HL = combined user extent
+        ld      de,(__rl_size)
+        or      a
+        sbc     hl,de
+        jp      c,rl_do_alloc           ; combined < new: cannot satisfy here
+        add     hl,de                   ; restore combined user extent
+        ld      (__rl_cnt),hl           ; commit only when absorbing next block
+
+        ; Absorb the next block: stamp one merged USED header+footer spanning
+        ; the whole combined extent (its footer lands exactly on the next
+        ; block's old footer) so the following block no longer exists as a
+        ; separate free block, THEN resize in place.  This must happen before
+        ; re-entering rl_resize_in_place because its no-split branch
+        ; (rl_keep_whole) assumes the physical block already matches __rl_cnt
+        ; and would otherwise return the block with a stale old-size header,
+        ; leaving the absorbed region still marked free.
+        ld      hl,(__rl_old)
+        ld      de,0-HDRSIZE
+        add     hl,de                   ; HL = header
+        ld      bc,(__rl_cnt)           ; BC = combined size
+        ld      d,b
+        ld      e,c                     ; DE = packed(used) = combined size
+        call    __wr_hf
+        jp      rl_resize_in_place
+
+rl_try_grow_top:
+        ; Grow a heap-top block by extending __brk when the larger end still
+        ; fits below __hlimit.
         ld      hl,(__rl_old)
         ld      de,(__rl_size)
         add     hl,de
@@ -8610,6 +8650,11 @@ rl_free_old:
         pop     ix
         ret
 
+rl_size_oom:
+        ld      hl,0                    ; failure leaves the old block intact
+        pop     ix
+        ret
+
 __rl_old:       dw      0
 __rl_new:       dw      0
 __rl_size:      dw      0
@@ -8647,17 +8692,13 @@ __frcoal:
         add     hl,de           ; HL = header address
         ld      (__fr_hdr),hl
 
-        ; Mark this block free: its packed value's flag bit is currently
-        ; clear (used), so the raw stored bytes already equal its true
-        ; size - set bit 0 and rewrite header+footer together.
+        ; The block is currently used, so its packed value is its true size.
+        ; Treat it as free while finding the final coalesced extent, but defer
+        ; writing metadata until that extent is known.
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)          ; DE = packed (used, so DE == true size)
-        ld      b,d
-        ld      c,e             ; BC = true size (for __wr_hf)
-        set     0,e             ; DE = packed(free) = size|1
-        ld      hl,(__fr_hdr)
-        call    __wr_hf
+        ld      d,(hl)
+        ld      (__fr_csz),de
 
         ; O(1) predecessor check: unless this is the very first heap block,
         ; read the 2 bytes just before our own header - the preceding
@@ -8684,25 +8725,25 @@ __frcoal:
         ld      a,e
         and     0feh
         ld      e,a             ; DE = true preceding size
+        push    de              ; preserve preceding size
         ld      hl,(__fr_hdr)
         ld      bc,0-(HDRSIZE+FTRSIZE)
         add     hl,bc
         or      a
         sbc     hl,de           ; HL = preceding block's header address
         ld      (__fr_hdr),hl   ; it becomes the coalescing anchor
+        pop     de              ; DE = preceding size
+        ld      hl,(__fr_csz)
+        ld      bc,HDRSIZE+FTRSIZE
+        add     hl,bc
+        add     hl,de           ; include predecessor + inter-block metadata
+        ld      (__fr_csz),hl
 
 fr_coal:
         ; Merge any immediately following free blocks.  Never read a next
         ; header unless next < __brk; next == __brk means this is the tail.
         ld      hl,(__fr_hdr)
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)          ; DE = anchor packed value (flag=1, free)
-        ld      a,e
-        and     0feh
-        ld      e,a             ; DE = true anchor size
-        ld      (__fr_csz),de
-        ld      hl,(__fr_hdr)
+        ld      de,(__fr_csz)
         ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de           ; HL = next block header
@@ -8711,53 +8752,40 @@ fr_coal:
         or      a
         sbc     hl,de           ; carry iff next < __brk
         pop     hl              ; HL = next block header
-        jr      nc,fr_done      ; next >= __brk: no following block
+        jr      z,fr_trim       ; coalesced block reaches the heap top
+        jr      nc,fr_write     ; defensive: do not read beyond __brk
 
         ld      e,(hl)
         inc     hl
         ld      d,(hl)          ; DE = next block's packed value
         ld      a,e
         and     1
-        jr      z,fr_done       ; next block is used
+        jr      z,fr_write      ; next block is used
 
         ld      a,e
         and     0feh
         ld      e,a             ; DE = true next size
 
-        ; merged_size = anchor_size + HDRSIZE + FTRSIZE + next_size
+        ; Accumulate the following block without writing an intermediate
+        ; header/footer; the loop writes only the final merged extent.
         ld      hl,(__fr_csz)
         ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de           ; HL = merged size (true, even)
-        ld      b,h
-        ld      c,l             ; BC = merged size
-        ld      d,h
-        ld      e,l
-        set     0,e             ; DE = packed(free) = merged_size|1
-        ld      hl,(__fr_hdr)
-        call    __wr_hf         ; rewrites the anchor header + a new, farther
-                                 ; out footer for the merged block
+        ld      (__fr_csz),hl
         jr      fr_coal
-fr_done:
-        ; Heap trim: if the (coalesced) free block ends exactly at __brk it is
-        ; the top block, so lower __brk to its header.  This returns the space
-        ; to the heap/stack gap instead of leaving a stranded top free block,
-        ; so the heap high-water mark falls when the top block is released.
+
+fr_write:
+        ld      bc,(__fr_csz)           ; BC = final true size
+        ld      d,b
+        ld      e,c
+        set     0,e                     ; DE = packed(free) = size|1
         ld      hl,(__fr_hdr)
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)                  ; DE = anchor packed value
-        ld      a,e
-        and     0feh
-        ld      e,a                     ; DE = true anchor size
-        ld      hl,(__fr_hdr)
-        ld      bc,HDRSIZE+FTRSIZE
-        add     hl,bc
-        add     hl,de                   ; HL = anchor block end
-        ld      de,(__brk)
-        or      a
-        sbc     hl,de                   ; anchor_end - __brk
-        ret     nz                      ; not the top block: keep as free block
+        jp      __wr_hf
+
+fr_trim:
+        ; Nothing needs writing above the new break.  This is the common LIFO
+        ; free path and also trims through an immediately preceding free block.
         ld      hl,(__fr_hdr)
         ld      (__brk),hl              ; drop the heap high-water mark
         ret
@@ -8776,6 +8804,9 @@ __mlh:
         and     1
         jr      z,mh_rnd_ok
         inc     hl
+        ld      a,h
+        or      l
+        jp      z,mh_oom        ; 0ffffh rounded past size_t range
 mh_rnd_ok:
         ld      a,h
         or      l
@@ -8923,11 +8954,13 @@ mh_extend:
         ; the allocation (old brk + header + user size + footer).
         ; This comparison deliberately avoids computing hlimit+1, which
         ; itself can wrap when the CP/M stack starts near FFFFh.
+        push    hl              ; preserve validated new_brk for commit below
         ld      de,(__hlimit)
         or      a
         sbc     hl,de           ; carry if end < limit, z if end == limit
         jr      c,mh_extend_ok
         jr      z,mh_extend_ok
+        pop     hl
         jr      mh_oom
 
 mh_extend_ok:
@@ -8939,12 +8972,7 @@ mh_extend_ok:
         ld      c,e
         ld      hl,(__ml_p)
         call    __wr_hf
-        ; Advance brk: new_brk = old_brk + HDRSIZE + FTRSIZE + need
-        ld      hl,(__ml_p)
-        ld      de,HDRSIZE+FTRSIZE
-        add     hl,de
-        ld      de,(__ml_need)
-        add     hl,de
+        pop     hl              ; validated new_brk
         ld      (__brk),hl
         ; Return old_brk + HDRSIZE
         ld      hl,(__ml_p)
