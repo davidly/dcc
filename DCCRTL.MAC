@@ -921,6 +921,166 @@ bdos_core:
         ret
 
 
+; bdoshl(fn, dearg)
+; Same as bdos() above, but for BDOS functions whose useful result is a
+; 16-bit value in HL (e.g. BDOS 12 get version, BDOS 6Ch get/set global
+; error flags) rather than a byte in A. Returns HL exactly as BDOS left it,
+; with no zero-extension of A into H.
+;
+; C prototype:
+;     extern int bdoshl(int fn, int dearg);
+;
+; Arguments:
+;     fn    -> BDOS function number, placed in C
+;     dearg -> 16-bit argument pointer/value, placed in DE
+;
+; Return:
+;     HL as returned by BDOS, unmodified.
+        public  _bdoshl
+_bdoshl:
+        pop     bc              ; return address
+        pop     hl              ; function number
+        pop     de              ; DE argument
+        push    de              ; restore arguments
+        push    hl
+        push    bc
+        ld      c,l
+        jr      bdoshl_core
+
+        public  __bhlf
+__bhlf:
+        ; fastcall int bdoshl(int fn, int dearg)
+        ; Entry: C = fn (low byte), DE = dearg - skips the general
+        ; push-2/call/pop-2 convention entirely. See dcc_ast_gen_expr.c's
+        ; bdoshl call-site codegen.
+        ;
+        ; Named __bhlf, not __bdoshlf: M80 truncates public symbols to 6
+        ; significant characters, and __bdoshlf truncates to __BDOS,
+        ; colliding with __bdosf's own truncated name (a real
+        ; "%Mult. Def. Global __BDOS" linker warning plus a miscompile -
+        ; call sites got linked to __bdosf instead). Same issue as __msf
+        ; above.
+bdoshl_core:
+        call    5
+        ret
+
+
+; bios(fn, dearg) / bioshl(fn, dearg)
+; Call the CP/M BIOS jump table directly. Unlike BDOS, which is always
+; invoked with CALL 5, the BIOS is invoked through a 17-entry table of
+; 3-byte JP instructions whose base address isn't fixed - it's recovered
+; from the warm-boot vector at 0001h/0002h (JP WBOOT, jump-table entry 1,
+; so the table base/entry 0 is that address minus 3).
+;
+; C prototypes:
+;     extern int bios(int fn, int dearg);
+;     extern int bioshl(int fn, int dearg);
+;
+; Arguments:
+;     fn    -> BIOS function number (0=boot, 1=wboot, 2=const, 3=conin,
+;              4=conout, 5=list, 6=punch, 7=reader, 8=home, 9=seldsk,
+;              10=settrk, 11=setsec, 12=setdma, 13=read, 14=write,
+;              15=listst, 16=sectran per CP/M 2.2). fn 0/1 (boot/wboot)
+;              end the running program - do not call them expecting to
+;              return.
+;     dearg -> loaded into BC, DE, and the low byte into C before the call.
+;              Unlike BDOS, CP/M 2.2 BIOS functions are not consistent
+;              about which register carries their argument: CONOUT/LIST/
+;              PUNCH read a character from C; SETTRK/SETSEC/SETDMA read a
+;              16-bit value from BC; SECTRAN reads a translate-table
+;              pointer from DE. Loading all three covers every CP/M 2.2
+;              BIOS function whose argument fits in one register pair.
+;
+; Return:
+;     bios() returns the low-byte BIOS result A, zero-extended to int in
+;     HL. This matches BIOS functions that return a byte in A (CONST,
+;     CONIN, READER, READ, WRITE, LISTST). bioshl() returns HL exactly as
+;     the BIOS call left it, for functions that return an address in HL
+;     (SELDSK, SECTRAN) - note A is not mirrored into L the way CP/M's own
+;     BDOS entry conventionally does, so bioshl() on a byte-returning
+;     function gets back whatever HL held before the call, not A.
+        public  _bios
+_bios:
+        pop     bc              ; return address
+        pop     hl              ; function number
+        pop     de              ; DE argument
+        push    de              ; restore arguments
+        push    hl
+        push    bc
+        ld      c,l
+        jr      bios_core
+
+        public  __biosf
+__biosf:
+        ; fastcall int bios(int fn, int dearg)
+        ; Entry: C = fn (low byte), DE = dearg - skips the general
+        ; push-2/call/pop-2 convention entirely. See dcc_ast_gen_expr.c's
+        ; bios call-site codegen.
+bios_core:
+        call    __bios_dispatch
+        ld      l,a             ; only meaningful for byte-returning fns
+        ld      h,0
+        ret
+
+        public  _bioshl
+_bioshl:
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        ld      c,l
+        jr      bioshl_core
+
+        public  __bhf
+__bhf:
+        ; fastcall int bioshl(int fn, int dearg)
+        ;
+        ; Named __bhf, not __bioshlf: M80 truncates public symbols to 6
+        ; significant characters, and __bioshlf truncates to __BIOS,
+        ; colliding with __biosf's own truncated name. Same issue as
+        ; __msf/__bhlf above.
+bioshl_core:
+        call    __bios_dispatch
+        ret
+
+; __bios_dispatch: shared by bios_core/bioshl_core. Computes the jump-table
+; entry address for fn (in C), loads dearg (in DE) into BC/DE/C, and jumps
+; into the BIOS. Not itself a call-site entry point, so no truncation
+; concerns despite the long name - only public symbols are linked by name.
+;
+; Entry: C = fn (low byte), DE = dearg
+; Exit:  BC = DE = dearg (C already held dearg's low byte before the jump);
+;        HL/A hold whatever the invoked BIOS function returned.
+__bios_dispatch:
+        ld      l,c
+        ld      h,0             ; HL = fn (zero-extended); C still holds fn
+        add     hl,hl           ; HL = fn*2
+        ld      b,0             ; BC = fn (C untouched since the ld/add
+                                 ; above only ever wrote H and L)
+        add     hl,bc           ; HL = fn*2 + fn = fn*3
+        ld      b,h
+        ld      c,l             ; BC = fn*3 (jump-table byte offset)
+        push    de              ; stash dearg while HL/DE compute the target
+        ld      hl,(0001h)      ; HL = WBOOT jump-table entry address (the
+                                 ; word CP/M jumps to on warm boot is jump-
+                                 ; table entry 1, at base+3)
+        ld      de,-3
+        add     hl,de           ; HL = jump-table base (entry 0, "boot")
+        add     hl,bc           ; HL = jump-table entry for fn
+        pop     de              ; DE = dearg restored
+        ld      b,d
+        ld      c,e             ; BC = dearg too (SETTRK/SETSEC/SETDMA read
+                                 ; a 16-bit value from BC; CONOUT/LIST/PUNCH
+                                 ; read a byte from C, already set above)
+        jp      (hl)            ; "CALL (HL)": Z80 has no such opcode, so
+                                 ; jump indirectly - the return address
+                                 ; already on the stack (pushed by our own
+                                 ; caller's "call __bios_dispatch") is popped
+                                 ; by the invoked BIOS function's own RET
+
+
 ; inp(port) / outp(port, val)
 ; Direct 8-bit port I/O.  These are a dcc extension (not C89), declared in
 ; <stdlib.h>.

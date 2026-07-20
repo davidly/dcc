@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 extern int bdos(int fn, int dearg);
+extern int bdoshl(int fn, int dearg);
 
 static void putstr(const char *s)
 {
@@ -50,6 +51,24 @@ int main(void)
     printf("BDOS version major=%u minor=%u\n",
            (ver >> 4) & 0x0f,
            ver & 0x0f);
+
+    /* bdoshl(): same BDOS 12 call, but returns the full HL result instead
+     * of zero-extending A into HL. On CP/M 2.2 H is 0, so this should match
+     * bdos()'s result exactly. */
+    ver = bdoshl(12, 0);
+
+    printf("BDOS version raw (bdoshl): %u\n", ver);
+    printf("BDOS version major=%u minor=%u (bdoshl)\n",
+           (ver >> 4) & 0x0f,
+           ver & 0x0f);
+
+    /* exercise bdoshl() through a function pointer too, since dcc emits a
+     * different DCCRTL entry point for direct calls (fastcall __bhlf)
+     * vs. indirect calls (stack-marshaling _bdoshl) - see tfpcall.c. */
+    {
+        int (*fp_bdoshl)(int, int) = bdoshl;
+        printf("BDOS version raw (bdoshl via fnptr): %u\n", fp_bdoshl(12, 0));
+    }
 
     /* BDOS 11: console status */
     printf("Console status: %u\n", bdos(11, 0));
