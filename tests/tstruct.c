@@ -32,6 +32,8 @@ struct Pair ret_pair_value(int b)
     return p;
 }
 
+int pair_array_sum();
+
 void test2()
 {
     /* 
@@ -114,8 +116,16 @@ int main()
     ret_pair_value(77);
     printf("discard struct return ok\n");
 
+    printf("arrayarg=%d\n", pair_array_sum(g_arr));
+
     test2();
 
     printf( "tstruct completed with great success\n" );
     return 0;
+}
+
+int pair_array_sum(pairs)
+struct Pair pairs[];
+{
+    return pairs[0].b + pairs[1].b;
 }

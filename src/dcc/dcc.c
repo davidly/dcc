@@ -595,7 +595,7 @@ int include_scan_macro_directive(const char *line, long n, int active)
                 vi--;
             val[vi] = 0;
             strip_macro_replacement_comments(val);
-            add_define_ex(name, val[0] ? val : "1", 1, nargs, params);
+            add_define_ex(name, val, 1, nargs, params);
         } else {
             while (s < e && (*s == ' ' || *s == '\t'))
                 s++;
@@ -606,7 +606,7 @@ int include_scan_macro_directive(const char *line, long n, int active)
                 vi--;
             val[vi] = 0;
             strip_macro_replacement_comments(val);
-            add_define(name, val[0] ? val : "1");
+            add_define(name, val);
         }
         return 1;
     }
@@ -1349,7 +1349,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 while (vi > 0 && (val[vi - 1] == ' ' || val[vi - 1] == '\t' || val[vi - 1] == '\r'))
                     vi--;
                 val[vi] = 0;
-                add_define_ex(name, val[0] ? val : "1", 1, nargs, params);
+                add_define_ex(name, val, 1, nargs, params);
             } else if (name[0]) {
                 while (s < e && (*s == ' ' || *s == '\t')) s++;
                 vi = 0;
@@ -1358,7 +1358,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 while (vi > 0 && (val[vi - 1] == ' ' || val[vi - 1] == '\t' || val[vi - 1] == '\r'))
                     vi--;
                 val[vi] = 0;
-                add_define(name, val[0] ? val : "1");
+                add_define(name, val);
             }
             /* Keep active #define in the filtered source so macro scope is
              * applied in normal C source order.  The add_define above is only

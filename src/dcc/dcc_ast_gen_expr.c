@@ -3816,7 +3816,8 @@ void gen_call_ast(const struct AstNode *n)
         }
         if (!have_want && n->list[i]->kind == AST_IDENT) {
             arg_sym = find_sym(n->list[i]->sval);
-            if (arg_sym != NULL && type_is_struct_object(arg_sym->type)) {
+            if (arg_sym != NULL && !arg_sym->is_array &&
+                type_is_struct_object(arg_sym->type)) {
                 gen_call_struct_arg_ast(n->list[i], arg_sym->type);
                 arg_bytes += type_size(arg_sym->type);
                 continue;

@@ -43,3 +43,10 @@ and the single source-of-truth runtime.
 - **CP/M text files are not byte-stream hosted files.** Text input follows CP/M
   Ctrl-Z EOF conventions, and stdio is intentionally smaller than hosted C
   stdio.
+- **Public symbols are significant to only 6 characters.** M80/L80 keep the
+  first 6 characters of an external symbol, and DCC C Compiler's leading `_` uses one, so
+  every non-`static` function and global must be unique within its first 5
+  characters across all linked modules. Make single-file symbols `static` and
+  avoid long shared prefixes. See
+  [Multi-module symbol names](02-build-and-link.md#multi-module-symbol-names)
+  for the collision rule, error messages, and a detection recipe.

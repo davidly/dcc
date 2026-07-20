@@ -988,7 +988,7 @@ void parse_preprocessor_line(void)
                 val[i] = 0;
                 strip_macro_replacement_comments(val);
 
-                if (name[0]) add_define_ex(name, val[0] ? val : "1", 1, nargs, params);
+                if (name[0]) add_define_ex(name, val, 1, nargs, params);
                 (void)pi;
             } else {
                 while (isspace((unsigned char)peekc()) && peekc() != '\n') getc_src();
@@ -999,7 +999,7 @@ void parse_preprocessor_line(void)
                 val[i] = 0;
                 strip_macro_replacement_comments(val);
 
-                if (name[0]) add_define(name, val[0] ? val : "1");
+                if (name[0]) add_define(name, val);
             }
         }
     } else if (!strcmp(word, "__asm_line")) {
@@ -1261,6 +1261,8 @@ int read_escape(void)
 long parse_number_string(const char *s)
 {
     long v;
+    int base;
+    int digit;
     int i;
     int neg;
 
@@ -1268,25 +1270,33 @@ long parse_number_string(const char *s)
     i = 0;
     neg = 0;
 
-    if (s[i] == '-') {
-        neg = 1;
+    if (s[i] == '-' || s[i] == '+') {
+        neg = s[i] == '-';
         i++;
     }
 
     if (s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+        base = 16;
         i += 2;
-        while (isxdigit((unsigned char)s[i])) {
-            v *= 16;
-            if (s[i] >= '0' && s[i] <= '9') v += s[i] - '0';
-            else if (s[i] >= 'a' && s[i] <= 'f') v += s[i] - 'a' + 10;
-            else v += s[i] - 'A' + 10;
-            i++;
-        }
+    } else if (s[i] == '0' && isdigit((unsigned char)s[i + 1])) {
+        base = 8;
     } else {
-        while (isdigit((unsigned char)s[i])) {
-            v = v * 10 + s[i] - '0';
-            i++;
-        }
+        base = 10;
+    }
+
+    while (s[i]) {
+        if (s[i] >= '0' && s[i] <= '9')
+            digit = s[i] - '0';
+        else if (s[i] >= 'a' && s[i] <= 'f')
+            digit = s[i] - 'a' + 10;
+        else if (s[i] >= 'A' && s[i] <= 'F')
+            digit = s[i] - 'A' + 10;
+        else
+            break;
+        if (digit >= base)
+            break;
+        v = v * base + digit;
+        i++;
     }
 
     while (s[i] == 'u' || s[i] == 'U' || s[i] == 'l' || s[i] == 'L')

@@ -77,6 +77,16 @@ static void verify_str(const char *actual, const char *expected, const char *tes
    still just a comment. */
 #define REAL_MACRO_AFTER_COMMENT 55
 
+/* Empty replacement lists must contribute no preprocessing tokens. */
+#define EMPTY_DECL
+#define EMPTY_DECL_FN()
+EMPTY_DECL static int empty_object_value = 12;
+EMPTY_DECL_FN() static int empty_function_value = 34;
+
+/* Integer-valued object macros retain the source literal's base. */
+#define OCTAL_CREATE 0100
+#define OCTAL_TRUNC 01000
+
 #ifdef COMMENT_MACRO_SHOULD_NOT_EXIST
 #define COMMENT_LEAKED 1
 #else
@@ -101,6 +111,8 @@ int main(void) {
     verify_int(UNDEF_VALUE, 789, "9. #undef and #elif");
     verify_int(COMMENT_LEAKED, 0, "10. Directive-lookalike text inside a comment is not a real directive");
     verify_int(REAL_MACRO_AFTER_COMMENT, 55, "11. Real directive after such a comment still works");
+    verify_int(empty_object_value + empty_function_value, 46, "12. Empty macro replacement lists");
+    verify_int(OCTAL_CREATE | OCTAL_TRUNC | 1, 577, "13. Octal object macro values");
 
     printf("\n----------------------------------------\n");
     if (g_failed == 0) {

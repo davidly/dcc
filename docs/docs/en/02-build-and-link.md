@@ -420,6 +420,63 @@ Include the standard headers as usual:
 #include <string.h>
 ```
 
+## Multi-module symbol names
+
+M80 and L80 only keep the **first 6 characters** of a public (external) symbol.
+DCC C Compiler emits each external C identifier as `_` followed by the name, so the leading
+underscore consumes one of those six characters. The practical rule for any
+program built from more than one `.c` file is:
+
+> **Every non-`static` function and non-`static` file-scope variable must be
+> unique within its first 5 characters across all linked modules.**
+
+Names that only differ after the fifth character collapse to the same public
+symbol. For example `i_idxins`, `i_idxbld`, and `i_idxlookup` all become
+`_I_IDX` and are indistinguishable to the linker.
+
+Anything used in only one translation unit should be declared `static`. A
+`static` symbol has internal linkage, so DCC C Compiler gives it a private, generated
+assembler name and the 6-character rule does not apply to it.
+
+### How a collision shows up
+
+- **Within one file**, DCC C Compiler catches it at compile time and stops with an error
+  naming both symbols, for example:
+
+    ```text
+    global names 'i_idxins' and 'i_idxbld' are not distinguishable in M80's
+    6 significant character public symbols (both become '_I_IDX'); rename one
+    ```
+
+- **Across different files**, DCC C Compiler cannot see the clash. L80 may report
+  `%Mult. Def. Global`, or — worse — silently bind a call to the wrong
+  definition, so the program links but misbehaves at runtime.
+
+### Fixing collisions
+
+- Rename the offending identifiers so they differ within the first 5
+  characters (put the distinguishing letters early: `ixins`, `ixbld`,
+  `ixlook` rather than a shared `i_idx…` prefix).
+- Or make single-file helpers `static`.
+
+Struct, union, and enum tags, `typedef` names, struct members, macros, enum
+constants, and local variables never become public symbols, so they are exempt.
+
+### Detecting collisions
+
+After a build, scan the emitted `.MAC` modules for external names that share a
+6-character prefix:
+
+```sh
+grep -rhiE '^[[:space:]]*public ' build/*.MAC \
+  | awk '{print $2}' | sort -u \
+  | awk '{k=toupper(substr($0,1,6));
+          if (seen[k]) print "COLLISION " k ": " first[k] " <> " $0;
+          else { seen[k]=1; first[k]=$0 }}'
+```
+
+Any line printed is a pair you must rename or make `static`.
+
 ## Memory layout
 
 CP/M loads `.COM` files in one way. BSS begins immediately after the loaded
