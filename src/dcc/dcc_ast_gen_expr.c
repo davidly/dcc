@@ -3674,6 +3674,67 @@ void gen_call_ast(const struct AstNode *n)
         return;
     }
 
+    /* Fastcall bdoshl(fn,dearg): same shape as bdos above, but calls
+     * DCCRTL's __bhlf, which returns HL exactly as BDOS left it instead
+     * of zero-extending A into HL. For BDOS functions whose useful result
+     * is a 16-bit HL value rather than a byte in A. */
+    if (n->list_len == 2 && !strcmp(name, "bdoshl")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = fn */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = dearg */
+        expr_result_dead = old_dead;
+        emit("\tex de,hl\n");           /* DE = dearg */
+        emit("\tpop hl\n");             /* HL = fn */
+        emit("\tld c,l\n");             /* C = fn low byte */
+        emit_runtime_call("__bhlf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall bios(fn,dearg): same shape as bdos above, but calls
+     * DCCRTL's __biosf, which invokes the CP/M BIOS jump table instead of
+     * BDOS's fixed CALL 5. See DCCRTL.MAC for why fn/dearg still land in
+     * C/DE despite the BIOS having no single argument convention. */
+    if (n->list_len == 2 && !strcmp(name, "bios")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = fn */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = dearg */
+        expr_result_dead = old_dead;
+        emit("\tex de,hl\n");           /* DE = dearg */
+        emit("\tpop hl\n");             /* HL = fn */
+        emit("\tld c,l\n");             /* C = fn low byte */
+        emit_runtime_call("__biosf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall bioshl(fn,dearg): same shape as bios above, but calls
+     * DCCRTL's __bhf, which returns HL exactly as the BIOS call left it
+     * instead of zero-extending A into HL. For BIOS functions whose useful
+     * result is a 16-bit HL value (e.g. SELDSK, SECTRAN) rather than a
+     * byte in A. */
+    if (n->list_len == 2 && !strcmp(name, "bioshl")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = fn */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = dearg */
+        expr_result_dead = old_dead;
+        emit("\tex de,hl\n");           /* DE = dearg */
+        emit("\tpop hl\n");             /* HL = fn */
+        emit("\tld c,l\n");             /* C = fn low byte */
+        emit_runtime_call("__bhf");
+        g_expr_type = fn_sym->type;
+        g_long_from16 = 0;
+        return;
+    }
+
     /* Fastcall memcpy(dst,src,n): DCCRTL's __mcf takes dst in DE, src in HL,
      * n in BC directly - same rationale/shape as memcmp above, extended to
      * memcpy's copy-not-compare semantics. memcpy is common enough

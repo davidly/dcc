@@ -104,11 +104,32 @@ size_t wcstombs(char *s, const wchar_t *pwcs, size_t n);
  *               byte result is returned in the low byte of the int.  Calls
  *               whose useful result is an FCB/DMA region return it through the
  *               memory that dearg points at, not in the return value.
+ *   bdoshl()    same call as bdos(), but for BDOS functions whose useful
+ *               result is a 16-bit value in HL (e.g. BDOS 12 get version)
+ *               rather than a byte in A; returns HL exactly as BDOS left it.
+ *   bios()      calls the CP/M BIOS jump table directly (fn -> BIOS function
+ *               number 0-16; dearg -> loaded into BC, DE, and C, since unlike
+ *               BDOS the BIOS has no single argument register convention).
+ *               fn 0/1 (boot/wboot) end the program instead of returning.
+ *               The byte result is returned in the low byte of the int, for
+ *               functions that return a byte in A (const, conin, reader,
+ *               read, write, listst).
+ *   bioshl()    same call as bios(), but for BIOS functions whose useful
+ *               result is an address in HL (seldsk, sectran) rather than a
+ *               byte in A; returns HL exactly as the BIOS call left it. A is
+ *               not mirrored into L the way BDOS conventionally does, so
+ *               bioshl() on a byte-returning function is not meaningful.
  *   inp()/outp() do direct Z80 8-bit port I/O.  inp() runs IN A,(port) and
  *               returns the byte zero-extended to int (0..255); outp() runs
  *               OUT (port),A.  Only the low 8 bits of port are significant. */
 /** Call the CP/M BDOS entry point. */
 int  bdos( int fn, int dearg );
+/** Call the CP/M BDOS entry point, returning the full HL result. */
+int  bdoshl( int fn, int dearg );
+/** Call the CP/M BIOS jump table directly. */
+int  bios( int fn, int dearg );
+/** Call the CP/M BIOS jump table directly, returning the full HL result. */
+int  bioshl( int fn, int dearg );
 /** Read an 8-bit Z80 I/O port. */
 int  inp( unsigned port );
 /** Write an 8-bit Z80 I/O port. */
