@@ -1931,10 +1931,12 @@ static int run_build(struct Config *cfg)
     }
 
     copy_text(link_arg, sizeof(link_arg), "/P:100,RTLMIN");
-    for (i = 0; i < cfg->input_count; i++) {
+    for (i = 1; i < cfg->input_count; i++) {
         if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
         if (!cmd_append_raw(link_arg, sizeof(link_arg), uppers[i])) return 0;
     }
+    if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
+    if (!cmd_append_raw(link_arg, sizeof(link_arg), uppers[0])) return 0;
     if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
     if (!cmd_append_raw(link_arg, sizeof(link_arg), output_upper)) return 0;
     if (!cmd_append_raw(link_arg, sizeof(link_arg), "/N/E/Y")) return 0;
