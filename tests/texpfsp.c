@@ -43,7 +43,7 @@ int main(void)
     okb("expf(+inf) sign", signbit(expf(pinf)), 0);
     okb("expf(-inf) iszero", expf(ninf) == 0.0f, 1);
     okb("expf(100) isinf", isinf(expf(100.0f)), 1);
-    okb("expf(-100) iszero", expf(-100.0f) == 0.0f, 1);
+    okb("expf(-150) iszero", expf(-150.0f) == 0.0f, 1);
     okf("expf(0)", expf(0.0f), 1.0f);
 
     printf("checks=%d failures=%d\n", checks, failures);
