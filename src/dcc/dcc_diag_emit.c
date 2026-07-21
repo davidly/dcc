@@ -54,6 +54,8 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "#elif without matching #if")) return "DCC-E0313";
     if (dcc_msg_has(msg, "#else without matching #if")) return "DCC-E0314";
     if (dcc_msg_has(msg, "#endif without matching #if")) return "DCC-E0315";
+    if (dcc_msg_has(msg, "#else after #else")) return "DCC-E0316";
+    if (dcc_msg_has(msg, "#if with no matching #endif")) return "DCC-E0317";
     if (dcc_msg_has(msg, "too many arguments provided to function-like macro invocation")) return "DCC-E0320";
     if (dcc_msg_has(msg, "too few arguments provided to function-like macro invocation")) return "DCC-E0321";
     if (dcc_msg_has(msg, "macro argument too long in function-like macro invocation")) return "DCC-E0322";

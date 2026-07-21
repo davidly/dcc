@@ -1,0 +1,4 @@
+<source>:5: error DCC-E0316: #else after #else
+    #else
+    ^
+dcc: 1 error(s)

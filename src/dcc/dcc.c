@@ -975,6 +975,7 @@ char *filter_active_preprocessor_source(long *lenp)
     int active_stack[MAX_IFSTACK];
     int branch_taken[MAX_IFSTACK];
     int seen_else[MAX_IFSTACK];
+    long if_open_ofs[MAX_IFSTACK];
     int sp;
     int active;
     int in_asm;
@@ -1130,6 +1131,7 @@ char *filter_active_preprocessor_source(long *lenp)
             active_stack[sp] = active;
             branch_taken[sp] = (active && cond) ? 1 : 0;
             seen_else[sp] = 0;
+            if_open_ofs[sp] = line_start;
             active = active && cond;
             sp++;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
@@ -1159,6 +1161,7 @@ char *filter_active_preprocessor_source(long *lenp)
             active_stack[sp] = active;
             branch_taken[sp] = (active && cond) ? 1 : 0;
             seen_else[sp] = 0;
+            if_open_ofs[sp] = line_start;
             active = active && cond;
             sp++;
             append_mem(&out, &out_len, &out_cap, "\n", 1);
@@ -1210,6 +1213,22 @@ char *filter_active_preprocessor_source(long *lenp)
                     branch_taken[i] = 1;
                     seen_else[i] = 1;
                 } else {
+                    /* A second #else at this nesting level - previously
+                     * silently deactivated output with no diagnostic,
+                     * which let a missing #endif between two #else's for
+                     * the same #if pass through unnoticed: the second
+                     * #else reads as the enclosing level's own #else to a
+                     * human, but this #if's #else slot was already used by
+                     * the first one. Reported unconditionally (not gated on
+                     * `active`, unlike the "no matching #if" cases below) -
+                     * this is a structural nesting error in the directive
+                     * text itself, not a property of which branch happens
+                     * to be live, so it's just as real when the enclosing
+                     * branch is the one currently skipped. */
+                    char filebuf[256];
+                    int lno;
+                    source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                    dcc_error_at(filebuf, lno, line_start, "#else after #else", NULL);
                     active = 0;
                 }
             } else if (active) {
@@ -1424,6 +1443,27 @@ char *filter_active_preprocessor_source(long *lenp)
 
 next_filter_line:
         logical_line = next_logical_line;
+    }
+
+    /* Any #if/#ifdef/#ifndef still open at end of file never got a matching
+     * #endif. Report only the outermost still-open level (nested opens are
+     * very likely a consequence of it, not independent problems) at the
+     * point where the file actually ran out - once that one is fixed,
+     * reprocessing may well reveal or resolve the rest, the same way fixing
+     * the first error in a cascade usually does. */
+    if (sp > 0) {
+        char openbuf[256];
+        char eofbuf[256];
+        int openline;
+        int eofline;
+
+        source_location_at(if_open_ofs[0], openbuf, sizeof(openbuf), &openline);
+        source_location_at(p, eofbuf, sizeof(eofbuf), &eofline);
+        {
+            char msg[320];
+            sprintf(msg, "#if with no matching #endif (opened at %s:%d)", openbuf, openline);
+            dcc_error_at(eofbuf, eofline, p, msg, NULL);
+        }
     }
 
     if (!out) {

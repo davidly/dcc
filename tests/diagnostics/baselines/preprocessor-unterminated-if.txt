@@ -1,0 +1,2 @@
+<source>:7: error DCC-E0317: #if with no matching #endif (opened at <source>:4)
+dcc: 1 error(s)
