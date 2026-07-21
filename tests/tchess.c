@@ -85,35 +85,35 @@ static int xstrncmp(const char *a, const char *b, int n)
     return 0;
 }
 
-static int piece_side(char p)
+static inline int piece_side(char p)
 {
     if (p >= 'A' && p <= 'Z') return WHITE;
     if (p >= 'a' && p <= 'z') return BLACK;
     return 0;
 }
 
-static char upiece(char p)
+static inline char upiece(char p)
 {
     if (p >= 'a' && p <= 'z') return (char)(p - 'a' + 'A');
     return p;
 }
 
-static int abs_i(int x)
+static inline int abs_i(int x)
 {
     return x < 0 ? -x : x;
 }
 
-static int file_of(int sq)
+static inline int file_of(int sq)
 {
     return sq & 7;
 }
 
-static int rank_of(int sq)
+static inline int rank_of(int sq)
 {
     return sq >> 3;
 }
 
-static int on_board(int sq)
+static inline int on_board(int sq)
 {
     return sq >= 0 && sq < 64;
 }
