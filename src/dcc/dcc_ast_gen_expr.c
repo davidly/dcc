@@ -944,6 +944,32 @@ void gen_long_cmp_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* True if n, once any explicit widening-to-long cast around it is stripped
+ * away, is a plain unsigned value no wider than 16 bits - i.e. widening it
+ * to long (whether via that cast or via the ordinary usual-arithmetic-
+ * conversion promotion applied when it sits next to an already-long sibling
+ * operand) is known, from its own declared type alone, to produce a high
+ * word of exactly 0. Used by gen_long_arith_ast's '%' case to detect the
+ * "((wide)a * (wide)b) % c" idiom - the standard C89 way to multiply two
+ * 16-bit values without overflow before reducing - where a, b, and c all
+ * satisfy this. That pattern can skip straight to __m1mu (multiply and
+ * reduce mod c together, 16 bits at a time) instead of building the full
+ * 32-bit product via __m1u and then dividing it by c via __lmu. */
+static int ast_is_plain_u16_source(const struct AstNode *n)
+{
+    int t;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_CAST && type_is_long(n->type) && !type_is_float(n->type))
+        n = n->a;
+    if (n == NULL)
+        return 0;
+    t = promote_int_type(ast_expr_type_for_sizeof(n));
+    return !type_is_long(t) && !type_is_float(t) && !type_ptr_depth(t) &&
+           (t & TYPE_UNSIGNED) != 0;
+}
+
 /* Extract the compile-time value of `n` when it is a bare integer literal or
  * a cast directly wrapping one (e.g. `(long)128`, which parses as a CAST
  * node over an INT_LIT rather than folding into a single long-typed
@@ -1015,6 +1041,40 @@ void gen_long_arith_ast(const struct AstNode *n)
             g_long_from16 = 0;
             return;
         }
+    }
+
+    /* "((wide)a * (wide)b) % c" with a, b, c all plain unsigned <=16-bit
+     * values (the standard C89 overflow-safe-multiply-then-reduce idiom,
+     * e.g. modular exponentiation's `((uint32_t)r * (uint32_t)b) % m`):
+     * skip evaluating the '*' as its own 32-bit subexpression (which would
+     * call __m1u for the multiply and then __lmu for the mod - profiled at
+     * ~59% of total runtime combined in one real workload) and instead
+     * evaluate the three underlying 16-bit values directly, left to right
+     * (preserving this compiler's normal evaluation order for the
+     * expressions such a pattern could contain, e.g. calls with side
+     * effects), and call __m1mu once. That single routine reduces the
+     * running product mod c after every doubling step, so it never needs
+     * more than a carry-extended 16-bit register - see __m1mu in
+     * DCCRTL.MAC for the algorithm. Its result is always < c <= 65535, so
+     * it comes back in HL alone; zero-extend to DE:HL to match this node's
+     * long-typed result. */
+    if (n->op == '%' && n->a != NULL && n->a->kind == AST_BINARY && n->a->op == '*' &&
+        ast_is_plain_u16_source(n->a->a) && ast_is_plain_u16_source(n->a->b) &&
+        ast_is_plain_u16_source(n->b)) {
+        ast_gen_expr(n->a->a);
+        emit("\tpush hl\n");
+        ast_gen_expr(n->a->b);
+        emit("\tpush hl\n");
+        ast_gen_expr(n->b);
+        emit("\tpush hl\n");
+        emit("\tpop bc\n");             /* BC = c (modulus) */
+        emit("\tpop de\n");             /* DE = b */
+        emit("\tpop hl\n");             /* HL = a */
+        emit_runtime_call("__m1mu");
+        emit("\tld de,0\n");
+        g_expr_type = ast_expr_type_for_sizeof(n);
+        g_long_from16 = 0;
+        return;
     }
 
     ast_gen_expr(n->a);

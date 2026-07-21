@@ -7707,6 +7707,110 @@ lm1u_b:
         ex      de,hl
         ret
 
+; __m1mu: unsigned (a * b) % m for three 16-bit operands, computed without
+; ever materializing a 32-bit intermediate product or invoking the general
+; 32-bit long-divide (__lmu) - both of which the common C89
+; "((uint32_t)a * (uint32_t)b) % m" overflow-safe-multiply idiom otherwise
+; needs (profiled at ~59% of total runtime combined, in pihex.c's
+; powermod16). dcc emits a call here instead whenever it can prove, at
+; compile time, that a, b, and m in exactly that expression shape all
+; originate as plain (not-already-long) unsigned values - see the '%' case
+; in gen_long_arith_ast (dcc_ast_gen_expr.c).
+;
+;   Entry: HL = a, DE = b, BC = m.  Exit: HL = (a * b) % m.
+;   Clobbers AF/BC/DE.
+;
+; Algorithm: reduce a mod m once up front - a fast inline compare/subtract
+; when a is already < m (a single "sbc hl,bc" - true for every call this
+; exists for: modular-exponentiation style code, where the multiplicands are
+; themselves always prior mod-m results), falling back to a real division
+; (__udivmod, called directly - skipping __modu's operand-cache check, which
+; is pure overhead here since these operands are never the same call to
+; call) only when a >= m. Then build the product bit-by-bit over b's 16
+; bits, MSB first: double the running accumulator every step (mod m) and
+; conditionally add the fixed a0 = a%m into it when that step's bit of b is
+; set (also mod m) - the standard binary double-and-add modular
+; multiplication used for modexp on hardware without a wide multiply/divide.
+; Every intermediate value this touches stays under 2*m <= 131070, i.e.
+; never more than the 17 bits a carry-extended Z80 register pair already
+; represents exactly, so nothing here ever needs the 32-bit width the naive
+; C idiom implies.
+;
+; Register allocation is the whole story for this routine's performance: HL
+; is pinned to the accumulator for the entire loop and never spilled to
+; memory (nothing else needs HL as scratch - a two-earlier version stored
+; and reloaded it every iteration and lost most of its win to that alone),
+; DE is pinned to b's remaining bits, shifted in place each iteration
+; (self-updating, no store-back needed - an earlier version kept b in
+; memory instead, shifting a loaded copy and writing it back every
+; iteration, which alone cost more than this whole routine now does). Only
+; m and the fixed a0 - needed at different moments, never simultaneously -
+; share BC, reloaded from memory when each is needed (m unconditionally
+; once per iteration, a0 only on the ~half of iterations whose bit is set).
+        public  __m1mu
+__m1mu:
+        or      a
+        sbc     hl,bc            ; trial a - m (BC = m, straight from entry)
+        jr      nc,__mmu_r0_divide  ; a >= m (rare/never for the code this
+                                     ; exists for): needs a real division
+        add     hl,bc            ; a < m (the common case): undo -> HL = a
+        jr      __mmu_r0_have
+__mmu_r0_divide:
+        add     hl,bc            ; undo -> HL = a (need the real value to divide)
+        push    de               ; save b
+        ld      d,b
+        ld      e,c              ; DE = m (divisor)
+        call    __udivmod        ; HL = a/m (discarded), DE = a % m
+        ex      de,hl            ; HL = a % m
+        pop     de               ; DE = b (restored)
+__mmu_r0_have:
+        ld      (__mmu_a0),hl    ; a0 = a % m, fixed for the whole loop
+        ld      (__mmu_m),bc
+        ld      hl,0             ; acc = 0; HL stays pinned to acc from here on
+        ld      a,16
+__mmu_loop:
+        add     hl,hl            ; acc *= 2 (mod 65536; carry = true overflow)
+        jr      c,__mmu_dbl_ge   ; overflowed 16 bits -> true value >= 65536 > m,
+                                  ; and (mod-65536 wraparound) HL - m already
+                                  ; equals the correct reduced value
+        ld      bc,(__mmu_m)
+        or      a
+        sbc     hl,bc            ; trial acc-m
+        jr      nc,__mmu_dbl_done  ; >= m: keep reduced value
+        add     hl,bc            ; < m: undo, keep acc as-is
+        jr      __mmu_dbl_done
+__mmu_dbl_ge:
+        ld      bc,(__mmu_m)
+        or      a
+        sbc     hl,bc
+__mmu_dbl_done:
+        sla     e
+        rl      d                ; carry = next bit of b (MSB first); DE <<= 1
+        jr      nc,__mmu_no_add
+        ld      bc,(__mmu_a0)
+        add     hl,bc            ; acc += a0
+        jr      c,__mmu_add_ge
+        ld      bc,(__mmu_m)
+        or      a
+        sbc     hl,bc
+        jr      nc,__mmu_no_add
+        add     hl,bc
+        jr      __mmu_no_add
+__mmu_add_ge:
+        ld      bc,(__mmu_m)
+        or      a
+        sbc     hl,bc
+__mmu_no_add:
+        dec     a
+        jr      nz,__mmu_loop
+
+        ret                      ; HL already = acc = (a * b) % m
+
+__mmu_a0:
+        dw      0
+__mmu_m:
+        dw      0
+
 ; __m8u: unsigned 8x16 -> 24-bit multiply, register ABI.
 ;   Entry: A  = 8-bit multiplier, BC = 16-bit multiplicand.
 ;   Exit:  HL:E = 24-bit product (HL = high 16 bits, E = low 8 bits).

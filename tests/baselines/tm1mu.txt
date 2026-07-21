@@ -1,0 +1,8 @@
+checked 16900 cases, 0 mismatches
+1
+42701
+0
+0
+0
+0
+tm1mu ok
