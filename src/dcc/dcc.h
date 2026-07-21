@@ -269,6 +269,9 @@ struct Sym {
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
+    int is_volatile; /* object declared with the volatile qualifier: access-
+                      * contracting fast paths must decline for it */
+    int pointee_is_volatile; /* immediate pointed-to type is volatile */
     int is_inline;   /* function declared with inline specifier */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
@@ -326,6 +329,8 @@ struct AsmName {
 struct TypeDef {
     char name[64];
     int type;
+    int is_volatile;
+    int pointee_is_volatile;
     int array_len; /* >0 when typedef is an array type, e.g. typedef int T[4] */
     int is_func;   /* typedef names a function type, e.g. typedef int F(int); */
     int has_proto;
@@ -337,6 +342,7 @@ struct TypeDef {
 struct FieldDef {
     char name[64];
     int type;
+    int is_volatile;
     int offset;
     int size;
     int is_array;
@@ -562,6 +568,8 @@ extern int decl_is_extern;
 extern int decl_is_static;
 extern int decl_is_inline;     /* current declaration used inline specifier */
 extern int decl_is_const;      /* current declaration used const qualifier */
+extern int decl_is_volatile;   /* current declaration used volatile qualifier */
+extern int decl_pointee_is_volatile;
 extern int decl_is_register;   /* current decl used 'register' keyword */
 extern int expr_result_dead;
 extern int g_expr_type;
@@ -771,6 +779,7 @@ int is_type_qualifier_token(int k);
 int is_restrict_qualifier_token(void);
 void skip_parameter_array_qualifiers(void);
 void skip_type_qualifiers(void);
+int skip_type_qualifiers_volatile(void);
 int type_struct_id(int type);
 int make_struct_type(int id);
 int type_size(int type);
@@ -794,7 +803,8 @@ int add_struct_def(const char *name);
 struct FieldDef *find_field_def(int struct_id, const char *field_name);
 void parse_struct_definition(int struct_id);
 int find_typedef(const char *name);
-void add_typedef_name_ex(const char *name, int type, int array_len, int is_func);
+void add_typedef_name_ex(const char *name, int type, int array_len, int is_func,
+                         int is_volatile, int pointee_is_volatile);
 void add_typedef_name(const char *name, int type, int array_len);
 int parse_base_type(void);
 int is_unsupported_target_type_name(const char *name);

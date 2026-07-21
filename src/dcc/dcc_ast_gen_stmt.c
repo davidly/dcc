@@ -863,6 +863,67 @@ static int ast_stmt_has_direct_break(const struct AstNode *n)
     return 0;
 }
 
+/* Collect the names of every label DEFINED anywhere within `n` into
+ * labels[] (bounded by cap). Used to tell an intra-loop goto (whose target
+ * label lives inside the loop) from one that jumps clear out of it. */
+static void ast_collect_defined_labels(const struct AstNode *n,
+                                       const char **labels, int *nlabels, int cap)
+{
+    int i;
+
+    if (n == NULL)
+        return;
+    if (n->kind == AST_LABEL && n->sval[0] != 0 && *nlabels < cap)
+        labels[(*nlabels)++] = n->sval;
+    ast_collect_defined_labels(n->a, labels, nlabels, cap);
+    ast_collect_defined_labels(n->b, labels, nlabels, cap);
+    ast_collect_defined_labels(n->c, labels, nlabels, cap);
+    ast_collect_defined_labels(n->d, labels, nlabels, cap);
+    for (i = 0; i < n->list_len; ++i)
+        ast_collect_defined_labels(n->list[i], labels, nlabels, cap);
+}
+
+/* Is there a `goto` within `n` whose target label is NOT among labels[] -
+ * i.e. one that escapes the subtree those labels were collected from? */
+static int ast_goto_escapes(const struct AstNode *n,
+                            const char **labels, int nlabels)
+{
+    int i;
+    int j;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_GOTO && n->sval[0] != 0) {
+        for (j = 0; j < nlabels; ++j)
+            if (strcmp(labels[j], n->sval) == 0)
+                break;
+        if (j == nlabels)
+            return 1;
+    }
+    if (ast_goto_escapes(n->a, labels, nlabels) ||
+        ast_goto_escapes(n->b, labels, nlabels) ||
+        ast_goto_escapes(n->c, labels, nlabels) ||
+        ast_goto_escapes(n->d, labels, nlabels))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (ast_goto_escapes(n->list[i], labels, nlabels))
+            return 1;
+    return 0;
+}
+
+/* A loop body with a `goto` that jumps to a label defined outside the loop
+ * can exit the loop that way, just like a `break` - so an otherwise
+ * "infinite" loop containing one is NOT guaranteed to never fall through. A
+ * goto to a label defined inside the body stays in the loop and is ignored. */
+static int ast_stmt_has_escaping_goto(const struct AstNode *body)
+{
+    const char *labels[MAX_USER_LABELS];
+    int nlabels = 0;
+
+    ast_collect_defined_labels(body, labels, &nlabels, MAX_USER_LABELS);
+    return ast_goto_escapes(body, labels, nlabels);
+}
+
 int ast_stmt_exits(const struct AstNode *n)
 {
     int i;
@@ -925,14 +986,18 @@ int ast_stmt_exits(const struct AstNode *n)
         /* An infinite loop (constant nonzero condition) exits unless a
          * `break` directly inside its body can escape it - e.g.
          * `for (;;) { ...; if (done) return x; }` never falls through, but
-         * `while (1) { if (x) break; }` does, right past the loop. */
-        return ast_is_const_nonzero_condition(n->a) && !ast_stmt_has_direct_break(n->b);
+         * `while (1) { if (x) break; }` does, right past the loop. A `goto`
+         * to a label outside the loop escapes it the same way as a break. */
+        return ast_is_const_nonzero_condition(n->a) &&
+               !ast_stmt_has_direct_break(n->b) &&
+               !ast_stmt_has_escaping_goto(n->b);
     case AST_FOR:
         /* An empty condition (`for (;;)`) is `true` by C's own rules - not
          * caught by ast_is_const_nonzero_condition, which treats a NULL
          * node as "not a constant" rather than "absent = true". */
         return (n->b == NULL || ast_is_const_nonzero_condition(n->b)) &&
-               !ast_stmt_has_direct_break(n->d);
+               !ast_stmt_has_direct_break(n->d) &&
+               !ast_stmt_has_escaping_goto(n->d);
     default:
         return 0;
     }

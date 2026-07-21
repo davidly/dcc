@@ -1,0 +1,4 @@
+<source>:5: error DCC-E0001: #elif after #else
+    #elif 1
+    ^
+dcc: 1 error(s)

@@ -179,7 +179,7 @@ struct Sym *try_const_fold_local(const char *store_name, const char *src_name,
     unsigned long const_value;
     struct Sym *s;
 
-    if (!decl_is_const || has_array ||
+    if (!decl_is_const || decl_is_volatile || has_array ||
         !type_is_const_scalar_candidate(type) || tok.kind != '=' ||
         local_name_address_taken_ahead(src_name))
         return NULL;
@@ -1353,6 +1353,8 @@ static void emit_vla_alloc(struct Sym *s)
 void gen_local_decl_after_type(int base)
 {
     int type, bytes, arrlen;
+    int base_is_volatile;
+    int base_pointee_is_volatile;
     int total_elems;
     int direct_funcptr;
     char name[64];
@@ -1361,11 +1363,20 @@ void gen_local_decl_after_type(int base)
     int freshly_allocated;
     int narrowed_as_counter;
 
+    base_is_volatile = decl_is_volatile;
+    base_pointee_is_volatile = decl_pointee_is_volatile;
+
     for (;;) {
         type = base;
+        decl_is_volatile = base_is_volatile;
+        decl_pointee_is_volatile = base_pointee_is_volatile;
         direct_funcptr = 0;
 
-        while (accept('*')) { skip_type_qualifiers(); type = type_add_ptr(type); }
+        while (accept('*')) {
+            decl_pointee_is_volatile = decl_is_volatile;
+            decl_is_volatile = skip_type_qualifiers_volatile();
+            type = type_add_ptr(type);
+        }
 
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr = 1;
@@ -1474,7 +1485,8 @@ void gen_local_decl_after_type(int base)
          * frame-sizing pass - both independently re-run the same
          * speculative parse over the same source text, so they agree. */
         narrowed_as_counter = 0;
-        if (try_narrow_local_int_array(name, type, arrlen, total_elems)) {
+        if (!decl_is_volatile &&
+            try_narrow_local_int_array(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             /* See the identical comment in scan_local_decl_after_type
              * (dcc_func.c): first_stride_bytes was computed from the
@@ -1482,9 +1494,11 @@ void gen_local_decl_after_type(int base)
              * here too or Sym.elem_size below keeps the stale, too-wide
              * stride even though Sym.type is now correctly narrowed. */
             current_field_array_elem_size = 0;
-        } else if (try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
+        } else if (!decl_is_volatile &&
+                   try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
-        } else if (try_narrow_for_counter(name, type, arrlen, total_elems)) {
+        } else if (!decl_is_volatile &&
+                   try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             narrowed_as_counter = 1;
         }
@@ -1503,6 +1517,8 @@ void gen_local_decl_after_type(int base)
 
             s = add_local_alloc(name, type, bytes);
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
+            s->is_volatile = decl_is_volatile;
+            s->pointee_is_volatile = decl_pointee_is_volatile;
             freshly_allocated = 1;
             /* Round 2 of codegen-time register residency (see dcc_func.c's
              * find_bc_regalloc_candidate/try_speculative_bc_regalloc_

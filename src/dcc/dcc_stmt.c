@@ -104,7 +104,8 @@ void gen_compound(void)
             /* Body falls through: the closing brace is a reachable step in
              * this scope, emitted here before the epilogue. */
             ast_emit_debug_location(tok.file, tok_line);
-            if ((current_return_type & 15) != TYPE_VOID)
+            if ((current_return_type & 15) != TYPE_VOID &&
+                strcmp(g_current_compiling_func, "main") != 0)
                 warn_at(tok.file, tok_line, "control reaches end of non-void function");
         } else {
             /* Body always exits: no in-block closing-brace marker is emitted,
