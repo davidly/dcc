@@ -1,0 +1,2 @@
+<source>:10: warning: control reaches end of non-void function
+dcc: 1 warning(s)

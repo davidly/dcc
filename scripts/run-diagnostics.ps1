@@ -114,11 +114,26 @@ function Invoke-DiagnosticTest {
     $outPath = Join-Path $BuildDir "$TestName.MAC"
     $baselinePath = Join-Path $BaselineDir "$TestName.txt"
 
+    # Tests whose name starts with "warn-" are warning tests: they must compile
+    # SUCCESSFULLY (exit 0) and their captured diagnostic output (which may be
+    # empty, e.g. proving a warning is correctly suppressed) is matched exactly
+    # against the baseline. Every other test is a compile-fail test and must
+    # exit nonzero.
+    $expectSuccess = $TestName.StartsWith("warn-")
+
     Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
     $result = Invoke-Capture $DccCommand @($TestPath, "-o", $outPath)
     $actual = Normalize-Output $result.Output $TestPath
 
-    if ($result.ExitCode -eq 0) {
+    if ($expectSuccess -and $result.ExitCode -ne 0) {
+        return [pscustomobject]@{
+            Name = $TestName
+            Passed = $false
+            Updated = $false
+            Detail = "expected compile success, got failure (exit $($result.ExitCode))"
+        }
+    }
+    if (-not $expectSuccess -and $result.ExitCode -eq 0) {
         return [pscustomobject]@{
             Name = $TestName
             Passed = $false

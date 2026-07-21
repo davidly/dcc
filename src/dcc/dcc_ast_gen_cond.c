@@ -1883,6 +1883,34 @@ int ast_cond_is_abs_idiom(const struct AstNode *n, const struct AstNode **out_x)
     if (!ast_gen_supported(cx) || !ast_value_is_plain_int(cx))
         return 0;
 
+    /* The comparison must be a genuine SIGNED `x < 0` / `x >= 0`. It is
+     * evaluated in the usual-arithmetic-conversion type of ITS operands,
+     * so if either operand is unsigned - an unsigned x, OR a signed x
+     * against an unsigned zero literal like `0U`/`0UL` - the comparison is
+     * done unsigned and `x < 0U` is constant-false (`x >= 0U`
+     * constant-true). The value is then always the plain-x arm, x itself
+     * unchanged, but ast_gen_abs_idiom_value would still negate whenever
+     * bit 7 of x's high byte is set (an ordinary large magnitude for an
+     * unsigned/wrapped value, not a sign), miscompiling e.g. unsigned
+     * 40000 to 25536 and signed -5 (`-5 < 0U`) to +5. Guarding on the
+     * COMMON type of both comparison operands - not x alone - is exactly
+     * right: unsigned char promotes to signed int (zero-extends, so bit 7
+     * of H is never set and negation never fires - correctly left in),
+     * while any unsigned participant excludes the match, falling back to
+     * the generic ?: codegen that honours the constant condition. */
+    if (common_arith_type(promote_int_type(ast_expr_type_for_sizeof(cx)),
+                          ast_expr_type_for_sizeof(n->a->b)) & TYPE_UNSIGNED)
+        return 0;
+
+    /* x is read three times by the source (the test plus one arm); this
+     * idiom fuses them into a single load, which is invalid for a volatile
+     * object whose every access must occur. */
+    {
+        struct Sym *xs = find_sym(cx->sval);
+        if (xs != NULL && xs->is_volatile)
+            return 0;
+    }
+
     if (out_x)
         *out_x = cx;
     return 1;

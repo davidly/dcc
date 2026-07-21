@@ -1177,7 +1177,18 @@ char *filter_active_preprocessor_source(long *lenp)
                 int ei;
                 i = sp - 1;
                 parent = active_stack[i];
-                if (seen_else[i] || branch_taken[i]) {
+                if (seen_else[i]) {
+                    /* An #elif once the #else slot at this level is already
+                     * used is a structural error in the directive text (the
+                     * #else must be the final branch), exactly like the
+                     * "#else after #else" case below. Reported unconditionally
+                     * rather than gated on `active`. */
+                    char filebuf[256];
+                    int lno;
+                    source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                    dcc_error_at(filebuf, lno, line_start, "#elif after #else", NULL);
+                    active = 0;
+                } else if (branch_taken[i]) {
                     active = 0;
                 } else {
                     while (s < e && (*s == ' ' || *s == '\t')) s++;

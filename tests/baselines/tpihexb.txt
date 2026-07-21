@@ -1,0 +1,1 @@
+tpihexb: p0=0 p511=511 p512=-1 pplus=42 pws=12 pneg=-1 pjunk=-1 pempty=-1 pbig=-1 v0_1=128 v0_4=512 v511_1=128 v1_511=65408 v0_511=65408

@@ -322,6 +322,10 @@ static void parse_funcptr_prototype_suffix(void)
 int parse_funcptr_declarator(int *ptype, char *name, int namesz)
 {
     int type;
+    int save_decl_is_volatile;
+    int save_decl_pointee_is_volatile;
+    int object_is_volatile;
+    int pointee_is_volatile;
     long save_pos;
     long save_tok_start;
     int save_line;
@@ -343,6 +347,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     save_line = line_no;
     save_tok_line = tok_line;
     save_tok = tok;
+    save_decl_is_volatile = decl_is_volatile;
+    save_decl_pointee_is_volatile = decl_pointee_is_volatile;
 
     next_token();
     if (!accept('*')) {
@@ -351,9 +357,12 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         line_no = save_line;
         tok_line = save_tok_line;
         tok = save_tok;
+        decl_is_volatile = save_decl_is_volatile;
+        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
-    skip_type_qualifiers();
+    pointee_is_volatile = save_decl_is_volatile;
+    object_is_volatile = skip_type_qualifiers_volatile();
 
     if (tok.kind == '(') {
         int depth;
@@ -364,6 +373,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             line_no = save_line;
             tok_line = save_tok_line;
             tok = save_tok;
+            decl_is_volatile = save_decl_is_volatile;
+            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         strncpy(name, tok.text, namesz - 1);
@@ -375,6 +386,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             line_no = save_line;
             tok_line = save_tok_line;
             tok = save_tok;
+            decl_is_volatile = save_decl_is_volatile;
+            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         if (accept('(')) {
@@ -391,6 +404,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             line_no = save_line;
             tok_line = save_tok_line;
             tok = save_tok;
+            decl_is_volatile = save_decl_is_volatile;
+            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         if (accept('(')) {
@@ -403,6 +418,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         }
         type = type_add_ptr(ptype[0]);
         ptype[0] = type;
+        decl_is_volatile = object_is_volatile;
+        decl_pointee_is_volatile = pointee_is_volatile;
         return 1;
     }
 
@@ -412,6 +429,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         line_no = save_line;
         tok_line = save_tok_line;
         tok = save_tok;
+        decl_is_volatile = save_decl_is_volatile;
+        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
@@ -447,6 +466,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
+                decl_is_volatile = save_decl_is_volatile;
+                decl_pointee_is_volatile = save_decl_pointee_is_volatile;
                 return 0;
             }
             next_token(); /* consume ')' of name(...) */
@@ -460,6 +481,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
+                decl_is_volatile = save_decl_is_volatile;
+                decl_pointee_is_volatile = save_decl_pointee_is_volatile;
                 return 0;
             }
             /* Skip the trailing (...) describing the pointed-to function's params */
@@ -476,6 +499,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             type = type_add_ptr(ptype[0]);
             ptype[0] = type;
             g_funcptr_is_funcret_decl = 1;
+            decl_is_volatile = object_is_volatile;
+            decl_pointee_is_volatile = pointee_is_volatile;
             return 1;
         }
 
@@ -488,6 +513,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
         memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
+        decl_is_volatile = save_decl_is_volatile;
+        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
@@ -500,6 +527,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     }
 
     ptype[0] = type;
+    decl_is_volatile = object_is_volatile;
+    decl_pointee_is_volatile = pointee_is_volatile;
     return 1;
 }
 

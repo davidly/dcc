@@ -166,6 +166,8 @@ int decl_is_extern;
 int decl_is_static;
 int decl_is_inline;
 int decl_is_const;      /* current declaration used const qualifier */
+int decl_is_volatile;   /* current declaration used volatile qualifier */
+int decl_pointee_is_volatile;
 int decl_is_register;   /* current decl used 'register' keyword */
 int expr_result_dead;
 int g_expr_type;

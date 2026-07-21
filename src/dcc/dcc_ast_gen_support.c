@@ -2658,6 +2658,7 @@ int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
     const struct AstNode *index;
     const struct AstNode *member;
     struct Sym *base_sym;
+    struct FieldDef *field;
     int val_type;
 
     if (n == NULL || n->d == NULL)
@@ -2693,6 +2694,11 @@ int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
     if (base_sym == NULL || base_sym->storage != SC_GLOBAL || !base_sym->is_static)
         return 0;
     if (!is_global_word_sym(base_sym))
+        return 0;
+
+    field = find_field_def(base_struct_id_from_type(base_sym->type), member->sval);
+    if (field == NULL || field->is_volatile || base_sym->is_volatile ||
+        base_sym->pointee_is_volatile)
         return 0;
 
     if (global_text_addr_taken_count(base_sym->name) != 0)

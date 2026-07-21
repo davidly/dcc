@@ -1277,7 +1277,11 @@ void gen_binary_ast(const struct AstNode *n)
         ast_const_int_operand_value(n->b, &const_val) &&
         const_val > 0 && const_val < 255) {
         struct Sym *land_sym = find_sym(n->a->sval);
-        if (sym_word_load_is_two_byte_fetch(land_sym)) {
+        /* A volatile object's full width must be accessed; loading only its
+         * low byte here would drop the high-byte read the abstract machine
+         * requires, so decline and let the generic full-word path run. */
+        if (land_sym != NULL && !land_sym->is_volatile &&
+            sym_word_load_is_two_byte_fetch(land_sym)) {
             emit_load_sym_low_byte_and_const(land_sym, (unsigned int)const_val);
             g_expr_type = TYPE_INT;
             g_long_from16 = 0;

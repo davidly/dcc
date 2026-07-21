@@ -43,8 +43,20 @@ void skip_parameter_array_qualifiers(void)
 
 void skip_type_qualifiers(void)
 {
-    while (is_type_qualifier_token(tok.kind) || is_restrict_qualifier_token())
+    (void)skip_type_qualifiers_volatile();
+}
+
+int skip_type_qualifiers_volatile(void)
+{
+    int saw_volatile;
+
+    saw_volatile = 0;
+    while (is_type_qualifier_token(tok.kind) || is_restrict_qualifier_token()) {
+        if (tok.kind == TOK_VOLATILE)
+            saw_volatile = 1;
         next_token();
+    }
+    return saw_volatile;
 }
 
 int parse_type(void);
@@ -387,6 +399,7 @@ static void promote_anonymous_aggregate_fields(int parent_struct_id, struct Fiel
         field_defs[nfield_defs] = field_defs[i];
         field_defs[nfield_defs].parent_struct_id = parent_struct_id;
         field_defs[nfield_defs].offset += anon_fd->offset;
+        field_defs[nfield_defs].is_volatile |= anon_fd->is_volatile;
         field_defs[nfield_defs].is_anonymous = 0;
         field_defs[nfield_defs].is_promoted = 1;
         nfield_defs++;
@@ -401,6 +414,9 @@ void parse_struct_definition(int struct_id)
     int bytes;
     int bit_next;
     int bit_unit_offset;
+    int decl_type;
+    int field_base_is_volatile;
+    int field_base_pointee_is_volatile;
 
     sd = &struct_defs[struct_id - 1];
 
@@ -419,14 +435,23 @@ void parse_struct_definition(int struct_id)
             parse_static_assert_decl();
             continue;
         }
-        ftype = parse_type();
+        decl_type = parse_type();
+        field_base_is_volatile = decl_is_volatile;
+        field_base_pointee_is_volatile = decl_pointee_is_volatile;
 
         for (;;) {
             int is_funcptr_field;
             int is_anonymous_field;
             int is_unnamed_bitfield;
             int field_index;
-            while (accept('*')) { skip_type_qualifiers(); ftype = type_add_ptr(ftype); }
+            ftype = decl_type;
+            decl_is_volatile = field_base_is_volatile;
+            decl_pointee_is_volatile = field_base_pointee_is_volatile;
+            while (accept('*')) {
+                decl_pointee_is_volatile = decl_is_volatile;
+                decl_is_volatile = skip_type_qualifiers_volatile();
+                ftype = type_add_ptr(ftype);
+            }
 
             is_funcptr_field = 0;
             is_anonymous_field = 0;
@@ -501,6 +526,7 @@ void parse_struct_definition(int struct_id)
                     error_here("bitfield type must be int or unsigned int");
                 field_defs[nfield_defs].type = ((ftype & TYPE_UNSIGNED) || g_parse_type_was_enum) ?
                     (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
+                field_defs[nfield_defs].is_volatile = decl_is_volatile;
                 field_defs[nfield_defs].parent_struct_id = struct_id;
                 field_defs[nfield_defs].offset = bit_unit_offset;
                 field_defs[nfield_defs].elem_type = TYPE_UNSIGNED | TYPE_INT;
@@ -526,6 +552,7 @@ void parse_struct_definition(int struct_id)
             memset(&field_defs[nfield_defs], 0, sizeof(field_defs[nfield_defs]));
             dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
             field_defs[nfield_defs].type = ftype;
+            field_defs[nfield_defs].is_volatile = decl_is_volatile;
             field_defs[nfield_defs].parent_struct_id = struct_id;
             /* union: all fields at offset 0; struct: cumulative */
             field_defs[nfield_defs].offset = sd->is_union ? 0 : sd->size;
@@ -595,7 +622,8 @@ int find_typedef(const char *name)
     return -1;
 }
 
-void add_typedef_name_ex(const char *name, int type, int array_len, int is_func)
+void add_typedef_name_ex(const char *name, int type, int array_len, int is_func,
+                         int is_volatile, int pointee_is_volatile)
 {
     int i;
     int pi;
@@ -609,6 +637,8 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func)
     }
 
     typedefs[i].type = type;
+    typedefs[i].is_volatile = is_volatile;
+    typedefs[i].pointee_is_volatile = pointee_is_volatile;
     typedefs[i].array_len = array_len;
     typedefs[i].is_func = is_func;
     typedefs[i].has_proto = g_funcptr_has_proto;
@@ -620,7 +650,7 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func)
 
 void add_typedef_name(const char *name, int type, int array_len)
 {
-    add_typedef_name_ex(name, type, array_len, 0);
+    add_typedef_name_ex(name, type, array_len, 0, 0, 0);
 }
 
 int parse_base_type(void)
@@ -657,6 +687,8 @@ int parse_base_type(void)
     memset(g_typedef_proto_types, 0, sizeof(g_typedef_proto_types));
     decl_is_register = 0;
     decl_is_const = 0;
+    decl_is_volatile = 0;
+    decl_pointee_is_volatile = 0;
     decl_is_inline = 0;
     g_parse_type_was_enum = 0;
 
@@ -674,7 +706,9 @@ int parse_base_type(void)
         if (tok.kind == TOK_INLINE) { decl_is_inline = 1; next_token(); continue; }
         if (tok.kind == TOK_VOLATILE ||
             tok.kind == TOK_AUTO) {
-            if (tok.kind == TOK_AUTO) {
+            if (tok.kind == TOK_VOLATILE) {
+                decl_is_volatile = 1;
+            } else if (tok.kind == TOK_AUTO) {
                 if (storage_class_seen)
                     error_here("multiple storage classes in declaration");
                 storage_class_seen = 1;
@@ -719,8 +753,12 @@ int parse_base_type(void)
 
         if (tok.kind == TOK_STRUCT || tok.kind == TOK_UNION) {
             int sid;
+            int struct_is_volatile;
+            int struct_pointee_is_volatile;
             char sname[64];
             int is_union_kw;
+            struct_is_volatile = decl_is_volatile;
+            struct_pointee_is_volatile = decl_pointee_is_volatile;
             is_union_kw = (tok.kind == TOK_UNION);
             next_token();
             if (tok.kind == TOK_ID) {
@@ -736,7 +774,11 @@ int parse_base_type(void)
                 sid = add_struct_def(sname);
             }
             if (is_union_kw) struct_defs[sid - 1].is_union = 1;
-            if (tok.kind == '{') parse_struct_definition(sid);
+            if (tok.kind == '{') {
+                parse_struct_definition(sid);
+                decl_is_volatile = struct_is_volatile;
+                decl_pointee_is_volatile = struct_pointee_is_volatile;
+            }
             t = make_struct_type(sid);
             saw_any = 1;
             break;
@@ -825,6 +867,8 @@ int parse_base_type(void)
 
         if (!saw_any && tok.kind == TOK_ID && (td = find_typedef(tok.text)) >= 0) {
             t = typedefs[td].type;
+            decl_is_volatile |= typedefs[td].is_volatile;
+            decl_pointee_is_volatile = typedefs[td].pointee_is_volatile;
             g_typedef_array_len = typedefs[td].array_len;
             g_typedef_is_func = typedefs[td].is_func;
                  g_typedef_has_proto = typedefs[td].has_proto;
@@ -857,7 +901,8 @@ int parse_base_type(void)
         if (saw_unsigned && t != TYPE_FLOAT && t != TYPE_VOID)
             t |= TYPE_UNSIGNED;
     }
-    skip_type_qualifiers();
+    if (skip_type_qualifiers_volatile())
+        decl_is_volatile = 1;
     return t;
 }
 
@@ -866,7 +911,8 @@ int parse_type(void)
     int t;
     t = parse_base_type();
     while (accept('*')) {
-        skip_type_qualifiers();
+        decl_pointee_is_volatile = decl_is_volatile;
+        decl_is_volatile = skip_type_qualifiers_volatile();
         t = type_add_ptr(t);
     }
     return t;
