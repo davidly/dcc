@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
+#include <string.h>
 
 // most of this fails with dccrtl, but it's good to know where things stand.
 
@@ -143,6 +144,54 @@ int main()
     printf("[%08.2f]\n", 1.5);     /* [00001.50] */
     printf("[%08.2f]\n", -1.5);    /* [-0001.50] */
     printf("[%12f]\n", 1.5);       /* [    1.500000] */
+
+    /* long strings: %s length must not truncate to 8 bits. A strlen >= 256
+     * used to wrap to 0 in printf's internal length counter, so
+     * printf("%s", ac) printed nothing at all for such a string - exactly
+     * what surfaced when tests/pihex.c was hand-modified to double its
+     * generated string's length. A related bug in the same fix (caught only
+     * via sprintf's return value, not by what got printed) had the
+     * length-computation helper collide with printf's own running
+     * output-char count, corrupting the count for every %s conversion. */
+    {
+        char buf[300];
+        char sbuf[300];
+        char vb[8];
+        int i, sn;
+
+        for (i = 0; i < 296; i++) buf[i] = 'a';
+        buf[296] = 'x';
+        buf[297] = 'y';
+        buf[298] = 'z';
+        buf[299] = 0;
+
+        printf("longstr len: %d\n", (int)strlen(buf));        /* 299 */
+        printf("longstr first3: %.3s\n", buf);                 /* aaa */
+        printf("longstr last3: %s\n", buf + 296);               /* xyz */
+        printf("longstr full:\n%s\n", buf);
+
+        sn = sprintf(sbuf, "%s", buf);
+        printf("sprintf longstr n=%d slen=%d\n", sn, (int)strlen(sbuf)); /* 299 299 */
+
+        for (i = 0; i < 255; i++) buf[i] = 'p';
+        buf[255] = 0;
+        printf("buf255 len: %d\n", (int)strlen(buf));           /* 255 */
+
+        for (i = 0; i < 256; i++) buf[i] = 'p';
+        buf[256] = 0;
+        printf("buf256 len: %d\n", (int)strlen(buf));           /* 256 */
+
+        /* precision clamp on a long (>255) string */
+        for (i = 0; i < 296; i++) buf[i] = 'a';
+        buf[296] = 0;
+        printf("[%.5s]\n", buf);                                 /* [aaaaa] */
+
+        /* sprintf's return value must equal the number of characters
+         * written, not corrupted by the register collision above
+         * (previously shipped bug: this returned 4 instead of 2). */
+        sn = sprintf(vb, "%s", "hi");
+        printf("sprintf short n=%d\n", sn);                      /* 2 */
+    }
 
     // no real attempt to make printf conformant on a Z80 cppreference();
 

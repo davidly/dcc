@@ -58,4 +58,14 @@ size_t zx: 8235
 [00001.50]
 [-0001.50]
 [    1.500000]
+longstr len: 299
+longstr first3: aaa
+longstr last3: xyz
+longstr full:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxyz
+sprintf longstr n=299 slen=299
+buf255 len: 255
+buf256 len: 256
+[aaaaa]
+sprintf short n=2
 tprintf ok

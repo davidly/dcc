@@ -3895,13 +3895,36 @@ pf_c_done:
         pop     hl
         jp      pf_loop
 
+; pf_s_padlen_a: A = pf_slen saturated to 0..255, for pf_pad_a's "width -
+; length" math. pf_width is itself always a single byte (0..255), so any
+; pf_slen >= 256 already guarantees no padding is needed regardless of
+; exactly how far past 255 it is - saturating to 255 is as good as the true
+; (wider) value for that comparison.
+pf_s_padlen_a:
+        ld      hl,(pf_slen)
+        ld      a,h
+        or      a
+        jr      z,pf_s_padlen_lo
+        ld      a,255
+        ret
+pf_s_padlen_lo:
+        ld      a,l
+        ret
+
 pf_s:
         push    hl
         call    pf_arg_hl
         push    de
         push    hl
-        call    pf__slen_hl       ; A = strlen(HL), HL preserved by stack below
-        ld      (pf_digit),a
+        call    pf__slen_hl       ; DE = strlen(HL), HL preserved by stack below.
+                                   ; DE, not BC: BC is pf_emit_a's running
+                                   ; output-char count, live across this call -
+                                   ; see pf__slen_hl's own comment.
+        ld      (pf_slen),de      ; pf_slen (16-bit): pf_digit is 8-bit and shared
+                                   ; with integer/float digit counts elsewhere,
+                                   ; which never need more than a byte, so %s
+                                   ; gets its own wide counter instead of
+                                   ; widening every other pf_digit use too.
         ; An explicit precision (%.Ns) caps both the field-width padding
         ; calculation and the actual emit count at min(strlen, N) - C89's
         ; "at most N characters, stopping at a NUL first" rule. Previously
@@ -3910,42 +3933,55 @@ pf_s:
         ld      a,(pf_haveprec)
         or      a
         jr      z,pf_s_no_clamp
-        ld      a,(pf_digit)
-        ld      e,a
+        ld      hl,(pf_slen)
+        ld      a,h
+        or      a
+        jr      z,pf_s_check_prec ; strlen < 256: need the real comparison
+        ; strlen >= 256: pf_prec (a single byte, 0..255) is always smaller,
+        ; so it always clamps - apply it directly, nothing to compare.
         ld      a,(pf_prec)
-        cp      e
+        ld      l,a
+        ld      h,0
+        ld      (pf_slen),hl
+        jr      pf_s_no_clamp
+pf_s_check_prec:
+        ld      a,(pf_prec)
+        cp      l
         jr      nc,pf_s_no_clamp  ; precision >= strlen: nothing to clamp
-        ld      (pf_digit),a      ; clamp the printed/padded length to precision
+        ld      l,a
+        ld      h,0
+        ld      (pf_slen),hl      ; clamp the printed/padded length to precision
 pf_s_no_clamp:
         ld      a,(pf_left)
         or      a
         jr      nz,pf_s_no_prepad
-        ld      a,(pf_digit)
+        call    pf_s_padlen_a
         call    pf_pad_a
 pf_s_no_prepad:
         pop     hl
-        ld      a,(pf_digit)
-        ld      e,a               ; E = characters left to emit. The caller's
-                                    ; own DE is safe on the stack below (pushed
-                                    ; above) and pf_emit_a itself preserves DE
-                                    ; across each call, so E is free to reuse
-                                    ; here as this loop's countdown.
+        ld      de,(pf_slen)      ; DE = characters left to emit, 16-bit. The
+                                    ; caller's own DE is safe on the stack below
+                                    ; (pushed above) and pf_emit_a preserves DE
+                                    ; across each call (BC is NOT free here -
+                                    ; pf_emit_a uses it as printf's running
+                                    ; total-chars-emitted count and increments
+                                    ; it as a side effect on every call).
 pf_s_loop:
-        ld      a,e
-        or      a
+        ld      a,d
+        or      e
         jr      z,pf_s_done       ; precision limit reached
         ld      a,(hl)
         or      a
         jr      z,pf_s_done       ; NUL reached first
         inc     hl
         call    pf_emit_a
-        dec     e
+        dec     de
         jr      pf_s_loop
 pf_s_done:
         ld      a,(pf_left)
         or      a
         jr      z,pf_s_no_postpad
-        ld      a,(pf_digit)
+        call    pf_s_padlen_a
         call    pf_pad_a
 pf_s_no_postpad:
         pop     de
@@ -4136,6 +4172,19 @@ pfe_con:
         inc     bc
         ret
 
+; pf__slen_hl: DE = strlen(HL), full 16-bit (not just the low byte - a
+; strlen >= 256 wrapping to 0 in a 1-byte count made %s print nothing at
+; all for such strings, since pf_s's emit-count would come out zero. Only
+; caller is pf_s, so this is safe to widen without touching anything else.
+;
+; Returns in DE, not BC: BC is pf_emit_a's running output-character count
+; (it just increments whatever it finds there), live across this whole
+; call chain. An earlier version of this routine used BC as its own
+; counting scratch and returned the length in BC too, silently stomping
+; the real running count with the strlen value - every character emitted
+; afterward got counted on top of that instead of the true prior total
+; (confirmed: sprintf(buf,"%s","hi") returned 4, not 2). BC is scratch
+; ONLY within this function's own loop, saved/restored around it.
 pf__slen_hl:
         push    hl
         push    bc
@@ -4148,7 +4197,8 @@ pfsl1:
         inc     bc
         jr      pfsl1
 pfsl2:
-        ld      a,c              ; low byte is enough for current tests
+        ld      d,b
+        ld      e,c
         pop     bc
         pop     hl
         ret
@@ -4384,6 +4434,8 @@ pf_width:
         db      0
 pf_digit:
         db      0
+pf_slen:
+        dw      0
 pf_field:
         db      0
 pf_prec:
