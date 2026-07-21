@@ -421,4 +421,5 @@ int main(void)
     }
 
    printf( "ttrig completed with great success\n" );
+   return 0;
 }

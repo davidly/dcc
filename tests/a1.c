@@ -1435,5 +1435,6 @@ int main( argc, argv ) int argc; char * argv[];
     memset( &cpu, 0, sizeof( cpu ) );
     invoke_command( pcHEX );
     printf( "\n" );
+    return 0;
 }
 

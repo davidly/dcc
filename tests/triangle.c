@@ -15,4 +15,5 @@ int main()
 {
     int32_t n = 50;
     printf( "triangle( %ld ) = %ld\n", n, triangle( n ) );
+    return 0;
 } //main

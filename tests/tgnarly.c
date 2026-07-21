@@ -62,6 +62,7 @@ hi_world() {
             putchar (s [i]);
         }
     }
+    return 0;
 }
 
 
