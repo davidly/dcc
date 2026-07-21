@@ -3482,7 +3482,15 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
         if (tmp == NULL)
             return 0;
         want_type = fn->proto_types[i] ? fn->proto_types[i] : TYPE_INT;
-        if (type_size(want_type) != 2 || type_is_float(want_type) || type_is_long(want_type))
+        /* reserve_inline_temp_locals always reserves 2 bytes for every
+         * #itmpN slot (it can't know the eventual parameter type - that's
+         * this function's job, called far later, once per actual call
+         * site), so a 1-byte want_type just leaves the slot's second byte
+         * unused; emit_store_hl_to_sym_direct and the later read through
+         * this same symbol both already switch on type_size(s->type)
+         * themselves for every size they support, 1 included. */
+        if ((type_size(want_type) != 2 && type_size(want_type) != 1) ||
+            type_is_float(want_type) || type_is_long(want_type))
             return 0;
         tmp->type = want_type;
         temp_names[i] = temp_name_buf[i];

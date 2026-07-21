@@ -3258,6 +3258,437 @@ static void find_function_bounds(int from, int *func_start, int *func_end)
     }
 }
 
+/* Same as find_function_bounds, but also recognizes "; static function "
+ * (see emit_function_prologue) as a function boundary - a static
+ * function's definition never emits a public line, so find_function_bounds
+ * alone treats its whole body as still belonging to whichever public
+ * function happens to precede it in the file. */
+static void find_function_bounds_any(int from, int *func_start, int *func_end)
+{
+    int k;
+
+    *func_start = 0;
+    for (k = from; k >= 0; --k) {
+        if (strncmp(lines[k], "public ", 7) == 0 ||
+            strncmp(lines[k], "; static function ", 18) == 0) {
+            *func_start = k;
+            break;
+        }
+    }
+    *func_end = nlines;
+    for (k = from + 1; k < nlines; ++k) {
+        if (strncmp(lines[k], "public ", 7) == 0 ||
+            strncmp(lines[k], "; static function ", 18) == 0) {
+            *func_end = k;
+            break;
+        }
+    }
+}
+
+static int jump_target_any(const char *s, char *out);
+
+/*
+ * pass_word_loop_var_to_reg_bc:
+ *
+ * A 2-byte local variable (a negative ix offset, so a local rather than a
+ * parameter) that is:
+ *   - initialized once, immediately before a loop's own top label (a
+ *     "ld (ix+O),l" / "ld (ix+O+1),h" pair right before the label),
+ *   - that label is a real loop (something later jumps back to it - and,
+ *     since a loop can have more than one back-edge, e.g. an early
+ *     "continue"-style path, every reference up through the LAST one
+ *     found counts as still being inside the loop, not just the first),
+ *   - never has its address taken - checked two ways: no reference to
+ *     its offset anywhere in the function outside one of eight
+ *     whitelisted shapes (loaded into hl, de, or a's low/high byte, or
+ *     stored back from hl as a pair - never a cp, never anything else),
+ *     and no bare "ld de,<off>" / "ld hl,<off>" anywhere either, which is
+ *     how dcc compiles "&local" (push ix / pop hl / ld de,<off> /
+ *     add hl,de) - the offset there is a plain immediate, not "(ix<off>)"
+ *     text, so the first check alone can't see it,
+ *   - and B/C are completely unused anywhere else in the function (no
+ *     calls at all - every user-function call in this ABI clobbers every
+ *     register, so a live register cache can never safely cross one - no
+ *     block-repeat instructions, no explicit b/c/bc token)
+ * is kept in BC for the function's entire body instead of round-tripping
+ * through its frame slot on every use. This is the same
+ * "enumerate exactly what's recognized, decline on anything else" design
+ * as pass_byte_loop_counter_to_reg_c, generalized from an 8-bit
+ * decrementing counter to a 16-bit variable with an arbitrary update.
+ *
+ * An earlier version scoped the BC-freedom requirement to just the loop
+ * (not the whole function), reasoning that code before the init-write
+ * can't matter and code after the loop can't reference the variable
+ * again anyway. That's true, but cost two real bugs to get right (an
+ * incomplete loop-extent bound from only finding the first of several
+ * back-edges let BC get silently clobbered mid-loop in tests/forint.c;
+ * and it never even caught the &local case above, corrupting
+ * tests/tforsco.c) while never actually paying for itself - its
+ * motivating case, is_attacked's call-free knight-check loop ahead of
+ * its calls to attacked_by_slider, turned out to be blocked anyway by an
+ * unrelated pre-existing pass already claiming BC for that loop's own
+ * array index. Reverted to the simpler, whole-function requirement.
+ *
+ * Does not attempt to reclaim the now-unused frame slot; leaving it
+ * allocated but unreferenced wastes at most 2 bytes of stack per call,
+ * and avoids needing to renumber every other frame offset in the
+ * function.
+ */
+static int pass_word_loop_var_to_reg_bc(void)
+{
+    int i, j, changed = 0;
+    int off;
+    int func_start, func_end;
+    int backedge_line;
+    char label[128];
+    char pat_l[32], pat_h[32], pat_e[32], pat_d[32], pat_stl[32], pat_sth[32];
+    char pat_al[32], pat_ah[32];
+    int bad;
+    int bc_used_elsewhere;
+
+    for (i = 0; i + 2 < nlines; i++) {
+        char t1[MAX_LINE], t2[MAX_LINE];
+
+        strip_peep_comment_copy(t1, lines[i]);
+        if (strncmp(t1, "ld (ix", 6) != 0)
+            continue;
+        if (sscanf(t1 + 6, "%d),l", &off) != 1)
+            continue;
+        if (off >= 0)
+            continue;
+
+        sprintf(pat_sth, "ld (ix%d),h", off + 1);
+        strip_peep_comment_copy(t2, lines[i + 1]);
+        if (strcmp(t2, pat_sth) != 0)
+            continue;
+
+        if (!starts_label(lines[i + 2]))
+            continue;
+        if (!label_name_at(i + 2, label))
+            continue;
+
+        /* A loop can have more than one jump back to its own top label -
+         * an early "continue"-style path, for instance - and every one of
+         * them is still part of the loop body. Take the LAST (highest
+         * line number) back-edge, not the first: anything in between is
+         * still inside the loop and must be covered by the bad-reference
+         * and BC-freedom scans below. Using only the first one found
+         * silently under-covers the loop whenever a later back-edge
+         * exists, missing BC-clobbering code that's still part of it -
+         * confirmed via a real corruption in tests/forint.c, where a
+         * later back-edge sat well past the first one this used to stop
+         * at. */
+        backedge_line = -1;
+        for (j = i + 3; j < nlines; j++) {
+            char tgt[128];
+            if (strncmp(lines[j], "public ", 7) == 0 ||
+                strncmp(lines[j], "; static function ", 18) == 0)
+                break;
+            if (jump_target_any(lines[j], tgt) && !strcmp(tgt, label))
+                backedge_line = j;
+        }
+        if (backedge_line < 0)
+            continue;
+
+        find_function_bounds_any(i, &func_start, &func_end);
+
+        sprintf(pat_l,   "ld l,(ix%d)", off);
+        sprintf(pat_h,   "ld h,(ix%d)", off + 1);
+        sprintf(pat_e,   "ld e,(ix%d)", off);
+        sprintf(pat_d,   "ld d,(ix%d)", off + 1);
+        sprintf(pat_stl, "ld (ix%d),l", off);
+        sprintf(pat_sth, "ld (ix%d),h", off + 1);
+        sprintf(pat_al,  "ld a,(ix%d)", off);
+        sprintf(pat_ah,  "ld a,(ix%d)", off + 1);
+
+        /* A local's address is taken as the exact 4-instruction sequence
+         * "push ix / pop hl / ld de,<off> / add hl,de" (confirmed via
+         * dcc's own codegen for `&local`) - the offset appears as a BARE
+         * immediate there, not as "(ix<off>)" text, so the substring scan
+         * below can never see it. Matching the full 4-instruction
+         * sequence (not just a bare "ld de,<off>" anywhere, which an
+         * earlier version of this check did) matters: an unrelated
+         * variable's own address computation can legitimately use this
+         * candidate's own offset as its bare immediate too, purely by
+         * numeric coincidence (two different locals' offsets are never
+         * equal, but variable X's *base address* arithmetic can still
+         * involve variable Y's offset number, e.g. X = &array_at_dash_5
+         * while Y separately happens to live at offset -6/-5) - confirmed
+         * via a real false-positive in tests/tc99scpe.c that the loose
+         * bare-number version of this check declined unnecessarily.
+         * Still conservative (requires an exact, contiguous 4-instruction
+         * match; a compiler change that computed this address some other
+         * way would need a corresponding update here), but precise enough
+         * not to trip over an unrelated variable's own address math. */
+        {
+            char pat_addr_de_l[32], pat_addr_de_h[32];
+            int addr_taken;
+
+            sprintf(pat_addr_de_l, "ld de,%d", off);
+            sprintf(pat_addr_de_h, "ld de,%d", off + 1);
+
+            addr_taken = 0;
+            for (j = func_start; j + 3 < func_end; j++) {
+                char t0[MAX_LINE], t1[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
+
+                strip_peep_comment_copy(t0, lines[j]);
+                if (strcmp(t0, "push ix") != 0)
+                    continue;
+                strip_peep_comment_copy(t1, lines[j + 1]);
+                if (strcmp(t1, "pop hl") != 0)
+                    continue;
+                strip_peep_comment_copy(t3, lines[j + 3]);
+                if (strcmp(t3, "add hl,de") != 0)
+                    continue;
+                strip_peep_comment_copy(t2, lines[j + 2]);
+                if (strcmp(t2, pat_addr_de_l) == 0 || strcmp(t2, pat_addr_de_h) == 0) {
+                    addr_taken = 1;
+                    break;
+                }
+            }
+            if (addr_taken)
+                continue;
+        }
+
+        bad = 0;
+        for (j = func_start; j < func_end; j++) {
+            char t[MAX_LINE];
+            char off_l[32], off_h[32];
+
+            strip_peep_comment_copy(t, lines[j]);
+            sprintf(off_l, "(ix%d)", off);
+            sprintf(off_h, "(ix%d)", off + 1);
+            if (strstr(t, off_l) == NULL && strstr(t, off_h) == NULL)
+                continue;
+            if (strcmp(t, pat_l) == 0 || strcmp(t, pat_h) == 0 ||
+                strcmp(t, pat_e) == 0 || strcmp(t, pat_d) == 0 ||
+                strcmp(t, pat_stl) == 0 || strcmp(t, pat_sth) == 0 ||
+                strcmp(t, pat_al) == 0 || strcmp(t, pat_ah) == 0)
+                continue;
+            bad = 1;
+            break;
+        }
+        if (bad)
+            continue;
+
+        /* BC must be free across the whole function, not just the loop:
+         * an earlier version scoped this to just [loop label, back-edge]
+         * (reasoning that nothing outside that range could still
+         * reference the variable, since the "bad" scan above already
+         * covers the whole function). That's true, but doesn't fully
+         * pay for itself - it never actually unlocked its motivating
+         * case (a call-free loop followed by calls later in the same
+         * function, e.g. is_attacked's knight-check loop ahead of its
+         * calls to attacked_by_slider - blocked instead by an unrelated
+         * register conflict, a pre-existing pass already claiming BC for
+         * that specific loop's own array index) while costing a real,
+         * measurable regression in several other apps that used to have
+         * this variable safely read again after the loop under the
+         * whole-function requirement. Reverted to the simpler, strictly
+         * safe whole-function scope. */
+        bc_used_elsewhere = 0;
+        for (j = func_start; j < func_end; j++) {
+            if (line_clobbers_bc(lines[j])) {
+                bc_used_elsewhere = 1;
+                break;
+            }
+        }
+        if (bc_used_elsewhere)
+            continue;
+
+        for (j = func_start; j < func_end; j++) {
+            char t[MAX_LINE];
+
+            strip_peep_comment_copy(t, lines[j]);
+            if (strcmp(t, pat_l) == 0) {
+                replace1_tagged(j, "ld l,c", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_h) == 0) {
+                replace1_tagged(j, "ld h,b", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_e) == 0) {
+                replace1_tagged(j, "ld e,c", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_d) == 0) {
+                replace1_tagged(j, "ld d,b", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_stl) == 0) {
+                replace1_tagged(j, "ld c,l", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_sth) == 0) {
+                replace1_tagged(j, "ld b,h", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_al) == 0) {
+                replace1_tagged(j, "ld a,c", "word_loop_var_bc");
+                changed = 1;
+            } else if (strcmp(t, pat_ah) == 0) {
+                replace1_tagged(j, "ld a,b", "word_loop_var_bc");
+                changed = 1;
+            }
+        }
+    }
+
+    return changed;
+}
+
+/*
+ * pass_byte_loop_var_to_reg_c:
+ *
+ * A 1-byte local variable (a negative ix offset) initialized once,
+ * immediately before a loop's own top label (a single "ld (ix+O),l"
+ * right before the label - the same shape pass_word_loop_var_to_reg_bc
+ * looks for, just one instruction instead of a pair), referenced
+ * elsewhere in the function only via one of four whitelisted shapes -
+ * loaded into l or a, or stored back from l or a - is kept in register C
+ * for the function's entire body instead of round-tripping through its
+ * frame slot on every use, under the exact same conditions as that pass
+ * (a real loop, possibly with more than one back-edge; never has its
+ * address taken, checked the same two ways; C completely unused
+ * anywhere else in the function).
+ *
+ * Deliberately narrower in what it rewrites than the word version: it
+ * only ever replaces the memory fetch/store itself ("ld l,(ix+O)" ->
+ * "ld l,c", not anything downstream of it). For a signed byte used in a
+ * 16-bit context, dcc's codegen sign-extends after every load ("ld a,l /
+ * rlca / sbc a,a / ld h,a") - this pass leaves that sequence completely
+ * untouched and just feeds it from a register instead of memory. That
+ * still saves the full memory-load cost (a direct (ix+d) byte fetch is
+ * comparable to the pair fetch pass_word_loop_var_to_reg_bc eliminates),
+ * without needing to reason about every way dcc might phrase "produce
+ * this byte's sign-extended 16-bit value" - including the existing
+ * a_tracks_ix fusion, which already elides a redundant reload into A
+ * right before this pass would apply and needs no awareness of this
+ * pass at all, since it never touches "(ix+O)" text itself.
+ */
+static int pass_byte_loop_var_to_reg_c(void)
+{
+    int i, j, changed = 0;
+    int off;
+    int func_start, func_end;
+    int backedge_line;
+    char label[128];
+    char pat_l[32], pat_a[32], pat_stl[32], pat_sta[32];
+    int bad;
+    int bc_used_elsewhere;
+
+    for (i = 0; i < nlines; i++) {
+        char t1[MAX_LINE];
+
+        strip_peep_comment_copy(t1, lines[i]);
+        if (strncmp(t1, "ld (ix", 6) != 0)
+            continue;
+        if (sscanf(t1 + 6, "%d),l", &off) != 1)
+            continue;
+        if (off >= 0)
+            continue;
+
+        if (!starts_label(lines[i + 1]))
+            continue;
+        if (!label_name_at(i + 1, label))
+            continue;
+
+        backedge_line = -1;
+        for (j = i + 2; j < nlines; j++) {
+            char tgt[128];
+            if (strncmp(lines[j], "public ", 7) == 0 ||
+                strncmp(lines[j], "; static function ", 18) == 0)
+                break;
+            if (jump_target_any(lines[j], tgt) && !strcmp(tgt, label))
+                backedge_line = j;
+        }
+        if (backedge_line < 0)
+            continue;
+
+        find_function_bounds_any(i, &func_start, &func_end);
+
+        /* Same &local detection as pass_word_loop_var_to_reg_bc: dcc
+         * compiles "&local" as "push ix / pop hl / ld de,<off> /
+         * add hl,de", the offset a bare immediate that the substring
+         * scan below can never see. */
+        {
+            char pat_addr_de[32];
+            int addr_taken;
+
+            sprintf(pat_addr_de, "ld de,%d", off);
+            addr_taken = 0;
+            for (j = func_start; j + 3 < func_end; j++) {
+                char t0[MAX_LINE], t1b[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
+
+                strip_peep_comment_copy(t0, lines[j]);
+                if (strcmp(t0, "push ix") != 0)
+                    continue;
+                strip_peep_comment_copy(t1b, lines[j + 1]);
+                if (strcmp(t1b, "pop hl") != 0)
+                    continue;
+                strip_peep_comment_copy(t3, lines[j + 3]);
+                if (strcmp(t3, "add hl,de") != 0)
+                    continue;
+                strip_peep_comment_copy(t2, lines[j + 2]);
+                if (strcmp(t2, pat_addr_de) == 0) {
+                    addr_taken = 1;
+                    break;
+                }
+            }
+            if (addr_taken)
+                continue;
+        }
+
+        sprintf(pat_l,   "ld l,(ix%d)", off);
+        sprintf(pat_a,   "ld a,(ix%d)", off);
+        sprintf(pat_stl, "ld (ix%d),l", off);
+        sprintf(pat_sta, "ld (ix%d),a", off);
+
+        bad = 0;
+        for (j = func_start; j < func_end; j++) {
+            char t[MAX_LINE];
+            char off_txt[32];
+
+            strip_peep_comment_copy(t, lines[j]);
+            sprintf(off_txt, "(ix%d)", off);
+            if (strstr(t, off_txt) == NULL)
+                continue;
+            if (strcmp(t, pat_l) == 0 || strcmp(t, pat_a) == 0 ||
+                strcmp(t, pat_stl) == 0 || strcmp(t, pat_sta) == 0)
+                continue;
+            bad = 1;
+            break;
+        }
+        if (bad)
+            continue;
+
+        bc_used_elsewhere = 0;
+        for (j = func_start; j < func_end; j++) {
+            if (line_clobbers_bc(lines[j])) {
+                bc_used_elsewhere = 1;
+                break;
+            }
+        }
+        if (bc_used_elsewhere)
+            continue;
+
+        for (j = func_start; j < func_end; j++) {
+            char t[MAX_LINE];
+
+            strip_peep_comment_copy(t, lines[j]);
+            if (strcmp(t, pat_l) == 0) {
+                replace1_tagged(j, "ld l,c", "byte_loop_var_c");
+                changed = 1;
+            } else if (strcmp(t, pat_a) == 0) {
+                replace1_tagged(j, "ld a,c", "byte_loop_var_c");
+                changed = 1;
+            } else if (strcmp(t, pat_stl) == 0) {
+                replace1_tagged(j, "ld c,l", "byte_loop_var_c");
+                changed = 1;
+            } else if (strcmp(t, pat_sta) == 0) {
+                replace1_tagged(j, "ld c,a", "byte_loop_var_c");
+                changed = 1;
+            }
+        }
+    }
+
+    return changed;
+}
+
 /* True iff every jump anywhere in [scan_lo, scan_hi) that targets
  * `label_name` has its OWN line number inside [range_lo, range_hi).  Used
  * to admit an internal label into a loop's scanned body only when it is
@@ -15080,6 +15511,8 @@ int main(int argc, char **argv)
         if (pass_fix_main_argc_gt_one()) changed = 1;
         if (pass_cache_noix_byte_param_reload()) changed = 1;
         if (pass_cache_global_word_reload()) changed = 1;
+        if (pass_word_loop_var_to_reg_bc()) changed = 1;
+        if (pass_byte_loop_var_to_reg_c()) changed = 1;
 /*        if (pass_replace_tstr_fake_strstr()) changed = 1; */
         if (pass_labels()) changed = 1;
         passes++;
