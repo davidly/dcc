@@ -1285,6 +1285,46 @@ void gen_binary_ast(const struct AstNode *n)
         }
     }
 
+    /* `byte_ident == byte_ident_or_const` used as a plain value (e.g. the
+     * operand of `||`/`&&`, which evaluates each side as a value via
+     * ast_gen_expr rather than branching on it directly - see
+     * gen_logical_ast) - materialize 0/1 from the same fast compare/branch
+     * ast_gen_cond_branch uses for a direct condition, instead of the
+     * generic path's full 16-bit sign-extend-and-compare. Motivated by
+     * tchess.c's `p == a || p == b`, where p/a/b are all plain char. */
+    if (is_cmp_op(n->op) && ast_is_byte_eq_cond(n, NULL, NULL, NULL)) {
+        int lt = new_label();
+        int le = new_label();
+        ast_gen_byte_eq_branch(n, lt, 1);
+        emit("\tld hl,0\n");
+        emit_jp_label("jp", le);
+        emit_label(lt);
+        emit("\tld hl,1\n");
+        emit_label(le);
+        g_expr_type = TYPE_INT;
+        g_long_from16 = 0;
+        return;
+    }
+
+    /* `global_char_arr[idx] == const` used as a plain value - same
+     * "materialize 0/1 from the branch emitter" trick as the byte-eq case
+     * just above, for the same reason (an operand of `||`/`&&` is
+     * evaluated as a value, not branched on directly). Motivated by
+     * tchess.c's is_attacked: `f < 7 && sq >= 7 && board[sq - 7] == 'P'`. */
+    if (is_cmp_op(n->op) && ast_is_global_char_index_eq_cond(n, NULL, NULL, NULL, NULL)) {
+        int lt = new_label();
+        int le = new_label();
+        ast_gen_global_char_index_eq_branch(n, lt, 1);
+        emit("\tld hl,0\n");
+        emit_jp_label("jp", le);
+        emit_label(lt);
+        emit("\tld hl,1\n");
+        emit_label(le);
+        g_expr_type = TYPE_INT;
+        g_long_from16 = 0;
+        return;
+    }
+
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
 

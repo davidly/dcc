@@ -111,6 +111,15 @@ int ast_cond_result_is_float(const struct AstNode *n);
 int ast_cond_result_is_long(const struct AstNode *n);
 int ast_cond_is_abs_idiom(const struct AstNode *n, const struct AstNode **out_x);
 void ast_gen_abs_idiom_value(const struct AstNode *x);
+int ast_is_byte_eq_cond(const struct AstNode *n, struct Sym **out_a,
+                               struct Sym **out_b, long *out_const);
+void ast_gen_byte_eq_branch(const struct AstNode *n, int label,
+                                   int branch_when_true);
+int ast_is_global_char_index_eq_cond(const struct AstNode *n, struct Sym **out_arr,
+                                             const struct AstNode **out_idx,
+                                             struct Sym **out_other, long *out_const);
+void ast_gen_global_char_index_eq_branch(const struct AstNode *n, int label,
+                                                 int branch_when_true);
 int ast_void_expr_supported(const struct AstNode *n);
 int ast_cond_void_supported(const struct AstNode *n);
 int ast_index_cmp_cond_supported(const struct AstNode *n);

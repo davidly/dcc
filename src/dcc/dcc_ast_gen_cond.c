@@ -1904,6 +1904,194 @@ void ast_gen_abs_idiom_value(const struct AstNode *x)
     g_long_from16 = 0;
 }
 
+/* Is `n` an ==/!= comparison whose left operand is a directly-fetchable
+ * byte (char/uchar) identifier and whose right operand is either a small
+ * (0..255) integer constant or another directly-fetchable byte identifier?
+ * Equality doesn't care about a byte's signed interpretation - the bit
+ * pattern either matches or it doesn't - so this needs only the raw 8-bit
+ * value(s) and a `cp`, unlike a relational operator's sign-aware compare
+ * (which does need to know signedness, and has its own path via
+ * ast_byte_operand/ast_is_byte_cmp_cond - restricted to TYPE_UNSIGNED
+ * operands specifically because of that signedness dependency). Additive
+ * and narrower in shape (no reversed const-on-left form) but not
+ * restricted to unsigned, since none of that matters for ==/!=. Motivated
+ * by tchess.c's `p != EMPTY` and `p == a || p == b`, where p/a/b are all
+ * plain (signed) char - none of which is handled by any existing path. */
+int ast_is_byte_eq_cond(const struct AstNode *n, struct Sym **out_a,
+                               struct Sym **out_b, long *out_const)
+{
+    struct Sym *sa;
+    struct Sym *sb;
+
+    if (n == NULL || n->kind != AST_BINARY || (n->op != TOK_EQ && n->op != TOK_NE))
+        return 0;
+    if (n->a == NULL || n->b == NULL || n->a->kind != AST_IDENT)
+        return 0;
+
+    sa = find_sym(n->a->sval);
+    if (!sym_is_direct_byte_fetch(sa) || type_is_bool(sa->type))
+        return 0;
+
+    if (n->b->kind == AST_INT_LIT) {
+        if (n->b->ival < 0 || n->b->ival > 255)
+            return 0;
+        if (out_a) *out_a = sa;
+        if (out_b) *out_b = NULL;
+        if (out_const) *out_const = n->b->ival;
+        return 1;
+    }
+    if (n->b->kind == AST_IDENT) {
+        sb = find_sym(n->b->sval);
+        if (!sym_is_direct_byte_fetch(sb) || type_is_bool(sb->type))
+            return 0;
+        if (out_a) *out_a = sa;
+        if (out_b) *out_b = sb;
+        return 1;
+    }
+    return 0;
+}
+
+/* Emitter for ast_is_byte_eq_cond: load the left operand into A, then
+ * compare directly against the right - a bare (ix+d) form via a single
+ * `cp (ix+d)` when possible (no register needed for it at all), otherwise
+ * fetched into B first. */
+void ast_gen_byte_eq_branch(const struct AstNode *n, int label,
+                                   int branch_when_true)
+{
+    struct Sym *sa;
+    struct Sym *sb;
+    long cval;
+    int branch_on_eq;
+
+    ast_is_byte_eq_cond(n, &sa, &sb, &cval);
+    emit_load_sym_byte_to_a(sa);
+    if (sb == NULL) {
+        fprintf(outf, "\tcp %ld\n", cval);
+    } else if (sym_can_ix_direct(sb)) {
+        fprintf(outf, "\tcp (ix%+d)\n", sb->offset);
+    } else {
+        /* Neither B/C nor D/E is safe scratch here: sb's own load may be
+         * register-resident (reg_alloc REG_BC/REG_E, whose live value IS
+         * that register - clobbering it corrupts every later read of sb,
+         * not just this comparison) or may internally recompute a no-ix-
+         * frame address through DE (emit_load_frame_addr_hl). L is never a
+         * register-allocation target in this codebase, so it's safe to
+         * park sa's already-read value there across sb's load, restoring
+         * A from the stack afterward for the actual compare. Found via a
+         * real miscompare in tests/ttt.c under -fstack-check specifically
+         * (which pushes a function through the no-ix-frame-ineligible,
+         * REG_BC-eligible path where the old `ld b,a` scratch silently
+         * stomped a live register-resident operand - passed every
+         * hand-built isolation test until one matched that exact shape). */
+        emit("\tpush af\n");
+        emit_load_sym_byte_to_a(sb);
+        emit("\tld l,a\n");
+        emit("\tpop af\n");
+        emit("\tcp l\n");
+    }
+    branch_on_eq = (n->op == TOK_EQ) ? branch_when_true : !branch_when_true;
+    emit_jp_label(branch_on_eq ? "jp z," : "jp nz,", label);
+}
+
+/* Is `n` an ==/!= comparison between a global char array element
+ * (`arr[idx]`) and either a small (0..255) integer constant or a
+ * directly-fetchable byte identifier (either operand order)? A char array
+ * read needs no int-promotion for an equality test either (same reasoning
+ * as ast_is_byte_eq_cond just above), but there was previously no fast
+ * path for this shape at all - only the truthiness test `if (arr[idx])`
+ * (ast_global_char_index_cond/ast_gen_global_char_index_branch, reused
+ * here for the "is idxn actually a global-char-array index expression"
+ * check) had one. Motivated by tchess.c's is_attacked:
+ * `board[sq - 7] == 'P'`, `board[sq + 9] == 'p'`, etc. (the constant
+ * form), and in_check's `board[i] == k` - k a plain (signed) char local,
+ * so even ast_byte_operand's existing array-vs-identifier path (which
+ * requires TYPE_UNSIGNED) declines it too (the ident form) - each
+ * currently a full int-promote-and-16-bit-compare of a value that only
+ * ever needs 8 bits either side. */
+int ast_is_global_char_index_eq_cond(const struct AstNode *n, struct Sym **out_arr,
+                                             const struct AstNode **out_idx,
+                                             struct Sym **out_other, long *out_const)
+{
+    const struct AstNode *idxn;
+    const struct AstNode *othern;
+    struct Sym *s;
+    struct Sym *os;
+
+    if (n == NULL || n->kind != AST_BINARY || (n->op != TOK_EQ && n->op != TOK_NE))
+        return 0;
+    if (n->a != NULL && n->a->kind == AST_INDEX) {
+        idxn = n->a;
+        othern = n->b;
+    } else if (n->b != NULL && n->b->kind == AST_INDEX) {
+        idxn = n->b;
+        othern = n->a;
+    } else {
+        return 0;
+    }
+    if (othern == NULL || !ast_global_char_index_cond(idxn, &s))
+        return 0;
+
+    if (othern->kind == AST_INT_LIT) {
+        if (othern->ival < 0 || othern->ival > 255)
+            return 0;
+        if (out_arr) *out_arr = s;
+        if (out_idx) *out_idx = idxn->b;
+        if (out_other) *out_other = NULL;
+        if (out_const) *out_const = othern->ival;
+        return 1;
+    }
+    if (othern->kind == AST_IDENT) {
+        os = find_sym(othern->sval);
+        if (!sym_is_direct_byte_fetch(os) || type_is_bool(os->type))
+            return 0;
+        if (out_arr) *out_arr = s;
+        if (out_idx) *out_idx = idxn->b;
+        if (out_other) *out_other = os;
+        return 1;
+    }
+    return 0;
+}
+
+/* Emitter for ast_is_global_char_index_eq_cond: evaluate the index
+ * expression once, form the element address the same way
+ * ast_gen_global_char_index_branch does, load the byte straight into A,
+ * and compare directly against either the constant or the other
+ * identifier's byte - a bare (ix+d) via `cp (ix+d)` when possible (same
+ * trick as ast_gen_byte_eq_branch), otherwise via the same push-af/L/
+ * pop-af sequence ast_gen_byte_eq_branch's fallback uses - see its
+ * comment for why neither B/C nor D/E is safe scratch here. */
+void ast_gen_global_char_index_eq_branch(const struct AstNode *n, int label,
+                                                 int branch_when_true)
+{
+    struct Sym *s;
+    const struct AstNode *idx;
+    struct Sym *other;
+    long cval;
+    int saved_dead;
+    int branch_on_eq;
+
+    ast_is_global_char_index_eq_cond(n, &s, &idx, &other, &cval);
+    saved_dead = expr_result_dead;
+    expr_result_dead = 0;
+    ast_gen_expr(idx);
+    expr_result_dead = saved_dead;
+    emit_global_char_index_addr(s);
+    emit("\tld a,(hl)\n");
+    if (other == NULL) {
+        fprintf(outf, "\tcp %ld\n", cval);
+    } else if (sym_can_ix_direct(other)) {
+        fprintf(outf, "\tcp (ix%+d)\n", other->offset);
+    } else {
+        emit("\tpush af\n");
+        emit_load_sym_byte_to_a(other);
+        emit("\tld l,a\n");
+        emit("\tpop af\n");
+        emit("\tcp l\n");
+    }
+    branch_on_eq = (n->op == TOK_EQ) ? branch_when_true : !branch_when_true;
+    emit_jp_label(branch_on_eq ? "jp z," : "jp nz,", label);
+}
+
 /* Emitter for ast_is_direct_long_const_eq_cond: XOR each stored byte against
  * its matching constant byte (skipping a byte whose constant is 0 - xor 0 is
  * a no-op), OR-ing the running result in C so the whole thing collapses to a
@@ -2061,12 +2249,31 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
         ast_gen_range_check_branch(n, label, branch_when_true);
         return;
     }
+    if (ast_is_byte_eq_cond(n, NULL, NULL, NULL)) {
+        ast_gen_byte_eq_branch(n, label, branch_when_true);
+        return;
+    }
     if (ast_is_const_cmp_cond(n)) {
         ast_gen_const_cmp_branch(n, label, branch_when_true);
         return;
     }
     if (ast_is_byte_cmp_cond(n)) {
         ast_gen_byte_cmp_branch(n, label, branch_when_true);
+        return;
+    }
+    /* Checked only after ast_is_byte_cmp_cond declines: that existing,
+     * already-tuned path already covers `global_char_arr[ident_or_const]`
+     * (ast_byte_operand's kind==3) - including choosing which side loads
+     * into A - so this is only needed for its actual gap, an INDEX
+     * EXPRESSION more complex than a bare identifier/constant (e.g.
+     * tchess.c's `board[sq - 7]`). Checking this first regressed
+     * tests/ttt.c's `PieceBlank == g_board[p]` (p a bare identifier,
+     * already handled) by ~11% - this fast path's own addressing turned
+     * out no cheaper than ast_gen_byte_cmp_branch's for that shape, so
+     * preempting it was a pure loss, found only by re-measuring the whole
+     * suite rather than trusting the isolated wins in tchess.c alone. */
+    if (ast_is_global_char_index_eq_cond(n, NULL, NULL, NULL, NULL)) {
+        ast_gen_global_char_index_eq_branch(n, label, branch_when_true);
         return;
     }
     if (ast_is_direct_byte_bitand_cond(n)) {
