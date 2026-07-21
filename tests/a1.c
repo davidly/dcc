@@ -1065,11 +1065,6 @@ void load_input_file()
     }
 }
 
-int bdos_kbhit()
-{
-    return bdos( 6, 0xff );
-}
-
 int getc_load_file()
 {
     char c;
@@ -1106,7 +1101,7 @@ uint8_t m_load( address ) uint16_t address;
             }
         }
 
-        ch = (char) bdos_kbhit();
+        ch = (char) kbhit();
         if ( 0 != ch )
         {
             if ( 0xa == ch )
@@ -1146,7 +1141,7 @@ uint8_t m_load( address ) uint16_t address;
             ch = kbd_char;
         }
         else
-            ch = (char) bdos_kbhit();
+            ch = (char) kbhit();
 
         if ( 0 != ch )
         {

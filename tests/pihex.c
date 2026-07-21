@@ -58,13 +58,12 @@ float nmfpart( float x ) // nm = no mod. so it's faster.
 
 float fpart( float x )
 {
-    float d = fmodf( x, 1.0 );
+    float f = fmodf( x, 1.0 );
 
-    if ( d < 0.0 )
-        d = 1.0 + d;
+    if ( f < 0.0 )
+        f += 1.0;
 
-    //printf( "fpart of x %.*f is %.*f\n", 20, x, 20, d );
-    return d;
+    return f;
 } //fpart
 
 float eps( float f )
@@ -72,12 +71,12 @@ float eps( float f )
     return nextafterf( f, FLT_MAX ) - f;
 } //eps
 
-uint32_t powermod16_faster( uint32_t e, uint32_t m )
+uint16_t powermod16( uint16_t e, uint16_t m )
 {
     // https://en.wikipedia.org/wiki/Modular_exponentiation
     // faster way to calculate b^e % m
 
-    //printf( "in powermod16_faster. e: %ld, m %ld\n", e, m );
+    //printf( "in powermod16. e: %ld, m %ld\n", e, m );
 
     if ( 1 == m )
         return 0;
@@ -85,39 +84,34 @@ uint32_t powermod16_faster( uint32_t e, uint32_t m )
     if ( 0 == e )
         return 1;
 
-    uint32_t result = 1;
-    uint32_t b = 16 % m;
-
-    //printf( "  16 % m == b: %ld\n", b );
+    uint16_t result = 1;
+    uint16_t b = 16 % m;
 
     do
     {
         if ( e & 1 )
-            result = ( result * b ) % m;
+            result = ( (uint32_t) result * (uint32_t) b ) % m;
 
         e >>= 1;
 
         if ( 0 == e )
             return result;
 
-        b = ( b * b ) % m;
+        b = ( (uint32_t) b * (uint32_t) b ) % m;
     } while ( true );
-} //powermod16_faster
+} //powermod16
 
-float fun( uint32_t n, uint32_t j )
+float fun( uint16_t n, uint16_t j )
 {
     //printf( "fun call n %ld, j %ld\n", n, j );
     float s = 0.0;
-    uint32_t denom = j;
+    uint16_t denom = j;
 
-    for ( uint32_t k = 0; k <= n; k++ )
+    for ( uint16_t k = 0; k <= n; k++ )
     {
-        //printf( "in kloop, computing powermod16: n %ld k %ld, denom %ld\n", n, k, denom );
-        uint32_t p = powermod16_faster( n - k, denom );
+        uint16_t p = powermod16( n - k, denom );
         float f = s + ( (float) p / (float) denom );
-        //printf( "in kloop, s %f p %ld, denom %ld, f %f\n", s, p, denom, f );
         s = nmfpart( f );
-        //printf( "  in kloop:  k %ld, p %ld, denom %ld incremental s %f\n", k, p, denom, s );
         denom += 8;
     }
 
@@ -141,19 +135,18 @@ float fun( uint32_t n, uint32_t j )
     return nmfpart( s );
 } //fun
 
-int pi_digit( uint32_t n )
+int pi_digit( uint16_t n )
 {
     float sum = ( 4.0 * fun( n, 1 ) ) - ( 2.0 * fun( n, 4 ) ) - fun( n, 5 ) - fun( n, 6 );
     float f = fpart( sum );
     float r = 16.0 * f;
     int x = (int) r;
 
-    //printf( "resulting sum %f, f %f, r %f, x: %d\n", sum, f, r, x );
     assert( x >= 0 && x <= 15 );
     return x;
 } //pi_digit
 
-void usage()
+void usage( void )
 {
     printf( "usage: pis [offset] [count]\n" );
     printf( "  PI source. Generates hexadecimal digits of PI.\n" );
@@ -166,10 +159,10 @@ int main( int argc, char * argv[] )
 {
     // These are in units of 128
 
-    uint32_t startingOffset = 0;
-    uint32_t startingOffset128 = 0;
-    uint32_t countGenerated128 = 1;
-    uint32_t countGenerated = countGenerated128 * 128;
+    uint16_t startingOffset = 0;
+    uint16_t startingOffset128 = 0;
+    uint16_t countGenerated128 = 1;
+    uint16_t countGenerated = countGenerated128 * 128;
 
     if ( argc > 3 )
         usage();
@@ -186,27 +179,27 @@ int main( int argc, char * argv[] )
         countGenerated = 128 * countGenerated128;
     }
 
-    printf( "startingOffset128: %ld, startingOffset: %ld, countGenerated128 %ld, countGenerated %ld\n",
+    printf( "startingOffset128: %u, startingOffset: %u, countGenerated128 %u, countGenerated %u\n",
             startingOffset128, startingOffset, countGenerated128, countGenerated );
 
-    uint32_t bufsize = 1 + countGenerated;
+    uint16_t bufsize = 1 + countGenerated;
     char* ac = malloc( bufsize );
     memset( ac, 0, bufsize );
 
-    const uint32_t chunkSize = 32; // rely on fact that 32*3 = 128
-    uint32_t startInChunks = ( startingOffset128 * 128 ) / chunkSize;
-    uint32_t limitInChunks = ( startInChunks + ( countGenerated128 * 128 ) ) / chunkSize;
+    const uint16_t chunkSize = 32; // rely on fact that 32*3 = 128
+    uint16_t startInChunks = ( startingOffset128 * 128 ) / chunkSize;
+    uint16_t limitInChunks = ( startInChunks + ( countGenerated128 * 128 ) ) / chunkSize;
 
-    printf( "startInChunks: %ld, limitInChunks %ld\n", startInChunks, limitInChunks );
+    printf( "startInChunks: %u, limitInChunks %u\n", startInChunks, limitInChunks );
 
-    uint32_t complete = 0;
-    uint32_t generatedChunks = countGenerated128 * 129 / chunkSize;
+    uint16_t complete = 0;
+    uint16_t generatedChunks = countGenerated128 * 129 / chunkSize;
 
-    for ( uint32_t i = startInChunks; i < limitInChunks; i++ )
+    for ( uint16_t i = startInChunks; i < limitInChunks; i++ )
     {
-        uint32_t start = i * chunkSize;
+        uint16_t start = i * chunkSize;
 
-        for ( uint32_t d = start; d < start + chunkSize; d++ )
+        for ( uint16_t d = start; d < start + chunkSize; d++ )
         {
             int x = pi_digit( d );
             char c = x <= 9 ? '0' + x : 'a' + x - 10;
