@@ -833,6 +833,36 @@ int ast_stmt_has_reentry_label(const struct AstNode *n)
     return 0;
 }
 
+/* Is there a `break;` directly inside `n` that would target an enclosing
+ * switch - i.e. not one belonging to a nested loop or switch, which has its
+ * own break target? Used by ast_stmt_exits's AST_SWITCH case: a switch with
+ * a default case and no such break can only fall through to whatever
+ * statement is textually last in its body (nothing escapes early), so its
+ * own exit behavior reduces to that last statement's. */
+static int ast_stmt_has_direct_break(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_BREAK)
+        return 1;
+    if (n->kind == AST_WHILE || n->kind == AST_FOR || n->kind == AST_DOWHILE ||
+        n->kind == AST_SWITCH)
+        return 0;                          /* own break scope */
+    if (n->kind == AST_IF)
+        return ast_stmt_has_direct_break(n->b) || ast_stmt_has_direct_break(n->c);
+    if (n->kind == AST_LABEL || n->kind == AST_CASE || n->kind == AST_DEFAULT)
+        return ast_stmt_has_direct_break(n->b);
+    if (n->kind == AST_COMPOUND) {
+        for (i = 0; i < n->list_len; ++i)
+            if (ast_stmt_has_direct_break(n->list[i]))
+                return 1;
+        return 0;
+    }
+    return 0;
+}
+
 int ast_stmt_exits(const struct AstNode *n)
 {
     int i;
@@ -846,6 +876,32 @@ int ast_stmt_exits(const struct AstNode *n)
     case AST_CONTINUE:
     case AST_GOTO:
         return 1;
+    case AST_SWITCH: {
+        /* Exits only when every path through the body is forced to reach a
+         * point that itself exits: a default case must exist (otherwise an
+         * unmatched value skips the whole body), and nothing may `break`
+         * out early - given both, control can only fall through case labels
+         * until it reaches whatever's textually last, so that determines
+         * the switch's own exit behavior, exactly like AST_COMPOUND. */
+        const struct AstNode *body = n->b;
+        const struct AstNode *peel;
+        int has_default = 0;
+
+        if (body == NULL || body->kind != AST_COMPOUND || body->list_len == 0)
+            return 0;
+        for (i = 0; i < body->list_len; ++i) {
+            peel = body->list[i];
+            while (peel != NULL &&
+                   (peel->kind == AST_CASE || peel->kind == AST_DEFAULT || peel->kind == AST_LABEL)) {
+                if (peel->kind == AST_DEFAULT)
+                    has_default = 1;
+                peel = peel->b;
+            }
+        }
+        if (!has_default || ast_stmt_has_direct_break(body))
+            return 0;
+        return ast_stmt_exits(body->list[body->list_len - 1]);
+    }
     case AST_LABEL:
     case AST_CASE:
     case AST_DEFAULT:
@@ -864,6 +920,19 @@ int ast_stmt_exits(const struct AstNode *n)
             exits = ast_stmt_exits(n->list[i]);
         }
         return exits;
+    case AST_WHILE:
+    case AST_DOWHILE:
+        /* An infinite loop (constant nonzero condition) exits unless a
+         * `break` directly inside its body can escape it - e.g.
+         * `for (;;) { ...; if (done) return x; }` never falls through, but
+         * `while (1) { if (x) break; }` does, right past the loop. */
+        return ast_is_const_nonzero_condition(n->a) && !ast_stmt_has_direct_break(n->b);
+    case AST_FOR:
+        /* An empty condition (`for (;;)`) is `true` by C's own rules - not
+         * caught by ast_is_const_nonzero_condition, which treats a NULL
+         * node as "not a constant" rather than "absent = true". */
+        return (n->b == NULL || ast_is_const_nonzero_condition(n->b)) &&
+               !ast_stmt_has_direct_break(n->d);
     default:
         return 0;
     }

@@ -81,6 +81,9 @@ int ast_return_stmt_supported(const struct AstNode *n)
  * when present, then jump to the function's shared return label. */
 void gen_return_ast(const struct AstNode *n)
 {
+    if (n->a == NULL && (current_return_type & 15) != TYPE_VOID)
+        warn_at(n->file, n->line, "'return' with no value, in function returning non-void");
+
     if (n->a != NULL && type_is_struct_object(current_return_type)) {
         if (n->a->kind == AST_CALL &&
             ast_struct_return_call_assign_supported(current_return_type, n->a)) {

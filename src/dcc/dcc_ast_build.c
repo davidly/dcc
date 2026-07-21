@@ -771,6 +771,12 @@ static struct AstNode *ast_build_return_stmt(struct AstArena *ar)
 {
     struct AstNode *n;
     struct AstNode *val = NULL;
+    int ret_line = tok_line;             /* the 'return' keyword's own line -
+                                           * ast_new below would otherwise
+                                           * stamp whatever token follows the
+                                           * trailing ';', off by a line for
+                                           * the common one-statement-per-line
+                                           * case */
 
     next_token();                        /* consume 'return' */
     if (tok.kind != ';')
@@ -780,6 +786,7 @@ static struct AstNode *ast_build_return_stmt(struct AstArena *ar)
     next_token();                        /* consume ';' */
 
     n = ast_new(ar, AST_RETURN);
+    n->line = ret_line;
     n->a = val;
     return n;
 }

@@ -556,6 +556,7 @@ void emit_vla_restore_to_label_scope(int label_index);
 struct Sym *find_local_decl(const char *name);
 
 extern int errors;
+extern int warnings;
 extern int scan_mode;
 extern int decl_is_extern;
 extern int decl_is_static;
@@ -697,6 +698,7 @@ void source_location_at(long ofs, char *filebuf, int filebufsz, int *linep);
 const char *dcc_diag_code_for_message(const char *msg);
 void dcc_error_at(const char *file, int line, long ofs, const char *msg, const char *near_text);
 void error_here(const char *msg);
+void warn_at(const char *file, int line, const char *msg);
 void *xmalloc(size_t n);
 char *xstrdup2(const char *s);
 int new_label(void);

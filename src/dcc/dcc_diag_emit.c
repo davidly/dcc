@@ -376,6 +376,37 @@ void error_here(const char *msg)
     dcc_error_at(fn, tok_line, tok_start_pos, msg, tok.text);
 }
 
+int warnings = 0;
+
+/* Non-fatal diagnostic: doesn't touch `errors` or exit(), so a warning never
+ * changes whether the compile succeeds. Suppressed under asm_suppress_depth
+ * for the same reason dcc_error_at is (see its comment) - a speculative,
+ * possibly-discarded codegen attempt (narrowing, inline-candidate scanning,
+ * the no-ix/bc-regalloc speculative function-body attempts in dcc_func.c)
+ * must not print a diagnostic about code that might never actually ship;
+ * only the real, kept compilation of a given function runs outside any
+ * suppressed region.
+ *
+ * Also suppressed once a real error has already been reported anywhere in
+ * the compile: a missing/malformed return expression already produces its
+ * own error at the return statement itself (e.g. "unsupported return
+ * expression"), and the control-flow analysis this feeds (does the
+ * function's body provably return a value on every path) is only
+ * meaningful for a function that actually parsed - once something upstream
+ * is already broken, "control reaches end of non-void function" is
+ * cascaded noise on top of a diagnostic the user already has, not a
+ * separate real finding. */
+void warn_at(const char *file, int line, const char *msg)
+{
+    const char *fn;
+
+    if (asm_suppress_depth > 0 || errors > 0)
+        return;
+    fn = file && file[0] ? file : (input_name ? input_name : "<input>");
+    fprintf(stderr, "%s:%d: warning: %s\n", fn, line, msg);
+    warnings++;
+}
+
 void *xmalloc(size_t n)
 {
     void *p;

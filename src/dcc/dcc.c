@@ -1752,6 +1752,10 @@ int main(int argc, char **argv)
     if (outf != stdout)
         fclose(outf);
 
+    if (warnings) {
+        fprintf(stderr, "dcc: %d warning(s)\n", warnings);
+    }
+
     if (errors) {
         fprintf(stderr, "dcc: %d error(s)\n", errors);
         return 1;
