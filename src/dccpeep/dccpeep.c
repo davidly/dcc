@@ -1694,7 +1694,22 @@ static int pass_skip_ix_reload_across_label(void)
         {
             char skip_label[160], jr_line[192], skip_def[168];
 
-            sprintf(skip_label, "Lpeep_skiprl_%d", i);
+            /* "Lskrl_", not "Lpeep_skiprl_": M80 truncates non-public
+             * labels to 16 significant characters (confirmed empirically -
+             * not documented anywhere in the M80/L80 manual we have), and
+             * "Lpeep_skiprl_" alone is already 13 of those, leaving just 3
+             * digits of headroom before two different line-index suffixes
+             * (e.g. i=160 and i=1609) silently collide into the same
+             * symbol. Real-world impact isn't just an assembler error: M80
+             * still emits a .REL despite the "multiply defined" fatals, so
+             * the "jr" can end up wired to whichever definition won the
+             * collision - confirmed as a silent miscompile on tests/pihex.c
+             * (hangs after 2 lines of output instead of completing) when
+             * assembled with the real M80.COM/M80.EXE, though not with the
+             * project's m80c, which doesn't enforce this limit and let it
+             * through unnoticed. Same fix applied to every other
+             * Lpeep_..._%d generator below - see the shared rationale here. */
+            sprintf(skip_label, "Lskrl_%d", i);
             sprintf(jr_line, "jr %s", skip_label);
             sprintf(skip_def, "%s:", skip_label);
 
@@ -6971,7 +6986,7 @@ static int pass_postinc_ix_word(void)
         if (!eq(i + 7, "pop hl")) continue;
         if (!flags_dead_from(i + 8)) continue;
 
-        sprintf(skip_label, "Lpeep_incw_%d", i);
+        sprintf(skip_label, "Lincw_%d", i); /* see Lskrl_'s rationale above */
         sprintf(inc_lo,    "inc (ix%+d)", off);
         sprintf(inc_hi,    "inc (ix%+d)", off + 1);
         sprintf(jr_skip,   "jr nz, %s",   skip_label);
@@ -8629,7 +8644,7 @@ static int pass_once(void)
             eq(i + 14, "pop hl")) {
             char lab[64], line[128];
 
-            sprintf(lab, "Lpeep_ginc_%d", i);
+            sprintf(lab, "Lginc_%d", i); /* see Lskrl_'s rationale above */
             replace1_tagged(i, "ld hl,_g_Moves", "lookforwinner_ginc");
             replace1(i + 1, "inc (hl)");
             sprintf(line, "jp nz, %s", lab);
@@ -8732,7 +8747,7 @@ static int pass_once(void)
                     char skip[64];
                     char jnzskip[96];
 
-                    sprintf(skip, "Lpeep_sceq_%d", i);
+                    sprintf(skip, "Lsceq_%d", i); /* see Lskrl_'s rationale above */
                     sprintf(newline, "cp %d", imm);
                     replace1(i + 1, newline);
                     sprintf(jnzskip, "jp nz, %s", skip);
