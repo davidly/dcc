@@ -109,6 +109,8 @@ int ast_numeric_value_supported(const struct AstNode *n);
 int ast_cond_numeric_supported(const struct AstNode *n);
 int ast_cond_result_is_float(const struct AstNode *n);
 int ast_cond_result_is_long(const struct AstNode *n);
+int ast_cond_is_abs_idiom(const struct AstNode *n, const struct AstNode **out_x);
+void ast_gen_abs_idiom_value(const struct AstNode *x);
 int ast_void_expr_supported(const struct AstNode *n);
 int ast_cond_void_supported(const struct AstNode *n);
 int ast_index_cmp_cond_supported(const struct AstNode *n);

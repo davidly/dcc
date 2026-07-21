@@ -1800,8 +1800,32 @@ void ast_gen_range_check_branch(const struct AstNode *n, int label,
     const struct AstNode *x;
     long lo;
     long hi;
+    struct Sym *xs;
 
     ast_is_range_check_cond(n, &x, &lo, &hi);
+
+    /* Byte-width fast path: x is a directly-fetchable char/uchar/bool
+     * scalar and the whole [lo,hi] span fits in the positive half of a
+     * byte (0..127) - the only region an 8-bit unsigned subtract-and-
+     * compare on x's raw byte can't be fooled by a negative signed char's
+     * high bit. (A span reaching into 128..255 would wrongly accept
+     * negative values whose raw byte happens to land there too - e.g.
+     * `p >= 0 && p <= 200` on a signed char must still reject p == -50,
+     * whose raw byte 206 is well inside that wider span.) Skips the
+     * general byte-read path's int-promotion (sign-extend into H) and the
+     * 16-bit ld de/sbc hl,de pair below in favor of the 8-bit sub/cp
+     * equivalent - e.g. tchess.c's piece_side/upiece, almost entirely
+     * `p >= 'A' && p <= 'Z'`-shaped range checks over a char parameter,
+     * where lo/hi are always plain ASCII (< 128). */
+    xs = (x->kind == AST_IDENT) ? find_sym(x->sval) : NULL;
+    if (lo >= 0 && hi <= 127 && sym_is_direct_byte_fetch(xs)) {
+        emit_load_sym_byte_to_a(xs);
+        if (lo != 0)
+            fprintf(outf, "\tsub %ld\n", lo);
+        fprintf(outf, "\tcp %ld\n", hi - lo + 1);
+        emit_jp_label(branch_when_true ? "jp c," : "jp nc,", label);
+        return;
+    }
 
     ast_gen_expr(x);
 
@@ -1809,6 +1833,75 @@ void ast_gen_range_check_branch(const struct AstNode *n, int label,
         fprintf(outf, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", lo & 0xffffL);
     fprintf(outf, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", (hi - lo + 1) & 0xffffL);
     emit_jp_label(branch_when_true ? "jp c," : "jp nc,", label);
+}
+
+/* Is `n` the classic absolute-value idiom `x < 0 ? -x : x` (or its mirror
+ * `x >= 0 ? x : -x`), where all three `x` mentions are the exact same bare
+ * identifier? Extremely common (e.g. tchess.c's own `abs_i`, in lieu of
+ * calling abs()/labs()). The generic ?: codegen evaluates `x` three times
+ * over - once for the condition, once for the arm that's the plain read,
+ * once more for the arm that negates it - each a fresh reload from its
+ * frame slot, since a bare identifier read has no reason on its own to
+ * suspect it's about to be read twice more nearby. Since `x` is a bare
+ * identifier here (never a call/deref/anything with a side effect or a
+ * reason to differ on a second read), fusing all three into one is always
+ * safe. */
+int ast_cond_is_abs_idiom(const struct AstNode *n, const struct AstNode **out_x)
+{
+    const struct AstNode *cx;
+    const struct AstNode *neg_x;
+    const struct AstNode *plain_x;
+
+    if (n == NULL || n->kind != AST_COND || n->a == NULL || n->b == NULL || n->c == NULL)
+        return 0;
+    if (n->a->kind != AST_BINARY || n->a->a == NULL || n->a->b == NULL ||
+        n->a->b->kind != AST_INT_LIT || n->a->b->ival != 0)
+        return 0;
+
+    if (n->a->op == '<') {
+        cx = n->a->a;
+        neg_x = n->b;
+        plain_x = n->c;
+    } else if (n->a->op == TOK_GE) {
+        cx = n->a->a;
+        plain_x = n->b;
+        neg_x = n->c;
+    } else {
+        return 0;
+    }
+
+    if (cx == NULL || cx->kind != AST_IDENT)
+        return 0;
+    if (neg_x == NULL || neg_x->kind != AST_UNARY || neg_x->op != '-' ||
+        neg_x->a == NULL || neg_x->a->kind != AST_IDENT)
+        return 0;
+    if (plain_x == NULL || plain_x->kind != AST_IDENT)
+        return 0;
+    if (strcmp(cx->sval, neg_x->a->sval) != 0 || strcmp(cx->sval, plain_x->sval) != 0)
+        return 0;
+
+    if (!ast_gen_supported(cx) || !ast_value_is_plain_int(cx))
+        return 0;
+
+    if (out_x)
+        *out_x = cx;
+    return 1;
+}
+
+/* Emitter for ast_cond_is_abs_idiom: evaluate x exactly once, then negate
+ * in place iff its sign bit is set. Leaves the result (a plain int, same
+ * width as x already promoted to) in HL. */
+void ast_gen_abs_idiom_value(const struct AstNode *x)
+{
+    int lpos = new_label();
+
+    ast_gen_expr(x);
+    emit("\tbit 7,h\n");
+    emit_jp_label("jp z,", lpos);
+    emit("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n");
+    emit_label(lpos);
+    g_expr_type = TYPE_INT;
+    g_long_from16 = 0;
 }
 
 /* Emitter for ast_is_direct_long_const_eq_cond: XOR each stored byte against

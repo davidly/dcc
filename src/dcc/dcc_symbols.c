@@ -932,6 +932,112 @@ void emit_load_sym_value_direct(struct Sym *s)
     }
 }
 
+/* True if s's value load is a genuine two-byte memory fetch that a
+ * `sym & <const < 256>` fast path could trim to one byte - i.e. not
+ * already register-resident (there a full load is already just 1-2 cheap
+ * register moves, nothing to trim) and not an array/const-folded/long/
+ * float/pointer symbol (out of scope for this fast path; long has its own
+ * separate `& const` fast path in gen_long_arith_ast).
+ *
+ * The remaining three load shapes emit_load_sym_low_byte_and_const uses
+ * each have their own addressing constraint: is_global_word_sym and the
+ * no-ix-frame frame-address case both compute a full 16-bit address (via
+ * `ld a,(name)` or emit_load_frame_addr_hl's HL arithmetic), so any offset
+ * works; the plain ix-relative fallback instead emits a bare `(ix+d)`,
+ * whose displacement is a signed 8-bit field - sym_can_ix_direct is the
+ * existing range check for exactly that (a local frame can easily exceed
+ * +-127 bytes; found via tests/tptrcnd.c's large-frame case, where an
+ * unchecked `ld a,(ix-756)` silently wrapped to the wrong offset instead
+ * of failing to assemble, corrupting an unrelated read). */
+int sym_word_load_is_two_byte_fetch(struct Sym *s)
+{
+    if (s == NULL || s->reg_alloc != REG_NONE)
+        return 0;
+    if (s->is_array || s->is_const_value)
+        return 0;
+    if (type_size(s->type) != 2)
+        return 0;
+    if (type_is_float(s->type) || type_ptr_depth(s->type) != 0)
+        return 0;
+    if (is_global_word_sym(s))
+        return 1;
+    if (current_omit_ix_frame && s->storage == SC_PARAM)
+        return 1;
+    return sym_can_ix_direct(s);
+}
+
+/* Load only s's low byte and AND it with mask (caller guarantees
+ * mask <= 255). The result's high byte is always 0 regardless of s's
+ * actual value or sign - a mask with no bits above bit 7 set can never
+ * depend on s's high byte - so this skips fetching it at all, unlike the
+ * normal two-byte load emit_load_sym_value_direct does before any masking
+ * happens. Leaves the zero-extended result in HL. Caller has already
+ * confirmed sym_word_load_is_two_byte_fetch(s). */
+void emit_load_sym_low_byte_and_const(struct Sym *s, unsigned int mask)
+{
+    if (is_global_word_sym(s)) {
+        emit_extrn_if_needed(s);
+        fprintf(outf, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
+    } else if (current_omit_ix_frame && s->storage == SC_PARAM) {
+        emit_load_frame_addr_hl(s);
+        emit("\tld a,(hl)\n");
+    } else {
+        fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
+    }
+    fprintf(outf, "\tand %u\n", mask & 255);
+    emit("\tld l,a\n\tld h,0\n");
+}
+
+/* True if s is a byte-sized (char/uchar/bool) scalar whose value is a
+ * single-instruction raw byte fetch - i.e. safe to use directly in an
+ * 8-bit-only comparison (sub/cp) without this codebase's usual int-
+ * promotion (sign/zero-extend into H) on every byte read. Same three load
+ * shapes and the same sym_can_ix_direct range check as
+ * sym_word_load_is_two_byte_fetch, just for a 1-byte rather than 2-byte
+ * value. */
+int sym_is_direct_byte_fetch(struct Sym *s)
+{
+    if (s == NULL)
+        return 0;
+    if (s->is_array || s->is_const_value)
+        return 0;
+    if (type_size(s->type) != 1)
+        return 0;
+    if (s->reg_alloc == REG_BC || s->reg_alloc == REG_E)
+        return 1;
+    if (s->storage == SC_GLOBAL || s->storage == SC_EXTERN)
+        return 1;
+    if (current_omit_ix_frame && s->storage == SC_PARAM)
+        return 1;
+    return sym_can_ix_direct(s);
+}
+
+/* Load s's raw byte value into A - no int-promotion, since the only use is
+ * an 8-bit-only comparison that doesn't need one. Caller has already
+ * confirmed sym_is_direct_byte_fetch(s). */
+void emit_load_sym_byte_to_a(struct Sym *s)
+{
+    if (s->reg_alloc == REG_BC) {
+        emit("\tld a,c\n");
+        return;
+    }
+    if (s->reg_alloc == REG_E) {
+        emit("\tld a,e\n");
+        return;
+    }
+    if (s->storage == SC_GLOBAL || s->storage == SC_EXTERN) {
+        emit_extrn_if_needed(s);
+        fprintf(outf, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
+        return;
+    }
+    if (current_omit_ix_frame && s->storage == SC_PARAM) {
+        emit_load_frame_addr_hl(s);
+        emit("\tld a,(hl)\n");
+        return;
+    }
+    fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
+}
+
 void emit_load_sym_de_direct(struct Sym *s)
 {
     if (s == NULL)

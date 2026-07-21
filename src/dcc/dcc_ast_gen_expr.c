@@ -1254,6 +1254,37 @@ void gen_binary_ast(const struct AstNode *n)
         return;
     }
 
+    /* `ident & <const < 256>` (e.g. tchess.c's `return sq & 7;`): such a
+     * mask's result can never depend on the identifier's high byte,
+     * regardless of its value or sign, so load only the low byte instead
+     * of the normal full load (which the '&' fast path further below would
+     * then immediately discard half of via emit_and_hl_const). Checked
+     * before the generic ast_gen_expr(n->a) below runs, since that's
+     * exactly the full load this skips. Declined (falls through to the
+     * generic path) for register-resident/array/long/float/pointer
+     * symbols, where sym_word_load_is_two_byte_fetch's callers already
+     * have a cheap or separate path.
+     *
+     * Excludes the mask 0 and 255 boundary cases: emit_and_word_const
+     * already turns a byte mask of 0x00 into a single immediate load and
+     * a byte mask of 0xFF into skipping the AND entirely (it's a no-op on
+     * a byte), so the generic path's full load followed by that already-
+     * cheap masking beats this fast path's load-into-A/and/move-to-L
+     * sequence for those two values specifically - found via a real
+     * performance regression in tests/trw.c's `x & 0xFF` once measured,
+     * not anticipated up front. */
+    if (n->op == '&' && n->a->kind == AST_IDENT &&
+        ast_const_int_operand_value(n->b, &const_val) &&
+        const_val > 0 && const_val < 255) {
+        struct Sym *land_sym = find_sym(n->a->sval);
+        if (sym_word_load_is_two_byte_fetch(land_sym)) {
+            emit_load_sym_low_byte_and_const(land_sym, (unsigned int)const_val);
+            g_expr_type = TYPE_INT;
+            g_long_from16 = 0;
+            return;
+        }
+    }
+
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr_type);
 
@@ -2702,7 +2733,24 @@ void gen_assign_ast(const struct AstNode *n)
                 emit_bool_normalize_hl(g_expr_type);
         } else if (type_is_float(g_expr_type))
             emit_convert_float_to_intlike(s->type);
-        else if (!type_is_long(g_expr_type))
+        else if (!type_is_long(g_expr_type) &&
+                 /* gen_index_ast/gen_member_ast already promote a byte-sized
+                  * element's value in H via emit_load_from_hl during the
+                  * read itself - they just leave g_expr_type as the raw
+                  * (unpromoted) element type afterward, since other callers
+                  * need to see the true small type (e.g. this same
+                  * function's own type_size(s->type)==1 fast paths above).
+                  * Re-promoting here is a correct no-op (re-sign-extending
+                  * an already-extended value doesn't change it) but wastes
+                  * 4-5 real instructions every time - measurable in a hot
+                  * path (profiled: tchess.c's `p = board[s]`, the single
+                  * hottest statement shape in its two hottest functions).
+                  * Bitfield extractions (current_field_bit_width > 0) go
+                  * through emit_extract_bitfield() instead and are left
+                  * alone here - not verified to leave H in the same
+                  * already-promoted state. */
+                 !((n->b->kind == AST_INDEX || n->b->kind == AST_MEMBER) &&
+                   type_size(g_expr_type) == 1 && current_field_bit_width == 0))
             emit_promote_byte_to_int(g_expr_type);
         emit_store_hl_to_sym_direct(s);
         g_long_from16 = 0;
@@ -4843,10 +4891,19 @@ void gen_cond_ast(const struct AstNode *n)
     int need_long_result;
     int result_is_float;
     int no_deref;
+    int know_not_long;
 
     if (ast_pointer_expr_type(n, &true_type, &no_deref)) {
         gen_pointer_expr_ast(n, &true_type, &no_deref);
         return;
+    }
+
+    {
+        const struct AstNode *abs_x;
+        if (ast_cond_is_abs_idiom(n, &abs_x)) {
+            ast_gen_abs_idiom_value(abs_x);
+            return;
+        }
     }
 
     ast_gen_expr(n->a);                 /* condition */
@@ -4867,6 +4924,21 @@ void gen_cond_ast(const struct AstNode *n)
 
     result_is_float = ast_cond_result_is_float(n);
 
+    /* `cond ? a : b` where neither arm's static type is long (the common
+     * case, e.g. tchess.c's `x < 0 ? -x : x`) - proven with the same
+     * static, side-effect-free type predicates ast_cond_result_is_long
+     * already uses elsewhere (dcc_ast_gen_support.c), just not previously
+     * consulted here. Without this, the true arm below was unconditionally
+     * widened to a long result in DE:HL (on the chance the false arm might
+     * turn out to be long) even when it plainly isn't - dead work on every
+     * evaluation, since DE never ends up read: the whole expression's type
+     * only depends on true_type/false_type, and once both arms are known
+     * in hand after evaluating them, a not-actually-long result already
+     * takes the plain `g_expr_type = common_arith_type(...)` path at the
+     * bottom regardless of what got widened along the way. */
+    know_not_long = !result_is_float && ast_cond_numeric_supported(n) &&
+                     !ast_cond_result_is_long(n);
+
     ast_gen_expr(n->b);                 /* true arm */
     true_type = g_expr_type;
     need_long_result = 0;
@@ -4875,7 +4947,7 @@ void gen_cond_ast(const struct AstNode *n)
             emit_convert_int_to_float(true_type);
     } else {
         need_long_result = type_is_long(true_type);
-        if (!type_is_long(true_type))
+        if (!type_is_long(true_type) && !know_not_long)
             emit_extend_to_long((true_type & TYPE_UNSIGNED) ||
                                 (true_type & (TYPE_PTR | TYPE_PTR2)));
     }
