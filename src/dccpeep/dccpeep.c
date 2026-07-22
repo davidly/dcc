@@ -114,6 +114,15 @@ static void strip_peep_comment_copy(char *dst, const char *src)
     }
 }
 
+static void strip_peep_comment_lower_copy(char *dst, const char *src)
+{
+    char *p;
+
+    strip_peep_comment_copy(dst, src);
+    for (p = dst; *p; ++p)
+        *p = (char)tolower((unsigned char)*p);
+}
+
 static void replace1(int i, const char *s)
 {
     char *p;
@@ -2064,11 +2073,10 @@ static int pass_posfunc_b_cache(void)
 
 /* Is `line` unsafe to assume BC is free across it - i.e. could it clobber
  * B, C, or BC? Three independent hazards:
- *   - "call": can clobber BC through whatever it calls.
- *   - djnz/block-repeat instructions (ldir/lddr/cpir/cpdr/inir/indr/otir/
- *     otdr) use B or BC as an implicit counter without spelling out "b" or
- *     "bc" in their own operand text - a plain register-name text search
- *     would miss these.
+ *   - "call"/"rst": can clobber BC through whatever they invoke.
+ *   - djnz, exx, and block instructions use or replace B/BC implicitly
+ *     without spelling out "b" or "bc" in their operand text - a plain
+ *     register-name text search would miss these.
  *   - an explicit "b"/"c"/"bc" register-name token anywhere else in the
  *     function body.
  *
@@ -2085,16 +2093,24 @@ static int line_clobbers_bc(const char *line)
     char clean[MAX_LINE];
     const char *p;
 
-    strip_peep_comment_copy(clean, line);
+    strip_peep_comment_lower_copy(clean, line);
 
-    if (strncmp(clean, "djnz", 4) == 0 ||
-        strncmp(clean, "ldir", 4) == 0 || strncmp(clean, "lddr", 4) == 0 ||
-        strncmp(clean, "cpir", 4) == 0 || strncmp(clean, "cpdr", 4) == 0 ||
-        strncmp(clean, "inir", 4) == 0 || strncmp(clean, "indr", 4) == 0 ||
-        strncmp(clean, "otir", 4) == 0 || strncmp(clean, "otdr", 4) == 0)
+    if ((strncmp(clean, "rst", 3) == 0 &&
+         (clean[3] == ' ' || clean[3] == '\t')) ||
+        strncmp(clean, "djnz", 4) == 0 || strcmp(clean, "exx") == 0 ||
+        strcmp(clean, "ldi") == 0 || strcmp(clean, "ldd") == 0 ||
+        strcmp(clean, "cpi") == 0 || strcmp(clean, "cpd") == 0 ||
+        strcmp(clean, "ini") == 0 || strcmp(clean, "ind") == 0 ||
+        strcmp(clean, "outi") == 0 || strcmp(clean, "outd") == 0 ||
+        strcmp(clean, "ldir") == 0 || strcmp(clean, "lddr") == 0 ||
+        strcmp(clean, "cpir") == 0 || strcmp(clean, "cpdr") == 0 ||
+        strcmp(clean, "inir") == 0 || strcmp(clean, "indr") == 0 ||
+        strcmp(clean, "otir") == 0 || strcmp(clean, "otdr") == 0)
         return 1;
 
-    if (strncmp(clean, "call ", 5) == 0 && strcmp(clean, "call __stchk") != 0)
+    if (strncmp(clean, "call", 4) == 0 &&
+        (clean[4] == ' ' || clean[4] == '\t') &&
+        strcmp(clean, "call __stchk") != 0)
         return 1;
 
     p = clean;
@@ -3401,12 +3417,12 @@ static int pass_word_loop_var_to_reg_bc(void)
         sprintf(pat_al,  "ld a,(ix%d)", off);
         sprintf(pat_ah,  "ld a,(ix%d)", off + 1);
 
-        /* A local's address is taken as the exact 4-instruction sequence
-         * "push ix / pop hl / ld de,<off> / add hl,de" (confirmed via
-         * dcc's own codegen for `&local`) - the offset appears as a BARE
-         * immediate there, not as "(ix<off>)" text, so the substring scan
-         * below can never see it. Matching the full 4-instruction
-         * sequence (not just a bare "ld de,<off>" anywhere, which an
+        /* A local's address starts with "push ix / pop hl", followed by
+         * either "ld de,<off> / add hl,de" or repeated inc/dec hl for a
+         * small offset. The offset appears as a BARE immediate or is only
+         * implicit in the inc/dec count, not as "(ix<off>)" text, so the
+         * substring scan below can never see it. Matching the complete
+         * address sequence (not just a bare "ld de,<off>" anywhere, which an
          * earlier version of this check did) matters: an unrelated
          * variable's own address computation can legitimately use this
          * candidate's own offset as its bare immediate too, purely by
@@ -3416,8 +3432,8 @@ static int pass_word_loop_var_to_reg_bc(void)
          * while Y separately happens to live at offset -6/-5) - confirmed
          * via a real false-positive in tests/tc99scpe.c that the loose
          * bare-number version of this check declined unnecessarily.
-         * Still conservative (requires an exact, contiguous 4-instruction
-         * match; a compiler change that computed this address some other
+         * Still conservative (requires an exact, contiguous recognized
+         * shape; a compiler change that computed this address some other
          * way would need a corresponding update here), but precise enough
          * not to trip over an unrelated variable's own address math. */
         {
@@ -3430,17 +3446,34 @@ static int pass_word_loop_var_to_reg_bc(void)
             addr_taken = 0;
             for (j = func_start; j + 3 < func_end; j++) {
                 char t0[MAX_LINE], t1[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
+                int addr_off, k;
 
-                strip_peep_comment_copy(t0, lines[j]);
+                strip_peep_comment_lower_copy(t0, lines[j]);
                 if (strcmp(t0, "push ix") != 0)
                     continue;
-                strip_peep_comment_copy(t1, lines[j + 1]);
+                strip_peep_comment_lower_copy(t1, lines[j + 1]);
                 if (strcmp(t1, "pop hl") != 0)
                     continue;
-                strip_peep_comment_copy(t3, lines[j + 3]);
+                addr_off = 0;
+                for (k = j + 2; k < func_end; ++k) {
+                    strip_peep_comment_lower_copy(t2, lines[k]);
+                    if (strcmp(t2, "inc hl") == 0)
+                        ++addr_off;
+                    else if (strcmp(t2, "dec hl") == 0)
+                        --addr_off;
+                    else
+                        break;
+                    if (addr_off == off || addr_off == off + 1) {
+                        addr_taken = 1;
+                        break;
+                    }
+                }
+                if (addr_taken)
+                    break;
+                strip_peep_comment_lower_copy(t3, lines[j + 3]);
                 if (strcmp(t3, "add hl,de") != 0)
                     continue;
-                strip_peep_comment_copy(t2, lines[j + 2]);
+                strip_peep_comment_lower_copy(t2, lines[j + 2]);
                 if (strcmp(t2, pat_addr_de_l) == 0 || strcmp(t2, pat_addr_de_h) == 0) {
                     addr_taken = 1;
                     break;
@@ -3455,7 +3488,7 @@ static int pass_word_loop_var_to_reg_bc(void)
             char t[MAX_LINE];
             char off_l[32], off_h[32];
 
-            strip_peep_comment_copy(t, lines[j]);
+            strip_peep_comment_lower_copy(t, lines[j]);
             sprintf(off_l, "(ix%d)", off);
             sprintf(off_h, "(ix%d)", off + 1);
             if (strstr(t, off_l) == NULL && strstr(t, off_h) == NULL)
@@ -3499,7 +3532,7 @@ static int pass_word_loop_var_to_reg_bc(void)
         for (j = func_start; j < func_end; j++) {
             char t[MAX_LINE];
 
-            strip_peep_comment_copy(t, lines[j]);
+            strip_peep_comment_lower_copy(t, lines[j]);
             if (strcmp(t, pat_l) == 0) {
                 replace1_tagged(j, "ld l,c", "word_loop_var_bc");
                 changed = 1;
@@ -3601,10 +3634,9 @@ static int pass_byte_loop_var_to_reg_c(void)
 
         find_function_bounds_any(i, &func_start, &func_end);
 
-        /* Same &local detection as pass_word_loop_var_to_reg_bc: dcc
-         * compiles "&local" as "push ix / pop hl / ld de,<off> /
-         * add hl,de", the offset a bare immediate that the substring
-         * scan below can never see. */
+        /* Same &local detection as pass_word_loop_var_to_reg_bc: after
+         * "push ix / pop hl", dcc uses either a bare offset plus add hl,de
+         * or repeated inc/dec hl, neither visible to the IX substring scan. */
         {
             char pat_addr_de[32];
             int addr_taken;
@@ -3613,17 +3645,34 @@ static int pass_byte_loop_var_to_reg_c(void)
             addr_taken = 0;
             for (j = func_start; j + 3 < func_end; j++) {
                 char t0[MAX_LINE], t1b[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
+                int addr_off, k;
 
-                strip_peep_comment_copy(t0, lines[j]);
+                strip_peep_comment_lower_copy(t0, lines[j]);
                 if (strcmp(t0, "push ix") != 0)
                     continue;
-                strip_peep_comment_copy(t1b, lines[j + 1]);
+                strip_peep_comment_lower_copy(t1b, lines[j + 1]);
                 if (strcmp(t1b, "pop hl") != 0)
                     continue;
-                strip_peep_comment_copy(t3, lines[j + 3]);
+                addr_off = 0;
+                for (k = j + 2; k < func_end; ++k) {
+                    strip_peep_comment_lower_copy(t2, lines[k]);
+                    if (strcmp(t2, "inc hl") == 0)
+                        ++addr_off;
+                    else if (strcmp(t2, "dec hl") == 0)
+                        --addr_off;
+                    else
+                        break;
+                    if (addr_off == off) {
+                        addr_taken = 1;
+                        break;
+                    }
+                }
+                if (addr_taken)
+                    break;
+                strip_peep_comment_lower_copy(t3, lines[j + 3]);
                 if (strcmp(t3, "add hl,de") != 0)
                     continue;
-                strip_peep_comment_copy(t2, lines[j + 2]);
+                strip_peep_comment_lower_copy(t2, lines[j + 2]);
                 if (strcmp(t2, pat_addr_de) == 0) {
                     addr_taken = 1;
                     break;
@@ -3643,7 +3692,7 @@ static int pass_byte_loop_var_to_reg_c(void)
             char t[MAX_LINE];
             char off_txt[32];
 
-            strip_peep_comment_copy(t, lines[j]);
+            strip_peep_comment_lower_copy(t, lines[j]);
             sprintf(off_txt, "(ix%d)", off);
             if (strstr(t, off_txt) == NULL)
                 continue;
@@ -3669,7 +3718,7 @@ static int pass_byte_loop_var_to_reg_c(void)
         for (j = func_start; j < func_end; j++) {
             char t[MAX_LINE];
 
-            strip_peep_comment_copy(t, lines[j]);
+            strip_peep_comment_lower_copy(t, lines[j]);
             if (strcmp(t, pat_l) == 0) {
                 replace1_tagged(j, "ld l,c", "byte_loop_var_c");
                 changed = 1;
