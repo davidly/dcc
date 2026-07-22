@@ -65,6 +65,30 @@ int main(int argc, char **argv)
     check("signed-const-low-safe", signed_low == 65, 1);
     check("unsigned-const-hi-safe", unsigned_values[index + 1] == 200, 1);
 
+    /* Array element vs identifier, matching signedness: the safe half of
+     * the same guard "signed-array-mixed" above exercises the decline
+     * side of - not covered by any existing case, in either operand
+     * order. */
+    branch_result = 0;
+    if (signed_values[index + 1] == signed_high)
+        branch_result = 1;
+    check("signed-array-signed-ident-safe", branch_result, 1);
+
+    branch_result = 0;
+    if (signed_high == signed_values[index + 1])
+        branch_result = 1;
+    check("signed-ident-signed-array-reversed-safe", branch_result, 1);
+
+    branch_result = 0;
+    if (unsigned_values[index + 1] == unsigned_high)
+        branch_result = 1;
+    check("unsigned-array-unsigned-ident-safe", branch_result, 1);
+
+    branch_result = 0;
+    if (unsigned_high == unsigned_values[index + 1])
+        branch_result = 1;
+    check("unsigned-ident-unsigned-array-reversed-safe", branch_result, 1);
+
     printf("tbyteeq %s\n", failures == 0 ? "PASS" : "FAIL");
     return failures != 0;
 }
