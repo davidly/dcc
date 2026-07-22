@@ -1963,6 +1963,16 @@ int ast_is_byte_eq_cond(const struct AstNode *n, struct Sym **out_a,
     if (n->b->kind == AST_INT_LIT) {
         if (n->b->ival < 0 || n->b->ival > 255)
             return 0;
+        /* A raw-byte `cp` is only equality-correct when the operand's
+         * C-promoted value can actually equal the constant. A signed byte
+         * promotes to int with sign extension, so any value with the high
+         * bit set becomes negative and can never equal a positive constant
+         * in 128..255 - yet its raw byte might match it (e.g. signed char
+         * 0xC8 == -56, whose raw byte still equals the constant 200). Only
+         * constants in 0..127 are safe for a signed operand; the full
+         * 0..255 range is safe only when the operand is unsigned. */
+        if (n->b->ival > 127 && !(sa->type & TYPE_UNSIGNED))
+            return 0;
         if (out_a) *out_a = sa;
         if (out_b) *out_b = NULL;
         if (out_const) *out_const = n->b->ival;
@@ -1971,6 +1981,12 @@ int ast_is_byte_eq_cond(const struct AstNode *n, struct Sym **out_a,
     if (n->b->kind == AST_IDENT) {
         sb = find_sym(n->b->sval);
         if (!sym_is_direct_byte_fetch(sb) || type_is_bool(sb->type))
+            return 0;
+        /* Raw-byte equality of two byte lvalues is only correct when both
+         * promote to int the same way. A signed/unsigned mix can share a
+         * raw byte yet differ as ints (signed 0xC8 == -56 vs unsigned
+         * 0xC8 == 200), so require matching signedness. */
+        if (((sa->type & TYPE_UNSIGNED) != 0) != ((sb->type & TYPE_UNSIGNED) != 0))
             return 0;
         if (out_a) *out_a = sa;
         if (out_b) *out_b = sb;
@@ -2062,6 +2078,13 @@ int ast_is_global_char_index_eq_cond(const struct AstNode *n, struct Sym **out_a
     if (othern->kind == AST_INT_LIT) {
         if (othern->ival < 0 || othern->ival > 255)
             return 0;
+        /* Same signedness restriction as ast_is_byte_eq_cond: a raw-byte
+         * `cp` against a constant in 128..255 is only equality-correct
+         * when the array element type is unsigned; a signed char element
+         * with that raw byte promotes to a negative int that can never
+         * equal the positive constant. */
+        if (othern->ival > 127 && !(s->type & TYPE_UNSIGNED))
+            return 0;
         if (out_arr) *out_arr = s;
         if (out_idx) *out_idx = idxn->b;
         if (out_other) *out_other = NULL;
@@ -2071,6 +2094,10 @@ int ast_is_global_char_index_eq_cond(const struct AstNode *n, struct Sym **out_a
     if (othern->kind == AST_IDENT) {
         os = find_sym(othern->sval);
         if (!sym_is_direct_byte_fetch(os) || type_is_bool(os->type))
+            return 0;
+        /* Both byte lvalues must promote the same way - see the matching
+         * signedness guard in ast_is_byte_eq_cond. */
+        if (((s->type & TYPE_UNSIGNED) != 0) != ((os->type & TYPE_UNSIGNED) != 0))
             return 0;
         if (out_arr) *out_arr = s;
         if (out_idx) *out_idx = idxn->b;
