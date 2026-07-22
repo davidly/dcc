@@ -3409,7 +3409,12 @@ static void global_init_insert_entry_at(struct Sym *s, int idx, const char *labe
                 (size_t)(s->init_count - idx) * sizeof(s->init_sizes[0]));
     }
     if (is_label) {
-        strncpy(s->init_labels[idx], label, sizeof(s->init_labels[0]) - 1);
+        /* Full sizeof (not sizeof(...) - 1), matching append_global_init
+         * above: strncpy's own length argument exactly matching a source
+         * GCC can prove is exactly that long reads as guaranteed
+         * truncation to -Wstringop-truncation, even though the explicit
+         * NUL write on the next line makes either form equally safe. */
+        strncpy(s->init_labels[idx], label, sizeof(s->init_labels[0]));
         s->init_labels[idx][sizeof(s->init_labels[0]) - 1] = 0;
     } else {
         sprintf(s->init_labels[idx], "%ld", v);
