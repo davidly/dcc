@@ -181,10 +181,10 @@ void set_nz( x ) uint8_t x;
         ; SP+4/5 after push ix = address low/high; returns HL = mem_base[addr>>12]+addr
         ; 3 rrca + and 01eh extracts 2*(addr>>12) directly (vs 4 rrca + and 0fh + add a,a)
         ; DE holds address throughout; reused for final add via ex de,hl + add hl,bc
+        ; overall app runtime is about 33% faster with this over the C version of get_mem()
         public _get_mem
 _get_mem:
-        push ix
-        ld hl,4
+        ld hl,2
         add hl,sp               ; hl = &address arg (low byte at sp+4)
         ld e,(hl)               ; e = address low
         inc hl
@@ -206,7 +206,6 @@ _get_mem:
         jr z,_get_mem_bad
         ex de,hl                ; hl = address (from de);  de now irrelevant
         add hl,bc               ; hl = base + address
-        pop ix
         ret
 _get_mem_bad:
         push de                 ; push address as argument to bad_address
@@ -283,7 +282,7 @@ static uint8_t ins_len_6502[ 256 ] =    /* length of instructions */
     /*f8*/ 1, 3, 0, 0, 0, 3, 3, 1
 };
 
-uint8_t op_rotate( op, val ) uint8_t op; uint8_t val;
+static uint8_t op_rotate( op, val ) uint8_t op; uint8_t val;
 {
     bool oldCarry;
 
@@ -319,22 +318,20 @@ uint8_t op_rotate( op, val ) uint8_t op; uint8_t val;
     return val;
 }
 
-void op_cmp( lhs, rhs ) uint8_t lhs; uint8_t rhs;
+static inline void op_cmp( lhs, rhs ) uint8_t lhs; uint8_t rhs;
 {
-    uint8_t result;
-    result = (uint8_t) ( (uint16_t) lhs - (uint16_t) rhs );
-    set_nz( result );
+    set_nz( (uint8_t) ( (uint16_t) lhs - (uint16_t) rhs ) );
     cpu.fCarry = ( lhs >= rhs );
 }
 
-void op_bit( val ) uint8_t val;
+static void op_bit( val ) uint8_t val;
 {
     cpu.fNegative = ( val & 0x80 );
     cpu.fOverflow = ( val & 0x40 );
     cpu.fZero = ! ( cpu.a & val );
 }
 
-void op_bcd_math( math, rhs ) uint8_t math; uint8_t rhs;
+static void op_bcd_math( math, rhs ) uint8_t math; uint8_t rhs;
 {
     uint8_t alo, ahi, rlo, rhi, ad, rd, result;
 
@@ -382,7 +379,7 @@ void op_bcd_math( math, rhs ) uint8_t math; uint8_t rhs;
     cpu.a = ( ( result / 10 ) << 4 ) + ( result % 10 );
 }
 
-void op_math( op, rhs ) uint8_t op; uint8_t rhs;
+static void op_math( op, rhs ) uint8_t op; uint8_t rhs;
 {
     uint16_t res16; 
     uint8_t result;
@@ -424,7 +421,7 @@ void op_math( op, rhs ) uint8_t op; uint8_t rhs;
     set_nz( cpu.a );
 }
 
-void op_pop_pf()
+static void op_pop_pf()
 {
     uint8_t pf = pop();
     cpu.fNegative = ( pf & 0x80 );
@@ -1057,7 +1054,7 @@ void load_input_file()
     result = gets( acLine );
     if ( result )
     {
-        g_loadFile = fopen( result, "r" );
+        g_loadFile = fopen( result, "rb" );
         if ( !g_loadFile )
         {
             printf( "failed to open the file\n" );
@@ -1412,7 +1409,7 @@ int main( argc, argv ) int argc; char * argv[];
                 g_useHooks = true;
             else if ( 'l' == lower )
             {
-                g_loadFile = fopen( parg + 3, "r" );
+                g_loadFile = fopen( parg + 3, "rb" );
                 if ( !g_loadFile )
                     usage( "unable to load the file specified" );
             }
