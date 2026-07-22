@@ -21,9 +21,8 @@ for src in "${tests[@]}"; do
  name=$(basename "$src" .c); raw="$build_dir/$name.raw"; actual="$build_dir/$name.txt"; out="$build_dir/$name.mac"; baseline="$baseline_dir/$name.txt"
  "$dcc" "$src" -o "$out" >"$raw" 2>&1; rc=$?
  resolved=$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")
- perl -0777 -pe 's/\r\n?/\n/g' "$raw" | sed -e "s|$resolved|<source>|g" -e "s|$src|<source>|g" > "$actual"
+ resolved_source=$resolved source_path=$src perl -0777 -pe 's/\r\n?/\n/g; s/\Q$ENV{resolved_source}\E/<source>/g; s/\Q$ENV{source_path}\E/<source>/g' "$raw" > "$actual"
  [[ -s $actual ]] && [[ $(tail -c1 "$actual" | od -An -t u1) != *10* ]] && printf '\n' >> "$actual"
- if ((update)); then cp "$actual" "$baseline"; echo "UPDATE $name"; continue; fi
  # Tests named "warn-*" must compile successfully (exit 0) - they prove a
  # warning fires (or is correctly suppressed) without it being a hard
  # error. Every other diagnostic test is a compile-fail test and must
@@ -33,6 +32,7 @@ for src in "${tests[@]}"; do
  else
   if ((rc==0)); then echo "FAIL   $name (compiler unexpectedly succeeded)"; ((fail++)); continue; fi
  fi
+ if ((update)); then cp "$actual" "$baseline"; echo "UPDATE $name"; continue; fi
  if [[ ! -f $baseline ]]; then echo "FAIL   $name (missing baseline)"; ((fail++)); continue; fi
  if cmp -s "$baseline" "$actual"; then echo "PASS   $name"; else echo "FAIL   $name (diagnostic mismatch)"; diff -u "$baseline" "$actual" || true; ((fail++)); fi
 done
