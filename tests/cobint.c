@@ -1,5 +1,10 @@
 /* cobint.c - tiny Microsoft COBOL v4.65 subset interpreter for DCC/C89.
- * Tokenized execution path for sieve.cob, e.cob, and ttt.cob.
+ * Compile-once bytecode VM for sieve.cob, e.cob, and ttt.cob: each COBOL
+ * sentence is tokenized once, then compiled once (recursive-descent
+ * compiler mirroring the grammar of the interpreter this replaced) into a
+ * flat struct Ins bytecode array. Statement execution walks that bytecode
+ * (pint.c-style pointer dispatch) instead of re-parsing the token stream
+ * on every loop iteration.
  * Integer-only, heap-backed state, Ctrl-Z tolerant input.
  */
 #include <stdio.h>
@@ -15,8 +20,10 @@
 #define MAXSTMT 256
 #define MAXTOK 64
 #define MAXARR 1200
-#define MAXTCODE 5000
+#define MAXTCODE 2200
 #define MAXSTR 32
+#define MAXPERFORM 32
+#define MAXVMSTACK 64
 
 #define TK_NUM 256
 #define TK_STR 257
@@ -50,9 +57,52 @@
 #define KW_MOD 325
 #define KW_RUN 326
 
+/* Bytecode opcodes. */
+#define OP_STMT_END    0
+#define OP_RETVAL      1
+#define OP_PUSH        2
+#define OP_PUSHVAR_S   3
+#define OP_PUSHVAR_IDX 4
+#define OP_STORE_S     5
+#define OP_STORE_IDX   6
+#define OP_SAVE_IDX    7
+#define OP_STORE_IDXT  8
+#define OP_ADD_TO_S    9
+#define OP_ADD_TO_IDX  10
+#define OP_SUB_FROM_S  11
+#define OP_SUB_FROM_IDX 12
+#define OP_NEG         13
+#define OP_ADD         14
+#define OP_SUB         15
+#define OP_MUL         16
+#define OP_DIV         17
+#define OP_MOD         18
+#define OP_EQ          19
+#define OP_LT          20
+#define OP_GT          21
+#define OP_NOT         22
+#define OP_AND         23
+#define OP_OR          24
+#define OP_JMP         25
+#define OP_JZ          26
+#define OP_STOP        27
+#define OP_EXIT_STMT   28
+#define OP_GOTO        29
+#define OP_DISPLAY_STR 30
+#define OP_DISPLAY_VAL 31
+#define OP_DISPLAY_SPACE 32
+#define OP_DISPLAY_NL  33
+#define OP_PERFORM     34
+
+#define PM_COUNT   0
+#define PM_VARYING 1
+
 struct Var { char name[MAXNAME]; int *v; int len; };
 struct Para { char name[MAXNAME]; int first; int last; };
-struct Stmt { char *s; int parno; int ts; int te; };
+struct Stmt { char *s; int parno; int ts; int te; int bc; };
+struct Ins { unsigned char op; int a; int b; };
+struct Perform { int p, q, mode, times, vname, until_start; };
+
 struct State {
     char *src;
     long slen;
@@ -61,8 +111,11 @@ struct State {
     struct Stmt *stmt;
     int *tc;
     char **strs;
-    int nv, np, ns, ntc, nstr;
+    struct Ins *code;
+    struct Perform *pf;
+    int nv, np, ns, ntc, nstr, cp, npf, code_limit;
     int stopped, jumped, jtarget;
+    int idxtmp;
     int verbose;
     int tp, tend;
 };
@@ -73,16 +126,46 @@ static struct State *G;
 #define stmt G->stmt
 #define tc G->tc
 #define strs G->strs
+#define code G->code
+#define pf G->pf
 #define nv G->nv
 #define np G->np
 #define ns G->ns
 #define ntc G->ntc
 #define nstr G->nstr
+#define cp G->cp
+#define npf G->npf
+#define code_limit G->code_limit
 #define stopped G->stopped
 #define jumped G->jumped
 #define jtarget G->jtarget
+#define idxtmp G->idxtmp
 #define tp G->tp
 #define tend G->tend
+
+static void die(const char *s);
+
+static int vs[MAXVMSTACK];
+static int vsp;
+
+/* No bounds check, matching pint.c/cint.c's popv/pushv: every bytecode path
+ * is compile-time stack-balanced (each statement or detached expr block nets
+ * exactly the values it produces), so depth can't drift at runtime. An
+ * earlier version added an if-guard + die() here and marked these inline;
+ * dcc's inliner miscompiled that specific shape (if-guard calling a noreturn
+ * die() followed by a return of a side-effecting expression) when inlined
+ * into a caller like vpush(!vpop()) - confirmed via a minimal repro (nested
+ * IF/ELSE with NOT evaluated wrong). Matching the sibling interpreters'
+ * unchecked shape avoids the bug and restores inlining. */
+static inline int vpop(void)
+{
+    return vs[--vsp];
+}
+
+static inline void vpush(int v)
+{
+    vs[vsp++] = v;
+}
 
 static void die(const char *s)
 {
@@ -277,7 +360,7 @@ static void tokenize_stmt(int si)
 {
     const char *p;
     char word[MAXTOK];
-    int i, c, code, vi, pi;
+    int i, c, code_, vi, pi;
     stmt[si].ts = ntc;
     p = stmt[si].s;
     while (*p) {
@@ -311,9 +394,9 @@ static void tokenize_stmt(int si)
                 p++;
             }
             word[i] = 0;
-            code = keyword_code(word);
-            if (code == TK_NUM) { emit_tok(TK_NUM); emit_tok(0); }
-            else if (code) emit_tok(code);
+            code_ = keyword_code(word);
+            if (code_ == TK_NUM) { emit_tok(TK_NUM); emit_tok(0); }
+            else if (code_) emit_tok(code_);
             else if ((vi = find_var_soft(word)) >= 0) { emit_tok(TK_VAR); emit_tok(vi); }
             else if ((pi = find_para_soft(word)) >= 0) { emit_tok(TK_PARA); emit_tok(pi); }
             else { fprintf(stderr, "unknown word %s\n", word); exit(1); }
@@ -324,311 +407,500 @@ static void tokenize_stmt(int si)
     stmt[si].te = ntc;
 }
 
-static int expr(void);
+/* ---- bytecode compiler: mirrors the grammar of the evaluator it replaces,
+ * emitting instructions instead of computing values. ---- */
 
-static int var_ref(int *idxp)
+static int emit(int op, int a, int b)
 {
-    int vi, ix;
+    if (cp >= code_limit) die("bytecode full");
+    code[cp].op = (unsigned char)op;
+    code[cp].a = a;
+    code[cp].b = b;
+    return cp++;
+}
+
+static void patch(int at, int v)
+{
+    code[at].a = v;
+}
+
+static void compile_expr(void);
+static void compile_stmt_seq(void);
+
+static void compile_var_load(void)
+{
+    int vi;
     if (tget() != TK_VAR) die("variable expected");
     vi = tget();
-    ix = 0;
     if (acc('(')) {
-        ix = expr();
+        compile_expr();
         need(')');
+        emit(OP_PUSHVAR_IDX, vi, 0);
+    } else {
+        emit(OP_PUSHVAR_S, vi, 0);
     }
-    if (ix < 0 || ix > var[vi].len + 1) die("bad subscript");
-    if (idxp) *idxp = ix;
-    return vi;
 }
 
-static int primary(void)
+static void compile_primary(void)
 {
-    int v, vi, ix;
-    if (tpeek() == TK_NUM) { tp++; v = tget(); return v; }
-    if (acc('(')) { v = expr(); if (tpeek() == ')') tp++; return v; }
+    if (tpeek() == TK_NUM) { tp++; emit(OP_PUSH, tget(), 0); return; }
+    if (acc('(')) { compile_expr(); if (tpeek() == ')') tp++; return; }
     if (acc(KW_MOD)) {
-        int a, b;
         if (tpeek() == '(') tp++;
-        a = expr();
+        compile_expr();
         if (tpeek() == ',') tp++;
-        b = expr();
+        compile_expr();
         if (tpeek() == ')') tp++;
-        return b ? a % b : 0;
+        emit(OP_MOD, 0, 0);
+        return;
     }
-    if (tpeek() == TK_VAR) {
-        vi = var_ref(&ix);
-        return var[vi].v[ix];
-    }
+    if (tpeek() == TK_VAR) { compile_var_load(); return; }
     die("primary");
-    return 0;
 }
 
-static int factor(void)
+static void compile_factor(void)
 {
-    if (acc('-')) return -factor();
-    return primary();
+    if (acc('-')) { compile_factor(); emit(OP_NEG, 0, 0); return; }
+    compile_primary();
 }
 
-static int term(void)
+static void compile_term(void)
 {
-    int v, r, op;
-    v = factor();
+    int op;
+    compile_factor();
     while (tpeek() == '*' || tpeek() == '/') {
         op = tget();
-        r = factor();
-        if (op == '*') v *= r;
-        else v = r ? v / r : 0;
+        compile_factor();
+        emit(op == '*' ? OP_MUL : OP_DIV, 0, 0);
     }
-    return v;
 }
 
-static int expr(void)
+static void compile_expr(void)
 {
-    int v, r, op;
-    v = term();
+    int op;
+    compile_term();
     while (tpeek() == '+' || tpeek() == '-') {
         op = tget();
-        r = term();
-        if (op == '+') v += r;
-        else v -= r;
+        compile_term();
+        emit(op == '+' ? OP_ADD : OP_SUB, 0, 0);
     }
-    return v;
 }
 
-static int rel_one(void)
+static void compile_rel_one(void)
 {
-    int a, b, notf, op;
+    int notf, op;
     if (tpeek() == '(') tp++;
-    a = expr();
+    compile_expr();
     notf = 0;
     if (acc(KW_NOT)) notf = 1;
     if (tpeek() == '=' || tpeek() == '<' || tpeek() == '>') op = tget();
     else die("relop");
-    b = expr();
+    compile_expr();
     if (tpeek() == ')') tp++;
-    if (op == '=') a = (a == b);
-    else if (op == '<') a = (a < b);
-    else a = (a > b);
-    if (notf) a = !a;
-    return a;
+    if (op == '=') emit(OP_EQ, 0, 0);
+    else if (op == '<') emit(OP_LT, 0, 0);
+    else emit(OP_GT, 0, 0);
+    if (notf) emit(OP_NOT, 0, 0);
 }
 
-static int condition(void)
+static void compile_condition(void)
 {
-    int v, isand, r;
-    v = rel_one();
+    int isand;
+    compile_rel_one();
     while (tpeek() == KW_AND || tpeek() == KW_OR) {
         isand = (tpeek() == KW_AND);
         tp++;
-        r = rel_one();
-        v = isand ? (v && r) : (v || r);
-    }
-    return v;
-}
-
-static void skip_stmt(void)
-{
-    int depth, k;
-    depth = 0;
-    while (tp < tend) {
-        k = tpeek();
-        if (k == KW_IF) depth++;
-        if (k == KW_ELSE && depth == 0) return;
-        if (k == KW_ELSE && depth > 0) depth--;
-        tp++;
-        if (k == TK_NUM || k == TK_STR || k == TK_VAR || k == TK_PARA) tp++;
+        compile_rel_one();
+        emit(isand ? OP_AND : OP_OR, 0, 0);
     }
 }
 
-static void exec_range(int start, int end);
-static void exec_stmt_tokens(void);
-
-static void exec_if(void)
+/* Compiles "TO/FROM/GIVING <var>" store targets that come AFTER the value
+ * has already been compiled (pushed). Canonical stack order for indexed
+ * stores is value-then-index (matches every statement type except
+ * COMPUTE, whose target precedes its value - see compile_compute). */
+static void compile_store_after_value(void)
 {
-    int ok;
-    tp++;
-    ok = condition();
-    if (ok) {
-        exec_stmt_tokens();
-        if (tpeek() == KW_ELSE) { tp++; skip_stmt(); }
+    int vi;
+    if (tget() != TK_VAR) die("variable expected");
+    vi = tget();
+    if (acc('(')) {
+        compile_expr();
+        need(')');
+        emit(OP_STORE_IDX, vi, 0);
     } else {
-        skip_stmt();
-        if (tpeek() == KW_ELSE) { tp++; exec_stmt_tokens(); }
+        emit(OP_STORE_S, vi, 0);
     }
 }
 
-static void do_move(void)
+static void compile_move(void)
 {
-    int v, vi, ix;
     tp++;
-    v = expr();
+    compile_expr();
     need(KW_TO);
-    vi = var_ref(&ix);
-    var[vi].v[ix] = v;
+    compile_store_after_value();
 }
 
-static void do_compute(void)
+static void compile_compute(void)
 {
-    int vi, ix, v;
+    int vi, indexed;
     tp++;
-    vi = var_ref(&ix);
+    if (tget() != TK_VAR) die("variable expected");
+    vi = tget();
+    indexed = acc('(');
+    if (indexed) {
+        compile_expr();
+        need(')');
+        emit(OP_SAVE_IDX, 0, 0);
+    }
     need('=');
-    v = expr();
-    var[vi].v[ix] = v;
+    compile_expr();
+    if (indexed)
+        emit(OP_STORE_IDXT, vi, 0);
+    else
+        emit(OP_STORE_S, vi, 0);
 }
 
-static void do_add(void)
+static void compile_add(void)
 {
-    int v, vi, ix;
+    int vi, indexed;
     tp++;
-    v = expr();
+    compile_expr();
     need(KW_TO);
-    vi = var_ref(&ix);
-    var[vi].v[ix] += v;
+    if (tget() != TK_VAR) die("variable expected");
+    vi = tget();
+    indexed = acc('(');
+    if (indexed) {
+        compile_expr();
+        need(')');
+        emit(OP_ADD_TO_IDX, vi, 0);
+    } else {
+        emit(OP_ADD_TO_S, vi, 0);
+    }
 }
 
-static void do_subtract(void)
+static void compile_subtract(void)
 {
-    int v, vi, ix;
+    int vi, indexed;
     tp++;
-    v = expr();
+    compile_expr();
     need(KW_FROM);
-    vi = var_ref(&ix);
-    var[vi].v[ix] -= v;
+    if (tget() != TK_VAR) die("variable expected");
+    vi = tget();
+    indexed = acc('(');
+    if (indexed) {
+        compile_expr();
+        need(')');
+        emit(OP_SUB_FROM_IDX, vi, 0);
+    } else {
+        emit(OP_SUB_FROM_S, vi, 0);
+    }
 }
 
-static void do_multiply(void)
+static void compile_multiply(void)
 {
-    int a, b, vi, ix;
-    tp++; a = expr(); need(KW_BY); b = expr(); need(KW_GIVING);
-    vi = var_ref(&ix); var[vi].v[ix] = a * b;
+    tp++;
+    compile_expr();
+    need(KW_BY);
+    compile_expr();
+    emit(OP_MUL, 0, 0);
+    need(KW_GIVING);
+    compile_store_after_value();
 }
 
-static void do_divide(void)
+static void compile_divide(void)
 {
-    int a, b, vi, ix;
-    tp++; a = expr(); need(KW_BY); b = expr(); need(KW_GIVING);
-    vi = var_ref(&ix); var[vi].v[ix] = b ? a / b : 0;
+    tp++;
+    compile_expr();
+    need(KW_BY);
+    compile_expr();
+    emit(OP_DIV, 0, 0);
+    need(KW_GIVING);
+    compile_store_after_value();
 }
 
-static void do_display(void)
+static void compile_display(void)
 {
-    int first, vi, ix, k;
+    int first, k;
     tp++;
     first = 1;
     while (tp < tend) {
-        if (!first) printf(" ");
+        if (!first) emit(OP_DISPLAY_SPACE, 0, 0);
         first = 0;
         k = tpeek();
-        if (k == TK_STR) { tp++; printf("%s", strs[tget()]); }
-        else if (k == TK_VAR) { vi = var_ref(&ix); printf("%d", var[vi].v[ix]); }
-        else { printf("%d", expr()); }
+        if (k == TK_STR) { tp++; emit(OP_DISPLAY_STR, tget(), 0); }
+        else { compile_expr(); emit(OP_DISPLAY_VAL, 0, 0); }
     }
-    printf("\n");
+    emit(OP_DISPLAY_NL, 0, 0);
 }
 
-static int has_var_name(const char *name)
+static void compile_goto(void)
 {
-    return find_var_soft(name) >= 0;
-}
-
-static int getv0(const char *name)
-{
-    return var[find_var(name)].v[0];
-}
-
-static void setv0(const char *name, int v)
-{
-    var[find_var(name)].v[0] = v;
-}
-
-static int geta1(const char *name, int ix)
-{
-    return var[find_var(name)].v[ix];
-}
-
-static void seta1(const char *name, int ix, int v)
-{
-    var[find_var(name)].v[ix] = v;
-}
-
-static void do_perform(void)
-{
-    int p, q, vname, fromv, byv, times, limit;
-    tp++;
-    if (tpeek() != TK_PARA) die("perform name");
-    tp++; p = tget();
-    q = p; times = 1;
-    if (acc(KW_THRU)) { if (tpeek() != TK_PARA) die("thru name"); tp++; q = tget(); }
-    if (tpeek() == TK_NUM) { tp++; times = tget(); need(KW_TIMES); }
-    if (acc(KW_VARYING)) {
-        int condpos, afterpos, have_after, saveend;
-        if (tpeek() != TK_VAR) die("vary var");
-        tp++; vname = tget(); need(KW_FROM); fromv = expr();
-        need(KW_BY); byv = expr(); need(KW_UNTIL);
-        var[vname].v[0] = fromv;
-        condpos = tp;
-        afterpos = tp;
-        saveend = tend;
-        have_after = 0;
-        while (!stopped) {
-            int done;
-            tp = condpos;
-            tend = saveend;
-            done = condition();
-            if (!have_after) { afterpos = tp; have_after = 1; }
-            if (done) break;
-            exec_range(para[p].first, para[q].last);
-            jumped = 0;
-            var[vname].v[0] += byv;
-        }
-        tp = afterpos;
-        tend = saveend;
-    } else {
-        int contpos, saveend;
-        contpos = tp;
-        saveend = tend;
-        for (limit = 0; limit < times && !stopped; limit++) {
-            exec_range(para[p].first, para[q].last);
-            jumped = 0;
-            tp = contpos;
-            tend = saveend;
-        }
-        tp = contpos;
-        tend = saveend;
-    }
-}
-
-static void do_goto(void)
-{
+    int p;
     tp++;
     if (tpeek() == KW_TO) tp++;
     if (tpeek() != TK_PARA) die("goto name");
-    tp++; jtarget = stmt_for_para_i(tget());
-    jumped = 1;
+    tp++; p = tget();
+    emit(OP_GOTO, p, 0);
 }
 
-static void exec_stmt_tokens(void)
+static void compile_perform(void)
 {
-    int k;
-    while (tp < tend && !stopped && !jumped) {
+    int p, q, vname, mode, times, pfi, jmp, until_start;
+    tp++;
+    if (tpeek() != TK_PARA) die("perform name");
+    tp++; p = tget();
+    q = p; times = 1; mode = PM_COUNT; vname = 0; until_start = 0;
+    if (acc(KW_THRU)) {
+        if (tpeek() != TK_PARA) die("thru name");
+        tp++; q = tget();
+    }
+    if (tpeek() == TK_NUM) {
+        tp++; times = tget(); need(KW_TIMES);
+    }
+    if (acc(KW_VARYING)) {
+        mode = PM_VARYING;
+        if (tpeek() != TK_VAR) die("vary var");
+        tp++; vname = tget();
+        need(KW_FROM);
+        compile_expr();
+        need(KW_BY);
+        compile_expr();
+        need(KW_UNTIL);
+
+        jmp = emit(OP_JMP, 0, 0);
+        until_start = cp;
+        compile_condition();
+        emit(OP_RETVAL, 0, 0);
+        patch(jmp, cp);
+    }
+    if (npf >= MAXPERFORM) die("too many performs");
+    pfi = npf++;
+    pf[pfi].p = p; pf[pfi].q = q; pf[pfi].mode = mode;
+    pf[pfi].times = times; pf[pfi].vname = vname;
+    pf[pfi].until_start = until_start;
+    emit(OP_PERFORM, pfi, 0);
+}
+
+static void compile_if(void)
+{
+    int jz, jmp;
+    tp++;
+    compile_condition();
+    jz = emit(OP_JZ, 0, 0);
+    compile_stmt_seq();
+    if (tpeek() == KW_ELSE) {
+        tp++;
+        jmp = emit(OP_JMP, 0, 0);
+        patch(jz, cp);
+        compile_stmt_seq();
+        patch(jmp, cp);
+    } else {
+        patch(jz, cp);
+    }
+}
+
+static void compile_stmt_seq(void)
+{
+    int k, stop;
+    stop = 0;
+    while (tp < tend && !stop) {
         k = tpeek();
         switch (k) {
         case KW_ELSE: return;
-        case KW_MOVE: do_move(); break;
-        case KW_COMPUTE: do_compute(); break;
-        case KW_ADD: do_add(); break;
-        case KW_SUBTRACT: do_subtract(); break;
-        case KW_MULTIPLY: do_multiply(); break;
-        case KW_DIVIDE: do_divide(); break;
-        case KW_DISPLAY: do_display(); break;
-        case KW_PERFORM: do_perform(); break;
-        case KW_GO: case KW_GOTO: do_goto(); break;
-        case KW_IF: exec_if(); break;
-        case KW_STOP: stopped = 1; return;
-        case KW_EXIT: tp++; return;
+        case KW_MOVE: compile_move(); break;
+        case KW_COMPUTE: compile_compute(); break;
+        case KW_ADD: compile_add(); break;
+        case KW_SUBTRACT: compile_subtract(); break;
+        case KW_MULTIPLY: compile_multiply(); break;
+        case KW_DIVIDE: compile_divide(); break;
+        case KW_DISPLAY: compile_display(); break;
+        case KW_PERFORM: compile_perform(); break;
+        case KW_GO: case KW_GOTO: compile_goto(); stop = 1; break;
+        case KW_IF: compile_if(); break;
+        case KW_STOP: tp++; emit(OP_STOP, 0, 0); stop = 1; break;
+        case KW_EXIT: tp++; emit(OP_EXIT_STMT, 0, 0); stop = 1; break;
         default: tp++; break;
         }
+    }
+}
+
+static void compile_stmt(int si)
+{
+    tp = stmt[si].ts;
+    tend = stmt[si].te;
+    stmt[si].bc = cp;
+    compile_stmt_seq();
+    emit(OP_STMT_END, 0, 0);
+}
+
+/* ---- bytecode VM ---- */
+
+static void exec_range(int start, int end);
+
+static inline void check_idx(int vi, int ix)
+{
+    if (ix < 0 || ix > var[vi].len + 1) die("bad subscript");
+}
+
+static int run_bc(struct Ins *start)
+{
+    struct Ins *in;
+    int a, b;
+
+    in = start;
+    for (;;) {
+        switch (in->op) {
+        case OP_STMT_END:
+            return 0;
+        case OP_RETVAL:
+            a = vpop();
+            return a;
+        case OP_PUSH:
+            vpush(in->a);
+            break;
+        case OP_PUSHVAR_S:
+            vpush(var[in->a].v[0]);
+            break;
+        case OP_PUSHVAR_IDX:
+            a = vpop();
+            check_idx(in->a, a);
+            vpush(var[in->a].v[a]);
+            break;
+        case OP_STORE_S:
+            a = vpop();
+            var[in->a].v[0] = a;
+            break;
+        case OP_STORE_IDX:
+            a = vpop();
+            b = vpop();
+            check_idx(in->a, a);
+            var[in->a].v[a] = b;
+            break;
+        case OP_SAVE_IDX:
+            a = vpop();
+            idxtmp = a;
+            break;
+        case OP_STORE_IDXT:
+            b = vpop();
+            check_idx(in->a, idxtmp);
+            var[in->a].v[idxtmp] = b;
+            break;
+        case OP_ADD_TO_S:
+            a = vpop();
+            var[in->a].v[0] += a;
+            break;
+        case OP_ADD_TO_IDX:
+            a = vpop();
+            b = vpop();
+            check_idx(in->a, a);
+            var[in->a].v[a] += b;
+            break;
+        case OP_SUB_FROM_S:
+            a = vpop();
+            var[in->a].v[0] -= a;
+            break;
+        case OP_SUB_FROM_IDX:
+            a = vpop();
+            b = vpop();
+            check_idx(in->a, a);
+            var[in->a].v[a] -= b;
+            break;
+        case OP_NEG:
+            a = vpop();
+            vpush(-a);
+            break;
+        case OP_ADD:
+            b = vpop(); a = vpop(); vpush(a + b);
+            break;
+        case OP_SUB:
+            b = vpop(); a = vpop(); vpush(a - b);
+            break;
+        case OP_MUL:
+            b = vpop(); a = vpop(); vpush(a * b);
+            break;
+        case OP_DIV:
+            b = vpop(); a = vpop(); vpush(b ? a / b : 0);
+            break;
+        case OP_MOD:
+            b = vpop(); a = vpop(); vpush(b ? a % b : 0);
+            break;
+        case OP_EQ:
+            b = vpop(); a = vpop(); vpush(a == b);
+            break;
+        case OP_LT:
+            b = vpop(); a = vpop(); vpush(a < b);
+            break;
+        case OP_GT:
+            b = vpop(); a = vpop(); vpush(a > b);
+            break;
+        case OP_NOT:
+            a = vpop();
+            vpush(!a);
+            break;
+        case OP_AND:
+            b = vpop(); a = vpop(); vpush(a && b);
+            break;
+        case OP_OR:
+            b = vpop(); a = vpop(); vpush(a || b);
+            break;
+        case OP_JMP:
+            in = &code[in->a];
+            continue;
+        case OP_JZ:
+            a = vpop();
+            if (!a) { in = &code[in->a]; continue; }
+            break;
+        case OP_STOP:
+            stopped = 1;
+            break;
+        case OP_EXIT_STMT:
+            return 0;
+        case OP_GOTO:
+            jtarget = stmt_for_para_i(in->a);
+            jumped = 1;
+            break;
+        case OP_DISPLAY_STR:
+            printf("%s", strs[in->a]);
+            break;
+        case OP_DISPLAY_VAL:
+            printf("%d", vpop());
+            break;
+        case OP_DISPLAY_SPACE:
+            printf(" ");
+            break;
+        case OP_DISPLAY_NL:
+            printf("\n");
+            break;
+        case OP_PERFORM: {
+            struct Perform *P;
+            P = &pf[in->a];
+            if (P->mode == PM_VARYING) {
+                int byv, fromv;
+                byv = vpop();
+                fromv = vpop();
+                var[P->vname].v[0] = fromv;
+                while (!stopped) {
+                    if (run_bc(&code[P->until_start])) break;
+                    exec_range(para[P->p].first, para[P->q].last);
+                    jumped = 0;
+                    var[P->vname].v[0] += byv;
+                }
+            } else {
+                int lim;
+                for (lim = 0; lim < P->times && !stopped; lim++) {
+                    exec_range(para[P->p].first, para[P->q].last);
+                    jumped = 0;
+                }
+            }
+            break;
+        }
+        default:
+            die("bad opcode");
+        }
+        if (stopped || jumped)
+            return 0;
+        in++;
     }
 }
 
@@ -639,9 +911,7 @@ static void exec_range(int start, int end)
     while (pc <= end && !stopped) {
         jumped = 0;
 
-        tp = stmt[pc].ts;
-        tend = stmt[pc].te;
-        exec_stmt_tokens();
+        run_bc(&code[stmt[pc].bc]);
 
         if (jumped) pc = jtarget;
         else pc++;
@@ -654,7 +924,7 @@ static void add_stmt(const char *s, int p)
     if (ns >= MAXSTMT) die("too many statements");
     stmt[ns].s = xstrdup2(s);
     stmt[ns].parno = p;
-    stmt[ns].ts = stmt[ns].te = 0;
+    stmt[ns].ts = stmt[ns].te = stmt[ns].bc = 0;
     ns++;
 }
 
@@ -757,6 +1027,9 @@ static void decode_stmts(void)
 {
     int i;
     for (i = 0; i < ns; i++) tokenize_stmt(i);
+    code_limit = ntc * 3 / 4 + 150;
+    code = (struct Ins *)xcalloc(code_limit, sizeof(struct Ins));
+    for (i = 0; i < ns; i++) compile_stmt(i);
 }
 
 static void print_stats(void)
@@ -770,6 +1043,8 @@ static void print_stats(void)
     fprintf(stderr, "  Paragraphs: %d / %d\n", np, MAXPARA);
     fprintf(stderr, "  Statements: %d / %d\n", ns, MAXSTMT);
     fprintf(stderr, "  Tokens:     %d / %d\n", ntc, MAXTCODE);
+    fprintf(stderr, "  Bytecode:   %d / %d\n", cp, code_limit);
+    fprintf(stderr, "  Performs:   %d / %d\n", npf, MAXPERFORM);
     fprintf(stderr, "  Strings:    %d / %d\n", nstr, MAXSTR);
     fprintf(stderr, "  Data bytes: %d\n", bytes);
 }
@@ -783,6 +1058,7 @@ int main(int argc, char **argv)
     stmt = (struct Stmt *)xcalloc(MAXSTMT, sizeof(struct Stmt));
     tc = (int *)xcalloc(MAXTCODE, sizeof(int));
     strs = (char **)xcalloc(MAXSTR, sizeof(char *));
+    pf = (struct Perform *)xcalloc(MAXPERFORM, sizeof(struct Perform));
     argi = 1;
     if (argi < argc && (!strcmp(argv[argi], "-V") || !strcmp(argv[argi], "-v"))) {
         G->verbose = 1; argi++;
