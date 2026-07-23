@@ -1113,6 +1113,22 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
         emit("\tld e,l\n");
         return;
     }
+    if (s->reg_alloc == REG_BC) {
+        /* Loop-scoped write candidate (dcc_loop_regalloc.c's Phase 2, not
+         * the whole-function BC candidate - that one is read-only by
+         * construction and never reaches a store site at all). Word-sized
+         * (this reg_alloc target is only ever chosen for a 2-byte scalar -
+         * see loop_regalloc_find_bc_candidate's type_size(s->type) == 2
+         * check), so both halves need updating, unlike REG_E's single
+         * byte. The candidate's frame slot is intentionally left stale
+         * here - it's resynced once by a spill store the loop wrapper
+         * emits right after the loop, not on every write (see
+         * try_loop_regalloc_bc_write in dcc_loop_regalloc.c). */
+        if (type_is_bool(s->type))
+            emit_bool_normalize_hl(s->type);
+        emit("\tld c,l\n\tld b,h\n");
+        return;
+    }
     if (is_global_word_sym(s)) {
         emit_store_global_word_direct(s);
         return;
@@ -1218,6 +1234,24 @@ void emit_incdec_sym_direct(struct Sym *s, int op)
 
     if (s->reg_alloc == REG_E) {
         emit(op == TOK_INC ? "\tinc e\n" : "\tdec e\n");
+        return;
+    }
+    if (s->reg_alloc == REG_BC && type_ptr_depth(s->type) == 0) {
+        /* See the matching REG_BC branch in emit_store_hl_to_sym_direct -
+         * same loop-scoped write-candidate mechanism. inc bc/dec bc affect
+         * no flags, matching every other word-sized ++/-- fast path here.
+         * Pointer candidates deliberately fall through instead (see below):
+         * ++/-- on a pointer must scale by the pointee size, not a raw +1,
+         * and the generic type_ptr_depth(s->type) > 0 path just below
+         * already does that correctly via emit_load_sym_value_direct/
+         * emit_store_hl_to_sym_direct - both already REG_BC-aware - so
+         * there is nothing pointer-specific to add here. A short-circuit
+         * here unconditionally emitting inc bc/dec bc (raw +1/-1) silently
+         * broke every pointer candidate's ++/-- (advances by one byte
+         * instead of sizeof(*p)) - found via tests/tforcomm.c's `ptr++`
+         * inside a for-condition comma expression, a real wrong-answer
+         * bug, not just a missed optimization. */
+        emit(op == TOK_INC ? "\tinc bc\n" : "\tdec bc\n");
         return;
     }
 

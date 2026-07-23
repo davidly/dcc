@@ -4581,7 +4581,7 @@ static int line_touches_reg_pair(const char *s, const char *lo, const char *hi, 
     return 0;
 }
 
-static int line_touches_bc_reg(const char *s)
+int line_touches_bc_reg(const char *s)
 {
     return line_touches_reg_pair(s, "b", "c", "bc");
 }

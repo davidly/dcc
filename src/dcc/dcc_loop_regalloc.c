@@ -23,7 +23,7 @@
  * LICM itself already holds its own hoists to, reused rather than
  * reinvented for a second time in this file.
  *
- * Verification of a chosen candidate reuses dcc_func.c's own
+ * Verification of a read-only (Phase 1) candidate reuses dcc_func.c's own
  * regalloc_buffer_finalize unmodified: it scans a buffer of emitted
  * assembly text for anything that clobbers b/c/bc without dcc's own
  * recognized load/store idioms, tracking loop back-edges via label/jump
@@ -32,6 +32,22 @@
  * assumes its buffer is a whole function body rather than one loop's own
  * emitted span - "any call anywhere in this text" is exactly the right
  * question whether "this text" is a function or a loop.
+ *
+ * Phase 2 promotes candidates the loop also WRITES (assigns to, and/or
+ * increments/decrements) - the actual replacement for dccpeep's half-dozen
+ * near-duplicate loop-counter/accumulator-to-register passes. This needs
+ * two things Phase 1 didn't: a place for a write to actually go (new
+ * REG_BC branches in emit_store_hl_to_sym_direct/emit_incdec_sym_direct,
+ * dcc_symbols.c - previously dead code, since the whole-function BC
+ * candidate is read-only by construction) and a stricter verifier
+ * (loop_regalloc_write_candidate_safe, below) than regalloc_buffer_
+ * finalize's lenient one, because a write candidate's frame slot is
+ * intentionally stale for the whole loop - reload-repairing from it, as
+ * the lenient policy would, could silently substitute a stale value. See
+ * that function's own header comment for the full argument. Eligible loops
+ * are naturally single-exit (see loop_regalloc_find_bc_candidate's header
+ * comment), so a single spill store right after the loop is always
+ * sufficient to resync the frame slot before anything downstream reads it.
  */
 #include "dcc.h"
 #include "dcc_ast.h"
@@ -134,26 +150,80 @@ static void loop_regalloc_count_idents(const struct AstNode *n, struct LoopIdent
     }
 }
 
+/* Shared eligibility gate for both read-only (Phase 1) and write (Phase 2)
+ * candidates: word-sized (2-byte, not struct/long/float) local or
+ * parameter, not an array/VLA, not volatile, not already reg_alloc'd by an
+ * outer claim, its address never taken ANYWHERE in the whole function (not
+ * just within this loop - licm_scan_modified's own address-taken detection
+ * is loop-scoped, so `int *alias = &value;` sitting BEFORE the loop is
+ * completely invisible to it; a write to *alias inside the loop would then
+ * silently target value's stale frame slot instead of its BC-resident
+ * live value - found via tests/tpeepal.c's word_loop_alias, a real wrong-
+ * answer bug, not just a missed optimization, since checked via
+ * local_name_address_taken_in_function - dcc_func.c's own whole-function
+ * lexical scan, already run once per function and safe to reuse here, the
+ * same one find_bc_regalloc_candidate itself relies on for its own
+ * parameter candidates), and its frame offset fits an IX displacement's
+ * signed byte range (sym_can_ix_direct - see the priming-load comment in
+ * try_loop_regalloc_bc for why this matters here specifically, unlike for
+ * dcc_func.c's parameter-only whole-function candidate). */
+static int loop_regalloc_sym_eligible(struct Sym *s)
+{
+    if (s == NULL)
+        return 0;
+    if (s->storage != SC_LOCAL && s->storage != SC_PARAM)
+        return 0;
+    if (local_name_address_taken_in_function(s->name))
+        return 0;
+    if (s->name[0] == '#')
+        return 0;
+    if (s->is_array || s->is_vla)
+        return 0;
+    if (s->is_volatile)
+        return 0;
+    if (s->reg_alloc != REG_NONE)
+        return 0;
+    if (type_is_struct_object(s->type) || type_is_long(s->type) || type_is_float(s->type))
+        return 0;
+    if (type_size(s->type) != 2)
+        return 0;
+    if (!sym_can_ix_direct(s))
+        return 0;
+    return 1;
+}
+
 /* Picks the best loop-scoped BC-promotion candidate for `for_node` (an
- * AST_FOR node), or NULL if none qualifies. Eligibility mirrors dcc_func.c's
- * find_bc_regalloc_candidate: a plain word-sized (2-byte, not struct/long/
- * float) local or parameter, not an array/VLA, not volatile, not already
- * reg_alloc'd by an outer claim, referenced at least LOOP_REGALLOC_MIN_REFS
- * times in the loop's condition/increment/body, and never assigned,
- * incremented/decremented, or address-taken anywhere in that same span
- * (checked via dcc_licm.c's licm_scan_modified, which also declines the
- * whole loop - by overflowing - if it contains a call, nested loop, switch,
- * or goto anywhere, matching find_bc_regalloc_candidate's own function-wide
- * "any call disqualifies everything" conservatism, just scoped to one
- * loop). Unlike find_bc_regalloc_candidate, body-local symbols are eligible
- * too, not just parameters - see this file's header comment for why that's
- * safe here specifically. */
-struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node)
+ * AST_FOR node), or NULL if none qualifies - considering BOTH read-only
+ * candidates (Phase 1: never assigned/incremented/address-taken in the
+ * loop, verified via try_loop_regalloc_bc's lenient reload-repair) and
+ * write candidates (Phase 2: assigned and/or incremented/decremented,
+ * verified via try_loop_regalloc_bc_write's stricter decline-only policy -
+ * see that function's header comment for why a write candidate can't
+ * safely use the lenient policy). Both draw from the same reference-count
+ * ranking across the loop's condition/increment/body, so whichever
+ * identifier is used the most wins regardless of category - only one can
+ * occupy BC per loop either way. *out_is_write reports which policy the
+ * winning candidate needs; the caller must route to the matching driver.
+ *
+ * A call, nested loop, switch, or goto anywhere in the loop declines
+ * everything outright (dcc_licm.c's licm_scan_modified overflows), exactly
+ * matching find_bc_regalloc_candidate's own function-wide "any call
+ * disqualifies everything" conservatism, just scoped to one loop - and,
+ * for write candidates specifically, this is also what guarantees a single
+ * fall-through exit: break/return/goto-out/continue are all unrecognized
+ * node kinds to licm_scan_modified too, so any of them anywhere in the
+ * loop already declines the whole loop before write-candidate selection
+ * ever runs, leaving exactly one exit point (the label right after the
+ * loop) for the spill store try_loop_regalloc_bc_write emits there. */
+struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int *out_is_write)
 {
     struct LicmModifiedNames mod;
     struct LoopIdentCounts ic;
-    struct Sym *best;
-    int best_count;
+    struct LoopIdentCounts cond_ic;
+    struct Sym *best_ro;
+    int best_ro_count;
+    struct Sym *best_write;
+    int best_write_count;
     int i;
 
     if (for_node == NULL)
@@ -175,15 +245,39 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node)
     loop_regalloc_count_idents(for_node->c, &ic);
     loop_regalloc_count_idents(for_node->d, &ic);
 
-    best = NULL;
-    best_count = 0;
+    /* Separately: which names appear in the condition clause at all (not
+     * just how many times) - write candidates exclude these, see below. */
+    memset(&cond_ic, 0, sizeof(cond_ic));
+    loop_regalloc_count_idents(for_node->b, &cond_ic);
+
+    /* Read-only and write candidates are ranked SEPARATELY, then combined
+     * with a bias toward read-only: a write candidate only wins if its
+     * count beats the best read-only candidate's by more than one
+     * reference, not merely ties or edges it out. Both categories draw
+     * from the same loop, so they aren't independent - promoting whichever
+     * one wins means the OTHER doesn't get promoted at all, and a write
+     * candidate is strictly more expensive in fixed overhead (it pays a
+     * spill after the loop; a read-only candidate doesn't) with no
+     * guarantee its per-access savings are actually larger. Found via
+     * tests/00040b.c's chk(): its accumulator `r` (write, ~6 references)
+     * edged out its parameter `y` (read-only, referenced almost as often,
+     * including inside several comparisons) by a small margin under pure
+     * reference-count ranking, and promoting `r` instead of `y` measurably
+     * regressed this extremely hot function - not from any fast-path
+     * defeat (see the condition-clause exclusion above), just because `y`
+     * was the more valuable candidate to have in BC here and a small
+     * count edge isn't a reliable signal of that. */
+    best_ro = NULL;
+    best_ro_count = 0;
+    best_write = NULL;
+    best_write_count = 0;
     for (i = 0; i < ic.n; ++i) {
         struct Sym *s;
         int j, is_mod;
 
         if (ic.items[i].count < LOOP_REGALLOC_MIN_REFS)
             continue;
-        if (ic.items[i].count <= best_count)
+        if (ic.items[i].count <= best_ro_count && ic.items[i].count <= best_write_count)
             continue;
 
         is_mod = 0;
@@ -193,43 +287,79 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node)
                 break;
             }
         }
-        if (is_mod)
-            continue;
+
+        /* Write candidates that also appear in the loop's own condition
+         * (almost always the induction variable itself, compared against
+         * a bound every iteration) are excluded: dcc's comparison codegen
+         * has its own fast path for a directly (ix+d)-addressed operand
+         * (branching straight off the compare's flags), which requires
+         * reg_alloc == REG_NONE and so is unavailable once this candidate
+         * is BC-resident - falling back to a much more expensive generic
+         * "materialize a 0/1 boolean, then test it" sequence, paid every
+         * single iteration. Found via tests/sieve.c: promoting its loop
+         * counter (compared against the sieve size every iteration) more
+         * than DOUBLED total cycles despite every individual body
+         * reference getting cheaper - the condition-test regression
+         * dominates completely. A candidate used only in the increment/
+         * body (the accumulator pattern, e.g. `sum += x;`) never hits
+         * this fast path at all, so is unaffected and stays eligible;
+         * dccpeep's own existing loop-counter-to-register passes already
+         * cover the condition-participant case reasonably well (see the
+         * baseline .mac for tests/sieve.c), so nothing is lost by leaving
+         * it to them here. */
+        if (is_mod) {
+            int in_cond = 0;
+            for (j = 0; j < cond_ic.n; ++j) {
+                if (strcmp(cond_ic.items[j].name, ic.items[i].name) == 0) {
+                    in_cond = 1;
+                    break;
+                }
+            }
+            if (in_cond)
+                continue;
+        }
 
         s = find_sym(ic.items[i].name);
-        if (s == NULL)
-            continue;
-        if (s->storage != SC_LOCAL && s->storage != SC_PARAM)
-            continue;
-        if (s->name[0] == '#')
-            continue;
-        if (s->is_array || s->is_vla)
-            continue;
-        if (s->is_volatile)
-            continue;
-        if (s->reg_alloc != REG_NONE)
-            continue;
-        if (type_is_struct_object(s->type) || type_is_long(s->type) || type_is_float(s->type))
-            continue;
-        if (type_size(s->type) != 2)
-            continue;
-        /* The priming load emits a direct "ld c,(ix+off)"/"ld b,(ix+off+1)"
-         * pair (see try_loop_regalloc_bc) - off must fit an IX
-         * displacement's signed byte range. dcc_func.c's own whole-function
-         * candidate never needs this check: it's restricted to parameters,
-         * which always sit at small, in-range positive offsets - but this
-         * mechanism also considers locals, which can sit arbitrarily deep
-         * in a large frame (found via tests/tautolcs.c: a local at ix-164,
-         * well outside [-128,127], produced a "ld c,(ix-164)" instruction
-         * with a displacement byte too large to encode). sym_can_ix_direct
-         * is the existing, already-correct check for exactly this. */
-        if (!sym_can_ix_direct(s))
+        if (!loop_regalloc_sym_eligible(s))
             continue;
 
-        best = s;
-        best_count = ic.items[i].count;
+        if (is_mod) {
+            if (ic.items[i].count > best_write_count) {
+                best_write = s;
+                best_write_count = ic.items[i].count;
+            }
+        } else {
+            if (ic.items[i].count > best_ro_count) {
+                best_ro = s;
+                best_ro_count = ic.items[i].count;
+            }
+        }
     }
-    return best;
+
+    /* Combine with a bias toward read-only - see the comment above this
+     * loop for why. Absolute, not margin-based: a read-only candidate's
+     * raw reference count isn't comparable to a write candidate's at all,
+     * since every read-modify-write occurrence (the overwhelmingly common
+     * write shape - `x = x op y`, `x op= y`, `x++`) counts the SAME name
+     * twice (once read, once written) where a read-only use counts it
+     * once, so a write candidate's count is inflated by its very nature
+     * and no fixed margin reliably corrects for that - tests/00040b.c's
+     * `r` (write, 12 occurrences: 6 statements x 2) still beat `y` (read-
+     * only, single digits) under a margin of 1. Any qualifying read-only
+     * candidate wins outright instead. */
+    if (best_ro != NULL) {
+        if (out_is_write != NULL)
+            *out_is_write = 0;
+        return best_ro;
+    }
+    if (best_write != NULL) {
+        if (out_is_write != NULL)
+            *out_is_write = 1;
+        return best_write;
+    }
+    if (out_is_write != NULL)
+        *out_is_write = 0;
+    return NULL;
 }
 
 /* Speculatively generates `for_node` (via `gen_for_impl`, dcc_ast_gen_stmt.c's
@@ -324,6 +454,161 @@ int try_loop_regalloc_bc(const struct AstNode *for_node, struct Sym *cand,
      * declaration only ever existed in the scratch buffer just discarded.
      * Found via tests/tcrcfix.c: a `call __mulu` with no matching `extrn
      * __mulu` anywhere in the output, from exactly this nesting. */
+    g_buffering_epoch++;
+    nlocals = saved_nlocals;
+    local_size = saved_local_size;
+    g_for_seq = saved_for_seq;
+    g_licm_seq = saved_licm_seq;
+    return 0;
+}
+
+/* Strict verifier for a write candidate (Phase 2), scanning `f` (left
+ * rewound, unmodified, for the caller to copy on success - unlike
+ * regalloc_buffer_finalize's bc_cand path, nothing here is ever rewritten).
+ *
+ * regalloc_buffer_finalize's BC handling is deliberately lenient: since a
+ * read-only candidate's original frame slot never changes for the life of
+ * the span being verified, any untrusted point can always be repaired by
+ * reloading from it, so an unrelated scratch use of b/c/bc elsewhere (e.g.
+ * borrowed transiently for long-arithmetic scratch) just costs a reload
+ * rather than failing the whole attempt. A write candidate has no such
+ * shadow: its frame slot is intentionally stale for the entire loop -
+ * nothing keeps it in sync until try_loop_regalloc_bc_write's spill store,
+ * emitted once, after the loop - so there is nothing safe to reload from
+ * at any point *during* it. Anything that touches b/c/bc other than this
+ * candidate's own recognized read (emit_load_sym_value_direct's REG_BC
+ * pair), write (emit_store_hl_to_sym_direct's REG_BC pair), incdec
+ * (emit_incdec_sym_direct's REG_BC form), or the priming/spill lines this
+ * file itself emits, must decline the WHOLE attempt outright - matching
+ * regalloc_buffer_finalize's own e_cand policy (word pair instead of e's
+ * single byte). This also means none of regalloc_buffer_finalize's loop-
+ * header/self-consistency machinery is needed: that exists purely to
+ * decide when a reload-repair is worth it (a linear scan sees a loop body
+ * once but it runs N times), which never applies here - every recognized
+ * pattern is safe on every iteration purely because it's the same fixed
+ * instruction wherever it appears in the text, independent of any
+ * "trust" history, so nothing about iteration count matters. */
+static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
+{
+    long size;
+    char *buf;
+    char *line, *nl;
+    char entry_c[32], entry_b[32], exit_c[32], exit_b[32];
+    int safe;
+
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    rewind(f);
+    if (size <= 0)
+        return 1;
+    buf = (char *)xmalloc((size_t)size + 1);
+    if (fread(buf, 1, (size_t)size, f) != (size_t)size)
+        fatal("cannot read loop-regalloc write-candidate verify temp file");
+    buf[size] = 0;
+    rewind(f);
+
+    if (strstr(buf, "\tcall ") != NULL) {
+        free(buf);
+        return 0;
+    }
+
+    sprintf(entry_c, "\tld c,(ix%+d)", cand->offset);
+    sprintf(entry_b, "\tld b,(ix%+d)", cand->offset + 1);
+    sprintf(exit_c, "\tld (ix%+d),c", cand->offset);
+    sprintf(exit_b, "\tld (ix%+d),b", cand->offset + 1);
+
+    safe = 1;
+    line = buf;
+    while (safe && line < buf + size) {
+        int recognized;
+
+        nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+
+        recognized =
+            strcmp(line, entry_c) == 0 || strcmp(line, entry_b) == 0 ||
+            strcmp(line, exit_c) == 0 || strcmp(line, exit_b) == 0 ||
+            strcmp(line, "\tld l,c") == 0 || strcmp(line, "\tld h,b") == 0 ||
+            strcmp(line, "\tld c,l") == 0 || strcmp(line, "\tld b,h") == 0 ||
+            strcmp(line, "\tinc bc") == 0 || strcmp(line, "\tdec bc") == 0;
+
+        if (!recognized && line_touches_bc_reg(line))
+            safe = 0;
+
+        line = nl ? nl + 1 : buf + size;
+    }
+
+    free(buf);
+    return safe;
+}
+
+/* Write-candidate counterpart to try_loop_regalloc_bc (see that function's
+ * header comment for the shared speculate/verify/commit-or-discard shape
+ * and state-rewind rationale - identical here). Differences specific to a
+ * write candidate: the loop's own generated writes/incdecs now redirect
+ * through BC too (emit_store_hl_to_sym_direct/emit_incdec_sym_direct's
+ * REG_BC branches, dcc_symbols.c), a spill store is emitted once right
+ * after the loop to resync the candidate's frame slot with BC's final
+ * value (nothing else keeps it in sync - see loop_regalloc_write_
+ * candidate_safe), and verification uses that stricter, decline-only
+ * checker instead of regalloc_buffer_finalize's lenient one. */
+int try_loop_regalloc_bc_write(const struct AstNode *for_node, struct Sym *cand,
+                                void (*gen_for_impl)(const struct AstNode *))
+{
+    FILE *scratch;
+    FILE *saved_outf;
+    int saved_nlocals;
+    int saved_local_size;
+    int saved_for_seq;
+    int saved_licm_seq;
+    int c;
+    int errors_before;
+
+    scratch = tmpfile();
+    if (scratch == NULL)
+        fatal("cannot create speculative loop-regalloc write temp file");
+
+    saved_nlocals = nlocals;
+    saved_local_size = local_size;
+    saved_for_seq = g_for_seq;
+    saved_licm_seq = g_licm_seq;
+
+    saved_outf = outf;
+    outf = scratch;
+    cand->reg_alloc = REG_BC;
+    g_regalloc_address_escaped = 0;
+    g_inline_body_buffering++;
+    g_buffering_epoch++;
+    fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
+    fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+
+    errors_before = g_diag_error_count;
+    asm_suppress_depth++;
+    gen_for_impl(for_node);
+    /* Spill BC's final value back to the candidate's frame slot before
+     * anything after the loop (still generated under reg_alloc == REG_NONE,
+     * set below) can read it via the normal (ix+d) path. Still inside the
+     * suppressed/buffered span - this is unconditionally part of what gets
+     * verified and either committed whole or discarded whole. */
+    fprintf(outf, "\tld (ix%+d),c\n", cand->offset);
+    fprintf(outf, "\tld (ix%+d),b\n", cand->offset + 1);
+    asm_suppress_depth--;
+    g_inline_body_buffering--;
+
+    cand->reg_alloc = REG_NONE;
+    outf = saved_outf;
+
+    if (g_diag_error_count == errors_before && !g_regalloc_address_escaped &&
+        loop_regalloc_write_candidate_safe(scratch, cand)) {
+        rewind(scratch);
+        while ((c = fgetc(scratch)) != EOF)
+            fputc(c, outf);
+        fclose(scratch);
+        return 1;
+    }
+
+    fclose(scratch);
+    /* See try_loop_regalloc_bc's identical comment on this bump. */
     g_buffering_epoch++;
     nlocals = saved_nlocals;
     local_size = saved_local_size;

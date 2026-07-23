@@ -767,17 +767,27 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
 }
 
 /* Loop-scoped BC register promotion (dcc_loop_regalloc.c): if this loop has
- * an eligible read-only candidate (see loop_regalloc_find_bc_candidate),
- * try generating the whole loop with it primed into BC instead of its
- * normal frame slot, verify the result is safe, and commit it - falling
- * back to plain, unpromoted generation (the untouched ast_gen_for_stmt_impl
- * above) if no candidate exists or the speculative attempt is declined. */
+ * an eligible candidate (see loop_regalloc_find_bc_candidate), try
+ * generating the whole loop with it primed into BC instead of its normal
+ * frame slot - via try_loop_regalloc_bc for a read-only candidate (Phase
+ * 1) or try_loop_regalloc_bc_write for one the loop also writes (Phase 2,
+ * which additionally spills BC back to the frame slot once, after the
+ * loop) - verify the result is safe, and commit it. Falls back to plain,
+ * unpromoted generation (the untouched ast_gen_for_stmt_impl above) if no
+ * candidate exists or the speculative attempt is declined. */
 void ast_gen_for_stmt(const struct AstNode *n)
 {
-    struct Sym *cand = loop_regalloc_find_bc_candidate(n);
+    int is_write;
+    struct Sym *cand = loop_regalloc_find_bc_candidate(n, &is_write);
 
-    if (cand != NULL && try_loop_regalloc_bc(n, cand, ast_gen_for_stmt_impl))
-        return;
+    if (cand != NULL) {
+        if (is_write) {
+            if (try_loop_regalloc_bc_write(n, cand, ast_gen_for_stmt_impl))
+                return;
+        } else if (try_loop_regalloc_bc(n, cand, ast_gen_for_stmt_impl)) {
+            return;
+        }
+    }
     ast_gen_for_stmt_impl(n);
 }
 
