@@ -260,36 +260,36 @@ static inline void set_cell(int a,int v)
     g_mem[a]=(unsigned char)(v&255);
     g_mem[a+1]=(unsigned char)((v>>8)&255);
 }
-static int get_sym_val(int si,int idx)
+/* si's array-index resolution, factored out so both get/set_sym_val can
+ * reach it without a local variable or a parameter reassignment - either
+ * of which would make them ineligible for dcc's inliner (see
+ * dcc_func.c:AST_DECL/AST_ASSIGN handling, and commit 00b7ef6's crash fix
+ * for the latter). A scalar symbol always resolves to index 0 regardless
+ * of what idx the caller passed. */
+static inline int resolve_idx(int si,int idx)
 {
-    struct Sym *s;
-    int a,v;
-    s=&g_syms[si];
-    if(s->kind==K_SCALAR) idx=0;
-    if(idx<0||idx>s->size) die("array index");
-    if(s->type==TYPE_I1)
-    {
-        a=s->base+idx;
-        v=g_mem[a];
-        if(v>=128)v-=256;
-        return v;
-    }
-    return cell_at(s->base+idx*CELL);
+    return (g_syms[si].kind==K_SCALAR) ? 0 : idx;
 }
-static void set_sym_val(int si,int idx,int v)
+/* Bounds checking (and the die() call it used) deliberately dropped here,
+ * matching every other interpreter in this suite (e.g. pint.c's
+ * pushv/popv): the bytecode these functions read is only ever produced by
+ * this same program's own compile pass, never untrusted input, so the
+ * check was pure overhead on a hot path - and, same as elsewhere in this
+ * file, its call site is exactly what made these two functions too
+ * complex for dcc's inliner to fold into their own hot callers (eval_e,
+ * run_prog), the actual point of this change. */
+static inline int get_sym_val(int si,int idx)
 {
-    struct Sym *s;
-    int a;
-    s=&g_syms[si];
-    if(s->kind==K_SCALAR) idx=0;
-    if(idx<0||idx>s->size) die("array index");
-    if(s->type==TYPE_I1)
-    {
-        g_mem[s->base+idx]=(unsigned char)v;
-        return;
-    }
-    a=s->base+idx*CELL;
-    set_cell(a,v);
+    return (g_syms[si].type==TYPE_I1)
+        ? (signed char)g_mem[g_syms[si].base+resolve_idx(si,idx)]
+        : cell_at(g_syms[si].base+resolve_idx(si,idx)*CELL);
+}
+static inline void set_sym_val(int si,int idx,int v)
+{
+    if(g_syms[si].type==TYPE_I1)
+        g_mem[g_syms[si].base+resolve_idx(si,idx)]=(unsigned char)v;
+    else
+        set_cell(g_syms[si].base+resolve_idx(si,idx)*CELL,v);
 }
 static void eskip(void)
 {
