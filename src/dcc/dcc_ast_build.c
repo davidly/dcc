@@ -1183,7 +1183,8 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
          * type/tag-only declarations are caught separately during replay. */
         if (depth == 0 &&
             (tok.kind == TOK_EXTERN || tok.kind == TOK_STATIC ||
-             tok.kind == TOK_TYPEDEF || tok.kind == TOK_INLINE))
+             tok.kind == TOK_TYPEDEF || tok.kind == TOK_INLINE ||
+             tok.kind == TOK_NORETURN))
             sp->unsupported_for_storage = 1;
         if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') {
             depth++;

@@ -2948,6 +2948,7 @@ void scan_function_body(void)
             decl_is_extern = 0;
             decl_is_static = 0;
             decl_is_inline = 0;
+            decl_is_noreturn = 0;
             decl_is_const = 0;
             is_static_local = (tok.kind == TOK_STATIC);
             t = parse_base_type();
@@ -5424,6 +5425,7 @@ void parse_function_or_global(int base_type)
         if (base_is_func_typedef && g_funcptr_decl_array_len == 0) {
             s = add_global(name, type, SC_FUNC);
             s->is_inline |= decl_is_inline;
+            s->is_noreturn |= decl_is_noreturn;
             parse_function_return_type = type;
             if (decl_is_static) {
                 s->is_static = 1;
@@ -5440,6 +5442,7 @@ void parse_function_or_global(int base_type)
         if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
             s = add_global(name, type, SC_FUNC);
             s->is_inline |= decl_is_inline;
+            s->is_noreturn |= decl_is_noreturn;
             parse_function_return_type = type;
             if (g_ptr_array_dim_count > 0) {
                 int pi;
@@ -5904,6 +5907,7 @@ void parse_translation_unit(void)
             decl_is_extern = 0;
             decl_is_static = 0;
             decl_is_inline = 0;
+            decl_is_noreturn = 0;
             decl_is_const = 0;
             t = parse_type();
             if (tok.kind == ';') {
@@ -5916,6 +5920,7 @@ void parse_translation_unit(void)
             decl_is_extern = 0;
             decl_is_static = 0;
             decl_is_inline = 0;
+            decl_is_noreturn = 0;
             decl_is_const = 0;
             t = parse_type();
             if (tok.kind == ';')
@@ -5927,6 +5932,7 @@ void parse_translation_unit(void)
             decl_is_extern = 0;
             decl_is_static = 0;
             decl_is_inline = 0;
+            decl_is_noreturn = 0;
             decl_is_const = 0;
             parse_function_or_global(TYPE_INT);
         } else {

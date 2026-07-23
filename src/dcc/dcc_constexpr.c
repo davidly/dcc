@@ -220,7 +220,7 @@ int starts_type(void)
             tok.kind == TOK_BOOL ||
            tok.kind == TOK_UNSIGNED || tok.kind == TOK_SIGNED || tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE ||
            tok.kind == TOK_EXTERN || tok.kind == TOK_STATIC || tok.kind == TOK_REGISTER || tok.kind == TOK_AUTO ||
-           tok.kind == TOK_INLINE ||
+           tok.kind == TOK_INLINE || tok.kind == TOK_NORETURN ||
            tok.kind == TOK_TYPEDEF || tok.kind == TOK_STRUCT ||
            tok.kind == TOK_UNION || tok.kind == TOK_ENUM ||
            (tok.kind == TOK_ID && find_typedef(tok.text) >= 0);

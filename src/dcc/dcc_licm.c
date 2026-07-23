@@ -103,10 +103,11 @@ static int licm_name_is_modified(const struct LicmModifiedNames *mod, const char
 static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmModifiedNames *mod);
 
 /* Recursively record every name assigned, incremented/decremented, or
- * address-taken anywhere in `n`. Any call, or any node kind not explicitly
- * recognized below (nested loops, goto/labels, compound literals, ...) sets
- * mod->overflowed - safe (declines every candidate) rather than risking a
- * missed modification a purely lexical scan can't see through.
+ * address-taken anywhere in `n`. Any call to a function that might actually
+ * return, or any node kind not explicitly recognized below (nested loops,
+ * goto/labels, compound literals, ...) sets mod->overflowed - safe (declines
+ * every candidate) rather than risking a missed modification a purely
+ * lexical scan can't see through.
  *
  * AST_SWITCH and AST_CONTINUE are both explicitly safe, not just "not
  * unrecognized": a `continue` anywhere never skips this loop's own eventual
@@ -118,7 +119,16 @@ static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmM
  * AST_SWITCH/AST_BREAK cases, dcc_ast_gen_stmt.c), not this loop, so it
  * doesn't skip this loop's exit either. A `break` reached OUTSIDE any
  * switch still overflows here (the normal AST_BREAK case, declined via the
- * default case below) since THAT one does target this loop directly. */
+ * default case below) since THAT one does target this loop directly.
+ *
+ * AST_CALL to a function declared _Noreturn (Sym::is_noreturn) is also
+ * explicitly safe: whatever it clobbers can't matter, because control never
+ * returns to any point after it on this path for this candidate's
+ * eligibility to be evaluated against - only its own argument expressions
+ * (which do still execute) need scanning. A call to anything else - an
+ * ordinary function, a function pointer, or an unresolvable callee - still
+ * overflows, since it could modify anything through an escaped pointer or
+ * global that this lexical scan can't rule out. */
 void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
 {
     int i;
@@ -184,6 +194,18 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
     case AST_CAST:
         licm_scan_modified(n->a, mod);
         return;
+    case AST_CALL: {
+        struct Sym *fn_sym;
+
+        fn_sym = (n->a != NULL && n->a->kind == AST_IDENT) ? find_global(n->a->sval) : NULL;
+        if (fn_sym != NULL && fn_sym->is_noreturn) {
+            for (i = 0; i < n->list_len && !mod->overflowed; ++i)
+                licm_scan_modified(n->list[i], mod);
+            return;
+        }
+        mod->overflowed = 1;
+        return;
+    }
     case AST_IDENT:
     case AST_INT_LIT:
     case AST_FLOAT_LIT:
@@ -193,14 +215,14 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
     case AST_EMPTY:
         return;
     default:
-        /* AST_CALL, AST_WHILE, AST_FOR, AST_DOWHILE, AST_RETURN, AST_GOTO,
-         * AST_LABEL, AST_BREAK, AST_DECL, AST_COMPOUND_LITERAL, or anything
-         * else: a call could modify anything through an escaped pointer or
-         * global, and the others change control flow in ways this simple
-         * walk does not model (AST_BREAK here specifically means one
-         * reached OUTSIDE any switch, since AST_SWITCH routes its own body
-         * through licm_scan_modified_switch_body instead, which handles a
-         * switch-scoped break itself - see that function). */
+        /* AST_WHILE, AST_FOR, AST_DOWHILE, AST_RETURN, AST_GOTO, AST_LABEL,
+         * AST_BREAK, AST_DECL, AST_COMPOUND_LITERAL, or anything else not
+         * explicitly handled above (AST_CALL has its own case): these change
+         * control flow in ways this simple walk does not model (AST_BREAK
+         * here specifically means one reached OUTSIDE any switch, since
+         * AST_SWITCH routes its own body through licm_scan_modified_switch_
+         * body instead, which handles a switch-scoped break itself - see
+         * that function). */
         mod->overflowed = 1;
         return;
     }

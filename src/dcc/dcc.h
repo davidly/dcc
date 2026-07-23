@@ -223,6 +223,7 @@
 #define TOK_WSTR       314
 #define TOK_BOOL       316
 #define TOK_STATIC_ASSERT 317
+#define TOK_NORETURN   318
 #define TOK_SWITCH     300
 #define TOK_CASE       301
 #define TOK_DEFAULT    302
@@ -277,6 +278,11 @@ struct Sym {
                       * anything ELSE in a loop that also contains one - see
                       * loop_regalloc_sym_eligible's comment for why. */
     int is_inline;   /* function declared with inline specifier */
+    int is_noreturn; /* function declared with _Noreturn: licm_scan_modified
+                      * (dcc_licm.c) tolerates a call to it in an otherwise-
+                      * disqualifying eligibility scan, since nothing after
+                      * the call in that control-flow path is ever reached -
+                      * whatever it clobbers can't matter. */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
     struct AstNode *inline_stmt_body;   /* simple void inline statement body */
@@ -590,6 +596,7 @@ extern int scan_mode;
 extern int decl_is_extern;
 extern int decl_is_static;
 extern int decl_is_inline;     /* current declaration used inline specifier */
+extern int decl_is_noreturn;   /* current declaration used _Noreturn specifier */
 extern int decl_is_const;      /* current declaration used const qualifier */
 extern int decl_is_volatile;   /* current declaration used volatile qualifier */
 extern int decl_pointee_is_volatile;

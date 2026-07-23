@@ -690,6 +690,7 @@ int parse_base_type(void)
     decl_is_volatile = 0;
     decl_pointee_is_volatile = 0;
     decl_is_inline = 0;
+    decl_is_noreturn = 0;
     g_parse_type_was_enum = 0;
 
     /* C89 declaration specifiers are order-independent. */
@@ -704,6 +705,7 @@ int parse_base_type(void)
         }
         if (tok.kind == TOK_CONST) { decl_is_const = 1; next_token(); continue; }
         if (tok.kind == TOK_INLINE) { decl_is_inline = 1; next_token(); continue; }
+        if (tok.kind == TOK_NORETURN) { decl_is_noreturn = 1; next_token(); continue; }
         if (tok.kind == TOK_VOLATILE ||
             tok.kind == TOK_AUTO) {
             if (tok.kind == TOK_VOLATILE) {

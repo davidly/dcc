@@ -147,7 +147,7 @@ static struct Stmt *g_pc;
 static int g_halted, g_verbose;
 static const char *g_ep;
 static const char *g_cep;
-static void die(const char *s)
+static _Noreturn void die(const char *s)
 {
     fprintf(stderr, "forint:%s near pc=%d '%s'\n", s,
         (g_stmts && g_pc) ? (int)(g_pc - g_stmts) : -1,
@@ -769,7 +769,6 @@ static int eval_e(int ei)
                 case EO_GE: a=(a>=b); break;
                 case EO_AND: a=(a&&b); break;
                 case EO_OR: a=(a||b); break;
-                default: die("bad expr op");
             }
             *sp++=a;
         }
