@@ -529,6 +529,13 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
  * around it than this file's own lenient reload-repair one - see that
  * function's header comment. Defined in dcc_func.c. */
 int line_touches_bc_reg(const char *s);
+/* True if `buf` (the full generated-assembly text under verification)
+ * contains a "\tcall NAME" whose NAME is not one of the DCCRTL.MAC-
+ * contracted BC-preserving runtime helpers (__mulu, __udivmod, __divu,
+ * __modu, __divs, __mods, __sdivmod - see DCCRTL.MAC's contract comment
+ * just above __divs). Shared with dcc_loop_regalloc.c's write-candidate
+ * verifier, which needs the identical whitelist. Defined in dcc_func.c. */
+int buf_has_unsafe_call(const char *buf);
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];

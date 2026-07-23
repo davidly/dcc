@@ -30,8 +30,10 @@
  * text so a linear single-pass scan still catches a hazard that would only
  * appear on a loop's second-and-later iteration. Nothing in that function
  * assumes its buffer is a whole function body rather than one loop's own
- * emitted span - "any call anywhere in this text" is exactly the right
- * question whether "this text" is a function or a loop.
+ * emitted span - "any call in this text to something other than a
+ * DCCRTL.MAC-contracted BC-preserving runtime helper" (buf_has_unsafe_call,
+ * dcc_func.c) is exactly the right question whether "this text" is a
+ * function or a loop.
  *
  * Phase 2 promotes candidates the loop also WRITES (assigns to, and/or
  * increments/decrements) - the actual replacement for dccpeep's half-dozen
@@ -647,7 +649,7 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
     buf[size] = 0;
     rewind(f);
 
-    if (strstr(buf, "\tcall ") != NULL) {
+    if (buf_has_unsafe_call(buf)) {
         free(buf);
         return 0;
     }

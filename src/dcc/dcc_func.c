@@ -4523,7 +4523,9 @@ static int try_speculative_noix_function_body(const char *name, int type,
  * `*`, `/`, `%`, or long/float operation with no visible call syntax at all -
  * so it is only a pre-filter, never the actual safety proof. That proof is
  * regalloc_buffer_finalize below, which also rejects any "call" found in
- * the generated buffer regardless of what this pre-filter guessed.
+ * the generated buffer that isn't to one of a small set of DCCRTL.MAC-
+ * contracted runtime helpers known to preserve BC (buf_has_unsafe_call),
+ * regardless of what this pre-filter guessed.
  *
  * Returns 1 whenever it's worth attempting speculative generation at all -
  * regardless of whether find_bc_regalloc_candidate finds a BC pointer
@@ -4621,6 +4623,70 @@ int line_touches_bc_reg(const char *s)
 static int line_touches_de_reg(const char *s)
 {
     return line_touches_reg_pair(s, "d", "e", "de");
+}
+
+/* Runtime helpers DCCRTL.MAC documents (see the CONTRACT comment just above
+ * __divs there) as preserving BC across the call: their fast paths never
+ * touch b/c/bc at all, and their slow paths explicitly push/pop it. This is
+ * the same trust dccpeep's pass_byte_loop_counter_to_reg_c already relies on
+ * for __mods/__divs specifically; extended here to the full set DCCRTL.MAC's
+ * comment names, since dcc's own codegen (dcc_ops.c, dcc_ast_gen_stmt.c) can
+ * emit a call to any of the seven for a plain `*`, `/`, or `%` on int - none
+ * of which appear as an AST_CALL node, so no AST-level scan can ever see
+ * them; this text-level check is the only place they're visible at all. Any
+ * OTHER runtime helper (float conversions, BDOS/BIOS calls, __stchk,
+ * __call_hl, long-math variants, ...) carries no such documented contract
+ * and is deliberately left out - a bare call to any of those still fails
+ * the whole attempt, exactly as before this whitelist existed. */
+static const char *g_safe_runtime_calls[] = {
+    "__mulu", "__udivmod", "__divu", "__modu", "__divs", "__mods", "__sdivmod",
+    NULL
+};
+
+/* True if `buf` contains a "\tcall NAME" line whose NAME is not on
+ * g_safe_runtime_calls above - i.e. true if there is at least one call this
+ * speculative attempt cannot trust. NAME is taken as running from just after
+ * "\tcall " to end of line (or a trailing comment/condition would break this,
+ * but dcc's own codegen never emits either after a call's target). */
+int buf_has_unsafe_call(const char *buf)
+{
+    static const char prefix[] = "\tcall ";
+    const size_t prefix_len = sizeof(prefix) - 1;
+    const char *p;
+
+    p = buf;
+    for (;;) {
+        const char *hit = strstr(p, prefix);
+        const char *name_start, *name_end;
+        char namebuf[32];
+        size_t namelen;
+        int i, whitelisted;
+
+        if (hit == NULL)
+            return 0;
+        name_start = hit + prefix_len;
+        name_end = name_start;
+        while (*name_end != '\0' && *name_end != '\n' && *name_end != ' ' &&
+               *name_end != '\t' && *name_end != ';')
+            name_end++;
+        namelen = (size_t)(name_end - name_start);
+        if (namelen >= sizeof(namebuf))
+            namelen = sizeof(namebuf) - 1;
+        memcpy(namebuf, name_start, namelen);
+        namebuf[namelen] = 0;
+
+        whitelisted = 0;
+        for (i = 0; g_safe_runtime_calls[i] != NULL; i++) {
+            if (strcmp(namebuf, g_safe_runtime_calls[i]) == 0) {
+                whitelisted = 1;
+                break;
+            }
+        }
+        if (!whitelisted)
+            return 1;
+
+        p = name_end;
+    }
 }
 
 #define MAX_BC_LOOP_LABELS 512
@@ -4809,17 +4875,20 @@ static int bc_loop_body_self_consistent(const char *buf, long start, long end,
  * instructions for staying exact rather than tracking real stack-balance
  * semantics from flat text.
  *
- * A bare "call" anywhere still fails the whole attempt outright, for both
- * candidates: current_function_has_call only detects an explicit C call
- * syntactically present in the source, not an implicit runtime-helper call
- * (e.g. `call __mulu`) codegen may still insert for a `*`, `/`, `%`, or
- * long/float operation with no call syntax visible at all - this feature's
- * leaf-only gate depends on there being truly zero calls of any kind, and a
- * call's effect on bc/de is not something a reload can safely paper over
- * (unlike a same-function scratch use, it's not visible in this text at
- * all). Neither candidate's own address may ever be taken either - see
- * g_regalloc_address_escaped (dcc_symbols.c), checked separately by the
- * caller.
+ * A "call" to anything other than one of g_safe_runtime_calls' seven
+ * DCCRTL.MAC-contracted helpers (see buf_has_unsafe_call above) still fails
+ * the whole attempt outright, for both candidates: current_function_has_call
+ * only detects an explicit C call syntactically present in the source, not
+ * an implicit runtime-helper call (e.g. `call __mulu`) codegen may still
+ * insert for a `*`, `/`, `%`, or long/float operation with no call syntax
+ * visible at all - this feature's leaf-only gate otherwise depends on there
+ * being truly zero calls of any kind, and an arbitrary call's effect on
+ * bc/de is not something a reload can safely paper over (unlike a same-
+ * function scratch use, it's not visible in this text at all); the seven
+ * whitelisted helpers are the sole exception, trusted by documented contract
+ * rather than by anything this scan itself can verify. Neither candidate's
+ * own address may ever be taken either - see g_regalloc_address_escaped
+ * (dcc_symbols.c), checked separately by the caller.
  *
  * On success, *out_f is a rewound tmpfile holding the (possibly BC-
  * reload-rewritten) content to commit - the caller must fclose it. On
@@ -4867,7 +4936,7 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
         fatal("cannot read speculative regalloc temp file");
     buf[size] = 0;
 
-    if (strstr(buf, "\tcall ") != NULL) {
+    if (buf_has_unsafe_call(buf)) {
         free(buf);
         fclose(rewritten);
         return 0;

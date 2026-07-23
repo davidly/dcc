@@ -5921,6 +5921,42 @@ static int pass_ix_pair_load_to_de(void)
     return changed;
 }
 
+/*
+ * BC-resident counterpart of pass_ix_pair_load_to_de above: a loop-scoped
+ * register-allocation candidate (dcc_loop_regalloc.c) parked in BC loads
+ * into DE via the same generic "push hl / load into hl / ex de,hl / pop hl"
+ * scaffolding used for any expression operand, since dcc's codegen has no
+ * AST-level knowledge, at a generic operand-evaluation call site, that the
+ * operand happens to be a plain register-resident ident eligible for a
+ * cheaper direct move - it just evaluates the operand into HL (whose REG_BC
+ * branch is "ld l,c"/"ld h,b") like any other subexpression. As with the ix
+ * case, DE is always dead before the push (it held a consumed frame
+ * pointer), and BC itself is never disturbed by push hl/pop hl, so the
+ * whole five-instruction dance collapses to a single register-to-register
+ * move pair - cheaper even than the ix case, since there's no memory access
+ * involved at all.
+ */
+static int pass_bc_pair_load_to_de(void)
+{
+    int i, changed = 0;
+
+    for (i = 0; i + 4 < nlines; i++) {
+        if (!eq(i, "push hl")) continue;
+        if (!eq(i + 1, "ld l,c")) continue;
+        if (!eq(i + 2, "ld h,b")) continue;
+        if (!eq(i + 3, "ex de,hl")) continue;
+        if (!eq(i + 4, "pop hl")) continue;
+
+        replace1_tagged(i, "ld e,c", "bc_pair_load_to_de");
+        replace1(i + 1, "ld d,b");
+        delete_n(i + 2, 3);
+
+        changed = 1;
+        if (i > 0) i--;
+    }
+    return changed;
+}
+
 /* Returns 1 if instruction s is safe to skip over when checking whether a
  * reload of HL from (ix+off_lo)/(ix+off_hi) is redundant.  An instruction
  * is safe when it neither modifies L/H nor writes to the two stored slots. */
@@ -13135,6 +13171,7 @@ int main(int argc, char **argv)
             if (pass_byte_incr_loop_counter_to_reg_iyl()) changed = 1;
         }
         if (pass_ix_pair_load_to_de()) changed = 1;
+        if (pass_bc_pair_load_to_de()) changed = 1;
         if (pass_ix_byte_load_to_de()) changed = 1;
         if (pass_remove_ix_store_reload_hl()) changed = 1;
         if (pass_postinc_ix_word()) changed = 1;
