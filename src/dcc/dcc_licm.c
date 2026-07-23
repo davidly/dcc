@@ -100,11 +100,25 @@ static int licm_name_is_modified(const struct LicmModifiedNames *mod, const char
     return 0;
 }
 
+static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmModifiedNames *mod);
+
 /* Recursively record every name assigned, incremented/decremented, or
  * address-taken anywhere in `n`. Any call, or any node kind not explicitly
- * recognized below (nested loops, switch, goto/labels, compound literals,
- * ...) sets mod->overflowed - safe (declines every candidate) rather than
- * risking a missed modification a purely lexical scan can't see through. */
+ * recognized below (nested loops, goto/labels, compound literals, ...) sets
+ * mod->overflowed - safe (declines every candidate) rather than risking a
+ * missed modification a purely lexical scan can't see through.
+ *
+ * AST_SWITCH and AST_CONTINUE are both explicitly safe, not just "not
+ * unrecognized": a `continue` anywhere never skips this loop's own eventual
+ * exit (it jumps to the increment/condition test, still inside the loop's
+ * normal flow), and a `switch` is scanned via licm_scan_modified_switch_
+ * body below, which is break-aware - a `break` reached directly inside a
+ * switch's own body targets that switch (via break_stack[nflow-1] at
+ * whichever nesting level is innermost at runtime - see ast_gen_stmt's
+ * AST_SWITCH/AST_BREAK cases, dcc_ast_gen_stmt.c), not this loop, so it
+ * doesn't skip this loop's exit either. A `break` reached OUTSIDE any
+ * switch still overflows here (the normal AST_BREAK case, declined via the
+ * default case below) since THAT one does target this loop directly. */
 void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
 {
     int i;
@@ -119,6 +133,12 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
         return;
     case AST_EXPR_STMT:
         licm_scan_modified(n->a, mod);
+        return;
+    case AST_SWITCH:
+        licm_scan_modified(n->a, mod);           /* control expression */
+        licm_scan_modified_switch_body(n->b, mod);
+        return;
+    case AST_CONTINUE:
         return;
     case AST_IF:
         licm_scan_modified(n->a, mod);
@@ -173,12 +193,52 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
     case AST_EMPTY:
         return;
     default:
-        /* AST_CALL, AST_WHILE, AST_FOR, AST_DOWHILE, AST_SWITCH, AST_RETURN,
-         * AST_GOTO, AST_LABEL, AST_BREAK, AST_CONTINUE, AST_DECL,
-         * AST_COMPOUND_LITERAL, or anything else: a call could modify
-         * anything through an escaped pointer or global, and the others
-         * change control flow in ways this simple walk does not model. */
+        /* AST_CALL, AST_WHILE, AST_FOR, AST_DOWHILE, AST_RETURN, AST_GOTO,
+         * AST_LABEL, AST_BREAK, AST_DECL, AST_COMPOUND_LITERAL, or anything
+         * else: a call could modify anything through an escaped pointer or
+         * global, and the others change control flow in ways this simple
+         * walk does not model (AST_BREAK here specifically means one
+         * reached OUTSIDE any switch, since AST_SWITCH routes its own body
+         * through licm_scan_modified_switch_body instead, which handles a
+         * switch-scoped break itself - see that function). */
         mod->overflowed = 1;
+        return;
+    }
+}
+
+/* Companion to licm_scan_modified, used only for a switch statement's own
+ * body (dispatched from its AST_SWITCH case): same job, but a `break`
+ * reached here is safe (it targets this switch's own end, not the
+ * enclosing loop scanned by the caller) rather than triggering overflow.
+ * AST_CASE/AST_DEFAULT are pure statement labels (dcc_ast.h: `b` = the
+ * following statement) - unwrap and keep walking in switch-body mode, so a
+ * break directly inside a `case` block still resolves as switch-scoped.
+ * Anything that isn't a label, a break, or a nested compound is real
+ * statement content, delegated back to the ordinary licm_scan_modified -
+ * including a NESTED switch or loop within this one's cases, which get
+ * exactly the same handling (a nested switch recurses back into this same
+ * function for its own body; a nested loop still overflows via licm_scan_
+ * modified's default case, unchanged). */
+static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmModifiedNames *mod)
+{
+    int i;
+
+    if (n == NULL || mod->overflowed)
+        return;
+
+    switch (n->kind) {
+    case AST_COMPOUND:
+        for (i = 0; i < n->list_len && !mod->overflowed; ++i)
+            licm_scan_modified_switch_body(n->list[i], mod);
+        return;
+    case AST_CASE:
+    case AST_DEFAULT:
+        licm_scan_modified_switch_body(n->b, mod);
+        return;
+    case AST_BREAK:
+        return;
+    default:
+        licm_scan_modified(n, mod);
         return;
     }
 }

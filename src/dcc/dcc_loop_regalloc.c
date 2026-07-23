@@ -115,6 +115,14 @@ static void loop_regalloc_count_idents(const struct AstNode *n, struct LoopIdent
         loop_regalloc_count_idents(n->b, ic);
         loop_regalloc_count_idents(n->c, ic);
         return;
+    case AST_SWITCH:
+        loop_regalloc_count_idents(n->a, ic);
+        loop_regalloc_count_idents(n->b, ic);
+        return;
+    case AST_CASE:
+    case AST_DEFAULT:
+        loop_regalloc_count_idents(n->b, ic);
+        return;
     case AST_ASSIGN:
         loop_regalloc_count_idents(n->a, ic);
         loop_regalloc_count_idents(n->b, ic);
@@ -208,6 +216,12 @@ static int loop_regalloc_used_as_index(const struct AstNode *n, const char *name
         return loop_regalloc_used_as_index(n->a, name) ||
                loop_regalloc_used_as_index(n->b, name) ||
                loop_regalloc_used_as_index(n->c, name);
+    case AST_SWITCH:
+        return loop_regalloc_used_as_index(n->a, name) ||
+               loop_regalloc_used_as_index(n->b, name);
+    case AST_CASE:
+    case AST_DEFAULT:
+        return loop_regalloc_used_as_index(n->b, name);
     case AST_ASSIGN:
         return loop_regalloc_used_as_index(n->a, name) ||
                loop_regalloc_used_as_index(n->b, name);
