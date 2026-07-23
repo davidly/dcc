@@ -60,7 +60,8 @@ struct Stmt
     char *text;
     int unit;
     int op;
-    int target;
+    struct Stmt *target;      /* resolved GOTO/CALL/DO target (NULL = unresolved/bad) */
+    int target_label;         /* OP_DO only: raw label text, staged for decode_stmts' 2nd pass */
     int fmt;
     int sym;
     char *a;
@@ -70,13 +71,23 @@ struct Stmt
     int be;
     int ce;
     int act;
-    int act_target;
+    struct Stmt *act_target;  /* resolved IF-GOTO target */
+    int act_target_label;     /* IF+ACT_GOTO only: raw label text, staged for the 2nd pass */
     int act_sym;
     char *act_idx;
     char *act_rhs;
     int act_idx_e;
     int act_rhs_e;
     int ntargets;
+    /* WORKAROUND: dcc mis-types a struct-member pointer ARRAY (confirmed
+     * via a minimal repro: `struct Bar *arr[3];` as a struct member reads
+     * back as int[3] at the first use, even for a plain non-self-referential
+     * pointee type - not specific to this self-referential case). Plain
+     * pointer members (target/act_target above) are unaffected, only
+     * arrays-of-pointers. Kept as a statement index, resolved to a pointer
+     * at the OP_CGOTO site instead of at parse time - computed GOTO is rare
+     * enough that this one field staying index-based costs nothing
+     * measurable relative to target/act_target/DoEnt being pointers. */
     int targets[10];
 }
 ;
@@ -91,13 +102,13 @@ struct Sym
 ;
 struct Call
 {
-    int pc;
+    struct Stmt *pc;
 }
 ;
 struct DoEnt
 {
-    int label;
-    int pc_after;
+    struct Stmt *label;       /* the loop's terminating CONTINUE statement */
+    struct Stmt *pc_after;    /* resume point: the statement right after DO */
     int sym;
     int endv;
     int step;
@@ -115,29 +126,32 @@ struct ETok
     int a;
 }
 ;
-struct State
-{
-    char *src;
-    long slen;
-    struct Stmt *stmts;
-    struct Sym *syms;
-    struct Call *calls;
-    struct DoEnt *dos;
-    struct Expr *exprs;
-    struct ETok *etoks;
-    unsigned char *mem;
-    int ns, nsy, ncall, ndo, mtop, mcap;
-    int ne, netok;
-    int pc, halted, verbose;
-    const char *ep;
-    const char *cep;
-}
-;
-static struct State *G;
+/* Former struct State's fields, now plain globals: there was only ever one
+ * instance (allocated once in init_state, never reassigned), so every
+ * reference through it paid a pointer fetch (find where G lives) plus a
+ * field-offset add (find where in *G the field is) before even touching the
+ * value - two indirections for what's really just a fixed set of variables,
+ * each with a compile-time-known address once it's a real global. */
+static char *g_src;
+static long g_slen;
+static struct Stmt *g_stmts;
+static struct Sym *g_syms;
+static struct Call *g_calls;
+static struct DoEnt *g_dos;
+static struct Expr *g_exprs;
+static struct ETok *g_etoks;
+static unsigned char *g_mem;
+static int g_ns, g_nsy, g_ncall, g_ndo, g_mtop, g_mcap;
+static int g_ne, g_netok;
+static struct Stmt *g_pc;
+static int g_halted, g_verbose;
+static const char *g_ep;
+static const char *g_cep;
 static void die(const char *s)
 {
-    fprintf(stderr, "forint:%s near pc=%d '%s'\n", s, G ? G->pc : -1,
-    (G && G->pc >= 0 && G->pc < G->ns) ? G->stmts[G->pc].text : "");
+    fprintf(stderr, "forint:%s near pc=%d '%s'\n", s,
+        (g_stmts && g_pc) ? (int)(g_pc - g_stmts) : -1,
+        (g_stmts && g_pc >= g_stmts && g_pc < g_stmts + g_ns) ? g_pc->text : "");
     exit(1);
 }
 static void *xcalloc(unsigned int n, unsigned int z)
@@ -190,7 +204,7 @@ static int find_sym(const char *name)
     char n[MAXNAME];
     int i;
     upcase(n,name);
-    for(i=G->nsy-1;i>=0;i--) if(!strcmp(G->syms[i].name,n)) return i;
+    for(i=g_nsy-1;i>=0;i--) if(!strcmp(g_syms[i].name,n)) return i;
     return -1;
 }
 
@@ -199,34 +213,34 @@ static void grow_mem(int need)
     unsigned char *p;
     int ncap;
 
-    if(need <= G->mcap) return;
+    if(need <= g_mcap) return;
     if(need > MAXMEM) die("data memory full");
-    ncap = G->mcap;
+    ncap = g_mcap;
     while(ncap < need) {
         if(ncap < 1024) ncap += 256;
         else ncap += 1024;
     }
     if(ncap > MAXMEM) ncap = MAXMEM;
-    p = (unsigned char*)realloc(G->mem, (unsigned int)ncap);
+    p = (unsigned char*)realloc(g_mem, (unsigned int)ncap);
     if(!p) die("oom");
-    memset(p + G->mcap, 0, (unsigned int)(ncap - G->mcap));
-    G->mem = p;
-    G->mcap = ncap;
+    memset(p + g_mcap, 0, (unsigned int)(ncap - g_mcap));
+    g_mem = p;
+    g_mcap = ncap;
 }
 static int add_sym(const char *name,int kind,int type,int count)
 {
     int i,bytes;
-    if(G->nsy>=MAXSYM) die("too many symbols");
-    i=G->nsy++;
-    memset(&G->syms[i],0,sizeof(struct Sym));
-    upcase(G->syms[i].name,name);
-    G->syms[i].kind=kind;
-    G->syms[i].type=type;
-    G->syms[i].size=count;
+    if(g_nsy>=MAXSYM) die("too many symbols");
+    i=g_nsy++;
+    memset(&g_syms[i],0,sizeof(struct Sym));
+    upcase(g_syms[i].name,name);
+    g_syms[i].kind=kind;
+    g_syms[i].type=type;
+    g_syms[i].size=count;
     bytes=(count+1)*(type==TYPE_I1?1:CELL);
-    grow_mem(G->mtop + bytes);
-    G->syms[i].base=G->mtop;
-    G->mtop+=bytes;
+    grow_mem(g_mtop + bytes);
+    g_syms[i].base=g_mtop;
+    g_mtop+=bytes;
     return i;
 }
 static int ensure_sym(const char *name)
@@ -237,26 +251,26 @@ static int ensure_sym(const char *name)
 }
 static inline int cell_at(int a)
 {
-    if(a<0||a+1>=G->mcap)die("bad cell");
-    return(short)(G->mem[a]|(G->mem[a+1]<<8));
+    if(a<0||a+1>=g_mcap)die("bad cell");
+    return(short)(g_mem[a]|(g_mem[a+1]<<8));
 }
 static inline void set_cell(int a,int v)
 {
-    if(a<0||a+1>=G->mcap)die("bad cell");
-    G->mem[a]=(unsigned char)(v&255);
-    G->mem[a+1]=(unsigned char)((v>>8)&255);
+    if(a<0||a+1>=g_mcap)die("bad cell");
+    g_mem[a]=(unsigned char)(v&255);
+    g_mem[a+1]=(unsigned char)((v>>8)&255);
 }
 static int get_sym_val(int si,int idx)
 {
     struct Sym *s;
     int a,v;
-    s=&G->syms[si];
+    s=&g_syms[si];
     if(s->kind==K_SCALAR) idx=0;
     if(idx<0||idx>s->size) die("array index");
     if(s->type==TYPE_I1)
     {
         a=s->base+idx;
-        v=G->mem[a];
+        v=g_mem[a];
         if(v>=128)v-=256;
         return v;
     }
@@ -266,12 +280,12 @@ static void set_sym_val(int si,int idx,int v)
 {
     struct Sym *s;
     int a;
-    s=&G->syms[si];
+    s=&g_syms[si];
     if(s->kind==K_SCALAR) idx=0;
     if(idx<0||idx>s->size) die("array index");
     if(s->type==TYPE_I1)
     {
-        G->mem[s->base+idx]=(unsigned char)v;
+        g_mem[s->base+idx]=(unsigned char)v;
         return;
     }
     a=s->base+idx*CELL;
@@ -279,7 +293,7 @@ static void set_sym_val(int si,int idx,int v)
 }
 static void eskip(void)
 {
-    while(*G->ep && isspace((unsigned char)*G->ep))G->ep++;
+    while(*g_ep && isspace((unsigned char)*g_ep))g_ep++;
 }
 static int expr(void);
 static int primary(void)
@@ -287,69 +301,69 @@ static int primary(void)
     char name[MAXNAME];
     int i,v,si,idx;
     eskip();
-    if(*G->ep=='(')
+    if(*g_ep=='(')
     {
-        G->ep++;
+        g_ep++;
         v=expr();
         eskip();
-        if(*G->ep==')')G->ep++;
+        if(*g_ep==')')g_ep++;
         return v;
     }
-    if(*G->ep=='-'||*G->ep=='+')
+    if(*g_ep=='-'||*g_ep=='+')
     {
         int neg;
-        neg=(*G->ep=='-');
-        G->ep++;
+        neg=(*g_ep=='-');
+        g_ep++;
         v=primary();
         return neg?-v:v;
     }
-    if(*G->ep=='.')
+    if(*g_ep=='.')
     {
-        if(!strncmp(G->ep,".TRUE.",6))
+        if(!strncmp(g_ep,".TRUE.",6))
         {
-            G->ep+=6;
+            g_ep+=6;
             return 1;
         }
-        if(!strncmp(G->ep,".FALSE.",7))
+        if(!strncmp(g_ep,".FALSE.",7))
         {
-            G->ep+=7;
+            g_ep+=7;
             return 0;
         }
     }
-    if(isdigit((unsigned char)*G->ep))
+    if(isdigit((unsigned char)*g_ep))
     {
         v=0;
-        while(isdigit((unsigned char)*G->ep))v=v*10+*G->ep++-'0';
+        while(isdigit((unsigned char)*g_ep))v=v*10+*g_ep++-'0';
         return v;
     }
-    if(isalpha((unsigned char)*G->ep))
+    if(isalpha((unsigned char)*g_ep))
     {
         i=0;
-        while((isalnum((unsigned char)*G->ep) || *G->ep == '_') &&
+        while((isalnum((unsigned char)*g_ep) || *g_ep == '_') &&
               i < MAXNAME - 1) {
-            name[i++] = (char)toupper((unsigned char)*G->ep++);
+            name[i++] = (char)toupper((unsigned char)*g_ep++);
         }
         name[i]=0;
         if(!strcmp(name,"MOD"))
         {
             eskip();
-            if(*G->ep=='(')G->ep++;
+            if(*g_ep=='(')g_ep++;
             v=expr();
             eskip();
-            if(*G->ep==',')G->ep++;
+            if(*g_ep==',')g_ep++;
             idx=expr();
             eskip();
-            if(*G->ep==')')G->ep++;
+            if(*g_ep==')')g_ep++;
             return idx?v%idx:0;
         }
         si=ensure_sym(name);
         eskip();
-        if(*G->ep=='(')
+        if(*g_ep=='(')
         {
-            G->ep++;
+            g_ep++;
             idx=expr();
             eskip();
-            if(*G->ep==')')G->ep++;
+            if(*g_ep==')')g_ep++;
             return get_sym_val(si,idx);
         }
         return get_sym_val(si,0);
@@ -364,14 +378,14 @@ static int term(void)
     for(;;)
     {
         eskip();
-        if(*G->ep=='*')
+        if(*g_ep=='*')
         {
-            G->ep++;
+            g_ep++;
             v*=primary();
         }
-        else if(*G->ep=='/')
+        else if(*g_ep=='/')
         {
-            G->ep++;
+            g_ep++;
             r=primary();
             v=r?v/r:0;
         }
@@ -386,14 +400,14 @@ static int arith(void)
     for(;;)
     {
         eskip();
-        if(*G->ep=='+')
+        if(*g_ep=='+')
         {
-            G->ep++;
+            g_ep++;
             v+=term();
         }
-        else if(*G->ep=='-')
+        else if(*g_ep=='-')
         {
-            G->ep++;
+            g_ep++;
             v-=term();
         }
         else break;
@@ -407,39 +421,39 @@ static int rel(void)
     for(;;)
     {
         eskip();
-        if(!strncmp(G->ep,".EQ.",4))
+        if(!strncmp(g_ep,".EQ.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             r=arith();
             v=(v==r);
         }
-        else if(!strncmp(G->ep,".NE.",4))
+        else if(!strncmp(g_ep,".NE.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             r=arith();
             v=(v!=r);
         }
-        else if(!strncmp(G->ep,".LT.",4))
+        else if(!strncmp(g_ep,".LT.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             r=arith();
             v=(v<r);
         }
-        else if(!strncmp(G->ep,".LE.",4))
+        else if(!strncmp(g_ep,".LE.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             r=arith();
             v=(v<=r);
         }
-        else if(!strncmp(G->ep,".GT.",4))
+        else if(!strncmp(g_ep,".GT.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             r=arith();
             v=(v>r);
         }
-        else if(!strncmp(G->ep,".GE.",4))
+        else if(!strncmp(g_ep,".GE.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             r=arith();
             v=(v>=r);
         }
@@ -454,9 +468,9 @@ static int land(void)
     for(;;)
     {
         eskip();
-        if(!strncmp(G->ep,".AND.",5))
+        if(!strncmp(g_ep,".AND.",5))
         {
-            G->ep+=5;
+            g_ep+=5;
             v=(rel()&&v);
         }
         else break;
@@ -470,9 +484,9 @@ static int expr(void)
     for(;;)
     {
         eskip();
-        if(!strncmp(G->ep,".OR.",4))
+        if(!strncmp(g_ep,".OR.",4))
         {
-            G->ep+=4;
+            g_ep+=4;
             v=(land()||v);
         }
         else break;
@@ -481,22 +495,22 @@ static int expr(void)
 }
 static int eval_str(const char *s)
 {
-    G->ep=s;
+    g_ep=s;
     return expr();
 }
 
 static int eemit(int op,int a)
 {
     int i;
-    if(G->netok>=MAXETOK)die("expr token full");
-    i=G->netok++;
-    G->etoks[i].op=op;
-    G->etoks[i].a=a;
+    if(g_netok>=MAXETOK)die("expr token full");
+    i=g_netok++;
+    g_etoks[i].op=op;
+    g_etoks[i].a=a;
     return i;
 }
 static void cskip(void)
 {
-    while(*G->cep&&isspace((unsigned char)*G->cep))G->cep++;
+    while(*g_cep&&isspace((unsigned char)*g_cep))g_cep++;
 }
 static void cexpr(void);
 static void cprimary(void)
@@ -504,74 +518,74 @@ static void cprimary(void)
     char name[MAXNAME];
     int i,v,si;
     cskip();
-    if(*G->cep=='(')
+    if(*g_cep=='(')
     {
-        G->cep++;
+        g_cep++;
         cexpr();
         cskip();
-        if(*G->cep==')')G->cep++;
+        if(*g_cep==')')g_cep++;
         return;
     }
-    if(*G->cep=='-'||*G->cep=='+')
+    if(*g_cep=='-'||*g_cep=='+')
     {
-        i=(*G->cep=='-');
-        G->cep++;
+        i=(*g_cep=='-');
+        g_cep++;
         cprimary();
         if(i)eemit(EO_NEG,0);
         return;
     }
-    if(*G->cep=='.')
+    if(*g_cep=='.')
     {
-        if(!strncmp(G->cep,".TRUE.",6))
+        if(!strncmp(g_cep,".TRUE.",6))
         {
-            G->cep+=6;
+            g_cep+=6;
             eemit(EO_CONST,1);
             return;
         }
-        if(!strncmp(G->cep,".FALSE.",7))
+        if(!strncmp(g_cep,".FALSE.",7))
         {
-            G->cep+=7;
+            g_cep+=7;
             eemit(EO_CONST,0);
             return;
         }
     }
-    if(isdigit((unsigned char)*G->cep))
+    if(isdigit((unsigned char)*g_cep))
     {
         v=0;
-        while(isdigit((unsigned char)*G->cep))v=v*10+*G->cep++-'0';
+        while(isdigit((unsigned char)*g_cep))v=v*10+*g_cep++-'0';
         eemit(EO_CONST,v);
         return;
     }
-    if(isalpha((unsigned char)*G->cep))
+    if(isalpha((unsigned char)*g_cep))
     {
         i=0;
-        while((isalnum((unsigned char)*G->cep)||*G->cep=='_')&&
+        while((isalnum((unsigned char)*g_cep)||*g_cep=='_')&&
               i<MAXNAME-1)
         {
-            name[i++]=(char)toupper((unsigned char)*G->cep++);
+            name[i++]=(char)toupper((unsigned char)*g_cep++);
         }
         name[i]=0;
         if(!strcmp(name,"MOD"))
         {
             cskip();
-            if(*G->cep=='(')G->cep++;
+            if(*g_cep=='(')g_cep++;
             cexpr();
             cskip();
-            if(*G->cep==',')G->cep++;
+            if(*g_cep==',')g_cep++;
             cexpr();
             cskip();
-            if(*G->cep==')')G->cep++;
+            if(*g_cep==')')g_cep++;
             eemit(EO_MOD,0);
             return;
         }
         si=ensure_sym(name);
         cskip();
-        if(*G->cep=='(')
+        if(*g_cep=='(')
         {
-            G->cep++;
+            g_cep++;
             cexpr();
             cskip();
-            if(*G->cep==')')G->cep++;
+            if(*g_cep==')')g_cep++;
             eemit(EO_LOADA,si);
         }
         else
@@ -587,15 +601,15 @@ static void cterm(void)
     for(;;)
     {
         cskip();
-        if(*G->cep=='*')
+        if(*g_cep=='*')
         {
-            G->cep++;
+            g_cep++;
             cprimary();
             eemit(EO_MUL,0);
         }
-        else if(*G->cep=='/')
+        else if(*g_cep=='/')
         {
-            G->cep++;
+            g_cep++;
             cprimary();
             eemit(EO_DIV,0);
         }
@@ -609,16 +623,16 @@ static void carith(void)
     for(;;)
     {
         cskip();
-        if(*G->cep=='+')
+        if(*g_cep=='+')
         {
-            G->cep++;
+            g_cep++;
             cprimary();
             cterm();
             eemit(EO_ADD,0);
         }
-        else if(*G->cep=='-')
+        else if(*g_cep=='-')
         {
-            G->cep++;
+            g_cep++;
             cprimary();
             cterm();
             eemit(EO_SUB,0);
@@ -632,29 +646,29 @@ static void crel(void)
     for(;;)
     {
         cskip();
-        if(!strncmp(G->cep,".EQ.",4))
+        if(!strncmp(g_cep,".EQ.",4))
         {
-            G->cep+=4; carith(); eemit(EO_EQ,0);
+            g_cep+=4; carith(); eemit(EO_EQ,0);
         }
-        else if(!strncmp(G->cep,".NE.",4))
+        else if(!strncmp(g_cep,".NE.",4))
         {
-            G->cep+=4; carith(); eemit(EO_NE,0);
+            g_cep+=4; carith(); eemit(EO_NE,0);
         }
-        else if(!strncmp(G->cep,".LT.",4))
+        else if(!strncmp(g_cep,".LT.",4))
         {
-            G->cep+=4; carith(); eemit(EO_LT,0);
+            g_cep+=4; carith(); eemit(EO_LT,0);
         }
-        else if(!strncmp(G->cep,".LE.",4))
+        else if(!strncmp(g_cep,".LE.",4))
         {
-            G->cep+=4; carith(); eemit(EO_LE,0);
+            g_cep+=4; carith(); eemit(EO_LE,0);
         }
-        else if(!strncmp(G->cep,".GT.",4))
+        else if(!strncmp(g_cep,".GT.",4))
         {
-            G->cep+=4; carith(); eemit(EO_GT,0);
+            g_cep+=4; carith(); eemit(EO_GT,0);
         }
-        else if(!strncmp(G->cep,".GE.",4))
+        else if(!strncmp(g_cep,".GE.",4))
         {
-            G->cep+=4; carith(); eemit(EO_GE,0);
+            g_cep+=4; carith(); eemit(EO_GE,0);
         }
         else return;
     }
@@ -665,9 +679,9 @@ static void cand(void)
     for(;;)
     {
         cskip();
-        if(!strncmp(G->cep,".AND.",5))
+        if(!strncmp(g_cep,".AND.",5))
         {
-            G->cep+=5;
+            g_cep+=5;
             crel();
             eemit(EO_AND,0);
         }
@@ -680,9 +694,9 @@ static void cexpr(void)
     for(;;)
     {
         cskip();
-        if(!strncmp(G->cep,".OR.",4))
+        if(!strncmp(g_cep,".OR.",4))
         {
-            G->cep+=4;
+            g_cep+=4;
             cand();
             eemit(EO_OR,0);
         }
@@ -693,13 +707,13 @@ static int compile_expr_str(const char *s)
 {
     int i,start;
     if(!s)return -1;
-    if(G->ne>=MAXEXPR)die("too many exprs");
-    i=G->ne++;
-    start=G->netok;
-    G->cep=s;
+    if(g_ne>=MAXEXPR)die("too many exprs");
+    i=g_ne++;
+    start=g_netok;
+    g_cep=s;
     cexpr();
-    G->exprs[i].start=start;
-    G->exprs[i].len=G->netok-start;
+    g_exprs[i].start=start;
+    g_exprs[i].len=g_netok-start;
     return i;
 }
 static int eval_e(int ei)
@@ -709,11 +723,11 @@ static int eval_e(int ei)
     struct ETok *t;
     if(ei<0)return 0;
     sp=0;
-    i=G->exprs[ei].start;
-    end=i+G->exprs[ei].len;
+    i=g_exprs[ei].start;
+    end=i+g_exprs[ei].len;
     while(i<end)
     {
-        t=&G->etoks[i++];
+        t=&g_etoks[i++];
         op=t->op;
         if(op==EO_CONST)stack[sp++]=t->a;
         else if(op==EO_LOAD)stack[sp++]=get_sym_val(t->a,0);
@@ -749,12 +763,15 @@ static int eval_e(int ei)
     }
     return sp?stack[sp-1]:0;
 }
-static int find_label_in_unit(int lab,int unit)
+/* Returns the resolved statement, or NULL if lab isn't found in this
+ * program (used directly as a runtime "no target" sentinel by every
+ * caller, matching the old -1 index's role). */
+static struct Stmt *find_label_in_unit(int lab,int unit)
 {
     int i;
-    for(i=0;i<G->ns;i++)if(G->stmts[i].label==lab&&G->stmts[i].unit==unit)return i;
-    for(i=0;i<G->ns;i++)if(G->stmts[i].label==lab)return i;
-    return -1;
+    for(i=0;i<g_ns;i++)if(g_stmts[i].label==lab&&g_stmts[i].unit==unit)return &g_stmts[i];
+    for(i=0;i<g_ns;i++)if(g_stmts[i].label==lab)return &g_stmts[i];
+    return NULL;
 }
 static int parse_goto_label(char *s)
 {
@@ -810,20 +827,22 @@ static void decode_assignment_fields(struct Stmt *st,char *s,int ifpart)
         st->op=OP_ASSIGN;
     }
 }
-static int find_sub(const char *name)
+/* Returns the subroutine's first executable statement, or NULL if not
+ * found (see find_label_in_unit). */
+static struct Stmt *find_sub(const char *name)
 {
     char n[MAXNAME],w[MAXNAME];
     int i;
     const char*p;
     upcase(n,name);
-    for(i=0;i<G->ns;i++)if(starts(G->stmts[i].text,"SUBROUTINE"))
+    for(i=0;i<g_ns;i++)if(starts(g_stmts[i].text,"SUBROUTINE"))
     {
-        p=G->stmts[i].text+10;
+        p=g_stmts[i].text+10;
         while(*p&&isspace((unsigned char)*p))p++;
         upcase(w,p);
-        if(!strcmp(w,n))return i+1;
+        if(!strcmp(w,n))return &g_stmts[i+1];
     }
-    return -1;
+    return NULL;
 }
 static void parse_decl(char *s,int type)
 {
@@ -865,9 +884,9 @@ static void parse_decls(void)
 {
     int i;
     char buf[MAXLINE];
-    for(i=0;i<G->ns;i++)
+    for(i=0;i<g_ns;i++)
     {
-        strcpy(buf,G->stmts[i].text);
+        strcpy(buf,g_stmts[i].text);
         trim(buf);
         if(starts(buf,"INTEGER*1"))parse_decl(buf,TYPE_I1);
         else if(starts(buf,"INTEGER*2"))parse_decl(buf,TYPE_I2);
@@ -881,7 +900,7 @@ static void decode_action(struct Stmt *st,char *q)
     if(starts(q,"GOTO")||starts(q,"GO TO"))
     {
         st->act=ACT_GOTO;
-        st->act_target=parse_goto_label(q);
+        st->act_target_label=parse_goto_label(q);
         return;
     }
     if(starts(q,"RETURN"))
@@ -900,9 +919,10 @@ static void decode_stmts(void)
     int i,lab,nl;
     char buf[MAXLINE],*s,*p,*q,*r;
     struct Stmt *st;
-    for(i=0;i<G->ns;i++)
+    struct Stmt *found;
+    for(i=0;i<g_ns;i++)
     {
-        st=&G->stmts[i];
+        st=&g_stmts[i];
         strcpy(buf,st->text);
         trim(buf);
         s=buf;
@@ -967,7 +987,7 @@ static void decode_stmts(void)
             st->op=OP_DO;
             p=s+2;
             while(*p&&isspace((unsigned char)*p))p++;
-            st->target=atoi(p);
+            st->target_label=atoi(p);
             while(*p&&!isspace((unsigned char)*p))p++;
             while(*p&&isspace((unsigned char)*p))p++;
             q=strchr(p,'=');
@@ -1025,7 +1045,8 @@ static void decode_stmts(void)
                     if(isdigit((unsigned char)*p))
                     {
                         lab=atoi(p);
-                        st->targets[nl++]=find_label_in_unit(lab,st->unit);
+                        found=find_label_in_unit(lab,st->unit);
+                        st->targets[nl++]=found?(int)(found-g_stmts):-1;
                     }
                     while(isdigit((unsigned char)*p))p++;
                 }
@@ -1051,12 +1072,12 @@ static void decode_stmts(void)
             continue;
         }
     }
-    for(i=0;i<G->ns;i++)
+    for(i=0;i<g_ns;i++)
     {
-        st=&G->stmts[i];
-        if(st->op==OP_DO)st->target=find_label_in_unit(st->target,st->unit);
+        st=&g_stmts[i];
+        if(st->op==OP_DO)st->target=find_label_in_unit(st->target_label,st->unit);
         if(st->op == OP_IF && st->act == ACT_GOTO) {
-            st->act_target = find_label_in_unit(st->act_target, st->unit);
+            st->act_target = find_label_in_unit(st->act_target_label, st->unit);
         }
     }
 }
@@ -1077,113 +1098,139 @@ static void write_pre(struct Stmt *st)
 }
 static void do_return(void)
 {
-    if(G->ncall<=0)
+    if(g_ncall<=0)
     {
-        G->halted=1;
+        g_halted=1;
         return;
     }
-    G->pc=G->calls[--G->ncall].pc;
+    g_pc=g_calls[--g_ncall].pc;
 }
-static void exec_stmt(void)
-{
-    struct Stmt *st;
-    struct DoEnt *d;
-    int v,idx;
-    st=&G->stmts[G->pc];
-    switch(st->op)
-    {
-        case OP_SKIP: G->pc++;
-        return;
-        case OP_STOP: G->halted=1;
-        return;
-        case OP_RETURN: do_return();
-        return;
-        case OP_WRITE: write_pre(st);
-        G->pc++;
-        return;
-        case OP_CALL: if(st->target<0)die("bad call");
-        if(G->ncall>=MAXCALL)die("call stack");
-        G->calls[G->ncall++].pc=G->pc+1;
-        G->pc=st->target;
-        return;
-        case OP_DO: if(G->ndo>=MAXDO)die("do stack");
-        set_sym_val(st->sym,0,eval_e(st->ae));
-        d=&G->dos[G->ndo++];
-        d->label=st->target;
-        d->pc_after=G->pc+1;
-        d->sym=st->sym;
-        d->endv=eval_e(st->be);
-        d->step=eval_e(st->ce);
-        G->pc++;
-        return;
-        case OP_CONTINUE: if(G->ndo>0 && G->dos[G->ndo-1].label==G->pc)
-        {
-            d=&G->dos[G->ndo-1];
-            v=get_sym_val(d->sym,0)+d->step;
-            set_sym_val(d->sym,0,v);
-            if((d->step>=0&&v<=d->endv)||(d->step<0&&v>=d->endv))
-            {
-                G->pc=d->pc_after;
-                return;
-            }
-            G->ndo--;
-        }
-        G->pc++;
-        return;
-        case OP_IF: if(eval_e(st->ae))
-        {
-            if(st->act==ACT_GOTO)
-            {
-                if(st->act_target<0)die("bad label");
-                G->pc=st->act_target;
-                return;
-            }
-            if(st->act==ACT_RETURN)
-            {
-                do_return();
-                return;
-            }
-            if(st->act==ACT_ASSIGN)
-            {
-                assign_pre(st->act_sym,st->act_idx_e,st->act_rhs_e);
-            }
-        }
-        G->pc++;
-        return;
-        case OP_GOTO: if(st->target<0)die("bad label");
-        G->pc=st->target;
-        return;
-        case OP_CGOTO: idx=eval_e(st->ae);
-        if(idx>=1&&idx<=st->ntargets)
-        {
-            G->pc=st->targets[idx-1];
-            return;
-        }
-        G->pc++;
-        return;
-        case OP_ASSIGN: assign_pre(st->sym,st->ae,st->be);
-        G->pc++;
-        return;
-    }
-    G->pc++;
-}
+/* run_prog merges what used to be a separate exec_stmt(), called from a
+ * one-line while loop, into the loop body directly: exec_stmt was always
+ * too big for dcc's inliner (a switch with locals - dcc only inlines a
+ * single expression or a simple if-chain, never anything with
+ * declarations), so every statement execution paid a real call/ret plus
+ * exec_stmt's own prologue/epilogue for its 4 locals. There was exactly
+ * one call site, so merging the bodies is exactly what a real inliner
+ * would have done here anyway, with no code-size tradeoff since nothing
+ * gets duplicated.
+ *
+ * g_pc is now a struct Stmt* (was: an int index into g_stmts[]) - struct
+ * Stmt is 60+ bytes, not a power of 2, so `&g_stmts[g_pc]` recomputed a
+ * genuine multiply-by-sizeof(struct Stmt) on every single statement
+ * dispatch. Advancing via `g_pc++` on the common (non-branching) path is
+ * a compile-time-constant pointer bump instead - the same fix already
+ * applied to pint/cint/bint/adaint/fint's bytecode dispatch loops earlier
+ * this session. Every GOTO/CALL/DO/computed-GOTO target, and the DO-loop
+ * bookkeeping (Call.pc, DoEnt.label/pc_after) that used to store a
+ * statement index, is now resolved to a pointer instead: for GOTO/CALL/
+ * computed-GOTO targets that happens once at decode_stmts() parse time,
+ * entirely off the runtime path; for the DO-loop fields it happens once
+ * per loop entry and is then reused, unconverted, on every iteration
+ * (previously a repeated multiply on every single pass through the
+ * loop's CONTINUE statement). */
 static void run_prog(void)
 {
-    G->pc=0;
-    while(!G->halted&&G->pc>=0&&G->pc<G->ns)exec_stmt();
+    struct Stmt *st;
+    struct Stmt *stmts_end;
+    struct DoEnt *d;
+    int v,idx;
+
+    g_pc=g_stmts;
+    stmts_end=g_stmts+g_ns;
+    while(!g_halted && g_pc>=g_stmts && g_pc<stmts_end)
+    {
+        st=g_pc;
+        switch(st->op)
+        {
+            case OP_SKIP: g_pc++;
+            continue;
+            case OP_STOP: g_halted=1;
+            continue;
+            case OP_RETURN: do_return();
+            continue;
+            case OP_WRITE: write_pre(st);
+            g_pc++;
+            continue;
+            case OP_CALL: if(st->target==NULL)die("bad call");
+            if(g_ncall>=MAXCALL)die("call stack");
+            g_calls[g_ncall++].pc=g_pc+1;
+            g_pc=st->target;
+            continue;
+            case OP_DO: if(g_ndo>=MAXDO)die("do stack");
+            set_sym_val(st->sym,0,eval_e(st->ae));
+            d=&g_dos[g_ndo++];
+            d->label=st->target;
+            d->pc_after=g_pc+1;
+            d->sym=st->sym;
+            d->endv=eval_e(st->be);
+            d->step=eval_e(st->ce);
+            g_pc++;
+            continue;
+            case OP_CONTINUE: if(g_ndo>0 && g_dos[g_ndo-1].label==g_pc)
+            {
+                d=&g_dos[g_ndo-1];
+                v=get_sym_val(d->sym,0)+d->step;
+                set_sym_val(d->sym,0,v);
+                if((d->step>=0&&v<=d->endv)||(d->step<0&&v>=d->endv))
+                {
+                    g_pc=d->pc_after;
+                    continue;
+                }
+                g_ndo--;
+            }
+            g_pc++;
+            continue;
+            case OP_IF: if(eval_e(st->ae))
+            {
+                if(st->act==ACT_GOTO)
+                {
+                    if(st->act_target==NULL)die("bad label");
+                    g_pc=st->act_target;
+                    continue;
+                }
+                if(st->act==ACT_RETURN)
+                {
+                    do_return();
+                    continue;
+                }
+                if(st->act==ACT_ASSIGN)
+                {
+                    assign_pre(st->act_sym,st->act_idx_e,st->act_rhs_e);
+                }
+            }
+            g_pc++;
+            continue;
+            case OP_GOTO: if(st->target==NULL)die("bad label");
+            g_pc=st->target;
+            continue;
+            case OP_CGOTO: idx=eval_e(st->ae);
+            if(idx>=1&&idx<=st->ntargets)
+            {
+                g_pc=g_stmts+st->targets[idx-1];
+                continue;
+            }
+            g_pc++;
+            continue;
+            case OP_ASSIGN: assign_pre(st->sym,st->ae,st->be);
+            g_pc++;
+            continue;
+        }
+        g_pc++;
+    }
 }
 static void add_stmt(int label,char*s,int unit)
 {
-    if(G->ns>=MAXSTMT)die("too many statements");
-    G->stmts[G->ns].label=label;
-    G->stmts[G->ns].text=xstrdup2(s);
-    G->stmts[G->ns].unit=unit;
-    G->stmts[G->ns].ae=-1;
-    G->stmts[G->ns].be=-1;
-    G->stmts[G->ns].ce=-1;
-    G->stmts[G->ns].act_idx_e=-1;
-    G->stmts[G->ns].act_rhs_e=-1;
-    G->ns++;
+    if(g_ns>=MAXSTMT)die("too many statements");
+    g_stmts[g_ns].label=label;
+    g_stmts[g_ns].text=xstrdup2(s);
+    g_stmts[g_ns].unit=unit;
+    g_stmts[g_ns].ae=-1;
+    g_stmts[g_ns].be=-1;
+    g_stmts[g_ns].ce=-1;
+    g_stmts[g_ns].act_idx_e=-1;
+    g_stmts[g_ns].act_rhs_e=-1;
+    g_ns++;
 }
 static void parse_source(void)
 {
@@ -1192,21 +1239,21 @@ static void parse_source(void)
     int li,c,label,unit;
     p=0;
     unit=0;
-    while(p<G->slen)
+    while(p<g_slen)
     {
         li=0;
-        while(p<G->slen&&G->src[p]!='\n'&&li<MAXLINE-1)
+        while(p<g_slen&&g_src[p]!='\n'&&li<MAXLINE-1)
         {
-            c=(unsigned char)G->src[p++];
+            c=(unsigned char)g_src[p++];
             if(c==0x1a)
             {
-                p=G->slen;
+                p=g_slen;
                 break;
             }
             if(c!='\r')line[li++]=(char)c;
         }
-        while(p<G->slen&&G->src[p]!='\n')p++;
-        if(p<G->slen&&G->src[p]=='\n')p++;
+        while(p<g_slen&&g_src[p]!='\n')p++;
+        if(p<g_slen&&g_src[p]=='\n')p++;
         line[li]=0;
         if(line[0]=='C'||line[0]=='c'||line[0]=='#')continue;
         trim(line);
@@ -1252,48 +1299,42 @@ static int load_file(const char*name)
         fclose(f);
         return 0;
     }
-    G->src=(char*)malloc((unsigned int)n+1);
-    if(!G->src)
+    g_src=(char*)malloc((unsigned int)n+1);
+    if(!g_src)
     {
         fclose(f);
         return 0;
     }
-    got=(long)fread(G->src,1,(unsigned int)n,f);
+    got=(long)fread(g_src,1,(unsigned int)n,f);
     fclose(f);
     if(got!=n)return 0;
-    while(n>0&&(unsigned char)G->src[n-1]==0x1a)n--;
-    G->src[n]=0;
-    G->slen=n;
+    while(n>0&&(unsigned char)g_src[n-1]==0x1a)n--;
+    g_src[n]=0;
+    g_slen=n;
     return 1;
 }
 static void init_state(void)
 {
-    G=(struct State*)calloc(1,sizeof(struct State));
-    if(!G)
-    {
-        fprintf(stderr,"out of memory\n");
-        exit(1);
-    }
-    G->stmts=(struct Stmt*)xcalloc(MAXSTMT,sizeof(struct Stmt));
-    G->syms=(struct Sym*)xcalloc(MAXSYM,sizeof(struct Sym));
-    G->calls=(struct Call*)xcalloc(MAXCALL,sizeof(struct Call));
-    G->dos=(struct DoEnt*)xcalloc(MAXDO,sizeof(struct DoEnt));
-    G->exprs=(struct Expr*)xcalloc(MAXEXPR,sizeof(struct Expr));
-    G->etoks=(struct ETok*)xcalloc(MAXETOK,sizeof(struct ETok));
-    G->mem=(unsigned char*)xcalloc(INITMEM,1);
-    G->mcap=INITMEM;
+    g_stmts=(struct Stmt*)xcalloc(MAXSTMT,sizeof(struct Stmt));
+    g_syms=(struct Sym*)xcalloc(MAXSYM,sizeof(struct Sym));
+    g_calls=(struct Call*)xcalloc(MAXCALL,sizeof(struct Call));
+    g_dos=(struct DoEnt*)xcalloc(MAXDO,sizeof(struct DoEnt));
+    g_exprs=(struct Expr*)xcalloc(MAXEXPR,sizeof(struct Expr));
+    g_etoks=(struct ETok*)xcalloc(MAXETOK,sizeof(struct ETok));
+    g_mem=(unsigned char*)xcalloc(INITMEM,1);
+    g_mcap=INITMEM;
 }
 static void print_stats(void)
 {
-    if(!G->verbose)return;
+    if(!g_verbose)return;
     fprintf(stderr,"\nFORINT usage summary\n");
-    fprintf(stderr,"  Source bytes:    %ld / %ld\n",G->slen,MAXSRC);
-    fprintf(stderr,"  Statements:      %d / %d\n",G->ns,MAXSTMT);
-    fprintf(stderr,"  Symbols:         %d / %d\n",G->nsy,MAXSYM);
+    fprintf(stderr,"  Source bytes:    %ld / %ld\n",g_slen,MAXSRC);
+    fprintf(stderr,"  Statements:      %d / %d\n",g_ns,MAXSTMT);
+    fprintf(stderr,"  Symbols:         %d / %d\n",g_nsy,MAXSYM);
     fprintf(stderr,"  Data bytes:      %d used, %d allocated, %d max\n",
-            G->mtop,G->mcap,MAXMEM);
-    fprintf(stderr,"  Expressions:     %d / %d\n",G->ne,MAXEXPR);
-    fprintf(stderr,"  Expr tokens:     %d / %d\n",G->netok,MAXETOK);
+            g_mtop,g_mcap,MAXMEM);
+    fprintf(stderr,"  Expressions:     %d / %d\n",g_ne,MAXEXPR);
+    fprintf(stderr,"  Expr tokens:     %d / %d\n",g_netok,MAXETOK);
 }
 int main(int argc,char**argv)
 {
@@ -1302,7 +1343,7 @@ int main(int argc,char**argv)
     argi=1;
     if(argi<argc&&(!strcmp(argv[argi],"-V")||!strcmp(argv[argi],"-v")))
     {
-        G->verbose=1;
+        g_verbose=1;
         argi++;
     }
     if(argi>=argc)
