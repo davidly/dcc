@@ -94,6 +94,38 @@ static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
     case AST_COMMA:
         return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
     case AST_ASSIGN:
+        /* Same hazard as TOK_INC/TOK_DEC just above, for the same reason:
+         * substituted verbatim onto a parameter, the assignment target
+         * would become the caller's argument EXPRESSION, not an lvalue
+         * ("3 = 0" for a call site like f(3)) - inline_param_index's own
+         * caller (gen_assign_ast, dcc_ast_gen_expr.c) then calls find_sym
+         * on whatever AST_IDENT node the substitution produced there,
+         * which is simply absent for a non-identifier expression,
+         * crashing on a NULL name. Found via a minimal repro: `static
+         * inline int f(int cond,int idx){if(cond)idx=0;return idx+1;}` -
+         * the existing guard-capture machinery (inline_return_expr_from_
+         * seq's "side-effect-only guard" case, this file) explicitly
+         * supports folding `if (cond) idx=0;` ahead of a return into the
+         * inlined expression, with no check that `idx` here is a
+         * parameter being reassigned rather than some unrelated side
+         * effect like the die() call its own comment uses as the
+         * motivating example - this is the missing check that makes that
+         * substitution sound.
+         *
+         * Deliberately narrower than inline_expr_touches_param(fn, n->a)
+         * (which the TOK_INC/TOK_DEC case above uses): that checks whether
+         * a parameter appears ANYWHERE in n->a, but the actual hazard is
+         * only when n->a - the assignment target ITSELF - reduces to a
+         * bare parameter identifier. `fold_mem[base+idx*esz] = v;` (an
+         * array-element target whose INDEX merely reads parameters) is
+         * perfectly sound to substitute and must stay eligible - an
+         * earlier, broader version of this check (matching the INC/DEC
+         * one exactly) wrongly declined it too, regressing several
+         * already-working inline candidates (tests/tinline.c, tinlinfb.c,
+         * attnc11.c, and others) that never touched the actual crash. */
+        if (n->a != NULL && n->a->kind == AST_IDENT &&
+            inline_param_index(fn, n->a->sval) >= 0)
+            return 0;
         return inline_expr_is_simple(fn, n->a) && inline_expr_is_simple(fn, n->b);
     case AST_MEMBER:
         return inline_expr_is_simple(fn, n->a);
