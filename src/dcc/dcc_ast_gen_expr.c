@@ -944,6 +944,24 @@ void gen_long_cmp_ast(const struct AstNode *n)
     g_long_from16 = 0;
 }
 
+/* Strips a widening-to-long cast (e.g. the `(uint32_t)` in `(uint32_t)b`)
+ * down to the plain <=16-bit value underneath, when the cast is exactly
+ * that and nothing more (not a float conversion). Shared by every
+ * "plain u16 source" check/use around the __m1mu fast path below: proving
+ * a value is one of these already establishes that widening it to long
+ * only appends a zero high word, so evaluating the stripped node directly
+ * is worth exactly the same 16 bits as evaluating the cast - without also
+ * paying for gen_cast_ast's zero-extension of DE, which this fast path
+ * only wants for one of the three "plain u16 source" positions to begin
+ * with (via its own trailing `ld de,0` on the result), or in the "same
+ * source twice" case (ast_same_plain_u16_source), not at all. */
+static const struct AstNode *ast_strip_u16_widen_cast(const struct AstNode *n)
+{
+    if (n != NULL && n->kind == AST_CAST && type_is_long(n->type) && !type_is_float(n->type))
+        return n->a;
+    return n;
+}
+
 /* True if n, once any explicit widening-to-long cast around it is stripped
  * away, is a plain unsigned value no wider than 16 bits - i.e. widening it
  * to long (whether via that cast or via the ordinary usual-arithmetic-
@@ -959,10 +977,7 @@ static int ast_is_plain_u16_source(const struct AstNode *n)
 {
     int t;
 
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_CAST && type_is_long(n->type) && !type_is_float(n->type))
-        n = n->a;
+    n = ast_strip_u16_widen_cast(n);
     if (n == NULL)
         return 0;
     t = promote_int_type(ast_expr_type_for_sizeof(n));
@@ -1007,10 +1022,8 @@ static int ast_const_int_operand_value(const struct AstNode *n, long *out)
  * ast_is_plain_u16_source's own "just a value" scope. */
 static int ast_same_plain_u16_source(const struct AstNode *a, const struct AstNode *b)
 {
-    if (a != NULL && a->kind == AST_CAST && type_is_long(a->type) && !type_is_float(a->type))
-        a = a->a;
-    if (b != NULL && b->kind == AST_CAST && type_is_long(b->type) && !type_is_float(b->type))
-        b = b->a;
+    a = ast_strip_u16_widen_cast(a);
+    b = ast_strip_u16_widen_cast(b);
     if (a == NULL || b == NULL)
         return 0;
     return a->kind == AST_IDENT && b->kind == AST_IDENT && a->sym != NULL && a->sym == b->sym;
@@ -1087,7 +1100,15 @@ void gen_long_arith_ast(const struct AstNode *n)
     if (n->op == '%' && n->a != NULL && n->a->kind == AST_BINARY && n->a->op == '*' &&
         ast_is_plain_u16_source(n->a->a) && ast_is_plain_u16_source(n->a->b) &&
         ast_is_plain_u16_source(n->b)) {
-        ast_gen_expr(n->a->a);
+        /* Evaluate the stripped (uncast) node, not n->a->a/n->a->b/n->b
+         * themselves: each is already known plain-u16 (possibly under a
+         * widening cast to long), so its stripped form is worth the exact
+         * same 16 bits pushed here - without gen_cast_ast's zero-extension
+         * of DE for the cast, which this fast path has no use for (nothing
+         * reads DE between here and the `pop de`/`pop bc`/`pop hl` below
+         * that overwrite it, and the actual long-typed result gets its own
+         * zero-extension via the trailing `ld de,0` after the call). */
+        ast_gen_expr(ast_strip_u16_widen_cast(n->a->a));
         emit("\tpush hl\n");
         if (ast_same_plain_u16_source(n->a->a, n->a->b)) {
             /* b*b (or (wide)b*(wide)b): the second operand is a re-read of
@@ -1096,10 +1117,10 @@ void gen_long_arith_ast(const struct AstNode *n)
              * slot. */
             emit("\tpush hl\n");
         } else {
-            ast_gen_expr(n->a->b);
+            ast_gen_expr(ast_strip_u16_widen_cast(n->a->b));
             emit("\tpush hl\n");
         }
-        ast_gen_expr(n->b);
+        ast_gen_expr(ast_strip_u16_widen_cast(n->b));
         emit("\tpush hl\n");
         emit("\tpop bc\n");             /* BC = c (modulus) */
         emit("\tpop de\n");             /* DE = b */
