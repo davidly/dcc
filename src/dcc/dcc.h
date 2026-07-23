@@ -535,6 +535,13 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
  * around it than this file's own lenient reload-repair one - see that
  * function's header comment. Defined in dcc_func.c. */
 int line_touches_bc_reg(const char *s);
+/* True if `s` has a captured, codegen-time-substitutable inline body (one
+ * of inline_return_expr/inline_stmt_expr/inline_stmt_body). Shared with
+ * dcc_licm.c/dcc_loop_regalloc.c's eligibility scans, which recurse into
+ * that captured body instead of declining outright on the plain AST_CALL
+ * node - matching what try_gen_inline_call_ast will actually substitute at
+ * codegen time. Defined in dcc_func.c. */
+int is_inline_substitutable(struct Sym *s);
 /* True if `buf` (the full generated-assembly text under verification)
  * contains a "\tcall NAME" whose NAME is not one of the DCCRTL.MAC-
  * contracted BC-preserving runtime helpers (__mulu, __udivmod, __divu,

@@ -556,7 +556,7 @@ static void inline_temp_name(char *dst, int dstsz, int index)
     (void)dstsz;
 }
 
-static int is_inline_substitutable(struct Sym *s)
+int is_inline_substitutable(struct Sym *s)
 {
     return s != NULL && s->is_static && s->is_inline &&
            (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL ||
@@ -4644,8 +4644,36 @@ static const char *g_safe_runtime_calls[] = {
     NULL
 };
 
-/* True if `buf` contains a "\tcall NAME" line whose NAME is not on
- * g_safe_runtime_calls above - i.e. true if there is at least one call this
+/* True if `name` (an asm-level call target, e.g. "_Z0001" for a static
+ * function or "_foo" for a public one - see sym_asm_name) is a function
+ * declared _Noreturn. Checked in addition to g_safe_runtime_calls: a call
+ * to such a function is trustworthy for a completely different reason than
+ * the DCCRTL.MAC contract above - not because it preserves bc/de, but
+ * because control never returns to any point after it, so whatever it
+ * clobbers can never be read back through this speculative attempt's
+ * promoted candidate on that path. This is the text-level counterpart to
+ * dcc_licm.c's AST-level tolerance for the same case (licm_scan_modified's
+ * AST_CALL handling) - that scan makes the loop eligible to ATTEMPT
+ * promotion in the first place; this is what makes the attempt actually
+ * verify once the call's real asm name is visible in the generated text
+ * (found via forint.c's eval_e: get_sym_val inlines cleanly, but its own
+ * callee cell_at still has a genuine, non-inlined `call` to die() for its
+ * bounds check, which is _Noreturn but not itself inline-substitutable). */
+static int asm_name_is_noreturn_call(const char *name)
+{
+    int i;
+
+    for (i = 0; i < nglobals; i++) {
+        if (globals[i].storage == SC_FUNC && globals[i].is_noreturn &&
+            strcmp(asm_name_for(globals[i].name), name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* True if `buf` contains a "\tcall NAME" line whose NAME is neither on
+ * g_safe_runtime_calls above nor a call to a _Noreturn function (see
+ * asm_name_is_noreturn_call) - i.e. true if there is at least one call this
  * speculative attempt cannot trust. NAME is taken as running from just after
  * "\tcall " to end of line (or a trailing comment/condition would break this,
  * but dcc's own codegen never emits either after a call's target). */
@@ -4683,6 +4711,8 @@ int buf_has_unsafe_call(const char *buf)
                 break;
             }
         }
+        if (!whitelisted && asm_name_is_noreturn_call(namebuf))
+            whitelisted = 1;
         if (!whitelisted)
             return 1;
 

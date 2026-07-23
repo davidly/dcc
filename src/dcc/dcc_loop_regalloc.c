@@ -152,6 +152,24 @@ static void loop_regalloc_count_idents(const struct AstNode *n, struct LoopIdent
     case AST_CAST:
         loop_regalloc_count_idents(n->a, ic);
         return;
+    case AST_CALL:
+        /* Deliberately NOT recursed into an inline-substitutable callee's
+         * captured body, unlike licm_scan_modified's matching case: that
+         * body's own identifiers (most concretely, a callee parameter that
+         * happens to share a bare name with one of THIS loop's own locals -
+         * found via forint.c's eval_e calling get_sym_val, whose own callee
+         * cell_at has a parameter literally named `a`, colliding with
+         * eval_e's own local `a`) would get bumped into the very same
+         * count-by-name bucket, inflating an outer candidate's reference
+         * count with uses that are actually a completely different symbol
+         * in a different scope - corrupting ranking (which candidate looks
+         * "most-referenced") rather than just under-counting it, unlike
+         * every other deliberate gap in this function. Only this call's own
+         * ARGUMENT expressions (evaluated in the loop's own scope, so free
+         * of that risk) are counted. */
+        for (i = 0; i < n->list_len; ++i)
+            loop_regalloc_count_idents(n->list[i], ic);
+        return;
     case AST_IDENT:
         loop_ident_bump(ic, n->sval);
         return;
@@ -249,6 +267,25 @@ static int loop_regalloc_used_as_index(const struct AstNode *n, const char *name
                loop_regalloc_used_as_index(n->c, name);
     case AST_CAST:
         return loop_regalloc_used_as_index(n->a, name);
+    case AST_CALL:
+        /* Deliberately NOT recursed into an inline-substitutable callee's
+         * captured body - see loop_regalloc_count_idents' matching AST_CALL
+         * case for why: `name` is always a local/param of THIS function
+         * (loop_regalloc_sym_eligible never admits a global), so a literal-
+         * string search for it inside a DIFFERENT function's callee body
+         * would only ever match by pure name coincidence, not a real
+         * reference - not the unsafe direction here (a false match just
+         * excludes a candidate that didn't need it; a false negative just
+         * risks a missed dccpeep-pattern win, same category as the tdmfuse
+         * case Phase 7a fixed), but not a meaningful signal either way, so
+         * left out for simplicity along with loop_regalloc_count_idents'
+         * matching gap. Only this call's own argument expressions (real
+         * uses of `name`, if any, are actually written there) are
+         * checked. */
+        for (i = 0; i < n->list_len; ++i)
+            if (loop_regalloc_used_as_index(n->list[i], name))
+                return 1;
+        return 0;
     default:
         return 0;
     }

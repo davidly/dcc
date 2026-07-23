@@ -64,6 +64,21 @@
 #include "dcc_ast.h"
 
 #define MAX_LICM_CANDIDATES 8
+#define LICM_MAX_INLINE_EXPAND_DEPTH 16
+
+/* "Currently being expanded" stack for AST_CALL's inline-substitution
+ * recursion below: guards against a self- or mutually-recursive chain of
+ * inline-substitutable functions sending this scan into unbounded (and,
+ * for a self-call, literally infinite) recursion. Safe to keep as file-
+ * scope state rather than threading it through every call: licm_scan_
+ * modified is a single synchronous recursive descent that always fully
+ * unwinds (push immediately before recursing into a callee's captured
+ * body, pop immediately after) before this file does anything else, and
+ * dcc is single-threaded. Hitting the cap (or revisiting a function
+ * already being expanded) just overflows - conservative, matching every
+ * other "shape this doesn't specifically model" decision in this file. */
+static struct Sym *g_licm_inline_expand_stack[LICM_MAX_INLINE_EXPAND_DEPTH];
+static int g_licm_inline_expand_depth;
 
 /* struct LicmModifiedNames now lives in dcc_ast.h (as LICM_MAX_MODIFIED_NAMES/
  * struct LicmModifiedNames) - dcc_loop_regalloc.c shares it. */
@@ -125,10 +140,31 @@ static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmM
  * explicitly safe: whatever it clobbers can't matter, because control never
  * returns to any point after it on this path for this candidate's
  * eligibility to be evaluated against - only its own argument expressions
- * (which do still execute) need scanning. A call to anything else - an
- * ordinary function, a function pointer, or an unresolvable callee - still
- * overflows, since it could modify anything through an escaped pointer or
- * global that this lexical scan can't rule out. */
+ * (which do still execute) need scanning.
+ *
+ * AST_CALL to a function dcc's inliner has captured as substitutable
+ * (is_inline_substitutable, dcc_func.c) is likewise not an automatic
+ * overflow: dcc's real codegen-time substitution (try_gen_inline_call_ast,
+ * invoked from gen_call_ast during ast_gen_expr) replaces the call with the
+ * callee's own captured body at the call site, so by the time this AST_CALL
+ * node reaches actual codegen it may never become a real "call" instruction
+ * at all - declining every loop that merely calls an inlinable helper (this
+ * file's motivating change: forint.c's eval_e, whose hot loop calls
+ * get_sym_val/set_sym_val for every variable access) would be needlessly
+ * conservative. After scanning the call's own arguments normally, this
+ * recurses into the callee's captured inline_return_expr/inline_stmt_expr/
+ * inline_stmt_body as if it were written at the call site - parameter names
+ * inside that captured body are left as-is (real substitution onto this
+ * call's actual arguments happens later, at codegen time) and scanned as
+ * ordinary identifiers, which is correct for this purpose: this scan only
+ * cares about what's modified/address-taken/called, and dcc's own scoping
+ * already prevents a parameter name from colliding with an unrelated
+ * caller-scope identifier of the same name. g_licm_inline_expand_stack
+ * guards against a self- or mutually-recursive chain of such functions
+ * (see its own comment). A call to anything else - an ordinary function, a
+ * function pointer, or an unresolvable callee - still overflows, since it
+ * could modify anything through an escaped pointer or global that this
+ * lexical scan can't rule out. */
 void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
 {
     int i;
@@ -196,11 +232,36 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
         return;
     case AST_CALL: {
         struct Sym *fn_sym;
+        const struct AstNode *inline_body;
+        int di, already_expanding;
 
         fn_sym = (n->a != NULL && n->a->kind == AST_IDENT) ? find_global(n->a->sval) : NULL;
         if (fn_sym != NULL && fn_sym->is_noreturn) {
             for (i = 0; i < n->list_len && !mod->overflowed; ++i)
                 licm_scan_modified(n->list[i], mod);
+            return;
+        }
+        if (fn_sym != NULL && is_inline_substitutable(fn_sym)) {
+            for (i = 0; i < n->list_len && !mod->overflowed; ++i)
+                licm_scan_modified(n->list[i], mod);
+            if (mod->overflowed)
+                return;
+
+            already_expanding = 0;
+            for (di = 0; di < g_licm_inline_expand_depth; ++di)
+                if (g_licm_inline_expand_stack[di] == fn_sym)
+                    already_expanding = 1;
+            if (already_expanding || g_licm_inline_expand_depth >= LICM_MAX_INLINE_EXPAND_DEPTH) {
+                mod->overflowed = 1;
+                return;
+            }
+
+            inline_body = fn_sym->inline_return_expr != NULL ? fn_sym->inline_return_expr :
+                          fn_sym->inline_stmt_expr != NULL ? fn_sym->inline_stmt_expr :
+                          fn_sym->inline_stmt_body;
+            g_licm_inline_expand_stack[g_licm_inline_expand_depth++] = fn_sym;
+            licm_scan_modified(inline_body, mod);
+            g_licm_inline_expand_depth--;
             return;
         }
         mod->overflowed = 1;
