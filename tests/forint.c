@@ -10,7 +10,16 @@
 #define MAXLINE 160
 #define MAXSTMT 160
 #define MAXSYM 64
-#define MAXNAME 16
+/* 24, not the more obvious 16: struct Sym's other four fields (kind, type,
+ * base, size) add 8 bytes, so name[24] makes sizeof(struct Sym) exactly 32
+ * - a power of 2. get_sym_val/set_sym_val compute &g_syms[si] on every
+ * variable read/write in the whole interpreted program (25%+8% of total
+ * runtime per profiling); with the previous name[16] (sizeof 24, not a
+ * power of 2), that address needed a 5-instruction shift/add sequence for
+ * si*24, versus 5 plain doublings for si*32 - fewer, cheaper instructions,
+ * and no wasted padding field, just a slightly more generous (than
+ * standard FORTRAN's own 6-character limit) identifier length. */
+#define MAXNAME 24
 #define MAXCALL 16
 #define MAXDO 16
 #define MAXMEM 9000
@@ -707,31 +716,44 @@ static int compile_expr_str(const char *s)
     g_exprs[i].len=g_netok-start;
     return i;
 }
+/* eval_e is a small stack-machine bytecode interpreter (g_etoks[], compiled
+ * once by cexpr()/friends) - the same shape as the bytecode dispatch loops
+ * in pint/cint/bint/adaint/fint/cobint and forint's own run_prog, all
+ * already fixed earlier this session to carry the "current position" as a
+ * pointer instead of an array index. This one was missed: `t=&g_etoks[i++];`
+ * recomputed i's address from scratch (base + i*4) every single token, and
+ * the VM operand stack (stack[]/sp) had the identical "int index,
+ * recompute the address every push/pop" shape. Both are now pointers,
+ * advanced/pushed/popped directly - no address recomputation on the
+ * common path. This is the single hottest function in forint by a wide
+ * margin (54% of total runtime per profiling), so this loop's shape
+ * matters more here than anywhere else in the interpreter. */
 static int eval_e(int ei)
 {
     int stack[24];
-    int sp,i,end,op,a,b;
+    int *sp;
+    int op,a,b;
     struct ETok *t;
+    struct ETok *tend;
     if(ei<0)return 0;
-    sp=0;
-    i=g_exprs[ei].start;
-    end=i+g_exprs[ei].len;
-    while(i<end)
+    sp=stack;
+    t=&g_etoks[g_exprs[ei].start];
+    tend=t+g_exprs[ei].len;
+    while(t<tend)
     {
-        t=&g_etoks[i++];
         op=t->op;
-        if(op==EO_CONST)stack[sp++]=t->a;
-        else if(op==EO_LOAD)stack[sp++]=get_sym_val(t->a,0);
+        if(op==EO_CONST)*sp++=t->a;
+        else if(op==EO_LOAD)*sp++=get_sym_val(t->a,0);
         else if(op==EO_LOADA)
         {
-            a=stack[--sp];
-            stack[sp++]=get_sym_val(t->a,a);
+            a=*--sp;
+            *sp++=get_sym_val(t->a,a);
         }
-        else if(op==EO_NEG)stack[sp-1]=-stack[sp-1];
+        else if(op==EO_NEG)sp[-1]=-sp[-1];
         else
         {
-            b=stack[--sp];
-            a=stack[--sp];
+            b=*--sp;
+            a=*--sp;
             switch(op)
             {
                 case EO_ADD: a=a+b; break;
@@ -749,10 +771,11 @@ static int eval_e(int ei)
                 case EO_OR: a=(a||b); break;
                 default: die("bad expr op");
             }
-            stack[sp++]=a;
+            *sp++=a;
         }
+        t++;
     }
-    return sp?stack[sp-1]:0;
+    return sp>stack?sp[-1]:0;
 }
 /* Returns the resolved statement, or NULL if lab isn't found in this
  * program (used directly as a runtime "no target" sentinel by every
