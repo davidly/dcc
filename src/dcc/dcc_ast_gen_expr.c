@@ -3446,27 +3446,6 @@ static const struct AstNode *inline_substitution_body(struct Sym *fn)
     return fn->inline_stmt_body;
 }
 
-static int inline_expr_contains_inline_call(const struct AstNode *n)
-{
-    int i;
-
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_CALL && n->a != NULL && n->a->kind == AST_IDENT) {
-        struct Sym *s;
-        s = find_global(n->a->sval);
-        if (s != NULL && s->is_static && s->is_inline && inline_substitution_body(s) != NULL)
-            return 1;
-    }
-    if (inline_expr_contains_inline_call(n->a) || inline_expr_contains_inline_call(n->b) ||
-        inline_expr_contains_inline_call(n->c) || inline_expr_contains_inline_call(n->d))
-        return 1;
-    for (i = 0; i < n->list_len; ++i)
-        if (inline_expr_contains_inline_call(n->list[i]))
-            return 1;
-    return 0;
-}
-
 /* True if evaluating n could have an observable side effect (a call, an
  * assignment, or ++/--) anywhere in its subtree. A real (non-inlined) call
  * always fully evaluates its arguments - side effects included - before the
