@@ -222,14 +222,14 @@ board 8 + CONSTANT B8
     board 9 pieceBlank FILL
 
     ( all other first moves are reflections of these 3 )
-    10 0 DO
+    1 0 DO
         0 moves !
         0 RUNIT
         1 RUNIT
         4 RUNIT
     LOOP
 
-    ." 10 iterations" CR
+    ." 1 iterations" CR
     ." moves evaluated: " moves @ . CR
 ;
 
