@@ -3433,12 +3433,60 @@ static int inline_expr_contains_inline_call(const struct AstNode *n)
     return 0;
 }
 
+/* True if evaluating n could have an observable side effect (a call, an
+ * assignment, or ++/--) anywhere in its subtree. A real (non-inlined) call
+ * always fully evaluates its arguments - side effects included - before the
+ * callee's body runs; inlining must preserve that same ordering guarantee
+ * even when a parameter is used only once, because the callee's OWN body
+ * can contain a side effect that is sequenced before the parameter's one
+ * use once substituted - e.g. push(v){ vs[vsp++]=v; } inlined with argument
+ * `!vpop()` clones to `vs[vsp++] = !vpop()`, and dcc's assignment codegen
+ * evaluates the LHS address (committing vsp++ to memory) before the RHS, so
+ * vpop()'s own vsp-- then reads the wrong slot. Confirmed via a minimal
+ * repro (a push/pop-shaped pair of static inline functions) and a bytecode
+ * dump showing identical output between a host build and the dcc build,
+ * isolating the bug to codegen ordering rather than any AST-level
+ * difference. A side-effect-free argument (a bare deref, arithmetic, a
+ * struct member read, ...) has nothing to reorder against the callee's own
+ * side effects even if it's evaluated at a different point than the
+ * caller wrote it, so - unlike inline_arg_reusable, which exists to avoid
+ * redundant re-evaluation of an expensive-but-safe expression when a
+ * parameter is used more than once - this check does not need to (and must
+ * not, for the sake of the constant-folding this whole temp-avoidance
+ * machinery exists to preserve) treat every non-reusable argument as
+ * unsafe, only actually side-effecting ones. */
+static int inline_arg_may_have_side_effect(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_CALL || n->kind == AST_ASSIGN || n->kind == AST_POSTFIX)
+        return 1;
+    if (n->kind == AST_UNARY && (n->op == TOK_INC || n->op == TOK_DEC))
+        return 1;
+    if (inline_arg_may_have_side_effect(n->a) || inline_arg_may_have_side_effect(n->b) ||
+        inline_arg_may_have_side_effect(n->c) || inline_arg_may_have_side_effect(n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (inline_arg_may_have_side_effect(n->list[i]))
+            return 1;
+    return 0;
+}
+
+static int inline_arg_needs_temp(const struct AstNode *n, int use_count)
+{
+    if (inline_arg_may_have_side_effect(n))
+        return 1;
+    return use_count > 1 && !inline_arg_reusable(n);
+}
+
 static int inline_call_needs_arg_temps(const struct AstNode *n, struct Sym *fn)
 {
     int i;
 
     for (i = 0; i < n->list_len; ++i)
-        if (fn->inline_param_use_count[i] > 1 && !inline_arg_reusable(n->list[i]))
+        if (inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i]))
             return 1;
     return 0;
 }
@@ -3473,27 +3521,23 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
     if (inline_expr_contains_inline_call(inline_substitution_body(fn)))
         return 0;
 
-    /* Per-parameter, not per-call: only a parameter that is itself used
-     * more than once AND whose own argument isn't cheaply re-evaluable
-     * needs a temp. A sibling parameter needing one (e.g. because its
-     * argument is a call) must not drag an unrelated parameter through a
-     * temp too - that parameter's argument, if simple (inline_arg_reusable:
-     * a literal, string literal, sizeof, or a bare identifier), is exactly
-     * as safe to substitute directly here as it would be if this whole
-     * function's gate (inline_call_needs_arg_temps) hadn't fired at all,
-     * since that's the same test used to decide whether ANY temps are
-     * needed in the first place. Substituting it directly instead of
-     * routing it through a temp preserves its compile-time-constant-ness
-     * for arithmetic in the inlined body (e.g. a literal element-size
-     * argument multiplying an index can still fold to a shift) - routing
-     * every parameter through a temp regardless of need was silently
-     * defeating that folding for any call where a completely unrelated
-     * parameter happened to need protecting. */
+    /* Per-parameter, not per-call: see inline_arg_needs_temp for the two
+     * independent reasons a parameter's argument needs a temp (it may have
+     * a side effect that could reorder against the callee's own, or it's
+     * reused and not cheap to re-evaluate) - a parameter matching neither
+     * never needs a temp, regardless of what else in this call needed one,
+     * and substituting it directly instead of routing it through a temp
+     * preserves its compile-time-constant-ness for arithmetic in the
+     * inlined body (e.g. a literal element-size argument multiplying an
+     * index can still fold to a shift) - routing every parameter through a
+     * temp regardless of need was silently defeating that folding for any
+     * call where a completely unrelated parameter happened to need
+     * protecting. */
     for (i = 0; i < n->list_len; ++i) {
         struct Sym *tmp;
         int want_type;
 
-        if (!(fn->inline_param_use_count[i] > 1 && !inline_arg_reusable(n->list[i])))
+        if (!inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i]))
             continue;
 
         inline_temp_name_for_call(temp_name_buf[i], 64, i);

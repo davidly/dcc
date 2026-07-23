@@ -75,9 +75,50 @@ static int inline_fold_check(void)
     return sum;
 }
 
+/* Regression test for a real dcc bug (fixed in inline_call_needs_arg_temps /
+ * emit_inline_arg_temps): a stack-shaped push/pop pair, both static inline,
+ * where push's own body has a side effect (vsp2++, part of its LHS array
+ * index) sequenced textually before its parameter's one use. Calling
+ * push(!pop()) with both inlined used to clone to vstack[vsp2++] = !pop(),
+ * and dcc's assignment codegen evaluated the LHS address - committing
+ * vsp2++ to memory - before the RHS, so pop()'s own vsp2-- then read the
+ * wrong slot. This doesn't change *what* gets computed once codegen order
+ * is corrected, so a plain correctness check can't catch a regression on
+ * its own; this test's cycle count is tracked in tests/perf_baselines.csv
+ * so a reintroduced unsafe direct-substitution shows up as a measurable
+ * perf change (fewer or more inline temps), not just silently-wrong output
+ * that happens to still be caught here by the return value. */
+static int vstack[8];
+static int vsp2;
+
+static inline int vpop2(void)
+{
+    return vstack[--vsp2];
+}
+
+static inline void vpush2(int v)
+{
+    vstack[vsp2++] = v;
+}
+
+static int inline_order_check(void)
+{
+    int a, b;
+
+    vsp2 = 0;
+    vpush2(0);
+    vpush2(5);
+    b = vpop2();
+    a = vpop2();
+    vpush2(a == b);
+    vpush2(!vpop2());
+    return vpop2();
+}
+
 int main(void)
 {
     printf("static inline: %d %d\n", scale3(7), helper_sub(helper_add(10, 5), 3));
     printf("inline fold check: %d\n", inline_fold_check());
+    printf("inline order check: %d\n", inline_order_check());
     return 0;
 }

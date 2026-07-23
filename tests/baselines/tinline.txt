@@ -1,2 +1,3 @@
 static inline: 21 12
 inline fold check: 423
+inline order check: 1
