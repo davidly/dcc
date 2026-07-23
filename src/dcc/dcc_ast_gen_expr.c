@@ -3474,9 +3474,123 @@ static int inline_arg_may_have_side_effect(const struct AstNode *n)
     return 0;
 }
 
-static int inline_arg_needs_temp(const struct AstNode *n, int use_count)
+static int inline_body_is_side_effect_free(const struct AstNode *n);
+static int inline_fn_body_is_side_effect_free(struct Sym *fn);
+
+static int g_purity_check_depth;
+
+/* True if a call within a provably-pure-candidate body is itself provably
+ * free of side effects: only when it's a call to another static inline
+ * function whose own substitution body is (recursively) also free of
+ * side effects, AND every argument this body itself passes is too - those
+ * arguments are part of THIS function's own authored source, not a
+ * caller's substituted argument, so they need checking the same way the
+ * rest of the body does. Anything else (a non-inline call, a call through
+ * a function pointer, hitting the recursion guard) is conservatively
+ * treated as possibly side-effecting, since it can't be proven otherwise
+ * from here. */
+static int inline_call_is_provably_pure(const struct AstNode *n)
 {
-    if (inline_arg_may_have_side_effect(n))
+    struct Sym *s;
+    int i;
+    int ok;
+
+    if (n->a == NULL || n->a->kind != AST_IDENT)
+        return 0;
+    s = find_global(n->a->sval);
+    if (s == NULL || !s->is_static || !s->is_inline || inline_substitution_body(s) == NULL)
+        return 0;
+    if (g_purity_check_depth >= 8)
+        return 0;
+    g_purity_check_depth++;
+    ok = inline_fn_body_is_side_effect_free(s);
+    for (i = 0; ok && i < n->list_len; ++i)
+        ok = inline_body_is_side_effect_free(n->list[i]);
+    g_purity_check_depth--;
+    return ok;
+}
+
+/* Like inline_arg_may_have_side_effect, but for walking a static inline
+ * function's OWN substitution body (not a caller's argument): a bare
+ * identifier read (whether one of this function's own parameters or
+ * anything else) is never itself a side effect, so - unlike
+ * inline_arg_may_have_side_effect, which only needs to answer "could this
+ * argument expression itself have a side effect" - this also needs to
+ * recurse through calls (via inline_call_is_provably_pure) rather than
+ * flagging every call unconditionally, since a chain of pure static inline
+ * helpers (e.g. multiply_q8 calling q16_to_q8, both pure arithmetic) has
+ * nothing to protect a caller's side-effecting argument from. */
+static int inline_body_is_side_effect_free(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 1;
+    if (n->kind == AST_ASSIGN || n->kind == AST_POSTFIX ||
+        (n->kind == AST_UNARY && (n->op == TOK_INC || n->op == TOK_DEC)))
+        return 0;
+    if (n->kind == AST_CALL)
+        return inline_call_is_provably_pure(n);
+    if (!inline_body_is_side_effect_free(n->a) || !inline_body_is_side_effect_free(n->b) ||
+        !inline_body_is_side_effect_free(n->c) || !inline_body_is_side_effect_free(n->d))
+        return 0;
+    for (i = 0; i < n->list_len; ++i)
+        if (!inline_body_is_side_effect_free(n->list[i]))
+            return 0;
+    return 1;
+}
+
+/* For `*p = ...` or `p[i] = ...` (the only two shapes a void/stmt-body
+ * inline function's store target takes), only the ADDRESS-computing part
+ * (p, or p and i) needs to be side-effect-free - the outer deref/subscript
+ * itself just reads a value to know where to store, it doesn't write one,
+ * so it's never itself the hazard. Any other store shape (a struct member,
+ * etc.) is conservatively treated as unsafe rather than taught its own
+ * address-computing subset. */
+static int inline_lhs_addr_is_side_effect_free(const struct AstNode *lhs)
+{
+    if (lhs == NULL)
+        return 0;
+    if (lhs->kind == AST_UNARY && lhs->op == '*')
+        return inline_body_is_side_effect_free(lhs->a);
+    if (lhs->kind == AST_INDEX)
+        return inline_body_is_side_effect_free(lhs->a) &&
+               inline_body_is_side_effect_free(lhs->b);
+    return 0;
+}
+
+/* True if fn's own inline-substitution body has nothing that dcc's codegen
+ * guarantees will run before a substituted argument gets evaluated - see
+ * inline_arg_may_have_side_effect's comment for the hazard this exists to
+ * rule out. A void/stmt-body function's body is `LHS = RHS;`: the whole
+ * point of such a helper is to store somewhere, so the assignment itself
+ * isn't the hazard - only LHS's own address computation is (see
+ * inline_lhs_addr_is_side_effect_free); RHS is checked like any other
+ * body. A return-expr function's body has no assignment shape at all
+ * (inline_return_expr_from_seq only accepts a single expression or an
+ * if-chain folded to a ternary), so it's checked as a whole - a bare
+ * "return expr;" body being unsafe can only mean it contains an embedded
+ * assignment/++/-- or an unprovable call, both genuinely worth keeping
+ * conservative about. When this is true, inline_call_needs_arg_temps can
+ * skip the side-effect-based temp requirement for fn's parameters
+ * entirely - its use_count>1 reason for a temp still applies
+ * independently. */
+static int inline_fn_body_is_side_effect_free(struct Sym *fn)
+{
+    const struct AstNode *body;
+
+    body = inline_substitution_body(fn);
+    if (body == NULL)
+        return 1;
+    if (body->kind == AST_ASSIGN)
+        return inline_lhs_addr_is_side_effect_free(body->a) &&
+               inline_body_is_side_effect_free(body->b);
+    return inline_body_is_side_effect_free(body);
+}
+
+static int inline_arg_needs_temp(const struct AstNode *n, int use_count, int fn_body_safe)
+{
+    if (!fn_body_safe && inline_arg_may_have_side_effect(n))
         return 1;
     return use_count > 1 && !inline_arg_reusable(n);
 }
@@ -3484,9 +3598,11 @@ static int inline_arg_needs_temp(const struct AstNode *n, int use_count)
 static int inline_call_needs_arg_temps(const struct AstNode *n, struct Sym *fn)
 {
     int i;
+    int fn_body_safe;
 
+    fn_body_safe = inline_fn_body_is_side_effect_free(fn);
     for (i = 0; i < n->list_len; ++i)
-        if (inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i]))
+        if (inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i], fn_body_safe))
             return 1;
     return 0;
 }
@@ -3517,6 +3633,9 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
                                  char temp_name_buf[MAX_PROTO_PARAMS][64])
 {
     int i;
+    int fn_body_safe;
+
+    fn_body_safe = inline_fn_body_is_side_effect_free(fn);
 
     /* No longer bails out when the callee's own body contains a nested
      * inline call (it used to: `if (inline_expr_contains_inline_call(...))
@@ -3559,7 +3678,7 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
         struct Sym *tmp;
         int want_type;
 
-        if (!inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i]))
+        if (!inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i], fn_body_safe))
             continue;
 
         inline_temp_name_for_call(temp_name_buf[i], 64, i);
