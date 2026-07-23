@@ -143,6 +143,11 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
                   s->dim_count + 1 == index_count)))
                 return s->is_array ? s->type : type_decay_ptr(s->type);
         }
+        if (root != NULL && root->kind == AST_MEMBER) {
+            fd = ast_member_field_for_sizeof(root);
+            if (fd != NULL && fd->is_array && fd->dim_count == index_count)
+                return fd->elem_type;
+        }
         lt = ast_expr_type_for_sizeof(n->a);
         if (n->a != NULL && n->a->kind == AST_IDENT) {
             s = find_sym(n->a->sval);
@@ -285,6 +290,37 @@ static int ast_expr_is_array_row(const struct AstNode *n)
     return 0;
 }
 
+/*
+ * Descend an rvalue's base chain - through subscripts, member selections
+ * (. and ->) and pointer dereferences - to the identifier its value derives
+ * from, and report whether that identifier is absent from the symbol table.
+ * Such a base is a local declared in an inner block whose scope AST-build has
+ * not entered (nested-block locals register only when emitted), so the whole
+ * expression's type is unknowable here.  Enum constants are excluded: they
+ * carry a known int type and must keep the precise E0920 diagnostic.
+ */
+static int ast_expr_base_ident_unresolved(const struct AstNode *n)
+{
+    while (n != NULL) {
+        switch (n->kind) {
+        case AST_INDEX:
+        case AST_MEMBER:
+            n = n->a;
+            break;
+        case AST_UNARY:
+            if (n->op != '*')
+                return 0;
+            n = n->a;
+            break;
+        case AST_IDENT:
+            return find_sym(n->sval) == NULL && find_enum_const(n->sval) < 0;
+        default:
+            return 0;
+        }
+    }
+    return 0;
+}
+
 static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
 {
     const struct AstNode *cast;
@@ -303,17 +339,15 @@ static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
     if (ast_expr_is_null_pointer_constant(n))
         return 1;
     /*
-     * A bare identifier that is not yet in the symbol table denotes a
-     * declaration from an inner block whose scope has not been entered at
-     * AST-build time (nested-block locals only register when emitted).  Its
+     * When the value derives from an identifier not yet in the symbol table
+     * - a bare reference, or a subscript/member/deref rooted on one - that
+     * identifier is a declaration from an inner block whose scope AST-build
+     * has not entered (nested-block locals only register when emitted).  Its
      * type is not knowable here, so ast_expr_type_for_sizeof would wrongly
      * default it to int.  Do not treat that as an integer-to-pointer
      * assignment; a genuinely undeclared identifier is diagnosed later.
-     * Enum constants are excluded: they are looked up in their own table,
-     * have a known int type, and must keep the precise E0920 diagnostic.
      */
-    if (n->kind == AST_IDENT && find_sym(n->sval) == NULL &&
-        find_enum_const(n->sval) < 0)
+    if (ast_expr_base_ident_unresolved(n))
         return 1;
     if (type_ptr_depth(ast_expr_type_for_sizeof(n)) > 0)
         return 1;
