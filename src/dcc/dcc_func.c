@@ -524,17 +524,61 @@ static void inline_temp_name(char *dst, int dstsz, int index)
     (void)dstsz;
 }
 
+static int is_inline_substitutable(struct Sym *s)
+{
+    return s != NULL && s->is_static && s->is_inline &&
+           (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL ||
+            s->inline_stmt_body != NULL);
+}
+
 static int inline_function_has_multiuse_param(struct Sym *s)
 {
     int i;
 
-    if (s == NULL || !s->is_static || !s->is_inline ||
-        (s->inline_return_expr == NULL && s->inline_stmt_expr == NULL &&
-         s->inline_stmt_body == NULL))
+    if (!is_inline_substitutable(s))
         return 0;
     for (i = 0; i < s->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
         if (s->inline_param_use_count[i] > 1)
             return 1;
+    return 0;
+}
+
+/* Lexically scans a call's argument list (tok positioned just after the
+ * opening '(') for anything that could make emit_inline_arg_temps
+ * materialize a temp under the side-effect rule (dcc_ast_gen_expr.c's
+ * inline_arg_may_have_side_effect: a call, assignment, or ++/--),
+ * independent of whether the callee has a multi-use parameter - the
+ * pre-existing case inline_function_has_multiuse_param covers. Only needs
+ * to be a safe over-approximation, not exact: a false positive just
+ * reserves unused #itmpN stack slots (see reserve_inline_temp_locals); a
+ * false negative just means that one call site's emit_inline_arg_temps
+ * finds no local reserved (find_local returns NULL) and quietly falls
+ * back to a real, non-inlined call - a missed optimization, never a
+ * miscompile, since reserving the locals is orthogonal to whether a given
+ * call site's arguments actually need one. */
+static int call_args_may_need_temps(void)
+{
+    int depth;
+
+    depth = 1;
+    while (tok.kind != TOK_EOF && depth > 0) {
+        if (tok.kind == '(') {
+            depth++;
+        } else if (tok.kind == ')') {
+            depth--;
+            if (depth == 0)
+                break;
+        } else if (tok.kind == TOK_INC || tok.kind == TOK_DEC || tok.kind == '=' ||
+                   (tok.kind >= TOK_ADDEQ && tok.kind <= TOK_SHREQ)) {
+            return 1;
+        } else if (tok.kind == TOK_ID) {
+            next_token();
+            if (tok.kind == '(')
+                return 1; /* nested call */
+            continue;
+        }
+        next_token();
+    }
     return 0;
 }
 
@@ -573,6 +617,14 @@ static int function_body_mentions_multiuse_inline_call(void)
                 if (inline_function_has_multiuse_param(s)) {
                     result = 1;
                     break;
+                }
+                if (is_inline_substitutable(s)) {
+                    next_token(); /* consume '(', start of argument list */
+                    if (call_args_may_need_temps()) {
+                        result = 1;
+                        break;
+                    }
+                    continue;
                 }
             }
             continue;

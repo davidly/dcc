@@ -115,10 +115,63 @@ static int inline_order_check(void)
     return vpop2();
 }
 
+/* Regression test for a related fix (removing emit_inline_arg_temps' bail
+ * out when the callee's own body contains a nested inline call, plus
+ * teaching function_body_mentions_multiuse_inline_call's lexical pre-scan
+ * about call_args_may_need_temps so #itmpN locals actually get reserved for
+ * this shape): a call whose argument is itself a call to a static inline
+ * function that calls a SECOND static inline function, where the outer
+ * call's temp and the inner call's temp land at the SAME parameter index
+ * (1) in their respective functions. Before the fix this either lost
+ * inlining entirely for scale_and_clamp/clamp4 (falling back to real calls
+ * - a large, unnecessary cycle cost, not a correctness bug on its own) or,
+ * with only the pre-scan half of the fix missing, hit a NULL from
+ * find_local for the un-reserved #itmp1 slot. The #itmpN slots are
+ * per-function, not per-nesting-level, so this also stands as a check that
+ * reusing a slot NUMBER across nesting levels is safe: each slot is
+ * written, immediately consumed once, and only ever revisited after its
+ * prior value has already been fully read - see emit_inline_arg_temps'
+ * comment for why that ordering can't collide. */
+static int nestbuf[8];
+static int nestptr;
+
+static inline int nest_take(void)
+{
+    return nestbuf[--nestptr];
+}
+
+static inline void nest_give(int v)
+{
+    nestbuf[nestptr++] = v;
+}
+
+static inline int nest_clamp4(int value)
+{
+    if (value > 100) return 100;
+    if (value < -100) return -100;
+    if (value < 0) return -value;
+    return value;
+}
+
+static inline int nest_scale_and_clamp(int left, int right)
+{
+    return nest_clamp4(left * right);
+}
+
+static int inline_nest_check(void)
+{
+    nestptr = 0;
+    nest_give(10);
+    nest_give(4);
+    nest_give(nest_scale_and_clamp(3, nest_take()));
+    return nest_take();
+}
+
 int main(void)
 {
     printf("static inline: %d %d\n", scale3(7), helper_sub(helper_add(10, 5), 3));
     printf("inline fold check: %d\n", inline_fold_check());
     printf("inline order check: %d\n", inline_order_check());
+    printf("inline nest check: %d\n", inline_nest_check());
     return 0;
 }

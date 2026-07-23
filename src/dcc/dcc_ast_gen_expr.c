@@ -3518,8 +3518,30 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
 {
     int i;
 
-    if (inline_expr_contains_inline_call(inline_substitution_body(fn)))
-        return 0;
+    /* No longer bails out when the callee's own body contains a nested
+     * inline call (it used to: `if (inline_expr_contains_inline_call(...))
+     * return 0;`). That guard predates inline_arg_needs_temp's side-effect
+     * rule and was never actually about correctness here - temp
+     * materialization is inherently sequential and depth-first: each
+     * #itmpN slot is written, then immediately consumed exactly once
+     * (either directly, or by a nested call's own temp materialization,
+     * whose *result* - not the #itmpN memory - is what a caller further
+     * up eventually stores into its own, possibly same-numbered, #itmpN
+     * slot). Two different call levels can share a slot NUMBER because
+     * they can never be simultaneously live: nothing in this call-by-call,
+     * argument-by-argument process holds a temp's value across a point
+     * where a nested expansion could overwrite it before it's read.
+     * Verified by construction (a repro shaped like this exact pattern -
+     * a call whose argument is itself a call to a static inline function
+     * that calls a second static inline function, both at the same
+     * parameter index the outer call also uses) and by the full and
+     * extended suites. Keeping the bail-out was actively costly: without
+     * it, any call whose argument became side-effecting under the new
+     * rule and which itself nested a further inline call (e.g.
+     * attnc11.c's multiply_q8, whose body is `return
+     * q16_to_q8(left*right);`) lost inlining entirely rather than just
+     * gaining one temp - a double-digit percent cycle regression for a
+     * single-digit percent one. */
 
     /* Per-parameter, not per-call: see inline_arg_needs_temp for the two
      * independent reasons a parameter's argument needs a temp (it may have
