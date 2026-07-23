@@ -149,6 +149,22 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
             if (s != NULL && s->is_array)
                 return s->type;
         }
+        /* n->a is a struct/union array FIELD (`f.arr[i]` / `p->arr[i]`):
+         * the AST_MEMBER case above already returns fd->elem_type for an
+         * array field - i.e. lt here is already arr[i]'s own type, not
+         * "the type of arr as a whole" - so it must not be decayed again
+         * the way a genuinely pointer-valued n->a would be below. Missing
+         * this case for AST_MEMBER (unlike the AST_IDENT case just above,
+         * which already avoids the same double-decay for a plain array
+         * variable) silently dropped a pointer level for any struct field
+         * declared as a pointer ARRAY (`struct Foo *arr[N];`): elem_type
+         * is one-pointer-deep, type_decay_ptr then dropped it to zero,
+         * so `p = f.arr[0];` looked like an int-to-pointer assignment. */
+        if (n->a != NULL && n->a->kind == AST_MEMBER) {
+            struct FieldDef *fd = ast_member_field_for_sizeof(n->a);
+            if (fd != NULL && fd->is_array)
+                return lt;
+        }
         if (type_ptr_depth(lt) > 0)
             return type_decay_ptr(lt);
         return lt;

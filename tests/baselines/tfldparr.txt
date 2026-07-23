@@ -1,0 +1,3 @@
+via dot: 10
+via arrow: 20
+via chain: 10
