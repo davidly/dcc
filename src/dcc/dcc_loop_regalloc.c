@@ -280,18 +280,20 @@ static int loop_regalloc_sym_eligible(struct Sym *s)
     return 1;
 }
 
-/* Picks the best loop-scoped BC-promotion candidate for `for_node` (an
- * AST_FOR node), or NULL if none qualifies - considering BOTH read-only
- * candidates (Phase 1: never assigned/incremented/address-taken in the
- * loop, verified via try_loop_regalloc_bc's lenient reload-repair) and
- * write candidates (Phase 2: assigned and/or incremented/decremented,
- * verified via try_loop_regalloc_bc_write's stricter decline-only policy -
- * see that function's header comment for why a write candidate can't
- * safely use the lenient policy). Both draw from the same reference-count
- * ranking across the loop's condition/increment/body, so whichever
- * identifier is used the most wins regardless of category - only one can
- * occupy BC per loop either way. *out_is_write reports which policy the
- * winning candidate needs; the caller must route to the matching driver.
+/* Picks the best loop-scoped BC-promotion candidate for a loop whose
+ * condition/increment/body are `cond`/`incr`/`body` (`incr` may be NULL -
+ * AST_WHILE/AST_DOWHILE have no separate increment clause, only AST_FOR
+ * does), or NULL if none qualifies - considering BOTH read-only candidates
+ * (Phase 1: never assigned/incremented/address-taken in the loop, verified
+ * via try_loop_regalloc_bc's lenient reload-repair) and write candidates
+ * (Phase 2: assigned and/or incremented/decremented, verified via
+ * try_loop_regalloc_bc_write's stricter decline-only policy - see that
+ * function's header comment for why a write candidate can't safely use the
+ * lenient policy). Both draw from the same reference-count ranking across
+ * cond/incr/body, so whichever identifier is used the most wins regardless
+ * of category - only one can occupy BC per loop either way. *out_is_write
+ * reports which policy the winning candidate needs; the caller must route
+ * to the matching driver.
  *
  * A call, nested loop, switch, or goto anywhere in the loop declines
  * everything outright (dcc_licm.c's licm_scan_modified overflows), exactly
@@ -303,7 +305,10 @@ static int loop_regalloc_sym_eligible(struct Sym *s)
  * loop already declines the whole loop before write-candidate selection
  * ever runs, leaving exactly one exit point (the label right after the
  * loop) for the spill store try_loop_regalloc_bc_write emits there. */
-struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int *out_is_write)
+struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
+                                            const struct AstNode *incr,
+                                            const struct AstNode *body,
+                                            int *out_is_write)
 {
     struct LicmModifiedNames mod;
     struct LoopIdentCounts ic;
@@ -313,7 +318,7 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
     int best_write_count;
     int i;
 
-    if (for_node == NULL)
+    if (body == NULL)
         return NULL;
     /* BC already spoken for by dcc_func.c's whole-function candidate (for
      * this whole function, not just this loop) - never double-claim it. */
@@ -321,16 +326,47 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
         return NULL;
 
     memset(&mod, 0, sizeof(mod));
-    licm_scan_modified(for_node->b, &mod);
-    licm_scan_modified(for_node->c, &mod);
-    licm_scan_modified(for_node->d, &mod);
+    licm_scan_modified(cond, &mod);
+    licm_scan_modified(incr, &mod);
+    licm_scan_modified(body, &mod);
     if (mod.overflowed)
         return NULL;
 
     memset(&ic, 0, sizeof(ic));
-    loop_regalloc_count_idents(for_node->b, &ic);
-    loop_regalloc_count_idents(for_node->c, &ic);
-    loop_regalloc_count_idents(for_node->d, &ic);
+    loop_regalloc_count_idents(cond, &ic);
+    loop_regalloc_count_idents(incr, &ic);
+    loop_regalloc_count_idents(body, &ic);
+
+    /* If ANY identifier referenced in this loop was declared `register`
+     * (regardless of whether it's even eligible as a candidate itself),
+     * decline promoting anything in this loop at all. dccpeep has its own,
+     * completely independent register-allocation-shaped passes that
+     * specifically target register-qualified locals (e.g.
+     * pass_byte_loop_counter_to_reg_c, reactively promoting a narrowed
+     * `register`-qualified self-testing decrement counter into C) - dccpeep
+     * runs on dcc's output as pure text, with zero visibility into any
+     * reg_alloc claim this mechanism already made, so it can and does
+     * clobber a register this mechanism is already using for a DIFFERENT
+     * symbol across the very same loop. Found via tests/tregnarw.c's
+     * lres(): `register int n; ... while (--n) total = total + n;` -
+     * `total` (word, unrelated to `n`) got promoted into BC here, then
+     * dccpeep's pass_byte_loop_counter_to_reg_c independently promoted the
+     * narrowed byte counter `n` into C - the low half of the SAME
+     * register - silently overwriting `total`'s low byte and hanging the
+     * program in an infinite loop. `register` is a strong, cheap, already-
+     * available (Sym::is_register, set from the `register` keyword at
+     * declaration - dcc_decl.c's gen_local_decl_after_type) signal that
+     * some OTHER mechanism may want this loop's registers too; ceding the
+     * whole loop is far simpler and safer than trying to model dccpeep's
+     * exact pattern set here. */
+    {
+        int k;
+        for (k = 0; k < ic.n; ++k) {
+            struct Sym *rs = find_sym(ic.items[k].name);
+            if (rs != NULL && rs->is_register)
+                return NULL;
+        }
+    }
 
     /* Read-only and write candidates are ranked SEPARATELY, then combined
      * with a bias toward read-only: a write candidate only wins if its
@@ -404,9 +440,9 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
          * array (a plain accumulator, or a comparison-only participant)
          * is unaffected. */
         if (is_mod &&
-            (loop_regalloc_used_as_index(for_node->b, ic.items[i].name) ||
-             loop_regalloc_used_as_index(for_node->c, ic.items[i].name) ||
-             loop_regalloc_used_as_index(for_node->d, ic.items[i].name)))
+            (loop_regalloc_used_as_index(cond, ic.items[i].name) ||
+             loop_regalloc_used_as_index(incr, ic.items[i].name) ||
+             loop_regalloc_used_as_index(body, ic.items[i].name)))
             continue;
 
         s = find_sym(ic.items[i].name);
@@ -452,14 +488,14 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
     return NULL;
 }
 
-/* Speculatively generates `for_node` (via `gen_for_impl`, dcc_ast_gen_stmt.c's
+/* Speculatively generates `loop_node` (via `gen_loop_impl`, dcc_ast_gen_stmt.c's
  * ast_gen_for_stmt_impl - the renamed original body of ast_gen_for_stmt)
  * with `cand` primed into BC right before the loop instead of occupying its
  * normal frame slot, and verifies/finalizes via regalloc_buffer_finalize.
  * Modeled directly on dcc_func.c's try_speculative_bc_regalloc_function_body:
  * same tmpfile-redirect-generate-verify-commit-or-discard shape. Lighter in
  * one respect: no token-stream rewind is needed on a discarded attempt,
- * because for_node is an already-built AST subtree that this whole call
+ * because loop_node is an already-built AST subtree that this whole call
  * re-walks without reparsing anything - unlike dcc_func.c's whole-function
  * retry, which must reparse from source because gen_compound() is a fused
  * parse-and-emit loop with no persisted whole-function tree to re-walk (see
@@ -472,10 +508,10 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
  *
  * Returns 1 if the promoted version was committed to outf (cand->reg_alloc
  * is REG_NONE again by the time this returns either way - the caller must
- * NOT also call gen_for_impl itself when this returns 1). Returns 0 if
+ * NOT also call gen_loop_impl itself when this returns 1). Returns 0 if
  * declined; the caller must then generate the loop normally. */
-int try_loop_regalloc_bc(const struct AstNode *for_node, struct Sym *cand,
-                          void (*gen_for_impl)(const struct AstNode *))
+int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
+                          void (*gen_loop_impl)(const struct AstNode *))
 {
     FILE *scratch;
     FILE *saved_outf;
@@ -513,7 +549,7 @@ int try_loop_regalloc_bc(const struct AstNode *for_node, struct Sym *cand,
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;
-    gen_for_impl(for_node);
+    gen_loop_impl(loop_node);
     asm_suppress_depth--;
     g_inline_body_buffering--;
 
@@ -642,8 +678,8 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
  * value (nothing else keeps it in sync - see loop_regalloc_write_
  * candidate_safe), and verification uses that stricter, decline-only
  * checker instead of regalloc_buffer_finalize's lenient one. */
-int try_loop_regalloc_bc_write(const struct AstNode *for_node, struct Sym *cand,
-                                void (*gen_for_impl)(const struct AstNode *))
+int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand,
+                                void (*gen_loop_impl)(const struct AstNode *))
 {
     FILE *scratch;
     FILE *saved_outf;
@@ -674,7 +710,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *for_node, struct Sym *cand,
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;
-    gen_for_impl(for_node);
+    gen_loop_impl(loop_node);
     /* Spill BC's final value back to the candidate's frame slot before
      * anything after the loop (still generated under reg_alloc == REG_NONE,
      * set below) can read it via the normal (ix+d) path. Still inside the

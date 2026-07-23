@@ -1519,6 +1519,7 @@ void gen_local_decl_after_type(int base)
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
             s->is_volatile = decl_is_volatile;
             s->pointee_is_volatile = decl_pointee_is_volatile;
+            s->is_register = decl_is_register;
             freshly_allocated = 1;
             /* Round 2 of codegen-time register residency (see dcc_func.c's
              * find_bc_regalloc_candidate/try_speculative_bc_regalloc_

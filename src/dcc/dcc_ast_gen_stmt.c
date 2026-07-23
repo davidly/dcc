@@ -778,7 +778,7 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
 void ast_gen_for_stmt(const struct AstNode *n)
 {
     int is_write;
-    struct Sym *cand = loop_regalloc_find_bc_candidate(n, &is_write);
+    struct Sym *cand = loop_regalloc_find_bc_candidate(n->b, n->c, n->d, &is_write);
 
     if (cand != NULL) {
         if (is_write) {
@@ -789,6 +789,97 @@ void ast_gen_for_stmt(const struct AstNode *n)
         }
     }
     ast_gen_for_stmt_impl(n);
+}
+
+/* Renamed original body of the AST_WHILE case (formerly inline in
+ * ast_gen_stmt's switch) - see ast_gen_while_stmt just below for the
+ * loop-scoped BC register-promotion wrapper now placed around it. */
+static void ast_gen_while_stmt_impl(const struct AstNode *n)
+{
+    /* Generic while shape: ltop, lend allocated up front;
+     * label(ltop); test condition -> lend; body inside nflow scope;
+     * jp ltop; label(lend). */
+    int ltop = new_label();
+    int lend = new_label();
+    emit_label(ltop);
+    if (ast_is_const_nonzero_condition(n->a)) {
+        ast_gen_expr(n->a);
+        emit_test_expr_nonzero(g_expr_type, lend, 0);
+    } else {
+        ast_gen_cond_branch(n->a, lend, 0);
+    }
+    break_stack[nflow] = lend;
+    cont_stack[nflow] = ltop;
+    flow_scope_depth[nflow] = g_scope_depth;
+    nflow++;
+    ast_gen_stmt(n->b);
+    nflow--;
+    emit_jp_label("jp", ltop);
+    emit_label(lend);
+}
+
+/* Loop-scoped BC register promotion (dcc_loop_regalloc.c) for AST_WHILE -
+ * same wrapper shape as ast_gen_for_stmt, just with no separate increment
+ * clause (AST_WHILE's cond is n->a, body is n->b; there is no n->c). */
+void ast_gen_while_stmt(const struct AstNode *n)
+{
+    int is_write;
+    struct Sym *cand = loop_regalloc_find_bc_candidate(n->a, NULL, n->b, &is_write);
+
+    if (cand != NULL) {
+        if (is_write) {
+            if (try_loop_regalloc_bc_write(n, cand, ast_gen_while_stmt_impl))
+                return;
+        } else if (try_loop_regalloc_bc(n, cand, ast_gen_while_stmt_impl)) {
+            return;
+        }
+    }
+    ast_gen_while_stmt_impl(n);
+}
+
+/* Renamed original body of the AST_DOWHILE case (formerly inline in
+ * ast_gen_stmt's switch) - see ast_gen_dowhile_stmt just below. */
+static void ast_gen_dowhile_stmt_impl(const struct AstNode *n)
+{
+    /* Generic do-while shape: ltop, lcont, lend
+     * allocated up front; label(ltop); body inside nflow scope (break->
+     * lend, continue->lcont); label(lcont); test condition -> ltop when
+     * TRUE (branch sense 1); label(lend).  For `while(0)`, keep the labels
+     * but omit the test/back-edge. */
+    int ltop = new_label();
+    int lcont = new_label();
+    int lend = new_label();
+    emit_label(ltop);
+    break_stack[nflow] = lend;
+    cont_stack[nflow] = lcont;
+    flow_scope_depth[nflow] = g_scope_depth;
+    nflow++;
+    ast_gen_stmt(n->b);
+    nflow--;
+    emit_label(lcont);
+    if (ast_is_const_nonzero_condition(n->a))
+        emit_jp_label("jp", ltop);
+    else if (!ast_is_const_zero_condition(n->a))
+        ast_gen_cond_branch(n->a, ltop, 1);
+    emit_label(lend);
+}
+
+/* Loop-scoped BC register promotion (dcc_loop_regalloc.c) for AST_DOWHILE -
+ * same wrapper shape as ast_gen_for_stmt/ast_gen_while_stmt. */
+void ast_gen_dowhile_stmt(const struct AstNode *n)
+{
+    int is_write;
+    struct Sym *cand = loop_regalloc_find_bc_candidate(n->a, NULL, n->b, &is_write);
+
+    if (cand != NULL) {
+        if (is_write) {
+            if (try_loop_regalloc_bc_write(n, cand, ast_gen_dowhile_stmt_impl))
+                return;
+        } else if (try_loop_regalloc_bc(n, cand, ast_gen_dowhile_stmt_impl)) {
+            return;
+        }
+    }
+    ast_gen_dowhile_stmt_impl(n);
 }
 
 /* See dcc_ast.h for the rationale: scan_function_body's frame-sizing scan
@@ -1227,53 +1318,12 @@ void ast_gen_stmt(const struct AstNode *n)
         }
         break;
     }
-    case AST_WHILE: {
-        /* Generic while shape: ltop, lend allocated up front;
-         * label(ltop); test condition -> lend; body inside nflow scope;
-         * jp ltop; label(lend). */
-        int ltop = new_label();
-        int lend = new_label();
-        emit_label(ltop);
-        if (ast_is_const_nonzero_condition(n->a)) {
-            ast_gen_expr(n->a);
-            emit_test_expr_nonzero(g_expr_type, lend, 0);
-        } else {
-            ast_gen_cond_branch(n->a, lend, 0);
-        }
-        break_stack[nflow] = lend;
-        cont_stack[nflow] = ltop;
-        flow_scope_depth[nflow] = g_scope_depth;
-        nflow++;
-        ast_gen_stmt(n->b);
-        nflow--;
-        emit_jp_label("jp", ltop);
-        emit_label(lend);
+    case AST_WHILE:
+        ast_gen_while_stmt(n);
         break;
-    }
-    case AST_DOWHILE: {
-        /* Generic do-while shape: ltop, lcont, lend
-         * allocated up front; label(ltop); body inside nflow scope (break->
-         * lend, continue->lcont); label(lcont); test condition -> ltop when
-         * TRUE (branch sense 1); label(lend).  For `while(0)`, keep the labels
-         * but omit the test/back-edge. */
-        int ltop = new_label();
-        int lcont = new_label();
-        int lend = new_label();
-        emit_label(ltop);
-        break_stack[nflow] = lend;
-        cont_stack[nflow] = lcont;
-        flow_scope_depth[nflow] = g_scope_depth;
-        nflow++;
-        ast_gen_stmt(n->b);
-        nflow--;
-        emit_label(lcont);
-        if (ast_is_const_nonzero_condition(n->a))
-            emit_jp_label("jp", ltop);
-        else if (!ast_is_const_zero_condition(n->a))
-            ast_gen_cond_branch(n->a, ltop, 1);
-        emit_label(lend);
+    case AST_DOWHILE:
+        ast_gen_dowhile_stmt(n);
         break;
-    }
     case AST_FOR:
         ast_gen_for_stmt(n);
         break;

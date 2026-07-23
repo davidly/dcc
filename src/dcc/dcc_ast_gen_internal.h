@@ -294,17 +294,24 @@ void ast_switch_assign_labels(const struct AstNode *n, int *case_vals,
                                      int *default_labp);
 void ast_gen_switch_stmt(const struct AstNode *n);
 void ast_gen_for_stmt(const struct AstNode *n);
+void ast_gen_while_stmt(const struct AstNode *n);
+void ast_gen_dowhile_stmt(const struct AstNode *n);
 void ast_gen_stmt(const struct AstNode *n);
 
 /* dcc_loop_regalloc.c - loop-scoped BC register promotion; see that file's
- * header comment for the full design. *out_is_write reports whether the
- * winning candidate needs try_loop_regalloc_bc (read-only, Phase 1) or
- * try_loop_regalloc_bc_write (Phase 2). */
-struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int *out_is_write);
-int try_loop_regalloc_bc(const struct AstNode *for_node, struct Sym *cand,
-                          void (*gen_for_impl)(const struct AstNode *));
-int try_loop_regalloc_bc_write(const struct AstNode *for_node, struct Sym *cand,
-                                void (*gen_for_impl)(const struct AstNode *));
+ * header comment for the full design. `incr` may be NULL (AST_WHILE/
+ * AST_DOWHILE have no separate increment clause; only AST_FOR does).
+ * *out_is_write reports whether the winning candidate needs try_loop_
+ * regalloc_bc (read-only, Phase 1) or try_loop_regalloc_bc_write
+ * (Phase 2). */
+struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
+                                            const struct AstNode *incr,
+                                            const struct AstNode *body,
+                                            int *out_is_write);
+int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
+                          void (*gen_loop_impl)(const struct AstNode *));
+int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand,
+                                void (*gen_loop_impl)(const struct AstNode *));
 int ast_try_emit_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */
