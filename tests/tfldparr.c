@@ -26,7 +26,25 @@ struct Node {
     struct Node *kids[3];
 };
 
+struct Grid {
+    struct Node *cells[2][3];
+};
+
 static struct Node nodes[3];
+
+static int compile_2d_member_array(struct Grid *grid)
+{
+    struct Node *p;
+
+    /* Nested-block locals register only during AST emission.  The assignment
+     * must therefore tolerate an unresolved base while the AST is built. */
+    {
+        struct Grid *nested_grid = grid;
+
+        p = nested_grid->cells[0][0];
+    }
+    return p->val;
+}
 
 int main(void)
 {

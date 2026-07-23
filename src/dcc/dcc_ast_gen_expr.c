@@ -1026,7 +1026,8 @@ static int ast_same_plain_u16_source(const struct AstNode *a, const struct AstNo
     b = ast_strip_u16_widen_cast(b);
     if (a == NULL || b == NULL)
         return 0;
-    return a->kind == AST_IDENT && b->kind == AST_IDENT && a->sym != NULL && a->sym == b->sym;
+    return a->kind == AST_IDENT && b->kind == AST_IDENT && a->sym != NULL &&
+           !a->sym->is_volatile && a->sym == b->sym;
 }
 
 void gen_long_arith_ast(const struct AstNode *n)
