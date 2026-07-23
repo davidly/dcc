@@ -79,16 +79,7 @@ struct Stmt
     int act_idx_e;
     int act_rhs_e;
     int ntargets;
-    /* WORKAROUND: dcc mis-types a struct-member pointer ARRAY (confirmed
-     * via a minimal repro: `struct Bar *arr[3];` as a struct member reads
-     * back as int[3] at the first use, even for a plain non-self-referential
-     * pointee type - not specific to this self-referential case). Plain
-     * pointer members (target/act_target above) are unaffected, only
-     * arrays-of-pointers. Kept as a statement index, resolved to a pointer
-     * at the OP_CGOTO site instead of at parse time - computed GOTO is rare
-     * enough that this one field staying index-based costs nothing
-     * measurable relative to target/act_target/DoEnt being pointers. */
-    int targets[10];
+    struct Stmt *targets[10];
 }
 ;
 struct Sym
@@ -919,7 +910,6 @@ static void decode_stmts(void)
     int i,lab,nl;
     char buf[MAXLINE],*s,*p,*q,*r;
     struct Stmt *st;
-    struct Stmt *found;
     for(i=0;i<g_ns;i++)
     {
         st=&g_stmts[i];
@@ -1045,8 +1035,7 @@ static void decode_stmts(void)
                     if(isdigit((unsigned char)*p))
                     {
                         lab=atoi(p);
-                        found=find_label_in_unit(lab,st->unit);
-                        st->targets[nl++]=found?(int)(found-g_stmts):-1;
+                        st->targets[nl++]=find_label_in_unit(lab,st->unit);
                     }
                     while(isdigit((unsigned char)*p))p++;
                 }
@@ -1207,7 +1196,7 @@ static void run_prog(void)
             case OP_CGOTO: idx=eval_e(st->ae);
             if(idx>=1&&idx<=st->ntargets)
             {
-                g_pc=g_stmts+st->targets[idx-1];
+                g_pc=st->targets[idx-1];
                 continue;
             }
             g_pc++;
