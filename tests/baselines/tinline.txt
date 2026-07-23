@@ -2,3 +2,8 @@ static inline: 21 12
 inline fold check: 423
 inline order check: 1
 inline nest check: 12
+inline eval check: 1065
+inline volatile check: 14
+inline temp collision check: 5844
+inline readwrite check: 101
+inline read order check: 34

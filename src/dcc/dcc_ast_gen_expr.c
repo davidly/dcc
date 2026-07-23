@@ -3467,178 +3467,62 @@ static const struct AstNode *inline_substitution_body(struct Sym *fn)
     return fn->inline_stmt_body;
 }
 
-/* True if evaluating n could have an observable side effect (a call, an
- * assignment, or ++/--) anywhere in its subtree. A real (non-inlined) call
- * always fully evaluates its arguments - side effects included - before the
- * callee's body runs; inlining must preserve that same ordering guarantee
- * even when a parameter is used only once, because the callee's OWN body
- * can contain a side effect that is sequenced before the parameter's one
- * use once substituted - e.g. push(v){ vs[vsp++]=v; } inlined with argument
- * `!vpop()` clones to `vs[vsp++] = !vpop()`, and dcc's assignment codegen
- * evaluates the LHS address (committing vsp++ to memory) before the RHS, so
- * vpop()'s own vsp-- then reads the wrong slot. Confirmed via a minimal
- * repro (a push/pop-shaped pair of static inline functions) and a bytecode
- * dump showing identical output between a host build and the dcc build,
- * isolating the bug to codegen ordering rather than any AST-level
- * difference. A side-effect-free argument (a bare deref, arithmetic, a
- * struct member read, ...) has nothing to reorder against the callee's own
- * side effects even if it's evaluated at a different point than the
- * caller wrote it, so - unlike inline_arg_reusable, which exists to avoid
- * redundant re-evaluation of an expensive-but-safe expression when a
- * parameter is used more than once - this check does not need to (and must
- * not, for the sake of the constant-folding this whole temp-avoidance
- * machinery exists to preserve) treat every non-reusable argument as
- * unsafe, only actually side-effecting ones. */
-static int inline_arg_may_have_side_effect(const struct AstNode *n)
-{
-    int i;
-
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_CALL || n->kind == AST_ASSIGN || n->kind == AST_POSTFIX)
-        return 1;
-    if (n->kind == AST_UNARY && (n->op == TOK_INC || n->op == TOK_DEC))
-        return 1;
-    if (inline_arg_may_have_side_effect(n->a) || inline_arg_may_have_side_effect(n->b) ||
-        inline_arg_may_have_side_effect(n->c) || inline_arg_may_have_side_effect(n->d))
-        return 1;
-    for (i = 0; i < n->list_len; ++i)
-        if (inline_arg_may_have_side_effect(n->list[i]))
-            return 1;
-    return 0;
-}
-
-static int inline_body_is_side_effect_free(const struct AstNode *n);
-static int inline_fn_body_is_side_effect_free(struct Sym *fn);
-
-static int g_purity_check_depth;
-
-/* True if a call within a provably-pure-candidate body is itself provably
- * free of side effects: only when it's a call to another static inline
- * function whose own substitution body is (recursively) also free of
- * side effects, AND every argument this body itself passes is too - those
- * arguments are part of THIS function's own authored source, not a
- * caller's substituted argument, so they need checking the same way the
- * rest of the body does. Anything else (a non-inline call, a call through
- * a function pointer, hitting the recursion guard) is conservatively
- * treated as possibly side-effecting, since it can't be proven otherwise
- * from here. */
-static int inline_call_is_provably_pure(const struct AstNode *n)
+/* Direct substitution may skip, duplicate, or move an argument into the
+ * callee body. That is safe only when the expression depends entirely on
+ * constants and caller-local automatic objects that the body cannot reach.
+ * Everything else is evaluated once into a temp before body generation,
+ * exactly as for a real call. */
+static int inline_arg_is_body_independent(const struct AstNode *n)
 {
     struct Sym *s;
     int i;
-    int ok;
-
-    if (n->a == NULL || n->a->kind != AST_IDENT)
-        return 0;
-    s = find_global(n->a->sval);
-    if (s == NULL || !s->is_static || !s->is_inline || inline_substitution_body(s) == NULL)
-        return 0;
-    if (g_purity_check_depth >= 8)
-        return 0;
-    g_purity_check_depth++;
-    ok = inline_fn_body_is_side_effect_free(s);
-    for (i = 0; ok && i < n->list_len; ++i)
-        ok = inline_body_is_side_effect_free(n->list[i]);
-    g_purity_check_depth--;
-    return ok;
-}
-
-/* Like inline_arg_may_have_side_effect, but for walking a static inline
- * function's OWN substitution body (not a caller's argument): a bare
- * identifier read (whether one of this function's own parameters or
- * anything else) is never itself a side effect, so - unlike
- * inline_arg_may_have_side_effect, which only needs to answer "could this
- * argument expression itself have a side effect" - this also needs to
- * recurse through calls (via inline_call_is_provably_pure) rather than
- * flagging every call unconditionally, since a chain of pure static inline
- * helpers (e.g. multiply_q8 calling q16_to_q8, both pure arithmetic) has
- * nothing to protect a caller's side-effecting argument from. */
-static int inline_body_is_side_effect_free(const struct AstNode *n)
-{
-    int i;
 
     if (n == NULL)
         return 1;
-    if (n->kind == AST_ASSIGN || n->kind == AST_POSTFIX ||
-        (n->kind == AST_UNARY && (n->op == TOK_INC || n->op == TOK_DEC)))
+    switch (n->kind) {
+    case AST_INT_LIT:
+    case AST_FLOAT_LIT:
+    case AST_STR_LIT:
+    case AST_SIZEOF_EXPR:
+    case AST_SIZEOF_TYPE:
+        return 1;
+    case AST_IDENT:
+        if (find_enum_const(n->sval) >= 0)
+            return 1;
+        s = find_local(n->sval);
+        return s != NULL && !s->is_static && !s->is_volatile &&
+               (s->storage == SC_LOCAL || s->storage == SC_PARAM) &&
+               local_name_address_taken_in_function(n->sval) == 0;
+    case AST_UNARY:
+        if (n->op == '*' || n->op == TOK_INC || n->op == TOK_DEC)
+            return 0;
+        break;
+    case AST_BINARY:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_COMMA:
+    case AST_COND:
+    case AST_CAST:
+        break;
+    default:
         return 0;
-    if (n->kind == AST_CALL)
-        return inline_call_is_provably_pure(n);
-    if (!inline_body_is_side_effect_free(n->a) || !inline_body_is_side_effect_free(n->b) ||
-        !inline_body_is_side_effect_free(n->c) || !inline_body_is_side_effect_free(n->d))
+    }
+    if (!inline_arg_is_body_independent(n->a) ||
+        !inline_arg_is_body_independent(n->b) ||
+        !inline_arg_is_body_independent(n->c) ||
+        !inline_arg_is_body_independent(n->d))
         return 0;
     for (i = 0; i < n->list_len; ++i)
-        if (!inline_body_is_side_effect_free(n->list[i]))
+        if (!inline_arg_is_body_independent(n->list[i]))
             return 0;
     return 1;
 }
 
-/* For `*p = ...` or `p[i] = ...` (the only two shapes a void/stmt-body
- * inline function's store target takes), only the ADDRESS-computing part
- * (p, or p and i) needs to be side-effect-free - the outer deref/subscript
- * itself just reads a value to know where to store, it doesn't write one,
- * so it's never itself the hazard. Any other store shape (a struct member,
- * etc.) is conservatively treated as unsafe rather than taught its own
- * address-computing subset. */
-static int inline_lhs_addr_is_side_effect_free(const struct AstNode *lhs)
+static int inline_arg_needs_temp(const struct AstNode *n, int use_count)
 {
-    if (lhs == NULL)
-        return 0;
-    if (lhs->kind == AST_UNARY && lhs->op == '*')
-        return inline_body_is_side_effect_free(lhs->a);
-    if (lhs->kind == AST_INDEX)
-        return inline_body_is_side_effect_free(lhs->a) &&
-               inline_body_is_side_effect_free(lhs->b);
-    return 0;
-}
-
-/* True if fn's own inline-substitution body has nothing that dcc's codegen
- * guarantees will run before a substituted argument gets evaluated - see
- * inline_arg_may_have_side_effect's comment for the hazard this exists to
- * rule out. A void/stmt-body function's body is `LHS = RHS;`: the whole
- * point of such a helper is to store somewhere, so the assignment itself
- * isn't the hazard - only LHS's own address computation is (see
- * inline_lhs_addr_is_side_effect_free); RHS is checked like any other
- * body. A return-expr function's body has no assignment shape at all
- * (inline_return_expr_from_seq only accepts a single expression or an
- * if-chain folded to a ternary), so it's checked as a whole - a bare
- * "return expr;" body being unsafe can only mean it contains an embedded
- * assignment/++/-- or an unprovable call, both genuinely worth keeping
- * conservative about. When this is true, inline_call_needs_arg_temps can
- * skip the side-effect-based temp requirement for fn's parameters
- * entirely - its use_count>1 reason for a temp still applies
- * independently. */
-static int inline_fn_body_is_side_effect_free(struct Sym *fn)
-{
-    const struct AstNode *body;
-
-    body = inline_substitution_body(fn);
-    if (body == NULL)
-        return 1;
-    if (body->kind == AST_ASSIGN)
-        return inline_lhs_addr_is_side_effect_free(body->a) &&
-               inline_body_is_side_effect_free(body->b);
-    return inline_body_is_side_effect_free(body);
-}
-
-static int inline_arg_needs_temp(const struct AstNode *n, int use_count, int fn_body_safe)
-{
-    if (!fn_body_safe && inline_arg_may_have_side_effect(n))
+    if (!inline_arg_is_body_independent(n))
         return 1;
     return use_count > 1 && !inline_arg_reusable(n);
-}
-
-static int inline_call_needs_arg_temps(const struct AstNode *n, struct Sym *fn)
-{
-    int i;
-    int fn_body_safe;
-
-    fn_body_safe = inline_fn_body_is_side_effect_free(fn);
-    for (i = 0; i < n->list_len; ++i)
-        if (inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i], fn_body_safe))
-            return 1;
-    return 0;
 }
 
 static void emit_inline_arg_temp_store(struct Sym *tmp, const struct AstNode *arg,
@@ -3648,7 +3532,6 @@ static void emit_inline_arg_temp_store(struct Sym *tmp, const struct AstNode *ar
     int ptr_type;
     int no_deref;
 
-    tmp->type = want_type;
     if (ast_pointer_expr_type(arg, &ptr_type, &no_deref))
         gen_pointer_expr_ast(arg, &ptr_type, &no_deref);
     else
@@ -3662,39 +3545,22 @@ static void emit_inline_arg_temp_store(struct Sym *tmp, const struct AstNode *ar
     emit_store_hl_to_sym_direct(tmp);
 }
 
+static unsigned long g_inline_live_temp_mask;
+
 static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
                                  const char **temp_names,
                                  char temp_name_buf[MAX_PROTO_PARAMS][64])
 {
+    struct Sym *temp_syms[MAX_PROTO_PARAMS];
+    int temp_types[MAX_PROTO_PARAMS];
     int i;
-    int fn_body_safe;
+    unsigned long unavailable;
+    unsigned long current_mask;
 
-    fn_body_safe = inline_fn_body_is_side_effect_free(fn);
-
-    /* No longer bails out when the callee's own body contains a nested
-     * inline call (it used to: `if (inline_expr_contains_inline_call(...))
-     * return 0;`). That guard predates inline_arg_needs_temp's side-effect
-     * rule and was never actually about correctness here - temp
-     * materialization is inherently sequential and depth-first: each
-     * #itmpN slot is written, then immediately consumed exactly once
-     * (either directly, or by a nested call's own temp materialization,
-     * whose *result* - not the #itmpN memory - is what a caller further
-     * up eventually stores into its own, possibly same-numbered, #itmpN
-     * slot). Two different call levels can share a slot NUMBER because
-     * they can never be simultaneously live: nothing in this call-by-call,
-     * argument-by-argument process holds a temp's value across a point
-     * where a nested expansion could overwrite it before it's read.
-     * Verified by construction (a repro shaped like this exact pattern -
-     * a call whose argument is itself a call to a static inline function
-     * that calls a second static inline function, both at the same
-     * parameter index the outer call also uses) and by the full and
-     * extended suites. Keeping the bail-out was actively costly: without
-     * it, any call whose argument became side-effecting under the new
-     * rule and which itself nested a further inline call (e.g.
-     * attnc11.c's multiply_q8, whose body is `return
-     * q16_to_q8(left*right);`) lost inlining entirely rather than just
-     * gaining one temp - a double-digit percent cycle regression for a
-     * single-digit percent one. */
+    unavailable = g_inline_live_temp_mask;
+    current_mask = 0;
+    for (i = 0; i < n->list_len; ++i)
+        temp_syms[i] = NULL;
 
     /* Per-parameter, not per-call: see inline_arg_needs_temp for the two
      * independent reasons a parameter's argument needs a temp (it may have
@@ -3711,11 +3577,22 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
     for (i = 0; i < n->list_len; ++i) {
         struct Sym *tmp;
         int want_type;
+        int slot;
 
-        if (!inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i], fn_body_safe))
+        if (!inline_arg_needs_temp(n->list[i], fn->inline_param_use_count[i]))
             continue;
 
-        inline_temp_name_for_call(temp_name_buf[i], 64, i);
+        slot = i;
+        if ((unavailable & (1UL << slot)) != 0) {
+            for (slot = 0; slot < MAX_PROTO_PARAMS; ++slot)
+                if ((unavailable & (1UL << slot)) == 0)
+                    break;
+            if (slot >= MAX_PROTO_PARAMS)
+                return 0;
+        }
+        unavailable |= 1UL << slot;
+        current_mask |= 1UL << slot;
+        inline_temp_name_for_call(temp_name_buf[i], 64, slot);
         tmp = find_local(temp_name_buf[i]);
         if (tmp == NULL)
             return 0;
@@ -3730,20 +3607,32 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
         if ((type_size(want_type) != 2 && type_size(want_type) != 1) ||
             type_is_float(want_type) || type_is_long(want_type))
             return 0;
-        tmp->type = want_type;
+        temp_syms[i] = tmp;
+        temp_types[i] = want_type;
+    }
+
+    /* Commit shared symbol metadata only after every requested slot has
+     * passed validation. A failed nested expansion then falls back to a real
+     * call without leaving a partially retagged #itmp symbol behind. */
+    for (i = 0; i < n->list_len; ++i) {
+        if (temp_syms[i] == NULL)
+            continue;
+        temp_syms[i]->type = temp_types[i];
         temp_names[i] = temp_name_buf[i];
     }
 
+    /* Reserve every selected slot while arguments are evaluated. A nested
+     * inline expansion then allocates from the remaining #itmp slots, so it
+     * cannot overwrite either an already-materialized argument or a slot
+     * this call will materialize later. All 16 slots already exist in the
+     * frame; this remapping adds no runtime instructions or frame bytes. */
+    g_inline_live_temp_mask |= current_mask;
     for (i = n->list_len - 1; i >= 0; --i) {
-        struct Sym *tmp;
-        int want_type;
-
         if (temp_names[i] == NULL)
             continue;
-
-        tmp = find_local(temp_name_buf[i]);
-        want_type = fn->proto_types[i] ? fn->proto_types[i] : TYPE_INT;
-        emit_inline_arg_temp_store(tmp, n->list[i], want_type);
+        emit_inline_arg_temp_store(temp_syms[i], n->list[i], temp_types[i]);
+        if (fn->inline_param_use_count[i] == 1)
+            emit(";@dcc-inline-temp-single-use\n");
     }
     return 1;
 }
@@ -3806,6 +3695,7 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     const char *temp_names[MAX_PROTO_PARAMS];
     char temp_name_buf[MAX_PROTO_PARAMS][64];
     int i;
+    unsigned long old_live_mask;
 
     if (opt_debug || fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
         inline_substitution_body(fn_sym) == NULL)
@@ -3817,11 +3707,12 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
         return 0;
     if (n->list_len != fn_sym->proto_nargs || n->list_len > MAX_PROTO_PARAMS)
         return 0;
-    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i) {
         temp_names[i] = NULL;
+    }
 
-    if (inline_call_needs_arg_temps(n, fn_sym) &&
-        !emit_inline_arg_temps(n, fn_sym, temp_names, temp_name_buf))
+    old_live_mask = g_inline_live_temp_mask;
+    if (!emit_inline_arg_temps(n, fn_sym, temp_names, temp_name_buf))
         return 0;
 
     g_inline_expand_depth++;
@@ -3834,6 +3725,7 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
         ast_gen_expr(expr);
     }
     g_inline_expand_depth--;
+    g_inline_live_temp_mask = old_live_mask;
     g_expr_type = (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL) ?
                   TYPE_VOID : fn_sym->type;
     g_long_from16 = 0;

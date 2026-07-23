@@ -7888,7 +7888,9 @@ __m8u:
 __m1s:
         ld      a,b
         xor     h
-        ld      (lm1s_sg),a             ; bit7 = sign of product
+        ; Keep the sign reentrantly on the stack.  Shadow AF is unsafe here:
+        ; a conventional interrupt handler may use it to save primary AF.
+        push    af                       ; saved A bit7 = sign of product
         bit     7,b
         jr      z,lm1s_ap
         xor     a
@@ -7947,7 +7949,7 @@ lm1s_b:
         dec     a
         jr      nz,lm1s_b
         ex      de,hl                   ; HL = low, DE = high
-        ld      a,(lm1s_sg)
+        pop     af
         bit     7,a
         ret     z
         ld      a,l
@@ -7968,7 +7970,6 @@ lm1s_b:
         ret     nz
         inc     de
         ret
-lm1s_sg:        db      0
 
 ; __ldivu: unsigned 32-bit divide.  Returns DE:HL = LHS / RHS.
         public  __ldu

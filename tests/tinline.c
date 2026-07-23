@@ -167,11 +167,172 @@ static int inline_nest_check(void)
     return nest_take();
 }
 
+/* A real call evaluates every argument exactly once before entering the
+ * callee, even when a parameter is unused, appears only in a short-circuited
+ * expression, or appears only as the operand of sizeof. */
+static int edge_calls;
+
+static int edge_bump(void)
+{
+    edge_calls++;
+    return 7;
+}
+
+static inline int edge_unused(int unused, int value)
+{
+    return value;
+}
+
+static inline int edge_conditional(int flag, int value)
+{
+    return flag ? 99 : value;
+}
+
+static inline int edge_and(int flag, int value)
+{
+    return flag && value;
+}
+
+static inline int edge_or(int flag, int value)
+{
+    return flag || value;
+}
+
+static inline int edge_sizeof(int value)
+{
+    return sizeof(value) != 0;
+}
+
+static int inline_eval_check(void)
+{
+    int sum;
+
+    edge_calls = 0;
+    sum = edge_unused(edge_bump(), 5);
+    sum += edge_conditional(1, edge_bump());
+    sum += edge_and(0, edge_bump());
+    sum += edge_or(1, edge_bump());
+    sum += edge_sizeof(edge_bump());
+    return sum * 10 + edge_calls;
+}
+
+/* Volatile accesses are observable and must not be duplicated when an inline
+ * parameter is used more than once. */
+static volatile int edge_volatile;
+
+static inline int edge_twice(int value)
+{
+    return value + value;
+}
+
+static int inline_volatile_check(void)
+{
+    edge_volatile = 7;
+    return edge_twice(edge_volatile);
+}
+
+/* A side-effect-free inline body that READS a global is still unsafe to
+ * substitute a side-effecting argument into without a temp: the argument's
+ * write must be committed before the body's read, exactly as a real call
+ * would. edge_rw_read's body reads edge_rw_global; the argument writes it to
+ * 100 and yields 1, so the result must be 101 (temp materialized first), not
+ * 1 (body read reordered before the write). */
+static int edge_rw_global;
+
+static inline int edge_rw_read(int value)
+{
+    return edge_rw_global + value;
+}
+
+static int inline_readwrite_check(void)
+{
+    edge_rw_global = 0;
+    return edge_rw_read((edge_rw_global = 100, 1));
+}
+
+/* Argument evaluation also includes non-volatile READS. A real call reads
+ * edge_rw_global before write_then_value enters and writes it; direct AST
+ * substitution must not move either a nested pure call or a plain global read
+ * after that write. */
+static inline int edge_read_global(int addend)
+{
+    return edge_rw_global + addend;
+}
+
+static inline int edge_write_then_value(int value)
+{
+    return (edge_rw_global = 10, value);
+}
+
+static int inline_read_order_check(void)
+{
+    int call_result;
+    int ident_result;
+
+    edge_rw_global = 3;
+    call_result = edge_write_then_value(edge_read_global(0));
+    edge_rw_global = 4;
+    ident_result = edge_write_then_value(edge_rw_global);
+    return call_result * 10 + ident_result;
+}
+
+/* Outer temp arguments are all materialized before the cloned body consumes
+ * them. A nested inline call in a later argument must not reuse and overwrite
+ * an already-live outer #itmpN slot. */
+static int edge_inner_count;
+static int edge_outer_count;
+static int edge_sink[4];
+
+static int edge_next_inner(void)
+{
+    edge_inner_count++;
+    return 11;
+}
+
+static int edge_next_outer(void)
+{
+    edge_outer_count++;
+    return 7;
+}
+
+static inline int edge_inner(int zero, int value)
+{
+    edge_inner_count++;
+    return value + zero;
+}
+
+static inline void edge_outer(int left, int right)
+{
+    edge_sink[edge_outer_count++] = left - right;
+}
+
+static inline int edge_outer_body(int unused, int right)
+{
+    return edge_inner(0, edge_next_inner()) + right;
+}
+
+static int inline_temp_collision_check(void)
+{
+    int body_value;
+
+    edge_inner_count = 0;
+    edge_outer_count = 0;
+    edge_outer(edge_inner(0, edge_next_inner()), edge_next_outer());
+    body_value = edge_outer_body(edge_next_outer(), edge_next_outer());
+    return edge_sink[1] * 1000 + body_value * 100 +
+           edge_inner_count * 10 + edge_outer_count;
+}
+
 int main(void)
 {
     printf("static inline: %d %d\n", scale3(7), helper_sub(helper_add(10, 5), 3));
     printf("inline fold check: %d\n", inline_fold_check());
     printf("inline order check: %d\n", inline_order_check());
     printf("inline nest check: %d\n", inline_nest_check());
+    printf("inline eval check: %d\n", inline_eval_check());
+    printf("inline volatile check: %d\n", inline_volatile_check());
+    printf("inline temp collision check: %d\n", inline_temp_collision_check());
+    printf("inline readwrite check: %d\n", inline_readwrite_check());
+    printf("inline read order check: %d\n", inline_read_order_check());
     return 0;
 }
