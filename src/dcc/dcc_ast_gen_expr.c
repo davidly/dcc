@@ -990,6 +990,32 @@ static int ast_const_int_operand_value(const struct AstNode *n, long *out)
     return 0;
 }
 
+/* True if a and b (each already known, via ast_is_plain_u16_source, to be
+ * a plain unsigned <=16-bit source - possibly under a widening cast to
+ * long) are provably the exact same value on every read: the same
+ * local/global variable referenced twice (e.g. `b*b`, `(uint32_t)b *
+ * (uint32_t)b`), not merely two different expressions that happen to
+ * agree. Reading a variable has no side effect, so when this holds,
+ * generating the load once and reusing the value for the second use
+ * gives the identical result while skipping a wholly redundant second
+ * memory read. Deliberately narrow: only a bare identifier, compared by
+ * resolved symbol (not spelling, which could ambiguously match two
+ * different variables of the same name in different scopes) is provably
+ * the same storage on every read; anything else that could textually
+ * repeat (an array subscript, a volatile read, a function call) is
+ * conservatively treated as not provably identical, matching
+ * ast_is_plain_u16_source's own "just a value" scope. */
+static int ast_same_plain_u16_source(const struct AstNode *a, const struct AstNode *b)
+{
+    if (a != NULL && a->kind == AST_CAST && type_is_long(a->type) && !type_is_float(a->type))
+        a = a->a;
+    if (b != NULL && b->kind == AST_CAST && type_is_long(b->type) && !type_is_float(b->type))
+        b = b->a;
+    if (a == NULL || b == NULL)
+        return 0;
+    return a->kind == AST_IDENT && b->kind == AST_IDENT && a->sym != NULL && a->sym == b->sym;
+}
+
 void gen_long_arith_ast(const struct AstNode *n)
 {
     int lhs_type;
@@ -1063,8 +1089,16 @@ void gen_long_arith_ast(const struct AstNode *n)
         ast_is_plain_u16_source(n->b)) {
         ast_gen_expr(n->a->a);
         emit("\tpush hl\n");
-        ast_gen_expr(n->a->b);
-        emit("\tpush hl\n");
+        if (ast_same_plain_u16_source(n->a->a, n->a->b)) {
+            /* b*b (or (wide)b*(wide)b): the second operand is a re-read of
+             * the exact same variable already sitting in HL - push it
+             * again instead of a second, wholly redundant load from its
+             * slot. */
+            emit("\tpush hl\n");
+        } else {
+            ast_gen_expr(n->a->b);
+            emit("\tpush hl\n");
+        }
         ast_gen_expr(n->b);
         emit("\tpush hl\n");
         emit("\tpop bc\n");             /* BC = c (modulus) */
