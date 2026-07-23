@@ -1169,6 +1169,67 @@ static int pass_ix_addr_byte_store_imm(void)
     return changed;
 }
 
+/* Recognize HL = IX + constant sequences emitted for frame addresses. */
+static int scan_ix_frame_addr(int i, long *lowest_offset)
+{
+    char cur[MAX_LINE], next[MAX_LINE];
+    char *endp;
+    long offset;
+    long delta;
+    long lowest;
+    int j;
+    int saw_offset;
+
+    if (i + 1 >= nlines)
+        return 0;
+    strip_peep_comment_copy(cur, lines[i]);
+    strip_peep_comment_copy(next, lines[i + 1]);
+    if (strcmp(cur, "push ix") != 0 || strcmp(next, "pop hl") != 0)
+        return 0;
+
+    offset = 0;
+    lowest = 0;
+    saw_offset = 0;
+    j = i + 2;
+    while (j < nlines) {
+        strip_peep_comment_copy(cur, lines[j]);
+        if (j + 1 < nlines && strncmp(cur, "ld de,", 6) == 0) {
+            strip_peep_comment_copy(next, lines[j + 1]);
+            delta = strtol(cur + 6, &endp, 0);
+            if (*endp == 0 && strcmp(next, "add hl,de") == 0) {
+                offset += delta;
+                if (!saw_offset || offset < lowest)
+                    lowest = offset;
+                saw_offset = 1;
+                j += 2;
+                continue;
+            }
+        }
+        if (strcmp(cur, "inc hl") == 0 || strcmp(cur, "dec hl") == 0) {
+            if (!saw_offset)
+                lowest = 0;
+            offset += strcmp(cur, "inc hl") == 0 ? 1 : -1;
+            if (offset < lowest)
+                lowest = offset;
+            saw_offset = 1;
+            j++;
+            continue;
+        }
+        break;
+    }
+    if (!saw_offset)
+        return 0;
+    *lowest_offset = lowest;
+    return 1;
+}
+
+static int may_access_escaped_frame(const char *s)
+{
+    if (strncmp(s, "call ", 5) == 0 || strncmp(s, "rst ", 4) == 0)
+        return 1;
+    return strchr(s, '(') != NULL && strstr(s, "(ix") == NULL;
+}
+
 /*
  * Dead IX-frame store elimination.
  *
@@ -1226,9 +1287,10 @@ static int pass_elim_dead_ix_stores(void)
                 escaped_from = 128;
             } else {
                 /* Internal label: conservative flush — a branch from elsewhere
-                   might rely on a pending store being present. */
+                   might rely on a pending store being present. Keep
+                   escaped_from: an address saved in a pointer remains escaped
+                   across control flow for the rest of this function. */
                 memset(last_store, -1, sizeof(last_store));
-                escaped_from = 128;
             }
             continue;
         }
@@ -1247,174 +1309,28 @@ static int pass_elim_dead_ix_stores(void)
         if (strncmp(tmp, "jp ", 3) == 0 || strncmp(tmp, "jr ", 3) == 0 ||
             strncmp(tmp, "djnz ", 5) == 0) {
             memset(last_store, -1, sizeof(last_store));
-            escaped_from = 128;
             continue;
         }
 
-        /* Indirect IX-frame access pattern: push ix / pop hl / ld de,K / add hl,de
-         * This computes HL = IX+K and then subsequent (hl) accesses read IX+K.
-         * The (hl) instructions contain no "(ix" text, so we must handle this
-         * 4-instruction sequence explicitly to avoid false dead-store deletions.
-         *
-         * The offset computation can also be CHAINED: array-of-struct element
-         * addressing emits "ld de,K1 / add hl,de" (element stride) followed by
-         * another "ld de,K2 / add hl,de" (field offset within the element),
-         * optionally followed by inc hl / dec hl (byte-granular adjustment
-         * within the field, e.g. reading the high byte of a multi-byte
-         * member). Only checking the FIRST pair - as this used to - marks the
-         * wrong (partial) offset range live and leaves the actual accessed
-         * bytes looking like dead stores, deleting real initializers. */
-        if (strcmp(tmp, "push ix") == 0 &&
-            i + 3 < nlines) {
-            char t1[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
-            long kv;
-            char *ep;
-            strip_peep_comment_copy(t1, lines[i + 1]);
-            strip_peep_comment_copy(t2, lines[i + 2]);
-            strip_peep_comment_copy(t3, lines[i + 3]);
-            if (strcmp(t1, "pop hl") == 0 &&
-                strncmp(t2, "ld de,", 6) == 0 &&
-                strcmp(t3, "add hl,de") == 0) {
-                kv = strtol(t2 + 6, &ep, 0);
-                if (*ep == 0) {
-                    int j = i + 4;
-                    for (;;) {
-                        char u1[MAX_LINE], u2[MAX_LINE];
-                        long kv2;
-                        char *ep2;
-                        if (j + 1 >= nlines) break;
-                        strip_peep_comment_copy(u1, lines[j]);
-                        strip_peep_comment_copy(u2, lines[j + 1]);
-                        if (strncmp(u1, "ld de,", 6) != 0 ||
-                            strcmp(u2, "add hl,de") != 0)
-                            break;
-                        kv2 = strtol(u1 + 6, &ep2, 0);
-                        if (*ep2 != 0) break;
-                        kv += kv2;
-                        j += 2;
-                    }
-                    while (j < nlines) {
-                        char u3[MAX_LINE];
-                        strip_peep_comment_copy(u3, lines[j]);
-                        if (strcmp(u3, "inc hl") == 0) { kv++; j++; }
-                        else if (strcmp(u3, "dec hl") == 0) { kv--; j++; }
-                        else break;
-                    }
-                    {
-                        char next1[MAX_LINE], next2[MAX_LINE];
-                        /* Address of frame offset K is taken via HL. There is
-                         * no bound, from plain assembly text alone, on how
-                         * many bytes get accessed through the resulting
-                         * pointer or where it ends up (immediately
-                         * dereferenced for a scalar load/store, saved via
-                         * push hl as a call argument, stored directly into
-                         * another local via a fast ix-direct pointer
-                         * assignment with no push at all, ...). A previous
-                         * version guessed "at most 4 bytes, unless the very
-                         * next line is push hl" - a real, confirmed bug: an
-                         * array/struct larger than 4 bytes (or a compound
-                         * literal) whose address escaped through ANY of
-                         * these routes had its later elements' initializers
-                         * wrongly deleted as "dead", since only the first
-                         * few bytes from the base were ever marked live.
-                         * Flushing every pending store is the only sound
-                         * choice whenever an address is taken this way.
-                         *
-                         * This flush must NOT be gated on kv (the object's
-                         * own base offset) fitting in a signed-byte ix
-                         * displacement. A previous version required
-                         * kv>=-128 && kv<=127 before flushing at all - a
-                         * real, confirmed bug: an array/struct based more
-                         * than 127 bytes from IX (so its OWN base cannot be
-                         * expressed as (ix+d)) still has interior/tail bytes
-                         * that land in the trackable -128..127 window once
-                         * per-byte stores to it get folded to direct
-                         * (ix+d) form by an earlier pass. Skipping the flush
-                         * left those in-range stores looking unread at the
-                         * next `ret` and wrongly deleted, even though this
-                         * very escape is what reads them (e.g. a second
-                         * local array/struct, based out of ix+d range as a
-                         * whole, passed by address to printf/strcat/etc.
-                         * after being initialized element-by-element). */
-                        memset(last_store, -1, sizeof(last_store));
-                        /* If the just-computed frame address is immediately
-                         * stored into another frame slot (a pointer/array-decay
-                         * local: `ld (ix+M),l` / `ld (ix+M+1),h`), the pointed-to
-                         * object is initialised later by DIRECT `ld (ix+K)`
-                         * stores and only read back through that saved pointer
-                         * (whose `(hl)` accesses this text pass cannot see).
-                         * Protect every store at offset >= K for the rest of
-                         * the segment so those initializers are not deleted.
-                         *
-                         * The `push hl` (address passed as a call argument)
-                         * case needs no such protection: dcc compiles member
-                         * and element stores to an object whose address has
-                         * escaped through HL-computed `(hl)` stores, never as
-                         * `ld (ix+K)`, so no direct-store initializer can follow
-                         * that route and be wrongly deleted. Excluding it keeps
-                         * ordinary `&local` argument passing from disabling the
-                         * dead-store pass for unrelated higher-offset locals. */
-                        next1[0] = 0;
-                        next2[0] = 0;
-                        if (j < nlines)
-                            strip_peep_comment_copy(next1, lines[j]);
-                        if (j + 1 < nlines)
-                            strip_peep_comment_copy(next2, lines[j + 1]);
-                        if (strncmp(next1, "ld (ix", 6) == 0 &&
-                            strstr(next1, "),l") != NULL &&
-                            strncmp(next2, "ld (ix", 6) == 0 &&
-                            strstr(next2, "),h") != NULL)
-                            escaped_from = (int)kv < escaped_from ? (int)kv : escaped_from;
-                    }
-                }
+        /* Once HL holds a frame address, assembly text cannot prove whether
+         * the pointer is used directly, saved, or retained by a call. Flush
+         * pending stores and protect all later direct stores from the lowest
+         * offset visited while constructing that address. */
+        {
+            long lowest_offset;
+            if (scan_ix_frame_addr(i, &lowest_offset)) {
+                memset(last_store, -1, sizeof(last_store));
+                if ((int)lowest_offset < escaped_from)
+                    escaped_from = (int)lowest_offset;
             }
-            /* Fall through: also treat push ix as a regular no-(ix) instruction */
         }
 
-        /* Small-offset IX-frame address idiom:
-         *   push ix / pop hl / {dec hl | inc hl}*
-         * computes HL = IX+K where K is the net of the inc/dec chain (used for
-         * &local when the offset is close to the frame pointer).  Like the
-         * ld de,K / add hl,de form above, the address is taken via HL and the
-         * pointed-to bytes may be read or written through it, so mark up to 4
-         * consecutive bytes from offset K as live to avoid deleting the store
-         * that initialised the pointed-to object. */
-        if (strcmp(tmp, "push ix") == 0 && i + 1 < nlines) {
-            char t1[MAX_LINE], tj[MAX_LINE];
-            strip_peep_comment_copy(t1, lines[i + 1]);
-            if (strcmp(t1, "pop hl") == 0) {
-                long kv = 0;
-                int j = i + 2;
-                int saw = 0;
-                while (j < nlines) {
-                    strip_peep_comment_copy(tj, lines[j]);
-                    if (strcmp(tj, "dec hl") == 0) { kv--; saw = 1; j++; }
-                    else if (strcmp(tj, "inc hl") == 0) { kv++; saw = 1; j++; }
-                    else break;
-                }
-                if (saw) {
-                    /* No sound bound on the access through this address -
-                     * see the identical reasoning at the ld de,K/add hl,de
-                     * variant above. Always flush rather than guess 4 bytes. */
-                    char nx1[MAX_LINE], nx2[MAX_LINE];
-                    memset(last_store, -1, sizeof(last_store));
-                    /* Same narrow rule as the ld de,K variant: only protect the
-                     * escaped range when the address is saved into a frame
-                     * pointer slot (`ld (ix+M),l` / `ld (ix+M+1),h`), the shape
-                     * that precedes direct `ld (ix+K)` aggregate initializers. */
-                    nx1[0] = 0;
-                    nx2[0] = 0;
-                    if (j < nlines)
-                        strip_peep_comment_copy(nx1, lines[j]);
-                    if (j + 1 < nlines)
-                        strip_peep_comment_copy(nx2, lines[j + 1]);
-                    if (strncmp(nx1, "ld (ix", 6) == 0 &&
-                        strstr(nx1, "),l") != NULL &&
-                        strncmp(nx2, "ld (ix", 6) == 0 &&
-                        strstr(nx2, "),h") != NULL)
-                        escaped_from = (int)kv < escaped_from ? (int)kv : escaped_from;
-                }
-            }
+        /* A direct store to escaped frame storage remains removable until an
+         * indirect access or call could observe it. */
+        if (may_access_escaped_frame(tmp)) {
+            int first_escaped = escaped_from < -128 ? 0 : escaped_from + 128;
+            for (idx = first_escaped; idx < 256; ++idx)
+                last_store[idx] = -1;
         }
 
         /* Check whether this instruction touches an IX-indexed address */
@@ -1427,10 +1343,6 @@ static int pass_elim_dead_ix_stores(void)
             v = strtol(p, &endp, 0);
             if (*endp == ')' && *(endp+1) == ',' && v >= -128 && v <= 127) {
                 idx = (int)v + 128;
-                if ((int)v >= escaped_from) {
-                    last_store[idx] = -1;
-                    continue;
-                }
                 if (last_store[idx] >= 0)
                     is_dead[last_store[idx]] = 1;  /* overwritten → dead */
                 last_store[idx] = i;
@@ -5982,6 +5894,387 @@ static int pass_remove_ix_store_reload_hl(void)
     return changed;
 }
 
+static int peep_parse_st_ix_de_pair(const char *s1, const char *s2, int *off)
+{
+    char tmp1[MAX_LINE], tmp2[MAX_LINE];
+    char *p, *endp;
+    int lo, hi;
+
+    strip_peep_comment_copy(tmp1, s1);
+    strip_peep_comment_copy(tmp2, s2);
+    if (strncmp(tmp1, "ld (ix", 6) != 0)
+        return 0;
+    p = tmp1 + 6;
+    lo = (int)strtol(p, &endp, 10);
+    if (*endp != ')' || endp[1] != ',' || endp[2] != 'e' || endp[3] != 0)
+        return 0;
+    if (strncmp(tmp2, "ld (ix", 6) != 0)
+        return 0;
+    p = tmp2 + 6;
+    hi = (int)strtol(p, &endp, 10);
+    if (*endp != ')' || endp[1] != ',' || endp[2] != 'd' || endp[3] != 0 || hi != lo + 1)
+        return 0;
+    *off = lo;
+    return 1;
+}
+
+static int inline_temp_line_preserves_de(const char *s)
+{
+    char tmp[MAX_LINE];
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "call ", 5) == 0 || strncmp(tmp, "rst ", 4) == 0 ||
+        strcmp(tmp, "ex de,hl") == 0 || strcmp(tmp, "exx") == 0 ||
+        strcmp(tmp, "pop de") == 0 || strcmp(tmp, "inc de") == 0 ||
+        strcmp(tmp, "dec de") == 0 || strcmp(tmp, "inc d") == 0 ||
+        strcmp(tmp, "dec d") == 0 || strcmp(tmp, "inc e") == 0 ||
+        strcmp(tmp, "dec e") == 0 || strcmp(tmp, "ldi") == 0 ||
+        strcmp(tmp, "ldir") == 0 || strcmp(tmp, "ldd") == 0 ||
+        strcmp(tmp, "lddr") == 0)
+        return 0;
+    if (strncmp(tmp, "ld de,", 6) == 0 || strncmp(tmp, "ld d,", 5) == 0 ||
+        strncmp(tmp, "ld e,", 5) == 0 || strncmp(tmp, "rl d", 4) == 0 ||
+        strncmp(tmp, "rl e", 4) == 0 || strncmp(tmp, "rr d", 4) == 0 ||
+        strncmp(tmp, "rr e", 4) == 0 || strncmp(tmp, "sl d", 4) == 0 ||
+        strncmp(tmp, "sl e", 4) == 0 || strncmp(tmp, "sr d", 4) == 0 ||
+        strncmp(tmp, "sr e", 4) == 0 || strncmp(tmp, "set ", 4) == 0 ||
+        strncmp(tmp, "res ", 4) == 0)
+        return 0;
+    return 1;
+}
+
+static int inline_temp_line_mentions_de(const char *s)
+{
+    char tmp[MAX_LINE];
+    char token[32];
+    int i, n;
+
+    strip_peep_comment_copy(tmp, s);
+    i = 0;
+    while (tmp[i] != 0) {
+        while (tmp[i] != 0 &&
+               !isalnum((unsigned char)tmp[i]) && tmp[i] != '_')
+            i++;
+        n = 0;
+        while (tmp[i] != 0 &&
+               (isalnum((unsigned char)tmp[i]) || tmp[i] == '_')) {
+            if (n + 1 < (int)sizeof(token))
+                token[n++] = tmp[i];
+            i++;
+        }
+        token[n] = 0;
+        if (strcmp(token, "d") == 0 || strcmp(token, "e") == 0 ||
+            strcmp(token, "de") == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int inline_temp_byte_gap_preserves_a(const char *s)
+{
+    char tmp[MAX_LINE];
+    size_t n;
+
+    strip_peep_comment_copy(tmp, s);
+    if (tmp[0] == 0 || strcmp(tmp, "push hl") == 0 ||
+        strcmp(tmp, "inc hl") == 0 || strncmp(tmp, "ld hl,", 6) == 0)
+        return 1;
+    n = strlen(tmp);
+    return strncmp(tmp, "ld (", 4) == 0 && n >= 4 &&
+           strcmp(tmp + n - 3, ",hl") == 0;
+}
+
+static int inline_temp_line_mentions_bank_reg(const char *s)
+{
+    char tmp[MAX_LINE];
+    char token[32];
+    int i, n;
+
+    strip_peep_comment_copy(tmp, s);
+    i = 0;
+    while (tmp[i] != 0) {
+        while (tmp[i] != 0 &&
+               !isalnum((unsigned char)tmp[i]) && tmp[i] != '_')
+            i++;
+        n = 0;
+        while (tmp[i] != 0 &&
+               (isalnum((unsigned char)tmp[i]) || tmp[i] == '_')) {
+            if (n + 1 < (int)sizeof(token))
+                token[n++] = tmp[i];
+            i++;
+        }
+        token[n] = 0;
+        if (strcmp(token, "h") == 0 || strcmp(token, "l") == 0 ||
+            strcmp(token, "hl") == 0 || strcmp(token, "d") == 0 ||
+            strcmp(token, "e") == 0 || strcmp(token, "de") == 0 ||
+            strcmp(token, "b") == 0 || strcmp(token, "c") == 0 ||
+            strcmp(token, "bc") == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int inline_temp_exx_gap_safe(int first, int last)
+{
+    int i;
+    int h = 0, l = 0, d = 0, e = 0, b = 0, c = 0;
+    char tmp[MAX_LINE];
+
+    for (i = first; i < last; ++i) {
+        strip_peep_comment_copy(tmp, lines[i]);
+        if (tmp[0] == 0)
+            continue;
+        if (starts_label(tmp) || strncmp(tmp, "call ", 5) == 0 ||
+            strncmp(tmp, "rst ", 4) == 0 || strncmp(tmp, "jp ", 3) == 0 ||
+            strncmp(tmp, "jr ", 3) == 0 || strncmp(tmp, "djnz ", 5) == 0 ||
+            strcmp(tmp, "ret") == 0 || strncmp(tmp, "ret ", 4) == 0 ||
+            strcmp(tmp, "exx") == 0 || strstr(tmp, "sp") != NULL)
+            return 0;
+
+        if (strncmp(tmp, "ld l,(ix", 8) == 0) { l = 1; continue; }
+        if (strncmp(tmp, "ld h,(ix", 8) == 0) { h = 1; continue; }
+        if (strncmp(tmp, "ld e,(ix", 8) == 0) { e = 1; continue; }
+        if (strncmp(tmp, "ld d,(ix", 8) == 0) { d = 1; continue; }
+        if (strncmp(tmp, "ld hl,", 6) == 0) { h = l = 1; continue; }
+        if (strncmp(tmp, "ld de,", 6) == 0) { d = e = 1; continue; }
+        if (strncmp(tmp, "ld bc,", 6) == 0) { b = c = 1; continue; }
+        if (strcmp(tmp, "ld h,0") == 0) { h = 1; continue; }
+        if (strcmp(tmp, "ld d,h") == 0) { if (!h) return 0; d = 1; continue; }
+        if (strcmp(tmp, "ld e,l") == 0) { if (!l) return 0; e = 1; continue; }
+        if (strcmp(tmp, "pop hl") == 0) { h = l = 1; continue; }
+        if (strcmp(tmp, "pop de") == 0) { d = e = 1; continue; }
+        if (strcmp(tmp, "pop bc") == 0) { b = c = 1; continue; }
+        if (strcmp(tmp, "push ix") == 0 || strcmp(tmp, "pop ix") == 0)
+            continue;
+        if (strcmp(tmp, "push hl") == 0) { if (!h || !l) return 0; continue; }
+        if (strcmp(tmp, "push de") == 0) { if (!d || !e) return 0; continue; }
+        if (strcmp(tmp, "push bc") == 0) { if (!b || !c) return 0; continue; }
+        if (strcmp(tmp, "inc hl") == 0 || strcmp(tmp, "dec hl") == 0) {
+            if (!h || !l) return 0;
+            continue;
+        }
+        if (strcmp(tmp, "add hl,hl") == 0) {
+            if (!h || !l) return 0;
+            continue;
+        }
+        if (strcmp(tmp, "add hl,de") == 0) {
+            if (!h || !l || !d || !e) return 0;
+            continue;
+        }
+        if (strncmp(tmp, "ld e,(hl)", 9) == 0) {
+            if (!h || !l) return 0;
+            e = 1;
+            continue;
+        }
+        if (strncmp(tmp, "ld d,(hl)", 9) == 0) {
+            if (!h || !l) return 0;
+            d = 1;
+            continue;
+        }
+        if (strcmp(tmp, "ex de,hl") == 0) {
+            int old_h = h, old_l = l;
+            h = d; l = e; d = old_h; e = old_l;
+            continue;
+        }
+        if (strcmp(tmp, "ld a,h") == 0) { if (!h) return 0; continue; }
+        if (strcmp(tmp, "ld a,l") == 0) { if (!l) return 0; continue; }
+        if (strcmp(tmp, "ld a,d") == 0) { if (!d) return 0; continue; }
+        if (strcmp(tmp, "ld a,e") == 0) { if (!e) return 0; continue; }
+        if (strcmp(tmp, "ld d,a") == 0) { d = 1; continue; }
+        if (strcmp(tmp, "ld e,a") == 0) { e = 1; continue; }
+        if (strncmp(tmp, "ld (ix", 6) == 0) {
+            if (strstr(tmp, ",h") != NULL && !h) return 0;
+            if (strstr(tmp, ",l") != NULL && !l) return 0;
+            if (strstr(tmp, ",d") != NULL && !d) return 0;
+            if (strstr(tmp, ",e") != NULL && !e) return 0;
+            continue;
+        }
+        if (inline_temp_line_mentions_bank_reg(tmp))
+            return 0;
+    }
+    return 1;
+}
+
+/* Replace a straight-line, compiler-tagged single-use inline-argument spill
+ * with a stack spill. The tag supplies the fact assembly cannot recover: no
+ * later path can read this value from the frame slot. Control flow and direct
+ * SP manipulation still decline the rewrite.
+ *
+ * The DE form accepts one outstanding `push hl` in the gap. It rotates that
+ * saved HL value around the argument with pop hl/pop de/push hl, leaving the
+ * stack and live registers exactly as the original reload/exchange did. */
+static int pass_inline_temp_spill_to_stack(void)
+{
+    int i, j, off, changed = 0;
+    int is_de, stack_depth, outstanding_push_hl;
+    int de_preserved, de_untouched;
+    int byte_a_safe, byte_hl_overwritten, byte_load_i;
+    char expected_lo[64], expected_hi[64];
+    char expected_de_lo[64], expected_de_hi[64], tmp[MAX_LINE];
+
+    for (i = 0; i + 4 < nlines; ++i) {
+        is_de = peep_parse_st_ix_de_pair(lines[i], lines[i + 1], &off);
+        if (!is_de && !peep_parse_st_ix_pair(lines[i], lines[i + 1], &off))
+            continue;
+        if (strstr(lines[i + 2], ";@dcc-inline-temp-single-use") == NULL)
+            continue;
+        sprintf(expected_lo, "ld l,(ix%+d)", off);
+        sprintf(expected_hi, "ld h,(ix%+d)", off + 1);
+        sprintf(expected_de_lo, "ld e,(ix%+d)", off);
+        sprintf(expected_de_hi, "ld d,(ix%+d)", off + 1);
+        if (!is_de && i + 7 < nlines && eq(i + 3, "ld a,h") &&
+            eq(i + 4, "rlca") && eq(i + 5, "sbc a,a") &&
+            eq(i + 6, "ld d,a") && eq(i + 7, "ld e,a")) {
+            replace1_tagged(i, "; inline temp remains in hl",
+                            "inline_temp_hl_live");
+            delete_n(i + 1, 2);
+            changed = 1;
+            if (i > 0) --i;
+            continue;
+        }
+        stack_depth = 0;
+        outstanding_push_hl = 0;
+        de_preserved = 1;
+        de_untouched = 1;
+        byte_load_i = -1;
+        if (!is_de && i >= 2 && eq(i - 2, "ld l,(hl)") && eq(i - 1, "ld h,0"))
+            byte_load_i = i - 2;
+        else if (!is_de && i >= 3 && eq(i - 3, "ld l,(hl)") &&
+                 eq(i - 2, "ld h,0") && eq(i - 1, "ld h,0"))
+            byte_load_i = i - 3;
+        byte_a_safe = byte_load_i >= 0;
+        byte_hl_overwritten = 0;
+
+        for (j = i + 3; j < nlines && j <= i + 60; ++j) {
+            strip_peep_comment_copy(tmp, lines[j]);
+            if ((eq(j, expected_lo) && j + 1 < nlines && eq(j + 1, expected_hi)) ||
+                (eq(j, expected_de_lo) && j + 1 < nlines && eq(j + 1, expected_de_hi))) {
+                int reloads_de = eq(j, expected_de_lo);
+                int followed_by_ex = j + 2 < nlines && eq(j + 2, "ex de,hl");
+                if (!is_de && !reloads_de && j + 7 < nlines &&
+                    eq(j + 2, "ld a,h") && eq(j + 3, "rlca") &&
+                    eq(j + 4, "sbc a,a") && eq(j + 5, "ld d,a") &&
+                    eq(j + 6, "ld e,a") && eq(j + 7, "pop bc") &&
+                    inline_temp_exx_gap_safe(i + 3, j)) {
+                    replace1_tagged(j, "exx", "inline_temp_exx");
+                    delete_n(j + 1, 1);
+                    replace1_tagged(i, "exx", "inline_temp_exx");
+                    delete_n(i + 1, 2);
+                    changed = 1;
+                    if (i > 0) --i;
+                } else if (reloads_de && is_de && de_preserved) {
+                    delete_n(j, 2);
+                    replace1_tagged(i, "; inline temp kept in de", "inline_temp_de_live");
+                    delete_n(i + 1, 2);
+                    changed = 1;
+                    if (i > 0) --i;
+                } else if (reloads_de && stack_depth == 0) {
+                    replace1_tagged(i, is_de ? "push de" : "push hl",
+                                    "inline_temp_spill_to_stack");
+                    replace1(j, "pop de");
+                    delete_n(j + 1, 1);
+                    delete_n(i + 1, 2);
+                    changed = 1;
+                    if (i > 0) --i;
+                } else if (byte_a_safe && followed_by_ex && j + 6 < nlines &&
+                    eq(j + 3, "pop hl") && eq(j + 4, "ld (hl),e") &&
+                    eq(j + 5, "inc hl") && eq(j + 6, "ld (hl),d")) {
+                    replace1_tagged(byte_load_i, "ld a,(hl)", "inline_temp_byte_in_a");
+                    replace1(j + 4, "ld (hl),a");
+                    replace1(j + 6, "ld (hl),0");
+                    delete_n(j, 3);
+                    delete_n(byte_load_i + 1, i - byte_load_i + 2);
+                    changed = 1;
+                    i = byte_load_i > 0 ? byte_load_i - 1 : 0;
+                } else if (is_de && followed_by_ex && de_preserved) {
+                    delete_n(j, 3);
+                    replace1_tagged(i, "; inline temp kept in de", "inline_temp_de_live");
+                    delete_n(i + 1, 2);
+                    changed = 1;
+                    if (i > 0) --i;
+                } else if (!is_de && followed_by_ex && de_untouched) {
+                    delete_n(j, 3);
+                    replace1_tagged(i, "ld d,h", "inline_temp_hl_to_de");
+                    replace1(i + 1, "ld e,l");
+                    delete_n(i + 2, 1);
+                    changed = 1;
+                    if (i > 0) --i;
+                } else if (!is_de && stack_depth == 0 && !followed_by_ex) {
+                    replace1_tagged(i, "push hl", "inline_temp_spill_to_stack");
+                    replace1(j, "pop hl");
+                    delete_n(j + 1, 1);
+                    delete_n(i + 1, 1);
+                    delete_n(i + 1, 1);
+                    changed = 1;
+                    if (i > 0) --i;
+                } else if (followed_by_ex &&
+                           (stack_depth == 0 ||
+                            (stack_depth == 1 && outstanding_push_hl &&
+                             j + 3 < nlines && eq(j + 3, "pop hl")))) {
+                    replace1_tagged(i, is_de ? "push de" : "push hl",
+                                    "inline_temp_spill_to_stack");
+                    if (stack_depth == 0) {
+                        replace1(j, "ex de,hl");
+                        replace1(j + 1, "pop de");
+                        delete_n(j + 2, 1);
+                    } else {
+                        replace1(j, "pop hl");
+                        replace1(j + 1, "pop de");
+                        replace1(j + 2, "push hl");
+                    }
+                    delete_n(i + 1, 1);
+                    delete_n(i + 1, 1);
+                    changed = 1;
+                    if (i > 0) --i;
+                }
+                break;
+            }
+            if (starts_label(tmp) || strncmp(tmp, "jp ", 3) == 0 ||
+                strncmp(tmp, "jr ", 3) == 0 || strncmp(tmp, "djnz ", 5) == 0 ||
+                strcmp(tmp, "ret") == 0 || strncmp(tmp, "ret ", 4) == 0 ||
+                strstr(tmp, "sp") != NULL || strcmp(tmp, "ex (sp),hl") == 0)
+                break;
+            if (!inline_temp_line_preserves_de(tmp))
+                de_preserved = 0;
+            if (inline_temp_line_mentions_de(tmp))
+                de_untouched = 0;
+            if (byte_a_safe && !byte_hl_overwritten && tmp[0] != 0) {
+                if (strncmp(tmp, "ld hl,", 6) == 0)
+                    byte_hl_overwritten = 1;
+                else
+                    byte_a_safe = 0;
+            }
+            if (!inline_temp_byte_gap_preserves_a(tmp))
+                byte_a_safe = 0;
+            if (strncmp(tmp, "push ", 5) == 0) {
+                if (stack_depth == 0)
+                    outstanding_push_hl = strcmp(tmp, "push hl") == 0;
+                stack_depth++;
+            } else if (strncmp(tmp, "pop ", 4) == 0) {
+                if (stack_depth == 0)
+                    break;
+                stack_depth--;
+                if (stack_depth == 0)
+                    outstanding_push_hl = 0;
+            }
+        }
+    }
+    return changed;
+}
+
+static int pass_remove_inline_temp_markers(void)
+{
+    int i, changed = 0;
+
+    for (i = nlines - 1; i >= 0; --i) {
+        if (strstr(lines[i], ";@dcc-inline-temp-single-use") != NULL) {
+            delete_n(i, 1);
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
 static int count_jumps_to_label(const char *label)
 {
     int k, count = 0;
@@ -7509,7 +7802,7 @@ static int pass_array_base_push_to_de(void)
 {
     int i;
     int changed;
-    char base[128];
+    char base[128], index[128];
 
     changed = 0;
 
@@ -7530,6 +7823,35 @@ static int pass_array_base_push_to_de(void)
             replace1(i + 3, line);
             replace1(i + 4, "add hl,de");
             delete_n(i + 5, 3);
+            changed = 1;
+            if (i > 0) --i;
+        }
+
+        if (i + 10 < nlines &&
+            parse_ld_hl_imm(lines[i], base) && base[0] != '(' &&
+            eq(i + 1, "push hl") &&
+            parse_ld_hl_imm(lines[i + 2], index) && index[0] == '(' &&
+            eq(i + 3, "push hl") &&
+            eq(i + 4, "inc hl") &&
+            eq(i + 6, "pop hl") &&
+            eq(i + 7, "add hl,hl") &&
+            eq(i + 8, "ex de,hl") &&
+            eq(i + 9, "pop hl") &&
+            eq(i + 10, "add hl,de") &&
+            peep_de_dead_at(i + 11)) {
+            char store[128], expected_store[132], line[180];
+
+            strip_peep_comment_copy(store, lines[i + 5]);
+            sprintf(expected_store, "ld %s,hl", index);
+            if (strcmp(store, expected_store) != 0)
+                continue;
+
+            delete_n(i, 2);
+            replace1_tagged(i, lines[i], "array_base_to_de");
+            sprintf(line, "ld de,%s", base);
+            replace1(i + 6, line);
+            replace1(i + 7, "add hl,de");
+            delete_n(i + 8, 1);
             changed = 1;
             if (i > 0) --i;
         }
@@ -9796,7 +10118,7 @@ static int pass_global_ptr_word_predec_load(void)
  */
 static int pass_elim_ex_de_hl_before_ix_store(void)
 {
-    int i, off, changed = 0;
+    int i, next_i, off, changed = 0;
     char next[MAX_LINE];
     char new_lo[64], new_hi[64];
 
@@ -9804,11 +10126,14 @@ static int pass_elim_ex_de_hl_before_ix_store(void)
         if (!eq(i, "ex de,hl")) continue;
         if (!peep_parse_st_ix_pair(lines[i + 1], lines[i + 2], &off)) continue;
 
-        /* HL must be clobbered by the next instruction; otherwise the
-         * stale stp-pointer left in HL by removing the exchange would be
-         * visible.  All generated instances follow immediately with a
-         * ld hl,(sym) that starts the next predec/postinc sequence. */
-        strip_peep_comment_copy(next, lines[i + 3]);
+        next_i = i + 3;
+        if (next_i < nlines &&
+            strstr(lines[next_i], ";@dcc-inline-temp-single-use") != NULL)
+            next_i++;
+        if (next_i >= nlines)
+            continue;
+        strip_peep_comment_copy(next, lines[next_i]);
+
         if (strncmp(next, "ld hl,", 6) != 0) continue;
 
         sprintf(new_lo, "ld (ix%+d),e", off);
@@ -13137,6 +13462,8 @@ int main(int argc, char **argv)
         if (pass_ix_pair_load_to_de()) changed = 1;
         if (pass_ix_byte_load_to_de()) changed = 1;
         if (pass_remove_ix_store_reload_hl()) changed = 1;
+        if (pass_inline_temp_spill_to_stack()) changed = 1;
+        if (pass_remove_inline_temp_markers()) changed = 1;
         if (pass_postinc_ix_word()) changed = 1;
         if (pass_cp_jz_jpnc()) changed = 1;
         if (pass_cp_jz_jpc()) changed = 1;

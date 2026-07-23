@@ -123,6 +123,14 @@ static void test_widen_mul_edges(void)
     b = 2;
     chk((long)a * b, -65536L, "s16mul minneg2");
 
+    a = -32768;
+    b = 32767;
+    chk((long)a * b, -1073709056L, "s16mul minmax");
+
+    a = 32767;
+    b = -32768;
+    chk((long)a * b, -1073709056L, "s16mul maxmin");
+
     ua = 65535U;
     ub = 65535U;
     chku((unsigned long)ua * ub, 4294836225UL, "u16mul max");
