@@ -4791,9 +4791,18 @@ static int bc_loop_body_self_consistent(const char *buf, long start, long end,
  *
  * On success, *out_f is a rewound tmpfile holding the (possibly BC-
  * reload-rewritten) content to commit - the caller must fclose it. On
- * failure, *out_f is untouched. */
-static int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
-                                     FILE **out_f)
+ * failure, *out_f is untouched.
+ *
+ * Not static: dcc_loop_regalloc.c calls this directly to verify a single
+ * loop's speculatively-generated body, passing e_cand=NULL (loop-scoped
+ * promotion only ever targets BC, matching find_bc_regalloc_candidate's own
+ * word-sized/read-only/never-address-taken candidate shape - see that
+ * file). Nothing about this scan assumes its buffer covers a whole function
+ * body rather than one loop's own emitted span - the "any call anywhere"
+ * check and the loop-header self-consistency check are exactly as sound,
+ * and exactly as needed, scoped to just a loop's own text. */
+int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
+                              FILE **out_f)
 {
     long size;
     char *buf;

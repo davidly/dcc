@@ -513,6 +513,11 @@ extern int g_regalloc_address_escaped;
 extern int g_e_regalloc_claim_active;
 extern int g_e_regalloc_claimed;
 extern struct Sym *g_e_regalloc_sym;
+/* Shared with dcc_loop_regalloc.c - see that file's use for the full
+ * contract; e_cand is always NULL from there (loop-scoped promotion only
+ * ever targets BC). Defined in dcc_func.c. */
+int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
+                              FILE **out_f);
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];

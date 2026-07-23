@@ -63,15 +63,10 @@
 #include "dcc.h"
 #include "dcc_ast.h"
 
-#define MAX_LICM_NAMES 32
 #define MAX_LICM_CANDIDATES 8
 
-struct LicmModifiedNames {
-    const char *names[MAX_LICM_NAMES];
-    int count;
-    int overflowed;   /* too many names, or something unrecognized/a call was
-                        * seen - treat as "everything is modified" */
-};
+/* struct LicmModifiedNames now lives in dcc_ast.h (as LICM_MAX_MODIFIED_NAMES/
+ * struct LicmModifiedNames) - dcc_loop_regalloc.c shares it. */
 
 struct LicmCandidateList {
     const struct AstNode *nodes[MAX_LICM_CANDIDATES];
@@ -87,7 +82,7 @@ static void licm_mark_modified(struct LicmModifiedNames *mod, const char *name)
     for (i = 0; i < mod->count; ++i)
         if (strcmp(mod->names[i], name) == 0)
             return;
-    if (mod->count < MAX_LICM_NAMES)
+    if (mod->count < LICM_MAX_MODIFIED_NAMES)
         mod->names[mod->count++] = name;
     else
         mod->overflowed = 1;
@@ -110,7 +105,7 @@ static int licm_name_is_modified(const struct LicmModifiedNames *mod, const char
  * recognized below (nested loops, switch, goto/labels, compound literals,
  * ...) sets mod->overflowed - safe (declines every candidate) rather than
  * risking a missed modification a purely lexical scan can't see through. */
-static void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
+void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
 {
     int i;
 

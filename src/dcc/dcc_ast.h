@@ -242,6 +242,22 @@ int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
  * its place, or NULL if nothing qualifies (use for_node->d unchanged). */
 struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node);
 
+/* Set of names assigned, incremented/decremented, or address-taken anywhere
+ * in a scanned subtree; ->overflowed means "assume everything is modified"
+ * (a call, a nested loop/switch/goto, or any other construct this doesn't
+ * specifically recognize was seen - see licm_scan_modified in dcc_licm.c).
+ * Shared with dcc_loop_regalloc.c, which reuses this exact conservative scan
+ * as its own loop-register-promotion eligibility check: a candidate must be
+ * read but never appear in this set, and overflowed declines promoting
+ * anything in the loop at all - the same safety bar LICM itself holds. */
+#define LICM_MAX_MODIFIED_NAMES 32
+struct LicmModifiedNames {
+    const char *names[LICM_MAX_MODIFIED_NAMES];
+    int count;
+    int overflowed;
+};
+void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod);
+
 /* Detects two ADJACENT statements in a compound block whose list one
  * contains `X % Y` and the other `X / Y` (either order, bare-identifier
  * operands only in v1), and rewrites them to share one DCCRTL.MAC

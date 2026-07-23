@@ -467,7 +467,9 @@ static struct AstNode *ast_hoist_row_invariant_2d_reads(const struct AstNode *rh
     return copy;
 }
 
-void ast_gen_for_stmt(const struct AstNode *n)
+/* Renamed original body of ast_gen_for_stmt - see that function (just below)
+ * for the loop-scoped BC register-promotion wrapper now placed around it. */
+static void ast_gen_for_stmt_impl(const struct AstNode *n)
 {
     int ltop;
     int linc;
@@ -762,6 +764,21 @@ void ast_gen_for_stmt(const struct AstNode *n)
         pop_for_rename();
         rename_count--;
     }
+}
+
+/* Loop-scoped BC register promotion (dcc_loop_regalloc.c): if this loop has
+ * an eligible read-only candidate (see loop_regalloc_find_bc_candidate),
+ * try generating the whole loop with it primed into BC instead of its
+ * normal frame slot, verify the result is safe, and commit it - falling
+ * back to plain, unpromoted generation (the untouched ast_gen_for_stmt_impl
+ * above) if no candidate exists or the speculative attempt is declined. */
+void ast_gen_for_stmt(const struct AstNode *n)
+{
+    struct Sym *cand = loop_regalloc_find_bc_candidate(n);
+
+    if (cand != NULL && try_loop_regalloc_bc(n, cand, ast_gen_for_stmt_impl))
+        return;
+    ast_gen_for_stmt_impl(n);
 }
 
 /* See dcc_ast.h for the rationale: scan_function_body's frame-sizing scan

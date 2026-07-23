@@ -295,6 +295,12 @@ void ast_switch_assign_labels(const struct AstNode *n, int *case_vals,
 void ast_gen_switch_stmt(const struct AstNode *n);
 void ast_gen_for_stmt(const struct AstNode *n);
 void ast_gen_stmt(const struct AstNode *n);
+
+/* dcc_loop_regalloc.c - loop-scoped BC register promotion; see that file's
+ * header comment for the full design. */
+struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node);
+int try_loop_regalloc_bc(const struct AstNode *for_node, struct Sym *cand,
+                          void (*gen_for_impl)(const struct AstNode *));
 int ast_try_emit_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */
