@@ -220,7 +220,7 @@ static inline int acc(int k)
     return 0;
 }
 
-static void need(int k)
+static inline void need(int k)
 {
     if (!acc(k)) die("syntax");
 }

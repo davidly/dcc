@@ -118,7 +118,7 @@ struct State {
     unsigned char *flp;
     int *st;
     int *stp;
-    int *fret;
+    struct Ins **fret;
     int cp;
     int nsym;
     int nfunc;
@@ -915,22 +915,39 @@ static void parse_package(void)
     emit(OP_HALT, 0, 0);
 }
 
-static inline int mem_get(int base, int esz, int idx, unsigned char *m)
+/* Split into word/byte variants instead of a single function taking a
+ * runtime esz parameter: esz is always a compile-time literal (1 or INTB)
+ * at every real call site, but a reproducible dcc quirk means having both
+ * mem_get and mem_set inlined together in the same function (as run()
+ * does, many times over) defeats constant-folding of esz through the
+ * substituted parameter for *both* of them - each call ends up paying a
+ * genuine runtime __mulu for idx * esz instead of the compile-time-
+ * constant shift it should fold to. Baking the size into which function
+ * is called instead of passing it sidesteps the interaction entirely
+ * (verified: neither function alone triggers it, only using both
+ * together in one function does) - see the identical fix in cint.c. */
+static inline int mem_get_word(int base, int idx, unsigned char *m)
 {
-    if (esz == 1) return m[base + idx * esz];
-    return (short)(m[base + idx * esz] | (m[base + idx * esz + 1] << 8));
+    return (short)(m[base + idx * INTB] | (m[base + idx * INTB + 1] << 8));
 }
 
-static inline void mem_set(int base, int esz, int idx, unsigned char *m, int v)
+static inline int mem_get_byte(int base, int idx, unsigned char *m)
 {
-    if (esz == 1) { m[base + idx * esz] = (unsigned char)v; }
-    else {
-        m[base + idx * esz] = (unsigned char)(v & 255);
-        m[base + idx * esz + 1] = (unsigned char)((v >> 8) & 255);
-    }
+    return m[base + idx];
 }
 
-static void call_func(int fi, int retpc, int argc)
+static inline void mem_set_word(int base, int idx, unsigned char *m, int v)
+{
+    m[base + idx * INTB] = (unsigned char)(v & 255);
+    m[base + idx * INTB + 1] = (unsigned char)((v >> 8) & 255);
+}
+
+static inline void mem_set_byte(int base, int idx, unsigned char *m, int v)
+{
+    m[base + idx] = (unsigned char)v;
+}
+
+static void call_func(int fi, struct Ins *retpc, int argc)
 {
     int i, v;
     if (G->fp + 1 >= MAXFRAME) die("frame full");
@@ -940,41 +957,44 @@ static void call_func(int fi, int retpc, int argc)
     G->fret[G->fp] = retpc;
     for (i = argc - 1; i >= 0; i--) {
         v = popv();
-        if (i < G->func[fi].nparam)
-            mem_set(G->func[fi].pofs[i], G->func[fi].pesz[i], 0, G->flp, v);
+        if (i < G->func[fi].nparam) {
+            if (G->func[fi].pesz[i] == 1)
+                mem_set_byte(G->func[fi].pofs[i], 0, G->flp, v);
+            else
+                mem_set_word(G->func[fi].pofs[i], 0, G->flp, v);
+        }
     }
 }
 
 static void run(void)
 {
-    int pc, a, b, v, argc, i;
+    int a, b, v, argc, i;
     struct Ins *in;
     G->stp = G->st;
     G->fp = 0;
     G->flp = G->floc;
     memset(G->floc, 0, (unsigned int)(MAXFRAME * G->frame_size));
-    pc = G->main_entry;
+    in = &G->code[G->main_entry];
     for (;;) {
-        in = &G->code[pc++];
         switch (in->op) {
         case OP_HALT: return;
         case OP_PUSH: pushv(in->a); break;
-        case OP_LDG: pushv(mem_get(in->a, INTB, 0, G->gmem)); break;
-        case OP_STG: mem_set(in->a, INTB, 0, G->gmem, popv()); break;
-        case OP_LDL: pushv(mem_get(in->a, INTB, 0, G->flp)); break;
-        case OP_STL: mem_set(in->a, INTB, 0, G->flp, popv()); break;
-        case OP_LDGB: pushv(mem_get(in->a, 1, 0, G->gmem)); break;
-        case OP_STGB: mem_set(in->a, 1, 0, G->gmem, popv()); break;
-        case OP_LDLB: pushv(mem_get(in->a, 1, 0, G->flp)); break;
-        case OP_STLB: mem_set(in->a, 1, 0, G->flp, popv()); break;
-        case OP_LDGA: a=popv(); pushv(mem_get(in->a, INTB, a, G->gmem)); break;
-        case OP_STGA: v=popv(); a=popv(); mem_set(in->a, INTB, a, G->gmem, v); break;
-        case OP_LDLA: a=popv(); pushv(mem_get(in->a, INTB, a, G->flp)); break;
-        case OP_STLA: v=popv(); a=popv(); mem_set(in->a, INTB, a, G->flp, v); break;
-        case OP_LDGAB: a=popv(); pushv(mem_get(in->a, 1, a, G->gmem)); break;
-        case OP_STGAB: v=popv(); a=popv(); mem_set(in->a, 1, a, G->gmem, v); break;
-        case OP_LDLAB: a=popv(); pushv(mem_get(in->a, 1, a, G->flp)); break;
-        case OP_STLAB: v=popv(); a=popv(); mem_set(in->a, 1, a, G->flp, v); break;
+        case OP_LDG: pushv(mem_get_word(in->a, 0, G->gmem)); break;
+        case OP_STG: mem_set_word(in->a, 0, G->gmem, popv()); break;
+        case OP_LDL: pushv(mem_get_word(in->a, 0, G->flp)); break;
+        case OP_STL: mem_set_word(in->a, 0, G->flp, popv()); break;
+        case OP_LDGB: pushv(mem_get_byte(in->a, 0, G->gmem)); break;
+        case OP_STGB: mem_set_byte(in->a, 0, G->gmem, popv()); break;
+        case OP_LDLB: pushv(mem_get_byte(in->a, 0, G->flp)); break;
+        case OP_STLB: mem_set_byte(in->a, 0, G->flp, popv()); break;
+        case OP_LDGA: a=popv(); pushv(mem_get_word(in->a, a, G->gmem)); break;
+        case OP_STGA: v=popv(); a=popv(); mem_set_word(in->a, a, G->gmem, v); break;
+        case OP_LDLA: a=popv(); pushv(mem_get_word(in->a, a, G->flp)); break;
+        case OP_STLA: v=popv(); a=popv(); mem_set_word(in->a, a, G->flp, v); break;
+        case OP_LDGAB: a=popv(); pushv(mem_get_byte(in->a, a, G->gmem)); break;
+        case OP_STGAB: v=popv(); a=popv(); mem_set_byte(in->a, a, G->gmem, v); break;
+        case OP_LDLAB: a=popv(); pushv(mem_get_byte(in->a, a, G->flp)); break;
+        case OP_STLAB: v=popv(); a=popv(); mem_set_byte(in->a, a, G->flp, v); break;
         case OP_ADD: b=popv(); a=popv(); pushv(a+b); break;
         case OP_SUB: b=popv(); a=popv(); pushv(a-b); break;
         case OP_MUL: b=popv(); a=popv(); pushv(a*b); break;
@@ -990,12 +1010,13 @@ static void run(void)
         case OP_GE: b=popv(); a=popv(); pushv(a>=b); break;
         case OP_AND: b=popv(); a=popv(); pushv(a&&b); break;
         case OP_OR: b=popv(); a=popv(); pushv(a||b); break;
-        case OP_JMP: pc = in->a; break;
-        case OP_JZ: a=popv(); if(!a) pc=in->a; break;
-        case OP_CALL: call_func(in->a, pc, in->b); pc = G->func[in->a].entry; break;
+        case OP_JMP: in = &G->code[in->a]; continue;
+        case OP_JZ: a=popv(); if(!a) { in = &G->code[in->a]; continue; } break;
+        case OP_CALL:
+            call_func(in->a, in + 1, in->b); in = &G->code[G->func[in->a].entry]; continue;
         case OP_RET:
-            v=popv(); pc=G->fret[G->fp]; G->fp--;
-            G->flp = G->floc + G->fp * G->frame_size; pushv(v); break;
+            v=popv(); in=G->fret[G->fp]; G->fp--;
+            G->flp = G->floc + G->fp * G->frame_size; pushv(v); continue;
         case OP_POP: (void)popv(); break;
         case OP_PUTI: printf("%d", popv()); break;
         case OP_PUTS: printf("%s", G->strs[in->a]); break;
@@ -1003,6 +1024,7 @@ static void run(void)
         default: die("bad op");
         }
         (void)argc; (void)i;
+        in++;
     }
 }
 
@@ -1069,7 +1091,7 @@ static void init_compile_storage(void)
 static void init_run_storage(void)
 {
     G->st = (int *)xcalloc(MAXSTACK, sizeof(int));
-    G->fret = (int *)xcalloc(MAXFRAME, sizeof(int));
+    G->fret = (struct Ins **)xcalloc(MAXFRAME, sizeof(struct Ins *));
     G->floc = (unsigned char *)xcalloc((unsigned int)(MAXFRAME * G->frame_size), 1);
 }
 

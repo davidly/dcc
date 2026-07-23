@@ -59,7 +59,7 @@ struct Ins { unsigned char op; int a; int b; };
 struct Line { int num; char *txt; int pc; };
 struct Sym { char name[12]; int scalar; int base; int size; };
 struct Patch { int at; int line; };
-struct ForFrame { int var; int limit; int step; int pc; };
+struct ForFrame { int var; int limit; int step; struct Ins *pc; };
 
 /* Keep large tables out of BSS.  Only small scalar and pointer globals
  * remain static; the actual arrays are allocated from the CP/M heap.
@@ -80,7 +80,7 @@ static int *st;
 static int sp;
 static struct ForFrame *fstk;
 static int fsp;
-static int *gstk;
+static struct Ins **gstk;
 static int gsp;
 static char **strs;
 static int nstr;
@@ -138,7 +138,7 @@ static void init_run_storage(void)
     mem = (int *)xcalloc(mtop, sizeof(int));
     st = (int *)xcalloc(MAXSTACK, sizeof(int));
     fstk = (struct ForFrame *)xcalloc(MAXFOR, sizeof(struct ForFrame));
-    gstk = (int *)xcalloc(MAXGOSUB, sizeof(int));
+    gstk = (struct Ins **)xcalloc(MAXGOSUB, sizeof(struct Ins *));
 }
 
 static void free_compile_only_storage(void)
@@ -473,13 +473,11 @@ static inline int popv(void) { return st[--sp]; }
 
 static void run(void)
 {
-    int pc;
     int a, b, v, idx, si;
     struct Ins *in;
 
-    pc = 0;
+    in = code;
     for (;;) {
-        in = &code[pc++];
         switch (in->op) {
         case OP_HALT: return;
         case OP_PUSH: pushv(in->a); break;
@@ -507,19 +505,24 @@ static void run(void)
         case OP_GT: b=popv(); a=popv(); pushv(a>b); break;
         case OP_GE: b=popv(); a=popv(); pushv(a>=b); break;
         case OP_AND: b=popv(); a=popv(); pushv(a & b); break;
-        case OP_JMP: pc = in->a; break;
-        case OP_JZ: a=popv(); if (!a) pc = in->a; break;
-        case OP_GOSUB: if (gsp >= MAXGOSUB) die("gosub stack full"); gstk[gsp++] = pc; pc = in->a; break;
-        case OP_RET: if (gsp <= 0) die("return stack empty"); pc = gstk[--gsp]; break;
+        case OP_JMP: in = &code[in->a]; continue;
+        case OP_JZ: a=popv(); if (!a) { in = &code[in->a]; continue; } break;
+        case OP_GOSUB:
+            if (gsp >= MAXGOSUB) die("gosub stack full");
+            gstk[gsp++] = in + 1; in = &code[in->a]; continue;
+        case OP_RET:
+            if (gsp <= 0) die("return stack empty");
+            in = gstk[--gsp]; continue;
         case OP_FOR:
             if (fsp >= MAXFOR) die("for stack full");
-            fstk[fsp].var = in->a; fstk[fsp].limit = popv(); fstk[fsp].step = in->b; fstk[fsp].pc = pc; fsp++;
+            fstk[fsp].var = in->a; fstk[fsp].limit = popv(); fstk[fsp].step = in->b; fstk[fsp].pc = in + 1; fsp++;
             break;
         case OP_NEXT:
             if (fsp <= 0) die("next without for");
             si = fsp - 1;
             mem[sym[fstk[si].var].scalar] += fstk[si].step;
-            if (mem[sym[fstk[si].var].scalar] <= fstk[si].limit) pc = fstk[si].pc; else fsp--;
+            if (mem[sym[fstk[si].var].scalar] <= fstk[si].limit) { in = fstk[si].pc; continue; }
+            fsp--;
             break;
         case OP_PRI: printf("%d", popv()); break;
         case OP_PRS: printf("%s", strs[in->a]); break;
@@ -528,6 +531,7 @@ static void run(void)
         case OP_CLR: break;
         default: die("bad opcode");
         }
+        in++;
     }
 }
 

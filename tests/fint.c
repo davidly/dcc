@@ -115,7 +115,7 @@ struct State {
     char **s_strs;
     unsigned char *s_mem;
     int *s_st;
-    int *s_crs;      /* call return stack: flat int array of saved PCs */
+    struct Ins **s_crs; /* call return stack: saved return addresses */
     int *s_lrs_idx;  /* loop index values */
     int *s_lrs_lim;  /* loop limit values */
     int *s_lrs_prv;  /* loop_top link (previous loop frame index) */
@@ -473,7 +473,7 @@ static void run_at(int pc)
     struct Ins *lcode;
     unsigned char *lmem;
     int *lst;
-    int *lcrs;
+    struct Ins **lcrs;
     int *llrs_idx;
     int *llrs_lim;
     int *llrs_prv;
@@ -493,8 +493,8 @@ static void run_at(int pc)
     lltop   = loop_top;
     lmcap   = mcap;
 
+    in = lcode + pc;
     for (;;) {
-        in = lcode + pc++;
         switch (in->op) {
         case OP_HALT:
             sp = lsp; crp = lcrp; lrp = llrp; loop_top = lltop;
@@ -522,18 +522,18 @@ static void run_at(int pc)
             break;
         case OP_CALL:
             if (lcrp >= MAXRSTACK) die("return stack full");
-            lcrs[lcrp++] = pc;
-            pc = in->a;
-            break;
+            lcrs[lcrp++] = in + 1;
+            in = lcode + in->a;
+            continue;
         case OP_RET:
             if (lcrp <= 0) {
                 sp = lsp; crp = lcrp; lrp = llrp; loop_top = lltop;
                 return;
             }
-            pc = lcrs[--lcrp];
-            break;
-        case OP_JMP: pc = in->a; break;
-        case OP_JZ: { int _v = lst[--lsp]; if (!_v) pc = in->a; } break;
+            in = lcrs[--lcrp];
+            continue;
+        case OP_JMP: in = lcode + in->a; continue;
+        case OP_JZ: { int _v = lst[--lsp]; if (!_v) { in = lcode + in->a; continue; } } break;
         case OP_DO:
             a = lst[--lsp]; b = lst[--lsp];
             if (llrp >= MAXRSTACK) die("loop stack full");
@@ -544,7 +544,7 @@ static void run_at(int pc)
             break;
         case OP_LOOP:
             { int _r = llrp - 1; int _i = llrs_idx[_r] + 1; llrs_idx[_r] = _i;
-              if (_i < llrs_lim[_r]) pc = in->a;
+              if (_i < llrs_lim[_r]) { in = lcode + in->a; continue; }
               else { lltop = llrs_prv[_r]; llrp = _r; } }
             break;
         case OP_I: lst[lsp++] = llrs_idx[lltop]; break;
@@ -596,6 +596,7 @@ static void run_at(int pc)
         case OP_PSTR: printf("%s", strs[in->a]); break;
         default: die("bad op");
         }
+        in++;
     }
 }
 
@@ -750,7 +751,7 @@ static void init_state(void)
     mem = (unsigned char *)xcalloc(INITMEM, 1);
     mcap = INITMEM;
     st = (int *)xcalloc(MAXSTACK, sizeof(int));
-    crs = (int *)xcalloc(MAXRSTACK, sizeof(int));
+    crs = (struct Ins **)xcalloc(MAXRSTACK, sizeof(struct Ins *));
     lrs_idx = (int *)xcalloc(MAXRSTACK, sizeof(int));
     lrs_lim = (int *)xcalloc(MAXRSTACK, sizeof(int));
     lrs_prv = (int *)xcalloc(MAXRSTACK, sizeof(int));
