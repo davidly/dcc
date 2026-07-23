@@ -3473,9 +3473,28 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
     if (inline_expr_contains_inline_call(inline_substitution_body(fn)))
         return 0;
 
+    /* Per-parameter, not per-call: only a parameter that is itself used
+     * more than once AND whose own argument isn't cheaply re-evaluable
+     * needs a temp. A sibling parameter needing one (e.g. because its
+     * argument is a call) must not drag an unrelated parameter through a
+     * temp too - that parameter's argument, if simple (inline_arg_reusable:
+     * a literal, string literal, sizeof, or a bare identifier), is exactly
+     * as safe to substitute directly here as it would be if this whole
+     * function's gate (inline_call_needs_arg_temps) hadn't fired at all,
+     * since that's the same test used to decide whether ANY temps are
+     * needed in the first place. Substituting it directly instead of
+     * routing it through a temp preserves its compile-time-constant-ness
+     * for arithmetic in the inlined body (e.g. a literal element-size
+     * argument multiplying an index can still fold to a shift) - routing
+     * every parameter through a temp regardless of need was silently
+     * defeating that folding for any call where a completely unrelated
+     * parameter happened to need protecting. */
     for (i = 0; i < n->list_len; ++i) {
         struct Sym *tmp;
         int want_type;
+
+        if (!(fn->inline_param_use_count[i] > 1 && !inline_arg_reusable(n->list[i])))
+            continue;
 
         inline_temp_name_for_call(temp_name_buf[i], 64, i);
         tmp = find_local(temp_name_buf[i]);
@@ -3499,6 +3518,9 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
     for (i = n->list_len - 1; i >= 0; --i) {
         struct Sym *tmp;
         int want_type;
+
+        if (temp_names[i] == NULL)
+            continue;
 
         tmp = find_local(temp_name_buf[i]);
         want_type = fn->proto_types[i] ? fn->proto_types[i] : TYPE_INT;
