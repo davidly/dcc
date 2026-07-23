@@ -109,7 +109,7 @@ struct Proc {
 static struct Ins *code;
 static struct Sym *sym;
 static struct Proc *proc;
-static int *fret;
+static struct Ins **fret;
 static unsigned char *floc;
 static unsigned char *flp;
 
@@ -1177,7 +1177,7 @@ static inline void pushv(int v)
     *stp++ = v;
 }
 
-static void call_proc(int pi, int pc)
+static void call_proc(int pi, struct Ins *retaddr)
 {
     int i;
 
@@ -1188,7 +1188,7 @@ static void call_proc(int pi, int pc)
     fp++;
     flp += MAXLOC * INT_BYTES;
     memset(flp, 0, MAXLOC * INT_BYTES);
-    fret[fp] = pc;
+    fret[fp] = retaddr;
     for (i = proc[pi].nparam - 1; i >= 0; i--)
         if (proc[pi].pesz[i] == 1)
             flp[proc[pi].pofs[i]] = (unsigned char)popv();
@@ -1198,22 +1198,20 @@ static void call_proc(int pi, int pc)
 
 static void run(void)
 {
-    int pc;
     int a;
     int b;
     int v;
     int pi;
     struct Ins *in;
 
-    pc = 0;
+    in = code;
     fp = 0;
     sp = 0;
     stp = st;
     flp = floc;
-    memset(fret, 0, sizeof(int) * MAXFRAME);
+    memset(fret, 0, sizeof(struct Ins *) * MAXFRAME);
     memset(floc, 0, MAXFRAME * MAXLOC * INT_BYTES);
     for (;;) {
-        in = &code[pc++];
         switch (in->op) {
         case OP_HALT:
             return;
@@ -1365,34 +1363,38 @@ static void run(void)
             pushv(a << b);
             break;
         case OP_JMP:
-            pc = in->a;
-            break;
+            in = &code[in->a];
+            continue;
         case OP_JZ:
             a = popv();
-            if (!a)
-                pc = in->a;
+            if (!a) {
+                in = &code[in->a];
+                continue;
+            }
             break;
         case OP_JNZ:
             a = popv();
-            if (a)
-                pc = in->a;
+            if (a) {
+                in = &code[in->a];
+                continue;
+            }
             break;
         case OP_CALL:
             pi = in->a;
-            call_proc(pi, pc);
-            pc = proc[pi].entry;
-            break;
+            call_proc(pi, in + 1);
+            in = &code[proc[pi].entry];
+            continue;
         case OP_RET:
             pi = in->a;
             v = 0;
             if (proc[pi].isfunc)
                 v = popv();
-            pc = fret[fp];
+            in = fret[fp];
             fp--;
             flp -= MAXLOC * INT_BYTES;
             if (proc[pi].isfunc)
                 pushv(v);
-            break;
+            continue;
         case OP_WRI:
             printf("%d", popv());
             break;
@@ -1410,6 +1412,7 @@ static void run(void)
             fprintf(stderr, "bad op %d\n", in->op);
             exit(1);
         }
+        in++;
     }
 }
 
@@ -1446,7 +1449,7 @@ static void init_compile_storage(void)
 
 static void init_run_storage(void)
 {
-    fret = (int *)xcalloc(MAXFRAME, sizeof(int));
+    fret = (struct Ins **)xcalloc(MAXFRAME, sizeof(struct Ins *));
     floc = (unsigned char *)xcalloc(MAXFRAME * MAXLOC * INT_BYTES, 1);
     gmem = (unsigned char *)xcalloc(MAXMEM * INT_BYTES, 1);
     st = (int *)xcalloc(MAXSTACK, sizeof(int));
