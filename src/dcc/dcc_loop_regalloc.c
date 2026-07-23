@@ -150,6 +150,94 @@ static void loop_regalloc_count_idents(const struct AstNode *n, struct LoopIdent
     }
 }
 
+/* True if `name` is referenced anywhere in `n` (any position - read, write,
+ * or as part of a larger subexpression). Used only by loop_regalloc_used_
+ * as_index below to check an AST_INDEX's index subtree, which can be an
+ * arbitrary expression (`arr[i]`, `arr[i+1]`, ...), not just a bare
+ * identifier. */
+static int loop_regalloc_ident_in_subtree(const struct AstNode *n, const char *name)
+{
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_IDENT:
+        return n->sval != NULL && strcmp(n->sval, name) == 0;
+    case AST_BINARY:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_COMMA:
+    case AST_INDEX:
+    case AST_ASSIGN:
+        return loop_regalloc_ident_in_subtree(n->a, name) ||
+               loop_regalloc_ident_in_subtree(n->b, name);
+    case AST_UNARY:
+    case AST_POSTFIX:
+    case AST_MEMBER:
+    case AST_CAST:
+        return loop_regalloc_ident_in_subtree(n->a, name);
+    case AST_COND:
+        return loop_regalloc_ident_in_subtree(n->a, name) ||
+               loop_regalloc_ident_in_subtree(n->b, name) ||
+               loop_regalloc_ident_in_subtree(n->c, name);
+    default:
+        return 0;
+    }
+}
+
+/* True if `name` is used as (part of) an array/pointer INDEX expression
+ * anywhere in `n` - i.e. appears in an AST_INDEX node's `b` (the subscript),
+ * as opposed to merely being the array/pointer being indexed (`n->a`) or
+ * appearing elsewhere entirely. Write-candidate selection excludes any name
+ * this returns true for - see the comment at its call site for why. Same
+ * node-kind coverage/traversal shape as loop_regalloc_count_idents. */
+static int loop_regalloc_used_as_index(const struct AstNode *n, const char *name)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    switch (n->kind) {
+    case AST_COMPOUND:
+        for (i = 0; i < n->list_len; ++i)
+            if (loop_regalloc_used_as_index(n->list[i], name))
+                return 1;
+        return 0;
+    case AST_EXPR_STMT:
+        return loop_regalloc_used_as_index(n->a, name);
+    case AST_IF:
+        return loop_regalloc_used_as_index(n->a, name) ||
+               loop_regalloc_used_as_index(n->b, name) ||
+               loop_regalloc_used_as_index(n->c, name);
+    case AST_ASSIGN:
+        return loop_regalloc_used_as_index(n->a, name) ||
+               loop_regalloc_used_as_index(n->b, name);
+    case AST_UNARY:
+    case AST_POSTFIX:
+        return loop_regalloc_used_as_index(n->a, name);
+    case AST_BINARY:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_COMMA:
+        return loop_regalloc_used_as_index(n->a, name) ||
+               loop_regalloc_used_as_index(n->b, name);
+    case AST_INDEX:
+        if (loop_regalloc_ident_in_subtree(n->b, name))
+            return 1;
+        return loop_regalloc_used_as_index(n->a, name) ||
+               loop_regalloc_used_as_index(n->b, name);
+    case AST_MEMBER:
+        return loop_regalloc_used_as_index(n->a, name);
+    case AST_COND:
+        return loop_regalloc_used_as_index(n->a, name) ||
+               loop_regalloc_used_as_index(n->b, name) ||
+               loop_regalloc_used_as_index(n->c, name);
+    case AST_CAST:
+        return loop_regalloc_used_as_index(n->a, name);
+    default:
+        return 0;
+    }
+}
+
 /* Shared eligibility gate for both read-only (Phase 1) and write (Phase 2)
  * candidates: word-sized (2-byte, not struct/long/float) local or
  * parameter, not an array/VLA, not volatile, not already reg_alloc'd by an
@@ -219,7 +307,6 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
 {
     struct LicmModifiedNames mod;
     struct LoopIdentCounts ic;
-    struct LoopIdentCounts cond_ic;
     struct Sym *best_ro;
     int best_ro_count;
     struct Sym *best_write;
@@ -244,11 +331,6 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
     loop_regalloc_count_idents(for_node->b, &ic);
     loop_regalloc_count_idents(for_node->c, &ic);
     loop_regalloc_count_idents(for_node->d, &ic);
-
-    /* Separately: which names appear in the condition clause at all (not
-     * just how many times) - write candidates exclude these, see below. */
-    memset(&cond_ic, 0, sizeof(cond_ic));
-    loop_regalloc_count_idents(for_node->b, &cond_ic);
 
     /* Read-only and write candidates are ranked SEPARATELY, then combined
      * with a bias toward read-only: a write candidate only wins if its
@@ -288,36 +370,44 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *for_node, int 
             }
         }
 
-        /* Write candidates that also appear in the loop's own condition
-         * (almost always the induction variable itself, compared against
-         * a bound every iteration) are excluded: dcc's comparison codegen
-         * has its own fast path for a directly (ix+d)-addressed operand
-         * (branching straight off the compare's flags), which requires
-         * reg_alloc == REG_NONE and so is unavailable once this candidate
-         * is BC-resident - falling back to a much more expensive generic
-         * "materialize a 0/1 boolean, then test it" sequence, paid every
-         * single iteration. Found via tests/sieve.c: promoting its loop
-         * counter (compared against the sieve size every iteration) more
-         * than DOUBLED total cycles despite every individual body
-         * reference getting cheaper - the condition-test regression
-         * dominates completely. A candidate used only in the increment/
-         * body (the accumulator pattern, e.g. `sum += x;`) never hits
-         * this fast path at all, so is unaffected and stays eligible;
-         * dccpeep's own existing loop-counter-to-register passes already
-         * cover the condition-participant case reasonably well (see the
-         * baseline .mac for tests/sieve.c), so nothing is lost by leaving
-         * it to them here. */
-        if (is_mod) {
-            int in_cond = 0;
-            for (j = 0; j < cond_ic.n; ++j) {
-                if (strcmp(cond_ic.items[j].name, ic.items[i].name) == 0) {
-                    in_cond = 1;
-                    break;
-                }
-            }
-            if (in_cond)
-                continue;
-        }
+        /* A write candidate that also appears in the loop's own condition
+         * (almost always the induction variable itself, compared against a
+         * bound every iteration) USED to be excluded outright here: dcc's
+         * fast direct-branch comparison path required reg_alloc == REG_NONE
+         * (ast_cmp_operand_ok, dcc_ast_gen_cond.c), so a BC-resident operand
+         * fell back to a much more expensive generic "materialize a 0/1
+         * boolean, then test it" sequence, paid every iteration. That gate
+         * now accepts a REG_BC-resident operand directly (its own emitter,
+         * ast_gen_cmp_branch, was already reg_alloc-transparent - the gate
+         * was the only thing declining it), so the blanket condition-clause
+         * exclusion is gone.
+         *
+         * A NARROWER exclusion replaces it: a write candidate used as an
+         * array/pointer INDEX anywhere in the loop is still excluded. Not a
+         * fast-path defeat this time - dccpeep has whole-LOOP structural
+         * passes (pass_ldir_memset_rotated, pass_stride_loop_to_ptr) that
+         * recognize an array-indexed loop's canonical (ix+d)-based shape
+         * and replace the ENTIRE loop with something algorithmically
+         * better (a single Z80 `ldir` block-copy for a constant-fill loop;
+         * incremental pointer striding instead of recomputing base+index
+         * every iteration for a strided-store loop) - categorically bigger
+         * wins than a register cache can ever provide. Promoting the index
+         * changes the text shape enough that neither pass recognizes the
+         * loop anymore, losing that larger win for the smaller one this
+         * mechanism provides. Found via tests/sieve.c: promoting its outer
+         * fill-loop's `i` (matches pass_ldir_memset_rotated's shape) and
+         * inner sieve loop's `k` (matches pass_stride_loop_to_ptr's shape)
+         * more than doubled total cycles even with the comparison fast-path
+         * fix in place - confirmed via dccprof profiling and a direct diff
+         * against dccpeep's un-promoted output, which collapses the whole
+         * fill loop into one `ldir`. A candidate that never indexes an
+         * array (a plain accumulator, or a comparison-only participant)
+         * is unaffected. */
+        if (is_mod &&
+            (loop_regalloc_used_as_index(for_node->b, ic.items[i].name) ||
+             loop_regalloc_used_as_index(for_node->c, ic.items[i].name) ||
+             loop_regalloc_used_as_index(for_node->d, ic.items[i].name)))
+            continue;
 
         s = find_sym(ic.items[i].name);
         if (!loop_regalloc_sym_eligible(s))

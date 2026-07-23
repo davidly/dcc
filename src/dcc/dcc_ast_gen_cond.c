@@ -268,7 +268,24 @@ int ast_cmp_operand_ok(const struct AstNode *e)
         return 0;
     if (type_size(s->type) != 2)
         return 0;                          /* excludes char (byte rel path) */
-    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
+    /* ast_gen_cmp_branch (the emitter every caller of this gate reaches on
+     * success) is already reg_alloc-transparent: it evaluates both operands
+     * via plain ast_gen_expr calls, which already load a REG_BC-resident
+     * symbol correctly (emit_load_sym_value_direct's existing fast path,
+     * dcc_symbols.c) - so a BC-resident operand needs no special handling
+     * here, only permission to reach that emitter at all. Without this, a
+     * loop-scoped BC candidate used in its own loop's condition (dcc_loop_
+     * regalloc.c) fell through every specialized fast path in ast_gen_cond_
+     * branch's dispatch chain to the generic "materialize a 0/1 boolean,
+     * then test it" fallback - paid every iteration - which is what forced
+     * that mechanism to exclude condition-clause candidates entirely
+     * (tests/sieve.c: promoting its loop counter this way more than
+     * doubled total cycles). Word-sized only (matches this function's own
+     * type_size(s->type) == 2 gate above) - REG_BC is the only reg_alloc
+     * value that ever reaches a word-sized operand. Mirrors existing
+     * precedent: ast_byte_operand's own gate already accepts sym_can_ix_
+     * direct(s) || s->reg_alloc == REG_E for the byte-comparison path. */
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s) && s->reg_alloc != REG_BC)
         return 0;
     return 1;
 }
