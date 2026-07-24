@@ -693,6 +693,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * regalloc_buffer_finalize uses to recognize/reinsert this same text. */
     if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
         emit_extrn_if_needed(cand);
+        fprintf(outf, ";@dcc-regalloc-bc-prime\n");
         fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
         fprintf(outf, "\tld c,l\n");
         fprintf(outf, "\tld b,h\n");
@@ -904,6 +905,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
      * globals need a 3-instruction sequence instead of locals'/params' 2. */
     if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
         emit_extrn_if_needed(cand);
+        fprintf(outf, ";@dcc-regalloc-bc-prime\n");
         fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
         fprintf(outf, "\tld c,l\n");
         fprintf(outf, "\tld b,h\n");
