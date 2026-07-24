@@ -836,10 +836,13 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         return 1;
     }
     case AST_INDEX: {
+         int elem_type;
         int ptr_type;
         int no_deref;
         return ast_index_plain_int_read(n) || ast_index_long_read(n) ||
                ast_index_float_read(n) ||
+             (ast_index_2d_array_elem_type(n, &elem_type) &&
+              type_ptr_depth(elem_type) > 0) ||
                ast_pointer_expr_type(n, &ptr_type, &no_deref);
     }
     case AST_CALL: {
@@ -1568,8 +1571,12 @@ int ast_value_is_pointer_word(const struct AstNode *n)
         return s != NULL && type_ptr_depth(s->type) > 0;
     case AST_MEMBER:
         return ast_member_pointer_read(n);
-    case AST_INDEX:
-        return ast_pointer_expr_type(n, &ptr_type, &no_deref);
+    case AST_INDEX: {
+        int elem_type;
+        return ast_pointer_expr_type(n, &ptr_type, &no_deref) ||
+               (ast_index_2d_array_elem_type(n, &elem_type) &&
+                type_ptr_depth(elem_type) > 0);
+    }
     default:
         return 0;
     }

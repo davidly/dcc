@@ -1218,6 +1218,7 @@ static void run_prog(void)
             case OP_CGOTO: idx=eval_e(st->ae);
             if(idx>=1&&idx<=st->ntargets)
             {
+                if(st->targets[idx-1]==NULL)die("bad label");
                 g_pc=st->targets[idx-1];
                 continue;
             }

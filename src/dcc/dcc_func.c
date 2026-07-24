@@ -577,8 +577,7 @@ static int inline_function_has_multiuse_param(struct Sym *s)
 
 /* Lexically scans a call's argument list (tok positioned just after the
  * opening '(') for anything that could make emit_inline_arg_temps
- * materialize a temp under the side-effect rule (dcc_ast_gen_expr.c's
- * inline_arg_may_have_side_effect: a call, assignment, or ++/--),
+ * materialize a temp under dcc_ast_gen_expr.c's conservative argument rule,
  * independent of whether the callee has a multi-use parameter - the
  * pre-existing case inline_function_has_multiuse_param covers. Only needs
  * to be a safe over-approximation, not exact: a false positive just
@@ -604,17 +603,18 @@ static int call_args_may_need_temps(void)
                    (tok.kind >= TOK_ADDEQ && tok.kind <= TOK_SHREQ)) {
             return 1;
         } else if (tok.kind == TOK_ID) {
-            next_token();
-            if (tok.kind == '(')
-                return 1; /* nested call */
-            continue;
+            /* Block locals are not in the symbol table during this lexical
+             * pre-scan, so it cannot distinguish a private automatic from a
+             * global, volatile, or address-taken object. Reserve on any
+             * identifier and let the AST emitter make the exact decision. */
+            return 1;
         }
         next_token();
     }
     return 0;
 }
 
-static int function_body_mentions_multiuse_inline_call(void)
+static int function_body_may_need_inline_temps(void)
 {
     long sv_pos;
     long sv_tok_start;
@@ -698,7 +698,7 @@ static void reserve_inline_temp_locals(void)
  * any question of which control-flow path reaches which use first), and have
  * every use site just reload the cached pointer.
  *
- * Two-step design, mirroring function_body_mentions_multiuse_inline_call():
+ * Two-step design, mirroring function_body_may_need_inline_temps():
  *   1. A read-only token scan (this function) counts every identifier's bare
  *      occurrences in the function body, without knowing yet which ones are
  *      local arrays - declarations haven't been processed. For an array,
@@ -926,7 +926,7 @@ void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name)
 }
 
 /* Token-scan pre-pass (read-only, saves/restores lexer position exactly like
- * function_body_mentions_multiuse_inline_call): count every identifier's bare
+ * function_body_may_need_inline_temps): count every identifier's bare
  * occurrences in the function body, and reset the per-function address-cache
  * table for the upcoming three passes over this function; also sets
  * g_addr_cache_calls_exec (declared above) when the body directly calls
@@ -5831,7 +5831,7 @@ void parse_function_or_global(int base_type)
                 saved_stack_check = opt_stack_check;
                 record_inline_function_if_simple(s);
                 record_narrow_return_expr_if_simple(s);
-                if (function_body_mentions_multiuse_inline_call())
+                if (function_body_may_need_inline_temps())
                     reserve_inline_temp_locals();
                 scan_function_body_ident_counts();
                 opt_stack_check = saved_stack_check;

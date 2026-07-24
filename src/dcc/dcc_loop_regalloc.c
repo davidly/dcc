@@ -212,12 +212,21 @@ static int loop_regalloc_ident_in_subtree(const struct AstNode *n, const char *n
     }
 }
 
+/* Bounds how many levels of inline-substitutable call the AST_CALL case
+ * below will chase a candidate's value through (mirroring try_gen_inline_
+ * call_ast's own g_inline_expand_depth >= 8 bail for inline nesting
+ * generally) - balanced inc/dec around each dive, so it's always back to 0
+ * once any top-level loop_regalloc_used_as_index call returns, regardless
+ * of how deep it went. */
+static int g_used_as_index_inline_depth = 0;
+
 /* True if `name` is used as (part of) an array/pointer INDEX expression
  * anywhere in `n` - i.e. appears in an AST_INDEX node's `b` (the subscript),
  * as opposed to merely being the array/pointer being indexed (`n->a`) or
  * appearing elsewhere entirely. Write-candidate selection excludes any name
  * this returns true for - see the comment at its call site for why. Same
- * node-kind coverage/traversal shape as loop_regalloc_count_idents. */
+ * node-kind coverage/traversal shape as loop_regalloc_count_idents, except
+ * for AST_CALL - see that case's own comment. */
 static int loop_regalloc_used_as_index(const struct AstNode *n, const char *name)
 {
     int i;
@@ -267,25 +276,58 @@ static int loop_regalloc_used_as_index(const struct AstNode *n, const char *name
                loop_regalloc_used_as_index(n->c, name);
     case AST_CAST:
         return loop_regalloc_used_as_index(n->a, name);
-    case AST_CALL:
-        /* Deliberately NOT recursed into an inline-substitutable callee's
-         * captured body - see loop_regalloc_count_idents' matching AST_CALL
-         * case for why: `name` is always a local/param of THIS function
-         * (loop_regalloc_sym_eligible never admits a global), so a literal-
-         * string search for it inside a DIFFERENT function's callee body
-         * would only ever match by pure name coincidence, not a real
-         * reference - not the unsafe direction here (a false match just
-         * excludes a candidate that didn't need it; a false negative just
-         * risks a missed dccpeep-pattern win, same category as the tdmfuse
-         * case Phase 7a fixed), but not a meaningful signal either way, so
-         * left out for simplicity along with loop_regalloc_count_idents'
-         * matching gap. Only this call's own argument expressions (real
-         * uses of `name`, if any, are actually written there) are
-         * checked. */
+    case AST_CALL: {
+        /* Unlike loop_regalloc_count_idents' matching AST_CALL case (which
+         * stays name-blind on purpose - see that function's own comment for
+         * the eval_e/get_sym_val/cell_at parameter-name-collision bug that
+         * shaped it), this check's job is a pure yes/no safety question
+         * where a false positive only costs a missed promotion, never a
+         * wrong ranking - so it's safe, and worth doing, to trace a
+         * candidate's value one level into an inline-substitutable callee:
+         * if this call's k-th argument is `name` verbatim, the callee's own
+         * k-th formal parameter (inline_param_names, captured alongside its
+         * substitutable body) stands for the exact same value inside that
+         * body, so recurse there under ITS name. loop_regalloc_used_as_
+         * index's own recursion then naturally chases this through further
+         * levels of inlining for free, bounded by the same depth this
+         * project already uses for inline nesting generally (try_gen_
+         * inline_call_ast's g_inline_expand_depth >= 8 bail).
+         *
+         * Found via tests/tinline.c's mem_get(base, esz, idx) - a loop
+         * counter passed straight through as idx, which mem_get's own body
+         * then uses to index fold_mem[]. Without this, a write candidate
+         * whose only real index use is hidden one inline call away looked
+         * completely safe here, so promoting it silently defeated whatever
+         * cheaper handling the un-promoted, in-frame-slot form would have
+         * gotten instead - a real, measured regression, not just a
+         * theoretical gap. */
+        struct Sym *fn_sym;
+
+        fn_sym = (n->a != NULL && n->a->kind == AST_IDENT) ? find_global(n->a->sval) : NULL;
+        if (fn_sym != NULL && is_inline_substitutable(fn_sym) &&
+            g_used_as_index_inline_depth < 8) {
+            int k;
+            for (k = 0; k < n->list_len && k < MAX_PROTO_PARAMS; ++k) {
+                if (n->list[k] != NULL && n->list[k]->kind == AST_IDENT &&
+                    n->list[k]->sval != NULL && strcmp(n->list[k]->sval, name) == 0) {
+                    const struct AstNode *body =
+                        fn_sym->inline_return_expr != NULL ? fn_sym->inline_return_expr :
+                        fn_sym->inline_stmt_expr != NULL ? fn_sym->inline_stmt_expr :
+                        fn_sym->inline_stmt_body;
+                    int hit;
+                    g_used_as_index_inline_depth++;
+                    hit = loop_regalloc_used_as_index(body, fn_sym->inline_param_names[k]);
+                    g_used_as_index_inline_depth--;
+                    if (hit)
+                        return 1;
+                }
+            }
+        }
         for (i = 0; i < n->list_len; ++i)
             if (loop_regalloc_used_as_index(n->list[i], name))
                 return 1;
         return 0;
+    }
     default:
         return 0;
     }
