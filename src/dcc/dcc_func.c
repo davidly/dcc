@@ -5579,6 +5579,28 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
                             (type & 15) == TYPE_INT && type_ptr_depth(type) == 0);
     asm_suppress_depth--;
     g_bc_regalloc_sym = NULL;
+    /* Reset unconditionally here, right after codegen finishes, regardless
+     * of whether this attempt goes on to succeed or get discarded below -
+     * matching try_loop_regalloc_bc/_write's (dcc_loop_regalloc.c) own,
+     * already-correct pattern. bc_cand's own reg_alloc field is only ever
+     * consulted DURING gen_compound() above; leaving it set to REG_BC past
+     * this point serves no purpose and is actively dangerous for a global
+     * candidate specifically - unlike a local/param's Sym, which is
+     * effectively discarded once this function's compilation moves on, a
+     * global's Sym is the SAME, persistent object referenced by every other
+     * function in the file. A stale REG_BC left here after a successful
+     * commit (the old code only reset it on the discard path, taking the
+     * `return 1` below without ever reaching it) meant every later,
+     * unrelated function referencing that same global got silently
+     * compiled as if it had its own live BC prime, reading whatever
+     * leftover garbage happened to be in BC instead of the global's real
+     * value - a real, confirmed miscompile (tests/pint.c interpreting
+     * TTT.PAS: curproc read as garbage, then appearing to change value
+     * across an unrelated call, purely from stale reg_alloc state left on
+     * its Sym by an earlier, different function's successful whole-
+     * function promotion of it). */
+    if (bc_cand != NULL)
+        bc_cand->reg_alloc = REG_NONE;
     g_e_regalloc_claim_active = 0;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
@@ -5603,8 +5625,6 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
     }
 
     fclose(scratch);
-    if (bc_cand != NULL)
-        bc_cand->reg_alloc = REG_NONE;
     if (g_e_regalloc_claimed && g_e_regalloc_sym != NULL)
         g_e_regalloc_sym->reg_alloc = REG_NONE;
     g_e_regalloc_claimed = 0;
