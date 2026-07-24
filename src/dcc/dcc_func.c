@@ -998,10 +998,10 @@ static void scan_function_body_ident_counts(void)
     tok = sv_tok;
 }
 
-/* Round-1 BC register-residency candidate selection: the first plain
- * 16-bit parameter (pointer or scalar int/unsigned - anything that fits in
- * a register pair and isn't a struct/long/float, matching exactly the
- * "plain 16-bit operand" gate ast_cmp_operand_ok in dcc_ast_gen_cond.c
+/* Round-1 BC register-residency candidate selection: the most-referenced
+ * plain 16-bit parameter (pointer or scalar int/unsigned - anything that
+ * fits in a register pair and isn't a struct/long/float, matching exactly
+ * the "plain 16-bit operand" gate ast_cmp_operand_ok in dcc_ast_gen_cond.c
  * already uses for its own fast comparison path) referenced at least twice
  * in the function body, whose address is never taken. Originally
  * pointer-only; generalized once it became clear every codegen hook this
@@ -1026,19 +1026,34 @@ static void scan_function_body_ident_counts(void)
 static struct Sym *find_bc_regalloc_candidate(int params_end)
 {
     int i;
+    struct Sym *best;
+    int best_count;
 
+    /* Rank by reference count instead of returning the first eligible
+     * parameter in declaration order - a function with two qualifying
+     * parameters used to always get the textually-first one, even when a
+     * later one was referenced far more often. Ties keep the
+     * earlier-declared parameter (strict '>', not '>='), matching
+     * loop_regalloc_find_bc_candidate's own tie-breaking convention. */
+    best = NULL;
+    best_count = 0;
     for (i = 0; i < params_end; ++i) {
         struct Sym *p = &locals[i];
+        int count;
+
         if (p->storage != SC_PARAM) continue;
         if (p->is_array) continue;
         if (type_is_struct_object(p->type) || type_is_long(p->type) || type_is_float(p->type)) continue;
         if (type_size(p->type) != 2) continue;
-        if (ident_count_for(p->name) < BC_REGALLOC_MIN_REFS) continue;
+        count = ident_count_for(p->name);
+        if (count < BC_REGALLOC_MIN_REFS) continue;
+        if (count <= best_count) continue;
         if (ident_addr_taken_for(p->name)) continue;
         if (ident_written_for(p->name)) continue;
-        return p;
+        best = p;
+        best_count = count;
     }
-    return NULL;
+    return best;
 }
 
 void emit_needed_deferred_bodies(void)
