@@ -1029,6 +1029,25 @@ static void scan_function_body_ident_counts(void)
  * parameter (4 bytes) does not fit in bc and is out of scope here - it
  * would need a materially different two-register-pair design.
  *
+ * Also considers global/extern word variables, ranked in the SAME pool as
+ * parameters (ties favor the parameter, since it's scanned first) - unlike
+ * dcc_loop_regalloc.c's loop-scoped mechanism, no separate whole-file
+ * address-taken proof is strictly required here: this candidate is only
+ * ever acted on when function_qualifies_for_speculative_regalloc's own
+ * current_function_has_call==0 gate holds AND regalloc_buffer_finalize's
+ * buf_has_unsafe_call independently confirms zero calls (beyond the seven
+ * DCCRTL.MAC-contracted runtime helpers) appear anywhere in the generated
+ * function body - so nothing else in this single-threaded, non-interrupt-
+ * driven program can possibly execute while this function runs, and the
+ * only way the global's value could change during that span is a direct
+ * write from this SAME function's own text, which ident_written_for
+ * already catches (same whole-function lexical scan used for parameters).
+ * The whole-file address-taken check is still applied anyway, not because
+ * it's load-bearing here the way it is for the loop-scoped mechanism, but
+ * because it's cheap, already validated, and removes any need to re-argue
+ * the "could an alias reach this from somewhere still-reachable" question
+ * for every future change to what counts as a tolerated call.
+ *
  * Deliberately restricted to parameters, not locals declared inside the
  * body - a parameter's Sym is added exactly once to locals[] and persists
  * unchanged (same struct instance) across every scan/codegen pass over
@@ -1067,6 +1086,22 @@ static struct Sym *find_bc_regalloc_candidate(int params_end)
         if (ident_addr_taken_for(p->name)) continue;
         if (ident_written_for(p->name)) continue;
         best = p;
+        best_count = count;
+    }
+    for (i = 0; i < nglobals; ++i) {
+        struct Sym *g = &globals[i];
+        int count;
+
+        if (!is_global_word_sym(g)) continue;
+        if (g->is_volatile) continue;
+        if (g->reg_alloc != REG_NONE) continue;
+        if (type_is_struct_object(g->type) || type_is_long(g->type) || type_is_float(g->type)) continue;
+        count = ident_count_for(g->name);
+        if (count < BC_REGALLOC_MIN_REFS) continue;
+        if (count <= best_count) continue;
+        if (global_text_addr_taken_count(g->name) != 0) continue;
+        if (ident_written_for(g->name)) continue;
+        best = g;
         best_count = count;
     }
     return best;
@@ -1763,15 +1798,26 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     if (opt_stack_check)
         emit_runtime_call("__stchk");
 
-    /* Load a BC-resident pointer parameter's value exactly once here, right
-     * after the frame is established but before any user statement runs -
-     * the same "materialize once at entry, dominates every use" placement
-     * as the address-cache block just below. g_bc_regalloc_sym is only ever
-     * set by try_speculative_bc_regalloc_function_body for the duration of
-     * one speculative generation attempt. */
+    /* Load a BC-resident parameter or global's value exactly once here,
+     * right after the frame is established but before any user statement
+     * runs - the same "materialize once at entry, dominates every use"
+     * placement as the address-cache block just below. g_bc_regalloc_sym is
+     * only ever set by try_speculative_bc_regalloc_function_body for the
+     * duration of one speculative generation attempt. Prime text must stay
+     * in exact lockstep with bc_regalloc_entry_lines, which regalloc_
+     * buffer_finalize uses to recognize/reinsert this same text - see
+     * try_loop_regalloc_bc's (dcc_loop_regalloc.c) identical comment on why
+     * a global needs a 3-instruction sequence instead of a parameter's 2. */
     if (!omit_ix_frame && g_bc_regalloc_sym != NULL) {
-        fprintf(outf, "\tld c,(ix%+d)\n", g_bc_regalloc_sym->offset);
-        fprintf(outf, "\tld b,(ix%+d)\n", g_bc_regalloc_sym->offset + 1);
+        if (g_bc_regalloc_sym->storage == SC_GLOBAL || g_bc_regalloc_sym->storage == SC_EXTERN) {
+            emit_extrn_if_needed(g_bc_regalloc_sym);
+            fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(g_bc_regalloc_sym)));
+            fprintf(outf, "\tld c,l\n");
+            fprintf(outf, "\tld b,h\n");
+        } else {
+            fprintf(outf, "\tld c,(ix%+d)\n", g_bc_regalloc_sym->offset);
+            fprintf(outf, "\tld b,(ix%+d)\n", g_bc_regalloc_sym->offset + 1);
+        }
     }
 
     /* Materialize any address-cached local arrays' addresses exactly once,
