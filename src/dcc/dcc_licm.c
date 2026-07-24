@@ -241,6 +241,22 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
                 licm_scan_modified(n->list[i], mod);
             return;
         }
+        /* A call to one of DCCRTL.MAC's verified-BC-clean ctype.h routines
+         * (asm_name_is_bc_safe_call, dcc_func.c/g_safe_runtime_calls) has
+         * nothing to model - no writes, no further calls, no side effects
+         * at all - so it's tolerated exactly like a _Noreturn call: recurse
+         * into its own argument expressions (evaluated in the loop's own
+         * scope, so still subject to the ordinary write-tracking below) and
+         * move on, without declining the whole loop. This is the AST-level
+         * half of the check; buf_has_unsafe_call re-verifies the same
+         * whitelist once the call's real asm name is visible in the
+         * generated text (see that function's own comment for why both
+         * checks exist). */
+        if (fn_sym != NULL && asm_name_is_bc_safe_call(asm_name_for(sym_asm_name(fn_sym)))) {
+            for (i = 0; i < n->list_len && !mod->overflowed; ++i)
+                licm_scan_modified(n->list[i], mod);
+            return;
+        }
         if (fn_sym != NULL && is_inline_substitutable(fn_sym)) {
             for (i = 0; i < n->list_len && !mod->overflowed; ++i)
                 licm_scan_modified(n->list[i], mod);

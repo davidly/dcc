@@ -4711,15 +4711,52 @@ static int line_touches_de_reg(const char *s)
  * comment names, since dcc's own codegen (dcc_ops.c, dcc_ast_gen_stmt.c) can
  * emit a call to any of the seven for a plain `*`, `/`, or `%` on int - none
  * of which appear as an AST_CALL node, so no AST-level scan can ever see
- * them; this text-level check is the only place they're visible at all. Any
- * OTHER runtime helper (float conversions, BDOS/BIOS calls, __stchk,
- * __call_hl, long-math variants, ...) carries no such documented contract
- * and is deliberately left out - a bare call to any of those still fails
- * the whole attempt, exactly as before this whitelist existed. */
+ * them; this text-level check is the only place they're visible at all.
+ *
+ * The twelve ctype.h entries after them (isalpha through tolower) are a
+ * second, independently verified group: unlike the arithmetic seven, these
+ * DO appear as ordinary AST_CALL nodes (see dcc_licm.c's licm_scan_modified,
+ * whose AST_CALL case checks asm_name_is_bc_safe_call below before deciding
+ * whether to decline a loop containing one at all - this array alone only
+ * gates the text-level re-check once such a loop's speculative attempt has
+ * already been allowed to proceed). Confirmed by direct inspection of every
+ * one of DCCRTL.MAC's "ctype helpers with short external names" (the block
+ * starting at its own "Character classification and conversion" comment):
+ * every single one reads its argument through IX/SP-relative addressing and
+ * classifies it using only A, HL, and flags - none reference B, C, or BC in
+ * any form, so none need the push/pop-around-a-clobber escape the arithmetic
+ * seven's slow paths use. Any OTHER runtime helper (float conversions,
+ * BDOS/BIOS calls, __stchk, __call_hl, long-math variants, string/memory
+ * functions - strcmp and strlen in particular were checked and DO use BC,
+ * as a stack-argument/CPIR scratch register respectively - ...) carries no
+ * such verified contract and is deliberately left out - a bare call to any
+ * of those still fails the whole attempt, exactly as before this whitelist
+ * existed. */
 static const char *g_safe_runtime_calls[] = {
     "__mulu", "__udivmod", "__divu", "__modu", "__divs", "__mods", "__sdivmod",
+    "__caa", "__can", "__csp", "__cdg", "__cup", "__clo",
+    "__cxd", "__cpr", "__cct", "__cpu", "__ctu", "__ctl",
     NULL
 };
+
+/* True if `name` (an asm-level call target, e.g. "__csp" for isspace - see
+ * asm_name_for(sym_asm_name(s))) is on g_safe_runtime_calls above. Exposed
+ * non-static for dcc_licm.c's licm_scan_modified, which needs this same
+ * verified-safe set at the AST level (by the callee's real asm name, since
+ * the DCCRTL.MAC short-name remapping only happens at that point - the C
+ * name "isspace" itself is not what appears in g_safe_runtime_calls) to
+ * decide whether a loop containing such a call is even eligible to attempt
+ * BC promotion in the first place - see that function's own comment. */
+int asm_name_is_bc_safe_call(const char *name)
+{
+    int i;
+
+    for (i = 0; g_safe_runtime_calls[i] != NULL; i++) {
+        if (strcmp(name, g_safe_runtime_calls[i]) == 0)
+            return 1;
+    }
+    return 0;
+}
 
 /* True if `name` (an asm-level call target, e.g. "_Z0001" for a static
  * function or "_foo" for a public one - see sym_asm_name) is a function
@@ -4766,7 +4803,7 @@ int buf_has_unsafe_call(const char *buf)
         const char *name_start, *name_end;
         char namebuf[32];
         size_t namelen;
-        int i, whitelisted;
+        int whitelisted;
 
         if (hit == NULL)
             return 0;
@@ -4781,15 +4818,7 @@ int buf_has_unsafe_call(const char *buf)
         memcpy(namebuf, name_start, namelen);
         namebuf[namelen] = 0;
 
-        whitelisted = 0;
-        for (i = 0; g_safe_runtime_calls[i] != NULL; i++) {
-            if (strcmp(namebuf, g_safe_runtime_calls[i]) == 0) {
-                whitelisted = 1;
-                break;
-            }
-        }
-        if (!whitelisted && asm_name_is_noreturn_call(namebuf))
-            whitelisted = 1;
+        whitelisted = asm_name_is_bc_safe_call(namebuf) || asm_name_is_noreturn_call(namebuf);
         if (!whitelisted)
             return 1;
 

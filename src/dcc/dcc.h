@@ -555,12 +555,21 @@ int line_touches_bc_reg(const char *s);
  * codegen time. Defined in dcc_func.c. */
 int is_inline_substitutable(struct Sym *s);
 /* True if `buf` (the full generated-assembly text under verification)
- * contains a "\tcall NAME" whose NAME is not one of the DCCRTL.MAC-
- * contracted BC-preserving runtime helpers (__mulu, __udivmod, __divu,
- * __modu, __divs, __mods, __sdivmod - see DCCRTL.MAC's contract comment
- * just above __divs). Shared with dcc_loop_regalloc.c's write-candidate
- * verifier, which needs the identical whitelist. Defined in dcc_func.c. */
+ * contains a "\tcall NAME" whose NAME is not on the verified-BC-safe
+ * whitelist (g_safe_runtime_calls, dcc_func.c - the seven DCCRTL.MAC-
+ * contracted arithmetic helpers plus a dozen verified-clean ctype.h
+ * entries) and is not a call to a _Noreturn function. Shared with
+ * dcc_loop_regalloc.c's write-candidate verifier, which needs the
+ * identical whitelist. Defined in dcc_func.c. */
 int buf_has_unsafe_call(const char *buf);
+/* True if `name` (an asm-level call target, e.g. "__csp" for isspace) is on
+ * that same whitelist (now also including a dozen verified-BC-clean
+ * ctype.h entries - see the definition for how they were checked). Exposed
+ * for dcc_licm.c's licm_scan_modified, which needs it at the AST level to
+ * decide whether a loop containing such a call is even eligible to attempt
+ * BC promotion, before any generated text exists for buf_has_unsafe_call
+ * to re-check. Defined in dcc_func.c. */
+int asm_name_is_bc_safe_call(const char *name);
 /* True if `name` (an asm-level call target) is a function declared
  * _Noreturn - see the fuller comment at its definition (dcc_func.c).
  * Exposed so dcc_loop_regalloc.c's strict write-candidate verifier can
