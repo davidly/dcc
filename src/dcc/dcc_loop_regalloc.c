@@ -333,6 +333,44 @@ static int loop_regalloc_sym_eligible(struct Sym *s)
     return 1;
 }
 
+/* Read-only-candidate counterpart of loop_regalloc_sym_eligible for a
+ * global/extern variable - deliberately never called for a write candidate
+ * (see loop_regalloc_find_bc_candidate's own call site: gated on !is_mod),
+ * since a global assigned inside the loop raises a symmetric "does anything
+ * outside this loop still read the stale value while it's BC-resident"
+ * question this phase does not attempt to answer.
+ *
+ * The local/param mechanism's alias risk (loop_regalloc_sym_eligible's own
+ * comment above) is scoped to the current FUNCTION - a global is visible to
+ * every OTHER function in the translation unit too, so the equivalent proof
+ * has to be whole-FILE, not whole-function: global_text_addr_taken_count
+ * (dcc_global_scan.c) is exactly that primitive, a one-time lexical pre-scan
+ * before real parsing begins that is deliberately conservative in the safe
+ * direction (may over-count, never under-counts). Requiring it be exactly 0
+ * means G's address is never taken anywhere in the file, so G can only ever
+ * be written via its own bare name - and any such direct write reachable
+ * from inside the promoted loop (including one inside an inline-substituted
+ * callee's captured body) is already caught by licm_scan_modified's own
+ * storage-class-agnostic modified-name tracking, which is what actually
+ * classifies this candidate as read-only (is_mod == 0) in the first place.
+ * No new call-graph analysis is needed: an ordinary (non-inline, non-
+ * _Noreturn) call anywhere in the loop already declines the whole loop
+ * outright, exactly as it does for a local/param candidate. */
+static int loop_regalloc_global_eligible(struct Sym *s)
+{
+    if (!is_global_word_sym(s))
+        return 0;
+    if (s->is_volatile)
+        return 0;
+    if (s->reg_alloc != REG_NONE)
+        return 0;
+    if (type_is_struct_object(s->type) || type_is_long(s->type) || type_is_float(s->type))
+        return 0;
+    if (global_text_addr_taken_count(s->name) != 0)
+        return 0;
+    return 1;
+}
+
 /* Picks the best loop-scoped BC-promotion candidate for a loop whose
  * condition/increment/body are `cond`/`incr`/`body` (`incr` may be NULL -
  * AST_WHILE/AST_DOWHILE have no separate increment clause, only AST_FOR
@@ -500,7 +538,8 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
             continue;
 
         s = find_sym(ic.items[i].name);
-        if (!loop_regalloc_sym_eligible(s))
+        if (!loop_regalloc_sym_eligible(s) &&
+            !(!is_mod && loop_regalloc_global_eligible(s)))
             continue;
 
         if (is_mod) {
@@ -598,8 +637,21 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * dcc_symbols.c. */
     g_inline_body_buffering++;
     g_buffering_epoch++;
-    fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
-    fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+    /* Z80 has no "ld bc,(nn)" absolute load - a global candidate's prime is
+     * a 3-instruction sequence instead of the local/param mechanism's
+     * 2-instruction "ld c,(ix+d)"/"ld b,(ix+d+1)", mirroring emit_load_
+     * global_word_direct (dcc_symbols.c) plus a transfer into bc. Must stay
+     * in exact lockstep with bc_regalloc_entry_lines (dcc_func.c), which
+     * regalloc_buffer_finalize uses to recognize/reinsert this same text. */
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        emit_extrn_if_needed(cand);
+        fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
+        fprintf(outf, "\tld c,l\n");
+        fprintf(outf, "\tld b,h\n");
+    } else {
+        fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
+        fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+    }
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;

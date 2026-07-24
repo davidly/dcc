@@ -630,6 +630,14 @@ void gen_unary_ast(const struct AstNode *n)
         s = find_sym(n->a->sval);
         if (s->is_array) {
             emit_load_sym_addr(s);
+        } else if (s->reg_alloc == REG_BC) {
+            /* A loop-scoped BC-resident global pointer (dcc_loop_regalloc.c)
+             * also satisfies is_global_word_sym below, which would otherwise
+             * unconditionally win and emit a plain "ld hl,(name)" reload,
+             * silently ignoring its live BC-resident value - checked first
+             * here for the same reason gen_index_addr_ast's own pointer-base
+             * fast path needs the identical ordering (see that comment). */
+            emit_load_sym_value_direct(s);
         } else if (is_global_word_sym(s)) {
             emit_load_global_word_direct(s);
         } else {
@@ -3277,12 +3285,21 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
          * a direct ld hl,(nn); an ix-direct local/param pointer loads its value
          * directly too (ld l,(ix+d)/ld h,(ix+d+1)) instead of computing its
          * frame address and then dereferencing it; arrays and any other
-         * pointer load their address. */
-        if (is_global_word_sym(s) && !s->is_array && type_ptr_depth(s->type) > 0) {
-            emit_load_global_word_direct(s);
-            global_ptr_preloaded = 1;
-        } else if (!s->is_array && type_ptr_depth(s->type) > 0 && s->reg_alloc == REG_BC) {
+         * pointer load their address.
+         *
+         * The reg_alloc check MUST come first: a loop-scoped BC-resident
+         * global pointer (dcc_loop_regalloc.c) also satisfies is_global_word_
+         * sym below, which would otherwise unconditionally win and emit a
+         * plain "ld hl,(nn)" reload every time, silently ignoring the live
+         * BC-resident value and paying the promotion's priming cost for
+         * nothing - found via tests/bint.c after adding global BC promotion,
+         * where an indexed global pointer inside a promoted loop kept
+         * reloading from memory instead of ever reading back from bc. */
+        if (!s->is_array && type_ptr_depth(s->type) > 0 && s->reg_alloc == REG_BC) {
             emit_load_sym_value_direct(s);
+            global_ptr_preloaded = 1;
+        } else if (is_global_word_sym(s) && !s->is_array && type_ptr_depth(s->type) > 0) {
+            emit_load_global_word_direct(s);
             global_ptr_preloaded = 1;
         } else if (!s->is_array && type_ptr_depth(s->type) > 0 && sym_can_ix_direct(s)) {
             emit_load_sym_value_direct(s);

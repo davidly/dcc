@@ -967,6 +967,22 @@ static void scan_function_body_ident_counts(void)
             if (address_pending)
                 mark_ident_addr_taken(tok.text);
             address_pending = 0;
+            /* Prefix ++/-- ("++x", not "x++") mutates x exactly like the
+             * postfix form the write-op check below already catches - but
+             * that check only ever looks BACKWARD (identifier immediately
+             * FOLLOWED BY a write-op token), so a parameter mutated only via
+             * prefix form was never marked written at all, falsely passing
+             * find_bc_regalloc_candidate's "never written" eligibility bar.
+             * Confirmed as a real miscompile: a whole-function candidate
+             * mutated only via "++p" kept every later read correct (emit_
+             * incdec_sym_direct's REG_BC branch updates bc directly), but
+             * regalloc_buffer_finalize's reload-repair - built entirely on
+             * the assumption a "never written" candidate's own frame slot
+             * is a permanent, always-valid shadow copy - reloaded from that
+             * now-stale, pre-increment slot the moment anything made bc look
+             * untrusted, silently reverting the pointer mid-loop. */
+            if (prev_kind == TOK_INC || prev_kind == TOK_DEC)
+                mark_ident_written(tok.text);
             if (strcmp(tok.text, "exec") == 0 || strcmp(tok.text, "execv") == 0)
                 g_addr_cache_calls_exec = 1;
         } else if (tok.kind == '{')
@@ -4832,6 +4848,32 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
     }
 }
 
+/* Computes a BC-resident candidate's own fixed priming-instruction text, as
+ * up to 3 lines (no trailing newline on any of them - callers add their
+ * own). Shared by bc_loop_body_self_consistent and regalloc_buffer_finalize
+ * so both recognize/reinsert exactly the same text a real prime emits -
+ * see try_loop_regalloc_bc (dcc_loop_regalloc.c) for the actual emission
+ * this must stay in lockstep with.
+ *
+ * A local/param candidate's frame slot supports the ordinary 2-instruction
+ * "ld c,(ix+d)"/"ld b,(ix+d+1)" pair. A global has no such direct absolute
+ * BC load on Z80 (there is no "ld bc,(nn)" opcode this codebase's target
+ * assembler recognizes for this form) - its prime is a 3-instruction
+ * sequence instead, mirroring emit_load_global_word_direct (dcc_symbols.c)
+ * plus a transfer into bc. Returns the line count (2 or 3). */
+static int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40])
+{
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        sprintf(lines[0], "\tld hl,(%s)", asm_name_for(sym_asm_name(cand)));
+        strcpy(lines[1], "\tld c,l");
+        strcpy(lines[2], "\tld b,h");
+        return 3;
+    }
+    sprintf(lines[0], "\tld c,(ix%+d)", cand->offset);
+    sprintf(lines[1], "\tld b,(ix%+d)", cand->offset + 1);
+    return 2;
+}
+
 /* Precise per-loop refinement of the above: a label only truly NEEDS bc
  * forced untrusted if its own body is not internally self-consistent - i.e.
  * simulating the exact same trust-transition rules regalloc_buffer_finalize
@@ -4851,13 +4893,14 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
  * diverge from what the real scan actually does and reintroduce exactly the
  * kind of blind spot this whole mechanism exists to avoid. */
 static int bc_loop_body_self_consistent(const char *buf, long start, long end,
-                                         const char *entry_c, const char *entry_b)
+                                         const char entry_lines[3][40], int n_entry_lines)
 {
     const char *p, *nl;
     char linebuf[64], prev1[64];
     size_t ll;
     int bc_trusted;
     int is_bc_value_read_start, is_bc_recognized_other;
+    int k;
 
     bc_trusted = 1;
     prev1[0] = 0;
@@ -4874,9 +4917,16 @@ static int bc_loop_body_self_consistent(const char *buf, long start, long end,
              (strcmp(linebuf, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") != 0));
         is_bc_recognized_other =
             (strcmp(linebuf, "\tld h,b") == 0 || strcmp(linebuf, "\tld d,b") == 0 ||
-             strcmp(linebuf, entry_c) == 0 || strcmp(linebuf, entry_b) == 0 ||
              (strcmp(linebuf, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") == 0) ||
              (strcmp(linebuf, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") == 0));
+        if (!is_bc_recognized_other) {
+            for (k = 0; k < n_entry_lines; k++) {
+                if (strcmp(linebuf, entry_lines[k]) == 0) {
+                    is_bc_recognized_other = 1;
+                    break;
+                }
+            }
+        }
 
         if (is_bc_value_read_start)
             bc_trusted = 1;
@@ -4954,7 +5004,8 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
     long size;
     char *buf;
     char *line, *nl;
-    char entry_c[32], entry_b[32];
+    char entry_lines[3][40];
+    int n_entry_lines = 0;
     int safe;
     int e_live;
     int bc_trusted;
@@ -4994,14 +5045,13 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
         long body_end_offs[MAX_BC_LOOP_LABELS];
         int n_all, hi;
 
-        sprintf(entry_c, "\tld c,(ix%+d)", bc_cand->offset);
-        sprintf(entry_b, "\tld b,(ix%+d)", bc_cand->offset + 1);
+        n_entry_lines = bc_regalloc_entry_lines(bc_cand, entry_lines);
         bc_regalloc_find_loop_headers(buf, size, all_headers, header_offs, body_end_offs, &n_all);
 
         n_loop_headers = 0;
         for (hi = 0; hi < n_all; hi++) {
             if (!bc_loop_body_self_consistent(buf, header_offs[hi], body_end_offs[hi],
-                                               entry_c, entry_b)) {
+                                               entry_lines, n_entry_lines)) {
                 dcc_copy_str(loop_headers[n_loop_headers], sizeof(loop_headers[0]), all_headers[hi]);
                 n_loop_headers++;
             }
@@ -5090,14 +5140,23 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
              (strcmp(line, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") != 0));
         is_bc_recognized_other = bc_cand != NULL &&
             (strcmp(line, "\tld h,b") == 0 || strcmp(line, "\tld d,b") == 0 ||
-             strcmp(line, entry_c) == 0 || strcmp(line, entry_b) == 0 ||
              (strcmp(line, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") == 0) ||
              (strcmp(line, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") == 0));
+        if (bc_cand != NULL && !is_bc_recognized_other) {
+            int k;
+            for (k = 0; k < n_entry_lines; k++) {
+                if (strcmp(line, entry_lines[k]) == 0) {
+                    is_bc_recognized_other = 1;
+                    break;
+                }
+            }
+        }
 
         if (is_bc_value_read_start) {
             if (!bc_trusted) {
-                fprintf(rewritten, "%s\n", entry_c);
-                fprintf(rewritten, "%s\n", entry_b);
+                int k;
+                for (k = 0; k < n_entry_lines; k++)
+                    fprintf(rewritten, "%s\n", entry_lines[k]);
                 bc_trusted = 1;
             }
         } else if (!is_bc_recognized_other && bc_cand != NULL && line_touches_bc_reg(line)) {

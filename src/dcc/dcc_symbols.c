@@ -807,6 +807,16 @@ void emit_load_sym_addr(struct Sym *s)
     if (s->storage == SC_LOCAL || s->storage == SC_PARAM) {
         emit_load_frame_addr_hl(s);
     } else {
+        /* Defense in depth, mirroring emit_load_frame_addr_hl's own flag
+         * above: a reg_alloc'd global whose address is computed here means
+         * some caller wants to read/write through that address, bypassing
+         * the live BC-resident copy entirely - a hazard the eligibility
+         * gate's whole-file global_text_addr_taken_count check (dcc_loop_
+         * regalloc.c) should already have prevented from ever reaching
+         * here, but flagging it structurally at this shared choke point
+         * costs nothing and needs no text scan to be exact. */
+        if (s->reg_alloc != REG_NONE)
+            g_regalloc_address_escaped = 1;
         emit_extrn_if_needed(s);
         fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
     }
