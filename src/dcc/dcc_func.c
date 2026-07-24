@@ -4851,9 +4851,10 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
 /* Computes a BC-resident candidate's own fixed priming-instruction text, as
  * up to 3 lines (no trailing newline on any of them - callers add their
  * own). Shared by bc_loop_body_self_consistent and regalloc_buffer_finalize
- * so both recognize/reinsert exactly the same text a real prime emits -
- * see try_loop_regalloc_bc (dcc_loop_regalloc.c) for the actual emission
- * this must stay in lockstep with.
+ * (this file) and loop_regalloc_write_candidate_safe (dcc_loop_regalloc.c)
+ * so all three recognize/reinsert exactly the same text a real prime emits -
+ * see try_loop_regalloc_bc/try_loop_regalloc_bc_write (dcc_loop_regalloc.c)
+ * for the actual emission this must stay in lockstep with.
  *
  * A local/param candidate's frame slot supports the ordinary 2-instruction
  * "ld c,(ix+d)"/"ld b,(ix+d+1)" pair. A global has no such direct absolute
@@ -4861,7 +4862,7 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
  * assembler recognizes for this form) - its prime is a 3-instruction
  * sequence instead, mirroring emit_load_global_word_direct (dcc_symbols.c)
  * plus a transfer into bc. Returns the line count (2 or 3). */
-static int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40])
+int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40])
 {
     if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
         sprintf(lines[0], "\tld hl,(%s)", asm_name_for(sym_asm_name(cand)));
@@ -4871,6 +4872,30 @@ static int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40])
     }
     sprintf(lines[0], "\tld c,(ix%+d)", cand->offset);
     sprintf(lines[1], "\tld b,(ix%+d)", cand->offset + 1);
+    return 2;
+}
+
+/* Spill-side counterpart of bc_regalloc_entry_lines, used only by a write
+ * candidate's own verifier (loop_regalloc_write_candidate_safe, dcc_loop_
+ * regalloc.c) to recognize try_loop_regalloc_bc_write's own spill text.
+ * Local/param: "ld (ix+d),c"/"ld (ix+d+1),b" (2 lines). Global: transfer bc
+ * into hl then store it absolutely, mirroring emit_store_global_word_direct
+ * (dcc_symbols.c) - "ld l,c"/"ld h,b"/"ld (name),hl" (3 lines; the first two
+ * are also already part of the generic recognized-line set every write
+ * candidate's verifier accepts, so only the final store is genuinely new
+ * text, but returning all 3 keeps this and bc_regalloc_entry_lines
+ * symmetric and equally simple for callers to use). Returns the line count
+ * (2 or 3). */
+int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40])
+{
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        strcpy(lines[0], "\tld l,c");
+        strcpy(lines[1], "\tld h,b");
+        sprintf(lines[2], "\tld (%s),hl", asm_name_for(sym_asm_name(cand)));
+        return 3;
+    }
+    sprintf(lines[0], "\tld (ix%+d),c", cand->offset);
+    sprintf(lines[1], "\tld (ix%+d),b", cand->offset + 1);
     return 2;
 }
 

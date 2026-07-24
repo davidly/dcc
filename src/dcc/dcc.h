@@ -535,6 +535,11 @@ extern int g_loop_regalloc_bc_claimed;
  * ever targets BC). Defined in dcc_func.c. */
 int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
                               FILE **out_f);
+/* Shared with dcc_loop_regalloc.c's loop_regalloc_write_candidate_safe -
+ * see their own header comments in dcc_func.c for the full contract.
+ * Defined in dcc_func.c. */
+int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40]);
+int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40]);
 /* True if `s` (one line of emitted assembly, no trailing newline) references
  * register B, C, or the BC pair as a real operand. Shared with
  * dcc_loop_regalloc.c's write-candidate verifier (loop_regalloc_write_

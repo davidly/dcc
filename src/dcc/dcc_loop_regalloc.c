@@ -333,12 +333,10 @@ static int loop_regalloc_sym_eligible(struct Sym *s)
     return 1;
 }
 
-/* Read-only-candidate counterpart of loop_regalloc_sym_eligible for a
- * global/extern variable - deliberately never called for a write candidate
- * (see loop_regalloc_find_bc_candidate's own call site: gated on !is_mod),
- * since a global assigned inside the loop raises a symmetric "does anything
- * outside this loop still read the stale value while it's BC-resident"
- * question this phase does not attempt to answer.
+/* Counterpart of loop_regalloc_sym_eligible for a global/extern variable -
+ * shared by both the read-only (Phase 1) and write (Phase 2) candidate
+ * buckets, since neither direction needs anything beyond what's checked
+ * here (see loop_regalloc_find_bc_candidate's own call site).
  *
  * The local/param mechanism's alias risk (loop_regalloc_sym_eligible's own
  * comment above) is scoped to the current FUNCTION - a global is visible to
@@ -352,10 +350,19 @@ static int loop_regalloc_sym_eligible(struct Sym *s)
  * from inside the promoted loop (including one inside an inline-substituted
  * callee's captured body) is already caught by licm_scan_modified's own
  * storage-class-agnostic modified-name tracking, which is what actually
- * classifies this candidate as read-only (is_mod == 0) in the first place.
+ * classifies a candidate as read-only vs write (is_mod) in the first place.
  * No new call-graph analysis is needed: an ordinary (non-inline, non-
  * _Noreturn) call anywhere in the loop already declines the whole loop
- * outright, exactly as it does for a local/param candidate. */
+ * outright, exactly as it does for a local/param candidate - so nothing
+ * else in the whole (single-threaded, non-interrupt-driven) program can
+ * possibly run, and therefore observe a write candidate's stale memory
+ * copy, while the loop has it live in BC. The copy goes stale the moment
+ * the first write happens and stays that way until try_loop_regalloc_bc_
+ * write's spill store, emitted once, immediately after the loop and before
+ * any code that could read the global again - the exact same shape
+ * already proven safe for a local/param write candidate, just with the
+ * whole-file (not whole-function) address-taken proof standing in for the
+ * frame slot's own inherent unaliasability. */
 static int loop_regalloc_global_eligible(struct Sym *s)
 {
     if (!is_global_word_sym(s))
@@ -538,8 +545,7 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
             continue;
 
         s = find_sym(ic.items[i].name);
-        if (!loop_regalloc_sym_eligible(s) &&
-            !(!is_mod && loop_regalloc_global_eligible(s)))
+        if (!loop_regalloc_sym_eligible(s) && !loop_regalloc_global_eligible(s))
             continue;
 
         if (is_mod) {
@@ -726,7 +732,8 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
     long size;
     char *buf;
     char *line, *nl;
-    char entry_c[32], entry_b[32], exit_c[32], exit_b[32];
+    char entry_lines[3][40], exit_lines[3][40];
+    int n_entry_lines, n_exit_lines;
     int safe;
 
     fseek(f, 0, SEEK_END);
@@ -745,10 +752,8 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
         return 0;
     }
 
-    sprintf(entry_c, "\tld c,(ix%+d)", cand->offset);
-    sprintf(entry_b, "\tld b,(ix%+d)", cand->offset + 1);
-    sprintf(exit_c, "\tld (ix%+d),c", cand->offset);
-    sprintf(exit_b, "\tld (ix%+d),b", cand->offset + 1);
+    n_entry_lines = bc_regalloc_entry_lines(cand, entry_lines);
+    n_exit_lines = bc_regalloc_exit_lines(cand, exit_lines);
 
     safe = 1;
     line = buf;
@@ -779,12 +784,17 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
                 after_noreturn_call = 0;
 
             recognized =
-                strcmp(line, entry_c) == 0 || strcmp(line, entry_b) == 0 ||
-                strcmp(line, exit_c) == 0 || strcmp(line, exit_b) == 0 ||
                 strcmp(line, "\tld l,c") == 0 || strcmp(line, "\tld h,b") == 0 ||
                 strcmp(line, "\tld c,l") == 0 || strcmp(line, "\tld b,h") == 0 ||
                 strcmp(line, "\tinc bc") == 0 || strcmp(line, "\tdec bc") == 0 ||
                 after_noreturn_call;
+            if (!recognized) {
+                int k;
+                for (k = 0; k < n_entry_lines && !recognized; k++)
+                    if (strcmp(line, entry_lines[k]) == 0) recognized = 1;
+                for (k = 0; k < n_exit_lines && !recognized; k++)
+                    if (strcmp(line, exit_lines[k]) == 0) recognized = 1;
+            }
 
             if (!recognized && line_touches_bc_reg(line))
                 safe = 0;
@@ -845,19 +855,37 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     g_regalloc_address_escaped = 0;
     g_inline_body_buffering++;
     g_buffering_epoch++;
-    fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
-    fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+    /* Prime/spill text must stay in exact lockstep with bc_regalloc_entry_
+     * lines/bc_regalloc_exit_lines (dcc_func.c), which loop_regalloc_write_
+     * candidate_safe uses to recognize this same text - see try_loop_
+     * regalloc_bc's identical comment on the read-only priming for why
+     * globals need a 3-instruction sequence instead of locals'/params' 2. */
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        emit_extrn_if_needed(cand);
+        fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
+        fprintf(outf, "\tld c,l\n");
+        fprintf(outf, "\tld b,h\n");
+    } else {
+        fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
+        fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+    }
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;
     gen_loop_impl(loop_node);
-    /* Spill BC's final value back to the candidate's frame slot before
+    /* Spill BC's final value back to the candidate's storage before
      * anything after the loop (still generated under reg_alloc == REG_NONE,
-     * set below) can read it via the normal (ix+d) path. Still inside the
+     * set below) can read it via the normal path. Still inside the
      * suppressed/buffered span - this is unconditionally part of what gets
      * verified and either committed whole or discarded whole. */
-    fprintf(outf, "\tld (ix%+d),c\n", cand->offset);
-    fprintf(outf, "\tld (ix%+d),b\n", cand->offset + 1);
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        fprintf(outf, "\tld l,c\n");
+        fprintf(outf, "\tld h,b\n");
+        fprintf(outf, "\tld (%s),hl\n", asm_name_for(sym_asm_name(cand)));
+    } else {
+        fprintf(outf, "\tld (ix%+d),c\n", cand->offset);
+        fprintf(outf, "\tld (ix%+d),b\n", cand->offset + 1);
+    }
     asm_suppress_depth--;
     g_inline_body_buffering--;
 
