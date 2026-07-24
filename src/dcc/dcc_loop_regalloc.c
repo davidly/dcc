@@ -212,52 +212,6 @@ static int loop_regalloc_ident_in_subtree(const struct AstNode *n, const char *n
     }
 }
 
-/* True if `n` contains, anywhere in its subtree, a call to a function dcc's
- * inliner has captured as substitutable (is_inline_substitutable, dcc_
- * func.c). Used only to keep a write candidate (Phase 2) out of a loop that
- * inlines through such a call at all - found via forint.c's eval_e: a write
- * candidate (`a`) passed as a multi-use, "reusable" (bare-identifier)
- * argument into a chain of nested inline substitution (get_sym_val ->
- * resolve_idx / cell_at) came out with a corrupted value at the innermost
- * call, from a mechanism this investigation could not fully pin down in the
- * time available - confirmed with a diagnostic build (a correct idx=3 going
- * into get_sym_val, a wrong a=9046 arriving at cell_at). Given a write
- * candidate has no reload-repair safety net (see loop_regalloc_write_
- * candidate_safe's own header comment - unlike a read-only candidate's
- * lenient verifier, there is nothing safe to reload from once a write
- * candidate is in a bad state), this declines the whole loop's write-
- * candidate eligibility outright rather than trust a text-level
- * verification already shown wrong once for this exact shape. Read-only
- * candidates are unaffected, deliberately: their own text verifier's
- * reload-repair discipline exists specifically to recover from an
- * unrecognized clobber, which is exactly the class of hazard this guards
- * against for writes. Generic over-approximating traversal (recurses into
- * every child field unconditionally, including into an already-known-safe
- * subtree) rather than mirroring licm_scan_modified's precise per-kind
- * coverage: this is a pure existence check with no safety asymmetry from
- * over-recursing, unlike a scan that decides what's "modified". */
-static int loop_regalloc_contains_inline_call(const struct AstNode *n)
-{
-    int i;
-
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_CALL) {
-        struct Sym *fn_sym = (n->a != NULL && n->a->kind == AST_IDENT) ?
-            find_global(n->a->sval) : NULL;
-        if (fn_sym != NULL && is_inline_substitutable(fn_sym))
-            return 1;
-    }
-    if (loop_regalloc_contains_inline_call(n->a)) return 1;
-    if (loop_regalloc_contains_inline_call(n->b)) return 1;
-    if (loop_regalloc_contains_inline_call(n->c)) return 1;
-    if (loop_regalloc_contains_inline_call(n->d)) return 1;
-    for (i = 0; i < n->list_len; ++i)
-        if (loop_regalloc_contains_inline_call(n->list[i]))
-            return 1;
-    return 0;
-}
-
 /* True if `name` is used as (part of) an array/pointer INDEX expression
  * anywhere in `n` - i.e. appears in an AST_INDEX node's `b` (the subscript),
  * as opposed to merely being the array/pointer being indexed (`n->a`) or
@@ -415,7 +369,6 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
     int best_ro_count;
     struct Sym *best_write;
     int best_write_count;
-    int loop_has_inline_call;
     int i;
 
     if (body == NULL)
@@ -489,14 +442,6 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
     best_ro_count = 0;
     best_write = NULL;
     best_write_count = 0;
-    /* Computed once for the whole loop, not per-candidate - see loop_
-     * regalloc_contains_inline_call's own header comment for why write
-     * candidates specifically are excluded outright whenever this is
-     * true, regardless of which name they are. */
-    loop_has_inline_call =
-        loop_regalloc_contains_inline_call(cond) ||
-        loop_regalloc_contains_inline_call(incr) ||
-        loop_regalloc_contains_inline_call(body);
 
     for (i = 0; i < ic.n; ++i) {
         struct Sym *s;
@@ -552,9 +497,6 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
             (loop_regalloc_used_as_index(cond, ic.items[i].name) ||
              loop_regalloc_used_as_index(incr, ic.items[i].name) ||
              loop_regalloc_used_as_index(body, ic.items[i].name)))
-            continue;
-
-        if (is_mod && loop_has_inline_call)
             continue;
 
         s = find_sym(ic.items[i].name);

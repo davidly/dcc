@@ -9579,6 +9579,28 @@ static int peep_parse_ld_paren_sym_hl(const char *s, char *sym)
  * whole-file write-once proof already relies on for its (much narrower)
  * global-hoist fast path, just re-derived here textually since dccpeep has
  * no access to that C-source-level analysis. */
+/* True if `line` is dcc's own reg_alloc priming load for a loop-scoped or
+ * whole-function BC candidate (dcc_loop_regalloc.c/dcc_func.c emit this
+ * exact pair, with a leading tab in dcc's own output, right before the
+ * candidate's live range begins: "\tld c,(ix%+d)\n" / "\tld b,(ix%+d)\n") -
+ * confirmed by grep to be the ONLY place dcc's own codegen ever emits "ld
+ * c,(ix" or "ld b,(ix" at all, so this text signature is unambiguous. The
+ * comparison below has no leading tab because read_file's own trim() has
+ * already stripped it from every line in lines[] by the time any pass sees
+ * it - matching every other bare-mnemonic string this file compares
+ * against (e.g. line_clobbers_bc's "rst"/"djnz" checks). Used by pass_
+ * cache_global_word_reload (below) to recognize that BC is already spoken
+ * for by dcc's own codegen from this point in the function onward - see
+ * that pass's own use of this for why a purely per-segment view (line_
+ * clobbers_bc) isn't enough here. */
+static int line_is_regalloc_bc_priming(const char *line)
+{
+    char clean[MAX_LINE];
+
+    strip_peep_comment_copy(clean, line);
+    return strncmp(clean, "ld c,(ix", 8) == 0 || strncmp(clean, "ld b,(ix", 8) == 0;
+}
+
 static int global_write_count_in_file(const char *name)
 {
     int i, n;
@@ -9646,8 +9668,10 @@ static int pass_cache_global_word_reload(void)
     int i;
     int changed = 0;
     int segstart;
+    int reg_alloc_seen;
 
     segstart = 0;
+    reg_alloc_seen = 0;
     for (i = 0; i <= nlines; i++) {
         int j, k;
         char sym[128], best_sym[128];
@@ -9657,6 +9681,31 @@ static int pass_cache_global_word_reload(void)
         int occ[64];
         int noc;
         int delta;
+
+        /* dcc's own reg_alloc mechanism (dcc_loop_regalloc.c/dcc_func.c)
+         * keeps a loop-scoped or whole-function candidate resident in BC
+         * across a span this pass cannot see in the surrounding text at
+         * all: the priming load ("ld c,(ix+d)"/"ld b,(ix+d+1)") and the
+         * candidate's own later reads/writes are the ONLY textual b/c
+         * mentions, with everything genuinely hazard-free (by line_
+         * clobbers_bc's own definition) in between - exactly the shape
+         * this pass looks for to justify caching something else there.
+         * Once BC's real owner is dcc's own reg_alloc, this pass storing a
+         * completely unrelated global into it there silently overwrites
+         * the live candidate - confirmed as a real miscompile: forint.c's
+         * eval_e, where this pass cached g_syms's address in BC across a
+         * span that, unknown to it, already held a live write candidate,
+         * corrupting an array index computed several calls later. Once a
+         * priming load is seen, this pass declines to cache anything for
+         * the REST of the function - conservative (a reg_alloc candidate's
+         * spill, if it has one, would genuinely free BC back up before the
+         * function ends, but reliably detecting that from text alone
+         * isn't worth the complexity for what stays a missed optimization
+         * either way, never a correctness risk). */
+        if (i < nlines && line_starts_function_marker(lines[i]))
+            reg_alloc_seen = 0;
+        if (i < nlines && line_is_regalloc_bc_priming(lines[i]))
+            reg_alloc_seen = 1;
 
         /* A segment must never cross a label or a function boundary in
          * addition to never crossing a BC-clobbering line: a label can be
@@ -9732,7 +9781,7 @@ static int pass_cache_global_word_reload(void)
          * (confirmed as a real, measured regression on several small,
          * otherwise-unrelated tests before this threshold was raised). */
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
-            !symbol_written_in_range(best_sym, segstart, i)) {
+            !symbol_written_in_range(best_sym, segstart, i) && !reg_alloc_seen) {
             noc = 0;
             for (j = segstart; j < i; j++) {
                 if (!peep_parse_ld_hl_paren_sym(lines[j], sym)) continue;
