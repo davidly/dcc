@@ -2034,6 +2034,13 @@ static int line_starts_function_marker(const char *line)
     return peep_is_public_line(line) || strncmp(line, "; static function ", 18) == 0;
 }
 
+/* Forward declarations: full definitions (and their shared header comment)
+ * live near pass_cache_global_word_reload below, the pass that originally
+ * motivated them - but bc_regalloc_claimed_before is needed by several
+ * passes defined earlier in the file than that. */
+static int line_is_regalloc_bc_priming(const char *line);
+static int bc_regalloc_claimed_before(int at);
+
 static int pass_cache_noix_byte_param_reload(void)
 {
     int fstart, fend;
@@ -2655,6 +2662,16 @@ static int pass_byte_loop_counter_to_reg_c(void)
             ok = 0;
         }
         if (!ok)
+            continue;
+
+        /* This loop's own body never mentions B/C outside the whitelisted
+         * shapes above, but that alone doesn't prove BC is actually free
+         * here - dcc's own reg_alloc may already hold a whole-function or
+         * earlier-loop candidate resident in BC across this exact point,
+         * invisible to a scan confined to [i+3, loop_end) alone. See
+         * bc_regalloc_claimed_before's own comment; this is the same
+         * collision class pass_cache_global_word_reload was fixed for. */
+        if (bc_regalloc_claimed_before(i))
             continue;
 
         /* In-place replacements first, while every index computed above is
@@ -3459,6 +3476,13 @@ static int pass_byte_for_counter_to_reg_c(void)
             if (line_touches_bc(lines[k])) { ok = 0; break; }
         }
         if (!ok)
+            continue;
+
+        /* line_touches_bc above only covers this loop's own body - it can't
+         * see a whole-function or earlier-loop reg_alloc candidate primed
+         * before this loop and still live here. See
+         * bc_regalloc_claimed_before's own comment. */
+        if (bc_regalloc_claimed_before(i))
             continue;
 
         /* In-place replacements first, while every index computed above is
@@ -6681,6 +6705,14 @@ static int pass_minmax_loop_ctr_b(void)
         if (!has_score_e || has_score_b) return 0;
     }
 
+    /* _MinMax is an ordinary function like any other: dcc's own reg_alloc
+     * could in principle have claimed BC for a whole-function candidate
+     * here too, and this pass has no visibility into that. See
+     * bc_regalloc_claimed_before's own comment - end, not start, since the
+     * whole [start,end) range is being claimed for B, not just one loop. */
+    if (bc_regalloc_claimed_before(end))
+        return 0;
+
     /* Replace all (ix-3) loop-counter references with B.
      * All are 1-for-1 replacements so nlines and end are unchanged. */
     for (i = start; i < end; i++) {
@@ -6802,6 +6834,13 @@ static int pass_minmax_value_c(void)
         }
         if (!has_bc || !has_ix1) return 0;
     }
+
+    /* Transitively covered by pass_minmax_loop_ctr_b's own guard today (the
+     * "ld b,c" this pass requires above only exists if that pass already
+     * committed), but checked explicitly anyway rather than relying on that
+     * chain never changing - see bc_regalloc_claimed_before's own comment. */
+    if (bc_regalloc_claimed_before(end))
+        return 0;
 
     /* Replace (ix-1) value references with C. */
     for (i = start; i < end; i++) {
@@ -7346,7 +7385,8 @@ static int pass_minmax_pack_call(void)
     {
         int fs_start, fs_end;
         if (peep_in_function_range("_FindSolution:", &fs_start, &fs_end) &&
-            !peep_range_has_debug_annotations(fs_start, fs_end)) {
+            !peep_range_has_debug_annotations(fs_start, fs_end) &&
+            !bc_regalloc_claimed_before(fs_end)) {
             for (i = fs_start; i + 12 < fs_end; i++) {
                 int j, npopcnt;
                 char off[32];
@@ -9086,6 +9126,17 @@ static int pass_ldir_memset_rotated(void)
             if (!found) continue;
         }
 
+        /* The matched loop body never touches B/C (it's HL/DE/IX only), so
+         * nothing above needed to check that - but the LDIR replacement
+         * below claims BC fresh as a byte count, and dcc's own reg_alloc
+         * may already have a whole-function or earlier-loop candidate live
+         * in BC right through this exact point, invisible to a match that
+         * never had any reason to look at B/C. See
+         * bc_regalloc_claimed_before's own comment; same collision class
+         * pass_cache_global_word_reload was fixed for. */
+        if (bc_regalloc_claimed_before(i))
+            continue;
+
         /* All checks passed.  Replace the rotated loop with LDIR. */
         {
             char ld_hl_sym[MAX_LINE], ld_const[MAX_LINE], ld_de_sym1[MAX_LINE], ld_bc[MAX_LINE];
@@ -9283,6 +9334,17 @@ static int pass_stride_loop_to_ptr(void)
 
         /* 8. LE label immediately follows */
         if (!line_is_label_name(j, le)) continue;
+
+        /* The matched loop body never touches B/C (HL/DE/IX only), so
+         * nothing above needed to check that - but the replacement below
+         * keeps BC live as the end-address for the loop's entire new
+         * duration, and dcc's own reg_alloc may already have a
+         * whole-function or earlier-loop candidate live in BC right
+         * through this exact point. See bc_regalloc_claimed_before's own
+         * comment; same collision class pass_cache_global_word_reload was
+         * fixed for. */
+        if (bc_regalloc_claimed_before(i))
+            continue;
 
         /* Pattern matched. Delete old block and insert pointer-walk version.
          *
@@ -9601,6 +9663,40 @@ static int line_is_regalloc_bc_priming(const char *line)
     return strncmp(clean, "ld c,(ix", 8) == 0 || strncmp(clean, "ld b,(ix", 8) == 0;
 }
 
+/* Shared by every dccpeep pass that wants to write its own value into B, C,
+ * or the BC pair (a loop counter, a cached pointer, a packed call argument,
+ * ...): true if dcc's own reg_alloc priming line for a loop-scoped or
+ * whole-function BC candidate appears anywhere between the start of the
+ * function containing line `at` and `at` itself. Deliberately conservative,
+ * matching pass_cache_global_word_reload's own reg_alloc_seen tracking
+ * (this is in fact the same check, generalized to a single callable
+ * primitive instead of that pass's own local forward-scan state - see this
+ * function's own commit history for why the two were unified): once a
+ * priming line has appeared anywhere earlier in the function, BC is treated
+ * as spoken for through the rest of that function, not just until some
+ * text-detected spill point - a real reg_alloc candidate's spill, if it has
+ * one, would genuinely free BC back up before the function ends, but
+ * reliably proving that from text alone isn't worth the complexity for what
+ * stays a missed optimization either way, never a correctness risk.
+ *
+ * A caller with a candidate insertion point that isn't itself the very
+ * start of a loop/segment (e.g. a whole-function pass like the _MinMax
+ * family below) should pass the END of its own scan range instead of a
+ * single point, so the backward scan still covers every line the pass is
+ * about to touch, not just a prefix of it. */
+static int bc_regalloc_claimed_before(int at)
+{
+    int i;
+
+    for (i = at - 1; i >= 0; i--) {
+        if (line_starts_function_marker(lines[i]))
+            return 0;
+        if (line_is_regalloc_bc_priming(lines[i]))
+            return 1;
+    }
+    return 0;
+}
+
 static int global_write_count_in_file(const char *name)
 {
     int i, n;
@@ -9668,10 +9764,8 @@ static int pass_cache_global_word_reload(void)
     int i;
     int changed = 0;
     int segstart;
-    int reg_alloc_seen;
 
     segstart = 0;
-    reg_alloc_seen = 0;
     for (i = 0; i <= nlines; i++) {
         int j, k;
         char sym[128], best_sym[128];
@@ -9695,17 +9789,11 @@ static int pass_cache_global_word_reload(void)
          * the live candidate - confirmed as a real miscompile: forint.c's
          * eval_e, where this pass cached g_syms's address in BC across a
          * span that, unknown to it, already held a live write candidate,
-         * corrupting an array index computed several calls later. Once a
-         * priming load is seen, this pass declines to cache anything for
-         * the REST of the function - conservative (a reg_alloc candidate's
-         * spill, if it has one, would genuinely free BC back up before the
-         * function ends, but reliably detecting that from text alone
-         * isn't worth the complexity for what stays a missed optimization
-         * either way, never a correctness risk). */
-        if (i < nlines && line_starts_function_marker(lines[i]))
-            reg_alloc_seen = 0;
-        if (i < nlines && line_is_regalloc_bc_priming(lines[i]))
-            reg_alloc_seen = 1;
+         * corrupting an array index computed several calls later. Guarded
+         * below via the shared bc_regalloc_claimed_before (see its own
+         * comment for the conservative "seen once, spoken for through the
+         * rest of the function" rule this pass originally established and
+         * every other BC-writing pass in this file now shares). */
 
         /* A segment must never cross a label or a function boundary in
          * addition to never crossing a BC-clobbering line: a label can be
@@ -9781,7 +9869,8 @@ static int pass_cache_global_word_reload(void)
          * (confirmed as a real, measured regression on several small,
          * otherwise-unrelated tests before this threshold was raised). */
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
-            !symbol_written_in_range(best_sym, segstart, i) && !reg_alloc_seen) {
+            !symbol_written_in_range(best_sym, segstart, i) &&
+            !bc_regalloc_claimed_before(i)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
                 if (!peep_parse_ld_hl_paren_sym(lines[j], sym)) continue;
