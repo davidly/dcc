@@ -1,0 +1,2 @@
+global BC collision: 45
+global BC pointer collision: 52

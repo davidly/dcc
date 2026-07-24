@@ -1811,6 +1811,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     if (!omit_ix_frame && g_bc_regalloc_sym != NULL) {
         if (g_bc_regalloc_sym->storage == SC_GLOBAL || g_bc_regalloc_sym->storage == SC_EXTERN) {
             emit_extrn_if_needed(g_bc_regalloc_sym);
+            fprintf(outf, ";@dcc-regalloc-bc-prime\n");
             fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(g_bc_regalloc_sym)));
             fprintf(outf, "\tld c,l\n");
             fprintf(outf, "\tld b,h\n");
@@ -5012,6 +5013,20 @@ static int bc_loop_body_self_consistent(const char *buf, long start, long end,
         memcpy(linebuf, p, ll);
         linebuf[ll] = 0;
 
+        /* Comment-only lines execute nothing and must not affect trust
+         * tracking or the prev1 adjacency state - see the identical guard in
+         * regalloc_buffer_finalize's main scan (a ";@dcc-regalloc-bc-prime"
+         * marker's bare "bc" token would otherwise trip line_touches_bc_reg).
+         * This scan produces no output, so it just advances past the line. */
+        {
+            const char *cq = linebuf;
+            while (*cq == ' ' || *cq == '\t') cq++;
+            if (*cq == ';') {
+                p = nl ? nl + 1 : buf + end;
+                continue;
+            }
+        }
+
         is_bc_value_read_start =
             ((strcmp(linebuf, "\tld l,c") == 0 && strcmp(prev1, "\tld h,b") != 0) ||
              (strcmp(linebuf, "\tld e,c") == 0 && strcmp(prev1, "\tld d,b") != 0));
@@ -5176,6 +5191,28 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
 
         nl = strchr(line, '\n');
         if (nl) *nl = 0;
+
+        /* A comment-only line (first non-blank char ';') executes nothing -
+         * in particular the ";@dcc-regalloc-bc-prime" marker emit_function_
+         * prologue and the loop primers plant purely so dccpeep's own
+         * bc_regalloc_claimed_before can tell dcc's global BC prime apart
+         * from its identical-looking global_word_cache_store. Such a line
+         * must be emitted verbatim but take no part in trust tracking: the
+         * token scan line_touches_bc_reg uses would otherwise see the bare
+         * "bc" in "regalloc-bc-prime" as register BC and wrongly clear
+         * bc_trusted right after the prime, splicing a redundant reload in
+         * before the candidate's first real use. It must also leave prev1/
+         * prev2 untouched, since those record the last real instruction for
+         * the value-read adjacency test below. */
+        {
+            const char *cq = line;
+            while (*cq == ' ' || *cq == '\t') cq++;
+            if (*cq == ';') {
+                fprintf(rewritten, "%s\n", line);
+                line = nl ? nl + 1 : buf + size;
+                continue;
+            }
+        }
 
         /* The two-line "ld l,c"/"ld h,b" or "ld e,c"/"ld d,b" pairs (emit_
          * load_sym_value_direct/emit_load_sym_de_direct's REG_BC branches)
