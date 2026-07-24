@@ -523,6 +523,13 @@ extern int g_regalloc_address_escaped;
 extern int g_e_regalloc_claim_active;
 extern int g_e_regalloc_claimed;
 extern struct Sym *g_e_regalloc_sym;
+/* Set by dcc_loop_regalloc.c's try_loop_regalloc_bc/try_loop_regalloc_bc_
+ * write right where each commits a successful promotion - dcc_func.c's
+ * try_loop_scoped_regalloc_first resets this to 0 before a trial body
+ * generation and checks it afterward to learn, empirically, whether any
+ * loop in the function actually claimed BC (unlike g_bc_regalloc_sym,
+ * which only dcc_func.c's own whole-function mechanism ever writes). */
+extern int g_loop_regalloc_bc_claimed;
 /* Shared with dcc_loop_regalloc.c - see that file's use for the full
  * contract; e_cand is always NULL from there (loop-scoped promotion only
  * ever targets BC). Defined in dcc_func.c. */
@@ -549,6 +556,15 @@ int is_inline_substitutable(struct Sym *s);
  * just above __divs). Shared with dcc_loop_regalloc.c's write-candidate
  * verifier, which needs the identical whitelist. Defined in dcc_func.c. */
 int buf_has_unsafe_call(const char *buf);
+/* True if `name` (an asm-level call target) is a function declared
+ * _Noreturn - see the fuller comment at its definition (dcc_func.c).
+ * Exposed so dcc_loop_regalloc.c's strict write-candidate verifier can
+ * treat any bc-touching line between such a call and the next label as
+ * unreachable dead code, not just the call line itself (asm-level dead-
+ * code elimination never runs on the throwaway argument-cleanup code a
+ * noreturn call site still gets, e.g. a `pop bc` discarding a pushed
+ * string-literal argument to die()). */
+int asm_name_is_noreturn_call(const char *name);
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];

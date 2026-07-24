@@ -123,6 +123,7 @@ int g_regalloc_address_escaped;
 int g_e_regalloc_claim_active;
 int g_e_regalloc_claimed;
 struct Sym *g_e_regalloc_sym;
+int g_loop_regalloc_bc_claimed;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];

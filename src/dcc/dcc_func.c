@@ -4659,7 +4659,7 @@ static const char *g_safe_runtime_calls[] = {
  * (found via forint.c's eval_e: get_sym_val inlines cleanly, but its own
  * callee cell_at still has a genuine, non-inlined `call` to die() for its
  * bounds check, which is _Noreturn but not itself inline-substitutable). */
-static int asm_name_is_noreturn_call(const char *name)
+int asm_name_is_noreturn_call(const char *name)
 {
     int i;
 
@@ -5204,6 +5204,135 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
     return 1;
 }
 
+/* Tried before find_bc_regalloc_candidate's own whole-function BC candidate
+ * gets a chance: dcc_loop_regalloc.c's loop-scoped mechanism finds and
+ * ranks a per-loop candidate far more precisely than find_bc_regalloc_
+ * candidate's crude "first read-only parameter referenced twice, in
+ * declaration order" token-scan does - and, whenever it succeeds, a loop-
+ * scoped candidate is essentially always more valuable, since it's
+ * referenced inside a loop that (unless proven otherwise) runs more than
+ * once, versus a flat whole-function reference count. But the two
+ * mechanisms don't know each other's value in advance, and whole-function's
+ * own commit happens by wrapping the ENTIRE body in one speculative
+ * generate-verify-commit BEFORE any loop inside it is even reached - so
+ * whichever claims BC first has always won unconditionally, regardless of
+ * actual value (see tests/forint.c's eval_e for a real example: its own
+ * best loop-scoped candidate, referenced 30 times inside its hot loop, was
+ * losing outright to a parameter referenced 3 times, all outside any
+ * loop).
+ *
+ * Rather than predict which side would win (a lexical heuristic risks
+ * declining find_bc_regalloc_candidate's candidate for nothing if the
+ * loop-scoped one then fails for a reason the heuristic can't see - e.g. a
+ * text-level verifier decline), this generates the body once with NOTHING
+ * pre-claimed - exactly like the plain-buffered/final-fallback branches
+ * below, where dcc_loop_regalloc.c already gets a fully fair, unimpeded
+ * shot today - and checks g_loop_regalloc_bc_claimed (set by dcc_loop_
+ * regalloc.c's try_loop_regalloc_bc/try_loop_regalloc_bc_write right where
+ * each commits) afterward to learn, empirically, whether any loop actually
+ * claimed BC. If one did, this body is kept outright and the whole-function
+ * mechanism never runs at all for this function. If not, this attempt is
+ * discarded and rewound exactly like a failed speculative attempt anywhere
+ * else in this file, and the existing chain proceeds unchanged - no loss
+ * relative to today's behavior.
+ *
+ * Modeled directly on try_speculative_bc_regalloc_function_body's own
+ * commit-or-full-rewind shape, just with nothing pre-claimed going in and a
+ * different (empirical, not text-scanned) success condition. */
+static int try_loop_scoped_regalloc_first(const char *name, int type,
+                                           int local_bytes, struct Sym *s,
+                                           long body_start_pos,
+                                           long body_start_tok_start,
+                                           int body_start_line,
+                                           int body_start_tok_line,
+                                           struct Token body_start_tok,
+                                           int body_start_nlocals,
+                                           int body_start_local_size)
+{
+    FILE *scratch;
+    FILE *saved_outf_ptr;
+    int saved_stack_check;
+    int c;
+    int errors_before;
+
+    if (strcmp(name, "main") == 0)
+        return 0;
+
+    scratch = tmpfile();
+    if (scratch == NULL)
+        fatal("cannot create speculative loop-scoped-first temp file");
+
+    saved_outf_ptr = outf;
+    saved_stack_check = opt_stack_check;
+    outf = scratch;
+    opt_stack_check = s->stack_check_enabled;
+    g_inline_body_buffering++;
+    g_buffering_epoch++;
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    g_licm_seq = 0;
+    g_loop_regalloc_bc_claimed = 0;
+
+    errors_before = g_diag_error_count;
+    asm_suppress_depth++;
+    emit_function_prologue(name, local_bytes, current_function_safe_to_omit_ix(type, local_bytes));
+    gen_compound();
+    emit_function_epilogue(strcmp(name, "main") == 0 &&
+                            (type & 15) == TYPE_INT && type_ptr_depth(type) == 0);
+    asm_suppress_depth--;
+    g_inline_body_buffering--;
+    opt_stack_check = saved_stack_check;
+    outf = saved_outf_ptr;
+
+    if (g_diag_error_count == errors_before && g_loop_regalloc_bc_claimed) {
+        check_undefined_user_labels();
+        if (plain_static_body_can_be_buffered(s, name)) {
+            s->deferred_body_file = scratch;
+        } else {
+            rewind(scratch);
+            while ((c = fgetc(scratch)) != EOF)
+                fputc(c, outf);
+            fclose(scratch);
+        }
+        return 1;
+    }
+
+    fclose(scratch);
+
+    /* Undo every bit of per-function codegen state this discarded attempt
+     * touched, exactly like try_speculative_bc_regalloc_function_body's own
+     * rewind. */
+    posi = body_start_pos;
+    tok_start_pos = body_start_tok_start;
+    line_no = body_start_line;
+    tok_line = body_start_tok_line;
+    tok = body_start_tok;
+    nlocals = body_start_nlocals;
+    local_size = body_start_local_size;
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    g_licm_seq = 0;
+    return 0;
+}
+
 /* Speculatively generate `name`'s already-scanned body with `bc_cand` (a
  * read-only pointer parameter, chosen ahead of time by find_bc_regalloc_
  * candidate - may be NULL) BC-resident, and/or a loop-counter local claimed
@@ -5644,6 +5773,16 @@ void parse_function_or_global(int base_type)
                                                                saved_nlocals, saved_local_size)) {
                     /* No-IX-frame body already generated and written to outf
                      * inside try_speculative_noix_function_body. */
+                } else if (!opt_debug &&
+                           try_loop_scoped_regalloc_first(name, type, current_local_bytes, s,
+                                                           saved_pos, saved_tok_start, saved_line,
+                                                           saved_tok_line, saved_tok,
+                                                           saved_nlocals, saved_local_size)) {
+                    /* A loop inside the body claimed BC on its own - see
+                     * try_loop_scoped_regalloc_first's header comment for why
+                     * that's given priority over find_bc_regalloc_candidate's
+                     * own, cruder whole-function candidate below. Body already
+                     * generated and written to outf (or deferred). */
                 } else if (!opt_debug && function_qualifies_for_speculative_regalloc(name) &&
                            try_speculative_bc_regalloc_with_e_fallback(name, type, current_local_bytes, s,
                                                                         bc_regalloc_cand,
