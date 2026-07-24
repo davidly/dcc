@@ -1,12 +1,36 @@
 {
   "apps": [
     { "name": "ttt", "args": "10" },
-    { "name": "pint", "args": "e.pas", "fixtures": ["E.PAS"] },
-    { "name": "cobint", "args": "e.cob", "stack_size": 1536, "fixtures": ["E.COB"] },
-    { "name": "forint", "args": "e.for", "fixtures": ["E.FOR"] },
-    { "name": "adaint", "args": "e.ada", "fixtures": ["E.ADA"] },
-    { "name": "bint", "args": "e.bas", "fixtures": ["E.BAS"] },
-    { "name": "fint", "args": "e.f", "fixtures": ["E.F"] },
+    { "name": "pint", "args": "e.pas", "stack_size": 768, "fixtures": ["E.PAS"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.pas", "fixtures": ["TTT.PAS"] },
+        { "suffix": "sieve", "args": "sieve.pas", "fixtures": ["SIEVE.PAS"] }
+      ] },
+    { "name": "cobint", "args": "e.cob", "stack_size": 1536, "fixtures": ["E.COB"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.cob", "fixtures": ["TTT.COB"] },
+        { "suffix": "sieve", "args": "sieve.cob", "fixtures": ["SIEVE.COB"] }
+      ] },
+    { "name": "forint", "args": "e.for", "fixtures": ["E.FOR"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.for", "fixtures": ["TTT.FOR"] },
+        { "suffix": "sieve", "args": "sieve.for", "fixtures": ["SIEVE.FOR"] }
+      ] },
+    { "name": "adaint", "args": "e.ada", "fixtures": ["E.ADA"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.ada", "fixtures": ["TTT.ADA"] },
+        { "suffix": "sieve", "args": "sieve.ada", "fixtures": ["SIEVE.ADA"] }
+      ] },
+    { "name": "bint", "args": "e.bas", "fixtures": ["E.BAS"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.bas", "fixtures": ["TTT.BAS"] },
+        { "suffix": "sieve", "args": "sieve.bas", "fixtures": ["SIEVE.BAS"] }
+      ] },
+    { "name": "fint", "args": "e.f", "fixtures": ["E.F"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.f", "fixtures": ["TTT.F"] },
+        { "suffix": "sieve", "args": "sieve.f", "fixtures": ["SIEVE.F"] }
+      ] },
     { "name": "attnc99", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
     { "name": "attnc11", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
     { "name": "cint", "args": "eu.cin", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["eu.cin"] },

@@ -1,0 +1,2 @@
+1 iterations
+final move count 6493

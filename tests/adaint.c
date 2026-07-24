@@ -124,6 +124,7 @@ struct State {
     int nfunc;
     int nstr;
     int gtop;
+    int gmem_cap;
     int curfunc;
     int fp;
     int frame_size;
@@ -401,12 +402,28 @@ static int add_func(const char *n)
     return i;
 }
 
+/* gmem grows on demand instead of eagerly reserving the full MAXMEM ceiling
+ * up front: that ceiling exists for the rare program with a large array
+ * (e.g. sieve.ada's Flags, OCCURS-equivalent 8191 elements), but most
+ * programs (e.g. ttt.ada) use only a few dozen bytes of global storage -
+ * paying the worst case unconditionally left too little heap for anything
+ * else. Growing in small chunks costs a handful of reallocs, all at
+ * compile time, never on the interpreter's hot execution path. */
 static int alloc_global(int bytes)
 {
-    int b;
+    int b, newtop, newcap;
     b = G->gtop;
-    G->gtop += bytes;
-    if (G->gtop >= MAXMEM) die("global memory full");
+    newtop = G->gtop + bytes;
+    if (newtop >= MAXMEM) die("global memory full");
+    if (newtop > G->gmem_cap) {
+        newcap = newtop + 64;
+        if (newcap >= MAXMEM) newcap = MAXMEM;
+        G->gmem = (unsigned char *)realloc(G->gmem, (unsigned int)newcap);
+        if (!G->gmem) die("oom");
+        memset(G->gmem + G->gmem_cap, 0, (unsigned int)(newcap - G->gmem_cap));
+        G->gmem_cap = newcap;
+    }
+    G->gtop = newtop;
     return b;
 }
 
@@ -1085,7 +1102,6 @@ static void init_compile_storage(void)
     G->sym = (struct Sym *)xcalloc(MAXSYM, sizeof(struct Sym));
     G->func = (struct Func *)xcalloc(MAXFUNC, sizeof(struct Func));
     G->strs = (char **)xcalloc(MAXSTR, sizeof(char *));
-    G->gmem = (unsigned char *)xcalloc(MAXMEM, 1);
 }
 
 static void init_run_storage(void)

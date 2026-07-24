@@ -360,6 +360,7 @@ if (-not (Test-Path $appOverridesPath)) {
         if ($app.perf_ignore) { $appOverrides[$app.name]['perf_ignore'] = $app.perf_ignore }
         if ($app.narrow_diff_ignore) { $appOverrides[$app.name]['narrow_diff_ignore'] = $app.narrow_diff_ignore }
         if ($app.fixtures) { $appOverrides[$app.name]['fixtures'] = @($app.fixtures) }
+        if ($app.extra_scenarios) { $appOverrides[$app.name]['extra_scenarios'] = @($app.extra_scenarios) }
     }
 }
 
@@ -460,6 +461,20 @@ function Get-AppFixtures {
     param([string]$app)
     if ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['fixtures']) {
         return @($appOverrides[$app]['fixtures'])
+    }
+    return @()
+}
+
+# Additional (args, fixtures) scenarios to run against the SAME already-built
+# COM for this app, e.g. pint also runs against TTT.PAS in addition to its
+# primary E.PAS fixture - each scenario gets its own baseline
+# (tests/baselines/<app>_<suffix>.txt) so a bug that only manifests with one
+# input's data/control-flow shape (see commit 077d30c) doesn't silently pass
+# just because the primary fixture works.
+function Get-AppExtraScenarios {
+    param([string]$app)
+    if ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['extra_scenarios']) {
+        return @($appOverrides[$app]['extra_scenarios'])
     }
     return @()
 }
@@ -660,6 +675,113 @@ function Copy-FixtureUpper {
     }
 }
 
+# Run one already-built COM once with a given set of args/stdin, strip the
+# ntvcm perf-report block, and compare the remaining output against an
+# (optional) expected baseline. Shared by Invoke-AppTest's primary run and
+# each of its extra scenario runs (see Get-AppExtraScenarios) so a single COM
+# can be exercised against multiple fixtures without rebuilding.
+function Invoke-ComRunAndCompare {
+    param(
+        [string]$BuildDir,
+        [string]$ComFileName,
+        [string]$Emulator,
+        [string[]]$EmulatorRunArgs,
+        [string]$RunArgs,
+        [string]$RunStdin,
+        [bool]$HasBaseline,
+        [string]$Expected,
+        [System.Collections.IDictionary]$Placeholders,
+        [string]$BaselinePath,
+        [string]$DiffPrefix,
+        [System.Collections.Generic.List[string]]$Lines
+    )
+
+    Push-Location $BuildDir
+    $runSw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $appArgs = if ($RunArgs) { @($RunArgs -split '\s+') } else { @() }
+        $nativeArgs = @($EmulatorRunArgs) + @($ComFileName) + $appArgs
+        if ($RunStdin) {
+            $out = $RunStdin | & $Emulator @nativeArgs 2>&1
+        }
+        else {
+            $out = & $Emulator @nativeArgs 2>&1
+        }
+        $output = ($out -join "`n")
+    }
+    catch {
+        $output = ""
+        $Lines.Add("    ${DiffPrefix}ERROR running ${ComFileName}: $_")
+    }
+    finally {
+        $runSw.Stop()
+        Pop-Location
+    }
+
+    # In report mode ntvcm is run with -p, which appends a performance block
+    # to stdout at app exit, e.g.:
+    #     elapsed milliseconds:               10
+    #     Z80  cycles:                    79,093
+    #     clock rate:                400,000,000 Hz
+    # Parse those values (commas stripped) for the report, then remove the
+    # block from the captured output so it doesn't break baseline matching.
+    $ntvcmMs = ""
+    $ntvcmCycles = ""
+    $ntvcmClockHz = ""
+    if ($output -match '(?m)^\s*elapsed milliseconds:\s*([\d,]+)') {
+        $ntvcmMs = $matches[1] -replace ',', ''
+    }
+    if ($output -match '(?m)^\s*Z80\s+cycles:\s*([\d,]+)') {
+        $ntvcmCycles = $matches[1] -replace ',', ''
+    }
+    if ($output -match '(?m)^\s*clock rate:\s*([\d,]+)') {
+        $ntvcmClockHz = $matches[1] -replace ',', ''
+    }
+    # Strip the ntvcm performance block (and any blank separator before it).
+    $output = [regex]::Replace($output, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
+
+    $result = [pscustomobject]@{
+        Passed  = $true
+        Ms      = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
+        Cycles  = $ntvcmCycles
+        ClockHz = $ntvcmClockHz
+    }
+
+    if ($HasBaseline) {
+        $actual = ($output -replace "`r`n", "`n").TrimEnd("`n")
+        if (-not (Test-MatchesBaseline -Actual $actual -Baseline $Expected -Placeholders $Placeholders)) {
+            $Lines.Add("    ${DiffPrefix}OUTPUT MISMATCH (vs $BaselinePath)")
+            $expLines = if ($Expected) { @($Expected -split "`n") } else { @() }
+            $actLines = if ($actual)   { @($actual   -split "`n") } else { @() }
+            $maxLen = [Math]::Max($expLines.Count, $actLines.Count)
+            for ($i = 0; $i -lt $maxLen; $i++) {
+                $e = if ($i -lt $expLines.Count) { $expLines[$i] } else { $null }
+                $a = if ($i -lt $actLines.Count) { $actLines[$i] } else { $null }
+                if ($null -eq $a) {
+                    $Lines.Add("    ${DiffPrefix}DIFF- $e")
+                } elseif ($null -eq $e) {
+                    $Lines.Add("    ${DiffPrefix}DIFF+ $a")
+                } elseif ($e -ceq $a) {
+                    $Lines.Add("    ${DiffPrefix}DIFF  $e")
+                } else {
+                    $Lines.Add("    ${DiffPrefix}DIFF- $e")
+                    $Lines.Add("    ${DiffPrefix}DIFF+ $a")
+                }
+            }
+            $result.Passed = $false
+        }
+        else {
+            $Lines.Add("    ${DiffPrefix}Output matches baseline")
+        }
+    }
+    else {
+        $Lines.Add("    ${DiffPrefix}ERROR: no baseline at $BaselinePath (every app/scenario must have one)")
+        $result.Passed = $false
+    }
+
+    return $result
+}
+
 # Build, run, and verify a single app across the requested modes. Returns a
 # result object with a collected log (Lines) so callers can print output in a
 # deterministic, grouped order (important under parallel execution). This is
@@ -682,7 +804,8 @@ function Invoke-AppTest {
         [switch]$UseEmulatedM80,
         [string[]]$EmulatorRunArgs,
         [object[]]$Fixtures,
-        [bool]$StageFixtures = $true
+        [bool]$StageFixtures = $true,
+        [object[]]$ExtraScenarios = @()
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -690,13 +813,21 @@ function Invoke-AppTest {
     $appPassed = $true
     $modeMetrics = @{}
 
-    # Ensure the (possibly per-app) build dir exists and stage CP/M fixtures.
+    # Ensure the (possibly per-app) build dir exists and stage CP/M fixtures
+    # (the primary fixtures plus every extra scenario's own fixtures - all
+    # scenarios run against the same build, so everything must be staged
+    # before any run happens).
     if (-not (Test-Path $BuildDir -PathType Container)) {
         New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
     }
     if ($StageFixtures) {
         foreach ($f in $Fixtures) {
             Copy-FixtureUpper -Fixture $f -DestDir $BuildDir
+        }
+        foreach ($scenario in $ExtraScenarios) {
+            foreach ($f in @($scenario.fixtures)) {
+                Copy-FixtureUpper -Fixture $f -DestDir $BuildDir
+            }
         }
     }
 
@@ -707,6 +838,23 @@ function Invoke-AppTest {
     $expected = $null
     if ($hasBaseline) {
         $expected = (((Get-Content -Path $blPath -Raw) -replace "`r`n", "`n")).TrimEnd("`n")
+    }
+
+    # Same, per extra scenario - each gets its own baseline file
+    # (tests/baselines/<AppName>_<suffix>.txt).
+    $scenarioBaselines = @{}
+    foreach ($scenario in $ExtraScenarios) {
+        $sBlPath = Join-Path $BaselineDir "${AppName}_$($scenario.suffix).txt"
+        $sHasBaseline = Test-Path $sBlPath -PathType Leaf
+        $sExpected = $null
+        if ($sHasBaseline) {
+            $sExpected = (((Get-Content -Path $sBlPath -Raw) -replace "`r`n", "`n")).TrimEnd("`n")
+        }
+        $scenarioBaselines[$scenario.suffix] = [pscustomobject]@{
+            Path        = $sBlPath
+            HasBaseline = $sHasBaseline
+            Expected    = $sExpected
+        }
     }
 
     foreach ($buildMode in $Modes) {
@@ -735,89 +883,33 @@ function Invoke-AppTest {
         }
         $comSize = (Get-Item $comFile).Length
 
-        Push-Location $BuildDir
-        $runSw = [System.Diagnostics.Stopwatch]::StartNew()
-        try {
-            $appArgs = if ($RunArgs) { @($RunArgs -split '\s+') } else { @() }
-            $nativeArgs = @($EmulatorRunArgs) + @("$upper.COM") + $appArgs
-            if ($RunStdin) {
-                $out = $RunStdin | & $Emulator @nativeArgs 2>&1
-            }
-            else {
-                $out = & $Emulator @nativeArgs 2>&1
-            }
-            $output = ($out -join "`n")
-        }
-        catch {
-            $output = ""
-            $lines.Add("    ERROR running $AppName : $_")
-        }
-        finally {
-            $runSw.Stop()
-            Pop-Location
-        }
-
-        # In report mode ntvcm is run with -p, which appends a performance block
-        # to stdout at app exit, e.g.:
-        #     elapsed milliseconds:               10
-        #     Z80  cycles:                    79,093
-        #     clock rate:                400,000,000 Hz
-        # Parse those values (commas stripped) for the report, then remove the
-        # block from the captured output so it doesn't break baseline matching.
-        $ntvcmMs = ""
-        $ntvcmCycles = ""
-        $ntvcmClockHz = ""
-        if ($output -match '(?m)^\s*elapsed milliseconds:\s*([\d,]+)') {
-            $ntvcmMs = $matches[1] -replace ',', ''
-        }
-        if ($output -match '(?m)^\s*Z80\s+cycles:\s*([\d,]+)') {
-            $ntvcmCycles = $matches[1] -replace ',', ''
-        }
-        if ($output -match '(?m)^\s*clock rate:\s*([\d,]+)') {
-            $ntvcmClockHz = $matches[1] -replace ',', ''
-        }
-        # Strip the ntvcm performance block (and any blank separator before it).
-        $output = [regex]::Replace($output, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
+        $primaryResult = Invoke-ComRunAndCompare -BuildDir $BuildDir -ComFileName "$upper.COM" `
+            -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -RunArgs $RunArgs -RunStdin $RunStdin `
+            -HasBaseline $hasBaseline -Expected $expected -Placeholders $Placeholders `
+            -BaselinePath "$BaselineDir/$AppName.txt" -DiffPrefix "" -Lines $lines
 
         $modeMetrics[$buildMode] = [pscustomobject]@{
-            Ms      = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
-            Cycles  = $ntvcmCycles
-            ClockHz = $ntvcmClockHz
+            Ms      = $primaryResult.Ms
+            Cycles  = $primaryResult.Cycles
+            ClockHz = $primaryResult.ClockHz
             Size    = $comSize
         }
+        if (-not $primaryResult.Passed) { $appPassed = $false }
+        if (-not $hasBaseline) { break }
 
-        # Compare against the per-app baseline (placeholder-aware).
-        if ($hasBaseline) {
-            $actual = ($output -replace "`r`n", "`n").TrimEnd("`n")
-            if (-not (Test-MatchesBaseline -Actual $actual -Baseline $expected -Placeholders $Placeholders)) {
-                $lines.Add("    OUTPUT MISMATCH (vs $BaselineDir/$AppName.txt)")
-                $expLines = if ($expected) { @($expected -split "`n") } else { @() }
-                $actLines = if ($actual)   { @($actual   -split "`n") } else { @() }
-                $maxLen = [Math]::Max($expLines.Count, $actLines.Count)
-                for ($i = 0; $i -lt $maxLen; $i++) {
-                    $e = if ($i -lt $expLines.Count) { $expLines[$i] } else { $null }
-                    $a = if ($i -lt $actLines.Count) { $actLines[$i] } else { $null }
-                    if ($null -eq $a) {
-                        $lines.Add("    DIFF- $e")
-                    } elseif ($null -eq $e) {
-                        $lines.Add("    DIFF+ $a")
-                    } elseif ($e -ceq $a) {
-                        $lines.Add("    DIFF  $e")
-                    } else {
-                        $lines.Add("    DIFF- $e")
-                        $lines.Add("    DIFF+ $a")
-                    }
-                }
-                $appPassed = $false
-            }
-            else {
-                $lines.Add("    Output matches baseline")
-            }
-        }
-        else {
-            $lines.Add("    ERROR: no baseline at $BaselineDir/$AppName.txt (every app must have one)")
-            $appPassed = $false
-            break
+        # Rerun the SAME already-built COM against every extra scenario's own
+        # args/fixtures and baseline - no rebuild, since the fixture data is
+        # a runtime argv input, not a different source file. A scenario
+        # failure marks the app failed but doesn't stop other scenarios/modes
+        # from also being checked and reported.
+        foreach ($scenario in $ExtraScenarios) {
+            $sb = $scenarioBaselines[$scenario.suffix]
+            $scenarioResult = Invoke-ComRunAndCompare -BuildDir $BuildDir -ComFileName "$upper.COM" `
+                -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -RunArgs $scenario.args `
+                -RunStdin $(if ($scenario.stdin) { $scenario.stdin } else { "" }) `
+                -HasBaseline $sb.HasBaseline -Expected $sb.Expected -Placeholders $Placeholders `
+                -BaselinePath $sb.Path -DiffPrefix "[$($scenario.suffix)] " -Lines $lines
+            if (-not $scenarioResult.Passed) { $appPassed = $false }
         }
     }
 
@@ -1094,15 +1186,18 @@ foreach ($app in $testFiles) {
         DccFloatio   = (Get-DccFloatio $app)
         DccLongio    = (Get-DccLongio $app)
         Fixtures     = (Get-AppFixtures $app)
+        ExtraScenarios = (Get-AppExtraScenarios $app)
     })
 }
 
-# Union of every app's declared runtime fixtures - used only by the serial
-# shared build dir (Stage-FixtureInputs); parallel mode stages each app's own
-# subset individually (see $item.Fixtures at each Invoke-AppTest call below),
-# so most apps' build dirs get nothing copied at all instead of every fixture
-# in tests/.
-$fixtureList = @($workItems | ForEach-Object { $_.Fixtures } | Select-Object -Unique)
+# Union of every app's declared runtime fixtures, including each app's extra
+# scenarios - used only by the serial shared build dir (Stage-FixtureInputs);
+# parallel mode stages each app's own subset individually (see $item.Fixtures
+# / $item.ExtraScenarios at each Invoke-AppTest call below), so most apps'
+# build dirs get nothing copied at all instead of every fixture in tests/.
+$fixtureList = @($workItems | ForEach-Object {
+    @($_.Fixtures) + @($_.ExtraScenarios | ForEach-Object { $_.fixtures })
+} | Select-Object -Unique)
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -1125,9 +1220,9 @@ function Show-AppResult {
     foreach ($line in $result.Lines) {
         $color = if ($line -match 'FAILED|MISMATCH|WARNING|ERROR') { 'Red' }
                  elseif ($line -match 'matches baseline') { 'Green' }
-                 elseif ($line -match '^    DIFF-') { 'Red' }
-                 elseif ($line -match '^    DIFF\+') { 'Green' }
-                 elseif ($line -match '^    DIFF  ') { 'DarkGray' }
+                 elseif ($line -match '^    (\[\S+\] )?DIFF-') { 'Red' }
+                 elseif ($line -match '^    (\[\S+\] )?DIFF\+') { 'Green' }
+                 elseif ($line -match '^    (\[\S+\] )?DIFF  ') { 'DarkGray' }
                  else { 'Gray' }
         Write-Host $line -ForegroundColor $color
     }
@@ -1403,6 +1498,7 @@ if ($Parallel) {
     $repoRoot     = (Get-Location).Path
     $tmbDef       = ${function:Test-MatchesBaseline}.ToString()
     $iatDef       = ${function:Invoke-AppTest}.ToString()
+    $icrcDef      = ${function:Invoke-ComRunAndCompare}.ToString()
     $cfuDef       = ${function:Copy-FixtureUpper}.ToString()
     $ctbsDef      = ${function:ConvertTo-BooleanSetting}.ToString()
     $gdmDef       = ${function:Get-DccMakeCommand}.ToString()
@@ -1424,6 +1520,7 @@ if ($Parallel) {
         ${function:ConvertTo-BooleanSetting} = $using:ctbsDef
         ${function:Get-DccMakeCommand}   = $using:gdmDef
         ${function:Invoke-DccMakeBuild}  = $using:idmbDef
+        ${function:Invoke-ComRunAndCompare} = $using:icrcDef
         ${function:Invoke-AppTest}       = $using:iatDef
 
         $appBuildDir = Join-Path $using:BuildDir $item.App
@@ -1435,7 +1532,8 @@ if ($Parallel) {
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
             -UseEmulatedM80:$using:UseEmulatedM80 `
             -EmulatorRunArgs $using:runArgs `
-            -Fixtures $item.Fixtures -StageFixtures $true
+            -Fixtures $item.Fixtures -StageFixtures $true `
+            -ExtraScenarios $item.ExtraScenarios
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -1455,9 +1553,9 @@ if ($Parallel) {
             foreach ($detail in $result.Lines) {
                 if ($detail -match 'FAILED|MISMATCH|WARNING|ERROR') {
                     Write-Host "        $($detail.Trim())" -ForegroundColor Red
-                } elseif ($detail -match '^    DIFF-') {
+                } elseif ($detail -match '^    (\[\S+\] )?DIFF-') {
                     Write-Host "        $($detail.Trim())" -ForegroundColor Red
-                } elseif ($detail -match '^    DIFF\+') {
+                } elseif ($detail -match '^    (\[\S+\] )?DIFF\+') {
                     Write-Host "        $($detail.Trim())" -ForegroundColor Green
                 }
             }
@@ -1475,7 +1573,8 @@ else {
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
             -UseEmulatedM80:$UseEmulatedM80 `
             -EmulatorRunArgs $emulatorRunArgs `
-            -Fixtures $fixtureList -StageFixtures $false
+            -Fixtures $fixtureList -StageFixtures $false `
+            -ExtraScenarios $item.ExtraScenarios
         Show-AppResult $result
         $results += $result
     }

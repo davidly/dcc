@@ -1,0 +1,3 @@
+starting...
+Moves:      6493
+Iterations: 1

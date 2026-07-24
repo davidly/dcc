@@ -42,10 +42,20 @@ it, and compares the captured stdout against the like-named file in
 Because matching is keyed on the **app name** (not position in a list), the
 order in which tests are discovered or run does not matter.
 
+An app can also declare `extra_scenarios` in `_test_overrides.json` to rerun
+its *same already-built* COM against additional (args, fixtures) inputs -
+e.g. `pint` also runs against `TTT.PAS` in addition to its primary `E.PAS`.
+Each scenario gets its own baseline at `tests/baselines/<name>_<suffix>.txt`
+(e.g. `tests/baselines/pint_ttt.txt`), checked independently of the primary
+baseline. This exists so a bug that only manifests with one input's
+data/control-flow shape (see commit `077d30c`) can't hide behind a single
+fixture that happens to work.
+
 > Note: a few tests take command-line arguments or need a larger stack. Those
 > parameters live in `tests/_test_overrides.json` (keys: `args`, `stdin`,
-> `stack_size`, `dcc_args`, `dcc_floatio`, `dcc_longio`, `ignore`). For example
-> `ttt` is run with `10`, and `cobint` reads `e.cob`.
+> `stack_size`, `dcc_args`, `dcc_floatio`, `dcc_longio`, `ignore`,
+> `extra_scenarios`). For example `ttt` is run with `10`, and `cobint` reads
+> `e.cob`.
 
 ## Running the suite
 

@@ -15,9 +15,9 @@
 #define MAXSRC 18000L
 #define MAXLINE 160
 #define MAXNAME 32
-#define MAXVAR 64
-#define MAXPARA 64
-#define MAXSTMT 256
+#define MAXVAR 32
+#define MAXPARA 32
+#define MAXSTMT 128
 #define MAXTOK 64
 #define MAXARR 1200
 #define MAXTCODE 2200
@@ -97,7 +97,7 @@
 #define PM_COUNT   0
 #define PM_VARYING 1
 
-struct Var { char name[MAXNAME]; int *v; int len; };
+struct Var { char name[MAXNAME]; void *v; int len; unsigned char esize; };
 struct Para { char name[MAXNAME]; int first; int last; };
 struct Stmt { char *s; int parno; int ts; int te; int bc; };
 struct Ins { unsigned char op; int a; int b; };
@@ -248,7 +248,7 @@ static int find_var(const char *name)
     return 0;
 }
 
-static int add_var(const char *name, int len)
+static int add_var(const char *name, int len, int esize)
 {
     int i;
     if (nv >= MAXVAR) die("too many variables");
@@ -256,8 +256,34 @@ static int add_var(const char *name, int len)
     memset(&var[i], 0, sizeof(var[i]));
     upcase(var[i].name, name);
     var[i].len = len;
-    var[i].v = (int *)xcalloc(len + 1, sizeof(int));
+    var[i].esize = (unsigned char)esize;
+    var[i].v = xcalloc((unsigned int)(len + 1), (unsigned int)esize);
     return i;
+}
+
+/* esize is 1 (signed char) only for a bare "PIC 9" OCCURS array - e.g.
+ * sieve.cob's FLAGS, OCCURS 8190 TIMES - the one case where storing a full
+ * int per element (a few KB, for a large table) burns heap other apps
+ * genuinely need. Signed, not unsigned: covers a transient negative value
+ * without silently wrapping, at zero extra cost, matching the safety
+ * margin a full int already had.
+ *
+ * Deliberately NOT applied to scalar "PIC 9" fields, even though they're
+ * the same declared width: verified against e.cob that scalars like
+ * TM/TD/HIGH genuinely carry values outside 0-9 during intermediate
+ * arithmetic (a real corruption was reproduced when this was tried) -
+ * their byte-packing savings are negligible anyway (a handful of bytes)
+ * next to that correctness risk, so scalars always keep the full int. */
+static inline int var_get(int vi, int idx)
+{
+    if (var[vi].esize == 1) return ((signed char *)var[vi].v)[idx];
+    return ((int *)var[vi].v)[idx];
+}
+
+static inline void var_set(int vi, int idx, int val)
+{
+    if (var[vi].esize == 1) ((signed char *)var[vi].v)[idx] = (signed char)val;
+    else ((int *)var[vi].v)[idx] = val;
 }
 
 static int find_para_soft(const char *name)
@@ -410,9 +436,19 @@ static void tokenize_stmt(int si)
 /* ---- bytecode compiler: mirrors the grammar of the evaluator it replaces,
  * emitting instructions instead of computing values. ---- */
 
+/* code_limit starts at 0 and grows on demand (see decode_stmts) instead of
+ * pre-sizing to a worst-case ratio of token count: actual bytecode per
+ * token varies a lot by statement shape, so a fixed ratio either wastes
+ * heap (over-provisioned - measured ~40% unused on ttt.cob) or risks
+ * "bytecode full" (under-provisioned). Growing in chunks costs a handful
+ * of reallocs, all during compilation, never on the VM's execution path. */
 static int emit(int op, int a, int b)
 {
-    if (cp >= code_limit) die("bytecode full");
+    if (cp >= code_limit) {
+        code_limit += 128;
+        code = (struct Ins *)realloc(code, (unsigned int)code_limit * sizeof(struct Ins));
+        if (!code) { fprintf(stderr, "out of memory\n"); exit(1); }
+    }
     code[cp].op = (unsigned char)op;
     code[cp].a = a;
     code[cp].b = b;
@@ -760,22 +796,22 @@ static int run_bc(struct Ins *start)
             vpush(in->a);
             break;
         case OP_PUSHVAR_S:
-            vpush(var[in->a].v[0]);
+            vpush(var_get(in->a, 0));
             break;
         case OP_PUSHVAR_IDX:
             a = vpop();
             check_idx(in->a, a);
-            vpush(var[in->a].v[a]);
+            vpush(var_get(in->a, a));
             break;
         case OP_STORE_S:
             a = vpop();
-            var[in->a].v[0] = a;
+            var_set(in->a, 0, a);
             break;
         case OP_STORE_IDX:
             a = vpop();
             b = vpop();
             check_idx(in->a, a);
-            var[in->a].v[a] = b;
+            var_set(in->a, a, b);
             break;
         case OP_SAVE_IDX:
             a = vpop();
@@ -784,27 +820,27 @@ static int run_bc(struct Ins *start)
         case OP_STORE_IDXT:
             b = vpop();
             check_idx(in->a, idxtmp);
-            var[in->a].v[idxtmp] = b;
+            var_set(in->a, idxtmp, b);
             break;
         case OP_ADD_TO_S:
             a = vpop();
-            var[in->a].v[0] += a;
+            var_set(in->a, 0, var_get(in->a, 0) + a);
             break;
         case OP_ADD_TO_IDX:
             a = vpop();
             b = vpop();
             check_idx(in->a, a);
-            var[in->a].v[a] += b;
+            var_set(in->a, a, var_get(in->a, a) + b);
             break;
         case OP_SUB_FROM_S:
             a = vpop();
-            var[in->a].v[0] -= a;
+            var_set(in->a, 0, var_get(in->a, 0) - a);
             break;
         case OP_SUB_FROM_IDX:
             a = vpop();
             b = vpop();
             check_idx(in->a, a);
-            var[in->a].v[a] -= b;
+            var_set(in->a, a, var_get(in->a, a) - b);
             break;
         case OP_NEG:
             a = vpop();
@@ -879,12 +915,12 @@ static int run_bc(struct Ins *start)
                 int byv, fromv;
                 byv = vpop();
                 fromv = vpop();
-                var[P->vname].v[0] = fromv;
+                var_set(P->vname, 0, fromv);
                 while (!stopped) {
                     if (run_bc(&code[P->until_start])) break;
                     exec_range(para[P->p].first, para[P->q].last);
                     jumped = 0;
-                    var[P->vname].v[0] += byv;
+                    var_set(P->vname, 0, var_get(P->vname, 0) + byv);
                 }
             } else {
                 int lim;
@@ -948,6 +984,20 @@ static int get_occurs(const char *s)
     return atoi(p);
 }
 
+static int get_pic_esize(const char *s, int len)
+{
+    const char *p;
+    if (len <= 0) return sizeof(int);
+    p = strstr(s, " PIC ");
+    if (!p) return sizeof(int);
+    p += 5;
+    while (*p == ' ') p++;
+    if (*p != '9') return sizeof(int);
+    p++;
+    if (*p == '9' || *p == '(') return sizeof(int);
+    return 1;
+}
+
 static void parse_data_line(char *line)
 {
     char *p, *q, name[MAXNAME];
@@ -965,9 +1015,9 @@ static void parse_data_line(char *line)
     if (!strstr(line, " PIC ")) return;
     len = get_occurs(line);
     if (len <= 0) len = 0;
-    add_var(name, len);
+    add_var(name, len, get_pic_esize(line, len));
     p = strstr(line, "VALUE");
-    if (p) { val = atoi(p + 5); var[nv - 1].v[0] = val; }
+    if (p) { val = atoi(p + 5); var_set(nv - 1, 0, val); }
 }
 
 static int load_file(const char *name)
@@ -1026,9 +1076,20 @@ static void parse_source(void)
 static void decode_stmts(void)
 {
     int i;
-    for (i = 0; i < ns; i++) tokenize_stmt(i);
-    code_limit = ntc * 3 / 4 + 150;
-    code = (struct Ins *)xcalloc(code_limit, sizeof(struct Ins));
+    /* Each statement's raw text (stmt[i].s) is only ever read here, by
+     * tokenize_stmt - compile_stmt works from the token array (.ts/.te
+     * into tc[]), never the raw string. Freeing it immediately after
+     * tokenizing (rather than holding every statement's text alive for
+     * the rest of the run) matters on a big source like ttt.cob, where
+     * the accumulated statement text is several KB of heap that's dead
+     * weight right when the code buffer below needs room. */
+    for (i = 0; i < ns; i++) {
+        tokenize_stmt(i);
+        free(stmt[i].s);
+        stmt[i].s = NULL;
+    }
+    code_limit = 0;
+    code = NULL;
     for (i = 0; i < ns; i++) compile_stmt(i);
 }
 
@@ -1037,7 +1098,7 @@ static void print_stats(void)
     int i, bytes;
     if (!G->verbose) return;
     bytes = 0;
-    for (i = 0; i < nv; i++) bytes += (var[i].len + 1) * (int)sizeof(int);
+    for (i = 0; i < nv; i++) bytes += (var[i].len + 1) * var[i].esize;
     fprintf(stderr, "\nCOBINT usage summary\n");
     fprintf(stderr, "  Variables:  %d / %d\n", nv, MAXVAR);
     fprintf(stderr, "  Paragraphs: %d / %d\n", np, MAXPARA);
@@ -1066,6 +1127,13 @@ int main(int argc, char **argv)
     if (argi >= argc) { fprintf(stderr, "usage: cobint [-V] file.cob\n"); return 1; }
     if (!load_file(argv[argi])) return 1;
     parse_source();
+    /* G->src (the whole source file, up to MAXSRC bytes) is only read
+     * during parse_source - decode_stmts and everything after work from
+     * the already-extracted statement/paragraph tables. Freeing it here
+     * matters on a big source like ttt.cob, where it's several KB of
+     * heap that's otherwise held dead for the rest of the run. */
+    free(G->src);
+    G->src = NULL;
     decode_stmts();
     mainp = find_para("MAIN");
     exec_range(para[mainp].first, ns - 1);
