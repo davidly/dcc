@@ -36,6 +36,7 @@
  *   dcc_decl.c      local declaration + initializer codegen
  *   dcc_stmt.c      statement codegen (if/while/for/switch/...)
  *   dcc_func.c      function + top-level declaration parsing
+ *   dcc_global_init.c file-scope object initializer parsing (record path)
  *   dcc_data.c      data-section emission
  *   dcc.c           driver: file I/O, #include, CLI, and main()
  *
