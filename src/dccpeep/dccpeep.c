@@ -863,8 +863,8 @@ static int pass_base_index_addr(void)
  * compile-time constant, so there's nothing to fold into it. Found via
  * corpus mining a static-struct-heavy interpreter (tests/cobint.c, whose
  * global state lives in one struct with ~20 fields - 567 instances of this
- * exact triple in that file alone; a broader sample of tests/*.c found it
- * elsewhere too, just far less densely).
+ * exact triple in that file alone; a broader sample of the tests directory's
+ * .c files found it elsewhere too, just far less densely).
  */
 static int pass_fold_hl_base_const_offset(void)
 {
