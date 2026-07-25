@@ -750,16 +750,28 @@ static int compile_expr_str(const char *s)
  * advanced/pushed/popped directly - no address recomputation on the
  * common path. This is the single hottest function in forint by a wide
  * margin (54% of total runtime per profiling), so this loop's shape
- * matters more here than anywhere else in the interpreter. */
+ * matters more here than anywhere else in the interpreter.
+ *
+ * The VM operand stack itself (g_estack[]) is file-scope static rather than
+ * an eval_e-local array: eval_e is never reentrant (its own body has no
+ * recursive call to itself, and none of its callers - assign_pre, write_pre,
+ * and the OP_DO/OP_IF/OP_CGOTO cases in run_prog - are themselves reachable
+ * from inside it), so exactly one instance is ever live at a time, the same
+ * "only one instance, ever" property that already justified making former
+ * struct State's fields plain globals above. Kept local, `sp=stack;` cost an
+ * IX-relative address computation (frame base + a fixed offset) on every one
+ * of eval_e's ~1.5M calls for the e.for workload; static, it's a compile-time
+ * constant address - a single immediate load, no IX arithmetic at all - and
+ * the call frame shrinks by the array's own 48 bytes besides. */
+static int g_estack[24];
 static int eval_e(int ei)
 {
-    int stack[24];
     int *sp;
     int op,a,b;
     struct ETok *t;
     struct ETok *tend;
     if(ei<0)return 0;
-    sp=stack;
+    sp=g_estack;
     t=&g_etoks[g_exprs[ei].start];
     tend=t+g_exprs[ei].len;
     while(t<tend)
@@ -797,7 +809,7 @@ static int eval_e(int ei)
         }
         t++;
     }
-    return sp>stack?sp[-1]:0;
+    return sp>g_estack?sp[-1]:0;
 }
 /* Returns the resolved statement, or NULL if lab isn't found in this
  * program (used directly as a runtime "no target" sentinel by every
