@@ -1898,6 +1898,14 @@ static void emit_float_compound_rhs(const struct AstNode *n, int saved_dead)
     emit("\tpop bc\n\tpop bc\n");
 }
 
+/* Store the 32-bit value held in E,D,C,B (low byte -> high byte) to the address
+ * in HL, advancing HL past it. This exact four-`ld (hl),r` / `inc hl` sequence
+ * appears at the long compound-assignment sites in gen_assign_ast below. */
+static void emit_store_long_edcb_via_hl(void)
+{
+    emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n");
+}
+
 void gen_assign_ast(const struct AstNode *n)
 {
     struct Sym *s;
@@ -2152,7 +2160,7 @@ void gen_assign_ast(const struct AstNode *n)
                 emit("\tld b,d\n\tld c,e\n");
                 emit("\tpop de\n");
                 emit("\tex de,hl\n");
-                emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n");
+                emit_store_long_edcb_via_hl();
                 if (!want_dead) {
                     emit("\tex de,hl\n");
                     emit("\tld d,b\n\tld e,c\n");
@@ -2188,7 +2196,7 @@ void gen_assign_ast(const struct AstNode *n)
                 emit("\tld b,d\n\tld c,e\n");
                 emit("\tpop de\n");
                 emit("\tex de,hl\n");
-                emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n");
+                emit_store_long_edcb_via_hl();
                 if (!want_dead) {
                     emit("\tex de,hl\n");
                     emit("\tld d,b\n\tld e,c\n");
@@ -2499,7 +2507,7 @@ void gen_assign_ast(const struct AstNode *n)
         emit("\tld b,d\n\tld c,e\n");
         emit("\tpop de\n");
         emit("\tex de,hl\n");
-        emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n");
+        emit_store_long_edcb_via_hl();
         if (!saved_dead)
             emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
         g_expr.type = s->type;
