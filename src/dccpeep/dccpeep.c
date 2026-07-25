@@ -866,6 +866,25 @@ static int pass_base_index_addr(void)
  * exact triple in that file alone; a broader sample of the tests directory's
  * .c files found it elsewhere too, just far less densely).
  */
+static int input_is_dcc_generated;
+
+static int range_is_user_asm(int start, int end)
+{
+    int depth;
+    int i;
+
+    depth = 0;
+    for (i = 0; i <= end && i < nlines; ++i) {
+        if (strcmp(lines[i], "; dcc user asm begin") == 0)
+            depth++;
+        if (i >= start && depth > 0)
+            return 1;
+        if (strcmp(lines[i], "; dcc user asm end") == 0 && depth > 0)
+            depth--;
+    }
+    return 0;
+}
+
 static int pass_fold_hl_base_const_offset(void)
 {
     int i;
@@ -877,6 +896,8 @@ static int pass_fold_hl_base_const_offset(void)
 
     changed = 0;
     for (i = 0; i + 2 < nlines; ++i) {
+        if (!input_is_dcc_generated || range_is_user_asm(i, i + 2))
+            continue;
         if (!parse_ld_hl_imm(lines[i], base))
             continue;
         if (base[0] == '(')
@@ -943,6 +964,8 @@ static int pass_fold_hl_label_word_deref(void)
 
     changed = 0;
     for (i = 0; i + 4 < nlines; ++i) {
+        if (!input_is_dcc_generated || range_is_user_asm(i, i + 4))
+            continue;
         if (!parse_ld_hl_imm(lines[i], label))
             continue;
         if (label[0] == '(')
@@ -9407,6 +9430,8 @@ static void read_file(const char *name)
 
     while (fgets(buf, sizeof(buf), f)) {
         trim(buf);
+        if (strcmp(buf, "; dcc stage-1d output") == 0)
+            input_is_dcc_generated = 1;
         if (nlines >= MAX_LINES) {
             fprintf(stderr, "too many lines\n");
             exit(1);

@@ -443,7 +443,9 @@ void flush_pending_asm(void)
     if (asm_suppress_depth > 0)
         return;
     if (pending_asm_len > 0 && outf) {
+        fputs("\t; dcc user asm begin\n", outf);
         fwrite(pending_asm_buf, 1, (size_t)pending_asm_len, outf);
+        fputs("\t; dcc user asm end\n", outf);
         pending_asm_len = 0;
     }
 }
