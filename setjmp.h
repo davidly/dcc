@@ -12,7 +12,7 @@ typedef unsigned int jmp_buf[4];
 /** Save the current execution context and return 0 on the direct call. */
 int  setjmp(jmp_buf env);
 /** Restore a context saved by setjmp and make that setjmp return val, or 1 if val is 0. */
-void longjmp(jmp_buf env, int val);
+_Noreturn void longjmp(jmp_buf env, int val);
 
 #endif
 

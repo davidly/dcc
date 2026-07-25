@@ -30,9 +30,9 @@ typedef struct {
 } ldiv_t;
 
 /** Terminate the program after flushing runtime output. */
-void exit( int code );
+_Noreturn void exit( int code );
 /** Terminate the program abnormally; does not call atexit handlers. */
-void abort( void );
+_Noreturn void abort( void );
 /** Register func to be called at normal program termination (LIFO order).
  *  Returns 0 on success, nonzero if the ATEXIT_MAX table is full. */
 int  atexit( void (*func)(void) );

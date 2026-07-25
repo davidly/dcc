@@ -12,7 +12,7 @@
 /* Failure handler in DCCRTL.MAC: prints the diagnostic and aborts.
  * C name _asfl -> assembly label __asfl (dcc prepends one '_').
  * Only linked when assert() is used with NDEBUG not defined. */
-extern void _asfl(const char *msg);
+extern _Noreturn void _asfl(const char *msg);
 
 /* Internal helpers for turning __LINE__ into a string literal. */
 #define STR_HELPER(x) #x
