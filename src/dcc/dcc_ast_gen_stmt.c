@@ -804,7 +804,7 @@ static void ast_gen_while_stmt_impl(const struct AstNode *n)
     emit_label(ltop);
     if (ast_is_const_nonzero_condition(n->a)) {
         ast_gen_expr(n->a);
-        emit_test_expr_nonzero(g_expr_type, lend, 0);
+        emit_test_expr_nonzero(g_expr.type, lend, 0);
     } else {
         ast_gen_cond_branch(n->a, lend, 0);
     }

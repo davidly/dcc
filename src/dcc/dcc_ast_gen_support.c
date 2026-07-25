@@ -1079,7 +1079,7 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
             gen_pointer_expr_ast(call->list[i], &ptr_type, &no_deref);
         else
             ast_gen_expr(call->list[i]);
-        actual_type = g_expr_type;
+        actual_type = g_expr.type;
         if (have_want && type_is_float(inner_want)) {
             if (!type_is_float(actual_type))
                 emit_convert_int_to_float(actual_type);
@@ -1110,8 +1110,8 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
     fprintf(outf, "\tcall %s\n", asm_name_for(name));
     emit_cleanup_stack_bytes(arg_bytes + 2);
     emit("\tpop bc\n");
-    g_expr_type = want_type;
-    g_long_from16 = 0;
+    g_expr.type = want_type;
+    g_expr.long_from16 = 0;
 }
 
 static int ast_update_lvalue_long_type(const struct AstNode *n, int *out_type)
@@ -2271,7 +2271,7 @@ static const struct AstNode *ast_find_unconditional_divmod_op(const struct AstNo
         n->b != NULL && n->b->kind == AST_IDENT && n->b->sval != NULL) {
         /* AST_IDENT nodes carry no reliable ->type of their own until
          * codegen actually evaluates them (gen_ident resolves the symbol
-         * and sets g_expr_type at that point, not stored back onto the
+         * and sets g_expr.type at that point, not stored back onto the
          * node) - ast_expr_type_for_sizeof is the existing static
          * inference path built for exactly this "need a node's type
          * before/without running its codegen" situation. */

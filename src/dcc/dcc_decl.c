@@ -175,7 +175,7 @@ void emit_load_const_sym_value(struct Sym *s)
 
     if (type_is_float(s->type)) {
         emit_load_float_bits(s->const_value);
-        g_expr_type = TYPE_FLOAT;
+        g_expr.type = TYPE_FLOAT;
         return;
     }
 
@@ -329,8 +329,8 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
     ast_emit_init_expr();
 
     if (type_is_bool(type)) {
-        if (!type_is_bool(g_expr_type))
-            emit_bool_normalize_hl(g_expr_type);
+        if (!type_is_bool(g_expr.type))
+            emit_bool_normalize_hl(g_expr.type);
         if (fast) {
             emit_store_hl_direct_at(s, off, type);
             return;
@@ -341,28 +341,28 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
     }
 
     if (type_is_long(type)) {
-        if (type_is_float(g_expr_type))
+        if (type_is_float(g_expr.type))
             emit_convert_float_to_intlike(type);
-        else if (!type_is_long(g_expr_type))
-            emit_extend_to_long_typed(g_expr_type);
+        else if (!type_is_long(g_expr.type))
+            emit_extend_to_long_typed(g_expr.type);
         if (fast) {
             emit_store_hl_direct_at(s, off, type);
             return;
         }
         emit_store_de_to_addr_hl(type);
     } else if (type_is_float(type)) {
-        if (!type_is_float(g_expr_type))
-            emit_convert_int_to_float(g_expr_type);
+        if (!type_is_float(g_expr.type))
+            emit_convert_int_to_float(g_expr.type);
         if (fast) {
             emit_store_hl_direct_at(s, off, type);
             return;
         }
         emit_store_de_to_addr_hl(type);
     } else {
-        if (type_is_float(g_expr_type))
+        if (type_is_float(g_expr.type))
             emit_convert_float_to_intlike(type);
-        else if (type_size(type) > 1 && !type_is_long(g_expr_type))
-            emit_promote_byte_to_int(g_expr_type);
+        else if (type_size(type) > 1 && !type_is_long(g_expr.type))
+            emit_promote_byte_to_int(g_expr.type);
         if (fast) {
             emit_store_hl_direct_at(s, off, type);
             return;
@@ -1558,19 +1558,19 @@ void gen_local_decl_after_type(int base)
                 }
                 ast_emit_init_expr();
                 if (type_is_long(type)) {
-                    if (type_is_float(g_expr_type))
+                    if (type_is_float(g_expr.type))
                         emit_convert_float_to_intlike(type);
-                    else if (!type_is_long(g_expr_type))
-                        emit_extend_to_long_typed(g_expr_type);
+                    else if (!type_is_long(g_expr.type))
+                        emit_extend_to_long_typed(g_expr.type);
                     if (fast)
                         emit_store_hl_to_sym_direct(s);
                     else
                         emit_store_de_to_addr_hl(type);
                 } else {
-                    if (type_is_float(g_expr_type))
+                    if (type_is_float(g_expr.type))
                         emit_convert_float_to_intlike(type);
-                    else if (type_size(type) > 1 && !type_is_long(g_expr_type))
-                        emit_promote_byte_to_int(g_expr_type);
+                    else if (type_size(type) > 1 && !type_is_long(g_expr.type))
+                        emit_promote_byte_to_int(g_expr.type);
                     if (fast) {
                         emit_store_hl_to_sym_direct(s);
                     } else {
@@ -1612,8 +1612,8 @@ void gen_local_decl_after_type(int base)
                         emit("\tpush hl\n");
                     }
                     ast_emit_init_expr();
-                    if (!type_is_float(g_expr_type))
-                        emit_convert_int_to_float(g_expr_type);
+                    if (!type_is_float(g_expr.type))
+                        emit_convert_int_to_float(g_expr.type);
                     if (fast)
                         emit_store_hl_to_sym_direct(s);
                     else
@@ -1641,20 +1641,20 @@ void gen_local_decl_after_type(int base)
                 if (type_is_long(type)) {
                     /* For long locals, emit_store_de_to_addr_hl pops the
                      * address itself via "pop de", so don't consume it here. */
-                    if (type_is_float(g_expr_type))
+                    if (type_is_float(g_expr.type))
                         emit_convert_float_to_intlike(type);
-                    else if (!type_is_long(g_expr_type))
-                        emit_extend_to_long_typed(g_expr_type);
+                    else if (!type_is_long(g_expr.type))
+                        emit_extend_to_long_typed(g_expr.type);
                     if (fast) {
                         emit_store_hl_to_sym_direct(s);
                     } else {
                         emit_store_de_to_addr_hl(type);
                     }
                 } else {
-                    if (type_is_float(g_expr_type))
+                    if (type_is_float(g_expr.type))
                         emit_convert_float_to_intlike(type);
-                    else if (type_size(type) > 1 && !type_is_long(g_expr_type))
-                        emit_promote_byte_to_int(g_expr_type);
+                    else if (type_size(type) > 1 && !type_is_long(g_expr.type))
+                        emit_promote_byte_to_int(g_expr.type);
                     if (fast) {
                         emit_store_hl_to_sym_direct(s);
                     } else {

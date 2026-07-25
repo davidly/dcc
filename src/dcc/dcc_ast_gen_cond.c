@@ -91,7 +91,7 @@ void gen_return_ast(const struct AstNode *n)
              * straight through as f's destination - the callee writes the
              * result in place, so no temp or copy is needed here. */
             gen_struct_return_call_assign_ast(NULL, n->a);
-            g_expr_type = current_return_type;
+            g_expr.type = current_return_type;
         } else {
             int src_type;
             gen_struct_addr_expr_ast(n->a, &src_type);
@@ -99,7 +99,7 @@ void gen_return_ast(const struct AstNode *n)
             emit("\tex de,hl\n");
             emit("\tld l,(ix+4)\n\tld h,(ix+5)\n");
             emit_copy_de_to_hl_bytes(type_size(current_return_type));
-            g_expr_type = current_return_type;
+            g_expr.type = current_return_type;
         }
     } else if (n->a != NULL && type_size(current_return_type) == 1) {
         if (n->a->kind == AST_IDENT) {
@@ -111,10 +111,10 @@ void gen_return_ast(const struct AstNode *n)
                 emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
             if (type_is_bool(current_return_type) && rs->storage == SC_PARAM)
                 emit_bool_normalize_hl(current_return_type);
-            g_expr_type = current_return_type;
+            g_expr.type = current_return_type;
         } else if (n->a->kind == AST_INT_LIT) {
             fprintf(outf, "\tld hl,%ld\n", n->a->ival & 255);
-            g_expr_type = current_return_type;
+            g_expr.type = current_return_type;
         } else {
             ast_gen_expr(n->a);
         }
@@ -134,23 +134,23 @@ void gen_return_ast(const struct AstNode *n)
         if (type_is_bool(current_return_type)) {
             /* Only non-bool sources need normalising; a bool value is 0/1. */
             if (!ast_expr_yields_bool01(n->a))
-                emit_bool_normalize_hl(g_expr_type);
-            g_expr_type = current_return_type;
-        } else if (type_is_float(current_return_type) && !type_is_float(g_expr_type)) {
-            emit_convert_int_to_float(g_expr_type);
-            g_expr_type = current_return_type;
-        } else if (!type_is_float(current_return_type) && type_is_float(g_expr_type)) {
+                emit_bool_normalize_hl(g_expr.type);
+            g_expr.type = current_return_type;
+        } else if (type_is_float(current_return_type) && !type_is_float(g_expr.type)) {
+            emit_convert_int_to_float(g_expr.type);
+            g_expr.type = current_return_type;
+        } else if (!type_is_float(current_return_type) && type_is_float(g_expr.type)) {
             emit_convert_float_to_intlike(current_return_type);
-            g_expr_type = current_return_type;
-        } else if (type_size(current_return_type) == 1 && !type_is_long(g_expr_type)) {
+            g_expr.type = current_return_type;
+        } else if (type_size(current_return_type) == 1 && !type_is_long(g_expr.type)) {
             if (current_return_type & TYPE_UNSIGNED)
                 emit("\tld h,0\n");
             else
                 emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-            g_expr_type = current_return_type;
-        } else if (type_is_long(current_return_type) && !type_is_long(g_expr_type)) {
-            emit_promote_int_to_long(g_expr_type, current_return_type);
-            g_expr_type = current_return_type;
+            g_expr.type = current_return_type;
+        } else if (type_is_long(current_return_type) && !type_is_long(g_expr.type)) {
+            emit_promote_int_to_long(g_expr.type, current_return_type);
+            g_expr.type = current_return_type;
         }
     }
     /*
@@ -1136,7 +1136,7 @@ void ast_emit_local_self_add_stmt(const struct AstNode *e)
     }
     fprintf(outf, "\tld (ix%+d),l\n", lhs_sym->offset);
     fprintf(outf, "\tld (ix%+d),h\n", lhs_sym->offset + 1);
-    g_expr_type = lhs_sym->type;
+    g_expr.type = lhs_sym->type;
 }
 
 /* For a dead-result top-level ++/-- statement on a bare identifier, return the
@@ -1691,10 +1691,10 @@ void ast_gen_cmp_branch(const struct AstNode *n, int label,
 
     ptr_cmp = ast_operand_is_ptr_ident(n->a) || ast_operand_is_ptr_ident(n->b);
     ast_gen_expr(n->a);
-    lhs_type = g_expr_type;
+    lhs_type = g_expr.type;
     emit("\tpush hl\n");
     ast_gen_expr(n->b);
-    rhs_type = g_expr_type;
+    rhs_type = g_expr.type;
     common_type = common_arith_type(lhs_type, rhs_type);
     emit("\tex de,hl\n\tpop hl\n");
     if ((common_type & TYPE_UNSIGNED) || ptr_cmp) {
@@ -1945,8 +1945,8 @@ void ast_gen_abs_idiom_value(const struct AstNode *x)
     emit_jp_label("jp z,", lpos);
     emit("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n");
     emit_label(lpos);
-    g_expr_type = TYPE_INT;
-    g_long_from16 = 0;
+    g_expr.type = TYPE_INT;
+    g_expr.long_from16 = 0;
 }
 
 /* Is `n` an ==/!= comparison whose left operand is a directly-fetchable
@@ -2216,12 +2216,12 @@ void ast_gen_float_cmp_branch(const struct AstNode *n, int label,
                                      int branch_when_true)
 {
     ast_gen_expr(n->a);
-    if (!type_is_float(g_expr_type))
-        emit_convert_int_to_float(g_expr_type);
+    if (!type_is_float(g_expr.type))
+        emit_convert_int_to_float(g_expr.type);
     emit("\tpush de\n\tpush hl\n");
     ast_gen_expr(n->b);
-    if (!type_is_float(g_expr_type))
-        emit_convert_int_to_float(g_expr_type);
+    if (!type_is_float(g_expr.type))
+        emit_convert_int_to_float(g_expr.type);
     /* n->b is still live in DE:HL right here - see the fastcall call
      * site in gen_binary_ast for why this skips a second push. */
     emit_float_compare_call(n->op);
@@ -2387,7 +2387,7 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
         return;
     }
     ast_gen_expr(n);
-    emit_test_expr_nonzero(g_expr_type, label, branch_when_true);
+    emit_test_expr_nonzero(g_expr.type, label, branch_when_true);
 }
 
 

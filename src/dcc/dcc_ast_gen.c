@@ -1962,8 +1962,8 @@ void gen_va_arg_deref_ast(const struct AstNode *n, int val_type)
     emit_store_de_to_addr_hl(ap->type);
     emit("\tld h,b\n\tld l,c\n"); /* HL = old ap */
     emit_load_from_hl(val_type);
-    g_expr_type = val_type;
-    g_long_from16 = 0;
+    g_expr.type = val_type;
+    g_expr.long_from16 = 0;
 }
 
 int ast_long_va_arg_self_assign_supported(const struct AstNode *n,
@@ -2015,8 +2015,8 @@ void gen_long_va_arg_self_assign_ast(const struct AstNode *n)
     expr_result_dead = saved_dead;
     gen_binop32_typed('+', s->type);
     emit_store_hl_to_sym_direct(s);
-    g_expr_type = s->type;
-    g_long_from16 = 0;
+    g_expr.type = s->type;
+    g_expr.long_from16 = 0;
 }
 
 int ast_deref_pointer_word_read(const struct AstNode *n)

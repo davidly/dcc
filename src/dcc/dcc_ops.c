@@ -85,7 +85,7 @@ void emit_extend_to_long_typed(int source_type)
     emit_promote_byte_to_int(source_type);
     if ((source_type & TYPE_UNSIGNED) || type_ptr_depth(source_type)) {
         emit("\tld de,0\n");
-        g_long_from16 = 2; /* zero-extended: low word is an unsigned 16-bit value */
+        g_expr.long_from16 = 2; /* zero-extended: low word is an unsigned 16-bit value */
     } else {
         /* Sign-extend signed 16-bit HL into DE:HL.  This is also correct
          * when the target type is unsigned long: C converts the negative
@@ -95,7 +95,7 @@ void emit_extend_to_long_typed(int source_type)
         emit("\tsbc a,a\n");
         emit("\tld d,a\n");
         emit("\tld e,a\n");
-        g_long_from16 = 1; /* sign-extended: low word is a signed 16-bit value */
+        g_expr.long_from16 = 1; /* sign-extended: low word is a signed 16-bit value */
     }
 }
 
@@ -161,7 +161,7 @@ void gen_binop32(int op, int lhs_type)
         emit("\tpop bc\n\tpop bc\n"); /* balance stack */
         break;
     }
-    g_long_from16 = 0;
+    g_expr.long_from16 = 0;
 }
 
 /*
@@ -698,7 +698,7 @@ int emit_shift_const_long(int op, int lhs_type, long count)
     is_unsigned = (lhs_type & TYPE_UNSIGNED) != 0;
 
     if (count <= 0) {
-        g_long_from16 = 0;
+        g_expr.long_from16 = 0;
         return 1;
     }
 
@@ -707,7 +707,7 @@ int emit_shift_const_long(int op, int lhs_type, long count)
             emit("\tld hl,0\n\tld de,0\n");
         else
             emit("\tld a,d\n\trla\n\tsbc a,a\n\tld h,a\n\tld l,a\n\tld d,a\n\tld e,a\n");
-        g_long_from16 = 0;
+        g_expr.long_from16 = 0;
         return 1;
     }
 
@@ -769,7 +769,7 @@ int emit_shift_const_long(int op, int lhs_type, long count)
         }
     }
 
-    g_long_from16 = 0;
+    g_expr.long_from16 = 0;
     return 1;
 }
 
@@ -804,7 +804,7 @@ void emit_shift_loop(int op, int lhs_type)
     emit_jp_label("jp", ltop);
     emit_label(ldone);
     if (type_is_long(lhs_type))
-        g_long_from16 = 0;
+        g_expr.long_from16 = 0;
 }
 
 /* log2 of a power-of-two value in the full unsigned 32-bit long range;
@@ -892,7 +892,7 @@ void emit_float_compare_call(int op)
     emit_runtime_call(helper);
     for (k = 0; k < 2; ++k)
         emit("\tpop bc\n");
-    g_expr_type = TYPE_INT;
+    g_expr.type = TYPE_INT;
 }
 
 

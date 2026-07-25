@@ -281,6 +281,24 @@ typedef struct FrameState {
     int param_offset;
 } FrameState;
 
+/*
+ * Description of the value the most recently generated expression left in
+ * registers, grouped so the related result-state travels together:
+ *   type          - the expression's result type (g_expr_type)
+ *   long_from16   - the DE:HL long was just widened from 16-bit: 0 no,
+ *                   1 signed, 2 unsigned (g_long_from16)
+ *   decay_stride  - stride override when a multi-dim array decays to a
+ *                   pointer; 0 = use the type default (g_array_decay_stride)
+ *   no_deref      - suppress the next '*' load, a phantom deref for a
+ *                   multi-dim array row pointer (g_expr_no_deref)
+ */
+typedef struct ExprState {
+    int type;
+    int long_from16;
+    int decay_stride;
+    int no_deref;
+} ExprState;
+
 struct AstNode;
 
 struct Sym {
@@ -689,12 +707,9 @@ extern int decl_is_volatile;   /* current declaration used volatile qualifier */
 extern int decl_pointee_is_volatile;
 extern int decl_is_register;   /* current decl used 'register' keyword */
 extern int expr_result_dead;
-extern int g_expr_type;
+extern ExprState g_expr;
 extern int g_tok_long_suffix; /* set by lexer when L/l suffix seen on integer literal */
 extern int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int literal */
-extern int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
-extern int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
-extern int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
 extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum */
 
 /* Pending #asm block output buffered to avoid duplicate emission from posi save/restore */

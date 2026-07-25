@@ -1106,7 +1106,7 @@ void gen_post_update_symbol_addr_value(struct Sym *s, int op)
         }
         emit_store_hl_to_sym_direct(s);  /* store new pointer value */
         emit("\tpop hl\n");               /* HL = old pointer, used as lvalue address */
-        g_expr_type = t;
+        g_expr.type = t;
         return;
     }
 
@@ -1130,7 +1130,7 @@ void gen_post_update_symbol_addr_value(struct Sym *s, int op)
     emit("\tex (sp),hl\n");         /* HL = pointer variable address, stack = old pointer */
     emit_store_de_to_addr_hl(t);    /* store new pointer */
     emit("\tpop hl\n");             /* HL = old pointer, used as lvalue address */
-    g_expr_type = t;
+    g_expr.type = t;
 }
 
 
@@ -1176,7 +1176,7 @@ void gen_post_update_from_addr(int type, int op)
         emit("\tld (hl),d\n");           /* store new_high[1] */
         emit("\tpop hl\n");              /* HL = low16_old  (return value low) */
         emit("\tpop de\n");              /* DE = high16_old (return value high) */
-        g_expr_type = type;
+        g_expr.type = type;
         return;
     }
 
@@ -1190,7 +1190,7 @@ void gen_post_update_from_addr(int type, int op)
         current_field_bit_width = bf_width;
         current_field_bit_shift = bf_shift;
         current_field_bit_mask = bf_mask;
-        g_expr_type = type;
+        g_expr.type = type;
         emit_extract_bitfield();
         if (!expr_result_dead)
             emit("\tpush hl\n");
@@ -1206,8 +1206,8 @@ void gen_post_update_from_addr(int type, int op)
         emit_store_bitfield_de_to_addr_hl(0);
         if (!expr_result_dead)
             emit("\tpop hl\n");
-        g_expr_type = type;
-        g_long_from16 = 0;
+        g_expr.type = type;
+        g_expr.long_from16 = 0;
         return;
     }
 
@@ -1226,7 +1226,7 @@ void gen_post_update_from_addr(int type, int op)
     emit("\tex (sp),hl\n");          /* HL = addr, stack = old */
     emit_store_de_to_addr_hl(type);
     emit("\tpop hl\n");              /* expression result = old */
-    g_expr_type = type;
+    g_expr.type = type;
 }
 
 
@@ -1275,14 +1275,14 @@ void emit_convert_int_to_float(int actual_type)
             emit_runtime_call("__fulf");
         else
             emit_runtime_call("__flf");
-        g_expr_type = TYPE_FLOAT;
+        g_expr.type = TYPE_FLOAT;
         return;
     }
     if ((actual_type & TYPE_UNSIGNED) || type_ptr_depth(actual_type))
         emit_runtime_call("__fuf");
     else
         emit_runtime_call("__fif");
-    g_expr_type = TYPE_FLOAT;
+    g_expr.type = TYPE_FLOAT;
 }
 
 void emit_convert_float_to_intlike(int target_type)
@@ -1292,7 +1292,7 @@ void emit_convert_float_to_intlike(int target_type)
             emit_runtime_call("__fful");
         else
             emit_runtime_call("__ffl");
-        g_expr_type = target_type;
+        g_expr.type = target_type;
         return;
     }
 
@@ -1308,7 +1308,7 @@ void emit_convert_float_to_intlike(int target_type)
             emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
     }
 
-    g_expr_type = target_type;
+    g_expr.type = target_type;
 }
 
 int expected_arg_type(struct Sym *fn, int arg_index, int *ptype)
@@ -1367,7 +1367,7 @@ void emit_extract_bitfield(void)
     if (current_field_bit_width <= 0)
         return;
 
-    out_type = (g_expr_type & TYPE_UNSIGNED) ? (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
+    out_type = (g_expr.type & TYPE_UNSIGNED) ? (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
 
     for (i = 0; i < current_field_bit_shift; ++i)
         emit("\tsrl h\n\trr l\n");
@@ -1396,7 +1396,7 @@ void emit_extract_bitfield(void)
         emit_label(lab);
     }
 
-    g_expr_type = out_type;
+    g_expr.type = out_type;
 }
 
 void emit_store_bitfield_from_hl(void)
@@ -1447,7 +1447,7 @@ void emit_store_bitfield_de_to_addr_hl(int keep_result)
      * result can be read back from the stored field.  Returning the raw
      * pre-store value would skip the field's width truncation / sign
      * extension, e.g. `x = (s.bf3 += 5)` must yield the stored 3-bit value,
-     * not the untruncated sum.  g_expr_type must hold the field type at entry
+     * not the untruncated sum.  g_expr.type must hold the field type at entry
      * so emit_extract_bitfield sign- vs zero-extends correctly. */
     if (keep_result)
         emit("\tpush hl\n");
@@ -1582,7 +1582,7 @@ void emit_pre_incdec_lvalue(int type, int op)
             current_field_bit_width = bf_width;
             current_field_bit_shift = bf_shift;
             current_field_bit_mask = bf_mask;
-            g_expr_type = type;
+            g_expr.type = type;
             emit_extract_bitfield();
         }
         emit_incdec_value_in_dehl(type, op);
@@ -1592,7 +1592,7 @@ void emit_pre_incdec_lvalue(int type, int op)
             current_field_bit_width = bf_width;
             current_field_bit_shift = bf_shift;
             current_field_bit_mask = bf_mask;
-            g_expr_type = type;   /* field type -> correct extract signedness */
+            g_expr.type = type;   /* field type -> correct extract signedness */
             emit_store_bitfield_de_to_addr_hl(1);
         } else {
             emit("\tpop hl\n");
@@ -1600,6 +1600,6 @@ void emit_pre_incdec_lvalue(int type, int op)
             emit("\tex de,hl\n");
         }
     }
-    g_expr_type = type;
+    g_expr.type = type;
 }
 

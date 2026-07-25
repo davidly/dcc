@@ -778,7 +778,7 @@ void emit_const_value(struct ConstVal v)
     } else {
         fprintf(outf, "\tld hl,%lu\n", v.u & 0xffffUL);
     }
-    g_expr_type = v.type;
+    g_expr.type = v.type;
 }
 
 

@@ -1234,7 +1234,7 @@ int try_emit_post_update_sym_direct(struct Sym *s, int op)
 
     emit_store_hl_to_sym_direct(s);    /* store new value */
     emit("\tpop hl\n");               /* return old value */
-    g_expr_type = s->type;
+    g_expr.type = s->type;
     return 1;
 }
 
