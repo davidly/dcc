@@ -119,29 +119,48 @@ struct State {
     int verbose;
     int tp, tend;
 };
-static struct State *G;
+/* A plain static instance, not a heap-allocated struct behind a runtime
+ * pointer variable: every field macro below expands straight to Gst.field,
+ * a compile-time-constant address, so the codegen it produces addresses
+ * each field directly instead of first loading a pointer value out of
+ * memory and adding the field offset. Profiling e.cob against the earlier
+ * `struct State *G` + xcalloc showed that reload (`ld hl,(G)` before every
+ * single field touch, e.g. twice per bytecode instruction just for the
+ * stopped/jumped check in exec_range) was a real, broad cost across the
+ * whole interpreter, not just the VM loop.
+ *
+ * Deliberately NOT routed through an intermediate `#define G (&Gst)` (the
+ * field macros used to expand to G->field): that shape - a self-referential
+ * macro like `#define stopped G->stopped` whose body names a second, separate
+ * macro (G) - drives dcc's preprocessor into unbounded token growth and OOMs
+ * the host compiler. Confirmed with a 1-field minimal repro
+ * (struct S{int a;}; static struct S Gst; #define G (&Gst); #define a G->a;
+ * a=1;) - not specific to this file's size. Expanding every field macro
+ * directly to Gst.field (no G indirection at all) sidesteps it entirely
+ * while producing the same direct-addressed codegen. */
+static struct State Gst;
 
-#define var G->var
-#define para G->para
-#define stmt G->stmt
-#define tc G->tc
-#define strs G->strs
-#define code G->code
-#define pf G->pf
-#define nv G->nv
-#define np G->np
-#define ns G->ns
-#define ntc G->ntc
-#define nstr G->nstr
-#define cp G->cp
-#define npf G->npf
-#define code_limit G->code_limit
-#define stopped G->stopped
-#define jumped G->jumped
-#define jtarget G->jtarget
-#define idxtmp G->idxtmp
-#define tp G->tp
-#define tend G->tend
+#define var Gst.var
+#define para Gst.para
+#define stmt Gst.stmt
+#define tc Gst.tc
+#define strs Gst.strs
+#define code Gst.code
+#define pf Gst.pf
+#define nv Gst.nv
+#define np Gst.np
+#define ns Gst.ns
+#define ntc Gst.ntc
+#define nstr Gst.nstr
+#define cp Gst.cp
+#define npf Gst.npf
+#define code_limit Gst.code_limit
+#define stopped Gst.stopped
+#define jumped Gst.jumped
+#define jtarget Gst.jtarget
+#define idxtmp Gst.idxtmp
+#define tp Gst.tp
+#define tend Gst.tend
 
 static void die(const char *s);
 
@@ -779,6 +798,19 @@ static inline void check_idx(int vi, int ix)
     if (ix < 0 || ix > var[vi].len + 1) die("bad subscript");
 }
 
+/* run_bc's only caller is exec_range's OP_PERFORM/PM_VARYING case, evaluating
+ * a compiled PERFORM ... UNTIL condition block (compile_perform's
+ * until_start bytecode: compile_condition() followed by a single OP_RETVAL -
+ * see its comment). compile_condition can only ever emit the expression/
+ * comparison/logic opcodes below, so this switch is intentionally missing
+ * every statement-level opcode (stores, DISPLAY, GOTO, PERFORM, STOP,
+ * OP_JMP/OP_JZ, OP_STMT_END/OP_EXIT_STMT) even though exec_range's switch
+ * handles all of them - this used to be a full second copy of that switch,
+ * which duplicated ~100 bytes of dead cases into the compiled binary for
+ * every one of them (measured: enough to push ttt.cob/sieve.cob's nopeep
+ * build past its heap budget, since it doesn't reduce the source program's
+ * own bytecode/token needs, just the room left over for them). Trimmed to
+ * exactly what compile_condition can produce. */
 static int run_bc(struct Ins *start)
 {
     struct Ins *in;
@@ -787,8 +819,6 @@ static int run_bc(struct Ins *start)
     in = start;
     for (;;) {
         switch (in->op) {
-        case OP_STMT_END:
-            return 0;
         case OP_RETVAL:
             a = vpop();
             return a;
@@ -802,45 +832,6 @@ static int run_bc(struct Ins *start)
             a = vpop();
             check_idx(in->a, a);
             vpush(var_get(in->a, a));
-            break;
-        case OP_STORE_S:
-            a = vpop();
-            var_set(in->a, 0, a);
-            break;
-        case OP_STORE_IDX:
-            a = vpop();
-            b = vpop();
-            check_idx(in->a, a);
-            var_set(in->a, a, b);
-            break;
-        case OP_SAVE_IDX:
-            a = vpop();
-            idxtmp = a;
-            break;
-        case OP_STORE_IDXT:
-            b = vpop();
-            check_idx(in->a, idxtmp);
-            var_set(in->a, idxtmp, b);
-            break;
-        case OP_ADD_TO_S:
-            a = vpop();
-            var_set(in->a, 0, var_get(in->a, 0) + a);
-            break;
-        case OP_ADD_TO_IDX:
-            a = vpop();
-            b = vpop();
-            check_idx(in->a, a);
-            var_set(in->a, a, var_get(in->a, a) + b);
-            break;
-        case OP_SUB_FROM_S:
-            a = vpop();
-            var_set(in->a, 0, var_get(in->a, 0) - a);
-            break;
-        case OP_SUB_FROM_IDX:
-            a = vpop();
-            b = vpop();
-            check_idx(in->a, a);
-            var_set(in->a, a, var_get(in->a, a) - b);
             break;
         case OP_NEG:
             a = vpop();
@@ -880,75 +871,185 @@ static int run_bc(struct Ins *start)
         case OP_OR:
             b = vpop(); a = vpop(); vpush(a || b);
             break;
-        case OP_JMP:
-            in = &code[in->a];
-            continue;
-        case OP_JZ:
-            a = vpop();
-            if (!a) { in = &code[in->a]; continue; }
-            break;
-        case OP_STOP:
-            stopped = 1;
-            break;
-        case OP_EXIT_STMT:
-            return 0;
-        case OP_GOTO:
-            jtarget = stmt_for_para_i(in->a);
-            jumped = 1;
-            break;
-        case OP_DISPLAY_STR:
-            printf("%s", strs[in->a]);
-            break;
-        case OP_DISPLAY_VAL:
-            printf("%d", vpop());
-            break;
-        case OP_DISPLAY_SPACE:
-            printf(" ");
-            break;
-        case OP_DISPLAY_NL:
-            printf("\n");
-            break;
-        case OP_PERFORM: {
-            struct Perform *P;
-            P = &pf[in->a];
-            if (P->mode == PM_VARYING) {
-                int byv, fromv;
-                byv = vpop();
-                fromv = vpop();
-                var_set(P->vname, 0, fromv);
-                while (!stopped) {
-                    if (run_bc(&code[P->until_start])) break;
-                    exec_range(para[P->p].first, para[P->q].last);
-                    jumped = 0;
-                    var_set(P->vname, 0, var_get(P->vname, 0) + byv);
-                }
-            } else {
-                int lim;
-                for (lim = 0; lim < P->times && !stopped; lim++) {
-                    exec_range(para[P->p].first, para[P->q].last);
-                    jumped = 0;
-                }
-            }
-            break;
-        }
         default:
             die("bad opcode");
         }
-        if (stopped || jumped)
-            return 0;
         in++;
     }
 }
 
+/* Statement-range dispatch, inlined rather than calling run_bc() once per
+ * statement. The original shape (exec_range's pc loop calling run_bc() as a
+ * separate function for every statement) meant a full Z80 CALL/RET plus
+ * frame setup for every COBOL sentence - measured at 140,802 run_bc() calls
+ * against just 196 exec_range() calls for e.cob, each call typically doing
+ * only 1-4 bytecode ops of actual work before returning. Folding the
+ * instruction dispatch directly into this function's statement loop (same
+ * case bodies as run_bc, verified identical) keeps every statement inside
+ * ITER-ROUTINE/INNER-LOOP-style GOTO loops in one continuous walk with no
+ * function-call boundary between sentences. run_bc() itself is untouched
+ * and still used for the separate, non-statement PERFORM ... VARYING UNTIL
+ * condition block (P->until_start), which needs a real return value. */
 static void exec_range(int start, int end)
 {
-    int pc;
+    int pc, a, b;
+    struct Ins *in;
+
     pc = start;
     while (pc <= end && !stopped) {
         jumped = 0;
-
-        run_bc(&code[stmt[pc].bc]);
-
+        in = &code[stmt[pc].bc];
+        for (;;) {
+            switch (in->op) {
+            case OP_STMT_END:
+                goto next_stmt;
+            case OP_EXIT_STMT:
+                goto next_stmt;
+            case OP_PUSH:
+                vpush(in->a);
+                break;
+            case OP_PUSHVAR_S:
+                vpush(var_get(in->a, 0));
+                break;
+            case OP_PUSHVAR_IDX:
+                a = vpop();
+                check_idx(in->a, a);
+                vpush(var_get(in->a, a));
+                break;
+            case OP_STORE_S:
+                a = vpop();
+                var_set(in->a, 0, a);
+                break;
+            case OP_STORE_IDX:
+                a = vpop();
+                b = vpop();
+                check_idx(in->a, a);
+                var_set(in->a, a, b);
+                break;
+            case OP_SAVE_IDX:
+                a = vpop();
+                idxtmp = a;
+                break;
+            case OP_STORE_IDXT:
+                b = vpop();
+                check_idx(in->a, idxtmp);
+                var_set(in->a, idxtmp, b);
+                break;
+            case OP_ADD_TO_S:
+                a = vpop();
+                var_set(in->a, 0, var_get(in->a, 0) + a);
+                break;
+            case OP_ADD_TO_IDX:
+                a = vpop();
+                b = vpop();
+                check_idx(in->a, a);
+                var_set(in->a, a, var_get(in->a, a) + b);
+                break;
+            case OP_SUB_FROM_S:
+                a = vpop();
+                var_set(in->a, 0, var_get(in->a, 0) - a);
+                break;
+            case OP_SUB_FROM_IDX:
+                a = vpop();
+                b = vpop();
+                check_idx(in->a, a);
+                var_set(in->a, a, var_get(in->a, a) - b);
+                break;
+            case OP_NEG:
+                a = vpop();
+                vpush(-a);
+                break;
+            case OP_ADD:
+                b = vpop(); a = vpop(); vpush(a + b);
+                break;
+            case OP_SUB:
+                b = vpop(); a = vpop(); vpush(a - b);
+                break;
+            case OP_MUL:
+                b = vpop(); a = vpop(); vpush(a * b);
+                break;
+            case OP_DIV:
+                b = vpop(); a = vpop(); vpush(b ? a / b : 0);
+                break;
+            case OP_MOD:
+                b = vpop(); a = vpop(); vpush(b ? a % b : 0);
+                break;
+            case OP_EQ:
+                b = vpop(); a = vpop(); vpush(a == b);
+                break;
+            case OP_LT:
+                b = vpop(); a = vpop(); vpush(a < b);
+                break;
+            case OP_GT:
+                b = vpop(); a = vpop(); vpush(a > b);
+                break;
+            case OP_NOT:
+                a = vpop();
+                vpush(!a);
+                break;
+            case OP_AND:
+                b = vpop(); a = vpop(); vpush(a && b);
+                break;
+            case OP_OR:
+                b = vpop(); a = vpop(); vpush(a || b);
+                break;
+            case OP_JMP:
+                in = &code[in->a];
+                continue;
+            case OP_JZ:
+                a = vpop();
+                if (!a) { in = &code[in->a]; continue; }
+                break;
+            case OP_STOP:
+                stopped = 1;
+                break;
+            case OP_GOTO:
+                jtarget = stmt_for_para_i(in->a);
+                jumped = 1;
+                break;
+            case OP_DISPLAY_STR:
+                printf("%s", strs[in->a]);
+                break;
+            case OP_DISPLAY_VAL:
+                printf("%d", vpop());
+                break;
+            case OP_DISPLAY_SPACE:
+                printf(" ");
+                break;
+            case OP_DISPLAY_NL:
+                printf("\n");
+                break;
+            case OP_PERFORM: {
+                struct Perform *P;
+                P = &pf[in->a];
+                if (P->mode == PM_VARYING) {
+                    int byv, fromv;
+                    byv = vpop();
+                    fromv = vpop();
+                    var_set(P->vname, 0, fromv);
+                    while (!stopped) {
+                        if (run_bc(&code[P->until_start])) break;
+                        exec_range(para[P->p].first, para[P->q].last);
+                        jumped = 0;
+                        var_set(P->vname, 0, var_get(P->vname, 0) + byv);
+                    }
+                } else {
+                    int lim;
+                    for (lim = 0; lim < P->times && !stopped; lim++) {
+                        exec_range(para[P->p].first, para[P->q].last);
+                        jumped = 0;
+                    }
+                }
+                break;
+            }
+            default:
+                die("bad opcode");
+            }
+            if (stopped || jumped)
+                goto next_stmt;
+            in++;
+        }
+    next_stmt:
         if (jumped) pc = jtarget;
         else pc++;
         if (pc < start || pc > end) break;
@@ -1028,12 +1129,12 @@ static int load_file(const char *name)
     if (!f) { perror(name); return 0; }
     fseek(f, 0L, 2); n = ftell(f); fseek(f, 0L, 0);
     if (n < 0 || n > MAXSRC) { fclose(f); fprintf(stderr, "source too large\n"); return 0; }
-    G->src = (char *)malloc((unsigned int)n + 1);
-    if (!G->src) { fclose(f); return 0; }
-    got = (long)fread(G->src, 1, (unsigned int)n, f); fclose(f);
+    Gst.src = (char *)malloc((unsigned int)n + 1);
+    if (!Gst.src) { fclose(f); return 0; }
+    got = (long)fread(Gst.src, 1, (unsigned int)n, f); fclose(f);
     if (got != n) return 0;
-    while (n > 0 && (unsigned char)G->src[n - 1] == 0x1a) n--;
-    G->src[n] = 0; G->slen = n; return 1;
+    while (n > 0 && (unsigned char)Gst.src[n - 1] == 0x1a) n--;
+    Gst.src[n] = 0; Gst.slen = n; return 1;
 }
 
 static void parse_source(void)
@@ -1042,7 +1143,7 @@ static void parse_source(void)
     char *p;
     int indata, inproc, curp, i, j;
     indata = 0; inproc = 0; curp = -1; sent[0] = 0;
-    p = G->src;
+    p = Gst.src;
     while (*p) {
         i = 0;
         while (*p && *p != '\n' && i < MAXLINE - 1) line[i++] = *p++;
@@ -1096,7 +1197,7 @@ static void decode_stmts(void)
 static void print_stats(void)
 {
     int i, bytes;
-    if (!G->verbose) return;
+    if (!Gst.verbose) return;
     bytes = 0;
     for (i = 0; i < nv; i++) bytes += (var[i].len + 1) * var[i].esize;
     fprintf(stderr, "\nCOBINT usage summary\n");
@@ -1113,7 +1214,6 @@ static void print_stats(void)
 int main(int argc, char **argv)
 {
     int argi, mainp;
-    G = (struct State *)xcalloc(1, sizeof(struct State));
     var = (struct Var *)xcalloc(MAXVAR, sizeof(struct Var));
     para = (struct Para *)xcalloc(MAXPARA, sizeof(struct Para));
     stmt = (struct Stmt *)xcalloc(MAXSTMT, sizeof(struct Stmt));
@@ -1122,18 +1222,18 @@ int main(int argc, char **argv)
     pf = (struct Perform *)xcalloc(MAXPERFORM, sizeof(struct Perform));
     argi = 1;
     if (argi < argc && (!strcmp(argv[argi], "-V") || !strcmp(argv[argi], "-v"))) {
-        G->verbose = 1; argi++;
+        Gst.verbose = 1; argi++;
     }
     if (argi >= argc) { fprintf(stderr, "usage: cobint [-V] file.cob\n"); return 1; }
     if (!load_file(argv[argi])) return 1;
     parse_source();
-    /* G->src (the whole source file, up to MAXSRC bytes) is only read
+    /* Gst.src (the whole source file, up to MAXSRC bytes) is only read
      * during parse_source - decode_stmts and everything after work from
      * the already-extracted statement/paragraph tables. Freeing it here
      * matters on a big source like ttt.cob, where it's several KB of
      * heap that's otherwise held dead for the rest of the run. */
-    free(G->src);
-    G->src = NULL;
+    free(Gst.src);
+    Gst.src = NULL;
     decode_stmts();
     mainp = find_para("MAIN");
     exec_range(para[mainp].first, ns - 1);

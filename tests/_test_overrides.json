@@ -7,6 +7,7 @@
         { "suffix": "sieve", "args": "sieve.pas", "fixtures": ["SIEVE.PAS"] }
       ] },
     { "name": "cobint", "args": "e.cob", "stack_size": 1536, "fixtures": ["E.COB"],
+      "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.cob", "fixtures": ["TTT.COB"] },
         { "suffix": "sieve", "args": "sieve.cob", "fixtures": ["SIEVE.COB"] }
