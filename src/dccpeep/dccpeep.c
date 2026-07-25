@@ -899,6 +899,74 @@ static int pass_fold_hl_base_const_offset(void)
     return changed;
 }
 
+/*
+ * pass_fold_hl_label_word_deref:
+ *
+ * Reading a 16-bit value stored at a link-time-constant address often
+ * follows right after computing that address into HL (e.g. right after
+ * pass_fold_hl_base_const_offset above folds a struct field's address, or
+ * directly from dcc's own codegen for any global/static pointer- or
+ * int-sized field/variable):
+ *
+ *     ld hl,LABEL
+ *     ld e,(hl)
+ *     inc hl
+ *     ld d,(hl)
+ *     ex de,hl
+ *
+ * This computes HL = the 16-bit value stored at LABEL - exactly what the
+ * native Z80 `ld hl,(nn)` instruction does directly. Collapses five
+ * instructions into one. Never matches `ld hl,(LABEL)`: that's already an
+ * indirect load (a runtime pointer's stored value), not a link-time
+ * address, so there's nothing to fold. Flag-neutral in both directions
+ * (none of ld/16-bit inc/ex touch flags), so nothing downstream can
+ * observe a difference there; DE ends up holding whatever it held before
+ * the sequence instead of the LABEL+1 the original left there as a pure
+ * side effect of dereferencing byte-at-a-time, which no correct compiler
+ * output would intentionally depend on.
+ *
+ * Found the same way as pass_fold_hl_base_const_offset: profiling
+ * tests/cint.c's run() dispatch loop after converting its own G-> heap
+ * pointer to a static struct (test/pint.c-style "in = &code[pc++]" plus
+ * the switch dispatch's opcode fetch, hot on every VM instruction) showed
+ * this residual pattern immediately following that fold. Not confined to
+ * interpreters - a corpus sample found it elsewhere too, e.g. 118
+ * instances in tests/na.c (a text editor with heavy struct/global-array
+ * state), just less densely.
+ */
+static int pass_fold_hl_label_word_deref(void)
+{
+    int i;
+    int changed;
+    char label[128];
+    char out[160];
+
+    changed = 0;
+    for (i = 0; i + 4 < nlines; ++i) {
+        if (!parse_ld_hl_imm(lines[i], label))
+            continue;
+        if (label[0] == '(')
+            continue;
+        if (!eq(i + 1, "ld e,(hl)"))
+            continue;
+        if (!eq(i + 2, "inc hl"))
+            continue;
+        if (!eq(i + 3, "ld d,(hl)"))
+            continue;
+        if (!eq(i + 4, "ex de,hl"))
+            continue;
+
+        sprintf(out, "ld hl,(%s)", label);
+        replace1_tagged(i, out, "fold_hl_label_word_deref");
+        delete_n(i + 1, 4);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
 
 static int pass_branch_over_jump(void)
 {
@@ -9982,6 +10050,25 @@ static int peep_parse_ld_hl_paren_sym(const char *s, char *sym)
     const char *p;
     int i;
 
+    /* Never match a line pass_fold_hl_label_word_deref produced: that pass
+     * collapses a struct field's address-then-dereference into this same
+     * "ld hl,(X)" text, but X there is a field offset expression
+     * (e.g. "_Z0002+96"), not the bare global-variable symbol this
+     * function's callers assume - global_write_count_in_file and
+     * symbol_written_in_range below both do literal-text lookups against
+     * sym elsewhere in the file, which isn't a meaningful safety check for
+     * "some field of struct _Z0002 at this offset". Confirmed as a real
+     * miscompile on tests/cint.c (eu.cin produced wrong output): before
+     * this exclusion, the global-word-cache pass below started firing on
+     * these newly-folded lines - the exact mechanism of the resulting bad
+     * codegen wasn't traced further once excluding this tag was confirmed
+     * (via a before/after diff of the two passes' combined output) to be
+     * both necessary and sufficient to fix it and restore this pass's
+     * trigger set to exactly what it was before
+     * pass_fold_hl_label_word_deref existed. */
+    if (strstr(s, "fold_hl_label_word_deref"))
+        return 0;
+
     strip_peep_comment_copy(tmp, s);
     if (strncmp(tmp, "ld hl,(", 7) != 0)
         return 0;
@@ -13590,6 +13677,7 @@ int main(int argc, char **argv)
         if (pass_array_base_push_to_de()) changed = 1;
         if (pass_base_index_addr()) changed = 1;
         if (pass_fold_hl_base_const_offset()) changed = 1;
+        if (pass_fold_hl_label_word_deref()) changed = 1;
         if (pass_e_signed_le_zero()) changed = 1;
         if (pass_ix_array_word_addr()) changed = 1;
         if (pass_ix_array_byte_addr()) changed = 1;
