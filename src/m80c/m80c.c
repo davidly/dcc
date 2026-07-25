@@ -1743,10 +1743,17 @@ static void rel_module_name(char *out,const char *src) {
     for(i=0; p+i<dot && i<MAXNAME-1; i++) out[i]=(char)toupper((unsigned char)p[i]);
     out[i]=0;
 }
+typedef struct { Sym *s; int rank; int idx; } RankEntry;
+static int rankentry_cmp(const void *pa, const void *pb) {
+    const RankEntry *a = (const RankEntry *)pa;
+    const RankEntry *b = (const RankEntry *)pb;
+    if (a->rank != b->rank) return a->rank - b->rank;
+    return a->idx - b->idx;
+}
 static void write_rel(Asm *a) {
     FILE *f;
     Rel r;
-    int h,rank;
+    int h;
     Sym *s;
     if(!a->want_rel) return;
     f=fopen(a->rel,"wb");
@@ -1764,10 +1771,41 @@ static void write_rel(Asm *a) {
         else rel_module_name(mn,a->src);
         rel_special(&r,2,0,0,0,mn);
     }
-    for(rank=0;rank<9999;rank++) for(h=0;h<SYMHASH;h++) for(s=a->syms[h];s;s=s->next) if(s->is_public &&
-        rel_entry_rank(s->name)==rank) rel_special(&r,0,0,0,0,s->name);
-    for(h=0;h<SYMHASH;h++) for(s=a->syms[h];s;s=s->next) if(s->is_public && rel_entry_rank(s->name)==9999)
-        rel_special(&r,0,0,0,0,s->name);
+    /* Was: for each of 9999 possible ranks, walk the entire SYMHASH-bucket
+     * table calling rel_entry_rank(s->name) again for every public symbol,
+     * to find the ones matching that one rank value - an O(9999 * table
+     * size) scan (profiled: >75% of m80c's total runtime assembling
+     * cobint's ~21K-line output). rel_entry_rank is a pure function of
+     * s->name alone, so compute it once per symbol instead, then sort:
+     * a stable sort by rank reproduces the same output order the nested
+     * loop did (each rank's symbols in the same hash-bucket-then-chain
+     * traversal order, unranked ones - rank 9999 - trailing after all real
+     * ord[] ranks, exactly like the original's separate trailing loop).
+     * qsort isn't guaranteed stable, so the traversal-order index each
+     * symbol gets on the single collection pass below is carried as an
+     * explicit tiebreaker rather than relied on implicitly. */
+    {
+        RankEntry *rentries;
+        int rcnt, ridx;
+
+        rcnt = 0;
+        for(h=0;h<SYMHASH;h++) for(s=a->syms[h];s;s=s->next) if(s->is_public) rcnt++;
+        rentries = (RankEntry *)calloc((size_t)(rcnt?rcnt:1), sizeof(RankEntry));
+        if(!rentries) {
+            fprintf(stderr,"oom\n");
+            exit(2);
+        }
+        ridx = 0;
+        for(h=0;h<SYMHASH;h++) for(s=a->syms[h];s;s=s->next) if(s->is_public) {
+            rentries[ridx].s = s;
+            rentries[ridx].rank = rel_entry_rank(s->name);
+            rentries[ridx].idx = ridx;
+            ridx++;
+        }
+        qsort(rentries,(size_t)rcnt,sizeof(RankEntry),rankentry_cmp);
+        for(ridx=0;ridx<rcnt;ridx++) rel_special(&r,0,0,0,0,rentries[ridx].s->name);
+        free(rentries);
+    }
     rel_special(&r,10,1,T_ABS,a->data.n,NULL);
     rel_special(&r,13,1,T_CODE,a->code.n,NULL);
     rel_special(&r,11,1,T_CODE,0,NULL);
