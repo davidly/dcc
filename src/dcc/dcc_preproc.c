@@ -1473,6 +1473,36 @@ void reset_preproc_scan_state(void)
     nmacro_push_stack = 0;
 }
 
+/* disabled_macro_start/end (see above) are absolute positions into `src`,
+ * recorded when some earlier, still-in-progress expansion spliced its
+ * replacement text in. Every later splice - including one nested inside
+ * that earlier replacement, e.g. `G` expanding inside `#define words
+ * G->words`'s own "G->words" output - shifts everything at or after its
+ * start point, which silently invalidates any disabled range recorded
+ * before it: the range's end no longer lines up with the text it was meant
+ * to cover, so a rescan can walk right back onto the protected macro name
+ * and expand it again, unbounded (reproduced with a 1-field minimal case:
+ * struct S{int a;}; static struct S Gst; #define G (&Gst); #define a G->a;
+ * a=1; - OOMs the compiler). Shift every recorded range by this splice's
+ * length delta before applying it: ranges entirely at/after the splice
+ * move by the full delta, and a range the splice point falls inside grows
+ * or shrinks by delta at its end (its start can't be after the splice
+ * point - ranges are always recorded for text already scanned, so a new
+ * splice can only ever start at or after a standing range's start). */
+static void shift_disabled_ranges(long start, long end, long delta)
+{
+    int i;
+
+    for (i = 0; i < ndisabled_macro_ranges; i++) {
+        if (disabled_macro_start[i] >= end) {
+            disabled_macro_start[i] += delta;
+            disabled_macro_end[i] += delta;
+        } else if (disabled_macro_end[i] > start) {
+            disabled_macro_end[i] += delta;
+        }
+    }
+}
+
 void replace_source_range(long start, long end, const char *text)
 {
     long n;
@@ -1484,6 +1514,7 @@ void replace_source_range(long start, long end, const char *text)
     if (end > src_len) end = src_len;
 
     n = (long)strlen(text);
+    shift_disabled_ranges(start, end, n - (end - start));
     rest = src_len - end;
     nsrc = (char *)xmalloc((size_t)(start + n + rest + 1));
     memcpy(nsrc, src, (size_t)start);
