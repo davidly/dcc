@@ -181,7 +181,7 @@ void ast_gen_switch_stmt(const struct AstNode *n)
     } else {
         emit("\tex de,hl\n");
         for (i = 0; i < ncase; ++i) {
-            fprintf(outf, "\tld hl,%ld\n", (long)(case_vals[i] & 0xffff));
+            fprintf(g_emit_sink.stream, "\tld hl,%ld\n", (long)(case_vals[i] & 0xffff));
             emit("\tor a\n\tsbc hl,de\n");
             emit_jp_label("jp z,", case_labs[i]);
         }
@@ -191,7 +191,7 @@ void ast_gen_switch_stmt(const struct AstNode *n)
     enter_scope();
     break_stack[nflow] = lend;
     cont_stack[nflow] = (nflow > 0) ? cont_stack[nflow - 1] : lend;
-    flow_scope_depth[nflow] = g_scope_depth;
+    flow_scope_depth[nflow] = g_func_pass.scope_depth;
     nflow++;
 
     if (ast_sw_depth < AST_MAX_SW_NEST) {
@@ -437,7 +437,7 @@ static struct AstNode *ast_hoist_row_invariant_2d_reads(const struct AstNode *rh
             row_addr->a = (struct AstNode *)outer;
             row_addr->b = zero_lit;
 
-            sprintf(tmp_name, "#licm%d", g_licm_seq++);
+            sprintf(tmp_name, "#licm%d", g_func_pass.licm_seq++);
             addr_tmp = add_local_alloc(tmp_name, type_add_ptr(elem_val_type), 2);
             gen_index_addr_ast(row_addr, &addr_val_type);  /* HL = &ARR[row][0], computed once */
             emit_store_hl_to_sym_direct(addr_tmp);
@@ -482,12 +482,12 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
     int hoist_val_type;
     struct AstNode *hoist_body;
 
-    for_seq = g_for_seq++;
+    for_seq = g_func_pass.for_seq++;
     if (for_seq >= MAX_FOR_SCOPES)
         fatal("too many for statements");
     /* g_for_rename_count[] is indexed by for_seq, which is reused across
      * functions and across the (up to three) passes over one function's
-     * body (frame-sizing scan x2, then the real pass) - g_for_seq itself
+     * body (frame-sizing scan x2, then the real pass) - g_func_pass.for_seq itself
      * resets to 0 for each pass, but this array does not reset on its own.
      * dcc_func.c's old hand-written frame-sizing scanner used to zero this
      * slot unconditionally for every for-loop it walked past, decl-init or
@@ -511,25 +511,25 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
          *
          * g_for_rename_count[for_seq] used to be populated ahead of time by
          * dcc_func.c's old hand-written frame-sizing scanner, which recorded
-         * each for-init declarator's rename via g_for_decl_recording before
+         * each for-init declarator's rename via g_func_pass.for_decl_recording before
          * any AST codegen ever ran for this loop. That scanner is gone, so
-         * nothing else ever sets g_for_decl_recording=1 any more - relying
+         * nothing else ever sets g_func_pass.for_decl_recording=1 any more - relying
          * on a pre-existing count here would always see 0 (just reset above)
          * and fail every C99 for-init loop. Record fresh instead: this same
-         * call self-records via g_for_decl_recording=1, so each invocation
+         * call self-records via g_func_pass.for_decl_recording=1, so each invocation
          * (both scan-time replays and the real pass) is self-contained and
          * does not depend on a prior pass having run. */
-        int old_for_decl_seq = g_for_decl_seq;
-        int old_for_decl_rename_index = g_for_decl_rename_index;
-        int old_for_decl_recording = g_for_decl_recording;
-        g_for_decl_seq = for_seq;
-        g_for_decl_rename_index = 0;
-        g_for_decl_recording = 1;
+        int old_for_decl_seq = g_func_pass.for_decl_seq;
+        int old_for_decl_rename_index = g_func_pass.for_decl_rename_index;
+        int old_for_decl_recording = g_func_pass.for_decl_recording;
+        g_func_pass.for_decl_seq = for_seq;
+        g_func_pass.for_decl_rename_index = 0;
+        g_func_pass.for_decl_recording = 1;
         ast_emit_decl_span(n->a);
-        rename_count = g_for_decl_rename_index;
-        g_for_decl_seq = old_for_decl_seq;
-        g_for_decl_rename_index = old_for_decl_rename_index;
-        g_for_decl_recording = old_for_decl_recording;
+        rename_count = g_func_pass.for_decl_rename_index;
+        g_func_pass.for_decl_seq = old_for_decl_seq;
+        g_func_pass.for_decl_rename_index = old_for_decl_rename_index;
+        g_func_pass.for_decl_recording = old_for_decl_recording;
     } else {
         if (rename_count != 0)
             fatal("unsupported AST for-init scope");
@@ -548,8 +548,8 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
     if (n->sym != NULL) {
         long init_val, base_val, mod_val;
         ast_for_mod_fill_supported(n, NULL, &init_val, &base_val, &mod_val, NULL);
-        fprintf(outf, "\tld a,%ld\n", base_val + (init_val % mod_val));
-        fprintf(outf, "\tld (ix%+d),a\n", n->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld a,%ld\n", base_val + (init_val % mod_val));
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),a\n", n->sym->offset);
     }
 
     rotate = ast_for_first_iter_certain(n);
@@ -574,7 +574,7 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
         char tmp_name[24];
         int addr_val_type;
 
-        sprintf(tmp_name, "#licm%d", g_licm_seq++);
+        sprintf(tmp_name, "#licm%d", g_func_pass.licm_seq++);
         addr_tmp = add_local_alloc(tmp_name, type_add_ptr(hoist_val_type), 2);
 
         gen_index_addr_ast(hoist_lhs, &addr_val_type);  /* HL = the hoisted address, computed once */
@@ -619,7 +619,7 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
             char tmp_name[24];
             int i;
 
-            sprintf(tmp_name, "#gmv%d", g_licm_seq++);
+            sprintf(tmp_name, "#gmv%d", g_func_pass.licm_seq++);
             val_tmp = add_local_alloc(tmp_name, gmv_val_type, 2);
 
             gen_member_ast(gmv_member);  /* HL = BASE->FIELD's value, computed once */
@@ -714,7 +714,7 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
 
     break_stack[nflow] = lend;
     cont_stack[nflow] = linc;
-    flow_scope_depth[nflow] = g_scope_depth;
+    flow_scope_depth[nflow] = g_func_pass.scope_depth;
     nflow++;
     if (n->sym != NULL) {
         /* Cyclic-byte-fill fast path (see ast_for_mod_fill_supported): the
@@ -730,15 +730,15 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
 
         ast_for_mod_fill_supported(n, NULL, NULL, &base_val, &mod_val, NULL);
         gen_index_addr_ast(n->d->a->a, &val_type);   /* HL = &ARR[ivar] */
-        fprintf(outf, "\tld a,(ix%+d)\n", n->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", n->sym->offset);
         emit("\tld (hl),a\n");
         emit("\tinc a\n");
-        fprintf(outf, "\tcp %ld\n", base_val + mod_val);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", base_val + mod_val);
         lwrap = new_label();
         emit_jp_label("jr nz,", lwrap);
-        fprintf(outf, "\tld a,%ld\n", base_val);
+        fprintf(g_emit_sink.stream, "\tld a,%ld\n", base_val);
         emit_label(lwrap);
-        fprintf(outf, "\tld (ix%+d),a\n", n->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),a\n", n->sym->offset);
     } else if (hoist_body != NULL) {
         ast_gen_stmt(hoist_body);
     } else {
@@ -810,7 +810,7 @@ static void ast_gen_while_stmt_impl(const struct AstNode *n)
     }
     break_stack[nflow] = lend;
     cont_stack[nflow] = ltop;
-    flow_scope_depth[nflow] = g_scope_depth;
+    flow_scope_depth[nflow] = g_func_pass.scope_depth;
     nflow++;
     ast_gen_stmt(n->b);
     nflow--;
@@ -852,7 +852,7 @@ static void ast_gen_dowhile_stmt_impl(const struct AstNode *n)
     emit_label(ltop);
     break_stack[nflow] = lend;
     cont_stack[nflow] = lcont;
-    flow_scope_depth[nflow] = g_scope_depth;
+    flow_scope_depth[nflow] = g_func_pass.scope_depth;
     nflow++;
     ast_gen_stmt(n->b);
     nflow--;
@@ -892,7 +892,7 @@ void ast_gen_dowhile_stmt(const struct AstNode *n)
  * also set, matching the existing C99 for-init declaration probe in
  * ast_gen_cond_branch: some emit-adjacent bookkeeping (e.g.
  * emit_runtime_extrn_if_needed's "already emitted" cache) is keyed on it
- * specifically, not on where outf points, and must see this replay as
+ * specifically, not on where g_emit_sink.stream points, and must see this replay as
  * suppressed or a runtime helper first used here would be marked emitted
  * while its EXTRN line went nowhere, leaving it undefined for the real
  * pass. */
@@ -901,16 +901,16 @@ static int g_ast_last_stmt_exits;
 int ast_scan_for_stmt(void)
 {
     static FILE *sink = NULL;
-    FILE *s_outf;
+    EmitSink saved_sink;
     int s_scan_mode;
     struct AstNode *n;
 
-    s_outf = outf;
+    saved_sink = g_emit_sink;
     s_scan_mode = scan_mode;
     if (sink == NULL)
         sink = fopen(DCC_NULL_DEVICE, "w");
     if (sink != NULL)
-        outf = sink;
+        saved_sink = emit_sink_push(sink, EMIT_SINK_DISCARD);
     scan_mode = 1;
 
     n = ast_build_stmt(&g_ast_arena);
@@ -922,7 +922,7 @@ int ast_scan_for_stmt(void)
 
     ast_arena_reset(&g_ast_arena);
     scan_mode = s_scan_mode;
-    outf = s_outf;
+    emit_sink_restore(&saved_sink);
     return n != NULL;
 }
 
@@ -1133,14 +1133,14 @@ void ast_emit_debug_location(const char *file, int line)
     if (!opt_debug || scan_mode || line <= 0)
         return;
 
-    fputs(";@dcc-line \"", outf);
+    fputs(";@dcc-line \"", g_emit_sink.stream);
     p = file ? file : (input_name ? input_name : "<input>");
     while (*p) {
         if (*p == '\\' || *p == '"')
-            fputc('\\', outf);
-        fputc(*p++, outf);
+            fputc('\\', g_emit_sink.stream);
+        fputc(*p++, g_emit_sink.stream);
     }
-    fprintf(outf, "\" %d\n", line);
+    fprintf(g_emit_sink.stream, "\" %d\n", line);
 }
 
 static void ast_emit_debug_line(const struct AstNode *n)
@@ -1371,9 +1371,9 @@ void ast_gen_stmt(const struct AstNode *n)
         }
         /* Reclaim this scope's VLAs on fall-through exit (unreachable when the
          * block always exits; break/continue/return reclaim on their own). */
-        if (!dead && g_scope_depth < MAX_SCOPE_DEPTH &&
-            g_vla_scope_off[g_scope_depth] != 0)
-            emit_vla_restore_sp(g_vla_scope_off[g_scope_depth]);
+        if (!dead && g_func_pass.scope_depth < MAX_SCOPE_DEPTH &&
+            g_vla_scope_off[g_func_pass.scope_depth] != 0)
+            emit_vla_restore_sp(g_vla_scope_off[g_func_pass.scope_depth]);
         if (!dead)
             ast_emit_debug_location(n->end_file, n->end_line);
         leave_scope();
@@ -1433,7 +1433,7 @@ int ast_try_emit_statement(void)
     report = getenv("DCC_AST_REPORT") != NULL;
 
     _ls = lex_save();
-    sv_for_seq = g_for_seq;
+    sv_for_seq = g_func_pass.for_seq;
 
     n = ast_build_stmt(&g_ast_arena);
 
@@ -1443,7 +1443,7 @@ int ast_try_emit_statement(void)
         ast_support_cache_begin();
 
     if (n != NULL && ast_stmt_supported(n)) {
-        g_for_seq = sv_for_seq;
+        g_func_pass.for_seq = sv_for_seq;
         if (g_ast_build_enabled == 2)
             ast_dump(n, 0);
         ast_gen_stmt(n);
@@ -1495,7 +1495,7 @@ int ast_try_emit_statement(void)
         }
     }
 
-    g_for_seq = sv_for_seq;
+    g_func_pass.for_seq = sv_for_seq;
     ast_arena_reset(&g_ast_arena);
     return 1;
 }

@@ -104,7 +104,7 @@ void gen_return_ast(const struct AstNode *n)
     } else if (n->a != NULL && type_size(current_return_type) == 1) {
         if (n->a->kind == AST_IDENT) {
             struct Sym *rs = find_sym(n->a->sval);
-            fprintf(outf, "\tld l,(ix%+d)\n", rs->offset);
+            fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", rs->offset);
             if (current_return_type & TYPE_UNSIGNED)
                 emit("\tld h,0\n");
             else
@@ -113,7 +113,7 @@ void gen_return_ast(const struct AstNode *n)
                 emit_bool_normalize_hl(current_return_type);
             g_expr.type = current_return_type;
         } else if (n->a->kind == AST_INT_LIT) {
-            fprintf(outf, "\tld hl,%ld\n", n->a->ival & 255);
+            fprintf(g_emit_sink.stream, "\tld hl,%ld\n", n->a->ival & 255);
             g_expr.type = current_return_type;
         } else {
             ast_gen_expr(n->a);
@@ -154,7 +154,7 @@ void gen_return_ast(const struct AstNode *n)
         }
     }
     /*
-     * Record where this tail jump lands in `outf` so emit_function_epilogue
+     * Record where this tail jump lands in `g_emit_sink.stream` so emit_function_epilogue
      * can elide it when this return turns out to be the function's last
      * statement (nothing else gets written before the epilogue label it
      * targets). Debug (-g) builds only: dccpeep already removes this
@@ -163,8 +163,8 @@ void gen_return_ast(const struct AstNode *n)
      * survive to the final .mac.
      */
     if (opt_debug && !scan_mode) {
-        fflush(outf);
-        g_return_jp_check_pos = ftell(outf);
+        fflush(g_emit_sink.stream);
+        g_return_jp_check_pos = ftell(g_emit_sink.stream);
         g_return_jp_check_label = current_return_label;
     } else {
         g_return_jp_check_pos = -1;
@@ -1106,10 +1106,10 @@ void ast_emit_local_self_add_stmt(const struct AstNode *e)
     struct Sym *rhs1_sym = find_sym(rhs1->sval);
     struct Sym *rhs2_sym = find_sym(rhs2->sval);
 
-    fprintf(outf, "\tld l,(ix%+d)\n", rhs1_sym->offset);
-    fprintf(outf, "\tld h,(ix%+d)\n", rhs1_sym->offset + 1);
-    fprintf(outf, "\tld e,(ix%+d)\n", rhs2_sym->offset);
-    fprintf(outf, "\tld d,(ix%+d)\n", rhs2_sym->offset + 1);
+    fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", rhs1_sym->offset);
+    fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", rhs1_sym->offset + 1);
+    fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", rhs2_sym->offset);
+    fprintf(g_emit_sink.stream, "\tld d,(ix%+d)\n", rhs2_sym->offset + 1);
     if ((rhs1_sym->type & (TYPE_PTR | TYPE_PTR2)) &&
         !(rhs2_sym->type & (TYPE_PTR | TYPE_PTR2))) {
         int elem = type_index_elem_size(rhs1_sym->type);
@@ -1129,13 +1129,13 @@ void ast_emit_local_self_add_stmt(const struct AstNode *e)
             (rhs2_sym->type & (TYPE_PTR | TYPE_PTR2))) {
             int elem = type_index_elem_size(rhs1_sym->type);
             if (elem > 1) {
-                fprintf(outf, "\tld de,%d\n", elem);
+                fprintf(g_emit_sink.stream, "\tld de,%d\n", elem);
                 emit_runtime_call("__divs");
             }
         }
     }
-    fprintf(outf, "\tld (ix%+d),l\n", lhs_sym->offset);
-    fprintf(outf, "\tld (ix%+d),h\n", lhs_sym->offset + 1);
+    fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", lhs_sym->offset);
+    fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", lhs_sym->offset + 1);
     g_expr.type = lhs_sym->type;
 }
 
@@ -1452,20 +1452,20 @@ int ast_stmt_supported(const struct AstNode *n)
          * machinery.  An expression init excludes the transform-prone constant
          * assignment shape and must have no recorded for-scope renames.
          *
-         * This gate mirrors ast_gen_for_stmt's pre-order g_for_seq numbering.
+         * This gate mirrors ast_gen_for_stmt's pre-order g_func_pass.for_seq numbering.
          * For a for-init declaration the loop variable's local slot does not
          * exist yet (codegen creates it only when the declaration is emitted),
          * so we replay the declaration with emission suppressed (scan_mode) to
          * materialise the slot and push its rename, gate the
          * condition/increment/body while they can resolve, then roll back the
-         * local table and rename stack.  g_for_seq is intentionally left at the
+         * local table and rename stack.  g_func_pass.for_seq is intentionally left at the
          * post-order cursor for sibling gates; the top-level AST statement
          * probe restores it before real emission. */
         if (n->d == NULL)
             return 0;
-        if (g_for_seq >= MAX_FOR_SCOPES)
+        if (g_func_pass.for_seq >= MAX_FOR_SCOPES)
             return 0;
-        for_seq = g_for_seq++;
+        for_seq = g_func_pass.for_seq++;
         /* g_for_rename_count[] is indexed by for_seq, reused across
          * functions and across passes; nothing resets it on its own now
          * that dcc_func.c's old hand-written frame-sizing scanner (which
@@ -1485,19 +1485,19 @@ int ast_stmt_supported(const struct AstNode *n)
         if (n->a != NULL && n->a->kind == AST_DECL) {
             int s_nlocals = g_frame.nlocals;
             int s_local_size = g_frame.local_size;
-            int s_forren_n = g_forren_n;
+            int s_forren_n = g_func_pass.forren_n;
             int s_nulabels = nulabels;
-            int s_static_seq = g_static_local_seq;
-            int s_scope_depth = g_scope_depth;
+            int s_static_seq = g_func_pass.static_local_seq;
+            int s_scope_depth = g_func_pass.scope_depth;
             int s_has_call = current_function_has_call;
-            int s_decl_seq = g_for_decl_seq;
-            int s_decl_index = g_for_decl_rename_index;
-            int s_decl_recording = g_for_decl_recording;
+            int s_decl_seq = g_func_pass.for_decl_seq;
+            int s_decl_index = g_func_pass.for_decl_rename_index;
+            int s_decl_recording = g_func_pass.for_decl_recording;
             int s_decl_nonobject = g_for_decl_saw_nonobject;
             int decl_object_count;
             int decl_saw_nonobject;
             int s_scan_mode = scan_mode;
-            FILE *s_outf = outf;
+            EmitSink saved_sink = g_emit_sink;
             static FILE *sink = NULL;
 
             ok = ast_for_decl_storage_supported(n->a);
@@ -1506,7 +1506,7 @@ int ast_stmt_supported(const struct AstNode *n)
              * emit path), and set scan_mode so nested AST build/gen and the
              * remaining guarded emits stay quiet.
              *
-             * g_for_decl_recording=1 (not 0): nothing pre-populates
+             * g_func_pass.for_decl_recording=1 (not 0): nothing pre-populates
              * g_for_rename_count[for_seq] any more (see the matching comment
              * in ast_gen_for_stmt - the hand-written frame-sizing scanner
              * that used to do that recording is gone), so this probe must
@@ -1515,24 +1515,24 @@ int ast_stmt_supported(const struct AstNode *n)
             if (sink == NULL)
                 sink = fopen(DCC_NULL_DEVICE, "w");
             if (sink != NULL)
-                outf = sink;
+                saved_sink = emit_sink_push(sink, EMIT_SINK_DISCARD);
             scan_mode = 1;
-            g_for_decl_seq = for_seq;
-            g_for_decl_rename_index = 0;
-            g_for_decl_recording = 1;
+            g_func_pass.for_decl_seq = for_seq;
+            g_func_pass.for_decl_rename_index = 0;
+            g_func_pass.for_decl_recording = 1;
             g_for_decl_saw_nonobject = 0;
             if (ok)
                 ast_emit_decl_span(n->a);
-            decl_object_count = g_for_decl_rename_index;
+            decl_object_count = g_func_pass.for_decl_rename_index;
             decl_saw_nonobject = g_for_decl_saw_nonobject;
             /* Declaration replay changes the symbols visible to the loop's
              * condition, increment and body. Discard support decisions that
              * may have been cached while the builder inspected those nodes
              * before the for-init local existed. */
             ast_support_cache_begin();
-            g_for_decl_seq = s_decl_seq;
-            g_for_decl_rename_index = s_decl_index;
-            g_for_decl_recording = s_decl_recording;
+            g_func_pass.for_decl_seq = s_decl_seq;
+            g_func_pass.for_decl_rename_index = s_decl_index;
+            g_func_pass.for_decl_recording = s_decl_recording;
             g_for_decl_saw_nonobject = s_decl_nonobject;
 
             if (ok && (decl_object_count == 0 || decl_saw_nonobject)) {
@@ -1552,14 +1552,14 @@ int ast_stmt_supported(const struct AstNode *n)
                 nflow = old_nflow;
             }
             scan_mode = s_scan_mode;
-            outf = s_outf;
+            emit_sink_restore(&saved_sink);
 
             g_frame.nlocals = s_nlocals;
             g_frame.local_size = s_local_size;
-            g_forren_n = s_forren_n;
+            g_func_pass.forren_n = s_forren_n;
             nulabels = s_nulabels;
-            g_static_local_seq = s_static_seq;
-            g_scope_depth = s_scope_depth;
+            g_func_pass.static_local_seq = s_static_seq;
+            g_func_pass.scope_depth = s_scope_depth;
             current_function_has_call = s_has_call;
             return ok;
         }
@@ -1605,7 +1605,7 @@ int ast_stmt_supported(const struct AstNode *n)
          * *later* sibling referencing a block-local name cannot resolve it at
          * gate time because codegen only creates the local when the decl is
          * emitted.  So replay each declaration with emission suppressed
-         * (scan_mode + a throwaway outf sink) to materialise its local slots
+         * (scan_mode + a throwaway g_emit_sink.stream sink) to materialise its local slots
          * and scope, gate the remaining children while they resolve, then roll
          * back every mutated codegen counter (ast_gen_stmt re-emits the decls
          * for real). */
@@ -1630,19 +1630,19 @@ int ast_stmt_supported(const struct AstNode *n)
         {
             int s_nlocals = g_frame.nlocals;
             int s_local_size = g_frame.local_size;
-            int s_scope_depth = g_scope_depth;
-            int s_forren_n = g_forren_n;
+            int s_scope_depth = g_func_pass.scope_depth;
+            int s_forren_n = g_func_pass.forren_n;
             int s_nulabels = nulabels;
-            int s_static_seq = g_static_local_seq;
+            int s_static_seq = g_func_pass.static_local_seq;
             int s_has_call = current_function_has_call;
             int s_scan_mode = scan_mode;
-            FILE *s_outf = outf;
+            EmitSink saved_sink = g_emit_sink;
             static FILE *sink = NULL;
 
             if (sink == NULL)
                 sink = fopen(DCC_NULL_DEVICE, "w");
             if (sink != NULL)
-                outf = sink;
+                saved_sink = emit_sink_push(sink, EMIT_SINK_DISCARD);
             scan_mode = 1;
             enter_scope();
             ok = 1;
@@ -1657,14 +1657,14 @@ int ast_stmt_supported(const struct AstNode *n)
             }
             leave_scope();
             scan_mode = s_scan_mode;
-            outf = s_outf;
+            emit_sink_restore(&saved_sink);
 
             g_frame.nlocals = s_nlocals;
             g_frame.local_size = s_local_size;
-            g_scope_depth = s_scope_depth;
-            g_forren_n = s_forren_n;
+            g_func_pass.scope_depth = s_scope_depth;
+            g_func_pass.forren_n = s_forren_n;
             nulabels = s_nulabels;
-            g_static_local_seq = s_static_seq;
+            g_func_pass.static_local_seq = s_static_seq;
             current_function_has_call = s_has_call;
             return ok;
         }
@@ -1773,8 +1773,8 @@ void ast_gen_direct_byte_bitand_branch(const struct AstNode *n, int label,
 
     s = find_sym(n->a->sval);
     mask = n->b->ival & 255;
-    fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
-    fprintf(outf, "\tand %ld\n", mask);
+    fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
+    fprintf(g_emit_sink.stream, "\tand %ld\n", mask);
     if (branch_when_true)
         emit_jp_label("jp nz,", label);
     else
@@ -1793,8 +1793,8 @@ void ast_gen_direct_wide_bitand_branch(const struct AstNode *n, int label,
 
     s = find_sym(n->a->sval);
     mask = n->b->ival & 255;
-    fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
-    fprintf(outf, "\tand %ld\n", mask);
+    fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
+    fprintf(g_emit_sink.stream, "\tand %ld\n", mask);
     if (branch_when_true)
         emit_jp_label("jp nz,", label);
     else
@@ -1838,8 +1838,8 @@ void ast_gen_range_check_branch(const struct AstNode *n, int label,
     if (lo >= 0 && hi <= 127 && sym_is_direct_byte_fetch(xs)) {
         emit_load_sym_byte_to_a(xs);
         if (lo != 0)
-            fprintf(outf, "\tsub %ld\n", lo);
-        fprintf(outf, "\tcp %ld\n", hi - lo + 1);
+            fprintf(g_emit_sink.stream, "\tsub %ld\n", lo);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", hi - lo + 1);
         emit_jp_label(branch_when_true ? "jp c," : "jp nc,", label);
         return;
     }
@@ -1847,8 +1847,8 @@ void ast_gen_range_check_branch(const struct AstNode *n, int label,
     ast_gen_expr(x);
 
     if ((lo & 0xffffL) != 0)
-        fprintf(outf, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", lo & 0xffffL);
-    fprintf(outf, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", (hi - lo + 1) & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", lo & 0xffffL);
+    fprintf(g_emit_sink.stream, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", (hi - lo + 1) & 0xffffL);
     emit_jp_label(branch_when_true ? "jp c," : "jp nc,", label);
 }
 
@@ -2027,9 +2027,9 @@ void ast_gen_byte_eq_branch(const struct AstNode *n, int label,
     ast_is_byte_eq_cond(n, &sa, &sb, &cval);
     emit_load_sym_byte_to_a(sa);
     if (sb == NULL) {
-        fprintf(outf, "\tcp %ld\n", cval);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", cval);
     } else if (sym_can_ix_direct(sb)) {
-        fprintf(outf, "\tcp (ix%+d)\n", sb->offset);
+        fprintf(g_emit_sink.stream, "\tcp (ix%+d)\n", sb->offset);
     } else {
         /* Neither B/C nor D/E is safe scratch here: sb's own load may be
          * register-resident (reg_alloc REG_BC/REG_E, whose live value IS
@@ -2150,9 +2150,9 @@ void ast_gen_global_char_index_eq_branch(const struct AstNode *n, int label,
     emit_global_char_index_addr(s);
     emit("\tld a,(hl)\n");
     if (other == NULL) {
-        fprintf(outf, "\tcp %ld\n", cval);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", cval);
     } else if (sym_can_ix_direct(other)) {
-        fprintf(outf, "\tcp (ix%+d)\n", other->offset);
+        fprintf(g_emit_sink.stream, "\tcp (ix%+d)\n", other->offset);
     } else {
         emit("\tpush af\n");
         emit_load_sym_byte_to_a(other);
@@ -2198,9 +2198,9 @@ void ast_gen_direct_long_const_eq_branch(const struct AstNode *n, int label,
     branch_on_zero = (n->op == TOK_EQ) ? branch_when_true : !branch_when_true;
 
     for (i = 0; i < 4; ++i) {
-        fprintf(outf, "\tld a,(ix%+d)\n", s->offset + i);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + i);
         if (kbyte[i] != 0)
-            fprintf(outf, "\txor %d\n", kbyte[i]);
+            fprintf(g_emit_sink.stream, "\txor %d\n", kbyte[i]);
         if (i > 0)
             emit("\tor c\n");
         if (i < 3)

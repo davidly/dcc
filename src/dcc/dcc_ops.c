@@ -638,17 +638,17 @@ static void emit_and_word_const(char hi_reg, char lo_reg, unsigned int word_mask
     if (word_mask == 0xffffU)
         return;
     if (word_mask == 0) {
-        fprintf(outf, "\tld %c%c,0\n", hi_reg, lo_reg);
+        fprintf(g_emit_sink.stream, "\tld %c%c,0\n", hi_reg, lo_reg);
         return;
     }
     if (hib == 0)
-        fprintf(outf, "\tld %c,0\n", hi_reg);
+        fprintf(g_emit_sink.stream, "\tld %c,0\n", hi_reg);
     else if (hib != 0xffU)
-        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
+        fprintf(g_emit_sink.stream, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
     if (lob == 0)
-        fprintf(outf, "\tld %c,0\n", lo_reg);
+        fprintf(g_emit_sink.stream, "\tld %c,0\n", lo_reg);
     else if (lob != 0xffU)
-        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
+        fprintf(g_emit_sink.stream, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
 }
 
 /* AND HL with a compile-time mask in place. Used both for the unsigned `%
@@ -682,7 +682,7 @@ void divide_hl_by_elem_size(int elem)
         return;
     }
 
-    fprintf(outf, "\tld de,%d\n", elem);
+    fprintf(g_emit_sink.stream, "\tld de,%d\n", elem);
     emit_runtime_call("__divs");
 }
 

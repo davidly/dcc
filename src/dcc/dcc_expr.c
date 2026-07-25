@@ -148,15 +148,15 @@ void emit_copy_de_to_hl_bytes(int n)
 
     lab = new_label();
     if (n <= 255) {
-        fprintf(outf, "\tld b,%d\n", n);
+        fprintf(g_emit_sink.stream, "\tld b,%d\n", n);
         emit_label(lab);
         emit("\tld a,(de)\n");
         emit("\tld (hl),a\n");
         emit("\tinc de\n");
         emit("\tinc hl\n");
-        fprintf(outf, "\tdjnz L%d\n", lab);
+        fprintf(g_emit_sink.stream, "\tdjnz L%d\n", lab);
     } else {
-        fprintf(outf, "\tld bc,%d\n", n);
+        fprintf(g_emit_sink.stream, "\tld bc,%d\n", n);
         emit_label(lab);
         emit("\tld a,(de)\n");
         emit("\tld (hl),a\n");
@@ -174,7 +174,7 @@ void emit_push_struct_arg_from_hl(int n)
     if (n <= 0)
         return;
     emit("\tex de,hl\n");          /* DE = source */
-    fprintf(outf, "\tld hl,-%d\n", n);
+    fprintf(g_emit_sink.stream, "\tld hl,-%d\n", n);
     emit("\tadd hl,sp\n");        /* HL = destination */
     emit("\tld sp,hl\n");
     emit_copy_de_to_hl_bytes(n);
@@ -185,7 +185,7 @@ void emit_load_hl_from_sp_offset(int off)
     if (off == 0) {
         emit("\tpop hl\n\tpush hl\n");
     } else {
-        fprintf(outf, "\tld hl,%d\n", off);
+        fprintf(g_emit_sink.stream, "\tld hl,%d\n", off);
         emit("\tadd hl,sp\n");
         emit("\tld e,(hl)\n");
         emit("\tinc hl\n");
@@ -339,14 +339,14 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         return 0;
 
     _ls = lex_save();
-    save_decl_is_volatile = decl_is_volatile;
-    save_decl_pointee_is_volatile = decl_pointee_is_volatile;
+    save_decl_is_volatile = g_decl.is_volatile;
+    save_decl_pointee_is_volatile = g_decl.pointee_is_volatile;
 
     next_token();
     if (!accept('*')) {
         lex_restore(&_ls);
-        decl_is_volatile = save_decl_is_volatile;
-        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+        g_decl.is_volatile = save_decl_is_volatile;
+        g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
     pointee_is_volatile = save_decl_is_volatile;
@@ -357,8 +357,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         next_token();
         if (!accept('*') || g_lex.tok.kind != TOK_ID) {
             lex_restore(&_ls);
-            decl_is_volatile = save_decl_is_volatile;
-            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+            g_decl.is_volatile = save_decl_is_volatile;
+            g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         strncpy(name, g_lex.tok.text, namesz - 1);
@@ -366,8 +366,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         next_token();
         if (!accept(')')) {
             lex_restore(&_ls);
-            decl_is_volatile = save_decl_is_volatile;
-            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+            g_decl.is_volatile = save_decl_is_volatile;
+            g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         if (accept('(')) {
@@ -380,8 +380,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         }
         if (!accept(')')) {
             lex_restore(&_ls);
-            decl_is_volatile = save_decl_is_volatile;
-            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+            g_decl.is_volatile = save_decl_is_volatile;
+            g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         if (accept('(')) {
@@ -394,15 +394,15 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         }
         type = type_add_ptr(ptype[0]);
         ptype[0] = type;
-        decl_is_volatile = object_is_volatile;
-        decl_pointee_is_volatile = pointee_is_volatile;
+        g_decl.is_volatile = object_is_volatile;
+        g_decl.pointee_is_volatile = pointee_is_volatile;
         return 1;
     }
 
     if (g_lex.tok.kind != TOK_ID) {
         lex_restore(&_ls);
-        decl_is_volatile = save_decl_is_volatile;
-        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+        g_decl.is_volatile = save_decl_is_volatile;
+        g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
@@ -434,8 +434,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
-                decl_is_volatile = save_decl_is_volatile;
-                decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+                g_decl.is_volatile = save_decl_is_volatile;
+                g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
                 return 0;
             }
             next_token(); /* consume ')' of name(...) */
@@ -445,8 +445,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
-                decl_is_volatile = save_decl_is_volatile;
-                decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+                g_decl.is_volatile = save_decl_is_volatile;
+                g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
                 return 0;
             }
             /* Skip the trailing (...) describing the pointed-to function's params */
@@ -463,8 +463,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             type = type_add_ptr(ptype[0]);
             ptype[0] = type;
             g_funcptr_is_funcret_decl = 1;
-            decl_is_volatile = object_is_volatile;
-            decl_pointee_is_volatile = pointee_is_volatile;
+            g_decl.is_volatile = object_is_volatile;
+            g_decl.pointee_is_volatile = pointee_is_volatile;
             return 1;
         }
 
@@ -473,8 +473,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
         memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
-        decl_is_volatile = save_decl_is_volatile;
-        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+        g_decl.is_volatile = save_decl_is_volatile;
+        g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
@@ -487,8 +487,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     }
 
     ptype[0] = type;
-    decl_is_volatile = object_is_volatile;
-    decl_pointee_is_volatile = pointee_is_volatile;
+    g_decl.is_volatile = object_is_volatile;
+    g_decl.pointee_is_volatile = pointee_is_volatile;
     return 1;
 }
 
@@ -985,7 +985,7 @@ void emit_init_auto_char_array_from_string(struct Sym *s, const char *str, int s
         ch = (i + 1 < n) ? ((unsigned char)str[i]) : 0;
         emit_load_sym_addr(s);
         emit_add_const_to_hl(i);
-        fprintf(outf, "\tld e,%d\n", ch);
+        fprintf(g_emit_sink.stream, "\tld e,%d\n", ch);
         emit_store_de_to_addr_hl(TYPE_CHAR);
     }
 }
@@ -1348,7 +1348,7 @@ int try_emit_push_struct_return_call_arg(const char *snippet, int want_type);
 
 void emit_call_hl_from_stack_offset(int off)
 {
-    fprintf(outf, "\tld hl,%d\n", off);
+    fprintf(g_emit_sink.stream, "\tld hl,%d\n", off);
     emit("\tadd hl,sp\n");
     emit("\tld e,(hl)\n");
     emit("\tinc hl\n");
@@ -1373,7 +1373,7 @@ void emit_extract_bitfield(void)
         emit("\tsrl h\n\trr l\n");
 
     mask = (unsigned int)((1UL << current_field_bit_width) - 1UL);
-    fprintf(outf, "\tld de,%u\n", mask & 0xffffU);
+    fprintf(g_emit_sink.stream, "\tld de,%u\n", mask & 0xffffU);
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
@@ -1386,11 +1386,11 @@ void emit_extract_bitfield(void)
         signbit = (unsigned int)(1UL << (current_field_bit_width - 1));
         extend_mask = (~mask) & 0xffffU;
 
-        fprintf(outf, "\tld de,%u\n", signbit & 0xffffU);
+        fprintf(g_emit_sink.stream, "\tld de,%u\n", signbit & 0xffffU);
         emit("\tld a,l\n\tand e\n\tld e,a\n");
         emit("\tld a,h\n\tand d\n\tor e\n");
-        fprintf(outf, "\tjp z,L%d\n", lab);
-        fprintf(outf, "\tld de,%u\n", extend_mask);
+        fprintf(g_emit_sink.stream, "\tjp z,L%d\n", lab);
+        fprintf(g_emit_sink.stream, "\tld de,%u\n", extend_mask);
         emit("\tld a,l\n\tor e\n\tld l,a\n");
         emit("\tld a,h\n\tor d\n\tld h,a\n");
         emit_label(lab);
@@ -1415,7 +1415,7 @@ void emit_store_bitfield_from_hl(void)
     emit("\tpush de\n");       /* keep raw field value */
     emit_load_from_hl(TYPE_INT); /* HL = old storage-unit word */
 
-    fprintf(outf, "\tld de,%u\n", clear_mask);
+    fprintf(g_emit_sink.stream, "\tld de,%u\n", clear_mask);
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
@@ -1423,7 +1423,7 @@ void emit_store_bitfield_from_hl(void)
     for (i = 0; i < current_field_bit_shift; ++i)
         emit("\tsla e\n\trl d\n");
 
-    fprintf(outf, "\tld bc,%u\n", mask);
+    fprintf(g_emit_sink.stream, "\tld bc,%u\n", mask);
     emit("\tld a,e\n\tand c\n\tld e,a\n");
     emit("\tld a,d\n\tand b\n\tld d,a\n");
     emit("\tld a,l\n\tor e\n\tld l,a\n");
@@ -1455,7 +1455,7 @@ void emit_store_bitfield_de_to_addr_hl(int keep_result)
     emit("\tpush de\n");
     emit_load_from_hl(TYPE_INT);
 
-    fprintf(outf, "\tld de,%u\n", clear_mask);
+    fprintf(g_emit_sink.stream, "\tld de,%u\n", clear_mask);
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
@@ -1463,7 +1463,7 @@ void emit_store_bitfield_de_to_addr_hl(int keep_result)
     for (i = 0; i < current_field_bit_shift; ++i)
         emit("\tsla e\n\trl d\n");
 
-    fprintf(outf, "\tld bc,%u\n", mask);
+    fprintf(g_emit_sink.stream, "\tld bc,%u\n", mask);
     emit("\tld a,e\n\tand c\n\tld e,a\n");
     emit("\tld a,d\n\tand b\n\tld d,a\n");
     emit("\tld a,l\n\tor e\n\tld l,a\n");

@@ -126,16 +126,16 @@ static void reset_function_codegen_state(struct Sym *s)
 {
     nulabels = 0;
     current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    g_func_pass.for_seq = 0;
+    g_func_pass.forren_n = 0;
+    g_func_pass.for_decl_seq = -1;
+    g_func_pass.for_decl_rename_index = 0;
+    g_func_pass.for_decl_recording = 0;
+    g_func_pass.scope_depth = 0;
+    g_func_pass.static_local_func_index = (int)(s - globals);
+    g_func_pass.static_local_seq = 0;
+    g_func_pass.compound_literal_seq = 0;
+    g_func_pass.licm_seq = 0;
 }
 
 /*
@@ -178,7 +178,7 @@ static void speculative_body_discard_rewind(struct Sym *s,
  * means discard it and let the caller regenerate normally with the IX frame,
  * via the exact same rewind this function performs on failure.
  *
- * Returns 1 if the no-IX version was kept and already written to outf; 0 if
+ * Returns 1 if the no-IX version was kept and already written to g_emit_sink.stream; 0 if
  * the caller must still run the normal (IX-framed) codegen path itself, with
  * every relevant piece of parser/codegen state already rewound to the body
  * start as if this function had never been called - the same state the
@@ -194,7 +194,7 @@ int try_speculative_noix_function_body(const char *name, int type,
                                                      int body_start_local_size)
 {
     FILE *scratch;
-    FILE *saved_outf_ptr;
+    EmitSink saved_sink;
     int saved_stack_check;
     int generated_stack_check;
     int implicit_zero_return;
@@ -208,9 +208,8 @@ int try_speculative_noix_function_body(const char *name, int type,
     if (scratch == NULL)
         fatal("cannot create speculative no-ix-frame temp file");
 
-    saved_outf_ptr = outf;
     saved_stack_check = opt_stack_check;
-    outf = scratch;
+    saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     opt_stack_check = s->stack_check_enabled;
     /* emit_runtime_extrn_if_needed (dcc_symbols.c) caches which runtime-
      * helper EXTRNs have already been emitted in a *persistent*,
@@ -248,7 +247,7 @@ int try_speculative_noix_function_body(const char *name, int type,
     g_inline_body_buffering--;
     generated_stack_check = opt_stack_check;
     opt_stack_check = saved_stack_check;
-    outf = saved_outf_ptr;
+    emit_sink_restore(&saved_sink);
 
     /* check_undefined_user_labels() is deliberately not called above: if
      * this attempt is about to be discarded, calling it here would both
@@ -264,7 +263,7 @@ int try_speculative_noix_function_body(const char *name, int type,
         check_undefined_user_labels();
         rewind(scratch);
         while ((c = fgetc(scratch)) != EOF)
-            fputc(c, outf);
+            fputc(c, g_emit_sink.stream);
         fclose(scratch);
         opt_stack_check = generated_stack_check;
         return 1;
@@ -1151,7 +1150,7 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
                                            int body_start_local_size)
 {
     FILE *scratch;
-    FILE *saved_outf_ptr;
+    EmitSink saved_sink;
     int saved_stack_check;
     int c;
     int errors_before;
@@ -1163,9 +1162,8 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     if (scratch == NULL)
         fatal("cannot create speculative loop-scoped-first temp file");
 
-    saved_outf_ptr = outf;
     saved_stack_check = opt_stack_check;
-    outf = scratch;
+    saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
     g_buffering_epoch++;
@@ -1181,7 +1179,7 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     asm_suppress_depth--;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
-    outf = saved_outf_ptr;
+    emit_sink_restore(&saved_sink);
 
     if (g_diag_error_count == errors_before && g_loop_regalloc_bc_claimed) {
         check_undefined_user_labels();
@@ -1190,7 +1188,7 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
         } else {
             rewind(scratch);
             while ((c = fgetc(scratch)) != EOF)
-                fputc(c, outf);
+                fputc(c, g_emit_sink.stream);
             fclose(scratch);
         }
         return 1;
@@ -1233,7 +1231,7 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
                                                        int body_start_local_size)
 {
     FILE *scratch;
-    FILE *saved_outf_ptr;
+    EmitSink saved_sink;
     int saved_stack_check;
     int c;
     int errors_before;
@@ -1242,9 +1240,8 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
     if (scratch == NULL)
         fatal("cannot create speculative bc-regalloc temp file");
 
-    saved_outf_ptr = outf;
     saved_stack_check = opt_stack_check;
-    outf = scratch;
+    saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
     g_buffering_epoch++;
@@ -1294,7 +1291,7 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
     g_e_regalloc_claim_active = 0;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
-    outf = saved_outf_ptr;
+    emit_sink_restore(&saved_sink);
 
     /* Same rationale as try_speculative_noix_function_body's identical
      * comment: skip check_undefined_user_labels() here on a path that might
@@ -1308,7 +1305,7 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
             check_undefined_user_labels();
             fclose(scratch);
             while ((c = fgetc(finalized)) != EOF)
-                fputc(c, outf);
+                fputc(c, g_emit_sink.stream);
             fclose(finalized);
             return 1;
         }

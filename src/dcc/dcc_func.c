@@ -2,9 +2,10 @@
  * dcc_func.c - function and top-level declaration parsing.
  *
  * Parameter lists (prototype and K&R old-style), function prologue/epilogue
- * and frame layout, the function-body scan, typedef declarations, and parsing
- * plus emission of file-scope objects and their initializers
- * (parse_function_or_global, parse_translation_unit).
+ * and frame layout, the function-body scan, typedef declarations, and
+ * top-level declaration dispatch (parse_function_or_global,
+ * parse_translation_unit). File-scope initializer parsing is in
+ * dcc_global_init.c.
  *
  * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
  * Source provenance: monolith src/ddc.c lines 15880-17705.
@@ -1197,7 +1198,7 @@ void emit_needed_deferred_bodies(void)
         if (s->deferred_body_needed) {
             rewind(s->deferred_body_file);
             while ((c = fgetc(s->deferred_body_file)) != EOF)
-                fputc(c, outf);
+                fputc(c, g_emit_sink.stream);
         }
         fclose(s->deferred_body_file);
         s->deferred_body_file = NULL;
@@ -1502,16 +1503,16 @@ void parse_old_style_param_declarations(void)
 
     while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '{' && starts_type()) {
         base = parse_base_type();
-        base_is_volatile = decl_is_volatile;
-        base_pointee_is_volatile = decl_pointee_is_volatile;
+        base_is_volatile = g_decl.is_volatile;
+        base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
         for (;;) {
             type = base;
-            decl_is_volatile = base_is_volatile;
-            decl_pointee_is_volatile = base_pointee_is_volatile;
+            g_decl.is_volatile = base_is_volatile;
+            g_decl.pointee_is_volatile = base_pointee_is_volatile;
             while (accept('*')) {
-                decl_pointee_is_volatile = decl_is_volatile;
-                decl_is_volatile = skip_type_qualifiers_volatile();
+                g_decl.pointee_is_volatile = g_decl.is_volatile;
+                g_decl.is_volatile = skip_type_qualifiers_volatile();
                 type = type_add_ptr(type);
             }
 
@@ -1538,8 +1539,8 @@ void parse_old_style_param_declarations(void)
             } else {
                 int pi;
                 s->type = type;
-                s->is_volatile = decl_is_volatile;
-                s->pointee_is_volatile = decl_pointee_is_volatile;
+                s->is_volatile = g_decl.is_volatile;
+                s->pointee_is_volatile = g_decl.pointee_is_volatile;
                 if (g_ptr_array_dim_count > 0) {
                     s->elem_size = g_ptr_array_elem_size;
                     s->dim_count = g_ptr_array_dim_count;
@@ -1603,8 +1604,8 @@ void parse_param_list(void)
         unnamed_id = 0;
 
         while (accept('*')) {
-            decl_pointee_is_volatile = decl_is_volatile;
-            decl_is_volatile = skip_type_qualifiers_volatile();
+            g_decl.pointee_is_volatile = g_decl.is_volatile;
+            g_decl.is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
         }
         skip_type_qualifiers();
@@ -1650,8 +1651,8 @@ void parse_param_list(void)
             add_param_alloc(name, type);
             ps = find_local(name);
             if (ps != NULL) {
-                ps->is_volatile = decl_is_volatile;
-                ps->pointee_is_volatile = decl_pointee_is_volatile;
+                ps->is_volatile = g_decl.is_volatile;
+                ps->pointee_is_volatile = g_decl.pointee_is_volatile;
             }
             copy_funcptr_prototype_to_sym(ps, direct_funcptr);
             if (ps && g_ptr_array_dim_count > 0) {
@@ -1720,10 +1721,10 @@ static int debug_types_emitted;
 static void emit_debug_dims(const int *dims, int count)
 {
     int i;
-    fputc('"', outf);
+    fputc('"', g_emit_sink.stream);
     for (i = 0; i < count; ++i)
-        fprintf(outf, "%s%d", i ? "," : "", dims[i]);
-    fputc('"', outf);
+        fprintf(g_emit_sink.stream, "%s%d", i ? "," : "", dims[i]);
+    fputc('"', g_emit_sink.stream);
 }
 
 void emit_debug_types_once(void)
@@ -1733,18 +1734,18 @@ void emit_debug_types_once(void)
         return;
     debug_types_emitted = 1;
     for (i = 0; i < nstruct_defs; ++i)
-        fprintf(outf, ";@dcc-struct %d %d %d \"%s\"\n", i + 1,
+        fprintf(g_emit_sink.stream, ";@dcc-struct %d %d %d \"%s\"\n", i + 1,
                 struct_defs[i].size, struct_defs[i].is_union,
                 struct_defs[i].name);
     for (i = 0; i < nfield_defs; ++i) {
         struct FieldDef *f = &field_defs[i];
         if (f->is_promoted)
             continue;
-        fprintf(outf, ";@dcc-field %d \"%s\" %d %d %d %d %d %d %d ",
+        fprintf(g_emit_sink.stream, ";@dcc-field %d \"%s\" %d %d %d %d %d %d %d ",
                 f->parent_struct_id, f->name, f->type, f->offset, f->size,
                 f->is_array, f->elem_size, f->bit_width, f->bit_shift);
         emit_debug_dims(f->dims, f->dim_count);
-        fputc('\n', outf);
+        fputc('\n', g_emit_sink.stream);
     }
 }
 
@@ -1754,11 +1755,11 @@ void emit_debug_global(struct Sym *s)
         s->storage == SC_EXTERN || s->name[0] == '#')
         return;
     emit_debug_types_once();
-    fprintf(outf, ";@dcc-global \"%s\" \"%s\" %d %d %d %d %d %d ",
+    fprintf(g_emit_sink.stream, ";@dcc-global \"%s\" \"%s\" %d %d %d %d %d %d ",
             asm_name_for(sym_asm_name(s)), s->name, s->type, s->size,
             s->is_array, s->is_vla, s->elem_size, s->is_funcptr);
     emit_debug_dims(s->dims, s->dim_count);
-    fputc('\n', outf);
+    fputc('\n', g_emit_sink.stream);
 }
 
 void emit_debug_variable(struct Sym *s)
@@ -1766,12 +1767,12 @@ void emit_debug_variable(struct Sym *s)
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
         s->name[0] == '#' || s->reg_alloc != REG_NONE)
         return;
-    fprintf(outf, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d ",
+    fprintf(g_emit_sink.stream, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d ",
             current_debug_function, s->name, s->type, s->storage,
             s->offset, s->size, s->is_array, s->is_vla, s->elem_size,
             s->is_funcptr);
     emit_debug_dims(s->dims, s->dim_count);
-    fputc('\n', outf);
+    fputc('\n', g_emit_sink.stream);
 }
 
 void emit_debug_variable_end(struct Sym *s)
@@ -1779,7 +1780,7 @@ void emit_debug_variable_end(struct Sym *s)
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
         s->name[0] == '#' || s->reg_alloc != REG_NONE)
         return;
-    fprintf(outf, ";@dcc-var-end \"%s\" \"%s\" %d\n",
+    fprintf(g_emit_sink.stream, ";@dcc-var-end \"%s\" \"%s\" %d\n",
             current_debug_function, s->name, s->offset);
 }
 
@@ -1800,20 +1801,20 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     current_debug_function_source_name[sizeof(current_debug_function_source_name) - 1] = 0;
 
     if (opt_debug && !scan_mode)
-        fprintf(outf, ";@dcc-func-begin \"%s\" \"%s\"\n",
+        fprintf(g_emit_sink.stream, ";@dcc-func-begin \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
 
     if (!s || !s->is_static) {
         asm_name_check_public_collision(name);
-        fprintf(outf, "\n\tpublic %s\n", aname);
+        fprintf(g_emit_sink.stream, "\n\tpublic %s\n", aname);
     } else {
         /* File-scope static functions are mangled to avoid M80/L80 short-name
          * collisions.  Emit the original C spelling beside the generated label
          * so .mac listings remain readable during debugging. */
-        fprintf(outf, "\n; static function %s\n", name);
+        fprintf(g_emit_sink.stream, "\n; static function %s\n", name);
     }
 
-    fprintf(outf, "%s:\n", aname);
+    fprintf(g_emit_sink.stream, "%s:\n", aname);
     current_omit_ix_frame = omit_ix_frame;
     if (!omit_ix_frame) {
         emit("\tpush ix\n");
@@ -1822,7 +1823,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     }
 
     if (local_bytes > 0) {
-        fprintf(outf, "\tld hl,-%d\n", local_bytes);
+        fprintf(g_emit_sink.stream, "\tld hl,-%d\n", local_bytes);
         emit("\tadd hl,sp\n");
         emit("\tld sp,hl\n");
     }
@@ -1851,13 +1852,13 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     if (!omit_ix_frame && g_bc_regalloc_sym != NULL) {
         if (g_bc_regalloc_sym->storage == SC_GLOBAL || g_bc_regalloc_sym->storage == SC_EXTERN) {
             emit_extrn_if_needed(g_bc_regalloc_sym);
-            fprintf(outf, ";@dcc-regalloc-bc-prime\n");
-            fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(g_bc_regalloc_sym)));
-            fprintf(outf, "\tld c,l\n");
-            fprintf(outf, "\tld b,h\n");
+            fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
+            fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(g_bc_regalloc_sym)));
+            fprintf(g_emit_sink.stream, "\tld c,l\n");
+            fprintf(g_emit_sink.stream, "\tld b,h\n");
         } else {
-            fprintf(outf, "\tld c,(ix%+d)\n", g_bc_regalloc_sym->offset);
-            fprintf(outf, "\tld b,(ix%+d)\n", g_bc_regalloc_sym->offset + 1);
+            fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", g_bc_regalloc_sym->offset);
+            fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", g_bc_regalloc_sym->offset + 1);
         }
     }
 
@@ -1874,9 +1875,9 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
         for (i = 0; i < g_addr_cache_array_count; ++i) {
             emit("\tpush ix\n\tpop hl\n");
             if (g_addr_cache_arrays[i].array_offset != 0)
-                fprintf(outf, "\tld de,%d\n\tadd hl,de\n", g_addr_cache_arrays[i].array_offset);
-            fprintf(outf, "\tld (ix%+d),l\n", g_addr_cache_arrays[i].cache_slot_offset);
-            fprintf(outf, "\tld (ix%+d),h\n", g_addr_cache_arrays[i].cache_slot_offset + 1);
+                fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", g_addr_cache_arrays[i].array_offset);
+            fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", g_addr_cache_arrays[i].cache_slot_offset);
+            fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", g_addr_cache_arrays[i].cache_slot_offset + 1);
         }
     }
 }
@@ -1901,7 +1902,7 @@ static int all_comment_lines(const char *buf, long n)
 }
 
 /*
- * If a "jp L<label>\n" sits at file offset jp_pos in `outf`, it is the tail
+ * If a "jp L<label>\n" sits at file offset jp_pos in `g_emit_sink.stream`, it is the tail
  * jump gen_return_ast just emitted for a `return` that turned out to be the
  * function's last statement: fall-through already reaches `label` (emitted
  * right after this call returns), so the jump is dead weight. Whatever has
@@ -1929,48 +1930,48 @@ static void elide_redundant_tail_jp(long jp_pos, int label)
     if (len >= (long)sizeof(expect))
         return;
 
-    fflush(outf);
-    end_pos = ftell(outf);
+    fflush(g_emit_sink.stream);
+    end_pos = ftell(g_emit_sink.stream);
     if (end_pos < 0 || end_pos < jp_pos + len)
         return;
     tail_len = end_pos - jp_pos - len;
     if (tail_len >= (long)sizeof(tail))
         return;
 
-    if (fseek(outf, jp_pos, SEEK_SET) != 0)
+    if (fseek(g_emit_sink.stream, jp_pos, SEEK_SET) != 0)
         return;
-    if (fread(actual, 1, (size_t)len, outf) != (size_t)len) {
-        fseek(outf, end_pos, SEEK_SET);
+    if (fread(actual, 1, (size_t)len, g_emit_sink.stream) != (size_t)len) {
+        fseek(g_emit_sink.stream, end_pos, SEEK_SET);
         return;
     }
     actual[len] = 0;
     if (strcmp(actual, expect) != 0) {
-        fseek(outf, end_pos, SEEK_SET);
+        fseek(g_emit_sink.stream, end_pos, SEEK_SET);
         return;
     }
 
     if (tail_len > 0) {
-        if (fread(tail, 1, (size_t)tail_len, outf) != (size_t)tail_len) {
-            fseek(outf, end_pos, SEEK_SET);
+        if (fread(tail, 1, (size_t)tail_len, g_emit_sink.stream) != (size_t)tail_len) {
+            fseek(g_emit_sink.stream, end_pos, SEEK_SET);
             return;
         }
         if (!all_comment_lines(tail, tail_len)) {
-            fseek(outf, end_pos, SEEK_SET);
+            fseek(g_emit_sink.stream, end_pos, SEEK_SET);
             return;
         }
     }
 
-    fflush(outf);
+    fflush(g_emit_sink.stream);
 #ifdef _WIN32
-    if (_chsize(_fileno(outf), jp_pos) != 0)
+    if (_chsize(_fileno(g_emit_sink.stream), jp_pos) != 0)
         return;
 #else
-    if (ftruncate(fileno(outf), jp_pos) != 0)
+    if (ftruncate(fileno(g_emit_sink.stream), jp_pos) != 0)
         return;
 #endif
-    fseek(outf, jp_pos, SEEK_SET);
+    fseek(g_emit_sink.stream, jp_pos, SEEK_SET);
     if (tail_len > 0)
-        fwrite(tail, 1, (size_t)tail_len, outf);
+        fwrite(tail, 1, (size_t)tail_len, g_emit_sink.stream);
 }
 
 void emit_function_epilogue(int implicit_zero_return)
@@ -1999,7 +2000,7 @@ void emit_function_epilogue(int implicit_zero_return)
     }
     emit("\tret\n");
     if (opt_debug && !scan_mode && current_debug_function[0])
-        fprintf(outf, ";@dcc-func-end \"%s\" \"%s\"\n",
+        fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
     current_debug_function[0] = 0;
     current_debug_function_source_name[0] = 0;
@@ -2383,32 +2384,32 @@ static SpecParseState spec_parse_save(void)
 {
     SpecParseState s;
     s.nulabels = nulabels;
-    s.for_seq = g_for_seq;
-    s.forren_n = g_forren_n;
-    s.for_decl_seq = g_for_decl_seq;
-    s.for_decl_rename_index = g_for_decl_rename_index;
-    s.for_decl_recording = g_for_decl_recording;
-    s.scope_depth = g_scope_depth;
-    s.compound_literal_seq = g_compound_literal_seq;
-    s.licm_seq = g_licm_seq;
-    s.decl_is_volatile = decl_is_volatile;
-    s.decl_pointee_is_volatile = decl_pointee_is_volatile;
+    s.for_seq = g_func_pass.for_seq;
+    s.forren_n = g_func_pass.forren_n;
+    s.for_decl_seq = g_func_pass.for_decl_seq;
+    s.for_decl_rename_index = g_func_pass.for_decl_rename_index;
+    s.for_decl_recording = g_func_pass.for_decl_recording;
+    s.scope_depth = g_func_pass.scope_depth;
+    s.compound_literal_seq = g_func_pass.compound_literal_seq;
+    s.licm_seq = g_func_pass.licm_seq;
+    s.decl_is_volatile = g_decl.is_volatile;
+    s.decl_pointee_is_volatile = g_decl.pointee_is_volatile;
     return s;
 }
 
 static void spec_parse_restore(const SpecParseState *s)
 {
     nulabels = s->nulabels;
-    g_for_seq = s->for_seq;
-    g_forren_n = s->forren_n;
-    g_for_decl_seq = s->for_decl_seq;
-    g_for_decl_rename_index = s->for_decl_rename_index;
-    g_for_decl_recording = s->for_decl_recording;
-    g_scope_depth = s->scope_depth;
-    g_compound_literal_seq = s->compound_literal_seq;
-    g_licm_seq = s->licm_seq;
-    decl_is_volatile = s->decl_is_volatile;
-    decl_pointee_is_volatile = s->decl_pointee_is_volatile;
+    g_func_pass.for_seq = s->for_seq;
+    g_func_pass.forren_n = s->forren_n;
+    g_func_pass.for_decl_seq = s->for_decl_seq;
+    g_func_pass.for_decl_rename_index = s->for_decl_rename_index;
+    g_func_pass.for_decl_recording = s->for_decl_recording;
+    g_func_pass.scope_depth = s->scope_depth;
+    g_func_pass.compound_literal_seq = s->compound_literal_seq;
+    g_func_pass.licm_seq = s->licm_seq;
+    g_decl.is_volatile = s->decl_is_volatile;
+    g_decl.pointee_is_volatile = s->decl_pointee_is_volatile;
 }
 
 /* Speculatively parses the rest of the enclosing block (from the current
@@ -2470,7 +2471,7 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
  * always in [0,255], so its storage can narrow to unsigned char - e.g.
  * e.c's `register int n`, which this same engine already has to bound
  * anyway as a dependency of proving `a[]` narrow-safe (n is a %-divisor).
- * is_register is captured by the caller (from decl_is_register) rather
+ * is_register is captured by the caller (from g_decl.is_register) rather
  * than read here, since nothing this function calls is expected to touch
  * that global, but relying on a value already in hand is more robust than
  * re-reading a global after a speculative parse.
@@ -2612,18 +2613,18 @@ void scan_local_decl_after_type(int base)
     char source_name[64];
     struct Sym *s;
 
-    base_is_volatile = decl_is_volatile;
-    base_pointee_is_volatile = decl_pointee_is_volatile;
+    base_is_volatile = g_decl.is_volatile;
+    base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
     for (;;) {
         type = base;
-        decl_is_volatile = base_is_volatile;
-        decl_pointee_is_volatile = base_pointee_is_volatile;
+        g_decl.is_volatile = base_is_volatile;
+        g_decl.pointee_is_volatile = base_pointee_is_volatile;
         direct_funcptr = 0;
 
         while (accept('*')) {
-            decl_pointee_is_volatile = decl_is_volatile;
-            decl_is_volatile = skip_type_qualifiers_volatile();
+            g_decl.pointee_is_volatile = g_decl.is_volatile;
+            g_decl.is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
         }
 
@@ -2646,7 +2647,7 @@ void scan_local_decl_after_type(int base)
             continue;
         }
 
-        if (g_for_decl_seq >= 0) {
+        if (g_func_pass.for_decl_seq >= 0) {
             const char *rn;
             rn = enter_for_decl_rename(name);
             strncpy(name, rn, sizeof(name) - 1);
@@ -2711,7 +2712,7 @@ void scan_local_decl_after_type(int base)
             total_elems = g_typedef_array_len;
         }
 
-        if (!decl_is_volatile &&
+        if (!g_decl.is_volatile &&
             try_narrow_local_int_array(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             /* first_stride_bytes (see parse_array_declarator_dims) was
@@ -2723,10 +2724,10 @@ void scan_local_decl_after_type(int base)
              * below fall through to type_size(type), matching the narrowed
              * type instead of silently keeping the stale, too-wide stride. */
             current_field_array_elem_size = 0;
-        } else if (!decl_is_volatile &&
-                   try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
+        } else if (!g_decl.is_volatile &&
+                   try_narrow_register_scalar(name, type, g_decl.is_register, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
-        } else if (!decl_is_volatile &&
+        } else if (!g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         }
@@ -2756,8 +2757,8 @@ void scan_local_decl_after_type(int base)
         if (!s) {
             s = add_local_alloc(name, type, bytes);
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
-            s->is_volatile = decl_is_volatile;
-            s->pointee_is_volatile = decl_pointee_is_volatile;
+            s->is_volatile = g_decl.is_volatile;
+            s->pointee_is_volatile = g_decl.pointee_is_volatile;
             freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
@@ -2837,17 +2838,17 @@ void scan_static_local_decl_after_type(int base)
     struct Sym *g;
     struct Sym *l;
 
-    base_is_volatile = decl_is_volatile;
-    base_pointee_is_volatile = decl_pointee_is_volatile;
+    base_is_volatile = g_decl.is_volatile;
+    base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
     for (;;) {
         type = base;
-        decl_is_volatile = base_is_volatile;
-        decl_pointee_is_volatile = base_pointee_is_volatile;
+        g_decl.is_volatile = base_is_volatile;
+        g_decl.pointee_is_volatile = base_pointee_is_volatile;
 
         while (accept('*')) {
-            decl_pointee_is_volatile = decl_is_volatile;
-            decl_is_volatile = skip_type_qualifiers_volatile();
+            g_decl.pointee_is_volatile = g_decl.is_volatile;
+            g_decl.is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
         }
 
@@ -2891,16 +2892,16 @@ void scan_static_local_decl_after_type(int base)
             strncpy(backing_name, l->link_name, sizeof(backing_name) - 1);
             backing_name[sizeof(backing_name) - 1] = 0;
         } else {
-            sprintf(backing_name, "__sl%d_%d", g_static_local_func_index,
-                    g_static_local_seq++);
+            sprintf(backing_name, "__sl%d_%d", g_func_pass.static_local_func_index,
+                    g_func_pass.static_local_seq++);
         }
 
         g = add_global(backing_name, type, SC_GLOBAL);
         g->is_defined = 1;
         g->needs_extrn = 0;
         g->is_static = 1;
-        g->is_volatile = decl_is_volatile;
-        g->pointee_is_volatile = decl_pointee_is_volatile;
+        g->is_volatile = g_decl.is_volatile;
+        g->pointee_is_volatile = g_decl.pointee_is_volatile;
         g->size = bytes;
         if (arrlen != 0 || g_last_array_dim_count > 0) {
             g->is_array = 1;
@@ -2912,8 +2913,8 @@ void scan_static_local_decl_after_type(int base)
 
         if (!l) {
             l = add_local_known(name, type, SC_GLOBAL, 0, bytes);
-            l->is_volatile = decl_is_volatile;
-            l->pointee_is_volatile = decl_pointee_is_volatile;
+            l->is_volatile = g_decl.is_volatile;
+            l->pointee_is_volatile = g_decl.pointee_is_volatile;
             strncpy(l->link_name, backing_name, sizeof(l->link_name) - 1);
             l->link_name[sizeof(l->link_name) - 1] = 0;
             if (arrlen != 0 || g_last_array_dim_count > 0) {
@@ -2953,14 +2954,14 @@ void scan_function_body(void)
 
     /* Restart the per-function for-loop counter so the frame-sizing scan and
      * the real codegen agree on which for-loop is which. */
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    g_func_pass.for_seq = 0;
+    g_func_pass.forren_n = 0;
+    g_func_pass.for_decl_seq = -1;
+    g_func_pass.for_decl_rename_index = 0;
+    g_func_pass.for_decl_recording = 0;
+    g_func_pass.scope_depth = 0;
+    g_func_pass.compound_literal_seq = 0;
+    g_func_pass.licm_seq = 0;
     g_vla_fwd_ngoto = 0;
 
     expect('{');
@@ -3027,11 +3028,11 @@ void scan_function_body(void)
         } else if (can_decl && starts_type()) {
             int t;
             int is_static_local;
-            decl_is_extern = 0;
-            decl_is_static = 0;
-            decl_is_inline = 0;
-            decl_is_noreturn = 0;
-            decl_is_const = 0;
+            g_decl.is_extern = 0;
+            g_decl.is_static = 0;
+            g_decl.is_inline = 0;
+            g_decl.is_noreturn = 0;
+            g_decl.is_const = 0;
             is_static_local = (g_lex.tok.kind == TOK_STATIC);
             t = parse_base_type();
             if (g_lex.tok.kind == ';') {
@@ -3081,8 +3082,8 @@ void parse_typedef_decl(void)
      *     typedef int A4[4], FN(int), (*PF)(int);
      */
     base_type = parse_base_type();
-    base_is_volatile = decl_is_volatile;
-    base_pointee_is_volatile = decl_pointee_is_volatile;
+    base_is_volatile = g_decl.is_volatile;
+    base_pointee_is_volatile = g_decl.pointee_is_volatile;
     done = 0;
 
     while (!done && g_lex.tok.kind != TOK_EOF) {
@@ -3108,8 +3109,8 @@ void parse_typedef_decl(void)
 
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             /* Parenthesized function-pointer typedef. */
-            is_volatile = decl_is_volatile;
-            pointee_is_volatile = decl_pointee_is_volatile;
+            is_volatile = g_decl.is_volatile;
+            pointee_is_volatile = g_decl.pointee_is_volatile;
         } else {
             if (g_lex.tok.kind != TOK_ID) {
                 error_here("identifier expected in typedef");
@@ -3167,8 +3168,8 @@ void parse_function_or_global(int base_type)
     int base_pointee_is_volatile;
 
     done = 0;
-    base_is_volatile = decl_is_volatile;
-    base_pointee_is_volatile = decl_pointee_is_volatile;
+    base_is_volatile = g_decl.is_volatile;
+    base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
     while (!done && g_lex.tok.kind != TOK_EOF) {
         int type;
@@ -3212,8 +3213,8 @@ void parse_function_or_global(int base_type)
 
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr_decl = 1;
-            object_is_volatile = decl_is_volatile;
-            pointee_is_volatile = decl_pointee_is_volatile;
+            object_is_volatile = g_decl.is_volatile;
+            pointee_is_volatile = g_decl.pointee_is_volatile;
         } else {
             if (g_lex.tok.kind != TOK_ID) {
                 error_here("identifier expected");
@@ -3239,10 +3240,10 @@ void parse_function_or_global(int base_type)
          * fn_t *fp have already cleared base_is_func_typedef above. */
         if (base_is_func_typedef && g_funcptr_decl_array_len == 0) {
             s = add_global(name, type, SC_FUNC);
-            s->is_inline |= decl_is_inline;
-            s->is_noreturn |= decl_is_noreturn;
+            s->is_inline |= g_decl.is_inline;
+            s->is_noreturn |= g_decl.is_noreturn;
             parse_function_return_type = type;
-            if (decl_is_static) {
+            if (g_decl.is_static) {
                 s->is_static = 1;
                 s->needs_extrn = 0;
             } else if (!s->is_defined)
@@ -3256,8 +3257,8 @@ void parse_function_or_global(int base_type)
         /* Function declarator or definition. */
         if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
             s = add_global(name, type, SC_FUNC);
-            s->is_inline |= decl_is_inline;
-            s->is_noreturn |= decl_is_noreturn;
+            s->is_inline |= g_decl.is_inline;
+            s->is_noreturn |= g_decl.is_noreturn;
             parse_function_return_type = type;
             if (g_ptr_array_dim_count > 0) {
                 int pi;
@@ -3268,7 +3269,7 @@ void parse_function_or_global(int base_type)
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
             }
-            if (decl_is_static) {
+            if (g_decl.is_static) {
                 s->is_static = 1;
                 s->needs_extrn = 0;
             }
@@ -3327,8 +3328,8 @@ void parse_function_or_global(int base_type)
 
                 current_return_type = type;
                 current_function_has_call = 0;
-                g_static_local_func_index = (int)(s - globals);
-                g_static_local_seq = 0;
+                g_func_pass.static_local_func_index = (int)(s - globals);
+                g_func_pass.static_local_seq = 0;
                 asm_suppress_depth++;
                 scan_function_body();
                 asm_suppress_depth--;
@@ -3352,8 +3353,8 @@ void parse_function_or_global(int base_type)
                  * nlocals/local_size are reset here for the same reason. */
                 nulabels = saved_nulabels;
 
-                g_static_local_func_index = (int)(s - globals);
-                g_static_local_seq = 0;
+                g_func_pass.static_local_func_index = (int)(s - globals);
+                g_func_pass.static_local_seq = 0;
                 asm_suppress_depth++;
                 scan_function_body();
                 asm_suppress_depth--;
@@ -3371,32 +3372,31 @@ void parse_function_or_global(int base_type)
                 current_return_type = type;
                 /* Restart the for-loop counter for the codegen pass so it
                  * lines up with the frame-sizing scan. */
-                g_for_seq = 0;
-                g_forren_n = 0;
-                g_for_decl_seq = -1;
-                g_for_decl_rename_index = 0;
-                g_for_decl_recording = 0;
+                g_func_pass.for_seq = 0;
+                g_func_pass.forren_n = 0;
+                g_func_pass.for_decl_seq = -1;
+                g_func_pass.for_decl_rename_index = 0;
+                g_func_pass.for_decl_recording = 0;
                 /* Codegen rebuilds the local table exactly as the frame-sizing
                  * scan did - block scopes truncate nlocals as they close - so
                  * restart from just the parameters with an empty scope stack.
                  * Both passes therefore assign identical frame offsets. */
                 g_frame.nlocals = saved_nlocals;
                 g_frame.local_size = saved_local_size;
-                g_scope_depth = 0;
-                g_static_local_func_index = (int)(s - globals);
-                g_static_local_seq = 0;
-                g_compound_literal_seq = 0;
-                g_licm_seq = 0;
+                g_func_pass.scope_depth = 0;
+                g_func_pass.static_local_func_index = (int)(s - globals);
+                g_func_pass.static_local_seq = 0;
+                g_func_pass.compound_literal_seq = 0;
+                g_func_pass.licm_seq = 0;
                 opt_stack_check = s->stack_check_enabled;
                 bc_regalloc_cand = find_bc_regalloc_candidate(saved_nlocals);
                 if (static_inline_body_can_be_buffered(s)) {
-                    FILE *saved_outf;
+                    EmitSink saved_sink;
 
                     s->deferred_body_file = tmpfile();
                     if (s->deferred_body_file == NULL)
                         fatal("cannot create deferred body temp file");
-                    saved_outf = outf;
-                    outf = s->deferred_body_file;
+                    saved_sink = emit_sink_push(s->deferred_body_file, EMIT_SINK_DEFERRED);
                     g_inline_body_buffering++;
                     g_buffering_epoch++;
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
@@ -3404,14 +3404,14 @@ void parse_function_or_global(int base_type)
                     check_undefined_user_labels();
                     emit_function_epilogue(0);
                     g_inline_body_buffering--;
-                    outf = saved_outf;
+                    emit_sink_restore(&saved_sink);
                 } else if (!opt_debug &&
                            function_qualifies_for_speculative_noix(name, current_local_bytes) &&
                            try_speculative_noix_function_body(name, type, current_local_bytes, s,
                                                                _ls.posi, _ls.tok_start_pos, _ls.line_no,
                                                                _ls.tok_line, _ls.tok,
                                                                saved_nlocals, saved_local_size)) {
-                    /* No-IX-frame body already generated and written to outf
+                    /* No-IX-frame body already generated and written to g_emit_sink.stream
                      * inside try_speculative_noix_function_body. */
                 } else if (!opt_debug &&
                            try_loop_scoped_regalloc_first(name, type, current_local_bytes, s,
@@ -3422,7 +3422,7 @@ void parse_function_or_global(int base_type)
                      * try_loop_scoped_regalloc_first's header comment for why
                      * that's given priority over find_bc_regalloc_candidate's
                      * own, cruder whole-function candidate below. Body already
-                     * generated and written to outf (or deferred). */
+                     * generated and written to g_emit_sink.stream (or deferred). */
                 } else if (!opt_debug && function_qualifies_for_speculative_regalloc(name) &&
                            try_speculative_bc_regalloc_with_e_fallback(name, type, current_local_bytes, s,
                                                                         bc_regalloc_cand,
@@ -3430,15 +3430,14 @@ void parse_function_or_global(int base_type)
                                                                         _ls.tok_line, _ls.tok,
                                                                         saved_nlocals, saved_local_size)) {
                     /* BC/E-resident body already generated and written to
-                     * outf inside try_speculative_bc_regalloc_function_body. */
+                     * g_emit_sink.stream inside try_speculative_bc_regalloc_function_body. */
                 } else if (plain_static_body_can_be_buffered(s, name)) {
-                    FILE *saved_outf;
+                    EmitSink saved_sink;
 
                     s->deferred_body_file = tmpfile();
                     if (s->deferred_body_file == NULL)
                         fatal("cannot create deferred body temp file");
-                    saved_outf = outf;
-                    outf = s->deferred_body_file;
+                    saved_sink = emit_sink_push(s->deferred_body_file, EMIT_SINK_DEFERRED);
                     g_inline_body_buffering++;
                     g_buffering_epoch++;
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
@@ -3446,7 +3445,7 @@ void parse_function_or_global(int base_type)
                     check_undefined_user_labels();
                     emit_function_epilogue(0);
                     g_inline_body_buffering--;
-                    outf = saved_outf;
+                    emit_sink_restore(&saved_sink);
                 } else {
                     emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
                     gen_compound();
@@ -3463,25 +3462,25 @@ void parse_function_or_global(int base_type)
                 if (strcmp(name, "main") == 0) {
                     int has_args = !((s->has_proto  && s->proto_nargs == 0) ||
                                      (!s->has_proto && pre_params_nlocals == 0));
-                    fprintf(outf, "\n\tpublic __mrun\n");
+                    fprintf(g_emit_sink.stream, "\n\tpublic __mrun\n");
                     if (has_args) {
-                        fprintf(outf, "\textrn __build_argv\n");
-                        fprintf(outf, "\textrn __argc\n");
-                        fprintf(outf, "\textrn argv\n");
-                        fprintf(outf, "__mrun:\n");
-                        fprintf(outf, "\tcall __build_argv\n");
-                        fprintf(outf, "\tld hl,argv\n");
-                        fprintf(outf, "\tpush hl\n");
-                        fprintf(outf, "\tld hl,(__argc)\n");
-                        fprintf(outf, "\tpush hl\n");
-                        fprintf(outf, "\tcall _main\n");
-                        fprintf(outf, "\tpop de\n");
-                        fprintf(outf, "\tpop de\n");
+                        fprintf(g_emit_sink.stream, "\textrn __build_argv\n");
+                        fprintf(g_emit_sink.stream, "\textrn __argc\n");
+                        fprintf(g_emit_sink.stream, "\textrn argv\n");
+                        fprintf(g_emit_sink.stream, "__mrun:\n");
+                        fprintf(g_emit_sink.stream, "\tcall __build_argv\n");
+                        fprintf(g_emit_sink.stream, "\tld hl,argv\n");
+                        fprintf(g_emit_sink.stream, "\tpush hl\n");
+                        fprintf(g_emit_sink.stream, "\tld hl,(__argc)\n");
+                        fprintf(g_emit_sink.stream, "\tpush hl\n");
+                        fprintf(g_emit_sink.stream, "\tcall _main\n");
+                        fprintf(g_emit_sink.stream, "\tpop de\n");
+                        fprintf(g_emit_sink.stream, "\tpop de\n");
                     } else {
-                        fprintf(outf, "__mrun:\n");
-                        fprintf(outf, "\tcall _main\n");
+                        fprintf(g_emit_sink.stream, "__mrun:\n");
+                        fprintf(g_emit_sink.stream, "\tcall _main\n");
                     }
-                    fprintf(outf, "\tret\n");
+                    fprintf(g_emit_sink.stream, "\tret\n");
                 }
 
                 lex_restore(&_le);
@@ -3494,7 +3493,7 @@ void parse_function_or_global(int base_type)
              * but the M80 EXTRN is emitted only if actually referenced and not
              * later defined in this translation unit.
              */
-            if (decl_is_static) {
+            if (g_decl.is_static) {
                 s->is_static = 1;
                 s->needs_extrn = 0;
             } else if (!s->is_defined)
@@ -3592,7 +3591,7 @@ void parse_function_or_global(int base_type)
                 total_count = 0;
             }
 
-            if (decl_is_extern) {
+            if (g_decl.is_extern) {
                 int already_declared = (find_global(name) != NULL);
                 s = add_global(name, type, SC_EXTERN);
                 s->is_volatile = object_is_volatile;
@@ -3620,7 +3619,7 @@ void parse_function_or_global(int base_type)
             s->needs_extrn = 0;
             s->is_volatile = object_is_volatile;
             s->pointee_is_volatile = pointee_is_volatile;
-            if (decl_is_static)
+            if (g_decl.is_static)
                 s->is_static = 1;
 
             if (dim_count > 0 || arrlen || total_count == 0) {
@@ -3709,11 +3708,11 @@ void parse_translation_unit(void)
             parse_typedef_decl();
         } else if (starts_type()) {
             int t;
-            decl_is_extern = 0;
-            decl_is_static = 0;
-            decl_is_inline = 0;
-            decl_is_noreturn = 0;
-            decl_is_const = 0;
+            g_decl.is_extern = 0;
+            g_decl.is_static = 0;
+            g_decl.is_inline = 0;
+            g_decl.is_noreturn = 0;
+            g_decl.is_const = 0;
             t = parse_type();
             if (g_lex.tok.kind == ';') {
                 next_token();
@@ -3722,11 +3721,11 @@ void parse_translation_unit(void)
             }
         } else if (g_lex.tok.kind == TOK_ID && is_unsupported_target_type_name(g_lex.tok.text)) {
             int t;
-            decl_is_extern = 0;
-            decl_is_static = 0;
-            decl_is_inline = 0;
-            decl_is_noreturn = 0;
-            decl_is_const = 0;
+            g_decl.is_extern = 0;
+            g_decl.is_static = 0;
+            g_decl.is_inline = 0;
+            g_decl.is_noreturn = 0;
+            g_decl.is_const = 0;
             t = parse_type();
             if (g_lex.tok.kind == ';')
                 next_token();
@@ -3734,11 +3733,11 @@ void parse_translation_unit(void)
                 parse_function_or_global(t);
         } else if (g_lex.tok.kind == TOK_ID) {
             /* C89: implicit int return type for function definition/declaration. */
-            decl_is_extern = 0;
-            decl_is_static = 0;
-            decl_is_inline = 0;
-            decl_is_noreturn = 0;
-            decl_is_const = 0;
+            g_decl.is_extern = 0;
+            g_decl.is_static = 0;
+            g_decl.is_inline = 0;
+            g_decl.is_noreturn = 0;
+            g_decl.is_const = 0;
             parse_function_or_global(TYPE_INT);
         } else {
             error_here("external declaration expected");

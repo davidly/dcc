@@ -12,6 +12,21 @@
 
 #include "dcc.h"
 
+EmitSink emit_sink_push(FILE *stream, int purpose)
+{
+    EmitSink saved;
+
+    saved = g_emit_sink;
+    g_emit_sink.stream = stream;
+    g_emit_sink.purpose = purpose;
+    return saved;
+}
+
+void emit_sink_restore(const EmitSink *saved)
+{
+    g_emit_sink = *saved;
+}
+
 void dcc_copy_str(char *dst, size_t dstsz, const char *src)
 {
     size_t i;
@@ -442,10 +457,10 @@ void flush_pending_asm(void)
      * of being written once into a doomed buffer and considered "done". */
     if (asm_suppress_depth > 0)
         return;
-    if (pending_asm_len > 0 && outf) {
-        fputs("\t; dcc user asm begin\n", outf);
-        fwrite(pending_asm_buf, 1, (size_t)pending_asm_len, outf);
-        fputs("\t; dcc user asm end\n", outf);
+    if (pending_asm_len > 0 && g_emit_sink.stream) {
+        fputs("\t; dcc user asm begin\n", g_emit_sink.stream);
+        fwrite(pending_asm_buf, 1, (size_t)pending_asm_len, g_emit_sink.stream);
+        fputs("\t; dcc user asm end\n", g_emit_sink.stream);
         pending_asm_len = 0;
     }
 }
@@ -455,7 +470,7 @@ void emit(const char *s);
 void emit_ld_de_const(long v)
 {
     if (!scan_mode)
-        fprintf(outf, "\tld de,%ld\n", v & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld de,%ld\n", v & 0xffffL);
 }
 
 void emit_add_const_to_hl(long v)
@@ -470,19 +485,19 @@ void emit_add_const_to_hl(long v)
 void emit(const char *s)
 {
     if (!scan_mode)
-        fputs(s, outf);
+        fputs(s, g_emit_sink.stream);
 }
 
 void emit_label(int n)
 {
     if (!scan_mode)
-        fprintf(outf, "L%d:\n", n);
+        fprintf(g_emit_sink.stream, "L%d:\n", n);
 }
 
 void emit_jp_label(const char *op, int n)
 {
     if (!scan_mode)
-        fprintf(outf, "\t%s L%d\n", op, n);
+        fprintf(g_emit_sink.stream, "\t%s L%d\n", op, n);
 }
 
 int is_ident_start(int c)

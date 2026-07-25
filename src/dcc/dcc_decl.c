@@ -143,7 +143,7 @@ struct Sym *try_const_fold_local(const char *store_name, const char *src_name,
     unsigned long const_value;
     struct Sym *s;
 
-    if (!decl_is_const || decl_is_volatile || has_array ||
+    if (!g_decl.is_const || g_decl.is_volatile || has_array ||
         !type_is_const_scalar_candidate(type) || g_lex.tok.kind != '=' ||
         local_name_address_taken_ahead(src_name))
         return NULL;
@@ -233,11 +233,11 @@ void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int inde
     if (type_size(elem_type) == 4) {
         unsigned long uv;
         uv = (unsigned long)v;
-        fprintf(outf, "\tld hl,%lu\n", uv & 0xffffUL);
-        fprintf(outf, "\tld de,%lu\n", (uv >> 16) & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", uv & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld de,%lu\n", (uv >> 16) & 0xffffUL);
         emit_store_de_to_addr_hl(elem_type);
     } else {
-        fprintf(outf, "\tld hl,%ld\n", v & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", v & 0xffffL);
         emit("\tex de,hl\n\tpop hl\n");
         emit_store_de_to_addr_hl(elem_type);
     }
@@ -259,12 +259,12 @@ void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
          * path below. */
         int d = s->offset + off;
         uv = (unsigned long)v;
-        fprintf(outf, "\tld (ix%+d),%lu\n", d, uv & 0xffUL);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", d, uv & 0xffUL);
         if (type_size(type) >= 2)
-            fprintf(outf, "\tld (ix%+d),%lu\n", d + 1, (uv >> 8) & 0xffUL);
+            fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", d + 1, (uv >> 8) & 0xffUL);
         if (type_size(type) == 4) {
-            fprintf(outf, "\tld (ix%+d),%lu\n", d + 2, (uv >> 16) & 0xffUL);
-            fprintf(outf, "\tld (ix%+d),%lu\n", d + 3, (uv >> 24) & 0xffUL);
+            fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", d + 2, (uv >> 16) & 0xffUL);
+            fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", d + 3, (uv >> 24) & 0xffUL);
         }
         return;
     }
@@ -275,11 +275,11 @@ void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
 
     if (type_size(type) == 4) {
         uv = (unsigned long)v;
-        fprintf(outf, "\tld hl,%lu\n", uv & 0xffffUL);
-        fprintf(outf, "\tld de,%lu\n", (uv >> 16) & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", uv & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld de,%lu\n", (uv >> 16) & 0xffffUL);
         emit_store_de_to_addr_hl(type);
     } else {
-        fprintf(outf, "\tld hl,%ld\n", v & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", v & 0xffffL);
         emit("\tex de,hl\n\tpop hl\n");
         emit_store_de_to_addr_hl(type);
     }
@@ -294,15 +294,15 @@ static void emit_store_hl_direct_at(struct Sym *s, int off, int type)
 {
     int d = s->offset + off;
     if (type_size(type) == 1) {
-        fprintf(outf, "\tld (ix%+d),l\n", d);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", d);
     } else if (type_size(type) == 4) {
-        fprintf(outf, "\tld (ix%+d),l\n", d);
-        fprintf(outf, "\tld (ix%+d),h\n", d + 1);
-        fprintf(outf, "\tld (ix%+d),e\n", d + 2);
-        fprintf(outf, "\tld (ix%+d),d\n", d + 3);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", d);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", d + 1);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),e\n", d + 2);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),d\n", d + 3);
     } else {
-        fprintf(outf, "\tld (ix%+d),l\n", d);
-        fprintf(outf, "\tld (ix%+d),h\n", d + 1);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", d);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", d + 1);
     }
 }
 
@@ -1290,7 +1290,7 @@ static void emit_vla_alloc(struct Sym *s)
     if (s->vla_size_offset != 0) {
         emit("\tpush hl\n");
         emit("\tpush ix\n\tpop hl\n");
-        fprintf(outf, "\tld de,%d\n\tadd hl,de\n", s->vla_size_offset);
+        fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", s->vla_size_offset);
         emit("\tpop de\n");
         emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
         emit("\tex de,hl\n");
@@ -1326,18 +1326,18 @@ void gen_local_decl_after_type(int base)
     int freshly_allocated;
     int narrowed_as_counter;
 
-    base_is_volatile = decl_is_volatile;
-    base_pointee_is_volatile = decl_pointee_is_volatile;
+    base_is_volatile = g_decl.is_volatile;
+    base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
     for (;;) {
         type = base;
-        decl_is_volatile = base_is_volatile;
-        decl_pointee_is_volatile = base_pointee_is_volatile;
+        g_decl.is_volatile = base_is_volatile;
+        g_decl.pointee_is_volatile = base_pointee_is_volatile;
         direct_funcptr = 0;
 
         while (accept('*')) {
-            decl_pointee_is_volatile = decl_is_volatile;
-            decl_is_volatile = skip_type_qualifiers_volatile();
+            g_decl.pointee_is_volatile = g_decl.is_volatile;
+            g_decl.is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
         }
 
@@ -1358,7 +1358,7 @@ void gen_local_decl_after_type(int base)
         source_name[sizeof(source_name) - 1] = 0;
 
         if (g_lex.tok.kind == '(') {
-            if (g_for_decl_seq >= 0 && !direct_funcptr)
+            if (g_func_pass.for_decl_seq >= 0 && !direct_funcptr)
                 g_for_decl_saw_nonobject = 1;
             skip_prototype_function_suffix();
             if (!accept(','))
@@ -1366,7 +1366,7 @@ void gen_local_decl_after_type(int base)
             continue;
         }
 
-        if (g_for_decl_seq >= 0) {
+        if (g_func_pass.for_decl_seq >= 0) {
             const char *rn;
             rn = enter_for_decl_rename(name);
             strncpy(name, rn, sizeof(name) - 1);
@@ -1448,7 +1448,7 @@ void gen_local_decl_after_type(int base)
          * frame-sizing pass - both independently re-run the same
          * speculative parse over the same source text, so they agree. */
         narrowed_as_counter = 0;
-        if (!decl_is_volatile &&
+        if (!g_decl.is_volatile &&
             try_narrow_local_int_array(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             /* See the identical comment in scan_local_decl_after_type
@@ -1457,10 +1457,10 @@ void gen_local_decl_after_type(int base)
              * here too or Sym.elem_size below keeps the stale, too-wide
              * stride even though Sym.type is now correctly narrowed. */
             current_field_array_elem_size = 0;
-        } else if (!decl_is_volatile &&
-                   try_narrow_register_scalar(name, type, decl_is_register, arrlen, total_elems)) {
+        } else if (!g_decl.is_volatile &&
+                   try_narrow_register_scalar(name, type, g_decl.is_register, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
-        } else if (!decl_is_volatile &&
+        } else if (!g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             narrowed_as_counter = 1;
@@ -1480,9 +1480,9 @@ void gen_local_decl_after_type(int base)
 
             s = add_local_alloc(name, type, bytes);
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
-            s->is_volatile = decl_is_volatile;
-            s->pointee_is_volatile = decl_pointee_is_volatile;
-            s->is_register = decl_is_register;
+            s->is_volatile = g_decl.is_volatile;
+            s->pointee_is_volatile = g_decl.pointee_is_volatile;
+            s->is_register = g_decl.is_register;
             freshly_allocated = 1;
             /* Round 2 of codegen-time register residency (see dcc_func.c's
              * find_bc_regalloc_candidate/try_speculative_bc_regalloc_
@@ -1627,15 +1627,15 @@ void gen_local_decl_after_type(int base)
                         /* Compile-time-constant float bits: write the 4
                          * immediate bytes straight to the frame slot, no
                          * register round-trip needed at all. */
-                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset, bits & 0xffUL);
-                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset + 1, (bits >> 8) & 0xffUL);
-                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset + 2, (bits >> 16) & 0xffUL);
-                        fprintf(outf, "\tld (ix%+d),%lu\n", s->offset + 3, (bits >> 24) & 0xffUL);
+                        fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", s->offset, bits & 0xffUL);
+                        fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", s->offset + 1, (bits >> 8) & 0xffUL);
+                        fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", s->offset + 2, (bits >> 16) & 0xffUL);
+                        fprintf(g_emit_sink.stream, "\tld (ix%+d),%lu\n", s->offset + 3, (bits >> 24) & 0xffUL);
                     } else {
                         emit_load_sym_addr(s);
                         emit("\tpush hl\n");
-                        fprintf(outf, "\tld hl,%lu\n", bits & 0xffffUL);
-                        fprintf(outf, "\tld de,%lu\n", (bits >> 16) & 0xffffUL);
+                        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", bits & 0xffffUL);
+                        fprintf(g_emit_sink.stream, "\tld de,%lu\n", (bits >> 16) & 0xffffUL);
                         emit_store_de_to_addr_hl(type);
                     }
                 } else {

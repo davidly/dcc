@@ -1768,9 +1768,10 @@ int main(int argc, char **argv)
     g_lex.line_no = 1;
     g_lex.tok_line = 1;
     pp_reset_asm_dedupe();
+    g_emit_sink.purpose = EMIT_SINK_FINAL;
 
     if (!strcmp(output_name, "-")) {
-        outf = stdout;
+        g_emit_sink.stream = stdout;
     } else {
         /* "w+" (not "w"): emit_function_epilogue's elide_redundant_tail_jp
          * (-g builds only) needs to seek back and read a few just-written
@@ -1778,8 +1779,8 @@ int main(int argc, char **argv)
          * away. Read-write vs. write-only otherwise behaves identically for
          * this file (still created/truncated fresh, still written
          * sequentially). */
-        outf = fopen(output_name, "w+");
-        if (!outf) fatal("cannot open output");
+        g_emit_sink.stream = fopen(output_name, "w+");
+        if (!g_emit_sink.stream) fatal("cannot open output");
     }
 
     add_typedef_name("FILE", TYPE_INT, 0);
@@ -1800,8 +1801,8 @@ int main(int argc, char **argv)
     emit_deferred_extrns();
     emit("\n\tend\n");
 
-    if (outf != stdout)
-        fclose(outf);
+    if (g_emit_sink.stream != stdout)
+        fclose(g_emit_sink.stream);
 
     if (warnings) {
         fprintf(stderr, "dcc: %d warning(s)\n", warnings);

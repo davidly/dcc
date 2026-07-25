@@ -228,45 +228,45 @@ void emit_byte_operand_to_a(struct ByteOperand *op)
         if (op->sym->reg_alloc == REG_E)
             emit("\tld a,e\n");
         else
-            fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
+            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", op->sym->offset);
     } else if (op->kind == 2) {
-        fprintf(outf, "\tld a,%ld\n", op->val & 255);
+        fprintf(g_emit_sink.stream, "\tld a,%ld\n", op->val & 255);
     } else if (op->kind == 3) {
         emit_extrn_if_needed(op->sym);
         if (op->idx_sym) {
-            fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(op->sym)));
-            fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(g_emit_sink.stream, "\tld hl,%s\n", asm_name_for(sym_asm_name(op->sym)));
+            fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", op->idx_sym->offset);
             emit("\tld d,0\n");
             emit("\tadd hl,de\n");
             emit("\tld a,(hl)\n");
         } else {
-            fprintf(outf, "\tld a,(%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
+            fprintf(g_emit_sink.stream, "\tld a,(%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
         }
     } else if (op->kind == 4) {
-        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
-        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         emit("\tld a,(hl)\n");
     } else if (op->kind == 5) {
-        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
-        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         if (op->idx_sym) {
-            fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", op->idx_sym->offset);
             if (type_size(op->idx_sym->type) == 1)
                 emit("\tld d,0\n");
             else
-                fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
+                fprintf(g_emit_sink.stream, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
             emit("\tadd hl,de\n");
         } else if (op->val != 0) {
-            fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
+            fprintf(g_emit_sink.stream, "\tld de,%ld\n", op->val & 0xffffL);
             emit("\tadd hl,de\n");
         }
         emit("\tld a,(hl)\n");
     } else if (op->kind == 6) {
-        fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", op->sym->offset);
         if (op->idx_sym)
-            fprintf(outf, "\tadd a,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(g_emit_sink.stream, "\tadd a,(ix%+d)\n", op->idx_sym->offset);
         if ((op->val & 255L) != 0)
-            fprintf(outf, "\tadd a,%ld\n", op->val & 255L);
+            fprintf(g_emit_sink.stream, "\tadd a,%ld\n", op->val & 255L);
     }
 }
 
@@ -276,56 +276,56 @@ void emit_cp_byte_operand(struct ByteOperand *op)
         if (op->sym->reg_alloc == REG_E)
             emit("\tcp e\n");
         else
-            fprintf(outf, "\tcp (ix%+d)\n", op->sym->offset);
+            fprintf(g_emit_sink.stream, "\tcp (ix%+d)\n", op->sym->offset);
     } else if (op->kind == 2) {
-        fprintf(outf, "\tcp %ld\n", op->val & 255);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", op->val & 255);
     } else if (op->kind == 3) {
         emit_extrn_if_needed(op->sym);
         if (op->idx_sym) {
             /* Like kind 4 below: the hl/de address math here never touches
              * A, so the value already loaded there (the LHS) survives
              * untouched with no save/restore needed. */
-            fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(op->sym)));
-            fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(g_emit_sink.stream, "\tld hl,%s\n", asm_name_for(sym_asm_name(op->sym)));
+            fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", op->idx_sym->offset);
             emit("\tld d,0\n");
             emit("\tadd hl,de\n");
             emit("\tcp (hl)\n");
         } else {
-            fprintf(outf, "\tcp (%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
+            fprintf(g_emit_sink.stream, "\tcp (%s+%ld)\n", asm_name_for(sym_asm_name(op->sym)), op->val & 0xffffL);
         }
     } else if (op->kind == 4) {
         /* Unlike kind 3 (which needs the hl,de address math to reach an
          * indexed global), loading the pointer's own value via ix-direct
          * addressing touches only L and H, so A (already holding the LHS
          * value) survives untouched with no save/restore needed. */
-        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
-        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         emit("\tcp (hl)\n");
     } else if (op->kind == 5) {
         /* Like kind 4: this address math (e/d/hl only) never touches A, so
          * the LHS value already loaded there survives with no save/restore
          * needed. */
-        fprintf(outf, "\tld l,(ix%+d)\n", op->sym->offset);
-        fprintf(outf, "\tld h,(ix%+d)\n", op->sym->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", op->sym->offset + 1);
         if (op->idx_sym) {
-            fprintf(outf, "\tld e,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", op->idx_sym->offset);
             if (type_size(op->idx_sym->type) == 1)
                 emit("\tld d,0\n");
             else
-                fprintf(outf, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
+                fprintf(g_emit_sink.stream, "\tld d,(ix%+d)\n", op->idx_sym->offset + 1);
             emit("\tadd hl,de\n");
         } else if (op->val != 0) {
-            fprintf(outf, "\tld de,%ld\n", op->val & 0xffffL);
+            fprintf(g_emit_sink.stream, "\tld de,%ld\n", op->val & 0xffffL);
             emit("\tadd hl,de\n");
         }
         emit("\tcp (hl)\n");
     } else if (op->kind == 6) {
         emit("\tld b,a\n");
-        fprintf(outf, "\tld a,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", op->sym->offset);
         if (op->idx_sym)
-            fprintf(outf, "\tadd a,(ix%+d)\n", op->idx_sym->offset);
+            fprintf(g_emit_sink.stream, "\tadd a,(ix%+d)\n", op->idx_sym->offset);
         if ((op->val & 255L) != 0)
-            fprintf(outf, "\tadd a,%ld\n", op->val & 255L);
+            fprintf(g_emit_sink.stream, "\tadd a,%ld\n", op->val & 255L);
         emit("\tld c,a\n\tld a,b\n\tcp c\n");
     }
 }
@@ -427,14 +427,14 @@ int emit_cmp_const_branch_for_signed_local16(struct Sym *s, int op, long c,
         if (branch_when_true) {
             /* branch to label when var >= 0 (non-negative) */
             ldone = new_label();
-            fprintf(outf, "\tld a,(ix%+d)\n", s->offset + 1);
+            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 1);
             emit("\tor a\n");
             emit_jp_label("jp m,", ldone);   /* negative: not >= 0, skip */
             emit_jp_label("jp", label);
             emit_label(ldone);
         } else {
             /* branch to label when var < 0 (negative) */
-            fprintf(outf, "\tld a,(ix%+d)\n", s->offset + 1);
+            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 1);
             emit("\tor a\n");
             emit_jp_label("jp m,", label);   /* negative: branch */
         }
@@ -446,22 +446,22 @@ int emit_cmp_const_branch_for_signed_local16(struct Sym *s, int op, long c,
 
     if (branch_when_true) {
         ldone = new_label();
-        fprintf(outf, "\tld a,(ix%+d)\n", s->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 1);
         emit("\tor a\n");
         emit_jp_label("jp m,", label);     /* negative < c */
         emit_jp_label("jp nz,", ldone);    /* positive >= 256 */
-        fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
-        fprintf(outf, "\tcp %ld\n", c & 255);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", c & 255);
         emit_jp_label("jp c,", label);
         emit_label(ldone);
     } else {
         ldone = new_label();
-        fprintf(outf, "\tld a,(ix%+d)\n", s->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 1);
         emit("\tor a\n");
         emit_jp_label("jp m,", ldone);     /* negative => true, so not false */
         emit_jp_label("jp nz,", label);    /* positive >= 256 => false */
-        fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
-        fprintf(outf, "\tcp %ld\n", c & 255);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
+        fprintf(g_emit_sink.stream, "\tcp %ld\n", c & 255);
         emit_jp_label("jp nc,", label);
         emit_label(ldone);
     }

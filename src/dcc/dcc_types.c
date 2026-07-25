@@ -436,8 +436,8 @@ void parse_struct_definition(int struct_id)
             continue;
         }
         decl_type = parse_type();
-        field_base_is_volatile = decl_is_volatile;
-        field_base_pointee_is_volatile = decl_pointee_is_volatile;
+        field_base_is_volatile = g_decl.is_volatile;
+        field_base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
         for (;;) {
             int is_funcptr_field;
@@ -445,11 +445,11 @@ void parse_struct_definition(int struct_id)
             int is_unnamed_bitfield;
             int field_index;
             ftype = decl_type;
-            decl_is_volatile = field_base_is_volatile;
-            decl_pointee_is_volatile = field_base_pointee_is_volatile;
+            g_decl.is_volatile = field_base_is_volatile;
+            g_decl.pointee_is_volatile = field_base_pointee_is_volatile;
             while (accept('*')) {
-                decl_pointee_is_volatile = decl_is_volatile;
-                decl_is_volatile = skip_type_qualifiers_volatile();
+                g_decl.pointee_is_volatile = g_decl.is_volatile;
+                g_decl.is_volatile = skip_type_qualifiers_volatile();
                 ftype = type_add_ptr(ftype);
             }
 
@@ -526,7 +526,7 @@ void parse_struct_definition(int struct_id)
                     error_here("bitfield type must be int or unsigned int");
                 field_defs[nfield_defs].type = ((ftype & TYPE_UNSIGNED) || g_parse_type_was_enum) ?
                     (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
-                field_defs[nfield_defs].is_volatile = decl_is_volatile;
+                field_defs[nfield_defs].is_volatile = g_decl.is_volatile;
                 field_defs[nfield_defs].parent_struct_id = struct_id;
                 field_defs[nfield_defs].offset = bit_unit_offset;
                 field_defs[nfield_defs].elem_type = TYPE_UNSIGNED | TYPE_INT;
@@ -552,7 +552,7 @@ void parse_struct_definition(int struct_id)
             memset(&field_defs[nfield_defs], 0, sizeof(field_defs[nfield_defs]));
             dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
             field_defs[nfield_defs].type = ftype;
-            field_defs[nfield_defs].is_volatile = decl_is_volatile;
+            field_defs[nfield_defs].is_volatile = g_decl.is_volatile;
             field_defs[nfield_defs].parent_struct_id = struct_id;
             /* union: all fields at offset 0; struct: cumulative */
             field_defs[nfield_defs].offset = sd->is_union ? 0 : sd->size;
@@ -685,12 +685,12 @@ int parse_base_type(void)
     g_typedef_proto_nargs = 0;
     g_typedef_proto_variadic = 0;
     memset(g_typedef_proto_types, 0, sizeof(g_typedef_proto_types));
-    decl_is_register = 0;
-    decl_is_const = 0;
-    decl_is_volatile = 0;
-    decl_pointee_is_volatile = 0;
-    decl_is_inline = 0;
-    decl_is_noreturn = 0;
+    g_decl.is_register = 0;
+    g_decl.is_const = 0;
+    g_decl.is_volatile = 0;
+    g_decl.pointee_is_volatile = 0;
+    g_decl.is_inline = 0;
+    g_decl.is_noreturn = 0;
     g_parse_type_was_enum = 0;
 
     /* C89 declaration specifiers are order-independent. */
@@ -699,17 +699,17 @@ int parse_base_type(void)
             if (storage_class_seen)
                 error_here("multiple storage classes in declaration");
             storage_class_seen = 1;
-            decl_is_register = 1;
+            g_decl.is_register = 1;
             next_token();
             continue;
         }
-        if (g_lex.tok.kind == TOK_CONST) { decl_is_const = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_INLINE) { decl_is_inline = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_NORETURN) { decl_is_noreturn = 1; next_token(); continue; }
+        if (g_lex.tok.kind == TOK_CONST) { g_decl.is_const = 1; next_token(); continue; }
+        if (g_lex.tok.kind == TOK_INLINE) { g_decl.is_inline = 1; next_token(); continue; }
+        if (g_lex.tok.kind == TOK_NORETURN) { g_decl.is_noreturn = 1; next_token(); continue; }
         if (g_lex.tok.kind == TOK_VOLATILE ||
             g_lex.tok.kind == TOK_AUTO) {
             if (g_lex.tok.kind == TOK_VOLATILE) {
-                decl_is_volatile = 1;
+                g_decl.is_volatile = 1;
             } else if (g_lex.tok.kind == TOK_AUTO) {
                 if (storage_class_seen)
                     error_here("multiple storage classes in declaration");
@@ -722,7 +722,7 @@ int parse_base_type(void)
             if (storage_class_seen)
                 error_here("multiple storage classes in declaration");
             storage_class_seen = 1;
-            decl_is_extern = 1;
+            g_decl.is_extern = 1;
             next_token();
             continue;
         }
@@ -730,7 +730,7 @@ int parse_base_type(void)
             if (storage_class_seen)
                 error_here("multiple storage classes in declaration");
             storage_class_seen = 1;
-            decl_is_static = 1;
+            g_decl.is_static = 1;
             next_token();
             continue;
         }
@@ -759,8 +759,8 @@ int parse_base_type(void)
             int struct_pointee_is_volatile;
             char sname[64];
             int is_union_kw;
-            struct_is_volatile = decl_is_volatile;
-            struct_pointee_is_volatile = decl_pointee_is_volatile;
+            struct_is_volatile = g_decl.is_volatile;
+            struct_pointee_is_volatile = g_decl.pointee_is_volatile;
             is_union_kw = (g_lex.tok.kind == TOK_UNION);
             next_token();
             if (g_lex.tok.kind == TOK_ID) {
@@ -778,8 +778,8 @@ int parse_base_type(void)
             if (is_union_kw) struct_defs[sid - 1].is_union = 1;
             if (g_lex.tok.kind == '{') {
                 parse_struct_definition(sid);
-                decl_is_volatile = struct_is_volatile;
-                decl_pointee_is_volatile = struct_pointee_is_volatile;
+                g_decl.is_volatile = struct_is_volatile;
+                g_decl.pointee_is_volatile = struct_pointee_is_volatile;
             }
             t = make_struct_type(sid);
             saw_any = 1;
@@ -869,8 +869,8 @@ int parse_base_type(void)
 
         if (!saw_any && g_lex.tok.kind == TOK_ID && (td = find_typedef(g_lex.tok.text)) >= 0) {
             t = typedefs[td].type;
-            decl_is_volatile |= typedefs[td].is_volatile;
-            decl_pointee_is_volatile = typedefs[td].pointee_is_volatile;
+            g_decl.is_volatile |= typedefs[td].is_volatile;
+            g_decl.pointee_is_volatile = typedefs[td].pointee_is_volatile;
             g_typedef_array_len = typedefs[td].array_len;
             g_typedef_is_func = typedefs[td].is_func;
                  g_typedef_has_proto = typedefs[td].has_proto;
@@ -904,7 +904,7 @@ int parse_base_type(void)
             t |= TYPE_UNSIGNED;
     }
     if (skip_type_qualifiers_volatile())
-        decl_is_volatile = 1;
+        g_decl.is_volatile = 1;
     return t;
 }
 
@@ -913,8 +913,8 @@ int parse_type(void)
     int t;
     t = parse_base_type();
     while (accept('*')) {
-        decl_pointee_is_volatile = decl_is_volatile;
-        decl_is_volatile = skip_type_qualifiers_volatile();
+        g_decl.pointee_is_volatile = g_decl.is_volatile;
+        g_decl.is_volatile = skip_type_qualifiers_volatile();
         t = type_add_ptr(t);
     }
     return t;

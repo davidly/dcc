@@ -1308,7 +1308,7 @@ void ast_emit_decl_span(const struct AstNode *n)
     } else {
         int t;
         int is_static_local;
-        decl_is_extern = 0;
+        g_decl.is_extern = 0;
         is_static_local = (g_lex.tok.kind == TOK_STATIC);
         t = parse_base_type();
         if (g_lex.tok.kind == ';')

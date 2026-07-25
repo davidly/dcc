@@ -764,11 +764,11 @@ void emit_const_value(struct ConstVal v)
 {
     cf_cast_to_type(&v, v.type);
     if (type_size(v.type) == 4) {
-        fprintf(outf, "\tld hl,%lu\n", v.u & 0xffffUL);
-        fprintf(outf, "\tld de,%lu\n", (v.u >> 16) & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", v.u & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld de,%lu\n", (v.u >> 16) & 0xffffUL);
     } else if (type_size(v.type) == 1) {
         unsigned long b = v.u & 0xffUL;
-        fprintf(outf, "\tld l,%lu\n", b);
+        fprintf(g_emit_sink.stream, "\tld l,%lu\n", b);
         if (v.type & TYPE_UNSIGNED)
             emit("\tld h,0\n");
         else if (b & 0x80UL)
@@ -776,7 +776,7 @@ void emit_const_value(struct ConstVal v)
         else
             emit("\tld h,0\n");
     } else {
-        fprintf(outf, "\tld hl,%lu\n", v.u & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", v.u & 0xffffUL);
     }
     g_expr.type = v.type;
 }

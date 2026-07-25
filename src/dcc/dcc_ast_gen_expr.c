@@ -19,6 +19,8 @@ static int emit_long_oreq_byte_lane(struct Sym *s, const struct AstNode *rhs);
 static void gen_compound_literal_ast(const struct AstNode *n);
 static void gen_assign_lvalue_expr_ast(const struct AstNode *n);
 static void gen_assign_ident_ast(const struct AstNode *n);
+static void gen_assign_ident_plain_ast(const struct AstNode *n, struct Sym *s);
+static void gen_assign_ident_compound_ast(const struct AstNode *n, struct Sym *s);
 
 
 /* Recognize byte-truncation idioms that are common in hand-written portable C:
@@ -181,7 +183,7 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
             byte_base != NULL && byte_base->kind == AST_IDENT) {
             s = find_sym(byte_base->sval);
             if (s != NULL && sym_can_ix_direct(s) && type_is_long(s->type)) {
-                fprintf(outf, "\tld a,(ix%+d)\n", s->offset + byte_index);
+                fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + byte_index);
                 return 1;
             }
         }
@@ -199,7 +201,7 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
             (shift == 0 || shift == 8 || shift == 16 || shift == 24)) {
             s = find_sym(n->a->sval);
             if (s != NULL && sym_can_ix_direct(s) && type_is_long(s->type)) {
-                fprintf(outf, "\tld a,(ix%+d)\n", s->offset + (int)(shift / 8));
+                fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + (int)(shift / 8));
                 return 1;
             }
         }
@@ -208,11 +210,11 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
         s = find_sym(n->sval);
         if (s == NULL || !sym_can_ix_direct(s) || type_size(s->type) > 4)
             return 0;
-        fprintf(outf, "\tld a,(ix%+d)\n", s->offset);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
         return 1;
     }
     if (n->kind == AST_INT_LIT) {
-        fprintf(outf, "\tld a,%ld\n", n->ival & 255L);
+        fprintf(g_emit_sink.stream, "\tld a,%ld\n", n->ival & 255L);
         return 1;
     }
     if (n->kind == AST_INDEX && n->a != NULL && n->a->kind == AST_IDENT &&
@@ -222,18 +224,18 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
         if (ps != NULL && sym_can_ix_direct(ps)) {
             base = type_decay_ptr(ps->type);
             if (type_size(base) == 1) {
-                fprintf(outf, "\tld l,(ix%+d)\n", ps->offset);
-                fprintf(outf, "\tld h,(ix%+d)\n", ps->offset + 1);
+                fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", ps->offset);
+                fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", ps->offset + 1);
                 if (n->b->kind == AST_IDENT) {
                     struct Sym *idx = find_sym(n->b->sval);
                     if (idx == NULL || !sym_can_ix_direct(idx) || type_size(idx->type) != 2)
                         return 0;
-                    fprintf(outf, "\tld e,(ix%+d)\n", idx->offset);
-                    fprintf(outf, "\tld d,(ix%+d)\n", idx->offset + 1);
+                    fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", idx->offset);
+                    fprintf(g_emit_sink.stream, "\tld d,(ix%+d)\n", idx->offset + 1);
                     emit("\tadd hl,de\n");
                 } else if (n->b->kind == AST_INT_LIT) {
                     if (n->b->ival != 0) {
-                        fprintf(outf, "\tld de,%ld\n", n->b->ival & 0xffffL);
+                        fprintf(g_emit_sink.stream, "\tld de,%ld\n", n->b->ival & 0xffffL);
                         emit("\tadd hl,de\n");
                     }
                 } else {
@@ -251,11 +253,11 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n)
             s = find_sym(n->b->sval);
             if (s == NULL || !sym_can_ix_direct(s) || type_size(s->type) > 4)
                 return 0;
-            fprintf(outf, n->op == '+' ? "\tadd a,(ix%+d)\n" : "\tsub (ix%+d)\n", s->offset);
+            fprintf(g_emit_sink.stream, n->op == '+' ? "\tadd a,(ix%+d)\n" : "\tsub (ix%+d)\n", s->offset);
             return 1;
         }
         if (n->b != NULL && n->b->kind == AST_INT_LIT) {
-            fprintf(outf, n->op == '+' ? "\tadd a,%ld\n" : "\tsub %ld\n", n->b->ival & 255L);
+            fprintf(g_emit_sink.stream, n->op == '+' ? "\tadd a,%ld\n" : "\tsub %ld\n", n->b->ival & 255L);
             return 1;
         }
     }
@@ -296,8 +298,8 @@ static int emit_long_oreq_byte_lane(struct Sym *s, const struct AstNode *rhs)
         return 0;
 
     byte_index = (int)(sh / 8);
-    fprintf(outf, "\tor (ix%+d)\n", s->offset + byte_index);
-    fprintf(outf, "\tld (ix%+d),a\n", s->offset + byte_index);
+    fprintf(g_emit_sink.stream, "\tor (ix%+d)\n", s->offset + byte_index);
+    fprintf(g_emit_sink.stream, "\tld (ix%+d),a\n", s->offset + byte_index);
     return 1;
 }
 
@@ -305,10 +307,10 @@ void gen_int_lit(const struct AstNode *n)
 {
     if (n->type & TYPE_LONG) {
         /* 32-bit literal: low half in HL, high half in DE. */
-        fprintf(outf, "\tld hl,%ld\n", n->ival & 0xffffL);
-        fprintf(outf, "\tld de,%ld\n", (n->ival >> 16) & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", n->ival & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld de,%ld\n", (n->ival >> 16) & 0xffffL);
     } else {
-        fprintf(outf, "\tld hl,%ld\n", n->ival & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", n->ival & 0xffffL);
     }
     g_expr.type = n->type;
     g_expr.long_from16 = 0;
@@ -383,7 +385,7 @@ void gen_str_lit(const struct AstNode *n)
      * string id remains stable. */
     int sid;
     sid = add_string_ex(n->sval, (int)n->uval, (int)n->ival);
-    fprintf(outf, "\tld hl,S%d\n", sid);
+    fprintf(g_emit_sink.stream, "\tld hl,S%d\n", sid);
     g_expr.type = TYPE_CHAR | TYPE_PTR;
 }
 
@@ -425,7 +427,7 @@ void gen_ident(const struct AstNode *n)
         for (ei = 0; ei < nenum_consts; ++ei) {
             if (!strcmp(enum_const_names[ei], name)) {
                 long ev = (long)(int)enum_const_values[ei];
-                fprintf(outf, "\tld hl,%ld\n", ev & 0xffffL);
+                fprintf(g_emit_sink.stream, "\tld hl,%ld\n", ev & 0xffffL);
                 g_expr.type = TYPE_INT;
                 return;
             }
@@ -466,7 +468,7 @@ void gen_ident(const struct AstNode *n)
         if (s->is_static)
             s->deferred_body_needed = 1;
         emit_extrn_if_needed(s);
-        fprintf(outf, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
+        fprintf(g_emit_sink.stream, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
         g_expr.type = type_add_ptr(s->type);
         return;
     }
@@ -523,15 +525,15 @@ void gen_unary_ast(const struct AstNode *n)
     /* A unary chain over a single int literal folds to one immediate. */
     if ((op == '-' || op == '+' || op == '~') &&
         ast_unary_long_const_fold(n, &fv)) {
-        fprintf(outf, "\tld hl,%ld\n", fv & 0xffffL);
-        fprintf(outf, "\tld de,%ld\n", (fv >> 16) & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", fv & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld de,%ld\n", (fv >> 16) & 0xffffL);
         g_expr.type = type_is_long(n->type) ? n->type : n->a->type;
         g_expr.long_from16 = 0;
         return;
     }
     if ((op == '-' || op == '+' || op == '~') &&
         ast_unary_int_const_fold(n, &fv)) {
-        fprintf(outf, "\tld hl,%ld\n", fv & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", fv & 0xffffL);
         g_expr.type = TYPE_INT;
         return;
     }
@@ -539,7 +541,7 @@ void gen_unary_ast(const struct AstNode *n)
     /* `!<constant-int-expr>` (including chains like `!!0`) folds to a single
      * 0/1 immediate; ast_const_scalar_fold already yields the final value. */
     if (op == '!' && ast_const_scalar_fold(n, &fv)) {
-        fprintf(outf, "\tld hl,%ld\n", fv & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", fv & 0xffffL);
         g_expr.type = TYPE_INT;
         return;
     }
@@ -800,7 +802,7 @@ static void gen_sizeof_expr_ast(const struct AstNode *n)
         struct Sym *vsym = ast_sizeof_whole_vla_sym(n->a);
         if (vsym != NULL && vsym->vla_size_offset != 0) {
             emit("\tpush ix\n\tpop hl\n");
-            fprintf(outf, "\tld de,%d\n\tadd hl,de\n", vsym->vla_size_offset);
+            fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", vsym->vla_size_offset);
             emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");
             g_expr.type = TYPE_INT;
             return;
@@ -809,7 +811,7 @@ static void gen_sizeof_expr_ast(const struct AstNode *n)
     } else {
         val = n->ival;
     }
-    fprintf(outf, "\tld hl,%ld\n", val & 0xffffL);
+    fprintf(g_emit_sink.stream, "\tld hl,%ld\n", val & 0xffffL);
     g_expr.type = TYPE_INT;
 }
 
@@ -869,9 +871,9 @@ static int emit_signed_long_const_cmp_ast(int op, long c)
     end_label = new_label();
 
     emit("\tld a,d\n\txor 80h\n\tld d,a\n");
-    fprintf(outf, "\tld bc,%u\n", lo);
+    fprintf(g_emit_sink.stream, "\tld bc,%u\n", lo);
     emit("\tor a\n\tsbc hl,bc\n\tex de,hl\n");
-    fprintf(outf, "\tld bc,%u\n", hi);
+    fprintf(g_emit_sink.stream, "\tld bc,%u\n", hi);
     emit("\tsbc hl,bc\n");
     emit_jp_label(true_on_carry ? "jp c," : "jp nc,", true_label);
     emit("\tld hl,0\n");
@@ -1052,8 +1054,8 @@ void gen_long_arith_ast(const struct AstNode *n)
         ast_const_fold_strict(n, &const_val)) {
         common_type = common_arith_type(
             promote_int_type(ast_expr_type_for_sizeof(n->a)), n->peek_type);
-        fprintf(outf, "\tld hl,%ld\n", const_val & 0xffffL);
-        fprintf(outf, "\tld de,%ld\n", (const_val >> 16) & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", const_val & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld de,%ld\n", (const_val >> 16) & 0xffffL);
         g_expr.type = common_type;
         g_expr.long_from16 = 0;
         return;
@@ -1256,7 +1258,7 @@ void gen_binary_ast(const struct AstNode *n)
         int fold_type = is_cmp_op(n->op)
             ? TYPE_INT
             : common_arith_type(promote_int_type(n->a->type), n->peek_type);
-        fprintf(outf, "\tld hl,%ld\n", const_val & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld hl,%ld\n", const_val & 0xffffL);
         g_expr.type = fold_type;
         g_expr.long_from16 = 0;
         return;
@@ -1527,7 +1529,7 @@ void gen_binary_ast(const struct AstNode *n)
     if (!type_is_long(common_type) &&
         ast_const_int_operand_value(n->b, &const_val) &&
         !type_is_long(n->b->type) && !type_is_float(n->b->type)) {
-        fprintf(outf, "\tld de,%ld\n", const_val & 0xffffL);
+        fprintf(g_emit_sink.stream, "\tld de,%ld\n", const_val & 0xffffL);
         gen_binop_typed(n->op, common_type);
         if (is_cmp_op(n->op))
             g_expr.type = TYPE_INT;
@@ -1583,7 +1585,7 @@ void gen_shift_ast(const struct AstNode *n)
     if (type_is_long(lhs_type)) {
         if (n->b->kind == AST_INT_LIT && ast_value_is_plain_int(n->b)) {
             if (!emit_shift_const_long(n->op, lhs_type, n->b->ival)) {
-                fprintf(outf, "\tld b,%ld\n", n->b->ival & 255L);
+                fprintf(g_emit_sink.stream, "\tld b,%ld\n", n->b->ival & 255L);
                 emit_shift_loop(n->op, lhs_type);
             }
         } else {
@@ -1814,12 +1816,12 @@ static void emit_store_bool_masked_hl_to_addr_on_stack(unsigned int mask,
     byte_mask = 0;
     if ((mask & 0xff00U) == 0) {
         byte_mask = mask & 0xffU;
-        fprintf(outf, "\tld a,l\n\tand %u\n", byte_mask);
+        fprintf(g_emit_sink.stream, "\tld a,l\n\tand %u\n", byte_mask);
     } else if ((mask & 0x00ffU) == 0) {
         byte_mask = (mask >> 8) & 0xffU;
-        fprintf(outf, "\tld a,h\n\tand %u\n", byte_mask);
+        fprintf(g_emit_sink.stream, "\tld a,h\n\tand %u\n", byte_mask);
     } else {
-        fprintf(outf, "\tld a,h\n\tand %u\n\tld e,a\n\tld a,l\n\tand %u\n\tor e\n",
+        fprintf(g_emit_sink.stream, "\tld a,h\n\tand %u\n\tld e,a\n\tld a,l\n\tand %u\n\tor e\n",
                 (mask >> 8) & 0xffU, mask & 0xffU);
     }
     if (need_result)
@@ -1990,7 +1992,7 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
 
     if (ast_global_byte_array_const_store(n, &byte_arr, &byte_idx, &byte_rhs)) {
         emit_global_byte_array_index_addr(byte_arr, NULL, byte_idx, 1);
-        fprintf(outf, "\tld (hl),%ld\n", byte_rhs & 255);
+        fprintf(g_emit_sink.stream, "\tld (hl),%ld\n", byte_rhs & 255);
         g_expr.type = byte_arr->type;
         g_expr.long_from16 = 0;
         return;
@@ -2003,10 +2005,10 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
         emit_global_byte_array_index_addr(byte_arr, byte_idx_sym, byte_idx,
                                           byte_idx_has_const);
         if (byte_rhs_kind == 1) {
-            fprintf(outf, "\tld a,(ix%+d)\n", byte_rhs_sym->offset);
+            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", byte_rhs_sym->offset);
             emit("\tld (hl),a\n");
         } else {
-            fprintf(outf, "\tld (hl),%ld\n", byte_rhs & 255);
+            fprintf(g_emit_sink.stream, "\tld (hl),%ld\n", byte_rhs & 255);
         }
         g_expr.type = byte_arr->type;
         g_expr.long_from16 = 0;
@@ -2167,7 +2169,7 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
             (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
             n->b->kind == AST_INT_LIT) {
             if (!emit_shift_const_long(n->op, val_type, n->b->ival)) {
-                fprintf(outf, "\tld b,%ld\n", n->b->ival & 255L);
+                fprintf(g_emit_sink.stream, "\tld b,%ld\n", n->b->ival & 255L);
                 emit_shift_loop(n->op, val_type);
             }
             emit("\tld b,d\n\tld c,e\n");
@@ -2514,7 +2516,7 @@ static void gen_assign_ident_ast(const struct AstNode *n)
         emit_load_from_hl(s->type);
         if (n->b->kind == AST_INT_LIT && ast_value_is_plain_int(n->b)) {
             if (!emit_shift_const_long(n->op, s->type, n->b->ival)) {
-                fprintf(outf, "\tld b,%ld\n", n->b->ival & 255L);
+                fprintf(g_emit_sink.stream, "\tld b,%ld\n", n->b->ival & 255L);
                 emit_shift_loop(n->op, s->type);
             }
         } else {
@@ -2543,7 +2545,7 @@ static void gen_assign_ident_ast(const struct AstNode *n)
         expr_result_dead = 0;
         if (n->b->kind == AST_INT_LIT && ast_value_is_plain_int(n->b)) {
             if (!emit_shift_const_long(n->op, s->type, n->b->ival)) {
-                fprintf(outf, "\tld b,%ld\n", n->b->ival & 255L);
+                fprintf(g_emit_sink.stream, "\tld b,%ld\n", n->b->ival & 255L);
                 emit_shift_loop(n->op, s->type);
             }
         } else {
@@ -2697,6 +2699,16 @@ static void gen_assign_ident_ast(const struct AstNode *n)
     }
 
     if (n->op == '=') {
+        gen_assign_ident_plain_ast(n, s);
+        return;
+    }
+    gen_assign_ident_compound_ast(n, s);
+}
+
+static void gen_assign_ident_plain_ast(const struct AstNode *n, struct Sym *s)
+{
+    int saved_dead;
+
         if (type_size(s->type) == 1 &&
             (s->storage == SC_GLOBAL || s->storage == SC_EXTERN)) {
             int want_dead = expr_result_dead;
@@ -2726,8 +2738,8 @@ static void gen_assign_ident_ast(const struct AstNode *n)
                     g_expr.long_from16 = 0;
                     return;
                 }
-                fprintf(outf, "\tld a,(ix%+d)\n", rs->offset);
-                fprintf(outf, "\tld (ix%+d),a\n", s->offset);
+                fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", rs->offset);
+                fprintf(g_emit_sink.stream, "\tld (ix%+d),a\n", s->offset);
                 g_expr.type = s->type;
                 g_expr.long_from16 = 0;
                 /* This statement's value may itself be read by an enclosing
@@ -2745,14 +2757,14 @@ static void gen_assign_ident_ast(const struct AstNode *n)
         }
         if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE && n->b->kind == AST_INT_LIT) {
             if (type_is_bool(s->type)) {
-                fprintf(outf, "\tld (ix%+d),%d\n", s->offset, n->b->ival ? 1 : 0);
+                fprintf(g_emit_sink.stream, "\tld (ix%+d),%d\n", s->offset, n->b->ival ? 1 : 0);
                 g_expr.type = s->type;
                 g_expr.long_from16 = 0;
                 if (!expr_result_dead)
                     emit_load_sym_value_direct(s);
                 return;
             }
-            fprintf(outf, "\tld (ix%+d),%ld\n", s->offset, n->b->ival & 255);
+            fprintf(g_emit_sink.stream, "\tld (ix%+d),%ld\n", s->offset, n->b->ival & 255);
             g_expr.type = s->type;
             g_expr.long_from16 = 0;
             if (!expr_result_dead)
@@ -2764,7 +2776,7 @@ static void gen_assign_ident_ast(const struct AstNode *n)
             if (ast_int_const_cast_fold(n->b, &fv)) {
                 if (type_is_bool(s->type))
                     fv = fv ? 1 : 0;
-                fprintf(outf, "\tld (ix%+d),%ld\n", s->offset, fv & 255);
+                fprintf(g_emit_sink.stream, "\tld (ix%+d),%ld\n", s->offset, fv & 255);
                 g_expr.type = s->type;
                 g_expr.long_from16 = 0;
                 if (!expr_result_dead)
@@ -2836,7 +2848,13 @@ static void gen_assign_ident_ast(const struct AstNode *n)
         emit_store_hl_to_sym_direct(s);
         g_expr.long_from16 = 0;
         return;
-    }
+}
+
+static void gen_assign_ident_compound_ast(const struct AstNode *n, struct Sym *s)
+{
+    int common_type;
+    int binop;
+    int saved_dead;
 
     if (expr_result_dead && type_size(s->type) == 1 && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) &&
         (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ)) {
@@ -2976,7 +2994,7 @@ static int emit_array_symbase_index(struct Sym *s, const struct AstNode *idx,
     gen_index_subscript_expr_ast(idx);   /* index -> HL */
     scale_hl_by_elem_size(elem);         /* index * elem */
     emit_extrn_if_needed(s);
-    fprintf(outf, "\tld de,%s\n", asm_name_for(sym_asm_name(s)));
+    fprintf(g_emit_sink.stream, "\tld de,%s\n", asm_name_for(sym_asm_name(s)));
     emit("\tadd hl,de\n");
     return 1;
 }
@@ -4351,7 +4369,7 @@ void gen_call_ast(const struct AstNode *n)
             emit_runtime_call(asm_name_for_pf_call(name, needs_float, needs_long));
         } else {
             emit_extrn_if_needed(fn_sym);
-            fprintf(outf, "\tcall %s\n", asm_name_for(name));
+            fprintf(g_emit_sink.stream, "\tcall %s\n", asm_name_for(name));
         }
     }
     g_expr.type = fn_sym->type;
@@ -4439,7 +4457,7 @@ void gen_struct_return_call_assign_ast(const struct AstNode *lhs,
     emit_load_hl_from_sp_offset(arg_bytes);
     emit("\tpush hl\n");
     emit_extrn_if_needed(fn_sym);
-    fprintf(outf, "\tcall %s\n", asm_name_for(name));
+    fprintf(g_emit_sink.stream, "\tcall %s\n", asm_name_for(name));
     emit_cleanup_stack_bytes(arg_bytes + 2);
     emit("\tpop bc\n");
     g_expr.type = lhs_type;
@@ -4911,7 +4929,7 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
             if (base_sym != NULL) {
                 elem = type_index_elem_size(ptr_type);
                 emit_extrn_if_needed(base_sym);
-                fprintf(outf, "\tld hl,%s+%ld\n", asm_name_for(sym_asm_name(base_sym)),
+                fprintf(g_emit_sink.stream, "\tld hl,%s+%ld\n", asm_name_for(sym_asm_name(base_sym)),
                         (n->b->ival * elem) & 0xffffL);
                 g_expr.type = ptr_type;
                 g_expr.long_from16 = 0;

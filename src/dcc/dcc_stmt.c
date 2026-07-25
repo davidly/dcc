@@ -48,7 +48,7 @@ void gen_compound(void)
             int is_static_local;
             int decl_line;
             struct Token decl_tok;
-            decl_is_extern = 0;
+            g_decl.is_extern = 0;
             is_static_local = (g_lex.tok.kind == TOK_STATIC);
             decl_line = g_lex.tok_line;
             decl_tok = g_lex.tok;
@@ -58,7 +58,7 @@ void gen_compound(void)
             } else if (is_static_local) {
                 scan_static_local_decl_after_type(t);
             } else {
-                if (!decl_is_extern && !dead)
+                if (!g_decl.is_extern && !dead)
                     ast_emit_debug_location(decl_tok.file, decl_line);
                 if (dead)
                     asm_suppress_depth++;
@@ -132,13 +132,13 @@ void emit_switch_jump_table(int minv, int maxv,
     ltab = new_label();
 
     if (minv != 0) {
-        fprintf(outf, "\tld de,%d\n", minv);
+        fprintf(g_emit_sink.stream, "\tld de,%d\n", minv);
         emit("\tor a\n\tsbc hl,de\n");
         emit_jp_label("jp c,", default_lab >= 0 ? default_lab : lend);
     }
 
     emit("\tpush hl\n");
-    fprintf(outf, "\tld de,%d\n", maxv - minv);
+    fprintf(g_emit_sink.stream, "\tld de,%d\n", maxv - minv);
     emit("\tor a\n\tsbc hl,de\n");
     emit("\tpop hl\n");
     emit_jp_label("jp z,", lok);
@@ -146,7 +146,7 @@ void emit_switch_jump_table(int minv, int maxv,
     emit_label(lok);
 
     emit("\tadd hl,hl\n");
-    fprintf(outf, "\tld de,L%d\n", ltab);
+    fprintf(g_emit_sink.stream, "\tld de,L%d\n", ltab);
     emit("\tadd hl,de\n");
     emit("\tld e,(hl)\n");
     emit("\tinc hl\n");
@@ -157,7 +157,7 @@ void emit_switch_jump_table(int minv, int maxv,
     emit_label(ltab);
     for (v = minv; v <= maxv; ++v) {
         target = switch_label_for_value(v, case_vals, case_labs, ncase, default_lab, lend);
-        fprintf(outf, "\tdw L%d\n", target);
+        fprintf(g_emit_sink.stream, "\tdw L%d\n", target);
     }
 }
 

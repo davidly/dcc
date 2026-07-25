@@ -61,7 +61,7 @@
  * ast_scan_for_stmt and the AST_FOR/AST_COMPOUND probes in
  * dcc_ast_gen_cond.c).  "/dev/null" does not exist on native Windows: MSVC's
  * fopen() there fails on it (it looks for a "dev" subdirectory), silently
- * leaving the caller's `outf` pointed at the real output file instead of a
+ * leaving the caller's `g_emit_sink.stream` pointed at the real output file instead of a
  * sink - so the replay's speculative emission leaks into real output.  The
  * Windows null device is "NUL".
  */
@@ -282,6 +282,44 @@ typedef struct FrameState {
     int local_size;
     int param_offset;
 } FrameState;
+
+/* Scalar counters and cursors restarted for each function scan/codegen pass. */
+typedef struct FunctionPassState {
+    int for_seq;
+    int forren_n;
+    int for_decl_seq;
+    int for_decl_rename_index;
+    int for_decl_recording;
+    int scope_depth;
+    int static_local_func_index;
+    int static_local_seq;
+    int compound_literal_seq;
+    int licm_seq;
+} FunctionPassState;
+
+/* Storage-class and qualifier flags for the declaration currently parsed. */
+typedef struct DeclState {
+    int is_extern;
+    int is_static;
+    int is_inline;
+    int is_noreturn;
+    int is_const;
+    int is_volatile;
+    int pointee_is_volatile;
+    int is_register;
+} DeclState;
+
+enum EmitSinkPurpose {
+    EMIT_SINK_FINAL,
+    EMIT_SINK_DISCARD,
+    EMIT_SINK_VERIFY,
+    EMIT_SINK_DEFERRED
+};
+
+typedef struct EmitSink {
+    FILE *stream;
+    int purpose;
+} EmitSink;
 
 /*
  * Description of the value the most recently generated expression left in
@@ -531,7 +569,9 @@ extern long g_src_generation;
  * speculative parse can snapshot/rewind them with one struct copy
  * (lex_save()/lex_restore()). */
 extern LexState g_lex;
-extern FILE *outf;
+extern EmitSink g_emit_sink;
+EmitSink emit_sink_push(FILE *stream, int purpose);
+void emit_sink_restore(const EmitSink *saved);
 extern const char *input_name;
 extern const char *output_name;
 extern char current_file_name[256];
@@ -569,7 +609,7 @@ extern int nused_extrns;
 /* per-function code-generation state */
 extern int label_id;
 extern int current_return_label;
-/* Position in `outf` of a "jp current_return_label" tail jump gen_return_ast
+/* Position in `g_emit_sink.stream` of a "jp current_return_label" tail jump gen_return_ast
  * just emitted (byte offset right before it), and the label it targets, or
  * (-1, -1) if none is pending. Debug (-g) builds only - see
  * emit_function_epilogue's elide_redundant_tail_jp. */
@@ -594,20 +634,20 @@ extern int g_e_regalloc_claim_active;
 extern int g_e_regalloc_claimed;
 extern struct Sym *g_e_regalloc_sym;
 /* Set by dcc_loop_regalloc.c's try_loop_regalloc_bc/try_loop_regalloc_bc_
- * write right where each commits a successful promotion - dcc_func.c's
+ * write right where each commits a successful promotion - dcc_regalloc.c's
  * try_loop_scoped_regalloc_first resets this to 0 before a trial body
  * generation and checks it afterward to learn, empirically, whether any
  * loop in the function actually claimed BC (unlike g_bc_regalloc_sym,
- * which only dcc_func.c's own whole-function mechanism ever writes). */
+ * which only dcc_regalloc.c's own whole-function mechanism ever writes). */
 extern int g_loop_regalloc_bc_claimed;
 /* Shared with dcc_loop_regalloc.c - see that file's use for the full
  * contract; e_cand is always NULL from there (loop-scoped promotion only
- * ever targets BC). Defined in dcc_func.c. */
+ * ever targets BC). Defined in dcc_regalloc.c. */
 int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
                               FILE **out_f);
 /* Shared with dcc_loop_regalloc.c's loop_regalloc_write_candidate_safe -
- * see their own header comments in dcc_func.c for the full contract.
- * Defined in dcc_func.c. */
+ * see their own header comments in dcc_regalloc.c for the full contract.
+ * Defined in dcc_regalloc.c. */
 int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40]);
 int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40]);
 /* True if `s` (one line of emitted assembly, no trailing newline) references
@@ -615,7 +655,7 @@ int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40]);
  * dcc_loop_regalloc.c's write-candidate verifier (loop_regalloc_write_
  * candidate_safe), which needs the same primitive but a stricter policy
  * around it than this file's own lenient reload-repair one - see that
- * function's header comment. Defined in dcc_func.c. */
+ * function's header comment. Defined in dcc_regalloc.c. */
 int line_touches_bc_reg(const char *s);
 /* True if `s` has a captured, codegen-time-substitutable inline body (one
  * of inline_return_expr/inline_stmt_expr/inline_stmt_body). Shared with
@@ -626,11 +666,11 @@ int line_touches_bc_reg(const char *s);
 int is_inline_substitutable(struct Sym *s);
 /* True if `buf` (the full generated-assembly text under verification)
  * contains a "\tcall NAME" whose NAME is not on the verified-BC-safe
- * whitelist (g_safe_runtime_calls, dcc_func.c - the seven DCCRTL.MAC-
+ * whitelist (g_safe_runtime_calls, dcc_regalloc.c - the seven DCCRTL.MAC-
  * contracted arithmetic helpers plus a dozen verified-clean ctype.h
  * entries) and is not a call to a _Noreturn function. Shared with
  * dcc_loop_regalloc.c's write-candidate verifier, which needs the
- * identical whitelist. Defined in dcc_func.c. */
+ * identical whitelist. Defined in dcc_regalloc.c. */
 int buf_has_unsafe_call(const char *buf);
 /* True if `name` (an asm-level call target, e.g. "__csp" for isspace) is on
  * that same whitelist (now also including a dozen verified-BC-clean
@@ -638,10 +678,10 @@ int buf_has_unsafe_call(const char *buf);
  * for dcc_licm.c's licm_scan_modified, which needs it at the AST level to
  * decide whether a loop containing such a call is even eligible to attempt
  * BC promotion, before any generated text exists for buf_has_unsafe_call
- * to re-check. Defined in dcc_func.c. */
+ * to re-check. Defined in dcc_regalloc.c. */
 int asm_name_is_bc_safe_call(const char *name);
 /* True if `name` (an asm-level call target) is a function declared
- * _Noreturn - see the fuller comment at its definition (dcc_func.c).
+ * _Noreturn - see the fuller comment at its definition (dcc_regalloc.c).
  * Exposed so dcc_loop_regalloc.c's strict write-candidate verifier can
  * treat any bc-touching line between such a call and the next label as
  * unreachable dead code, not just the call line itself (asm-level dead-
@@ -656,16 +696,12 @@ extern int cont_stack[MAX_FLOW];
 extern int nflow;
 
 /* C99 for-init declaration scoping (see dcc_state.c for details) */
-extern int g_for_seq;
+extern FunctionPassState g_func_pass;
 extern int g_for_rename_count[MAX_FOR_SCOPES];
 extern char g_for_rename_from[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
 extern char g_for_rename_to[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
 extern char g_forren_from[MAX_FORREN][64];
 extern char g_forren_to[MAX_FORREN][64];
-extern int g_forren_n;
-extern int g_for_decl_seq;
-extern int g_for_decl_rename_index;
-extern int g_for_decl_recording;
 extern int g_for_decl_saw_nonobject;
 const char *resolve_local_rename(const char *name);
 void make_for_rename_name(char *dst, int dstsz, const char *from, int for_seq, int rename_index);
@@ -680,9 +716,6 @@ void pop_for_rename(void);
  * nlocals on block exit and a local declared in an inner block stops resolving
  * once the block ends. */
 extern int g_scope_watermark[MAX_SCOPE_DEPTH];
-extern int g_scope_depth;
-extern int g_static_local_func_index;
-extern int g_static_local_seq;
 void enter_scope(void);
 void leave_scope(void);
 int vla_scope_ensure_save_slot(void);
@@ -700,14 +733,7 @@ struct Sym *find_local_decl(const char *name);
 extern int errors;
 extern int warnings;
 extern int scan_mode;
-extern int decl_is_extern;
-extern int decl_is_static;
-extern int decl_is_inline;     /* current declaration used inline specifier */
-extern int decl_is_noreturn;   /* current declaration used _Noreturn specifier */
-extern int decl_is_const;      /* current declaration used const qualifier */
-extern int decl_is_volatile;   /* current declaration used volatile qualifier */
-extern int decl_pointee_is_volatile;
-extern int decl_is_register;   /* current decl used 'register' keyword */
+extern DeclState g_decl;
 extern int expr_result_dead;
 extern ExprState g_expr;
 extern int g_tok_long_suffix; /* set by lexer when L/l suffix seen on integer literal */
@@ -719,8 +745,6 @@ extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
 extern int  g_diag_error_count;
-extern int  g_compound_literal_seq;
-extern int  g_licm_seq;
 void flush_pending_asm(void);
 void pp_reset_asm_dedupe(void);
 
@@ -806,7 +830,7 @@ extern int flow_scope_depth[MAX_FLOW];
 struct VlaFwdGoto {
     int label_index;                 /* target label (index into ulabel_*)   */
     int fixup_id;                    /* stub label the goto jumps to          */
-    int snap_depth;                  /* g_scope_depth at the goto             */
+    int snap_depth;                  /* g_func_pass.scope_depth at the goto             */
     int snap_off[MAX_SCOPE_DEPTH];   /* g_vla_scope_off snapshot at the goto  */
     int line;                        /* goto source line, for diagnostics     */
 };
