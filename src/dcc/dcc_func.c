@@ -21,6 +21,7 @@
 #endif
 
 #include "dcc.h"
+#include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 #ifdef _WIN32
 #include <io.h>

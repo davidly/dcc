@@ -766,6 +766,23 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
     }
 }
 
+static int ast_try_loop_regalloc(const struct AstNode *loop_node,
+                                 const struct AstNode *cond,
+                                 const struct AstNode *inc,
+                                 const struct AstNode *body,
+                                 void (*gen_loop_impl)(const struct AstNode *))
+{
+    int is_write;
+    struct Sym *cand;
+
+    cand = loop_regalloc_find_bc_candidate(cond, inc, body, &is_write);
+    if (cand == NULL)
+        return 0;
+    if (is_write)
+        return try_loop_regalloc_bc_write(loop_node, cand, gen_loop_impl);
+    return try_loop_regalloc_bc(loop_node, cand, gen_loop_impl);
+}
+
 /* Loop-scoped BC register promotion (dcc_loop_regalloc.c): if this loop has
  * an eligible candidate (see loop_regalloc_find_bc_candidate), try
  * generating the whole loop with it primed into BC instead of its normal
@@ -777,17 +794,8 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
  * candidate exists or the speculative attempt is declined. */
 void ast_gen_for_stmt(const struct AstNode *n)
 {
-    int is_write;
-    struct Sym *cand = loop_regalloc_find_bc_candidate(n->b, n->c, n->d, &is_write);
-
-    if (cand != NULL) {
-        if (is_write) {
-            if (try_loop_regalloc_bc_write(n, cand, ast_gen_for_stmt_impl))
-                return;
-        } else if (try_loop_regalloc_bc(n, cand, ast_gen_for_stmt_impl)) {
-            return;
-        }
-    }
+    if (ast_try_loop_regalloc(n, n->b, n->c, n->d, ast_gen_for_stmt_impl))
+        return;
     ast_gen_for_stmt_impl(n);
 }
 
@@ -823,17 +831,8 @@ static void ast_gen_while_stmt_impl(const struct AstNode *n)
  * clause (AST_WHILE's cond is n->a, body is n->b; there is no n->c). */
 void ast_gen_while_stmt(const struct AstNode *n)
 {
-    int is_write;
-    struct Sym *cand = loop_regalloc_find_bc_candidate(n->a, NULL, n->b, &is_write);
-
-    if (cand != NULL) {
-        if (is_write) {
-            if (try_loop_regalloc_bc_write(n, cand, ast_gen_while_stmt_impl))
-                return;
-        } else if (try_loop_regalloc_bc(n, cand, ast_gen_while_stmt_impl)) {
-            return;
-        }
-    }
+    if (ast_try_loop_regalloc(n, n->a, NULL, n->b, ast_gen_while_stmt_impl))
+        return;
     ast_gen_while_stmt_impl(n);
 }
 
@@ -868,17 +867,8 @@ static void ast_gen_dowhile_stmt_impl(const struct AstNode *n)
  * same wrapper shape as ast_gen_for_stmt/ast_gen_while_stmt. */
 void ast_gen_dowhile_stmt(const struct AstNode *n)
 {
-    int is_write;
-    struct Sym *cand = loop_regalloc_find_bc_candidate(n->a, NULL, n->b, &is_write);
-
-    if (cand != NULL) {
-        if (is_write) {
-            if (try_loop_regalloc_bc_write(n, cand, ast_gen_dowhile_stmt_impl))
-                return;
-        } else if (try_loop_regalloc_bc(n, cand, ast_gen_dowhile_stmt_impl)) {
-            return;
-        }
-    }
+    if (ast_try_loop_regalloc(n, n->a, NULL, n->b, ast_gen_dowhile_stmt_impl))
+        return;
     ast_gen_dowhile_stmt_impl(n);
 }
 

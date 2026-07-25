@@ -52,6 +52,7 @@
  * sufficient to resync the frame slot before anything downstream reads it.
  */
 #include "dcc.h"
+#include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 
 #define LOOP_REGALLOC_MIN_REFS 2
@@ -629,6 +630,58 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
     return NULL;
 }
 
+typedef struct LoopRegallocState {
+    int nlocals;
+    int local_size;
+    int for_seq;
+    int licm_seq;
+} LoopRegallocState;
+
+static LoopRegallocState loop_regalloc_save_state(void)
+{
+    LoopRegallocState state;
+
+    state.nlocals = g_frame.nlocals;
+    state.local_size = g_frame.local_size;
+    state.for_seq = g_func_pass.for_seq;
+    state.licm_seq = g_func_pass.licm_seq;
+    return state;
+}
+
+static void loop_regalloc_restore_state(const LoopRegallocState *state)
+{
+    g_frame.nlocals = state->nlocals;
+    g_frame.local_size = state->local_size;
+    g_func_pass.for_seq = state->for_seq;
+    g_func_pass.licm_seq = state->licm_seq;
+}
+
+static void emit_loop_regalloc_bc_prime(struct Sym *cand)
+{
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        emit_extrn_if_needed(cand);
+        fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
+        fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
+        fprintf(g_emit_sink.stream, "\tld c,l\n");
+        fprintf(g_emit_sink.stream, "\tld b,h\n");
+    } else {
+        fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", cand->offset);
+        fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", cand->offset + 1);
+    }
+}
+
+static void emit_loop_regalloc_bc_spill(struct Sym *cand)
+{
+    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
+        fprintf(g_emit_sink.stream, "\tld l,c\n");
+        fprintf(g_emit_sink.stream, "\tld h,b\n");
+        fprintf(g_emit_sink.stream, "\tld (%s),hl\n", asm_name_for(sym_asm_name(cand)));
+    } else {
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),c\n", cand->offset);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),b\n", cand->offset + 1);
+    }
+}
+
 /* Speculatively generates `loop_node` (via `gen_loop_impl`, dcc_ast_gen_stmt.c's
  * ast_gen_for_stmt_impl - the renamed original body of ast_gen_for_stmt)
  * with `cand` primed into BC right before the loop instead of occupying its
@@ -656,10 +709,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
 {
     FILE *scratch;
     EmitSink saved_sink;
-    int saved_nlocals;
-    int saved_local_size;
-    int saved_for_seq;
-    int saved_licm_seq;
+    LoopRegallocState saved_state;
     int c;
     int errors_before;
 
@@ -667,10 +717,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
     if (scratch == NULL)
         fatal("cannot create speculative loop-regalloc temp file");
 
-    saved_nlocals = g_frame.nlocals;
-    saved_local_size = g_frame.local_size;
-    saved_for_seq = g_func_pass.for_seq;
-    saved_licm_seq = g_func_pass.licm_seq;
+    saved_state = loop_regalloc_save_state();
 
     saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     cand->reg_alloc = REG_BC;
@@ -679,7 +726,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * below) - a runtime helper (e.g. __mulu) first referenced only inside
      * it must not be marked "extrn already emitted" in the persistent
      * dedup cache, or the real fallback generation would silently skip
-    * re-declaring it. Same guard dcc_regalloc.c's speculative attempts
+        * re-declaring it. Same guard dcc_regalloc.c's speculative attempts
      * use, for the identical reason - see emit_extrn_if_needed in
      * dcc_symbols.c. */
     g_inline_body_buffering++;
@@ -688,18 +735,9 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * a 3-instruction sequence instead of the local/param mechanism's
      * 2-instruction "ld c,(ix+d)"/"ld b,(ix+d+1)", mirroring emit_load_
      * global_word_direct (dcc_symbols.c) plus a transfer into bc. Must stay
-    * in exact lockstep with bc_regalloc_entry_lines (dcc_regalloc.c), which
+     * in exact lockstep with bc_regalloc_entry_lines (dcc_regalloc.c), which
      * regalloc_buffer_finalize uses to recognize/reinsert this same text. */
-    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
-        emit_extrn_if_needed(cand);
-        fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
-        fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
-        fprintf(g_emit_sink.stream, "\tld c,l\n");
-        fprintf(g_emit_sink.stream, "\tld b,h\n");
-    } else {
-        fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", cand->offset);
-        fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", cand->offset + 1);
-    }
+    emit_loop_regalloc_bc_prime(cand);
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;
@@ -724,7 +762,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
 
     fclose(scratch);
     /* Bump the epoch again, even though g_inline_body_buffering may already
-    * be back to 0: if this attempt is nested inside dcc_regalloc.c's
+        * be back to 0: if this attempt is nested inside dcc_regalloc.c's
      * whole-function speculative buffering, g_inline_body_buffering is only
      * back to THAT outer level (not 0), and the fallback generation below
      * still runs under it. Without this, emit_runtime_extrn_if_needed's
@@ -736,10 +774,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * Found via tests/tcrcfix.c: a `call __mulu` with no matching `extrn
      * __mulu` anywhere in the output, from exactly this nesting. */
     g_buffering_epoch++;
-    g_frame.nlocals = saved_nlocals;
-    g_frame.local_size = saved_local_size;
-    g_func_pass.for_seq = saved_for_seq;
-    g_func_pass.licm_seq = saved_licm_seq;
+    loop_regalloc_restore_state(&saved_state);
     return 0;
 }
 
@@ -875,10 +910,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
 {
     FILE *scratch;
     EmitSink saved_sink;
-    int saved_nlocals;
-    int saved_local_size;
-    int saved_for_seq;
-    int saved_licm_seq;
+    LoopRegallocState saved_state;
     int c;
     int errors_before;
 
@@ -886,10 +918,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     if (scratch == NULL)
         fatal("cannot create speculative loop-regalloc write temp file");
 
-    saved_nlocals = g_frame.nlocals;
-    saved_local_size = g_frame.local_size;
-    saved_for_seq = g_func_pass.for_seq;
-    saved_licm_seq = g_func_pass.licm_seq;
+    saved_state = loop_regalloc_save_state();
 
     saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     cand->reg_alloc = REG_BC;
@@ -897,20 +926,11 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     g_inline_body_buffering++;
     g_buffering_epoch++;
     /* Prime/spill text must stay in exact lockstep with bc_regalloc_entry_
-    * lines/bc_regalloc_exit_lines (dcc_regalloc.c), which loop_regalloc_write_
+        * lines/bc_regalloc_exit_lines (dcc_regalloc.c), which loop_regalloc_write_
      * candidate_safe uses to recognize this same text - see try_loop_
      * regalloc_bc's identical comment on the read-only priming for why
      * globals need a 3-instruction sequence instead of locals'/params' 2. */
-    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
-        emit_extrn_if_needed(cand);
-        fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
-        fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
-        fprintf(g_emit_sink.stream, "\tld c,l\n");
-        fprintf(g_emit_sink.stream, "\tld b,h\n");
-    } else {
-        fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", cand->offset);
-        fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", cand->offset + 1);
-    }
+    emit_loop_regalloc_bc_prime(cand);
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;
@@ -920,14 +940,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
      * set below) can read it via the normal path. Still inside the
      * suppressed/buffered span - this is unconditionally part of what gets
      * verified and either committed whole or discarded whole. */
-    if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
-        fprintf(g_emit_sink.stream, "\tld l,c\n");
-        fprintf(g_emit_sink.stream, "\tld h,b\n");
-        fprintf(g_emit_sink.stream, "\tld (%s),hl\n", asm_name_for(sym_asm_name(cand)));
-    } else {
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),c\n", cand->offset);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),b\n", cand->offset + 1);
-    }
+    emit_loop_regalloc_bc_spill(cand);
     asm_suppress_depth--;
     g_inline_body_buffering--;
 
@@ -947,9 +960,6 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     fclose(scratch);
     /* See try_loop_regalloc_bc's identical comment on this bump. */
     g_buffering_epoch++;
-    g_frame.nlocals = saved_nlocals;
-    g_frame.local_size = saved_local_size;
-    g_func_pass.for_seq = saved_for_seq;
-    g_func_pass.licm_seq = saved_licm_seq;
+    loop_regalloc_restore_state(&saved_state);
     return 0;
 }

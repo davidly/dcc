@@ -11,6 +11,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_regalloc_internal.h"
 
 /*
  * C99 for-init renames.  While code generation (or the frame-sizing scan) is

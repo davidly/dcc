@@ -61,6 +61,7 @@
  * to keep this file's interaction with that existing code trivial.
  */
 #include "dcc.h"
+#include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 
 #define MAX_LICM_CANDIDATES 8
