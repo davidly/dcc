@@ -1456,17 +1456,40 @@ static int is_cond(const char *op) {
     return streqi(op,"IF") || streqi(op,"IFE") || streqi(op,"IFDEF") ||
         streqi(op,"IFNDEF") || streqi(op,"ELSE") || streqi(op,"ENDIF");
 }
-static int is_pseudo(const char *op) {
-    const char *p[]= {
-        "ASEG","CSEG","DSEG","ORG","DB","DEFB","DEFM","BYTE",
-        "DW","DEFW","WORD","DS","DEFS","BLKB","EQU","SET",
-        "PUBLIC","ENTRY","EXTRN","EXT","NAME","TITLE",
-        ".RADIX","RADIX","END",0
+/* Case-insensitive ordering compare (streqi above only answers equal/not
+ * equal, which bsearch needs an ordering from) - written by hand rather than
+ * POSIX strcasecmp/MSVC _stricmp so it's portable across the three build
+ * toolchains this project targets (MSVC/gcc/clang). */
+static int strcmp_order_ci(const char *a, const char *b) {
+    int ca, cb;
+    for (;;) {
+        ca = toupper((unsigned char)*a);
+        cb = toupper((unsigned char)*b);
+        if (ca != cb) return ca - cb;
+        if (ca == 0) return 0;
+        a++;
+        b++;
     }
-    ;
-    int i;
-    for(i=0;p[i];i++) if(streqi(op,p[i])) return 1;
-    return 0;
+}
+static int pseudo_name_cmp(const void *pa, const void *pb) {
+    const char *a = *(const char * const *)pa;
+    const char *b = *(const char * const *)pb;
+    return strcmp_order_ci(a, b);
+}
+static int is_pseudo(const char *op) {
+    /* Sorted case-insensitively (verified by construction, matching
+     * strcmp_order_ci's ordering) so bsearch can find a match in ~5
+     * comparisons instead of the up to 25 streqi calls the previous
+     * linear scan needed - is_pseudo alone was called ~39K times per
+     * m80c invocation on a large app, profiled as a meaningful share of
+     * the 3.7M total streqi calls dominating m80c's post-write_rel-fix
+     * runtime. */
+    static const char *p[] = {
+        ".RADIX","ASEG","BLKB","BYTE","CSEG","DB","DEFB","DEFM","DEFS","DEFW",
+        "DS","DSEG","DW","END","ENTRY","EQU","EXT","EXTRN","NAME","ORG",
+        "PUBLIC","RADIX","SET","TITLE","WORD"
+    };
+    return bsearch(&op, p, sizeof(p) / sizeof(p[0]), sizeof(p[0]), pseudo_name_cmp) != NULL;
 }
 static void parse_line(Asm *a,char *line,char *orig) {
     char *p,*q,*op,*args,*label="";
