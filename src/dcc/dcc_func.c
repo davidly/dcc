@@ -3886,94 +3886,13 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
         if (fd->bit_width > 0) {
             int unit_off;
             int k;
-            int next;
-            unsigned int unit;
-            unsigned int unit_mask;
             int stop;
+            unsigned int unit;
 
-            unit_off = fd->offset;
-            unit = 0;
-            unit_mask = 0;
-            stop = 0;
-            k = i;
-            while (k >= 0 && k < nfield_defs && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
-                struct FieldDef *bfd;
-                bfd = &field_defs[k];
-                if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
-                    if (bfd->bit_width <= 0 || bfd->offset != unit_off)
-                        break;
-                    unit &= ~bitfield_field_mask(bfd);
-                    unit |= bitfield_init_part(bfd, parse_struct_init_const_value());
-                    unit_mask |= bitfield_field_mask(bfd);
-                    if (!accept(',')) {
-                        stop = 1;
-                        break;
-                    }
-                    if (g_lex.tok.kind == '}') {
-                        stop = 1;
-                        break;
-                    }
-                }
-                /*
-                 * A designated element (`.field = ...`) may follow.  When it
-                 * names another bit-field in the SAME storage unit, keep
-                 * accumulating it into `unit` so all designators for the unit
-                 * are written with a single store.  A designator for a
-                 * different unit (or a non-bit-field) is left for the outer
-                 * field loop; the comma has already been consumed.
-                 */
-                if (g_lex.tok.kind == '.') {
-                    LexState _ls = lex_save();
-                    struct FieldDef *nf = NULL;
-
-                    next_token();
-                    if (g_lex.tok.kind == TOK_ID)
-                        nf = find_field_def(sid, g_lex.tok.text);
-                    if (nf != NULL && nf->bit_width > 0 && nf->offset == unit_off) {
-                        next_token();
-                        if (g_lex.tok.kind == '=')
-                            next_token();
-                        else if (g_lex.tok.kind != '[' && g_lex.tok.kind != '.')
-                            expect('=');
-                        k = field_def_index(nf);
-                        continue;
-                    }
-                    lex_restore(&_ls);
-                    break;
-                }
-                next = next_parent_field_index(sid, k + 1);
-                if (next < 0) {
-                    if (g_lex.tok.kind != '}') {
-                        error_here("too many initializer elements");
-                        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
-                            skip_initializer_or_decl_tail();
-                            if (g_lex.tok.kind == ',') next_token();
-                            else break;
-                        }
-                    }
-                    stop = 1;
-                    break;
-                }
-                k = next;
-            }
-            {
-                int u;
-                int found = -1;
-                for (u = 0; u < bf_nunits; ++u) {
-                    if (bf_unit_offs[u] == unit_off) {
-                        found = u;
-                        break;
-                    }
-                }
-                if (found >= 0)
-                    unit = (bf_unit_vals[found] & ~unit_mask) | unit;
-                else if (bf_nunits < (int)(sizeof(bf_unit_offs) / sizeof(bf_unit_offs[0]))) {
-                    found = bf_nunits++;
-                    bf_unit_offs[found] = unit_off;
-                }
-                if (found >= 0)
-                    bf_unit_vals[found] = unit;
-            }
+            unit = pack_struct_bitfield_unit(sid, i, fd, 0,
+                bf_unit_offs, bf_unit_vals, &bf_nunits,
+                (int)(sizeof(bf_unit_offs) / sizeof(bf_unit_offs[0])),
+                &unit_off, &k, &stop);
             global_init_write_value_at(s, baseoff + unit_off, NULL, (long)(unit & 0xffffU), 2, 0);
             if (k > i)
                 i = k - 1;

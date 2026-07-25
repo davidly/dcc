@@ -767,6 +767,129 @@ int next_parent_field_index(int sid, int start)
     return -1;
 }
 
+/*
+ * Shared bit-field storage-unit packer for struct designated initializers,
+ * used by BOTH the local (emit) and global (record) init paths so the two
+ * cannot drift out of sync (they did once - a fix had to be applied twice).
+ *
+ * Starting at field index `i` (fd = &field_defs[i], a bit-field), this
+ * consumes from the token stream the initializers of every bit-field sharing
+ * fd's 16-bit storage unit - including same-unit `.field =` designators - and
+ * returns the packed unit value.  It merges with any value previously stored
+ * for this unit via the caller-owned tracking arrays
+ * (unit_offs[], unit_vals[], *nunits, capacity `cap`), so an out-of-order
+ * designator that revisits a unit is last-designator-wins per C99.
+ *
+ * On return *out_unit_off is the unit's byte offset, *out_k the final field
+ * index the packing reached, and *out_stop is 1 when the initializer list
+ * ended (no trailing ',').  The CALLER performs the actual unit store (emit a
+ * runtime store, or record init bytes) and any `used` bookkeeping, and then
+ * the shared `if (k > i) i = k - 1; if (stop) break; ...` tail.
+ *
+ * allow_promoted_owner: the local path also accepts a promoted bit-field when
+ * the unit's owner fd is itself promoted (anonymous struct/union member); the
+ * global path does not.
+ */
+unsigned int pack_struct_bitfield_unit(int sid, int i, struct FieldDef *fd,
+                                       int allow_promoted_owner,
+                                       int *unit_offs, unsigned int *unit_vals,
+                                       int *nunits, int cap,
+                                       int *out_unit_off, int *out_k,
+                                       int *out_stop)
+{
+    int unit_off = fd->offset;
+    int k = i;
+    int next;
+    int u;
+    int found;
+    unsigned int unit = 0;
+    unsigned int unit_mask = 0;
+    int stop = 0;
+
+    while (k >= 0 && k < nfield_defs && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
+        struct FieldDef *bfd = &field_defs[k];
+        if (bfd->parent_struct_id == sid &&
+            (!bfd->is_promoted || (allow_promoted_owner && fd->is_promoted))) {
+            if (bfd->bit_width <= 0 || bfd->offset != unit_off)
+                break;
+            unit &= ~bitfield_field_mask(bfd);
+            unit |= bitfield_init_part(bfd, parse_struct_init_const_value());
+            unit_mask |= bitfield_field_mask(bfd);
+            if (!accept(',')) {
+                stop = 1;
+                break;
+            }
+            if (g_lex.tok.kind == '}') {
+                stop = 1;
+                break;
+            }
+        }
+        /*
+         * A designated element (`.field = ...`) may follow.  When it names
+         * another bit-field in the SAME storage unit, keep accumulating it
+         * into `unit` so all designators for the unit are packed with a single
+         * store (the unit store overwrites, so they cannot be emitted one at a
+         * time).  A designator that targets a different unit (or a non-bit-
+         * field) is left for the outer field loop; the comma has already been
+         * consumed, which is exactly where the outer loop expects to resume.
+         */
+        if (g_lex.tok.kind == '.') {
+            LexState _ls = lex_save();
+            struct FieldDef *nf = NULL;
+
+            next_token();
+            if (g_lex.tok.kind == TOK_ID)
+                nf = find_field_def(sid, g_lex.tok.text);
+            if (nf != NULL && nf->bit_width > 0 && nf->offset == unit_off) {
+                next_token();
+                if (g_lex.tok.kind == '=')
+                    next_token();
+                else if (g_lex.tok.kind != '[' && g_lex.tok.kind != '.')
+                    expect('=');
+                k = (int)(nf - field_defs);
+                continue;
+            }
+            lex_restore(&_ls);
+            break;
+        }
+        next = next_parent_field_index(sid, k + 1);
+        if (next < 0) {
+            if (g_lex.tok.kind != '}') {
+                error_here("too many initializer elements");
+                while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
+                    skip_initializer_or_decl_tail();
+                    if (g_lex.tok.kind == ',') next_token();
+                    else break;
+                }
+            }
+            stop = 1;
+            break;
+        }
+        k = next;
+    }
+
+    found = -1;
+    for (u = 0; u < *nunits; ++u) {
+        if (unit_offs[u] == unit_off) {
+            found = u;
+            break;
+        }
+    }
+    if (found >= 0)
+        unit = (unit_vals[found] & ~unit_mask) | unit;
+    else if (*nunits < cap) {
+        found = (*nunits)++;
+        unit_offs[found] = unit_off;
+    }
+    if (found >= 0)
+        unit_vals[found] = unit;
+
+    *out_unit_off = unit_off;
+    *out_k = k;
+    *out_stop = stop;
+    return unit;
+}
+
 void emit_store_const_bitfield_unit_to_local(struct Sym *s, int off, unsigned int unit)
 {
     emit_store_const_to_local_offset(s, off, TYPE_UNSIGNED | TYPE_INT, (long)(unit & 0xffffU));
@@ -928,97 +1051,13 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
         if (fd->bit_width > 0) {
             int unit_off;
             int k;
-            int next;
-            unsigned int unit;
-            unsigned int unit_mask;
             int stop;
+            unsigned int unit;
 
-            unit_off = fd->offset;
-            unit = 0;
-            unit_mask = 0;
-            stop = 0;
-            k = i;
-            while (k >= 0 && k < nfield_defs && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
-                struct FieldDef *bfd;
-                bfd = &field_defs[k];
-                if (bfd->parent_struct_id == sid &&
-                    (!bfd->is_promoted || fd->is_promoted)) {
-                    if (bfd->bit_width <= 0 || bfd->offset != unit_off)
-                        break;
-                    unit &= ~bitfield_field_mask(bfd);
-                    unit |= bitfield_init_part(bfd, parse_struct_init_const_value());
-                    unit_mask |= bitfield_field_mask(bfd);
-                    if (!accept(',')) {
-                        stop = 1;
-                        break;
-                    }
-                    if (g_lex.tok.kind == '}') {
-                        stop = 1;
-                        break;
-                    }
-                }
-                /*
-                 * A designated element (`.field = ...`) may follow.  When it
-                 * names another bit-field in the SAME storage unit, keep
-                 * accumulating it into `unit` so all designators for the unit
-                 * are packed with a single store (the unit store overwrites, so
-                 * they cannot be emitted one at a time).  A designator that
-                 * targets a different unit (or a non-bit-field) is left for the
-                 * outer field loop; the comma has already been consumed, which
-                 * is exactly where the outer loop expects to resume.
-                 */
-                if (g_lex.tok.kind == '.') {
-                    LexState _ls = lex_save();
-                    struct FieldDef *nf = NULL;
-
-                    next_token();
-                    if (g_lex.tok.kind == TOK_ID)
-                        nf = find_field_def(sid, g_lex.tok.text);
-                    if (nf != NULL && nf->bit_width > 0 && nf->offset == unit_off) {
-                        next_token();
-                        if (g_lex.tok.kind == '=')
-                            next_token();
-                        else if (g_lex.tok.kind != '[' && g_lex.tok.kind != '.')
-                            expect('=');
-                        k = (int)(nf - field_defs);
-                        continue;
-                    }
-                    lex_restore(&_ls);
-                    break;
-                }
-                next = next_parent_field_index(sid, k + 1);
-                if (next < 0) {
-                    if (g_lex.tok.kind != '}') {
-                        error_here("too many initializer elements");
-                        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
-                            skip_initializer_or_decl_tail();
-                            if (g_lex.tok.kind == ',') next_token();
-                            else break;
-                        }
-                    }
-                    stop = 1;
-                    break;
-                }
-                k = next;
-            }
-            {
-                int u;
-                int found = -1;
-                for (u = 0; u < bf_nunits; ++u) {
-                    if (bf_unit_offs[u] == unit_off) {
-                        found = u;
-                        break;
-                    }
-                }
-                if (found >= 0)
-                    unit = (bf_unit_vals[found] & ~unit_mask) | unit;
-                else if (bf_nunits < (int)(sizeof(bf_unit_offs) / sizeof(bf_unit_offs[0]))) {
-                    found = bf_nunits++;
-                    bf_unit_offs[found] = unit_off;
-                }
-                if (found >= 0)
-                    bf_unit_vals[found] = unit;
-            }
+            unit = pack_struct_bitfield_unit(sid, i, fd, 1,
+                bf_unit_offs, bf_unit_vals, &bf_nunits,
+                (int)(sizeof(bf_unit_offs) / sizeof(bf_unit_offs[0])),
+                &unit_off, &k, &stop);
             emit_store_const_bitfield_unit_to_local(s, baseoff + unit_off, unit);
             end_used = unit_off + 2;
             if (end_used > used) used = end_used;

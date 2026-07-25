@@ -1136,6 +1136,12 @@ long parse_struct_init_const_value(void);
 unsigned int bitfield_init_part(struct FieldDef *fd, long v);
 unsigned int bitfield_field_mask(struct FieldDef *fd);
 int next_parent_field_index(int sid, int start);
+unsigned int pack_struct_bitfield_unit(int sid, int i, struct FieldDef *fd,
+                                       int allow_promoted_owner,
+                                       int *unit_offs, unsigned int *unit_vals,
+                                       int *nunits, int cap,
+                                       int *out_unit_off, int *out_k,
+                                       int *out_stop);
 void emit_store_const_bitfield_unit_to_local(struct Sym *s, int off, unsigned int unit);
 void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type);
 void emit_init_auto_struct_from_list(struct Sym *s);
