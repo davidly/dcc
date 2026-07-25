@@ -144,7 +144,20 @@ struct State {
     char *pp_defv[32];
     int pp_ifact[16];
 };
-static struct State *G;
+/* A plain static instance, not a heap-allocated struct behind a runtime
+ * pointer variable: every Gst.field access below is a link-time-constant
+ * address, so the codegen it produces addresses each field directly
+ * instead of first loading a pointer value out of memory and adding the
+ * field offset. This is the same fix applied to tests/cobint.c's
+ * equivalent State/G - see that file's header comment for the profiling
+ * background (there, the interpreter's whole hot loop paid this tax on
+ * every field touch). Here it matters even more directly: run()'s main
+ * dispatch loop touches Gst.gmem/flp/fp/st/stp/etc. on nearly every
+ * opcode case, and unlike cobint this file never routed field access
+ * through macros, so there's no risk of the self-referential-macro
+ * preprocessor bug that fix had to route around - plain search-and-replace
+ * of the old G-> spelling to Gst. was sufficient. */
+static struct State Gst;
 static int saved_main_func;
 
 struct Mark { long pos; int tok; int ival; int cp; char text[MAXTOK]; };
@@ -155,8 +168,11 @@ static int is_type_start(void);
 
 static void die(const char *s)
 {
-    fprintf(stderr, "cint:%d: %s near '%s'\n", G ? G->line : 0, s,
-            G ? G->text : "");
+    /* No G-is-NULL guard needed anymore: Gst always "exists" (a plain
+     * static struct), and its fields are zero-initialized until
+     * init_state() sets them, matching the fallback values (0, "") the
+     * old ternaries produced for a die() called before G was allocated. */
+    fprintf(stderr, "cint:%d: %s near '%s'\n", Gst.line, s, Gst.text);
     exit(1);
 }
 
@@ -179,58 +195,58 @@ static char *xstrdup2(const char *s)
 
 static int emit(int op, int a, int b)
 {
-    if (G->cp >= MAXCODE) die("code full");
-    G->code[G->cp].op = (unsigned char)op;
-    G->code[G->cp].a = a;
-    G->code[G->cp].b = b;
-    return G->cp++;
+    if (Gst.cp >= MAXCODE) die("code full");
+    Gst.code[Gst.cp].op = (unsigned char)op;
+    Gst.code[Gst.cp].a = a;
+    Gst.code[Gst.cp].b = b;
+    return Gst.cp++;
 }
 
 static inline void patch(int at, int v)
 {
-    G->code[at].a = v;
+    Gst.code[at].a = v;
 }
 
 static inline void pushv(int v)
 {
-    *G->stp = v;
-    G->stp = G->stp + 1;
+    *Gst.stp = v;
+    Gst.stp = Gst.stp + 1;
 }
 
 static inline int popv(void)
 {
-    G->stp = G->stp - 1;
-    return *G->stp;
+    Gst.stp = Gst.stp - 1;
+    return *Gst.stp;
 }
 
 static void mark_get(struct Mark *m)
 {
-    m->pos = G->pos;
-    m->tok = G->tok;
-    m->ival = G->ival;
-    m->cp = G->cp;
-    strcpy(m->text, G->text);
+    m->pos = Gst.pos;
+    m->tok = Gst.tok;
+    m->ival = Gst.ival;
+    m->cp = Gst.cp;
+    strcpy(m->text, Gst.text);
 }
 
 static void mark_set(struct Mark *m)
 {
-    G->pos = m->pos;
-    G->tok = m->tok;
-    G->ival = m->ival;
-    G->cp = m->cp;
-    strcpy(G->text, m->text);
+    Gst.pos = m->pos;
+    Gst.tok = m->tok;
+    Gst.ival = m->ival;
+    Gst.cp = m->cp;
+    strcpy(Gst.text, m->text);
 }
 
 static int isword(const char *s)
 {
-    return G->tok == T_ID && strcmp(G->text, s) == 0;
+    return Gst.tok == T_ID && strcmp(Gst.text, s) == 0;
 }
 
 static void skip_ws(void)
 {
-    while (G->pos < G->slen && isspace((unsigned char)G->src[G->pos])) {
-        if (G->src[G->pos] == '\n') G->line++;
-        G->pos++;
+    while (Gst.pos < Gst.slen && isspace((unsigned char)Gst.src[Gst.pos])) {
+        if (Gst.src[Gst.pos] == '\n') Gst.line++;
+        Gst.pos++;
     }
 }
 
@@ -241,118 +257,118 @@ static void next(void)
     long v;
 
     skip_ws();
-    G->text[0] = 0;
-    G->tok = T_EOF;
-    G->ival = 0;
-    if (G->pos >= G->slen) return;
-    c = (unsigned char)G->src[G->pos++];
+    Gst.text[0] = 0;
+    Gst.tok = T_EOF;
+    Gst.ival = 0;
+    if (Gst.pos >= Gst.slen) return;
+    c = (unsigned char)Gst.src[Gst.pos++];
     if (isalpha(c) || c == '_') {
         i = 0;
         while (isalnum(c) || c == '_') {
-            if (i < MAXTOK - 1) G->text[i++] = (char)c;
-            if (G->pos >= G->slen) break;
-            c = (unsigned char)G->src[G->pos];
-            if (isalnum(c) || c == '_') G->pos++;
+            if (i < MAXTOK - 1) Gst.text[i++] = (char)c;
+            if (Gst.pos >= Gst.slen) break;
+            c = (unsigned char)Gst.src[Gst.pos];
+            if (isalnum(c) || c == '_') Gst.pos++;
             else break;
         }
-        G->text[i] = 0;
-        if (!strcmp(G->text, "true")) { G->tok = T_NUM; G->ival = 1; return; }
-        if (!strcmp(G->text, "false")) { G->tok = T_NUM; G->ival = 0; return; }
-        G->tok = T_ID;
+        Gst.text[i] = 0;
+        if (!strcmp(Gst.text, "true")) { Gst.tok = T_NUM; Gst.ival = 1; return; }
+        if (!strcmp(Gst.text, "false")) { Gst.tok = T_NUM; Gst.ival = 0; return; }
+        Gst.tok = T_ID;
         return;
     }
     if (isdigit(c)) {
         v = 0;
         while (isdigit(c)) {
             v = v * 10 + c - '0';
-            if (G->pos >= G->slen) break;
-            c = (unsigned char)G->src[G->pos++];
+            if (Gst.pos >= Gst.slen) break;
+            c = (unsigned char)Gst.src[Gst.pos++];
         }
-        if (!isdigit(c)) G->pos--;
-        while (G->pos < G->slen &&
-               (G->src[G->pos] == 'u' || G->src[G->pos] == 'U' ||
-                G->src[G->pos] == 'l' || G->src[G->pos] == 'L')) G->pos++;
-        G->tok = T_NUM;
-        G->ival = (int)v;
-        sprintf(G->text, "%d", G->ival);
+        if (!isdigit(c)) Gst.pos--;
+        while (Gst.pos < Gst.slen &&
+               (Gst.src[Gst.pos] == 'u' || Gst.src[Gst.pos] == 'U' ||
+                Gst.src[Gst.pos] == 'l' || Gst.src[Gst.pos] == 'L')) Gst.pos++;
+        Gst.tok = T_NUM;
+        Gst.ival = (int)v;
+        sprintf(Gst.text, "%d", Gst.ival);
         return;
     }
     if (c == '"') {
         i = 0;
-        while (G->pos < G->slen && G->src[G->pos] != '"') {
-            c = (unsigned char)G->src[G->pos++];
-            if (c == '\\' && G->pos < G->slen) {
-                c = (unsigned char)G->src[G->pos++];
+        while (Gst.pos < Gst.slen && Gst.src[Gst.pos] != '"') {
+            c = (unsigned char)Gst.src[Gst.pos++];
+            if (c == '\\' && Gst.pos < Gst.slen) {
+                c = (unsigned char)Gst.src[Gst.pos++];
                 if (c == 'n') c = '\n';
                 else if (c == 'r') c = '\r';
                 else if (c == 't') c = '\t';
             }
-            if (i < MAXTOK - 1) G->text[i++] = (char)c;
+            if (i < MAXTOK - 1) Gst.text[i++] = (char)c;
         }
-        if (G->pos < G->slen) G->pos++;
-        G->text[i] = 0;
-        G->tok = T_STR;
+        if (Gst.pos < Gst.slen) Gst.pos++;
+        Gst.text[i] = 0;
+        Gst.tok = T_STR;
         return;
     }
-    if (c == '=' && G->pos < G->slen && G->src[G->pos] == '=')
-        { G->pos++; G->tok = T_EQ; strcpy(G->text, "=="); return; }
-    if (c == '!' && G->pos < G->slen && G->src[G->pos] == '=')
-        { G->pos++; G->tok = T_NE; strcpy(G->text, "!="); return; }
-    if (c == '<' && G->pos < G->slen && G->src[G->pos] == '=')
-        { G->pos++; G->tok = T_LE; strcpy(G->text, "<="); return; }
-    if (c == '>' && G->pos < G->slen && G->src[G->pos] == '=')
-        { G->pos++; G->tok = T_GE; strcpy(G->text, ">="); return; }
-    if (c == '&' && G->pos < G->slen && G->src[G->pos] == '&')
-        { G->pos++; G->tok = T_ANDAND; strcpy(G->text, "&&"); return; }
-    if (c == '|' && G->pos < G->slen && G->src[G->pos] == '|')
-        { G->pos++; G->tok = T_OROR; strcpy(G->text, "||"); return; }
-    if (c == '+' && G->pos < G->slen && G->src[G->pos] == '+')
-        { G->pos++; G->tok = T_INC; strcpy(G->text, "++"); return; }
-    if (c == '-' && G->pos < G->slen && G->src[G->pos] == '-')
-        { G->pos++; G->tok = T_DEC; strcpy(G->text, "--"); return; }
-    if (c == '+' && G->pos < G->slen && G->src[G->pos] == '=')
-        { G->pos++; G->tok = T_ADDEQ; strcpy(G->text, "+="); return; }
-    if (c == '-' && G->pos < G->slen && G->src[G->pos] == '=')
-        { G->pos++; G->tok = T_SUBEQ; strcpy(G->text, "-="); return; }
-    G->tok = c;
-    G->text[0] = (char)c;
-    G->text[1] = 0;
+    if (c == '=' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '=')
+        { Gst.pos++; Gst.tok = T_EQ; strcpy(Gst.text, "=="); return; }
+    if (c == '!' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '=')
+        { Gst.pos++; Gst.tok = T_NE; strcpy(Gst.text, "!="); return; }
+    if (c == '<' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '=')
+        { Gst.pos++; Gst.tok = T_LE; strcpy(Gst.text, "<="); return; }
+    if (c == '>' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '=')
+        { Gst.pos++; Gst.tok = T_GE; strcpy(Gst.text, ">="); return; }
+    if (c == '&' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '&')
+        { Gst.pos++; Gst.tok = T_ANDAND; strcpy(Gst.text, "&&"); return; }
+    if (c == '|' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '|')
+        { Gst.pos++; Gst.tok = T_OROR; strcpy(Gst.text, "||"); return; }
+    if (c == '+' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '+')
+        { Gst.pos++; Gst.tok = T_INC; strcpy(Gst.text, "++"); return; }
+    if (c == '-' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '-')
+        { Gst.pos++; Gst.tok = T_DEC; strcpy(Gst.text, "--"); return; }
+    if (c == '+' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '=')
+        { Gst.pos++; Gst.tok = T_ADDEQ; strcpy(Gst.text, "+="); return; }
+    if (c == '-' && Gst.pos < Gst.slen && Gst.src[Gst.pos] == '=')
+        { Gst.pos++; Gst.tok = T_SUBEQ; strcpy(Gst.text, "-="); return; }
+    Gst.tok = c;
+    Gst.text[0] = (char)c;
+    Gst.text[1] = 0;
 }
 
 static void need(int t)
 {
-    if (G->tok != t) die("syntax");
+    if (Gst.tok != t) die("syntax");
     next();
 }
 
 static int acc(int t)
 {
-    if (G->tok == t) { next(); return 1; }
+    if (Gst.tok == t) { next(); return 1; }
     return 0;
 }
 
 static int add_string(const char *s)
 {
     int i;
-    if (G->nstr >= MAXSTR) die("too many strings");
-    i = G->nstr++;
-    G->strs[i] = xstrdup2(s);
+    if (Gst.nstr >= MAXSTR) die("too many strings");
+    i = Gst.nstr++;
+    Gst.strs[i] = xstrdup2(s);
     return i;
 }
 
 static int find_sym_scope(const char *n, int sc)
 {
     int i;
-    for (i = G->nsym - 1; i >= 0; i--)
-        if (G->sym[i].scope == sc && !strcmp(G->sym[i].name, n)) return i;
+    for (i = Gst.nsym - 1; i >= 0; i--)
+        if (Gst.sym[i].scope == sc && !strcmp(Gst.sym[i].name, n)) return i;
     return -1;
 }
 
 static int find_sym(const char *n)
 {
     int i;
-    if (G->curfunc >= 0) {
-        i = find_sym_scope(n, G->curfunc + 1);
+    if (Gst.curfunc >= 0) {
+        i = find_sym_scope(n, Gst.curfunc + 1);
         if (i >= 0) return i;
     }
     i = find_sym_scope(n, 0);
@@ -364,13 +380,13 @@ static int find_sym(const char *n)
 static int add_sym(const char *n, int kind, int sc)
 {
     int i;
-    if (G->nsym >= MAXSYM) die("sym full");
-    i = G->nsym++;
-    memset(&G->sym[i], 0, sizeof(struct Sym));
-    strncpy(G->sym[i].name, n, MAXNAME - 1);
-    G->sym[i].kind = (unsigned char)kind;
-    G->sym[i].scope = (unsigned char)sc;
-    G->sym[i].esize = INTB;
+    if (Gst.nsym >= MAXSYM) die("sym full");
+    i = Gst.nsym++;
+    memset(&Gst.sym[i], 0, sizeof(struct Sym));
+    strncpy(Gst.sym[i].name, n, MAXNAME - 1);
+    Gst.sym[i].kind = (unsigned char)kind;
+    Gst.sym[i].scope = (unsigned char)sc;
+    Gst.sym[i].esize = INTB;
     return i;
 }
 
@@ -383,8 +399,8 @@ static int is_main_name(const char *n)
 static int find_func(const char *n)
 {
     int i;
-    for (i = 0; i < G->nfunc; i++)
-        if (!strcmp(G->func[i].name, n)) return i;
+    for (i = 0; i < Gst.nfunc; i++)
+        if (!strcmp(Gst.func[i].name, n)) return i;
     return -1;
 }
 
@@ -393,34 +409,34 @@ static int add_func(const char *n)
     int i, si;
     i = find_func(n);
     if (i >= 0) return i;
-    if (G->nfunc >= MAXFUNC) die("too many funcs");
-    i = G->nfunc++;
-    memset(&G->func[i], 0, sizeof(struct Func));
-    strncpy(G->func[i].name, n, MAXNAME - 1);
-    if (is_main_name(n)) G->main_func = i;
-    G->func[i].ret_esize = INTB;
+    if (Gst.nfunc >= MAXFUNC) die("too many funcs");
+    i = Gst.nfunc++;
+    memset(&Gst.func[i], 0, sizeof(struct Func));
+    strncpy(Gst.func[i].name, n, MAXNAME - 1);
+    if (is_main_name(n)) Gst.main_func = i;
+    Gst.func[i].ret_esize = INTB;
     si = add_sym(n, K_FUNC, 0);
-    G->sym[si].func = i;
+    Gst.sym[si].func = i;
     return i;
 }
 
 static int alloc_global(int bytes)
 {
     int b;
-    b = G->gtop;
-    G->gtop += bytes;
-    if (G->gtop >= MAXMEM) die("global memory full");
+    b = Gst.gtop;
+    Gst.gtop += bytes;
+    if (Gst.gtop >= MAXMEM) die("global memory full");
     return b;
 }
 
 static int alloc_local(int bytes)
 {
     int b;
-    b = G->func[G->curfunc].locals;
-    G->func[G->curfunc].locals += bytes;
-    if (G->func[G->curfunc].locals >= MAXLOC) die("local memory full");
-    if (G->func[G->curfunc].locals > G->frame_size)
-        G->frame_size = G->func[G->curfunc].locals;
+    b = Gst.func[Gst.curfunc].locals;
+    Gst.func[Gst.curfunc].locals += bytes;
+    if (Gst.func[Gst.curfunc].locals >= MAXLOC) die("local memory full");
+    if (Gst.func[Gst.curfunc].locals > Gst.frame_size)
+        Gst.frame_size = Gst.func[Gst.curfunc].locals;
     return b;
 }
 
@@ -443,7 +459,7 @@ static int type_esize(void)
 
 static int is_type_start(void)
 {
-    if (G->tok != T_ID) return 0;
+    if (Gst.tok != T_ID) return 0;
     if (isword("typedef")) return 1;
     if (isword("extern")) return 1;
     if (isword("register")) return 1;
@@ -485,12 +501,12 @@ static int store_op(int sc, int esz, int arr)
 static int parse_const_expr_simple(void)
 {
     int v, op;
-    if (G->tok != T_NUM) die("constant");
-    v = G->ival; next();
-    while (G->tok == '+' || G->tok == '-') {
-        op = G->tok; next();
-        if (G->tok != T_NUM) die("constant");
-        if (op == '+') v += G->ival; else v -= G->ival;
+    if (Gst.tok != T_NUM) die("constant");
+    v = Gst.ival; next();
+    while (Gst.tok == '+' || Gst.tok == '-') {
+        op = Gst.tok; next();
+        if (Gst.tok != T_NUM) die("constant");
+        if (op == '+') v += Gst.ival; else v -= Gst.ival;
         next();
     }
     return v;
@@ -500,8 +516,8 @@ static void lvalue(int *sip, int *arrp)
 {
     int si;
     char name[MAXNAME];
-    if (G->tok != T_ID) die("lvalue");
-    strcpy(name, G->text);
+    if (Gst.tok != T_ID) die("lvalue");
+    strcpy(name, Gst.text);
     next();
     si = find_sym(name);
     *arrp = 0;
@@ -515,12 +531,12 @@ static void lvalue(int *sip, int *arrp)
 
 static void emit_load_lvalue(int si, int arr)
 {
-    emit(load_op(G->sym[si].scope, G->sym[si].esize, arr), G->sym[si].base, 0);
+    emit(load_op(Gst.sym[si].scope, Gst.sym[si].esize, arr), Gst.sym[si].base, 0);
 }
 
 static void emit_store_lvalue(int si, int arr)
 {
-    emit(store_op(G->sym[si].scope, G->sym[si].esize, arr), G->sym[si].base, 0);
+    emit(store_op(Gst.sym[si].scope, Gst.sym[si].esize, arr), Gst.sym[si].base, 0);
 }
 
 static void parse_assign(void);
@@ -530,16 +546,16 @@ static void primary(void)
     char name[MAXNAME];
     int si, fi, argc, arr;
 
-    if (G->tok == T_NUM) { emit(OP_PUSH, G->ival, 0); next(); return; }
-    if (G->tok == '(') { next(); parse_expr(); need(')'); return; }
-    if (G->tok == T_ID) {
-        strcpy(name, G->text);
+    if (Gst.tok == T_NUM) { emit(OP_PUSH, Gst.ival, 0); next(); return; }
+    if (Gst.tok == '(') { next(); parse_expr(); need(')'); return; }
+    if (Gst.tok == T_ID) {
+        strcpy(name, Gst.text);
         next();
         if (acc('(')) {
             if (!strcmp(name, "printf")) {
                 int sid, nargs;
-                if (G->tok != T_STR) die("printf format");
-                sid = add_string(G->text);
+                if (Gst.tok != T_STR) die("printf format");
+                sid = add_string(Gst.text);
                 next();
                 nargs = 0;
                 while (acc(',')) { parse_expr(); nargs++; }
@@ -548,17 +564,17 @@ static void primary(void)
                 return;
             }
             if (!strcmp(name, "atoi")) {
-                while (G->tok != ')' && G->tok != T_EOF) next();
+                while (Gst.tok != ')' && Gst.tok != T_EOF) next();
                 need(')'); emit(OP_PUSH, 0, 0); return;
             }
             if (!strcmp(name, "fflush")) {
-                while (G->tok != ')' && G->tok != T_EOF) next();
+                while (Gst.tok != ')' && Gst.tok != T_EOF) next();
                 need(')'); emit(OP_PUSH, 0, 0); return;
             }
             fi = find_func(name);
             if (fi < 0) die("bad function");
             argc = 0;
-            if (G->tok != ')') {
+            if (Gst.tok != ')') {
                 for (;;) { parse_expr(); argc++; if (!acc(',')) break; }
             }
             need(')');
@@ -574,14 +590,14 @@ static void primary(void)
         }
         emit_load_lvalue(si, arr);
         if (arr && acc('(')) {
-            if (G->tok != ')') die("indirect args");
+            if (Gst.tok != ')') die("indirect args");
             need(')');
             emit(OP_CALLI, 0, 0);
             return;
         }
-        if (G->tok == T_INC || G->tok == T_DEC) {
+        if (Gst.tok == T_INC || Gst.tok == T_DEC) {
             int op;
-            op = G->tok;
+            op = Gst.tok;
             next();
             /* Post inc/dec rarely used as value here; leave old value. */
             emit(OP_PUSH, op == T_INC ? 1 : -1, 0);
@@ -601,10 +617,10 @@ static void primary(void)
 static void unary(void)
 {
     int op, si, arr;
-    if (G->tok == '-') { next(); unary(); emit(OP_NEG, 0, 0); return; }
-    if (G->tok == '!') { next(); unary(); emit(OP_NOT, 0, 0); return; }
-    if (G->tok == T_INC || G->tok == T_DEC) {
-        op = G->tok; next();
+    if (Gst.tok == '-') { next(); unary(); emit(OP_NEG, 0, 0); return; }
+    if (Gst.tok == '!') { next(); unary(); emit(OP_NOT, 0, 0); return; }
+    if (Gst.tok == T_INC || Gst.tok == T_DEC) {
+        op = Gst.tok; next();
         lvalue(&si, &arr);
         if (arr) die("array preinc");
         emit_load_lvalue(si, 0);
@@ -622,9 +638,9 @@ static void mul_expr(void)
     int op;
     unary();
     for (;;) {
-        if (G->tok == '*') op = OP_MUL;
-        else if (G->tok == '/') op = OP_DIV;
-        else if (G->tok == '%') op = OP_MOD;
+        if (Gst.tok == '*') op = OP_MUL;
+        else if (Gst.tok == '/') op = OP_DIV;
+        else if (Gst.tok == '%') op = OP_MOD;
         else break;
         next(); unary(); emit(op, 0, 0);
     }
@@ -635,8 +651,8 @@ static void add_expr(void)
     int op;
     mul_expr();
     for (;;) {
-        if (G->tok == '+') op = OP_ADD;
-        else if (G->tok == '-') op = OP_SUB;
+        if (Gst.tok == '+') op = OP_ADD;
+        else if (Gst.tok == '-') op = OP_SUB;
         else break;
         next(); mul_expr(); emit(op, 0, 0);
     }
@@ -647,10 +663,10 @@ static void rel_expr(void)
     int op;
     add_expr();
     for (;;) {
-        if (G->tok == '<') op = OP_LT;
-        else if (G->tok == '>') op = OP_GT;
-        else if (G->tok == T_LE) op = OP_LE;
-        else if (G->tok == T_GE) op = OP_GE;
+        if (Gst.tok == '<') op = OP_LT;
+        else if (Gst.tok == '>') op = OP_GT;
+        else if (Gst.tok == T_LE) op = OP_LE;
+        else if (Gst.tok == T_GE) op = OP_GE;
         else break;
         next(); add_expr(); emit(op, 0, 0);
     }
@@ -661,8 +677,8 @@ static void eq_expr(void)
     int op;
     rel_expr();
     for (;;) {
-        if (G->tok == T_EQ) op = OP_EQ;
-        else if (G->tok == T_NE) op = OP_NE;
+        if (Gst.tok == T_EQ) op = OP_EQ;
+        else if (Gst.tok == T_NE) op = OP_NE;
         else break;
         next(); rel_expr(); emit(op, 0, 0);
     }
@@ -671,35 +687,35 @@ static void eq_expr(void)
 static void band_expr(void)
 {
     eq_expr();
-    while (G->tok == '&') { next(); eq_expr(); emit(OP_BAND, 0, 0); }
+    while (Gst.tok == '&') { next(); eq_expr(); emit(OP_BAND, 0, 0); }
 }
 
 static void and_expr(void)
 {
     band_expr();
-    while (G->tok == T_ANDAND) { next(); band_expr(); emit(OP_AND, 0, 0); }
+    while (Gst.tok == T_ANDAND) { next(); band_expr(); emit(OP_AND, 0, 0); }
 }
 
 static void or_expr(void)
 {
     and_expr();
-    while (G->tok == T_OROR) { next(); and_expr(); emit(OP_OR, 0, 0); }
+    while (Gst.tok == T_OROR) { next(); and_expr(); emit(OP_OR, 0, 0); }
 }
 
 static int try_assignment(void)
 {
     struct Mark *m;
     int si, arr, op;
-    if (G->mark_sp >= 8) die("mark stack");
-    m = G->marks + G->mark_sp++;
+    if (Gst.mark_sp >= 8) die("mark stack");
+    m = Gst.marks + Gst.mark_sp++;
     mark_get(m);
-    if (G->tok != T_ID) { G->mark_sp--; return 0; }
+    if (Gst.tok != T_ID) { Gst.mark_sp--; return 0; }
     next();
-    if (G->tok == '(') { mark_set(m); G->mark_sp--; return 0; }
+    if (Gst.tok == '(') { mark_set(m); Gst.mark_sp--; return 0; }
     mark_set(m);
     lvalue(&si, &arr);
-    if (G->tok == '=' || G->tok == T_ADDEQ || G->tok == T_SUBEQ) {
-        op = G->tok; next();
+    if (Gst.tok == '=' || Gst.tok == T_ADDEQ || Gst.tok == T_SUBEQ) {
+        op = Gst.tok; next();
         if (op == T_ADDEQ || op == T_SUBEQ) {
             if (arr) die("array +=");
             emit_load_lvalue(si, 0);
@@ -710,11 +726,11 @@ static int try_assignment(void)
         }
         emit_store_lvalue(si, arr);
         emit_load_lvalue(si, 0);
-        G->mark_sp--;
+        Gst.mark_sp--;
         return 1;
     }
     mark_set(m);
-    G->mark_sp--;
+    Gst.mark_sp--;
     return 0;
 }
 
@@ -730,14 +746,14 @@ static void parse_expr(void)
 
 static void expr_stmt(void)
 {
-    if (G->tok != ';') { parse_expr(); emit(OP_POP, 0, 0); }
+    if (Gst.tok != ';') { parse_expr(); emit(OP_POP, 0, 0); }
     need(';');
 }
 
 static void block(void)
 {
     need('{');
-    while (G->tok != '}') statement();
+    while (Gst.tok != '}') statement();
     need('}');
 }
 
@@ -749,47 +765,47 @@ static void if_stmt(void)
     statement();
     if (isword("else")) {
         jm = emit(OP_JMP, 0, 0);
-        patch(jz, G->cp);
+        patch(jz, Gst.cp);
         next(); statement();
-        patch(jm, G->cp);
-    } else patch(jz, G->cp);
+        patch(jm, Gst.cp);
+    } else patch(jz, Gst.cp);
 }
 
 static void while_stmt(void)
 {
     int top, jz;
-    next(); need('('); top = G->cp; parse_expr(); need(')');
+    next(); need('('); top = Gst.cp; parse_expr(); need(')');
     jz = emit(OP_JZ, 0, 0);
-    statement(); emit(OP_JMP, top, 0); patch(jz, G->cp);
+    statement(); emit(OP_JMP, top, 0); patch(jz, Gst.cp);
 }
 
 static void for_stmt(void)
 {
     int top, jz, jm, incp;
     next(); need('(');
-    if (G->tok != ';') { parse_expr(); emit(OP_POP, 0, 0); }
+    if (Gst.tok != ';') { parse_expr(); emit(OP_POP, 0, 0); }
     need(';');
-    top = G->cp;
-    if (G->tok != ';') parse_expr(); else emit(OP_PUSH, 1, 0);
+    top = Gst.cp;
+    if (Gst.tok != ';') parse_expr(); else emit(OP_PUSH, 1, 0);
     need(';');
     jz = emit(OP_JZ, 0, 0);
     jm = emit(OP_JMP, 0, 0);
-    incp = G->cp;
-    if (G->tok != ')') { parse_expr(); emit(OP_POP, 0, 0); }
+    incp = Gst.cp;
+    if (Gst.tok != ')') { parse_expr(); emit(OP_POP, 0, 0); }
     need(')');
     emit(OP_JMP, top, 0);
-    patch(jm, G->cp);
+    patch(jm, Gst.cp);
     statement();
     emit(OP_JMP, incp, 0);
-    patch(jz, G->cp);
+    patch(jz, Gst.cp);
 }
 
 static void return_stmt(void)
 {
     next();
-    if (G->tok != ';') parse_expr(); else emit(OP_PUSH, 0, 0);
+    if (Gst.tok != ';') parse_expr(); else emit(OP_PUSH, 0, 0);
     need(';');
-    emit(OP_RET, G->curfunc, 0);
+    emit(OP_RET, Gst.curfunc, 0);
 }
 
 static void local_decl(void)
@@ -800,17 +816,17 @@ static void local_decl(void)
     if (esz < 0) die("type");
     for (;;) {
         while (acc('*')) ;
-        if (G->tok != T_ID) die("decl name");
-        strcpy(name, G->text); next();
+        if (Gst.tok != T_ID) die("decl name");
+        strcpy(name, Gst.text); next();
         count = 0;
         if (acc('[')) { count = parse_const_expr_simple(); need(']'); }
-        si = add_sym(name, K_VAR, G->curfunc + 1);
-        G->sym[si].esize = (unsigned char)(esz ? esz : INTB);
-        G->sym[si].isarr = (unsigned char)(count > 0);
-        G->sym[si].size = count;
-        bytes = count > 0 ? count * G->sym[si].esize : G->sym[si].esize;
-        G->sym[si].base = alloc_local(bytes);
-        sc = G->sym[si].scope;
+        si = add_sym(name, K_VAR, Gst.curfunc + 1);
+        Gst.sym[si].esize = (unsigned char)(esz ? esz : INTB);
+        Gst.sym[si].isarr = (unsigned char)(count > 0);
+        Gst.sym[si].size = count;
+        bytes = count > 0 ? count * Gst.sym[si].esize : Gst.sym[si].esize;
+        Gst.sym[si].base = alloc_local(bytes);
+        sc = Gst.sym[si].scope;
         if (acc('=')) { parse_expr(); emit_store_lvalue(si, 0); }
         if (!acc(',')) break;
     }
@@ -819,7 +835,7 @@ static void local_decl(void)
 
 static void statement(void)
 {
-    if (G->tok == '{') { block(); return; }
+    if (Gst.tok == '{') { block(); return; }
     if (is_type_start()) { local_decl(); return; }
     if (isword("if")) { if_stmt(); return; }
     if (isword("while")) { while_stmt(); return; }
@@ -831,8 +847,8 @@ static void statement(void)
 
 static void skip_typedef(void)
 {
-    while (G->tok != ';' && G->tok != T_EOF) next();
-    if (G->tok == ';') next();
+    while (Gst.tok != ';' && Gst.tok != T_EOF) next();
+    if (Gst.tok == ';') next();
 }
 
 static void global_decl_or_func(void)
@@ -842,94 +858,94 @@ static void global_decl_or_func(void)
     esz = type_esize();
     if (esz < 0) die("global type");
     while (acc('*')) ;
-    if (G->tok != T_ID) die("global name");
-    strcpy(name, G->text); next();
+    if (Gst.tok != T_ID) die("global name");
+    strcpy(name, Gst.text); next();
     if (acc('(')) {
         fi = add_func(name);
         nparam = 0;
-        G->curfunc = fi;
-        if (G->tok != ')') {
+        Gst.curfunc = fi;
+        if (Gst.tok != ')') {
             for (;;) {
                 p_esz = type_esize();
                 if (p_esz < 0) die("param type");
                 while (acc('*')) ;
-                if (G->tok == T_ID) { strcpy(pname, G->text); next(); }
+                if (Gst.tok == T_ID) { strcpy(pname, Gst.text); next(); }
                 else strcpy(pname, "p");
-                if (acc('[')) { while (G->tok != ']') next(); need(']'); }
+                if (acc('[')) { while (Gst.tok != ']') next(); need(']'); }
                 si = add_sym(pname, K_VAR, fi + 1);
-                G->sym[si].esize = (unsigned char)(p_esz ? p_esz : INTB);
-                G->sym[si].base = alloc_local(G->sym[si].esize);
+                Gst.sym[si].esize = (unsigned char)(p_esz ? p_esz : INTB);
+                Gst.sym[si].base = alloc_local(Gst.sym[si].esize);
                 if (nparam < MAXPARAM) {
-                    G->func[fi].pofs[nparam] = (unsigned char)G->sym[si].base;
-                    G->func[fi].pesz[nparam] = G->sym[si].esize;
+                    Gst.func[fi].pofs[nparam] = (unsigned char)Gst.sym[si].base;
+                    Gst.func[fi].pesz[nparam] = Gst.sym[si].esize;
                     nparam++;
                 }
                 if (!acc(',')) break;
             }
         }
         need(')');
-        G->func[fi].nparam = nparam;
-        G->func[fi].ret_esize = (unsigned char)(esz ? esz : INTB);
-        if (acc(';')) { G->curfunc = -1; return; }
-        G->func[fi].entry = G->cp;
-        if (is_main_name(name)) G->main_func = fi;
+        Gst.func[fi].nparam = nparam;
+        Gst.func[fi].ret_esize = (unsigned char)(esz ? esz : INTB);
+        if (acc(';')) { Gst.curfunc = -1; return; }
+        Gst.func[fi].entry = Gst.cp;
+        if (is_main_name(name)) Gst.main_func = fi;
         block();
         emit(OP_PUSH, 0, 0);
         emit(OP_RET, fi, 0);
-        G->curfunc = -1;
+        Gst.curfunc = -1;
         return;
     }
     for (;;) {
         count = 0;
         if (acc('[')) { count = parse_const_expr_simple(); need(']'); }
         si = add_sym(name, K_VAR, 0);
-        G->sym[si].esize = (unsigned char)(esz ? esz : INTB);
-        G->sym[si].isarr = (unsigned char)(count > 0);
-        G->sym[si].size = count;
-        bytes = count > 0 ? count * G->sym[si].esize : G->sym[si].esize;
-        G->sym[si].base = alloc_global(bytes);
+        Gst.sym[si].esize = (unsigned char)(esz ? esz : INTB);
+        Gst.sym[si].isarr = (unsigned char)(count > 0);
+        Gst.sym[si].size = count;
+        bytes = count > 0 ? count * Gst.sym[si].esize : Gst.sym[si].esize;
+        Gst.sym[si].base = alloc_global(bytes);
         if (acc('=')) {
             if (acc('{')) {
                 int idx, f;
                 idx = 0;
                 while (!acc('}')) {
-                    if (G->tok == T_ID && find_func(G->text) >= 0) {
-                        f = find_func(G->text); next();
-                        G->gmem[G->sym[si].base + idx * INTB] = f & 255;
-                        G->gmem[G->sym[si].base + idx * INTB + 1] = f >> 8;
-                    } else if (G->tok == T_NUM) {
-                        G->gmem[G->sym[si].base + idx * G->sym[si].esize] =
-                            (unsigned char)G->ival;
+                    if (Gst.tok == T_ID && find_func(Gst.text) >= 0) {
+                        f = find_func(Gst.text); next();
+                        Gst.gmem[Gst.sym[si].base + idx * INTB] = f & 255;
+                        Gst.gmem[Gst.sym[si].base + idx * INTB + 1] = f >> 8;
+                    } else if (Gst.tok == T_NUM) {
+                        Gst.gmem[Gst.sym[si].base + idx * Gst.sym[si].esize] =
+                            (unsigned char)Gst.ival;
                         next();
                     } else next();
                     idx++;
                     acc(',');
                 }
-            } else if (G->tok == T_NUM) {
-                G->gmem[G->sym[si].base] = (unsigned char)(G->ival & 255);
-                G->gmem[G->sym[si].base + 1] = (unsigned char)(G->ival >> 8);
+            } else if (Gst.tok == T_NUM) {
+                Gst.gmem[Gst.sym[si].base] = (unsigned char)(Gst.ival & 255);
+                Gst.gmem[Gst.sym[si].base + 1] = (unsigned char)(Gst.ival >> 8);
                 next();
             }
         }
         if (!acc(',')) break;
-        if (G->tok != T_ID) die("global name");
-        strcpy(name, G->text); next();
+        if (Gst.tok != T_ID) die("global name");
+        strcpy(name, Gst.text); next();
     }
     need(';');
 }
 
 static void program(void)
 {
-    G->main_func = -1;
-    while (G->tok != T_EOF) {
+    Gst.main_func = -1;
+    while (Gst.tok != T_EOF) {
         if (isword("typedef")) { skip_typedef(); continue; }
         if (is_type_start()) global_decl_or_func();
         else next();
     }
-    if (G->main_func < 0) {
+    if (Gst.main_func < 0) {
         int mi;
-        for (mi = 0; mi < G->nfunc; mi++)
-            if (is_main_name(G->func[mi].name)) G->main_func = mi;
+        for (mi = 0; mi < Gst.nfunc; mi++)
+            if (is_main_name(Gst.func[mi].name)) Gst.main_func = mi;
     }
 }
 
@@ -969,18 +985,18 @@ static inline void mem_set_byte(int base, int idx, unsigned char *m, int v)
 static void call_func(int fi, int retpc, int argc)
 {
     int i, v;
-    if (G->fp + 1 >= MAXFRAME) die("frame full");
-    G->fp++;
-    G->flp = G->floc + G->fp * G->frame_size;
-    memset(G->flp, 0, (unsigned int)G->frame_size);
-    G->fret[G->fp] = retpc;
+    if (Gst.fp + 1 >= MAXFRAME) die("frame full");
+    Gst.fp++;
+    Gst.flp = Gst.floc + Gst.fp * Gst.frame_size;
+    memset(Gst.flp, 0, (unsigned int)Gst.frame_size);
+    Gst.fret[Gst.fp] = retpc;
     for (i = argc - 1; i >= 0; i--) {
         v = popv();
-        if (i < G->func[fi].nparam) {
-            if (G->func[fi].pesz[i] == 1)
-                mem_set_byte(G->func[fi].pofs[i], 0, G->flp, v);
+        if (i < Gst.func[fi].nparam) {
+            if (Gst.func[fi].pesz[i] == 1)
+                mem_set_byte(Gst.func[fi].pofs[i], 0, Gst.flp, v);
             else
-                mem_set_word(G->func[fi].pofs[i], 0, G->flp, v);
+                mem_set_word(Gst.func[fi].pofs[i], 0, Gst.flp, v);
         }
     }
 }
@@ -1006,37 +1022,37 @@ static void run(void)
 {
     int pc, a, b, v, fi, argc, vals[8], i;
     struct Ins *in;
-    G->stp = G->st;
-    G->fp = 0;
-    G->flp = G->floc;
-    memset(G->floc, 0, (unsigned int)(MAXFRAME * G->frame_size));
+    Gst.stp = Gst.st;
+    Gst.fp = 0;
+    Gst.flp = Gst.floc;
+    memset(Gst.floc, 0, (unsigned int)(MAXFRAME * Gst.frame_size));
     if (saved_main_func < 0) die("no main");
-    G->main_func = saved_main_func;
-    if (G->func[G->main_func].nparam >= 2) { pushv(1); pushv(0); argc = 2; }
+    Gst.main_func = saved_main_func;
+    if (Gst.func[Gst.main_func].nparam >= 2) { pushv(1); pushv(0); argc = 2; }
     else argc = 0;
-    call_func(G->main_func, -1, argc);
-    pc = G->func[G->main_func].entry;
+    call_func(Gst.main_func, -1, argc);
+    pc = Gst.func[Gst.main_func].entry;
     for (;;) {
-        in = &G->code[pc++];
+        in = &Gst.code[pc++];
         switch (in->op) {
         case OP_HALT: return;
         case OP_PUSH: pushv(in->a); break;
-        case OP_LDG: pushv(mem_get_word(in->a, 0, G->gmem)); break;
-        case OP_STG: mem_set_word(in->a, 0, G->gmem, popv()); break;
-        case OP_LDL: pushv(mem_get_word(in->a, 0, G->flp)); break;
-        case OP_STL: mem_set_word(in->a, 0, G->flp, popv()); break;
-        case OP_LDGB: pushv(mem_get_byte(in->a, 0, G->gmem)); break;
-        case OP_STGB: mem_set_byte(in->a, 0, G->gmem, popv()); break;
-        case OP_LDLB: pushv(mem_get_byte(in->a, 0, G->flp)); break;
-        case OP_STLB: mem_set_byte(in->a, 0, G->flp, popv()); break;
-        case OP_LDGA: a = popv(); pushv(mem_get_word(in->a, a, G->gmem)); break;
-        case OP_STGA: v = popv(); a = popv(); mem_set_word(in->a, a, G->gmem, v); break;
-        case OP_LDLA: a = popv(); pushv(mem_get_word(in->a, a, G->flp)); break;
-        case OP_STLA: v = popv(); a = popv(); mem_set_word(in->a, a, G->flp, v); break;
-        case OP_LDGAB: a = popv(); pushv(mem_get_byte(in->a, a, G->gmem)); break;
-        case OP_STGAB: v = popv(); a = popv(); mem_set_byte(in->a, a, G->gmem, v); break;
-        case OP_LDLAB: a = popv(); pushv(mem_get_byte(in->a, a, G->flp)); break;
-        case OP_STLAB: v = popv(); a = popv(); mem_set_byte(in->a, a, G->flp, v); break;
+        case OP_LDG: pushv(mem_get_word(in->a, 0, Gst.gmem)); break;
+        case OP_STG: mem_set_word(in->a, 0, Gst.gmem, popv()); break;
+        case OP_LDL: pushv(mem_get_word(in->a, 0, Gst.flp)); break;
+        case OP_STL: mem_set_word(in->a, 0, Gst.flp, popv()); break;
+        case OP_LDGB: pushv(mem_get_byte(in->a, 0, Gst.gmem)); break;
+        case OP_STGB: mem_set_byte(in->a, 0, Gst.gmem, popv()); break;
+        case OP_LDLB: pushv(mem_get_byte(in->a, 0, Gst.flp)); break;
+        case OP_STLB: mem_set_byte(in->a, 0, Gst.flp, popv()); break;
+        case OP_LDGA: a = popv(); pushv(mem_get_word(in->a, a, Gst.gmem)); break;
+        case OP_STGA: v = popv(); a = popv(); mem_set_word(in->a, a, Gst.gmem, v); break;
+        case OP_LDLA: a = popv(); pushv(mem_get_word(in->a, a, Gst.flp)); break;
+        case OP_STLA: v = popv(); a = popv(); mem_set_word(in->a, a, Gst.flp, v); break;
+        case OP_LDGAB: a = popv(); pushv(mem_get_byte(in->a, a, Gst.gmem)); break;
+        case OP_STGAB: v = popv(); a = popv(); mem_set_byte(in->a, a, Gst.gmem, v); break;
+        case OP_LDLAB: a = popv(); pushv(mem_get_byte(in->a, a, Gst.flp)); break;
+        case OP_STLAB: v = popv(); a = popv(); mem_set_byte(in->a, a, Gst.flp, v); break;
         case OP_ADD: b=popv(); a=popv(); pushv(a+b); break;
         case OP_SUB: b=popv(); a=popv(); pushv(a-b); break;
         case OP_MUL: b=popv(); a=popv(); pushv(a*b); break;
@@ -1056,16 +1072,16 @@ static void run(void)
         case OP_JMP: pc = in->a; break;
         case OP_JZ: a=popv(); if(!a) pc=in->a; break;
         case OP_JNZ: a=popv(); if(a) pc=in->a; break;
-        case OP_CALL: call_func(in->a, pc, in->b); pc = G->func[in->a].entry; break;
-        case OP_CALLI: fi = popv(); call_func(fi, pc, 0); pc = G->func[fi].entry; break;
+        case OP_CALL: call_func(in->a, pc, in->b); pc = Gst.func[in->a].entry; break;
+        case OP_CALLI: fi = popv(); call_func(fi, pc, 0); pc = Gst.func[fi].entry; break;
         case OP_RET:
-            v = popv(); pc = G->fret[G->fp]; G->fp--;
+            v = popv(); pc = Gst.fret[Gst.fp]; Gst.fp--;
             if (pc < 0) return;
-            G->flp = G->floc + G->fp * G->frame_size; pushv(v); break;
+            Gst.flp = Gst.floc + Gst.fp * Gst.frame_size; pushv(v); break;
         case OP_POP: (void)popv(); break;
         case OP_PRINTF:
             for (i = in->b - 1; i >= 0; i--) vals[i] = popv();
-            print_fmt(G->strs[in->a], in->b, vals); pushv(0); break;
+            print_fmt(Gst.strs[in->a], in->b, vals); pushv(0); break;
         default: die("bad op");
         }
     }
@@ -1084,12 +1100,12 @@ static char *preprocess(char *in)
     char **defv;
     int *ifact;
 
-    name = G->pp_name;
-    val = G->pp_val;
-    id = G->pp_id;
-    defn = G->pp_defn;
-    defv = G->pp_defv;
-    ifact = G->pp_ifact;
+    name = Gst.pp_name;
+    val = Gst.pp_val;
+    id = Gst.pp_id;
+    defn = Gst.pp_defn;
+    defv = Gst.pp_defv;
+    ifact = Gst.pp_ifact;
 
     out = (char *)malloc((unsigned int)strlen(in) + 1);
     if (!out) die("oom");
@@ -1214,37 +1230,35 @@ static int load_file(const char *name)
     got = (long)fread(raw, 1, (size_t)n, f); fclose(f);
     if (got != n) return 0;
     raw[n] = 0;
-    G->src = preprocess(raw); free(raw);
-    G->slen = (long)strlen(G->src);
+    Gst.src = preprocess(raw); free(raw);
+    Gst.slen = (long)strlen(Gst.src);
     return 1;
 }
 
 static void init_state(void)
 {
-    G = (struct State *)calloc(1, sizeof(struct State));
-    if (!G) { fprintf(stderr, "oom\n"); exit(1); }
-    G->line = 1;
+    Gst.line = 1;
     saved_main_func = -1;
-    G->marks = (struct Mark *)calloc(8, sizeof(struct Mark));
-    if (!G->marks) { fprintf(stderr, "oom\n"); exit(1); }
-    G->curfunc = -1;
-    G->frame_size = 2;
+    Gst.marks = (struct Mark *)calloc(8, sizeof(struct Mark));
+    if (!Gst.marks) { fprintf(stderr, "oom\n"); exit(1); }
+    Gst.curfunc = -1;
+    Gst.frame_size = 2;
 }
 
 static void init_compile_storage(void)
 {
-    G->code = (struct Ins *)xcalloc(MAXCODE, sizeof(struct Ins));
-    G->sym = (struct Sym *)xcalloc(MAXSYM, sizeof(struct Sym));
-    G->func = (struct Func *)xcalloc(MAXFUNC, sizeof(struct Func));
-    G->strs = (char **)xcalloc(MAXSTR, sizeof(char *));
-    G->gmem = (unsigned char *)xcalloc(MAXMEM, 1);
+    Gst.code = (struct Ins *)xcalloc(MAXCODE, sizeof(struct Ins));
+    Gst.sym = (struct Sym *)xcalloc(MAXSYM, sizeof(struct Sym));
+    Gst.func = (struct Func *)xcalloc(MAXFUNC, sizeof(struct Func));
+    Gst.strs = (char **)xcalloc(MAXSTR, sizeof(char *));
+    Gst.gmem = (unsigned char *)xcalloc(MAXMEM, 1);
 }
 
 static void init_run_storage(void)
 {
-    G->st = (int *)xcalloc(MAXSTACK, sizeof(int));
-    G->fret = (int *)xcalloc(MAXFRAME, sizeof(int));
-    G->floc = (unsigned char *)xcalloc((unsigned int)(MAXFRAME * G->frame_size), 1);
+    Gst.st = (int *)xcalloc(MAXSTACK, sizeof(int));
+    Gst.fret = (int *)xcalloc(MAXFRAME, sizeof(int));
+    Gst.floc = (unsigned char *)xcalloc((unsigned int)(MAXFRAME * Gst.frame_size), 1);
 }
 
 int main(int argc, char **argv)
@@ -1252,16 +1266,16 @@ int main(int argc, char **argv)
     int argi;
     init_state();
     argi = 1;
-    if (argi < argc && !strcmp(argv[argi], "-V")) { G->verbose = 1; argi++; }
+    if (argi < argc && !strcmp(argv[argi], "-V")) { Gst.verbose = 1; argi++; }
     if (argi >= argc) { fprintf(stderr, "usage: cint [-V] file.c\n"); return 1; }
     if (!load_file(argv[argi])) return 1;
     init_compile_storage();
     next();
     program();
-    saved_main_func = G->main_func;
+    saved_main_func = Gst.main_func;
     /* Keep source and symbols until exit; CP/M heap/free pressure is low
        here and this avoids possible allocator corruption before run(). */
-    if (G->frame_size < 2) G->frame_size = 2;
+    if (Gst.frame_size < 2) Gst.frame_size = 2;
     init_run_storage();
     run();
     return 0;
