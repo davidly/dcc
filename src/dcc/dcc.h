@@ -37,6 +37,7 @@
  *   dcc_stmt.c      statement codegen (if/while/for/switch/...)
  *   dcc_func.c      function + top-level declaration parsing
  *   dcc_global_init.c file-scope object initializer parsing (record path)
+ *   dcc_regalloc.c  speculative no-IX / BC-register-allocation codegen
  *   dcc_data.c      data-section emission
  *   dcc.c           driver: file I/O, #include, CLI, and main()
  *
@@ -1210,6 +1211,41 @@ void parse_global_scalar_array_zero_to(struct Sym *s, int *np, int limit);
 void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level);
 void parse_global_init_list(struct Sym *s);
 void parse_function_or_global(int base_type);
+
+/* dcc_regalloc.c - speculative no-IX / BC-register-allocation codegen passes.
+ * find_bc_regalloc_candidate and plain_static_body_can_be_buffered remain in
+ * dcc_func.c but are called from the speculative passes across the TU split. */
+struct Sym *find_bc_regalloc_candidate(int params_end);
+int plain_static_body_can_be_buffered(struct Sym *s, const char *name);
+int function_qualifies_for_speculative_noix(const char *name, int local_bytes);
+int function_qualifies_for_speculative_regalloc(const char *name);
+int try_speculative_noix_function_body(const char *name, int type,
+                                       int local_bytes, struct Sym *s,
+                                       long body_start_pos, long body_start_tok_start,
+                                       int body_start_line, int body_start_tok_line,
+                                       struct Token body_start_tok, int body_start_nlocals,
+                                       int body_start_local_size);
+int try_loop_scoped_regalloc_first(const char *name, int type,
+                                   int local_bytes, struct Sym *s,
+                                   long body_start_pos, long body_start_tok_start,
+                                   int body_start_line, int body_start_tok_line,
+                                   struct Token body_start_tok, int body_start_nlocals,
+                                   int body_start_local_size);
+int try_speculative_bc_regalloc_function_body(const char *name, int type,
+                                              int local_bytes, struct Sym *s,
+                                              struct Sym *bc_cand, int attempt_e,
+                                              long body_start_pos, long body_start_tok_start,
+                                              int body_start_line, int body_start_tok_line,
+                                              struct Token body_start_tok, int body_start_nlocals,
+                                              int body_start_local_size);
+int try_speculative_bc_regalloc_with_e_fallback(const char *name, int type,
+                                                int local_bytes, struct Sym *s,
+                                                struct Sym *bc_cand,
+                                                long body_start_pos, long body_start_tok_start,
+                                                int body_start_line, int body_start_tok_line,
+                                                struct Token body_start_tok, int body_start_nlocals,
+                                                int body_start_local_size);
+
 void add_predefined_extern(const char *name, int type, int storage);
 void parse_translation_unit(void);
 
