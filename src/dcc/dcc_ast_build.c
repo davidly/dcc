@@ -1248,6 +1248,50 @@ int ast_for_decl_storage_supported(const struct AstNode *n)
     return sp != NULL && !sp->unsupported_for_storage;
 }
 
+/* Seeks the lexer to the start of the declaration span n captures, saving
+ * the caller's own lexer position into *save for a later
+ * ast_decl_span_restore. Returns 0 (no seek performed, *save untouched) if
+ * n isn't a usable AST_DECL span - not a declaration at all, or one
+ * ast_build_decl_span already marked unsupported_for_storage. Exposed for
+ * dcc_func.c's try_scan_inline_local_decl, which needs to speculatively
+ * re-parse just a declaration's declarator + initializer as a real
+ * expression AST (via ast_build_expr) - unlike ast_emit_decl_span just
+ * above, it never emits anything, so it can't share that function's
+ * emitting declaration codegen path. struct DeclSpan itself stays private
+ * to this file; only this seek/restore pair crosses the module boundary. */
+int ast_decl_span_seek(const struct AstNode *n, struct DeclSpanSave *save)
+{
+    const struct DeclSpan *sp;
+
+    if (n == NULL || n->kind != AST_DECL)
+        return 0;
+    sp = (const struct DeclSpan *)n->aux;
+    if (sp == NULL || sp->unsupported_for_storage)
+        return 0;
+
+    save->posi = posi;
+    save->tok_start_pos = tok_start_pos;
+    save->line_no = line_no;
+    save->tok_line = tok_line;
+    save->tok = tok;
+
+    posi = sp->posi;
+    tok_start_pos = sp->tok_start_pos;
+    line_no = sp->line_no;
+    tok_line = sp->tok_line;
+    tok = sp->tok;
+    return 1;
+}
+
+void ast_decl_span_restore(const struct DeclSpanSave *save)
+{
+    posi = save->posi;
+    tok_start_pos = save->tok_start_pos;
+    line_no = save->line_no;
+    tok_line = save->tok_line;
+    tok = save->tok;
+}
+
 /* Re-emit a captured local-declaration span (see ast_build_decl_span).  The
  * lexer is transiently re-seeked to the declaration, declaration codegen runs
  * (mirroring gen_compound's declaration branch exactly, so locals[] / frame

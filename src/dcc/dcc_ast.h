@@ -156,6 +156,22 @@ struct AstNode *ast_new(struct AstArena *ar, int kind);
  * local symbol table / frame offsets are rebuilt exactly as the frame-sizing
  * scan built them.  Defined in dcc_ast_build.c. */
 void ast_emit_decl_span(const struct AstNode *n);
+
+/* Non-emitting counterpart used by dcc_func.c's inliner eligibility scan:
+ * seeks the lexer to an AST_DECL span's start (saving the caller's own
+ * position for ast_decl_span_restore) without running declaration codegen,
+ * so the caller can speculatively re-parse just the declarator + an
+ * initializer expression (e.g. via ast_build_expr) on its own. struct
+ * DeclSpan itself stays private to dcc_ast_build.c. Defined there. */
+struct DeclSpanSave {
+    long posi;
+    long tok_start_pos;
+    int line_no;
+    int tok_line;
+    struct Token tok;
+};
+int ast_decl_span_seek(const struct AstNode *n, struct DeclSpanSave *save);
+void ast_decl_span_restore(const struct DeclSpanSave *save);
 struct AstNode *ast_int_lit(struct AstArena *ar, long value, int type);
 struct AstNode *ast_float_lit(struct AstArena *ar, unsigned long bits, int type);
 struct AstNode *ast_unary(struct AstArena *ar, int op, struct AstNode *operand,

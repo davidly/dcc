@@ -288,6 +288,16 @@ struct Sym {
     struct AstNode *inline_stmt_body;   /* simple void inline statement body */
     int inline_param_use_count[MAX_PROTO_PARAMS];
     char inline_param_names[MAX_PROTO_PARAMS][64];
+    /* One leading local declaration in a static inline body, captured
+     * separately from inline_return_expr/inline_stmt_expr/inline_stmt_body
+     * (which never include it - those are built from the statements AFTER
+     * it). See dcc_func.c's try_scan_inline_local_decl for the eligibility
+     * scan and dcc_ast_gen_expr.c's emit_inline_local_temp for how it's
+     * materialized once per call site. */
+    int has_inline_local;
+    char inline_local_name[64];
+    struct AstNode *inline_local_init;
+    int inline_local_type;
     struct AstNode *narrow_return_expr; /* captured return expr of a zero-arg,
                                          * single-return function - independent
                                          * of is_inline, used only to bound

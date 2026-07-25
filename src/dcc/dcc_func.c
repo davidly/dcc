@@ -75,6 +75,15 @@ static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
                 fn->inline_param_use_count[i]++;
             return 1;
         }
+        /* The one leading local declaration try_scan_inline_local_decl may
+         * have captured (see struct Sym's inline_local_* fields) - a read
+         * of it is simple the same way a parameter read is, since it's
+         * always materialized into its own per-call-site temp before this
+         * expression runs, exactly like a parameter that needs one. Only
+         * ever set once eligibility for it is otherwise fully established,
+         * so this can't wrongly accept a name from some other function. */
+        if (fn->has_inline_local && !strcmp(n->sval, fn->inline_local_name))
+            return 1;
         return find_global(n->sval) != NULL;
     case AST_UNARY:
         /* ++/-- substituted verbatim onto a parameter would mutate the
@@ -325,6 +334,131 @@ static int inline_void_stmt_body_is_simple(struct Sym *fn, const struct AstNode 
     return inline_void_stmt_seq_is_simple(fn, n);
 }
 
+/* True if `name` is ever reassigned anywhere in n - a plain AST_ASSIGN
+ * targeting it directly, or ++/-- applied to it. Used only to confirm the
+ * one local declaration try_scan_inline_local_decl considers capturing is
+ * genuinely single-assignment (initialized once, read only thereafter):
+ * substituting it with a temp materialized once per call site, the same
+ * way a parameter needing one already is, is only sound under that
+ * invariant. A write through it (`*s = ...` or `s->f = ...`) is fine and
+ * doesn't trip this - only reassigning the pointer/scalar itself does. Not
+ * bounded to "after the declaration": scanning the whole tree (decl
+ * included) is a harmless superset, since an AST_DECL span's fields are
+ * unset (NULL) and the recursion into them immediately terminates. */
+static int inline_local_is_reassigned(const char *name, const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL || name == NULL)
+        return 0;
+    if (n->kind == AST_ASSIGN && n->a != NULL && n->a->kind == AST_IDENT &&
+        !strcmp(n->a->sval, name))
+        return 1;
+    if ((n->kind == AST_UNARY || n->kind == AST_POSTFIX) &&
+        (n->op == TOK_INC || n->op == TOK_DEC) &&
+        n->a != NULL && n->a->kind == AST_IDENT && !strcmp(n->a->sval, name))
+        return 1;
+    if (inline_local_is_reassigned(name, n->a) || inline_local_is_reassigned(name, n->b) ||
+        inline_local_is_reassigned(name, n->c) || inline_local_is_reassigned(name, n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (inline_local_is_reassigned(name, n->list[i]))
+            return 1;
+    return 0;
+}
+
+/* Builds a new AST_COMPOUND containing body->list[1..] - the statements
+ * after a leading local declaration try_scan_inline_local_decl captured -
+ * so the void-body eligibility path (inline_void_stmt_body_is_simple) and
+ * whatever gets stored as inline_stmt_expr/inline_stmt_body never need to
+ * know a declaration preceded them at all. Sub-nodes are reused, not
+ * deep-cloned, matching how inline_return_expr/inline_stmt_expr/
+ * inline_stmt_body already just point into the one speculatively-built
+ * body tree rather than copying out of it. */
+static struct AstNode *build_body_skip_first(struct AstArena *ar, struct AstNode *body)
+{
+    struct AstNode *n;
+    int i;
+
+    n = ast_new(ar, AST_COMPOUND);
+    for (i = 1; i < body->list_len; ++i)
+        ast_list_push(ar, n, body->list[i]);
+    return n;
+}
+
+/* Speculatively re-parses body->list[0] - already captured elsewhere
+ * (ast_build_decl_span) as an opaque "replay this token span later"
+ * marker, not a real AST subtree - as a declarator + initializer, using
+ * the same building blocks (parse_base_type, ast_build_expr) ordinary
+ * declaration codegen uses, but never emitting anything: this only ever
+ * runs inside record_inline_function_if_simple's own already-speculative,
+ * asm_suppress_depth-guarded body parse. Declines (0) on anything but
+ * exactly `TYPE *name = simple-initializer;` - multiple declarators,
+ * arrays, function pointers, a missing initializer, a non-pointer type, or
+ * an initializer that fails inline_expr_is_simple (e.g. it references a
+ * local this same speculative parse hasn't reached yet) - which is always
+ * safe: the caller falls back to the function simply not becoming
+ * inline-eligible, exactly as before this existed. Only pointer types are
+ * accepted for now (type_size 2 on this target, matching the #itmpN slot
+ * width every real parameter temp already uses) - not because a scalar
+ * local would be unsound, just because no case needing one has come up
+ * yet to verify against. */
+static int try_scan_inline_local_decl(struct Sym *fn, struct AstNode *body)
+{
+    struct DeclSpanSave save;
+    struct AstNode *first;
+    int type;
+    char name[64];
+    struct AstNode *init_expr;
+    int ok;
+    size_t namelen;
+
+    if (fn->proto_nargs >= MAX_PROTO_PARAMS - 1)
+        return 0;
+    if (body == NULL || body->kind != AST_COMPOUND || body->list_len < 2)
+        return 0;
+    first = body->list[0];
+    if (first == NULL || first->kind != AST_DECL)
+        return 0;
+    if (!ast_decl_span_seek(first, &save))
+        return 0;
+
+    ok = 0;
+    name[0] = 0;
+    init_expr = NULL;
+
+    type = parse_base_type();
+    while (accept('*'))
+        type = type_add_ptr(type);
+    if (tok.kind == TOK_ID && type_size(type) == 2) {
+        strncpy(name, tok.text, sizeof(name) - 1);
+        name[sizeof(name) - 1] = 0;
+        next_token();
+        if (accept('=')) {
+            init_expr = ast_build_expr(&g_ast_inline_arena);
+            if (init_expr != NULL && tok.kind == ';' &&
+                inline_expr_is_simple(fn, init_expr) &&
+                !inline_local_is_reassigned(name, body))
+                ok = 1;
+        }
+    }
+
+    ast_decl_span_restore(&save);
+
+    if (!ok)
+        return 0;
+
+    namelen = strlen(name);
+    if (namelen > sizeof(fn->inline_local_name) - 1)
+        namelen = sizeof(fn->inline_local_name) - 1;
+    memcpy(fn->inline_local_name, name, namelen);
+    fn->inline_local_name[namelen] = 0;
+    fn->inline_local_init = init_expr;
+    fn->inline_local_type = type;
+    fn->has_inline_local = 1;
+    return 1;
+}
+
 static void record_inline_function_if_simple(struct Sym *s)
 {
     long sv_pos;
@@ -337,6 +471,7 @@ static void record_inline_function_if_simple(struct Sym *s)
     int i;
     int nparams;
     size_t namelen;
+    int has_local;
 
     if (s == NULL || !s->is_static || !s->is_inline || tok.kind != '{')
         return;
@@ -389,17 +524,21 @@ static void record_inline_function_if_simple(struct Sym *s)
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
 
+    has_local = try_scan_inline_local_decl(s, body);
+
     if ((s->type & 15) == TYPE_VOID) {
-        if (!inline_void_stmt_body_is_simple(s, body))
+        struct AstNode *void_body;
+        void_body = has_local ? build_body_skip_first(&g_ast_inline_arena, body) : body;
+        if (!inline_void_stmt_body_is_simple(s, void_body))
             return;
-        if (body->list_len == 1 && body->list[0]->kind == AST_EXPR_STMT)
-            s->inline_stmt_expr = body->list[0]->a;
+        if (void_body->list_len == 1 && void_body->list[0]->kind == AST_EXPR_STMT)
+            s->inline_stmt_expr = void_body->list[0]->a;
         else
-            s->inline_stmt_body = body;
+            s->inline_stmt_body = void_body;
         return;
     }
 
-    ret_expr = inline_return_expr_from_seq(body, 0);
+    ret_expr = inline_return_expr_from_seq(body, has_local ? 1 : 0);
     if (ret_expr == NULL)
         return;
     if (!inline_expr_is_simple(s, ret_expr))

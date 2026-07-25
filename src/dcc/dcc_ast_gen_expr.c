@@ -3565,6 +3565,23 @@ static void emit_inline_arg_temp_store(struct Sym *tmp, const struct AstNode *ar
 
 static unsigned long g_inline_live_temp_mask;
 
+/* The one local declaration the currently-expanding inline call's callee
+ * captured (see struct Sym's inline_local_* fields, dcc_func.c's
+ * try_scan_inline_local_decl), and the #itmpN temp name it was
+ * materialized into for THIS call site - NULL/NULL when no such local is
+ * active. clone_inline_expr checks these directly rather than taking them
+ * as parameters (avoiding threading two more arguments through its six
+ * recursive call sites), the same "scoped mutable state around one bounded
+ * recursive expansion" shape g_inline_live_temp_mask/g_inline_expand_depth
+ * below already use. Save/restore around a nested expansion (the local's
+ * own initializer, or a call inside another inline call's argument) is
+ * required for correctness: without it, an outer local's name would keep
+ * shadowing an inner, unrelated identical parameter name, or an inner
+ * call's cloning would wrongly see an outer local that isn't in scope for
+ * it at all. */
+static const char *g_inline_local_src_name;
+static const char *g_inline_local_temp_name;
+
 static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
                                  const char **temp_names,
                                  char temp_name_buf[MAX_PROTO_PARAMS][64])
@@ -3666,6 +3683,13 @@ static struct AstNode *clone_inline_expr(struct AstArena *ar, struct Sym *fn,
     if (src == NULL)
         return NULL;
     if (src->kind == AST_IDENT) {
+        if (g_inline_local_src_name != NULL && !strcmp(src->sval, g_inline_local_src_name)) {
+            dst = ast_new(ar, AST_IDENT);
+            dst->type = src->type;
+            dst->sval = ast_arena_strdup(ar, g_inline_local_temp_name);
+            dst->line = src->line;
+            return dst;
+        }
         i = inline_param_index_for_call(fn, src->sval);
         if (i >= 0 && i < call->list_len && temp_names != NULL && temp_names[i] != NULL) {
             dst = ast_new(ar, AST_IDENT);
@@ -3703,6 +3727,62 @@ static struct AstNode *clone_inline_expr(struct AstArena *ar, struct Sym *fn,
     return dst;
 }
 
+/* Materializes fn's captured local declaration (struct Sym's
+ * inline_local_* fields, populated by dcc_func.c's
+ * try_scan_inline_local_decl) into a fresh #itmpN slot for THIS call site,
+ * the same way emit_inline_arg_temps already does for a real parameter
+ * that needs one - reusing the identical slot-picking/liveness-tracking
+ * (g_inline_live_temp_mask) so it can't collide with a slot a real
+ * parameter, or a nested inline expansion, is using at the same time.
+ * Always forces a temp (never substitutes the initializer expression
+ * directly at each use): the entire reason a local gets captured at all is
+ * to read something more than once without recomputing it. Returns 0
+ * (nothing emitted) only if out of #itmpN slots - the caller then falls
+ * back to a real, non-inlined call, exactly like emit_inline_arg_temps's
+ * own failure path. temp_name_buf is caller-owned and must outlive the
+ * g_inline_local_temp_name assignment the caller makes from it. */
+static int emit_inline_local_temp(struct Sym *fn, const struct AstNode *call,
+                                  const char **temp_names, char temp_name_buf[64])
+{
+    struct AstNode *init_substituted;
+    struct Sym *tmp;
+    int slot;
+    const char *save_src_name;
+    const char *save_temp_name;
+
+    slot = fn->proto_nargs;
+    if ((g_inline_live_temp_mask & (1UL << slot)) != 0) {
+        for (slot = 0; slot < MAX_PROTO_PARAMS; ++slot)
+            if ((g_inline_live_temp_mask & (1UL << slot)) == 0)
+                break;
+        if (slot >= MAX_PROTO_PARAMS)
+            return 0;
+    }
+
+    /* The local's own initializer can only reference real parameters (see
+     * try_scan_inline_local_decl / inline_expr_is_simple), never the local
+     * itself, so no local-name substitution is active while cloning it -
+     * and it must not see whatever OUTER local (if any) is currently
+     * active either. */
+    save_src_name = g_inline_local_src_name;
+    save_temp_name = g_inline_local_temp_name;
+    g_inline_local_src_name = NULL;
+    g_inline_local_temp_name = NULL;
+    init_substituted = clone_inline_expr(&g_ast_arena, fn, fn->inline_local_init, call, temp_names);
+    g_inline_local_src_name = save_src_name;
+    g_inline_local_temp_name = save_temp_name;
+
+    inline_temp_name_for_call(temp_name_buf, 64, slot);
+    tmp = find_local(temp_name_buf);
+    if (tmp == NULL)
+        return 0;
+    tmp->type = fn->inline_local_type;
+
+    g_inline_live_temp_mask |= 1UL << slot;
+    emit_inline_arg_temp_store(tmp, init_substituted, fn->inline_local_type);
+    return 1;
+}
+
 static int g_inline_expand_depth;
 
 static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
@@ -3712,8 +3792,11 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     const struct AstNode *src_expr;
     const char *temp_names[MAX_PROTO_PARAMS];
     char temp_name_buf[MAX_PROTO_PARAMS][64];
+    char local_temp_buf[64];
     int i;
     unsigned long old_live_mask;
+    const char *old_local_src_name;
+    const char *old_local_temp_name;
 
     if (opt_debug || fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
         inline_substitution_body(fn_sym) == NULL)
@@ -3733,6 +3816,20 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     if (!emit_inline_arg_temps(n, fn_sym, temp_names, temp_name_buf))
         return 0;
 
+    old_local_src_name = g_inline_local_src_name;
+    old_local_temp_name = g_inline_local_temp_name;
+    if (fn_sym->has_inline_local) {
+        if (!emit_inline_local_temp(fn_sym, n, temp_names, local_temp_buf)) {
+            g_inline_live_temp_mask = old_live_mask;
+            return 0;
+        }
+        g_inline_local_src_name = fn_sym->inline_local_name;
+        g_inline_local_temp_name = local_temp_buf;
+    } else {
+        g_inline_local_src_name = NULL;
+        g_inline_local_temp_name = NULL;
+    }
+
     g_inline_expand_depth++;
     src_expr = inline_substitution_body(fn_sym);
     if (fn_sym->inline_stmt_body != NULL) {
@@ -3744,6 +3841,8 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     }
     g_inline_expand_depth--;
     g_inline_live_temp_mask = old_live_mask;
+    g_inline_local_src_name = old_local_src_name;
+    g_inline_local_temp_name = old_local_temp_name;
     g_expr_type = (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL) ?
                   TYPE_VOID : fn_sym->type;
     g_long_from16 = 0;
