@@ -794,13 +794,11 @@ static void add_refs_from_line(const char *line)
 }
 
 
-static int symbol_mentioned_in_line(const char *line, const char *sym)
+static int symbol_mentioned_in_clean_line(const char *clean, const char *sym)
 {
-    char clean[MAX_LINE];
     const char *p;
     int n;
 
-    strip_comment_copy(line, clean, sizeof(clean));
     n = (int)strlen(sym);
     if (n <= 0)
         return 0;
@@ -821,6 +819,7 @@ static int symbol_mentioned_in_line(const char *line, const char *sym)
 static void add_known_runtime_refs_from_line(const char *line)
 {
     int i;
+    char clean[MAX_LINE];
 
     /*
      * Fallback root scan: after the runtime has been parsed, every PUBLIC and
@@ -830,9 +829,17 @@ static void add_known_runtime_refs_from_line(const char *line)
      * keep that symbol's owning block.  This is intentionally conservative and
      * fixes cases such as the float-printf entry _pffio being emitted by dcc but
      * omitted from rtlmin.mac.
+     *
+     * Comment-stripping used to happen inside the per-symbol helper, so a
+     * single app line got re-stripped once per runtime symbol checked against
+     * it (profiled on cobint.c's ~21K-line .MAC: 36.5M redundant
+     * strip_comment_copy calls, ~75% of dccrtlstrip's total runtime). `line`
+     * is a pure function of its own text regardless of which symbol is being
+     * looked for, so strip it once here instead.
      */
+    strip_comment_copy(line, clean, sizeof(clean));
     for (i = 0; i < nsyms; ++i) {
-        if (symbol_mentioned_in_line(line, syms[i].name))
+        if (symbol_mentioned_in_clean_line(clean, syms[i].name))
             add_root(syms[i].name);
     }
 }
