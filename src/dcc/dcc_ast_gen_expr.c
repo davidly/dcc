@@ -431,8 +431,8 @@ void gen_ident(const struct AstNode *n)
         {
             char msg[MAX_TOK_TEXT + 64];
             sprintf(msg, "use of undeclared identifier '%s'", name);
-            dcc_error_at(tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
-                         n->line > 0 ? n->line : tok_line, -1, msg, NULL);
+            dcc_error_at(g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>"),
+                         n->line > 0 ? n->line : g_lex.tok_line, -1, msg, NULL);
         }
         emit("\tld hl,0\n");
         g_expr_type = TYPE_INT;
@@ -726,11 +726,7 @@ void gen_unary_ast(const struct AstNode *n)
 static void gen_compound_literal_ast(const struct AstNode *n)
 {
     struct AstCompoundLitSpan *sp = (struct AstCompoundLitSpan *)n->aux;
-    long sv_posi = posi;
-    long sv_tok_start = tok_start_pos;
-    int sv_line = line_no;
-    int sv_tok_line = tok_line;
-    struct Token sv_tok = tok;
+    LexState _ls = lex_save();
     /* Capture the fields we still need after the initializer is emitted.
      * `n` itself lives in g_ast_init_arena, and emitting a non-constant field
      * (e.g. .p = &(T){...}) re-enters ast_emit_init_expr, which builds into and
@@ -741,28 +737,24 @@ static void gen_compound_literal_ast(const struct AstNode *n)
     struct Sym *clit_sym = n->sym;
     int clit_type = n->type;
 
-    posi = sp->posi;
-    tok_start_pos = sp->tok_start_pos;
-    line_no = sp->line_no;
-    tok_line = sp->tok_line;
-    tok = sp->tok;
+    g_lex.posi = sp->posi;
+    g_lex.tok_start_pos = sp->tok_start_pos;
+    g_lex.line_no = sp->line_no;
+    g_lex.tok_line = sp->tok_line;
+    g_lex.tok = sp->tok;
 
     if ((clit_type & TYPE_STRUCT) && type_ptr_depth(clit_type) == 0) {
         emit_init_auto_struct_from_list(clit_sym);
     } else if (accept('{')) {
         emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
-        if (tok.kind == ',')
+        if (g_lex.tok.kind == ',')
             next_token();
         expect('}');
     } else {
         emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
     }
 
-    posi = sv_posi;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
 
     emit_load_sym_addr(clit_sym);
     g_expr_type = type_add_ptr(clit_type);
@@ -1670,30 +1662,14 @@ void ast_emit_init_expr(void)
     struct AstNode *n;
     int ptr_type;
     int no_deref;
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
-    long end_pos;
-    long end_tok_start;
-    int end_line;
-    int end_tok_line;
-    struct Token end_tok;
+    LexState _ls;
+    LexState _le;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     n = ast_build_assign_expr(&g_ast_init_arena);
 
-    end_pos = posi;
-    end_tok_start = tok_start_pos;
-    end_line = line_no;
-    end_tok_line = tok_line;
-    end_tok = tok;
+    _le = lex_save();
 
     if (n != NULL && ast_pointer_expr_type(n, &ptr_type, &no_deref)) {
         gen_pointer_expr_ast(n, &ptr_type, &no_deref);
@@ -1714,28 +1690,20 @@ void ast_emit_init_expr(void)
     if (getenv("DCC_AST_REPORT") != NULL) {
         if (n == NULL)
             fprintf(stderr, "; AST-unsupported init build token=%d text='%s' line=%d\n",
-                    tok.kind, tok.text, tok_line);
+                    g_lex.tok.kind, g_lex.tok.text, g_lex.tok_line);
         else
             fprintf(stderr, "; AST-unsupported init gate kind=%s line=%d\n",
-                    ast_kind_name(n->kind), tok_line);
+                    ast_kind_name(n->kind), g_lex.tok_line);
     }
     ast_arena_reset(&g_ast_init_arena);
 
-    tok = sv_tok;
-    tok_line = sv_tok_line;
-    line_no = sv_line;
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
+    lex_restore(&_ls);
     error_here(n == NULL ? "malformed initializer expression" : "unsupported initializer expression");
 
     if (n != NULL) {
-        posi = end_pos;
-        tok_start_pos = end_tok_start;
-        line_no = end_line;
-        tok_line = end_tok_line;
-        tok = end_tok;
+        lex_restore(&_le);
     } else {
-        while (tok.kind != TOK_EOF && tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ',' && g_lex.tok.kind != ';' && g_lex.tok.kind != '}')
             next_token();
     }
 
@@ -1747,30 +1715,14 @@ void ast_emit_struct_init_expr_assign(struct Sym *s)
 {
     struct AstNode *rhs;
     struct AstNode *lhs;
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
-    long end_pos;
-    long end_tok_start;
-    int end_line;
-    int end_tok_line;
-    struct Token end_tok;
+    LexState _ls;
+    LexState _le;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     rhs = ast_build_assign_expr(&g_ast_init_arena);
 
-    end_pos = posi;
-    end_tok_start = tok_start_pos;
-    end_line = line_no;
-    end_tok_line = tok_line;
-    end_tok = tok;
+    _le = lex_save();
 
     lhs = ast_new(&g_ast_init_arena, AST_IDENT);
     lhs->sval = ast_arena_strdup(&g_ast_init_arena, s->name);
@@ -1805,28 +1757,20 @@ void ast_emit_struct_init_expr_assign(struct Sym *s)
     if (getenv("DCC_AST_REPORT") != NULL) {
         if (rhs == NULL)
             fprintf(stderr, "; AST-unsupported struct init build token=%d text='%s' line=%d\n",
-                    tok.kind, tok.text, tok_line);
+                    g_lex.tok.kind, g_lex.tok.text, g_lex.tok_line);
         else
             fprintf(stderr, "; AST-unsupported struct init gate kind=%s line=%d\n",
-                    ast_kind_name(rhs->kind), tok_line);
+                    ast_kind_name(rhs->kind), g_lex.tok_line);
     }
     ast_arena_reset(&g_ast_init_arena);
 
-    tok = sv_tok;
-    tok_line = sv_tok_line;
-    line_no = sv_line;
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
+    lex_restore(&_ls);
     error_here(rhs == NULL ? "malformed initializer expression" : "unsupported struct initializer expression");
 
     if (rhs != NULL) {
-        posi = end_pos;
-        tok_start_pos = end_tok_start;
-        line_no = end_line;
-        tok_line = end_tok_line;
-        tok = end_tok;
+        lex_restore(&_le);
     } else {
-        while (tok.kind != TOK_EOF && tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ',' && g_lex.tok.kind != ';' && g_lex.tok.kind != '}')
             next_token();
     }
 }

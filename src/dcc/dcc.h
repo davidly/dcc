@@ -244,6 +244,43 @@ struct Token {
     int text_len;
 };
 
+/*
+ * Snapshot of the lexer cursor for speculative look-ahead / rewind.
+ *
+ * The parser repeatedly saves the current lexer position, tries a speculative
+ * parse (calling next_token() a few times), then rewinds if the speculation
+ * does not pan out. LexState + lex_save()/lex_restore() capture the five core
+ * lexer-position fields (posi, tok_start_pos, line_no, tok_line, tok) as one
+ * unit so every rewind site is spelled the same way and can never forget a
+ * field. Callers that must also look ahead across an integer literal's suffix
+ * flags (g_tok_long_suffix / g_tok_unsigned_suffix) save and restore those two
+ * globals explicitly around the lex_save()/lex_restore() pair, because most
+ * rewind sites do not consume the restored token's suffix and must not perturb
+ * those flags.
+ */
+typedef struct LexState {
+    long posi;
+    long tok_start_pos;
+    int  line_no;
+    int  tok_line;
+    struct Token tok;
+} LexState;
+
+/*
+ * Current function's frame-layout state, grouped so the three fields always
+ * travel together: the number of locals declared so far (nlocals, also the
+ * block-scope watermark that leave_scope truncates), the total local storage
+ * in bytes (local_size, monotonic), and the parameter-area offset
+ * (param_offset). Both the frame-sizing scan and the codegen pass must derive
+ * identical frame offsets from these, so they are snapshotted/restored as a
+ * unit around the speculative body scans.
+ */
+typedef struct FrameState {
+    int nlocals;
+    int local_size;
+    int param_offset;
+} FrameState;
+
 struct AstNode;
 
 struct Sym {
@@ -447,6 +484,10 @@ extern int nstruct_defs;
 extern struct FieldDef field_defs[MAX_FIELDS];
 extern int nfield_defs;
 
+/* Capture / restore the live lexer cursor `g_lex` as one unit (a plain struct
+ * copy). Defined in dcc_preproc.c alongside next_token(). */
+LexState lex_save(void);
+void lex_restore(const LexState *s);
 /* in-progress field metadata (filled while parsing one declarator) */
 extern int current_field_array_elem_size;
 extern int current_field_array_dim_count;
@@ -464,11 +505,12 @@ extern long src_len;
  * source_location_at's precomputed line table (dcc_diag_emit.c) detect that
  * it must rebuild rather than answer from stale text. */
 extern long g_src_generation;
-extern long posi;
-extern long tok_start_pos;
-extern int line_no;
-extern int tok_line;
-extern struct Token tok;
+/* The live lexer cursor: current read position, current token's start
+ * position, current line, the token's line, and the one-token lookahead.
+ * Grouped into a single struct so the fields always travel together and a
+ * speculative parse can snapshot/rewind them with one struct copy
+ * (lex_save()/lex_restore()). */
+extern LexState g_lex;
 extern FILE *outf;
 extern const char *input_name;
 extern const char *output_name;
@@ -480,9 +522,7 @@ extern char predefined_time_text[16];
 extern struct Sym globals[MAX_SYMS];
 extern int nglobals;
 extern struct Sym locals[MAX_LOCALS];
-extern int nlocals;
-extern int local_size;
-extern int param_offset;
+extern FrameState g_frame;
 
 /* preprocessor macro table */
 extern struct Def defs[MAX_DEFINES];

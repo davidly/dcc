@@ -1006,7 +1006,7 @@ char *filter_active_preprocessor_source(long *lenp)
         line_end = p;
         if (p < src_len && src[p] == '\n')
             p++;
-        line_no = logical_line;
+        g_lex.line_no = logical_line;
         next_logical_line = logical_line + 1;
 
         line_opened_in_comment = line_starts_inside_comment(
@@ -1148,7 +1148,7 @@ char *filter_active_preprocessor_source(long *lenp)
                 expr[ei++] = *s++;
             expr[ei] = 0;
             strip_macro_replacement_comments(expr);
-            line_no = logical_line;
+            g_lex.line_no = logical_line;
             cond = pp_eval_simple_expr(expr);
             if (sp >= MAX_IFSTACK) {
                 char filebuf[256];
@@ -1197,7 +1197,7 @@ char *filter_active_preprocessor_source(long *lenp)
                         expr[ei++] = *s++;
                     expr[ei] = 0;
                     strip_macro_replacement_comments(expr);
-                        line_no = logical_line;
+                        g_lex.line_no = logical_line;
                     cond = pp_eval_simple_expr(expr);
                     active = parent && cond;
                     if (active)
@@ -1763,10 +1763,10 @@ int main(int argc, char **argv)
      * pass below (it sets and restores them itself). */
     scan_global_write_info();
 
-    posi = 0;
-    tok_start_pos = 0;
-    line_no = 1;
-    tok_line = 1;
+    g_lex.posi = 0;
+    g_lex.tok_start_pos = 0;
+    g_lex.line_no = 1;
+    g_lex.tok_line = 1;
     pp_reset_asm_dedupe();
 
     if (!strcmp(output_name, "-")) {

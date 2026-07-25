@@ -1483,8 +1483,8 @@ int ast_stmt_supported(const struct AstNode *n)
         rename_count = g_for_rename_count[for_seq];
 
         if (n->a != NULL && n->a->kind == AST_DECL) {
-            int s_nlocals = nlocals;
-            int s_local_size = local_size;
+            int s_nlocals = g_frame.nlocals;
+            int s_local_size = g_frame.local_size;
             int s_forren_n = g_forren_n;
             int s_nulabels = nulabels;
             int s_static_seq = g_static_local_seq;
@@ -1554,8 +1554,8 @@ int ast_stmt_supported(const struct AstNode *n)
             scan_mode = s_scan_mode;
             outf = s_outf;
 
-            nlocals = s_nlocals;
-            local_size = s_local_size;
+            g_frame.nlocals = s_nlocals;
+            g_frame.local_size = s_local_size;
             g_forren_n = s_forren_n;
             nulabels = s_nulabels;
             g_static_local_seq = s_static_seq;
@@ -1628,8 +1628,8 @@ int ast_stmt_supported(const struct AstNode *n)
         }
 
         {
-            int s_nlocals = nlocals;
-            int s_local_size = local_size;
+            int s_nlocals = g_frame.nlocals;
+            int s_local_size = g_frame.local_size;
             int s_scope_depth = g_scope_depth;
             int s_forren_n = g_forren_n;
             int s_nulabels = nulabels;
@@ -1659,8 +1659,8 @@ int ast_stmt_supported(const struct AstNode *n)
             scan_mode = s_scan_mode;
             outf = s_outf;
 
-            nlocals = s_nlocals;
-            local_size = s_local_size;
+            g_frame.nlocals = s_nlocals;
+            g_frame.local_size = s_local_size;
             g_scope_depth = s_scope_depth;
             g_forren_n = s_forren_n;
             nulabels = s_nulabels;

@@ -430,13 +430,13 @@ static int try_scan_inline_local_decl(struct Sym *fn, struct AstNode *body)
     type = parse_base_type();
     while (accept('*'))
         type = type_add_ptr(type);
-    if (tok.kind == TOK_ID && type_size(type) == 2) {
-        strncpy(name, tok.text, sizeof(name) - 1);
+    if (g_lex.tok.kind == TOK_ID && type_size(type) == 2) {
+        strncpy(name, g_lex.tok.text, sizeof(name) - 1);
         name[sizeof(name) - 1] = 0;
         next_token();
         if (accept('=')) {
             init_expr = ast_build_expr(&g_ast_inline_arena);
-            if (init_expr != NULL && tok.kind == ';' &&
+            if (init_expr != NULL && g_lex.tok.kind == ';' &&
                 inline_expr_is_simple(fn, init_expr) &&
                 !inline_local_is_reassigned(name, body))
                 ok = 1;
@@ -461,11 +461,7 @@ static int try_scan_inline_local_decl(struct Sym *fn, struct AstNode *body)
 
 static void record_inline_function_if_simple(struct Sym *s)
 {
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
+    LexState _ls;
     struct AstNode *body;
     struct AstNode *ret_expr;
     int i;
@@ -473,7 +469,7 @@ static void record_inline_function_if_simple(struct Sym *s)
     size_t namelen;
     int has_local;
 
-    if (s == NULL || !s->is_static || !s->is_inline || tok.kind != '{')
+    if (s == NULL || !s->is_static || !s->is_inline || g_lex.tok.kind != '{')
         return;
     if ((s->type & 15) != TYPE_VOID &&
         (!(type_size(s->type) == 1 || type_size(s->type) == 2 || type_size(s->type) == 4) ||
@@ -481,7 +477,7 @@ static void record_inline_function_if_simple(struct Sym *s)
         return;
 
     nparams = 0;
-    for (i = 0; i < nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
+    for (i = 0; i < g_frame.nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
         if (locals[i].storage == SC_PARAM) {
             if (!(type_size(locals[i].type) == 1 || type_size(locals[i].type) == 2 ||
                   type_size(locals[i].type) == 4) ||
@@ -498,11 +494,7 @@ static void record_inline_function_if_simple(struct Sym *s)
     if (nparams != s->proto_nargs || s->proto_variadic)
         return;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     /* This is a throwaway speculative parse of the function's own body,
      * run before any of its locals are declared for this pass - a
@@ -516,11 +508,7 @@ static void record_inline_function_if_simple(struct Sym *s)
     body = ast_build_stmt(&g_ast_inline_arena);
     asm_suppress_depth--;
 
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
 
@@ -549,45 +537,33 @@ static void record_inline_function_if_simple(struct Sym *s)
 
 static void scan_reserve_struct_return_member_temp(void)
 {
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
+    LexState _ls;
     struct Sym *fn;
     char name[64];
     int depth;
     int bytes;
 
-    if (tok.kind != TOK_ID)
+    if (g_lex.tok.kind != TOK_ID)
         return;
-    fn = find_global(tok.text);
+    fn = find_global(g_lex.tok.text);
     if (fn == NULL || fn->storage != SC_FUNC || !type_is_struct_object(fn->type))
         return;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     next_token();
-    if (tok.kind != '(') {
-        posi = sv_pos;
-        tok_start_pos = sv_tok_start;
-        line_no = sv_line;
-        tok_line = sv_tok_line;
-        tok = sv_tok;
+    if (g_lex.tok.kind != '(') {
+        lex_restore(&_ls);
         return;
     }
 
     depth = 0;
     do {
-        if (tok.kind == TOK_EOF)
+        if (g_lex.tok.kind == TOK_EOF)
             break;
-        if (tok.kind == '(')
+        if (g_lex.tok.kind == '(')
             depth++;
-        else if (tok.kind == ')')
+        else if (g_lex.tok.kind == ')')
             depth--;
         next_token();
     } while (depth > 0);
@@ -597,22 +573,18 @@ static void scan_reserve_struct_return_member_temp(void)
      * temp - so skip any run of closing parens before looking for the `.`.
      * This can only OVER-reserve (e.g. `f(g(1)).x` also matches at `g`),
      * which merely pads the frame; under-reserving is what corrupts it. */
-    while (tok.kind == ')')
+    while (g_lex.tok.kind == ')')
         next_token();
 
-    if (tok.kind == '.') {
+    if (g_lex.tok.kind == '.') {
         bytes = type_size(fn->type);
         if (bytes <= 0)
             bytes = 2;
-        sprintf(name, "#sret%d", nlocals);
+        sprintf(name, "#sret%d", g_frame.nlocals);
         add_local_alloc(name, fn->type, bytes);
     }
 
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
 }
 
 static int static_inline_body_can_be_buffered(struct Sym *s)
@@ -633,25 +605,17 @@ static int static_inline_body_can_be_buffered(struct Sym *s)
  * bound it. */
 static void record_narrow_return_expr_if_simple(struct Sym *s)
 {
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
+    LexState _ls;
     struct AstNode *body;
     struct AstNode *ret_expr;
 
-    if (s == NULL || s->proto_nargs != 0 || s->proto_variadic || tok.kind != '{')
+    if (s == NULL || s->proto_nargs != 0 || s->proto_variadic || g_lex.tok.kind != '{')
         return;
     if ((s->type & 15) == TYPE_VOID || type_size(s->type) != 2 ||
         type_is_bool(s->type) || type_is_struct_object(s->type))
         return;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     /* See the identical comment in record_inline_function_if_simple: this
      * speculatively parses the whole body before any of its own locals are
@@ -662,11 +626,7 @@ static void record_narrow_return_expr_if_simple(struct Sym *s)
     body = ast_build_stmt(&g_ast_inline_arena);
     asm_suppress_depth--;
 
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
 
     ret_expr = inline_return_expr_from_seq(body, 0);
     if (ret_expr == NULL)
@@ -731,17 +691,17 @@ static int call_args_may_need_temps(void)
     int depth;
 
     depth = 1;
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == '(') {
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == '(') {
             depth++;
-        } else if (tok.kind == ')') {
+        } else if (g_lex.tok.kind == ')') {
             depth--;
             if (depth == 0)
                 break;
-        } else if (tok.kind == TOK_INC || tok.kind == TOK_DEC || tok.kind == '=' ||
-                   (tok.kind >= TOK_ADDEQ && tok.kind <= TOK_SHREQ)) {
+        } else if (g_lex.tok.kind == TOK_INC || g_lex.tok.kind == TOK_DEC || g_lex.tok.kind == '=' ||
+                   (g_lex.tok.kind >= TOK_ADDEQ && g_lex.tok.kind <= TOK_SHREQ)) {
             return 1;
-        } else if (tok.kind == TOK_ID) {
+        } else if (g_lex.tok.kind == TOK_ID) {
             /* Block locals are not in the symbol table during this lexical
              * pre-scan, so it cannot distinguish a private automatic from a
              * global, volatile, or address-taken object. Reserve on any
@@ -755,35 +715,27 @@ static int call_args_may_need_temps(void)
 
 static int function_body_may_need_inline_temps(void)
 {
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
+    LexState _ls;
     int depth;
     int result;
 
-    if (tok.kind != '{')
+    if (g_lex.tok.kind != '{')
         return 0;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     depth = 1;
     result = 0;
     next_token();
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == TOK_ID) {
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == TOK_ID) {
             char name[64];
             struct Sym *s;
 
-            strncpy(name, tok.text, sizeof(name) - 1);
+            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
             next_token();
-            if (tok.kind == '(') {
+            if (g_lex.tok.kind == '(') {
                 s = find_global(name);
                 if (inline_function_has_multiuse_param(s)) {
                     result = 1;
@@ -800,18 +752,14 @@ static int function_body_may_need_inline_temps(void)
             }
             continue;
         }
-        if (tok.kind == '{')
+        if (g_lex.tok.kind == '{')
             depth++;
-        else if (tok.kind == '}')
+        else if (g_lex.tok.kind == '}')
             depth--;
         next_token();
     }
 
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
     return result;
 }
 
@@ -1055,7 +1003,7 @@ void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name)
      * that can never actually be addressed this way. local_size is the
      * running total BEFORE this reservation, matching what add_local_alloc
      * itself is about to compute (local_size += bytes; offset = -local_size). */
-    would_be_offset = -(local_size + 2);
+    would_be_offset = -(g_frame.local_size + 2);
     if (would_be_offset < -128)
         return;
     cache_slot = add_local_alloc("#addrcache", TYPE_INT, 2);
@@ -1072,11 +1020,7 @@ void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name)
  * exec()/execv(). */
 static void scan_function_body_ident_counts(void)
 {
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
+    LexState _ls;
     int depth;
     int prev_kind;
     int address_pending;
@@ -1086,25 +1030,21 @@ static void scan_function_body_ident_counts(void)
     g_addr_cache_array_count = 0;
     g_addr_cache_calls_exec = 0;
 
-    if (tok.kind != '{')
+    if (g_lex.tok.kind != '{')
         return;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     depth = 1;
     prev_kind = 0;
     address_pending = 0;
     prev_ident[0] = 0;
     next_token();
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == TOK_ID) {
-            bump_ident_count(tok.text);
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == TOK_ID) {
+            bump_ident_count(g_lex.tok.text);
             if (address_pending)
-                mark_ident_addr_taken(tok.text);
+                mark_ident_addr_taken(g_lex.tok.text);
             address_pending = 0;
             /* Prefix ++/-- ("++x", not "x++") mutates x exactly like the
              * postfix form the write-op check below already catches - but
@@ -1121,36 +1061,32 @@ static void scan_function_body_ident_counts(void)
              * now-stale, pre-increment slot the moment anything made bc look
              * untrusted, silently reverting the pointer mid-loop. */
             if (prev_kind == TOK_INC || prev_kind == TOK_DEC)
-                mark_ident_written(tok.text);
-            if (strcmp(tok.text, "exec") == 0 || strcmp(tok.text, "execv") == 0)
+                mark_ident_written(g_lex.tok.text);
+            if (strcmp(g_lex.tok.text, "exec") == 0 || strcmp(g_lex.tok.text, "execv") == 0)
                 g_addr_cache_calls_exec = 1;
-        } else if (tok.kind == '{')
+        } else if (g_lex.tok.kind == '{')
             depth++;
-        else if (tok.kind == '}')
+        else if (g_lex.tok.kind == '}')
             depth--;
-        else if (tok_kind_is_write_op(tok.kind) && prev_kind == TOK_ID && prev_ident[0])
+        else if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
             mark_ident_written(prev_ident);
-        if (tok.kind == TOK_ID) {
-            size_t pl = strlen(tok.text);
+        if (g_lex.tok.kind == TOK_ID) {
+            size_t pl = strlen(g_lex.tok.text);
             if (pl > sizeof(prev_ident) - 1) pl = sizeof(prev_ident) - 1;
-            memcpy(prev_ident, tok.text, pl);
+            memcpy(prev_ident, g_lex.tok.text, pl);
             prev_ident[pl] = 0;
         } else {
             prev_ident[0] = 0;
         }
-        if (tok.kind == '&')
+        if (g_lex.tok.kind == '&')
             address_pending = 1;
-        else if (address_pending && tok.kind != '(' && tok.kind != ')')
+        else if (address_pending && g_lex.tok.kind != '(' && g_lex.tok.kind != ')')
             address_pending = 0;
-        prev_kind = tok.kind;
+        prev_kind = g_lex.tok.kind;
         next_token();
     }
 
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
 }
 
 /* Round-1 BC register-residency candidate selection: the most-referenced
@@ -1270,30 +1206,18 @@ void emit_needed_deferred_bodies(void)
 
 int current_void_is_empty_param_list(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int r;
 
-    if (tok.kind != TOK_VOID)
+    if (g_lex.tok.kind != TOK_VOID)
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     next_token();
-    r = (tok.kind == ')');
+    r = (g_lex.tok.kind == ')');
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
 
     return r;
 }
@@ -1311,7 +1235,7 @@ void skip_prototype_array_suffixes(int *ptype)
 
     rt_name[0] = 0;
 
-    if (tok.kind != '[') return;
+    if (g_lex.tok.kind != '[') return;
 
     /* Reset: we're taking over array suffix parsing from scratch. */
     g_ptr_array_dim_count = 0;
@@ -1322,10 +1246,10 @@ void skip_prototype_array_suffixes(int *ptype)
     while (accept('[')) {
         skip_parameter_array_qualifiers();
 
-        if (tok.kind == ']') {
+        if (g_lex.tok.kind == ']') {
             n = 0;
             next_token();
-        } else if (tok.kind == '*') {
+        } else if (g_lex.tok.kind == '*') {
             /* C99 `[*]` unspecified-size VLA marker in a prototype; it decays
              * to a pointer exactly like `[]`. */
             next_token();
@@ -1345,21 +1269,21 @@ void skip_prototype_array_suffixes(int *ptype)
                 rt_count++;
                 if (rt_dim < 0) {
                     rt_dim = ndims;
-                    if (tok.kind == TOK_ID) {
-                        long s_pos = posi;
-                        long s_ts = tok_start_pos;
-                        int s_ln = line_no;
-                        int s_tl = tok_line;
-                        struct Token s_tk = tok;
-                        strncpy(rt_name, tok.text, sizeof(rt_name) - 1);
+                    if (g_lex.tok.kind == TOK_ID) {
+                        long s_pos = g_lex.posi;
+                        long s_ts = g_lex.tok_start_pos;
+                        int s_ln = g_lex.line_no;
+                        int s_tl = g_lex.tok_line;
+                        struct Token s_tk = g_lex.tok;
+                        strncpy(rt_name, g_lex.tok.text, sizeof(rt_name) - 1);
                         rt_name[sizeof(rt_name) - 1] = 0;
                         next_token();
-                        rt_simple = (tok.kind == ']');
-                        posi = s_pos;
-                        tok_start_pos = s_ts;
-                        line_no = s_ln;
-                        tok_line = s_tl;
-                        tok = s_tk;
+                        rt_simple = (g_lex.tok.kind == ']');
+                        g_lex.posi = s_pos;
+                        g_lex.tok_start_pos = s_ts;
+                        g_lex.line_no = s_ln;
+                        g_lex.tok_line = s_tl;
+                        g_lex.tok = s_tk;
                     }
                 }
             }
@@ -1420,40 +1344,28 @@ void skip_prototype_array_suffixes(int *ptype)
 void skip_prototype_function_suffix(void)
 {
     int depth;
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
 
     if (!accept('('))
         return;
 
     depth = 1;
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == '(')
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == '(')
             depth++;
-        else if (tok.kind == ')')
+        else if (g_lex.tok.kind == ')')
             depth--;
         next_token();
     }
 
-    while (tok.kind == '(')
+    while (g_lex.tok.kind == '(')
         skip_prototype_function_suffix();
 
-    if (tok.kind == ')') {
-        save_pos = posi;
-        save_tok_start = tok_start_pos;
-        save_line = line_no;
-        save_tok_line = tok_line;
-        save_tok = tok;
+    if (g_lex.tok.kind == ')') {
+        _ls = lex_save();
         next_token();
-        if (tok.kind != ',') {
-            posi = save_pos;
-            tok_start_pos = save_tok_start;
-            line_no = save_line;
-            tok_line = save_tok_line;
-            tok = save_tok;
+        if (g_lex.tok.kind != ',') {
+            lex_restore(&_ls);
         }
     }
 }
@@ -1512,43 +1424,31 @@ void remember_proto_param_type(int type)
 
 int old_style_param_list_starts(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int r;
 
-    if (tok.kind != TOK_ID || find_typedef(tok.text) >= 0)
+    if (g_lex.tok.kind != TOK_ID || find_typedef(g_lex.tok.text) >= 0)
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     r = 1;
     for (;;) {
-        if (tok.kind != TOK_ID || find_typedef(tok.text) >= 0) {
+        if (g_lex.tok.kind != TOK_ID || find_typedef(g_lex.tok.text) >= 0) {
             r = 0;
             break;
         }
         next_token();
-        if (tok.kind == ')')
+        if (g_lex.tok.kind == ')')
             break;
-        if (tok.kind != ',') {
+        if (g_lex.tok.kind != ',') {
             r = 0;
             break;
         }
         next_token();
     }
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
     return r;
 }
 
@@ -1561,7 +1461,7 @@ void recompute_param_offsets(void)
     off = ((parse_function_return_type & TYPE_STRUCT) &&
            type_ptr_depth(parse_function_return_type) == 0) ? 6 : 4;
 
-    for (i = 0; i < nlocals; ++i) {
+    for (i = 0; i < g_frame.nlocals; ++i) {
         if (locals[i].storage != SC_PARAM)
             continue;
         sz = type_size(locals[i].type);
@@ -1570,7 +1470,7 @@ void recompute_param_offsets(void)
         locals[i].size = sz;
         off += sz;
     }
-    param_offset = off;
+    g_frame.param_offset = off;
 }
 
 void parse_old_style_param_id_list(void)
@@ -1578,11 +1478,11 @@ void parse_old_style_param_id_list(void)
     char name[64];
 
     for (;;) {
-        if (tok.kind != TOK_ID) {
+        if (g_lex.tok.kind != TOK_ID) {
             error_here("parameter name expected");
             break;
         }
-        strncpy(name, tok.text, sizeof(name) - 1);
+        strncpy(name, g_lex.tok.text, sizeof(name) - 1);
         name[sizeof(name) - 1] = 0;
         next_token();
         add_param_alloc(name, TYPE_INT);
@@ -1600,7 +1500,7 @@ void parse_old_style_param_declarations(void)
     char name[64];
     struct Sym *s;
 
-    while (tok.kind != TOK_EOF && tok.kind != '{' && starts_type()) {
+    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '{' && starts_type()) {
         base = parse_base_type();
         base_is_volatile = decl_is_volatile;
         base_pointee_is_volatile = decl_pointee_is_volatile;
@@ -1615,19 +1515,19 @@ void parse_old_style_param_declarations(void)
                 type = type_add_ptr(type);
             }
 
-            if (tok.kind != TOK_ID) {
+            if (g_lex.tok.kind != TOK_ID) {
                 error_here("parameter declaration name expected");
-                while (tok.kind != ';' && tok.kind != TOK_EOF && tok.kind != '{')
+                while (g_lex.tok.kind != ';' && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '{')
                     next_token();
                 break;
             }
 
-            strncpy(name, tok.text, sizeof(name) - 1);
+            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
             next_token();
 
             skip_prototype_array_suffixes(&type);
-            if (tok.kind == '(') {
+            if (g_lex.tok.kind == '(') {
                 skip_prototype_function_suffix();
                 type = type_add_ptr(type);
             }
@@ -1667,9 +1567,9 @@ void parse_param_list(void)
     char name[64];
     int unnamed_id;
 
-    nlocals = 0;
-    local_size = 0;
-    param_offset = ((parse_function_return_type & TYPE_STRUCT) && type_ptr_depth(parse_function_return_type) == 0) ? 6 : 4;
+    g_frame.nlocals = 0;
+    g_frame.local_size = 0;
+    g_frame.param_offset = ((parse_function_return_type & TYPE_STRUCT) && type_ptr_depth(parse_function_return_type) == 0) ? 6 : 4;
     clear_parsed_prototype();
 
     if (current_void_is_empty_param_list()) {
@@ -1679,7 +1579,7 @@ void parse_param_list(void)
     }
 
     /* Empty parentheses in C89 mean old-style/no prototype. */
-    if (tok.kind == ')') return;
+    if (g_lex.tok.kind == ')') return;
 
     if (old_style_param_list_starts()) {
         parse_old_style_param_id_list();
@@ -1687,7 +1587,7 @@ void parse_param_list(void)
     }
 
     for (;;) {
-        if (tok.kind == TOK_ELLIPSIS) {
+        if (g_lex.tok.kind == TOK_ELLIPSIS) {
             g_proto_has = 1;
             g_proto_variadic = 1;
             next_token();
@@ -1712,10 +1612,10 @@ void parse_param_list(void)
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr = 1;
         } else if (parse_abstract_funcptr_declarator(&type)) {
-            sprintf(name, "__p%d", param_offset);
+            sprintf(name, "__p%d", g_frame.param_offset);
             unnamed_id = 1;
-        } else if (tok.kind == TOK_ID) {
-            strncpy(name, tok.text, sizeof(name) - 1);
+        } else if (g_lex.tok.kind == TOK_ID) {
+            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
             next_token();
         } else {
@@ -1724,7 +1624,7 @@ void parse_param_list(void)
              * Give such parameters private dummy names so function
              * definitions using named parameters continue to work exactly
              * as before, while header prototypes are accepted. */
-            sprintf(name, "__p%d", param_offset);
+            sprintf(name, "__p%d", g_frame.param_offset);
             unnamed_id = 1;
         }
 
@@ -1738,7 +1638,7 @@ void parse_param_list(void)
         /* Accept function-typed parameters in prototypes and treat them as
          * pointer-sized for this compiler's simple type model.  This keeps
          * declarations like int f(int cb(void)); from poisoning the parse. */
-        if (tok.kind == '(') {
+        if (g_lex.tok.kind == '(') {
             skip_prototype_function_suffix();
             type = type_add_ptr(type);
         }
@@ -1780,7 +1680,7 @@ int current_function_param_count(void)
     int n;
 
     n = 0;
-    for (i = 0; i < nlocals; ++i)
+    for (i = 0; i < g_frame.nlocals; ++i)
         if (locals[i].storage == SC_PARAM)
             n++;
     return n;
@@ -1927,7 +1827,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
         emit("\tld sp,hl\n");
     }
 
-    for (i = 0; i < nlocals; ++i)
+    for (i = 0; i < g_frame.nlocals; ++i)
         if (locals[i].storage == SC_PARAM)
             emit_debug_variable(&locals[i]);
 
@@ -2113,11 +2013,11 @@ void skip_initializer_or_decl_tail(void)
 
     depth = 0;
 
-    while (tok.kind != TOK_EOF) {
-        if (depth == 0 && (tok.kind == ',' || tok.kind == ';')) return;
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (depth == 0 && (g_lex.tok.kind == ',' || g_lex.tok.kind == ';')) return;
 
-        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') depth++;
-        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+        if (g_lex.tok.kind == '(' || g_lex.tok.kind == '[' || g_lex.tok.kind == '{') depth++;
+        else if (g_lex.tok.kind == ')' || g_lex.tok.kind == ']' || g_lex.tok.kind == '}') {
             if (depth > 0) depth--;
         }
 
@@ -2127,67 +2027,47 @@ void skip_initializer_or_decl_tail(void)
 
 static int scan_compound_literal_if_present(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
+    LexState _ls;
     int save_long_suffix;
     int save_unsigned_suffix;
-    struct Token save_tok;
     int type;
     int size;
     int depth;
 
-    if (tok.kind != '(' || !paren_starts_cast())
+    if (g_lex.tok.kind != '(' || !paren_starts_cast())
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
+    _ls = lex_save();
     save_long_suffix = g_tok_long_suffix;
     save_unsigned_suffix = g_tok_unsigned_suffix;
-    save_tok = tok;
 
     depth = 1;
     next_token();
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == '(')
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == '(')
             depth++;
-        else if (tok.kind == ')')
+        else if (g_lex.tok.kind == ')')
             depth--;
         next_token();
     }
 
-    if (tok.kind != '{') {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
+    if (g_lex.tok.kind != '{') {
+        lex_restore(&_ls);
         g_tok_long_suffix = save_long_suffix;
         g_tok_unsigned_suffix = save_unsigned_suffix;
-        tok = save_tok;
         return 0;
     }
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
+    lex_restore(&_ls);
     g_tok_long_suffix = save_long_suffix;
     g_tok_unsigned_suffix = save_unsigned_suffix;
-    tok = save_tok;
 
     next_token();
     parse_type_name_decl(&type, &size);
     expect(')');
 
-    if (tok.kind != '{') {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
+    if (g_lex.tok.kind != '{') {
+        lex_restore(&_ls);
         return 0;
     }
 
@@ -2205,19 +2085,19 @@ static int scan_compound_literal_if_present(void)
      * intervening push/call clobbers them. */
     depth = 0;
     do {
-        if (tok.kind == TOK_EOF)
+        if (g_lex.tok.kind == TOK_EOF)
             break;
-        if (depth >= 1 && tok.kind == '(' && scan_compound_literal_if_present())
+        if (depth >= 1 && g_lex.tok.kind == '(' && scan_compound_literal_if_present())
             continue;
         /* Non-constant fields are re-parsed at emit time through
          * ast_emit_init_expr, whose AST build allocates a hidden temp for a
          * struct-return call member base (`mk(...).f`); reserve the same
          * slot here so the scan-derived frame size matches. */
-        if (depth >= 1 && tok.kind == TOK_ID)
+        if (depth >= 1 && g_lex.tok.kind == TOK_ID)
             scan_reserve_struct_return_member_temp();
-        if (tok.kind == '{')
+        if (g_lex.tok.kind == '{')
             depth++;
-        else if (tok.kind == '}')
+        else if (g_lex.tok.kind == '}')
             depth--;
         next_token();
     } while (depth > 0);
@@ -2231,10 +2111,10 @@ static void scan_initializer_or_decl_tail(void)
 
     depth = 0;
 
-    while (tok.kind != TOK_EOF) {
-        if (depth == 0 && (tok.kind == ',' || tok.kind == ';')) return;
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (depth == 0 && (g_lex.tok.kind == ',' || g_lex.tok.kind == ';')) return;
 
-        if (tok.kind == '(' && scan_compound_literal_if_present())
+        if (g_lex.tok.kind == '(' && scan_compound_literal_if_present())
             continue;
 
         /* A struct-return call member access `mk(...).field` inside a
@@ -2242,11 +2122,11 @@ static void scan_initializer_or_decl_tail(void)
          * AST build (ast_add_struct_return_member_temp); reserve the same
          * slot here so the scan-derived frame size matches, exactly as the
          * statement-level else-branch in scan_function_body does. */
-        if (tok.kind == TOK_ID)
+        if (g_lex.tok.kind == TOK_ID)
             scan_reserve_struct_return_member_temp();
 
-        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') depth++;
-        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+        if (g_lex.tok.kind == '(' || g_lex.tok.kind == '[' || g_lex.tok.kind == '{') depth++;
+        else if (g_lex.tok.kind == ')' || g_lex.tok.kind == ']' || g_lex.tok.kind == '}') {
             if (depth > 0) depth--;
         }
 
@@ -2268,7 +2148,7 @@ int local_name_address_taken_ahead(const char *name)
      * source later forms &name, keep normal storage instead.  This deliberately
      * ignores strings/comments and stops at the function's closing brace.
      */
-    p = posi;
+    p = g_lex.posi;
     depth = 1;
     n = (int)strlen(name);
 
@@ -2361,46 +2241,34 @@ int local_name_address_taken_ahead(const char *name)
  * dropped, which is the only direction that would be unsafe. */
 int local_name_used_ahead(const char *name)
 {
-    long sv_pos;
-    long sv_tok_start;
-    int sv_line;
-    int sv_tok_line;
-    struct Token sv_tok;
+    LexState _ls;
     int depth;
     int prev_was_member_access;
     int found;
 
-    sv_pos = posi;
-    sv_tok_start = tok_start_pos;
-    sv_line = line_no;
-    sv_tok_line = tok_line;
-    sv_tok = tok;
+    _ls = lex_save();
 
     depth = 0;
     found = 0;
     prev_was_member_access = 0;
-    while (tok.kind != TOK_EOF) {
-        if (tok.kind == '{') {
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (g_lex.tok.kind == '{') {
             depth++;
-        } else if (tok.kind == '}') {
+        } else if (g_lex.tok.kind == '}') {
             if (depth == 0)
                 break;
             depth--;
-        } else if (tok.kind == TOK_ID && !strcmp(tok.text, name)) {
+        } else if (g_lex.tok.kind == TOK_ID && !strcmp(g_lex.tok.text, name)) {
             if (!prev_was_member_access) {
                 found = 1;
                 break;
             }
         }
-        prev_was_member_access = (tok.kind == '.' || tok.kind == TOK_ARROW);
+        prev_was_member_access = (g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW);
         next_token();
     }
 
-    posi = sv_pos;
-    tok_start_pos = sv_tok_start;
-    line_no = sv_line;
-    tok_line = sv_tok_line;
-    tok = sv_tok;
+    lex_restore(&_ls);
     return found;
 }
 
@@ -2425,16 +2293,16 @@ int local_name_used_ahead(const char *name)
 static int narrow_skip_declaration_statement(void)
 {
     int depth = 0;
-    while (tok.kind != TOK_EOF) {
-        if (depth == 0 && tok.kind == ';') {
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (depth == 0 && g_lex.tok.kind == ';') {
             next_token();
             return 1;
         }
-        if (depth == 0 && tok.kind == '=')
+        if (depth == 0 && g_lex.tok.kind == '=')
             return 0;
-        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{')
+        if (g_lex.tok.kind == '(' || g_lex.tok.kind == '[' || g_lex.tok.kind == '{')
             depth++;
-        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+        else if (g_lex.tok.kind == ')' || g_lex.tok.kind == ']' || g_lex.tok.kind == '}') {
             if (depth > 0) depth--;
         }
         next_token();
@@ -2473,9 +2341,9 @@ static struct AstNode *narrow_build_speculative_scope(struct AstArena *ar)
     seq = ast_new(ar, AST_COMPOUND);
     for (;;) {
         struct AstNode *stmt;
-        if (tok.kind == '}' || tok.kind == TOK_EOF)
+        if (g_lex.tok.kind == '}' || g_lex.tok.kind == TOK_EOF)
             return seq;
-        if (starts_type() && tok.kind != TOK_TYPEDEF) {
+        if (starts_type() && g_lex.tok.kind != TOK_TYPEDEF) {
             if (!narrow_skip_declaration_statement())
                 return NULL;
             continue;
@@ -2485,6 +2353,62 @@ static struct AstNode *narrow_build_speculative_scope(struct AstArena *ar)
             return NULL;
         ast_list_push(ar, seq, stmt);
     }
+}
+
+/*
+ * Snapshot of the per-function speculative-parse state that the narrow-analysis
+ * probes below must leave unchanged. Each probe runs a throwaway forward parse
+ * (narrow_build_speculative_scope -> ast_build_stmt) that mutates for-scope
+ * sequencing, label, block-scope-depth, compound-literal/LICM sequence, and
+ * declaration-qualifier state; capturing and restoring them as one unit keeps
+ * every field in lockstep so a newly added piece of speculative state cannot be
+ * forgotten at one of the (identical) restore sites. The lexer cursor is a
+ * separate concern captured by lex_save()/lex_restore().
+ */
+typedef struct SpecParseState {
+    int nulabels;
+    int for_seq;
+    int forren_n;
+    int for_decl_seq;
+    int for_decl_rename_index;
+    int for_decl_recording;
+    int scope_depth;
+    int compound_literal_seq;
+    int licm_seq;
+    int decl_is_volatile;
+    int decl_pointee_is_volatile;
+} SpecParseState;
+
+static SpecParseState spec_parse_save(void)
+{
+    SpecParseState s;
+    s.nulabels = nulabels;
+    s.for_seq = g_for_seq;
+    s.forren_n = g_forren_n;
+    s.for_decl_seq = g_for_decl_seq;
+    s.for_decl_rename_index = g_for_decl_rename_index;
+    s.for_decl_recording = g_for_decl_recording;
+    s.scope_depth = g_scope_depth;
+    s.compound_literal_seq = g_compound_literal_seq;
+    s.licm_seq = g_licm_seq;
+    s.decl_is_volatile = decl_is_volatile;
+    s.decl_pointee_is_volatile = decl_pointee_is_volatile;
+    return s;
+}
+
+static void spec_parse_restore(const SpecParseState *s)
+{
+    nulabels = s->nulabels;
+    g_for_seq = s->for_seq;
+    g_forren_n = s->forren_n;
+    g_for_decl_seq = s->for_decl_seq;
+    g_for_decl_rename_index = s->for_decl_rename_index;
+    g_for_decl_recording = s->for_decl_recording;
+    g_scope_depth = s->scope_depth;
+    g_compound_literal_seq = s->compound_literal_seq;
+    g_licm_seq = s->licm_seq;
+    decl_is_volatile = s->decl_is_volatile;
+    decl_pointee_is_volatile = s->decl_pointee_is_volatile;
 }
 
 /* Speculatively parses the rest of the enclosing block (from the current
@@ -2503,12 +2427,8 @@ static struct AstNode *narrow_build_speculative_scope(struct AstArena *ar)
  * cannot handle at all - rather than guess. */
 int try_narrow_local_int_array(const char *name, int type, int arrlen, int total_elems)
 {
-    long sv_pos, sv_tok_start;
-    int sv_line, sv_tok_line;
-    struct Token sv_tok;
-    int sv_nulabels, sv_for_seq, sv_forren_n, sv_for_decl_seq, sv_for_decl_rename_index;
-    int sv_for_decl_recording, sv_scope_depth, sv_compound_literal_seq, sv_licm_seq;
-    int sv_decl_is_volatile, sv_decl_pointee_is_volatile;
+    LexState _ls;
+    SpecParseState _sp;
     static struct AstArena narrow_scratch_arena;
     static int narrow_scratch_inited;
     struct AstNode *seq;
@@ -2517,7 +2437,7 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
     if (opt_no_narrow)
         return 0;
     if ((type & 15) != TYPE_INT || type_ptr_depth(type) != 0 || type_is_struct_object(type) ||
-        (arrlen <= 0 && total_elems <= 0) || tok.kind == '=' || g_last_array_dim_count > 1)
+        (arrlen <= 0 && total_elems <= 0) || g_lex.tok.kind == '=' || g_last_array_dim_count > 1)
         return 0;
 
     if (!narrow_scratch_inited) {
@@ -2526,16 +2446,8 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
     }
     ast_arena_reset(&narrow_scratch_arena);
 
-    sv_pos = posi; sv_tok_start = tok_start_pos;
-    sv_line = line_no; sv_tok_line = tok_line;
-    sv_tok = tok;
-    sv_nulabels = nulabels;
-    sv_for_seq = g_for_seq; sv_forren_n = g_forren_n;
-    sv_for_decl_seq = g_for_decl_seq; sv_for_decl_rename_index = g_for_decl_rename_index;
-    sv_for_decl_recording = g_for_decl_recording; sv_scope_depth = g_scope_depth;
-    sv_compound_literal_seq = g_compound_literal_seq; sv_licm_seq = g_licm_seq;
-    sv_decl_is_volatile = decl_is_volatile;
-    sv_decl_pointee_is_volatile = decl_pointee_is_volatile;
+    _ls = lex_save();
+    _sp = spec_parse_save();
 
     /* Same rationale as record_narrow_return_expr_if_simple: this walks
      * forward through code whose later declarations (if any follow) have
@@ -2547,16 +2459,8 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
     asm_suppress_depth--;
     result = (seq != NULL) ? narrow_array_is_byte_safe(seq, name) : 0;
 
-    posi = sv_pos; tok_start_pos = sv_tok_start;
-    line_no = sv_line; tok_line = sv_tok_line;
-    tok = sv_tok;
-    nulabels = sv_nulabels;
-    g_for_seq = sv_for_seq; g_forren_n = sv_forren_n;
-    g_for_decl_seq = sv_for_decl_seq; g_for_decl_rename_index = sv_for_decl_rename_index;
-    g_for_decl_recording = sv_for_decl_recording; g_scope_depth = sv_scope_depth;
-    g_compound_literal_seq = sv_compound_literal_seq; g_licm_seq = sv_licm_seq;
-    decl_is_volatile = sv_decl_is_volatile;
-    decl_pointee_is_volatile = sv_decl_pointee_is_volatile;
+    lex_restore(&_ls);
+    spec_parse_restore(&_sp);
 
     return result;
 }
@@ -2619,12 +2523,8 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
 int try_narrow_register_scalar(const char *name, int type, int is_register,
                                int arrlen, int total_elems)
 {
-    long sv_pos, sv_tok_start;
-    int sv_line, sv_tok_line;
-    struct Token sv_tok;
-    int sv_nulabels, sv_for_seq, sv_forren_n, sv_for_decl_seq, sv_for_decl_rename_index;
-    int sv_for_decl_recording, sv_scope_depth, sv_compound_literal_seq, sv_licm_seq;
-    int sv_decl_is_volatile, sv_decl_pointee_is_volatile;
+    LexState _ls;
+    SpecParseState _sp;
     static struct AstArena narrow_scalar_scratch_arena;
     static int narrow_scalar_scratch_inited;
     struct AstNode *seq;
@@ -2633,7 +2533,7 @@ int try_narrow_register_scalar(const char *name, int type, int is_register,
     if (opt_no_narrow)
         return 0;
     if (!is_register || (type & 15) != TYPE_INT || type_ptr_depth(type) != 0 ||
-        type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || tok.kind == '=')
+        type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || g_lex.tok.kind == '=')
         return 0;
 
     if (!narrow_scalar_scratch_inited) {
@@ -2642,32 +2542,16 @@ int try_narrow_register_scalar(const char *name, int type, int is_register,
     }
     ast_arena_reset(&narrow_scalar_scratch_arena);
 
-    sv_pos = posi; sv_tok_start = tok_start_pos;
-    sv_line = line_no; sv_tok_line = tok_line;
-    sv_tok = tok;
-    sv_nulabels = nulabels;
-    sv_for_seq = g_for_seq; sv_forren_n = g_forren_n;
-    sv_for_decl_seq = g_for_decl_seq; sv_for_decl_rename_index = g_for_decl_rename_index;
-    sv_for_decl_recording = g_for_decl_recording; sv_scope_depth = g_scope_depth;
-    sv_compound_literal_seq = g_compound_literal_seq; sv_licm_seq = g_licm_seq;
-    sv_decl_is_volatile = decl_is_volatile;
-    sv_decl_pointee_is_volatile = decl_pointee_is_volatile;
+    _ls = lex_save();
+    _sp = spec_parse_save();
 
     asm_suppress_depth++;
     seq = narrow_build_speculative_scope(&narrow_scalar_scratch_arena);
     asm_suppress_depth--;
     result = (seq != NULL) ? narrow_scalar_is_byte_safe(seq, name) : 0;
 
-    posi = sv_pos; tok_start_pos = sv_tok_start;
-    line_no = sv_line; tok_line = sv_tok_line;
-    tok = sv_tok;
-    nulabels = sv_nulabels;
-    g_for_seq = sv_for_seq; g_forren_n = sv_forren_n;
-    g_for_decl_seq = sv_for_decl_seq; g_for_decl_rename_index = sv_for_decl_rename_index;
-    g_for_decl_recording = sv_for_decl_recording; g_scope_depth = sv_scope_depth;
-    g_compound_literal_seq = sv_compound_literal_seq; g_licm_seq = sv_licm_seq;
-    decl_is_volatile = sv_decl_is_volatile;
-    decl_pointee_is_volatile = sv_decl_pointee_is_volatile;
+    lex_restore(&_ls);
+    spec_parse_restore(&_sp);
 
     return result;
 }
@@ -2684,12 +2568,8 @@ int try_narrow_register_scalar(const char *name, int type, int is_register,
  * smaller in scope than that attempt, so it carries none of that risk. */
 int try_narrow_for_counter(const char *name, int type, int arrlen, int total_elems)
 {
-    long sv_pos, sv_tok_start;
-    int sv_line, sv_tok_line;
-    struct Token sv_tok;
-    int sv_nulabels, sv_for_seq, sv_forren_n, sv_for_decl_seq, sv_for_decl_rename_index;
-    int sv_for_decl_recording, sv_scope_depth, sv_compound_literal_seq, sv_licm_seq;
-    int sv_decl_is_volatile, sv_decl_pointee_is_volatile;
+    LexState _ls;
+    SpecParseState _sp;
     static struct AstArena narrow_for_scratch_arena;
     static int narrow_for_scratch_inited;
     struct AstNode *seq;
@@ -2698,7 +2578,7 @@ int try_narrow_for_counter(const char *name, int type, int arrlen, int total_ele
     if (opt_no_narrow)
         return 0;
     if ((type & 15) != TYPE_INT || type_ptr_depth(type) != 0 ||
-        type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || tok.kind == '=')
+        type_is_struct_object(type) || arrlen > 0 || total_elems > 0 || g_lex.tok.kind == '=')
         return 0;
 
     if (!narrow_for_scratch_inited) {
@@ -2707,32 +2587,16 @@ int try_narrow_for_counter(const char *name, int type, int arrlen, int total_ele
     }
     ast_arena_reset(&narrow_for_scratch_arena);
 
-    sv_pos = posi; sv_tok_start = tok_start_pos;
-    sv_line = line_no; sv_tok_line = tok_line;
-    sv_tok = tok;
-    sv_nulabels = nulabels;
-    sv_for_seq = g_for_seq; sv_forren_n = g_forren_n;
-    sv_for_decl_seq = g_for_decl_seq; sv_for_decl_rename_index = g_for_decl_rename_index;
-    sv_for_decl_recording = g_for_decl_recording; sv_scope_depth = g_scope_depth;
-    sv_compound_literal_seq = g_compound_literal_seq; sv_licm_seq = g_licm_seq;
-    sv_decl_is_volatile = decl_is_volatile;
-    sv_decl_pointee_is_volatile = decl_pointee_is_volatile;
+    _ls = lex_save();
+    _sp = spec_parse_save();
 
     asm_suppress_depth++;
     seq = narrow_build_speculative_scope(&narrow_for_scratch_arena);
     asm_suppress_depth--;
     result = (seq != NULL) ? narrow_for_counter_is_byte_safe(seq, name) : 0;
 
-    posi = sv_pos; tok_start_pos = sv_tok_start;
-    line_no = sv_line; tok_line = sv_tok_line;
-    tok = sv_tok;
-    nulabels = sv_nulabels;
-    g_for_seq = sv_for_seq; g_forren_n = sv_forren_n;
-    g_for_decl_seq = sv_for_decl_seq; g_for_decl_rename_index = sv_for_decl_rename_index;
-    g_for_decl_recording = sv_for_decl_recording; g_scope_depth = sv_scope_depth;
-    g_compound_literal_seq = sv_compound_literal_seq; g_licm_seq = sv_licm_seq;
-    decl_is_volatile = sv_decl_is_volatile;
-    decl_pointee_is_volatile = sv_decl_pointee_is_volatile;
+    lex_restore(&_ls);
+    spec_parse_restore(&_sp);
 
     return result;
 }
@@ -2766,16 +2630,16 @@ void scan_local_decl_after_type(int base)
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr = 1;
         } else {
-            if (tok.kind != TOK_ID) return;
+            if (g_lex.tok.kind != TOK_ID) return;
 
-            strncpy(name, tok.text, sizeof(name) - 1);
+            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
             next_token();
         }
         strncpy(source_name, name, sizeof(source_name) - 1);
         source_name[sizeof(source_name) - 1] = 0;
 
-        if (tok.kind == '(') {
+        if (g_lex.tok.kind == '(') {
             skip_prototype_function_suffix();
             if (!accept(','))
                 break;
@@ -2802,7 +2666,7 @@ void scan_local_decl_after_type(int base)
 
             arrlen = total_elems;
 
-            if (arrlen == 0 && g_last_array_dim_count > 0 && tok.kind == '=') {
+            if (arrlen == 0 && g_last_array_dim_count > 0 && g_lex.tok.kind == '=') {
                 int atoms;
                 int inner;
                 int di;
@@ -2944,8 +2808,8 @@ void scan_local_decl_after_type(int base)
              * !s->is_const_value) guards against the redefinition-error
              * recovery case, where s is an unrelated pre-existing symbol and
              * bytes/nlocals do not describe it. */
-            nlocals--;
-            local_size -= bytes;
+            g_frame.nlocals--;
+            g_frame.local_size -= bytes;
         }
         }
 
@@ -2987,9 +2851,9 @@ void scan_static_local_decl_after_type(int base)
             type = type_add_ptr(type);
         }
 
-        if (tok.kind != TOK_ID) return;
+        if (g_lex.tok.kind != TOK_ID) return;
 
-        strncpy(name, tok.text, sizeof(name) - 1);
+        strncpy(name, g_lex.tok.text, sizeof(name) - 1);
         name[sizeof(name) - 1] = 0;
         next_token();
 
@@ -3104,18 +2968,18 @@ void scan_function_body(void)
     brace = 1;
     can_decl = 1;
 
-    while (tok.kind != TOK_EOF && brace > 0) {
-        if (tok.kind == '{') {
+    while (g_lex.tok.kind != TOK_EOF && brace > 0) {
+        if (g_lex.tok.kind == '{') {
             ast_scan_for_stmt();
             can_decl = 1;
-        } else if (tok.kind == '}') {
+        } else if (g_lex.tok.kind == '}') {
             brace--;
             next_token();
             leave_scope();
             can_decl = 1;
-        } else if (tok.kind == TOK_FOR || tok.kind == TOK_WHILE ||
-                   tok.kind == TOK_DO ||
-                   tok.kind == TOK_IF || tok.kind == TOK_SWITCH) {
+        } else if (g_lex.tok.kind == TOK_FOR || g_lex.tok.kind == TOK_WHILE ||
+                   g_lex.tok.kind == TOK_DO ||
+                   g_lex.tok.kind == TOK_IF || g_lex.tok.kind == TOK_SWITCH) {
             /*
              * Build and replay the whole statement (header + body) through
              * the AST builder/emitter (ast_scan_for_stmt, output suppressed)
@@ -3154,10 +3018,10 @@ void scan_function_body(void)
              */
             ast_scan_for_stmt();
             can_decl = 1;
-        } else if (can_decl && tok.kind == TOK_STATIC_ASSERT) {
+        } else if (can_decl && g_lex.tok.kind == TOK_STATIC_ASSERT) {
             parse_static_assert_decl();
             can_decl = 1;
-        } else if (can_decl && tok.kind == TOK_TYPEDEF) {
+        } else if (can_decl && g_lex.tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
             can_decl = 1;
         } else if (can_decl && starts_type()) {
@@ -3168,9 +3032,9 @@ void scan_function_body(void)
             decl_is_inline = 0;
             decl_is_noreturn = 0;
             decl_is_const = 0;
-            is_static_local = (tok.kind == TOK_STATIC);
+            is_static_local = (g_lex.tok.kind == TOK_STATIC);
             t = parse_base_type();
-            if (tok.kind == ';') {
+            if (g_lex.tok.kind == ';') {
                 next_token();
             } else if (is_static_local) {
                 scan_static_local_decl_after_type(t);
@@ -3180,15 +3044,15 @@ void scan_function_body(void)
             can_decl = 1;
         } else {
             int k;
-            if (tok.kind == '(' && scan_compound_literal_if_present()) {
+            if (g_lex.tok.kind == '(' && scan_compound_literal_if_present()) {
                 can_decl = 0;
                 continue;
             }
-            k = tok.kind;
+            k = g_lex.tok.kind;
             if (k == TOK_ID) {
                 scan_reserve_struct_return_member_temp();
                 next_token();
-                if (tok.kind == '(')
+                if (g_lex.tok.kind == '(')
                     current_function_has_call = 1;
             } else {
                 next_token();
@@ -3221,7 +3085,7 @@ void parse_typedef_decl(void)
     base_pointee_is_volatile = decl_pointee_is_volatile;
     done = 0;
 
-    while (!done && tok.kind != TOK_EOF) {
+    while (!done && g_lex.tok.kind != TOK_EOF) {
         int type;
         int typedef_array_len;
         int is_func;
@@ -3247,20 +3111,20 @@ void parse_typedef_decl(void)
             is_volatile = decl_is_volatile;
             pointee_is_volatile = decl_pointee_is_volatile;
         } else {
-            if (tok.kind != TOK_ID) {
+            if (g_lex.tok.kind != TOK_ID) {
                 error_here("identifier expected in typedef");
-                while (tok.kind != ';' && tok.kind != TOK_EOF) next_token();
+                while (g_lex.tok.kind != ';' && g_lex.tok.kind != TOK_EOF) next_token();
                 expect(';');
                 return;
             }
-            strncpy(name, tok.text, sizeof(name) - 1);
+            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
             next_token();
         }
 
-        if (tok.kind == '[') {
+        if (g_lex.tok.kind == '[') {
             next_token();
-            if (tok.kind == ']') {
+            if (g_lex.tok.kind == ']') {
                 typedef_array_len = 0;
                 next_token();
             } else {
@@ -3272,16 +3136,16 @@ void parse_typedef_decl(void)
              * sizeof(A) is element_size * product-of-dims, not just the first
              * dimension.  A typedef tracks only a single total length, so the
              * product is the correct flattened size. */
-            while (tok.kind == '[') {
+            while (g_lex.tok.kind == '[') {
                 next_token();
-                if (tok.kind != ']') {
+                if (g_lex.tok.kind != ']') {
                     int inner = parse_typed_array_bound_expr();
                     if (typedef_array_len > 0 && inner > 0)
                         typedef_array_len *= inner;
                 }
                 expect(']');
             }
-        } else if (tok.kind == '(') {
+        } else if (g_lex.tok.kind == '(') {
             skip_prototype_function_suffix();
             is_func = (type_ptr_depth(type) == 0);
         }
@@ -3309,14 +3173,14 @@ static int parse_global_compound_literal_address(char *label, int labelsz)
     char name[64];
     struct Sym *lit;
 
-    if (tok.kind != '(' || !paren_starts_cast())
+    if (g_lex.tok.kind != '(' || !paren_starts_cast())
         return 0;
 
     next_token();
     parse_type_name_decl(&type, &size);
     expect(')');
 
-    if (tok.kind != '{') {
+    if (g_lex.tok.kind != '{') {
         error_here("compound literal initializer expected");
         return 1;
     }
@@ -3344,8 +3208,8 @@ static int parse_global_addr_suffix(int base_type, long *offset)
     long idx;
 
     cur_type = base_type;
-    while (tok.kind == '[' || tok.kind == '.' || tok.kind == TOK_ARROW) {
-        if (tok.kind == '[') {
+    while (g_lex.tok.kind == '[' || g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW) {
+        if (g_lex.tok.kind == '[') {
             int elem_size;
             next_token();
             idx = parse_typed_const_long_expr();
@@ -3355,10 +3219,10 @@ static int parse_global_addr_suffix(int base_type, long *offset)
             *offset += idx * elem_size;
             continue;
         }
-        if (tok.kind == TOK_ARROW)
+        if (g_lex.tok.kind == TOK_ARROW)
             cur_type = type_decay_ptr(cur_type);
         next_token();
-        if (tok.kind != TOK_ID) {
+        if (g_lex.tok.kind != TOK_ID) {
             error_here("field name expected in address initializer");
             return 0;
         }
@@ -3366,7 +3230,7 @@ static int parse_global_addr_suffix(int base_type, long *offset)
             int sid;
             struct FieldDef *fd;
             sid = type_struct_id(cur_type);
-            fd = find_field_def(sid, tok.text);
+            fd = find_field_def(sid, g_lex.tok.text);
             if (fd == NULL) {
                 error_here("unknown field in address initializer");
                 return 0;
@@ -3384,19 +3248,19 @@ static int parse_global_cast_null_member_address(long *val)
     int base_type;
     long offset;
 
-    if (tok.kind != '(')
+    if (g_lex.tok.kind != '(')
         return 0;
     next_token();
-    if (tok.kind != '(')
+    if (g_lex.tok.kind != '(')
         return 0;
     next_token();
     base_type = parse_type();
     expect(')');
-    if (tok.kind != TOK_NUM || tok.val != 0)
+    if (g_lex.tok.kind != TOK_NUM || g_lex.tok.val != 0)
         return 0;
     next_token();
     expect(')');
-    if (tok.kind != TOK_ARROW)
+    if (g_lex.tok.kind != TOK_ARROW)
         return 0;
     offset = 0;
     if (!parse_global_addr_suffix(base_type, &offset))
@@ -3412,10 +3276,10 @@ static int parse_global_symbol_member_address(char *label, int labelsz)
     long offset;
     int base_type;
 
-    if (tok.kind != TOK_ID)
+    if (g_lex.tok.kind != TOK_ID)
         return 0;
-    ls = find_sym(tok.text);
-    lname = ls ? sym_asm_name(ls) : tok.text;
+    ls = find_sym(g_lex.tok.text);
+    lname = ls ? sym_asm_name(ls) : g_lex.tok.text;
     base_type = ls ? ls->type : TYPE_INT;
     if (ls && ls->is_array)
         base_type = ls->type;
@@ -3453,9 +3317,9 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
      *
      * and array bounds using parenthesized macro expressions.
      */
-    if (tok.kind == TOK_NUM || tok.kind == TOK_CHARLIT ||
-        tok.kind == '-' || tok.kind == '+' || tok.kind == '(' ||
-        tok.kind == TOK_SIZEOF) {
+    if (g_lex.tok.kind == TOK_NUM || g_lex.tok.kind == TOK_CHARLIT ||
+        g_lex.tok.kind == '-' || g_lex.tok.kind == '+' || g_lex.tok.kind == '(' ||
+        g_lex.tok.kind == TOK_SIZEOF) {
         val[0] = parse_typed_const_expr_long();
         if (label) label[0] = 0;
         return 1;
@@ -3466,7 +3330,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
         return 0;
     }
 
-    if (tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
+    if (g_lex.tok.kind == TOK_STR || g_lex.tok.kind == TOK_WSTR) {
         int sid;
 
         {
@@ -3482,7 +3346,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
         return 2;       /* symbolic address */
     }
 
-    if (tok.kind == TOK_ID) {
+    if (g_lex.tok.kind == TOK_ID) {
         /* An enumerator is an integer constant, not an address-bearing
          * external symbol.  Let the constant-expression parser consume the
          * whole expression so global initializers such as:
@@ -3490,7 +3354,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
          *     int a[] = { RED, GREEN + 1 };
          * emit numeric data instead of dw _BLUE / dw _RED.
          */
-        if (find_enum_const(tok.text) >= 0) {
+        if (find_enum_const(g_lex.tok.text) >= 0) {
             val[0] = parse_typed_const_expr_long();
             if (label) label[0] = 0;
             return 1;
@@ -3499,7 +3363,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
         {
             struct Sym *ls;
             const char *lname;
-            ls = find_sym(tok.text);
+            ls = find_sym(g_lex.tok.text);
             /* A global initializer that names a function (e.g. a function-
              * pointer table) is a real reference: this bypasses the normal
              * runtime expression codegen entirely, so it must mark the
@@ -3507,7 +3371,7 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
              * SC_FUNC hook. */
             if (ls != NULL && ls->storage == SC_FUNC && ls->is_static)
                 ls->deferred_body_needed = 1;
-            lname = ls ? sym_asm_name(ls) : tok.text;
+            lname = ls ? sym_asm_name(ls) : g_lex.tok.text;
             if (label && labelsz > 0) {
                 strncpy(label, lname, labelsz - 1);
                 label[labelsz - 1] = 0;
@@ -3516,64 +3380,48 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
 
             /* pointer +/- constant: e.g. buf - 0x4000
              * Emit as a raw asm arithmetic expression so M80 can relocate it. */
-            if (label && (tok.kind == '-' || tok.kind == '+')) {
-                int neg = (tok.kind == '-');
-                long save_pos2 = posi;
-                long save_tok_start2 = tok_start_pos;
-                int save_line2 = line_no;
-                int save_tok_line2 = tok_line;
-                struct Token save_tok2 = tok;
+            if (label && (g_lex.tok.kind == '-' || g_lex.tok.kind == '+')) {
+                int neg = (g_lex.tok.kind == '-');
+                LexState _ls = lex_save();
                 next_token();
-                if (tok.kind == TOK_NUM) {
+                if (g_lex.tok.kind == TOK_NUM) {
                     char tmp[64];
                     const char *aname = asm_name_for(lname);
                     if (neg)
-                        sprintf(tmp, "%s-%ld", aname, tok.val);
+                        sprintf(tmp, "%s-%ld", aname, g_lex.tok.val);
                     else
-                        sprintf(tmp, "%s+%ld", aname, tok.val);
+                        sprintf(tmp, "%s+%ld", aname, g_lex.tok.val);
                     strncpy(label, tmp, labelsz - 1);
                     label[labelsz - 1] = 0;
                     next_token();
                 } else {
-                    posi = save_pos2;
-                    tok_start_pos = save_tok_start2;
-                    line_no = save_line2;
-                    tok_line = save_tok_line2;
-                    tok = save_tok2;
+                    lex_restore(&_ls);
                 }
             }
         }
         return 2;       /* symbolic address */
     }
 
-    if (tok.kind == '&') {
+    if (g_lex.tok.kind == '&') {
         next_token();
         {
-            long save_pos = posi;
-            long save_tok_start = tok_start_pos;
-            int save_line = line_no;
-            int save_tok_line = tok_line;
-            struct Token save_tok = tok;
+            LexState _ls = lex_save();
             if (parse_global_cast_null_member_address(val)) {
                 if (label) label[0] = 0;
                 return 1;
             }
-            posi = save_pos;
-            tok_start_pos = save_tok_start;
-            line_no = save_line;
-            tok_line = save_tok_line;
-            tok = save_tok;
+            lex_restore(&_ls);
         }
         if (parse_global_compound_literal_address(label, labelsz))
             return 2;
         if (parse_global_symbol_member_address(label, labelsz))
             return 2;
-        if (tok.kind == TOK_ID) {
+        if (g_lex.tok.kind == TOK_ID) {
             if (label && labelsz > 0) {
                 struct Sym *ls;
                 const char *lname;
-                ls = find_sym(tok.text);
-                lname = ls ? sym_asm_name(ls) : tok.text;
+                ls = find_sym(g_lex.tok.text);
+                lname = ls ? sym_asm_name(ls) : g_lex.tok.text;
                 strncpy(label, lname, labelsz - 1);
                 label[labelsz - 1] = 0;
             }
@@ -3581,13 +3429,13 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
             return 2;   /* symbolic address */
         }
         error_here("identifier expected after & in initializer");
-        if (tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+        if (g_lex.tok.kind != ',' && g_lex.tok.kind != ';' && g_lex.tok.kind != '}')
             next_token();
         return 0;
     }
 
     error_here("constant initializer expected");
-    if (tok.kind != ',' && tok.kind != ';' && tok.kind != '}')
+    if (g_lex.tok.kind != ',' && g_lex.tok.kind != ';' && g_lex.tok.kind != '}')
         next_token();
     return 0;
 }
@@ -3861,7 +3709,7 @@ static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, 
     }
 
     if ((elem_type & 15) == TYPE_CHAR && type_ptr_depth(elem_type) == 0 &&
-        tok.kind == TOK_STR) {
+        g_lex.tok.kind == TOK_STR) {
         char *lit;
         int is_wide;
         int litlen;
@@ -3875,17 +3723,17 @@ static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, 
     }
 
     had_brace = 0;
-    if (tok.kind == '{') {
+    if (g_lex.tok.kind == '{') {
         next_token();
         had_brace = 1;
     }
     n = 0;
     maxn = 0;
-    while (tok.kind != TOK_EOF && (had_brace || count <= 0 || n < count) &&
-           (had_brace || tok.kind != '}')) {
-        if (had_brace && tok.kind == '}')
+    while (g_lex.tok.kind != TOK_EOF && (had_brace || count <= 0 || n < count) &&
+           (had_brace || g_lex.tok.kind != '}')) {
+        if (had_brace && g_lex.tok.kind == '}')
             break;
-        if (had_brace && tok.kind == '[') {
+        if (had_brace && g_lex.tok.kind == '[') {
             next_token();
             n = parse_typed_designator_index_expr();
             expect(']');
@@ -3902,7 +3750,7 @@ static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, 
         if (!had_brace && count > 0 && n >= count)
             break;
         if (!accept(',')) break;
-        if (had_brace && tok.kind == '}') break;
+        if (had_brace && g_lex.tok.kind == '}') break;
     }
     if (had_brace)
         expect('}');
@@ -3971,7 +3819,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
     is_union = (sid > 0 && sid <= nstruct_defs && struct_defs[sid - 1].is_union);
 
     had_brace = 0;
-    if (tok.kind == '{') {
+    if (g_lex.tok.kind == '{') {
         next_token();
         had_brace = 1;
     }
@@ -3986,7 +3834,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             }
         }
 
-        if (first && tok.kind != TOK_EOF && tok.kind != '}') {
+        if (first && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
             if (first->is_array)
                 parse_global_init_array_at(s, first->elem_type, first->array_len, first->elem_size, baseoff);
             else
@@ -3996,9 +3844,9 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
              * stops after its single initializer; the array loop owns the
              * comma.  Only a braced element may report extra members. */
             if (had_brace && accept(',')) {
-                if (tok.kind != '}') {
+                if (g_lex.tok.kind != '}') {
                     error_here("too many union initializer elements");
-                    while (tok.kind != TOK_EOF && tok.kind != '}')
+                    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}')
                         next_token();
                 }
             }
@@ -4009,20 +3857,20 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
         return;
     }
 
-    for (i = 0; i < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}'; ++i) {
+    for (i = 0; i < nfield_defs && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}'; ++i) {
         struct FieldDef *fd;
-        if (tok.kind == '.') {
+        if (g_lex.tok.kind == '.') {
             next_token();
-            if (tok.kind != TOK_ID) {
+            if (g_lex.tok.kind != TOK_ID) {
                 error_here("expected a field designator, such as '.field = value'");
-                while (tok.kind != TOK_EOF && tok.kind != '}')
+                while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}')
                     next_token();
                 break;
             }
-            fd = find_field_def(sid, tok.text);
+            fd = find_field_def(sid, g_lex.tok.text);
             if (fd == NULL) {
                 error_here("unknown field initializer designator");
-                while (tok.kind != TOK_EOF && tok.kind != '}')
+                while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}')
                     next_token();
                 break;
             }
@@ -4048,7 +3896,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             unit_mask = 0;
             stop = 0;
             k = i;
-            while (k >= 0 && k < nfield_defs && tok.kind != TOK_EOF && tok.kind != '}') {
+            while (k >= 0 && k < nfield_defs && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
                 struct FieldDef *bfd;
                 bfd = &field_defs[k];
                 if (bfd->parent_struct_id == sid && !bfd->is_promoted) {
@@ -4061,7 +3909,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                         stop = 1;
                         break;
                     }
-                    if (tok.kind == '}') {
+                    if (g_lex.tok.kind == '}') {
                         stop = 1;
                         break;
                     }
@@ -4074,40 +3922,32 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
                  * different unit (or a non-bit-field) is left for the outer
                  * field loop; the comma has already been consumed.
                  */
-                if (tok.kind == '.') {
-                    long save_pos = posi;
-                    long save_tok_start = tok_start_pos;
-                    int save_line = line_no;
-                    int save_tok_line = tok_line;
-                    struct Token save_tok = tok;
+                if (g_lex.tok.kind == '.') {
+                    LexState _ls = lex_save();
                     struct FieldDef *nf = NULL;
 
                     next_token();
-                    if (tok.kind == TOK_ID)
-                        nf = find_field_def(sid, tok.text);
+                    if (g_lex.tok.kind == TOK_ID)
+                        nf = find_field_def(sid, g_lex.tok.text);
                     if (nf != NULL && nf->bit_width > 0 && nf->offset == unit_off) {
                         next_token();
-                        if (tok.kind == '=')
+                        if (g_lex.tok.kind == '=')
                             next_token();
-                        else if (tok.kind != '[' && tok.kind != '.')
+                        else if (g_lex.tok.kind != '[' && g_lex.tok.kind != '.')
                             expect('=');
                         k = field_def_index(nf);
                         continue;
                     }
-                    posi = save_pos;
-                    tok_start_pos = save_tok_start;
-                    line_no = save_line;
-                    tok_line = save_tok_line;
-                    tok = save_tok;
+                    lex_restore(&_ls);
                     break;
                 }
                 next = next_parent_field_index(sid, k + 1);
                 if (next < 0) {
-                    if (tok.kind != '}') {
+                    if (g_lex.tok.kind != '}') {
                         error_here("too many initializer elements");
-                        while (tok.kind != TOK_EOF && tok.kind != '}') {
+                        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
                             skip_initializer_or_decl_tail();
-                            if (tok.kind == ',') next_token();
+                            if (g_lex.tok.kind == ',') next_token();
                             else break;
                         }
                     }
@@ -4142,7 +3982,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
             /* Restart the field scan when a designator stopped the packing
              * loop, so it is handled even when this unit's owner was the last
              * declared field. */
-            if (tok.kind == '.')
+            if (g_lex.tok.kind == '.')
                 i = -1;
             continue;
         }
@@ -4156,8 +3996,8 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
         if (!had_brace && next_parent_field_index(sid, i + 1) < 0)
             break;
         if (!accept(',')) break;
-        if (tok.kind == '}') break;
-        if (tok.kind == '.') i = -1;
+        if (g_lex.tok.kind == '}') break;
+        if (g_lex.tok.kind == '.') i = -1;
     }
     if (had_brace)
         expect('}');
@@ -4185,7 +4025,7 @@ static void parse_global_init_type_at(struct Sym *s, int type, int size, int bas
             global_init_write_value_at(s, baseoff, NULL, (long)bits, 4, 0);
         else {
             error_here("float initializer must be constant");
-            if (tok.kind != ',' && tok.kind != '}') next_token();
+            if (g_lex.tok.kind != ',' && g_lex.tok.kind != '}') next_token();
         }
         return;
     }
@@ -4232,7 +4072,7 @@ void parse_global_scalar_array_init_scalar(struct Sym *s, int *np)
             np[0] = n + 1;
         } else {
             error_here("float initializer must be constant");
-            if (tok.kind != ',' && tok.kind != '}')
+            if (g_lex.tok.kind != ',' && g_lex.tok.kind != '}')
                 next_token();
         }
     } else {
@@ -4248,7 +4088,7 @@ void parse_global_scalar_array_init_scalar(struct Sym *s, int *np)
             s->init_sizes[n] = elem_bytes;
             np[0] = n + 1;
         } else {
-            if (tok.kind != ',' && tok.kind != '}')
+            if (g_lex.tok.kind != ',' && g_lex.tok.kind != '}')
                 next_token();
         }
     }
@@ -4283,8 +4123,8 @@ void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level)
     start = np[0];
     limit = start + sym_array_elems_from_level(s, level);
 
-    while (tok.kind != TOK_EOF && tok.kind != '}') {
-        if (tok.kind == '[') {
+    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
+        if (g_lex.tok.kind == '[') {
             int idx;
             int span;
 
@@ -4305,14 +4145,14 @@ void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level)
                     np[0] = target;
             }
         }
-        if (tok.kind == '{' && s->dim_count > 0 && level + 1 < s->dim_count)
+        if (g_lex.tok.kind == '{' && s->dim_count > 0 && level + 1 < s->dim_count)
             parse_global_scalar_array_init_level(s, np, level + 1);
         else
             parse_global_scalar_array_init_scalar(s, np);
 
         if (!accept(','))
             break;
-        if (tok.kind == '}')
+        if (g_lex.tok.kind == '}')
             break;
     }
     expect('}');
@@ -4342,13 +4182,13 @@ void parse_global_init_list(struct Sym *s)
      * the declared object.
      */
     if (s->is_array && (s->type & 15) == TYPE_CHAR && type_ptr_depth(s->type) == 0 &&
-        tok.kind == TOK_STR) {
+        g_lex.tok.kind == TOK_STR) {
         n = 0;
-        while (tok.kind == TOK_STR) {
+        while (g_lex.tok.kind == TOK_STR) {
             int si;
-            for (si = 0; tok.text[si]; ++si) {
+            for (si = 0; g_lex.tok.text[si]; ++si) {
                 grow_init_cap(s, n + 1);
-                sprintf(s->init_labels[n], "%u", (unsigned char)tok.text[si]);
+                sprintf(s->init_labels[n], "%u", (unsigned char)g_lex.tok.text[si]);
                 s->init_sizes[n] = 1;
                 n++;
             }
@@ -4398,7 +4238,7 @@ void parse_global_init_list(struct Sym *s)
      * element's brace to be eaten by parse_global_init_array -- an off-by-one
      * that balanced for plain structs but broke union array elements.
      */
-    if ((s->type & TYPE_STRUCT) && type_ptr_depth(s->type) == 0 && tok.kind == '{') {
+    if ((s->type & TYPE_STRUCT) && type_ptr_depth(s->type) == 0 && g_lex.tok.kind == '{') {
         s->init_count = 0;
         if (s->is_array)
             parse_global_init_array(s, s->type, s->array_len, s->elem_size);
@@ -4440,7 +4280,7 @@ void parse_global_init_list(struct Sym *s)
             }
         } else {
             error_here("array initializer list expected");
-            while (tok.kind != TOK_EOF && tok.kind != ';' && tok.kind != ',')
+            while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ';' && g_lex.tok.kind != ',')
                 next_token();
         }
         return;
@@ -4448,8 +4288,8 @@ void parse_global_init_list(struct Sym *s)
 
     n = 0;
     maxn = 0;
-    while (tok.kind != TOK_EOF && tok.kind != '}') {
-        if (tok.kind == '[') {
+    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
+        if (g_lex.tok.kind == '[') {
             int idx;
             int span;
             int target;
@@ -4471,14 +4311,14 @@ void parse_global_init_list(struct Sym *s)
                     n = target;
             }
         }
-        if (tok.kind == '{' && s->dim_count > 1)
+        if (g_lex.tok.kind == '{' && s->dim_count > 1)
             parse_global_scalar_array_init_level(s, &n, 1);
         else
             parse_global_scalar_array_init_scalar(s, &n);
         if (n > maxn) maxn = n;
         if (!accept(','))
             break;
-        if (tok.kind == '}')
+        if (g_lex.tok.kind == '}')
             break;
     }
 
@@ -4711,13 +4551,13 @@ static int try_speculative_noix_function_body(const char *name, int type,
      * touched - the same set the scan-to-codegen transition above this
      * function resets - so the caller's normal codegen path runs exactly as
      * if this function had never been called. */
-    posi = body_start_pos;
-    tok_start_pos = body_start_tok_start;
-    line_no = body_start_line;
-    tok_line = body_start_tok_line;
-    tok = body_start_tok;
-    nlocals = body_start_nlocals;
-    local_size = body_start_local_size;
+    g_lex.posi = body_start_pos;
+    g_lex.tok_start_pos = body_start_tok_start;
+    g_lex.line_no = body_start_line;
+    g_lex.tok_line = body_start_tok_line;
+    g_lex.tok = body_start_tok;
+    g_frame.nlocals = body_start_nlocals;
+    g_frame.local_size = body_start_local_size;
     nulabels = 0;
     current_return_label = new_label();
     g_for_seq = 0;
@@ -5662,13 +5502,13 @@ static int try_loop_scoped_regalloc_first(const char *name, int type,
     /* Undo every bit of per-function codegen state this discarded attempt
      * touched, exactly like try_speculative_bc_regalloc_function_body's own
      * rewind. */
-    posi = body_start_pos;
-    tok_start_pos = body_start_tok_start;
-    line_no = body_start_line;
-    tok_line = body_start_tok_line;
-    tok = body_start_tok;
-    nlocals = body_start_nlocals;
-    local_size = body_start_local_size;
+    g_lex.posi = body_start_pos;
+    g_lex.tok_start_pos = body_start_tok_start;
+    g_lex.line_no = body_start_line;
+    g_lex.tok_line = body_start_tok_line;
+    g_lex.tok = body_start_tok;
+    g_frame.nlocals = body_start_nlocals;
+    g_frame.local_size = body_start_local_size;
     nulabels = 0;
     current_return_label = new_label();
     g_for_seq = 0;
@@ -5809,13 +5649,13 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
 
     /* Undo every bit of per-function codegen state this discarded attempt
      * touched, exactly like try_speculative_noix_function_body's own rewind. */
-    posi = body_start_pos;
-    tok_start_pos = body_start_tok_start;
-    line_no = body_start_line;
-    tok_line = body_start_tok_line;
-    tok = body_start_tok;
-    nlocals = body_start_nlocals;
-    local_size = body_start_local_size;
+    g_lex.posi = body_start_pos;
+    g_lex.tok_start_pos = body_start_tok_start;
+    g_lex.line_no = body_start_line;
+    g_lex.tok_line = body_start_tok_line;
+    g_lex.tok = body_start_tok;
+    g_frame.nlocals = body_start_nlocals;
+    g_frame.local_size = body_start_local_size;
     nulabels = 0;
     current_return_label = new_label();
     g_for_seq = 0;
@@ -5877,21 +5717,13 @@ void parse_function_or_global(int base_type)
     base_is_volatile = decl_is_volatile;
     base_pointee_is_volatile = decl_pointee_is_volatile;
 
-    while (!done && tok.kind != TOK_EOF) {
+    while (!done && g_lex.tok.kind != TOK_EOF) {
         int type;
         char name[64];
         int arrlen;
         struct Sym *s;
-        long body_end_pos;
-        long body_end_tok_start;
-        int body_end_line;
-        int body_end_tok_line;
-        struct Token body_end_tok;
-        long saved_pos;
-        long saved_tok_start;
-        int saved_line;
-        int saved_tok_line;
-        struct Token saved_tok;
+        LexState _le;
+        LexState _ls;
         int saved_nlocals;
         int saved_local_size;
         int saved_param_offset;
@@ -5930,14 +5762,14 @@ void parse_function_or_global(int base_type)
             object_is_volatile = decl_is_volatile;
             pointee_is_volatile = decl_pointee_is_volatile;
         } else {
-            if (tok.kind != TOK_ID) {
+            if (g_lex.tok.kind != TOK_ID) {
                 error_here("identifier expected");
-                while (tok.kind != ';' && tok.kind != TOK_EOF) next_token();
+                while (g_lex.tok.kind != ';' && g_lex.tok.kind != TOK_EOF) next_token();
                 expect(';');
                 return;
             }
 
-            strncpy(name, tok.text, sizeof(name) - 1);
+            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
             next_token();
         }
@@ -5995,12 +5827,12 @@ void parse_function_or_global(int base_type)
 
             /* Snapshot nlocals after prototype params are registered but before
              * K&R declarations: used to detect main() with no parameters. */
-            int pre_params_nlocals = nlocals;
+            int pre_params_nlocals = g_frame.nlocals;
 
-            if (!g_proto_has && tok.kind != '{' && tok.kind != ';' && tok.kind != ',')
+            if (!g_proto_has && g_lex.tok.kind != '{' && g_lex.tok.kind != ';' && g_lex.tok.kind != ',')
                 parse_old_style_param_declarations();
 
-            if (tok.kind == '{') {
+            if (g_lex.tok.kind == '{') {
                 /* Set once here, covering both frame-sizing scan passes below
                  * and the real codegen pass later in this same block, so a
                  * hoist decision keyed on "am I compiling function X" (see
@@ -6033,14 +5865,10 @@ void parse_function_or_global(int base_type)
                 scan_function_body_ident_counts();
                 opt_stack_check = saved_stack_check;
 
-                saved_pos = posi;
-                saved_tok_start = tok_start_pos;
-                saved_line = line_no;
-                saved_tok_line = tok_line;
-                saved_tok = tok;
-                saved_nlocals = nlocals;
-                saved_local_size = local_size;
-                saved_param_offset = param_offset;
+                _ls = lex_save();
+                saved_nlocals = g_frame.nlocals;
+                saved_local_size = g_frame.local_size;
+                saved_param_offset = g_frame.param_offset;
                 saved_nenum_consts = nenum_consts;
                 saved_nulabels = nulabels;
 
@@ -6051,23 +5879,15 @@ void parse_function_or_global(int base_type)
                 asm_suppress_depth++;
                 scan_function_body();
                 asm_suppress_depth--;
-                body_end_pos = posi;
-                body_end_tok_start = tok_start_pos;
-                body_end_line = line_no;
-                body_end_tok_line = tok_line;
-                body_end_tok = tok;
-                current_local_bytes = local_size;
+                _le = lex_save();
+                current_local_bytes = g_frame.local_size;
                 if (current_local_bytes > max_function_local_bytes)
                     max_function_local_bytes = current_local_bytes;
 
-                posi = saved_pos;
-                tok_start_pos = saved_tok_start;
-                line_no = saved_line;
-                tok_line = saved_tok_line;
-                tok = saved_tok;
-                nlocals = saved_nlocals;
-                local_size = saved_local_size;
-                param_offset = saved_param_offset;
+                lex_restore(&_ls);
+                g_frame.nlocals = saved_nlocals;
+                g_frame.local_size = saved_local_size;
+                g_frame.param_offset = saved_param_offset;
                 nenum_consts = saved_nenum_consts;
                 opt_stack_check = saved_stack_check;
                 /* ast_scan_for_stmt (called by scan_function_body via the AST
@@ -6085,11 +5905,7 @@ void parse_function_or_global(int base_type)
                 scan_function_body();
                 asm_suppress_depth--;
 
-                posi = saved_pos;
-                tok_start_pos = saved_tok_start;
-                line_no = saved_line;
-                tok_line = saved_tok_line;
-                tok = saved_tok;
+                lex_restore(&_ls);
                 nenum_consts = saved_nenum_consts;
                 opt_stack_check = saved_stack_check;
 
@@ -6111,8 +5927,8 @@ void parse_function_or_global(int base_type)
                  * scan did - block scopes truncate nlocals as they close - so
                  * restart from just the parameters with an empty scope stack.
                  * Both passes therefore assign identical frame offsets. */
-                nlocals = saved_nlocals;
-                local_size = saved_local_size;
+                g_frame.nlocals = saved_nlocals;
+                g_frame.local_size = saved_local_size;
                 g_scope_depth = 0;
                 g_static_local_func_index = (int)(s - globals);
                 g_static_local_seq = 0;
@@ -6139,15 +5955,15 @@ void parse_function_or_global(int base_type)
                 } else if (!opt_debug &&
                            function_qualifies_for_speculative_noix(name, current_local_bytes) &&
                            try_speculative_noix_function_body(name, type, current_local_bytes, s,
-                                                               saved_pos, saved_tok_start, saved_line,
-                                                               saved_tok_line, saved_tok,
+                                                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                                                               _ls.tok_line, _ls.tok,
                                                                saved_nlocals, saved_local_size)) {
                     /* No-IX-frame body already generated and written to outf
                      * inside try_speculative_noix_function_body. */
                 } else if (!opt_debug &&
                            try_loop_scoped_regalloc_first(name, type, current_local_bytes, s,
-                                                           saved_pos, saved_tok_start, saved_line,
-                                                           saved_tok_line, saved_tok,
+                                                           _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                                                           _ls.tok_line, _ls.tok,
                                                            saved_nlocals, saved_local_size)) {
                     /* A loop inside the body claimed BC on its own - see
                      * try_loop_scoped_regalloc_first's header comment for why
@@ -6157,8 +5973,8 @@ void parse_function_or_global(int base_type)
                 } else if (!opt_debug && function_qualifies_for_speculative_regalloc(name) &&
                            try_speculative_bc_regalloc_with_e_fallback(name, type, current_local_bytes, s,
                                                                         bc_regalloc_cand,
-                                                                        saved_pos, saved_tok_start, saved_line,
-                                                                        saved_tok_line, saved_tok,
+                                                                        _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                                                                        _ls.tok_line, _ls.tok,
                                                                         saved_nlocals, saved_local_size)) {
                     /* BC/E-resident body already generated and written to
                      * outf inside try_speculative_bc_regalloc_function_body. */
@@ -6215,11 +6031,7 @@ void parse_function_or_global(int base_type)
                     fprintf(outf, "\tret\n");
                 }
 
-                posi = body_end_pos;
-                tok_start_pos = body_end_tok_start;
-                line_no = body_end_line;
-                tok_line = body_end_tok_line;
-                tok = body_end_tok;
+                lex_restore(&_le);
                 return;
             }
 
@@ -6263,10 +6075,10 @@ void parse_function_or_global(int base_type)
             }
             g_funcptr_decl_array_len = 0;
 
-            while (tok.kind == '[') {
+            while (g_lex.tok.kind == '[') {
                 int d;
                 next_token();
-                if (tok.kind == ']') {
+                if (g_lex.tok.kind == ']') {
                     d = 0;
                     next_token();
                 } else {
@@ -6437,10 +6249,10 @@ void parse_translation_unit(void)
 
     next_token();
 
-    while (tok.kind != TOK_EOF) {
-        if (tok.kind == TOK_STATIC_ASSERT) {
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (g_lex.tok.kind == TOK_STATIC_ASSERT) {
             parse_static_assert_decl();
-        } else if (tok.kind == TOK_TYPEDEF) {
+        } else if (g_lex.tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
         } else if (starts_type()) {
             int t;
@@ -6450,12 +6262,12 @@ void parse_translation_unit(void)
             decl_is_noreturn = 0;
             decl_is_const = 0;
             t = parse_type();
-            if (tok.kind == ';') {
+            if (g_lex.tok.kind == ';') {
                 next_token();
             } else {
                 parse_function_or_global(t);
             }
-        } else if (tok.kind == TOK_ID && is_unsupported_target_type_name(tok.text)) {
+        } else if (g_lex.tok.kind == TOK_ID && is_unsupported_target_type_name(g_lex.tok.text)) {
             int t;
             decl_is_extern = 0;
             decl_is_static = 0;
@@ -6463,11 +6275,11 @@ void parse_translation_unit(void)
             decl_is_noreturn = 0;
             decl_is_const = 0;
             t = parse_type();
-            if (tok.kind == ';')
+            if (g_lex.tok.kind == ';')
                 next_token();
             else
                 parse_function_or_global(t);
-        } else if (tok.kind == TOK_ID) {
+        } else if (g_lex.tok.kind == TOK_ID) {
             /* C89: implicit int return type for function definition/declaration. */
             decl_is_extern = 0;
             decl_is_static = 0;

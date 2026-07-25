@@ -401,34 +401,25 @@ void emit_cast_16_to_common(int from_type, int common_type)
 
 int peek_simple_unary_type(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
+    LexState _ls;
     int save_long_suffix;
     int save_unsigned_suffix;
-    struct Token save_tok;
     int t;
     struct Sym *s;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
+    _ls = lex_save();
     save_long_suffix = g_tok_long_suffix;
     save_unsigned_suffix = g_tok_unsigned_suffix;
-    save_tok = tok;
 
     t = TYPE_INT;
 
-    if (tok.kind == '(') {
+    if (g_lex.tok.kind == '(') {
         next_token();
         if (starts_type()) {
             t = parse_type();
-            if (tok.kind == ')') {
-                posi = save_pos; tok_start_pos = save_tok_start;
-                line_no = save_line; tok_line = save_tok_line;
-                g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix; tok = save_tok;
+            if (g_lex.tok.kind == ')') {
+                lex_restore(&_ls);
+                g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
                 return promote_int_type(t);
             }
         } else {
@@ -443,24 +434,23 @@ int peek_simple_unary_type(void)
              * type.
              */
             int inner = peek_simple_unary_type();
-            posi = save_pos; tok_start_pos = save_tok_start;
-            line_no = save_line; tok_line = save_tok_line;
-            g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix; tok = save_tok;
+            lex_restore(&_ls);
+            g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
             return inner;
         }
-    } else if (tok.kind == TOK_FLOATLIT) {
+    } else if (g_lex.tok.kind == TOK_FLOATLIT) {
         t = TYPE_FLOAT;
-    } else if (tok.kind == TOK_NUM) {
-        if (tok.val > 0xffffL || tok.val < -32768L || g_tok_long_suffix)
+    } else if (g_lex.tok.kind == TOK_NUM) {
+        if (g_lex.tok.val > 0xffffL || g_lex.tok.val < -32768L || g_tok_long_suffix)
             t = TYPE_LONG;
         else
             t = TYPE_INT;
         if (g_tok_unsigned_suffix)
             t |= TYPE_UNSIGNED;
-    } else if (tok.kind == TOK_CHARLIT) {
+    } else if (g_lex.tok.kind == TOK_CHARLIT) {
         t = TYPE_INT;
-    } else if (tok.kind == TOK_ID) {
-        s = find_sym(tok.text);
+    } else if (g_lex.tok.kind == TOK_ID) {
+        s = find_sym(g_lex.tok.text);
         if (s) {
             int is_arr;
             int tt;
@@ -489,7 +479,7 @@ int peek_simple_unary_type(void)
                 base_type = s->type;
 
                 for (;;) {
-                    if (tok.kind == '[') {
+                    if (g_lex.tok.kind == '[') {
                         skip_balanced_bracket('[', ']');
                         nsubs++;
 
@@ -520,16 +510,16 @@ int peek_simple_unary_type(void)
                         }
                     }
 
-                    if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+                    if (g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW) {
                         struct FieldDef *fd;
                         int sid;
 
                         next_token();
-                        if (tok.kind != TOK_ID)
+                        if (g_lex.tok.kind != TOK_ID)
                             break;
 
                         sid = base_struct_id_from_type(tt);
-                        fd = find_field_def(sid, tok.text);
+                        fd = find_field_def(sid, g_lex.tok.text);
                         if (!fd)
                             break;
 
@@ -546,18 +536,14 @@ int peek_simple_unary_type(void)
                 }
             }
             t = tt;
-            if (tok.kind == '(' && type_ptr_depth(tt) > 0)
+            if (g_lex.tok.kind == '(' && type_ptr_depth(tt) > 0)
                 t = TYPE_INT;
         }
     }
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
+    lex_restore(&_ls);
     g_tok_long_suffix = save_long_suffix;
     g_tok_unsigned_suffix = save_unsigned_suffix;
-    tok = save_tok;
     return promote_int_type(t);
 }
 

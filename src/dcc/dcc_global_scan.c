@@ -142,11 +142,11 @@ void scan_global_write_info(void)
     int prev_kind;
     char prev_text[MAX_TOK_TEXT];
 
-    saved_posi = posi;
-    saved_tok_start = tok_start_pos;
-    saved_line = line_no;
-    saved_tok_line = tok_line;
-    saved_tok = tok;
+    saved_posi = g_lex.posi;
+    saved_tok_start = g_lex.tok_start_pos;
+    saved_line = g_lex.line_no;
+    saved_tok_line = g_lex.tok_line;
+    saved_tok = g_lex.tok;
     saved_stack_check = opt_stack_check;
 
     saved_defs = (struct Def *)xmalloc(sizeof(defs));
@@ -177,10 +177,10 @@ void scan_global_write_info(void)
      * errors>40 fatal before real compilation begins. */
     asm_suppress_depth++;
 
-    posi = 0;
-    tok_start_pos = 0;
-    line_no = 1;
-    tok_line = 1;
+    g_lex.posi = 0;
+    g_lex.tok_start_pos = 0;
+    g_lex.line_no = 1;
+    g_lex.tok_line = 1;
     next_token();
 
     brace_depth = 0;
@@ -190,25 +190,19 @@ void scan_global_write_info(void)
     prev_kind = TOK_EOF;
     prev_text[0] = 0;
 
-    while (tok.kind != TOK_EOF) {
-        if (tok.kind == TOK_ID && prev_kind != '.' && prev_kind != TOK_ARROW) {
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (g_lex.tok.kind == TOK_ID && prev_kind != '.' && prev_kind != TOK_ARROW) {
             char name[64];
-            long sv_posi = posi, sv_tok_start = tok_start_pos;
-            int sv_line = line_no, sv_tok_line = tok_line;
-            struct Token sv_tok = tok;
+            LexState _ls = lex_save();
             int next_kind;
 
-            strncpy(name, tok.text, 63);
+            strncpy(name, g_lex.tok.text, 63);
             name[63] = 0;
 
             next_token();
-            next_kind = tok.kind;
+            next_kind = g_lex.tok.kind;
 
-            posi = sv_posi;
-            tok_start_pos = sv_tok_start;
-            line_no = sv_line;
-            tok_line = sv_tok_line;
-            tok = sv_tok;
+            lex_restore(&_ls);
 
             /* `&EXPR->field`/`&EXPR.field`/`&EXPR[i]` takes the address of
              * a *member/element reached through* this identifier, not of
@@ -229,28 +223,28 @@ void scan_global_write_info(void)
                 strncpy(pending_call_name, name, 63);
                 pending_call_name[63] = 0;
             }
-        } else if (tok.kind == '(') {
+        } else if (g_lex.tok.kind == '(') {
             paren_depth++;
-        } else if (tok.kind == ')') {
+        } else if (g_lex.tok.kind == ')') {
             if (paren_depth > 0)
                 paren_depth--;
-        } else if (tok.kind == '{') {
+        } else if (g_lex.tok.kind == '{') {
             if (brace_depth == 0 && paren_depth == 0) {
                 strncpy(func_at_depth0, pending_call_name, 63);
                 func_at_depth0[63] = 0;
             }
             brace_depth++;
-        } else if (tok.kind == '}') {
+        } else if (g_lex.tok.kind == '}') {
             if (brace_depth > 0)
                 brace_depth--;
             if (brace_depth == 0)
                 func_at_depth0[0] = 0;
-        } else if (tok.kind != TOK_ID) {
+        } else if (g_lex.tok.kind != TOK_ID) {
             pending_call_name[0] = 0;
         }
 
-        prev_kind = tok.kind;
-        strncpy(prev_text, tok.text, MAX_TOK_TEXT - 1);
+        prev_kind = g_lex.tok.kind;
+        strncpy(prev_text, g_lex.tok.text, MAX_TOK_TEXT - 1);
         prev_text[MAX_TOK_TEXT - 1] = 0;
         (void)prev_text;
         next_token();
@@ -277,11 +271,11 @@ void scan_global_write_info(void)
      * swapped back - see reset_preproc_scan_state's own comment. */
     reset_preproc_scan_state();
 
-    posi = saved_posi;
-    tok_start_pos = saved_tok_start;
-    line_no = saved_line;
-    tok_line = saved_tok_line;
-    tok = saved_tok;
+    g_lex.posi = saved_posi;
+    g_lex.tok_start_pos = saved_tok_start;
+    g_lex.line_no = saved_line;
+    g_lex.tok_line = saved_tok_line;
+    g_lex.tok = saved_tok;
     opt_stack_check = saved_stack_check;
 }
 

@@ -55,11 +55,7 @@ unsigned int current_field_bit_mask;
 char *src;
 long src_len;
 long g_src_generation;
-long posi;
-long tok_start_pos;
-int line_no;
-int tok_line;
-struct Token tok;
+LexState g_lex;
 FILE *outf;
 const char *input_name;
 const char *output_name;
@@ -71,9 +67,7 @@ char predefined_time_text[16];
 struct Sym globals[MAX_SYMS];
 int nglobals;
 struct Sym locals[MAX_LOCALS];
-int nlocals;
-int local_size;
-int param_offset;
+FrameState g_frame;
 
 /* ---- preprocessor macro table ------------------------------------------ */
 struct Def defs[MAX_DEFINES];

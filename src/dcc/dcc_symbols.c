@@ -128,7 +128,7 @@ void enter_scope(void)
 {
     if (g_scope_depth >= MAX_SCOPE_DEPTH)
         fatal("too many nested block scopes");
-    g_scope_watermark[g_scope_depth++] = nlocals;
+    g_scope_watermark[g_scope_depth++] = g_frame.nlocals;
     /* A freshly opened scope has no VLA save slot yet. */
     if (g_scope_depth < MAX_SCOPE_DEPTH)
         g_vla_scope_off[g_scope_depth] = 0;
@@ -355,7 +355,7 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
             for (k = 1; k <= g->snap_depth && k < MAX_SCOPE_DEPTH; ++k)
                 if (g->snap_off[k] == off) { seen = 1; break; }
             if (!seen) {
-                dcc_error_at(tok.file[0] ? tok.file :
+                dcc_error_at(g_lex.tok.file[0] ? g_lex.tok.file :
                                  (input_name ? input_name : "<input>"),
                              g->line, -1,
                              "goto into a variable-length array scope is not supported",
@@ -391,9 +391,9 @@ void leave_scope(void)
      * storage is monotonic (slots are never reused), so the frame size still
      * equals the sum over every scope. */
     first = g_scope_watermark[--g_scope_depth];
-    for (i = first; i < nlocals; ++i)
+    for (i = first; i < g_frame.nlocals; ++i)
         emit_debug_variable_end(&locals[i]);
-    nlocals = first;
+    g_frame.nlocals = first;
 }
 
 /* Lookup used while DECLARING a local: only the innermost open block is
@@ -404,7 +404,7 @@ struct Sym *find_local_decl(const char *name)
 {
     int i, base;
     base = g_scope_depth > 0 ? g_scope_watermark[g_scope_depth - 1] : 0;
-    for (i = nlocals - 1; i >= base; --i)
+    for (i = g_frame.nlocals - 1; i >= base; --i)
         if (!strcmp(locals[i].name, name)) return &locals[i];
     return NULL;
 }
@@ -425,13 +425,13 @@ struct Sym *find_local(const char *name)
      * an outer same-named local, and an inner block redeclaration shadow the
      * for-init variable, both correctly. */
     plain_idx = -1;
-    for (i = nlocals - 1; i >= 0; --i)
+    for (i = g_frame.nlocals - 1; i >= 0; --i)
         if (!strcmp(locals[i].name, name)) { plain_idx = i; break; }
 
     ren_idx = -1;
     rn = resolve_local_rename(name);
     if (rn != name) {
-        for (i = nlocals - 1; i >= 0; --i)
+        for (i = g_frame.nlocals - 1; i >= 0; --i)
             if (!strcmp(locals[i].name, rn)) { ren_idx = i; break; }
     }
 
@@ -508,9 +508,9 @@ struct Sym *add_local_known(const char *name, int type, int storage,
 {
     struct Sym *s;
 
-    if (nlocals >= MAX_LOCALS) fatal("too many locals");
+    if (g_frame.nlocals >= MAX_LOCALS) fatal("too many locals");
 
-    s = &locals[nlocals++];
+    s = &locals[g_frame.nlocals++];
     memset(s, 0, sizeof(*s));
     strncpy(s->name, name, sizeof(s->name) - 1);
     s->type = type;
@@ -523,8 +523,8 @@ struct Sym *add_local_known(const char *name, int type, int storage,
 struct Sym *add_local_alloc(const char *name, int type, int bytes)
 {
     struct Sym *s;
-    local_size += bytes;
-    s = add_local_known(name, type, SC_LOCAL, -local_size, bytes);
+    g_frame.local_size += bytes;
+    s = add_local_known(name, type, SC_LOCAL, -g_frame.local_size, bytes);
     return s;
 }
 
@@ -546,8 +546,8 @@ struct Sym *add_param_alloc(const char *name, int type)
     struct Sym *s;
     int sz = type_size(type);
     if (sz < 2) sz = 2;
-    s = add_local_known(name, type, SC_PARAM, param_offset, sz);
-    param_offset += sz;
+    s = add_local_known(name, type, SC_PARAM, g_frame.param_offset, sz);
+    g_frame.param_offset += sz;
     return s;
 }
 
@@ -583,9 +583,9 @@ char *read_adjacent_string_literals_ex(int *is_widep, int *lenp)
     buf = (char *)xmalloc((size_t)cap);
     buf[0] = 0;
 
-    while (tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
+    while (g_lex.tok.kind == TOK_STR || g_lex.tok.kind == TOK_WSTR) {
         int slen;
-        if (tok.kind == TOK_WSTR)
+        if (g_lex.tok.kind == TOK_WSTR)
             is_wide = 1;
 
         /*
@@ -593,7 +593,7 @@ char *read_adjacent_string_literals_ex(int *is_widep, int *lenp)
          * containing a \0 escape has real bytes past that point, which
          * strlen() would silently discard.
          */
-        slen = tok.text_len;
+        slen = g_lex.tok.text_len;
         if (len + slen + 1 > cap) {
             char *nbuf;
             int ncap;
@@ -606,7 +606,7 @@ char *read_adjacent_string_literals_ex(int *is_widep, int *lenp)
             buf = nbuf;
             cap = ncap;
         }
-        memcpy(buf + len, tok.text, (size_t)slen);
+        memcpy(buf + len, g_lex.tok.text, (size_t)slen);
         len += slen;
         buf[len] = 0;
         next_token();
@@ -1387,10 +1387,10 @@ void skip_balanced_bracket(int open_ch, int close_ch)
     depth = 1;
     next_token();
 
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == open_ch) {
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == open_ch) {
             depth++;
-        } else if (tok.kind == close_ch) {
+        } else if (g_lex.tok.kind == close_ch) {
             depth--;
         }
 
@@ -1406,7 +1406,7 @@ int parse_offsetof_value(void)
     int off;
     struct FieldDef *fd;
 
-    if (tok.kind != TOK_ID || strcmp(tok.text, "__offsetof") != 0) {
+    if (g_lex.tok.kind != TOK_ID || strcmp(g_lex.tok.text, "__offsetof") != 0) {
         error_here("__offsetof expected");
         return 0;
     }
@@ -1424,14 +1424,14 @@ int parse_offsetof_value(void)
 
     off = 0;
     for (;;) {
-        if (tok.kind != TOK_ID) {
+        if (g_lex.tok.kind != TOK_ID) {
             error_here("field name expected in offsetof");
-            while (tok.kind != TOK_EOF && tok.kind != ')')
+            while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ')')
                 next_token();
             break;
         }
 
-        fd = find_field_def(sid, tok.text);
+        fd = find_field_def(sid, g_lex.tok.text);
         if (!fd) {
             error_here("unknown field in offsetof");
             next_token();
@@ -1442,7 +1442,7 @@ int parse_offsetof_value(void)
         off += fd->offset;
         t = fd->is_array ? fd->elem_type : fd->type;
 
-        while (tok.kind == '[') {
+        while (g_lex.tok.kind == '[') {
             int idx;
             int elem;
             next_token();
@@ -1455,13 +1455,13 @@ int parse_offsetof_value(void)
             t = fd->elem_type ? fd->elem_type : t;
         }
 
-        if (tok.kind != '.')
+        if (g_lex.tok.kind != '.')
             break;
         next_token();
         sid = base_struct_id_from_type(t);
         if (sid <= 0) {
             error_here("nested offsetof field is not struct/union");
-            while (tok.kind != TOK_EOF && tok.kind != ')')
+            while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ')')
                 next_token();
             break;
         }
@@ -1508,7 +1508,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
     int sid;
     int i;
 
-    if (tok.kind == '*') {
+    if (g_lex.tok.kind == '*') {
         next_token();
         if (!sizeof_parse_primary_type(&type, &sz)) {
             *typep = TYPE_INT;
@@ -1523,7 +1523,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         return 1;
     }
 
-    if (tok.kind == '&') {
+    if (g_lex.tok.kind == '&') {
         next_token();
         if (!sizeof_parse_primary_type(&type, &sz)) {
             *typep = TYPE_INT | TYPE_PTR;
@@ -1535,7 +1535,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         return 1;
     }
 
-    if (tok.kind == TOK_NUM) {
+    if (g_lex.tok.kind == TOK_NUM) {
         type = g_tok_long_suffix ? TYPE_LONG : TYPE_INT;
         if (g_tok_unsigned_suffix)
             type |= TYPE_UNSIGNED;
@@ -1545,14 +1545,14 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         return 1;
     }
 
-    if (tok.kind == TOK_CHARLIT) {
+    if (g_lex.tok.kind == TOK_CHARLIT) {
         next_token();
         *typep = TYPE_INT;
         *sizep = 2;
         return 1;
     }
 
-    if (tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
+    if (g_lex.tok.kind == TOK_STR || g_lex.tok.kind == TOK_WSTR) {
         char *lit;
         int is_wide;
         int litlen;
@@ -1566,7 +1566,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         return 1;
     }
 
-    if (tok.kind == '(') {
+    if (g_lex.tok.kind == '(') {
         next_token();
         if (starts_type()) {
             parse_type_name_decl(&type, &sz);
@@ -1583,18 +1583,18 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         return 1;
     }
 
-    if (tok.kind != TOK_ID) {
+    if (g_lex.tok.kind != TOK_ID) {
         error_here("unsupported sizeof expression");
         *typep = TYPE_INT;
         *sizep = 2;
         return 0;
     }
 
-    s = find_sym(tok.text);
+    s = find_sym(g_lex.tok.text);
     if (!s) {
         /* enum constants behave like int; unknown identifiers are diagnosed. */
         for (i = 0; i < nenum_consts; ++i) {
-            if (!strcmp(enum_const_names[i], tok.text)) {
+            if (!strcmp(enum_const_names[i], g_lex.tok.text)) {
                 next_token();
                 *typep = TYPE_INT;
                 *sizep = 2;
@@ -1603,7 +1603,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         }
         {
             char msg[MAX_TOK_TEXT + 64];
-            sprintf(msg, "use of undeclared identifier '%s'", tok.text);
+            sprintf(msg, "use of undeclared identifier '%s'", g_lex.tok.text);
             error_here(msg);
         }
         next_token();
@@ -1627,7 +1627,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
         next_token();
 
         for (;;) {
-            if (tok.kind == '[') {
+            if (g_lex.tok.kind == '[') {
                 skip_balanced_bracket('[', ']');
                 vla_whole = 0;
                 if (is_arr) {
@@ -1638,7 +1638,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
                     sz = type_size(type);
                     if (sz <= 0) sz = 1;
                 }
-            } else if (tok.kind == '(') {
+            } else if (g_lex.tok.kind == '(') {
                 /* Function call expression: sizeof uses the function return
                  * type.  Arguments are not evaluated; just skip the list. */
                 skip_balanced_bracket('(', ')');
@@ -1646,14 +1646,14 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
                 vla_whole = 0;
                 sz = type_size(type);
                 if (sz <= 0) sz = 2;
-            } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+            } else if (g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW) {
                 int arrow;
 
-                arrow = tok.kind == TOK_ARROW;
+                arrow = g_lex.tok.kind == TOK_ARROW;
                 vla_whole = 0;
                 next_token();
 
-                if (tok.kind != TOK_ID) {
+                if (g_lex.tok.kind != TOK_ID) {
                     error_here("field name expected");
                     break;
                 }
@@ -1663,7 +1663,7 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
                 else
                     sid = base_struct_id_from_type(type);
 
-                fd = find_field_def(sid, tok.text);
+                fd = find_field_def(sid, g_lex.tok.text);
                 if (!fd) {
                     error_here("unknown struct field");
                     next_token();

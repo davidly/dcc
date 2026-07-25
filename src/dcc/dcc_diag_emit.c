@@ -374,8 +374,8 @@ void error_here(const char *msg)
 {
     const char *fn;
 
-    fn = tok.file[0] ? tok.file : (input_name ? input_name : "<input>");
-    dcc_error_at(fn, tok_line, tok_start_pos, msg, tok.text);
+    fn = g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>");
+    dcc_error_at(fn, g_lex.tok_line, g_lex.tok_start_pos, msg, g_lex.tok.text);
 }
 
 int warnings = 0;
@@ -514,23 +514,23 @@ static int trigraph_xlat(int third)
 int peekc(void)
 {
     int t;
-    if (posi >= src_len) return 0;
-    if ((unsigned char)src[posi] == '?' && posi + 2 < src_len &&
-            (unsigned char)src[posi + 1] == '?' &&
-            (t = trigraph_xlat((unsigned char)src[posi + 2])) != 0)
+    if (g_lex.posi >= src_len) return 0;
+    if ((unsigned char)src[g_lex.posi] == '?' && g_lex.posi + 2 < src_len &&
+            (unsigned char)src[g_lex.posi + 1] == '?' &&
+            (t = trigraph_xlat((unsigned char)src[g_lex.posi + 2])) != 0)
         return t;
-    return (unsigned char)src[posi];
+    return (unsigned char)src[g_lex.posi];
 }
 
 int getc_src(void)
 {
     int c, t;
-    if (posi >= src_len) return 0;
-    c = (unsigned char)src[posi++];
-    if (c == '\n') { line_no++; return c; }
-    if (c == '?' && posi + 1 < src_len && (unsigned char)src[posi] == '?' &&
-            (t = trigraph_xlat((unsigned char)src[posi + 1])) != 0) {
-        posi += 2;
+    if (g_lex.posi >= src_len) return 0;
+    c = (unsigned char)src[g_lex.posi++];
+    if (c == '\n') { g_lex.line_no++; return c; }
+    if (c == '?' && g_lex.posi + 1 < src_len && (unsigned char)src[g_lex.posi] == '?' &&
+            (t = trigraph_xlat((unsigned char)src[g_lex.posi + 1])) != 0) {
+        g_lex.posi += 2;
         return t;
     }
     return c;

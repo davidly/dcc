@@ -667,8 +667,8 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
     if (scratch == NULL)
         fatal("cannot create speculative loop-regalloc temp file");
 
-    saved_nlocals = nlocals;
-    saved_local_size = local_size;
+    saved_nlocals = g_frame.nlocals;
+    saved_local_size = g_frame.local_size;
     saved_for_seq = g_for_seq;
     saved_licm_seq = g_licm_seq;
 
@@ -737,8 +737,8 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * Found via tests/tcrcfix.c: a `call __mulu` with no matching `extrn
      * __mulu` anywhere in the output, from exactly this nesting. */
     g_buffering_epoch++;
-    nlocals = saved_nlocals;
-    local_size = saved_local_size;
+    g_frame.nlocals = saved_nlocals;
+    g_frame.local_size = saved_local_size;
     g_for_seq = saved_for_seq;
     g_licm_seq = saved_licm_seq;
     return 0;
@@ -887,8 +887,8 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     if (scratch == NULL)
         fatal("cannot create speculative loop-regalloc write temp file");
 
-    saved_nlocals = nlocals;
-    saved_local_size = local_size;
+    saved_nlocals = g_frame.nlocals;
+    saved_local_size = g_frame.local_size;
     saved_for_seq = g_for_seq;
     saved_licm_seq = g_licm_seq;
 
@@ -949,8 +949,8 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     fclose(scratch);
     /* See try_loop_regalloc_bc's identical comment on this bump. */
     g_buffering_epoch++;
-    nlocals = saved_nlocals;
-    local_size = saved_local_size;
+    g_frame.nlocals = saved_nlocals;
+    g_frame.local_size = saved_local_size;
     g_for_seq = saved_for_seq;
     g_licm_seq = saved_licm_seq;
     return 0;

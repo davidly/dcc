@@ -119,9 +119,9 @@ long parse_typed_const_long_expr(void)
 
 static void recover_static_assert_decl(void)
 {
-    while (tok.kind != TOK_EOF && tok.kind != ';')
+    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ';')
         next_token();
-    if (tok.kind == ';')
+    if (g_lex.tok.kind == ';')
         next_token();
 }
 
@@ -137,11 +137,11 @@ void parse_static_assert_decl(void)
     size_t capacity;
     size_t used;
 
-    assert_tok = tok;
-    assert_line = tok_line;
-    assert_pos = tok_start_pos;
+    assert_tok = g_lex.tok;
+    assert_line = g_lex.tok_line;
+    assert_pos = g_lex.tok_start_pos;
     expect(TOK_STATIC_ASSERT);
-    if (tok.kind != '(') {
+    if (g_lex.tok.kind != '(') {
         error_here("expected '(' in static assertion");
         recover_static_assert_decl();
         return;
@@ -158,13 +158,13 @@ void parse_static_assert_decl(void)
         recover_static_assert_decl();
         return;
     }
-    if (tok.kind != ',') {
+    if (g_lex.tok.kind != ',') {
         error_here("expected ',' in static assertion");
         recover_static_assert_decl();
         return;
     }
     next_token();
-    if (tok.kind != TOK_STR && tok.kind != TOK_WSTR) {
+    if (g_lex.tok.kind != TOK_STR && g_lex.tok.kind != TOK_WSTR) {
         error_here("string literal expected in static assertion");
         recover_static_assert_decl();
         return;
@@ -175,11 +175,11 @@ void parse_static_assert_decl(void)
     capacity = used + 1;
     message = (char *)xmalloc(capacity);
     strcpy(message, prefix);
-    while (tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
+    while (g_lex.tok.kind == TOK_STR || g_lex.tok.kind == TOK_WSTR) {
         size_t piece_len;
         size_t needed;
 
-        piece_len = strlen(tok.text);
+        piece_len = strlen(g_lex.tok.text);
         needed = used + piece_len + 1;
         if (needed > capacity) {
             char *grown;
@@ -190,18 +190,18 @@ void parse_static_assert_decl(void)
             free(message);
             message = grown;
         }
-        memcpy(message + used, tok.text, piece_len + 1);
+        memcpy(message + used, g_lex.tok.text, piece_len + 1);
         used += piece_len;
         next_token();
     }
-    if (tok.kind != ')') {
+    if (g_lex.tok.kind != ')') {
         error_here("expected ')' after static assertion message");
         free(message);
         recover_static_assert_decl();
         return;
     }
     next_token();
-    if (tok.kind != ';') {
+    if (g_lex.tok.kind != ';') {
         error_here("expected ';' after static assertion");
         free(message);
         return;
@@ -216,12 +216,12 @@ void parse_static_assert_decl(void)
 
 int starts_type(void)
 {
-    return tok.kind == TOK_INT || tok.kind == TOK_LONG || tok.kind == TOK_SHORT || tok.kind == TOK_FLOAT || tok.kind == TOK_CHAR || tok.kind == TOK_VOID ||
-            tok.kind == TOK_BOOL ||
-           tok.kind == TOK_UNSIGNED || tok.kind == TOK_SIGNED || tok.kind == TOK_CONST || tok.kind == TOK_VOLATILE ||
-           tok.kind == TOK_EXTERN || tok.kind == TOK_STATIC || tok.kind == TOK_REGISTER || tok.kind == TOK_AUTO ||
-           tok.kind == TOK_INLINE || tok.kind == TOK_NORETURN ||
-           tok.kind == TOK_TYPEDEF || tok.kind == TOK_STRUCT ||
-           tok.kind == TOK_UNION || tok.kind == TOK_ENUM ||
-           (tok.kind == TOK_ID && find_typedef(tok.text) >= 0);
+    return g_lex.tok.kind == TOK_INT || g_lex.tok.kind == TOK_LONG || g_lex.tok.kind == TOK_SHORT || g_lex.tok.kind == TOK_FLOAT || g_lex.tok.kind == TOK_CHAR || g_lex.tok.kind == TOK_VOID ||
+            g_lex.tok.kind == TOK_BOOL ||
+           g_lex.tok.kind == TOK_UNSIGNED || g_lex.tok.kind == TOK_SIGNED || g_lex.tok.kind == TOK_CONST || g_lex.tok.kind == TOK_VOLATILE ||
+           g_lex.tok.kind == TOK_EXTERN || g_lex.tok.kind == TOK_STATIC || g_lex.tok.kind == TOK_REGISTER || g_lex.tok.kind == TOK_AUTO ||
+           g_lex.tok.kind == TOK_INLINE || g_lex.tok.kind == TOK_NORETURN ||
+           g_lex.tok.kind == TOK_TYPEDEF || g_lex.tok.kind == TOK_STRUCT ||
+           g_lex.tok.kind == TOK_UNION || g_lex.tok.kind == TOK_ENUM ||
+           (g_lex.tok.kind == TOK_ID && find_typedef(g_lex.tok.text) >= 0);
 }
