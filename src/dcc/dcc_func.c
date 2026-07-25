@@ -3240,6 +3240,60 @@ static int tmpfile_unsafe_for_noix(FILE *f)
     return found;
 }
 
+/*
+ * Reset the per-function codegen sequence counters to their function-entry
+ * state for a fresh body-generation pass over function `s`: label count,
+ * for-scope / for-init-rename / block-scope-depth sequence counters, the
+ * compound-literal and LICM sequence counters, and the static-local dedup
+ * index. Allocates a fresh return label via new_label() (which advances the
+ * global label counter - a discarded speculative attempt simply abandons the
+ * label it allocated). Shared by the speculative body passes below, whose
+ * setup and discard-rewind previously duplicated this block verbatim (six
+ * copies); centralising it means a newly added piece of per-function codegen
+ * state can't be forgotten at one of them.
+ */
+static void reset_function_codegen_state(struct Sym *s)
+{
+    nulabels = 0;
+    current_return_label = new_label();
+    g_for_seq = 0;
+    g_forren_n = 0;
+    g_for_decl_seq = -1;
+    g_for_decl_rename_index = 0;
+    g_for_decl_recording = 0;
+    g_scope_depth = 0;
+    g_static_local_func_index = (int)(s - globals);
+    g_static_local_seq = 0;
+    g_compound_literal_seq = 0;
+    g_licm_seq = 0;
+}
+
+/*
+ * Undo everything a discarded speculative body-generation attempt touched, so
+ * the caller's normal codegen path runs exactly as if the attempt never
+ * happened: rewind the lexer cursor and frame-layout counters to the captured
+ * body-start snapshot, then reset the per-function codegen counters. Shared by
+ * all three speculative passes' failure paths.
+ */
+static void speculative_body_discard_rewind(struct Sym *s,
+                                            long body_start_pos,
+                                            long body_start_tok_start,
+                                            int body_start_line,
+                                            int body_start_tok_line,
+                                            struct Token body_start_tok,
+                                            int body_start_nlocals,
+                                            int body_start_local_size)
+{
+    g_lex.posi = body_start_pos;
+    g_lex.tok_start_pos = body_start_tok_start;
+    g_lex.line_no = body_start_line;
+    g_lex.tok_line = body_start_tok_line;
+    g_lex.tok = body_start_tok;
+    g_frame.nlocals = body_start_nlocals;
+    g_frame.local_size = body_start_local_size;
+    reset_function_codegen_state(s);
+}
+
 /* Speculatively generate `name`'s already-scanned body without an IX frame
  * (params/locals addressed sp-relative - see current_function_safe_to_omit_ix,
  * which stays hard-disabled for the ordinary path below), and check whether
@@ -3306,18 +3360,7 @@ static int try_speculative_noix_function_body(const char *name, int type,
      * it's kept or discarded, instead of relying on the global cache. */
     g_inline_body_buffering++;
     g_buffering_epoch++;
-    nulabels = 0;
-    current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    reset_function_codegen_state(s);
     /* Suppress diagnostics for the duration of this possibly-discarded
      * attempt (asm_suppress_depth, checked by dcc_error_at) so a genuine
      * source error isn't shown to the user before we know whether the real
@@ -3363,25 +3406,10 @@ static int try_speculative_noix_function_body(const char *name, int type,
      * touched - the same set the scan-to-codegen transition above this
      * function resets - so the caller's normal codegen path runs exactly as
      * if this function had never been called. */
-    g_lex.posi = body_start_pos;
-    g_lex.tok_start_pos = body_start_tok_start;
-    g_lex.line_no = body_start_line;
-    g_lex.tok_line = body_start_tok_line;
-    g_lex.tok = body_start_tok;
-    g_frame.nlocals = body_start_nlocals;
-    g_frame.local_size = body_start_local_size;
-    nulabels = 0;
-    current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    speculative_body_discard_rewind(s, body_start_pos, body_start_tok_start,
+                                    body_start_line, body_start_tok_line,
+                                    body_start_tok, body_start_nlocals,
+                                    body_start_local_size);
     return 0;
 }
 
@@ -4271,18 +4299,7 @@ static int try_loop_scoped_regalloc_first(const char *name, int type,
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
     g_buffering_epoch++;
-    nulabels = 0;
-    current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    reset_function_codegen_state(s);
     g_loop_regalloc_bc_claimed = 0;
 
     errors_before = g_diag_error_count;
@@ -4314,25 +4331,10 @@ static int try_loop_scoped_regalloc_first(const char *name, int type,
     /* Undo every bit of per-function codegen state this discarded attempt
      * touched, exactly like try_speculative_bc_regalloc_function_body's own
      * rewind. */
-    g_lex.posi = body_start_pos;
-    g_lex.tok_start_pos = body_start_tok_start;
-    g_lex.line_no = body_start_line;
-    g_lex.tok_line = body_start_tok_line;
-    g_lex.tok = body_start_tok;
-    g_frame.nlocals = body_start_nlocals;
-    g_frame.local_size = body_start_local_size;
-    nulabels = 0;
-    current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    speculative_body_discard_rewind(s, body_start_pos, body_start_tok_start,
+                                    body_start_line, body_start_tok_line,
+                                    body_start_tok, body_start_nlocals,
+                                    body_start_local_size);
     return 0;
 }
 
@@ -4376,18 +4378,7 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
     g_buffering_epoch++;
-    nulabels = 0;
-    current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    reset_function_codegen_state(s);
     if (bc_cand != NULL) {
         bc_cand->reg_alloc = REG_BC;
         g_bc_regalloc_sym = bc_cand;
@@ -4461,25 +4452,10 @@ static int try_speculative_bc_regalloc_function_body(const char *name, int type,
 
     /* Undo every bit of per-function codegen state this discarded attempt
      * touched, exactly like try_speculative_noix_function_body's own rewind. */
-    g_lex.posi = body_start_pos;
-    g_lex.tok_start_pos = body_start_tok_start;
-    g_lex.line_no = body_start_line;
-    g_lex.tok_line = body_start_tok_line;
-    g_lex.tok = body_start_tok;
-    g_frame.nlocals = body_start_nlocals;
-    g_frame.local_size = body_start_local_size;
-    nulabels = 0;
-    current_return_label = new_label();
-    g_for_seq = 0;
-    g_forren_n = 0;
-    g_for_decl_seq = -1;
-    g_for_decl_rename_index = 0;
-    g_for_decl_recording = 0;
-    g_scope_depth = 0;
-    g_static_local_func_index = (int)(s - globals);
-    g_static_local_seq = 0;
-    g_compound_literal_seq = 0;
-    g_licm_seq = 0;
+    speculative_body_discard_rewind(s, body_start_pos, body_start_tok_start,
+                                    body_start_line, body_start_tok_line,
+                                    body_start_tok, body_start_nlocals,
+                                    body_start_local_size);
     return 0;
 }
 
