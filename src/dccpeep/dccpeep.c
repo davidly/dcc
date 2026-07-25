@@ -839,6 +839,66 @@ static int pass_base_index_addr(void)
     return changed;
 }
 
+/*
+ * pass_fold_hl_base_const_offset:
+ *
+ * Struct field / array element address computation for a link-time-constant
+ * base (a plain global/static symbol's own address - `ld hl,LABEL`, never
+ * `ld hl,(LABEL)`, which loads a stored *value* through a runtime pointer,
+ * not an address) often lands right next to adding a constant field offset:
+ *
+ *     ld hl,LABEL
+ *     ld de,N
+ *     add hl,de
+ *
+ * LABEL+N is itself a valid M80 assembler constant expression, so this
+ * collapses to a single `ld hl,LABEL+N` and drops the other two
+ * instructions. Conservative in the same spirit as
+ * pass_double_de_before_add just above: this triple only ever appears as
+ * address arithmetic feeding a later dereference or store, so the flags
+ * `add hl,de` sets are dead here, and DE's incoming value was already
+ * about to be clobbered by the `ld de,N` this pass removes, so leaving it
+ * unclobbered can only be safe. Never matches `ld hl,(LABEL)`: an indirect
+ * load through a runtime pointer variable's stored value isn't a
+ * compile-time constant, so there's nothing to fold into it. Found via
+ * corpus mining a static-struct-heavy interpreter (tests/cobint.c, whose
+ * global state lives in one struct with ~20 fields - 567 instances of this
+ * exact triple in that file alone; a broader sample of tests/*.c found it
+ * elsewhere too, just far less densely).
+ */
+static int pass_fold_hl_base_const_offset(void)
+{
+    int i;
+    int changed;
+    char base[128];
+    char off_text[64];
+    int off;
+    char out[256];
+
+    changed = 0;
+    for (i = 0; i + 2 < nlines; ++i) {
+        if (!parse_ld_hl_imm(lines[i], base))
+            continue;
+        if (base[0] == '(')
+            continue;
+        if (!parse_ld_de_imm(lines[i + 1], off_text))
+            continue;
+        if (!parse_nonneg_int(off_text, &off) || off == 0)
+            continue;
+        if (!eq(i + 2, "add hl,de"))
+            continue;
+
+        sprintf(out, "ld hl,%s+%d", base, off);
+        replace1_tagged(i, out, "fold_hl_base_const_offset");
+        delete_n(i + 1, 2);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
 
 static int pass_branch_over_jump(void)
 {
@@ -13529,6 +13589,7 @@ int main(int argc, char **argv)
         if (pass_reuse_board_addr_for_zero_store()) changed = 1;
         if (pass_array_base_push_to_de()) changed = 1;
         if (pass_base_index_addr()) changed = 1;
+        if (pass_fold_hl_base_const_offset()) changed = 1;
         if (pass_e_signed_le_zero()) changed = 1;
         if (pass_ix_array_word_addr()) changed = 1;
         if (pass_ix_array_byte_addr()) changed = 1;
