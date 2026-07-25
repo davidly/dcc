@@ -1083,6 +1083,7 @@ static struct Sym *find_bc_regalloc_candidate(int params_end)
         count = ident_count_for(p->name);
         if (count < BC_REGALLOC_MIN_REFS) continue;
         if (count <= best_count) continue;
+        if (p->is_volatile) continue;
         if (ident_addr_taken_for(p->name)) continue;
         if (ident_written_for(p->name)) continue;
         best = p;

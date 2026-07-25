@@ -59,6 +59,23 @@ static unsigned int volatile_param_mask(volatile unsigned int value)
     return value & 7u;
 }
 
+/* Shaped to match every eligibility check dcc_func.c's whole-function BC
+ * register-allocation candidate scan (find_bc_regalloc_candidate) applies
+ * to a parameter, other than volatility itself: word-sized, referenced
+ * more than once, never address-taken, never written, and the function
+ * body is call-free (a requirement for the promotion to actually be acted
+ * on, not just proposed). Exercises the parameter-only half of that scan;
+ * volatile_static_abs below covers the sibling global-candidate check the
+ * same function already applied correctly. */
+static int volatile_param_bc_candidate(volatile int value)
+{
+    int sum;
+    sum = value;
+    sum += value;
+    sum += value;
+    return sum;
+}
+
 static int volatile_static_abs(void)
 {
     static volatile int value = -7;
@@ -127,11 +144,11 @@ static int volatile_anonymous_member_reload(void)
 int main(void)
 {
     setup_base();
-        printf("tvolopt param=%d old=%d mask=%u static=%d typedef=%d cv=%d local=%d member=%d anonymous=%d fp=%d\n",
+        printf("tvolopt param=%d old=%d mask=%u static=%d typedef=%d cv=%d local=%d member=%d anonymous=%d fp=%d bccand=%d\n",
             volatile_param_abs(-5), volatile_old_param_abs(-6),
             volatile_param_mask(0x1234u),
            volatile_static_abs(), volatile_typedef_abs(),
             const_volatile_read(), volatile_local_widths(), volatile_member_reload(),
-            volatile_anonymous_member_reload(), callback());
+            volatile_anonymous_member_reload(), callback(), volatile_param_bc_candidate(5));
     return 0;
 }
