@@ -21,6 +21,9 @@ static struct AstSupportCacheEntry ast_support_cache[AST_SUPPORT_CACHE_SIZE];
 static unsigned ast_support_cache_stamp = 1;
 
 static int ast_gen_supported_uncached(const struct AstNode *n);
+static int ast_scalar_binary_supported_uncached(const struct AstNode *n);
+static int ast_assign_supported_uncached(const struct AstNode *n);
+static int ast_other_supported_uncached(const struct AstNode *n);
 
 void ast_support_cache_begin(void)
 {
@@ -93,7 +96,7 @@ int ast_gen_supported(const struct AstNode *n)
     return value;
 }
 
-static int ast_gen_supported_uncached(const struct AstNode *n)
+static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
 {
     if (n == NULL)
         return 0;
@@ -253,6 +256,14 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
             (type_is_long(n->peek_type) || type_is_float(n->peek_type)))
             return 0;
         return 1;
+    default:
+        return -1;
+    }
+}
+
+static int ast_assign_supported_uncached(const struct AstNode *n)
+{
+    switch (n->kind) {
     case AST_ASSIGN: {
         /* Narrow slice: `lhs = rhs` and compound `lhs OP= rhs` where lhs is a
          * bare plain-int (16-bit, signed or unsigned) scalar reachable by the
@@ -835,6 +846,14 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
         }
         return 1;
     }
+    default:
+        return -1;
+    }
+}
+
+static int ast_other_supported_uncached(const struct AstNode *n)
+{
+    switch (n->kind) {
     case AST_INDEX: {
          int elem_type;
         int ptr_type;
@@ -986,6 +1005,21 @@ static int ast_gen_supported_uncached(const struct AstNode *n)
     }
 }
 
+static int ast_gen_supported_uncached(const struct AstNode *n)
+{
+    int supported;
+
+    if (n == NULL)
+        return 0;
+    supported = ast_scalar_binary_supported_uncached(n);
+    if (supported >= 0)
+        return supported;
+    supported = ast_assign_supported_uncached(n);
+    if (supported >= 0)
+        return supported;
+    return ast_other_supported_uncached(n);
+}
+
 int ast_call_arg_word_supported(const struct AstNode *arg)
 {
     struct Sym *s;
@@ -1054,7 +1088,7 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
     if (fn_sym != NULL && fn_sym->is_static)
         fn_sym->deferred_body_needed = 1;
 
-    fprintf(outf, "\tld hl,-%d\n", struct_bytes);
+    fprintf(g_emit_sink.stream, "\tld hl,-%d\n", struct_bytes);
     emit("\tadd hl,sp\n");
     emit("\tld sp,hl\n");
     emit("\tpush hl\n");
@@ -1079,7 +1113,7 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
             gen_pointer_expr_ast(call->list[i], &ptr_type, &no_deref);
         else
             ast_gen_expr(call->list[i]);
-        actual_type = g_expr_type;
+        actual_type = g_expr.type;
         if (have_want && type_is_float(inner_want)) {
             if (!type_is_float(actual_type))
                 emit_convert_int_to_float(actual_type);
@@ -1107,11 +1141,11 @@ void gen_struct_return_call_arg_ast(const struct AstNode *call,
     emit_load_hl_from_sp_offset(arg_bytes);
     emit("\tpush hl\n");
     emit_extrn_if_needed(fn_sym);
-    fprintf(outf, "\tcall %s\n", asm_name_for(name));
+    fprintf(g_emit_sink.stream, "\tcall %s\n", asm_name_for(name));
     emit_cleanup_stack_bytes(arg_bytes + 2);
     emit("\tpop bc\n");
-    g_expr_type = want_type;
-    g_long_from16 = 0;
+    g_expr.type = want_type;
+    g_expr.long_from16 = 0;
 }
 
 static int ast_update_lvalue_long_type(const struct AstNode *n, int *out_type)
@@ -2271,7 +2305,7 @@ static const struct AstNode *ast_find_unconditional_divmod_op(const struct AstNo
         n->b != NULL && n->b->kind == AST_IDENT && n->b->sval != NULL) {
         /* AST_IDENT nodes carry no reliable ->type of their own until
          * codegen actually evaluates them (gen_ident resolves the symbol
-         * and sets g_expr_type at that point, not stored back onto the
+         * and sets g_expr.type at that point, not stored back onto the
          * node) - ast_expr_type_for_sizeof is the existing static
          * inference path built for exactly this "need a node's type
          * before/without running its codegen" situation. */
@@ -2459,8 +2493,8 @@ struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
             !ast_gen_supported(s2->a->a) || !ast_gen_supported(s2->a->b))
             continue;
 
-        sprintf(qname, "#dmq%d", g_licm_seq++);
-        sprintf(rname, "#dmr%d", g_licm_seq++);
+        sprintf(qname, "#dmq%d", g_func_pass.licm_seq++);
+        sprintf(rname, "#dmr%d", g_func_pass.licm_seq++);
         quot_sym = add_local_alloc(qname, is_signed ? TYPE_INT : (TYPE_INT | TYPE_UNSIGNED), 2);
         rem_sym = add_local_alloc(rname, is_signed ? TYPE_INT : (TYPE_INT | TYPE_UNSIGNED), 2);
 

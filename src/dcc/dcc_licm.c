@@ -242,7 +242,7 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
             return;
         }
         /* A call to one of DCCRTL.MAC's verified-BC-clean ctype.h routines
-         * (asm_name_is_bc_safe_call, dcc_func.c/g_safe_runtime_calls) has
+         * (asm_name_is_bc_safe_call, dcc_regalloc.c/g_safe_runtime_calls) has
          * nothing to model - no writes, no further calls, no side effects
          * at all - so it's tolerated exactly like a _Noreturn call: recurse
          * into its own argument expressions (evaluated in the loop's own
@@ -897,7 +897,7 @@ static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body,
          * ast_value_is_plain_int, which gated a constant-multiply fast path
          * that fell back to a full __mulu call once the temp's type read as
          * 0). */
-        sprintf(tmp_name, "#cse%d", g_licm_seq++);
+        sprintf(tmp_name, "#cse%d", g_func_pass.licm_seq++);
         temps[j] = add_local_alloc(tmp_name, ast_expr_type_for_sizeof(filtered.nodes[j]), 2);
         scratch[scratch_n++] = licm_cse_make_temp_assign(filtered.nodes[j], temps[j]);
     }
@@ -967,7 +967,7 @@ struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node)
         /* ast_expr_type_for_sizeof, not cands.nodes[i]->type directly - see
          * the identical comment in licm_apply_cse_to_stmt_list, where this
          * was found to matter in practice. */
-        sprintf(tmp_name, "#licm%d", g_licm_seq++);
+        sprintf(tmp_name, "#licm%d", g_func_pass.licm_seq++);
         temps[i] = add_local_alloc(tmp_name, ast_expr_type_for_sizeof(cands.nodes[i]), 2);
         ast_gen_expr(cands.nodes[i]);   /* HL = the hoisted value, computed once */
         emit_store_hl_to_sym_direct(temps[i]);

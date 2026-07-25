@@ -278,7 +278,7 @@ long pp_expr_primary(void)
         name[i] = 0;
 
         if (!strcmp(name, "__LINE__"))
-            return line_no;
+            return g_lex.line_no;
 
         di = find_define(name);
         if (di >= 0 && !defs[di].is_func && pp_expr_depth < 16) {
@@ -745,7 +745,7 @@ void parse_preprocessor_line(void)
      * always a hard error, even inside an inactive #if block. */
     if (word[0] == 0 && peekc() == '#') {
         dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                 line_no, tok_start_pos, "'##' is not a valid preprocessor directive", NULL);
+                 g_lex.line_no, g_lex.tok_start_pos, "'##' is not a valid preprocessor directive", NULL);
         while (peekc() && peekc() != '\n') getc_src();
         return;
     }
@@ -759,7 +759,7 @@ void parse_preprocessor_line(void)
 
         if (if_sp >= MAX_IFSTACK) {
             dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                         line_no, tok_start_pos, "too many nested #if", NULL);
+                         g_lex.line_no, g_lex.tok_start_pos, "too many nested #if", NULL);
             while (peekc() && peekc() != '\n') getc_src();
             return;
         }
@@ -783,7 +783,7 @@ void parse_preprocessor_line(void)
 
         if (if_sp >= MAX_IFSTACK) {
             dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                         line_no, tok_start_pos, "too many nested #if", NULL);
+                         g_lex.line_no, g_lex.tok_start_pos, "too many nested #if", NULL);
             while (peekc() && peekc() != '\n') getc_src();
             return;
         }
@@ -801,7 +801,7 @@ void parse_preprocessor_line(void)
     } else if (!strcmp(word, "elif")) {
         if (if_sp <= 0) {
             dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                         line_no, tok_start_pos, "#elif without matching #if", NULL);
+                         g_lex.line_no, g_lex.tok_start_pos, "#elif without matching #if", NULL);
         } else {
             i = if_sp - 1;
             if (if_seen_else[i]) {
@@ -826,7 +826,7 @@ void parse_preprocessor_line(void)
     } else if (!strcmp(word, "else")) {
         if (if_sp <= 0) {
             dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                         line_no, tok_start_pos, "#else without matching #if", NULL);
+                         g_lex.line_no, g_lex.tok_start_pos, "#else without matching #if", NULL);
         } else {
             i = if_sp - 1;
             if (!if_seen_else[i]) {
@@ -841,7 +841,7 @@ void parse_preprocessor_line(void)
             if_sp--;
         else
             dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                         line_no, tok_start_pos, "#endif without matching #if", NULL);
+                         g_lex.line_no, g_lex.tok_start_pos, "#endif without matching #if", NULL);
         pp_recompute_active();
     } else if (!strcmp(word, "line")) {
         int lno;
@@ -867,7 +867,7 @@ void parse_preprocessor_line(void)
             lno = lno * 10 + *lp++ - '0';
 
         if (lno > 0)
-            line_no = lno - 1;
+            g_lex.line_no = lno - 1;
 
         while (*lp && isspace((unsigned char)*lp))
             lp++;
@@ -903,7 +903,7 @@ void parse_preprocessor_line(void)
                 char msg[MAX_MACRO_TEXT + 16];
                 sprintf(msg, "#error %s", val);
                 dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                             line_no, tok_start_pos, msg, NULL);
+                             g_lex.line_no, g_lex.tok_start_pos, msg, NULL);
             }
         }
     } else if (!strcmp(word, "define")) {
@@ -941,8 +941,8 @@ void parse_preprocessor_line(void)
                      * Bind the trailing arguments to the implicit name
                      * __VA_ARGS__, which the rest of the macro engine then
                      * treats as an ordinary parameter. */
-                    if (peekc() == '.' && posi + 2 < src_len &&
-                        src[posi + 1] == '.' && src[posi + 2] == '.') {
+                    if (peekc() == '.' && g_lex.posi + 2 < src_len &&
+                        src[g_lex.posi + 1] == '.' && src[g_lex.posi + 2] == '.') {
                         getc_src();
                         getc_src();
                         getc_src();
@@ -1018,10 +1018,10 @@ void parse_preprocessor_line(void)
             getc_src();
         }
         line[li] = 0;
-        if (!scan_mode && asm_suppress_depth == 0 && !asm_line_was_seen(posi)) {
+        if (!scan_mode && asm_suppress_depth == 0 && !asm_line_was_seen(g_lex.posi)) {
             /* Record the position before buffering so the dedup bookkeeping
              * never depends on whether the pending buffer had room. */
-            mark_asm_line_seen(posi);
+            mark_asm_line_seen(g_lex.posi);
             if (pending_asm_len + li + 2 >= (int)sizeof(pending_asm_buf))
                 fatal("#asm block too large for pending buffer");
             memcpy(pending_asm_buf + pending_asm_len, line, (size_t)li);
@@ -1063,7 +1063,7 @@ void parse_preprocessor_line(void)
             val[i] = 0;
             fprintf(stderr, "%s:%d: warning: #warning %s\n",
                     current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                    line_no, val);
+                    g_lex.line_no, val);
         }
     } else if (!strcmp(word, "pragma")) {
         if (pp_active) {
@@ -1083,7 +1083,7 @@ void parse_preprocessor_line(void)
             char msg[96];
             sprintf(msg, "unknown preprocessor directive '#%s'", word);
             dcc_error_at(current_file_name[0] ? current_file_name : (input_name ? input_name : "<input>"),
-                         line_no, tok_start_pos, msg, NULL);
+                         g_lex.line_no, g_lex.tok_start_pos, msg, NULL);
         }
     }
 
@@ -1102,16 +1102,16 @@ void skip_ws_and_comments(void)
             c = peekc();
         }
 
-        if (c == '/' && posi + 1 < src_len && src[posi + 1] == '/') {
+        if (c == '/' && g_lex.posi + 1 < src_len && src[g_lex.posi + 1] == '/') {
             while (peekc() && peekc() != '\n') getc_src();
             continue;
         }
 
-        if (c == '/' && posi + 1 < src_len && src[posi + 1] == '*') {
-            posi += 2;
+        if (c == '/' && g_lex.posi + 1 < src_len && src[g_lex.posi + 1] == '*') {
+            g_lex.posi += 2;
             while (peekc()) {
-                if (peekc() == '*' && posi + 1 < src_len && src[posi + 1] == '/') {
-                    posi += 2;
+                if (peekc() == '*' && g_lex.posi + 1 < src_len && src[g_lex.posi + 1] == '/') {
+                    g_lex.posi += 2;
                     break;
                 }
                 getc_src();
@@ -1524,7 +1524,7 @@ void replace_source_range(long start, long end, const char *text)
     src = nsrc;
     src_len = start + n + rest;
     g_src_generation++;
-    posi = start;
+    g_lex.posi = start;
 }
 
 static void replace_source_range_disabled(long start, long end, const char *text, const char *macro_name)
@@ -1992,7 +1992,7 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
 
             if (!strcmp(ident, "__LINE__")) {
                 char numbuf[32];
-                sprintf(numbuf, "%d", line_no);
+                sprintf(numbuf, "%d", g_lex.line_no);
                 for (ii = 0; numbuf[ii] && oi < outsz - 1; ++ii)
                     out[oi++] = numbuf[ii];
                 continue;
@@ -2001,7 +2001,7 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
                 char filebuf[320];
                 const char *fp0;
                 int fj;
-                fp0 = tok.file[0] ? tok.file : (input_name ? input_name : "<input>");
+                fp0 = g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>");
                 fj = 0;
                 filebuf[fj++] = '"';
                 while (*fp0 && fj < (int)sizeof(filebuf) - 2) {
@@ -2433,23 +2433,37 @@ int define_number_value(const char *name, long *out, int depth)
     return 0;
 }
 
+/* Snapshot the live lexer cursor. The integer-suffix flags
+ * (g_tok_long_suffix/g_tok_unsigned_suffix) are deliberately NOT part of the
+ * cursor; callers that need them save/restore those two flags separately. */
+LexState lex_save(void)
+{
+    return g_lex;
+}
+
+/* Restore the live lexer cursor from a snapshot. */
+void lex_restore(const LexState *s)
+{
+    g_lex = *s;
+}
+
 void next_token(void)
 {
     int c, d, i, di;
     long start_line;
 
     skip_ws_and_comments();
-    memset(&tok, 0, sizeof(tok));
+    memset(&g_lex.tok, 0, sizeof(g_lex.tok));
 
-    start_line = line_no;
+    start_line = g_lex.line_no;
     c = getc_src();
-    tok_start_pos = posi - 1;
-    source_location_at(tok_start_pos, tok.file, sizeof(tok.file), &tok_line);
+    g_lex.tok_start_pos = g_lex.posi - 1;
+    source_location_at(g_lex.tok_start_pos, g_lex.tok.file, sizeof(g_lex.tok.file), &g_lex.tok_line);
     (void)start_line;
 
     if (!c) {
-        tok.kind = TOK_EOF;
-        strcpy(tok.text, "<eof>");
+        g_lex.tok.kind = TOK_EOF;
+        strcpy(g_lex.tok.text, "<eof>");
         return;
     }
 
@@ -2457,13 +2471,13 @@ void next_token(void)
         getc_src();     /* consume opening quote */
         if (peekc() == '\\') {
             getc_src();
-            tok.val = read_escape();
+            g_lex.tok.val = read_escape();
         } else {
-            tok.val = getc_src();
+            g_lex.tok.val = getc_src();
         }
         if (peekc() == '\'') getc_src();
-        tok.kind = TOK_NUM;
-        sprintf(tok.text, "%ld", tok.val & 0xffffL);
+        g_lex.tok.kind = TOK_NUM;
+        sprintf(g_lex.tok.text, "%ld", g_lex.tok.val & 0xffffL);
         return;
     }
 
@@ -2473,12 +2487,12 @@ void next_token(void)
         while (peekc() && peekc() != '"' && i < MAX_TOK_TEXT - 1) {
             if (peekc() == '\\') {
                 getc_src();
-                tok.text[i++] = (char)read_escape();
+                g_lex.tok.text[i++] = (char)read_escape();
             } else {
-                tok.text[i++] = (char)getc_src();
+                g_lex.tok.text[i++] = (char)getc_src();
             }
         }
-        tok.text[i] = 0;
+        g_lex.tok.text[i] = 0;
         /* Drain an over-long wide literal up to the closing quote (see the
          * narrow-string case below) so the lexer stays synchronized. */
         if (peekc() && peekc() != '"') {
@@ -2493,19 +2507,19 @@ void next_token(void)
             }
         }
         if (peekc() == '"') getc_src();
-        tok.kind = TOK_WSTR;
-        tok.text_len = i;
+        g_lex.tok.kind = TOK_WSTR;
+        g_lex.tok.text_len = i;
         return;
     }
 
     if (is_ident_start(c)) {
         i = 0;
-        tok.text[i++] = (char)c;
+        g_lex.tok.text[i++] = (char)c;
         while (is_ident_char(peekc()) && i < MAX_TOK_TEXT - 1)
-            tok.text[i++] = (char)getc_src();
-        tok.text[i] = 0;
+            g_lex.tok.text[i++] = (char)getc_src();
+        g_lex.tok.text[i] = 0;
 
-        if (!strcmp(tok.text, "__attribute__")) {
+        if (!strcmp(g_lex.tok.text, "__attribute__")) {
             skip_gnu_attribute();
             next_token();
             return;
@@ -2514,42 +2528,42 @@ void next_token(void)
         /* C89 predefined macros.  These are handled by the lexer so
          * __FILE__ and __LINE__ reflect the logical source location after
          * include/#line processing. */
-        if (!strcmp(tok.text, "__DATE__")) {
-            tok.kind = TOK_STR;
-            strncpy(tok.text, predefined_date_text, sizeof(tok.text) - 1);
-            tok.text[sizeof(tok.text) - 1] = 0;
-            tok.text_len = (int)strlen(tok.text);
+        if (!strcmp(g_lex.tok.text, "__DATE__")) {
+            g_lex.tok.kind = TOK_STR;
+            strncpy(g_lex.tok.text, predefined_date_text, sizeof(g_lex.tok.text) - 1);
+            g_lex.tok.text[sizeof(g_lex.tok.text) - 1] = 0;
+            g_lex.tok.text_len = (int)strlen(g_lex.tok.text);
             return;
         }
-        if (!strcmp(tok.text, "__TIME__")) {
-            tok.kind = TOK_STR;
-            strncpy(tok.text, predefined_time_text, sizeof(tok.text) - 1);
-            tok.text[sizeof(tok.text) - 1] = 0;
-            tok.text_len = (int)strlen(tok.text);
+        if (!strcmp(g_lex.tok.text, "__TIME__")) {
+            g_lex.tok.kind = TOK_STR;
+            strncpy(g_lex.tok.text, predefined_time_text, sizeof(g_lex.tok.text) - 1);
+            g_lex.tok.text[sizeof(g_lex.tok.text) - 1] = 0;
+            g_lex.tok.text_len = (int)strlen(g_lex.tok.text);
             return;
         }
-        if (!strcmp(tok.text, "__FILE__")) {
-            tok.kind = TOK_STR;
-            strncpy(tok.text, tok.file, sizeof(tok.text) - 1);
-            tok.text[sizeof(tok.text) - 1] = 0;
-            tok.text_len = (int)strlen(tok.text);
+        if (!strcmp(g_lex.tok.text, "__FILE__")) {
+            g_lex.tok.kind = TOK_STR;
+            strncpy(g_lex.tok.text, g_lex.tok.file, sizeof(g_lex.tok.text) - 1);
+            g_lex.tok.text[sizeof(g_lex.tok.text) - 1] = 0;
+            g_lex.tok.text_len = (int)strlen(g_lex.tok.text);
             return;
         }
-        if (!strcmp(tok.text, "__LINE__")) {
-            tok.kind = TOK_NUM;
-            tok.val = tok_line;
-            sprintf(tok.text, "%d", tok_line);
+        if (!strcmp(g_lex.tok.text, "__LINE__")) {
+            g_lex.tok.kind = TOK_NUM;
+            g_lex.tok.val = g_lex.tok_line;
+            sprintf(g_lex.tok.text, "%d", g_lex.tok_line);
             return;
         }
-        if (!strcmp(tok.text, "__STDC__")) {
-            tok.kind = TOK_NUM;
-            tok.val = 1;
-            strcpy(tok.text, "1");
+        if (!strcmp(g_lex.tok.text, "__STDC__")) {
+            g_lex.tok.kind = TOK_NUM;
+            g_lex.tok.val = 1;
+            strcpy(g_lex.tok.text, "1");
             return;
         }
 
-        di = find_define(tok.text);
-        if (di >= 0 && macro_disabled_here(tok.text, tok_start_pos))
+        di = find_define(g_lex.tok.text);
+        if (di >= 0 && macro_disabled_here(g_lex.tok.text, g_lex.tok_start_pos))
             di = -1;
         if (di >= 0) {
             long dv;
@@ -2562,12 +2576,12 @@ void next_token(void)
                 int nargs;
                 char expbuf[MAX_MACRO_TEXT];
 
-                save_pos = posi;
+                save_pos = g_lex.posi;
                 if (read_macro_call_args(args, &nargs,
                         defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                     if (macro_call_arg_overflow) {
                         error_here("macro argument too long in function-like macro invocation");
-                        replace_source_range(tok_start_pos, posi, "0");
+                        replace_source_range(g_lex.tok_start_pos, g_lex.posi, "0");
                         next_token();
                         return;
                     }
@@ -2575,17 +2589,17 @@ void next_token(void)
                         error_here(macro_call_args_too_many ?
                                    "too many arguments provided to function-like macro invocation" :
                                    "too few arguments provided to function-like macro invocation");
-                        replace_source_range(tok_start_pos, posi, "0");
+                        replace_source_range(g_lex.tok_start_pos, g_lex.posi, "0");
                         next_token();
                         return;
                     }
                     expand_function_macro(di, args, expbuf, sizeof(expbuf));
-                    replace_source_range(tok_start_pos, posi, expbuf);
+                    replace_source_range(g_lex.tok_start_pos, g_lex.posi, expbuf);
                     next_token();
                     return;
                 }
-                posi = save_pos;
-                tok.kind = TOK_ID;
+                g_lex.posi = save_pos;
+                g_lex.tok.kind = TOK_ID;
             } else {
                 const char *rv_base;
                 rv = defs[di].value;
@@ -2594,21 +2608,21 @@ void next_token(void)
                 rv_base = rv;
 
                 if (macro_value_is_float_literal(rv)) {
-                    replace_source_range(tok_start_pos, posi, rv);
+                    replace_source_range(g_lex.tok_start_pos, g_lex.posi, rv);
                     next_token();
                     return;
                 }
 
                 if (macro_number_should_expand_textually(rv)) {
-                    replace_source_range(tok_start_pos, posi, rv);
+                    replace_source_range(g_lex.tok_start_pos, g_lex.posi, rv);
                     next_token();
                     return;
                 }
 
-                if (define_number_value(tok.text, &dv, 0)) {
-                    tok.kind = TOK_NUM;
-                    tok.val = dv;
-                    sprintf(tok.text, "%ld", dv);
+                if (define_number_value(g_lex.tok.text, &dv, 0)) {
+                    g_lex.tok.kind = TOK_NUM;
+                    g_lex.tok.val = dv;
+                    sprintf(g_lex.tok.text, "%ld", dv);
                     /*
                      * This fast path bypasses the normal integer-literal
                      * lexer, so it must re-establish the literal-type flags
@@ -2641,7 +2655,7 @@ void next_token(void)
                          * chained macros and keyword-like macros go back through
                          * the normal lexer instead of becoming a dead identifier.
                          */
-                        replace_source_range_disabled(tok_start_pos, posi, rv0, defs[di].name);
+                        replace_source_range_disabled(g_lex.tok_start_pos, g_lex.posi, rv0, defs[di].name);
                         next_token();
                         return;
                     }
@@ -2658,12 +2672,12 @@ void next_token(void)
                  * were left as undefined identifiers.  Reinsert the replacement
                  * text and lex it normally.
                  */
-                replace_source_range_disabled(tok_start_pos, posi, rv_base, defs[di].name);
+                replace_source_range_disabled(g_lex.tok_start_pos, g_lex.posi, rv_base, defs[di].name);
                 next_token();
                 return;
             }
         } else {
-            tok.kind = keyword_kind(tok.text);
+            g_lex.tok.kind = keyword_kind(g_lex.tok.text);
         }
         return;
     }
@@ -2708,12 +2722,12 @@ void next_token(void)
                 while (peekc() == 'f' || peekc() == 'F' ||
                        peekc() == 'l' || peekc() == 'L')
                     getc_src();
-                tok.kind = TOK_FLOATLIT;
-                flen = (int)(posi - tok_start_pos);
+                g_lex.tok.kind = TOK_FLOATLIT;
+                flen = (int)(g_lex.posi - g_lex.tok_start_pos);
                 if (flen >= MAX_TOK_TEXT) flen = MAX_TOK_TEXT - 1;
-                memcpy(tok.text, src + tok_start_pos, (size_t)flen);
-                tok.text[flen] = 0;
-                tok.val = (long)(parse_float_literal_bits(tok.text) & 0xffffffffUL);
+                memcpy(g_lex.tok.text, src + g_lex.tok_start_pos, (size_t)flen);
+                g_lex.tok.text[flen] = 0;
+                g_lex.tok.val = (long)(parse_float_literal_bits(g_lex.tok.text) & 0xffffffffUL);
                 return;
             }
         }
@@ -2775,14 +2789,14 @@ void next_token(void)
             }
         }
 
-        tok.kind = TOK_NUM;
-        tok.val = (long)(v & 0xffffffffUL);
+        g_lex.tok.kind = TOK_NUM;
+        g_lex.tok.val = (long)(v & 0xffffffffUL);
         {
             int flen;
-            flen = (int)(posi - tok_start_pos);
+            flen = (int)(g_lex.posi - g_lex.tok_start_pos);
             if (flen >= MAX_TOK_TEXT) flen = MAX_TOK_TEXT - 1;
-            memcpy(tok.text, src + tok_start_pos, (size_t)flen);
-            tok.text[flen] = 0;
+            memcpy(g_lex.tok.text, src + g_lex.tok_start_pos, (size_t)flen);
+            g_lex.tok.text[flen] = 0;
         }
         return;
     }
@@ -2792,12 +2806,12 @@ void next_token(void)
         while (peekc() && peekc() != '"' && i < MAX_TOK_TEXT - 1) {
             if (peekc() == '\\') {
                 getc_src();
-                tok.text[i++] = (char)read_escape();
+                g_lex.tok.text[i++] = (char)read_escape();
             } else {
-                tok.text[i++] = (char)getc_src();
+                g_lex.tok.text[i++] = (char)getc_src();
             }
         }
-        tok.text[i] = 0;
+        g_lex.tok.text[i] = 0;
         /*
          * Over-long literal: drain the remainder up to the closing quote so
          * the lexer stays in sync.  Previously the scan stopped here, leaving
@@ -2816,31 +2830,31 @@ void next_token(void)
             }
         }
         if (peekc() == '"') getc_src();
-        tok.kind = TOK_STR;
-        tok.text_len = i;
+        g_lex.tok.kind = TOK_STR;
+        g_lex.tok.text_len = i;
         return;
     }
 
     if (c == '\'') {
         if (peekc() == '\\') {
             getc_src();
-            tok.val = read_escape();
+            g_lex.tok.val = read_escape();
         } else {
-            tok.val = getc_src();
+            g_lex.tok.val = getc_src();
         }
         if (peekc() == '\'') getc_src();
-        tok.kind = TOK_CHARLIT;
-        strcpy(tok.text, "charlit");
+        g_lex.tok.kind = TOK_CHARLIT;
+        strcpy(g_lex.tok.text, "charlit");
         return;
     }
 
     d = peekc();
 
-    if (c == '.' && d == '.' && posi + 1 < src_len && src[posi + 1] == '.') {
+    if (c == '.' && d == '.' && g_lex.posi + 1 < src_len && src[g_lex.posi + 1] == '.') {
         getc_src();
         getc_src();
-        tok.kind = TOK_ELLIPSIS;
-        strcpy(tok.text, "...");
+        g_lex.tok.kind = TOK_ELLIPSIS;
+        strcpy(g_lex.tok.text, "...");
         return;
     }
 
@@ -2855,61 +2869,61 @@ void next_token(void)
         while (peekc() == 'f' || peekc() == 'F' ||
                peekc() == 'l' || peekc() == 'L')
             getc_src();
-        tok.kind = TOK_FLOATLIT;
-        flen = (int)(posi - tok_start_pos);
+        g_lex.tok.kind = TOK_FLOATLIT;
+        flen = (int)(g_lex.posi - g_lex.tok_start_pos);
         if (flen >= MAX_TOK_TEXT) flen = MAX_TOK_TEXT - 1;
-        memcpy(tok.text, src + tok_start_pos, (size_t)flen);
-        tok.text[flen] = 0;
-        tok.val = (long)(parse_float_literal_bits(tok.text) & 0xffffffffUL);
+        memcpy(g_lex.tok.text, src + g_lex.tok_start_pos, (size_t)flen);
+        g_lex.tok.text[flen] = 0;
+        g_lex.tok.val = (long)(parse_float_literal_bits(g_lex.tok.text) & 0xffffffffUL);
         return;
     }
 
     if (c == '=') {
-        if (d == '=') { getc_src(); tok.kind = TOK_EQ; strcpy(tok.text, "=="); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_EQ; strcpy(g_lex.tok.text, "=="); return; }
     } else if (c == '!') {
-        if (d == '=') { getc_src(); tok.kind = TOK_NE; strcpy(tok.text, "!="); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_NE; strcpy(g_lex.tok.text, "!="); return; }
     } else if (c == '<') {
-        if (d == '=') { getc_src(); tok.kind = TOK_LE; strcpy(tok.text, "<="); return; }
-        if (d == '<') { getc_src(); if (peekc() == '=') { getc_src(); tok.kind = TOK_SHLEQ; strcpy(tok.text, "<<="); return; } tok.kind = TOK_SHL; strcpy(tok.text, "<<"); return; }
-        if (d == '%') { getc_src(); tok.kind = '{'; strcpy(tok.text, "<%"); return; }
-        if (d == ':') { getc_src(); tok.kind = '['; strcpy(tok.text, "<:"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_LE; strcpy(g_lex.tok.text, "<="); return; }
+        if (d == '<') { getc_src(); if (peekc() == '=') { getc_src(); g_lex.tok.kind = TOK_SHLEQ; strcpy(g_lex.tok.text, "<<="); return; } g_lex.tok.kind = TOK_SHL; strcpy(g_lex.tok.text, "<<"); return; }
+        if (d == '%') { getc_src(); g_lex.tok.kind = '{'; strcpy(g_lex.tok.text, "<%"); return; }
+        if (d == ':') { getc_src(); g_lex.tok.kind = '['; strcpy(g_lex.tok.text, "<:"); return; }
     } else if (c == '>') {
-        if (d == '=') { getc_src(); tok.kind = TOK_GE; strcpy(tok.text, ">="); return; }
-        if (d == '>') { getc_src(); if (peekc() == '=') { getc_src(); tok.kind = TOK_SHREQ; strcpy(tok.text, ">>="); return; } tok.kind = TOK_SHR; strcpy(tok.text, ">>"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_GE; strcpy(g_lex.tok.text, ">="); return; }
+        if (d == '>') { getc_src(); if (peekc() == '=') { getc_src(); g_lex.tok.kind = TOK_SHREQ; strcpy(g_lex.tok.text, ">>="); return; } g_lex.tok.kind = TOK_SHR; strcpy(g_lex.tok.text, ">>"); return; }
     } else if (c == '&') {
-        if (d == '&') { getc_src(); tok.kind = TOK_ANDAND; strcpy(tok.text, "&&"); return; }
-        if (d == '=') { getc_src(); tok.kind = TOK_ANDEQ; strcpy(tok.text, "&="); return; }
+        if (d == '&') { getc_src(); g_lex.tok.kind = TOK_ANDAND; strcpy(g_lex.tok.text, "&&"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_ANDEQ; strcpy(g_lex.tok.text, "&="); return; }
     } else if (c == '|') {
-        if (d == '|') { getc_src(); tok.kind = TOK_OROR; strcpy(tok.text, "||"); return; }
-        if (d == '=') { getc_src(); tok.kind = TOK_OREQ; strcpy(tok.text, "|="); return; }
+        if (d == '|') { getc_src(); g_lex.tok.kind = TOK_OROR; strcpy(g_lex.tok.text, "||"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_OREQ; strcpy(g_lex.tok.text, "|="); return; }
     } else if (c == '+') {
-        if (d == '+') { getc_src(); tok.kind = TOK_INC; strcpy(tok.text, "++"); return; }
-        if (d == '=') { getc_src(); tok.kind = TOK_ADDEQ; strcpy(tok.text, "+="); return; }
+        if (d == '+') { getc_src(); g_lex.tok.kind = TOK_INC; strcpy(g_lex.tok.text, "++"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_ADDEQ; strcpy(g_lex.tok.text, "+="); return; }
     } else if (c == '-') {
-        if (d == '-') { getc_src(); tok.kind = TOK_DEC; strcpy(tok.text, "--"); return; }
-        if (d == '=') { getc_src(); tok.kind = TOK_SUBEQ; strcpy(tok.text, "-="); return; }
-        if (d == '>') { getc_src(); tok.kind = TOK_ARROW; strcpy(tok.text, "->"); return; }
+        if (d == '-') { getc_src(); g_lex.tok.kind = TOK_DEC; strcpy(g_lex.tok.text, "--"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_SUBEQ; strcpy(g_lex.tok.text, "-="); return; }
+        if (d == '>') { getc_src(); g_lex.tok.kind = TOK_ARROW; strcpy(g_lex.tok.text, "->"); return; }
     } else if (c == '*') {
-        if (d == '=') { getc_src(); tok.kind = TOK_MULEQ; strcpy(tok.text, "*="); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_MULEQ; strcpy(g_lex.tok.text, "*="); return; }
     } else if (c == '/') {
-        if (d == '=') { getc_src(); tok.kind = TOK_DIVEQ; strcpy(tok.text, "/="); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_DIVEQ; strcpy(g_lex.tok.text, "/="); return; }
     } else if (c == '%') {
-        if (d == '=') { getc_src(); tok.kind = TOK_MODEQ; strcpy(tok.text, "%="); return; }
-        if (d == '>') { getc_src(); tok.kind = '}'; strcpy(tok.text, "%>"); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_MODEQ; strcpy(g_lex.tok.text, "%="); return; }
+        if (d == '>') { getc_src(); g_lex.tok.kind = '}'; strcpy(g_lex.tok.text, "%>"); return; }
     } else if (c == ':') {
-        if (d == '>') { getc_src(); tok.kind = ']'; strcpy(tok.text, ":>"); return; }
+        if (d == '>') { getc_src(); g_lex.tok.kind = ']'; strcpy(g_lex.tok.text, ":>"); return; }
     } else if (c == '^') {
-        if (d == '=') { getc_src(); tok.kind = TOK_XOREQ; strcpy(tok.text, "^="); return; }
+        if (d == '=') { getc_src(); g_lex.tok.kind = TOK_XOREQ; strcpy(g_lex.tok.text, "^="); return; }
     }
 
-    tok.kind = c;
-    tok.text[0] = (char)c;
-    tok.text[1] = 0;
+    g_lex.tok.kind = c;
+    g_lex.tok.text[0] = (char)c;
+    g_lex.tok.text[1] = 0;
 }
 
 int accept(int k)
 {
-    if (tok.kind == k) {
+    if (g_lex.tok.kind == k) {
         next_token();
         return 1;
     }
@@ -2976,7 +2990,7 @@ static const char *expected_token_name(int k, char *buf)
 
 void expect(int k)
 {
-    if (tok.kind != k) {
+    if (g_lex.tok.kind != k) {
         char namebuf[32];
         char msg[80];
 

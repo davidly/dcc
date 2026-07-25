@@ -23,7 +23,7 @@
  * LICM itself already holds its own hoists to, reused rather than
  * reinvented for a second time in this file.
  *
- * Verification of a read-only (Phase 1) candidate reuses dcc_func.c's own
+ * Verification of a read-only (Phase 1) candidate reuses dcc_regalloc.c's
  * regalloc_buffer_finalize unmodified: it scans a buffer of emitted
  * assembly text for anything that clobbers b/c/bc without dcc's own
  * recognized load/store idioms, tracking loop back-edges via label/jump
@@ -32,7 +32,7 @@
  * assumes its buffer is a whole function body rather than one loop's own
  * emitted span - "any call in this text to something other than a
  * DCCRTL.MAC-contracted BC-preserving runtime helper" (buf_has_unsafe_call,
- * dcc_func.c) is exactly the right question whether "this text" is a
+ * dcc_regalloc.c) is exactly the right question whether "this text" is a
  * function or a loop.
  *
  * Phase 2 promotes candidates the loop also WRITES (assigns to, and/or
@@ -633,21 +633,21 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
  * ast_gen_for_stmt_impl - the renamed original body of ast_gen_for_stmt)
  * with `cand` primed into BC right before the loop instead of occupying its
  * normal frame slot, and verifies/finalizes via regalloc_buffer_finalize.
- * Modeled directly on dcc_func.c's try_speculative_bc_regalloc_function_body:
+ * Modeled directly on dcc_regalloc.c's try_speculative_bc_regalloc_function_body:
  * same tmpfile-redirect-generate-verify-commit-or-discard shape. Lighter in
  * one respect: no token-stream rewind is needed on a discarded attempt,
  * because loop_node is an already-built AST subtree that this whole call
- * re-walks without reparsing anything - unlike dcc_func.c's whole-function
+ * re-walks without reparsing anything - unlike dcc_regalloc.c's whole-function
  * retry, which must reparse from source because gen_compound() is a fused
  * parse-and-emit loop with no persisted whole-function tree to re-walk (see
  * this file's header comment). Only frame/label bookkeeping a discarded
  * attempt could have touched needs rewinding: nlocals/local_size (a
  * declined loop-invariant hoist inside the loop may have allocated a
- * compiler temp), g_licm_seq (that temp's name counter), and g_for_seq
+ * compiler temp), g_func_pass.licm_seq (that temp's name counter), and g_func_pass.for_seq
  * (defense in depth - unreachable in practice, since licm_scan_modified
  * already declines any loop containing a nested loop).
  *
- * Returns 1 if the promoted version was committed to outf (cand->reg_alloc
+ * Returns 1 if the promoted version was committed to g_emit_sink.stream (cand->reg_alloc
  * is REG_NONE again by the time this returns either way - the caller must
  * NOT also call gen_loop_impl itself when this returns 1). Returns 0 if
  * declined; the caller must then generate the loop normally. */
@@ -655,7 +655,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
                           void (*gen_loop_impl)(const struct AstNode *))
 {
     FILE *scratch;
-    FILE *saved_outf;
+    EmitSink saved_sink;
     int saved_nlocals;
     int saved_local_size;
     int saved_for_seq;
@@ -667,20 +667,19 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
     if (scratch == NULL)
         fatal("cannot create speculative loop-regalloc temp file");
 
-    saved_nlocals = nlocals;
-    saved_local_size = local_size;
-    saved_for_seq = g_for_seq;
-    saved_licm_seq = g_licm_seq;
+    saved_nlocals = g_frame.nlocals;
+    saved_local_size = g_frame.local_size;
+    saved_for_seq = g_func_pass.for_seq;
+    saved_licm_seq = g_func_pass.licm_seq;
 
-    saved_outf = outf;
-    outf = scratch;
+    saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     cand->reg_alloc = REG_BC;
     g_regalloc_address_escaped = 0;
     /* This buffer may be discarded entirely (see regalloc_buffer_finalize
      * below) - a runtime helper (e.g. __mulu) first referenced only inside
      * it must not be marked "extrn already emitted" in the persistent
      * dedup cache, or the real fallback generation would silently skip
-     * re-declaring it. Same guard dcc_func.c's own speculative attempts
+    * re-declaring it. Same guard dcc_regalloc.c's speculative attempts
      * use, for the identical reason - see emit_extrn_if_needed in
      * dcc_symbols.c. */
     g_inline_body_buffering++;
@@ -689,17 +688,17 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * a 3-instruction sequence instead of the local/param mechanism's
      * 2-instruction "ld c,(ix+d)"/"ld b,(ix+d+1)", mirroring emit_load_
      * global_word_direct (dcc_symbols.c) plus a transfer into bc. Must stay
-     * in exact lockstep with bc_regalloc_entry_lines (dcc_func.c), which
+    * in exact lockstep with bc_regalloc_entry_lines (dcc_regalloc.c), which
      * regalloc_buffer_finalize uses to recognize/reinsert this same text. */
     if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
         emit_extrn_if_needed(cand);
-        fprintf(outf, ";@dcc-regalloc-bc-prime\n");
-        fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
-        fprintf(outf, "\tld c,l\n");
-        fprintf(outf, "\tld b,h\n");
+        fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
+        fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
+        fprintf(g_emit_sink.stream, "\tld c,l\n");
+        fprintf(g_emit_sink.stream, "\tld b,h\n");
     } else {
-        fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
-        fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", cand->offset);
+        fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", cand->offset + 1);
     }
 
     errors_before = g_diag_error_count;
@@ -709,14 +708,14 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
     g_inline_body_buffering--;
 
     cand->reg_alloc = REG_NONE;
-    outf = saved_outf;
+    emit_sink_restore(&saved_sink);
 
     if (g_diag_error_count == errors_before && !g_regalloc_address_escaped) {
         FILE *finalized = NULL;
         if (regalloc_buffer_finalize(scratch, cand, NULL, &finalized)) {
             fclose(scratch);
             while ((c = fgetc(finalized)) != EOF)
-                fputc(c, outf);
+                fputc(c, g_emit_sink.stream);
             fclose(finalized);
             g_loop_regalloc_bc_claimed = 1;
             return 1;
@@ -725,7 +724,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
 
     fclose(scratch);
     /* Bump the epoch again, even though g_inline_body_buffering may already
-     * be back to 0: if this attempt is nested inside dcc_func.c's own
+    * be back to 0: if this attempt is nested inside dcc_regalloc.c's
      * whole-function speculative buffering, g_inline_body_buffering is only
      * back to THAT outer level (not 0), and the fallback generation below
      * still runs under it. Without this, emit_runtime_extrn_if_needed's
@@ -737,10 +736,10 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * Found via tests/tcrcfix.c: a `call __mulu` with no matching `extrn
      * __mulu` anywhere in the output, from exactly this nesting. */
     g_buffering_epoch++;
-    nlocals = saved_nlocals;
-    local_size = saved_local_size;
-    g_for_seq = saved_for_seq;
-    g_licm_seq = saved_licm_seq;
+    g_frame.nlocals = saved_nlocals;
+    g_frame.local_size = saved_local_size;
+    g_func_pass.for_seq = saved_for_seq;
+    g_func_pass.licm_seq = saved_licm_seq;
     return 0;
 }
 
@@ -875,7 +874,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
                                 void (*gen_loop_impl)(const struct AstNode *))
 {
     FILE *scratch;
-    FILE *saved_outf;
+    EmitSink saved_sink;
     int saved_nlocals;
     int saved_local_size;
     int saved_for_seq;
@@ -887,31 +886,30 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     if (scratch == NULL)
         fatal("cannot create speculative loop-regalloc write temp file");
 
-    saved_nlocals = nlocals;
-    saved_local_size = local_size;
-    saved_for_seq = g_for_seq;
-    saved_licm_seq = g_licm_seq;
+    saved_nlocals = g_frame.nlocals;
+    saved_local_size = g_frame.local_size;
+    saved_for_seq = g_func_pass.for_seq;
+    saved_licm_seq = g_func_pass.licm_seq;
 
-    saved_outf = outf;
-    outf = scratch;
+    saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     cand->reg_alloc = REG_BC;
     g_regalloc_address_escaped = 0;
     g_inline_body_buffering++;
     g_buffering_epoch++;
     /* Prime/spill text must stay in exact lockstep with bc_regalloc_entry_
-     * lines/bc_regalloc_exit_lines (dcc_func.c), which loop_regalloc_write_
+    * lines/bc_regalloc_exit_lines (dcc_regalloc.c), which loop_regalloc_write_
      * candidate_safe uses to recognize this same text - see try_loop_
      * regalloc_bc's identical comment on the read-only priming for why
      * globals need a 3-instruction sequence instead of locals'/params' 2. */
     if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
         emit_extrn_if_needed(cand);
-        fprintf(outf, ";@dcc-regalloc-bc-prime\n");
-        fprintf(outf, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
-        fprintf(outf, "\tld c,l\n");
-        fprintf(outf, "\tld b,h\n");
+        fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
+        fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(cand)));
+        fprintf(g_emit_sink.stream, "\tld c,l\n");
+        fprintf(g_emit_sink.stream, "\tld b,h\n");
     } else {
-        fprintf(outf, "\tld c,(ix%+d)\n", cand->offset);
-        fprintf(outf, "\tld b,(ix%+d)\n", cand->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", cand->offset);
+        fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", cand->offset + 1);
     }
 
     errors_before = g_diag_error_count;
@@ -923,24 +921,24 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
      * suppressed/buffered span - this is unconditionally part of what gets
      * verified and either committed whole or discarded whole. */
     if (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN) {
-        fprintf(outf, "\tld l,c\n");
-        fprintf(outf, "\tld h,b\n");
-        fprintf(outf, "\tld (%s),hl\n", asm_name_for(sym_asm_name(cand)));
+        fprintf(g_emit_sink.stream, "\tld l,c\n");
+        fprintf(g_emit_sink.stream, "\tld h,b\n");
+        fprintf(g_emit_sink.stream, "\tld (%s),hl\n", asm_name_for(sym_asm_name(cand)));
     } else {
-        fprintf(outf, "\tld (ix%+d),c\n", cand->offset);
-        fprintf(outf, "\tld (ix%+d),b\n", cand->offset + 1);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),c\n", cand->offset);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),b\n", cand->offset + 1);
     }
     asm_suppress_depth--;
     g_inline_body_buffering--;
 
     cand->reg_alloc = REG_NONE;
-    outf = saved_outf;
+    emit_sink_restore(&saved_sink);
 
     if (g_diag_error_count == errors_before && !g_regalloc_address_escaped &&
         loop_regalloc_write_candidate_safe(scratch, cand)) {
         rewind(scratch);
         while ((c = fgetc(scratch)) != EOF)
-            fputc(c, outf);
+            fputc(c, g_emit_sink.stream);
         fclose(scratch);
         g_loop_regalloc_bc_claimed = 1;
         return 1;
@@ -949,9 +947,9 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
     fclose(scratch);
     /* See try_loop_regalloc_bc's identical comment on this bump. */
     g_buffering_epoch++;
-    nlocals = saved_nlocals;
-    local_size = saved_local_size;
-    g_for_seq = saved_for_seq;
-    g_licm_seq = saved_licm_seq;
+    g_frame.nlocals = saved_nlocals;
+    g_frame.local_size = saved_local_size;
+    g_func_pass.for_seq = saved_for_seq;
+    g_func_pass.licm_seq = saved_licm_seq;
     return 0;
 }

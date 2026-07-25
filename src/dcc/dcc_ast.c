@@ -121,11 +121,11 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->list_cap = 0;
     n->aux = NULL;
     n->peek_type = 0;
-    file = tok.file[0] ? tok.file : (input_name ? input_name : "<input>");
+    file = g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>");
     file_len = strlen(file) + 1;
     n->file = (char *)ast_arena_alloc(ar, file_len);
     memcpy(n->file, file, file_len);
-    n->line = tok_line;
+    n->line = g_lex.tok_line;
     n->end_file = NULL;
     n->end_line = 0;
     return n;

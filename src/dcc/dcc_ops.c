@@ -85,7 +85,7 @@ void emit_extend_to_long_typed(int source_type)
     emit_promote_byte_to_int(source_type);
     if ((source_type & TYPE_UNSIGNED) || type_ptr_depth(source_type)) {
         emit("\tld de,0\n");
-        g_long_from16 = 2; /* zero-extended: low word is an unsigned 16-bit value */
+        g_expr.long_from16 = 2; /* zero-extended: low word is an unsigned 16-bit value */
     } else {
         /* Sign-extend signed 16-bit HL into DE:HL.  This is also correct
          * when the target type is unsigned long: C converts the negative
@@ -95,7 +95,7 @@ void emit_extend_to_long_typed(int source_type)
         emit("\tsbc a,a\n");
         emit("\tld d,a\n");
         emit("\tld e,a\n");
-        g_long_from16 = 1; /* sign-extended: low word is a signed 16-bit value */
+        g_expr.long_from16 = 1; /* sign-extended: low word is a signed 16-bit value */
     }
 }
 
@@ -161,7 +161,7 @@ void gen_binop32(int op, int lhs_type)
         emit("\tpop bc\n\tpop bc\n"); /* balance stack */
         break;
     }
-    g_long_from16 = 0;
+    g_expr.long_from16 = 0;
 }
 
 /*
@@ -401,34 +401,25 @@ void emit_cast_16_to_common(int from_type, int common_type)
 
 int peek_simple_unary_type(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
+    LexState _ls;
     int save_long_suffix;
     int save_unsigned_suffix;
-    struct Token save_tok;
     int t;
     struct Sym *s;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
+    _ls = lex_save();
     save_long_suffix = g_tok_long_suffix;
     save_unsigned_suffix = g_tok_unsigned_suffix;
-    save_tok = tok;
 
     t = TYPE_INT;
 
-    if (tok.kind == '(') {
+    if (g_lex.tok.kind == '(') {
         next_token();
         if (starts_type()) {
             t = parse_type();
-            if (tok.kind == ')') {
-                posi = save_pos; tok_start_pos = save_tok_start;
-                line_no = save_line; tok_line = save_tok_line;
-                g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix; tok = save_tok;
+            if (g_lex.tok.kind == ')') {
+                lex_restore(&_ls);
+                g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
                 return promote_int_type(t);
             }
         } else {
@@ -443,24 +434,23 @@ int peek_simple_unary_type(void)
              * type.
              */
             int inner = peek_simple_unary_type();
-            posi = save_pos; tok_start_pos = save_tok_start;
-            line_no = save_line; tok_line = save_tok_line;
-            g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix; tok = save_tok;
+            lex_restore(&_ls);
+            g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
             return inner;
         }
-    } else if (tok.kind == TOK_FLOATLIT) {
+    } else if (g_lex.tok.kind == TOK_FLOATLIT) {
         t = TYPE_FLOAT;
-    } else if (tok.kind == TOK_NUM) {
-        if (tok.val > 0xffffL || tok.val < -32768L || g_tok_long_suffix)
+    } else if (g_lex.tok.kind == TOK_NUM) {
+        if (g_lex.tok.val > 0xffffL || g_lex.tok.val < -32768L || g_tok_long_suffix)
             t = TYPE_LONG;
         else
             t = TYPE_INT;
         if (g_tok_unsigned_suffix)
             t |= TYPE_UNSIGNED;
-    } else if (tok.kind == TOK_CHARLIT) {
+    } else if (g_lex.tok.kind == TOK_CHARLIT) {
         t = TYPE_INT;
-    } else if (tok.kind == TOK_ID) {
-        s = find_sym(tok.text);
+    } else if (g_lex.tok.kind == TOK_ID) {
+        s = find_sym(g_lex.tok.text);
         if (s) {
             int is_arr;
             int tt;
@@ -489,7 +479,7 @@ int peek_simple_unary_type(void)
                 base_type = s->type;
 
                 for (;;) {
-                    if (tok.kind == '[') {
+                    if (g_lex.tok.kind == '[') {
                         skip_balanced_bracket('[', ']');
                         nsubs++;
 
@@ -520,16 +510,16 @@ int peek_simple_unary_type(void)
                         }
                     }
 
-                    if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+                    if (g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW) {
                         struct FieldDef *fd;
                         int sid;
 
                         next_token();
-                        if (tok.kind != TOK_ID)
+                        if (g_lex.tok.kind != TOK_ID)
                             break;
 
                         sid = base_struct_id_from_type(tt);
-                        fd = find_field_def(sid, tok.text);
+                        fd = find_field_def(sid, g_lex.tok.text);
                         if (!fd)
                             break;
 
@@ -546,18 +536,14 @@ int peek_simple_unary_type(void)
                 }
             }
             t = tt;
-            if (tok.kind == '(' && type_ptr_depth(tt) > 0)
+            if (g_lex.tok.kind == '(' && type_ptr_depth(tt) > 0)
                 t = TYPE_INT;
         }
     }
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
+    lex_restore(&_ls);
     g_tok_long_suffix = save_long_suffix;
     g_tok_unsigned_suffix = save_unsigned_suffix;
-    tok = save_tok;
     return promote_int_type(t);
 }
 
@@ -652,17 +638,17 @@ static void emit_and_word_const(char hi_reg, char lo_reg, unsigned int word_mask
     if (word_mask == 0xffffU)
         return;
     if (word_mask == 0) {
-        fprintf(outf, "\tld %c%c,0\n", hi_reg, lo_reg);
+        fprintf(g_emit_sink.stream, "\tld %c%c,0\n", hi_reg, lo_reg);
         return;
     }
     if (hib == 0)
-        fprintf(outf, "\tld %c,0\n", hi_reg);
+        fprintf(g_emit_sink.stream, "\tld %c,0\n", hi_reg);
     else if (hib != 0xffU)
-        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
+        fprintf(g_emit_sink.stream, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
     if (lob == 0)
-        fprintf(outf, "\tld %c,0\n", lo_reg);
+        fprintf(g_emit_sink.stream, "\tld %c,0\n", lo_reg);
     else if (lob != 0xffU)
-        fprintf(outf, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
+        fprintf(g_emit_sink.stream, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
 }
 
 /* AND HL with a compile-time mask in place. Used both for the unsigned `%
@@ -696,7 +682,7 @@ void divide_hl_by_elem_size(int elem)
         return;
     }
 
-    fprintf(outf, "\tld de,%d\n", elem);
+    fprintf(g_emit_sink.stream, "\tld de,%d\n", elem);
     emit_runtime_call("__divs");
 }
 
@@ -712,7 +698,7 @@ int emit_shift_const_long(int op, int lhs_type, long count)
     is_unsigned = (lhs_type & TYPE_UNSIGNED) != 0;
 
     if (count <= 0) {
-        g_long_from16 = 0;
+        g_expr.long_from16 = 0;
         return 1;
     }
 
@@ -721,7 +707,7 @@ int emit_shift_const_long(int op, int lhs_type, long count)
             emit("\tld hl,0\n\tld de,0\n");
         else
             emit("\tld a,d\n\trla\n\tsbc a,a\n\tld h,a\n\tld l,a\n\tld d,a\n\tld e,a\n");
-        g_long_from16 = 0;
+        g_expr.long_from16 = 0;
         return 1;
     }
 
@@ -783,7 +769,7 @@ int emit_shift_const_long(int op, int lhs_type, long count)
         }
     }
 
-    g_long_from16 = 0;
+    g_expr.long_from16 = 0;
     return 1;
 }
 
@@ -818,7 +804,7 @@ void emit_shift_loop(int op, int lhs_type)
     emit_jp_label("jp", ltop);
     emit_label(ldone);
     if (type_is_long(lhs_type))
-        g_long_from16 = 0;
+        g_expr.long_from16 = 0;
 }
 
 /* log2 of a power-of-two value in the full unsigned 32-bit long range;
@@ -906,7 +892,7 @@ void emit_float_compare_call(int op)
     emit_runtime_call(helper);
     for (k = 0; k < 2; ++k)
         emit("\tpop bc\n");
-    g_expr_type = TYPE_INT;
+    g_expr.type = TYPE_INT;
 }
 
 

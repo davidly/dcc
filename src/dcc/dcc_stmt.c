@@ -13,27 +13,15 @@
 
 static int current_identifier_starts_label(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int is_label;
 
-    if (tok.kind != TOK_ID)
+    if (g_lex.tok.kind != TOK_ID)
         return 0;
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
     next_token();
-    is_label = (tok.kind == ':');
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    is_label = (g_lex.tok.kind == ':');
+    lex_restore(&_ls);
     return is_label;
 }
 
@@ -47,10 +35,10 @@ void gen_compound(void)
     expect('{');
     enter_scope();
     dead = 0;
-    while (tok.kind != TOK_EOF && tok.kind != '}') {
-        if (tok.kind == TOK_STATIC_ASSERT) {
+    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
+        if (g_lex.tok.kind == TOK_STATIC_ASSERT) {
             parse_static_assert_decl();
-        } else if (tok.kind == TOK_TYPEDEF) {
+        } else if (g_lex.tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
         } else if (current_identifier_starts_label()) {
             gen_statement();
@@ -60,17 +48,17 @@ void gen_compound(void)
             int is_static_local;
             int decl_line;
             struct Token decl_tok;
-            decl_is_extern = 0;
-            is_static_local = (tok.kind == TOK_STATIC);
-            decl_line = tok_line;
-            decl_tok = tok;
+            g_decl.is_extern = 0;
+            is_static_local = (g_lex.tok.kind == TOK_STATIC);
+            decl_line = g_lex.tok_line;
+            decl_tok = g_lex.tok;
             t = parse_base_type();
-            if (tok.kind == ';') {
+            if (g_lex.tok.kind == ';') {
                 next_token();
             } else if (is_static_local) {
                 scan_static_local_decl_after_type(t);
             } else {
-                if (!decl_is_extern && !dead)
+                if (!g_decl.is_extern && !dead)
                     ast_emit_debug_location(decl_tok.file, decl_line);
                 if (dead)
                     asm_suppress_depth++;
@@ -99,23 +87,23 @@ void gen_compound(void)
         }
     }
 
-    if (tok.kind == '}') {
+    if (g_lex.tok.kind == '}') {
         if (!dead) {
             /* Body falls through: the closing brace is a reachable step in
              * this scope, emitted here before the epilogue. */
-            ast_emit_debug_location(tok.file, tok_line);
+            ast_emit_debug_location(g_lex.tok.file, g_lex.tok_line);
             if ((current_return_type & 15) != TYPE_VOID &&
                 strcmp(g_current_compiling_func, "main") != 0)
-                warn_at(tok.file, tok_line, "control reaches end of non-void function");
+                warn_at(g_lex.tok.file, g_lex.tok_line, "control reaches end of non-void function");
         } else {
             /* Body always exits: no in-block closing-brace marker is emitted,
              * so hand the location to emit_function_epilogue, which maps the
              * shared return label to it (early returns jump there). */
-            const char *cf = tok.file[0] ? tok.file :
+            const char *cf = g_lex.tok.file[0] ? g_lex.tok.file :
                              (input_name ? input_name : "<input>");
             strncpy(g_func_close_file, cf, sizeof(g_func_close_file) - 1);
             g_func_close_file[sizeof(g_func_close_file) - 1] = 0;
-            g_func_close_line = tok_line;
+            g_func_close_line = g_lex.tok_line;
         }
     }
     leave_scope();
@@ -144,13 +132,13 @@ void emit_switch_jump_table(int minv, int maxv,
     ltab = new_label();
 
     if (minv != 0) {
-        fprintf(outf, "\tld de,%d\n", minv);
+        fprintf(g_emit_sink.stream, "\tld de,%d\n", minv);
         emit("\tor a\n\tsbc hl,de\n");
         emit_jp_label("jp c,", default_lab >= 0 ? default_lab : lend);
     }
 
     emit("\tpush hl\n");
-    fprintf(outf, "\tld de,%d\n", maxv - minv);
+    fprintf(g_emit_sink.stream, "\tld de,%d\n", maxv - minv);
     emit("\tor a\n\tsbc hl,de\n");
     emit("\tpop hl\n");
     emit_jp_label("jp z,", lok);
@@ -158,7 +146,7 @@ void emit_switch_jump_table(int minv, int maxv,
     emit_label(lok);
 
     emit("\tadd hl,hl\n");
-    fprintf(outf, "\tld de,L%d\n", ltab);
+    fprintf(g_emit_sink.stream, "\tld de,L%d\n", ltab);
     emit("\tadd hl,de\n");
     emit("\tld e,(hl)\n");
     emit("\tinc hl\n");
@@ -169,7 +157,7 @@ void emit_switch_jump_table(int minv, int maxv,
     emit_label(ltab);
     for (v = minv; v <= maxv; ++v) {
         target = switch_label_for_value(v, case_vals, case_labs, ncase, default_lab, lend);
-        fprintf(outf, "\tdw L%d\n", target);
+        fprintf(g_emit_sink.stream, "\tdw L%d\n", target);
     }
 }
 

@@ -394,10 +394,41 @@ int ast_index_plain_int_read(const struct AstNode *n)
     return ast_index_subscript_supported(n->b);
 }
 
-int ast_index_long_read(const struct AstNode *n)
+/* Shared shape recogniser for a scalar (long/float) array-or-pointer element
+ * read: `ident[i]` where ident is a 1-D array or a single-level scalar
+ * pointer, or `obj.field[i]` where field is an array. On success sets
+ * *out_elem to the element type and returns 1. Factored out of
+ * ast_index_long_read and ast_index_float_read (the block was verbatim
+ * identical) so the two stay in lockstep on exactly which index shapes they
+ * recognise - only the element-type predicate they apply differs. */
+static int ast_index_scalar_array_elem_type(const struct AstNode *n, int *out_elem)
 {
     struct Sym *s;
     int decayed;
+
+    if (n->a->kind == AST_IDENT) {
+        s = find_sym(n->a->sval);
+        if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
+            return 0;
+        if (s->is_array) {
+            if (s->dim_count > 1)
+                return 0;
+            decayed = type_add_ptr(s->type);
+        } else {
+            decayed = s->type;
+        }
+        if (type_ptr_depth(decayed) != 1)
+            return 0;
+        *out_elem = type_decay_ptr(decayed);
+        return 1;
+    }
+    if (n->a->kind == AST_MEMBER)
+        return ast_member_array_field_elem_type(n->a, out_elem);
+    return 0;
+}
+
+int ast_index_long_read(const struct AstNode *n)
+{
     int elem;
 
     if (n == NULL || n->kind != AST_INDEX || n->a == NULL)
@@ -406,59 +437,21 @@ int ast_index_long_read(const struct AstNode *n)
         return type_is_long(elem);
     if (ast_index_member_pointer_elem_type(n, &elem))
         return type_is_long(elem);
-    if (n->a->kind == AST_IDENT) {
-        s = find_sym(n->a->sval);
-        if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
-            return 0;
-        if (s->is_array) {
-            if (s->dim_count > 1)
-                return 0;
-            decayed = type_add_ptr(s->type);
-        } else {
-            decayed = s->type;
-        }
-        if (type_ptr_depth(decayed) != 1)
-            return 0;
-        elem = type_decay_ptr(decayed);
-    } else if (n->a->kind == AST_MEMBER) {
-        if (!ast_member_array_field_elem_type(n->a, &elem))
-            return 0;
-    } else {
+    if (!ast_index_scalar_array_elem_type(n, &elem))
         return 0;
-    }
     return type_is_long(elem) && ast_index_subscript_supported(n->b);
 }
 
 int ast_index_float_read(const struct AstNode *n)
 {
-    struct Sym *s;
-    int decayed;
     int elem;
 
     if (n == NULL || n->kind != AST_INDEX || n->a == NULL)
         return 0;
     if (ast_index_composite_elem_type(n, &elem))
         return type_is_float(elem);
-    if (n->a->kind == AST_IDENT) {
-        s = find_sym(n->a->sval);
-        if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
-            return 0;
-        if (s->is_array) {
-            if (s->dim_count > 1)
-                return 0;
-            decayed = type_add_ptr(s->type);
-        } else {
-            decayed = s->type;
-        }
-        if (type_ptr_depth(decayed) != 1)
-            return 0;
-        elem = type_decay_ptr(decayed);
-    } else if (n->a->kind == AST_MEMBER) {
-        if (!ast_member_array_field_elem_type(n->a, &elem))
-            return 0;
-    } else {
+    if (!ast_index_scalar_array_elem_type(n, &elem))
         return 0;
-    }
     return type_is_float(elem) && ast_index_subscript_supported(n->b);
 }
 
@@ -1962,8 +1955,8 @@ void gen_va_arg_deref_ast(const struct AstNode *n, int val_type)
     emit_store_de_to_addr_hl(ap->type);
     emit("\tld h,b\n\tld l,c\n"); /* HL = old ap */
     emit_load_from_hl(val_type);
-    g_expr_type = val_type;
-    g_long_from16 = 0;
+    g_expr.type = val_type;
+    g_expr.long_from16 = 0;
 }
 
 int ast_long_va_arg_self_assign_supported(const struct AstNode *n,
@@ -2015,8 +2008,8 @@ void gen_long_va_arg_self_assign_ast(const struct AstNode *n)
     expr_result_dead = saved_dead;
     gen_binop32_typed('+', s->type);
     emit_store_hl_to_sym_direct(s);
-    g_expr_type = s->type;
-    g_long_from16 = 0;
+    g_expr.type = s->type;
+    g_expr.long_from16 = 0;
 }
 
 int ast_deref_pointer_word_read(const struct AstNode *n)

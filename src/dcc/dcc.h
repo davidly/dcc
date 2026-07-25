@@ -36,6 +36,8 @@
  *   dcc_decl.c      local declaration + initializer codegen
  *   dcc_stmt.c      statement codegen (if/while/for/switch/...)
  *   dcc_func.c      function + top-level declaration parsing
+ *   dcc_global_init.c file-scope object initializer parsing (record path)
+ *   dcc_regalloc.c  speculative no-IX / BC-register-allocation codegen
  *   dcc_data.c      data-section emission
  *   dcc.c           driver: file I/O, #include, CLI, and main()
  *
@@ -59,7 +61,7 @@
  * ast_scan_for_stmt and the AST_FOR/AST_COMPOUND probes in
  * dcc_ast_gen_cond.c).  "/dev/null" does not exist on native Windows: MSVC's
  * fopen() there fails on it (it looks for a "dev" subdirectory), silently
- * leaving the caller's `outf` pointed at the real output file instead of a
+ * leaving the caller's `g_emit_sink.stream` pointed at the real output file instead of a
  * sink - so the replay's speculative emission leaks into real output.  The
  * Windows null device is "NUL".
  */
@@ -243,6 +245,99 @@ struct Token {
      * other token kinds. */
     int text_len;
 };
+
+/*
+ * Snapshot of the lexer cursor for speculative look-ahead / rewind.
+ *
+ * The parser repeatedly saves the current lexer position, tries a speculative
+ * parse (calling next_token() a few times), then rewinds if the speculation
+ * does not pan out. LexState + lex_save()/lex_restore() capture the five core
+ * lexer-position fields (posi, tok_start_pos, line_no, tok_line, tok) as one
+ * unit so every rewind site is spelled the same way and can never forget a
+ * field. Callers that must also look ahead across an integer literal's suffix
+ * flags (g_tok_long_suffix / g_tok_unsigned_suffix) save and restore those two
+ * globals explicitly around the lex_save()/lex_restore() pair, because most
+ * rewind sites do not consume the restored token's suffix and must not perturb
+ * those flags.
+ */
+typedef struct LexState {
+    long posi;
+    long tok_start_pos;
+    int  line_no;
+    int  tok_line;
+    struct Token tok;
+} LexState;
+
+/*
+ * Current function's frame-layout state, grouped so the three fields always
+ * travel together: the number of locals declared so far (nlocals, also the
+ * block-scope watermark that leave_scope truncates), the total local storage
+ * in bytes (local_size, monotonic), and the parameter-area offset
+ * (param_offset). Both the frame-sizing scan and the codegen pass must derive
+ * identical frame offsets from these, so they are snapshotted/restored as a
+ * unit around the speculative body scans.
+ */
+typedef struct FrameState {
+    int nlocals;
+    int local_size;
+    int param_offset;
+} FrameState;
+
+/* Scalar counters and cursors restarted for each function scan/codegen pass. */
+typedef struct FunctionPassState {
+    int for_seq;
+    int forren_n;
+    int for_decl_seq;
+    int for_decl_rename_index;
+    int for_decl_recording;
+    int scope_depth;
+    int static_local_func_index;
+    int static_local_seq;
+    int compound_literal_seq;
+    int licm_seq;
+} FunctionPassState;
+
+/* Storage-class and qualifier flags for the declaration currently parsed. */
+typedef struct DeclState {
+    int is_extern;
+    int is_static;
+    int is_inline;
+    int is_noreturn;
+    int is_const;
+    int is_volatile;
+    int pointee_is_volatile;
+    int is_register;
+} DeclState;
+
+enum EmitSinkPurpose {
+    EMIT_SINK_FINAL,
+    EMIT_SINK_DISCARD,
+    EMIT_SINK_VERIFY,
+    EMIT_SINK_DEFERRED
+};
+
+typedef struct EmitSink {
+    FILE *stream;
+    int purpose;
+} EmitSink;
+
+/*
+ * Description of the value the most recently generated expression left in
+ * registers, grouped so the related result-state travels together:
+ *   type          - the expression's result type (g_expr_type)
+ *   long_from16   - the DE:HL long was just widened from 16-bit: 0 no,
+ *                   1 signed, 2 unsigned (g_long_from16)
+ *   decay_stride  - stride override when a multi-dim array decays to a
+ *                   pointer; 0 = use the type default (g_array_decay_stride)
+ *   no_deref      - suppress the next '*' load, a phantom deref for a
+ *                   multi-dim array row pointer (g_expr_no_deref)
+ */
+typedef struct ExprState {
+    int type;
+    int long_from16;
+    int decay_stride;
+    int no_deref;
+} ExprState;
 
 struct AstNode;
 
@@ -447,6 +542,10 @@ extern int nstruct_defs;
 extern struct FieldDef field_defs[MAX_FIELDS];
 extern int nfield_defs;
 
+/* Capture / restore the live lexer cursor `g_lex` as one unit (a plain struct
+ * copy). Defined in dcc_preproc.c alongside next_token(). */
+LexState lex_save(void);
+void lex_restore(const LexState *s);
 /* in-progress field metadata (filled while parsing one declarator) */
 extern int current_field_array_elem_size;
 extern int current_field_array_dim_count;
@@ -464,12 +563,15 @@ extern long src_len;
  * source_location_at's precomputed line table (dcc_diag_emit.c) detect that
  * it must rebuild rather than answer from stale text. */
 extern long g_src_generation;
-extern long posi;
-extern long tok_start_pos;
-extern int line_no;
-extern int tok_line;
-extern struct Token tok;
-extern FILE *outf;
+/* The live lexer cursor: current read position, current token's start
+ * position, current line, the token's line, and the one-token lookahead.
+ * Grouped into a single struct so the fields always travel together and a
+ * speculative parse can snapshot/rewind them with one struct copy
+ * (lex_save()/lex_restore()). */
+extern LexState g_lex;
+extern EmitSink g_emit_sink;
+EmitSink emit_sink_push(FILE *stream, int purpose);
+void emit_sink_restore(const EmitSink *saved);
 extern const char *input_name;
 extern const char *output_name;
 extern char current_file_name[256];
@@ -480,9 +582,7 @@ extern char predefined_time_text[16];
 extern struct Sym globals[MAX_SYMS];
 extern int nglobals;
 extern struct Sym locals[MAX_LOCALS];
-extern int nlocals;
-extern int local_size;
-extern int param_offset;
+extern FrameState g_frame;
 
 /* preprocessor macro table */
 extern struct Def defs[MAX_DEFINES];
@@ -509,7 +609,7 @@ extern int nused_extrns;
 /* per-function code-generation state */
 extern int label_id;
 extern int current_return_label;
-/* Position in `outf` of a "jp current_return_label" tail jump gen_return_ast
+/* Position in `g_emit_sink.stream` of a "jp current_return_label" tail jump gen_return_ast
  * just emitted (byte offset right before it), and the label it targets, or
  * (-1, -1) if none is pending. Debug (-g) builds only - see
  * emit_function_epilogue's elide_redundant_tail_jp. */
@@ -534,20 +634,20 @@ extern int g_e_regalloc_claim_active;
 extern int g_e_regalloc_claimed;
 extern struct Sym *g_e_regalloc_sym;
 /* Set by dcc_loop_regalloc.c's try_loop_regalloc_bc/try_loop_regalloc_bc_
- * write right where each commits a successful promotion - dcc_func.c's
+ * write right where each commits a successful promotion - dcc_regalloc.c's
  * try_loop_scoped_regalloc_first resets this to 0 before a trial body
  * generation and checks it afterward to learn, empirically, whether any
  * loop in the function actually claimed BC (unlike g_bc_regalloc_sym,
- * which only dcc_func.c's own whole-function mechanism ever writes). */
+ * which only dcc_regalloc.c's own whole-function mechanism ever writes). */
 extern int g_loop_regalloc_bc_claimed;
 /* Shared with dcc_loop_regalloc.c - see that file's use for the full
  * contract; e_cand is always NULL from there (loop-scoped promotion only
- * ever targets BC). Defined in dcc_func.c. */
+ * ever targets BC). Defined in dcc_regalloc.c. */
 int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
                               FILE **out_f);
 /* Shared with dcc_loop_regalloc.c's loop_regalloc_write_candidate_safe -
- * see their own header comments in dcc_func.c for the full contract.
- * Defined in dcc_func.c. */
+ * see their own header comments in dcc_regalloc.c for the full contract.
+ * Defined in dcc_regalloc.c. */
 int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40]);
 int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40]);
 /* True if `s` (one line of emitted assembly, no trailing newline) references
@@ -555,7 +655,7 @@ int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40]);
  * dcc_loop_regalloc.c's write-candidate verifier (loop_regalloc_write_
  * candidate_safe), which needs the same primitive but a stricter policy
  * around it than this file's own lenient reload-repair one - see that
- * function's header comment. Defined in dcc_func.c. */
+ * function's header comment. Defined in dcc_regalloc.c. */
 int line_touches_bc_reg(const char *s);
 /* True if `s` has a captured, codegen-time-substitutable inline body (one
  * of inline_return_expr/inline_stmt_expr/inline_stmt_body). Shared with
@@ -566,11 +666,11 @@ int line_touches_bc_reg(const char *s);
 int is_inline_substitutable(struct Sym *s);
 /* True if `buf` (the full generated-assembly text under verification)
  * contains a "\tcall NAME" whose NAME is not on the verified-BC-safe
- * whitelist (g_safe_runtime_calls, dcc_func.c - the seven DCCRTL.MAC-
+ * whitelist (g_safe_runtime_calls, dcc_regalloc.c - the seven DCCRTL.MAC-
  * contracted arithmetic helpers plus a dozen verified-clean ctype.h
  * entries) and is not a call to a _Noreturn function. Shared with
  * dcc_loop_regalloc.c's write-candidate verifier, which needs the
- * identical whitelist. Defined in dcc_func.c. */
+ * identical whitelist. Defined in dcc_regalloc.c. */
 int buf_has_unsafe_call(const char *buf);
 /* True if `name` (an asm-level call target, e.g. "__csp" for isspace) is on
  * that same whitelist (now also including a dozen verified-BC-clean
@@ -578,10 +678,10 @@ int buf_has_unsafe_call(const char *buf);
  * for dcc_licm.c's licm_scan_modified, which needs it at the AST level to
  * decide whether a loop containing such a call is even eligible to attempt
  * BC promotion, before any generated text exists for buf_has_unsafe_call
- * to re-check. Defined in dcc_func.c. */
+ * to re-check. Defined in dcc_regalloc.c. */
 int asm_name_is_bc_safe_call(const char *name);
 /* True if `name` (an asm-level call target) is a function declared
- * _Noreturn - see the fuller comment at its definition (dcc_func.c).
+ * _Noreturn - see the fuller comment at its definition (dcc_regalloc.c).
  * Exposed so dcc_loop_regalloc.c's strict write-candidate verifier can
  * treat any bc-touching line between such a call and the next label as
  * unreachable dead code, not just the call line itself (asm-level dead-
@@ -596,16 +696,12 @@ extern int cont_stack[MAX_FLOW];
 extern int nflow;
 
 /* C99 for-init declaration scoping (see dcc_state.c for details) */
-extern int g_for_seq;
+extern FunctionPassState g_func_pass;
 extern int g_for_rename_count[MAX_FOR_SCOPES];
 extern char g_for_rename_from[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
 extern char g_for_rename_to[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
 extern char g_forren_from[MAX_FORREN][64];
 extern char g_forren_to[MAX_FORREN][64];
-extern int g_forren_n;
-extern int g_for_decl_seq;
-extern int g_for_decl_rename_index;
-extern int g_for_decl_recording;
 extern int g_for_decl_saw_nonobject;
 const char *resolve_local_rename(const char *name);
 void make_for_rename_name(char *dst, int dstsz, const char *from, int for_seq, int rename_index);
@@ -620,9 +716,6 @@ void pop_for_rename(void);
  * nlocals on block exit and a local declared in an inner block stops resolving
  * once the block ends. */
 extern int g_scope_watermark[MAX_SCOPE_DEPTH];
-extern int g_scope_depth;
-extern int g_static_local_func_index;
-extern int g_static_local_seq;
 void enter_scope(void);
 void leave_scope(void);
 int vla_scope_ensure_save_slot(void);
@@ -640,21 +733,11 @@ struct Sym *find_local_decl(const char *name);
 extern int errors;
 extern int warnings;
 extern int scan_mode;
-extern int decl_is_extern;
-extern int decl_is_static;
-extern int decl_is_inline;     /* current declaration used inline specifier */
-extern int decl_is_noreturn;   /* current declaration used _Noreturn specifier */
-extern int decl_is_const;      /* current declaration used const qualifier */
-extern int decl_is_volatile;   /* current declaration used volatile qualifier */
-extern int decl_pointee_is_volatile;
-extern int decl_is_register;   /* current decl used 'register' keyword */
+extern DeclState g_decl;
 extern int expr_result_dead;
-extern int g_expr_type;
+extern ExprState g_expr;
 extern int g_tok_long_suffix; /* set by lexer when L/l suffix seen on integer literal */
 extern int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int literal */
-extern int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
-extern int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
-extern int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
 extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum */
 
 /* Pending #asm block output buffered to avoid duplicate emission from posi save/restore */
@@ -662,8 +745,6 @@ extern char pending_asm_buf[8192];
 extern int  pending_asm_len;
 extern int  asm_suppress_depth;
 extern int  g_diag_error_count;
-extern int  g_compound_literal_seq;
-extern int  g_licm_seq;
 void flush_pending_asm(void);
 void pp_reset_asm_dedupe(void);
 
@@ -749,7 +830,7 @@ extern int flow_scope_depth[MAX_FLOW];
 struct VlaFwdGoto {
     int label_index;                 /* target label (index into ulabel_*)   */
     int fixup_id;                    /* stub label the goto jumps to          */
-    int snap_depth;                  /* g_scope_depth at the goto             */
+    int snap_depth;                  /* g_func_pass.scope_depth at the goto             */
     int snap_off[MAX_SCOPE_DEPTH];   /* g_vla_scope_off snapshot at the goto  */
     int line;                        /* goto source line, for diagnostics     */
 };
@@ -1081,6 +1162,12 @@ long parse_struct_init_const_value(void);
 unsigned int bitfield_init_part(struct FieldDef *fd, long v);
 unsigned int bitfield_field_mask(struct FieldDef *fd);
 int next_parent_field_index(int sid, int start);
+unsigned int pack_struct_bitfield_unit(int sid, int i, struct FieldDef *fd,
+                                       int allow_promoted_owner,
+                                       int *unit_offs, unsigned int *unit_vals,
+                                       int *nunits, int cap,
+                                       int *out_unit_off, int *out_k,
+                                       int *out_stop);
 void emit_store_const_bitfield_unit_to_local(struct Sym *s, int off, unsigned int unit);
 void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type);
 void emit_init_auto_struct_from_list(struct Sym *s);
@@ -1148,6 +1235,41 @@ void parse_global_scalar_array_zero_to(struct Sym *s, int *np, int limit);
 void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level);
 void parse_global_init_list(struct Sym *s);
 void parse_function_or_global(int base_type);
+
+/* dcc_regalloc.c - speculative no-IX / BC-register-allocation codegen passes.
+ * find_bc_regalloc_candidate and plain_static_body_can_be_buffered remain in
+ * dcc_func.c but are called from the speculative passes across the TU split. */
+struct Sym *find_bc_regalloc_candidate(int params_end);
+int plain_static_body_can_be_buffered(struct Sym *s, const char *name);
+int function_qualifies_for_speculative_noix(const char *name, int local_bytes);
+int function_qualifies_for_speculative_regalloc(const char *name);
+int try_speculative_noix_function_body(const char *name, int type,
+                                       int local_bytes, struct Sym *s,
+                                       long body_start_pos, long body_start_tok_start,
+                                       int body_start_line, int body_start_tok_line,
+                                       struct Token body_start_tok, int body_start_nlocals,
+                                       int body_start_local_size);
+int try_loop_scoped_regalloc_first(const char *name, int type,
+                                   int local_bytes, struct Sym *s,
+                                   long body_start_pos, long body_start_tok_start,
+                                   int body_start_line, int body_start_tok_line,
+                                   struct Token body_start_tok, int body_start_nlocals,
+                                   int body_start_local_size);
+int try_speculative_bc_regalloc_function_body(const char *name, int type,
+                                              int local_bytes, struct Sym *s,
+                                              struct Sym *bc_cand, int attempt_e,
+                                              long body_start_pos, long body_start_tok_start,
+                                              int body_start_line, int body_start_tok_line,
+                                              struct Token body_start_tok, int body_start_nlocals,
+                                              int body_start_local_size);
+int try_speculative_bc_regalloc_with_e_fallback(const char *name, int type,
+                                                int local_bytes, struct Sym *s,
+                                                struct Sym *bc_cand,
+                                                long body_start_pos, long body_start_tok_start,
+                                                int body_start_line, int body_start_tok_line,
+                                                struct Token body_start_tok, int body_start_nlocals,
+                                                int body_start_local_size);
+
 void add_predefined_extern(const char *name, int type, int storage);
 void parse_translation_unit(void);
 

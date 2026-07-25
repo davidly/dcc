@@ -55,12 +55,8 @@ unsigned int current_field_bit_mask;
 char *src;
 long src_len;
 long g_src_generation;
-long posi;
-long tok_start_pos;
-int line_no;
-int tok_line;
-struct Token tok;
-FILE *outf;
+LexState g_lex;
+EmitSink g_emit_sink;
 const char *input_name;
 const char *output_name;
 char current_file_name[256];
@@ -71,9 +67,7 @@ char predefined_time_text[16];
 struct Sym globals[MAX_SYMS];
 int nglobals;
 struct Sym locals[MAX_LOCALS];
-int nlocals;
-int local_size;
-int param_offset;
+FrameState g_frame;
 
 /* ---- preprocessor macro table ------------------------------------------ */
 struct Def defs[MAX_DEFINES];
@@ -136,7 +130,7 @@ int nflow;
  * which.  The frame-sizing scan records the source-name -> unique-local-name
  * mappings for each C99 for-init declaration; codegen replays them while
  * compiling the corresponding loop. */
-int g_for_seq;
+FunctionPassState g_func_pass;
 int g_for_rename_count[MAX_FOR_SCOPES];
 char g_for_rename_from[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
 char g_for_rename_to[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
@@ -146,10 +140,6 @@ char g_for_rename_to[MAX_FOR_SCOPES][MAX_FOR_SCOPE_RENAMES][64];
  * loop scope.  A small stack supports nested for scopes. */
 char g_forren_from[MAX_FORREN][64];
 char g_forren_to[MAX_FORREN][64];
-int g_forren_n;
-int g_for_decl_seq;
-int g_for_decl_rename_index;
-int g_for_decl_recording;
 int g_for_decl_saw_nonobject;
 
 /* General lexical block scope stack: the nlocals watermark saved at each open
@@ -158,26 +148,13 @@ int g_for_decl_saw_nonobject;
  * passes assign identical offsets; storage (local_size) is monotonic, so the
  * frame equals the sum over all scopes. */
 int g_scope_watermark[MAX_SCOPE_DEPTH];
-int g_scope_depth;
-int g_static_local_func_index;
-int g_static_local_seq;
 int errors;
 int scan_mode;
-int decl_is_extern;
-int decl_is_static;
-int decl_is_inline;
-int decl_is_noreturn;
-int decl_is_const;      /* current declaration used const qualifier */
-int decl_is_volatile;   /* current declaration used volatile qualifier */
-int decl_pointee_is_volatile;
-int decl_is_register;   /* current decl used 'register' keyword */
+DeclState g_decl;
 int expr_result_dead;
-int g_expr_type;
+ExprState g_expr;
 int g_tok_long_suffix; /* set by lexer when L/l suffix seen on integer literal */
 int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int literal */
-int g_long_from16; /* the long value in DE:HL was just widened from 16-bit: 0 no, 1 signed, 2 unsigned */
-int g_array_decay_stride; /* stride override when multi-dim array decays to pointer; 0 = use type default */
-int g_expr_no_deref; /* 1 = suppress next * load (phantom deref for multi-dim array row pointer) */
 int g_parse_type_was_enum;
 
 /* Pending #asm block output: buffered until a safe flush point (function
@@ -187,8 +164,6 @@ char pending_asm_buf[8192];
 int  pending_asm_len;
 int  asm_suppress_depth;
 int  g_diag_error_count;
-int  g_compound_literal_seq;
-int  g_licm_seq;
 char g_current_compiling_func[64];
 
 /* User-defined goto labels (function-scoped) */

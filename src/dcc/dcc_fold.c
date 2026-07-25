@@ -224,7 +224,7 @@ static float cf_float_literal_value(void)
     } value;
     unsigned long bits;
 
-    bits = (unsigned long)tok.val & 0xffffffffUL;
+    bits = (unsigned long)g_lex.tok.val & 0xffffffffUL;
     value.b[0] = (unsigned char)(bits & 0xffUL);
     value.b[1] = (unsigned char)((bits >> 8) & 0xffUL);
     value.b[2] = (unsigned char)((bits >> 16) & 0xffUL);
@@ -239,19 +239,19 @@ int cf_parse_primary(struct ConstVal *out)
     int t;
     int sz;
 
-    if (tok.kind == TOK_ID && strcmp(tok.text, "__offsetof") == 0) {
+    if (g_lex.tok.kind == TOK_ID && strcmp(g_lex.tok.text, "__offsetof") == 0) {
         out->u = (unsigned long)parse_offsetof_value();
         out->type = TYPE_INT | TYPE_UNSIGNED;
         cf_cast_to_type(out, out->type);
         return 1;
     }
 
-    if (tok.kind == TOK_NUM) {
+    if (g_lex.tok.kind == TOK_NUM) {
         /* Do not use tok.val here.  On MSVC host long is 32-bit, so tokens
          * such as 2147483648UL/4294967295UL cannot be represented as a
          * positive signed long.  Re-read tok.text as raw 32-bit bits and then
          * apply the target C89 literal type. */
-        out->u = cf_parse_integer_literal_bits(tok.text);
+        out->u = cf_parse_integer_literal_bits(g_lex.tok.text);
         out->type = g_tok_long_suffix ? TYPE_LONG : TYPE_INT;
         if (g_tok_unsigned_suffix)
             out->type |= TYPE_UNSIGNED;
@@ -260,17 +260,17 @@ int cf_parse_primary(struct ConstVal *out)
         return 1;
     }
 
-    if (tok.kind == TOK_CHARLIT) {
-        out->u = (unsigned long)tok.val;
+    if (g_lex.tok.kind == TOK_CHARLIT) {
+        out->u = (unsigned long)g_lex.tok.val;
         out->type = TYPE_INT;
         cf_cast_to_type(out, out->type);
         next_token();
         return 1;
     }
 
-    if (tok.kind == TOK_ID) {
+    if (g_lex.tok.kind == TOK_ID) {
         for (i = 0; i < nenum_consts; ++i) {
-            if (!strcmp(enum_const_names[i], tok.text)) {
+            if (!strcmp(enum_const_names[i], g_lex.tok.text)) {
                 out->u = (unsigned long)enum_const_values[i];
                 out->type = TYPE_INT;
                 cf_cast_to_type(out, out->type);
@@ -280,7 +280,7 @@ int cf_parse_primary(struct ConstVal *out)
         }
     }
 
-    if (tok.kind == TOK_SIZEOF) {
+    if (g_lex.tok.kind == TOK_SIZEOF) {
         next_token();
         if (accept('(')) {
             if (starts_type()) {
@@ -304,13 +304,13 @@ int cf_parse_primary(struct ConstVal *out)
         return 1;
     }
 
-    if (tok.kind == '(') {
+    if (g_lex.tok.kind == '(') {
         next_token();
         if (starts_type()) {
             float float_value;
             parse_type_name_decl(&t, &sz);
             expect(')');
-            if (tok.kind == TOK_FLOATLIT && !type_is_float(t) &&
+            if (g_lex.tok.kind == TOK_FLOATLIT && !type_is_float(t) &&
                 type_ptr_depth(t) == 0 && !(t & TYPE_STRUCT) &&
                 (t & 15) != TYPE_VOID) {
                 float_value = cf_float_literal_value();
@@ -356,8 +356,8 @@ int cf_parse_unary(struct ConstVal *out)
 {
     int op;
 
-    if (tok.kind == '+' || tok.kind == '-' || tok.kind == '~' || tok.kind == '!') {
-        op = tok.kind;
+    if (g_lex.tok.kind == '+' || g_lex.tok.kind == '-' || g_lex.tok.kind == '~' || g_lex.tok.kind == '!') {
+        op = g_lex.tok.kind;
         next_token();
         if (!cf_parse_unary(out))
             return 0;
@@ -398,8 +398,8 @@ int cf_parse_mul(struct ConstVal *out)
 
     if (!cf_parse_unary(out))
         return 0;
-    while (tok.kind == '*' || tok.kind == '/' || tok.kind == '%') {
-        op = tok.kind;
+    while (g_lex.tok.kind == '*' || g_lex.tok.kind == '/' || g_lex.tok.kind == '%') {
+        op = g_lex.tok.kind;
         next_token();
         if (!cf_parse_unary(&rhs))
             return 0;
@@ -456,8 +456,8 @@ int cf_parse_add(struct ConstVal *out)
 
     if (!cf_parse_mul(out))
         return 0;
-    while (tok.kind == '+' || tok.kind == '-') {
-        op = tok.kind;
+    while (g_lex.tok.kind == '+' || g_lex.tok.kind == '-') {
+        op = g_lex.tok.kind;
         next_token();
         if (!cf_parse_mul(&rhs))
             return 0;
@@ -498,8 +498,8 @@ int cf_parse_shift(struct ConstVal *out)
 
     if (!cf_parse_add(out))
         return 0;
-    while (tok.kind == TOK_SHL || tok.kind == TOK_SHR) {
-        op = tok.kind;
+    while (g_lex.tok.kind == TOK_SHL || g_lex.tok.kind == TOK_SHR) {
+        op = g_lex.tok.kind;
         next_token();
         if (!cf_parse_add(&rhs))
             return 0;
@@ -544,8 +544,8 @@ int cf_parse_rel(struct ConstVal *out)
 
     if (!cf_parse_shift(out))
         return 0;
-    while (tok.kind == '<' || tok.kind == '>' || tok.kind == TOK_LE || tok.kind == TOK_GE) {
-        op = tok.kind;
+    while (g_lex.tok.kind == '<' || g_lex.tok.kind == '>' || g_lex.tok.kind == TOK_LE || g_lex.tok.kind == TOK_GE) {
+        op = g_lex.tok.kind;
         next_token();
         if (!cf_parse_shift(&rhs))
             return 0;
@@ -578,8 +578,8 @@ int cf_parse_eq(struct ConstVal *out)
 
     if (!cf_parse_rel(out))
         return 0;
-    while (tok.kind == TOK_EQ || tok.kind == TOK_NE) {
-        op = tok.kind;
+    while (g_lex.tok.kind == TOK_EQ || g_lex.tok.kind == TOK_NE) {
+        op = g_lex.tok.kind;
         next_token();
         if (!cf_parse_rel(&rhs))
             return 0;
@@ -601,7 +601,7 @@ int cf_parse_band(struct ConstVal *out)
     struct ConstVal rhs;
     int common;
     if (!cf_parse_eq(out)) return 0;
-    while (tok.kind == '&') {
+    while (g_lex.tok.kind == '&') {
         next_token();
         if (!cf_parse_eq(&rhs)) return 0;
         common = cf_common_arith_type(out->type, rhs.type);
@@ -618,7 +618,7 @@ int cf_parse_bxor(struct ConstVal *out)
     struct ConstVal rhs;
     int common;
     if (!cf_parse_band(out)) return 0;
-    while (tok.kind == '^') {
+    while (g_lex.tok.kind == '^') {
         next_token();
         if (!cf_parse_band(&rhs)) return 0;
         common = cf_common_arith_type(out->type, rhs.type);
@@ -635,7 +635,7 @@ int cf_parse_bor(struct ConstVal *out)
     struct ConstVal rhs;
     int common;
     if (!cf_parse_bxor(out)) return 0;
-    while (tok.kind == '|') {
+    while (g_lex.tok.kind == '|') {
         next_token();
         if (!cf_parse_bxor(&rhs)) return 0;
         common = cf_common_arith_type(out->type, rhs.type);
@@ -651,7 +651,7 @@ int cf_parse_land(struct ConstVal *out)
 {
     struct ConstVal rhs;
     if (!cf_parse_bor(out)) return 0;
-    while (tok.kind == TOK_ANDAND) {
+    while (g_lex.tok.kind == TOK_ANDAND) {
         next_token();
         if (cf_no_eval || cf_signed_value(*out) == 0) {
             cf_no_eval++;
@@ -674,7 +674,7 @@ int cf_parse_lor(struct ConstVal *out)
 {
     struct ConstVal rhs;
     if (!cf_parse_land(out)) return 0;
-    while (tok.kind == TOK_OROR) {
+    while (g_lex.tok.kind == TOK_OROR) {
         next_token();
         if (cf_no_eval || cf_signed_value(*out) != 0) {
             cf_no_eval++;
@@ -702,7 +702,7 @@ int cf_parse_cond(struct ConstVal *out)
 
     if (!cf_parse_lor(out))
         return 0;
-    if (tok.kind != '?')
+    if (g_lex.tok.kind != '?')
         return 1;
 
     condition = cf_signed_value(*out) != 0;
@@ -764,11 +764,11 @@ void emit_const_value(struct ConstVal v)
 {
     cf_cast_to_type(&v, v.type);
     if (type_size(v.type) == 4) {
-        fprintf(outf, "\tld hl,%lu\n", v.u & 0xffffUL);
-        fprintf(outf, "\tld de,%lu\n", (v.u >> 16) & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", v.u & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld de,%lu\n", (v.u >> 16) & 0xffffUL);
     } else if (type_size(v.type) == 1) {
         unsigned long b = v.u & 0xffUL;
-        fprintf(outf, "\tld l,%lu\n", b);
+        fprintf(g_emit_sink.stream, "\tld l,%lu\n", b);
         if (v.type & TYPE_UNSIGNED)
             emit("\tld h,0\n");
         else if (b & 0x80UL)
@@ -776,9 +776,9 @@ void emit_const_value(struct ConstVal v)
         else
             emit("\tld h,0\n");
     } else {
-        fprintf(outf, "\tld hl,%lu\n", v.u & 0xffffUL);
+        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", v.u & 0xffffUL);
     }
-    g_expr_type = v.type;
+    g_expr.type = v.type;
 }
 
 

@@ -31,9 +31,9 @@ int parse_sizeof_expr_operand(void)
      *     sizeof(p[0])
      *     sizeof(s.field)
      * Stop at delimiters that belong to the surrounding grammar. */
-    while (tok.kind != TOK_EOF && tok.kind != ')' && tok.kind != ']' &&
-           tok.kind != ',' && tok.kind != ';') {
-        op = tok.kind;
+    while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != ')' && g_lex.tok.kind != ']' &&
+           g_lex.tok.kind != ',' && g_lex.tok.kind != ';') {
+        op = g_lex.tok.kind;
 
         if (op == '?' || op == ':')
             break;
@@ -148,15 +148,15 @@ void emit_copy_de_to_hl_bytes(int n)
 
     lab = new_label();
     if (n <= 255) {
-        fprintf(outf, "\tld b,%d\n", n);
+        fprintf(g_emit_sink.stream, "\tld b,%d\n", n);
         emit_label(lab);
         emit("\tld a,(de)\n");
         emit("\tld (hl),a\n");
         emit("\tinc de\n");
         emit("\tinc hl\n");
-        fprintf(outf, "\tdjnz L%d\n", lab);
+        fprintf(g_emit_sink.stream, "\tdjnz L%d\n", lab);
     } else {
-        fprintf(outf, "\tld bc,%d\n", n);
+        fprintf(g_emit_sink.stream, "\tld bc,%d\n", n);
         emit_label(lab);
         emit("\tld a,(de)\n");
         emit("\tld (hl),a\n");
@@ -174,7 +174,7 @@ void emit_push_struct_arg_from_hl(int n)
     if (n <= 0)
         return;
     emit("\tex de,hl\n");          /* DE = source */
-    fprintf(outf, "\tld hl,-%d\n", n);
+    fprintf(g_emit_sink.stream, "\tld hl,-%d\n", n);
     emit("\tadd hl,sp\n");        /* HL = destination */
     emit("\tld sp,hl\n");
     emit_copy_de_to_hl_bytes(n);
@@ -185,7 +185,7 @@ void emit_load_hl_from_sp_offset(int off)
     if (off == 0) {
         emit("\tpop hl\n\tpush hl\n");
     } else {
-        fprintf(outf, "\tld hl,%d\n", off);
+        fprintf(g_emit_sink.stream, "\tld hl,%d\n", off);
         emit("\tadd hl,sp\n");
         emit("\tld e,(hl)\n");
         emit("\tinc hl\n");
@@ -212,7 +212,7 @@ static void parse_pointer_array_suffixes(int base_type)
     ndims = 0;
     memset(dims, 0, sizeof(dims));
     while (accept('[')) {
-        if (tok.kind == ']') {
+        if (g_lex.tok.kind == ']') {
             n = 0;
             next_token();
         } else {
@@ -264,7 +264,7 @@ static void parse_funcptr_prototype_suffix(void)
     has_proto = 0;
     memset(types, 0, sizeof(types));
 
-    if (tok.kind == ')') {
+    if (g_lex.tok.kind == ')') {
         next_token();                  /* C89: unspecified parameters */
         clear_funcptr_prototype();
         return;
@@ -273,7 +273,7 @@ static void parse_funcptr_prototype_suffix(void)
     for (;;) {
         int type;
 
-        if (tok.kind == TOK_ELLIPSIS) {
+        if (g_lex.tok.kind == TOK_ELLIPSIS) {
             has_proto = 1;
             variadic = 1;
             next_token();
@@ -293,11 +293,11 @@ static void parse_funcptr_prototype_suffix(void)
 
         /* Parameter names are optional in prototypes.  The common scalar and
          * pointer forms need no declarator object, only the ABI type. */
-        if (tok.kind == TOK_ID && find_typedef(tok.text) < 0)
+        if (g_lex.tok.kind == TOK_ID && find_typedef(g_lex.tok.text) < 0)
             next_token();
         skip_prototype_array_suffixes(&type);
 
-        if (type == TYPE_VOID && nargs == 0 && tok.kind == ')') {
+        if (type == TYPE_VOID && nargs == 0 && g_lex.tok.kind == ')') {
             has_proto = 1;
             break;
         }
@@ -326,11 +326,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     int save_decl_pointee_is_volatile;
     int object_is_volatile;
     int pointee_is_volatile;
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
 
     g_funcptr_decl_array_len = 0;
     g_funcptr_is_funcret_decl = 0;
@@ -339,107 +335,83 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     g_ptr_array_elem_size = 0;
     memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
 
-    if (tok.kind != '(')
+    if (g_lex.tok.kind != '(')
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
-    save_decl_is_volatile = decl_is_volatile;
-    save_decl_pointee_is_volatile = decl_pointee_is_volatile;
+    _ls = lex_save();
+    save_decl_is_volatile = g_decl.is_volatile;
+    save_decl_pointee_is_volatile = g_decl.pointee_is_volatile;
 
     next_token();
     if (!accept('*')) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
-        decl_is_volatile = save_decl_is_volatile;
-        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+        lex_restore(&_ls);
+        g_decl.is_volatile = save_decl_is_volatile;
+        g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
     pointee_is_volatile = save_decl_is_volatile;
     object_is_volatile = skip_type_qualifiers_volatile();
 
-    if (tok.kind == '(') {
+    if (g_lex.tok.kind == '(') {
         int depth;
         next_token();
-        if (!accept('*') || tok.kind != TOK_ID) {
-            posi = save_pos;
-            tok_start_pos = save_tok_start;
-            line_no = save_line;
-            tok_line = save_tok_line;
-            tok = save_tok;
-            decl_is_volatile = save_decl_is_volatile;
-            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+        if (!accept('*') || g_lex.tok.kind != TOK_ID) {
+            lex_restore(&_ls);
+            g_decl.is_volatile = save_decl_is_volatile;
+            g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
-        strncpy(name, tok.text, namesz - 1);
+        strncpy(name, g_lex.tok.text, namesz - 1);
         name[namesz - 1] = 0;
         next_token();
         if (!accept(')')) {
-            posi = save_pos;
-            tok_start_pos = save_tok_start;
-            line_no = save_line;
-            tok_line = save_tok_line;
-            tok = save_tok;
-            decl_is_volatile = save_decl_is_volatile;
-            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+            lex_restore(&_ls);
+            g_decl.is_volatile = save_decl_is_volatile;
+            g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         if (accept('(')) {
             depth = 1;
-            while (tok.kind != TOK_EOF && depth > 0) {
-                if (tok.kind == '(') depth++;
-                else if (tok.kind == ')') depth--;
+            while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+                if (g_lex.tok.kind == '(') depth++;
+                else if (g_lex.tok.kind == ')') depth--;
                 next_token();
             }
         }
         if (!accept(')')) {
-            posi = save_pos;
-            tok_start_pos = save_tok_start;
-            line_no = save_line;
-            tok_line = save_tok_line;
-            tok = save_tok;
-            decl_is_volatile = save_decl_is_volatile;
-            decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+            lex_restore(&_ls);
+            g_decl.is_volatile = save_decl_is_volatile;
+            g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
         if (accept('(')) {
             depth = 1;
-            while (tok.kind != TOK_EOF && depth > 0) {
-                if (tok.kind == '(') depth++;
-                else if (tok.kind == ')') depth--;
+            while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+                if (g_lex.tok.kind == '(') depth++;
+                else if (g_lex.tok.kind == ')') depth--;
                 next_token();
             }
         }
         type = type_add_ptr(ptype[0]);
         ptype[0] = type;
-        decl_is_volatile = object_is_volatile;
-        decl_pointee_is_volatile = pointee_is_volatile;
+        g_decl.is_volatile = object_is_volatile;
+        g_decl.pointee_is_volatile = pointee_is_volatile;
         return 1;
     }
 
-    if (tok.kind != TOK_ID) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
-        decl_is_volatile = save_decl_is_volatile;
-        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+    if (g_lex.tok.kind != TOK_ID) {
+        lex_restore(&_ls);
+        g_decl.is_volatile = save_decl_is_volatile;
+        g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
-    strncpy(name, tok.text, namesz - 1);
+    strncpy(name, g_lex.tok.text, namesz - 1);
     name[namesz - 1] = 0;
     next_token();
 
     if (accept('[')) {
-        if (tok.kind == ']') {
+        if (g_lex.tok.kind == ']') {
             g_funcptr_decl_array_len = 0;
             next_token();
         } else {
@@ -452,69 +424,57 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         /* C89: return_type (*func_name(param_list))(pointed_fn_params)
          * A function declaration whose return type is a pointer to function.
          * The (*name has already been consumed; tok is now '(' (the param list). */
-        if (tok.kind == '(') {
+        if (g_lex.tok.kind == '(') {
             int depth;
             next_token(); /* consume opening '(' of param list */
             parse_param_list();
-            if (tok.kind != ')') {
-                posi = save_pos;
-                tok_start_pos = save_tok_start;
-                line_no = save_line;
-                tok_line = save_tok_line;
-                tok = save_tok;
+            if (g_lex.tok.kind != ')') {
+                lex_restore(&_ls);
                 g_funcptr_decl_array_len = 0;
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
-                decl_is_volatile = save_decl_is_volatile;
-                decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+                g_decl.is_volatile = save_decl_is_volatile;
+                g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
                 return 0;
             }
             next_token(); /* consume ')' of name(...) */
             if (!accept(')')) {
-                posi = save_pos;
-                tok_start_pos = save_tok_start;
-                line_no = save_line;
-                tok_line = save_tok_line;
-                tok = save_tok;
+                lex_restore(&_ls);
                 g_funcptr_decl_array_len = 0;
                 g_ptr_array_dim_count = 0;
                 g_ptr_array_elem_size = 0;
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
-                decl_is_volatile = save_decl_is_volatile;
-                decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+                g_decl.is_volatile = save_decl_is_volatile;
+                g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
                 return 0;
             }
             /* Skip the trailing (...) describing the pointed-to function's params */
             if (accept('(')) {
                 depth = 1;
-                while (tok.kind != TOK_EOF && depth > 0) {
-                    if (tok.kind == '(') depth++;
-                    else if (tok.kind == ')') depth--;
+                while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+                    if (g_lex.tok.kind == '(') depth++;
+                    else if (g_lex.tok.kind == ')') depth--;
                     next_token();
                 }
-            } else if (tok.kind == '[') {
+            } else if (g_lex.tok.kind == '[') {
                 parse_pointer_array_suffixes(ptype[0]);
             }
             type = type_add_ptr(ptype[0]);
             ptype[0] = type;
             g_funcptr_is_funcret_decl = 1;
-            decl_is_volatile = object_is_volatile;
-            decl_pointee_is_volatile = pointee_is_volatile;
+            g_decl.is_volatile = object_is_volatile;
+            g_decl.pointee_is_volatile = pointee_is_volatile;
             return 1;
         }
 
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
+        lex_restore(&_ls);
         g_funcptr_decl_array_len = 0;
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
         memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
-        decl_is_volatile = save_decl_is_volatile;
-        decl_pointee_is_volatile = save_decl_pointee_is_volatile;
+        g_decl.is_volatile = save_decl_is_volatile;
+        g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
@@ -522,73 +482,53 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
 
     if (accept('(')) {
         parse_funcptr_prototype_suffix();
-    } else if (tok.kind == '[') {
+    } else if (g_lex.tok.kind == '[') {
         parse_pointer_array_suffixes(ptype[0]);
     }
 
     ptype[0] = type;
-    decl_is_volatile = object_is_volatile;
-    decl_pointee_is_volatile = pointee_is_volatile;
+    g_decl.is_volatile = object_is_volatile;
+    g_decl.pointee_is_volatile = pointee_is_volatile;
     return 1;
 }
 
 
 int parse_abstract_funcptr_declarator(int *ptype)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int type;
 
-    if (tok.kind != '(')
+    if (g_lex.tok.kind != '(')
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     next_token();
     if (!accept('*')) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
+        lex_restore(&_ls);
         return 0;
     }
 
     if (!accept(')')) {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
+        lex_restore(&_ls);
         return 0;
     }
 
     type = type_add_ptr(ptype[0]);
 
     if (accept('(')) {
-        while (tok.kind != ')' && tok.kind != TOK_EOF)
+        while (g_lex.tok.kind != ')' && g_lex.tok.kind != TOK_EOF)
             next_token();
         expect(')');
-    } else if (tok.kind == '[') {
+    } else if (g_lex.tok.kind == '[') {
         while (accept('[')) {
             skip_parameter_array_qualifiers();
-            if (tok.kind != ']')
+            if (g_lex.tok.kind != ']')
                 (void)parse_typed_array_bound_expr();
             expect(']');
         }
     } else {
-        posi = save_pos;
-        tok_start_pos = save_tok_start;
-        line_no = save_line;
-        tok_line = save_tok_line;
-        tok = save_tok;
+        lex_restore(&_ls);
         return 0;
     }
 
@@ -598,26 +538,18 @@ int parse_abstract_funcptr_declarator(int *ptype)
 
 int char_array_string_initializer_size(int base_type)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int n;
 
     if ((base_type & 15) != TYPE_CHAR || type_ptr_depth(base_type) != 0)
         return 0;
-    if (tok.kind != '=')
+    if (g_lex.tok.kind != '=')
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     next_token();
-    if (tok.kind == TOK_STR) {
+    if (g_lex.tok.kind == TOK_STR) {
         char *lit;
         int is_wide;
         int litlen;
@@ -643,11 +575,7 @@ int char_array_string_initializer_size(int base_type)
         n = 0;
     }
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
     return n;
 }
 
@@ -668,14 +596,14 @@ static void skip_array_dim_balanced(int open, int close)
 {
     int depth;
 
-    if (tok.kind != open)
+    if (g_lex.tok.kind != open)
         return;
     depth = 1;
     next_token();
-    while (tok.kind != TOK_EOF && depth > 0) {
-        if (tok.kind == open)
+    while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        if (g_lex.tok.kind == open)
             depth++;
-        else if (tok.kind == close)
+        else if (g_lex.tok.kind == close)
             depth--;
         next_token();
     }
@@ -685,35 +613,35 @@ static void skip_sizeof_array_dim_operand(void)
 {
     int done;
 
-    if (tok.kind == TOK_SIZEOF)
+    if (g_lex.tok.kind == TOK_SIZEOF)
         next_token();
 
-    while (tok.kind == TOK_SIZEOF || tok.kind == '*' || tok.kind == '&' ||
-           tok.kind == '+' || tok.kind == '-' || tok.kind == '!' ||
-           tok.kind == '~') {
-        if (tok.kind == TOK_SIZEOF)
+    while (g_lex.tok.kind == TOK_SIZEOF || g_lex.tok.kind == '*' || g_lex.tok.kind == '&' ||
+           g_lex.tok.kind == '+' || g_lex.tok.kind == '-' || g_lex.tok.kind == '!' ||
+           g_lex.tok.kind == '~') {
+        if (g_lex.tok.kind == TOK_SIZEOF)
             next_token();
         else
             next_token();
     }
 
-    if (tok.kind == '(') {
+    if (g_lex.tok.kind == '(') {
         skip_array_dim_balanced('(', ')');
         return;
     }
 
-    if (tok.kind == TOK_ID || tok.kind == TOK_NUM || tok.kind == TOK_CHARLIT ||
-        tok.kind == TOK_STR || tok.kind == TOK_WSTR) {
+    if (g_lex.tok.kind == TOK_ID || g_lex.tok.kind == TOK_NUM || g_lex.tok.kind == TOK_CHARLIT ||
+        g_lex.tok.kind == TOK_STR || g_lex.tok.kind == TOK_WSTR) {
         next_token();
         done = 0;
         while (!done) {
-            if (tok.kind == '[') {
+            if (g_lex.tok.kind == '[') {
                 skip_array_dim_balanced('[', ']');
-            } else if (tok.kind == '(') {
+            } else if (g_lex.tok.kind == '(') {
                 skip_array_dim_balanced('(', ')');
-            } else if (tok.kind == '.' || tok.kind == TOK_ARROW) {
+            } else if (g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW) {
                 next_token();
-                if (tok.kind == TOK_ID)
+                if (g_lex.tok.kind == TOK_ID)
                     next_token();
             } else {
                 done = 1;
@@ -724,30 +652,22 @@ static void skip_sizeof_array_dim_operand(void)
 
 int array_dim_has_runtime_identifier(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int depth;
     int has_runtime;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     depth = 0;
     has_runtime = 0;
-    while (tok.kind != TOK_EOF) {
-        if (depth == 0 && tok.kind == ']')
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (depth == 0 && g_lex.tok.kind == ']')
             break;
-        if (tok.kind == TOK_SIZEOF) {
+        if (g_lex.tok.kind == TOK_SIZEOF) {
             skip_sizeof_array_dim_operand();
             continue;
         }
-        if (tok.kind == '(') {
+        if (g_lex.tok.kind == '(') {
             /* A parenthesized construct that begins with a type is a cast (or
              * parenthesized type): its type-name identifiers (e.g. size_t in
              * (size_t)8) are not runtime values, so skip the whole `(type)`
@@ -756,10 +676,10 @@ int array_dim_has_runtime_identifier(void)
             next_token();
             if (starts_type()) {
                 int d2 = 1;
-                while (tok.kind != TOK_EOF && d2 > 0) {
-                    if (tok.kind == '(')
+                while (g_lex.tok.kind != TOK_EOF && d2 > 0) {
+                    if (g_lex.tok.kind == '(')
                         d2++;
-                    else if (tok.kind == ')')
+                    else if (g_lex.tok.kind == ')')
                         d2--;
                     next_token();
                 }
@@ -768,24 +688,20 @@ int array_dim_has_runtime_identifier(void)
             }
             continue;
         }
-        if (tok.kind == TOK_ID && find_enum_const(tok.text) < 0) {
+        if (g_lex.tok.kind == TOK_ID && find_enum_const(g_lex.tok.text) < 0) {
             has_runtime = 1;
             break;
         }
-        if (tok.kind == '[' || tok.kind == '{')
+        if (g_lex.tok.kind == '[' || g_lex.tok.kind == '{')
             depth++;
-        else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+        else if (g_lex.tok.kind == ')' || g_lex.tok.kind == ']' || g_lex.tok.kind == '}') {
             if (depth > 0)
                 depth--;
         }
         next_token();
     }
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
     return has_runtime;
 }
 
@@ -799,14 +715,14 @@ int array_dim_has_runtime_identifier(void)
 void skip_array_dim_to_close(void)
 {
     int depth = 0;
-    while (tok.kind != TOK_EOF) {
-        if (depth == 0 && tok.kind == ']')
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (depth == 0 && g_lex.tok.kind == ']')
             break;
-        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{')
+        if (g_lex.tok.kind == '(' || g_lex.tok.kind == '[' || g_lex.tok.kind == '{')
             depth++;
-        else if (tok.kind == ')' || tok.kind == '}')
+        else if (g_lex.tok.kind == ')' || g_lex.tok.kind == '}')
             { if (depth > 0) depth--; }
-        else if (tok.kind == ']')
+        else if (g_lex.tok.kind == ']')
             { if (depth > 0) depth--; }
         next_token();
     }
@@ -835,7 +751,7 @@ void parse_array_declarator_dims(int base_type,
     memset(g_last_array_dims, 0, sizeof(g_last_array_dims));
 
     while (accept('[')) {
-        if (tok.kind == ']') {
+        if (g_lex.tok.kind == ']') {
             next_token();
             n = (allow_empty_first && ndims == 0)
                     ? char_array_string_initializer_size(base_type)
@@ -855,11 +771,11 @@ void parse_array_declarator_dims(int base_type,
                  */
                 if (ndims == 0) {
                     g_vla_pending = 1;
-                    g_vla_dim_posi = posi;
-                    g_vla_dim_tok_start = tok_start_pos;
-                    g_vla_dim_line = line_no;
-                    g_vla_dim_tok_line = tok_line;
-                    g_vla_dim_tok = tok;
+                    g_vla_dim_posi = g_lex.posi;
+                    g_vla_dim_tok_start = g_lex.tok_start_pos;
+                    g_vla_dim_line = g_lex.line_no;
+                    g_vla_dim_tok_line = g_lex.tok_line;
+                    g_vla_dim_tok = g_lex.tok;
                     skip_array_dim_to_close();
                     n = 0;
                 } else {
@@ -956,11 +872,11 @@ int count_initializer_atoms_level(void)
     n = 0;
 
     if (accept('{')) {
-        while (tok.kind != TOK_EOF && tok.kind != '}') {
+        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
             n += count_initializer_atoms_level();
             if (!accept(','))
                 break;
-            if (tok.kind == '}')
+            if (g_lex.tok.kind == '}')
                 break;
         }
         expect('}');
@@ -968,13 +884,13 @@ int count_initializer_atoms_level(void)
     }
 
     depth = 0;
-    while (tok.kind != TOK_EOF) {
-        if (depth == 0 && (tok.kind == ',' || tok.kind == '}'))
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (depth == 0 && (g_lex.tok.kind == ',' || g_lex.tok.kind == '}'))
             break;
 
-        if (tok.kind == '(' || tok.kind == '[' || tok.kind == '{') {
+        if (g_lex.tok.kind == '(' || g_lex.tok.kind == '[' || g_lex.tok.kind == '{') {
             depth++;
-        } else if (tok.kind == ')' || tok.kind == ']' || tok.kind == '}') {
+        } else if (g_lex.tok.kind == ')' || g_lex.tok.kind == ']' || g_lex.tok.kind == '}') {
             if (depth > 0)
                 depth--;
             else
@@ -989,28 +905,16 @@ int count_initializer_atoms_level(void)
 
 int count_omitted_array_initializer_atoms(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int n;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     n = 0;
-    if (accept('=') && tok.kind == '{')
+    if (accept('=') && g_lex.tok.kind == '{')
         n = count_initializer_atoms_level();
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
     return n;
 }
 
@@ -1027,12 +931,12 @@ int count_initializer_top_elems_level(void)
 
     n = 0;
     if (accept('{')) {
-        while (tok.kind != TOK_EOF && tok.kind != '}') {
+        while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
             count_initializer_atoms_level();   /* skip one whole element */
             n++;
             if (!accept(','))
                 break;
-            if (tok.kind == '}')
+            if (g_lex.tok.kind == '}')
                 break;
         }
         expect('}');
@@ -1042,28 +946,16 @@ int count_initializer_top_elems_level(void)
 
 int count_omitted_array_initializer_top_elems(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int n;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     n = 0;
-    if (accept('=') && tok.kind == '{')
+    if (accept('=') && g_lex.tok.kind == '{')
         n = count_initializer_top_elems_level();
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
     return n;
 }
 
@@ -1093,7 +985,7 @@ void emit_init_auto_char_array_from_string(struct Sym *s, const char *str, int s
         ch = (i + 1 < n) ? ((unsigned char)str[i]) : 0;
         emit_load_sym_addr(s);
         emit_add_const_to_hl(i);
-        fprintf(outf, "\tld e,%d\n", ch);
+        fprintf(g_emit_sink.stream, "\tld e,%d\n", ch);
         emit_store_de_to_addr_hl(TYPE_CHAR);
     }
 }
@@ -1161,8 +1053,8 @@ void check_undefined_user_labels(void)
              * through the array index (-Wformat-overflow false positive -
              * same class fixed in dccmake.c and asm_name_prefix_underscore). */
             sprintf(msg, "undefined goto label '%.63s'", ulabel_names[i]);
-            dcc_error_at(tok.file[0] ? tok.file : (input_name ? input_name : "<input>"),
-                         tok_line, -1, msg, NULL);
+            dcc_error_at(g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>"),
+                         g_lex.tok_line, -1, msg, NULL);
         }
     }
 }
@@ -1214,7 +1106,7 @@ void gen_post_update_symbol_addr_value(struct Sym *s, int op)
         }
         emit_store_hl_to_sym_direct(s);  /* store new pointer value */
         emit("\tpop hl\n");               /* HL = old pointer, used as lvalue address */
-        g_expr_type = t;
+        g_expr.type = t;
         return;
     }
 
@@ -1238,7 +1130,7 @@ void gen_post_update_symbol_addr_value(struct Sym *s, int op)
     emit("\tex (sp),hl\n");         /* HL = pointer variable address, stack = old pointer */
     emit_store_de_to_addr_hl(t);    /* store new pointer */
     emit("\tpop hl\n");             /* HL = old pointer, used as lvalue address */
-    g_expr_type = t;
+    g_expr.type = t;
 }
 
 
@@ -1284,7 +1176,7 @@ void gen_post_update_from_addr(int type, int op)
         emit("\tld (hl),d\n");           /* store new_high[1] */
         emit("\tpop hl\n");              /* HL = low16_old  (return value low) */
         emit("\tpop de\n");              /* DE = high16_old (return value high) */
-        g_expr_type = type;
+        g_expr.type = type;
         return;
     }
 
@@ -1298,7 +1190,7 @@ void gen_post_update_from_addr(int type, int op)
         current_field_bit_width = bf_width;
         current_field_bit_shift = bf_shift;
         current_field_bit_mask = bf_mask;
-        g_expr_type = type;
+        g_expr.type = type;
         emit_extract_bitfield();
         if (!expr_result_dead)
             emit("\tpush hl\n");
@@ -1314,8 +1206,8 @@ void gen_post_update_from_addr(int type, int op)
         emit_store_bitfield_de_to_addr_hl(0);
         if (!expr_result_dead)
             emit("\tpop hl\n");
-        g_expr_type = type;
-        g_long_from16 = 0;
+        g_expr.type = type;
+        g_expr.long_from16 = 0;
         return;
     }
 
@@ -1334,7 +1226,7 @@ void gen_post_update_from_addr(int type, int op)
     emit("\tex (sp),hl\n");          /* HL = addr, stack = old */
     emit_store_de_to_addr_hl(type);
     emit("\tpop hl\n");              /* expression result = old */
-    g_expr_type = type;
+    g_expr.type = type;
 }
 
 
@@ -1383,14 +1275,14 @@ void emit_convert_int_to_float(int actual_type)
             emit_runtime_call("__fulf");
         else
             emit_runtime_call("__flf");
-        g_expr_type = TYPE_FLOAT;
+        g_expr.type = TYPE_FLOAT;
         return;
     }
     if ((actual_type & TYPE_UNSIGNED) || type_ptr_depth(actual_type))
         emit_runtime_call("__fuf");
     else
         emit_runtime_call("__fif");
-    g_expr_type = TYPE_FLOAT;
+    g_expr.type = TYPE_FLOAT;
 }
 
 void emit_convert_float_to_intlike(int target_type)
@@ -1400,7 +1292,7 @@ void emit_convert_float_to_intlike(int target_type)
             emit_runtime_call("__fful");
         else
             emit_runtime_call("__ffl");
-        g_expr_type = target_type;
+        g_expr.type = target_type;
         return;
     }
 
@@ -1416,7 +1308,7 @@ void emit_convert_float_to_intlike(int target_type)
             emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
     }
 
-    g_expr_type = target_type;
+    g_expr.type = target_type;
 }
 
 int expected_arg_type(struct Sym *fn, int arg_index, int *ptype)
@@ -1456,7 +1348,7 @@ int try_emit_push_struct_return_call_arg(const char *snippet, int want_type);
 
 void emit_call_hl_from_stack_offset(int off)
 {
-    fprintf(outf, "\tld hl,%d\n", off);
+    fprintf(g_emit_sink.stream, "\tld hl,%d\n", off);
     emit("\tadd hl,sp\n");
     emit("\tld e,(hl)\n");
     emit("\tinc hl\n");
@@ -1475,13 +1367,13 @@ void emit_extract_bitfield(void)
     if (current_field_bit_width <= 0)
         return;
 
-    out_type = (g_expr_type & TYPE_UNSIGNED) ? (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
+    out_type = (g_expr.type & TYPE_UNSIGNED) ? (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
 
     for (i = 0; i < current_field_bit_shift; ++i)
         emit("\tsrl h\n\trr l\n");
 
     mask = (unsigned int)((1UL << current_field_bit_width) - 1UL);
-    fprintf(outf, "\tld de,%u\n", mask & 0xffffU);
+    fprintf(g_emit_sink.stream, "\tld de,%u\n", mask & 0xffffU);
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
@@ -1494,17 +1386,17 @@ void emit_extract_bitfield(void)
         signbit = (unsigned int)(1UL << (current_field_bit_width - 1));
         extend_mask = (~mask) & 0xffffU;
 
-        fprintf(outf, "\tld de,%u\n", signbit & 0xffffU);
+        fprintf(g_emit_sink.stream, "\tld de,%u\n", signbit & 0xffffU);
         emit("\tld a,l\n\tand e\n\tld e,a\n");
         emit("\tld a,h\n\tand d\n\tor e\n");
-        fprintf(outf, "\tjp z,L%d\n", lab);
-        fprintf(outf, "\tld de,%u\n", extend_mask);
+        fprintf(g_emit_sink.stream, "\tjp z,L%d\n", lab);
+        fprintf(g_emit_sink.stream, "\tld de,%u\n", extend_mask);
         emit("\tld a,l\n\tor e\n\tld l,a\n");
         emit("\tld a,h\n\tor d\n\tld h,a\n");
         emit_label(lab);
     }
 
-    g_expr_type = out_type;
+    g_expr.type = out_type;
 }
 
 void emit_store_bitfield_from_hl(void)
@@ -1523,7 +1415,7 @@ void emit_store_bitfield_from_hl(void)
     emit("\tpush de\n");       /* keep raw field value */
     emit_load_from_hl(TYPE_INT); /* HL = old storage-unit word */
 
-    fprintf(outf, "\tld de,%u\n", clear_mask);
+    fprintf(g_emit_sink.stream, "\tld de,%u\n", clear_mask);
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
@@ -1531,7 +1423,7 @@ void emit_store_bitfield_from_hl(void)
     for (i = 0; i < current_field_bit_shift; ++i)
         emit("\tsla e\n\trl d\n");
 
-    fprintf(outf, "\tld bc,%u\n", mask);
+    fprintf(g_emit_sink.stream, "\tld bc,%u\n", mask);
     emit("\tld a,e\n\tand c\n\tld e,a\n");
     emit("\tld a,d\n\tand b\n\tld d,a\n");
     emit("\tld a,l\n\tor e\n\tld l,a\n");
@@ -1555,7 +1447,7 @@ void emit_store_bitfield_de_to_addr_hl(int keep_result)
      * result can be read back from the stored field.  Returning the raw
      * pre-store value would skip the field's width truncation / sign
      * extension, e.g. `x = (s.bf3 += 5)` must yield the stored 3-bit value,
-     * not the untruncated sum.  g_expr_type must hold the field type at entry
+     * not the untruncated sum.  g_expr.type must hold the field type at entry
      * so emit_extract_bitfield sign- vs zero-extends correctly. */
     if (keep_result)
         emit("\tpush hl\n");
@@ -1563,7 +1455,7 @@ void emit_store_bitfield_de_to_addr_hl(int keep_result)
     emit("\tpush de\n");
     emit_load_from_hl(TYPE_INT);
 
-    fprintf(outf, "\tld de,%u\n", clear_mask);
+    fprintf(g_emit_sink.stream, "\tld de,%u\n", clear_mask);
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
@@ -1571,7 +1463,7 @@ void emit_store_bitfield_de_to_addr_hl(int keep_result)
     for (i = 0; i < current_field_bit_shift; ++i)
         emit("\tsla e\n\trl d\n");
 
-    fprintf(outf, "\tld bc,%u\n", mask);
+    fprintf(g_emit_sink.stream, "\tld bc,%u\n", mask);
     emit("\tld a,e\n\tand c\n\tld e,a\n");
     emit("\tld a,d\n\tand b\n\tld d,a\n");
     emit("\tld a,l\n\tor e\n\tld l,a\n");
@@ -1597,30 +1489,18 @@ void emit_float_compare_call(int op);
 
 int paren_starts_cast(void)
 {
-    long save_pos;
-    long save_tok_start;
-    int save_line;
-    int save_tok_line;
-    struct Token save_tok;
+    LexState _ls;
     int r;
 
-    if (tok.kind != '(')
+    if (g_lex.tok.kind != '(')
         return 0;
 
-    save_pos = posi;
-    save_tok_start = tok_start_pos;
-    save_line = line_no;
-    save_tok_line = tok_line;
-    save_tok = tok;
+    _ls = lex_save();
 
     next_token();
     r = starts_type();
 
-    posi = save_pos;
-    tok_start_pos = save_tok_start;
-    line_no = save_line;
-    tok_line = save_tok_line;
-    tok = save_tok;
+    lex_restore(&_ls);
 
     return r;
 }
@@ -1702,7 +1582,7 @@ void emit_pre_incdec_lvalue(int type, int op)
             current_field_bit_width = bf_width;
             current_field_bit_shift = bf_shift;
             current_field_bit_mask = bf_mask;
-            g_expr_type = type;
+            g_expr.type = type;
             emit_extract_bitfield();
         }
         emit_incdec_value_in_dehl(type, op);
@@ -1712,7 +1592,7 @@ void emit_pre_incdec_lvalue(int type, int op)
             current_field_bit_width = bf_width;
             current_field_bit_shift = bf_shift;
             current_field_bit_mask = bf_mask;
-            g_expr_type = type;   /* field type -> correct extract signedness */
+            g_expr.type = type;   /* field type -> correct extract signedness */
             emit_store_bitfield_de_to_addr_hl(1);
         } else {
             emit("\tpop hl\n");
@@ -1720,6 +1600,6 @@ void emit_pre_incdec_lvalue(int type, int op)
             emit("\tex de,hl\n");
         }
     }
-    g_expr_type = type;
+    g_expr.type = type;
 }
 

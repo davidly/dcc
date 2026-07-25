@@ -40,6 +40,8 @@ set(DCC_SOURCES
     dcc_decl.c
     dcc_stmt.c
     dcc_func.c
+    dcc_global_init.c   # file-scope object initializer parsing (split from dcc_func.c)
+    dcc_regalloc.c      # speculative no-IX / BC-regalloc codegen (split from dcc_func.c)
     dcc_data.c
     dcc_ast.c           # function-local AST (arena + nodes)
     dcc_ast_build.c     # function-local AST builder
