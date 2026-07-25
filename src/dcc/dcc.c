@@ -27,6 +27,7 @@
 #endif
 
 #include "dcc.h"
+#include "dcc_preproc_internal.h"
 #include "dcc_ast.h"
 
 #ifdef _WIN32

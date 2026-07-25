@@ -24,6 +24,7 @@
  *   dcc_asmname.c   C identifier -> M80 assembler symbol mapping
  *   dcc_diag_emit.c diagnostics, allocation, emit primitives, char input
  *   dcc_preproc.c   preprocessor + macro engine + lexer (next_token)
+ *   dcc_pp_expr.c   preprocessor #if/#elif expression evaluator
  *   dcc_types.c     type system, struct/union/typedef parsing
  *   dcc_constexpr.c integer constant-expression parser
  *   dcc_symbols.c   symbol tables + symbol-access codegen + EXTRN
@@ -43,7 +44,7 @@
  *
  * A small amount of state is intentionally NOT declared here because it is
  * private to a single module and kept `static` there:
- *   - pp_expr_p / pp_expr_depth        (dcc_preproc.c: #if expression cursor)
+ *   - pp_expr_p / pp_expr_depth        (dcc_pp_expr.c: #if expression cursor)
  *   - include_dirs / num_include_dirs  (dcc.c: include search path)
  */
 #ifndef DCC_H
@@ -628,35 +629,6 @@ extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
-extern struct Sym *g_bc_regalloc_sym;
-extern int g_regalloc_address_escaped;
-extern int g_e_regalloc_claim_active;
-extern int g_e_regalloc_claimed;
-extern struct Sym *g_e_regalloc_sym;
-/* Set by dcc_loop_regalloc.c's try_loop_regalloc_bc/try_loop_regalloc_bc_
- * write right where each commits a successful promotion - dcc_regalloc.c's
- * try_loop_scoped_regalloc_first resets this to 0 before a trial body
- * generation and checks it afterward to learn, empirically, whether any
- * loop in the function actually claimed BC (unlike g_bc_regalloc_sym,
- * which only dcc_regalloc.c's own whole-function mechanism ever writes). */
-extern int g_loop_regalloc_bc_claimed;
-/* Shared with dcc_loop_regalloc.c - see that file's use for the full
- * contract; e_cand is always NULL from there (loop-scoped promotion only
- * ever targets BC). Defined in dcc_regalloc.c. */
-int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
-                              FILE **out_f);
-/* Shared with dcc_loop_regalloc.c's loop_regalloc_write_candidate_safe -
- * see their own header comments in dcc_regalloc.c for the full contract.
- * Defined in dcc_regalloc.c. */
-int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40]);
-int bc_regalloc_exit_lines(struct Sym *cand, char lines[3][40]);
-/* True if `s` (one line of emitted assembly, no trailing newline) references
- * register B, C, or the BC pair as a real operand. Shared with
- * dcc_loop_regalloc.c's write-candidate verifier (loop_regalloc_write_
- * candidate_safe), which needs the same primitive but a stricter policy
- * around it than this file's own lenient reload-repair one - see that
- * function's header comment. Defined in dcc_regalloc.c. */
-int line_touches_bc_reg(const char *s);
 /* True if `s` has a captured, codegen-time-substitutable inline body (one
  * of inline_return_expr/inline_stmt_expr/inline_stmt_body). Shared with
  * dcc_licm.c/dcc_loop_regalloc.c's eligibility scans, which recurse into
@@ -664,31 +636,6 @@ int line_touches_bc_reg(const char *s);
  * node - matching what try_gen_inline_call_ast will actually substitute at
  * codegen time. Defined in dcc_func.c. */
 int is_inline_substitutable(struct Sym *s);
-/* True if `buf` (the full generated-assembly text under verification)
- * contains a "\tcall NAME" whose NAME is not on the verified-BC-safe
- * whitelist (g_safe_runtime_calls, dcc_regalloc.c - the seven DCCRTL.MAC-
- * contracted arithmetic helpers plus a dozen verified-clean ctype.h
- * entries) and is not a call to a _Noreturn function. Shared with
- * dcc_loop_regalloc.c's write-candidate verifier, which needs the
- * identical whitelist. Defined in dcc_regalloc.c. */
-int buf_has_unsafe_call(const char *buf);
-/* True if `name` (an asm-level call target, e.g. "__csp" for isspace) is on
- * that same whitelist (now also including a dozen verified-BC-clean
- * ctype.h entries - see the definition for how they were checked). Exposed
- * for dcc_licm.c's licm_scan_modified, which needs it at the AST level to
- * decide whether a loop containing such a call is even eligible to attempt
- * BC promotion, before any generated text exists for buf_has_unsafe_call
- * to re-check. Defined in dcc_regalloc.c. */
-int asm_name_is_bc_safe_call(const char *name);
-/* True if `name` (an asm-level call target) is a function declared
- * _Noreturn - see the fuller comment at its definition (dcc_regalloc.c).
- * Exposed so dcc_loop_regalloc.c's strict write-candidate verifier can
- * treat any bc-touching line between such a call and the next label as
- * unreachable dead code, not just the call line itself (asm-level dead-
- * code elimination never runs on the throwaway argument-cleanup code a
- * noreturn call site still gets, e.g. a `pop bc` discarding a pushed
- * string-literal argument to die()). */
-int asm_name_is_noreturn_call(const char *name);
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -878,31 +825,8 @@ int is_ident_char(int c);
 int peekc(void);
 int getc_src(void);
 
-/* ---- preproc ---- */
-int find_define(const char *name);
-void add_define_ex(const char *name, const char *value, int is_func, int nargs, char params[8][32]);
-void add_define(const char *name, const char *value);
-void pp_expr_skip_ws(void);
-int pp_expr_match_word(const char *w);
-long pp_expr_number(void);
-long pp_expr_charlit(void);
-long pp_expr_defined(void);
-long pp_expr_primary(void);
-long pp_expr_unary(void);
-long pp_expr_mul(void);
-long pp_expr_add(void);
-long pp_expr_shift(void);
-long pp_expr_rel(void);
-long pp_expr_eq(void);
-long pp_expr_bitand(void);
-long pp_expr_bitxor(void);
-long pp_expr_bitor(void);
-long pp_expr_andand(void);
-long pp_expr_oror(void);
-long pp_expr_cond(void);
-int pp_eval_simple_expr(const char *s);
+/* ---- preproc / lexer ---- */
 void macro_expand_argument_text(const char *in, char *out, int outsz, int depth);
-void remove_define(const char *name);
 void pp_recompute_active(void);
 void parse_preprocessor_line(void);
 void skip_ws_and_comments(void);
@@ -914,7 +838,6 @@ int parse_escape_string_char(const char **ps);
 int parse_charlit_string_value(const char *s, long *out);
 void replace_source_range(long start, long end, const char *text);
 void trim_arg(char *s);
-void strip_macro_replacement_comments(char *s);
 int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *nargs, int variadic_named_count);
 void append_macro_string_literal(const char *arg, char *out, int *oip, int outsz);
 int macro_param_index(int di, const char *ident);
@@ -1235,40 +1158,6 @@ void parse_global_scalar_array_zero_to(struct Sym *s, int *np, int limit);
 void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level);
 void parse_global_init_list(struct Sym *s);
 void parse_function_or_global(int base_type);
-
-/* dcc_regalloc.c - speculative no-IX / BC-register-allocation codegen passes.
- * find_bc_regalloc_candidate and plain_static_body_can_be_buffered remain in
- * dcc_func.c but are called from the speculative passes across the TU split. */
-struct Sym *find_bc_regalloc_candidate(int params_end);
-int plain_static_body_can_be_buffered(struct Sym *s, const char *name);
-int function_qualifies_for_speculative_noix(const char *name, int local_bytes);
-int function_qualifies_for_speculative_regalloc(const char *name);
-int try_speculative_noix_function_body(const char *name, int type,
-                                       int local_bytes, struct Sym *s,
-                                       long body_start_pos, long body_start_tok_start,
-                                       int body_start_line, int body_start_tok_line,
-                                       struct Token body_start_tok, int body_start_nlocals,
-                                       int body_start_local_size);
-int try_loop_scoped_regalloc_first(const char *name, int type,
-                                   int local_bytes, struct Sym *s,
-                                   long body_start_pos, long body_start_tok_start,
-                                   int body_start_line, int body_start_tok_line,
-                                   struct Token body_start_tok, int body_start_nlocals,
-                                   int body_start_local_size);
-int try_speculative_bc_regalloc_function_body(const char *name, int type,
-                                              int local_bytes, struct Sym *s,
-                                              struct Sym *bc_cand, int attempt_e,
-                                              long body_start_pos, long body_start_tok_start,
-                                              int body_start_line, int body_start_tok_line,
-                                              struct Token body_start_tok, int body_start_nlocals,
-                                              int body_start_local_size);
-int try_speculative_bc_regalloc_with_e_fallback(const char *name, int type,
-                                                int local_bytes, struct Sym *s,
-                                                struct Sym *bc_cand,
-                                                long body_start_pos, long body_start_tok_start,
-                                                int body_start_line, int body_start_tok_line,
-                                                struct Token body_start_tok, int body_start_nlocals,
-                                                int body_start_local_size);
 
 void add_predefined_extern(const char *name, int type, int storage);
 void parse_translation_unit(void);

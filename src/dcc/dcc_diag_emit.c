@@ -11,6 +11,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_preproc_internal.h"
 
 EmitSink emit_sink_push(FILE *stream, int purpose)
 {

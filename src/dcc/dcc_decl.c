@@ -10,6 +10,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 int parse_float_init_literal(unsigned long *bits)
 {
