@@ -292,17 +292,28 @@ static int add_var(const char *name, int len, int esize)
  * TM/TD/HIGH genuinely carry values outside 0-9 during intermediate
  * arithmetic (a real corruption was reproduced when this was tried) -
  * their byte-packing savings are negligible anyway (a handful of bytes)
- * next to that correctness risk, so scalars always keep the full int. */
+ * next to that correctness risk, so scalars always keep the full int.
+ *
+ * struct Var *vp=&var[vi]: same fix as tests/forint.c's get_sym_val/
+ * set_sym_val (see that file's comment and dcc's inliner commit for the
+ * background) - var[vi].esize and var[vi].v were each recomputing
+ * vi*sizeof(struct Var) from scratch instead of sharing one address, on
+ * every variable read/write the whole interpreted program makes. Found by
+ * grepping the rest of the suite for the same "array[same index] touched
+ * more than once in one static inline body" shape once forint's fix
+ * landed - var_get/var_set were the only other real hit. */
 static inline int var_get(int vi, int idx)
 {
-    if (var[vi].esize == 1) return ((signed char *)var[vi].v)[idx];
-    return ((int *)var[vi].v)[idx];
+    struct Var *vp = &var[vi];
+    if (vp->esize == 1) return ((signed char *)vp->v)[idx];
+    return ((int *)vp->v)[idx];
 }
 
 static inline void var_set(int vi, int idx, int val)
 {
-    if (var[vi].esize == 1) ((signed char *)var[vi].v)[idx] = (signed char)val;
-    else ((int *)var[vi].v)[idx] = val;
+    struct Var *vp = &var[vi];
+    if (vp->esize == 1) ((signed char *)vp->v)[idx] = (signed char)val;
+    else ((int *)vp->v)[idx] = val;
 }
 
 static int find_para_soft(const char *name)
