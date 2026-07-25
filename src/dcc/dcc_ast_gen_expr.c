@@ -17,6 +17,8 @@ static int emit_low_byte_expr_to_a(const struct AstNode *n);
 static int emit_long_byte_shift_to_reg(const struct AstNode *n);
 static int emit_long_oreq_byte_lane(struct Sym *s, const struct AstNode *rhs);
 static void gen_compound_literal_ast(const struct AstNode *n);
+static void gen_assign_lvalue_expr_ast(const struct AstNode *n);
+static void gen_assign_ident_ast(const struct AstNode *n);
 
 
 /* Recognize byte-truncation idioms that are common in hand-written portable C:
@@ -1908,11 +1910,6 @@ static void emit_store_long_edcb_via_hl(void)
 
 void gen_assign_ast(const struct AstNode *n)
 {
-    struct Sym *s;
-    int common_type;
-    int binop;
-    int saved_dead;
-
     if (ast_struct_deref_copy_assign_supported(n)) {
         gen_struct_deref_copy_assign_ast(n);
         return;
@@ -1959,259 +1956,241 @@ void gen_assign_ast(const struct AstNode *n)
      * and any wider/pointer element are excluded by the gate. */
     if (n->a->kind == AST_INDEX || n->a->kind == AST_MEMBER ||
         (n->a->kind == AST_UNARY && n->a->op == '*')) {
-        struct Sym *byte_arr;
-        struct Sym *byte_idx_sym;
-        struct Sym *byte_rhs_sym;
-        long byte_idx;
-        long byte_rhs;
-        int byte_idx_has_const;
-        int byte_rhs_kind;
-        int val_type;
-        int want_dead = expr_result_dead;
-        int bf_width;
-        int bf_shift;
-        unsigned int bf_mask;
-        int rhs_bool01;
-        const struct AstNode *mask_value;
-        unsigned int bool_mask;
+        gen_assign_lvalue_expr_ast(n);
+        return;
+    }
+    gen_assign_ident_ast(n);
+}
 
-        if (ast_global_byte_array_const_store(n, &byte_arr, &byte_idx, &byte_rhs)) {
-            emit_global_byte_array_index_addr(byte_arr, NULL, byte_idx, 1);
-            fprintf(outf, "\tld (hl),%ld\n", byte_rhs & 255);
-            g_expr.type = byte_arr->type;
-            g_expr.long_from16 = 0;
-            return;
-        }
+/* Store to a non-identifier lvalue (subscript arr[i], member s.f / p->f, or
+ * deref *p): the address machine differs per lvalue kind, the store tail is
+ * uniform. Handles plain = and the arithmetic/bitwise compound operators.
+ * Split out of gen_assign_ast. */
+static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
+{
+    int saved_dead;
+    int common_type;
+    int binop;
 
-        if (ast_global_byte_array_fast_store(n, &byte_arr, &byte_idx_sym,
-                                             &byte_idx, &byte_idx_has_const,
-                                             &byte_rhs_sym, &byte_rhs,
-                                             &byte_rhs_kind)) {
-            emit_global_byte_array_index_addr(byte_arr, byte_idx_sym, byte_idx,
-                                              byte_idx_has_const);
-            if (byte_rhs_kind == 1) {
-                fprintf(outf, "\tld a,(ix%+d)\n", byte_rhs_sym->offset);
-                emit("\tld (hl),a\n");
-            } else {
-                fprintf(outf, "\tld (hl),%ld\n", byte_rhs & 255);
-            }
-            g_expr.type = byte_arr->type;
-            g_expr.long_from16 = 0;
-            return;
-        }
+    struct Sym *byte_arr;
+    struct Sym *byte_idx_sym;
+    struct Sym *byte_rhs_sym;
+    long byte_idx;
+    long byte_rhs;
+    int byte_idx_has_const;
+    int byte_rhs_kind;
+    int val_type;
+    int want_dead = expr_result_dead;
+    int bf_width;
+    int bf_shift;
+    unsigned int bf_mask;
+    int rhs_bool01;
+    const struct AstNode *mask_value;
+    unsigned int bool_mask;
 
-        if (n->a->kind == AST_INDEX)
-            gen_index_addr_ast(n->a, &val_type);    /* HL = element address */
-        else if (n->a->kind == AST_MEMBER)
-            gen_member_addr_ast(n->a, &val_type);   /* HL = field address */
-        else
-            gen_deref_addr_ast(n->a, &val_type);    /* HL = target address */
+    if (ast_global_byte_array_const_store(n, &byte_arr, &byte_idx, &byte_rhs)) {
+        emit_global_byte_array_index_addr(byte_arr, NULL, byte_idx, 1);
+        fprintf(outf, "\tld (hl),%ld\n", byte_rhs & 255);
+        g_expr.type = byte_arr->type;
+        g_expr.long_from16 = 0;
+        return;
+    }
 
-        bf_width = current_field_bit_width;
-        bf_shift = current_field_bit_shift;
-        bf_mask = current_field_bit_mask;
-
-        /* The low-byte store shortcut is correct for char/uchar fields and
-         * array elements, but not for _Bool.  _Bool assignment must first
-         * normalize every non-zero RHS value to exactly 1; otherwise cases
-         * like arr[1] = 123, flags.a = 1000L, and *p = 77 store the raw low
-         * byte and break C99 _Bool semantics.  Let the normal assignment path
-         * below evaluate and emit_bool_normalize_hl() for boolean lvalues. */
-        if (n->op == '=' && type_size(val_type) == 1 && !type_is_bool(val_type) &&
-            bf_width == 0 && emit_low_byte_expr_to_a(n->b)) {
+    if (ast_global_byte_array_fast_store(n, &byte_arr, &byte_idx_sym,
+                                         &byte_idx, &byte_idx_has_const,
+                                         &byte_rhs_sym, &byte_rhs,
+                                         &byte_rhs_kind)) {
+        emit_global_byte_array_index_addr(byte_arr, byte_idx_sym, byte_idx,
+                                          byte_idx_has_const);
+        if (byte_rhs_kind == 1) {
+            fprintf(outf, "\tld a,(ix%+d)\n", byte_rhs_sym->offset);
             emit("\tld (hl),a\n");
-            if (!want_dead) {
-                emit("\tld l,a\n");
-                if (val_type & TYPE_UNSIGNED)
-                    emit("\tld h,0\n");
-                else
-                    emit("\trlca\n\tsbc a,a\n\tld h,a\n");
-            }
-            g_expr.type = val_type;
-            g_expr.long_from16 = 0;
-            return;
+        } else {
+            fprintf(outf, "\tld (hl),%ld\n", byte_rhs & 255);
         }
+        g_expr.type = byte_arr->type;
+        g_expr.long_from16 = 0;
+        return;
+    }
 
-        if (n->op == '=') {
-            emit("\tpush hl\n");
-            rhs_bool01 = 0;
+    if (n->a->kind == AST_INDEX)
+        gen_index_addr_ast(n->a, &val_type);    /* HL = element address */
+    else if (n->a->kind == AST_MEMBER)
+        gen_member_addr_ast(n->a, &val_type);   /* HL = field address */
+    else
+        gen_deref_addr_ast(n->a, &val_type);    /* HL = target address */
 
-            if (type_is_bool(val_type) &&
-                ast_bool_bitand_const_rhs(n->b, &mask_value, &bool_mask)) {
-                saved_dead = expr_result_dead;
-                expr_result_dead = 0;
-                ast_gen_expr(mask_value);
-                expr_result_dead = saved_dead;
-                emit_store_bool_masked_hl_to_addr_on_stack(bool_mask, !want_dead);
-                if (!want_dead)
-                    emit("\tex de,hl\n");
-                g_expr.long_from16 = 0;
-                return;
-            }
+    bf_width = current_field_bit_width;
+    bf_shift = current_field_bit_shift;
+    bf_mask = current_field_bit_mask;
 
+    /* The low-byte store shortcut is correct for char/uchar fields and
+     * array elements, but not for _Bool.  _Bool assignment must first
+     * normalize every non-zero RHS value to exactly 1; otherwise cases
+     * like arr[1] = 123, flags.a = 1000L, and *p = 77 store the raw low
+     * byte and break C99 _Bool semantics.  Let the normal assignment path
+     * below evaluate and emit_bool_normalize_hl() for boolean lvalues. */
+    if (n->op == '=' && type_size(val_type) == 1 && !type_is_bool(val_type) &&
+        bf_width == 0 && emit_low_byte_expr_to_a(n->b)) {
+        emit("\tld (hl),a\n");
+        if (!want_dead) {
+            emit("\tld l,a\n");
+            if (val_type & TYPE_UNSIGNED)
+                emit("\tld h,0\n");
+            else
+                emit("\trlca\n\tsbc a,a\n\tld h,a\n");
+        }
+        g_expr.type = val_type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    if (n->op == '=') {
+        emit("\tpush hl\n");
+        rhs_bool01 = 0;
+
+        if (type_is_bool(val_type) &&
+            ast_bool_bitand_const_rhs(n->b, &mask_value, &bool_mask)) {
             saved_dead = expr_result_dead;
             expr_result_dead = 0;
-            if (type_ptr_depth(val_type) > 0 && n->b->kind == AST_CAST) {
-                ast_gen_expr(n->b->a);              /* rhs -> HL */
-            } else if (type_ptr_depth(val_type) > 0) {
-                int ptr_type;
-                int no_deref;
-                if (ast_pointer_expr_type(n->b, &ptr_type, &no_deref))
-                    gen_pointer_expr_ast(n->b, &ptr_type, &no_deref);
-                else
-                    ast_gen_expr(n->b);
-            } else {
-                ast_gen_expr(n->b);                 /* rhs -> HL */
-            }
+            ast_gen_expr(mask_value);
             expr_result_dead = saved_dead;
-            if (type_is_bool(val_type)) {
-                rhs_bool01 = ast_expr_yields_bool01(n->b);
-                if (!rhs_bool01) {
-                    emit_bool_normalize_hl(g_expr.type);
-                    rhs_bool01 = 1;
-                }
-            }
-            if (type_size(val_type) == 4) {
-                if (type_is_float(val_type)) {
-                    if (!type_is_float(g_expr.type))
-                        emit_convert_int_to_float(g_expr.type);
-                } else if (!type_is_long(g_expr.type)) {
-                    emit_extend_to_long_typed(g_expr.type);
-                }
-                emit_store_de_to_addr_hl(val_type);  /* pops address itself */
-                /* emit_store_de_to_addr_hl leaves the stored 32-bit value as
-                 * DE=low word, BC=high word; rebuild DE:HL=value for a live
-                 * result (e.g. `x = (p->f = v)`). */
-                if (!want_dead)
-                    emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
-                g_expr.long_from16 = 0;
-                return;
-            }
-            if (bf_width > 0) {
-                current_field_bit_width = bf_width;
-                current_field_bit_shift = bf_shift;
-                current_field_bit_mask = bf_mask;
-                emit_store_bitfield_from_hl();
-                g_expr.long_from16 = 0;
-                return;
-            }
-            emit("\tex de,hl\n\tpop hl\n");         /* DE = value, HL = address */
-            if (type_is_bool(val_type) && rhs_bool01)
-                emit("\tld (hl),e\n");
-            else
-                emit_store_de_to_addr_hl(val_type);
+            emit_store_bool_masked_hl_to_addr_on_stack(bool_mask, !want_dead);
             if (!want_dead)
                 emit("\tex de,hl\n");
             g_expr.long_from16 = 0;
             return;
         }
 
-        switch (n->op) {
-        case TOK_ADDEQ: binop = '+'; break;
-        case TOK_SUBEQ: binop = '-'; break;
-        case TOK_MULEQ: binop = '*'; break;
-        case TOK_DIVEQ: binop = '/'; break;
-        case TOK_MODEQ: binop = '%'; break;
-        case TOK_ANDEQ: binop = '&'; break;
-        case TOK_OREQ:  binop = '|'; break;
-        default:        binop = '^'; break;   /* TOK_XOREQ */
-        }
-
-        if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
-            type_ptr_depth(val_type) > 0 && type_size(val_type) == 2) {
-            int elem_size;
-
-            elem_size = type_index_elem_size(val_type);
-            emit("\tpush hl\n");                    /* save lvalue address */
-            emit_load_from_hl(val_type);            /* HL = current pointer */
-            emit("\tpush hl\n");                    /* save current pointer */
-
-            saved_dead = expr_result_dead;
-            expr_result_dead = 0;
-            ast_gen_expr(n->b);                     /* HL = element count */
-            expr_result_dead = saved_dead;
-            scale_hl_by_elem_size(elem_size);
-
-            emit("\tex de,hl\n\tpop hl\n");         /* DE = scaled count, HL = current pointer */
-            if (n->op == TOK_ADDEQ)
-                emit("\tadd hl,de\n");
+        saved_dead = expr_result_dead;
+        expr_result_dead = 0;
+        if (type_ptr_depth(val_type) > 0 && n->b->kind == AST_CAST) {
+            ast_gen_expr(n->b->a);              /* rhs -> HL */
+        } else if (type_ptr_depth(val_type) > 0) {
+            int ptr_type;
+            int no_deref;
+            if (ast_pointer_expr_type(n->b, &ptr_type, &no_deref))
+                gen_pointer_expr_ast(n->b, &ptr_type, &no_deref);
             else
-                emit("\tor a\n\tsbc hl,de\n");
-            emit("\tex de,hl\n\tpop hl\n");         /* DE = result, HL = address */
-            emit_store_de_to_addr_hl(val_type);
-            if (!want_dead)
-                emit("\tex de,hl\n");
-            g_expr.type = val_type;
-            g_expr.long_from16 = 0;
-            return;
+                ast_gen_expr(n->b);
+        } else {
+            ast_gen_expr(n->b);                 /* rhs -> HL */
         }
-
+        expr_result_dead = saved_dead;
+        if (type_is_bool(val_type)) {
+            rhs_bool01 = ast_expr_yields_bool01(n->b);
+            if (!rhs_bool01) {
+                emit_bool_normalize_hl(g_expr.type);
+                rhs_bool01 = 1;
+            }
+        }
         if (type_size(val_type) == 4) {
-            emit("\tpush hl\n");                    /* save lvalue address */
-            emit_load_from_hl(val_type);             /* DE:HL = current value */
-
-            if (type_is_long(val_type) &&
-                (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
-                n->b->kind == AST_INT_LIT) {
-                if (!emit_shift_const_long(n->op, val_type, n->b->ival)) {
-                    fprintf(outf, "\tld b,%ld\n", n->b->ival & 255L);
-                    emit_shift_loop(n->op, val_type);
-                }
-                emit("\tld b,d\n\tld c,e\n");
-                emit("\tpop de\n");
-                emit("\tex de,hl\n");
-                emit_store_long_edcb_via_hl();
-                if (!want_dead) {
-                    emit("\tex de,hl\n");
-                    emit("\tld d,b\n\tld e,c\n");
-                }
-                g_expr.type = val_type;
-                g_expr.long_from16 = 0;
-                return;
-            }
-
-            emit("\tpush de\n\tpush hl\n");         /* save current value */
-            saved_dead = expr_result_dead;
-
             if (type_is_float(val_type)) {
-                emit_float_compound_rhs(n, saved_dead);
-                emit_store_de_to_addr_hl(val_type);
-                /* Rebuild DE:HL=value from the store's DE=low/BC=high leftovers
-                 * so a live result (`x = (p->f += v)`) is correct. */
-                if (!want_dead)
-                    emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
-                g_expr.type = val_type;
-                g_expr.long_from16 = 0;
-                return;
+                if (!type_is_float(g_expr.type))
+                    emit_convert_int_to_float(g_expr.type);
+            } else if (!type_is_long(g_expr.type)) {
+                emit_extend_to_long_typed(g_expr.type);
             }
-
-            expr_result_dead = 0;
-            ast_gen_expr(n->b);                      /* rhs -> DE:HL or HL */
-            expr_result_dead = saved_dead;
-
-            if (type_is_long(val_type) &&
-                (n->op == TOK_SHLEQ || n->op == TOK_SHREQ)) {
-                emit("\tld b,l\n\tpop hl\n\tpop de\n");
-                emit_shift_loop(n->op, val_type);
-                emit("\tld b,d\n\tld c,e\n");
-                emit("\tpop de\n");
-                emit("\tex de,hl\n");
-                emit_store_long_edcb_via_hl();
-                if (!want_dead) {
-                    emit("\tex de,hl\n");
-                    emit("\tld d,b\n\tld e,c\n");
-                }
-                g_expr.type = val_type;
-                g_expr.long_from16 = 0;
-                return;
-            }
-
-            common_type = common_arith_type(val_type, g_expr.type);
-            emit_cast_16_to_common(g_expr.type, common_type);
-            gen_binop32_typed(binop, common_type);
+            emit_store_de_to_addr_hl(val_type);  /* pops address itself */
+            /* emit_store_de_to_addr_hl leaves the stored 32-bit value as
+             * DE=low word, BC=high word; rebuild DE:HL=value for a live
+             * result (e.g. `x = (p->f = v)`). */
+            if (!want_dead)
+                emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
+            g_expr.long_from16 = 0;
+            return;
+        }
+        if (bf_width > 0) {
+            current_field_bit_width = bf_width;
+            current_field_bit_shift = bf_shift;
+            current_field_bit_mask = bf_mask;
+            emit_store_bitfield_from_hl();
+            g_expr.long_from16 = 0;
+            return;
+        }
+        emit("\tex de,hl\n\tpop hl\n");         /* DE = value, HL = address */
+        if (type_is_bool(val_type) && rhs_bool01)
+            emit("\tld (hl),e\n");
+        else
             emit_store_de_to_addr_hl(val_type);
-            /* Rebuild DE:HL=value from the store's DE=low/BC=high leftovers so a
-             * live result (`x = (p->lf += v)`) is correct. */
+        if (!want_dead)
+            emit("\tex de,hl\n");
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    switch (n->op) {
+    case TOK_ADDEQ: binop = '+'; break;
+    case TOK_SUBEQ: binop = '-'; break;
+    case TOK_MULEQ: binop = '*'; break;
+    case TOK_DIVEQ: binop = '/'; break;
+    case TOK_MODEQ: binop = '%'; break;
+    case TOK_ANDEQ: binop = '&'; break;
+    case TOK_OREQ:  binop = '|'; break;
+    default:        binop = '^'; break;   /* TOK_XOREQ */
+    }
+
+    if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
+        type_ptr_depth(val_type) > 0 && type_size(val_type) == 2) {
+        int elem_size;
+
+        elem_size = type_index_elem_size(val_type);
+        emit("\tpush hl\n");                    /* save lvalue address */
+        emit_load_from_hl(val_type);            /* HL = current pointer */
+        emit("\tpush hl\n");                    /* save current pointer */
+
+        saved_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->b);                     /* HL = element count */
+        expr_result_dead = saved_dead;
+        scale_hl_by_elem_size(elem_size);
+
+        emit("\tex de,hl\n\tpop hl\n");         /* DE = scaled count, HL = current pointer */
+        if (n->op == TOK_ADDEQ)
+            emit("\tadd hl,de\n");
+        else
+            emit("\tor a\n\tsbc hl,de\n");
+        emit("\tex de,hl\n\tpop hl\n");         /* DE = result, HL = address */
+        emit_store_de_to_addr_hl(val_type);
+        if (!want_dead)
+            emit("\tex de,hl\n");
+        g_expr.type = val_type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    if (type_size(val_type) == 4) {
+        emit("\tpush hl\n");                    /* save lvalue address */
+        emit_load_from_hl(val_type);             /* DE:HL = current value */
+
+        if (type_is_long(val_type) &&
+            (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
+            n->b->kind == AST_INT_LIT) {
+            if (!emit_shift_const_long(n->op, val_type, n->b->ival)) {
+                fprintf(outf, "\tld b,%ld\n", n->b->ival & 255L);
+                emit_shift_loop(n->op, val_type);
+            }
+            emit("\tld b,d\n\tld c,e\n");
+            emit("\tpop de\n");
+            emit("\tex de,hl\n");
+            emit_store_long_edcb_via_hl();
+            if (!want_dead) {
+                emit("\tex de,hl\n");
+                emit("\tld d,b\n\tld e,c\n");
+            }
+            g_expr.type = val_type;
+            g_expr.long_from16 = 0;
+            return;
+        }
+
+        emit("\tpush de\n\tpush hl\n");         /* save current value */
+        saved_dead = expr_result_dead;
+
+        if (type_is_float(val_type)) {
+            emit_float_compound_rhs(n, saved_dead);
+            emit_store_de_to_addr_hl(val_type);
+            /* Rebuild DE:HL=value from the store's DE=low/BC=high leftovers
+             * so a live result (`x = (p->f += v)`) is correct. */
             if (!want_dead)
                 emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
             g_expr.type = val_type;
@@ -2219,60 +2198,75 @@ void gen_assign_ast(const struct AstNode *n)
             return;
         }
 
-        /* Compound assignment to a non-identifier lvalue.  Streaming's general
-         * normal_assign compound tail: save the address, load the current
-         * value, save it, evaluate the RHS, combine, then store back (also
-         * leaving the result in HL when the statement value is live). */
-        switch (n->op) {
-        case TOK_ADDEQ: binop = '+'; break;
-        case TOK_SUBEQ: binop = '-'; break;
-        case TOK_MULEQ: binop = '*'; break;
-        case TOK_DIVEQ: binop = '/'; break;
-        case TOK_MODEQ: binop = '%'; break;
-        case TOK_ANDEQ: binop = '&'; break;
-        case TOK_OREQ:  binop = '|'; break;
-        default:        binop = '^'; break;   /* TOK_XOREQ */
-        }
-
-        emit("\tpush hl\n");                    /* save lvalue address */
-        emit_load_from_hl(val_type);            /* HL = current value */
-        if (bf_width > 0) {
-            current_field_bit_width = bf_width;
-            current_field_bit_shift = bf_shift;
-            current_field_bit_mask = bf_mask;
-            g_expr.type = val_type;
-            emit_extract_bitfield();
-        }
-        emit("\tpush hl\n");                    /* save current value */
-
-        saved_dead = expr_result_dead;
         expr_result_dead = 0;
-        ast_gen_expr(n->b);                     /* rhs -> HL */
+        ast_gen_expr(n->b);                      /* rhs -> DE:HL or HL */
         expr_result_dead = saved_dead;
 
-        if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) {
-            emit("\tld b,l\n\tpop hl\n");
+        if (type_is_long(val_type) &&
+            (n->op == TOK_SHLEQ || n->op == TOK_SHREQ)) {
+            emit("\tld b,l\n\tpop hl\n\tpop de\n");
             emit_shift_loop(n->op, val_type);
-            emit("\tex de,hl\n\tpop hl\n");
-            if (bf_width > 0) {
-                current_field_bit_width = bf_width;
-                current_field_bit_shift = bf_shift;
-                current_field_bit_mask = bf_mask;
-                g_expr.type = val_type;   /* field type -> correct extract sign */
-                emit_store_bitfield_de_to_addr_hl(!want_dead);
-            } else {
-                emit_store_de_to_addr_hl(val_type);
-                if (!want_dead)
-                    emit("\tex de,hl\n");
+            emit("\tld b,d\n\tld c,e\n");
+            emit("\tpop de\n");
+            emit("\tex de,hl\n");
+            emit_store_long_edcb_via_hl();
+            if (!want_dead) {
+                emit("\tex de,hl\n");
+                emit("\tld d,b\n\tld e,c\n");
             }
+            g_expr.type = val_type;
             g_expr.long_from16 = 0;
             return;
         }
 
-        emit("\tex de,hl\n\tpop hl\n");         /* DE = rhs, HL = current value */
         common_type = common_arith_type(val_type, g_expr.type);
-        gen_binop_typed(binop, common_type);    /* HL = result */
-        emit("\tex de,hl\n\tpop hl\n");         /* DE = result, HL = address */
+        emit_cast_16_to_common(g_expr.type, common_type);
+        gen_binop32_typed(binop, common_type);
+        emit_store_de_to_addr_hl(val_type);
+        /* Rebuild DE:HL=value from the store's DE=low/BC=high leftovers so a
+         * live result (`x = (p->lf += v)`) is correct. */
+        if (!want_dead)
+            emit("\tex de,hl\n\tld d,b\n\tld e,c\n");
+        g_expr.type = val_type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    /* Compound assignment to a non-identifier lvalue.  Streaming's general
+     * normal_assign compound tail: save the address, load the current
+     * value, save it, evaluate the RHS, combine, then store back (also
+     * leaving the result in HL when the statement value is live). */
+    switch (n->op) {
+    case TOK_ADDEQ: binop = '+'; break;
+    case TOK_SUBEQ: binop = '-'; break;
+    case TOK_MULEQ: binop = '*'; break;
+    case TOK_DIVEQ: binop = '/'; break;
+    case TOK_MODEQ: binop = '%'; break;
+    case TOK_ANDEQ: binop = '&'; break;
+    case TOK_OREQ:  binop = '|'; break;
+    default:        binop = '^'; break;   /* TOK_XOREQ */
+    }
+
+    emit("\tpush hl\n");                    /* save lvalue address */
+    emit_load_from_hl(val_type);            /* HL = current value */
+    if (bf_width > 0) {
+        current_field_bit_width = bf_width;
+        current_field_bit_shift = bf_shift;
+        current_field_bit_mask = bf_mask;
+        g_expr.type = val_type;
+        emit_extract_bitfield();
+    }
+    emit("\tpush hl\n");                    /* save current value */
+
+    saved_dead = expr_result_dead;
+    expr_result_dead = 0;
+    ast_gen_expr(n->b);                     /* rhs -> HL */
+    expr_result_dead = saved_dead;
+
+    if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) {
+        emit("\tld b,l\n\tpop hl\n");
+        emit_shift_loop(n->op, val_type);
+        emit("\tex de,hl\n\tpop hl\n");
         if (bf_width > 0) {
             current_field_bit_width = bf_width;
             current_field_bit_shift = bf_shift;
@@ -2287,6 +2281,33 @@ void gen_assign_ast(const struct AstNode *n)
         g_expr.long_from16 = 0;
         return;
     }
+
+    emit("\tex de,hl\n\tpop hl\n");         /* DE = rhs, HL = current value */
+    common_type = common_arith_type(val_type, g_expr.type);
+    gen_binop_typed(binop, common_type);    /* HL = result */
+    emit("\tex de,hl\n\tpop hl\n");         /* DE = result, HL = address */
+    if (bf_width > 0) {
+        current_field_bit_width = bf_width;
+        current_field_bit_shift = bf_shift;
+        current_field_bit_mask = bf_mask;
+        g_expr.type = val_type;   /* field type -> correct extract sign */
+        emit_store_bitfield_de_to_addr_hl(!want_dead);
+    } else {
+        emit_store_de_to_addr_hl(val_type);
+        if (!want_dead)
+            emit("\tex de,hl\n");
+    }
+    g_expr.long_from16 = 0;
+    return;
+}
+
+/* Assign to a plain identifier lvalue. Split out of gen_assign_ast. */
+static void gen_assign_ident_ast(const struct AstNode *n)
+{
+    struct Sym *s;
+    int common_type;
+    int binop;
+    int saved_dead;
 
     s = find_sym(n->a->sval);
 
