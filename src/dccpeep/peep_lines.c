@@ -173,13 +173,13 @@ void delete_n(int i, int count)
         free(lines[i + j]);
     }
 
-        memmove(&lines[i], &lines[i + count],
+    memmove(&lines[i], &lines[i + count],
             (size_t)(nlines - i - count) * sizeof(lines[0]));
-        memmove(&user_asm_original[i], &user_asm_original[i + count],
+    memmove(&user_asm_original[i], &user_asm_original[i + count],
             (size_t)(nlines - i - count) * sizeof(user_asm_original[0]));
 
     nlines -= count;
-        peep_lines_deleted += (unsigned long)count;
+    peep_lines_deleted += (unsigned long)count;
     for (j = nlines; j < nlines + count; ++j) {
         lines[j] = NULL;
         user_asm_original[j] = NULL;
@@ -193,9 +193,9 @@ void insert_line(int i, const char *s)
         exit(1);
     }
 
-        memmove(&lines[i + 1], &lines[i],
+    memmove(&lines[i + 1], &lines[i],
             (size_t)(nlines - i) * sizeof(lines[0]));
-        memmove(&user_asm_original[i + 1], &user_asm_original[i],
+    memmove(&user_asm_original[i + 1], &user_asm_original[i],
             (size_t)(nlines - i) * sizeof(user_asm_original[0]));
 
     lines[i] = xstrdup2(s);

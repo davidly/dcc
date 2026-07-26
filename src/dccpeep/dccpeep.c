@@ -75,6 +75,15 @@ static int allow_undocumented_z80 = 0;
 
 int jump_target(const char *s, char *out);
 
+/* Strip a single trailing ':' from an assembly label, in place. The caller
+ * has already copied a known label line (starts_label true) into `s`. */
+static void strip_label_colon(char *s)
+{
+    size_t n = strlen(s);
+    if (n > 0 && s[n - 1] == ':')
+        s[n - 1] = 0;
+}
+
 static int is_uncond_jp(const char *s)
 {
     const char *p;
@@ -2081,9 +2090,7 @@ static int pass_byte_loop_counter_to_reg_c(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         /* Find the matching loop-back jump to this same label, with no
          * other label in between (single-entry, single-exit body). */
@@ -2820,9 +2827,7 @@ static int pass_byte_for_counter_to_reg_c(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         /* Find this loop's own closing conditional jump back to the
          * label, with no other label in between (single-entry,
@@ -2993,9 +2998,7 @@ static int pass_byte_for_counter_to_reg_e(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         /* Find the loop's own closing branch - the LAST line in the
          * function that jumps back to the label (see
@@ -3196,9 +3199,7 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         /* Find the matching loop-back jump to this same label, with no
          * other label in between (single-entry, single-exit body). */
@@ -10108,9 +10109,7 @@ static int pass_hoist_index_ptr_to_bc(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         /* Find this loop's own closing branch back to LABEL - the LAST
          * line in the function that jumps back to it, not the first: an
@@ -10451,9 +10450,7 @@ static int pass_walk_hoisted_index_ptr(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         loop_end = find_last_loop_back(i + 1, label, 1);
         if (loop_end < i + 5)
@@ -10724,9 +10721,7 @@ static int pass_walk_row_cached_float_index(void)
             continue;
 
         strcpy(label, lines[i]);
-        k = (int)strlen(label);
-        if (k > 0 && label[k - 1] == ':')
-            label[k - 1] = 0;
+        strip_label_colon(label);
 
         loop_end = find_last_loop_back(i + 1, label, 1);
         if (loop_end < i + 22)
