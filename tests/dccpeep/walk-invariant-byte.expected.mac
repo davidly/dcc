@@ -1,0 +1,71 @@
+	public _accept
+_accept:
+	ld e,4
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4 ; peep: walk_hoisted_index_ptr
+	add hl,bc ; peep: walk_hoisted_index_ptr
+	ld b,h ; peep: walk_hoisted_index_ptr
+	ld c,l ; peep: walk_hoisted_index_ptr
+	ld h,(ix+4) ; peep: walk_invariant_byte_h
+L1:
+	ld a,h ; peep: walk_invariant_byte_h
+	add a,e
+	ld (bc),a ; peep: walk_hoisted_index_ptr
+	inc bc ; peep: walk_hoisted_index_ptr
+	inc e
+	ld a,e
+	cp 128
+	jr c,L1 ; peep: jp_to_jr
+	ret
+	public _decline
+_decline:
+	ld e,4
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4 ; peep: walk_hoisted_index_ptr
+	add hl,bc ; peep: walk_hoisted_index_ptr
+	ld b,h ; peep: walk_hoisted_index_ptr
+	ld c,l ; peep: walk_hoisted_index_ptr
+L2:
+	ld a,(ix+4)
+	add a,e
+	ld (bc),a ; peep: walk_hoisted_index_ptr
+	inc bc ; peep: walk_hoisted_index_ptr
+	ld h,0
+	inc e
+	ld a,e
+	cp 128
+	jr c,L2 ; peep: jp_to_jr
+	ret
+	public _compare
+_compare:
+	ld e,4
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4 ; peep: walk_hoisted_index_ptr
+	add hl,bc ; peep: walk_hoisted_index_ptr
+	ld b,h ; peep: walk_hoisted_index_ptr
+	ld c,l ; peep: walk_hoisted_index_ptr
+	ld h,(ix+4) ; peep: walk_invariant_byte_h
+L3:
+	ld a,h ; peep: walk_invariant_byte_h
+	add a,e
+	ld d,a ; peep: walk_hoisted_index_ptr
+	ld a,(bc) ; peep: walk_hoisted_index_ptr
+	cp d ; peep: walk_hoisted_index_ptr
+	inc bc ; peep: walk_hoisted_index_ptr
+	jr z,L4 ; peep: jp_to_jr
+	ld hl,0
+	jr L5 ; peep: jp_to_jr
+L4:
+	inc e
+	ld a,e
+	cp 128
+	jr c,L3 ; peep: jp_to_jr
+	ld hl,1
+L5:
+	ld sp,ix
+	pop ix
+	ret
+	end

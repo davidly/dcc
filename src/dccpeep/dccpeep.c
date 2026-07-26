@@ -6032,6 +6032,28 @@ static int a_dead_or_overwritten_from(int start, int func_end)
     return 0;
 }
 
+/* A full HL overwrite is harmless to an H-resident loop invariant when the
+ * very next instruction unconditionally exits this loop. The target must be
+ * resolved and lie outside [loop_start, loop_end]; ambiguous or conditional
+ * control flow declines. */
+static int hl_overwrite_exits_loop(int line, int loop_start, int loop_end)
+{
+    char clean[MAX_LINE];
+    char target[128];
+    int target_line;
+
+    strip_peep_comment_copy(clean, lines[line]);
+    if (strncmp(clean, "ld hl,", 6) != 0 || line + 1 >= nlines)
+        return 0;
+    if (!is_uncond_jp(lines[line + 1]) && !is_uncond_jr(lines[line + 1]))
+        return 0;
+    if (!jump_target_any(lines[line + 1], target))
+        return 0;
+    target_line = find_label_line_in_range(target, 0, nlines);
+    return target_line >= 0 &&
+           (target_line < loop_start || target_line > loop_end);
+}
+
 /*
  * pass_walk_hoisted_index_ptr:
  *
@@ -6119,6 +6141,10 @@ static int pass_walk_hoisted_index_ptr(void)
     int inc_e_count;
     int bc_ok;
     int de_ok;
+    int invariant_load_k;
+    int invariant_ok;
+    char invariant_off[32];
+    char invariant_pat[40];
     int func_start, func_end;
 
     changed = 0;
@@ -6172,6 +6198,53 @@ static int pass_walk_hoisted_index_ptr(void)
         }
         if (access_k < 0)
             continue;
+
+        /* Once the address recombination below is removed, H is available
+         * for one loop-invariant byte used to form the RHS. Cache exactly one
+         * indexed A load; decline if the same frame slot appears anywhere
+         * else in the loop or if H is live outside instructions this pass
+         * already removes/replaces. */
+        invariant_load_k = -1;
+        invariant_off[0] = 0;
+        for (k = match_k + 4; k < access_k; ++k) {
+            char off[32];
+            if (!peep_parse_ld_a_ix(lines[k], off))
+                continue;
+            if (invariant_load_k >= 0) {
+                invariant_load_k = -1;
+                break;
+            }
+            invariant_load_k = k;
+            strcpy(invariant_off, off);
+        }
+        if (invariant_load_k < 0 && access_is_cmp && match_k >= i + 3 &&
+            peep_parse_ld_a_ix(lines[match_k - 2], invariant_off) &&
+            eq(match_k - 1, "add a,e"))
+            invariant_load_k = match_k - 2;
+        if (invariant_load_k >= 0) {
+            char tmp[MAX_LINE];
+
+            sprintf(invariant_pat, "(ix%s)", invariant_off);
+            invariant_ok = 1;
+            for (k = i + 1; k < loop_end && invariant_ok; ++k) {
+                if (k != invariant_load_k &&
+                    strstr(lines[k], invariant_pat) != NULL) {
+                    invariant_ok = 0;
+                    break;
+                }
+                if ((k >= match_k && k <= match_k + 3) ||
+                    k == access_k || k == invariant_load_k)
+                    continue;
+                strip_peep_comment_copy(tmp, lines[k]);
+                if (strncmp(tmp, "call ", 5) == 0 ||
+                    strncmp(tmp, "rst ", 4) == 0 || strcmp(tmp, "exx") == 0 ||
+                    (line_touches_hl(tmp) &&
+                     !hl_overwrite_exits_loop(k, i, loop_end)))
+                    invariant_ok = 0;
+            }
+            if (!invariant_ok)
+                invariant_load_k = -1;
+        }
 
         /* A compare leaves the array byte in A afterward instead of the
          * original rhs (see the pass's own doc comment) - only safe when
@@ -6278,12 +6351,31 @@ static int pass_walk_hoisted_index_ptr(void)
                 loop_end += 4;
                 match_k += 4;
                 access_k += 4;
+                if (invariant_load_k >= 0)
+                    invariant_load_k += 4;
             }
+        }
+
+        if (invariant_load_k >= 0) {
+            char prime[48];
+
+            sprintf(prime, "ld h,(ix%s)", invariant_off);
+            insert_line_tagged(i, prime, "walk_invariant_byte_h");
+            ++i;
+            ++loop_end;
+            ++match_k;
+            ++access_k;
+            ++invariant_load_k;
         }
 
         {
             int access_after_delete = access_k - 4;
+            int invariant_after_delete = invariant_load_k < match_k
+                ? invariant_load_k : invariant_load_k - 4;
             delete_n(match_k, 4);
+            if (invariant_load_k >= 0)
+                replace1_tagged(invariant_after_delete, "ld a,h",
+                                "walk_invariant_byte_h");
             if (access_is_cmp) {
                 replace1_tagged(access_after_delete, "ld d,a", "walk_hoisted_index_ptr");
                 insert_line_tagged(access_after_delete + 1, "ld a,(bc)", "walk_hoisted_index_ptr");

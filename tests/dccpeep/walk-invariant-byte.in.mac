@@ -1,0 +1,64 @@
+public _accept
+_accept:
+ld e,4
+ld c,(ix+8)
+ld b,(ix+9)
+L1:
+ld l,c
+ld h,b
+ld d,0
+add hl,de
+ld a,(ix+4)
+add a,e
+ld (hl),a
+inc e
+ld a,e
+cp 128
+jp c, L1
+ret
+public _decline
+_decline:
+ld e,4
+ld c,(ix+8)
+ld b,(ix+9)
+L2:
+ld l,c
+ld h,b
+ld d,0
+add hl,de
+ld a,(ix+4)
+add a,e
+ld (hl),a
+ld h,0
+inc e
+ld a,e
+cp 128
+jp c, L2
+ret
+public _compare
+_compare:
+ld e,4
+ld c,(ix+8)
+ld b,(ix+9)
+L3:
+ld a,(ix+4)
+add a,e
+ld l,c
+ld h,b
+ld d,0
+add hl,de
+cp (hl)
+jp z, L4
+ld hl,0
+jp L5
+L4:
+inc e
+ld a,e
+cp 128
+jp c, L3
+ld hl,1
+L5:
+ld sp,ix
+pop ix
+ret
+end
