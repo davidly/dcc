@@ -156,7 +156,7 @@ static int ensure_dir(const char *path)
 {
     struct stat st;
     if (stat(path, &st) == 0)
-        return (st.st_mode & S_IFDIR) != 0;
+        return S_ISDIR(st.st_mode) != 0;
     if (MKDIR(path) == 0)
         return 1;
     return errno == EEXIST;
@@ -167,7 +167,7 @@ static int dir_exists(const char *path)
     struct stat st;
     if (stat(path, &st) != 0)
         return 0;
-    return (st.st_mode & S_IFDIR) != 0;
+    return S_ISDIR(st.st_mode) != 0;
 }
 
 static void path_join(char *dst, size_t dst_size, const char *dir, const char *name)
