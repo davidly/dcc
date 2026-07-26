@@ -7,9 +7,6 @@
  */
 #include "dccpeep_internal.h"
 
-static int opt_size = 0;  /* -Os: use RTL helper stubs; default -Ot: inline */
-static int stats_enabled;
-
 #define MAX_PASS_STATS 160
 typedef struct PassStat {
     const char *name;
@@ -61,7 +58,8 @@ static void report_stats(int iterations)
     int i;
 
     fprintf(stderr, "dccpeep stats: iterations=%d inserted=%lu deleted=%lu\n",
-            iterations, peep_lines_inserted, peep_lines_deleted);
+            iterations, peep_context.stats.lines_inserted,
+            peep_context.stats.lines_deleted);
     for (i = 0; i < pass_stats_count; ++i)
         fprintf(stderr, "  %-44s calls=%lu changes=%lu\n",
                 pass_stats[i].name, pass_stats[i].calls,
@@ -76,7 +74,6 @@ static void report_stats(int iterations)
  * folklore on real NMOS Z80 silicon and its common clones, and verified
  * working under ntvcm, but are not part of the documented Z80 instruction
  * set, so they are opt-in and OFF by default. */
-static int allow_undocumented_z80 = 0;
 
 
 
@@ -7023,15 +7020,17 @@ int main(int argc, char **argv)
     const char *outfile = NULL;
     int ai;
 
+    peep_context_init();
+
     for (ai = 1; ai < argc; ++ai) {
         if (strcmp(argv[ai], "-Os") == 0) {
-            opt_size = 1;
+            peep_context.options.optimize_size = 1;
         } else if (strcmp(argv[ai], "-Ot") == 0) {
-            opt_size = 0;
+            peep_context.options.optimize_size = 0;
         } else if (strcmp(argv[ai], "-fundocumented-z80") == 0) {
-            allow_undocumented_z80 = 1;
+            peep_context.options.allow_undocumented_z80 = 1;
         } else if (strcmp(argv[ai], "-fstats") == 0) {
-            stats_enabled = 1;
+            peep_context.options.stats_enabled = 1;
         } else if (infile == NULL) {
             infile = argv[ai];
         } else if (outfile == NULL) {
@@ -7161,12 +7160,13 @@ int main(int argc, char **argv)
         for (pass_index = 0; pass_index < fixed_pass_count; ++pass_index) {
             const PeepPass *pass = &fixed_point_passes[pass_index];
             if ((pass->flags & PEEP_PASS_UNDOCUMENTED_Z80) &&
-                !allow_undocumented_z80)
+                !peep_context.options.allow_undocumented_z80)
                 continue;
             if (run_counted_pass(pass->name, pass->run))
                 changed = 1;
         }
         passes++;
+        peep_context.stats.iterations = passes;
     } while (changed && passes < 30);
 
     /* General signed-compare constant-bias fold runs once after the main loop
@@ -7184,9 +7184,9 @@ int main(int argc, char **argv)
      * than this inline fold.  Folding here would defeat that, so restrict the
      * fold to -Ot where trading shared code size for fewer inline instructions
      * is the goal. */
-    if (!opt_size && RUN_PASS(pass_signed_cmp_const_bias_fold))
+    if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_cmp_const_bias_fold))
         RUN_PASS(pass_labels);
-    if (!opt_size && RUN_PASS(pass_signed_zero_branch))
+    if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_zero_branch))
         RUN_PASS(pass_labels);
 
     /* Run frame elimination after all other passes have converged, then
@@ -7212,7 +7212,7 @@ int main(int argc, char **argv)
      * Runs after frame elimination so only functions that genuinely need IX
      * are transformed.  A follow-up branch/label pass collapses any return
      * labels that now just contain "jp __lve" into direct jumps. */
-    if (opt_size && RUN_PASS(pass_shared_frame_stubs)) {
+    if (peep_context.options.optimize_size && RUN_PASS(pass_shared_frame_stubs)) {
         RUN_PASS(pass_branch_over_jump);
         RUN_PASS(pass_labels);
     }
@@ -7220,7 +7220,7 @@ int main(int argc, char **argv)
     /* Load-arg stubs and frame-pointer copy stub run last: they remove "ix"
      * text from lines, so they must not run before pass_elim_ix_frame (which
      * uses that text to detect live frame usage). */
-    if (opt_size) {
+    if (peep_context.options.optimize_size) {
         RUN_PASS(pass_larg_stubs);
         RUN_PASS(pass_phix_stub);
         RUN_PASS(pass_lvar_stubs);
@@ -7267,7 +7267,7 @@ int main(int argc, char **argv)
     RUN_PASS(pass_jp_to_jr);
 
     write_file(outfile);
-    if (stats_enabled)
+    if (peep_context.options.stats_enabled)
         report_stats(passes);
     return 0;
 }

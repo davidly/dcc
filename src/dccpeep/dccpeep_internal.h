@@ -15,12 +15,34 @@
 #define MAX_LINES 400000
 #define MAX_LINE  512
 
+typedef struct PeepOptions {
+    int optimize_size;
+    int allow_undocumented_z80;
+    int stats_enabled;
+} PeepOptions;
+
+typedef struct PeepRunStats {
+    unsigned long lines_inserted;
+    unsigned long lines_deleted;
+    int iterations;
+} PeepRunStats;
+
+typedef struct PeepContext {
+    char **lines;
+    char **user_asm_original;
+    int *line_count;
+    unsigned long program_version;
+    PeepOptions options;
+    PeepRunStats stats;
+} PeepContext;
+
+extern PeepContext peep_context;
+void peep_context_init(void);
+
 extern char *lines[MAX_LINES];
 extern char *user_asm_original[MAX_LINES];
 extern int nlines;
 extern int input_is_dcc_generated;
-extern unsigned long peep_lines_inserted;
-extern unsigned long peep_lines_deleted;
 
 char *xstrdup2(const char *s);
 int eq(int i, const char *s);

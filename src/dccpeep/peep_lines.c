@@ -5,8 +5,15 @@ char *lines[MAX_LINES];
 char *user_asm_original[MAX_LINES];
 int nlines;
 int input_is_dcc_generated;
-unsigned long peep_lines_inserted;
-unsigned long peep_lines_deleted;
+PeepContext peep_context;
+
+void peep_context_init(void)
+{
+    memset(&peep_context, 0, sizeof(peep_context));
+    peep_context.lines = lines;
+    peep_context.user_asm_original = user_asm_original;
+    peep_context.line_count = &nlines;
+}
 
 char *xstrdup2(const char *s)
 {
@@ -179,7 +186,8 @@ void delete_n(int i, int count)
             (size_t)(nlines - i - count) * sizeof(user_asm_original[0]));
 
     nlines -= count;
-    peep_lines_deleted += (unsigned long)count;
+    peep_context.stats.lines_deleted += (unsigned long)count;
+    peep_context.program_version++;
     for (j = nlines; j < nlines + count; ++j) {
         lines[j] = NULL;
         user_asm_original[j] = NULL;
@@ -201,7 +209,8 @@ void insert_line(int i, const char *s)
     lines[i] = xstrdup2(s);
     user_asm_original[i] = NULL;
     nlines++;
-    peep_lines_inserted++;
+    peep_context.stats.lines_inserted++;
+    peep_context.program_version++;
 }
 
 void insert_line_tagged(int i, const char *s, const char *tag)
