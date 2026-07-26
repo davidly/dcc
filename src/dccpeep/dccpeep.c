@@ -8190,6 +8190,1082 @@ static int local_alloc_hl_result_dead(int start)
     return 0; /* end of input without a full overwrite: assume live */
 }
 
+static int try_global_moves_postinc_at(int i)
+{
+    /*
+     * Global 16-bit post-increment used as a statement:
+     *
+     *   ld hl,_g_Moves
+     *   push hl
+     *   ld e,(hl)
+     *   inc hl
+     *   ld d,(hl)
+     *   ex de,hl
+     *   push hl
+     *   inc hl
+     *   ex de,hl
+     *   pop hl
+     *   ex (sp),hl
+     *   ld (hl),e
+     *   inc hl
+     *   ld (hl),d
+     *   pop hl
+     *
+     * becomes direct memory increment.  This hits the very hot
+     * g_Moves++ at _MinMax entry, without touching bool folding.
+     */
+    if (eq(i, "ld hl,_g_Moves") &&
+        eq(i + 1, "push hl") &&
+        eq(i + 2, "ld e,(hl)") &&
+        eq(i + 3, "inc hl") &&
+        eq(i + 4, "ld d,(hl)") &&
+        eq(i + 5, "ex de,hl") &&
+        eq(i + 6, "push hl") &&
+        eq(i + 7, "inc hl") &&
+        eq(i + 8, "ex de,hl") &&
+        eq(i + 9, "pop hl") &&
+        eq(i + 10, "ex (sp),hl") &&
+        eq(i + 11, "ld (hl),e") &&
+        eq(i + 12, "inc hl") &&
+        eq(i + 13, "ld (hl),d") &&
+        eq(i + 14, "pop hl")) {
+        char lab[64], line[128];
+
+        sprintf(lab, "Lginc_%d", i); /* see Lskrl_'s rationale above */
+        replace1_tagged(i, "ld hl,_g_Moves", "lookforwinner_ginc");
+        replace1(i + 1, "inc (hl)");
+        sprintf(line, "jp nz, %s", lab);
+        replace1(i + 2, line);
+        replace1(i + 3, "inc hl");
+        replace1(i + 4, "inc (hl)");
+        sprintf(line, "%s:", lab);
+        replace1(i + 5, line);
+        delete_n(i + 6, 9);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_minmax_board_store_at(int i)
+{
+    /*
+     * MinMax board[p] = pieceMove byte store:
+     *
+     *   ld l,(ix-5)
+     *   ld h,(ix-4)
+     *   ld hl,_g_board
+     *   push hl
+     *   ld l,(ix-5)
+     *   ld h,(ix-4)
+     *   ex de,hl
+     *   pop hl
+     *   add hl,de
+     *   push hl
+     *   ld l,(ix-3)
+     *   ld h,0
+     *   ex de,hl
+     *   pop hl
+     *   ld (hl),e
+     *
+     * becomes:
+     *
+     *   ld l,(ix-5)
+     *   ld h,(ix-4)
+     *   ld de,_g_board
+     *   add hl,de
+     *   ld a,(ix-3)
+     *   ld (hl),a
+     *
+     * This is safe for ttt_t g_board[p] = pieceMove; because both are
+     * byte objects in this benchmark.
+     */
+    if (eq(i, "ld l,(ix-5)") &&
+        eq(i + 1, "ld h,(ix-4)") &&
+        eq(i + 2, "ld hl,_g_board") &&
+        eq(i + 3, "push hl") &&
+        eq(i + 4, "ld l,(ix-5)") &&
+        eq(i + 5, "ld h,(ix-4)") &&
+        eq(i + 6, "ex de,hl") &&
+        eq(i + 7, "pop hl") &&
+        eq(i + 8, "add hl,de") &&
+        eq(i + 9, "push hl") &&
+        eq(i + 10, "ld l,(ix-3)") &&
+        eq(i + 11, "ld h,0") &&
+        eq(i + 12, "ex de,hl") &&
+        eq(i + 13, "pop hl") &&
+        eq(i + 14, "ld (hl),e")) {
+
+        replace1_tagged(i, "ld l,(ix-5)", "board_store");
+        replace1(i + 1, "ld h,(ix-4)");
+        replace1(i + 2, "ld de,_g_board");
+        replace1(i + 3, "add hl,de");
+        replace1(i + 4, "ld a,(ix-3)");
+        replace1(i + 5, "ld (hl),a");
+        delete_n(i + 6, 9);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_minmax_blank_board_at(int i)
+{
+    /*
+     * MinMax blank-board-position test:
+     *
+     *   ld hl,0
+     *   push hl
+     *   ld hl,_g_board
+     *   push hl
+     *   ld l,(ix-5)
+     *   ld h,(ix-4)
+     *   ex de,hl
+     *   pop hl
+     *   add hl,de
+     *   ld l,(hl)
+     *   ld h,0
+     *   ex de,hl
+     *   pop hl
+     *   or a
+     *   sbc hl,de
+     *   jp nz,Lskip
+     *
+     * becomes:
+     *
+     *   ld l,(ix-5)
+     *   ld h,(ix-4)
+     *   ld de,_g_board
+     *   add hl,de
+     *   ld a,(hl)
+     *   or a
+     *   jp nz,Lskip
+     */
+    {
+        char lskip[128];
+        if (eq(i, "ld hl,0") &&
+            eq(i + 1, "push hl") &&
+            eq(i + 2, "ld hl,_g_board") &&
+            eq(i + 3, "push hl") &&
+            eq(i + 4, "ld l,(ix-5)") &&
+            eq(i + 5, "ld h,(ix-4)") &&
+            eq(i + 6, "ex de,hl") &&
+            eq(i + 7, "pop hl") &&
+            eq(i + 8, "add hl,de") &&
+            eq(i + 9, "ld l,(hl)") &&
+            eq(i + 10, "ld h,0") &&
+            eq(i + 11, "ex de,hl") &&
+            eq(i + 12, "pop hl") &&
+            eq(i + 13, "or a") &&
+            eq(i + 14, "sbc hl,de") &&
+            peep_parse_jp_cond_label(lines[i + 15], "nz", lskip)) {
+
+            replace1_tagged(i, "ld l,(ix-5)", "blank_board_test");
+            replace1(i + 1, "ld h,(ix-4)");
+            replace1(i + 2, "ld de,_g_board");
+            replace1(i + 3, "add hl,de");
+            replace1(i + 4, "ld a,(hl)");
+            replace1(i + 5, "or a");
+            replace1(i + 6, lines[i + 15]);
+            delete_n(i + 7, 9);
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_posnfunc_setup_at(int i)
+{
+    /*
+     * posNfunc setup byte store:
+     *
+     *   push ix
+     *   pop hl
+     *   dec hl
+     *   push hl
+     *   ld hl,_g_board
+     *   [inc hl ...] or [ld de,N/add hl,de]
+     *   ld l,(hl)
+     *   ld h,0
+     *   ex de,hl
+     *   pop hl
+     *   ld (hl),e
+     *
+     * becomes:
+     *
+     *   ld hl,_g_board
+     *   [same address adjustment]
+     *   ld a,(hl)
+     *   ld (ix-1),a
+     */
+    if (eq(i, "push ix") &&
+        eq(i + 1, "pop hl") &&
+        eq(i + 2, "dec hl") &&
+        eq(i + 3, "push hl") &&
+        eq(i + 4, "ld hl,_g_board")) {
+        int j;
+        int incs;
+        int offv;
+        char tmp[128];
+
+        j = i + 5;
+        incs = 0;
+
+        while (j < nlines && eq(j, "inc hl")) {
+            incs++;
+            j++;
+        }
+
+        if (eq(j, "ld l,(hl)") &&
+            eq(j + 1, "ld h,0") &&
+            eq(j + 2, "ex de,hl") &&
+            eq(j + 3, "pop hl") &&
+            eq(j + 4, "ld (hl),e")) {
+
+            replace1_tagged(i, "ld hl,_g_board", "posnfunc_inc");
+            for (j = 0; j < incs; j++)
+                replace1(i + 1 + j, "inc hl");
+            replace1(i + 1 + incs, "ld a,(hl)");
+            replace1(i + 2 + incs, "ld (ix-1),a");
+            delete_n(i + 3 + incs, (i + 10 + incs) - (i + 3 + incs));
+        return 1;
+        }
+
+        j = i + 5;
+        if (peep_parse_ld_de_0_to_255(lines[j], &offv) &&
+            eq(j + 1, "add hl,de") &&
+            eq(j + 2, "ld l,(hl)") &&
+            eq(j + 3, "ld h,0") &&
+            eq(j + 4, "ex de,hl") &&
+            eq(j + 5, "pop hl") &&
+            eq(j + 6, "ld (hl),e")) {
+
+            replace1_tagged(i, "ld hl,_g_board", "posnfunc_de");
+            sprintf(tmp, "ld de,%d", offv);
+            replace1(i + 1, tmp);
+            replace1(i + 2, "add hl,de");
+            replace1(i + 3, "ld a,(hl)");
+            replace1(i + 4, "ld (ix-1),a");
+            delete_n(i + 5, (j + 7) - (i + 5));
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_small_const_eq_at(int i)
+{
+    /*
+     * Small constant equality/inequality against local int:
+     *
+     *   ld hl,N
+     *   push hl
+     *   ld l,(ix-K)
+     *   ld h,(ix-K+1)
+     *   ex de,hl
+     *   pop hl
+     *   or a
+     *   sbc hl,de
+     *   jp z/nz,L
+     *
+     * becomes (when N > 0):
+     *
+     *   ld a,(ix-K)
+     *   cp N
+     *   jp z/nz,L
+     *
+     * or when N == 0 (null/zero check, must test both bytes):
+     *
+     *   ld a,(ix-K)
+     *   or (ix-K+1)
+     *   jp z/nz,L
+     *
+     * This hits MinMax tests like score == SCORE_WIN / SCORE_LOSE.
+     * When N==0 we must use 'or' to check both bytes: a pointer like
+     * 0x1E00 has a zero low byte but is non-null, so 'cp 0' alone
+     * would incorrectly treat it as null.
+     */
+    {
+        int imm;
+        char loff[32], hoff[32], newline[128];
+
+        if (peep_parse_ld_hl_0_to_255(lines[i], &imm) &&
+            eq(i + 1, "push hl") &&
+            peep_parse_ld_l_ix(lines[i + 2], loff) &&
+            peep_parse_ld_h_ix(lines[i + 3], hoff) &&
+            eq(i + 4, "ex de,hl") &&
+            eq(i + 5, "pop hl") &&
+            eq(i + 6, "or a") &&
+            eq(i + 7, "sbc hl,de") &&
+            (strncmp(lines[i + 8], "jp z,", 5) == 0 ||
+             strncmp(lines[i + 8], "jp nz,", 6) == 0) &&
+            /* Skip >= comparisons: "jp z,L; jp c,L" with the same label
+             * means (const <= var), not (const == var).  Treating it as
+             * equality corrupts the carry flag used by the leftover jp c. */
+            !(strncmp(lines[i + 8], "jp z,", 5) == 0 &&
+              i + 9 < nlines &&
+              strncmp(lines[i + 9], "jp c,", 5) == 0 &&
+              strcmp(lines[i + 8] + 5, lines[i + 9] + 5) == 0)) {
+
+            /*
+             * For nonzero 16-bit constants the high byte must also be
+             * tested against zero.  The old peephole used only:
+             *
+             *     ld a,(ix+lo)
+             *     cp N
+             *
+             * which is only valid for byte objects.  It broke uint16_t
+             * comparisons such as "m == 1" when m was 257, 513, ...
+             *
+             * Keep the zero case compact; for nonzero constants emit
+             * a correct low-byte/high-byte test.
+             */
+            sprintf(newline, "ld a,(ix%s)", loff);
+            replace1_tagged(i, newline, "small_const_eq");
+
+            if (imm == 0) {
+                sprintf(newline, "or (ix%s)", hoff);
+                replace1(i + 1, newline);
+                replace1(i + 2, lines[i + 8]);
+                delete_n(i + 3, 6);
+            } else if (strncmp(lines[i + 8], "jp nz,", 6) == 0) {
+                /* x != imm: branch if low differs or high is nonzero. */
+                sprintf(newline, "cp %d", imm);
+                replace1(i + 1, newline);
+                replace1(i + 2, lines[i + 8]);
+                sprintf(newline, "ld a,(ix%s)", hoff);
+                replace1(i + 3, newline);
+                replace1(i + 4, "or a");
+                replace1(i + 5, lines[i + 8]);
+                delete_n(i + 6, 3);
+            } else {
+                /* x == imm: branch only if low matches and high is zero. */
+                char skip[64];
+                char jnzskip[96];
+
+                sprintf(skip, "Lsceq_%d", i); /* see Lskrl_'s rationale above */
+                sprintf(newline, "cp %d", imm);
+                replace1(i + 1, newline);
+                sprintf(jnzskip, "jp nz, %s", skip);
+                replace1(i + 2, jnzskip);
+                sprintf(newline, "ld a,(ix%s)", hoff);
+                replace1(i + 3, newline);
+                replace1(i + 4, "or a");
+                replace1(i + 5, lines[i + 8]);
+                sprintf(newline, "%s:", skip);
+                replace1(i + 6, newline);
+                delete_n(i + 7, 2);
+            }
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_and1_bool_at(int i)
+{
+    /*
+     * Fold 16-bit "x & 1" boolean tests:
+     *
+     *   ld l,(ix+8)
+     *   ld h,(ix+9)
+     *   ld de,1
+     *   ld a,h
+     *   and d
+     *   ld h,a
+     *   ld a,l
+     *   and e
+     *   ld l,a
+     *   ld a,h
+     *   or l
+     *   jp z,L
+     *
+     * becomes:
+     *
+     *   ld a,(ix+8)
+     *   and 1
+     *   jp z,L
+     *
+     * This is hot in ttt's MinMax for "depth & 1".
+     */
+    if (eq(i, "ld l,(ix+8)") &&
+        eq(i + 1, "ld h,(ix+9)") &&
+        eq(i + 2, "ld de,1") &&
+        eq(i + 3, "ld a,h") &&
+        eq(i + 4, "and d") &&
+        eq(i + 5, "ld h,a") &&
+        eq(i + 6, "ld a,l") &&
+        eq(i + 7, "and e") &&
+        eq(i + 8, "ld l,a") &&
+        eq(i + 9, "ld a,h") &&
+        eq(i + 10, "or l") &&
+        (strncmp(lines[i + 11], "jp z,", 5) == 0 ||
+         strncmp(lines[i + 11], "jp nz,", 6) == 0)) {
+
+        replace1_tagged(i, "ld a,(ix+8)", "and1_bool");
+        replace1(i + 1, "and 1");
+        replace1(i + 2, lines[i + 11]);
+        delete_n(i + 3, 9);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_bool_suffix_at(int i)
+{
+    /*
+     * Fold boolean materialization suffixes:
+     *
+     *   ld hl,1
+     *   jp Lend
+     * Lfalse:
+     *   ld hl,0
+     * Lend:
+     *   ld a,h
+     *   or l
+     *   jp nz,Ldest
+     *
+     * becomes:
+     *   jp Ldest
+     * Lfalse:
+     * Lend:
+     *
+     * For final "jp z", the false path jumps to Ldest instead.
+     * Also handles the symmetric "ld hl,0 ... Ltrue: ld hl,1" form.
+     */
+    {
+        char ljump[128], lab_mid[128], lab_end[128], ldest[128];
+        char out1[256], out2[256];
+
+        if ((eq(i, "ld hl,1") || eq(i, "ld hl,0")) &&
+            peep_parse_jp_uncond_label(lines[i + 1], ljump) &&
+            label_name_at(i + 2, lab_mid) &&
+            (eq(i + 3, "ld hl,0") || eq(i + 3, "ld hl,1")) &&
+            label_name_at(i + 4, lab_end) &&
+            strcmp(ljump, lab_end) == 0 &&
+            eq(i + 5, "ld a,h") &&
+            eq(i + 6, "or l") &&
+            (peep_parse_jp_cond_label(lines[i + 7], "z", ldest) ||
+             peep_parse_jp_cond_label(lines[i + 7], "nz", ldest))) {
+
+            int first_is_true;
+            int final_is_z;
+            int branch_from_first_path;
+
+            first_is_true = eq(i, "ld hl,1");
+            final_is_z = strncmp(lines[i + 7], "jp z,", 5) == 0;
+
+            /* final jp nz branches on true; final jp z branches on false. */
+            branch_from_first_path =
+                (first_is_true && !final_is_z) || (!first_is_true && final_is_z);
+
+            if (branch_from_first_path) {
+                sprintf(out1, "jp %s", ldest);
+                replace1_tagged(i, out1, "bool_suffix");
+                replace1(i + 1, lines[i + 2]);  /* middle label */
+                replace1(i + 2, lines[i + 4]);  /* end label */
+                delete_n(i + 3, 5);
+            } else {
+                sprintf(out1, "jp %s", lab_end);
+                sprintf(out2, "jp %s", ldest);
+                replace1_tagged(i, out1, "bool_suffix");
+                replace1(i + 1, lines[i + 2]);  /* middle label */
+                replace1(i + 2, out2);
+                replace1(i + 3, lines[i + 4]);  /* end label */
+                delete_n(i + 4, 4);
+            }
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_const_bool_at(int i)
+{
+    /*
+     * Fold constant boolean tests:
+     *
+     *   ld hl,1
+     *   ld a,h
+     *   or l
+     *   jp z, Lx       ; never taken
+     *
+     * delete all four.  Similarly, "jp nz" is always taken.
+     * Do the inverse for ld hl,0.
+     */
+    {
+        char tgt[128];
+        char newline[256];
+
+        if ((eq(i, "ld hl,1") || eq(i, "ld hl,0")) &&
+            eq(i + 1, "ld a,h") &&
+            eq(i + 2, "or l") &&
+            (peep_parse_jp_cond_label(lines[i + 3], "z", tgt) ||
+             peep_parse_jp_cond_label(lines[i + 3], "nz", tgt))) {
+            int is_one;
+            int is_jp_z;
+            int taken;
+
+            is_one = eq(i, "ld hl,1");
+            is_jp_z = strncmp(lines[i + 3], "jp z,", 5) == 0;
+
+            taken = is_one ? !is_jp_z : is_jp_z;
+
+            if (taken) {
+                sprintf(newline, "jp %s", tgt);
+                replace1_tagged(i, newline, "const_bool_taken");
+                delete_n(i + 1, 3);
+            } else {
+                delete_n(i, 4);
+            }
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_cp_hl_bool_at(int i)
+{
+    /*
+     * Fold byte compare boolean materialization after previous byte-compare
+     * peepholes:
+     *
+     *   cp (hl)
+     *   jp z, Ltrue       ; or jp nz, Ltrue
+     *   ld hl,0
+     *   jp Lend
+     * Ltrue:
+     *   ld hl,1
+     * Lend:
+     *   ld a,h
+     *   or l
+     *   jp z, Lfalse      ; or jp nz, Ltrue2
+     *
+     * into a direct conditional branch after cp.
+     */
+    {
+        char ltrue[128], lend[128], lab4[128], lab6[128], ldest[128];
+        char newline[256];
+        int first_is_z;
+        int final_is_z;
+
+        if (eq(i, "cp (hl)") &&
+            (peep_parse_jp_cond_label(lines[i + 1], "z", ltrue) ||
+             peep_parse_jp_cond_label(lines[i + 1], "nz", ltrue)) &&
+            eq(i + 2, "ld hl,0") &&
+            peep_parse_jp_uncond_label(lines[i + 3], lend) &&
+            label_name_at(i + 4, lab4) &&
+            strcmp(lab4, ltrue) == 0 &&
+            eq(i + 5, "ld hl,1") &&
+            label_name_at(i + 6, lab6) &&
+            strcmp(lab6, lend) == 0 &&
+            eq(i + 7, "ld a,h") &&
+            eq(i + 8, "or l") &&
+            (peep_parse_jp_cond_label(lines[i + 9], "z", ldest) ||
+             peep_parse_jp_cond_label(lines[i + 9], "nz", ldest))) {
+
+            first_is_z = strncmp(lines[i + 1], "jp z,", 5) == 0;
+            final_is_z = strncmp(lines[i + 9], "jp z,", 5) == 0;
+
+            if (final_is_z) {
+                peep_make_cond_jump(newline, sizeof(newline), first_is_z ? "nz" : "z", ldest);
+            } else {
+                peep_make_cond_jump(newline, sizeof(newline), first_is_z ? "z" : "nz", ldest);
+            }
+
+            replace1_tagged(i + 1, newline, "cp_hl_bool");
+            delete_n(i + 2, 8);
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_local_alloc_at(int i)
+{
+    /*
+     * Small local stack allocation:
+     *
+     *   ld hl,-1
+     *   add hl,sp
+     *   ld sp,hl
+     *
+     * becomes:
+     *   dec sp
+     *
+     * and similarly for -2.  This is especially useful for the tiny
+     * ttt posNfunc helpers that allocate one char local.
+     *
+     * The rewrite deletes the definition of HL (the address of the
+     * fresh allocation), so it must only fire when the following code
+     * fully rewrites HL before reading it (local_alloc_hl_result_dead).
+     * dcc's by-value struct/union argument copy uses HL from this very
+     * sequence as the copy destination; rewriting that shape corrupted
+     * the outgoing argument bytes and the stack.
+     */
+    if (eq(i, "ld hl,-1") &&
+        eq(i + 1, "add hl,sp") &&
+        eq(i + 2, "ld sp,hl") &&
+        local_alloc_hl_result_dead(i + 3)) {
+        replace1_tagged(i, "dec sp", "local_alloc_1");
+        delete_n(i + 1, 2);
+        return 1;
+    }
+
+    if (eq(i, "ld hl,-2") &&
+        eq(i + 1, "add hl,sp") &&
+        eq(i + 2, "ld sp,hl") &&
+        local_alloc_hl_result_dead(i + 3)) {
+        replace1_tagged(i, "dec sp", "local_alloc_2");
+        replace1(i + 1, "dec sp");
+        delete_n(i + 2, 1);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_byte_equality_at(int i)
+{
+    /*
+     * Byte equality compare:
+     *
+     *   ld l,(ix-N)
+     *   ld h,0
+     *   push hl
+     *   ld hl,_g_board
+     *   [inc hl ...]  or  [ld de,K / add hl,de]
+     *   ld l,(hl)
+     *   ld h,0
+     *   ex de,hl
+     *   pop hl
+     *   or a
+     *   sbc hl,de
+     *   jp z/nz, L
+     *
+     * becomes:
+     *
+     *   ld a,(ix-N)
+     *   ld hl,_g_board
+     *   [same address adjustment]
+     *   cp (hl)
+     *   jp z/nz, L
+     *
+     * Only equality/inequality branches are folded, so carry/sign
+     * semantics do not matter.
+     */
+    {
+        char off[32];
+        char newline[128];
+        int j;
+        int incs;
+
+        if (peep_parse_ld_l_ix(lines[i], off) &&
+            eq(i + 1, "ld h,0") &&
+            eq(i + 2, "push hl") &&
+            eq(i + 3, "ld hl,_g_board")) {
+
+            j = i + 4;
+            incs = 0;
+            while (j < nlines && eq(j, "inc hl")) {
+                j++;
+                incs++;
+            }
+
+            if (eq(j, "ld l,(hl)") &&
+                eq(j + 1, "ld h,0") &&
+                eq(j + 2, "ex de,hl") &&
+                eq(j + 3, "pop hl") &&
+                eq(j + 4, "or a") &&
+                eq(j + 5, "sbc hl,de") &&
+                peep_is_jp_z_or_nz(lines[j + 6])) {
+
+                peep_make_ld_a_ix(newline, off);
+                replace1_tagged(i, newline, "byte_eq_inc");
+                replace1(i + 1, "ld hl,_g_board");
+
+                /* existing inc hl lines at i+4.. remain moved down by deletion;
+                   copy them into position i+2.. */
+                {
+                    int k;
+                    for (k = 0; k < incs; k++)
+                        replace1(i + 2 + k, "inc hl");
+                    replace1(i + 2 + incs, "cp (hl)");
+                    replace1(i + 3 + incs, lines[j + 6]);
+                }
+
+                delete_n(i + 4 + incs, (j + 7) - (i + 4 + incs));
+        return 1;
+            }
+
+            if (strncmp(lines[j], "ld de,", 6) == 0 &&
+                eq(j + 1, "add hl,de") &&
+                eq(j + 2, "ld l,(hl)") &&
+                eq(j + 3, "ld h,0") &&
+                eq(j + 4, "ex de,hl") &&
+                eq(j + 5, "pop hl") &&
+                eq(j + 6, "or a") &&
+                eq(j + 7, "sbc hl,de") &&
+                peep_is_jp_z_or_nz(lines[j + 8])) {
+
+                peep_make_ld_a_ix(newline, off);
+                replace1_tagged(i, newline, "byte_eq_de");
+                replace1(i + 1, "ld hl,_g_board");
+                replace1(i + 2, lines[j]);
+                replace1(i + 3, "add hl,de");
+                replace1(i + 4, "cp (hl)");
+                replace1(i + 5, lines[j + 8]);
+
+                delete_n(i + 6, (j + 9) - (i + 6));
+        return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int try_byte_compare_zero_at(int i)
+{
+    /*
+     * Byte compare against zero:
+     *
+     *   ld hl,0
+     *   push hl
+     *   ld l,(ix-N)
+     *   ld h,0
+     *   ex de,hl
+     *   pop hl
+     *   or a
+     *   sbc hl,de
+     *   jp z/nz, L
+     *
+     * becomes:
+     *   ld a,(ix-N)
+     *   or a
+     *   jp z/nz, L
+     */
+    {
+        char off[32];
+        char newline[128];
+
+        if (eq(i, "ld hl,0") &&
+            eq(i + 1, "push hl") &&
+            peep_parse_ld_l_ix(lines[i + 2], off) &&
+            eq(i + 3, "ld h,0") &&
+            eq(i + 4, "ex de,hl") &&
+            eq(i + 5, "pop hl") &&
+            eq(i + 6, "or a") &&
+            eq(i + 7, "sbc hl,de") &&
+            peep_is_jp_z_or_nz(lines[i + 8])) {
+
+            peep_make_ld_a_ix(newline, off);
+            replace1_tagged(i, newline, "byte_cmp_zero");
+            replace1(i + 1, "or a");
+            replace1(i + 2, lines[i + 8]);
+            delete_n(i + 3, 6);
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_ix_de_load_reorder_at(int i)
+{
+    /*
+     * Before:
+     *   push ix
+     *   pop hl
+     *   dec hl
+     *   dec hl
+     *   ld e,(hl)
+     *   inc hl
+     *   ld d,(hl)
+     *   pop hl
+     *
+     * After:
+     *   push ix
+     *   pop hl
+     *   dec hl
+     *   ld d,(hl)
+     *   dec hl
+     *   ld e,(hl)
+     *   pop hl
+     *
+     * Safe because the final pop hl overwrites HL, so the changed
+     * intermediate HL value does not escape.
+     */
+    if (eq(i, "push ix") &&
+        eq(i + 1, "pop hl") &&
+        eq(i + 2, "dec hl") &&
+        eq(i + 3, "dec hl") &&
+        eq(i + 4, "ld e,(hl)") &&
+        eq(i + 5, "inc hl") &&
+        eq(i + 6, "ld d,(hl)") &&
+        eq(i + 7, "pop hl")) {
+        replace1_tagged(i + 2, "dec hl", "ix_de_load_reorder");
+        replace1(i + 3, "ld d,(hl)");
+        replace1(i + 4, "dec hl");
+        replace1(i + 5, "ld e,(hl)");
+        replace1(i + 6, "pop hl");
+        delete_n(i + 7, 1);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_small_positive_offset_at(int i)
+{
+    /* Small positive address offsets.  16-bit INC HL does not affect flags.
+     * Only use where the next instruction is not a conditional branch. */
+    if (eq(i, "ld de,1") && eq(i + 1, "add hl,de") &&
+        i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0) {
+        replace1_tagged(i, "inc hl", "ld_de1_to_inc");
+        delete_n(i + 1, 1);
+        return 1;
+    }
+
+    if (eq(i, "ld de,2") && eq(i + 1, "add hl,de") &&
+        i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0) {
+        replace1_tagged(i, "inc hl", "ld_de2_to_inc");
+        replace1(i + 1, "inc hl");
+        return 1;
+    }
+
+    if (eq(i, "ld de,3") && eq(i + 1, "add hl,de") &&
+        i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0) {
+        replace1_tagged(i, "inc hl", "ld_de3_to_inc");
+        replace1(i + 1, "inc hl");
+        insert_line(i + 2, "inc hl");
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_subtract_one_at(int i)
+{
+    /*
+     * HL -= 1 via signed subtract:
+     *   ld de,1
+     *   or a       ; clear carry
+     *   sbc hl,de  ; HL = HL - 1
+     *
+     * When not immediately followed by a conditional branch,
+     * the flags from sbc are unused, and this becomes just:
+     *   dec hl
+     *
+     * This hits HL = n - 1 patterns in indexed loops.
+     */
+    if (eq(i, "ld de,1") &&
+        eq(i + 1, "or a") &&
+        eq(i + 2, "sbc hl,de") &&
+        i + 3 < nlines &&
+        strncmp(lines[i + 3], "jp ", 3) != 0) {
+        replace1_tagged(i, "dec hl", "sbc_de1_to_dec");
+        delete_n(i + 1, 2);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_same_register_push_pop_at(int i)
+{
+    /* Same-register push/pop has no register or flag effect. */
+    if ((eq(i, "push hl") && eq(i + 1, "pop hl")) ||
+        (eq(i, "push de") && eq(i + 1, "pop de")) ||
+        (eq(i, "push bc") && eq(i + 1, "pop bc")) ||
+        (eq(i, "push af") && eq(i + 1, "pop af")) ||
+        (eq(i, "push ix") && eq(i + 1, "pop ix"))) {
+        delete_n(i, 2);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_double_exchange_at(int i)
+{
+    /* Two exchanges cancel exactly. */
+    if (eq(i, "ex de,hl") && eq(i + 1, "ex de,hl")) {
+        delete_n(i, 2);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_caller_cleanup_at(int i)
+{
+    char v[128];
+
+    /*
+     * Caller cleanup that preserves HL return value:
+     *   ex de,hl / ld hl,N / add hl,sp / ld sp,hl / ex de,hl
+     * becomes N copies of inc sp for small even N.  This keeps HL
+     * unchanged and adjusts SP by the same amount.  It intentionally
+     * avoids changing condition flags.
+     */
+    if (eq(i, "ex de,hl") &&
+        i + 4 < nlines &&
+        parse_ld_hl_imm(lines[i + 1], v, sizeof(v)) &&
+        eq(i + 2, "add hl,sp") &&
+        eq(i + 3, "ld sp,hl") &&
+        eq(i + 4, "ex de,hl")) {
+        int n;
+        int k;
+        if (parse_nonneg_int(v, &n) && n > 0 && n <= 6) {
+            delete_n(i, 5);
+            for (k = 0; k < n; k++) {
+                if (k == 0)
+                    insert_line_tagged(i, "inc sp", "caller_cleanup");
+                else
+                    insert_line(i + k, "inc sp");
+            }
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_unreachable_after_jump_at(int i)
+{
+    /*
+     * Code after an unconditional jump is unreachable until the next
+     * label.  Delete one non-label instruction at a time.
+     */
+    if (is_uncond_jp(lines[i]) &&
+        i + 1 < nlines &&
+        !starts_label(lines[i + 1]) &&
+        !is_blank_or_comment(lines[i + 1])) {
+        delete_n(i + 1, 1);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_jump_to_next_at(int i)
+{
+    /* Unconditional jump to immediately following label. */
+    if (is_jp_to_next_label(i)) {
+        delete_n(i, 1);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int try_ix_predec_inc_at(int i)
+{
+    /*
+     * 16-bit pre-decrement (or pre-increment) via pointer arithmetic,
+     * where the variable's IX offset is within direct IX addressing range.
+     *
+     *   push ix
+     *   pop hl
+     *   ld de,K      ; K in -128..126
+     *   add hl,de
+     *   push hl
+     *   ld e,(hl)
+     *   inc hl
+     *   ld d,(hl)
+     *   ex de,hl
+     *   dec hl       ; (or inc hl for pre-increment)
+     *   ex de,hl
+     *   pop hl
+     *   ld (hl),e
+     *   inc hl
+     *   ld (hl),d
+     *   ex de,hl
+     *
+     * Becomes (result stays in HL):
+     *
+     *   ld l,(ix+K)
+     *   ld h,(ix+K+1)
+     *   dec hl
+     *   ld (ix+K),l
+     *   ld (ix+K+1),h
+     */
+    {
+        int K;
+        char loff[32], hoff[32], newline[128];
+        const char *step;
+
+        if (eq(i,      "push ix") &&
+            eq(i +  1, "pop hl") &&
+            peep_parse_ld_de_signed(lines[i + 2], &K) &&
+            eq(i +  3, "add hl,de") &&
+            eq(i +  4, "push hl") &&
+            eq(i +  5, "ld e,(hl)") &&
+            eq(i +  6, "inc hl") &&
+            eq(i +  7, "ld d,(hl)") &&
+            eq(i +  8, "ex de,hl") &&
+            (eq(i +  9, "dec hl") || eq(i +  9, "inc hl")) &&
+            eq(i + 10, "ex de,hl") &&
+            eq(i + 11, "pop hl") &&
+            eq(i + 12, "ld (hl),e") &&
+            eq(i + 13, "inc hl") &&
+            eq(i + 14, "ld (hl),d") &&
+            eq(i + 15, "ex de,hl") &&
+            K >= -128 && K <= 126) {
+
+            step = eq(i + 9, "dec hl") ? "dec hl" : "inc hl";
+            peep_format_ix_off(loff, K);
+            peep_format_ix_off(hoff, K + 1);
+
+            sprintf(newline, "ld l,(ix%s)", loff);  replace1_tagged(i, newline, "ix_predec_inc");
+            sprintf(newline, "ld h,(ix%s)", hoff);  replace1(i + 1, newline);
+            replace1(i + 2, step);
+            sprintf(newline, "ld (ix%s),l", loff);  replace1(i + 3, newline);
+            sprintf(newline, "ld (ix%s),h", hoff);  replace1(i + 4, newline);
+            delete_n(i + 5, 11);
+        return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int try_byte_zero_test_at(int i)
+{
+    /*
+     * Zero-test a byte from memory:
+     *   ld l,(hl)
+     *   ld h,0
+     *   ld a,h
+     *   or l
+     * The above loads a byte from (HL) as an unsigned 16-bit value in HL,
+     * then OR-reduces HL into A to test for zero.  Since H is forced to 0,
+     * A ends up equal to the byte.  Equivalent, and 11T faster:
+     *   ld a,(hl)
+     *   or a
+     */
+    if (i + 3 < nlines &&
+        eq(i,     "ld l,(hl)") &&
+        eq(i + 1, "ld h,0") &&
+        eq(i + 2, "ld a,h") &&
+        eq(i + 3, "or l")) {
+        replace1_tagged(i, "ld a,(hl)", "byte_zero_test");
+        replace1(i + 1, "or a");
+        delete_n(i + 2, 2);
+        return 1;
+    }
+
+    return 0;
+}
+
 static int pass_once(void)
 {
     int i;
@@ -8200,765 +9276,76 @@ static int pass_once(void)
     changed = 0;
 
     for (i = 0; i < nlines; i++) {
-        /*
-         * Global 16-bit post-increment used as a statement:
-         *
-         *   ld hl,_g_Moves
-         *   push hl
-         *   ld e,(hl)
-         *   inc hl
-         *   ld d,(hl)
-         *   ex de,hl
-         *   push hl
-         *   inc hl
-         *   ex de,hl
-         *   pop hl
-         *   ex (sp),hl
-         *   ld (hl),e
-         *   inc hl
-         *   ld (hl),d
-         *   pop hl
-         *
-         * becomes direct memory increment.  This hits the very hot
-         * g_Moves++ at _MinMax entry, without touching bool folding.
-         */
-        if (eq(i, "ld hl,_g_Moves") &&
-            eq(i + 1, "push hl") &&
-            eq(i + 2, "ld e,(hl)") &&
-            eq(i + 3, "inc hl") &&
-            eq(i + 4, "ld d,(hl)") &&
-            eq(i + 5, "ex de,hl") &&
-            eq(i + 6, "push hl") &&
-            eq(i + 7, "inc hl") &&
-            eq(i + 8, "ex de,hl") &&
-            eq(i + 9, "pop hl") &&
-            eq(i + 10, "ex (sp),hl") &&
-            eq(i + 11, "ld (hl),e") &&
-            eq(i + 12, "inc hl") &&
-            eq(i + 13, "ld (hl),d") &&
-            eq(i + 14, "pop hl")) {
-            char lab[64], line[128];
-
-            sprintf(lab, "Lginc_%d", i); /* see Lskrl_'s rationale above */
-            replace1_tagged(i, "ld hl,_g_Moves", "lookforwinner_ginc");
-            replace1(i + 1, "inc (hl)");
-            sprintf(line, "jp nz, %s", lab);
-            replace1(i + 2, line);
-            replace1(i + 3, "inc hl");
-            replace1(i + 4, "inc (hl)");
-            sprintf(line, "%s:", lab);
-            replace1(i + 5, line);
-            delete_n(i + 6, 9);
+        if (try_global_moves_postinc_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        /*
-         * Small constant equality/inequality against local int:
-         *
-         *   ld hl,N
-         *   push hl
-         *   ld l,(ix-K)
-         *   ld h,(ix-K+1)
-         *   ex de,hl
-         *   pop hl
-         *   or a
-         *   sbc hl,de
-         *   jp z/nz,L
-         *
-         * becomes (when N > 0):
-         *
-         *   ld a,(ix-K)
-         *   cp N
-         *   jp z/nz,L
-         *
-         * or when N == 0 (null/zero check, must test both bytes):
-         *
-         *   ld a,(ix-K)
-         *   or (ix-K+1)
-         *   jp z/nz,L
-         *
-         * This hits MinMax tests like score == SCORE_WIN / SCORE_LOSE.
-         * When N==0 we must use 'or' to check both bytes: a pointer like
-         * 0x1E00 has a zero low byte but is non-null, so 'cp 0' alone
-         * would incorrectly treat it as null.
-         */
-        {
-            int imm;
-            char loff[32], hoff[32], newline[128];
-
-            if (peep_parse_ld_hl_0_to_255(lines[i], &imm) &&
-                eq(i + 1, "push hl") &&
-                peep_parse_ld_l_ix(lines[i + 2], loff) &&
-                peep_parse_ld_h_ix(lines[i + 3], hoff) &&
-                eq(i + 4, "ex de,hl") &&
-                eq(i + 5, "pop hl") &&
-                eq(i + 6, "or a") &&
-                eq(i + 7, "sbc hl,de") &&
-                (strncmp(lines[i + 8], "jp z,", 5) == 0 ||
-                 strncmp(lines[i + 8], "jp nz,", 6) == 0) &&
-                /* Skip >= comparisons: "jp z,L; jp c,L" with the same label
-                 * means (const <= var), not (const == var).  Treating it as
-                 * equality corrupts the carry flag used by the leftover jp c. */
-                !(strncmp(lines[i + 8], "jp z,", 5) == 0 &&
-                  i + 9 < nlines &&
-                  strncmp(lines[i + 9], "jp c,", 5) == 0 &&
-                  strcmp(lines[i + 8] + 5, lines[i + 9] + 5) == 0)) {
-
-                /*
-                 * For nonzero 16-bit constants the high byte must also be
-                 * tested against zero.  The old peephole used only:
-                 *
-                 *     ld a,(ix+lo)
-                 *     cp N
-                 *
-                 * which is only valid for byte objects.  It broke uint16_t
-                 * comparisons such as "m == 1" when m was 257, 513, ...
-                 *
-                 * Keep the zero case compact; for nonzero constants emit
-                 * a correct low-byte/high-byte test.
-                 */
-                sprintf(newline, "ld a,(ix%s)", loff);
-                replace1_tagged(i, newline, "small_const_eq");
-
-                if (imm == 0) {
-                    sprintf(newline, "or (ix%s)", hoff);
-                    replace1(i + 1, newline);
-                    replace1(i + 2, lines[i + 8]);
-                    delete_n(i + 3, 6);
-                } else if (strncmp(lines[i + 8], "jp nz,", 6) == 0) {
-                    /* x != imm: branch if low differs or high is nonzero. */
-                    sprintf(newline, "cp %d", imm);
-                    replace1(i + 1, newline);
-                    replace1(i + 2, lines[i + 8]);
-                    sprintf(newline, "ld a,(ix%s)", hoff);
-                    replace1(i + 3, newline);
-                    replace1(i + 4, "or a");
-                    replace1(i + 5, lines[i + 8]);
-                    delete_n(i + 6, 3);
-                } else {
-                    /* x == imm: branch only if low matches and high is zero. */
-                    char skip[64];
-                    char jnzskip[96];
-
-                    sprintf(skip, "Lsceq_%d", i); /* see Lskrl_'s rationale above */
-                    sprintf(newline, "cp %d", imm);
-                    replace1(i + 1, newline);
-                    sprintf(jnzskip, "jp nz, %s", skip);
-                    replace1(i + 2, jnzskip);
-                    sprintf(newline, "ld a,(ix%s)", hoff);
-                    replace1(i + 3, newline);
-                    replace1(i + 4, "or a");
-                    replace1(i + 5, lines[i + 8]);
-                    sprintf(newline, "%s:", skip);
-                    replace1(i + 6, newline);
-                    delete_n(i + 7, 2);
-                }
-
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * Fold 16-bit "x & 1" boolean tests:
-         *
-         *   ld l,(ix+8)
-         *   ld h,(ix+9)
-         *   ld de,1
-         *   ld a,h
-         *   and d
-         *   ld h,a
-         *   ld a,l
-         *   and e
-         *   ld l,a
-         *   ld a,h
-         *   or l
-         *   jp z,L
-         *
-         * becomes:
-         *
-         *   ld a,(ix+8)
-         *   and 1
-         *   jp z,L
-         *
-         * This is hot in ttt's MinMax for "depth & 1".
-         */
-        if (eq(i, "ld l,(ix+8)") &&
-            eq(i + 1, "ld h,(ix+9)") &&
-            eq(i + 2, "ld de,1") &&
-            eq(i + 3, "ld a,h") &&
-            eq(i + 4, "and d") &&
-            eq(i + 5, "ld h,a") &&
-            eq(i + 6, "ld a,l") &&
-            eq(i + 7, "and e") &&
-            eq(i + 8, "ld l,a") &&
-            eq(i + 9, "ld a,h") &&
-            eq(i + 10, "or l") &&
-            (strncmp(lines[i + 11], "jp z,", 5) == 0 ||
-             strncmp(lines[i + 11], "jp nz,", 6) == 0)) {
-
-            replace1_tagged(i, "ld a,(ix+8)", "and1_bool");
-            replace1(i + 1, "and 1");
-            replace1(i + 2, lines[i + 11]);
-            delete_n(i + 3, 9);
+        if (try_small_const_eq_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        /*
-         * MinMax board[p] = pieceMove byte store:
-         *
-         *   ld l,(ix-5)
-         *   ld h,(ix-4)
-         *   ld hl,_g_board
-         *   push hl
-         *   ld l,(ix-5)
-         *   ld h,(ix-4)
-         *   ex de,hl
-         *   pop hl
-         *   add hl,de
-         *   push hl
-         *   ld l,(ix-3)
-         *   ld h,0
-         *   ex de,hl
-         *   pop hl
-         *   ld (hl),e
-         *
-         * becomes:
-         *
-         *   ld l,(ix-5)
-         *   ld h,(ix-4)
-         *   ld de,_g_board
-         *   add hl,de
-         *   ld a,(ix-3)
-         *   ld (hl),a
-         *
-         * This is safe for ttt_t g_board[p] = pieceMove; because both are
-         * byte objects in this benchmark.
-         */
-        if (eq(i, "ld l,(ix-5)") &&
-            eq(i + 1, "ld h,(ix-4)") &&
-            eq(i + 2, "ld hl,_g_board") &&
-            eq(i + 3, "push hl") &&
-            eq(i + 4, "ld l,(ix-5)") &&
-            eq(i + 5, "ld h,(ix-4)") &&
-            eq(i + 6, "ex de,hl") &&
-            eq(i + 7, "pop hl") &&
-            eq(i + 8, "add hl,de") &&
-            eq(i + 9, "push hl") &&
-            eq(i + 10, "ld l,(ix-3)") &&
-            eq(i + 11, "ld h,0") &&
-            eq(i + 12, "ex de,hl") &&
-            eq(i + 13, "pop hl") &&
-            eq(i + 14, "ld (hl),e")) {
-
-            replace1_tagged(i, "ld l,(ix-5)", "board_store");
-            replace1(i + 1, "ld h,(ix-4)");
-            replace1(i + 2, "ld de,_g_board");
-            replace1(i + 3, "add hl,de");
-            replace1(i + 4, "ld a,(ix-3)");
-            replace1(i + 5, "ld (hl),a");
-            delete_n(i + 6, 9);
+        if (try_and1_bool_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        /*
-         * MinMax blank-board-position test:
-         *
-         *   ld hl,0
-         *   push hl
-         *   ld hl,_g_board
-         *   push hl
-         *   ld l,(ix-5)
-         *   ld h,(ix-4)
-         *   ex de,hl
-         *   pop hl
-         *   add hl,de
-         *   ld l,(hl)
-         *   ld h,0
-         *   ex de,hl
-         *   pop hl
-         *   or a
-         *   sbc hl,de
-         *   jp nz,Lskip
-         *
-         * becomes:
-         *
-         *   ld l,(ix-5)
-         *   ld h,(ix-4)
-         *   ld de,_g_board
-         *   add hl,de
-         *   ld a,(hl)
-         *   or a
-         *   jp nz,Lskip
-         */
-        {
-            char lskip[128];
-            if (eq(i, "ld hl,0") &&
-                eq(i + 1, "push hl") &&
-                eq(i + 2, "ld hl,_g_board") &&
-                eq(i + 3, "push hl") &&
-                eq(i + 4, "ld l,(ix-5)") &&
-                eq(i + 5, "ld h,(ix-4)") &&
-                eq(i + 6, "ex de,hl") &&
-                eq(i + 7, "pop hl") &&
-                eq(i + 8, "add hl,de") &&
-                eq(i + 9, "ld l,(hl)") &&
-                eq(i + 10, "ld h,0") &&
-                eq(i + 11, "ex de,hl") &&
-                eq(i + 12, "pop hl") &&
-                eq(i + 13, "or a") &&
-                eq(i + 14, "sbc hl,de") &&
-                peep_parse_jp_cond_label(lines[i + 15], "nz", lskip)) {
-
-                replace1_tagged(i, "ld l,(ix-5)", "blank_board_test");
-                replace1(i + 1, "ld h,(ix-4)");
-                replace1(i + 2, "ld de,_g_board");
-                replace1(i + 3, "add hl,de");
-                replace1(i + 4, "ld a,(hl)");
-                replace1(i + 5, "or a");
-                replace1(i + 6, lines[i + 15]);
-                delete_n(i + 7, 9);
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * Fold boolean materialization suffixes:
-         *
-         *   ld hl,1
-         *   jp Lend
-         * Lfalse:
-         *   ld hl,0
-         * Lend:
-         *   ld a,h
-         *   or l
-         *   jp nz,Ldest
-         *
-         * becomes:
-         *   jp Ldest
-         * Lfalse:
-         * Lend:
-         *
-         * For final "jp z", the false path jumps to Ldest instead.
-         * Also handles the symmetric "ld hl,0 ... Ltrue: ld hl,1" form.
-         */
-        {
-            char ljump[128], lab_mid[128], lab_end[128], ldest[128];
-            char out1[256], out2[256];
-
-            if ((eq(i, "ld hl,1") || eq(i, "ld hl,0")) &&
-                peep_parse_jp_uncond_label(lines[i + 1], ljump) &&
-                label_name_at(i + 2, lab_mid) &&
-                (eq(i + 3, "ld hl,0") || eq(i + 3, "ld hl,1")) &&
-                label_name_at(i + 4, lab_end) &&
-                strcmp(ljump, lab_end) == 0 &&
-                eq(i + 5, "ld a,h") &&
-                eq(i + 6, "or l") &&
-                (peep_parse_jp_cond_label(lines[i + 7], "z", ldest) ||
-                 peep_parse_jp_cond_label(lines[i + 7], "nz", ldest))) {
-
-                int first_is_true;
-                int final_is_z;
-                int branch_from_first_path;
-
-                first_is_true = eq(i, "ld hl,1");
-                final_is_z = strncmp(lines[i + 7], "jp z,", 5) == 0;
-
-                /* final jp nz branches on true; final jp z branches on false. */
-                branch_from_first_path =
-                    (first_is_true && !final_is_z) || (!first_is_true && final_is_z);
-
-                if (branch_from_first_path) {
-                    sprintf(out1, "jp %s", ldest);
-                    replace1_tagged(i, out1, "bool_suffix");
-                    replace1(i + 1, lines[i + 2]);  /* middle label */
-                    replace1(i + 2, lines[i + 4]);  /* end label */
-                    delete_n(i + 3, 5);
-                } else {
-                    sprintf(out1, "jp %s", lab_end);
-                    sprintf(out2, "jp %s", ldest);
-                    replace1_tagged(i, out1, "bool_suffix");
-                    replace1(i + 1, lines[i + 2]);  /* middle label */
-                    replace1(i + 2, out2);
-                    replace1(i + 3, lines[i + 4]);  /* end label */
-                    delete_n(i + 4, 4);
-                }
-
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * Fold constant boolean tests:
-         *
-         *   ld hl,1
-         *   ld a,h
-         *   or l
-         *   jp z, Lx       ; never taken
-         *
-         * delete all four.  Similarly, "jp nz" is always taken.
-         * Do the inverse for ld hl,0.
-         */
-        {
-            char tgt[128];
-            char newline[256];
-
-            if ((eq(i, "ld hl,1") || eq(i, "ld hl,0")) &&
-                eq(i + 1, "ld a,h") &&
-                eq(i + 2, "or l") &&
-                (peep_parse_jp_cond_label(lines[i + 3], "z", tgt) ||
-                 peep_parse_jp_cond_label(lines[i + 3], "nz", tgt))) {
-                int is_one;
-                int is_jp_z;
-                int taken;
-
-                is_one = eq(i, "ld hl,1");
-                is_jp_z = strncmp(lines[i + 3], "jp z,", 5) == 0;
-
-                taken = is_one ? !is_jp_z : is_jp_z;
-
-                if (taken) {
-                    sprintf(newline, "jp %s", tgt);
-                    replace1_tagged(i, newline, "const_bool_taken");
-                    delete_n(i + 1, 3);
-                } else {
-                    delete_n(i, 4);
-                }
-
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * Fold byte compare boolean materialization after previous byte-compare
-         * peepholes:
-         *
-         *   cp (hl)
-         *   jp z, Ltrue       ; or jp nz, Ltrue
-         *   ld hl,0
-         *   jp Lend
-         * Ltrue:
-         *   ld hl,1
-         * Lend:
-         *   ld a,h
-         *   or l
-         *   jp z, Lfalse      ; or jp nz, Ltrue2
-         *
-         * into a direct conditional branch after cp.
-         */
-        {
-            char ltrue[128], lend[128], lab4[128], lab6[128], ldest[128];
-            char newline[256];
-            int first_is_z;
-            int final_is_z;
-
-            if (eq(i, "cp (hl)") &&
-                (peep_parse_jp_cond_label(lines[i + 1], "z", ltrue) ||
-                 peep_parse_jp_cond_label(lines[i + 1], "nz", ltrue)) &&
-                eq(i + 2, "ld hl,0") &&
-                peep_parse_jp_uncond_label(lines[i + 3], lend) &&
-                label_name_at(i + 4, lab4) &&
-                strcmp(lab4, ltrue) == 0 &&
-                eq(i + 5, "ld hl,1") &&
-                label_name_at(i + 6, lab6) &&
-                strcmp(lab6, lend) == 0 &&
-                eq(i + 7, "ld a,h") &&
-                eq(i + 8, "or l") &&
-                (peep_parse_jp_cond_label(lines[i + 9], "z", ldest) ||
-                 peep_parse_jp_cond_label(lines[i + 9], "nz", ldest))) {
-
-                first_is_z = strncmp(lines[i + 1], "jp z,", 5) == 0;
-                final_is_z = strncmp(lines[i + 9], "jp z,", 5) == 0;
-
-                if (final_is_z) {
-                    peep_make_cond_jump(newline, sizeof(newline), first_is_z ? "nz" : "z", ldest);
-                } else {
-                    peep_make_cond_jump(newline, sizeof(newline), first_is_z ? "z" : "nz", ldest);
-                }
-
-                replace1_tagged(i + 1, newline, "cp_hl_bool");
-                delete_n(i + 2, 8);
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * posNfunc setup byte store:
-         *
-         *   push ix
-         *   pop hl
-         *   dec hl
-         *   push hl
-         *   ld hl,_g_board
-         *   [inc hl ...] or [ld de,N/add hl,de]
-         *   ld l,(hl)
-         *   ld h,0
-         *   ex de,hl
-         *   pop hl
-         *   ld (hl),e
-         *
-         * becomes:
-         *
-         *   ld hl,_g_board
-         *   [same address adjustment]
-         *   ld a,(hl)
-         *   ld (ix-1),a
-         */
-        if (eq(i, "push ix") &&
-            eq(i + 1, "pop hl") &&
-            eq(i + 2, "dec hl") &&
-            eq(i + 3, "push hl") &&
-            eq(i + 4, "ld hl,_g_board")) {
-            int j;
-            int incs;
-            int offv;
-            char tmp[128];
-
-            j = i + 5;
-            incs = 0;
-
-            while (j < nlines && eq(j, "inc hl")) {
-                incs++;
-                j++;
-            }
-
-            if (eq(j, "ld l,(hl)") &&
-                eq(j + 1, "ld h,0") &&
-                eq(j + 2, "ex de,hl") &&
-                eq(j + 3, "pop hl") &&
-                eq(j + 4, "ld (hl),e")) {
-
-                replace1_tagged(i, "ld hl,_g_board", "posnfunc_inc");
-                for (j = 0; j < incs; j++)
-                    replace1(i + 1 + j, "inc hl");
-                replace1(i + 1 + incs, "ld a,(hl)");
-                replace1(i + 2 + incs, "ld (ix-1),a");
-                delete_n(i + 3 + incs, (i + 10 + incs) - (i + 3 + incs));
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-
-            j = i + 5;
-            if (peep_parse_ld_de_0_to_255(lines[j], &offv) &&
-                eq(j + 1, "add hl,de") &&
-                eq(j + 2, "ld l,(hl)") &&
-                eq(j + 3, "ld h,0") &&
-                eq(j + 4, "ex de,hl") &&
-                eq(j + 5, "pop hl") &&
-                eq(j + 6, "ld (hl),e")) {
-
-                replace1_tagged(i, "ld hl,_g_board", "posnfunc_de");
-                sprintf(tmp, "ld de,%d", offv);
-                replace1(i + 1, tmp);
-                replace1(i + 2, "add hl,de");
-                replace1(i + 3, "ld a,(hl)");
-                replace1(i + 4, "ld (ix-1),a");
-                delete_n(i + 5, (j + 7) - (i + 5));
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * Small local stack allocation:
-         *
-         *   ld hl,-1
-         *   add hl,sp
-         *   ld sp,hl
-         *
-         * becomes:
-         *   dec sp
-         *
-         * and similarly for -2.  This is especially useful for the tiny
-         * ttt posNfunc helpers that allocate one char local.
-         *
-         * The rewrite deletes the definition of HL (the address of the
-         * fresh allocation), so it must only fire when the following code
-         * fully rewrites HL before reading it (local_alloc_hl_result_dead).
-         * dcc's by-value struct/union argument copy uses HL from this very
-         * sequence as the copy destination; rewriting that shape corrupted
-         * the outgoing argument bytes and the stack.
-         */
-        if (eq(i, "ld hl,-1") &&
-            eq(i + 1, "add hl,sp") &&
-            eq(i + 2, "ld sp,hl") &&
-            local_alloc_hl_result_dead(i + 3)) {
-            replace1_tagged(i, "dec sp", "local_alloc_1");
-            delete_n(i + 1, 2);
+        if (try_minmax_board_store_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        if (eq(i, "ld hl,-2") &&
-            eq(i + 1, "add hl,sp") &&
-            eq(i + 2, "ld sp,hl") &&
-            local_alloc_hl_result_dead(i + 3)) {
-            replace1_tagged(i, "dec sp", "local_alloc_2");
-            replace1(i + 1, "dec sp");
-            delete_n(i + 2, 1);
+        if (try_minmax_blank_board_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        /*
-         * Byte equality compare:
-         *
-         *   ld l,(ix-N)
-         *   ld h,0
-         *   push hl
-         *   ld hl,_g_board
-         *   [inc hl ...]  or  [ld de,K / add hl,de]
-         *   ld l,(hl)
-         *   ld h,0
-         *   ex de,hl
-         *   pop hl
-         *   or a
-         *   sbc hl,de
-         *   jp z/nz, L
-         *
-         * becomes:
-         *
-         *   ld a,(ix-N)
-         *   ld hl,_g_board
-         *   [same address adjustment]
-         *   cp (hl)
-         *   jp z/nz, L
-         *
-         * Only equality/inequality branches are folded, so carry/sign
-         * semantics do not matter.
-         */
-        {
-            char off[32];
-            char newline[128];
-            int j;
-            int incs;
-
-            if (peep_parse_ld_l_ix(lines[i], off) &&
-                eq(i + 1, "ld h,0") &&
-                eq(i + 2, "push hl") &&
-                eq(i + 3, "ld hl,_g_board")) {
-
-                j = i + 4;
-                incs = 0;
-                while (j < nlines && eq(j, "inc hl")) {
-                    j++;
-                    incs++;
-                }
-
-                if (eq(j, "ld l,(hl)") &&
-                    eq(j + 1, "ld h,0") &&
-                    eq(j + 2, "ex de,hl") &&
-                    eq(j + 3, "pop hl") &&
-                    eq(j + 4, "or a") &&
-                    eq(j + 5, "sbc hl,de") &&
-                    peep_is_jp_z_or_nz(lines[j + 6])) {
-
-                    peep_make_ld_a_ix(newline, off);
-                    replace1_tagged(i, newline, "byte_eq_inc");
-                    replace1(i + 1, "ld hl,_g_board");
-
-                    /* existing inc hl lines at i+4.. remain moved down by deletion;
-                       copy them into position i+2.. */
-                    {
-                        int k;
-                        for (k = 0; k < incs; k++)
-                            replace1(i + 2 + k, "inc hl");
-                        replace1(i + 2 + incs, "cp (hl)");
-                        replace1(i + 3 + incs, lines[j + 6]);
-                    }
-
-                    delete_n(i + 4 + incs, (j + 7) - (i + 4 + incs));
-                    changed = 1;
-                    if (i > 0) i--;
-                    continue;
-                }
-
-                if (strncmp(lines[j], "ld de,", 6) == 0 &&
-                    eq(j + 1, "add hl,de") &&
-                    eq(j + 2, "ld l,(hl)") &&
-                    eq(j + 3, "ld h,0") &&
-                    eq(j + 4, "ex de,hl") &&
-                    eq(j + 5, "pop hl") &&
-                    eq(j + 6, "or a") &&
-                    eq(j + 7, "sbc hl,de") &&
-                    peep_is_jp_z_or_nz(lines[j + 8])) {
-
-                    peep_make_ld_a_ix(newline, off);
-                    replace1_tagged(i, newline, "byte_eq_de");
-                    replace1(i + 1, "ld hl,_g_board");
-                    replace1(i + 2, lines[j]);
-                    replace1(i + 3, "add hl,de");
-                    replace1(i + 4, "cp (hl)");
-                    replace1(i + 5, lines[j + 8]);
-
-                    delete_n(i + 6, (j + 9) - (i + 6));
-                    changed = 1;
-                    if (i > 0) i--;
-                    continue;
-                }
-            }
+        if (try_bool_suffix_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
         }
 
-        /*
-         * Byte compare against zero:
-         *
-         *   ld hl,0
-         *   push hl
-         *   ld l,(ix-N)
-         *   ld h,0
-         *   ex de,hl
-         *   pop hl
-         *   or a
-         *   sbc hl,de
-         *   jp z/nz, L
-         *
-         * becomes:
-         *   ld a,(ix-N)
-         *   or a
-         *   jp z/nz, L
-         */
-        {
-            char off[32];
-            char newline[128];
+        if (try_const_bool_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
 
-            if (eq(i, "ld hl,0") &&
-                eq(i + 1, "push hl") &&
-                peep_parse_ld_l_ix(lines[i + 2], off) &&
-                eq(i + 3, "ld h,0") &&
-                eq(i + 4, "ex de,hl") &&
-                eq(i + 5, "pop hl") &&
-                eq(i + 6, "or a") &&
-                eq(i + 7, "sbc hl,de") &&
-                peep_is_jp_z_or_nz(lines[i + 8])) {
+        if (try_cp_hl_bool_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
 
-                peep_make_ld_a_ix(newline, off);
-                replace1_tagged(i, newline, "byte_cmp_zero");
-                replace1(i + 1, "or a");
-                replace1(i + 2, lines[i + 8]);
-                delete_n(i + 3, 6);
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
+        if (try_posnfunc_setup_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
+        if (try_local_alloc_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
+        if (try_byte_equality_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
+        if (try_byte_compare_zero_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
         }
 
         /*
@@ -9028,43 +9415,7 @@ static int pass_once(void)
         if (is_blank_or_comment(lines[i]))
             continue;
 
-        /*
-         * Before:
-         *   push ix
-         *   pop hl
-         *   dec hl
-         *   dec hl
-         *   ld e,(hl)
-         *   inc hl
-         *   ld d,(hl)
-         *   pop hl
-         *
-         * After:
-         *   push ix
-         *   pop hl
-         *   dec hl
-         *   ld d,(hl)
-         *   dec hl
-         *   ld e,(hl)
-         *   pop hl
-         *
-         * Safe because the final pop hl overwrites HL, so the changed
-         * intermediate HL value does not escape.
-         */
-        if (eq(i, "push ix") &&
-            eq(i + 1, "pop hl") &&
-            eq(i + 2, "dec hl") &&
-            eq(i + 3, "dec hl") &&
-            eq(i + 4, "ld e,(hl)") &&
-            eq(i + 5, "inc hl") &&
-            eq(i + 6, "ld d,(hl)") &&
-            eq(i + 7, "pop hl")) {
-            replace1_tagged(i + 2, "dec hl", "ix_de_load_reorder");
-            replace1(i + 3, "ld d,(hl)");
-            replace1(i + 4, "dec hl");
-            replace1(i + 5, "ld e,(hl)");
-            replace1(i + 6, "pop hl");
-            delete_n(i + 7, 1);
+        if (try_ix_de_load_reorder_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
@@ -9077,75 +9428,25 @@ static int pass_once(void)
             continue;
         }
 
-        /* Small positive address offsets.  16-bit INC HL does not affect flags.
-         * Only use where the next instruction is not a conditional branch. */
-        if (eq(i, "ld de,1") && eq(i + 1, "add hl,de") &&
-            i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0) {
-            replace1_tagged(i, "inc hl", "ld_de1_to_inc");
-            delete_n(i + 1, 1);
+        if (try_small_positive_offset_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        if (eq(i, "ld de,2") && eq(i + 1, "add hl,de") &&
-            i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0) {
-            replace1_tagged(i, "inc hl", "ld_de2_to_inc");
-            replace1(i + 1, "inc hl");
+        if (try_subtract_one_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        if (eq(i, "ld de,3") && eq(i + 1, "add hl,de") &&
-            i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0) {
-            replace1_tagged(i, "inc hl", "ld_de3_to_inc");
-            replace1(i + 1, "inc hl");
-            insert_line(i + 2, "inc hl");
+        if (try_same_register_push_pop_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        /*
-         * HL -= 1 via signed subtract:
-         *   ld de,1
-         *   or a       ; clear carry
-         *   sbc hl,de  ; HL = HL - 1
-         *
-         * When not immediately followed by a conditional branch,
-         * the flags from sbc are unused, and this becomes just:
-         *   dec hl
-         *
-         * This hits HL = n - 1 patterns in indexed loops.
-         */
-        if (eq(i, "ld de,1") &&
-            eq(i + 1, "or a") &&
-            eq(i + 2, "sbc hl,de") &&
-            i + 3 < nlines &&
-            strncmp(lines[i + 3], "jp ", 3) != 0) {
-            replace1_tagged(i, "dec hl", "sbc_de1_to_dec");
-            delete_n(i + 1, 2);
-            changed = 1;
-            if (i > 0) i--;
-            continue;
-        }
-
-        /* Same-register push/pop has no register or flag effect. */
-        if ((eq(i, "push hl") && eq(i + 1, "pop hl")) ||
-            (eq(i, "push de") && eq(i + 1, "pop de")) ||
-            (eq(i, "push bc") && eq(i + 1, "pop bc")) ||
-            (eq(i, "push af") && eq(i + 1, "pop af")) ||
-            (eq(i, "push ix") && eq(i + 1, "pop ix"))) {
-            delete_n(i, 2);
-            changed = 1;
-            if (i > 0) i--;
-            continue;
-        }
-
-        /* Two exchanges cancel exactly. */
-        if (eq(i, "ex de,hl") && eq(i + 1, "ex de,hl")) {
-            delete_n(i, 2);
+        if (try_double_exchange_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
@@ -9197,52 +9498,19 @@ static int pass_once(void)
             continue;
         }
 
-        /*
-         * Caller cleanup that preserves HL return value:
-         *   ex de,hl / ld hl,N / add hl,sp / ld sp,hl / ex de,hl
-         * becomes N copies of inc sp for small even N.  This keeps HL
-         * unchanged and adjusts SP by the same amount.  It intentionally
-         * avoids changing condition flags.
-         */
-        if (eq(i, "ex de,hl") &&
-            i + 4 < nlines &&
-            parse_ld_hl_imm(lines[i + 1], v, sizeof(v)) &&
-            eq(i + 2, "add hl,sp") &&
-            eq(i + 3, "ld sp,hl") &&
-            eq(i + 4, "ex de,hl")) {
-            int n;
-            int k;
-            if (parse_nonneg_int(v, &n) && n > 0 && n <= 6) {
-                delete_n(i, 5);
-                for (k = 0; k < n; k++) {
-                    if (k == 0)
-                        insert_line_tagged(i, "inc sp", "caller_cleanup");
-                    else
-                        insert_line(i + k, "inc sp");
-                }
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
-        }
-
-        /*
-         * Code after an unconditional jump is unreachable until the next
-         * label.  Delete one non-label instruction at a time.
-         */
-        if (is_uncond_jp(lines[i]) &&
-            i + 1 < nlines &&
-            !starts_label(lines[i + 1]) &&
-            !is_blank_or_comment(lines[i + 1])) {
-            delete_n(i + 1, 1);
+        if (try_caller_cleanup_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
         }
 
-        /* Unconditional jump to immediately following label. */
-        if (is_jp_to_next_label(i)) {
-            delete_n(i, 1);
+        if (try_unreachable_after_jump_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
+        if (try_jump_to_next_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
@@ -9275,94 +9543,13 @@ static int pass_once(void)
             continue;
         }
 
-        /*
-         * 16-bit pre-decrement (or pre-increment) via pointer arithmetic,
-         * where the variable's IX offset is within direct IX addressing range.
-         *
-         *   push ix
-         *   pop hl
-         *   ld de,K      ; K in -128..126
-         *   add hl,de
-         *   push hl
-         *   ld e,(hl)
-         *   inc hl
-         *   ld d,(hl)
-         *   ex de,hl
-         *   dec hl       ; (or inc hl for pre-increment)
-         *   ex de,hl
-         *   pop hl
-         *   ld (hl),e
-         *   inc hl
-         *   ld (hl),d
-         *   ex de,hl
-         *
-         * Becomes (result stays in HL):
-         *
-         *   ld l,(ix+K)
-         *   ld h,(ix+K+1)
-         *   dec hl
-         *   ld (ix+K),l
-         *   ld (ix+K+1),h
-         */
-        {
-            int K;
-            char loff[32], hoff[32], newline[128];
-            const char *step;
-
-            if (eq(i,      "push ix") &&
-                eq(i +  1, "pop hl") &&
-                peep_parse_ld_de_signed(lines[i + 2], &K) &&
-                eq(i +  3, "add hl,de") &&
-                eq(i +  4, "push hl") &&
-                eq(i +  5, "ld e,(hl)") &&
-                eq(i +  6, "inc hl") &&
-                eq(i +  7, "ld d,(hl)") &&
-                eq(i +  8, "ex de,hl") &&
-                (eq(i +  9, "dec hl") || eq(i +  9, "inc hl")) &&
-                eq(i + 10, "ex de,hl") &&
-                eq(i + 11, "pop hl") &&
-                eq(i + 12, "ld (hl),e") &&
-                eq(i + 13, "inc hl") &&
-                eq(i + 14, "ld (hl),d") &&
-                eq(i + 15, "ex de,hl") &&
-                K >= -128 && K <= 126) {
-
-                step = eq(i + 9, "dec hl") ? "dec hl" : "inc hl";
-                peep_format_ix_off(loff, K);
-                peep_format_ix_off(hoff, K + 1);
-
-                sprintf(newline, "ld l,(ix%s)", loff);  replace1_tagged(i, newline, "ix_predec_inc");
-                sprintf(newline, "ld h,(ix%s)", hoff);  replace1(i + 1, newline);
-                replace1(i + 2, step);
-                sprintf(newline, "ld (ix%s),l", loff);  replace1(i + 3, newline);
-                sprintf(newline, "ld (ix%s),h", hoff);  replace1(i + 4, newline);
-                delete_n(i + 5, 11);
-                changed = 1;
-                if (i > 0) i--;
-                continue;
-            }
+        if (try_ix_predec_inc_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
         }
 
-        /*
-         * Zero-test a byte from memory:
-         *   ld l,(hl)
-         *   ld h,0
-         *   ld a,h
-         *   or l
-         * The above loads a byte from (HL) as an unsigned 16-bit value in HL,
-         * then OR-reduces HL into A to test for zero.  Since H is forced to 0,
-         * A ends up equal to the byte.  Equivalent, and 11T faster:
-         *   ld a,(hl)
-         *   or a
-         */
-        if (i + 3 < nlines &&
-            eq(i,     "ld l,(hl)") &&
-            eq(i + 1, "ld h,0") &&
-            eq(i + 2, "ld a,h") &&
-            eq(i + 3, "or l")) {
-            replace1_tagged(i, "ld a,(hl)", "byte_zero_test");
-            replace1(i + 1, "or a");
-            delete_n(i + 2, 2);
+        if (try_byte_zero_test_at(i)) {
             changed = 1;
             if (i > 0) i--;
             continue;
