@@ -5843,7 +5843,7 @@ static int pass_byte_cmp_push_pop_hl(void)
 static int pass_byte_global_ptr_array_addr(void)
 {
     int i, j, S, changed = 0;
-    char base[MAX_LINE], off[32], ld_hl_buf[MAX_LINE];
+    char base[MAX_LINE], off[32], ld_hl_buf[MAX_LINE + 16];
 
     for (i = 0; i + 6 < nlines; i++) {
         if (!parse_ld_hl_imm(lines[i], base, sizeof(base))) continue;
@@ -5858,7 +5858,7 @@ static int pass_byte_global_ptr_array_addr(void)
         if (!eq(j + 1, "pop hl")) continue;
         if (!eq(j + 2, "add hl,de")) continue;
 
-        sprintf(ld_hl_buf, "ld hl,%s", base);
+        snprintf(ld_hl_buf, sizeof(ld_hl_buf), "ld hl,%s", base);
         delete_n(i, j + 2 - i + 1);
         {
             char ld_l_buf[64]; int k;
@@ -8101,10 +8101,10 @@ static int pass_array_base_push_to_de(void)
             eq(i + 9, "pop hl") &&
             eq(i + 10, "add hl,de") &&
             peep_de_dead_at(i + 11)) {
-            char store[128], expected_store[132], line[180];
+            char store[128], expected_store[136], line[180];
 
             strip_peep_comment_copy(store, lines[i + 5]);
-            sprintf(expected_store, "ld %s,hl", index);
+            snprintf(expected_store, sizeof(expected_store), "ld %s,hl", index);
             if (strcmp(store, expected_store) != 0)
                 continue;
 
@@ -12824,7 +12824,7 @@ static int pass_phix_stub(void)
 static int pass_larg_direct_store(void)
 {
     int i, changed = 0;
-    char addr[MAX_LINE], newline[MAX_LINE];
+    char addr[MAX_LINE], newline[MAX_LINE + 16];
 
     for (i = 0; i + 7 < nlines; i++) {
         char tmp[MAX_LINE];
@@ -12854,7 +12854,7 @@ static int pass_larg_direct_store(void)
         /* Replace: keep stub call at i, replace i+1 with ld (ADDR),hl */
         sprintf(newline, "call %s", stub);
         replace1_tagged(i, newline, "larg_dstore");
-        sprintf(newline, "ld (%s),hl", addr);
+        snprintf(newline, sizeof(newline), "ld (%s),hl", addr);
         replace1(i+1, newline);
         delete_n(i+2, 6);
         changed = 1;
