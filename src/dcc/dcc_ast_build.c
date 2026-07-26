@@ -7,10 +7,11 @@
  * source grammar (including dcc's C99 conveniences -
  * it operates purely on the token stream, so for-init/mid-block expressions
  * and // comments are handled transparently by the shared lexer).  It builds
- * an AstNode tree from the current lexer position by calling next_token(); it
- * never emits, interns strings, or allocates symbols, so the only global state
- * it touches is the lexer cursor.  The AST emitter consumes the built tree;
- * unsupported shapes are compiler errors in normal codegen.
+ * an AstNode tree from the current lexer position and emits no assembly.
+ * Compound-literal and optimization shapes may reserve compiler-generated
+ * locals while building, so speculative callers must restore lexer/frame state
+ * when discarding a tree. The AST emitter consumes the result; unsupported
+ * shapes are compiler errors in normal codegen.
  */
 #include "dcc.h"
 #include "dcc_ast.h"

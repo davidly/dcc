@@ -1,3 +1,5 @@
+/* dcc_regalloc_internal.h - private state and entry points shared by
+ * speculative whole-function/loop register allocation and its callers. */
 #ifndef DCC_REGALLOC_INTERNAL_H
 #define DCC_REGALLOC_INTERNAL_H
 
@@ -10,6 +12,9 @@ extern int g_e_regalloc_claimed;
 extern struct Sym *g_e_regalloc_sym;
 extern int g_loop_regalloc_bc_claimed;
 
+/* Verifies generated text in `f`. On success, returns 1 and transfers a newly
+ * allocated, rewound commit stream through out_f; the caller owns that FILE.
+ * On failure, returns 0 and leaves out_f untouched. */
 int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
                              FILE **out_f);
 int bc_regalloc_entry_lines(struct Sym *cand, char lines[3][40]);
@@ -27,6 +32,9 @@ struct Sym *find_bc_regalloc_candidate(int params_end);
 int plain_static_body_can_be_buffered(struct Sym *s, const char *name);
 int function_qualifies_for_speculative_noix(const char *name, int local_bytes);
 int function_qualifies_for_speculative_regalloc(const char *name);
+/* Trial generators return 1 only after committing a complete body to the
+ * current sink. A 0 return means the caller must emit the normal fallback;
+ * declined trials restore lexer/frame/function-pass state before returning. */
 int try_speculative_noix_function_body(const char *name, int type,
                                        int local_bytes, struct Sym *s,
                                        long body_start_pos, long body_start_tok_start,

@@ -3,7 +3,7 @@
  *
  * Low-level primitives the AST emitter calls while lowering assignments and
  * float values: emit_load_float_bits materialises a 32-bit float constant into
- * the HL:DE register pair, and emit_global_byte_array_index_addr computes the
+ * the DE:HL register pair, and emit_global_byte_array_index_addr computes the
  * address of a byte-array element at a global symbol (constant or ix-relative
  * index). Assignment statement/expression lowering itself lives in the AST
  * emitter (dcc_ast_gen*.c).

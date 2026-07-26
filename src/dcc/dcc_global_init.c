@@ -1,8 +1,7 @@
 /*
  * dcc_global_init.c - file-scope (global/static) object initializer parsing.
  *
- * Split out of dcc_func.c (architectural-review item §5). This module parses a
- * global object's initializer from the token stream and RECORDS the resulting
+ * Parses a global object's initializer from the token stream and records the
  * initialized-data image (bytes + relocatable label references) on the symbol,
  * for later emission by the data section. It is the "record" counterpart to
  * dcc_decl.c's "emit" path for automatic (local) initializers.

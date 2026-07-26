@@ -1,19 +1,15 @@
 /*
  * dcc_state.c - definitions of the shared mutable state for the dcc compiler.
  *
- * MODULE: its own translation unit. This file DEFINES the compiler's
- * file-scope globals; every other module references them through the matching
- * `extern` declarations in the umbrella header dcc.h.
+ * Defines cross-module compiler state declared in dcc.h and focused internal
+ * headers. Truly module-local state remains static in its owning file.
  *
  * Why dcc keeps so much shared state: parser, AST builder, and codegen helpers
  * share a large amount of "current position" state (the source buffer, the
  * lookahead token, the symbol tables, per-function codegen flags, ...).
- * Keeping all of it in one place, declared once in dcc.h, lets the modules
- * cooperate without threading the state through every call.
- *
- * Intentionally NOT here (kept private/static to one module for locality):
- *   - pp_expr_p / pp_expr_depth        -> dcc_preproc.c (#if expression cursor)
- *   - include_dirs / num_include_dirs  -> dcc.c (include search path)
+ * Related live fields are grouped by lifecycle in LexState, FrameState,
+ * ExprState, FunctionPassState, DeclState, and EmitSink rather than exposed as
+ * independent scalars.
  *
  * Source provenance: monolith src/ddc.c lines 199-203, 347-348, 378-489.
  */

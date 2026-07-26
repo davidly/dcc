@@ -2,18 +2,20 @@
  * dcc_func.c - function and top-level declaration parsing.
  *
  * Parameter lists (prototype and K&R old-style), function prologue/epilogue
- * and frame layout, the function-body scan, typedef declarations, and
+ * and frame layout, inline/narrowing candidate capture, the function-body scan,
+ * typedef declarations, and
  * top-level declaration dispatch (parse_function_or_global,
  * parse_translation_unit). File-scope initializer parsing is in
  * dcc_global_init.c.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * MODULE: compiled as its own translation unit; speculative codegen entry
+ * points are declared in dcc_regalloc_internal.h.
  * Source provenance: monolith src/ddc.c lines 15880-17705.
  */
 
 #ifndef _WIN32
 /* fileno()/ftruncate() (used by emit_function_epilogue's dead-tail-jump
- * elision) are POSIX, not ISO C89, so -std=c89 hides their declarations in
+ * elision) are POSIX, so strict ISO C mode hides their declarations in
  * <stdio.h>/<unistd.h> unless a POSIX feature-test macro is visible before
  * those headers are first included - which happens via dcc.h below, so this
  * must come first. */
@@ -853,11 +855,8 @@ static void bump_ident_count(const char *name)
     if (g_ident_count_n < MAX_IDENT_COUNTS) {
         /* Manual bounded copy, not strncpy: name (63+NUL) is far smaller than
          * a token's text (MAX_TOK_TEXT, 512), and GCC's fortify source flags
-         * that size disparity on strncpy as a possible truncation-without-
-         * termination bug even though the following assignment already
-         * null-terminates. snprintf would sidestep the warning but is C99,
-         * and this project builds its own source as strict C89
-         * (build-dcc.sh's default CFLAGS: -std=c89). */
+         * that size disparity as possible truncation despite the explicit
+         * terminator below. */
         size_t namelen = strlen(name);
         size_t cap = sizeof(g_ident_counts[0].name) - 1;
         if (namelen > cap) namelen = cap;

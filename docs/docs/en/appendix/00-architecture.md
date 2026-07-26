@@ -9,6 +9,10 @@ optimizer `dccpeep`, the runtime size reducer `dccrtlstrip`, and the Microsoft
   never run on a Z80. They emit Z80 assembly text and CP/M `.COM` files that
   run under CP/M-80, for example via the `ntvcm` emulator.
 
+  The compiler implementation is portable C11 host code built by modern Clang,
+  GCC, or MSVC. That implementation language is independent of `dcc`'s C89
+  base language and selected C99/C11 additions for the 16-bit Z80 target.
+
 ## The toolchain at a glance
 
 A single `.c` file becomes a CP/M `.COM` executable through a short pipeline.
@@ -34,7 +38,7 @@ flowchart LR
 
 | Stage | Tool | Input | Output | Role |
 | --- | --- | --- | --- | --- |
-| Compile | `dcc` | `.c` | `.MAC` | Translate the supported C89/C99/C11 subset to Z80/M80 assembly |
+| Compile | `dcc` | `.c` | `.MAC` | Translate C89 plus documented selected C99/C11 features to Z80/M80 assembly |
 | Optimize | `dccpeep` | `.MAC` | `.MAC` | Local peephole rewriting of the asm |
 | Reduce runtime | `dccrtlstrip` | `DCCRTL.MAC` + app `.MAC` | `RTLMIN.MAC` | Keep only the runtime routines the app references |
 | Assemble | `m80c` or `M80` | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
@@ -383,9 +387,9 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 
 ## Architecture summary
 
-- the DCC C Compiler is an **AST-driven** compiler for its supported
-  C89/C99/C11 subset, with direct lowering from typed function-body AST nodes
-  to Z80/M80 assembly.
+- the DCC C Compiler is an **AST-driven** C89-base compiler with selected
+  C99/C11 additions, with direct lowering from typed function-body AST nodes to
+  Z80/M80 assembly.
 - Typed AST expression nodes drive mixed-width (16/32-bit, pointer, float)
   codegen decisions from the tree being emitted.
 - Machine-dependent optimization is split out into **`dccpeep`**, a

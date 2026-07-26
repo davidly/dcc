@@ -1,3 +1,5 @@
+/* dcc_preproc_internal.h - macro-table and #if evaluator contract shared by
+ * the driver, preprocessor, diagnostics, and dcc_pp_expr.c. */
 #ifndef DCC_PREPROC_INTERNAL_H
 #define DCC_PREPROC_INTERNAL_H
 

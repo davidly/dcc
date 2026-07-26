@@ -2,22 +2,23 @@
  * dcc_regalloc.c - speculative no-IX-frame and BC-register-allocation codegen.
  *
  * Speculative function-body generation passes that opportunistically emit a
- * tighter prologue/epilogue: omitting the IX frame pointer for leaf functions
- * with no local storage, and allocating a loop induction/pointer variable to
- * the BC (and optionally E) register. Each pass generates the body into a
- * scratch buffer, validates the result, and either keeps it or rewinds and
- * falls back to the ordinary IX-framed codegen.
+ * tighter prologue/epilogue: omitting IX for eligible leaf functions and
+ * keeping an eligible read-only word in BC (optionally with an E-register
+ * counter). It also orchestrates the loop-scoped BC trial implemented in
+ * dcc_loop_regalloc.c. Each pass generates into a verification sink, then
+ * commits or restores parser/frame state and falls back to ordinary codegen.
  *
  * Carved out of dcc_func.c; entry points are called from
  * parse_function_or_global. find_bc_regalloc_candidate and
  * plain_static_body_can_be_buffered remain in dcc_func.c.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * MODULE: compiled as its own translation unit; optimizer-only contracts are
+ * declared in dcc_regalloc_internal.h.
  */
 
 #ifndef _WIN32
-/* fileno()/ftruncate() (scratch-buffer management) are POSIX, not ISO C89, so
- * -std=c89 hides their declarations unless a POSIX feature-test macro is
+/* fileno()/ftruncate() (scratch-buffer management) are POSIX, so strict ISO C
+ * mode hides their declarations unless a POSIX feature-test macro is
  * visible before <stdio.h>/<unistd.h> are first included via dcc.h below. */
 #define _POSIX_C_SOURCE 200809L
 #endif

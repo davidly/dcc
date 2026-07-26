@@ -6,7 +6,8 @@
  * handling, and the main tokenizer next_token() that feeds the parser. The
  * #if expression evaluator lives in dcc_pp_expr.c.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * MODULE: compiled as its own translation unit; macro-table entry points shared
+ * with the driver/evaluator are declared in dcc_preproc_internal.h.
  * Source provenance: monolith src/ddc.c lines 692-2871.
  */
 
