@@ -242,6 +242,7 @@ int loop_body_internal_labels_safe(int lo, int hi);
 int find_label_line_in_range(const char *name, int lo, int hi);
 void peep_indexed_function_bounds(int from, int include_static,
                                   int *func_start, int *func_end);
+int is_label_referenced(const char *label);
 
 /* Application-specific board/game passes (peep_pass_minmax.c). */
 int peep_in_function_range(const char *func, int *startp, int *endp);
@@ -273,5 +274,12 @@ int pass_byte_incr_loop_counter_to_reg_iyl(void);
 /* Compiler-tagged temporary spill passes (peep_pass_inline_temp.c). */
 int pass_inline_temp_spill_to_stack(void);
 int pass_remove_inline_temp_markers(void);
+
+/* Label and branch rewrite passes (peep_pass_control_flow.c). */
+int pass_labels(void);
+int pass_branch_over_jump(void);
+int pass_jump_thread(void);
+int pass_cond_skip_shortcut(void);
+int pass_jp_to_plain_ret(void);
 
 #endif
