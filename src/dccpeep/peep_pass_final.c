@@ -7,10 +7,13 @@
 
 static int instr_size_upper(int line_index)
 {
+    const PeepLineInfo *info = peep_line_info(line_index);
     const char *s = user_asm_original[line_index] != NULL
         ? user_asm_original[line_index] : lines[line_index];
     /* Labels, comments, blank lines and assembler directives emit no code. */
-    if (s[0] == 0 || s[0] == ';' || starts_label(s))
+    if (info && (info->kind == PEEP_LINE_BLANK ||
+                 info->kind == PEEP_LINE_COMMENT ||
+                 info->kind == PEEP_LINE_LABEL))
         return 0;
     if (strncmp(s, "cseg", 4) == 0 || strncmp(s, "dseg", 4) == 0 ||
         strncmp(s, "public", 6) == 0 || strncmp(s, "extrn", 5) == 0 ||
@@ -29,7 +32,7 @@ static int instr_size_upper(int line_index)
     }
 
     /* jr/djnz are 2 bytes; a jr we have already produced must stay sized 2. */
-    if (strncmp(s, "jr ", 3) == 0 || strncmp(s, "djnz", 4) == 0)
+    if ((info && info->opcode == PEEP_OPCODE_JR) || strncmp(s, "djnz", 4) == 0)
         return 2;
 
     /* Any IX/IY-relative instruction is at most 4 bytes (DD/FD prefix). */

@@ -32,6 +32,63 @@ typedef struct PeepLabelIndexEntry {
     int line;
 } PeepLabelIndexEntry;
 
+typedef enum PeepLineKind {
+    PEEP_LINE_BLANK,
+    PEEP_LINE_COMMENT,
+    PEEP_LINE_LABEL,
+    PEEP_LINE_DIRECTIVE,
+    PEEP_LINE_INSTRUCTION,
+    PEEP_LINE_OPAQUE
+} PeepLineKind;
+
+typedef enum PeepOpcode {
+    PEEP_OPCODE_UNKNOWN,
+    PEEP_OPCODE_LD,
+    PEEP_OPCODE_JP,
+    PEEP_OPCODE_JR,
+    PEEP_OPCODE_CALL,
+    PEEP_OPCODE_RET,
+    PEEP_OPCODE_PUSH,
+    PEEP_OPCODE_POP,
+    PEEP_OPCODE_ALU,
+    PEEP_OPCODE_BLOCK
+} PeepOpcode;
+
+enum PeepRegisterMask {
+    PEEP_REG_A  = 1u << 0,
+    PEEP_REG_B  = 1u << 1,
+    PEEP_REG_C  = 1u << 2,
+    PEEP_REG_D  = 1u << 3,
+    PEEP_REG_E  = 1u << 4,
+    PEEP_REG_H  = 1u << 5,
+    PEEP_REG_L  = 1u << 6,
+    PEEP_REG_IX = 1u << 7,
+    PEEP_REG_IY = 1u << 8,
+    PEEP_REG_SP = 1u << 9
+};
+
+enum PeepFlagMask {
+    PEEP_FLAG_C = 1u << 0,
+    PEEP_FLAG_Z = 1u << 1,
+    PEEP_FLAG_S = 1u << 2,
+    PEEP_FLAG_PV = 1u << 3
+};
+
+typedef struct PeepEffects {
+    unsigned reads;
+    unsigned writes;
+    unsigned flags_read;
+    unsigned flags_written;
+    int unknown;
+    int control_flow;
+} PeepEffects;
+
+typedef struct PeepLineInfo {
+    PeepLineKind kind;
+    PeepOpcode opcode;
+    PeepEffects effects;
+} PeepLineInfo;
+
 typedef struct PeepIndexes {
     PeepLabelIndexEntry *labels;
     int label_count;
@@ -41,7 +98,10 @@ typedef struct PeepIndexes {
     int *all_functions;
     int all_function_count;
     int function_capacity;
+    PeepLineInfo *line_info;
+    int line_info_capacity;
     unsigned long version;
+    unsigned long line_info_version;
 } PeepIndexes;
 
 typedef struct PeepContext {
@@ -143,6 +203,7 @@ int line_touches_bc(const char *s);
 int line_touches_de(const char *s);
 int line_touches_hl(const char *s);
 int line_touches_a(const char *s);
+const PeepLineInfo *peep_line_info(int line);
 
 /* Size-mode shared-helper passes. */
 int pass_shared_frame_stubs(void);
