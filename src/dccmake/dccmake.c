@@ -1445,7 +1445,7 @@ static int copy_file(const char *src, const char *dst)
 {
     FILE *in;
     FILE *out;
-    char buf[8192];
+    char buf[65536];
     size_t n;
 
     in = fopen(src, "rb");
@@ -1489,7 +1489,15 @@ static int to_crlf(const char *path)
     FILE *in;
     FILE *out;
     char tmp[MAX_PATH_LEN];
-    int c;
+    /* Block I/O instead of fgetc/fputc per byte: on this file (a
+     * full RTL-source copy up to ~600KB, redone for every app built)
+     * per-call stdio overhead - especially Win32 CRT/filesystem
+     * latency - dominated dccmake's unaccounted "other" time bucket.
+     * outbuf is 2x inbuf since every byte could be a lone '\n'
+     * (worst case one '\r' inserted per input byte). */
+    unsigned char inbuf[65536];
+    unsigned char outbuf[2 * sizeof(inbuf)];
+    size_t n;
     int prev;
 
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
@@ -1505,11 +1513,22 @@ static int to_crlf(const char *path)
         return 0;
     }
     prev = 0;
-    while ((c = fgetc(in)) != EOF) {
-        if (c == '\n' && prev != '\r')
-            fputc('\r', out);
-        fputc(c, out);
-        prev = c;
+    while ((n = fread(inbuf, 1, sizeof(inbuf), in)) > 0) {
+        size_t i;
+        size_t outlen = 0;
+        for (i = 0; i < n; i++) {
+            unsigned char c = inbuf[i];
+            if (c == '\n' && prev != '\r')
+                outbuf[outlen++] = '\r';
+            outbuf[outlen++] = c;
+            prev = c;
+        }
+        if (fwrite(outbuf, 1, outlen, out) != outlen) {
+            fprintf(stderr, "write failed for %s\n", tmp);
+            fclose(in);
+            fclose(out);
+            return 0;
+        }
     }
     fclose(in);
     if (fclose(out) != 0) {
