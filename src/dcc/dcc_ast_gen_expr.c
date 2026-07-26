@@ -1286,6 +1286,27 @@ static int gen_binary_try_fast_preeval(const struct AstNode *n)
         return 1;
     }
 
+    /* `arr[E] | (arr[E+1] << 8)` - the mem_get_word-shaped byte-memory
+     * word-read idiom shared by adaint.c/cint.c/fint.c's VM interpreters
+     * (each ports the same benchmark suite). Computing the shared element
+     * address once and reusing it via one `inc hl` for the high byte,
+     * instead of recomputing the whole address expression from scratch a
+     * second time, was the single largest dcc-vs-sdcc codegen gap found in
+     * a benchmark comparison - this fires on nearly every VM memory access
+     * in all three interpreters. See ast_byte_pair_word_read_match
+     * (dcc_ast_gen_support.c) for the exact shape/safety proof. */
+    {
+        const struct AstNode *lo_index = ast_byte_pair_word_read_match(n);
+        if (lo_index != NULL) {
+            int val_type;
+            gen_index_addr_ast(lo_index, &val_type);   /* HL = &arr[E] */
+            emit("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n");
+            g_expr.type = TYPE_INT;
+            g_expr.long_from16 = 0;
+            return 1;
+        }
+    }
+
     if (n->op == '+' || n->op == '-') {
         int ptr_type;
         int no_deref;

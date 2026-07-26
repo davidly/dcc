@@ -2281,6 +2281,146 @@ int ast_expr_has_side_effects(const struct AstNode *n)
     return 0;
 }
 
+/* Deliberately narrow structural-equality check for two expression subtrees:
+ * true only when both are built entirely from AST_IDENT (same resolved
+ * symbol, and not volatile - a volatile read must happen exactly as many
+ * times as the source specifies, so treating two syntactic occurrences as
+ * "the same value, compute/read once" would silently drop a required
+ * access), AST_INT_LIT (same value), and AST_BINARY '+'/'-'/'*' (same
+ * operator, recursively equal operands). Declines (0) on anything else -
+ * casts, calls, member/index access, ?: - matching this file's usual
+ * "no general expression-equality checker; extend narrowly on the next
+ * real case" discipline (see ast_find_unconditional_divmod_op above).
+ * Motivated by mem_get_word/mem_set_word-shaped code (adaint.c/cint.c/
+ * fint.c's byte-memory word packing): `m[base+idx*INTB]` and
+ * `m[base+idx*INTB+1]` recompute the identical `base+idx*INTB` address
+ * expression twice; proving the two occurrences are really the same
+ * computation is what lets the caller compute it once and just `inc hl`
+ * for the second byte instead. */
+int ast_index_exprs_structurally_equal(const struct AstNode *a, const struct AstNode *b)
+{
+    if (a == NULL || b == NULL)
+        return a == b;
+    if (a->kind != b->kind)
+        return 0;
+    switch (a->kind) {
+    case AST_IDENT: {
+        /* Cloned inline-substitution identifiers (see try_gen_inline_call_ast/
+         * clone_inline_expr) carry sval but not a pre-resolved sym - it is
+         * looked up lazily during codegen, same as ast_expr_type_for_sizeof's
+         * own AST_IDENT case does via find_sym rather than trusting n->sym,
+         * so this must resolve the same way instead of trusting a stale/unset
+         * ->sym field directly. */
+        struct Sym *sa = a->sym != NULL ? a->sym : find_sym(a->sval);
+        struct Sym *sb = b->sym != NULL ? b->sym : find_sym(b->sval);
+        return sa != NULL && sa == sb && !sa->is_volatile;
+    }
+    case AST_INT_LIT:
+        return a->ival == b->ival;
+    case AST_BINARY:
+        return (a->op == '+' || a->op == '-' || a->op == '*') && a->op == b->op &&
+               ast_index_exprs_structurally_equal(a->a, b->a) &&
+               ast_index_exprs_structurally_equal(a->b, b->b);
+    default:
+        return 0;
+    }
+}
+
+/* True when `plus_one` is structurally `base + 1` (either operand order),
+ * using ast_index_exprs_structurally_equal to prove `base` really is the
+ * same computation as `base_expr`. Companion to that check - together they
+ * prove `arr[base_expr]` and `arr[plus_one]` address adjacent elements of
+ * the same array/pointer with no runtime dependency, so their shared
+ * address prefix can be computed once. */
+int ast_index_expr_is_plus_one(const struct AstNode *base_expr, const struct AstNode *plus_one)
+{
+    if (plus_one == NULL || plus_one->kind != AST_BINARY || plus_one->op != '+')
+        return 0;
+    if (plus_one->b != NULL && plus_one->b->kind == AST_INT_LIT && plus_one->b->ival == 1 &&
+        ast_index_exprs_structurally_equal(base_expr, plus_one->a))
+        return 1;
+    if (plus_one->a != NULL && plus_one->a->kind == AST_INT_LIT && plus_one->a->ival == 1 &&
+        ast_index_exprs_structurally_equal(base_expr, plus_one->b))
+        return 1;
+    return 0;
+}
+
+/* Recognizes `arr[E] | (arr[E+1] << 8)` - the byte-memory word-read idiom
+ * mem_get_word-shaped code uses - where `arr` (or the same pointer
+ * expression) is indexed by E for the low byte and by a provably-E+1
+ * expression for the high byte. Returns the low-byte AST_INDEX node (whose
+ * address computation the caller runs exactly once, for both bytes) or
+ * NULL. Requires a single-byte (char/uchar) element type: the point of the
+ * idiom is packing two byte reads into one 16-bit value, so anything wider
+ * isn't this shape at all. */
+const struct AstNode *ast_byte_pair_word_read_match(const struct AstNode *n)
+{
+    const struct AstNode *lo;
+    const struct AstNode *shift;
+    const struct AstNode *hi;
+
+    if (n == NULL || n->kind != AST_BINARY || n->op != '|')
+        return NULL;
+    lo = n->a;
+    shift = n->b;
+    if (lo == NULL || lo->kind != AST_INDEX)
+        return NULL;
+    if (shift == NULL || shift->kind != AST_BINARY || shift->op != TOK_SHL)
+        return NULL;
+    if (shift->b == NULL || shift->b->kind != AST_INT_LIT || shift->b->ival != 8)
+        return NULL;
+    hi = shift->a;
+    if (hi == NULL || hi->kind != AST_INDEX)
+        return NULL;
+    if (!ast_index_exprs_structurally_equal(lo->a, hi->a))
+        return NULL;
+    if (!ast_index_expr_is_plus_one(lo->b, hi->b))
+        return NULL;
+    if (type_size(ast_expr_type_for_sizeof(lo)) != 1)
+        return NULL;
+    return lo;
+}
+
+/* Write-side counterpart of ast_byte_pair_word_read_match: recognizes two
+ * adjacent statements `arr[E] = lo; arr[E+1] = hi;` (mem_set_word-shaped
+ * code) - same array/pointer, provably-adjacent byte indices, neither
+ * statement's rhs carrying any side effect that could invalidate reusing
+ * one address computation for both stores (mirrors ast_divmod_fuse_
+ * compound's identical "neither statement's rhs may have any other side
+ * effect" rule). Returns the low-byte AST_INDEX lvalue node (out_lo) and
+ * the high-byte statement's rhs AST_ASSIGN node (out_s2_assign) on match,
+ * leaving both untouched otherwise. */
+int ast_byte_pair_word_write_match(const struct AstNode *s1, const struct AstNode *s2,
+                                   const struct AstNode **out_lo, const struct AstNode **out_s2_assign)
+{
+    const struct AstNode *lo;
+    const struct AstNode *hi;
+
+    if (s1 == NULL || s1->kind != AST_EXPR_STMT || s1->a == NULL ||
+        s1->a->kind != AST_ASSIGN || s1->a->op != '=' || s1->a->a == NULL)
+        return 0;
+    if (s2 == NULL || s2->kind != AST_EXPR_STMT || s2->a == NULL ||
+        s2->a->kind != AST_ASSIGN || s2->a->op != '=' || s2->a->a == NULL)
+        return 0;
+
+    lo = s1->a->a;
+    hi = s2->a->a;
+    if (lo->kind != AST_INDEX || hi->kind != AST_INDEX)
+        return 0;
+    if (!ast_index_exprs_structurally_equal(lo->a, hi->a))
+        return 0;
+    if (!ast_index_expr_is_plus_one(lo->b, hi->b))
+        return 0;
+    if (type_size(ast_expr_type_for_sizeof(lo)) != 1)
+        return 0;
+    if (ast_expr_has_side_effects(s1->a->b) || ast_expr_has_side_effects(s2->a->b))
+        return 0;
+
+    *out_lo = lo;
+    *out_s2_assign = s2->a;
+    return 1;
+}
+
 /* Finds a '%' or '/' AST_BINARY node reachable UNCONDITIONALLY from `n` -
  * i.e. not nested under a ?: / && / ||, any of which can skip evaluating
  * one side - with both operands bare plain-int (not char/bool - the exact
