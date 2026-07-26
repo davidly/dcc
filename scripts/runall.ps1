@@ -146,6 +146,32 @@ speed:
     keep build/ from accumulating run-* folders. Pass -KeepBuild to retain that
     folder (e.g. to inspect failing build artifacts).
 
+.PARAMETER TimingBreakdown
+    Print a percentage breakdown of where wall-clock time went, for
+    diagnosing suite-level slowdowns. Two sections:
+      - Top-level phases (main app suite / perf check / diagnostics /
+        narrow-diff / extended suite), each as a % of this run's total time -
+        the same stopwatches already used for "Total time" above, just also
+        reported per phase.
+      - Build pipeline, aggregated across every app and mode built by the
+        main suite: dcc / dccpeep / m80 assembly / dccrtlstrip / L80 link
+        (each summed from a per-phase wall-clock timing line dccmake itself
+        now prints - see src/dccmake/dccmake.c's now_ms()/run_build), plus
+        the ntvcm execution time already captured for the cycle-count check.
+        Both dccmake's own reported total and ntvcm's own reported elapsed
+        milliseconds are measured from INSIDE those processes, so they
+        exclude the actual OS process-create/exec cost and PowerShell's own
+        overhead capturing/merging their output via 2>&1 - comparing each
+        against a PowerShell-side Stopwatch wrapping the same call splits
+        that out into its own "dccmake spawn" / "ntvcm spawn" bucket, with
+        whatever's left (fixture staging, baseline comparison, parallel
+        dispatch/collection) in a final "other script" bucket. This second
+        section is normalized to the sum of all apps' work, NOT wall-clock
+        time (parallel execution makes wall-clock time much smaller than
+        that sum) - it answers "of all the work the suite did, what fraction
+        was which pipeline stage", not "what fraction of the run's wall
+        time".
+
 .EXAMPLE
   pwsh ./scripts/runall.ps1
     pwsh ./scripts/runall.ps1 -Help
@@ -214,6 +240,7 @@ param(
     [string]$PerfBaselineFile = "tests/perf_baselines.csv",
     [switch]$NarrowDiff,
     [switch]$KeepBuild,
+    [switch]$TimingBreakdown,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -532,13 +559,17 @@ function Invoke-DccMakeBuild {
         [object]$DccFloatio = $null,
         [object]$DccLongio = $null,
         [switch]$UseEmulatedM80,
-        [switch]$Quiet
+        [switch]$Quiet,
+        [ref]$TimingOut
     )
 
     $modeLower = $Mode.ToLowerInvariant()
     if ($modeLower -eq "full") {
-        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet
-        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet
+        $fastTiming = $null
+        $nopeepTiming = $null
+        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimingOut ([ref]$fastTiming)
+        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimingOut ([ref]$nopeepTiming)
+        if ($TimingOut) { $TimingOut.Value = @{ peep = $fastTiming; nopeep = $nopeepTiming } }
         return ($fastOk -and $nopeepOk)
     }
     $usePeep = @("fast", "peep", "opt", "optimized", "o", "1", "yes", "true") -contains $modeLower
@@ -604,8 +635,26 @@ function Invoke-DccMakeBuild {
         $args += @($DccArgs -split '\s+' | Where-Object { $_ })
     }
 
+    $dccmakeSw = [System.Diagnostics.Stopwatch]::StartNew()
     $buildOut = & $dccmake @args 2>&1
+    $dccmakeSw.Stop()
     $exitCode = $LASTEXITCODE
+    if ($TimingOut) {
+        $timingLine = @($buildOut) | Where-Object { $_ -match '^dccmake: timing ' } | Select-Object -Last 1
+        if ($timingLine -match 'dcc=(\d+)ms peep=(\d+)ms asm=(\d+)ms\((\w+)\) rtlstrip=(\d+)ms link=(\d+)ms other=(\d+)ms total=(\d+)ms') {
+            $TimingOut.Value = @{
+                dcc      = [int]$Matches[1]
+                peep     = [int]$Matches[2]
+                asm      = [int]$Matches[3]
+                asmMode  = $Matches[4]
+                rtlstrip = [int]$Matches[5]
+                link     = [int]$Matches[6]
+                other    = [int]$Matches[7]
+                total    = [int]$Matches[8]
+                psInvokeMs = $dccmakeSw.ElapsedMilliseconds
+            }
+        }
+    }
     if (-not $Quiet) { $buildOut | Write-Host }
     if ($exitCode -ne 0) {
         Write-Error "dccmake failed for $Name ($Mode) with exit code $exitCode" -ErrorAction Continue
@@ -741,10 +790,11 @@ function Invoke-ComRunAndCompare {
     $output = [regex]::Replace($output, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
 
     $result = [pscustomobject]@{
-        Passed  = $true
-        Ms      = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
-        Cycles  = $ntvcmCycles
-        ClockHz = $ntvcmClockHz
+        Passed      = $true
+        Ms          = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
+        Cycles      = $ntvcmCycles
+        ClockHz     = $ntvcmClockHz
+        PsElapsedMs = $runSw.ElapsedMilliseconds
     }
 
     if ($HasBaseline) {
@@ -857,14 +907,17 @@ function Invoke-AppTest {
         }
     }
 
+    $buildTimingByMode = @{}
     foreach ($buildMode in $Modes) {
         $displayMode = if ($buildMode -eq "peep") { "fast" } else { $buildMode }
         $stackSizeInt = if ($StackSize) { [int]$StackSize } else { 0 }
         $ok = $false
+        $modeTiming = $null
         try {
-            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet
+            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet -TimingOut ([ref]$modeTiming)
         }
         catch { $ok = $false }
+        if ($modeTiming) { $buildTimingByMode[$buildMode] = $modeTiming }
 
         if (-not $ok) {
             $lines.Add("  Building $AppName ($displayMode)... FAILED")
@@ -889,10 +942,11 @@ function Invoke-AppTest {
             -BaselinePath "$BaselineDir/$AppName.txt" -DiffPrefix "" -Lines $lines
 
         $modeMetrics[$buildMode] = [pscustomobject]@{
-            Ms      = $primaryResult.Ms
-            Cycles  = $primaryResult.Cycles
-            ClockHz = $primaryResult.ClockHz
-            Size    = $comSize
+            Ms          = $primaryResult.Ms
+            Cycles      = $primaryResult.Cycles
+            ClockHz     = $primaryResult.ClockHz
+            Size        = $comSize
+            PsRunMs     = $primaryResult.PsElapsedMs
         }
         if (-not $primaryResult.Passed) { $appPassed = $false }
         if (-not $hasBaseline) { break }
@@ -920,6 +974,7 @@ function Invoke-AppTest {
         Elapsed = $sw.Elapsed
         Lines   = $lines.ToArray()
         Metrics = $modeMetrics
+        Timing  = $buildTimingByMode
     }
 }
 
@@ -1490,6 +1545,7 @@ function Invoke-ExtendedSuite {
 
 $results = @()
 $totalToRun = $workItems.Count
+$mainSuiteSw = [System.Diagnostics.Stopwatch]::StartNew()
 
 if ($Parallel) {
     # Each worker runs in its own runspace with its own filesystem location, so
@@ -1579,6 +1635,7 @@ else {
         $results += $result
     }
 }
+$mainSuiteSw.Stop()
 
 # Tally results.
 foreach ($result in $results) {
@@ -1606,6 +1663,7 @@ foreach ($result in $results) {
 # fix, since -Report was made to run the check too once it stopped forcing
 # -Serial).
 $perfCheck = $null
+$perfCheckSw = [System.Diagnostics.Stopwatch]::StartNew()
 if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -or $UpdatePerfBaseline)) {
     $perfIgnoreApps = @($testFiles | Where-Object { Get-PerfIgnoreApp $_ })
     $perfCheck = Test-PerfRegressions -Results $results -ModesRun $modes `
@@ -1643,14 +1701,17 @@ if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -o
         }
     }
 }
+$perfCheckSw.Stop()
 
 $diagnosticsPassed = $null
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
+$diagnosticsSw = [System.Diagnostics.Stopwatch]::StartNew()
 & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
 $diagnosticsExitCode = $LASTEXITCODE
+$diagnosticsSw.Stop()
 $diagnosticsPassed = ($diagnosticsExitCode -eq 0)
 if (-not $diagnosticsPassed) {
     $failed++
@@ -1669,6 +1730,7 @@ if (-not $dccpeepTestsPassed) {
 }
 
 $narrowDiffPassed = $null
+$narrowDiffSw = [System.Diagnostics.Stopwatch]::StartNew()
 if ($NarrowDiff) {
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -1759,8 +1821,10 @@ if ($NarrowDiff) {
         $failed += $narrowFailedApps.Count
     }
 }
+$narrowDiffSw.Stop()
 
 $extendedPassed = $null
+$extendedSw = [System.Diagnostics.Stopwatch]::StartNew()
 if ($Extended) {
     Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
         -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit `
@@ -1771,6 +1835,7 @@ if ($Extended) {
         $failed++
     }
 }
+$extendedSw.Stop()
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -1801,6 +1866,87 @@ if ($NarrowDiff) {
 }
 Write-Host "  Total time:   $suiteElapsedStr"
 Write-Host "  Optimisation: $optimisationSummary"
+
+if ($TimingBreakdown) {
+    function Write-TimingRow {
+        param([string]$Label, [double]$Ms, [double]$DenominatorMs)
+        $pct = if ($DenominatorMs -gt 0) { [math]::Round(($Ms / $DenominatorMs) * 100, 1) } else { 0 }
+        $sStr = "{0:0.00}s" -f ($Ms / 1000.0)
+        Write-Host ("    {0,-16} {1,9} ({2,5}%)" -f $Label, $sStr, $pct)
+    }
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "TIMING BREAKDOWN" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    $totalMs = $suiteElapsed.TotalMilliseconds
+    Write-Host "  Top-level phases (% of total run time above):"
+    Write-TimingRow "Main app suite" $mainSuiteSw.Elapsed.TotalMilliseconds $totalMs
+    Write-TimingRow "Perf check" $perfCheckSw.Elapsed.TotalMilliseconds $totalMs
+    Write-TimingRow "Diagnostics" $diagnosticsSw.Elapsed.TotalMilliseconds $totalMs
+    if ($NarrowDiff) { Write-TimingRow "Narrow-diff" $narrowDiffSw.Elapsed.TotalMilliseconds $totalMs }
+    if ($Extended)   { Write-TimingRow "Extended suite" $extendedSw.Elapsed.TotalMilliseconds $totalMs }
+
+    # Aggregate every app's build-pipeline timing (from dccmake's own
+    # per-phase wall-clock report - see now_ms()/run_build in
+    # src/dccmake/dccmake.c) and run timing (ntvcm's own reported elapsed
+    # milliseconds, already captured for the cycle-count check) across both
+    # modes. This is normalized to the SUM of per-app work, not wall time -
+    # parallel execution makes wall time far smaller than that sum.
+    $sumDcc = 0.0; $sumPeep = 0.0; $sumAsm = 0.0; $sumRtlstrip = 0.0; $sumLink = 0.0; $sumDccOther = 0.0
+    $sumRunMs = 0.0; $sumAppElapsedMs = 0.0
+    $sumDccmakeSelfTotal = 0.0; $sumDccmakePsInvoke = 0.0; $sumRunPs = 0.0
+    $asmModes = @{}
+    foreach ($r in $results) {
+        $sumAppElapsedMs += $r.Elapsed.TotalMilliseconds
+        foreach ($buildModeKey in @($r.Timing.Keys)) {
+            $t = $r.Timing[$buildModeKey]
+            if ($t) {
+                $sumDcc += $t.dcc; $sumPeep += $t.peep; $sumAsm += $t.asm
+                $sumRtlstrip += $t.rtlstrip; $sumLink += $t.link; $sumDccOther += $t.other
+                if ($t.asmMode) { $asmModes[$t.asmMode] = $true }
+                if ($t.total) { $sumDccmakeSelfTotal += $t.total }
+                if ($t.psInvokeMs) { $sumDccmakePsInvoke += $t.psInvokeMs }
+            }
+        }
+        foreach ($buildModeKey in @($r.Metrics.Keys)) {
+            $m = $r.Metrics[$buildModeKey]
+            if ($m.Ms) { $sumRunMs += [double]$m.Ms }
+            if ($m.PsRunMs) { $sumRunPs += [double]$m.PsRunMs }
+        }
+    }
+    $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink + $sumDccOther + $sumRunMs
+    $scriptOverheadMs = [math]::Max($sumAppElapsedMs - $accountedMs, 0)
+    $asmModeLabel = if ($asmModes.Count -eq 0) { "unknown" } elseif ($asmModes.Count -gt 1) { "MIXED: $($asmModes.Keys -join ', ')" } else { [string]$asmModes.Keys }
+    # dccmake/ntvcm's own SELF-reported timing (dcc/peep/.../total, and
+    # ntvcm's own "elapsed milliseconds") is measured from inside those
+    # processes - it excludes the actual OS process-create/exec cost and
+    # PowerShell's own overhead capturing/merging their output via `2>&1`.
+    # Comparing that self-reported figure against a PowerShell-side
+    # Stopwatch wrapping the SAME call splits the old undifferentiated
+    # "script/spawn" bucket into what's actually process-invocation
+    # overhead for dccmake/ntvcm specifically vs. everything else
+    # (fixture staging, baseline comparison, parallel dispatch).
+    $dccmakeInvokeOverheadMs = [math]::Max($sumDccmakePsInvoke - $sumDccmakeSelfTotal, 0)
+    $ntvcmInvokeOverheadMs = [math]::Max($sumRunPs - $sumRunMs, 0)
+    $otherScriptOverheadMs = [math]::Max($scriptOverheadMs - $dccmakeInvokeOverheadMs - $ntvcmInvokeOverheadMs, 0)
+
+    Write-Host ""
+    Write-Host "  Main suite build pipeline (% of aggregate per-app work across both" -ForegroundColor DarkGray
+    Write-Host "  modes, NOT wall time - parallel execution overlaps these):"
+    Write-TimingRow "dcc compile" $sumDcc $sumAppElapsedMs
+    Write-TimingRow "dccpeep" $sumPeep $sumAppElapsedMs
+    Write-TimingRow "m80 assemble" $sumAsm $sumAppElapsedMs
+    Write-Host ("    {0,-16} {1}" -f "  m80 mode:", $asmModeLabel) -ForegroundColor $(if ($asmModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
+    Write-TimingRow "dccrtlstrip" $sumRtlstrip $sumAppElapsedMs
+    Write-TimingRow "L80 link" $sumLink $sumAppElapsedMs
+    Write-TimingRow "dccmake other" $sumDccOther $sumAppElapsedMs
+    Write-TimingRow "ntvcm run" $sumRunMs $sumAppElapsedMs
+    Write-TimingRow "dccmake spawn" $dccmakeInvokeOverheadMs $sumAppElapsedMs
+    Write-TimingRow "ntvcm spawn" $ntvcmInvokeOverheadMs $sumAppElapsedMs
+    Write-TimingRow "other script" $otherScriptOverheadMs $sumAppElapsedMs
+}
 
 if ($failedApps.Count -gt 0) {
     Write-Host ""

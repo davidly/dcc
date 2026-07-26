@@ -174,19 +174,35 @@ static int pass_base_index_addr(void)
  * .c files found it elsewhere too, just far less densely).
  */
 
-static int range_is_user_asm(int start, int end)
-{
-    int depth;
-    int i;
+/* Both range_is_user_asm callers below query it once per line position in
+ * an O(nlines) outer loop; range_is_user_asm itself used to rescan from
+ * line 0 every single call, making each caller O(nlines^2) - measured as
+ * dccpeep's single largest hotspot (>50% of self time on tests/bint.c
+ * under gprof). Precomputing the same depth-bracketing scan ONCE per pass
+ * invocation into a mask, then doing an O(1)-ish bounded lookup per query,
+ * preserves the exact semantics (both marker lines themselves count as
+ * "inside", matching the original's depth++/return/depth-- ordering) at
+ * O(nlines) total per pass instead of O(nlines^2). */
+static char user_asm_mask[MAX_LINES];
 
-    depth = 0;
-    for (i = 0; i <= end && i < nlines; ++i) {
+static void build_user_asm_mask(void)
+{
+    int depth = 0, i;
+    for (i = 0; i < nlines; ++i) {
         if (strcmp(lines[i], "; dcc user asm begin") == 0)
             depth++;
-        if (i >= start && depth > 0)
-            return 1;
+        user_asm_mask[i] = (char)(depth > 0);
         if (strcmp(lines[i], "; dcc user asm end") == 0 && depth > 0)
             depth--;
+    }
+}
+
+static int mask_range_is_user_asm(int start, int end)
+{
+    int i;
+    for (i = (start < 0 ? 0 : start); i <= end && i < nlines; ++i) {
+        if (user_asm_mask[i])
+            return 1;
     }
     return 0;
 }
@@ -201,8 +217,9 @@ static int pass_fold_hl_base_const_offset(void)
     char out[256];
 
     changed = 0;
+    build_user_asm_mask();
     for (i = 0; i + 2 < nlines; ++i) {
-        if (!input_is_dcc_generated || range_is_user_asm(i, i + 2))
+        if (!input_is_dcc_generated || mask_range_is_user_asm(i, i + 2))
             continue;
         if (!parse_ld_hl_imm(lines[i], base, sizeof(base)))
             continue;
@@ -218,6 +235,7 @@ static int pass_fold_hl_base_const_offset(void)
         sprintf(out, "ld hl,%s+%d", base, off);
         replace1_tagged(i, out, "fold_hl_base_const_offset");
         delete_n(i + 1, 2);
+        build_user_asm_mask(); /* lines shifted; mask indices after i are now stale */
         changed = 1;
         if (i > 0)
             --i;
@@ -269,8 +287,9 @@ static int pass_fold_hl_label_word_deref(void)
     char out[160];
 
     changed = 0;
+    build_user_asm_mask();
     for (i = 0; i + 4 < nlines; ++i) {
-        if (!input_is_dcc_generated || range_is_user_asm(i, i + 4))
+        if (!input_is_dcc_generated || mask_range_is_user_asm(i, i + 4))
             continue;
         if (!parse_ld_hl_imm(lines[i], label, sizeof(label)))
             continue;
@@ -288,6 +307,7 @@ static int pass_fold_hl_label_word_deref(void)
         sprintf(out, "ld hl,(%s)", label);
         replace1_tagged(i, out, "fold_hl_label_word_deref");
         delete_n(i + 1, 4);
+        build_user_asm_mask(); /* lines shifted; mask indices after i are now stale */
         changed = 1;
         if (i > 0)
             --i;
@@ -2757,7 +2777,7 @@ static int pass_byte_cmp_push_pop_hl(void)
 static int pass_byte_global_ptr_array_addr(void)
 {
     int i, j, S, changed = 0;
-    char base[MAX_LINE], off[32], ld_hl_buf[MAX_LINE];
+    char base[MAX_LINE], off[32], ld_hl_buf[MAX_LINE + 16];
 
     for (i = 0; i + 6 < nlines; i++) {
         if (!parse_ld_hl_imm(lines[i], base, sizeof(base))) continue;
@@ -2772,7 +2792,7 @@ static int pass_byte_global_ptr_array_addr(void)
         if (!eq(j + 1, "pop hl")) continue;
         if (!eq(j + 2, "add hl,de")) continue;
 
-        sprintf(ld_hl_buf, "ld hl,%s", base);
+        snprintf(ld_hl_buf, sizeof(ld_hl_buf), "ld hl,%s", base);
         delete_n(i, j + 2 - i + 1);
         {
             char ld_l_buf[64]; int k;
@@ -3676,10 +3696,10 @@ static int pass_array_base_push_to_de(void)
             eq(i + 9, "pop hl") &&
             eq(i + 10, "add hl,de") &&
             peep_de_dead_at(i + 11)) {
-            char store[128], expected_store[132], line[180];
+            char store[128], expected_store[136], line[180];
 
             strip_peep_comment_copy(store, lines[i + 5]);
-            sprintf(expected_store, "ld %s,hl", index);
+            snprintf(expected_store, sizeof(expected_store), "ld %s,hl", index);
             if (strcmp(store, expected_store) != 0)
                 continue;
 
@@ -4576,6 +4596,702 @@ static int pass_cache_global_word_reload(void)
         }
 
         segstart = i + 1;
+    }
+
+    return changed;
+}
+
+/* Parse "push R" or "pop R" for R in {hl,de,bc,af,ix,iy}, reporting which
+ * via *reg (lowercase, e.g. "hl") and which mnemonic via *is_push (1 push,
+ * 0 pop). Returns 0 for anything else, including a push/pop of a single
+ * 8-bit register (not a real Z80 form).
+ *
+ * ix and iy are tracked for depth-counting purposes only (never returned
+ * as a target register from pass_defer_global_push_reload's own
+ * search - decline_af_or_frame_reg below excludes them the same way it
+ * excludes af) - but they still MUST be recognized here, not just ignored:
+ * "push ix / pop hl" is dcc's own standard idiom for copying the current
+ * frame pointer into a general register (Z80 has no direct ix-to-hl move),
+ * and omitting ix/iy from this recognition set left that idiom's "push ix"
+ * uncounted while its own "pop hl" still was - silently unbalancing this
+ * function's depth tracking by exactly one level, which let an outer
+ * pass_defer_global_push_reload candidate's search match that inner "pop
+ * hl" as if it were the outer's own, one push too early. Confirmed as a
+ * real miscompile (a corrupted computed value) on tests/forint.c and
+ * tests/pint.c, both of which use this exact frame-pointer-to-register
+ * idiom heavily for local-array/struct addressing. */
+static int peep_parse_push_or_pop(const char *s, char *reg, int *is_push)
+{
+    char clean[MAX_LINE];
+    const char *r;
+
+    strip_peep_comment_copy(clean, s);
+    if (!strncmp(clean, "push ", 5)) {
+        *is_push = 1;
+        r = clean + 5;
+    } else if (!strncmp(clean, "pop ", 4)) {
+        *is_push = 0;
+        r = clean + 4;
+    } else {
+        return 0;
+    }
+    if (!strcmp(r, "hl") || !strcmp(r, "de") || !strcmp(r, "bc") ||
+        !strcmp(r, "af") || !strcmp(r, "ix") || !strcmp(r, "iy")) {
+        strcpy(reg, r);
+        return 1;
+    }
+    return 0;
+}
+
+/* True if `reg` (a peep_parse_push_or_pop register name) is never a valid
+ * pass_defer_global_push_reload replacement target: af has no memory-load
+ * form at all ("ld af,(nn)" is not a Z80 instruction), and ix/iy, while
+ * loadable from memory, would change what the reloaded value actually IS
+ * if this pass ever matched a push/pop of one of those two directly (it
+ * doesn't today - pass_defer_global_push_reload only ever looks for "ld
+ * hl,(NAME)/push hl" as the outer candidate's own start, never "push ix" -
+ * but this check is what makes that constraint explicit and robust against
+ * a future change to that candidate-matching logic, rather than relying on
+ * it never changing). */
+static int decline_af_or_frame_reg(const char *reg)
+{
+    return !strcmp(reg, "af") || !strcmp(reg, "ix") || !strcmp(reg, "iy");
+}
+
+/*
+ * pass_defer_global_push_reload:
+ *
+ * "ld hl,(NAME) / push hl", immediately followed - possibly much later,
+ * with other, independently-balanced push/pop pairs in between - by the
+ * matching pop (net push/pop depth reaching zero), with NAME written
+ * nowhere in between: the whole point of the push/pop here is to carry
+ * NAME's value across some computation that needs HL/DE/BC for itself,
+ * then retrieve it back unchanged - which a fresh reload accomplishes for
+ * less. "ld hl,(nn)" is 16 T-states; push+pop is 11+10=21; loading NAME
+ * once up front and shuttling it through the stack this way costs 16+21=37
+ * T-states versus just reloading it fresh at the pop site (16 T-states) -
+ * a flat 21 T-state saving, independent of how long the value sits on the
+ * stack or what the matching pop's own target register is (the reload
+ * simply targets that same register instead).
+ *
+ * Confirmed as dcc's own default codegen shape for compound expressions
+ * like `mem[sym[si].scalar]` (tests/bint.c's OP_LDV/OP_STA and similar):
+ * dcc evaluates the outer index expression's own base pointer (mem) first
+ * and pushes it immediately, then descends into the inner index expression
+ * (sym[si].scalar, itself requiring sym's own base pushed the same way)
+ * before finally popping each base back only once the address arithmetic
+ * actually needs it - eagerly preserving a value across unrelated work
+ * instead of deferring its load to the point of use, the same waste this
+ * file's pass_cache_global_word_reload/pass_cache_ix_local_word_reload
+ * each address for a *repeated* reload; this is the matched-single-use-
+ * push/pop counterpart of that same general problem, so it runs right
+ * after them.
+ *
+ * Declines (leaves the push/pop alone) on:
+ *   - anything that writes NAME in between (symbol_written_in_range, the
+ *     same whole-word-store text match pass_cache_global_word_reload
+ *     already relies on for the identical reason: a write through an
+ *     aliased pointer, rather than literal "(NAME),hl" text, isn't visible
+ *     to a text-level scan - the same accepted-risk class as that pass,
+ *     not a new one here),
+ *   - any call (opaque - could write NAME, and this file has no way to
+ *     know what an arbitrary callee does),
+ *   - any label, jp/jr/djnz, ret, or "sp"/"(sp)" mention - reusing exactly
+ *     pass_inline_temp_spill_to_stack's own break conditions, for the
+ *     identical reasons: a label means this code might be reached from
+ *     elsewhere with a different (or no) value at this stack depth; an
+ *     explicit SP mention means push/pop-based depth tracking can no
+ *     longer be trusted; and a jump or return leaving this scan's own
+ *     straight-line assumption makes it impossible to be sure the matching
+ *     pop being searched for is even still reachable from here.
+ * Any OTHER balanced push/pop pair in between - including ones this same
+ * pass rewrites on a later iteration - is fine and does not end the scan;
+ * only the net depth reaching zero at some pop matters.
+ *
+ * Runs once after the main loop converges (see pass_cache_ix_local_word_
+ * reload's own call site comment for why: this pass's own precondition can
+ * become satisfiable on an earlier main-loop iteration than a more
+ * specific pass's own precondition does if that pass needs some other
+ * change first, and once this pass has rewritten the shape a more specific
+ * pass wanted to match, that match is gone for good). Since this pass
+ * shrinks code (never grows it) and never introduces a label, call, or new
+ * push/pop nesting of its own, a single pass here is expected to be enough
+ * - pass_labels tidies up.
+ */
+static int pass_defer_global_push_reload(void)
+{
+    int i, j;
+    int changed = 0;
+    char sym[128];
+    char reg[4];
+    int is_push;
+    int depth;
+    int pop_line;
+    char pop_reg[4];
+    char clean[MAX_LINE];
+
+    for (i = 0; i + 1 < nlines; i++) {
+        if (!peep_parse_ld_hl_paren_sym(lines[i], sym))
+            continue;
+        if (!eq(i + 1, "push hl"))
+            continue;
+
+        depth = 1;
+        pop_line = -1;
+        pop_reg[0] = 0;
+        for (j = i + 2; j < nlines; j++) {
+            if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+                break;
+            strip_peep_comment_lower_copy(clean, lines[j]);
+            if (strncmp(clean, "jp ", 3) == 0 || strncmp(clean, "jr ", 3) == 0 ||
+                strncmp(clean, "djnz", 4) == 0 || strcmp(clean, "ret") == 0 ||
+                strncmp(clean, "ret ", 4) == 0 || strstr(clean, "sp") != NULL)
+                break;
+            if (strncmp(clean, "call", 4) == 0 &&
+                (clean[4] == ' ' || clean[4] == '\t'))
+                break;
+            if (peep_parse_push_or_pop(lines[j], reg, &is_push)) {
+                if (is_push) {
+                    depth++;
+                } else {
+                    depth--;
+                    if (depth == 0) {
+                        strcpy(pop_reg, reg);
+                        pop_line = j;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (pop_line < 0 || decline_af_or_frame_reg(pop_reg))
+            continue;
+        if (symbol_written_in_range(sym, i + 2, pop_line))
+            continue;
+
+        {
+            char newline[MAX_LINE];
+            int target = pop_line - 2;
+
+            sprintf(newline, "ld %s,(%s)", pop_reg, sym);
+            delete_n(i, 2);
+            replace1_tagged(target, newline, "defer_global_push_reload");
+        }
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
+/* Parse the two-line "ld l,(ix-N)" / "ld h,(ix-(N-1))" shape dcc's own
+ * codegen always emits, never split apart or reordered, for a 16-bit
+ * ix-relative local's word reload - the ix-frame counterpart of
+ * peep_parse_ld_hl_paren_sym's single-line "ld hl,(NAME)" for a global.
+ * *n is the low byte's offset magnitude (N). Returns 1 and implicitly
+ * consumes lines i and i+1 on success. */
+static int peep_parse_ld_hl_ix_pair(int i, int *n)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int lo;
+    char hpat[32];
+
+    strip_peep_comment_copy(tmp, lines[i]);
+    if (strncmp(tmp, "ld l,(ix-", 9) != 0)
+        return 0;
+    p = tmp + 9;
+    if (*p < '0' || *p > '9')
+        return 0;
+    lo = 0;
+    while (*p >= '0' && *p <= '9')
+        lo = lo * 10 + (*p++ - '0');
+    if (*p != ')' || p[1] != 0 || lo <= 1)
+        return 0;
+
+    if (i + 1 >= nlines)
+        return 0;
+    sprintf(hpat, "ld h,(ix-%d)", lo - 1);
+    if (!eq(i + 1, hpat))
+        return 0;
+
+    *n = lo;
+    return 1;
+}
+
+/* Is ix-offset `off` (the low byte; off-1 is the paired high byte) written
+ * to - via any "ld (ix-off),R" or "ld (ix-off),imm" - anywhere in
+ * [start,end)? A write's destination always has a trailing comma right
+ * after the closing paren ("ld (ix-N),e"), which a read never does ("ld
+ * e,(ix-N)" ends the operand there instead) - the same asymmetry
+ * symbol_written_in_range above exploits for "NAME),hl" vs a bare reload,
+ * just applied to an ix-relative offset instead of a symbol name. */
+static int ix_offset_written_in_range(int off, int start, int end)
+{
+    char pat_lo[24], pat_hi[24];
+    char clean[MAX_LINE];
+    int i;
+
+    sprintf(pat_lo, "(ix-%d),", off);
+    sprintf(pat_hi, "(ix-%d),", off - 1);
+    for (i = start; i < end; i++) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strstr(clean, pat_lo) != NULL || strstr(clean, pat_hi) != NULL)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * pass_cache_ix_local_word_reload:
+ *
+ * The ix-frame counterpart of pass_cache_global_word_reload above, for the
+ * exact same "reloaded more than once in a short hazard-free span" waste,
+ * just for a word-sized LOCAL (frame slot) instead of a global. Confirmed
+ * on tests/bint.c's OP_STA handler (`mem[sym[si].base+idx] = v;`): si, idx,
+ * and v are all plain run()-locals, each materialized once (from an
+ * earlier computation or a popv() call) and reloaded once more, tens of
+ * instructions of bounds-check logic later, via two full "ld r,(ix+d)"
+ * byte reads each way (19 T-states apiece) - none of it inline-call-
+ * argument machinery (that's pass_inline_temp_spill_to_stack /
+ * inline_temp_de_live's territory, gated on a compiler-emitted tag this
+ * pass doesn't need and doesn't look for), so nothing else in this file
+ * previously touched it.
+ *
+ * Shares pass_cache_global_word_reload's entire hazard-segmentation
+ * machinery (line_clobbers_bc segment boundaries, the label/function-marker
+ * boundary fix from the cobint "too many statements" miscompile,
+ * bc_regalloc_claimed_before against dcc's own reg_alloc from the forint.c
+ * eval_e miscompile, and the "declined if the segment is bounded by another
+ * pass's still-pending load" rule from the tptrlhs.c gpwrap/gpleaf
+ * miscompile) - see that pass's own comments for why each of those is
+ * load-bearing, not just defensive. The one addition specific to locals: no
+ * whole-file write-count proof is needed (unlike a global, an ix-relative
+ * offset only means anything within this one function, and a segment
+ * already never crosses a call or a function boundary), just that the
+ * offset isn't written anywhere in-segment (ix_offset_written_in_range
+ * above). Like the global version, this doesn't attempt to prove the
+ * local's address was never taken and written through elsewhere without
+ * literal "(ix-N)," text - the same "distinctly-stored objects don't
+ * alias" assumption already accepted for the global case, validated the
+ * same way: full regression plus the extended corpus, not a formal proof.
+ *
+ * Uses line_clobbers_bc directly for its own segment boundaries - this
+ * pass's own target shape (a value materialized once, then reloaded across
+ * a run of comparisons) originally hit line_clobbers_bc's "jp c,LABEL"/
+ * "jr c,LABEL"/"ret c" false positive (the bare "C" condition code read as
+ * a reference to register C) constantly enough, on exactly the
+ * bounds-check bodies that motivated this pass, that a local exclusion
+ * lived here first - see line_clobbers_bc's own comment for why that fix
+ * was moved there instead once it became clear other passes sharing that
+ * function (pass_word_loop_var_to_reg_bc, pass_byte_loop_var_to_reg_c, ...)
+ * could benefit from it too, not just this one. */
+
+/* Is BC used ANYWHERE in the function containing `at` - not just
+ * backward from `at` (bc_regalloc_claimed_before's own scope), and not
+ * just for dcc's own compiler-level reg_alloc priming pattern
+ * (bc_regalloc_claimed_before's own trigger)? This pass runs after the
+ * main fixed-point loop has already fully converged (see this pass's own
+ * call site for why), by which point pass_word_loop_var_to_reg_bc and
+ * pass_byte_loop_var_to_reg_c may already have promoted some OTHER local
+ * into BC/C for the function's ENTIRE body - a dccpeep-level reservation
+ * with its own text signature ("; peep: word_loop_var_bc" / "; peep:
+ * byte_loop_var_c"), invisible to bc_regalloc_claimed_before, which only
+ * recognizes dcc's own "ld c,(ix+d)" compiler-side priming line. Confirmed
+ * as a real miscompile (an infinite loop) on tests/tlngnarw.c's heap_pop:
+ * pass_word_loop_var_to_reg_bc had already promoted the loop's own index
+ * into BC for heap_pop's whole body; this pass, not recognizing that
+ * reservation at all, cached a completely unrelated ix-relative local into
+ * BC too, silently corrupting the live loop variable.
+ *
+ * Conservative by construction: rather than enumerate every pass that
+ * might reserve BC/C this same way (fragile against any future one this
+ * file doesn't know about yet), this declines to cache anything in BC
+ * anywhere in a function where BC or C is mentioned at all, by
+ * line_clobbers_bc's own definition - the same per-token test already used
+ * for this pass's own segment boundaries, just applied to the whole
+ * function instead of one segment. Strictly more conservative than
+ * necessary (a function that uses C only in a part that provably can't
+ * overlap this pass's own candidate span still declines), but simple, and
+ * matches this codebase's own established default of forgoing a smaller
+ * optimization rather than risking a data-corrupting one. */
+static int ix_cache_bc_used_in_function(int at)
+{
+    int func_start, func_end;
+    int k;
+
+    /* Lines this pass itself already tagged, from an earlier (necessarily
+     * lower-indexed - segments are processed in file order) segment in
+     * this same function, are excluded: those caches are segment-scoped
+     * (bounded by line_clobbers_bc the same way any other candidate
+     * segment is), not whole-function reservations, so an already-closed
+     * one from earlier in this function must not prevent a later,
+     * unrelated segment from caching something of its own - without this
+     * exclusion, only the very first segment in any given function could
+     * ever benefit, which measured as most of this pass's value on
+     * tests/bint.c alone. Everything else that mentions B or C - dcc's own
+     * compiler priming, pass_word_loop_var_to_reg_bc,
+     * pass_byte_loop_var_to_reg_c, or anything this file doesn't have a
+     * name for yet - still counts, by design (see this function's own
+     * comment above). */
+    find_function_bounds_any(at, &func_start, &func_end);
+    for (k = func_start; k < func_end; ++k) {
+        if (strstr(lines[k], "ix_local_word_cache"))
+            continue;
+        if (line_clobbers_bc(lines[k]))
+            return 1;
+    }
+    return 0;
+}
+static int pass_cache_ix_local_word_reload(void)
+{
+    int i;
+    int changed = 0;
+    int segstart;
+
+    segstart = 0;
+    for (i = 0; i <= nlines; i++) {
+        int j, k;
+        int off;
+        int best_off, best_count;
+        struct { int off; int count; } seen[32];
+        int nseen;
+        int occ[64];
+        int noc;
+        int delta;
+
+        if (i < nlines && !line_clobbers_bc(lines[i]) &&
+            !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
+            continue;
+
+        /* [segstart, i) is one hazard-free segment. Find the best repeated
+         * ix-relative word reload within it. Scanning one line at a time
+         * (rather than skipping past a matched pair's second line) is safe:
+         * a pair's own second line ("ld h,(ix-(N-1))") never itself starts
+         * with "ld l,(ix-", so it silently fails to match as some other
+         * pair's first line and the scan just continues. */
+        nseen = 0;
+        for (j = segstart; j < i; j++) {
+            if (!peep_parse_ld_hl_ix_pair(j, &off))
+                continue;
+            for (k = 0; k < nseen; k++)
+                if (seen[k].off == off) break;
+            if (k == nseen) {
+                if (nseen < 32) { seen[nseen].off = off; seen[nseen].count = 1; nseen++; }
+            } else {
+                seen[k].count++;
+            }
+        }
+
+        best_count = 0;
+        best_off = 0;
+        for (k = 0; k < nseen; k++) {
+            if (seen[k].count > best_count) {
+                best_count = seen[k].count;
+                best_off = seen[k].off;
+            }
+        }
+
+        /* See pass_cache_global_word_reload's own identical check (tptrlhs.c
+         * gpwrap/gpleaf miscompile) - refuse to start a brand new cache in a
+         * segment bounded by anyone else's (or this pass's own, from an
+         * earlier segment) still-pending load. */
+        if (i < nlines && (strstr(lines[i], "global_word_cache_load") ||
+                            strstr(lines[i], "ix_local_word_cache_load")))
+            best_count = 0;
+
+        /* >= 3, not >= 2: see pass_cache_global_word_reload's own comment
+         * for the cost/benefit reasoning behind requiring a clear margin,
+         * not just a break-even one - the numbers differ here (a two-byte
+         * ix-relative reload is 38 T-states, not 16, so the margin per
+         * avoided reload is even wider than the global case's), but the
+         * same "don't rewrite a pattern some other, more specific pass might
+         * still want to match in its original form" caution applies, and
+         * >= 3 is the threshold already proven safe for that. */
+        if (best_count >= 3 && !bc_regalloc_claimed_before(i) &&
+            !ix_cache_bc_used_in_function(i)) {
+            noc = 0;
+            for (j = segstart; j < i; j++) {
+                if (!peep_parse_ld_hl_ix_pair(j, &off)) continue;
+                if (off != best_off) continue;
+                if (noc < 64) occ[noc++] = j;
+            }
+
+            /* Unlike symbol_written_in_range for a global (checked across
+             * the WHOLE segment, since a global can legitimately be read
+             * before this segment even starts), a local's own leading
+             * write - materializing it in the first place - is always
+             * inside [segstart, occ[0]) here: every local is written
+             * before its first read, so checking from segstart would flag
+             * that ordinary initialization as a hazard on every single
+             * candidate, never firing at all. What actually matters is
+             * whether the slot is reassigned anywhere from occ[0]'s own
+             * reload onward - occ[0]+2 skips past that reload's own two
+             * lines, which read, not write, the slot. */
+            if (noc > 0 && ix_offset_written_in_range(best_off, occ[0] + 2, i))
+                noc = 0;
+
+            if (noc > 0) {
+                delta = 0;
+                /* Last occurrence first, same reasoning as
+                 * pass_cache_global_word_reload: insert/delete only ever
+                 * shift indices at or after the edit point. Each
+                 * occurrence is a 2-line pair ("ld l,.."/"ld h,.."),
+                 * replaced with a 2-line register move ("ld l,c"/"ld
+                 * h,b"), so no line-count delta at the occurrence itself. */
+                for (k = noc - 1; k >= 1; k--) {
+                    replace1_tagged(occ[k], "ld l,c", "ix_local_word_cache_load");
+                    replace1(occ[k] + 1, "ld h,b");
+                    changed = 1;
+                }
+
+                /* occ[0] is left as the real reload, with the cache primed
+                 * right after it. */
+                insert_line_tagged(occ[0] + 2, "ld c,l", "ix_local_word_cache_store");
+                insert_line(occ[0] + 3, "ld b,h");
+                delta = 2;
+                changed = 1;
+
+                i += delta;
+            }
+        }
+
+        segstart = i + 1;
+    }
+
+    return changed;
+}
+
+/* Parse "ld (ix-N),R" for a single 8-bit register R, extracting N. Unlike
+ * stride_parse_ld_ix_neg_r (which shares this exact shape but doesn't
+ * strip a trailing peep-comment tag before comparing), this pass runs
+ * after the main loop has converged, when an earlier pass may already
+ * have tagged this exact line for an unrelated reason - stripping first
+ * is required for a reliable match at this point in the pipeline. */
+static int peep_parse_st_ix_neg_reg(const char *s, char reg, int *n)
+{
+    char tmp[MAX_LINE];
+    char suffix[8];
+    const char *p;
+    int v;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "ld (ix-", 7) != 0)
+        return 0;
+    p = tmp + 7;
+    if (*p < '0' || *p > '9')
+        return 0;
+    v = 0;
+    while (*p >= '0' && *p <= '9')
+        v = v * 10 + (*p++ - '0');
+    sprintf(suffix, "),%c", reg);
+    if (strcmp(p, suffix) != 0 || v <= 1)
+        return 0;
+    *n = v;
+    return 1;
+}
+
+/* Parse "ld de,K" for a signed integer constant K (dcc emits negative
+ * constants as literal "ld de,-K" text, never a normalized unsigned
+ * 16-bit form - see e.g. pass_stride_loop_to_ptr's own comment on this),
+ * requiring 0 < |K| <= 255 so a single 8-bit add/sub can stand in for the
+ * low byte of a full 16-bit add/sub (pass_small_const_incr_carry_skip's
+ * own precondition; K==0 would be a no-op not worth rewriting). */
+static int peep_parse_ld_de_small_const(const char *s, int *k)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int sign;
+    long v;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "ld de,", 6) != 0)
+        return 0;
+    p = tmp + 6;
+    sign = 1;
+    if (*p == '-') { sign = -1; p++; }
+    if (*p < '0' || *p > '9')
+        return 0;
+    v = 0;
+    while (*p >= '0' && *p <= '9') {
+        v = v * 10 + (*p++ - '0');
+        if (v > 255)
+            return 0;
+    }
+    if (*p != 0 || v == 0)
+        return 0;
+    *k = (int)(sign * v);
+    return 1;
+}
+
+/*
+ * pass_small_const_incr_carry_skip:
+ *
+ * "ld l,(ix-N) / ld h,(ix-(N-1)) / ld de,K / add hl,de / ld (ix-N),l /
+ * ld (ix-(N-1)),h" (dcc's own codegen for `local += K;` or `local++;` on a
+ * word-sized ix-relative local, K a compile-time constant small enough to
+ * fit one byte) does a full 16-bit add every time: 19+19+10+11+19+19 = 97
+ * T-states, unconditionally. Since only the low byte of a small constant
+ * ever needs adding, and the low byte overflowing into the high byte (a
+ * carry, for a positive K; a borrow, for a negative one) is rare, doing
+ * the low byte's add/sub with an 8-bit register and only touching the
+ * high byte on the rare carry/borrow is cheaper on both paths, not just
+ * the common one:
+ *
+ *   ld a,(ix-N)      19
+ *   add a,K / sub a,|K|   7
+ *   ld (ix-N),a      19
+ *   jp nc,SKIP / jp c,SKIP   10   (common case: no carry/borrow - done)
+ *   inc (ix-(N-1)) / dec (ix-(N-1))   23   (rare case only)
+ * SKIP:
+ *
+ * Common-case total: 19+7+19+10 = 55 T-states (a 42 T-state, 43% saving).
+ * Rare-case total: 55+23 = 78 T-states (still a 19 T-state saving) - this
+ * optimization has no downside case at all, unlike most that trade a rare
+ * path's cost for a common one's.
+ *
+ * "ld (ix-N),a" and "inc"/"dec (ix-(N-1))" don't affect any flag ADD A/SUB
+ * A didn't already set (LD never touches flags on Z80; INC/DEC touch Z/S/
+ * H/PV/N but never carry, which only ADD/ADC/SUB/SBC/CP/NEG/RLA-family
+ * instructions set), so the carry tested by "jp nc,"/"jp c," is exactly
+ * the one the ADD/SUB two lines earlier left behind - nothing in between
+ * can have changed it.
+ *
+ * Confirmed as z88dk/SDCC's own default codegen for this exact C shape
+ * (tests/bint.c's `in++;`, advancing the bytecode dispatch loop's own
+ * instruction pointer once per opcode - one of the hottest single lines
+ * in any of this suite's interpreters), which dcc had no equivalent for.
+ *
+ * This pattern is generic (`local += K;`/`local++;`/`local--;` on any
+ * word-sized ix-relative local, not just a VM instruction pointer), so
+ * pass_stride_loop_to_ptr - a structural, loop-recognizing pass in the
+ * main loop that looks for exactly this "index reload / add stride / store
+ * back" shape as part of a larger loop transformation - needs to see it
+ * in its original, untouched form first; folding it here, after the main
+ * loop has already fully converged, avoids the same "steal a pattern
+ * before a more specific pass is ready" risk pass_cache_ix_local_word_
+ * reload was moved here to avoid for pass_cpir (see that pass's own call
+ * site comment for the tests/tcpirlp.c regression that taught this
+ * lesson). Placed after pass_cache_ix_local_word_reload and before frame
+ * elimination for the same reason as that pass: an ix-relative local is
+ * this pass's whole precondition, so it needs to run before frame
+ * elimination might remove some functions' ix frames entirely.
+ *
+ * Declines only when the pattern doesn't match exactly as above (the
+ * offsets between the two loads/stores must agree, and the constant must
+ * fit one byte) - unlike this file's BC-caching passes, this rewrite
+ * doesn't touch BC/C or need any whole-function or cross-segment
+ * reasoning: it only ever uses A (already dead here - the original
+ * six-line sequence never reads or writes A either, and dcc's codegen has
+ * no convention of preserving a register's value across a statement
+ * boundary for it to violate) and the exact same ix-relative slot the
+ * original sequence already reads and writes, for a strictly shorter span
+ * than the original already occupied.
+ */
+/* True if "hl" is mentioned at all - as a register or as a "(hl)"
+ * dereference, read or write, no distinction - anywhere from line `from`
+ * up to the next label, call, or function marker (dcc's own "reuse
+ * whatever's already in a register" convention, the same one this
+ * function exists to protect, doesn't survive any of those either: a
+ * label may be reached from elsewhere with hl holding something
+ * unrelated, and a call clobbers every register). Used by
+ * pass_small_const_incr_carry_skip to decide whether the line right after
+ * its own match could be relying on the leftover hl value the original
+ * "add hl,de / store back" sequence left resident there - see that pass's
+ * own comment for why. Deliberately blunt (declines even a line that's
+ * itself about to load hl with something else entirely, or an "add
+ * hl,de" that only extends the staleness rather than resolving it) rather
+ * than trying to characterize every mention of hl as safe or not: this
+ * rewrite's whole value is a cheap, purely local text substitution, not
+ * worth the risk of a second miscompile in the same pass to save chasing
+ * a more precise, harder-to-verify condition. */
+static int hl_relied_on_after(int from)
+{
+    int j;
+    char clean[MAX_LINE];
+
+    for (j = from; j < nlines; j++) {
+        if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+            return 0;
+        strip_peep_comment_lower_copy(clean, lines[j]);
+        if (strncmp(clean, "call", 4) == 0 &&
+            (clean[4] == ' ' || clean[4] == '\t'))
+            return 0;
+        if (strstr(clean, "hl") != NULL)
+            return 1;
+    }
+    return 0;
+}
+
+static int pass_small_const_incr_carry_skip(void)
+{
+    int i;
+    int changed = 0;
+    static int label_counter;
+
+    for (i = 0; i + 5 < nlines; i++) {
+        int lo, hi, k;
+        int st_lo, st_hi;
+        char label[48];
+        char line1[32], line2[32], line3[32], line4[64], line5[32];
+
+        if (!peep_parse_ld_hl_ix_pair(i, &lo))
+            continue;
+        hi = lo - 1;
+        if (!peep_parse_ld_de_small_const(lines[i + 2], &k))
+            continue;
+        if (!eq(i + 3, "add hl,de"))
+            continue;
+        if (!peep_parse_st_ix_neg_reg(lines[i + 4], 'l', &st_lo) || st_lo != lo)
+            continue;
+        if (!peep_parse_st_ix_neg_reg(lines[i + 5], 'h', &st_hi) || st_hi != hi)
+            continue;
+
+        /* The original "ld (ix-N),l / ld (ix-(N-1)),h" store leaves the
+         * incremented pointer's own value still resident in HL (a plain
+         * store never clobbers a register on Z80), and dcc's own codegen
+         * relies on that: a later statement, if it needs the same address
+         * again (the common `p++; p->field = x;` shape - a pointer bump
+         * immediately followed by a dereference through the bumped
+         * pointer, possibly after a few lines computing the value to
+         * store first), reuses HL directly instead of reloading it. This
+         * rewrite never puts the new value in HL at all (the low byte
+         * lives in A throughout, and the high byte, when touched, goes
+         * straight from memory to memory via INC/DEC), so it must decline
+         * whenever anything reachable after this match could be relying
+         * on that leftover HL value - confirmed as a real miscompile on
+         * tests/tstruct.c's test2 (`sp++; sp->l = x;`, with two lines
+         * computing x's own address in between: the dereference wasn't
+         * even in the very next line, so an earlier version of this check
+         * that only looked at that one line missed it and silently wrote
+         * through the stale, pre-increment sp instead of the bumped one,
+         * corrupting an unrelated struct field). hl_relied_on_after's own
+         * comment covers why it's deliberately blunt about what counts as
+         * "relying on it". */
+        if (hl_relied_on_after(i + 6))
+            continue;
+
+        sprintf(label, "Lpeep_incr_skip%d", label_counter++);
+        sprintf(line1, "ld a,(ix-%d)", lo);
+        if (k > 0)
+            sprintf(line2, "add a,%d", k);
+        else
+            sprintf(line2, "sub a,%d", -k);
+        sprintf(line3, "ld (ix-%d),a", lo);
+        sprintf(line4, "jp %s, %s", k > 0 ? "nc" : "c", label);
+        sprintf(line5, k > 0 ? "inc (ix-%d)" : "dec (ix-%d)", hi);
+
+        replace1_tagged(i, line1, "small_const_incr_carry_skip");
+        replace1(i + 1, line2);
+        replace1(i + 2, line3);
+        replace1(i + 3, line4);
+        replace1(i + 4, line5);
+        {
+            char labelline[56];
+            sprintf(labelline, "%s:", label);
+            replace1(i + 5, labelline);
+        }
+        changed = 1;
     }
 
     return changed;
@@ -6847,6 +7563,69 @@ int main(int argc, char **argv)
     if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_cmp_const_bias_fold))
         RUN_PASS(pass_labels);
     if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_zero_branch))
+        RUN_PASS(pass_labels);
+
+    /* pass_defer_global_push_reload runs once here for the same reason as
+     * pass_cache_ix_local_word_reload just below (see that pass's own call
+     * site comment): both are structural rewrites whose own precondition
+     * can be satisfied on an earlier main-loop iteration than a more
+     * specific pass's precondition is, so both need to wait until every
+     * loop-recognizing pass in the main loop has already fully converged.
+     * Placed before pass_cache_ix_local_word_reload rather than after:
+     * removing a push/pop pair here can only ever shrink the text between
+     * two occurrences of a repeated ix-relative reload, never introduce a
+     * new hazard between them (push/pop are not hazards to
+     * pass_cache_ix_local_word_reload's own segmentation - see that pass's
+     * shared line_clobbers_bc comment), so running first here can only
+     * help that pass find a segment it would have found anyway, never hurt
+     * it. Purely local (no control flow change, and it only ever removes
+     * instructions), so a single pass suffices; pass_labels tidies up. */
+    if (RUN_PASS(pass_defer_global_push_reload))
+        RUN_PASS(pass_labels);
+
+    /* pass_cache_ix_local_word_reload runs once here, after the main loop
+     * converges, for the same reason pass_signed_cmp_const_bias_fold does
+     * (see its own comment just above): a structural, loop-recognizing pass
+     * - pass_cpir here, rather than pass_ldir_memset/pass_stride_loop_to_ptr
+     * - needs to see a loop's canonical, untouched shape, and this pass's
+     * own precondition (>= 3 occurrences of a repeated ix-relative reload in
+     * one hazard-free span) can already be satisfied on an EARLIER main-loop
+     * iteration than pass_cpir's own precondition is, if pass_cpir needs
+     * some other pass's change first. Since both ran inside the same shared
+     * fixed-point loop, this pass could - and, confirmed as a real, measured
+     * regression on tests/tcpirlp.c, did - claim the loop pointer's repeated
+     * reload before pass_cpir was ready, permanently blocking pass_cpir from
+     * ever replacing the whole loop with a single hardware CPIR instruction,
+     * a far bigger win than this pass's own per-reload saving; simply
+     * reordering the two calls within the shared loop did not help, since
+     * the problem isn't which one runs first on a given iteration but that
+     * this pass's own turn can come on an iteration earlier than pass_cpir's
+     * first eligible one. Moving it here - after every structural,
+     * loop-recognizing pass in the main loop has already fully converged -
+     * closes that gap the same way the bias fold's own move here already
+     * does for pass_ldir_memset/pass_stride_loop_to_ptr. Purely local (no
+     * control flow change), so a single pass suffices; pass_labels tidies
+     * up. */
+    if (RUN_PASS(pass_cache_ix_local_word_reload))
+        RUN_PASS(pass_labels);
+
+    /* pass_small_const_incr_carry_skip runs once here, for the same reason
+     * as pass_cache_ix_local_word_reload just above (see that pass's own
+     * call site comment, and this pass's own for which structural,
+     * loop-recognizing pass in the main loop it would otherwise steal a
+     * pattern from before that pass is ready): pass_stride_loop_to_ptr
+     * looks for the exact same "index reload / add stride / store back"
+     * shape this pass rewrites, as part of a larger loop transformation
+     * that saves far more than this pass's own per-increment saving would.
+     * Placed before frame elimination since an ix-relative local is this
+     * pass's whole precondition. Introduces new control flow (a
+     * conditional jump and a label) unlike every other pass placed in
+     * this post-convergence section, all of which are pure substitutions -
+     * still safe to run once here rather than in the main loop's own
+     * fixed point, since it only ever shortens the exact span it matches
+     * and never changes what any label anywhere else in the file targets;
+     * pass_labels tidies up regardless. */
+    if (RUN_PASS(pass_small_const_incr_carry_skip))
         RUN_PASS(pass_labels);
 
     /* Run frame elimination after all other passes have converged, then

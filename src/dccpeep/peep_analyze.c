@@ -30,6 +30,12 @@ int line_clobbers_bc(const char *line)
         strcmp(clean, "call __stchk") != 0)
         return 1;
 
+    /* These use the carry flag, not register C. Conditional calls are not
+     * exempt: when taken, they are ordinary ABI-clobbering calls. */
+    if (!strncmp(clean, "jp c,", 5) || !strncmp(clean, "jr c,", 5) ||
+        !strcmp(clean, "ret c"))
+        return 0;
+
     p = clean;
     while (*p) {
         if (isalnum((unsigned char)*p) || *p == '_') {

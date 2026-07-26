@@ -298,7 +298,7 @@ int pass_phix_stub(void)
 int pass_larg_direct_store(void)
 {
     int i, changed = 0;
-    char addr[MAX_LINE], newline[MAX_LINE];
+    char addr[MAX_LINE], newline[MAX_LINE + 16];
 
     for (i = 0; i + 7 < nlines; i++) {
         char tmp[MAX_LINE];
@@ -328,7 +328,7 @@ int pass_larg_direct_store(void)
         /* Replace: keep stub call at i, replace i+1 with ld (ADDR),hl */
         sprintf(newline, "call %s", stub);
         replace1_tagged(i, newline, "larg_dstore");
-        sprintf(newline, "ld (%s),hl", addr);
+        snprintf(newline, sizeof(newline), "ld (%s),hl", addr);
         replace1(i+1, newline);
         delete_n(i+2, 6);
         changed = 1;

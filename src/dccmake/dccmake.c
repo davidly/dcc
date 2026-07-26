@@ -4,15 +4,31 @@
  * Pipeline:
  *   dcc -> optional dccpeep -> ntvcm M80 -> dccrtlstrip -> ntvcm M80 -> ntvcm L80
  */
+/* CLOCK_MONOTONIC/clock_gettime (used by now_ms() below) are POSIX, not
+ * plain C11 - glibc only declares them if a feature-test macro requesting
+ * at least POSIX.1-2001 is defined before the first system header is
+ * included. Must come before every #include, including stdio.h. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <time.h>
+
+/* MSVC's <sys/stat.h> defines the S_IFDIR bitmask but not the POSIX
+ * S_ISDIR macro built on top of it - supply the standard fallback. */
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
+#endif
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
+#include <process.h>
 #define MKDIR(path) _mkdir(path)
 #define CHDIR(path) _chdir(path)
 #define GETCWD(buf, size) _getcwd(buf, (int)(size))
@@ -44,6 +60,24 @@
 #define MAX_NAME_LEN 128
 #define MAX_CMD_LEN 32768
 #define MAX_LINE_LEN 2048
+
+/* Monotonic wall-clock milliseconds, for the per-phase pipeline timing
+ * printed at the end of run_build - run_cmd's children run under system(),
+ * whose time isn't reliably reflected in this process's own clock()/CPU
+ * time, so this measures wall clock directly instead. */
+#ifdef _WIN32
+static long long now_ms(void)
+{
+    return (long long)GetTickCount64();
+}
+#else
+static long long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+#endif
 
 struct Config {
     char inputs[MAX_ITEMS][MAX_PATH_LEN];
@@ -156,7 +190,7 @@ static int ensure_dir(const char *path)
 {
     struct stat st;
     if (stat(path, &st) == 0)
-        return S_ISDIR(st.st_mode);
+        return S_ISDIR(st.st_mode) != 0;
     if (MKDIR(path) == 0)
         return 1;
     return errno == EEXIST;
@@ -167,7 +201,7 @@ static int dir_exists(const char *path)
     struct stat st;
     if (stat(path, &st) != 0)
         return 0;
-    return S_ISDIR(st.st_mode);
+    return S_ISDIR(st.st_mode) != 0;
 }
 
 static void path_join(char *dst, size_t dst_size, const char *dir, const char *name)
@@ -1266,53 +1300,112 @@ static int cmd_arg(char *cmd, size_t cmd_size, const char *arg)
 #endif
 }
 
+#ifdef _WIN32
+#define RUN_CMD_MAX_ARGV 4096
+
+/* Parses a command string built entirely out of cmd_arg's Windows
+ * convention above - every argument wrapped in "..." with any literal "
+ * escaped as \" - back into an argv array, dequoting in place inside buf
+ * (which the caller owns and must keep alive as long as argv is used).
+ * Returns the argument count, or -1 if buf isn't in that exact shape
+ * (defensive only: every caller in this file builds `cmd` via cmd_arg, so
+ * that should never happen).
+ *
+ * Known limitation, inherited from cmd_arg's own quoting convention rather
+ * than introduced here: an argument ending in a literal trailing backslash
+ * (e.g. "path\") is ambiguous - cmd_arg only escapes ", never \, so the
+ * built text ends in \" indistinguishable from an escaped quote. No caller
+ * in this file can produce that (every path comes from path_join, which
+ * always ends in a filename, never a bare separator), so this is untested
+ * and unfixed rather than silently mishandling a case that can't occur. */
+static int parse_quoted_argv(char *buf, char **argv, int max_argv)
+{
+    char *p = buf;
+    char *w;
+    int argc = 0;
+
+    for (;;) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (*p != '"' || argc >= max_argv - 1)
+            return -1;
+        p++;
+        argv[argc++] = p;
+        w = p;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1] == '"') {
+                *w++ = '"';
+                p += 2;
+            } else {
+                *w++ = *p++;
+            }
+        }
+        if (*p != '"')
+            return -1; /* unterminated quote */
+        p++;
+        *w = 0;
+    }
+    argv[argc] = NULL;
+    return argc;
+}
+
+/* Bypasses cmd.exe entirely via _spawnvp (-> CreateProcess directly), the
+ * one difference between this and the system()-based POSIX path below.
+ * system() on Windows always shells out through "cmd.exe /c <cmd>", which
+ * scripts/bench-pwsh-overhead.ps1 measured at ~7ms of pure shell-launch
+ * overhead per call on native Windows (vs sub-1ms for an equivalent spawn
+ * on Linux/macOS) - multiplied by the 6 run_cmd/run_cmd_in_dir calls in a
+ * single app build, across a few hundred apps in the full suite, that's
+ * tens of seconds of overhead with no relation to the actual work being
+ * done. _spawnvp needs a plain argv array rather than a shell command
+ * line, so parse_quoted_argv above recovers one from the exact quoting
+ * convention cmd_arg always uses - every caller of run_cmd in this file
+ * builds `cmd` that way, so this never needs to handle arbitrary shell
+ * syntax (no `&&`, pipes, or redirection - run_cmd_in_dir above already
+ * sidesteps needing any of that for the one caller that used to want it). */
+static int run_cmd(const char *cmd)
+{
+    char *buf;
+    char *argv[RUN_CMD_MAX_ARGV];
+    int argc;
+    intptr_t rc;
+
+    printf("+ %s\n", cmd);
+    buf = _strdup(cmd);
+    if (!buf) {
+        fprintf(stderr, "out of memory building command line\n");
+        return 0;
+    }
+    argc = parse_quoted_argv(buf, argv, RUN_CMD_MAX_ARGV);
+    if (argc <= 0) {
+        fprintf(stderr, "command failed: %s\n", cmd);
+        free(buf);
+        return 0;
+    }
+    rc = _spawnvp(_P_WAIT, argv[0], (const char * const *)argv);
+    free(buf);
+    if (rc != 0) {
+        if (rc < 0)
+            fprintf(stderr, "command failed: %s: %s\n", cmd, strerror(errno));
+        else
+            fprintf(stderr, "command failed: %s\n", cmd);
+        return 0;
+    }
+    return 1;
+}
+#else
 static int run_cmd(const char *cmd)
 {
     int rc;
     printf("+ %s\n", cmd);
-#ifdef _WIN32
-    /* system() on Windows runs the command via "cmd.exe /c <cmd>". cmd.exe's
-     * own command-line parsing strips a leading and trailing quote character
-     * from what follows /c only when the whole remainder is exactly one
-     * quoted executable name with nothing else quoted inside it; any other
-     * shape (like our `"exe" "arg1" "arg2" ...` - one quoted token per
-     * argument, built by cmd_arg above) instead falls back to cmd.exe's
-     * older behaviour of unconditionally stripping the very first and very
-     * last quote character of the whole line. That mangles a multi-argument
-     * quoted command: the first argument's closing quote and the last
-     * argument's opening quote both survive in the wrong places, so e.g.
-     * `".\dcc.exe" "-o" "x"` is executed as if the program name were
-     * `.\dcc.exe" "-o" "x` - a path that can never exist, failing with "The
-     * system cannot find the path specified." The standard workaround is to
-     * wrap the entire command in one more pair of quotes: cmd.exe's stripping
-     * then consumes that outer pair intact, leaving every individually-
-     * quoted argument exactly as built. */
-    {
-        char *wrapped;
-        size_t len;
-
-        len = strlen(cmd);
-        wrapped = (char *)malloc(len + 3);
-        if (!wrapped) {
-            fprintf(stderr, "out of memory building command line\n");
-            return 0;
-        }
-        wrapped[0] = '"';
-        memcpy(wrapped + 1, cmd, len);
-        wrapped[len + 1] = '"';
-        wrapped[len + 2] = 0;
-        rc = system(wrapped);
-        free(wrapped);
-    }
-#else
     rc = system(cmd);
-#endif
     if (rc != 0) {
         fprintf(stderr, "command failed: %s\n", cmd);
         return 0;
     }
     return 1;
 }
+#endif
 
 /* Run `inner_cmd` with the process's working directory temporarily switched
  * to `dir`, restoring the original directory afterward regardless of the
@@ -1737,6 +1830,10 @@ static int run_build(struct Config *cfg)
     char output_lower[MAX_NAME_LEN];
     char link_arg[MAX_CMD_LEN];
     int i;
+    long long t_start, t0;
+    long long ms_dcc = 0, ms_peep = 0, ms_asm = 0, ms_rtlstrip = 0, ms_link = 0;
+
+    t_start = now_ms();
 
     if (cfg->input_count <= 0) {
         fprintf(stderr, "dcc-input is required; set it in dccmake.txt or pass dcc-input=main.c\n");
@@ -1851,8 +1948,10 @@ static int run_build(struct Config *cfg)
     for (i = 0; i < cfg->input_count; i++) {
         if (!build_dcc_command(cfg, i, cfg->inputs[i], macs[i], cmd, sizeof(cmd)))
             return 0;
+        t0 = now_ms();
         if (!run_cmd(cmd) || !file_exists(macs[i]))
             return 0;
+        ms_dcc += now_ms() - t0;
         if (cfg->peep && (!cfg->debug || cfg->peep_debug)) {
             int tmp_n = snprintf(tmp, sizeof(tmp), "%s%c_PEEPOUT_%d.MAC", cfg->build_dir, PATH_SEP, i);
             if (tmp_n < 0 || (size_t)tmp_n >= sizeof(tmp)) {
@@ -1866,8 +1965,10 @@ static int run_build(struct Config *cfg)
             }
             if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
             if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
+            t0 = now_ms();
             if (!run_cmd(cmd) || !file_exists(tmp))
                 return 0;
+            ms_peep += now_ms() - t0;
             remove(macs[i]);
             if (rename(tmp, macs[i]) != 0) {
                 fprintf(stderr, "cannot replace %s with optimized output\n", macs[i]);
@@ -1882,10 +1983,12 @@ static int run_build(struct Config *cfg)
         snprintf(tmp, sizeof(tmp), "=%.127s.MAC", uppers[i]);
         if (!build_m80_command(cfg, tmp, cmd, sizeof(cmd)))
             return 0;
+        t0 = now_ms();
         if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rels[i])) {
             fprintf(stderr, "assembly failed: %s was not produced\n", rels[i]);
             return 0;
         }
+        ms_asm += now_ms() - t0;
         if (!check_no_fatal_errors(prns[i]))
             return 0;
         if (cfg->debug && (!file_exists(dbgs[i]) || !file_exists(links[i]))) {
@@ -1914,15 +2017,19 @@ static int run_build(struct Config *cfg)
     for (i = 0; i < cfg->input_count; i++) {
         if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
     }
+    t0 = now_ms();
     if (!run_cmd(cmd) || !file_exists(rtl_min) || !to_crlf(rtl_min))
         return 0;
+    ms_rtlstrip += now_ms() - t0;
 
     if (!build_m80_command(cfg, "=RTLMIN.MAC", cmd, sizeof(cmd)))
         return 0;
+    t0 = now_ms();
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rtl_rel)) {
         fprintf(stderr, "runtime assembly failed: %s was not produced\n", rtl_rel);
         return 0;
     }
+    ms_asm += now_ms() - t0;
     if (!check_no_fatal_errors(rtl_prn))
         return 0;
     if (cfg->debug && !file_exists(rtl_link)) {
@@ -1945,10 +2052,12 @@ static int run_build(struct Config *cfg)
     if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), cfg->l80)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), link_arg)) return 0;
+    t0 = now_ms();
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(app_com)) {
         fprintf(stderr, "link failed: %s was not produced\n", app_com);
         return 0;
     }
+    ms_link += now_ms() - t0;
 
     if (cfg->debug && !finalize_debug_file(app_dbg, rtl_link, dbgs, links, cfg->input_count))
         return 0;
@@ -1957,6 +2066,14 @@ static int run_build(struct Config *cfg)
         copy_file(app_com, lower_com);
 
     printf("dccmake: built %s\n", app_com);
+    {
+        long long total = now_ms() - t_start;
+        long long other = total - (ms_dcc + ms_peep + ms_asm + ms_rtlstrip + ms_link);
+        if (other < 0) other = 0;
+        printf("dccmake: timing dcc=%lldms peep=%lldms asm=%lldms(%s) rtlstrip=%lldms link=%lldms other=%lldms total=%lldms\n",
+               ms_dcc, ms_peep, ms_asm, cfg->use_emulated_m80 ? "emulated" : "native",
+               ms_rtlstrip, ms_link, other, total);
+    }
     return 1;
 }
 

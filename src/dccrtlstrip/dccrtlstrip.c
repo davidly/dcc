@@ -50,9 +50,9 @@ static int nblocks;
 static struct SymMap syms[MAX_SYMS];
 static int nsyms;
 
-/* Comprehensive name->block index covering every label and PUBLIC-mentioned
- * name in every already-classified block, built once by build_scan_index()
- * so find_sym_block's not-in-syms[] case is an O(1) lookup instead of the
+/* Comprehensive name->block index covering syms[] plus every label and
+ * PUBLIC-mentioned name in every already-classified block, built once by
+ * build_scan_index() so find_sym_block is an O(1) lookup instead of the
  * O(nlines) rescan find_symbol_block_by_scan used to do on every call. */
 static struct SymMap scan_syms[MAX_SCAN_SYMS];
 static int scan_next[MAX_SCAN_SYMS];
@@ -61,6 +61,78 @@ static int n_scan_syms;
 
 static char roots[MAX_ROOTS][128];
 static int nroots;
+
+/* Case-sensitive name hash shared by add_root/add_sym's dedup checks below.
+ * Both used to rescan their whole table (roots[]/syms[]) linearly on every
+ * insert, an O(n^2) cost in the number of roots/PUBLIC symbols that showed
+ * up as a str_ieq/strcmp hotspot under profiling - each is called once per
+ * distinct name candidate found while scanning the runtime and every app
+ * .MAC file, so n is easily in the thousands. */
+static unsigned name_hash_cs(const char *name)
+{
+    unsigned h = 0;
+    while (*name)
+        h = h * 131u + (unsigned char)*name++;
+    return h % SCAN_HASH_SIZE;
+}
+
+static int root_buckets[SCAN_HASH_SIZE];
+static int root_next[MAX_ROOTS];
+static int root_index_ready;
+
+static int root_index_find(const char *name)
+{
+    unsigned h;
+    int i;
+    if (!root_index_ready) return -1;
+    h = name_hash_cs(name);
+    for (i = root_buckets[h]; i >= 0; i = root_next[i])
+        if (!strcmp(roots[i], name))
+            return i;
+    return -1;
+}
+
+static void root_index_add(int idx)
+{
+    unsigned h;
+    int i;
+    if (!root_index_ready) {
+        for (i = 0; i < SCAN_HASH_SIZE; ++i) root_buckets[i] = -1;
+        root_index_ready = 1;
+    }
+    h = name_hash_cs(roots[idx]);
+    root_next[idx] = root_buckets[h];
+    root_buckets[h] = idx;
+}
+
+static int sym_buckets[SCAN_HASH_SIZE];
+static int sym_next[MAX_SYMS];
+static int sym_index_ready;
+
+static int sym_index_find(const char *name)
+{
+    unsigned h;
+    int i;
+    if (!sym_index_ready) return -1;
+    h = name_hash_cs(name);
+    for (i = sym_buckets[h]; i >= 0; i = sym_next[i])
+        if (!strcmp(syms[i].name, name))
+            return i;
+    return -1;
+}
+
+static void sym_index_add(int idx)
+{
+    unsigned h;
+    int i;
+    if (!sym_index_ready) {
+        for (i = 0; i < SCAN_HASH_SIZE; ++i) sym_buckets[i] = -1;
+        sym_index_ready = 1;
+    }
+    h = name_hash_cs(syms[idx].name);
+    sym_next[idx] = sym_buckets[h];
+    sym_buckets[h] = idx;
+}
 
 static char *xstrdup2(const char *s)
 {
@@ -164,33 +236,31 @@ static int ci_strncmp(const char *a, const char *b, int n)
 
 static void add_root(const char *name)
 {
-    int i;
     if (!name || !name[0]) return;
     if (is_number_token(name) || is_register_name(name)) return;
 
-    for (i = 0; i < nroots; ++i)
-        if (!strcmp(roots[i], name))
-            return;
+    if (root_index_find(name) >= 0)
+        return;
     if (nroots >= MAX_ROOTS) {
         fprintf(stderr, "too many roots\n");
         exit(1);
     }
     strncpy(roots[nroots], name, sizeof(roots[nroots]) - 1);
     roots[nroots][sizeof(roots[nroots]) - 1] = 0;
+    root_index_add(nroots);
     nroots++;
 }
 
 static void add_sym(const char *name, int block)
 {
-    int i;
+    int idx;
     if (!name || !name[0]) return;
-    for (i = 0; i < nsyms; ++i) {
-        if (!strcmp(syms[i].name, name)) {
-            /* Prefer the earliest block that actually owns the PUBLIC. */
-            if (syms[i].block < 0)
-                syms[i].block = block;
-            return;
-        }
+    idx = sym_index_find(name);
+    if (idx >= 0) {
+        /* Prefer the earliest block that actually owns the PUBLIC. */
+        if (syms[idx].block < 0)
+            syms[idx].block = block;
+        return;
     }
     if (nsyms >= MAX_SYMS) {
         fprintf(stderr, "too many symbols\n");
@@ -199,6 +269,7 @@ static void add_sym(const char *name, int block)
     strncpy(syms[nsyms].name, name, sizeof(syms[nsyms].name) - 1);
     syms[nsyms].name[sizeof(syms[nsyms].name) - 1] = 0;
     syms[nsyms].block = block;
+    sym_index_add(nsyms);
     nsyms++;
 }
 
@@ -277,7 +348,14 @@ static int scan_index_lookup(const char *name)
  * walked in the same order the old per-query scan used, and
  * scan_index_insert keeps only the first occurrence of a name, so lookups
  * are identical to what that scan would have returned - just O(1) instead
- * of O(nlines) per query. */
+ * of O(nlines) per query.
+ *
+ * Primed with syms[] first (build_blocks() has already fully populated it
+ * by the time this runs), so a name present there always resolves to its
+ * block here too - preserving find_sym_block's original priority of
+ * checking syms[] before falling back to this broader scan, now that
+ * find_sym_block is just this one lookup instead of an O(nsyms) scan
+ * followed by the fallback. */
 static void build_scan_index(void)
 {
     int b, i;
@@ -285,6 +363,9 @@ static void build_scan_index(void)
     for (i = 0; i < SCAN_HASH_SIZE; ++i)
         scan_buckets[i] = -1;
     n_scan_syms = 0;
+
+    for (i = 0; i < nsyms; ++i)
+        scan_index_insert(syms[i].name, syms[i].block);
 
     for (b = 0; b < nblocks; ++b) {
         for (i = blocks[b].start; i < blocks[b].end; ++i) {
@@ -321,10 +402,6 @@ static void build_scan_index(void)
 
 static int find_sym_block(const char *name)
 {
-    int i;
-    for (i = 0; i < nsyms; ++i)
-        if (!strcmp(syms[i].name, name) || str_ieq(syms[i].name, name))
-            return syms[i].block;
     return scan_index_lookup(name);
 }
 
