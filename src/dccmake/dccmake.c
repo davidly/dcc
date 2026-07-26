@@ -4,6 +4,13 @@
  * Pipeline:
  *   dcc -> optional dccpeep -> ntvcm M80 -> dccrtlstrip -> ntvcm M80 -> ntvcm L80
  */
+/* CLOCK_MONOTONIC/clock_gettime (used by now_ms() below) are POSIX, not
+ * plain C11 - glibc only declares them if a feature-test macro requesting
+ * at least POSIX.1-2001 is defined before the first system header is
+ * included. Must come before every #include, including stdio.h. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
