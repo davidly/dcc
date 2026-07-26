@@ -1,0 +1,37 @@
+public _accept
+_accept:
+ld l,(ix-2)
+ld h,(ix-1)
+ld e,(ix-4)
+ld d,(ix-3)
+or a
+sbc hl,de
+jp nc, L1
+ld l,(ix-2)
+ld h,(ix-1)
+ld e,(hl)
+inc hl
+ld d,(hl)
+ex de,hl
+or a
+L1:
+ret
+public _decline
+_decline:
+ld l,(ix-2)
+ld h,(ix-1)
+ld e,(ix-4)
+ld d,(ix-3)
+or a
+sbc hl,de
+jp nc, L2
+ld l,(ix-2)
+ld h,(ix-1)
+ld e,(hl)
+inc hl
+ld d,(hl)
+ex de,hl
+jp c, L2
+L2:
+ret
+end

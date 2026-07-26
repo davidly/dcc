@@ -1,0 +1,56 @@
+; static function decline
+_ZD:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,100
+	ld (ix-2),l
+	ld (ix-1),h
+	ld hl,0
+	ld l,(ix-2)
+	ld h,(ix-1)
+	ld a,(hl)
+	call _external
+	ld l,(ix-2)
+	ld h,(ix-1)
+	ld a,(hl)
+	call _external
+	ld l,(ix-2)
+	ld h,(ix-1)
+	ld a,(hl)
+	call _external
+	ld l,(ix-2)
+	ld h,(ix-1)
+	ld a,(hl)
+	ld a,(ix-2)
+	add a,1
+	ld (ix-2),a
+	jr nc,LDS
+	inc (ix-1)
+LDS:
+	ld sp,ix
+	pop ix
+	ret
+; static function accept
+_ZA:
+	ld hl,100
+	push hl ; peep: ix_pointer_to_iy
+	pop iy
+	ld hl,0
+	push iy ; peep: ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	push iy ; peep: ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	push iy ; peep: ix_pointer_to_iy
+	pop de
+	ex de,hl
+	ld a,(hl)
+	inc iy ; peep: ix_pointer_to_iy
+	inc iy ; peep: ix_pointer_to_iy
+	or a
+	ret
+	end
