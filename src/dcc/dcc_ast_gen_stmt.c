@@ -8,6 +8,33 @@
 #include "dcc_ast_gen_internal.h"
 
 
+/* Emit `arr[E] = lo; arr[E+1] = hi;` (mem_set_word-shaped code, matched by
+ * ast_byte_pair_word_write_match) sharing one address computation instead
+ * of two: HL = &arr[E] once, store the low byte, `inc hl`, store the high
+ * byte. See ast_byte_pair_word_read_match's read-side counterpart
+ * (dcc_ast_gen_expr.c) for the same idiom on the read path. */
+static void gen_byte_pair_word_write_ast(const struct AstNode *lo_index,
+                                         const struct AstNode *s1_assign,
+                                         const struct AstNode *s2_assign)
+{
+    int val_type;
+    int saved_dead;
+
+    gen_index_addr_ast(lo_index, &val_type);   /* HL = &arr[E] */
+    emit("\tpush hl\n");
+    saved_dead = expr_result_dead;
+    expr_result_dead = 1;
+    ast_gen_expr(s1_assign->b);                /* HL = low-byte value */
+    expr_result_dead = saved_dead;
+    emit("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n");
+    emit("\tpush hl\n");
+    saved_dead = expr_result_dead;
+    expr_result_dead = 1;
+    ast_gen_expr(s2_assign->b);                /* HL = high-byte value */
+    expr_result_dead = saved_dead;
+    emit("\tex de,hl\n\tpop hl\n\tld (hl),e\n");
+}
+
 void ast_switch_collect_stmt(const struct AstNode *n, int *case_vals,
                                     int *ncasep, int *have_defaultp)
 {
@@ -1355,6 +1382,17 @@ void ast_gen_stmt(const struct AstNode *n)
                     }
                 }
                 continue;
+            }
+            if (i + 1 < body->list_len) {
+                const struct AstNode *bp_lo;
+                const struct AstNode *bp_s2_assign;
+                if (ast_byte_pair_word_write_match(body->list[i], body->list[i + 1],
+                                                   &bp_lo, &bp_s2_assign)) {
+                    gen_byte_pair_word_write_ast(bp_lo, body->list[i]->a, bp_s2_assign);
+                    dead = 0;
+                    ++i;
+                    continue;
+                }
             }
             ast_gen_stmt(body->list[i]);
             dead = ast_stmt_exits(body->list[i]);

@@ -205,6 +205,16 @@ int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
 int ast_expr_references_ident(const struct AstNode *n, const char *name);
 int ast_expr_has_side_effects(const struct AstNode *n);
 
+/* Byte-memory word-packing idiom (mem_get_word/mem_set_word-shaped code -
+ * see dcc_ast_gen_support.c for the full rationale): `arr[E] | (arr[E+1]
+ * << 8)` for a read, `arr[E] = lo; arr[E+1] = hi;` for a write, where E is
+ * a non-trivial shared index expression currently recomputed twice. */
+int ast_index_exprs_structurally_equal(const struct AstNode *a, const struct AstNode *b);
+int ast_index_expr_is_plus_one(const struct AstNode *base_expr, const struct AstNode *plus_one);
+const struct AstNode *ast_byte_pair_word_read_match(const struct AstNode *n);
+int ast_byte_pair_word_write_match(const struct AstNode *s1, const struct AstNode *s2,
+                                   const struct AstNode **out_lo, const struct AstNode **out_s2_assign);
+
 /* Recursive, side-effect-free static type inference for an expression node -
  * originally written for sizeof, general-purpose enough to reuse anywhere a
  * node's result type is needed before/without running its codegen (e.g.
