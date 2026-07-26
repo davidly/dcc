@@ -7,13 +7,13 @@
  * main(). The include search path (include_dirs/num_include_dirs, capped by
  * MAX_INCLUDE_DIRS) is kept module-local (static) here.
  *
- * MODULE: its own translation unit, linked with the other dcc_*.c modules;
- * all shared declarations come from the umbrella header dcc.h.
+ * MODULE: its own translation unit, using dcc.h plus the focused preprocessor
+ * and AST contracts.
  * Source provenance: monolith src/ddc.c lines 17975-18841.
  */
 
 /*
- * realpath() is a POSIX extension: under strict -std=c89, glibc/libc headers
+ * realpath() is a POSIX extension: under strict ISO C mode, glibc/libc headers
  * don't declare it in <stdlib.h> unless a feature-test macro asks for it
  * (_POSIX_C_SOURCE 200809L alone isn't enough on this glibc; _DEFAULT_SOURCE
  * is). Without a prototype in scope, C89's implicit-int rule assumes

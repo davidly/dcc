@@ -1,57 +1,14 @@
 /*
- * dcc_array_narrow.c - detect int arrays whose every stored element value is
- * provably in [0,255], so their declared element type can be narrowed to
- * unsigned char before normal codegen runs.
+ * dcc_array_narrow.c - conservative proof engine for narrowing eligible local
+ * int arrays, register scalars, and for-loop counters to unsigned char.
  *
- * Byte arrays are already a completely ordinary, fully-supported C
- * construct in dcc - narrowing an array's type is the entire fix; no new
- * codegen is needed, since type_index_elem_size() and friends already
- * derive addressing arithmetic from the element type dynamically. The hard
- * part, and the only thing this file does, is proving the narrowing is
- * safe.
- *
- * Two independent questions have to be answered, both by lexical/AST
- * scanning rather than symbol-table-based analysis (matching
- * dcc_global_scan.c's approach for the analogous whole-file question):
- *
- *   1. Does this array's name ever escape as a bare pointer (passed to a
- *      function, assigned to a pointer, etc.)? If so, some other code this
- *      scan cannot see might store an unbounded value through it, so
- *      narrowing is declined outright. A bare occurrence of the name not
- *      immediately followed by '[' is treated as an escape.
- *
- *   2. Is every value ever stored into the array provably in [0,255]? This
- *      needs both an upper bound *and* non-negativity - storing a negative
- *      int into unsigned char wraps to a large positive value, which is not
- *      the same value read back, so an upper-bound-only proof is not
- *      sufic.ient. Values that are themselves expressions referencing other
- *      local scalars (not just literals) require bounding those scalars
- *      too, by tracing every place they are reassigned within the same
- *      scope - which can require mutual reasoning (variable X's bound
- *      depends on array A's values, and A's bound depends on X), handled
- *      by hypothesize-then-verify: assume every name in the dependency
- *      closure has the target property, then check every reassignment site
- *      for every name in the closure is consistent with that assumption.
- *      This is a coinductive safety argument, not an inductive one - it is
- *      valid because the property being checked (nonneg-and-bounded) is
- *      preserved by the recognized operators, not because it needs a base
- *      case to build up from.
- *
- * The rule set for "is this expression nonneg and bounded by K" is
- * deliberately small and conservative: literals, +, *, / (bound derived
- * from operands, with / requiring a positive divisor), % (bounded by the
- * divisor's own bound minus 1, and only when the dividend is separately
- * proven nonneg), a bare reference to another name in the assumption set,
- * an index into an array in the assumption set, and a call to a
- * no-argument function whose entire body is a single return statement
- * (recursively bounded the same way). Anything else - unrecognized
- * operators, a variable outside the same function, a function with
- * parameters or a body of more than one statement - is an unconditional
- * decline, never a guess: this can only under-narrow (miss an
- * optimization), never over-narrow (corrupt a value), which is the
- * required safety direction throughout this codebase's other lexical
- * scans (see local_name_used_ahead, local_name_address_taken_ahead,
- * scan_global_write_info).
+ * The proof checks that every stored value is non-negative and <=255 and that
+ * no writable alias escapes its scope. Dependencies are discovered
+ * coinductively, then every write is verified against the small supported rule
+ * set (literals, bounded arithmetic, group references, array reads, and simple
+ * no-argument calls). Unknown shapes, aliases, recursive calls, or exhausted
+ * limits decline narrowing; they never guess. Normal byte codegen then handles
+ * accepted candidates without a separate lowering path.
  */
 
 #include "dcc.h"
@@ -1098,6 +1055,9 @@ static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *nam
     return 1;
 }
 
+/* Proves all visible writes preserve [0,255] and no writable alias escapes.
+ * Returns 0 conservatively for any unsupported, recursive, or over-limit
+ * shape; callers must then keep the original 16-bit representation. */
 int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
 {
     return narrow_is_byte_safe_impl(scope, arr_name, 1);

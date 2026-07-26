@@ -1,12 +1,10 @@
 /*
  * dcc_ast.c - function-local AST: arena allocator and node constructors.
  *
- * See dcc_ast.h for the design rationale.  This module is intentionally
- * self-contained: it depends only on the umbrella header dcc.h for the
- * xmalloc/fatal helpers and the struct Sym definition, and it does not yet
- * participate in code generation.  It is compiled and linked so the data
- * structures and their invariants can be exercised as the AST migration
- * proceeds construct by construct.
+ * See dcc_ast.h for the design rationale. This module owns arena block
+ * allocation, reset/destruction, string/memory copies, node construction, and
+ * small AST query helpers. Parsing and emission live in dcc_ast_build.c and
+ * dcc_ast_gen*.c.
  */
 #include "dcc.h"
 #include "dcc_ast.h"

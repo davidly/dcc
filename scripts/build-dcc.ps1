@@ -315,12 +315,12 @@ function Build-UnixNative {
     $baseCflags = if ($env:CFLAGS) {
         @($env:CFLAGS -split "\s+" | Where-Object { $_ })
     } else {
-        # Host build tools (run on the dev machine, not the Z80 target), so
-        # gnu89 is fine and lets glibc declare snprintf/etc. under C89.
+        # Host build tools run on the development machine, not the Z80 target.
+        # Use the same portable C11 baseline as the Windows/MSVC build.
         # -w suppresses compiler warnings for a quiet default build. -g
         # matches the Windows path's /Zi: debug symbols by default even in
         # an optimized build.
-        @("-std=gnu89", "-w", "-O2", "-g")
+        @("-std=c11", "-w", "-O2", "-g")
     }
     if ($IsMacOS -and ($baseCflags -notcontains "-fno-common")) {
         $baseCflags += "-fno-common"

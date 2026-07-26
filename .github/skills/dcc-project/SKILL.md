@@ -1,6 +1,6 @@
 ---
 name: dcc-project
-description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89/C99/C11 front end -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (dccmake), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
+description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89-base front end with selected C99/C11 features -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (dccmake), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
 argument-hint: 'Describe the dcc-project task (change codegen, run the test suite, build a single app, rebuild host tools)'
 ---
 
@@ -162,7 +162,7 @@ built AST tree to stderr before it is emitted.
 
 ## Rebuild the host tools after a source change
 
-For compiler-only edits, the fastest strict C89 build is:
+For compiler-only edits, the fastest host build is:
 
 ```sh
 sh src/dcc/build-dcc.sh
@@ -170,6 +170,11 @@ sh src/dcc/build-dcc.sh
 
 It links every `src/dcc/*.c`; when adding a module, also add it to the explicit
 `src/dcc/CMakeLists.txt` source list.
+
+The `dcc` implementation is host code, not code for the Z80 target. It may use
+portable C11 supported by modern Clang, GCC, and MSVC; do not constrain it to
+the language subset that dcc accepts as input. Keep vendor-only extensions
+behind platform guards.
 
 ```pwsh
 pwsh ./scripts/build-dcc.ps1            # MSVC on Windows, clang on macOS, gcc on Linux

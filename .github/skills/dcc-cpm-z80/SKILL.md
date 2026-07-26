@@ -1,7 +1,7 @@
 ---
 name: dcc-cpm-z80
-description: 'Write, build, test, and debug C89/C99/C11-targeted code for the dcc compiler targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, dccmake, C89, C99, C11, CP/M, CP/M 2.2, Z80, ntvcm, DCCRTL, or VT100/ANSI CP/M terminal apps. Treat dcc as standard C89 plus a first-class _Bool scalar type and target-appropriate C99/C11 front-end compatibility EXCEPT for the Z80/CP/M deviations this skill documents: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full library/printf/scanf inventory and pitfalls are in the reference files.'
-argument-hint: 'Describe the C89/C99/C11 CP/M-Z80 task (write code, build, run under ntvcm, debug a failure)'
+description: 'Write, build, test, and debug C for dcc targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, dccmake, C89, C99, C11, CP/M, Z80, ntvcm, DCCRTL, or VT100/ANSI terminal apps. Treat dcc as a C89-base compiler with documented selected C99/C11 features and Z80/CP/M deviations: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full feature and library inventories are in the reference files.'
+argument-hint: 'Describe the dcc CP/M-Z80 task (write code, build, run under ntvcm, debug a failure)'
 ---
 
 # dcc C for CP/M 2.2 / Z80
@@ -10,12 +10,12 @@ dcc is a cross-compiler (runs on the host) that emits Z80 assembly for CP/M 2.2.
 The runtime is [DCCRTL.MAC](DCCRTL.MAC); programs run on real hardware or an
 emulator such as **ntvcm** (Altair 8800).
 
-**Assume standard C89 plus dcc's first-class `_Bool` scalar type and
-target-appropriate C99/C11 front-end compatibility.** dcc is not a hosted
+**Assume standard C89 plus the selected C99/C11 features documented by dcc.**
+dcc is not a hosted
 desktop C implementation: the CP/M 2.2 runtime, Z80 data model, and DCCRTL
-library subset are part of the compiler contract. Anything not listed here
-should be treated as ordinary C89/C99/C11, but CP/M/Z80 limits always win over
-host ABI expectations.
+library subset are part of the compiler contract. Do not assume an unlisted
+C99/C11 feature is supported; CP/M/Z80 limits always win over host ABI
+expectations.
 
 ## Compiler conformance level
 
@@ -31,7 +31,8 @@ host ABI expectations.
 
 ## When to use
 
-- Writing, porting, or reviewing C89/C99/C11 code compiled by `dcc`.
+- Writing, porting, or reviewing C89-base code using dcc's documented C99/C11
+  additions.
 - Building/running/debugging a dcc program (`dccmake`, `ntvcm`).
 - CP/M file I/O, VT100/ANSI console UIs, or DCCRTL work.
 

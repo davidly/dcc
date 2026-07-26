@@ -1,7 +1,8 @@
 /*
- * dcc_ast_gen_internal.h - internal prototypes shared across the
- * dcc_ast_gen* translation units.  Generated from the function
- * definitions; do not include outside the AST codegen module.
+ * dcc_ast_gen_internal.h - private contract shared by dcc_ast_gen*.c.
+ *
+ * Contains AST shape classifiers, emit helpers, and switch/codegen state.
+ * Do not include it outside the AST codegen module.
  */
 #ifndef DCC_AST_GEN_INTERNAL_H
 #define DCC_AST_GEN_INTERNAL_H
