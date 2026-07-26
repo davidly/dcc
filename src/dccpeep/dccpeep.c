@@ -10420,6 +10420,189 @@ static int pass_cache_global_word_reload(void)
     return changed;
 }
 
+/* Parse "push R" or "pop R" for R in {hl,de,bc,af,ix,iy}, reporting which
+ * via *reg (lowercase, e.g. "hl") and which mnemonic via *is_push (1 push,
+ * 0 pop). Returns 0 for anything else, including a push/pop of a single
+ * 8-bit register (not a real Z80 form).
+ *
+ * ix and iy are tracked for depth-counting purposes only (never returned
+ * as a target register from pass_defer_global_push_reload's own
+ * search - decline_af_or_frame_reg below excludes them the same way it
+ * excludes af) - but they still MUST be recognized here, not just ignored:
+ * "push ix / pop hl" is dcc's own standard idiom for copying the current
+ * frame pointer into a general register (Z80 has no direct ix-to-hl move),
+ * and omitting ix/iy from this recognition set left that idiom's "push ix"
+ * uncounted while its own "pop hl" still was - silently unbalancing this
+ * function's depth tracking by exactly one level, which let an outer
+ * pass_defer_global_push_reload candidate's search match that inner "pop
+ * hl" as if it were the outer's own, one push too early. Confirmed as a
+ * real miscompile (a corrupted computed value) on tests/forint.c and
+ * tests/pint.c, both of which use this exact frame-pointer-to-register
+ * idiom heavily for local-array/struct addressing. */
+static int peep_parse_push_or_pop(const char *s, char *reg, int *is_push)
+{
+    char clean[MAX_LINE];
+    const char *r;
+
+    strip_peep_comment_copy(clean, s);
+    if (!strncmp(clean, "push ", 5)) {
+        *is_push = 1;
+        r = clean + 5;
+    } else if (!strncmp(clean, "pop ", 4)) {
+        *is_push = 0;
+        r = clean + 4;
+    } else {
+        return 0;
+    }
+    if (!strcmp(r, "hl") || !strcmp(r, "de") || !strcmp(r, "bc") ||
+        !strcmp(r, "af") || !strcmp(r, "ix") || !strcmp(r, "iy")) {
+        strcpy(reg, r);
+        return 1;
+    }
+    return 0;
+}
+
+/* True if `reg` (a peep_parse_push_or_pop register name) is never a valid
+ * pass_defer_global_push_reload replacement target: af has no memory-load
+ * form at all ("ld af,(nn)" is not a Z80 instruction), and ix/iy, while
+ * loadable from memory, would change what the reloaded value actually IS
+ * if this pass ever matched a push/pop of one of those two directly (it
+ * doesn't today - pass_defer_global_push_reload only ever looks for "ld
+ * hl,(NAME)/push hl" as the outer candidate's own start, never "push ix" -
+ * but this check is what makes that constraint explicit and robust against
+ * a future change to that candidate-matching logic, rather than relying on
+ * it never changing). */
+static int decline_af_or_frame_reg(const char *reg)
+{
+    return !strcmp(reg, "af") || !strcmp(reg, "ix") || !strcmp(reg, "iy");
+}
+
+/*
+ * pass_defer_global_push_reload:
+ *
+ * "ld hl,(NAME) / push hl", immediately followed - possibly much later,
+ * with other, independently-balanced push/pop pairs in between - by the
+ * matching pop (net push/pop depth reaching zero), with NAME written
+ * nowhere in between: the whole point of the push/pop here is to carry
+ * NAME's value across some computation that needs HL/DE/BC for itself,
+ * then retrieve it back unchanged - which a fresh reload accomplishes for
+ * less. "ld hl,(nn)" is 16 T-states; push+pop is 11+10=21; loading NAME
+ * once up front and shuttling it through the stack this way costs 16+21=37
+ * T-states versus just reloading it fresh at the pop site (16 T-states) -
+ * a flat 21 T-state saving, independent of how long the value sits on the
+ * stack or what the matching pop's own target register is (the reload
+ * simply targets that same register instead).
+ *
+ * Confirmed as dcc's own default codegen shape for compound expressions
+ * like `mem[sym[si].scalar]` (tests/bint.c's OP_LDV/OP_STA and similar):
+ * dcc evaluates the outer index expression's own base pointer (mem) first
+ * and pushes it immediately, then descends into the inner index expression
+ * (sym[si].scalar, itself requiring sym's own base pushed the same way)
+ * before finally popping each base back only once the address arithmetic
+ * actually needs it - eagerly preserving a value across unrelated work
+ * instead of deferring its load to the point of use, the same waste this
+ * file's pass_cache_global_word_reload/pass_cache_ix_local_word_reload
+ * each address for a *repeated* reload; this is the matched-single-use-
+ * push/pop counterpart of that same general problem, so it runs right
+ * after them.
+ *
+ * Declines (leaves the push/pop alone) on:
+ *   - anything that writes NAME in between (symbol_written_in_range, the
+ *     same whole-word-store text match pass_cache_global_word_reload
+ *     already relies on for the identical reason: a write through an
+ *     aliased pointer, rather than literal "(NAME),hl" text, isn't visible
+ *     to a text-level scan - the same accepted-risk class as that pass,
+ *     not a new one here),
+ *   - any call (opaque - could write NAME, and this file has no way to
+ *     know what an arbitrary callee does),
+ *   - any label, jp/jr/djnz, ret, or "sp"/"(sp)" mention - reusing exactly
+ *     pass_inline_temp_spill_to_stack's own break conditions, for the
+ *     identical reasons: a label means this code might be reached from
+ *     elsewhere with a different (or no) value at this stack depth; an
+ *     explicit SP mention means push/pop-based depth tracking can no
+ *     longer be trusted; and a jump or return leaving this scan's own
+ *     straight-line assumption makes it impossible to be sure the matching
+ *     pop being searched for is even still reachable from here.
+ * Any OTHER balanced push/pop pair in between - including ones this same
+ * pass rewrites on a later iteration - is fine and does not end the scan;
+ * only the net depth reaching zero at some pop matters.
+ *
+ * Runs once after the main loop converges (see pass_cache_ix_local_word_
+ * reload's own call site comment for why: this pass's own precondition can
+ * become satisfiable on an earlier main-loop iteration than a more
+ * specific pass's own precondition does if that pass needs some other
+ * change first, and once this pass has rewritten the shape a more specific
+ * pass wanted to match, that match is gone for good). Since this pass
+ * shrinks code (never grows it) and never introduces a label, call, or new
+ * push/pop nesting of its own, a single pass here is expected to be enough
+ * - pass_labels tidies up.
+ */
+static int pass_defer_global_push_reload(void)
+{
+    int i, j;
+    int changed = 0;
+    char sym[128];
+    char reg[4];
+    int is_push;
+    int depth;
+    int pop_line;
+    char pop_reg[4];
+    char clean[MAX_LINE];
+
+    for (i = 0; i + 1 < nlines; i++) {
+        if (!peep_parse_ld_hl_paren_sym(lines[i], sym))
+            continue;
+        if (!eq(i + 1, "push hl"))
+            continue;
+
+        depth = 1;
+        pop_line = -1;
+        pop_reg[0] = 0;
+        for (j = i + 2; j < nlines; j++) {
+            if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+                break;
+            strip_peep_comment_lower_copy(clean, lines[j]);
+            if (strncmp(clean, "jp ", 3) == 0 || strncmp(clean, "jr ", 3) == 0 ||
+                strncmp(clean, "djnz", 4) == 0 || strcmp(clean, "ret") == 0 ||
+                strncmp(clean, "ret ", 4) == 0 || strstr(clean, "sp") != NULL)
+                break;
+            if (strncmp(clean, "call", 4) == 0 &&
+                (clean[4] == ' ' || clean[4] == '\t'))
+                break;
+            if (peep_parse_push_or_pop(lines[j], reg, &is_push)) {
+                if (is_push) {
+                    depth++;
+                } else {
+                    depth--;
+                    if (depth == 0) {
+                        strcpy(pop_reg, reg);
+                        pop_line = j;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (pop_line < 0 || decline_af_or_frame_reg(pop_reg))
+            continue;
+        if (symbol_written_in_range(sym, i + 2, pop_line))
+            continue;
+
+        {
+            char newline[MAX_LINE];
+            int target = pop_line - 2;
+
+            sprintf(newline, "ld %s,(%s)", pop_reg, sym);
+            delete_n(i, 2);
+            replace1_tagged(target, newline, "defer_global_push_reload");
+        }
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
 /* Parse the two-line "ld l,(ix-N)" / "ld h,(ix-(N-1))" shape dcc's own
  * codegen always emits, never split apart or reordered, for a 16-bit
  * ix-relative local's word reload - the ix-frame counterpart of
@@ -14091,6 +14274,24 @@ int main(int argc, char **argv)
     if (!opt_size && pass_signed_cmp_const_bias_fold())
         pass_labels();
     if (!opt_size && pass_signed_zero_branch())
+        pass_labels();
+
+    /* pass_defer_global_push_reload runs once here for the same reason as
+     * pass_cache_ix_local_word_reload just below (see that pass's own call
+     * site comment): both are structural rewrites whose own precondition
+     * can be satisfied on an earlier main-loop iteration than a more
+     * specific pass's precondition is, so both need to wait until every
+     * loop-recognizing pass in the main loop has already fully converged.
+     * Placed before pass_cache_ix_local_word_reload rather than after:
+     * removing a push/pop pair here can only ever shrink the text between
+     * two occurrences of a repeated ix-relative reload, never introduce a
+     * new hazard between them (push/pop are not hazards to
+     * pass_cache_ix_local_word_reload's own segmentation - see that pass's
+     * shared line_clobbers_bc comment), so running first here can only
+     * help that pass find a segment it would have found anyway, never hurt
+     * it. Purely local (no control flow change, and it only ever removes
+     * instructions), so a single pass suffices; pass_labels tidies up. */
+    if (pass_defer_global_push_reload())
         pass_labels();
 
     /* pass_cache_ix_local_word_reload runs once here, after the main loop
