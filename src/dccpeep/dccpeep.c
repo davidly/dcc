@@ -884,19 +884,35 @@ static int pass_base_index_addr(void)
  */
 static int input_is_dcc_generated;
 
-static int range_is_user_asm(int start, int end)
-{
-    int depth;
-    int i;
+/* Both range_is_user_asm callers below query it once per line position in
+ * an O(nlines) outer loop; range_is_user_asm itself used to rescan from
+ * line 0 every single call, making each caller O(nlines^2) - measured as
+ * dccpeep's single largest hotspot (>50% of self time on tests/bint.c
+ * under gprof). Precomputing the same depth-bracketing scan ONCE per pass
+ * invocation into a mask, then doing an O(1)-ish bounded lookup per query,
+ * preserves the exact semantics (both marker lines themselves count as
+ * "inside", matching the original's depth++/return/depth-- ordering) at
+ * O(nlines) total per pass instead of O(nlines^2). */
+static char user_asm_mask[MAX_LINES];
 
-    depth = 0;
-    for (i = 0; i <= end && i < nlines; ++i) {
+static void build_user_asm_mask(void)
+{
+    int depth = 0, i;
+    for (i = 0; i < nlines; ++i) {
         if (strcmp(lines[i], "; dcc user asm begin") == 0)
             depth++;
-        if (i >= start && depth > 0)
-            return 1;
+        user_asm_mask[i] = (char)(depth > 0);
         if (strcmp(lines[i], "; dcc user asm end") == 0 && depth > 0)
             depth--;
+    }
+}
+
+static int mask_range_is_user_asm(int start, int end)
+{
+    int i;
+    for (i = (start < 0 ? 0 : start); i <= end && i < nlines; ++i) {
+        if (user_asm_mask[i])
+            return 1;
     }
     return 0;
 }
@@ -911,8 +927,9 @@ static int pass_fold_hl_base_const_offset(void)
     char out[256];
 
     changed = 0;
+    build_user_asm_mask();
     for (i = 0; i + 2 < nlines; ++i) {
-        if (!input_is_dcc_generated || range_is_user_asm(i, i + 2))
+        if (!input_is_dcc_generated || mask_range_is_user_asm(i, i + 2))
             continue;
         if (!parse_ld_hl_imm(lines[i], base, sizeof(base)))
             continue;
@@ -928,6 +945,7 @@ static int pass_fold_hl_base_const_offset(void)
         sprintf(out, "ld hl,%s+%d", base, off);
         replace1_tagged(i, out, "fold_hl_base_const_offset");
         delete_n(i + 1, 2);
+        build_user_asm_mask(); /* lines shifted; mask indices after i are now stale */
         changed = 1;
         if (i > 0)
             --i;
@@ -979,8 +997,9 @@ static int pass_fold_hl_label_word_deref(void)
     char out[160];
 
     changed = 0;
+    build_user_asm_mask();
     for (i = 0; i + 4 < nlines; ++i) {
-        if (!input_is_dcc_generated || range_is_user_asm(i, i + 4))
+        if (!input_is_dcc_generated || mask_range_is_user_asm(i, i + 4))
             continue;
         if (!parse_ld_hl_imm(lines[i], label, sizeof(label)))
             continue;
@@ -998,6 +1017,7 @@ static int pass_fold_hl_label_word_deref(void)
         sprintf(out, "ld hl,(%s)", label);
         replace1_tagged(i, out, "fold_hl_label_word_deref");
         delete_n(i + 1, 4);
+        build_user_asm_mask(); /* lines shifted; mask indices after i are now stale */
         changed = 1;
         if (i > 0)
             --i;
