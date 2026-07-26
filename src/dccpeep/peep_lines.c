@@ -15,6 +15,72 @@ void peep_context_init(void)
     peep_context.line_count = &nlines;
 }
 
+static void peep_edit_discard_snapshot(PeepEditTransaction *transaction)
+{
+    int i;
+
+    for (i = 0; i < transaction->line_count; ++i) {
+        free(transaction->lines[i]);
+        free(transaction->user_asm_original[i]);
+    }
+    free(transaction->lines);
+    free(transaction->user_asm_original);
+    memset(transaction, 0, sizeof(*transaction));
+}
+
+void peep_edit_begin(PeepEditTransaction *transaction)
+{
+    int i;
+
+    memset(transaction, 0, sizeof(*transaction));
+    transaction->lines = (char **)calloc((size_t)nlines, sizeof(char *));
+    transaction->user_asm_original = (char **)calloc(
+        (size_t)nlines, sizeof(char *));
+    if (nlines && (!transaction->lines || !transaction->user_asm_original)) {
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
+    transaction->line_count = nlines;
+    transaction->version = peep_context.program_version;
+    transaction->stats = peep_context.stats;
+    transaction->active = 1;
+    for (i = 0; i < nlines; ++i) {
+        transaction->lines[i] = xstrdup2(lines[i]);
+        if (user_asm_original[i])
+            transaction->user_asm_original[i] = xstrdup2(user_asm_original[i]);
+    }
+}
+
+void peep_edit_commit(PeepEditTransaction *transaction)
+{
+    if (transaction->active)
+        peep_edit_discard_snapshot(transaction);
+}
+
+void peep_edit_rollback(PeepEditTransaction *transaction)
+{
+    int i;
+
+    if (!transaction->active)
+        return;
+    for (i = 0; i < nlines; ++i) {
+        free(lines[i]);
+        free(user_asm_original[i]);
+        lines[i] = NULL;
+        user_asm_original[i] = NULL;
+    }
+    nlines = transaction->line_count;
+    for (i = 0; i < nlines; ++i) {
+        lines[i] = transaction->lines[i];
+        user_asm_original[i] = transaction->user_asm_original[i];
+        transaction->lines[i] = NULL;
+        transaction->user_asm_original[i] = NULL;
+    }
+    peep_context.program_version = transaction->version + 1;
+    peep_context.stats = transaction->stats;
+    peep_edit_discard_snapshot(transaction);
+}
+
 char *xstrdup2(const char *s)
 {
     char *p;

@@ -734,7 +734,7 @@ int pass_minmax_pack_frame(void)
 {
     int start, end, i, changed = 0;
     char newline[MAX_LINE];
-    char **backup;
+    PeepEditTransaction transaction;
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
         return 0;
@@ -749,9 +749,7 @@ int pass_minmax_pack_frame(void)
         if (!has_ix10) return 0;
     }
 
-    backup = (char **)malloc((size_t)(end - start) * sizeof(char *));
-    for (i = start; i < end; i++)
-        backup[i - start] = xstrdup2(lines[i]);
+    peep_edit_begin(&transaction);
 
     /* Process in order: ix+6→ix+5 first (old beta), then ix+8→ix+6 (depth),
      * then ix+10→ix+7 (move).  Ordering prevents double-translation. */
@@ -772,14 +770,11 @@ int pass_minmax_pack_frame(void)
     }
 
     if (changed && !pass_minmax_pack_call()) {
-        for (i = start; i < end; i++)
-            replace1(i, backup[i - start]);
+        peep_edit_rollback(&transaction);
         changed = 0;
+    } else {
+        peep_edit_commit(&transaction);
     }
-
-    for (i = start; i < end; i++)
-        free(backup[i - start]);
-    free(backup);
 
     return changed;
 }

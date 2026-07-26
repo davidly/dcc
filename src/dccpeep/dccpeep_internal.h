@@ -54,8 +54,20 @@ typedef struct PeepContext {
     PeepIndexes indexes;
 } PeepContext;
 
+typedef struct PeepEditTransaction {
+    char **lines;
+    char **user_asm_original;
+    int line_count;
+    unsigned long version;
+    PeepRunStats stats;
+    int active;
+} PeepEditTransaction;
+
 extern PeepContext peep_context;
 void peep_context_init(void);
+void peep_edit_begin(PeepEditTransaction *transaction);
+void peep_edit_commit(PeepEditTransaction *transaction);
+void peep_edit_rollback(PeepEditTransaction *transaction);
 
 extern char *lines[MAX_LINES];
 extern char *user_asm_original[MAX_LINES];
