@@ -2010,8 +2010,9 @@ static int run_build(struct Config *cfg)
         long long total = now_ms() - t_start;
         long long other = total - (ms_dcc + ms_peep + ms_asm + ms_rtlstrip + ms_link);
         if (other < 0) other = 0;
-        printf("dccmake: timing dcc=%lldms peep=%lldms asm=%lldms rtlstrip=%lldms link=%lldms other=%lldms total=%lldms\n",
-               ms_dcc, ms_peep, ms_asm, ms_rtlstrip, ms_link, other, total);
+        printf("dccmake: timing dcc=%lldms peep=%lldms asm=%lldms(%s) rtlstrip=%lldms link=%lldms other=%lldms total=%lldms\n",
+               ms_dcc, ms_peep, ms_asm, cfg->use_emulated_m80 ? "emulated" : "native",
+               ms_rtlstrip, ms_link, other, total);
     }
     return 1;
 }

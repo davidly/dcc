@@ -634,15 +634,16 @@ function Invoke-DccMakeBuild {
     $exitCode = $LASTEXITCODE
     if ($TimingOut) {
         $timingLine = @($buildOut) | Where-Object { $_ -match '^dccmake: timing ' } | Select-Object -Last 1
-        if ($timingLine -match 'dcc=(\d+)ms peep=(\d+)ms asm=(\d+)ms rtlstrip=(\d+)ms link=(\d+)ms other=(\d+)ms total=(\d+)ms') {
+        if ($timingLine -match 'dcc=(\d+)ms peep=(\d+)ms asm=(\d+)ms\((\w+)\) rtlstrip=(\d+)ms link=(\d+)ms other=(\d+)ms total=(\d+)ms') {
             $TimingOut.Value = @{
                 dcc      = [int]$Matches[1]
                 peep     = [int]$Matches[2]
                 asm      = [int]$Matches[3]
-                rtlstrip = [int]$Matches[4]
-                link     = [int]$Matches[5]
-                other    = [int]$Matches[6]
-                total    = [int]$Matches[7]
+                asmMode  = $Matches[4]
+                rtlstrip = [int]$Matches[5]
+                link     = [int]$Matches[6]
+                other    = [int]$Matches[7]
+                total    = [int]$Matches[8]
             }
         }
     }
@@ -1872,6 +1873,7 @@ if ($TimingBreakdown) {
     # parallel execution makes wall time far smaller than that sum.
     $sumDcc = 0.0; $sumPeep = 0.0; $sumAsm = 0.0; $sumRtlstrip = 0.0; $sumLink = 0.0; $sumDccOther = 0.0
     $sumRunMs = 0.0; $sumAppElapsedMs = 0.0
+    $asmModes = @{}
     foreach ($r in $results) {
         $sumAppElapsedMs += $r.Elapsed.TotalMilliseconds
         foreach ($buildModeKey in @($r.Timing.Keys)) {
@@ -1879,6 +1881,7 @@ if ($TimingBreakdown) {
             if ($t) {
                 $sumDcc += $t.dcc; $sumPeep += $t.peep; $sumAsm += $t.asm
                 $sumRtlstrip += $t.rtlstrip; $sumLink += $t.link; $sumDccOther += $t.other
+                if ($t.asmMode) { $asmModes[$t.asmMode] = $true }
             }
         }
         foreach ($buildModeKey in @($r.Metrics.Keys)) {
@@ -1888,6 +1891,7 @@ if ($TimingBreakdown) {
     }
     $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink + $sumDccOther + $sumRunMs
     $scriptOverheadMs = [math]::Max($sumAppElapsedMs - $accountedMs, 0)
+    $asmModeLabel = if ($asmModes.Count -eq 0) { "unknown" } elseif ($asmModes.Count -gt 1) { "MIXED: $($asmModes.Keys -join ', ')" } else { [string]$asmModes.Keys }
 
     Write-Host ""
     Write-Host "  Main suite build pipeline (% of aggregate per-app work across both" -ForegroundColor DarkGray
@@ -1895,6 +1899,7 @@ if ($TimingBreakdown) {
     Write-TimingRow "dcc compile" $sumDcc $sumAppElapsedMs
     Write-TimingRow "dccpeep" $sumPeep $sumAppElapsedMs
     Write-TimingRow "m80 assemble" $sumAsm $sumAppElapsedMs
+    Write-Host ("    {0,-16} {1}" -f "  m80 mode:", $asmModeLabel) -ForegroundColor $(if ($asmModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
     Write-TimingRow "dccrtlstrip" $sumRtlstrip $sumAppElapsedMs
     Write-TimingRow "L80 link" $sumLink $sumAppElapsedMs
     Write-TimingRow "dccmake other" $sumDccOther $sumAppElapsedMs
