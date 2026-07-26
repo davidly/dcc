@@ -27,6 +27,23 @@ typedef struct PeepRunStats {
     int iterations;
 } PeepRunStats;
 
+typedef struct PeepLabelIndexEntry {
+    const char *name;
+    int line;
+} PeepLabelIndexEntry;
+
+typedef struct PeepIndexes {
+    PeepLabelIndexEntry *labels;
+    int label_count;
+    int label_capacity;
+    int *public_functions;
+    int public_function_count;
+    int *all_functions;
+    int all_function_count;
+    int function_capacity;
+    unsigned long version;
+} PeepIndexes;
+
 typedef struct PeepContext {
     char **lines;
     char **user_asm_original;
@@ -34,6 +51,7 @@ typedef struct PeepContext {
     unsigned long program_version;
     PeepOptions options;
     PeepRunStats stats;
+    PeepIndexes indexes;
 } PeepContext;
 
 extern PeepContext peep_context;
@@ -149,6 +167,8 @@ int jump_target_any(const char *s, char *out);
 int find_last_loop_back(int body_start, const char *label, int any);
 int loop_body_internal_labels_safe(int lo, int hi);
 int find_label_line_in_range(const char *name, int lo, int hi);
+void peep_indexed_function_bounds(int from, int include_static,
+                                  int *func_start, int *func_end);
 
 /* Application-specific board/game passes (peep_pass_minmax.c). */
 int peep_in_function_range(const char *func, int *startp, int *endp);

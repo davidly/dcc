@@ -134,6 +134,7 @@ void replace1(int i, const char *s)
     p = xstrdup2(s);
     free(lines[i]);
     lines[i] = p;
+    peep_context.program_version++;
 }
 
 static char *make_tagged_line(const char *s, const char *tag)

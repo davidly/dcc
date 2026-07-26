@@ -5,6 +5,52 @@
  */
 #include "dccpeep_internal.h"
 
+static void ensure_control_flow_indexes(void)
+{
+    PeepIndexes *indexes = &peep_context.indexes;
+    int i;
+
+    if (indexes->version == peep_context.program_version && indexes->labels)
+        return;
+
+    if (indexes->label_capacity < nlines) {
+        PeepLabelIndexEntry *labels = (PeepLabelIndexEntry *)realloc(
+            indexes->labels, (size_t)nlines * sizeof(*labels));
+        int *public_functions = (int *)realloc(
+            indexes->public_functions, (size_t)nlines * sizeof(*public_functions));
+        int *all_functions = (int *)realloc(
+            indexes->all_functions, (size_t)nlines * sizeof(*all_functions));
+        if ((nlines && !labels) || (nlines && !public_functions) ||
+            (nlines && !all_functions)) {
+            fprintf(stderr, "out of memory\n");
+            exit(1);
+        }
+        indexes->labels = labels;
+        indexes->public_functions = public_functions;
+        indexes->all_functions = all_functions;
+        indexes->label_capacity = nlines;
+        indexes->function_capacity = nlines;
+    }
+
+    indexes->label_count = 0;
+    indexes->public_function_count = 0;
+    indexes->all_function_count = 0;
+    for (i = 0; i < nlines; ++i) {
+        if (starts_label(lines[i])) {
+            indexes->labels[indexes->label_count].name = lines[i];
+            indexes->labels[indexes->label_count].line = i;
+            indexes->label_count++;
+        }
+        if (peep_is_public_line(lines[i])) {
+            indexes->public_functions[indexes->public_function_count++] = i;
+            indexes->all_functions[indexes->all_function_count++] = i;
+        } else if (strncmp(lines[i], "; static function ", 18) == 0) {
+            indexes->all_functions[indexes->all_function_count++] = i;
+        }
+    }
+    indexes->version = peep_context.program_version;
+}
+
 /* Strip a single trailing ':' from an assembly label, in place. The caller
  * has already copied a known label line (starts_label true) into `s`. */
 void strip_label_colon(char *s)
@@ -197,12 +243,45 @@ int loop_body_internal_labels_safe(int lo, int hi)
  * [lo, hi), or -1 if not found. */
 int find_label_line_in_range(const char *name, int lo, int hi)
 {
+    PeepIndexes *indexes = &peep_context.indexes;
+    size_t name_length = strlen(name);
     int k;
 
-    for (k = lo; k < hi; ++k)
-        if (line_is_label_name(k, name))
-            return k;
+    ensure_control_flow_indexes();
+    for (k = 0; k < indexes->label_count; ++k) {
+        const PeepLabelIndexEntry *entry = &indexes->labels[k];
+        if (entry->line < lo)
+            continue;
+        if (entry->line >= hi)
+            break;
+        if (strncmp(entry->name, name, name_length) == 0 &&
+            entry->name[name_length] == ':' && entry->name[name_length + 1] == 0)
+            return entry->line;
+    }
     return -1;
+}
+
+void peep_indexed_function_bounds(int from, int include_static,
+                                  int *func_start, int *func_end)
+{
+    PeepIndexes *indexes = &peep_context.indexes;
+    int *functions;
+    int count;
+    int i;
+
+    ensure_control_flow_indexes();
+    functions = include_static ? indexes->all_functions : indexes->public_functions;
+    count = include_static ? indexes->all_function_count : indexes->public_function_count;
+    *func_start = 0;
+    *func_end = nlines;
+    for (i = 0; i < count; ++i) {
+        if (functions[i] <= from)
+            *func_start = functions[i];
+        else {
+            *func_end = functions[i];
+            break;
+        }
+    }
 }
 
 /* Same target-label parse as jump_target above, but also accepts "jr "

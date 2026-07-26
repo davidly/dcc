@@ -60,38 +60,12 @@ int line_could_use_bc(const char *line)
 
 void find_function_bounds(int from, int *func_start, int *func_end)
 {
-    int k;
-
-    *func_start = 0;
-    for (k = from; k >= 0; --k) {
-        if (strncmp(lines[k], "public ", 7) == 0) { *func_start = k; break; }
-    }
-    *func_end = nlines;
-    for (k = from + 1; k < nlines; ++k) {
-        if (strncmp(lines[k], "public ", 7) == 0) { *func_end = k; break; }
-    }
+    peep_indexed_function_bounds(from, 0, func_start, func_end);
 }
 
 void find_function_bounds_any(int from, int *func_start, int *func_end)
 {
-    int k;
-
-    *func_start = 0;
-    for (k = from; k >= 0; --k) {
-        if (strncmp(lines[k], "public ", 7) == 0 ||
-            strncmp(lines[k], "; static function ", 18) == 0) {
-            *func_start = k;
-            break;
-        }
-    }
-    *func_end = nlines;
-    for (k = from + 1; k < nlines; ++k) {
-        if (strncmp(lines[k], "public ", 7) == 0 ||
-            strncmp(lines[k], "; static function ", 18) == 0) {
-            *func_end = k;
-            break;
-        }
-    }
+    peep_indexed_function_bounds(from, 1, func_start, func_end);
 }
 
 void scan_local_func_labels(void)
