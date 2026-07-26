@@ -28,6 +28,7 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
+#include <process.h>
 #define MKDIR(path) _mkdir(path)
 #define CHDIR(path) _chdir(path)
 #define GETCWD(buf, size) _getcwd(buf, (int)(size))
@@ -1299,53 +1300,112 @@ static int cmd_arg(char *cmd, size_t cmd_size, const char *arg)
 #endif
 }
 
+#ifdef _WIN32
+#define RUN_CMD_MAX_ARGV 4096
+
+/* Parses a command string built entirely out of cmd_arg's Windows
+ * convention above - every argument wrapped in "..." with any literal "
+ * escaped as \" - back into an argv array, dequoting in place inside buf
+ * (which the caller owns and must keep alive as long as argv is used).
+ * Returns the argument count, or -1 if buf isn't in that exact shape
+ * (defensive only: every caller in this file builds `cmd` via cmd_arg, so
+ * that should never happen).
+ *
+ * Known limitation, inherited from cmd_arg's own quoting convention rather
+ * than introduced here: an argument ending in a literal trailing backslash
+ * (e.g. "path\") is ambiguous - cmd_arg only escapes ", never \, so the
+ * built text ends in \" indistinguishable from an escaped quote. No caller
+ * in this file can produce that (every path comes from path_join, which
+ * always ends in a filename, never a bare separator), so this is untested
+ * and unfixed rather than silently mishandling a case that can't occur. */
+static int parse_quoted_argv(char *buf, char **argv, int max_argv)
+{
+    char *p = buf;
+    char *w;
+    int argc = 0;
+
+    for (;;) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (*p != '"' || argc >= max_argv - 1)
+            return -1;
+        p++;
+        argv[argc++] = p;
+        w = p;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1] == '"') {
+                *w++ = '"';
+                p += 2;
+            } else {
+                *w++ = *p++;
+            }
+        }
+        if (*p != '"')
+            return -1; /* unterminated quote */
+        p++;
+        *w = 0;
+    }
+    argv[argc] = NULL;
+    return argc;
+}
+
+/* Bypasses cmd.exe entirely via _spawnvp (-> CreateProcess directly), the
+ * one difference between this and the system()-based POSIX path below.
+ * system() on Windows always shells out through "cmd.exe /c <cmd>", which
+ * scripts/bench-pwsh-overhead.ps1 measured at ~7ms of pure shell-launch
+ * overhead per call on native Windows (vs sub-1ms for an equivalent spawn
+ * on Linux/macOS) - multiplied by the 6 run_cmd/run_cmd_in_dir calls in a
+ * single app build, across a few hundred apps in the full suite, that's
+ * tens of seconds of overhead with no relation to the actual work being
+ * done. _spawnvp needs a plain argv array rather than a shell command
+ * line, so parse_quoted_argv above recovers one from the exact quoting
+ * convention cmd_arg always uses - every caller of run_cmd in this file
+ * builds `cmd` that way, so this never needs to handle arbitrary shell
+ * syntax (no `&&`, pipes, or redirection - run_cmd_in_dir above already
+ * sidesteps needing any of that for the one caller that used to want it). */
+static int run_cmd(const char *cmd)
+{
+    char *buf;
+    char *argv[RUN_CMD_MAX_ARGV];
+    int argc;
+    intptr_t rc;
+
+    printf("+ %s\n", cmd);
+    buf = _strdup(cmd);
+    if (!buf) {
+        fprintf(stderr, "out of memory building command line\n");
+        return 0;
+    }
+    argc = parse_quoted_argv(buf, argv, RUN_CMD_MAX_ARGV);
+    if (argc <= 0) {
+        fprintf(stderr, "command failed: %s\n", cmd);
+        free(buf);
+        return 0;
+    }
+    rc = _spawnvp(_P_WAIT, argv[0], (const char * const *)argv);
+    free(buf);
+    if (rc != 0) {
+        if (rc < 0)
+            fprintf(stderr, "command failed: %s: %s\n", cmd, strerror(errno));
+        else
+            fprintf(stderr, "command failed: %s\n", cmd);
+        return 0;
+    }
+    return 1;
+}
+#else
 static int run_cmd(const char *cmd)
 {
     int rc;
     printf("+ %s\n", cmd);
-#ifdef _WIN32
-    /* system() on Windows runs the command via "cmd.exe /c <cmd>". cmd.exe's
-     * own command-line parsing strips a leading and trailing quote character
-     * from what follows /c only when the whole remainder is exactly one
-     * quoted executable name with nothing else quoted inside it; any other
-     * shape (like our `"exe" "arg1" "arg2" ...` - one quoted token per
-     * argument, built by cmd_arg above) instead falls back to cmd.exe's
-     * older behaviour of unconditionally stripping the very first and very
-     * last quote character of the whole line. That mangles a multi-argument
-     * quoted command: the first argument's closing quote and the last
-     * argument's opening quote both survive in the wrong places, so e.g.
-     * `".\dcc.exe" "-o" "x"` is executed as if the program name were
-     * `.\dcc.exe" "-o" "x` - a path that can never exist, failing with "The
-     * system cannot find the path specified." The standard workaround is to
-     * wrap the entire command in one more pair of quotes: cmd.exe's stripping
-     * then consumes that outer pair intact, leaving every individually-
-     * quoted argument exactly as built. */
-    {
-        char *wrapped;
-        size_t len;
-
-        len = strlen(cmd);
-        wrapped = (char *)malloc(len + 3);
-        if (!wrapped) {
-            fprintf(stderr, "out of memory building command line\n");
-            return 0;
-        }
-        wrapped[0] = '"';
-        memcpy(wrapped + 1, cmd, len);
-        wrapped[len + 1] = '"';
-        wrapped[len + 2] = 0;
-        rc = system(wrapped);
-        free(wrapped);
-    }
-#else
     rc = system(cmd);
-#endif
     if (rc != 0) {
         fprintf(stderr, "command failed: %s\n", cmd);
         return 0;
     }
     return 1;
 }
+#endif
 
 /* Run `inner_cmd` with the process's working directory temporarily switched
  * to `dir`, restoring the original directory afterward regardless of the
