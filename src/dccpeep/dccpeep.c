@@ -2164,6 +2164,28 @@ static int pass_byte_loop_counter_to_reg_c(void)
 
 static int jump_target_any(const char *s, char *out);
 
+/* Find a loop's own closing back-branch: the LAST jump anywhere in
+ * [body_start, next "public NAME") that targets `label`. `any` selects
+ * jump_target_any (jp+jr) over jump_target (jp only). Returns the matching
+ * line index, or -1 if none. Callers still apply their own minimum-body
+ * threshold and loop_body_internal_labels_safe proof. */
+static int find_last_loop_back(int body_start, const char *label, int any)
+{
+    int k;
+    int loop_end = -1;
+    char tgt[128];
+
+    for (k = body_start; k < nlines; ++k) {
+        if (strncmp(lines[k], "public ", 7) == 0)
+            break;
+        if ((any ? jump_target_any(lines[k], tgt)
+                 : jump_target(lines[k], tgt)) &&
+            strcmp(tgt, label) == 0)
+            loop_end = k;
+    }
+    return loop_end;
+}
+
 /*
  * pass_word_loop_var_to_reg_bc:
  *
@@ -2931,7 +2953,6 @@ static int pass_byte_for_counter_to_reg_e(void)
     int low_val;
     int high_val;
     char label[128];
-    char tgt[128];
     int loop_end;
     int k;
     int ok;
@@ -2990,13 +3011,7 @@ static int pass_byte_for_counter_to_reg_e(void)
          * all, so any read of it anywhere is always correct), this pass's
          * write-back only runs once, at the loop's own NORMAL exit, never
          * on an early-exit path. */
-        loop_end = -1;
-        for (k = i + 1; k < nlines; ++k) {
-            if (strncmp(lines[k], "public ", 7) == 0)
-                break;
-            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
-                loop_end = k;
-        }
+        loop_end = find_last_loop_back(i + 1, label, 0);
         if (loop_end < i + 4)
             continue;
         if (!loop_body_internal_labels_safe(i + 1, loop_end))
@@ -10117,13 +10132,7 @@ static int pass_hoist_index_ptr_to_bc(void)
          * makes the relaxed scan safe. Bounded by the next function's own
          * "public NAME" so a candidate that never loops back can't run
          * past this function's own code. */
-        loop_end = -1;
-        for (k = i + 1; k < nlines; ++k) {
-            if (strncmp(lines[k], "public ", 7) == 0)
-                break;
-            if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
-                loop_end = k;
-        }
+        loop_end = find_last_loop_back(i + 1, label, 0);
         if (loop_end < 0)
             continue;
         if (!loop_body_internal_labels_safe(i + 1, loop_end))
@@ -10425,7 +10434,6 @@ static int pass_walk_hoisted_index_ptr(void)
     int i, k;
     int changed;
     char label[128];
-    char tgt[128];
     int loop_end;
     int match_k;
     int access_k;
@@ -10447,13 +10455,7 @@ static int pass_walk_hoisted_index_ptr(void)
         if (k > 0 && label[k - 1] == ':')
             label[k - 1] = 0;
 
-        loop_end = -1;
-        for (k = i + 1; k < nlines; ++k) {
-            if (strncmp(lines[k], "public ", 7) == 0)
-                break;
-            if (jump_target_any(lines[k], tgt) && strcmp(tgt, label) == 0)
-                loop_end = k;
-        }
+        loop_end = find_last_loop_back(i + 1, label, 1);
         if (loop_end < i + 5)
             continue;
         if (!loop_body_internal_labels_safe(i + 1, loop_end))
@@ -10703,7 +10705,6 @@ static int pass_walk_row_cached_float_index(void)
     int i, k;
     int changed;
     char label[128];
-    char tgt[128];
     int loop_end;
     int match_k;
     int row_off;
@@ -10727,13 +10728,7 @@ static int pass_walk_row_cached_float_index(void)
         if (k > 0 && label[k - 1] == ':')
             label[k - 1] = 0;
 
-        loop_end = -1;
-        for (k = i + 1; k < nlines; ++k) {
-            if (strncmp(lines[k], "public ", 7) == 0)
-                break;
-            if (jump_target_any(lines[k], tgt) && strcmp(tgt, label) == 0)
-                loop_end = k;
-        }
+        loop_end = find_last_loop_back(i + 1, label, 1);
         if (loop_end < i + 22)
             continue;
         if (!loop_body_internal_labels_safe(i + 1, loop_end))
