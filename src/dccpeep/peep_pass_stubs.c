@@ -5,6 +5,22 @@
  */
 #include "dccpeep_internal.h"
 
+static int count_exact_sequence(const char *const *pattern, int count)
+{
+    int i;
+    int j;
+    int matches = 0;
+
+    for (i = 0; i + count <= nlines; ++i) {
+        for (j = 0; j < count; ++j)
+            if (!eq(i + j, pattern[j]))
+                break;
+        if (j == count)
+            ++matches;
+    }
+    return matches;
+}
+
 int pass_shared_frame_stubs(void)
 {
     int i, j;
@@ -120,6 +136,7 @@ int pass_lvar_stubs(void)
     static char low[8][20], high[8][20];
     static int inited = 0;
     int i, k, changed;
+    int matches[8];
     int used[8];
 
     if (!inited) {
@@ -130,12 +147,16 @@ int pass_lvar_stubs(void)
         inited = 1;
     }
 
-    for (k = 0; k < 8; k++) used[k] = 0;
+    for (k = 0; k < 8; k++) {
+        const char *pattern[] = { low[k], high[k] };
+        matches[k] = count_exact_sequence(pattern, 2);
+        used[k] = 0;
+    }
     changed = 0;
 
     for (i = 0; i + 1 < nlines; i++) {
         for (k = 0; k < 8; k++) {
-            if (eq(i, low[k]) && eq(i+1, high[k])) {
+            if (matches[k] >= 3 && eq(i, low[k]) && eq(i+1, high[k])) {
                 char stub[24];
                 sprintf(stub, "call %s", names[k]);
                 replace1_tagged(i, stub, "lvar");
@@ -166,6 +187,7 @@ int pass_svar_stubs(void)
     static char low[6][24], high[6][24];
     static int inited = 0;
     int i, k, changed;
+    int matches[6];
     int used[6];
 
     if (!inited) {
@@ -176,12 +198,16 @@ int pass_svar_stubs(void)
         inited = 1;
     }
 
-    for (k = 0; k < 6; k++) used[k] = 0;
+    for (k = 0; k < 6; k++) {
+        const char *pattern[] = { low[k], high[k] };
+        matches[k] = count_exact_sequence(pattern, 2);
+        used[k] = 0;
+    }
     changed = 0;
 
     for (i = 0; i + 1 < nlines; i++) {
         for (k = 0; k < 6; k++) {
-            if (eq(i, low[k]) && eq(i+1, high[k])) {
+            if (matches[k] >= 3 && eq(i, low[k]) && eq(i+1, high[k])) {
                 char stub[24];
                 sprintf(stub, "call %s", names[k]);
                 replace1_tagged(i, stub, "svar");
@@ -207,20 +233,27 @@ int pass_svar_stubs(void)
 int pass_larg_stubs(void)
 {
     int i, changed;
+    int count_la1 = 0, count_la2 = 0, count_la3 = 0;
     int used_la1 = 0, used_la2 = 0, used_la3 = 0;
 
     changed = 0;
 
+    for (i = 0; i + 1 < nlines; ++i) {
+        if (eq(i, "ld l,(ix+4)") && eq(i+1, "ld h,(ix+5)")) ++count_la1;
+        if (eq(i, "ld l,(ix+6)") && eq(i+1, "ld h,(ix+7)")) ++count_la2;
+        if (eq(i, "ld l,(ix+8)") && eq(i+1, "ld h,(ix+9)")) ++count_la3;
+    }
+
     for (i = 0; i + 1 < nlines; i++) {
-        if (eq(i, "ld l,(ix+4)") && eq(i+1, "ld h,(ix+5)")) {
+        if (count_la1 >= 3 && eq(i, "ld l,(ix+4)") && eq(i+1, "ld h,(ix+5)")) {
             replace1_tagged(i, "call __la1", "larg");
             delete_n(i+1, 1);
             used_la1 = 1; changed = 1;
-        } else if (eq(i, "ld l,(ix+6)") && eq(i+1, "ld h,(ix+7)")) {
+        } else if (count_la2 >= 3 && eq(i, "ld l,(ix+6)") && eq(i+1, "ld h,(ix+7)")) {
             replace1_tagged(i, "call __la2", "larg");
             delete_n(i+1, 1);
             used_la2 = 1; changed = 1;
-        } else if (eq(i, "ld l,(ix+8)") && eq(i+1, "ld h,(ix+9)")) {
+        } else if (count_la3 >= 3 && eq(i, "ld l,(ix+8)") && eq(i+1, "ld h,(ix+9)")) {
             replace1_tagged(i, "call __la3", "larg");
             delete_n(i+1, 1);
             used_la3 = 1; changed = 1;
@@ -241,8 +274,12 @@ int pass_phix_stub(void)
 {
     int i, changed;
     int used = 0;
+    const char *pattern[] = { "push hl", "push ix", "pop hl" };
 
     changed = 0;
+
+    if (count_exact_sequence(pattern, 3) < 7)
+        return 0;
 
     for (i = 0; i + 2 < nlines; i++) {
         if (eq(i, "push hl") && eq(i+1, "push ix") && eq(i+2, "pop hl")) {
@@ -303,6 +340,10 @@ int pass_larg_direct_store(void)
 int pass_ldwl_stub(void)
 {
     int i, changed = 0, used = 0;
+    const char *pattern[] = { "ld e,(hl)", "inc hl", "ld d,(hl)", "ex de,hl" };
+
+    if (count_exact_sequence(pattern, 4) < 5)
+        return 0;
 
     for (i = 0; i + 3 < nlines; i++) {
         if (eq(i,   "ld e,(hl)") &&
@@ -324,6 +365,12 @@ int pass_ldwl_stub(void)
 int pass_wand_stub(void)
 {
     int i, changed = 0, used = 0;
+    const char *pattern[] = {
+        "ld a,h", "and d", "ld h,a", "ld a,l", "and e", "ld l,a"
+    };
+
+    if (count_exact_sequence(pattern, 6) < 3)
+        return 0;
 
     for (i = 0; i + 5 < nlines; i++) {
         if (eq(i,   "ld a,h") &&
@@ -347,6 +394,13 @@ int pass_wand_stub(void)
 int pass_icmp_stub(void)
 {
     int i, changed = 0, used = 0;
+    const char *pattern[] = {
+        "ld a,h", "xor 80h", "ld h,a", "ld a,d", "xor 80h", "ld d,a",
+        "or a", "sbc hl,de"
+    };
+
+    if (count_exact_sequence(pattern, 8) < 2)
+        return 0;
 
     for (i = 0; i + 7 < nlines; i++) {
         if (eq(i,   "ld a,h") &&
@@ -372,6 +426,10 @@ int pass_icmp_stub(void)
 int pass_sxde_stub(void)
 {
     int i, changed = 0, used = 0;
+    const char *pattern[] = { "ld a,h", "rlca", "sbc a,a", "ld d,a", "ld e,a" };
+
+    if (count_exact_sequence(pattern, 5) < 3)
+        return 0;
 
     for (i = 0; i + 4 < nlines; i++) {
         if (eq(i,   "ld a,h") &&
@@ -394,6 +452,10 @@ int pass_sxde_stub(void)
 int pass_sxhl_stub(void)
 {
     int i, changed = 0, used = 0;
+    const char *pattern[] = { "ld a,l", "rlca", "sbc a,a", "ld h,a" };
+
+    if (count_exact_sequence(pattern, 4) < 5)
+        return 0;
 
     for (i = 0; i + 3 < nlines; i++) {
         if (eq(i,   "ld a,l") &&

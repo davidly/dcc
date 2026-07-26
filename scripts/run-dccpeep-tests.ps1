@@ -24,8 +24,10 @@ try {
         $expected = Join-Path $FixtureDir "$stem.expected.mac"
         $actual = Join-Path $tempRoot "$stem.actual.mac"
         $again = Join-Path $tempRoot "$stem.again.mac"
+        $options = @()
+        if ($stem.EndsWith(".os")) { $options += "-Os" }
 
-        & $DccPeep $input.FullName $actual
+        & $DccPeep @options $input.FullName $actual
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $actual)) {
             Write-Host "FAIL $stem (optimizer exit)" -ForegroundColor Red
             $failed++
@@ -37,7 +39,7 @@ try {
             continue
         }
 
-        & $DccPeep $actual $again
+        & $DccPeep @options $actual $again
         if ($LASTEXITCODE -ne 0 -or
             (Get-NormalizedText $again) -ne (Get-NormalizedText $actual)) {
             Write-Host "FAIL $stem (not idempotent)" -ForegroundColor Red

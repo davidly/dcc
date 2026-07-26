@@ -1,0 +1,33 @@
+; two __sxde candidates stay inline: break-even is three
+ld a,h
+rlca
+sbc a,a
+ld d,a
+ld e,a
+ld a,h
+rlca
+sbc a,a
+ld d,a
+ld e,a
+; five __sxhl candidates reach break-even
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,l
+rlca
+sbc a,a
+ld h,a
+end
