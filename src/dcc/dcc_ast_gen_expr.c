@@ -1235,11 +1235,8 @@ void gen_binop32_promote_16lhs_ast(int op, int lhs_type, int common_type)
  * lhs into HL, promote, capture the common type from the rhs's stored peek,
  * then push / eval rhs / ex de,hl / pop hl / dispatch. Result type is int for
  * comparisons, common type otherwise. */
-void gen_binary_ast(const struct AstNode *n)
+static int gen_binary_try_fast_preeval(const struct AstNode *n)
 {
-    int lhs_type;
-    int common_type;
-    const char *float_helper;
     long const_val;
 
     /* Whole-expression constant fold. The AST builder never folds, so without
@@ -1261,7 +1258,7 @@ void gen_binary_ast(const struct AstNode *n)
         fprintf(g_emit_sink.stream, "\tld hl,%ld\n", const_val & 0xffffL);
         g_expr.type = fold_type;
         g_expr.long_from16 = 0;
-        return;
+        return 1;
     }
 
     /* `CONST * expr` mirror of the `expr * CONST` fast path further below:
@@ -1282,7 +1279,7 @@ void gen_binary_ast(const struct AstNode *n)
         emit_mul_hl_const(n->a->ival & 0xffffL);
         g_expr.type = common_arith_type(rhs_type, n->a->type);
         g_expr.long_from16 = 0;
-        return;
+        return 1;
     }
 
     if (n->op == '+' || n->op == '-') {
@@ -1290,28 +1287,28 @@ void gen_binary_ast(const struct AstNode *n)
         int no_deref;
         if (ast_pointer_expr_type(n, &ptr_type, &no_deref)) {
             gen_pointer_expr_ast(n, &ptr_type, &no_deref);
-            return;
+            return 1;
         }
     }
 
     if (ast_pointer_cmp_supported(n)) {
         gen_pointer_cmp_ast(n);
-        return;
+        return 1;
     }
 
     if (ast_pointer_diff_supported(n)) {
         gen_pointer_diff_ast(n);
-        return;
+        return 1;
     }
 
     if (ast_long_cmp_supported(n)) {
         gen_long_cmp_ast(n);
-        return;
+        return 1;
     }
 
     if (ast_long_arith_supported(n)) {
         gen_long_arith_ast(n);
-        return;
+        return 1;
     }
 
     /* `ident & <const < 256>` (e.g. tchess.c's `return sq & 7;`): such a
@@ -1345,7 +1342,7 @@ void gen_binary_ast(const struct AstNode *n)
             emit_load_sym_low_byte_and_const(land_sym, (unsigned int)const_val);
             g_expr.type = TYPE_INT;
             g_expr.long_from16 = 0;
-            return;
+            return 1;
         }
     }
 
@@ -1367,7 +1364,7 @@ void gen_binary_ast(const struct AstNode *n)
         emit_label(le);
         g_expr.type = TYPE_INT;
         g_expr.long_from16 = 0;
-        return;
+        return 1;
     }
 
     /* `global_char_arr[idx] == const` used as a plain value - same
@@ -1386,8 +1383,21 @@ void gen_binary_ast(const struct AstNode *n)
         emit_label(le);
         g_expr.type = TYPE_INT;
         g_expr.long_from16 = 0;
-        return;
+        return 1;
     }
+
+    return 0;
+}
+
+void gen_binary_ast(const struct AstNode *n)
+{
+    int lhs_type;
+    int common_type;
+    const char *float_helper;
+    long const_val;
+
+    if (gen_binary_try_fast_preeval(n))
+        return;
 
     ast_gen_expr(n->a);
     lhs_type = promote_int_type(g_expr.type);
