@@ -1991,6 +1991,25 @@ static int line_clobbers_bc(const char *line)
         strcmp(clean, "call __stchk") != 0)
         return 1;
 
+    /* "jp c,LABEL" / "jr c,LABEL" / "ret c" test the carry FLAG, not
+     * register C - a lone "c" token to the per-token scan below, which
+     * can't otherwise tell the two apart, so without this they were
+     * treated as a hazard exactly like a real reference to register C.
+     * All three are plain conditional control flow with no register
+     * effect of their own: a jump doesn't touch any register, and a
+     * conditional return, when taken, only exits the function (nothing
+     * later in the same segment runs on that path for BC's cached value
+     * to need protecting from). "nc" is unaffected either way - its own
+     * two-character token never matches the "bc" check below, so it was
+     * never a hazard to begin with. This does NOT extend to "call c," /
+     * "call nc,": a conditional CALL, when taken, is a real function call
+     * like any other, clobbering every register per this ABI - the exact
+     * same hazard the unconditional "call" prefix check above exists for
+     * - so it must keep matching that check, not be excluded here. */
+    if (!strncmp(clean, "jp c,", 5) || !strncmp(clean, "jr c,", 5) ||
+        !strcmp(clean, "ret c"))
+        return 0;
+
     p = clean;
     while (*p) {
         if (isalnum((unsigned char)*p) || *p == '_') {
@@ -10493,27 +10512,16 @@ static int ix_offset_written_in_range(int off, int start, int end)
  * alias" assumption already accepted for the global case, validated the
  * same way: full regression plus the extended corpus, not a formal proof.
  *
- * Uses ix_cache_line_clobbers_bc (below), not line_clobbers_bc directly,
- * for its own segment boundaries: line_clobbers_bc's per-token scan can't
- * tell the bare "C" condition code ("jp c,LABEL"/"jr c,LABEL"/"call
- * c,LABEL"/"ret c" - the carry flag) from a reference to register C, both
- * being a lone "c" token to that scan. Left unfixed there - it's shared by
- * several already-verified passes, so changing what it returns for them is
- * a bigger, separate decision - but this pass's own target shape (a value
- * materialized once, then reloaded across a run of comparisons) hits this
- * false positive constantly enough, on exactly the bounds-check bodies that
- * motivated this pass, that it is worth a narrow, local exclusion instead
- * of just accepting the lost opportunity. */
-static int ix_cache_line_clobbers_bc(const char *line)
-{
-    char clean[MAX_LINE];
-
-    strip_peep_comment_lower_copy(clean, line);
-    if (!strncmp(clean, "jp c,", 5) || !strncmp(clean, "jr c,", 5) ||
-        !strncmp(clean, "call c,", 7) || !strcmp(clean, "ret c"))
-        return 0;
-    return line_clobbers_bc(line);
-}
+ * Uses line_clobbers_bc directly for its own segment boundaries - this
+ * pass's own target shape (a value materialized once, then reloaded across
+ * a run of comparisons) originally hit line_clobbers_bc's "jp c,LABEL"/
+ * "jr c,LABEL"/"ret c" false positive (the bare "C" condition code read as
+ * a reference to register C) constantly enough, on exactly the
+ * bounds-check bodies that motivated this pass, that a local exclusion
+ * lived here first - see line_clobbers_bc's own comment for why that fix
+ * was moved there instead once it became clear other passes sharing that
+ * function (pass_word_loop_var_to_reg_bc, pass_byte_loop_var_to_reg_c, ...)
+ * could benefit from it too, not just this one. */
 
 /* Is BC used ANYWHERE in the function containing `at` - not just
  * backward from `at` (bc_regalloc_claimed_before's own scope), and not
@@ -10536,14 +10544,13 @@ static int ix_cache_line_clobbers_bc(const char *line)
  * might reserve BC/C this same way (fragile against any future one this
  * file doesn't know about yet), this declines to cache anything in BC
  * anywhere in a function where BC or C is mentioned at all, by
- * ix_cache_line_clobbers_bc's own definition - the same per-token test
- * already used for this pass's own segment boundaries, just applied to
- * the whole function instead of one segment. Strictly more conservative
- * than necessary (a function that uses C only in a part that provably
- * can't overlap this pass's own candidate span still declines), but
- * simple, and matches this codebase's own established default of
- * forgoing a smaller optimization rather than risking a data-corrupting
- * one. */
+ * line_clobbers_bc's own definition - the same per-token test already used
+ * for this pass's own segment boundaries, just applied to the whole
+ * function instead of one segment. Strictly more conservative than
+ * necessary (a function that uses C only in a part that provably can't
+ * overlap this pass's own candidate span still declines), but simple, and
+ * matches this codebase's own established default of forgoing a smaller
+ * optimization rather than risking a data-corrupting one. */
 static int ix_cache_bc_used_in_function(int at)
 {
     int func_start, func_end;
@@ -10552,14 +10559,14 @@ static int ix_cache_bc_used_in_function(int at)
     /* Lines this pass itself already tagged, from an earlier (necessarily
      * lower-indexed - segments are processed in file order) segment in
      * this same function, are excluded: those caches are segment-scoped
-     * (bounded by ix_cache_line_clobbers_bc the same way any other
-     * candidate segment is), not whole-function reservations, so an
-     * already-closed one from earlier in this function must not prevent a
-     * later, unrelated segment from caching something of its own -
-     * without this exclusion, only the very first segment in any given
-     * function could ever benefit, which measured as most of this pass's
-     * value on tests/bint.c alone. Everything else that mentions B or C -
-     * dcc's own compiler priming, pass_word_loop_var_to_reg_bc,
+     * (bounded by line_clobbers_bc the same way any other candidate
+     * segment is), not whole-function reservations, so an already-closed
+     * one from earlier in this function must not prevent a later,
+     * unrelated segment from caching something of its own - without this
+     * exclusion, only the very first segment in any given function could
+     * ever benefit, which measured as most of this pass's value on
+     * tests/bint.c alone. Everything else that mentions B or C - dcc's own
+     * compiler priming, pass_word_loop_var_to_reg_bc,
      * pass_byte_loop_var_to_reg_c, or anything this file doesn't have a
      * name for yet - still counts, by design (see this function's own
      * comment above). */
@@ -10567,7 +10574,7 @@ static int ix_cache_bc_used_in_function(int at)
     for (k = func_start; k < func_end; ++k) {
         if (strstr(lines[k], "ix_local_word_cache"))
             continue;
-        if (ix_cache_line_clobbers_bc(lines[k]))
+        if (line_clobbers_bc(lines[k]))
             return 1;
     }
     return 0;
@@ -10589,7 +10596,7 @@ static int pass_cache_ix_local_word_reload(void)
         int noc;
         int delta;
 
-        if (i < nlines && !ix_cache_line_clobbers_bc(lines[i]) &&
+        if (i < nlines && !line_clobbers_bc(lines[i]) &&
             !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
             continue;
 
