@@ -30,4 +30,45 @@ void insert_line_tagged(int i, const char *s, const char *tag);
 void read_file(const char *name);
 void write_file(const char *name);
 
+/* Stateless instruction/operand parsing. */
+int parse_ld_hl_imm(const char *s, char *val, size_t val_size);
+int parse_ld_de_imm(const char *s, char *val, size_t val_size);
+int parse_nonneg_int(const char *s, int *out);
+int parse_jp_cond_label(const char *s, const char *cond, char *label);
+int parse_jp_z_label(const char *s, char *label);
+int parse_jp_nz_label(const char *s, char *label);
+int parse_jp_c_label(const char *s, char *label);
+int parse_jp_nc_label(const char *s, char *label);
+int parse_ld_de_positive_imm(const char *s, long *out);
+int peep_parse_jp_cond_label(const char *s, const char *cond, char *lab);
+int peep_parse_jp_uncond_label(const char *s, char *lab);
+void peep_make_cond_jump(char *out, size_t size, const char *cond, const char *lab);
+int peep_parse_any_cond_jump(const char *s, char *cond, char *lab);
+const char *peep_inverse_cond(const char *cond);
+int peep_parse_ld_l_ix(const char *s, char *off);
+int peep_is_jp_z_or_nz(const char *s);
+void peep_make_ld_a_ix(char *out, const char *off);
+int peep_parse_ld_ix_a(const char *s, char *off);
+int peep_parse_ld_a_ix(const char *s, char *off);
+int peep_parse_ld_de_0_to_255(const char *s, int *out);
+int peep_parse_ld_de_signed(const char *s, int *out);
+void peep_format_ix_off(char *buf, int off);
+int peep_parse_ld_e_imm8(const char *s, int *out);
+int peep_parse_ld_hl_0_to_255(const char *s, int *out);
+int peep_parse_ld_h_ix(const char *s, char *off);
+int peep_parse_ld_e_ix(const char *s, char *off);
+int peep_parse_ld_d_ix(const char *s, char *off);
+int peep_parse_ld_ix_pair(const char *s1, const char *s2, int *off);
+int peep_parse_st_ix_pair(const char *s1, const char *s2, int *off);
+int peep_parse_jp_same_z_c(int iz, int ic, char *lab);
+int peep_parse_dec_ix_byte(const char *s, int *off);
+int peep_parse_ld_ix_byte_imm(const char *s, int *off, int *val);
+int peep_parse_inc_ix_byte(const char *s, int *off);
+int peep_parse_cp_const(const char *s, int *val);
+int peep_parse_st_ix_de_pair(const char *s1, const char *s2, int *off);
+int peep_parse_ld_hl_paren_sym(const char *s, char *sym);
+int peep_parse_ld_paren_sym_hl(const char *s, char *sym);
+int parse_ix_off_numeric(const char *off, int *val);
+int parse_ld_reg16_dest(const char *s, char *out);
+
 #endif
