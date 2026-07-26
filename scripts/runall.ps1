@@ -157,15 +157,20 @@ speed:
         main suite: dcc / dccpeep / m80 assembly / dccrtlstrip / L80 link
         (each summed from a per-phase wall-clock timing line dccmake itself
         now prints - see src/dccmake/dccmake.c's now_ms()/run_build), plus
-        the ntvcm execution time already captured for the cycle-count check,
-        plus a residual "script/process overhead" bucket (per-app Elapsed
-        minus the above) covering PowerShell-side work: process spawn cost
-        for dccmake and the emulator, fixture staging, baseline comparison,
-        and parallel dispatch/collection overhead. This second section is
-        normalized to the sum of all apps' work, NOT wall-clock time
-        (parallel execution makes wall-clock time much smaller than that
-        sum) - it answers "of all the work the suite did, what fraction was
-        which pipeline stage", not "what fraction of the run's wall time".
+        the ntvcm execution time already captured for the cycle-count check.
+        Both dccmake's own reported total and ntvcm's own reported elapsed
+        milliseconds are measured from INSIDE those processes, so they
+        exclude the actual OS process-create/exec cost and PowerShell's own
+        overhead capturing/merging their output via 2>&1 - comparing each
+        against a PowerShell-side Stopwatch wrapping the same call splits
+        that out into its own "dccmake spawn" / "ntvcm spawn" bucket, with
+        whatever's left (fixture staging, baseline comparison, parallel
+        dispatch/collection) in a final "other script" bucket. This second
+        section is normalized to the sum of all apps' work, NOT wall-clock
+        time (parallel execution makes wall-clock time much smaller than
+        that sum) - it answers "of all the work the suite did, what fraction
+        was which pipeline stage", not "what fraction of the run's wall
+        time".
 
 .EXAMPLE
   pwsh ./scripts/runall.ps1
@@ -630,7 +635,9 @@ function Invoke-DccMakeBuild {
         $args += @($DccArgs -split '\s+' | Where-Object { $_ })
     }
 
+    $dccmakeSw = [System.Diagnostics.Stopwatch]::StartNew()
     $buildOut = & $dccmake @args 2>&1
+    $dccmakeSw.Stop()
     $exitCode = $LASTEXITCODE
     if ($TimingOut) {
         $timingLine = @($buildOut) | Where-Object { $_ -match '^dccmake: timing ' } | Select-Object -Last 1
@@ -644,6 +651,7 @@ function Invoke-DccMakeBuild {
                 link     = [int]$Matches[6]
                 other    = [int]$Matches[7]
                 total    = [int]$Matches[8]
+                psInvokeMs = $dccmakeSw.ElapsedMilliseconds
             }
         }
     }
@@ -782,10 +790,11 @@ function Invoke-ComRunAndCompare {
     $output = [regex]::Replace($output, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
 
     $result = [pscustomobject]@{
-        Passed  = $true
-        Ms      = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
-        Cycles  = $ntvcmCycles
-        ClockHz = $ntvcmClockHz
+        Passed      = $true
+        Ms          = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
+        Cycles      = $ntvcmCycles
+        ClockHz     = $ntvcmClockHz
+        PsElapsedMs = $runSw.ElapsedMilliseconds
     }
 
     if ($HasBaseline) {
@@ -933,10 +942,11 @@ function Invoke-AppTest {
             -BaselinePath "$BaselineDir/$AppName.txt" -DiffPrefix "" -Lines $lines
 
         $modeMetrics[$buildMode] = [pscustomobject]@{
-            Ms      = $primaryResult.Ms
-            Cycles  = $primaryResult.Cycles
-            ClockHz = $primaryResult.ClockHz
-            Size    = $comSize
+            Ms          = $primaryResult.Ms
+            Cycles      = $primaryResult.Cycles
+            ClockHz     = $primaryResult.ClockHz
+            Size        = $comSize
+            PsRunMs     = $primaryResult.PsElapsedMs
         }
         if (-not $primaryResult.Passed) { $appPassed = $false }
         if (-not $hasBaseline) { break }
@@ -1873,6 +1883,7 @@ if ($TimingBreakdown) {
     # parallel execution makes wall time far smaller than that sum.
     $sumDcc = 0.0; $sumPeep = 0.0; $sumAsm = 0.0; $sumRtlstrip = 0.0; $sumLink = 0.0; $sumDccOther = 0.0
     $sumRunMs = 0.0; $sumAppElapsedMs = 0.0
+    $sumDccmakeSelfTotal = 0.0; $sumDccmakePsInvoke = 0.0; $sumRunPs = 0.0
     $asmModes = @{}
     foreach ($r in $results) {
         $sumAppElapsedMs += $r.Elapsed.TotalMilliseconds
@@ -1882,16 +1893,31 @@ if ($TimingBreakdown) {
                 $sumDcc += $t.dcc; $sumPeep += $t.peep; $sumAsm += $t.asm
                 $sumRtlstrip += $t.rtlstrip; $sumLink += $t.link; $sumDccOther += $t.other
                 if ($t.asmMode) { $asmModes[$t.asmMode] = $true }
+                if ($t.total) { $sumDccmakeSelfTotal += $t.total }
+                if ($t.psInvokeMs) { $sumDccmakePsInvoke += $t.psInvokeMs }
             }
         }
         foreach ($buildModeKey in @($r.Metrics.Keys)) {
             $m = $r.Metrics[$buildModeKey]
             if ($m.Ms) { $sumRunMs += [double]$m.Ms }
+            if ($m.PsRunMs) { $sumRunPs += [double]$m.PsRunMs }
         }
     }
     $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink + $sumDccOther + $sumRunMs
     $scriptOverheadMs = [math]::Max($sumAppElapsedMs - $accountedMs, 0)
     $asmModeLabel = if ($asmModes.Count -eq 0) { "unknown" } elseif ($asmModes.Count -gt 1) { "MIXED: $($asmModes.Keys -join ', ')" } else { [string]$asmModes.Keys }
+    # dccmake/ntvcm's own SELF-reported timing (dcc/peep/.../total, and
+    # ntvcm's own "elapsed milliseconds") is measured from inside those
+    # processes - it excludes the actual OS process-create/exec cost and
+    # PowerShell's own overhead capturing/merging their output via `2>&1`.
+    # Comparing that self-reported figure against a PowerShell-side
+    # Stopwatch wrapping the SAME call splits the old undifferentiated
+    # "script/spawn" bucket into what's actually process-invocation
+    # overhead for dccmake/ntvcm specifically vs. everything else
+    # (fixture staging, baseline comparison, parallel dispatch).
+    $dccmakeInvokeOverheadMs = [math]::Max($sumDccmakePsInvoke - $sumDccmakeSelfTotal, 0)
+    $ntvcmInvokeOverheadMs = [math]::Max($sumRunPs - $sumRunMs, 0)
+    $otherScriptOverheadMs = [math]::Max($scriptOverheadMs - $dccmakeInvokeOverheadMs - $ntvcmInvokeOverheadMs, 0)
 
     Write-Host ""
     Write-Host "  Main suite build pipeline (% of aggregate per-app work across both" -ForegroundColor DarkGray
@@ -1904,7 +1930,9 @@ if ($TimingBreakdown) {
     Write-TimingRow "L80 link" $sumLink $sumAppElapsedMs
     Write-TimingRow "dccmake other" $sumDccOther $sumAppElapsedMs
     Write-TimingRow "ntvcm run" $sumRunMs $sumAppElapsedMs
-    Write-TimingRow "script/spawn" $scriptOverheadMs $sumAppElapsedMs
+    Write-TimingRow "dccmake spawn" $dccmakeInvokeOverheadMs $sumAppElapsedMs
+    Write-TimingRow "ntvcm spawn" $ntvcmInvokeOverheadMs $sumAppElapsedMs
+    Write-TimingRow "other script" $otherScriptOverheadMs $sumAppElapsedMs
 }
 
 if ($failedApps.Count -gt 0) {
