@@ -20,6 +20,14 @@ typedef struct PassStat {
 static PassStat pass_stats[MAX_PASS_STATS];
 static int pass_stats_count;
 
+typedef struct PeepPass {
+    const char *name;
+    int (*run)(void);
+    unsigned flags;
+} PeepPass;
+
+enum { PEEP_PASS_UNDOCUMENTED_Z80 = 1u << 0 };
+
 static int run_counted_pass(const char *name, int (*pass)(void))
 {
     int i;
@@ -7050,113 +7058,114 @@ int main(int argc, char **argv)
      * tests/too.c regression this exact check exists to prevent. */
     scan_local_func_labels();
 
+    static const PeepPass fixed_point_passes[] = {
+        { "pass_once", pass_once, 0 },
+        { "pass_byte_minmax_patterns", pass_byte_minmax_patterns, 0 },
+        { "pass_dead_hl_load_before_ldhl", pass_dead_hl_load_before_ldhl, 0 },
+        { "pass_word_load_push_de_call", pass_word_load_push_de_call, 0 },
+        { "pass_long_load_push_no_ex_call", pass_long_load_push_no_ex_call, 0 },
+        { "pass_elim_loop_back_signed_bias", pass_elim_loop_back_signed_bias, 0 },
+        { "pass_cp_zero_to_or_a", pass_cp_zero_to_or_a, 0 },
+        { "pass_hl_cmp_zero_to_or_hl", pass_hl_cmp_zero_to_or_hl, 0 },
+        { "pass_signed_cmp_const_low0", pass_signed_cmp_const_low0, 0 },
+        { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
+        { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
+        { "pass_call_hl_stack_roundtrip", pass_call_hl_stack_roundtrip, 0 },
+        { "pass_minmax_winner_result_no_temp", pass_minmax_winner_result_no_temp, 0 },
+        { "pass_minmax_score_b_cache", pass_minmax_score_b_cache, 0 },
+        { "pass_minmax_save_board_addr", pass_minmax_save_board_addr, 0 },
+        { "pass_elim_redundant_ld_a_reg", pass_elim_redundant_ld_a_reg, 0 },
+        { "pass_minmax_elim_label_reload", pass_minmax_elim_label_reload, 0 },
+        { "pass_elim_c_reload_after_store", pass_elim_c_reload_after_store, 0 },
+        { "pass_and1_ix_to_bit", pass_and1_ix_to_bit, 0 },
+        { "pass_winner_check_dec_a", pass_winner_check_dec_a, 0 },
+        { "pass_shrink_minmax_frame3_after_score_cache", pass_shrink_minmax_frame3_after_score_cache, 0 },
+        { "pass_minmax_loop_ctr_b", pass_minmax_loop_ctr_b, 0 },
+        { "pass_shrink_minmax_frame2_after_loop_ctr_b", pass_shrink_minmax_frame2_after_loop_ctr_b, 0 },
+        { "pass_minmax_value_c", pass_minmax_value_c, 0 },
+        { "pass_minmax_board_ptr_loop", pass_minmax_board_ptr_loop, 0 },
+        { "pass_minmax_byte_returns", pass_minmax_byte_returns, 0 },
+        { "pass_minmax_pack_frame", pass_minmax_pack_frame, 0 },
+        { "pass_minmax_pack_call", pass_minmax_pack_call, 0 },
+        { "pass_store_l_reload_a", pass_store_l_reload_a, 0 },
+        { "pass_reuse_board_addr_for_zero_store", pass_reuse_board_addr_for_zero_store, 0 },
+        { "pass_array_base_push_to_de", pass_array_base_push_to_de, 0 },
+        { "pass_base_index_addr", pass_base_index_addr, 0 },
+        { "pass_fold_hl_base_const_offset", pass_fold_hl_base_const_offset, 0 },
+        { "pass_fold_hl_label_word_deref", pass_fold_hl_label_word_deref, 0 },
+        { "pass_e_signed_le_zero", pass_e_signed_le_zero, 0 },
+        { "pass_ix_array_word_addr", pass_ix_array_word_addr, 0 },
+        { "pass_ix_array_byte_addr", pass_ix_array_byte_addr, 0 },
+        { "pass_byte_loop_counter_to_reg_c", pass_byte_loop_counter_to_reg_c, 0 },
+        { "pass_byte_for_counter_to_reg_c", pass_byte_for_counter_to_reg_c, 0 },
+        { "pass_byte_for_counter_to_reg_e", pass_byte_for_counter_to_reg_e, 0 },
+        { "pass_store_word_const_hl", pass_store_word_const_hl, 0 },
+        { "pass_float_zero_store", pass_float_zero_store, 0 },
+        { "pass_remove_unreferenced_labels", pass_remove_unreferenced_labels, 0 },
+        { "pass_ldir_memset_rotated", pass_ldir_memset_rotated, 0 },
+        { "pass_reuse_sbc_result_for_flagcheck_rotated", pass_reuse_sbc_result_for_flagcheck_rotated, 0 },
+        { "pass_cond_skip_shortcut", pass_cond_skip_shortcut, 0 },
+        { "pass_stride_loop_to_ptr", pass_stride_loop_to_ptr, 0 },
+        { "pass_ix_frame_ptr_load", pass_ix_frame_ptr_load, 0 },
+        { "pass_ix_frame_ptr_load_deadd", pass_ix_frame_ptr_load_deadd, 0 },
+        { "pass_hoist_index_ptr_to_bc", pass_hoist_index_ptr_to_bc, 0 },
+        { "pass_walk_hoisted_index_ptr", pass_walk_hoisted_index_ptr, 0 },
+        { "pass_walk_row_cached_float_index", pass_walk_row_cached_float_index, 0 },
+        { "pass_global_ptr_word_predec_load", pass_global_ptr_word_predec_load, 0 },
+        { "pass_elim_ex_de_hl_before_ix_store", pass_elim_ex_de_hl_before_ix_store, 0 },
+        { "pass_elim_redundant_pop_push", pass_elim_redundant_pop_push, 0 },
+        { "pass_double_de_before_add", pass_double_de_before_add, 0 },
+        { "pass_const_hl_doubles", pass_const_hl_doubles, 0 },
+        { "pass_deref_byte_cmp", pass_deref_byte_cmp, 0 },
+        { "pass_cpir", pass_cpir, 0 },
+        { "pass_byte_global_ptr_array_addr", pass_byte_global_ptr_array_addr, 0 },
+        { "pass_byte_ix_predec_zero_test", pass_byte_ix_predec_zero_test, 0 },
+        { "pass_byte_loop_counter_to_reg_iyl", pass_byte_loop_counter_to_reg_iyl, PEEP_PASS_UNDOCUMENTED_Z80 },
+        { "pass_byte_incr_loop_counter_to_reg_iyl", pass_byte_incr_loop_counter_to_reg_iyl, PEEP_PASS_UNDOCUMENTED_Z80 },
+        { "pass_ix_pair_load_to_de", pass_ix_pair_load_to_de, 0 },
+        { "pass_bc_pair_load_to_de", pass_bc_pair_load_to_de, 0 },
+        { "pass_ix_byte_load_to_de", pass_ix_byte_load_to_de, 0 },
+        { "pass_remove_ix_store_reload_hl", pass_remove_ix_store_reload_hl, 0 },
+        { "pass_inline_temp_spill_to_stack", pass_inline_temp_spill_to_stack, 0 },
+        { "pass_remove_inline_temp_markers", pass_remove_inline_temp_markers, 0 },
+        { "pass_postinc_ix_word", pass_postinc_ix_word, 0 },
+        { "pass_cp_jz_jpnc", pass_cp_jz_jpnc, 0 },
+        { "pass_cp_jz_jpc", pass_cp_jz_jpc, 0 },
+        { "pass_bool_from_cmp", pass_bool_from_cmp, 0 },
+        { "pass_elim_dead_ix_stores", pass_elim_dead_ix_stores, 0 },
+        { "pass_ix_addr_byte_store_imm", pass_ix_addr_byte_store_imm, 0 },
+        { "pass_remove_ix_store_reload_a", pass_remove_ix_store_reload_a, 0 },
+        { "pass_a_tracks_ix_byte", pass_a_tracks_ix_byte, 0 },
+        { "pass_elim_redundant_ld_h_zero", pass_elim_redundant_ld_h_zero, 0 },
+        { "pass_elim_long_store_reload", pass_elim_long_store_reload, 0 },
+        { "pass_skip_ix_reload_across_label", pass_skip_ix_reload_across_label, 0 },
+        { "pass_branch_over_jump", pass_branch_over_jump, 0 },
+        { "pass_jump_thread", pass_jump_thread, 0 },
+        { "pass_global_board_const_offsets", pass_global_board_const_offsets, 0 },
+        { "pass_posfunc_b_cache", pass_posfunc_b_cache, 0 },
+        { "pass_jp_to_plain_ret", pass_jp_to_plain_ret, 0 },
+        { "pass_const_divmod_helpers", pass_const_divmod_helpers, 0 },
+        { "pass_mulu_const", pass_mulu_const, 0 },
+        { "pass_cache_noix_byte_param_reload", pass_cache_noix_byte_param_reload, 0 },
+        { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
+        { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
+        { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
+        { "pass_labels", pass_labels, 0 },
+    };
+    size_t fixed_pass_count = sizeof(fixed_point_passes) / sizeof(fixed_point_passes[0]);
+    size_t pass_index;
+
     passes = 0;
     do {
         changed = 0;
-        if (RUN_PASS(pass_once)) changed = 1;
-        if (RUN_PASS(pass_byte_minmax_patterns)) changed = 1;
-        if (RUN_PASS(pass_dead_hl_load_before_ldhl)) changed = 1;
-        if (RUN_PASS(pass_word_load_push_de_call)) changed = 1;
-        if (RUN_PASS(pass_long_load_push_no_ex_call)) changed = 1;
-        if (RUN_PASS(pass_elim_loop_back_signed_bias)) changed = 1;
-        if (RUN_PASS(pass_cp_zero_to_or_a)) changed = 1;
-        if (RUN_PASS(pass_hl_cmp_zero_to_or_hl)) changed = 1;
-        if (RUN_PASS(pass_signed_cmp_const_low0)) changed = 1;
-        if (RUN_PASS(pass_zeroext_byte_cmp_const)) changed = 1;
-        if (RUN_PASS(pass_byte_cmp_push_pop_hl)) changed = 1;
-        if (RUN_PASS(pass_call_hl_stack_roundtrip)) changed = 1;
-        if (RUN_PASS(pass_minmax_winner_result_no_temp)) changed = 1;
-        if (RUN_PASS(pass_minmax_score_b_cache)) changed = 1;
-        if (RUN_PASS(pass_minmax_save_board_addr)) changed = 1;
-        if (RUN_PASS(pass_elim_redundant_ld_a_reg)) changed = 1;
-        if (RUN_PASS(pass_minmax_elim_label_reload)) changed = 1;
-        if (RUN_PASS(pass_elim_c_reload_after_store)) changed = 1;
-        if (RUN_PASS(pass_and1_ix_to_bit)) changed = 1;
-        if (RUN_PASS(pass_winner_check_dec_a)) changed = 1;
-        if (RUN_PASS(pass_shrink_minmax_frame3_after_score_cache)) changed = 1;
-        if (RUN_PASS(pass_minmax_loop_ctr_b)) changed = 1;
-        if (RUN_PASS(pass_shrink_minmax_frame2_after_loop_ctr_b)) changed = 1;
-        if (RUN_PASS(pass_minmax_value_c)) changed = 1;
-        if (RUN_PASS(pass_minmax_board_ptr_loop)) changed = 1;
-        if (RUN_PASS(pass_minmax_byte_returns)) changed = 1;
-        if (RUN_PASS(pass_minmax_pack_frame)) changed = 1;
-        if (RUN_PASS(pass_minmax_pack_call)) changed = 1;
-        if (RUN_PASS(pass_store_l_reload_a)) changed = 1;
-        if (RUN_PASS(pass_reuse_board_addr_for_zero_store)) changed = 1;
-        if (RUN_PASS(pass_array_base_push_to_de)) changed = 1;
-        if (RUN_PASS(pass_base_index_addr)) changed = 1;
-        if (RUN_PASS(pass_fold_hl_base_const_offset)) changed = 1;
-        if (RUN_PASS(pass_fold_hl_label_word_deref)) changed = 1;
-        if (RUN_PASS(pass_e_signed_le_zero)) changed = 1;
-        if (RUN_PASS(pass_ix_array_word_addr)) changed = 1;
-        if (RUN_PASS(pass_ix_array_byte_addr)) changed = 1;
-        if (RUN_PASS(pass_byte_loop_counter_to_reg_c)) changed = 1;
-        if (RUN_PASS(pass_byte_for_counter_to_reg_c)) changed = 1;
-        if (RUN_PASS(pass_byte_for_counter_to_reg_e)) changed = 1;
-        if (RUN_PASS(pass_store_word_const_hl)) changed = 1;
-        if (RUN_PASS(pass_float_zero_store)) changed = 1;
-        if (RUN_PASS(pass_remove_unreferenced_labels)) changed = 1;
-        if (RUN_PASS(pass_ldir_memset_rotated)) changed = 1;
-        if (RUN_PASS(pass_reuse_sbc_result_for_flagcheck_rotated)) changed = 1;
-        if (RUN_PASS(pass_cond_skip_shortcut)) changed = 1;
-        if (RUN_PASS(pass_stride_loop_to_ptr)) changed = 1;
-        if (RUN_PASS(pass_ix_frame_ptr_load)) changed = 1;
-        if (RUN_PASS(pass_ix_frame_ptr_load_deadd)) changed = 1;
-        if (RUN_PASS(pass_hoist_index_ptr_to_bc)) changed = 1;
-        if (RUN_PASS(pass_walk_hoisted_index_ptr)) changed = 1;
-        if (RUN_PASS(pass_walk_row_cached_float_index)) changed = 1;
-        if (RUN_PASS(pass_global_ptr_word_predec_load)) changed = 1;
-        if (RUN_PASS(pass_elim_ex_de_hl_before_ix_store)) changed = 1;
-        if (RUN_PASS(pass_elim_redundant_pop_push)) changed = 1;
-        if (RUN_PASS(pass_double_de_before_add)) changed = 1;
-        if (RUN_PASS(pass_const_hl_doubles)) changed = 1;
-        if (RUN_PASS(pass_deref_byte_cmp)) changed = 1;
-        if (RUN_PASS(pass_cpir)) changed = 1;
-        if (RUN_PASS(pass_byte_global_ptr_array_addr)) changed = 1;
-        if (RUN_PASS(pass_byte_ix_predec_zero_test)) changed = 1;
-        /* Deliberately placed after the specialized array-addressing passes
-         * above (pass_byte_global_ptr_array_addr in particular): both of
-         * these IYL-promotion passes match a plain "ld e,(ix+off)"/"ld
-         * l,(ix+off)" read, which is also part of several of those passes'
-         * own, more specific (and cheaper, since they need no IY prefix
-         * tax) fused address-computation patterns. Running first would let
-         * IYL promotion win a pattern an existing, already-optimal peephole
-         * would otherwise have claimed - measured as a real (if tiny)
-         * regression on attnc99 before this ordering fix. */
-        if (allow_undocumented_z80) {
-            if (RUN_PASS(pass_byte_loop_counter_to_reg_iyl)) changed = 1;
-            if (RUN_PASS(pass_byte_incr_loop_counter_to_reg_iyl)) changed = 1;
+        for (pass_index = 0; pass_index < fixed_pass_count; ++pass_index) {
+            const PeepPass *pass = &fixed_point_passes[pass_index];
+            if ((pass->flags & PEEP_PASS_UNDOCUMENTED_Z80) &&
+                !allow_undocumented_z80)
+                continue;
+            if (run_counted_pass(pass->name, pass->run))
+                changed = 1;
         }
-        if (RUN_PASS(pass_ix_pair_load_to_de)) changed = 1;
-        if (RUN_PASS(pass_bc_pair_load_to_de)) changed = 1;
-        if (RUN_PASS(pass_ix_byte_load_to_de)) changed = 1;
-        if (RUN_PASS(pass_remove_ix_store_reload_hl)) changed = 1;
-        if (RUN_PASS(pass_inline_temp_spill_to_stack)) changed = 1;
-        if (RUN_PASS(pass_remove_inline_temp_markers)) changed = 1;
-        if (RUN_PASS(pass_postinc_ix_word)) changed = 1;
-        if (RUN_PASS(pass_cp_jz_jpnc)) changed = 1;
-        if (RUN_PASS(pass_cp_jz_jpc)) changed = 1;
-        if (RUN_PASS(pass_bool_from_cmp)) changed = 1;
-        if (RUN_PASS(pass_elim_dead_ix_stores)) changed = 1;
-        if (RUN_PASS(pass_ix_addr_byte_store_imm)) changed = 1;
-        if (RUN_PASS(pass_remove_ix_store_reload_a)) changed = 1;
-        if (RUN_PASS(pass_a_tracks_ix_byte)) changed = 1;
-        if (RUN_PASS(pass_elim_redundant_ld_h_zero)) changed = 1;
-        if (RUN_PASS(pass_elim_long_store_reload)) changed = 1;
-        if (RUN_PASS(pass_skip_ix_reload_across_label)) changed = 1;
-        if (RUN_PASS(pass_branch_over_jump)) changed = 1;
-        if (RUN_PASS(pass_jump_thread)) changed = 1;
-        if (RUN_PASS(pass_global_board_const_offsets)) changed = 1;
-        if (RUN_PASS(pass_posfunc_b_cache)) changed = 1;
-        if (RUN_PASS(pass_jp_to_plain_ret)) changed = 1;
-        if (RUN_PASS(pass_const_divmod_helpers)) changed = 1;
-        if (RUN_PASS(pass_mulu_const)) changed = 1;
-        if (RUN_PASS(pass_cache_noix_byte_param_reload)) changed = 1;
-        if (RUN_PASS(pass_cache_global_word_reload)) changed = 1;
-        if (RUN_PASS(pass_word_loop_var_to_reg_bc)) changed = 1;
-        if (RUN_PASS(pass_byte_loop_var_to_reg_c)) changed = 1;
-/*        if (pass_replace_tstr_fake_strstr()) changed = 1; */
-        if (RUN_PASS(pass_labels)) changed = 1;
         passes++;
     } while (changed && passes < 30);
 
