@@ -1,0 +1,53 @@
+	extrn __mods
+; decrementing counter promoted to C
+	ld c,(ix-2) ; peep: byte_loop_counter_to_reg_c
+LCDEC:
+	dec c ; peep: byte_loop_counter_to_reg_c
+	ld (ix-2),c
+	jr z,LCDEXIT ; peep: jp_to_jr
+	ld e,c
+	ld d,0
+	call __mods
+	jr LCDEC ; peep: jp_to_jr
+LCDEXIT:
+	ret
+; incrementing counter promoted to E because BC is live
+	ld e,1 ; peep: byte_for_counter_to_reg_e
+LEINC:
+	ld b,a
+	ld l,e
+	ld h,0
+	inc e ; peep: byte_for_counter_to_reg_e
+	ld a,e
+	cp 5
+	jr c,LEINC ; peep: jp_to_jr
+	ld (ix-4),e
+; non-RTL call requires decrementing IYL promotion
+	ld a,(ix-5)
+	db 0FDh,06Fh ; peep: byte_loop_counter_to_reg_iyl
+LIDEC:
+	db 0FDh,02Dh ; peep: byte_loop_counter_to_reg_iyl
+	db 0FDh,07Dh ; peep: byte_loop_counter_to_reg_iyl
+	ld (ix-5),a
+	jr z,LIDEXIT ; peep: jp_to_jr
+	db 0FDh,05Dh ; peep: byte_loop_counter_to_reg_iyl
+	ld d,0
+	call _external
+	jr LIDEC ; peep: jp_to_jr
+LIDEXIT:
+	ret
+; non-RTL call requires incrementing IYL promotion
+	ld (ix-6),0
+	ld a,(ix-6)
+	db 0FDh,06Fh ; peep: byte_incr_loop_counter_to_reg_iyl
+LIINC:
+	db 0FDh,07Dh ; peep: byte_incr_loop_counter_to_reg_iyl
+	ld l,a
+	ld h,0
+	call _external
+	db 0FDh,02Ch ; peep: byte_incr_loop_counter_to_reg_iyl
+	db 0FDh,07Dh ; peep: byte_incr_loop_counter_to_reg_iyl
+	ld (ix-6),a
+	cp 3
+	jr c,LIINC ; peep: jp_to_jr
+	end

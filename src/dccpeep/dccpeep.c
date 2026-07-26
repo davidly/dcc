@@ -1993,6 +1993,44 @@ static int pass_ix_array_byte_addr(void)
  * int to unsigned char. */
 
 
+enum CounterZeroExtendUse {
+    COUNTER_USE_NONE,
+    COUNTER_USE_DE,
+    COUNTER_USE_HL
+};
+
+static int find_straight_line_loop_back(int body_start, const char *label)
+{
+    int k;
+    char target[128];
+
+    for (k = body_start; k < nlines; ++k) {
+        if (starts_label(lines[k]))
+            break;
+        if (is_uncond_jp(lines[k])) {
+            if (jump_target(lines[k], target) && strcmp(target, label) == 0)
+                return k;
+            break;
+        }
+    }
+    return -1;
+}
+
+static enum CounterZeroExtendUse match_counter_zero_extend(
+    int line, const char *load_de, const char *load_hl)
+{
+    if (eq(line, load_de) && eq(line + 1, "ld d,0"))
+        return COUNTER_USE_DE;
+    if (eq(line, load_hl) && eq(line + 1, "ld h,0"))
+        return COUNTER_USE_HL;
+    return COUNTER_USE_NONE;
+}
+
+static int line_uses_iy_half_register(int line)
+{
+    return strncmp(lines[line], "db 0FDh,", 8) == 0;
+}
+
 /* Recognizes a byte-sized ix-local used purely as a self-guarding
  * decrementing loop counter - dcc_array_narrow.c's `while(--n)` idiom,
  * once narrowing has made the counter's own storage a single byte (see
@@ -2023,7 +2061,6 @@ static int pass_byte_loop_counter_to_reg_c(void)
     int off;
     char label[128];
     char target[128];
-    char tgt[128];
     int loop_end;
     int k;
     int ok;
@@ -2050,16 +2087,7 @@ static int pass_byte_loop_counter_to_reg_c(void)
 
         /* Find the matching loop-back jump to this same label, with no
          * other label in between (single-entry, single-exit body). */
-        loop_end = -1;
-        for (k = i + 3; k < nlines; ++k) {
-            if (starts_label(lines[k]))
-                break;
-            if (is_uncond_jp(lines[k])) {
-                if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
-                    loop_end = k;
-                break;
-            }
-        }
+        loop_end = find_straight_line_loop_back(i + 3, label);
         if (loop_end < 0)
             continue;
 
@@ -2076,11 +2104,7 @@ static int pass_byte_loop_counter_to_reg_c(void)
             }
             if (strstr(lines[k], pat_ix) == NULL)
                 continue;
-            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
-                ++k;
-                continue;
-            }
-            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) {
+            if (match_counter_zero_extend(k, pat_lde, pat_lhl) != COUNTER_USE_NONE) {
                 ++k;
                 continue;
             }
@@ -2819,8 +2843,10 @@ static int pass_byte_for_counter_to_reg_c(void)
                 if (!eq(k, "call __mods") && !eq(k, "call __divs")) { ok = 0; break; }
                 continue;
             }
-            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) { ++k; continue; }
-            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) { ++k; continue; }
+            if (match_counter_zero_extend(k, pat_lde, pat_lhl) != COUNTER_USE_NONE) {
+                ++k;
+                continue;
+            }
             /* The counter's own byte value used directly in arithmetic
              * (e.g. `(rec + i) & 0xff`, added to another byte in A) - safe
              * to read from c instead, same as the index-load shapes above. */
@@ -3013,7 +3039,7 @@ static int pass_byte_for_counter_to_reg_e(void)
                 if (!eq(k, "call __mods") && !eq(k, "call __divs")) { ok = 0; break; }
                 continue;
             }
-            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
+            if (match_counter_zero_extend(k, pat_lde, pat_lhl) == COUNTER_USE_DE) {
                 /* The zero-extend is almost always immediately consumed by
                  * "add hl,de" (the address computation this whole family of
                  * passes exists to speed up) - that's the expected, safe
@@ -3024,7 +3050,10 @@ static int pass_byte_for_counter_to_reg_e(void)
                     ++k;
                 continue;
             }
-            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) { ++k; continue; }
+            if (match_counter_zero_extend(k, pat_lde, pat_lhl) == COUNTER_USE_HL) {
+                ++k;
+                continue;
+            }
             if (eq(k, pat_adda)) continue;
             if (strstr(lines[k], pat_ix) != NULL) { ok = 0; break; }
             /* D/E must be free for the whole loop body except the exact
@@ -3129,7 +3158,6 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
     int off;
     char label[128];
     char target[128];
-    char tgt[128];
     int loop_end;
     int k;
     int ok;
@@ -3159,16 +3187,7 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
 
         /* Find the matching loop-back jump to this same label, with no
          * other label in between (single-entry, single-exit body). */
-        loop_end = -1;
-        for (k = i + 3; k < nlines; ++k) {
-            if (starts_label(lines[k]))
-                break;
-            if (is_uncond_jp(lines[k])) {
-                if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0)
-                    loop_end = k;
-                break;
-            }
-        }
+        loop_end = find_straight_line_loop_back(i + 3, label);
         if (loop_end < 0)
             continue;
 
@@ -3191,7 +3210,7 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
              * (was a "IY" prefix check back when these were M80 macro
              * invocations by name; m80c has no MACRO/ENDM support at all,
              * so they're emitted as raw opcode bytes directly now). */
-            if (strncmp(lines[k], "db 0FDh,", 8) == 0) {
+            if (line_uses_iy_half_register(k)) {
                 ok = 0;
                 continue;
             }
@@ -3208,11 +3227,7 @@ static int pass_byte_loop_counter_to_reg_iyl(void)
             }
             if (strstr(lines[k], pat_ix) == NULL)
                 continue;
-            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
-                ++k;
-                continue;
-            }
-            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) {
+            if (match_counter_zero_extend(k, pat_lde, pat_lhl) != COUNTER_USE_NONE) {
                 ++k;
                 continue;
             }
@@ -3363,7 +3378,7 @@ static int pass_byte_incr_loop_counter_to_reg_iyl(void)
              * existed (i/j/k all tried to claim IYL simultaneously), and on
              * why this checks for the literal "db 0FDh," prefix rather than
              * an "IY" macro-name prefix. */
-            if (strncmp(lines[k], "db 0FDh,", 8) == 0) {
+            if (line_uses_iy_half_register(k)) {
                 ok = 0;
                 continue;
             }
@@ -3378,11 +3393,7 @@ static int pass_byte_incr_loop_counter_to_reg_iyl(void)
             }
             if (strstr(lines[k], pat_ix) == NULL)
                 continue;
-            if (eq(k, pat_lde) && eq(k + 1, "ld d,0")) {
-                ++k;
-                continue;
-            }
-            if (eq(k, pat_lhl) && eq(k + 1, "ld h,0")) {
+            if (match_counter_zero_extend(k, pat_lde, pat_lhl) != COUNTER_USE_NONE) {
                 ++k;
                 continue;
             }

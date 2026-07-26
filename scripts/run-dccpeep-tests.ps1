@@ -26,6 +26,7 @@ try {
         $again = Join-Path $tempRoot "$stem.again.mac"
         $options = @()
         if ($stem.EndsWith(".os")) { $options += "-Os" }
+        if ($stem.EndsWith(".undoc")) { $options += "-fundocumented-z80" }
 
         & $DccPeep @options $input.FullName $actual
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $actual)) {

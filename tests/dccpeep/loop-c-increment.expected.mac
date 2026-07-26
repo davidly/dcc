@@ -1,0 +1,10 @@
+	ld c,0 ; peep: byte_for_counter_to_reg_c
+LCINC:
+	ld l,c
+	ld h,0
+	inc c ; peep: byte_for_counter_to_reg_c
+	ld a,c
+	cp 4
+	jr c,LCINC ; peep: jp_to_jr
+	ld (ix-3),c
+	end
