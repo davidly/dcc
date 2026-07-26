@@ -20,6 +20,7 @@ char *xstrdup2(const char *s);
 int eq(int i, const char *s);
 int starts_label(const char *s);
 int is_blank_or_comment(const char *s);
+int is_global_asm_label_line(int i);
 void strip_peep_comment_copy(char *dst, const char *src);
 void strip_peep_comment_lower_copy(char *dst, const char *src);
 void replace1(int i, const char *s);
@@ -84,5 +85,18 @@ int line_touches_bc(const char *s);
 int line_touches_de(const char *s);
 int line_touches_hl(const char *s);
 int line_touches_a(const char *s);
+
+/* Size-mode shared-helper passes. */
+int pass_shared_frame_stubs(void);
+int pass_lvar_stubs(void);
+int pass_svar_stubs(void);
+int pass_larg_stubs(void);
+int pass_phix_stub(void);
+int pass_larg_direct_store(void);
+int pass_ldwl_stub(void);
+int pass_wand_stub(void);
+int pass_icmp_stub(void);
+int pass_sxde_stub(void);
+int pass_sxhl_stub(void);
 
 #endif
