@@ -685,6 +685,31 @@ void gen_unary_ast(const struct AstNode *n)
             return;
         }
         s = find_sym(n->a->sval);
+        /* Plain identifier, directly addressable (an ix-relative local/param
+         * in range, or a global/extern word): load/store its value directly
+         * instead of materializing &s into HL and updating through it -
+         * mirrors the same fast path plain global scalar reads/stores
+         * already get. Found via `*--sp`/`*sp++` on a local stack-pointer
+         * variable in a benchmarked VM interpreter (forint.c's eval_e,
+         * ~54% of that function's own runtime): every prefix decrement of
+         * `sp` was paying for a full "compute &sp, load, dec, store back
+         * through &sp" round trip that a plain 4-instruction load/dec/store
+         * replaces. Bitfields/4-byte types are out of scope (AST_MEMBER
+         * bitfields never reach this branch; long/float take the generic
+         * address-based path below, unchanged). */
+        if (!type_is_bool(s->type) && type_size(s->type) == 2 &&
+            (sym_can_ix_direct(s) || is_global_word_sym(s))) {
+            emit_load_sym_value_direct(s);
+            emit_incdec_value_in_dehl(s->type, op);
+            if (sym_can_ix_direct(s)) {
+                fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", s->offset);
+                fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", s->offset + 1);
+            } else {
+                emit_store_global_word_direct(s);
+            }
+            g_expr.type = s->type;
+            return;
+        }
         emit_load_sym_addr(s);
         emit_pre_incdec_lvalue(s->type, op);
         return;
