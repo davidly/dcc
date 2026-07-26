@@ -1,0 +1,16 @@
+; dcc stage-1d output
+	ld l,b
+	ld h,c
+	add hl,de
+	ld bc,1
+	jp z,L1
+	ld bc,2
+L1:
+	add hl,bc
+	ld de,4
+	call _opaque
+	ld a,(_global)
+	ld a,1
+	ld hl,5
+	ret
+	end

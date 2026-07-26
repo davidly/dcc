@@ -317,3 +317,29 @@ int pass_elim_dead_reg16_reload(void)
     return changed;
 }
 
+int pass_elim_dead_register_loads(void)
+{
+    const unsigned protected_registers = PEEP_REG_IX | PEEP_REG_IY | PEEP_REG_SP;
+    int i = 0;
+    int changed = 0;
+
+    while (i < nlines) {
+        const PeepLineInfo *info = peep_line_info(i);
+
+        if (info->kind == PEEP_LINE_INSTRUCTION &&
+            info->opcode == PEEP_OPCODE_LD &&
+            info->left.kind == PEEP_OPERAND_REGISTER &&
+            (info->right.kind == PEEP_OPERAND_REGISTER ||
+             info->right.kind == PEEP_OPERAND_IMMEDIATE) &&
+            info->effects.writes != 0 &&
+            !(info->effects.writes & protected_registers) &&
+            peep_registers_dead_after(i, info->effects.writes)) {
+            delete_n(i, 1);
+            changed = 1;
+            continue;
+        }
+        ++i;
+    }
+    return changed;
+}
+

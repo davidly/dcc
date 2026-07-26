@@ -47,6 +47,71 @@ static unsigned operand_registers(const char *operand)
     return mask;
 }
 
+static void classify_operand(PeepOperand *operand, const char *text)
+{
+    char *end;
+    long value;
+
+    memset(operand, 0, sizeof(*operand));
+    if (!text[0])
+        return;
+    operand->registers = operand_registers(text);
+    if (register_mask(text)) {
+        operand->kind = PEEP_OPERAND_REGISTER;
+        return;
+    }
+    value = strtol(text, &end, 0);
+    if (*end == 0) {
+        operand->kind = PEEP_OPERAND_IMMEDIATE;
+        operand->immediate = value;
+        operand->immediate_valid = 1;
+        return;
+    }
+    if (text[0] == '(') {
+        int offset;
+        char off[32];
+
+        if (!strncmp(text, "(ix", 3)) {
+            const char *close = strchr(text + 3, ')');
+            size_t length = close ? (size_t)(close - (text + 3)) : 0;
+
+            operand->kind = PEEP_OPERAND_FRAME;
+            if (close && close[1] == 0 && length > 0 && length < sizeof(off)) {
+                memcpy(off, text + 3, length);
+                off[length] = 0;
+                if (parse_ix_off_numeric(off, &offset)) {
+                    operand->frame_offset = offset;
+                    operand->frame_offset_valid = 1;
+                }
+            }
+            return;
+        }
+        if (!strncmp(text, "(sp", 3)) {
+            operand->kind = PEEP_OPERAND_INDIRECT;
+            return;
+        }
+        if (!operand->registers) {
+            operand->kind = PEEP_OPERAND_GLOBAL;
+            return;
+        }
+        operand->kind = PEEP_OPERAND_INDIRECT;
+        return;
+    }
+    operand->kind = PEEP_OPERAND_LABEL;
+}
+
+static unsigned operand_memory_class(const PeepOperand *operand)
+{
+    if (operand->kind == PEEP_OPERAND_FRAME)
+        return PEEP_MEM_FRAME;
+    if (operand->kind == PEEP_OPERAND_GLOBAL)
+        return PEEP_MEM_GLOBAL;
+    if (operand->kind == PEEP_OPERAND_INDIRECT)
+        return (operand->registers & PEEP_REG_SP) ? PEEP_MEM_STACK
+                                                  : PEEP_MEM_INDIRECT;
+    return PEEP_MEM_NONE;
+}
+
 static int split_instruction(const char *line, char *mnemonic,
                              char *left, char *right)
 {
@@ -96,19 +161,26 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
     info->effects.unknown = 1;
     if (!split_instruction(line, mnemonic, left, right))
         return;
+    if (strlen(mnemonic) < sizeof(info->mnemonic))
+        strcpy(info->mnemonic, mnemonic);
     left_regs = operand_registers(left);
     right_regs = operand_registers(right);
+    classify_operand(&info->left, left);
+    classify_operand(&info->right, right);
 
     if (!strcmp(mnemonic, "ld")) {
         info->opcode = PEEP_OPCODE_LD;
         info->effects.reads = right_regs;
         if (left[0] == '(') {
             info->effects.reads |= left_regs;
+            info->effects.memory_written |= operand_memory_class(&info->left);
         } else {
             info->effects.writes = left_regs;
         }
         if (right[0] == '(')
             info->effects.reads |= right_regs;
+        if (right[0] == '(')
+            info->effects.memory_read |= operand_memory_class(&info->right);
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "jp") || !strcmp(mnemonic, "jr")) {
         info->opcode = !strcmp(mnemonic, "jp") ? PEEP_OPCODE_JP : PEEP_OPCODE_JR;
@@ -118,25 +190,34 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
     } else if (!strcmp(mnemonic, "call") || !strcmp(mnemonic, "rst")) {
         info->opcode = PEEP_OPCODE_CALL;
         info->effects.control_flow = 1;
+        info->effects.memory_read = PEEP_MEM_OPAQUE;
+        info->effects.memory_written = PEEP_MEM_OPAQUE | PEEP_MEM_STACK;
     } else if (!strcmp(mnemonic, "ret") || !strcmp(mnemonic, "reti") ||
                !strcmp(mnemonic, "retn")) {
         info->opcode = PEEP_OPCODE_RET;
         info->effects.control_flow = 1;
+        info->effects.memory_read = PEEP_MEM_STACK;
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "push")) {
         info->opcode = PEEP_OPCODE_PUSH;
         info->effects.reads = left_regs | PEEP_REG_SP;
         info->effects.writes = PEEP_REG_SP;
+        info->effects.memory_written = PEEP_MEM_STACK;
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "pop")) {
         info->opcode = PEEP_OPCODE_POP;
         info->effects.reads = PEEP_REG_SP;
         info->effects.writes = left_regs | PEEP_REG_SP;
+        info->effects.memory_read = PEEP_MEM_STACK;
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "inc") || !strcmp(mnemonic, "dec")) {
         info->opcode = PEEP_OPCODE_ALU;
         info->effects.reads = left_regs;
         info->effects.writes = left_regs;
+        if (left[0] == '(') {
+            info->effects.memory_read = operand_memory_class(&info->left);
+            info->effects.memory_written = operand_memory_class(&info->left);
+        }
         info->effects.flags_written = PEEP_FLAG_C | PEEP_FLAG_Z |
                                       PEEP_FLAG_S | PEEP_FLAG_PV;
         info->effects.unknown = 0;
@@ -150,6 +231,10 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
             info->effects.reads = PEEP_REG_A | left_regs;
             info->effects.writes = PEEP_REG_A;
         }
+        if (right[0] == '(')
+            info->effects.memory_read = operand_memory_class(&info->right);
+        else if (!right[0] && left[0] == '(')
+            info->effects.memory_read = operand_memory_class(&info->left);
         info->effects.flags_written = PEEP_FLAG_C | PEEP_FLAG_Z |
                                       PEEP_FLAG_S | PEEP_FLAG_PV;
         info->effects.unknown = 0;
@@ -158,6 +243,8 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
                !strcmp(mnemonic, "cp")) {
         info->opcode = PEEP_OPCODE_ALU;
         info->effects.reads = PEEP_REG_A | left_regs;
+        if (left[0] == '(')
+            info->effects.memory_read = operand_memory_class(&info->left);
         if (strcmp(mnemonic, "cp"))
             info->effects.writes = PEEP_REG_A;
         info->effects.flags_written = PEEP_FLAG_C | PEEP_FLAG_Z |
@@ -173,6 +260,9 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
         info->effects.writes = PEEP_REG_B | PEEP_REG_C | PEEP_REG_D |
                                PEEP_REG_E | PEEP_REG_H | PEEP_REG_L;
         info->effects.flags_written = PEEP_FLAG_Z | PEEP_FLAG_PV;
+        info->effects.memory_read = PEEP_MEM_INDIRECT;
+        if (strncmp(mnemonic, "cp", 2))
+            info->effects.memory_written = PEEP_MEM_INDIRECT;
         info->effects.unknown = 0;
     }
 }
@@ -198,6 +288,8 @@ static void rebuild_line_info(void)
         if (user_asm_original[i]) {
             info->kind = PEEP_LINE_OPAQUE;
             info->effects.unknown = 1;
+            info->effects.memory_read = PEEP_MEM_OPAQUE;
+            info->effects.memory_written = PEEP_MEM_OPAQUE;
         } else if (!lines[i][0]) {
             info->kind = PEEP_LINE_BLANK;
         } else if (lines[i][0] == ';') {
