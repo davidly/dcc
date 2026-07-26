@@ -1,0 +1,18 @@
+; dcc stage-1d output
+public _public_base
+extrn _external_base
+ld hl,_external_base
+ld de,18
+add hl,de
+ret
+ld hl,_public_base
+ld de,18
+add hl,de
+ret
+ld hl,Llocal
+ld de,18
+add hl,de
+ret
+Llocal:
+ds 1
+end

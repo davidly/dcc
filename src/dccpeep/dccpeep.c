@@ -207,6 +207,25 @@ static int mask_range_is_user_asm(int start, int end)
     return 0;
 }
 
+static int symbol_is_external(const char *symbol)
+{
+    int i;
+    char name[128];
+    char extra;
+
+    /* Only a genuine EXTRN reference (a symbol defined in another module)
+     * hits the Link-80 addend bug. A PUBLIC symbol is defined in this
+     * module, so M80 folds BASE+offset within its own segment - the same
+     * guarantee a private local label has. */
+    for (i = 0; i < nlines; ++i) {
+        if (sscanf(lines[i], "extrn %127s %c", name, &extra) == 1 &&
+            strcmp(name, symbol) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
 static int pass_fold_hl_base_const_offset(void)
 {
     int i;
@@ -230,6 +249,8 @@ static int pass_fold_hl_base_const_offset(void)
         if (!parse_nonneg_int(off_text, &off) || off == 0)
             continue;
         if (!eq(i + 2, "add hl,de"))
+            continue;
+        if (symbol_is_external(base))
             continue;
 
         sprintf(out, "ld hl,%s+%d", base, off);
