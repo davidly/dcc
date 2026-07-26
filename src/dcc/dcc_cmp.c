@@ -12,22 +12,19 @@
  */
 
 #include "dcc.h"
-void gen_cmp(int op)
+
+/* Shared 16-bit compare tail used by gen_cmp / gen_cmp_typed after any signed
+ * bias has been applied: subtract, branch to a private true-label per relop,
+ * then materialize 0/1 into HL. Label allocation happens here (lt/le, plus the
+ * extra false label the `>` case needs) exactly as the two callers did inline,
+ * so the emitted text and label numbering are unchanged. */
+static void emit_cmp_subtract_to_bool(int op)
 {
     int lt;
     int le;
 
     lt = new_label();
     le = new_label();
-
-    if (op == '<' || op == TOK_GE || op == '>' || op == TOK_LE) {
-        emit("\tld a,h\n");
-        emit("\txor 80h\n");
-        emit("\tld h,a\n");
-        emit("\tld a,d\n");
-        emit("\txor 80h\n");
-        emit("\tld d,a\n");
-    }    
 
     emit("\tor a\n\tsbc hl,de\n");
 
@@ -52,45 +49,19 @@ void gen_cmp(int op)
     emit_label(le);
 }
 
+void gen_cmp(int op)
+{
+    /* gen_cmp always compares as signed, so the bias applies whenever the
+     * relop is order-sensitive (emit_signed_bias_for_relop filters on op). */
+    emit_signed_bias_for_relop(op);
+    emit_cmp_subtract_to_bool(op);
+}
+
 void gen_cmp_typed(int op, int lhs_type)
 {
-    int lt;
-    int le;
-
-    lt = new_label();
-    le = new_label();
-
-    if (!(lhs_type & TYPE_UNSIGNED) &&
-        (op == '<' || op == TOK_GE || op == '>' || op == TOK_LE)) {
-        emit("\tld a,h\n");
-        emit("\txor 80h\n");
-        emit("\tld h,a\n");
-        emit("\tld a,d\n");
-        emit("\txor 80h\n");
-        emit("\tld d,a\n");
-    }
-
-    emit("\tor a\n\tsbc hl,de\n");
-
-    if (op == TOK_EQ) emit_jp_label("jp z,", lt);
-    else if (op == TOK_NE) emit_jp_label("jp nz,", lt);
-    else if (op == '<') emit_jp_label("jp c,", lt);
-    else if (op == TOK_GE) emit_jp_label("jp nc,", lt);
-    else if (op == '>') {
-        int lfalse_gt = new_label();
-        emit_jp_label("jp z,", lfalse_gt);
-        emit_jp_label("jp nc,", lt);
-        emit_label(lfalse_gt);
-    } else if (op == TOK_LE) {
-        emit_jp_label("jp z,", lt);
-        emit_jp_label("jp c,", lt);
-    }
-
-    emit("\tld hl,0\n");
-    emit_jp_label("jp", le);
-    emit_label(lt);
-    emit("\tld hl,1\n");
-    emit_label(le);
+    if (!(lhs_type & TYPE_UNSIGNED))
+        emit_signed_bias_for_relop(op);
+    emit_cmp_subtract_to_bool(op);
 }
 
 void emit_signed_bias_for_relop(int op)

@@ -20,11 +20,11 @@ flowchart LR
     DCC --> MAC([".MAC assembly"])
     MAC --> PEEP["dccpeep<br/>peephole optimizer"]
     PEEP --> MAC2([".MAC optimized"])
-    MAC2 --> M80A["M80<br/>assemble"]
+    MAC2 --> M80A["m80c / M80<br/>assemble"]
     RTL([" DCCRTL.MAC<br/>full runtime"]) --> STRIP["dccrtlstrip<br/>dead-block removal"]
     MAC2 -. references .-> STRIP
     STRIP --> RTLMIN([" RTLMIN.MAC<br/>used routines only"])
-    RTLMIN --> M80B["M80<br/>assemble"]
+    RTLMIN --> M80B["m80c / M80<br/>assemble"]
     M80A --> REL([" app.REL"])
     M80B --> RRTL([" RTLMIN.REL"])
     REL --> L80["L80<br/>link"]
@@ -34,10 +34,10 @@ flowchart LR
 
 | Stage | Tool | Input | Output | Role |
 | --- | --- | --- | --- | --- |
-| Compile | `dcc` | `.c` | `.MAC` | Translate C89 to Z80/M80 assembly |
+| Compile | `dcc` | `.c` | `.MAC` | Translate the supported C89/C99/C11 subset to Z80/M80 assembly |
 | Optimize | `dccpeep` | `.MAC` | `.MAC` | Local peephole rewriting of the asm |
 | Reduce runtime | `dccrtlstrip` | `DCCRTL.MAC` + app `.MAC` | `RTLMIN.MAC` | Keep only the runtime routines the app references |
-| Assemble | `M80` | `.MAC` | `.REL` | Object code (relocatable) |
+| Assemble | `m80c` or `M80` | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
 | Link | `L80` | `.REL` files | `.COM` | Resolve symbols into a CP/M executable |
 
 The `dccpeep` stage is optional (`./scripts/ma.ps1 name -Mode nopeep` skips it
@@ -59,6 +59,7 @@ remain direct table-driven front-end machinery rather than AST nodes.
 ```mermaid
 flowchart LR
     SRC([".c source"]) --> PP["preprocess +<br/>#include splice"]
+    PPX["dcc_pp_expr.c<br/>#if / #elif expressions"] -. conditional evaluation .-> PP
     PP --> LEX["lexer<br/>(next_token)"]
     LEX --> BUILD["dcc_ast_build.c<br/>build function-local AST"]
     BUILD --> GEN["dcc_ast_gen*.c<br/>emit from AST"]
@@ -83,6 +84,41 @@ The AST carries expression result types, so codegen can choose 16-bit, 32-bit,
 pointer, struct, or float lowering from the tree it is emitting — the full
 typed operand is always in hand before any code is emitted.
 
+### State ownership and speculative generation
+
+The compiler remains a single-process, single-translation-unit-at-a-time tool,
+but related mutable state is grouped by lifecycle rather than exposed as loose
+globals:
+
+- `LexState` holds the live token/cursor fields and is copied by
+  `lex_save()` / `lex_restore()` for parser lookahead.
+- `FrameState` owns local-count, frame-size, and parameter-offset state.
+- `ExprState` describes the value most recently left in registers.
+- `FunctionPassState` owns counters restarted for function scan/codegen passes.
+- `DeclState` owns the storage-class and qualifier flags for the declaration
+  currently being parsed.
+
+Some optimizations generate a function or loop into a temporary stream, verify
+the emitted assembly, then either commit it or rewind parser/frame state and use
+the ordinary fallback. `EmitSink` names the destination role (`FINAL`,
+`DISCARD`, `VERIFY`, or `DEFERRED`) and scoped push/restore operations make
+nested redirection explicit. Sink role does **not** imply suppression:
+`scan_mode` remains separate, and verification streams may require raw formatted
+writes so their text can be read back before the commit/decline decision.
+
+Proof-based optimizations such as byte-array narrowing are deliberately
+conservative. Unknown shapes, recursive captured calls, or exhausted proof
+limits decline the optimization and retain ordinary 16-bit codegen.
+
+### Refactor validation
+
+For behavior-preserving parser/codegen changes, runtime output alone is not the
+strongest oracle. The project builds before/after compilers and requires
+byte-identical `.MAC` output across the application corpus plus identical stderr
+across the compile-fail diagnostic corpus, then runs the CP/M regression and
+performance suite. This catches label, speculative-pass, and instruction-shape
+changes that may not alter the current runtime baselines.
+
 ## Compiler Features
 
 The DCC C Compiler is intentionally small, but the compiler front end still provides a
@@ -104,7 +140,7 @@ lock these messages and carets against exact baselines.
 | Preprocessor and include handling | `DCC-E0301`-`DCC-E0321` | malformed `#include`, unknown directives, unmatched `#elif`/`#else`/`#endif`, bad macro arity |
 | Constant expressions | `DCC-E0401`-`DCC-E0403` | non-constant expressions, division by zero, missing expression operands |
 | Struct/union/enum/type semantics | `DCC-E0501`-`DCC-E0540` | field designators, `offsetof`, bit-fields, duplicate enum constants, missing type names, multiple storage classes |
-| Array and pointer constraints | `DCC-E0601`-`DCC-E0602` | variable-length arrays, scalar subscripting |
+| Array and pointer constraints | `DCC-E0601`-`DCC-E0605` | unsupported variable inner dimensions, invalid bounds/object sizes, scalar subscripting |
 | Statement control flow | `DCC-E0701`-`DCC-E0706` | `break`/`continue` outside valid contexts, stray `case`/`default`, duplicate or undefined labels |
 | Functions and declarations | `DCC-E0801`-`DCC-E0806` | parameter declaration errors, redefinitions, too few or too many function-call arguments |
 | Initializers and assignment compatibility | `DCC-E0901`-`DCC-E0920` | invalid address initializers, non-constant initializers, string/array/struct initializer errors, integer-to-pointer assignment |
@@ -143,23 +179,25 @@ inline bodies, and unreferenced runtime support.
 
 ## Inside DCC C Compiler: module architecture
 
-The compiler is one binary built from focused modules that all share a single
-umbrella header, `dcc.h`. The parser, AST builder, AST emitter, and low-level
-emit helpers share file-scope compiler state (the source buffer, the lookahead
-token, the symbol/type tables, per-function codegen flags), so the natural
-layout is the classic single-binary compiler shape: **one shared header, many
-cooperating `.c` files**, with all mutable state defined once in `dcc_state.c`.
+The compiler is one binary built from focused modules. Foundational target
+types, shared data structures, and broadly used APIs live in `dcc.h`; narrower
+contracts live in `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, and
+`dcc_regalloc_internal.h`. Shared mutable state is defined once in
+`dcc_state.c`, with related fields grouped into the lifecycle structures
+described above.
 
 ```mermaid
 graph TB
-    subgraph SHARED["Shared contract"]
-        H["dcc.h<br/>macros, types, externs, prototypes"]
-        STATE["dcc_state.c<br/>defines the shared globals"]
+    subgraph SHARED["Shared contracts and state"]
+      H["dcc.h<br/>foundational types + broad API"]
+      IH["*_internal.h<br/>focused subsystem contracts"]
+      STATE["dcc_state.c<br/>shared state definitions"]
     end
 
     subgraph FE["1 - Front end"]
         DRV["dcc.c<br/>driver, CLI, main()"]
-        PP["dcc_preproc.c<br/>preprocessor + lexer"]
+      PP["dcc_preproc.c<br/>macro engine + lexer"]
+      PPX["dcc_pp_expr.c<br/>#if expression evaluator"]
         DIAG["dcc_diag_emit.c<br/>diagnostics + emit"]
         ASM["dcc_asmname.c<br/>C name -> asm symbol"]
     end
@@ -184,30 +222,34 @@ graph TB
         ASSIGN["dcc_assign.c"]
         STMT["dcc_stmt.c<br/>compound + switch helpers"]
         DECL["dcc_decl.c<br/>local decls, initializers"]
+        NARROW["dcc_array_narrow.c<br/>byte-narrowing proof"]
     end
 
-    subgraph TOP["5 - Top level + output"]
+      subgraph TOP["5 - Top level, speculation + output"]
         FUNC["dcc_func.c<br/>functions, frame layout"]
+        GINIT["dcc_global_init.c<br/>file-scope initializers"]
+        REG["dcc_regalloc.c<br/>whole-function speculation"]
+        LREG["dcc_loop_regalloc.c<br/>loop-scoped BC allocation"]
         DATA["dcc_data.c<br/>data-section emission"]
     end
 
-    SHARED -.included by all.-> FE
+      SHARED -.contracts.-> FE
     FE ==> TYP ==> AST ==> CG ==> TOP
 ```
 
 The thick arrows are the dominant translation pipeline (front end → types →
-code generation → output). Within a stage the files are peers, and because
-every module sees the same prototypes through `dcc.h`, any module may call any
-other — the arrows show the usual direction, not a hard layering rule.
+    code generation → output). Within a stage the files cooperate through shared
+    types and focused internal contracts; the arrows show the usual direction, not
+    a hard layering rule.
 
 | Group | Modules | Responsibility |
 | --- | --- | --- |
-| Shared | `dcc.h`, `dcc_state.c` | Contract + single definition of all shared state |
-| Front end | `dcc.c`, `dcc_preproc.c`, `dcc_diag_emit.c`, `dcc_asmname.c` | Driver/CLI, preprocessor + lexer, diagnostics + emit primitives, C-name-to-asm-symbol mapping |
+| Shared | `dcc.h`, `dcc_state.c`, `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, `dcc_regalloc_internal.h` | Foundational contract, focused internal contracts, and shared state definitions |
+| Front end | `dcc.c`, `dcc_preproc.c`, `dcc_pp_expr.c`, `dcc_diag_emit.c`, `dcc_asmname.c` | Driver/CLI, macro engine + lexer, conditional-expression evaluation, diagnostics + emit primitives, C-name-to-asm-symbol mapping |
 | Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c` | Type system, symbol tables, constant-expression evaluation, constant folding |
 | Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` + `dcc_ast_gen_support.c` / `_expr.c` / `_cond.c` / `_stmt.c` (behind `dcc_ast_gen_internal.h`) | AST node storage, typed statement/expression building, and the AST-driven Z80 emitter — split into classifiers/type resolvers (`dcc_ast_gen.c`), the `ast_gen_supported` dispatch and folds (`_support.c`), expression emitters (`_expr.c`), condition/branch emitters (`_cond.c`), and switch/for/statement emitters (`_stmt.c`) |
-| Code generation helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c` | Shared low-level emit helpers — expression, operator, comparison, assignment, declaration, and compound-block/switch-table lowering — all invoked *by the AST emitter* |
-| Top level / output | `dcc_func.c`, `dcc_data.c` | Function/frame parsing and data-section emission |
+| Code generation helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Low-level expression/operator/statement emit helpers and conservative byte-narrowing proof, all feeding the AST-driven path |
+| Top level / speculation / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_regalloc.c`, `dcc_loop_regalloc.c`, `dcc_data.c` | Function/frame parsing, global initializer recording, speculative no-IX and BC/E allocation, loop-scoped BC allocation, and data-section emission |
 
 ## Inside dccpeep: a fixpoint peephole optimizer
 
@@ -341,8 +383,9 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 
 ## Architecture summary
 
-- the DCC C Compiler is an **AST-driven** C89 compiler for function bodies, with direct
-  lowering from typed AST nodes to Z80/M80 assembly.
+- the DCC C Compiler is an **AST-driven** compiler for its supported
+  C89/C99/C11 subset, with direct lowering from typed function-body AST nodes
+  to Z80/M80 assembly.
 - Typed AST expression nodes drive mixed-width (16/32-bit, pointer, float)
   codegen decisions from the tree being emitted.
 - Machine-dependent optimization is split out into **`dccpeep`**, a
@@ -352,6 +395,6 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
   ~297-line baseline), so every routine has a measurable
   `self`/`marginal` size cost and `dccrtlstrip` can link only the blocks a
   program references.
-- The back half of the pipeline reuses the proven off-the-shelf Microsoft
-  **`M80`/`L80`** assembler and linker, so DCC C Compiler never has to implement object
-  formats or relocation itself.
+- The back half of the pipeline uses native **`m80c`** or Microsoft **`M80`**
+  for assembly and Microsoft **`L80`** for linking, so DCC C Compiler does not
+  need to implement the object format or linker relocation itself.

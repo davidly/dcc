@@ -97,15 +97,12 @@ static int tmpfile_unsafe_for_noix(FILE *f)
     char *buf;
     int found;
 
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    rewind(f);
-    if (size <= 0)
+    buf = dcc_read_stream_text(f, &size,
+                               "cannot read speculative no-ix-frame temp file");
+    if (size <= 0) {
+        free(buf);
         return 0;
-    buf = (char *)xmalloc((size_t)size + 1);
-    if (fread(buf, 1, (size_t)size, f) != (size_t)size)
-        fatal("cannot read speculative no-ix-frame temp file");
-    buf[size] = 0;
+    }
     found = strstr(buf, "push") != NULL || strstr(buf, "(ix") != NULL;
     free(buf);
     return found;
@@ -825,18 +822,14 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
     if (rewritten == NULL)
         fatal("cannot create speculative regalloc rewrite temp file");
 
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    rewind(f);
+    buf = dcc_read_stream_text(f, &size,
+                               "cannot read speculative regalloc temp file");
     if (size <= 0) {
+        free(buf);
         rewind(rewritten);
         *out_f = rewritten;
         return 1;
     }
-    buf = (char *)xmalloc((size_t)size + 1);
-    if (fread(buf, 1, (size_t)size, f) != (size_t)size)
-        fatal("cannot read speculative regalloc temp file");
-    buf[size] = 0;
 
     if (buf_has_unsafe_call(buf)) {
         free(buf);

@@ -813,15 +813,12 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
     int n_entry_lines, n_exit_lines;
     int safe;
 
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    rewind(f);
-    if (size <= 0)
+    buf = dcc_read_stream_text(
+        f, &size, "cannot read loop-regalloc write-candidate verify temp file");
+    if (size <= 0) {
+        free(buf);
         return 1;
-    buf = (char *)xmalloc((size_t)size + 1);
-    if (fread(buf, 1, (size_t)size, f) != (size_t)size)
-        fatal("cannot read loop-regalloc write-candidate verify temp file");
-    buf[size] = 0;
+    }
     rewind(f);
 
     if (buf_has_unsafe_call(buf)) {

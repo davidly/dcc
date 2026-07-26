@@ -36,15 +36,6 @@
 
 void append_mem(char **outp, long *lenp, long *capp, const char *s, long n);
 
-long file_size(FILE *f)
-{
-    long n;
-    fseek(f, 0, SEEK_END);
-    n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    return n;
-}
-
 
 char *splice_backslash_newlines(char *in, long *lenp, const char *filename)
 {
@@ -139,14 +130,9 @@ char *read_file(const char *name, long *lenp)
         fatal(errbuf);
     }
 
-    n = file_size(f);
-    p = (char *)xmalloc((size_t)n + 1);
-
-    if (fread(p, 1, (size_t)n, f) != (size_t)n)
-        fatal("cannot read input");
+    p = dcc_read_stream_text(f, &n, "cannot read input");
 
     fclose(f);
-    p[n] = 0;
     lenp[0] = n;
 
     /*
