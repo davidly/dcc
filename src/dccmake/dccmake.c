@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <time.h>
 
 /* MSVC's <sys/stat.h> defines the S_IFDIR bitmask but not the POSIX
  * S_ISDIR macro built on top of it - supply the standard fallback. */
@@ -19,6 +20,7 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
 #define MKDIR(path) _mkdir(path)
 #define CHDIR(path) _chdir(path)
 #define GETCWD(buf, size) _getcwd(buf, (int)(size))
@@ -50,6 +52,24 @@
 #define MAX_NAME_LEN 128
 #define MAX_CMD_LEN 32768
 #define MAX_LINE_LEN 2048
+
+/* Monotonic wall-clock milliseconds, for the per-phase pipeline timing
+ * printed at the end of run_build - run_cmd's children run under system(),
+ * whose time isn't reliably reflected in this process's own clock()/CPU
+ * time, so this measures wall clock directly instead. */
+#ifdef _WIN32
+static long long now_ms(void)
+{
+    return (long long)GetTickCount64();
+}
+#else
+static long long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+#endif
 
 struct Config {
     char inputs[MAX_ITEMS][MAX_PATH_LEN];
@@ -1743,6 +1763,10 @@ static int run_build(struct Config *cfg)
     char output_lower[MAX_NAME_LEN];
     char link_arg[MAX_CMD_LEN];
     int i;
+    long long t_start, t0;
+    long long ms_dcc = 0, ms_peep = 0, ms_asm = 0, ms_rtlstrip = 0, ms_link = 0;
+
+    t_start = now_ms();
 
     if (cfg->input_count <= 0) {
         fprintf(stderr, "dcc-input is required; set it in dccmake.txt or pass dcc-input=main.c\n");
@@ -1857,8 +1881,10 @@ static int run_build(struct Config *cfg)
     for (i = 0; i < cfg->input_count; i++) {
         if (!build_dcc_command(cfg, i, cfg->inputs[i], macs[i], cmd, sizeof(cmd)))
             return 0;
+        t0 = now_ms();
         if (!run_cmd(cmd) || !file_exists(macs[i]))
             return 0;
+        ms_dcc += now_ms() - t0;
         if (cfg->peep && (!cfg->debug || cfg->peep_debug)) {
             int tmp_n = snprintf(tmp, sizeof(tmp), "%s%c_PEEPOUT_%d.MAC", cfg->build_dir, PATH_SEP, i);
             if (tmp_n < 0 || (size_t)tmp_n >= sizeof(tmp)) {
@@ -1872,8 +1898,10 @@ static int run_build(struct Config *cfg)
             }
             if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
             if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
+            t0 = now_ms();
             if (!run_cmd(cmd) || !file_exists(tmp))
                 return 0;
+            ms_peep += now_ms() - t0;
             remove(macs[i]);
             if (rename(tmp, macs[i]) != 0) {
                 fprintf(stderr, "cannot replace %s with optimized output\n", macs[i]);
@@ -1888,10 +1916,12 @@ static int run_build(struct Config *cfg)
         snprintf(tmp, sizeof(tmp), "=%.127s.MAC", uppers[i]);
         if (!build_m80_command(cfg, tmp, cmd, sizeof(cmd)))
             return 0;
+        t0 = now_ms();
         if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rels[i])) {
             fprintf(stderr, "assembly failed: %s was not produced\n", rels[i]);
             return 0;
         }
+        ms_asm += now_ms() - t0;
         if (!check_no_fatal_errors(prns[i]))
             return 0;
         if (cfg->debug && (!file_exists(dbgs[i]) || !file_exists(links[i]))) {
@@ -1920,15 +1950,19 @@ static int run_build(struct Config *cfg)
     for (i = 0; i < cfg->input_count; i++) {
         if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
     }
+    t0 = now_ms();
     if (!run_cmd(cmd) || !file_exists(rtl_min) || !to_crlf(rtl_min))
         return 0;
+    ms_rtlstrip += now_ms() - t0;
 
     if (!build_m80_command(cfg, "=RTLMIN.MAC", cmd, sizeof(cmd)))
         return 0;
+    t0 = now_ms();
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(rtl_rel)) {
         fprintf(stderr, "runtime assembly failed: %s was not produced\n", rtl_rel);
         return 0;
     }
+    ms_asm += now_ms() - t0;
     if (!check_no_fatal_errors(rtl_prn))
         return 0;
     if (cfg->debug && !file_exists(rtl_link)) {
@@ -1951,10 +1985,12 @@ static int run_build(struct Config *cfg)
     if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), cfg->l80)) return 0;
     if (!cmd_arg(cmd, sizeof(cmd), link_arg)) return 0;
+    t0 = now_ms();
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(app_com)) {
         fprintf(stderr, "link failed: %s was not produced\n", app_com);
         return 0;
     }
+    ms_link += now_ms() - t0;
 
     if (cfg->debug && !finalize_debug_file(app_dbg, rtl_link, dbgs, links, cfg->input_count))
         return 0;
@@ -1963,6 +1999,13 @@ static int run_build(struct Config *cfg)
         copy_file(app_com, lower_com);
 
     printf("dccmake: built %s\n", app_com);
+    {
+        long long total = now_ms() - t_start;
+        long long other = total - (ms_dcc + ms_peep + ms_asm + ms_rtlstrip + ms_link);
+        if (other < 0) other = 0;
+        printf("dccmake: timing dcc=%lldms peep=%lldms asm=%lldms rtlstrip=%lldms link=%lldms other=%lldms total=%lldms\n",
+               ms_dcc, ms_peep, ms_asm, ms_rtlstrip, ms_link, other, total);
+    }
     return 1;
 }
 
