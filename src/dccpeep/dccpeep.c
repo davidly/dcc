@@ -1337,8 +1337,6 @@ static int peep_is_public_line(const char *s)
 
 
 
-static int line_clobbers_bc(const char *line);
-
 static int pass_posfunc_b_cache(void)
 {
     int i, j, end;
@@ -1481,63 +1479,12 @@ static int pass_posfunc_b_cache(void)
  * overflow path, which does use C for a BDOS print call, ends in
  * "jp 0000h" (CP/M warm boot) without ever returning - so a clobbered C
  * there is never observed by anything. */
-static int line_clobbers_bc(const char *line)
-{
-    char clean[MAX_LINE];
-    const char *p;
-
-    strip_peep_comment_lower_copy(clean, line);
-
-    if ((strncmp(clean, "rst", 3) == 0 &&
-         (clean[3] == ' ' || clean[3] == '\t')) ||
-        strncmp(clean, "djnz", 4) == 0 || strcmp(clean, "exx") == 0 ||
-        strcmp(clean, "ldi") == 0 || strcmp(clean, "ldd") == 0 ||
-        strcmp(clean, "cpi") == 0 || strcmp(clean, "cpd") == 0 ||
-        strcmp(clean, "ini") == 0 || strcmp(clean, "ind") == 0 ||
-        strcmp(clean, "outi") == 0 || strcmp(clean, "outd") == 0 ||
-        strcmp(clean, "ldir") == 0 || strcmp(clean, "lddr") == 0 ||
-        strcmp(clean, "cpir") == 0 || strcmp(clean, "cpdr") == 0 ||
-        strcmp(clean, "inir") == 0 || strcmp(clean, "indr") == 0 ||
-        strcmp(clean, "otir") == 0 || strcmp(clean, "otdr") == 0)
-        return 1;
-
-    if (strncmp(clean, "call", 4) == 0 &&
-        (clean[4] == ' ' || clean[4] == '\t') &&
-        strcmp(clean, "call __stchk") != 0)
-        return 1;
-
-    p = clean;
-    while (*p) {
-        if (isalnum((unsigned char)*p) || *p == '_') {
-            const char *start = p;
-            int n = 0;
-            while (*p && (isalnum((unsigned char)*p) || *p == '_')) { p++; n++; }
-            if (n == 1 && (*start == 'b' || *start == 'c'))
-                return 1;
-            if (n == 2 && start[0] == 'b' && start[1] == 'c')
-                return 1;
-        } else {
-            p++;
-        }
-    }
-    return 0;
-}
 
 /* pass_cache_noix_byte_param_reload additionally needs SP to be stable (it
  * caches an SP-relative address, not just a value), so push/pop - which
  * don't clobber BC but do shift SP - are hazards there even though they
  * aren't for a plain register-value cache like
  * pass_cache_global_word_reload's. */
-static int line_could_use_bc(const char *line)
-{
-    char clean[MAX_LINE];
-
-    if (line_clobbers_bc(line))
-        return 1;
-
-    strip_peep_comment_copy(clean, line);
-    return strncmp(clean, "push ", 5) == 0 || strncmp(clean, "pop ", 4) == 0;
-}
 
 /* Recognizes both known "read a stack parameter via SP-relative addressing"
  * shapes a no-IX-frame function emits, immediately following the common
@@ -2128,55 +2075,17 @@ static int pass_byte_loop_counter_to_reg_c(void)
 }
 
 
-static int line_touches_bc(const char *s);
-static int line_touches_de(const char *s);
-static int line_touches_hl(const char *s);
-
 /* This function's own boundaries: the most recent "public NAME" at or
  * before `from`, and the next "public NAME" after it (or nlines if this is
  * the last function in the file). Used to bound the label-reachability
  * check below to the current function only, so it can never be fooled by
  * a same-numbered label belonging to a different function. */
-static void find_function_bounds(int from, int *func_start, int *func_end)
-{
-    int k;
-
-    *func_start = 0;
-    for (k = from; k >= 0; --k) {
-        if (strncmp(lines[k], "public ", 7) == 0) { *func_start = k; break; }
-    }
-    *func_end = nlines;
-    for (k = from + 1; k < nlines; ++k) {
-        if (strncmp(lines[k], "public ", 7) == 0) { *func_end = k; break; }
-    }
-}
 
 /* Same as find_function_bounds, but also recognizes "; static function "
  * (see emit_function_prologue) as a function boundary - a static
  * function's definition never emits a public line, so find_function_bounds
  * alone treats its whole body as still belonging to whichever public
  * function happens to precede it in the file. */
-static void find_function_bounds_any(int from, int *func_start, int *func_end)
-{
-    int k;
-
-    *func_start = 0;
-    for (k = from; k >= 0; --k) {
-        if (strncmp(lines[k], "public ", 7) == 0 ||
-            strncmp(lines[k], "; static function ", 18) == 0) {
-            *func_start = k;
-            break;
-        }
-    }
-    *func_end = nlines;
-    for (k = from + 1; k < nlines; ++k) {
-        if (strncmp(lines[k], "public ", 7) == 0 ||
-            strncmp(lines[k], "; static function ", 18) == 0) {
-            *func_end = k;
-            break;
-        }
-    }
-}
 
 static int jump_target_any(const char *s, char *out);
 
@@ -3132,54 +3041,7 @@ static int pass_byte_for_counter_to_reg_e(void)
  * is a documented limitation, not a live bug against anything exercised
  * here.
  */
-#define MAX_LOCAL_FUNC_LABELS 8192
-static char local_func_labels[MAX_LOCAL_FUNC_LABELS][128];
-static int n_local_func_labels;
 
-static void scan_local_func_labels(void)
-{
-    int i;
-    char name[128];
-    int n;
-
-    n_local_func_labels = 0;
-    for (i = 0; i + 1 < nlines; ++i) {
-        /* "; static function " is 18 characters, not 19 - an off-by-one
-         * here meant this branch never matched (strncmp saw the real
-         * function name's first character where the literal's implicit
-         * NUL was, at n=19), so scan_local_func_labels only ever recorded
-         * genuinely `public` functions, never `static` ones. That silently
-         * defeated the whole cross-function IY-collision check for calls
-         * between static functions - confirmed as the root cause of
-         * tests/too.c's corrupted output under -fundocumented-z80:
-         * gallery_init (static) calls hall_init (static) calls
-         * exhibit_init (static), and all three independently claimed IYL
-         * for their own loop, each stomping the others' live value. */
-        if (strncmp(lines[i], "public ", 7) != 0 &&
-            strncmp(lines[i], "; static function ", 18) != 0)
-            continue;
-        if (!starts_label(lines[i + 1]))
-            continue;
-
-        strncpy(name, lines[i + 1], sizeof(name) - 1);
-        name[sizeof(name) - 1] = 0;
-        n = (int)strlen(name);
-        if (n > 0 && name[n - 1] == ':')
-            name[n - 1] = 0;
-
-        if (n_local_func_labels < MAX_LOCAL_FUNC_LABELS)
-            strcpy(local_func_labels[n_local_func_labels++], name);
-    }
-}
-
-static int is_local_func_label(const char *name)
-{
-    int i;
-    for (i = 0; i < n_local_func_labels; ++i)
-        if (!strcmp(local_func_labels[i], name))
-            return 1;
-    return 0;
-}
 
 /*
  * IYL counterpart of pass_byte_loop_counter_to_reg_c: the identical self-
@@ -10233,59 +10095,9 @@ static int hoistbc_parse_ld_l_ix_off(const char *s, int *off)
  * Z80 mnemonic that touches a register pair implicitly (the block/repeat
  * instructions all use BC as a counter and DE/HL as pointers) is
  * included, not just explicit register-name operands. */
-static int line_touches_reg_pair(const char *s, const char *lo, const char *hi,
-                                 const char *pair)
-{
-    static const char *implicit_pair_mnemonics[] = {
-        "djnz ", "ldir", "lddr", "cpir", "cpdr",
-        "otir", "otdr", "inir", "indr",
-        "ldi", "ldd", "cpi", "cpd", "ini", "ind", "outi", "outd",
-        NULL
-    };
-    const char *p;
-    char tok[16];
-    char paren[8];
-    int ti;
-    int i;
 
-    for (i = 0; implicit_pair_mnemonics[i] != NULL; ++i)
-        if (strncmp(s, implicit_pair_mnemonics[i], strlen(implicit_pair_mnemonics[i])) == 0)
-            return 1;
 
-    sprintf(paren, "(%s)", pair);
-    if (strstr(s, paren) != NULL)
-        return 1;
 
-    p = s;
-    while (*p) {
-        if (isalpha((unsigned char)*p) || *p == '_') {
-            ti = 0;
-            while ((isalnum((unsigned char)*p) || *p == '_') && ti < 15)
-                tok[ti++] = *p++;
-            tok[ti] = 0;
-            if (strcmp(tok, lo) == 0 || strcmp(tok, hi) == 0 || strcmp(tok, pair) == 0)
-                return 1;
-        } else {
-            p++;
-        }
-    }
-    return 0;
-}
-
-static int line_touches_bc(const char *s)
-{
-    return line_touches_reg_pair(s, "b", "c", "bc");
-}
-
-static int line_touches_de(const char *s)
-{
-    return line_touches_reg_pair(s, "d", "e", "de");
-}
-
-static int line_touches_hl(const char *s)
-{
-    return line_touches_reg_pair(s, "l", "h", "hl");
-}
 
 /*
  * pass_hoist_index_ptr_to_bc:
@@ -10548,29 +10360,6 @@ static int zero_cond_jump_target_any(const char *s, char *out)
  * stripped first). Used only by a_dead_or_overwritten_from's conservative
  * liveness proof below - unlike line_touches_reg_pair's b/c/d/e callers,
  * there is no flag-condition mnemonic spelled "a" to special-case. */
-static int line_touches_a(const char *s)
-{
-    char tmp[MAX_LINE];
-    const char *p;
-    char tok[16];
-    int ti;
-
-    strip_peep_comment_copy(tmp, s);
-    p = tmp;
-    while (*p) {
-        if (isalpha((unsigned char)*p) || *p == '_') {
-            ti = 0;
-            while ((isalnum((unsigned char)*p) || *p == '_') && ti < 15)
-                tok[ti++] = *p++;
-            tok[ti] = 0;
-            if (strcmp(tok, "a") == 0 || strcmp(tok, "af") == 0)
-                return 1;
-        } else {
-            p++;
-        }
-    }
-    return 0;
-}
 
 static int is_uncond_jr(const char *s)
 {

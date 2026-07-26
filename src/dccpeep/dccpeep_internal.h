@@ -71,4 +71,18 @@ int peep_parse_ld_paren_sym_hl(const char *s, char *sym);
 int parse_ix_off_numeric(const char *off, int *val);
 int parse_ld_reg16_dest(const char *s, char *out);
 
+/* Shared conservative analysis helpers. */
+int line_clobbers_bc(const char *line);
+int line_could_use_bc(const char *line);
+void find_function_bounds(int from, int *func_start, int *func_end);
+void find_function_bounds_any(int from, int *func_start, int *func_end);
+void scan_local_func_labels(void);
+int is_local_func_label(const char *name);
+int line_touches_reg_pair(const char *s, const char *lo, const char *hi,
+                                 const char *pair);
+int line_touches_bc(const char *s);
+int line_touches_de(const char *s);
+int line_touches_hl(const char *s);
+int line_touches_a(const char *s);
+
 #endif
