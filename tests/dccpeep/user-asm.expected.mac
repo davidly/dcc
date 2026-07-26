@@ -1,0 +1,9 @@
+; dcc stage-1d output
+; dcc user asm begin
+	ld de,1
+	add hl,de
+	ld a,0
+	adc a,0
+; dcc user asm end
+	ret
+	end

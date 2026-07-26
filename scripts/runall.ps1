@@ -1656,6 +1656,18 @@ if (-not $diagnosticsPassed) {
     $failed++
 }
 
+$dccpeepTestsPassed = $null
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "RUNNING DCCPEEP FIXTURES" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+& pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
+    -DccPeep (Join-Path $script:RepoRoot "dccpeep")
+$dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
+if (-not $dccpeepTestsPassed) {
+    $failed++
+}
+
 $narrowDiffPassed = $null
 if ($NarrowDiff) {
     Write-Host ""
@@ -1779,6 +1791,7 @@ if ($Extended) {
     Write-Host "  Extended:     $(if ($extendedPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($extendedPassed) { "Green" } else { "Red" })
 }
 Write-Host "  Diagnostics:  $(if ($diagnosticsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($diagnosticsPassed) { "Green" } else { "Red" })
+Write-Host "  Dccpeep:      $(if ($dccpeepTestsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($dccpeepTestsPassed) { "Green" } else { "Red" })
 if ($perfCheck -and -not $UpdatePerfBaseline) {
     $perfLabel = if ($perfCheck.Regressions.Count -eq 0) { "passed" } else { "$($perfCheck.Regressions.Count) regression(s)" }
     Write-Host "  Performance:  $perfLabel" -ForegroundColor $(if ($perfCheck.Regressions.Count -eq 0) { "Green" } else { "Red" })
@@ -1803,6 +1816,10 @@ if ($Extended -and -not $extendedPassed) {
 if (-not $diagnosticsPassed) {
     Write-Host ""
     Write-Host "Diagnostics suite failed" -ForegroundColor Red
+}
+if (-not $dccpeepTestsPassed) {
+    Write-Host ""
+    Write-Host "Dccpeep fixture suite failed" -ForegroundColor Red
 }
 if ($NarrowDiff -and -not $narrowDiffPassed) {
     Write-Host ""

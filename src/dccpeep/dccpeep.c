@@ -11,6 +11,9 @@
 #define MAX_LINE  512
 
 static char *lines[MAX_LINES];
+/* Non-NULL for opaque user-assembly lines. During optimization lines[i] is a
+ * synthetic label barrier; write_file emits this saved original instead. */
+static char *user_asm_original[MAX_LINES];
 static int nlines;
 static int opt_size = 0;  /* -Os: use RTL helper stubs; default -Ot: inline */
 
@@ -128,6 +131,11 @@ static void replace1(int i, const char *s)
 {
     char *p;
 
+    if (user_asm_original[i] != NULL) {
+        fprintf(stderr, "internal error: attempted to rewrite user assembly\n");
+        exit(1);
+    }
+
     /*
      * Be careful when callers pass lines[i] as the replacement text.
      * The old version freed lines[i] before duplicating s, which is a
@@ -176,13 +184,24 @@ static void delete_n(int i, int count)
 {
     int j;
 
-    for (j = 0; j < count; j++)
+    for (j = 0; j < count; j++) {
+        if (user_asm_original[i + j] != NULL) {
+            fprintf(stderr, "internal error: attempted to delete user assembly\n");
+            exit(1);
+        }
         free(lines[i + j]);
+    }
 
-    for (j = i; j + count < nlines; j++)
+    for (j = i; j + count < nlines; j++) {
         lines[j] = lines[j + count];
+        user_asm_original[j] = user_asm_original[j + count];
+    }
 
     nlines -= count;
+    for (j = nlines; j < nlines + count; ++j) {
+        lines[j] = NULL;
+        user_asm_original[j] = NULL;
+    }
 }
 
 static void insert_line(int i, const char *s)
@@ -194,10 +213,13 @@ static void insert_line(int i, const char *s)
         exit(1);
     }
 
-    for (j = nlines; j > i; j--)
+    for (j = nlines; j > i; j--) {
         lines[j] = lines[j - 1];
+        user_asm_original[j] = user_asm_original[j - 1];
+    }
 
     lines[i] = xstrdup2(s);
+    user_asm_original[i] = NULL;
     nlines++;
 }
 
@@ -604,6 +626,10 @@ static int is_label_referenced(const char *lab)
     const char *found;
     char before;
     char after;
+
+    /* Opaque user-asm barriers must survive adjacent-label cleanup. */
+    if (strncmp(lab, "__dcc_user_asm_", 15) == 0)
+        return 1;
 
     lablen = (int)strlen(lab);
 
@@ -9433,10 +9459,43 @@ static int pass_cond_skip_shortcut(void)
     return changed;
 }
 
+static int read_physical_line(FILE *f, char **bufp, size_t *capp)
+{
+    size_t len;
+    int c;
+    char *buf;
+
+    len = 0;
+    buf = *bufp;
+    while ((c = fgetc(f)) != EOF) {
+        if (len + 1 >= *capp) {
+            size_t newcap = (*capp == 0) ? 512 : *capp * 2;
+            char *grown = (char *)realloc(buf, newcap);
+            if (grown == NULL) {
+                free(buf);
+                fprintf(stderr, "out of memory\n");
+                exit(1);
+            }
+            buf = grown;
+            *bufp = buf;
+            *capp = newcap;
+        }
+        if (c == '\n')
+            break;
+        buf[len++] = (char)c;
+    }
+    if (c == EOF && len == 0)
+        return 0;
+    buf[len] = 0;
+    return 1;
+}
+
 static void read_file(const char *name)
 {
     FILE *f;
-    char buf[MAX_LINE];
+    char *buf;
+    size_t cap;
+    int user_asm_depth;
 
     f = fopen(name, "r");
     if (!f) {
@@ -9444,7 +9503,12 @@ static void read_file(const char *name)
         exit(1);
     }
 
-    while (fgets(buf, sizeof(buf), f)) {
+    buf = NULL;
+    cap = 0;
+    user_asm_depth = 0;
+    while (read_physical_line(f, &buf, &cap)) {
+        char placeholder[64];
+
         trim(buf);
         if (strcmp(buf, "; dcc stage-1d output") == 0)
             input_is_dcc_generated = 1;
@@ -9452,9 +9516,32 @@ static void read_file(const char *name)
             fprintf(stderr, "too many lines\n");
             exit(1);
         }
-        lines[nlines++] = xstrdup2(buf);
+        if (strcmp(buf, "; dcc user asm begin") == 0) {
+            lines[nlines] = xstrdup2(buf);
+            user_asm_original[nlines++] = NULL;
+            user_asm_depth++;
+        } else if (strcmp(buf, "; dcc user asm end") == 0) {
+            if (user_asm_depth > 0)
+                user_asm_depth--;
+            lines[nlines] = xstrdup2(buf);
+            user_asm_original[nlines++] = NULL;
+        } else if (user_asm_depth > 0) {
+            sprintf(placeholder, "__dcc_user_asm_%d:", nlines);
+            lines[nlines] = xstrdup2(placeholder);
+            user_asm_original[nlines++] = xstrdup2(buf);
+        } else {
+            lines[nlines] = xstrdup2(buf);
+            user_asm_original[nlines++] = NULL;
+        }
     }
 
+    if (ferror(f)) {
+        fprintf(stderr, "cannot read %s\n", name);
+        free(buf);
+        fclose(f);
+        exit(1);
+    }
+    free(buf);
     fclose(f);
 }
 
@@ -9470,15 +9557,20 @@ static void write_file(const char *name)
     }
 
     for (i = 0; i < nlines; i++) {
-        if (lines[i][0] == 0)
+        const char *line = user_asm_original[i] != NULL
+            ? user_asm_original[i] : lines[i];
+        if (line[0] == 0)
             fprintf(f, "\n");
-        else if (starts_label(lines[i]) || lines[i][0] == ';')
-            fprintf(f, "%s\n", lines[i]);
+        else if (starts_label(line) || line[0] == ';')
+            fprintf(f, "%s\n", line);
         else
-            fprintf(f, "\t%s\n", lines[i]);
+            fprintf(f, "\t%s\n", line);
     }
 
-    fclose(f);
+    if (ferror(f) || fclose(f) != 0) {
+        fprintf(stderr, "cannot write %s\n", name);
+        exit(1);
+    }
 }
 
 /*
@@ -13278,8 +13370,10 @@ static int pass_jp_to_plain_ret(void)
  * ------------------------------------------------------------------------- */
 
 /* Upper bound on the encoded byte size of one (already-trimmed) line. */
-static int instr_size_upper(const char *s)
+static int instr_size_upper(int line_index)
 {
+    const char *s = user_asm_original[line_index] != NULL
+        ? user_asm_original[line_index] : lines[line_index];
     /* Labels, comments, blank lines and assembler directives emit no code. */
     if (s[0] == 0 || s[0] == ';' || starts_label(s))
         return 0;
@@ -13403,7 +13497,7 @@ static int pass_jp_to_jr(void)
         /* Assign an upper-bound address to every line. */
         for (i = 0; i < nlines; i++) {
             addr[i] = pc;
-            pc += instr_size_upper(lines[i]);
+            pc += instr_size_upper(i);
         }
 
         for (i = 0; i < nlines; i++) {
@@ -13426,6 +13520,22 @@ static int pass_jp_to_jr(void)
             }
             if (target < 0)
                 continue;
+
+            /* Opaque user assembly may contain directives or macros whose
+             * encoded size this text-level estimator cannot bound. */
+            {
+                int lo = (i < target) ? i : target;
+                int hi = (i < target) ? target : i;
+                int k;
+                int opaque = 0;
+                for (k = lo; k <= hi; ++k)
+                    if (user_asm_original[k] != NULL) {
+                        opaque = 1;
+                        break;
+                    }
+                if (opaque)
+                    continue;
+            }
 
             /* Displacement is measured from the address *after* the 2-byte jr
              * to the target address.  Using the current (jp, size<=3) address

@@ -1,0 +1,5 @@
+; dcc stage-1d output
+ld de,1
+add hl,de
+ret
+end

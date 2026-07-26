@@ -1,0 +1,4 @@
+; dcc stage-1d output
+	inc hl ; peep: ld_de1_to_inc
+	ret
+	end
