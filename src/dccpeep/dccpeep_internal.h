@@ -121,6 +121,11 @@ int line_is_label_name(int i, const char *name);
 int peep_is_public_line(const char *s);
 int bc_regalloc_claimed_before(int at);
 int stride_parse_ld_r_ix_neg(const char *s, char r, int *n);
+void strip_label_colon(char *s);
+int jump_target_any(const char *s, char *out);
+int find_last_loop_back(int body_start, const char *label, int any);
+int loop_body_internal_labels_safe(int lo, int hi);
+int find_label_line_in_range(const char *name, int lo, int hi);
 
 /* Application-specific board/game passes (peep_pass_minmax.c). */
 int peep_in_function_range(const char *func, int *startp, int *endp);
@@ -139,5 +144,14 @@ int pass_reuse_board_addr_for_zero_store(void);
 int pass_minmax_elim_label_reload(void);
 int pass_winner_check_dec_a(void);
 int pass_global_board_const_offsets(void);
+
+/* Loop-scoped registerization passes (peep_pass_loops.c). */
+int pass_byte_loop_counter_to_reg_c(void);
+int pass_word_loop_var_to_reg_bc(void);
+int pass_byte_loop_var_to_reg_c(void);
+int pass_byte_for_counter_to_reg_c(void);
+int pass_byte_for_counter_to_reg_e(void);
+int pass_byte_loop_counter_to_reg_iyl(void);
+int pass_byte_incr_loop_counter_to_reg_iyl(void);
 
 #endif
