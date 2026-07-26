@@ -5191,6 +5191,306 @@ static int pass_cache_ix_long_param_reload(void)
     return changed;
 }
 
+static int all_compare_flags_dead_from(int start)
+{
+    int i;
+    char clean[MAX_LINE];
+
+    for (i = start; i < start + 20 && i < nlines; ++i) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (starts_label(clean) || !strncmp(clean, "jp ", 3) ||
+            !strncmp(clean, "jr ", 3) || !strncmp(clean, "ret", 3) ||
+            !strncmp(clean, "djnz", 4))
+            return 0;
+        if (!strncmp(clean, "or ", 3) || !strncmp(clean, "and ", 4) ||
+            !strncmp(clean, "xor ", 4) || !strncmp(clean, "cp ", 3) ||
+            !strncmp(clean, "add a,", 6) || !strncmp(clean, "sub ", 4) ||
+            !strncmp(clean, "sbc ", 4) || !strncmp(clean, "adc ", 4) ||
+            !strncmp(clean, "call ", 5))
+            return 1;
+    }
+    return 0;
+}
+
+static int is_uncond_jr(const char *s);
+
+static int flags_dead_after_resolved_jump(int line, int func_start, int func_end)
+{
+    char target[128];
+    int target_line;
+
+    if (all_compare_flags_dead_from(line))
+        return 1;
+    if (line < 0 || line >= func_end ||
+        (!is_uncond_jp(lines[line]) && !is_uncond_jr(lines[line])) ||
+        !jump_target_any(lines[line], target))
+        return 0;
+    target_line = find_label_line_in_range(target, func_start, func_end);
+    return target_line >= 0 && all_compare_flags_dead_from(target_line + 1);
+}
+
+/* Preserve an IX-loaded pointer across `left < right` loop-bound tests.
+ * DCC normally computes left-right in HL, then reloads left for an immediate
+ * dereference. Computing right-left instead leaves left in DE; carry or zero
+ * means left>=right, and EX DE,HL restores left on the continuing path. */
+static int pass_preserve_ix_pointer_compare(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 12 < nlines; ++i) {
+        int left, right;
+        int eoff, doff;
+        char ebuf[32], dbuf[32];
+        char left_text[32], right_text[32];
+        char target[128];
+        char line[160];
+
+        if (!peep_parse_ld_ix_pair(lines[i], lines[i + 1], &left) ||
+            !peep_parse_ld_e_ix(lines[i + 2], ebuf) ||
+            !peep_parse_ld_d_ix(lines[i + 3], dbuf) ||
+            !parse_ix_off_numeric(ebuf, &eoff) ||
+            !parse_ix_off_numeric(dbuf, &doff) || doff != eoff + 1)
+            continue;
+        right = eoff;
+        if (!eq(i + 4, "or a") || !eq(i + 5, "sbc hl,de") ||
+            !parse_jp_nc_label(lines[i + 6], target) ||
+            !peep_parse_ld_ix_pair(lines[i + 7], lines[i + 8], &eoff) ||
+            eoff != left || !eq(i + 9, "ld e,(hl)") ||
+            !eq(i + 10, "inc hl") || !eq(i + 11, "ld d,(hl)") ||
+            !eq(i + 12, "ex de,hl") ||
+            !all_compare_flags_dead_from(i + 13))
+            continue;
+
+        peep_format_ix_off(left_text, left);
+        peep_format_ix_off(right_text, right);
+        sprintf(line, "ld l,(ix%s)", right_text);
+        replace1_tagged(i, line, "preserve_ix_pointer_compare");
+        sprintf(line, "ld h,(ix%+d)", right + 1);
+        replace1(i + 1, line);
+        sprintf(line, "ld e,(ix%s)", left_text);
+        replace1(i + 2, line);
+        sprintf(line, "ld d,(ix%+d)", left + 1);
+        replace1(i + 3, line);
+        sprintf(line, "jp c, %s", target);
+        replace1(i + 6, line);
+        sprintf(line, "jp z, %s", target);
+        replace1(i + 7, line);
+        replace1(i + 8, "ex de,hl");
+        changed = 1;
+    }
+    return changed;
+}
+
+static int line_mentions_iy(const char *line)
+{
+    char clean[MAX_LINE];
+    const char *p;
+
+    strip_peep_comment_lower_copy(clean, line);
+    if (!strncmp(clean, "db 0fdh,", 8))
+        return 1;
+    p = clean;
+    while (*p) {
+        if (isalnum((unsigned char)*p) || *p == '_') {
+            const char *start = p;
+            int length = 0;
+            while (isalnum((unsigned char)*p) || *p == '_') {
+                ++p;
+                ++length;
+            }
+            if ((length == 2 && !strncmp(start, "iy", 2)) ||
+                (length == 3 && (!strncmp(start, "iyh", 3) ||
+                                 !strncmp(start, "iyl", 3))))
+                return 1;
+        } else {
+            ++p;
+        }
+    }
+    return 0;
+}
+
+static int peep_parse_ld_de_ix_pair(int line, int *offset)
+{
+    char ebuf[32], dbuf[32];
+    int e, d;
+
+    if (line < 0 || line + 1 >= nlines ||
+        !peep_parse_ld_e_ix(lines[line], ebuf) ||
+        !peep_parse_ld_d_ix(lines[line + 1], dbuf) ||
+        !parse_ix_off_numeric(ebuf, &e) || !parse_ix_off_numeric(dbuf, &d) ||
+        d != e + 1)
+        return 0;
+    *offset = e;
+    return 1;
+}
+
+static int parse_small_add_a(const char *line, int *amount)
+{
+    char clean[MAX_LINE];
+    char *end;
+    long value;
+
+    strip_peep_comment_copy(clean, line);
+    if (strncmp(clean, "add a,", 6) != 0)
+        return 0;
+    value = strtol(clean + 6, &end, 10);
+    if (*end || value < 1 || value > 4)
+        return 0;
+    *amount = (int)value;
+    return 1;
+}
+
+/* Promote one frame-resident pointer in a closed static helper to documented
+ * IY. The candidate must have one HL initialization, only canonical HL/DE
+ * reloads, and one small carry-skip increment whose flags are dead at the
+ * loop target. Calls may only target same-file functions (the whole file is
+ * proven IY-free) or DCCRTL's __ helpers, which never touch IY. */
+static int pass_promote_ix_pointer_to_iy(void)
+{
+    int i, k;
+
+    for (i = 0; i < nlines; ++i)
+        if (line_mentions_iy(lines[i]))
+            return 0;
+
+    for (i = 0; i < nlines; ++i) {
+        int func_start, func_end;
+        int offset, init_line = -1, increment_line = -1, increment_amount = 0;
+        int best_candidate_loads = -1;
+        int loads[128], load_kinds[128], load_count = 0;
+        int safe = 1;
+        char low_pat[24], high_pat[24];
+
+        if (strncmp(lines[i], "; static function ", 18) != 0)
+            continue;
+        find_function_bounds_any(i + 1, &func_start, &func_end);
+        if (func_start != i)
+            continue;
+
+        /* Find a single canonical small increment candidate first. */
+        for (k = i + 1; k + 5 < func_end; ++k) {
+            char offbuf[32], storebuf[32], highbuf[48], target[128];
+            int parsed_offset, stored_offset;
+            int candidate_loads = 0;
+            int candidate_amount;
+            int q, qoff;
+
+            if (!peep_parse_ld_a_ix(lines[k], offbuf) ||
+                !parse_ix_off_numeric(offbuf, &parsed_offset) ||
+                !parse_small_add_a(lines[k + 1], &candidate_amount) ||
+                !peep_parse_ld_ix_a(lines[k + 2], storebuf) ||
+                !parse_ix_off_numeric(storebuf, &stored_offset) ||
+                stored_offset != parsed_offset ||
+                !peep_parse_inc_ix_byte(lines[k + 4], &stored_offset) ||
+                stored_offset != parsed_offset + 1 ||
+                !label_name_at(k + 5, target))
+                continue;
+            sprintf(highbuf, "jr nc,%s", target);
+            if (!eq(k + 3, highbuf)) {
+                sprintf(highbuf, "jp nc, %s", target);
+                if (!eq(k + 3, highbuf))
+                    continue;
+            }
+            if (!flags_dead_after_resolved_jump(k + 6, func_start, func_end))
+                continue;
+            for (q = i + 1; q + 1 < func_end; ++q) {
+                if ((peep_parse_ld_ix_pair(lines[q], lines[q + 1], &qoff) ||
+                     peep_parse_ld_de_ix_pair(q, &qoff)) &&
+                    qoff == parsed_offset) {
+                    ++candidate_loads;
+                    ++q;
+                }
+            }
+            if (candidate_loads > best_candidate_loads) {
+                best_candidate_loads = candidate_loads;
+                increment_line = k;
+                offset = parsed_offset;
+                increment_amount = candidate_amount;
+            }
+        }
+        if (!safe || increment_line < 0)
+            continue;
+
+        peep_format_ix_off(low_pat, offset);
+        peep_format_ix_off(high_pat, offset + 1);
+        for (k = i + 1; k < func_end && safe; ++k) {
+            int parsed_offset;
+            char clean[MAX_LINE], target[128];
+
+            if (k == increment_line) {
+                k += 5;
+                continue;
+            }
+            if (k + 1 < func_end &&
+                peep_parse_st_ix_pair(lines[k], lines[k + 1], &parsed_offset) &&
+                parsed_offset == offset) {
+                if (init_line >= 0) {
+                    safe = 0;
+                    break;
+                }
+                init_line = k;
+                ++k;
+                continue;
+            }
+            if (k + 1 < func_end &&
+                peep_parse_ld_ix_pair(lines[k], lines[k + 1], &parsed_offset) &&
+                parsed_offset == offset) {
+                if (load_count >= 128) { safe = 0; break; }
+                loads[load_count] = k;
+                load_kinds[load_count++] = 0;
+                ++k;
+                continue;
+            }
+            if (peep_parse_ld_de_ix_pair(k, &parsed_offset) &&
+                parsed_offset == offset) {
+                if (load_count >= 128) { safe = 0; break; }
+                loads[load_count] = k;
+                load_kinds[load_count++] = 1;
+                ++k;
+                continue;
+            }
+            strip_peep_comment_copy(clean, lines[k]);
+            if (strstr(clean, low_pat) || strstr(clean, high_pat)) {
+                safe = 0;
+                break;
+            }
+            if (!strncmp(clean, "call ", 5)) {
+                const char *callee = clean + 5;
+                int is_runtime_call;
+
+                while (*callee == ' ' || *callee == '\t') ++callee;
+                is_runtime_call = callee[0] == '_' && callee[1] == '_' &&
+                                  callee[2] != '_';
+                if (!is_runtime_call && !is_local_func_label(callee)) {
+                    safe = 0;
+                    break;
+                }
+            }
+            if (jump_target_any(clean, target) &&
+                target[0] != '(' &&
+                find_label_line_in_range(target, func_start, func_end) < 0) {
+                safe = 0;
+                break;
+            }
+        }
+        if (!safe || init_line < 0 || load_count < 3 || init_line >= increment_line)
+            continue;
+
+        replace1_tagged(init_line, "push hl", "ix_pointer_to_iy");
+        replace1(init_line + 1, "pop iy");
+        for (k = 0; k < load_count; ++k) {
+            replace1_tagged(loads[k], "push iy", "ix_pointer_to_iy");
+            replace1(loads[k] + 1, load_kinds[k] ? "pop de" : "pop hl");
+        }
+        for (k = 0; k < increment_amount; ++k)
+            replace1_tagged(increment_line + k, "inc iy", "ix_pointer_to_iy");
+        delete_n(increment_line + increment_amount, 5 - increment_amount);
+        return 1;
+    }
+    return 0;
+}
+
 /* Parse "ld (ix-N),R" for a single 8-bit register R, extracting N. Unlike
  * stride_parse_ld_ix_neg_r (which shares this exact shape but doesn't
  * strip a trailing peep-comment tag before comparing), this pass runs
@@ -7831,6 +8131,7 @@ int main(int argc, char **argv)
         RUN_PASS(pass_labels);
 
     RUN_PASS(pass_cache_ix_long_param_reload);
+    RUN_PASS(pass_preserve_ix_pointer_compare);
 
     /* pass_small_const_incr_carry_skip runs once here, for the same reason
      * as pass_cache_ix_local_word_reload just above (see that pass's own
@@ -7850,6 +8151,10 @@ int main(int argc, char **argv)
      * pass_labels tidies up regardless. */
     if (RUN_PASS(pass_small_const_incr_carry_skip))
         RUN_PASS(pass_labels);
+    if (RUN_PASS(pass_promote_ix_pointer_to_iy)) {
+        RUN_PASS(pass_remove_unreferenced_labels);
+        RUN_PASS(pass_labels);
+    }
 
     /* Run frame elimination after all other passes have converged, then
      * clean up any newly unreferenced labels created by the removal.
