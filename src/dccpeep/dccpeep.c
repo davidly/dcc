@@ -5282,6 +5282,117 @@ static int pass_preserve_ix_pointer_compare(void)
     return changed;
 }
 
+static int parse_nz_jump_any(const char *line, char *target)
+{
+    char clean[MAX_LINE];
+
+    strip_peep_comment_copy(clean, line);
+    if (strncmp(clean, "jp nz,", 6) != 0 &&
+        strncmp(clean, "jr nz,", 6) != 0)
+        return 0;
+    return jump_target_any(clean, target);
+}
+
+static int count_jumps_any_to_label(const char *label)
+{
+    int i, count = 0;
+    char target[128];
+
+    for (i = 0; i < nlines; ++i)
+        if (jump_target_any(lines[i], target) && !strcmp(target, label))
+            ++count;
+    return count;
+}
+
+/* Collapse a serial chain of equality tests against small constants:
+ *
+ *   ld (ix+N),l              ld (ix+N),l
+ *   ld (ix+N+1),h            ld (ix+N+1),h
+ *   ld de,K1                 ld a,h
+ *   or a                     or a
+ *   sbc hl,de                jp nz,Lfallback
+ *   jp nz,Lnext              ld a,l
+ *                         -> cp K1
+ * Lnext:                     jp nz,Lnext
+ *   ld l,(ix+N)           Lnext:
+ *   ld h,(ix+N+1)            cp K2
+ *   ld de,K2                 jp nz,...
+ *   or a
+ *   sbc hl,de
+ *   jp nz,...
+ *
+ * The high-byte jump goes to the final failure target, exactly where the
+ * original chain arrives after every small constant fails. Intermediate
+ * labels must have one incoming jump, so retaining A across them cannot be
+ * bypassed by another path. CP preserves the equality result used by each
+ * original NZ branch; no carry-dependent use is admitted. */
+static int pass_ix_word_small_eq_chain(void)
+{
+    int i;
+
+    for (i = 0; i + 5 < nlines; ++i) {
+        int slot, first_value, compare_count = 1;
+        int label_lines[32], values[32];
+        int previous_line = i;
+        int func_start, func_end;
+        char target[128], fallback[128];
+        char first_jump[MAX_LINE], line[MAX_LINE];
+
+        if (!peep_parse_st_ix_pair(lines[i], lines[i + 1], &slot) ||
+            !peep_parse_ld_de_0_to_255(lines[i + 2], &first_value) ||
+            first_value == 0 || !eq(i + 3, "or a") ||
+            !eq(i + 4, "sbc hl,de") ||
+            !parse_nz_jump_any(lines[i + 5], target))
+            continue;
+
+        find_function_bounds_any(i, &func_start, &func_end);
+        strcpy(first_jump, lines[i + 5]);
+        while (compare_count < 32) {
+            int label_line, next_slot, value;
+            char next_target[128];
+
+            label_line = find_label_line_in_range(target, func_start, func_end);
+            if (label_line <= previous_line || label_line + 6 >= func_end ||
+                count_jumps_any_to_label(target) != 1 ||
+                !peep_parse_ld_ix_pair(lines[label_line + 1],
+                                       lines[label_line + 2], &next_slot) ||
+                next_slot != slot ||
+                !peep_parse_ld_de_0_to_255(lines[label_line + 3], &value) ||
+                value == 0 || !eq(label_line + 4, "or a") ||
+                !eq(label_line + 5, "sbc hl,de") ||
+                !parse_nz_jump_any(lines[label_line + 6], next_target))
+                break;
+
+            label_lines[compare_count] = label_line;
+            values[compare_count] = value;
+            ++compare_count;
+            previous_line = label_line;
+            strcpy(target, next_target);
+        }
+        if (compare_count < 3)
+            continue;
+        strcpy(fallback, target);
+
+        while (--compare_count > 0) {
+            int label_line = label_lines[compare_count];
+            sprintf(line, "cp %d", values[compare_count]);
+            replace1_tagged(label_line + 1, line, "ix_word_small_eq_chain");
+            replace1(label_line + 2, lines[label_line + 6]);
+            delete_n(label_line + 3, 4);
+        }
+
+        replace1_tagged(i + 2, "ld a,h", "ix_word_small_eq_chain");
+        sprintf(line, "jp nz, %s", fallback);
+        replace1(i + 4, line);
+        replace1(i + 5, "ld a,l");
+        sprintf(line, "cp %d", first_value);
+        insert_line(i + 6, line);
+        insert_line(i + 7, first_jump);
+        return 1;
+    }
+    return 0;
+}
+
 static int line_mentions_iy(const char *line)
 {
     char clean[MAX_LINE];
@@ -8132,6 +8243,8 @@ int main(int argc, char **argv)
 
     RUN_PASS(pass_cache_ix_long_param_reload);
     RUN_PASS(pass_preserve_ix_pointer_compare);
+    if (RUN_PASS(pass_ix_word_small_eq_chain))
+        RUN_PASS(pass_labels);
 
     /* pass_small_const_incr_carry_skip runs once here, for the same reason
      * as pass_cache_ix_local_word_reload just above (see that pass's own
