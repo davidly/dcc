@@ -5062,6 +5062,135 @@ static int pass_cache_ix_local_word_reload(void)
     return changed;
 }
 
+/* Parse dcc's four-line little-endian long load from consecutive ix offsets:
+ * ld l,(ix+N) / ld h,(ix+N+1) / ld e,(ix+N+2) / ld d,(ix+N+3). */
+static int peep_parse_ld_long_ix_at(int line, int *offset)
+{
+    char eoff[32], doff[32];
+    int lo, e, d;
+
+    if (line < 0 || line + 3 >= nlines ||
+        !peep_parse_ld_ix_pair(lines[line], lines[line + 1], &lo) ||
+        !peep_parse_ld_e_ix(lines[line + 2], eoff) ||
+        !peep_parse_ld_d_ix(lines[line + 3], doff) ||
+        !parse_ix_off_numeric(eoff, &e) ||
+        !parse_ix_off_numeric(doff, &d) || e != lo + 2 || d != lo + 3)
+        return 0;
+    *offset = lo;
+    return 1;
+}
+
+static int ix_long_slot_written_in_range(int offset, int start, int end)
+{
+    char patterns[4][24];
+    char clean[MAX_LINE];
+    int i, byte;
+
+    for (byte = 0; byte < 4; ++byte)
+        sprintf(patterns[byte], "(ix%+d),", offset + byte);
+    for (i = start; i < end; ++i) {
+        strip_peep_comment_copy(clean, lines[i]);
+        for (byte = 0; byte < 4; ++byte)
+            if (strstr(clean, patterns[byte]) != NULL)
+                return 1;
+    }
+    return 0;
+}
+
+/* Repeated long-parameter loads in small framed leaf helpers are expensive:
+ * four indexed loads cost 76T and 12 bytes each time. Save the first DE:HL
+ * value beneath the working stack, then restore and re-save it at every later
+ * occurrence (42T, 4 bytes). The canonical IX epilogue discards the saved copy
+ * on every exit path. */
+static int pass_cache_ix_long_param_reload(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 3; i + 3 < nlines; ++i) {
+        int offset, func_start, func_end;
+        int prologue_line;
+        int occurrences[64];
+        int occurrence_count = 0;
+        int k, other_offset;
+        int safe = 1;
+        int saw_epilogue = 0;
+
+        prologue_line = -1;
+        if (eq(i - 3, "push ix") && eq(i - 2, "ld ix,0") &&
+            eq(i - 1, "add ix,sp"))
+            prologue_line = i - 3;
+        else if (i >= 4 && eq(i - 4, "push ix") &&
+                 eq(i - 3, "ld ix,0") && eq(i - 2, "add ix,sp") &&
+                 eq(i - 1, "call __stchk"))
+            prologue_line = i - 4;
+        if (prologue_line < 0 || !peep_parse_ld_long_ix_at(i, &offset))
+            continue;
+
+        find_function_bounds_any(i, &func_start, &func_end);
+        if (func_start > prologue_line - 1 || offset < 4)
+            continue;
+
+        for (k = i; k + 3 < func_end; ++k) {
+            if (!peep_parse_ld_long_ix_at(k, &other_offset))
+                continue;
+            if (other_offset != offset) {
+                safe = 0;
+                break;
+            }
+            if (occurrence_count >= 64) {
+                safe = 0;
+                break;
+            }
+            occurrences[occurrence_count++] = k;
+            k += 3;
+        }
+        if (!safe || occurrence_count < 3 ||
+            ix_long_slot_written_in_range(offset, i + 4, func_end))
+            continue;
+
+        for (k = i + 4; k < func_end && safe; ++k) {
+            char clean[MAX_LINE];
+            char target[128];
+
+            if (eq(k, "ld sp,ix") && k + 2 < func_end &&
+                eq(k + 1, "pop ix") && eq(k + 2, "ret")) {
+                saw_epilogue = 1;
+                k += 2;
+                continue;
+            }
+            strip_peep_comment_copy(clean, lines[k]);
+            if (!strncmp(clean, "call ", 5) || !strncmp(clean, "rst ", 4) ||
+                !strcmp(clean, "exx") || !strncmp(clean, "push ", 5) ||
+                !strncmp(clean, "pop ", 4) || !strncmp(clean, "ret", 3) ||
+                strstr(clean, "sp") != NULL) {
+                safe = 0;
+                break;
+            }
+            if (jump_target_any(clean, target) &&
+                find_label_line_in_range(target, func_start, func_end) < 0) {
+                safe = 0;
+                break;
+            }
+        }
+        if (!safe || !saw_epilogue)
+            continue;
+
+        for (k = occurrence_count - 1; k >= 1; --k) {
+            int line = occurrences[k];
+            replace1_tagged(line, "pop hl", "ix_long_param_cache_load");
+            replace1(line + 1, "pop de");
+            replace1(line + 2, "push de");
+            replace1(line + 3, "push hl");
+        }
+        insert_line_tagged(i + 4, "push de", "ix_long_param_cache_store");
+        insert_line(i + 5, "push hl");
+        changed = 1;
+        i = func_end + 1;
+    }
+    return changed;
+}
+
 /* Parse "ld (ix-N),R" for a single 8-bit register R, extracting N. Unlike
  * stride_parse_ld_ix_neg_r (which shares this exact shape but doesn't
  * strip a trailing peep-comment tag before comparing), this pass runs
@@ -7700,6 +7829,8 @@ int main(int argc, char **argv)
      * up. */
     if (RUN_PASS(pass_cache_ix_local_word_reload))
         RUN_PASS(pass_labels);
+
+    RUN_PASS(pass_cache_ix_long_param_reload);
 
     /* pass_small_const_incr_carry_skip runs once here, for the same reason
      * as pass_cache_ix_local_word_reload just above (see that pass's own

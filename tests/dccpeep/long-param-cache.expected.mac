@@ -1,0 +1,44 @@
+	public _accept
+_accept:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld e,(ix+6)
+	ld d,(ix+7)
+	push de ; peep: ix_long_param_cache_store
+	push hl
+	or a
+	jr z,L1 ; peep: jp_to_jr
+	pop hl ; peep: ix_long_param_cache_load
+	pop de
+	push de
+	push hl
+	or a
+	pop hl ; peep: ix_long_param_cache_load
+	pop de
+	push de
+	push hl
+L1:
+	ld sp,ix
+	pop ix
+	ret
+	public _decline
+_decline:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld e,(ix+6)
+	ld d,(ix+7)
+	call _external
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld e,(ix+6)
+	ld d,(ix+7)
+	ld sp,ix
+	pop ix
+	ret
+	end
