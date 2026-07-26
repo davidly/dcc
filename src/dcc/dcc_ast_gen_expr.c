@@ -21,6 +21,10 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n);
 static void gen_assign_ident_ast(const struct AstNode *n);
 static void gen_assign_ident_plain_ast(const struct AstNode *n, struct Sym *s);
 static void gen_assign_ident_compound_ast(const struct AstNode *n, struct Sym *s);
+static int ast_member_global_word_field(const struct AstNode *n, struct Sym **out_base,
+                                        struct FieldDef **out_fd, int *out_val_type);
+static void emit_load_global_field_word_direct(struct Sym *base, struct FieldDef *fd);
+static void emit_store_global_field_word_direct(struct Sym *base, struct FieldDef *fd);
 
 
 /* Recognize byte-truncation idioms that are common in hand-written portable C:
@@ -2023,6 +2027,40 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
         g_expr.type = byte_arr->type;
         g_expr.long_from16 = 0;
         return;
+    }
+
+    /* Plain `=` into a scalar word field of a global/extern struct instance
+     * (e.g. `Gst.stp = Gst.stp + 1`): both BASE and BASE.field are link-time
+     * constants, so the store can go straight to `ld (BASE+off),hl` without
+     * ever computing &BASE.field into HL - skipping the address-materialize/
+     * push/pop dance the generic path below needs when the lvalue's address
+     * genuinely is only known at runtime. See ast_member_global_word_field. */
+    if (n->op == '=' && n->a->kind == AST_MEMBER) {
+        struct Sym *direct_base;
+        struct FieldDef *direct_fd;
+        int direct_val_type;
+
+        if (ast_member_global_word_field(n->a, &direct_base, &direct_fd, &direct_val_type)) {
+            int saved_dead_direct = expr_result_dead;
+            expr_result_dead = 0;
+            if (type_ptr_depth(direct_val_type) > 0 && n->b->kind == AST_CAST) {
+                ast_gen_expr(n->b->a);              /* rhs -> HL */
+            } else if (type_ptr_depth(direct_val_type) > 0) {
+                int ptr_type;
+                int no_deref;
+                if (ast_pointer_expr_type(n->b, &ptr_type, &no_deref))
+                    gen_pointer_expr_ast(n->b, &ptr_type, &no_deref);
+                else
+                    ast_gen_expr(n->b);
+            } else {
+                ast_gen_expr(n->b);                 /* rhs -> HL */
+            }
+            expr_result_dead = saved_dead_direct;
+            emit_store_global_field_word_direct(direct_base, direct_fd);
+            g_expr.type = direct_val_type;
+            g_expr.long_from16 = 0;
+            return;
+        }
     }
 
     if (n->a->kind == AST_INDEX)
@@ -4730,10 +4768,85 @@ int ast_member_field_value_type(const struct AstNode *n)
     return fd->is_array ? fd->elem_type : fd->type;
 }
 
+/* True when `n` (a `.`-accessed struct/union member, e.g. Gst.stp) resolves
+ * to a scalar word-sized, non-bitfield, non-array field of a global/extern
+ * struct instance - i.e. both the base and the field live at a link-time-
+ * constant address (BASE+offset), the same guarantee is_global_word_sym
+ * already gives a plain global scalar. When true, the field can be read or
+ * written with a single direct `ld hl,(BASE+off)` / `ld (BASE+off),hl`
+ * instead of materializing &BASE.field into HL and indirecting through it via
+ * gen_member_addr_ast - needed in general (the base may be an array element,
+ * a local/param struct, or reached through a runtime pointer) but needlessly
+ * expensive here. Found via a codegen comparison against sdcc: this exact
+ * miss - treating a compile-time-constant field address as something that
+ * must be computed into a register and protected with push/pop across RHS
+ * evaluation - was the single highest-volume gap in dcc's own VM-interpreter
+ * benchmark programs, where a struct-resident stack/frame pointer field
+ * (e.g. an operand-stack top) is bumped on nearly every opcode. */
+static int ast_member_global_word_field(const struct AstNode *n, struct Sym **out_base,
+                                        struct FieldDef **out_fd, int *out_val_type)
+{
+    struct Sym *base;
+    struct FieldDef *fd;
+    int sid;
+    int val_type;
+
+    if (n->kind != AST_MEMBER || n->op == TOK_ARROW)
+        return 0;
+    if (n->a->kind != AST_IDENT)
+        return 0;
+    base = find_sym(n->a->sval);
+    if (base == NULL || base->is_array)
+        return 0;
+    if (base->storage != SC_GLOBAL && base->storage != SC_EXTERN)
+        return 0;
+
+    sid = base_struct_id_from_type(base->type);
+    fd = find_field_def(sid, n->sval);
+    if (fd == NULL || fd->is_array || fd->bit_width > 0)
+        return 0;
+
+    val_type = fd->type;
+    if (type_size(val_type) != 2 || type_is_bool(val_type))
+        return 0;
+
+    *out_base = base;
+    *out_fd = fd;
+    *out_val_type = val_type;
+    return 1;
+}
+
+static void emit_load_global_field_word_direct(struct Sym *base, struct FieldDef *fd)
+{
+    emit_extrn_if_needed(base);
+    if (fd->offset == 0)
+        fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(base)));
+    else
+        fprintf(g_emit_sink.stream, "\tld hl,(%s+%d)\n", asm_name_for(sym_asm_name(base)), fd->offset);
+}
+
+static void emit_store_global_field_word_direct(struct Sym *base, struct FieldDef *fd)
+{
+    emit_extrn_if_needed(base);
+    if (fd->offset == 0)
+        fprintf(g_emit_sink.stream, "\tld (%s),hl\n", asm_name_for(sym_asm_name(base)));
+    else
+        fprintf(g_emit_sink.stream, "\tld (%s+%d),hl\n", asm_name_for(sym_asm_name(base)), fd->offset);
+}
+
 void gen_member_ast(const struct AstNode *n)
 {
     int val_type;
     int elem_type;
+    struct Sym *direct_base;
+    struct FieldDef *direct_fd;
+
+    if (ast_member_global_word_field(n, &direct_base, &direct_fd, &val_type)) {
+        emit_load_global_field_word_direct(direct_base, direct_fd);
+        g_expr.type = val_type;
+        g_expr.long_from16 = 0;
+        return;
+    }
 
     gen_member_addr_ast(n, &val_type);
     if (ast_member_array_field_elem_type(n, &elem_type)) {
@@ -4975,6 +5088,18 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
 
     if (n->kind == AST_MEMBER) {
         int member_type;
+        struct Sym *direct_base;
+        struct FieldDef *direct_fd;
+
+        if (ast_member_global_word_field(n, &direct_base, &direct_fd, &member_type)) {
+            emit_load_global_field_word_direct(direct_base, direct_fd);
+            g_expr.type = member_type;
+            g_expr.long_from16 = 0;
+            *out_type = member_type;
+            *out_no_deref = 0;
+            return;
+        }
+
         gen_member_addr_ast(n, &member_type);
         if (ast_member_array_field_elem_type(n, &member_type)) {
             g_expr.type = type_add_ptr(member_type);
