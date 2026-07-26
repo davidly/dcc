@@ -4852,6 +4852,14 @@ static int ast_member_global_word_field(const struct AstNode *n, struct Sym **ou
     if (fd == NULL || fd->is_array || fd->bit_width > 0)
         return 0;
 
+    /* Link-80 mis-applies a nonzero addend (BASE+offset) only to a genuine
+     * EXTRN reference - a symbol defined in another module. A symbol defined
+     * in this translation unit is folded by M80 within its own segment, so
+     * BASE+offset is safe even when the symbol is also exported via PUBLIC
+     * (this is exactly emit_extrn_if_needed's "will emit EXTRN" predicate). */
+    if (fd->offset != 0 && base->needs_extrn && !base->is_defined)
+        return 0;
+
     val_type = fd->type;
     if (type_size(val_type) != 2 || type_is_bool(val_type))
         return 0;

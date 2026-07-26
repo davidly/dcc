@@ -1,0 +1,14 @@
+; dcc stage-1d output
+	public _public_base
+	extrn _external_base
+	ld hl,_external_base
+	ld de,18
+	add hl,de
+	ret
+	ld hl,_public_base+18 ; peep: fold_hl_base_const_offset
+	ret
+	ld hl,Llocal+18 ; peep: fold_hl_base_const_offset
+	ret
+Llocal:
+	ds 1
+	end
