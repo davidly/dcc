@@ -762,11 +762,7 @@ static int compile_expr_str(const char *s)
  * IX-relative address computation (frame base + a fixed offset) on every one
  * of eval_e's ~1.5M calls for the e.for workload; static, it's a compile-time
  * constant address - a single immediate load, no IX arithmetic at all - and
- * the call frame shrinks by the array's own 48 bytes besides.
- *
- * Opcodes are restricted to 1..17, so their hot equality tests may compare
- * only the low byte. This retains op's natural int representation for the
- * binary-operation switch while avoiding repeated 16-bit comparisons. */
+ * the call frame shrinks by the array's own 48 bytes besides. */
 static int g_estack[24];
 static int eval_e(int ei)
 {
@@ -781,14 +777,14 @@ static int eval_e(int ei)
     while(t<tend)
     {
         op=t->op;
-        if((unsigned char)op==EO_CONST)*sp++=t->a;
-        else if((unsigned char)op==EO_LOAD)*sp++=get_sym_val(t->a,0);
-        else if((unsigned char)op==EO_LOADA)
+        if(op==EO_CONST)*sp++=t->a;
+        else if(op==EO_LOAD)*sp++=get_sym_val(t->a,0);
+        else if(op==EO_LOADA)
         {
             a=*--sp;
             *sp++=get_sym_val(t->a,a);
         }
-        else if((unsigned char)op==EO_NEG)sp[-1]=-sp[-1];
+        else if(op==EO_NEG)sp[-1]=-sp[-1];
         else
         {
             b=*--sp;
