@@ -34,7 +34,7 @@ Microsoft's `L80` under ntvcm; `dcc-use-emulated-m80=true` selects Microsoft's
 | Path | What |
 | ---- | ---- |
 | `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations, `dcc_global_init.c` records file-scope initializers, and `dcc_regalloc.c`/`dcc_loop_regalloc.c` own speculative register allocation. `dcc_array_narrow.c` proves byte narrowing. **Codegen is a single AST path**: `dcc_ast.c`/`dcc_ast_build.c` build typed function-local ASTs and `dcc_ast_gen*.c` emits them. Low-level helpers live in `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, and `dcc_decl.c`. Focused contracts use `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, and `dcc_regalloc_internal.h`; shared state is defined in `dcc_state.c`. |
-| `src/dccpeep/` | Peephole optimizer (`-Ot` time / `-Os` size). |
+| `src/dccpeep/` | Fixpoint peephole optimizer (`-Ot` time / `-Os` size). `dccpeep.c` owns pass implementations and the order-sensitive scheduler; `peep_lines.c` owns the mutable line program and opaque user-asm barriers; `peep_parse.c` and `peep_analyze.c` provide shared parsing/safety analysis; `peep_pass_stubs.c` and `peep_pass_final.c` own post-convergence size and cleanup passes. |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
 | `tests/` | `*.c` test apps + `tests/baselines/<app>.txt` expected stdout + `tests/_test_overrides.json` (per-app args/stdin/stack/ignore). |
@@ -188,6 +188,16 @@ change.
 ## Performance and optimizer work
 
 Use measured signals before changing codegen, `dccpeep`, or `DCCRTL.MAC`:
+
+- Run `pwsh ./scripts/run-dccpeep-tests.ps1` for direct optimizer fixtures.
+	Fixture stems ending in `.os` run with `-Os`; stems ending in `.undoc` run
+	with `-fundocumented-z80`. Use `dccpeep -fstats input.mac output.mac` for
+	iteration, pass-change, and line-mutation counts without changing output.
+- Pure `dccpeep` refactors must produce byte-identical optimized `.MAC` output
+	over the saved raw compiler-output corpus. Optimizer improvements may lower
+	checked peep cycle/size baselines, but must never raise them or change nopeep
+	columns. Shared `-Os` helpers must meet their complete linked-stub break-even
+	count before rewriting.
 
 - For cycle measurements, run CP/M binaries with `ntvcm -p -s:0` and compare
 	the reported `Z80 cycles`; full-speed execution does not change the emulated

@@ -1,4 +1,8 @@
-/* dccpeep_internal.h - private line-program contract for dccpeep modules. */
+/* dccpeep_internal.h - private line-program contract for dccpeep modules.
+ *
+ * Passes may mutate only through this API: user-assembly entries are opaque,
+ * and the scheduler in dccpeep.c remains the sole owner of pass ordering.
+ */
 #ifndef DCCPEEP_INTERNAL_H
 #define DCCPEEP_INTERNAL_H
 

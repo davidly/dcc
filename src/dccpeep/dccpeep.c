@@ -4189,34 +4189,6 @@ static int pass_elim_ix_frame(void)
     return changed;
 }
 
-/*
- * pass_shared_frame_stubs:
- *
- * Called after pass_elim_ix_frame (which already stripped IX frames from
- * functions that never touch IX).  This pass converts the remaining framed
- * prologues and epilogues to shared stub calls, saving ~5-7 bytes per
- * prologue and ~2 bytes per epilogue that has locals.
- *
- * With locals (13 inline bytes → 6):
- *   push ix / ld ix,0 / add ix,sp / ld hl,-N / add hl,sp / ld sp,hl
- *   → ld hl,-N / call __entr
- *
- * Without locals but with IX-accessed params (8 inline bytes -> 3):
- *   push ix / ld ix,0 / add ix,sp
- *   -> call __en0
- *
- * Epilogue -- with-locals only (5 inline bytes -> 3):
- *   ld sp,ix / pop ix / ret
- *   -> jp __lve
- *
- * The no-locals epilogue (pop ix / ret, 3 bytes after the dcc.c fix) is
- * already as compact as a jp __lve, so it is left inline.
- *
- * RTL stub names are <=6 chars so they stay distinct in L80's 6-character
- * symbol table.  extrn declarations are injected at the top of the file so
- * that dccrtlstrip includes only the blocks actually used.
- */
-
 static int pass_byte_minmax_patterns(void)
 {
     int i;
@@ -11023,78 +10995,6 @@ static int pass_deref_byte_cmp(void)
 
 
 /*
- * pass_lvar_stubs — replace ld l,(ix-N) / ld h,(ix-N+1) with call __lv1..8.
- * pass_svar_stubs — replace ld (ix-N),l / ld (ix-N+1),h with call __sv1..6.
- *
- * Mirror of pass_larg_stubs but for local variables (negative IX offsets).
- * Stubs __lv1..__lv8 load the 1st..8th local word into HL.
- * Stubs __sv1..__sv6 store HL into the 1st..6th local word.
- * Each stub is 7 bytes; the inline pair is 6 bytes.  Break-even is 3 calls.
- */
-
-
-/*
- * pass_larg_stubs — replace ld l,(ix+N) / ld h,(ix+N+1) with call __la1/2/3.
- *
- * The shared RTL stubs are 7 bytes each; the inline pair is 6 bytes.  With
- * three or more uses of the same stub the stub cost is recovered and every
- * additional use saves 3 bytes.  Runs after pass_elim_ix_frame so that
- * the "ix" text is still visible during frame-elimination scanning.
- */
-
-/*
- * pass_phix_stub — replace push hl / push ix / pop hl with call __phix.
- *
- * The pattern saves HL on the stack and copies IX into HL (for frame-pointer
- * arithmetic).  The stub is 6 bytes; the inline sequence is 4 bytes (1 byte
- * push hl + 2 bytes push ix + 1 byte pop hl).  Break-even is 7 calls.
- * Runs after pass_shared_frame_stubs so prologue push-ix has been converted.
- */
-
-/*
- * pass_larg_direct_store — fold "ld hl,ADDR / push hl / call __la[123] or __lv[1-8] /
- *   ex de,hl / pop hl / ld (hl),e / inc hl / ld (hl),d" into
- *   "call __la[123]/__lv[1-8] / ld (ADDR),hl".
- *
- * Pattern generated for C like:  global_var = argN;
- * The destination is always a fixed global address (_Z label = BSS equ),
- * so ld (ADDR),hl (Z80 direct store) is valid.
- *
- * 8 instructions / 12 bytes -> 2 instructions / 6 bytes: saves 6 bytes per site.
- */
-
-/*
- * pass_ldwl_stub — replace ld e,(hl)/inc hl/ld d,(hl)/ex de,hl with call __ldwl.
- * Dereferences a 16-bit pointer in HL into HL.  4 inline bytes -> 3.
- * Stub is 5 bytes; break-even at 5 uses.
- */
-
-/*
- * pass_wand_stub — replace ld a,h/and d/ld h,a/ld a,l/and e/ld l,a with call __wand.
- * 16-bit HL &= DE.  6 inline bytes -> 3.  Stub is 7 bytes; break-even at 3 uses.
- */
-
-/*
- * pass_icmp_stub — replace 8-byte signed 16-bit compare sequence with call __icmp.
- * ld a,h/xor 80h/ld h,a/ld a,d/xor 80h/ld d,a/or a/sbc hl,de -> call __icmp.
- * 8 inline bytes -> 3.  Stub is 9 bytes; break-even at 2 uses.
- * Runs after the main loop so pass_e_signed_le_zero and pass_signed_cmp_small_const
- * (which recognise the same sub-sequence) have already fired.
- */
-
-/*
- * pass_sxde_stub — replace ld a,h/rlca/sbc a,a/ld d,a/ld e,a with call __sxde.
- * Sign-extends HL to DEHL by producing DE = 0FFFFh if HL<0, 0 otherwise.
- * 5 inline bytes -> 3.  Stub is 6 bytes; break-even at 3 uses.
- */
-
-/*
- * pass_sxhl_stub — replace ld a,l/rlca/sbc a,a/ld h,a with call __sxhl.
- * Sign-extends 8-bit L into H so HL = (int16_t)(int8_t)L.
- * 4 inline bytes -> 3.  Stub is 5 bytes; break-even at 5 uses.
- */
-
-/*
  * pass_a_tracks_ix_byte:
  *
  * When A is loaded from (ix+N) and the value at (ix+N) is not modified
@@ -12055,39 +11955,6 @@ static int pass_jp_to_plain_ret(void)
 }
 
 /* ------------------------------------------------------------------------- *
- * jp -> jr relaxation.
- *
- * The compiler only ever emits 3-byte absolute jumps (jp).  Where the target
- * is within the signed 8-bit relative range, a 2-byte jr is both smaller and
- * (on the not-taken path) faster.  This pass converts
- *
- *     jp LABEL            -> jr LABEL
- *     jp z,LABEL          -> jr z,LABEL      (and nz / c / nc)
- *
- * It is deliberately conservative:
- *   - Only the four conditions jr can encode (z, nz, c, nc) plus the
- *     unconditional form are touched.  `jp m,` (no jr form) and the indirect
- *     `jp (hl)` are left alone (their targets are not plain labels).
- *   - Byte addresses are modelled with an *upper bound* per line (see
- *     instr_size_upper).  Over-estimating sizes can only make the pass decide
- *     a branch is out of range when it is actually in range; it can never
- *     turn a truly-out-of-range branch into an emitted jr.  So every jr this
- *     pass produces is guaranteed assemblable by M80.
- *   - A fixpoint loop re-runs the scan: shrinking one jp to jr reduces
- *     addresses, which may bring further branches into range.  Shrinking never
- *     grows anything, so the loop is monotonic and terminates.
- * ------------------------------------------------------------------------- */
-
-/* Upper bound on the encoded byte size of one (already-trimmed) line. */
-
-/* If line i is a jp that jr can encode, copy its label to out and return the
- * length of the mnemonic+condition prefix kept before the label
- * (3 for "jp ", or the comma form length).  Returns 0 if not convertible. */
-
-/* Rewrite a convertible jp at line i into the equivalent jr. */
-
-
-/* ------------------------------------------------------------------------- *
  * Replace a redundant DE reload with register copies from HL.
  *
  *     ld l,(ix+N)          ld l,(ix+N)
@@ -12142,47 +12009,6 @@ static int pass_dup_ix_load_to_reg_copy(void)
 
     return changed;
 }
-
-/* ------------------------------------------------------------------------- *
- * Fold the runtime sign-extension of a 16-bit CONSTANT into a direct load.
- *
- *     ld hl,CONST          ld hl,CONST
- *     ld a,h          ->   ld de,0       (when CONST's bit 15 is clear)
- *     rlca                 ld de,65535   (when CONST's bit 15 is set)
- *     sbc a,a
- *     ld d,a
- *     ld e,a
- *
- * The five-instruction tail computes DE = (HL < 0) ? 0FFFFh : 0 and destroys
- * A.  When HL was just loaded with a compile-time *numeric* constant the
- * result is known, so we emit it directly: 5 bytes -> 3 bytes, and A is left
- * intact (strictly safer than the original, which clobbered it).  Only plain
- * decimal constants are folded; symbol/address loads (ld hl,_x) have unknown
- * high bits and are skipped.
- * ------------------------------------------------------------------------- */
-
-/* Parse a pure decimal (optionally negative) "ld hl,N" immediate.  Returns 1
- * and stores the 16-bit-reduced value's high bit (1 = set) when the operand is
- * a bare integer; returns 0 for symbols or any non-decimal operand. */
-
-
-/* ------------------------------------------------------------------------- *
- * Dead 16-bit register reload elimination.
- *
- * Two adjacent full-width loads to the same 16-bit register pair, e.g.
- *
- *     ld hl,0
- *     ld hl,_flags
- *
- * make the first load dead: the second overwrites the whole pair and none of
- * the `ld rr,nn` / `ld rr,(nn)` forms the compiler emits read the old value.
- * Such leftovers are produced by other rewrites (e.g. the ldir_memset idiom).
- * Only hl/de/bc are considered; the loads must be exactly adjacent so nothing
- * can read the register in between.
- * ------------------------------------------------------------------------- */
-
-/* If s is "ld RR,..." with RR one of hl/de/bc, write RR to out[3] and ret 1. */
-
 
 int main(int argc, char **argv)
 {
