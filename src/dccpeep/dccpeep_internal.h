@@ -99,4 +99,10 @@ int pass_icmp_stub(void);
 int pass_sxde_stub(void);
 int pass_sxhl_stub(void);
 
+/* Terminal relaxation and cleanup passes. */
+int jump_target(const char *s, char *out);
+int pass_jp_to_jr(void);
+int pass_fold_const_sign_extend(void);
+int pass_elim_dead_reg16_reload(void);
+
 #endif
