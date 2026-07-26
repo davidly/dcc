@@ -1,0 +1,9 @@
+ld (ix-3),0
+LCINC:
+ld l,(ix-3)
+ld h,0
+inc (ix-3)
+ld a,(ix-3)
+cp 4
+jp c, LCINC
+end

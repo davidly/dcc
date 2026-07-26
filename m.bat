@@ -21,7 +21,7 @@ popd
 
 rem cl /nologo dcc.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 
-cl /nologo src\dccpeep\dccpeep.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
+cl /nologo src\dccpeep\*.c /I src\dccpeep /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /std:c11 /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 
 cl /nologo src\dccrtlstrip\dccrtlstrip.c /GS- /GL /Oti2 /Ob3 /Qpar /Fa /FAsc /EHac /Zi /D_AMD64_ /link user32.lib ntdll.lib /OPT:REF
 

@@ -1,0 +1,19 @@
+	extrn __sxhl
+; two __sxde candidates stay inline: break-even is three
+	ld a,h
+	rlca
+	sbc a,a
+	ld d,a
+	ld e,a
+	ld a,h
+	rlca
+	sbc a,a
+	ld d,a
+	ld e,a
+; five __sxhl candidates reach break-even
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	end

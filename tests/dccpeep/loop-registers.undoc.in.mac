@@ -1,0 +1,41 @@
+; decrementing counter promoted to C
+LCDEC:
+dec (ix-2)
+jp z, LCDEXIT
+ld e,(ix-2)
+ld d,0
+call __mods
+jp LCDEC
+LCDEXIT:
+ret
+; incrementing counter promoted to E because BC is live
+ld (ix-4),1
+LEINC:
+ld b,a
+ld l,(ix-4)
+ld h,0
+inc (ix-4)
+ld a,(ix-4)
+cp 5
+jp c, LEINC
+; non-RTL call requires decrementing IYL promotion
+LIDEC:
+dec (ix-5)
+jp z, LIDEXIT
+ld e,(ix-5)
+ld d,0
+call _external
+jp LIDEC
+LIDEXIT:
+ret
+; non-RTL call requires incrementing IYL promotion
+ld (ix-6),0
+LIINC:
+ld l,(ix-6)
+ld h,0
+call _external
+inc (ix-6)
+ld a,(ix-6)
+cp 3
+jp c, LIINC
+end

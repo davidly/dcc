@@ -264,6 +264,26 @@ cheaper equivalent (for example folding a redundant store/reload, threading a
 jump-to-jump, turning an `ld`/`cp` against zero into `or a`, or replacing an
 absolute `jp` in range with a relative `jr`).
 
+The optimizer is split by responsibility. `peep_lines.c` owns storage,
+mutation, physical-line I/O, and opaque barriers for `; dcc user asm` regions;
+passes never rewrite or delete those user-authored lines. `peep_parse.c`
+contains stateless assembly parsers, `peep_effects.c` caches structured line,
+opcode, register, and flag metadata, and `peep_analyze.c` contains shared
+conservative register analysis. `peep_control_flow.c` owns versioned
+label/function indexes and bounded reachability queries. The main `dccpeep.c`
+file owns the descriptor-driven, order-sensitive fixed-point catalogue and
+remaining general passes. `PeepContext` groups program ownership, options,
+statistics, mutation versions, and cached indexes; compatibility globals keep
+legacy pass signatures stable during migration. `PeepEditTransaction` provides
+opt-in atomic commit/rollback for coupled rewrites.
+The high-volume local dispatcher, board/game idioms, loop registerization, and
+compiler-tagged temporary handling live in `peep_pass_once.c`,
+`peep_pass_minmax.c`, `peep_pass_loops.c`, and
+`peep_pass_inline_temp.c`. Label and branch rewrites live in
+`peep_pass_control_flow.c`. Post-convergence shared-helper rewrites and
+terminal cleanup live in `peep_pass_stubs.c` and `peep_pass_final.c`
+respectively, behind `dccpeep_internal.h`.
+
 dccpeep runs its rewrite catalogue to a **fixpoint** so one rewrite can expose
 the pattern another rewrite needs:
 
@@ -291,8 +311,17 @@ Key design points:
   canonical (un-folded) shape.
 - **Two optimization goals.** `-Ot` (default, "time") inlines helper sequences
   for speed; `-Os` ("size") factors recurring sequences into shared `call`
-  stubs to shrink the binary. The mode is chosen on the command line and
-  changes which post-convergence passes fire.
+  stubs to shrink the binary. Each helper family counts complete matches first
+  and fires only at its whole-program linked-stub break-even. The mode is
+  chosen on the command line and changes which post-convergence passes fire.
+- **Text safety is explicit.** Physical input lines are read without a fixed
+  length limit. Marked user-assembly regions become opaque label barriers while
+  optimization runs, then are restored byte-for-byte; address relaxation also
+  refuses to estimate across them.
+- **Direct observability.** `scripts/run-dccpeep-tests.ps1` checks focused
+  default, `-Os`, and undocumented-opcode fixtures plus idempotence. Optional
+  `-fstats` output reports convergence iterations, per-pass calls and changes,
+  and inserted/deleted line totals to stderr without changing normal output.
 
 !!! tip "Why a separate program instead of an in-compiler pass"
     Keeping the peephole optimizer as a standalone text-to-text filter keeps
