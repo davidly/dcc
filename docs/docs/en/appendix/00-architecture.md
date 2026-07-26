@@ -267,15 +267,22 @@ absolute `jp` in range with a relative `jr`).
 The optimizer is split by responsibility. `peep_lines.c` owns storage,
 mutation, physical-line I/O, and opaque barriers for `; dcc user asm` regions;
 passes never rewrite or delete those user-authored lines. `peep_parse.c`
-contains stateless assembly parsers, while `peep_analyze.c` contains shared
-conservative register and function-bound analyses. The main `dccpeep.c` file
-owns the order-sensitive fixed-point catalogue and remaining general passes.
+contains stateless assembly parsers, `peep_effects.c` caches structured line,
+opcode, register, and flag metadata, and `peep_analyze.c` contains shared
+conservative register analysis. `peep_control_flow.c` owns versioned
+label/function indexes and bounded reachability queries. The main `dccpeep.c`
+file owns the descriptor-driven, order-sensitive fixed-point catalogue and
+remaining general passes. `PeepContext` groups program ownership, options,
+statistics, mutation versions, and cached indexes; compatibility globals keep
+legacy pass signatures stable during migration. `PeepEditTransaction` provides
+opt-in atomic commit/rollback for coupled rewrites.
 The high-volume local dispatcher, board/game idioms, loop registerization, and
 compiler-tagged temporary handling live in `peep_pass_once.c`,
 `peep_pass_minmax.c`, `peep_pass_loops.c`, and
-`peep_pass_inline_temp.c`. Post-convergence shared-helper rewrites and terminal
-cleanup live in `peep_pass_stubs.c` and `peep_pass_final.c` respectively,
-behind `dccpeep_internal.h`.
+`peep_pass_inline_temp.c`. Label and branch rewrites live in
+`peep_pass_control_flow.c`. Post-convergence shared-helper rewrites and
+terminal cleanup live in `peep_pass_stubs.c` and `peep_pass_final.c`
+respectively, behind `dccpeep_internal.h`.
 
 dccpeep runs its rewrite catalogue to a **fixpoint** so one rewrite can expose
 the pattern another rewrite needs:
