@@ -2,10 +2,33 @@
  * Compile-then-run VM, modeled after pint.c style.
  * Supports enough C89-ish subset for sieve.c, e.c, and ttt.c.
  */
+
+#ifdef SDCC
+#define ZCC
+/*
+ * z88dk newlib malloc configuration.
+ *
+ * A negative CLIB_MALLOC_HEAP_SIZE tells the CP/M CRT to initialize the
+ * standard malloc heap with all free memory between the end of BSS and the
+ * reserved stack area.  Without this, the default configuration used by some
+ * recent z88dk builds may leave only a small fixed heap.
+ *
+ * CRT_STACK_SIZE is the amount excluded from the top of memory for stack use.
+ * pint's C stack use is modest; the Pascal VM stacks and frames are allocated
+ * separately by init_run_storage().
+ */
+#pragma output CLIB_MALLOC_HEAP_SIZE = -1
+#pragma output CRT_STACK_SIZE = 512
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
+#ifdef ZCC
+#include <malloc.h>
+#endif
 
 #define MAXSRC 8000L
 #define MAXTOK 80
