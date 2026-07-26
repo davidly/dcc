@@ -154,4 +154,8 @@ int pass_byte_for_counter_to_reg_e(void);
 int pass_byte_loop_counter_to_reg_iyl(void);
 int pass_byte_incr_loop_counter_to_reg_iyl(void);
 
+/* Compiler-tagged temporary spill passes (peep_pass_inline_temp.c). */
+int pass_inline_temp_spill_to_stack(void);
+int pass_remove_inline_temp_markers(void);
+
 #endif
