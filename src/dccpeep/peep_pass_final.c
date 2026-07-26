@@ -114,12 +114,62 @@ static void make_jr(int i)
     replace1_tagged(i, out, "jp_to_jr");
 }
 
+typedef struct LabelIndexEntry {
+    const char *definition;
+    int line;
+} LabelIndexEntry;
+
+static int compare_label_entries(const void *left, const void *right)
+{
+    const LabelIndexEntry *a = (const LabelIndexEntry *)left;
+    const LabelIndexEntry *b = (const LabelIndexEntry *)right;
+    int order = strcmp(a->definition, b->definition);
+
+    if (order != 0)
+        return order;
+    return (a->line > b->line) - (a->line < b->line);
+}
+
+static int find_label_line(const LabelIndexEntry *labels, int count,
+                           const char *definition)
+{
+    int lo = 0;
+    int hi = count;
+
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (strcmp(labels[mid].definition, definition) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo < count && strcmp(labels[lo].definition, definition) == 0)
+        return labels[lo].line;
+    return -1;
+}
+
 int pass_jp_to_jr(void)
 {
     static int addr[MAX_LINES];   /* upper-bound byte address of each line */
+    LabelIndexEntry *labels;
+    int label_count = 0;
     int i;
     int any = 0;
     int changed;
+
+    labels = (LabelIndexEntry *)malloc((size_t)nlines * sizeof(*labels));
+    if (labels == NULL && nlines != 0) {
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
+    for (i = 0; i < nlines; ++i) {
+        if (starts_label(lines[i])) {
+            labels[label_count].definition = lines[i];
+            labels[label_count].line = i;
+            ++label_count;
+        }
+    }
+    qsort(labels, (size_t)label_count, sizeof(*labels), compare_label_entries);
 
     do {
         int pc = 0;
@@ -134,21 +184,16 @@ int pass_jp_to_jr(void)
         for (i = 0; i < nlines; i++) {
             char lab[128];
             char def[130];
-            int j;
             int target = -1;
             int from, to, disp;
 
             if (!jr_convertible(i, lab))
                 continue;
 
-            /* Find the target label's line. */
+            /* Find the target label's first definition, matching the old
+             * forward scan when malformed input contains duplicate labels. */
             sprintf(def, "%s:", lab);
-            for (j = 0; j < nlines; j++) {
-                if (starts_label(lines[j]) && strcmp(lines[j], def) == 0) {
-                    target = j;
-                    break;
-                }
-            }
+            target = find_label_line(labels, label_count, def);
             if (target < 0)
                 continue;
 
@@ -187,6 +232,7 @@ int pass_jp_to_jr(void)
         }
     } while (changed);
 
+    free(labels);
     return any;
 }
 

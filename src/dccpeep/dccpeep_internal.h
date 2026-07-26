@@ -15,6 +15,8 @@ extern char *lines[MAX_LINES];
 extern char *user_asm_original[MAX_LINES];
 extern int nlines;
 extern int input_is_dcc_generated;
+extern unsigned long peep_lines_inserted;
+extern unsigned long peep_lines_deleted;
 
 char *xstrdup2(const char *s);
 int eq(int i, const char *s);

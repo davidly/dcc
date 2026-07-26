@@ -5,6 +5,8 @@ char *lines[MAX_LINES];
 char *user_asm_original[MAX_LINES];
 int nlines;
 int input_is_dcc_generated;
+unsigned long peep_lines_inserted;
+unsigned long peep_lines_deleted;
 
 char *xstrdup2(const char *s)
 {
@@ -171,12 +173,13 @@ void delete_n(int i, int count)
         free(lines[i + j]);
     }
 
-    for (j = i; j + count < nlines; j++) {
-        lines[j] = lines[j + count];
-        user_asm_original[j] = user_asm_original[j + count];
-    }
+        memmove(&lines[i], &lines[i + count],
+            (size_t)(nlines - i - count) * sizeof(lines[0]));
+        memmove(&user_asm_original[i], &user_asm_original[i + count],
+            (size_t)(nlines - i - count) * sizeof(user_asm_original[0]));
 
     nlines -= count;
+        peep_lines_deleted += (unsigned long)count;
     for (j = nlines; j < nlines + count; ++j) {
         lines[j] = NULL;
         user_asm_original[j] = NULL;
@@ -185,21 +188,20 @@ void delete_n(int i, int count)
 
 void insert_line(int i, const char *s)
 {
-    int j;
-
     if (nlines >= MAX_LINES) {
         fprintf(stderr, "too many lines\n");
         exit(1);
     }
 
-    for (j = nlines; j > i; j--) {
-        lines[j] = lines[j - 1];
-        user_asm_original[j] = user_asm_original[j - 1];
-    }
+        memmove(&lines[i + 1], &lines[i],
+            (size_t)(nlines - i) * sizeof(lines[0]));
+        memmove(&user_asm_original[i + 1], &user_asm_original[i],
+            (size_t)(nlines - i) * sizeof(user_asm_original[0]));
 
     lines[i] = xstrdup2(s);
     user_asm_original[i] = NULL;
     nlines++;
+    peep_lines_inserted++;
 }
 
 void insert_line_tagged(int i, const char *s, const char *tag)

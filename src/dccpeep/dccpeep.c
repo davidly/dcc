@@ -8,6 +8,57 @@
 #include "dccpeep_internal.h"
 
 static int opt_size = 0;  /* -Os: use RTL helper stubs; default -Ot: inline */
+static int stats_enabled;
+
+#define MAX_PASS_STATS 160
+typedef struct PassStat {
+    const char *name;
+    unsigned long calls;
+    unsigned long changes;
+} PassStat;
+
+static PassStat pass_stats[MAX_PASS_STATS];
+static int pass_stats_count;
+
+static int run_counted_pass(const char *name, int (*pass)(void))
+{
+    int i;
+    int changed;
+
+    for (i = 0; i < pass_stats_count; ++i)
+        if (strcmp(pass_stats[i].name, name) == 0)
+            break;
+    if (i == pass_stats_count) {
+        if (pass_stats_count >= MAX_PASS_STATS) {
+            fprintf(stderr, "too many optimizer passes for statistics\n");
+            exit(1);
+        }
+        pass_stats[i].name = name;
+        pass_stats[i].calls = 0;
+        pass_stats[i].changes = 0;
+        ++pass_stats_count;
+    }
+
+    changed = pass();
+    ++pass_stats[i].calls;
+    if (changed)
+        ++pass_stats[i].changes;
+    return changed;
+}
+
+#define RUN_PASS(pass) run_counted_pass(#pass, pass)
+
+static void report_stats(int iterations)
+{
+    int i;
+
+    fprintf(stderr, "dccpeep stats: iterations=%d inserted=%lu deleted=%lu\n",
+            iterations, peep_lines_inserted, peep_lines_deleted);
+    for (i = 0; i < pass_stats_count; ++i)
+        fprintf(stderr, "  %-44s calls=%lu changes=%lu\n",
+                pass_stats[i].name, pass_stats[i].calls,
+                pass_stats[i].changes);
+}
 
 /* -fundocumented-z80: allow peephole passes that rely on undocumented Z80
  * opcodes (currently just the IYH/IYL half-register load/inc/dec forms
@@ -12137,6 +12188,8 @@ int main(int argc, char **argv)
             opt_size = 0;
         } else if (strcmp(argv[ai], "-fundocumented-z80") == 0) {
             allow_undocumented_z80 = 1;
+        } else if (strcmp(argv[ai], "-fstats") == 0) {
+            stats_enabled = 1;
         } else if (infile == NULL) {
             infile = argv[ai];
         } else if (outfile == NULL) {
@@ -12148,7 +12201,7 @@ int main(int argc, char **argv)
     }
     if (infile == NULL || outfile == NULL) {
         fprintf(stderr,
-                "usage: dccpeep [-Ot|-Os] [-fundocumented-z80] input.mac output.mac\n");
+            "usage: dccpeep [-Ot|-Os] [-fundocumented-z80] [-fstats] input.mac output.mac\n");
         return 1;
     }
 
@@ -12166,67 +12219,67 @@ int main(int argc, char **argv)
     passes = 0;
     do {
         changed = 0;
-        if (pass_once()) changed = 1;
-        if (pass_byte_minmax_patterns()) changed = 1;
-        if (pass_dead_hl_load_before_ldhl()) changed = 1;
-        if (pass_word_load_push_de_call()) changed = 1;
-        if (pass_long_load_push_no_ex_call()) changed = 1;
-        if (pass_elim_loop_back_signed_bias()) changed = 1;
-        if (pass_cp_zero_to_or_a()) changed = 1;
-        if (pass_hl_cmp_zero_to_or_hl()) changed = 1;
-        if (pass_signed_cmp_const_low0()) changed = 1;
-        if (pass_zeroext_byte_cmp_const()) changed = 1;
-        if (pass_byte_cmp_push_pop_hl()) changed = 1;
-        if (pass_call_hl_stack_roundtrip()) changed = 1;
-        if (pass_minmax_winner_result_no_temp()) changed = 1;
-        if (pass_minmax_score_b_cache()) changed = 1;
-        if (pass_minmax_save_board_addr()) changed = 1;
-        if (pass_elim_redundant_ld_a_reg()) changed = 1;
-        if (pass_minmax_elim_label_reload()) changed = 1;
-        if (pass_elim_c_reload_after_store()) changed = 1;
-        if (pass_and1_ix_to_bit()) changed = 1;
-        if (pass_winner_check_dec_a()) changed = 1;
-        if (pass_shrink_minmax_frame3_after_score_cache()) changed = 1;
-        if (pass_minmax_loop_ctr_b()) changed = 1;
-        if (pass_shrink_minmax_frame2_after_loop_ctr_b()) changed = 1;
-        if (pass_minmax_value_c()) changed = 1;
-        if (pass_minmax_board_ptr_loop()) changed = 1;
-        if (pass_minmax_byte_returns()) changed = 1;
-        if (pass_minmax_pack_frame()) changed = 1;
-        if (pass_minmax_pack_call()) changed = 1;
-        if (pass_store_l_reload_a()) changed = 1;
-        if (pass_reuse_board_addr_for_zero_store()) changed = 1;
-        if (pass_array_base_push_to_de()) changed = 1;
-        if (pass_base_index_addr()) changed = 1;
-        if (pass_fold_hl_base_const_offset()) changed = 1;
-        if (pass_fold_hl_label_word_deref()) changed = 1;
-        if (pass_e_signed_le_zero()) changed = 1;
-        if (pass_ix_array_word_addr()) changed = 1;
-        if (pass_ix_array_byte_addr()) changed = 1;
-        if (pass_byte_loop_counter_to_reg_c()) changed = 1;
-        if (pass_byte_for_counter_to_reg_c()) changed = 1;
-        if (pass_byte_for_counter_to_reg_e()) changed = 1;
-        if (pass_store_word_const_hl()) changed = 1;
-        if (pass_float_zero_store()) changed = 1;
-        if (pass_remove_unreferenced_labels()) changed = 1;
-        if (pass_ldir_memset_rotated()) changed = 1;
-        if (pass_reuse_sbc_result_for_flagcheck_rotated()) changed = 1;
-        if (pass_cond_skip_shortcut()) changed = 1;
-        if (pass_stride_loop_to_ptr()) changed = 1;
-        if (pass_ix_frame_ptr_load()) changed = 1;
-        if (pass_ix_frame_ptr_load_deadd()) changed = 1;
-        if (pass_hoist_index_ptr_to_bc()) changed = 1;
-        if (pass_walk_hoisted_index_ptr()) changed = 1;
-        if (pass_walk_row_cached_float_index()) changed = 1;
-        if (pass_global_ptr_word_predec_load()) changed = 1;
-        if (pass_elim_ex_de_hl_before_ix_store()) changed = 1;
-        if (pass_elim_redundant_pop_push()) changed = 1;
-        if (pass_double_de_before_add()) changed = 1;
-        if (pass_const_hl_doubles()) changed = 1;
-        if (pass_deref_byte_cmp()) changed = 1;
-        if (pass_cpir()) changed = 1;
-        if (pass_byte_global_ptr_array_addr()) changed = 1;
-        if (pass_byte_ix_predec_zero_test()) changed = 1;
+        if (RUN_PASS(pass_once)) changed = 1;
+        if (RUN_PASS(pass_byte_minmax_patterns)) changed = 1;
+        if (RUN_PASS(pass_dead_hl_load_before_ldhl)) changed = 1;
+        if (RUN_PASS(pass_word_load_push_de_call)) changed = 1;
+        if (RUN_PASS(pass_long_load_push_no_ex_call)) changed = 1;
+        if (RUN_PASS(pass_elim_loop_back_signed_bias)) changed = 1;
+        if (RUN_PASS(pass_cp_zero_to_or_a)) changed = 1;
+        if (RUN_PASS(pass_hl_cmp_zero_to_or_hl)) changed = 1;
+        if (RUN_PASS(pass_signed_cmp_const_low0)) changed = 1;
+        if (RUN_PASS(pass_zeroext_byte_cmp_const)) changed = 1;
+        if (RUN_PASS(pass_byte_cmp_push_pop_hl)) changed = 1;
+        if (RUN_PASS(pass_call_hl_stack_roundtrip)) changed = 1;
+        if (RUN_PASS(pass_minmax_winner_result_no_temp)) changed = 1;
+        if (RUN_PASS(pass_minmax_score_b_cache)) changed = 1;
+        if (RUN_PASS(pass_minmax_save_board_addr)) changed = 1;
+        if (RUN_PASS(pass_elim_redundant_ld_a_reg)) changed = 1;
+        if (RUN_PASS(pass_minmax_elim_label_reload)) changed = 1;
+        if (RUN_PASS(pass_elim_c_reload_after_store)) changed = 1;
+        if (RUN_PASS(pass_and1_ix_to_bit)) changed = 1;
+        if (RUN_PASS(pass_winner_check_dec_a)) changed = 1;
+        if (RUN_PASS(pass_shrink_minmax_frame3_after_score_cache)) changed = 1;
+        if (RUN_PASS(pass_minmax_loop_ctr_b)) changed = 1;
+        if (RUN_PASS(pass_shrink_minmax_frame2_after_loop_ctr_b)) changed = 1;
+        if (RUN_PASS(pass_minmax_value_c)) changed = 1;
+        if (RUN_PASS(pass_minmax_board_ptr_loop)) changed = 1;
+        if (RUN_PASS(pass_minmax_byte_returns)) changed = 1;
+        if (RUN_PASS(pass_minmax_pack_frame)) changed = 1;
+        if (RUN_PASS(pass_minmax_pack_call)) changed = 1;
+        if (RUN_PASS(pass_store_l_reload_a)) changed = 1;
+        if (RUN_PASS(pass_reuse_board_addr_for_zero_store)) changed = 1;
+        if (RUN_PASS(pass_array_base_push_to_de)) changed = 1;
+        if (RUN_PASS(pass_base_index_addr)) changed = 1;
+        if (RUN_PASS(pass_fold_hl_base_const_offset)) changed = 1;
+        if (RUN_PASS(pass_fold_hl_label_word_deref)) changed = 1;
+        if (RUN_PASS(pass_e_signed_le_zero)) changed = 1;
+        if (RUN_PASS(pass_ix_array_word_addr)) changed = 1;
+        if (RUN_PASS(pass_ix_array_byte_addr)) changed = 1;
+        if (RUN_PASS(pass_byte_loop_counter_to_reg_c)) changed = 1;
+        if (RUN_PASS(pass_byte_for_counter_to_reg_c)) changed = 1;
+        if (RUN_PASS(pass_byte_for_counter_to_reg_e)) changed = 1;
+        if (RUN_PASS(pass_store_word_const_hl)) changed = 1;
+        if (RUN_PASS(pass_float_zero_store)) changed = 1;
+        if (RUN_PASS(pass_remove_unreferenced_labels)) changed = 1;
+        if (RUN_PASS(pass_ldir_memset_rotated)) changed = 1;
+        if (RUN_PASS(pass_reuse_sbc_result_for_flagcheck_rotated)) changed = 1;
+        if (RUN_PASS(pass_cond_skip_shortcut)) changed = 1;
+        if (RUN_PASS(pass_stride_loop_to_ptr)) changed = 1;
+        if (RUN_PASS(pass_ix_frame_ptr_load)) changed = 1;
+        if (RUN_PASS(pass_ix_frame_ptr_load_deadd)) changed = 1;
+        if (RUN_PASS(pass_hoist_index_ptr_to_bc)) changed = 1;
+        if (RUN_PASS(pass_walk_hoisted_index_ptr)) changed = 1;
+        if (RUN_PASS(pass_walk_row_cached_float_index)) changed = 1;
+        if (RUN_PASS(pass_global_ptr_word_predec_load)) changed = 1;
+        if (RUN_PASS(pass_elim_ex_de_hl_before_ix_store)) changed = 1;
+        if (RUN_PASS(pass_elim_redundant_pop_push)) changed = 1;
+        if (RUN_PASS(pass_double_de_before_add)) changed = 1;
+        if (RUN_PASS(pass_const_hl_doubles)) changed = 1;
+        if (RUN_PASS(pass_deref_byte_cmp)) changed = 1;
+        if (RUN_PASS(pass_cpir)) changed = 1;
+        if (RUN_PASS(pass_byte_global_ptr_array_addr)) changed = 1;
+        if (RUN_PASS(pass_byte_ix_predec_zero_test)) changed = 1;
         /* Deliberately placed after the specialized array-addressing passes
          * above (pass_byte_global_ptr_array_addr in particular): both of
          * these IYL-promotion passes match a plain "ld e,(ix+off)"/"ld
@@ -12237,39 +12290,39 @@ int main(int argc, char **argv)
          * would otherwise have claimed - measured as a real (if tiny)
          * regression on attnc99 before this ordering fix. */
         if (allow_undocumented_z80) {
-            if (pass_byte_loop_counter_to_reg_iyl()) changed = 1;
-            if (pass_byte_incr_loop_counter_to_reg_iyl()) changed = 1;
+            if (RUN_PASS(pass_byte_loop_counter_to_reg_iyl)) changed = 1;
+            if (RUN_PASS(pass_byte_incr_loop_counter_to_reg_iyl)) changed = 1;
         }
-        if (pass_ix_pair_load_to_de()) changed = 1;
-        if (pass_bc_pair_load_to_de()) changed = 1;
-        if (pass_ix_byte_load_to_de()) changed = 1;
-        if (pass_remove_ix_store_reload_hl()) changed = 1;
-        if (pass_inline_temp_spill_to_stack()) changed = 1;
-        if (pass_remove_inline_temp_markers()) changed = 1;
-        if (pass_postinc_ix_word()) changed = 1;
-        if (pass_cp_jz_jpnc()) changed = 1;
-        if (pass_cp_jz_jpc()) changed = 1;
-        if (pass_bool_from_cmp()) changed = 1;
-        if (pass_elim_dead_ix_stores()) changed = 1;
-        if (pass_ix_addr_byte_store_imm()) changed = 1;
-        if (pass_remove_ix_store_reload_a()) changed = 1;
-        if (pass_a_tracks_ix_byte()) changed = 1;
-        if (pass_elim_redundant_ld_h_zero()) changed = 1;
-        if (pass_elim_long_store_reload()) changed = 1;
-        if (pass_skip_ix_reload_across_label()) changed = 1;
-        if (pass_branch_over_jump()) changed = 1;
-        if (pass_jump_thread()) changed = 1;
-        if (pass_global_board_const_offsets()) changed = 1;
-        if (pass_posfunc_b_cache()) changed = 1;
-        if (pass_jp_to_plain_ret()) changed = 1;
-        if (pass_const_divmod_helpers()) changed = 1;
-        if (pass_mulu_const()) changed = 1;
-        if (pass_cache_noix_byte_param_reload()) changed = 1;
-        if (pass_cache_global_word_reload()) changed = 1;
-        if (pass_word_loop_var_to_reg_bc()) changed = 1;
-        if (pass_byte_loop_var_to_reg_c()) changed = 1;
+        if (RUN_PASS(pass_ix_pair_load_to_de)) changed = 1;
+        if (RUN_PASS(pass_bc_pair_load_to_de)) changed = 1;
+        if (RUN_PASS(pass_ix_byte_load_to_de)) changed = 1;
+        if (RUN_PASS(pass_remove_ix_store_reload_hl)) changed = 1;
+        if (RUN_PASS(pass_inline_temp_spill_to_stack)) changed = 1;
+        if (RUN_PASS(pass_remove_inline_temp_markers)) changed = 1;
+        if (RUN_PASS(pass_postinc_ix_word)) changed = 1;
+        if (RUN_PASS(pass_cp_jz_jpnc)) changed = 1;
+        if (RUN_PASS(pass_cp_jz_jpc)) changed = 1;
+        if (RUN_PASS(pass_bool_from_cmp)) changed = 1;
+        if (RUN_PASS(pass_elim_dead_ix_stores)) changed = 1;
+        if (RUN_PASS(pass_ix_addr_byte_store_imm)) changed = 1;
+        if (RUN_PASS(pass_remove_ix_store_reload_a)) changed = 1;
+        if (RUN_PASS(pass_a_tracks_ix_byte)) changed = 1;
+        if (RUN_PASS(pass_elim_redundant_ld_h_zero)) changed = 1;
+        if (RUN_PASS(pass_elim_long_store_reload)) changed = 1;
+        if (RUN_PASS(pass_skip_ix_reload_across_label)) changed = 1;
+        if (RUN_PASS(pass_branch_over_jump)) changed = 1;
+        if (RUN_PASS(pass_jump_thread)) changed = 1;
+        if (RUN_PASS(pass_global_board_const_offsets)) changed = 1;
+        if (RUN_PASS(pass_posfunc_b_cache)) changed = 1;
+        if (RUN_PASS(pass_jp_to_plain_ret)) changed = 1;
+        if (RUN_PASS(pass_const_divmod_helpers)) changed = 1;
+        if (RUN_PASS(pass_mulu_const)) changed = 1;
+        if (RUN_PASS(pass_cache_noix_byte_param_reload)) changed = 1;
+        if (RUN_PASS(pass_cache_global_word_reload)) changed = 1;
+        if (RUN_PASS(pass_word_loop_var_to_reg_bc)) changed = 1;
+        if (RUN_PASS(pass_byte_loop_var_to_reg_c)) changed = 1;
 /*        if (pass_replace_tstr_fake_strstr()) changed = 1; */
-        if (pass_labels()) changed = 1;
+        if (RUN_PASS(pass_labels)) changed = 1;
         passes++;
     } while (changed && passes < 30);
 
@@ -12288,10 +12341,10 @@ int main(int argc, char **argv)
      * than this inline fold.  Folding here would defeat that, so restrict the
      * fold to -Ot where trading shared code size for fewer inline instructions
      * is the goal. */
-    if (!opt_size && pass_signed_cmp_const_bias_fold())
-        pass_labels();
-    if (!opt_size && pass_signed_zero_branch())
-        pass_labels();
+    if (!opt_size && RUN_PASS(pass_signed_cmp_const_bias_fold))
+        RUN_PASS(pass_labels);
+    if (!opt_size && RUN_PASS(pass_signed_zero_branch))
+        RUN_PASS(pass_labels);
 
     /* Run frame elimination after all other passes have converged, then
      * clean up any newly unreferenced labels created by the removal.
@@ -12307,28 +12360,28 @@ int main(int argc, char **argv)
      * so the earlier main-loop pass correctly refuses to replace jp Lret with
      * ret.  pass_elim_ix_frame() can then collapse that label to a plain ret,
      * creating exactly the pattern jp_to_plain_ret is meant to remove. */
-    if (pass_elim_ix_frame()) {
-        pass_jp_to_plain_ret();
-        pass_labels();
+    if (RUN_PASS(pass_elim_ix_frame)) {
+        RUN_PASS(pass_jp_to_plain_ret);
+        RUN_PASS(pass_labels);
     }
 
     /* Convert remaining framed prologues/epilogues to shared stub calls.
      * Runs after frame elimination so only functions that genuinely need IX
      * are transformed.  A follow-up branch/label pass collapses any return
      * labels that now just contain "jp __lve" into direct jumps. */
-    if (opt_size && pass_shared_frame_stubs()) {
-        pass_branch_over_jump();
-        pass_labels();
+    if (opt_size && RUN_PASS(pass_shared_frame_stubs)) {
+        RUN_PASS(pass_branch_over_jump);
+        RUN_PASS(pass_labels);
     }
 
     /* Load-arg stubs and frame-pointer copy stub run last: they remove "ix"
      * text from lines, so they must not run before pass_elim_ix_frame (which
      * uses that text to detect live frame usage). */
     if (opt_size) {
-        pass_larg_stubs();
-        pass_phix_stub();
-        pass_lvar_stubs();
-        pass_svar_stubs();
+        RUN_PASS(pass_larg_stubs);
+        RUN_PASS(pass_phix_stub);
+        RUN_PASS(pass_lvar_stubs);
+        RUN_PASS(pass_svar_stubs);
         /* Generic sequence stubs: run after all other passes so that more
          * specific transforms (pass_e_signed_le_zero, pass_signed_cmp_small_const,
          * pass_once "and1_bool", etc.) have already fired on sub-patterns.
@@ -12347,14 +12400,14 @@ int main(int argc, char **argv)
          * into "call __laX/__lvX / ld (ADDR),hl" using Z80 direct-store.
          * Must run after larg/lvar stubs have produced the "call __laX" form.
          * Saves 6 bytes per site, no perf cost.  ~10 sites on lzpack. */
-        pass_larg_direct_store();
-        pass_icmp_stub();
-        pass_sxde_stub();
-        pass_sxhl_stub();
+        RUN_PASS(pass_larg_direct_store);
+        RUN_PASS(pass_icmp_stub);
+        RUN_PASS(pass_sxde_stub);
+        RUN_PASS(pass_sxhl_stub);
         /* Enable for more size at some perf cost: */
 #if 1
-        pass_wand_stub();    /* -200 bytes, +5% perf */
-        pass_ldwl_stub();    /* -231 bytes, +8% perf */
+        RUN_PASS(pass_wand_stub);    /* -200 bytes, +5% perf */
+        RUN_PASS(pass_ldwl_stub);    /* -231 bytes, +8% perf */
 #endif
     }
 
@@ -12365,11 +12418,13 @@ int main(int argc, char **argv)
      * jumps to relative jumps.  Both run after every structural pass so they
      * only tidy the settled instruction stream; dead-load removal first since
      * it shrinks code and can bring more branches into jr range. */
-    pass_dup_ix_load_to_reg_copy();
-    pass_fold_const_sign_extend();
-    pass_elim_dead_reg16_reload();
-    pass_jp_to_jr();
+    RUN_PASS(pass_dup_ix_load_to_reg_copy);
+    RUN_PASS(pass_fold_const_sign_extend);
+    RUN_PASS(pass_elim_dead_reg16_reload);
+    RUN_PASS(pass_jp_to_jr);
 
     write_file(outfile);
+    if (stats_enabled)
+        report_stats(passes);
     return 0;
 }
