@@ -3116,6 +3116,44 @@ static int emit_runtime_pointer_array_stride(struct Sym *s)
     return 1;
 }
 
+/* Sibling of emit_array_symbase_index above, for a PLAIN POINTER variable
+ * base (not a true array) that is directly loadable - an ix-relative
+ * local/param or a global/extern word. Same principle, adapted: the base
+ * here is a VALUE that must be loaded (not a compile-time address), so
+ * evaluate the index first into HL, then load the base directly into DE
+ * with emit_load_sym_de_direct and add - instead of the generic sequence's
+ * `push hl` (protecting the just-loaded base) while evaluating the index,
+ * needed only when the base itself requires a nontrivial reload.
+ *
+ * Found via fint.c's `OP_CALL`/`OP_RET` cases (`lcrs[lcrp++] = in + 1;`,
+ * `in = lcrs[--lcrp];`) - the recursive-call return-stack push/pop, hit on
+ * every minimax recursion in the ttt.f benchmark (the single largest
+ * remaining dcc-vs-sdcc gap in the whole interpreter benchmark suite,
+ * ~55% slower). idx++/idx-- itself already compiles efficiently (see
+ * try_emit_post_update_sym_direct/emit_incdec_sym_direct) - the waste was
+ * purely the EXTRA push/pop this function elides, protecting the base
+ * pointer's value across an index evaluation that never needed it live.
+ *
+ * Returns 1 when it emitted the whole first-subscript address (HL = base
+ * value + idx*elem); 0 when the caller should fall back (constant index,
+ * base is a true array, or base isn't directly loadable). */
+static int emit_pointer_symbase_index(struct Sym *s, const struct AstNode *idx,
+                                      int elem)
+{
+    if (s == NULL || s->is_array)
+        return 0;
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
+        return 0;
+    if (idx == NULL || idx->kind == AST_INT_LIT)
+        return 0;                        /* constant index: add-const path is fine */
+    gen_index_subscript_expr_ast(idx);   /* index -> HL */
+    if (!emit_runtime_pointer_array_stride(s))
+        scale_hl_by_elem_size(elem);     /* index * elem */
+    emit_load_sym_de_direct(s);          /* base value -> DE, HL untouched */
+    emit("\tadd hl,de\n");
+    return 1;
+}
+
 /* Emit a plain-int subscript read `base[index]` via the IDENTIFIER-ROOTED
  * subscript machine (NOT the postfix chain - the two use different base loads
  * and element-size helpers).  The gate (ast_index_plain_int_read) guarantees a
@@ -3138,6 +3176,40 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
 
     for (di = 0; di < 4; ++di)
         fa_dims[di] = 0;
+
+    /* `base[idx++]` / `base[--idx]` (postfix/prefix inc-dec used directly as
+     * the subscript - a push/pop-onto-an-array-via-index idiom, e.g. a VM's
+     * recursive call/return stack: fint.c's `lcrs[lcrp++] = in + 1;` /
+     * `in = lcrs[--lcrp];`) where base is a bare identifier resolving to a
+     * directly-loadable, non-array pointer variable (ix-relative local/param
+     * or a global/extern word): see emit_pointer_symbase_index - evaluates
+     * idx first, then loads base straight into DE, instead of the base-
+     * first/push/pop order every branch below (including this same shape's
+     * own fallback further down) otherwise uses.
+     *
+     * Deliberately narrow to inc/dec-as-the-whole-index, NOT any non-
+     * constant index: a plain loop variable (`b[i]` in a counting loop)
+     * matched here too in an earlier version of this check, and reordering
+     * it broke several of dccpeep's cross-ITERATION loop-hoisting passes
+     * (the invariant base load they hoist out of the loop entirely is a
+     * bigger win than this single-access push/pop elision, and their
+     * pattern-matching is tuned to the base-first shape) - a real
+     * performance regression (tbig -37%) caught by the full suite's
+     * perf-baseline check, not anticipated up front. Postfix/prefix inc-dec
+     * embedded IN the subscript itself is a different, much rarer shape
+     * with no such loop-hoisting opportunity to preserve. */
+    if (n->a != NULL && n->a->kind == AST_IDENT && n->b != NULL &&
+        (n->b->kind == AST_POSTFIX ||
+         (n->b->kind == AST_UNARY && (n->b->op == TOK_INC || n->b->op == TOK_DEC))) &&
+        (n->b->op == TOK_INC || n->b->op == TOK_DEC)) {
+        struct Sym *base_sym = find_sym(n->a->sval);
+        if (base_sym != NULL &&
+            emit_pointer_symbase_index(base_sym, n->b,
+                                       sym_pointer_array_index_elem_size(base_sym, base_sym->type, 0))) {
+            *out_val_type = type_decay_ptr(base_sym->type);
+            return;
+        }
+    }
 
     if (ast_index_reversed_pointer_expr_elem_type(n, &val_type)) {
         gen_pointer_expr_ast(n->b, &cur_type, &no_deref);
