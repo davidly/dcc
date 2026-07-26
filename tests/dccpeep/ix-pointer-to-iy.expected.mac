@@ -6,9 +6,6 @@ _ZD:
 	ld hl,100
 	ld (ix-2),l
 	ld (ix-1),h
-	ld hl,0
-	ld l,(ix-2)
-	ld h,(ix-1)
 	ld a,(hl)
 	call _external
 	ld l,(ix-2)
@@ -36,7 +33,6 @@ _ZA:
 	ld hl,100
 	push hl ; peep: ix_pointer_to_iy
 	pop iy
-	ld hl,0
 	push iy ; peep: ix_pointer_to_iy
 	pop hl
 	ld a,(hl)

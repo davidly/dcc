@@ -8343,6 +8343,13 @@ int main(int argc, char **argv)
      * it shrinks code and can bring more branches into jr range. */
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
     RUN_PASS(pass_fold_const_sign_extend);
+    do {
+        changed = 0;
+        if (RUN_PASS(pass_elim_dead_register_loads))
+            changed = 1;
+        if (RUN_PASS(pass_remove_ix_store_reload_hl))
+            changed = 1;
+    } while (changed);
     RUN_PASS(pass_elim_dead_reg16_reload);
     RUN_PASS(pass_jp_to_jr);
 

@@ -74,11 +74,41 @@ enum PeepFlagMask {
     PEEP_FLAG_PV = 1u << 3
 };
 
+typedef enum PeepOperandKind {
+    PEEP_OPERAND_NONE,
+    PEEP_OPERAND_REGISTER,
+    PEEP_OPERAND_IMMEDIATE,
+    PEEP_OPERAND_FRAME,
+    PEEP_OPERAND_GLOBAL,
+    PEEP_OPERAND_INDIRECT,
+    PEEP_OPERAND_LABEL
+} PeepOperandKind;
+
+enum PeepMemoryMask {
+    PEEP_MEM_NONE     = 0,
+    PEEP_MEM_FRAME    = 1u << 0,
+    PEEP_MEM_GLOBAL   = 1u << 1,
+    PEEP_MEM_STACK    = 1u << 2,
+    PEEP_MEM_INDIRECT = 1u << 3,
+    PEEP_MEM_OPAQUE   = 1u << 4
+};
+
+typedef struct PeepOperand {
+    PeepOperandKind kind;
+    unsigned registers;
+    long immediate;
+    int frame_offset;
+    int immediate_valid;
+    int frame_offset_valid;
+} PeepOperand;
+
 typedef struct PeepEffects {
     unsigned reads;
     unsigned writes;
     unsigned flags_read;
     unsigned flags_written;
+    unsigned memory_read;
+    unsigned memory_written;
     int unknown;
     int control_flow;
 } PeepEffects;
@@ -86,8 +116,28 @@ typedef struct PeepEffects {
 typedef struct PeepLineInfo {
     PeepLineKind kind;
     PeepOpcode opcode;
+    char mnemonic[8];
+    PeepOperand left;
+    PeepOperand right;
     PeepEffects effects;
 } PeepLineInfo;
+
+typedef struct PeepFlowLine {
+    int successors[2];
+    int successor_count;
+    int block;
+    unsigned live_in;
+    unsigned live_out;
+    unsigned flags_live_in;
+    unsigned flags_live_out;
+} PeepFlowLine;
+
+typedef struct PeepBasicBlock {
+    int start;
+    int end;
+    int function_start;
+    int function_end;
+} PeepBasicBlock;
 
 typedef struct PeepIndexes {
     PeepLabelIndexEntry *labels;
@@ -100,8 +150,14 @@ typedef struct PeepIndexes {
     int function_capacity;
     PeepLineInfo *line_info;
     int line_info_capacity;
+    PeepFlowLine *flow_lines;
+    int flow_line_capacity;
+    PeepBasicBlock *blocks;
+    int block_count;
+    int block_capacity;
     unsigned long version;
     unsigned long line_info_version;
+    unsigned long flow_version;
 } PeepIndexes;
 
 typedef struct PeepContext {
@@ -204,6 +260,11 @@ int line_touches_de(const char *s);
 int line_touches_hl(const char *s);
 int line_touches_a(const char *s);
 const PeepLineInfo *peep_line_info(int line);
+const PeepFlowLine *peep_flow_line(int line);
+const PeepBasicBlock *peep_basic_block(int block);
+int peep_basic_block_count(void);
+int peep_registers_dead_after(int line, unsigned registers);
+int peep_flags_dead_after(int line, unsigned flags);
 
 /* Size-mode shared-helper passes. */
 int pass_shared_frame_stubs(void);
@@ -223,6 +284,7 @@ int jump_target(const char *s, char *out);
 int pass_jp_to_jr(void);
 int pass_fold_const_sign_extend(void);
 int pass_elim_dead_reg16_reload(void);
+int pass_elim_dead_register_loads(void);
 
 /* Single-scan micro-pattern dispatcher (peep_pass_once.c). */
 int pass_once(void);
