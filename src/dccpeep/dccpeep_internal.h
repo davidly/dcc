@@ -116,6 +116,7 @@ int pass_once(void);
 
 /* Shared helpers used across the optimizer and the board passes. */
 int is_uncond_jp(const char *s);
+int is_jump_line(const char *s);
 int label_name_at(int i, char *out);
 int line_is_label_name(int i, const char *name);
 int peep_is_public_line(const char *s);
