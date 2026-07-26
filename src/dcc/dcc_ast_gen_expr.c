@@ -3177,31 +3177,37 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
     for (di = 0; di < 4; ++di)
         fa_dims[di] = 0;
 
-    /* `base[idx++]` / `base[--idx]` (postfix/prefix inc-dec used directly as
-     * the subscript - a push/pop-onto-an-array-via-index idiom, e.g. a VM's
-     * recursive call/return stack: fint.c's `lcrs[lcrp++] = in + 1;` /
-     * `in = lcrs[--lcrp];`) where base is a bare identifier resolving to a
+    /* `base[idx++]` / `base[--idx]` / `base[idx-K]` / `base[idx+K]` (a plain
+     * variable, adjusted by inc/dec or a constant offset, used directly as
+     * the subscript) where base is a bare identifier resolving to a
      * directly-loadable, non-array pointer variable (ix-relative local/param
      * or a global/extern word): see emit_pointer_symbase_index - evaluates
      * idx first, then loads base straight into DE, instead of the base-
      * first/push/pop order every branch below (including this same shape's
-     * own fallback further down) otherwise uses.
+     * own fallback further down) otherwise uses. Motivating shapes, both
+     * from fint.c's VM data-stack access (hit on nearly every opcode of
+     * every interpreted Forth word): `lcrs[lcrp++] = in + 1;` (push) and
+     * `lst[lsp-1] += _t;` (`OP_ADD` et al.'s compound-assign to the stack's
+     * top element, `lsp` the stack pointer).
      *
-     * Deliberately narrow to inc/dec-as-the-whole-index, NOT any non-
-     * constant index: a plain loop variable (`b[i]` in a counting loop)
-     * matched here too in an earlier version of this check, and reordering
-     * it broke several of dccpeep's cross-ITERATION loop-hoisting passes
-     * (the invariant base load they hoist out of the loop entirely is a
-     * bigger win than this single-access push/pop elision, and their
-     * pattern-matching is tuned to the base-first shape) - a real
+     * Deliberately narrow to inc/dec-or-fixed-offset-of-a-bare-identifier,
+     * NOT any non-constant index: a plain loop variable alone (`b[i]` in a
+     * counting loop) matched an earlier, broader version of this check too,
+     * and reordering it broke several of dccpeep's cross-ITERATION loop-
+     * hoisting passes (the invariant base load they hoist out of the loop
+     * entirely is a bigger win than this single-access push/pop elision,
+     * and their pattern-matching is tuned to the base-first shape) - a real
      * performance regression (tbig -37%) caught by the full suite's
-     * perf-baseline check, not anticipated up front. Postfix/prefix inc-dec
-     * embedded IN the subscript itself is a different, much rarer shape
-     * with no such loop-hoisting opportunity to preserve. */
+     * perf-baseline check, not anticipated up front. `idx+K`/`idx-K` keeps
+     * `idx` itself as a required, non-optional operand of the index
+     * expression (unlike a bare `i`), so it does not newly match that same
+     * loop-counter shape - re-verified against the same full-suite check
+     * that caught the original regression before landing this. */
     if (n->a != NULL && n->a->kind == AST_IDENT && n->b != NULL &&
-        (n->b->kind == AST_POSTFIX ||
-         (n->b->kind == AST_UNARY && (n->b->op == TOK_INC || n->b->op == TOK_DEC))) &&
-        (n->b->op == TOK_INC || n->b->op == TOK_DEC)) {
+        ((n->b->kind == AST_POSTFIX && (n->b->op == TOK_INC || n->b->op == TOK_DEC)) ||
+         (n->b->kind == AST_UNARY && (n->b->op == TOK_INC || n->b->op == TOK_DEC)) ||
+         (n->b->kind == AST_BINARY && (n->b->op == '+' || n->b->op == '-') &&
+          n->b->a->kind == AST_IDENT && n->b->b->kind == AST_INT_LIT))) {
         struct Sym *base_sym = find_sym(n->a->sval);
         if (base_sym != NULL &&
             emit_pointer_symbase_index(base_sym, n->b,
