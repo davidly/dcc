@@ -1,0 +1,58 @@
+public _accept
+_accept:
+ld (ix-4),l
+ld (ix-3),h
+ld de,1
+or a
+sbc hl,de
+jp nz, L2
+ld a,10
+jp Ldone
+L2:
+ld l,(ix-4)
+ld h,(ix-3)
+ld de,2
+or a
+sbc hl,de
+jp nz, L3
+ld a,20
+jp Ldone
+L3:
+ld l,(ix-4)
+ld h,(ix-3)
+ld de,9
+or a
+sbc hl,de
+jp nz, Lfallback
+ld a,90
+jp Ldone
+Lfallback:
+ld a,0
+Ldone:
+ret
+public _decline_external_entry
+_decline_external_entry:
+ld (ix-8),l
+ld (ix-7),h
+ld de,4
+or a
+sbc hl,de
+jp nz, Ld2
+Ld2:
+ld l,(ix-8)
+ld h,(ix-7)
+ld de,5
+or a
+sbc hl,de
+jp nz, Ld3
+Ld3:
+ld l,(ix-8)
+ld h,(ix-7)
+ld de,6
+or a
+sbc hl,de
+jp nz, Ldend
+jp Ld2
+Ldend:
+ret
+end

@@ -1,0 +1,49 @@
+	public _accept
+_accept:
+	ld (ix-4),l
+	ld (ix-3),h
+	ld a,h ; peep: ix_word_small_eq_chain
+	or a
+	jr nz,Lfallback ; peep: jp_to_jr
+	ld a,l
+	cp 1
+	jr nz,L2 ; peep: jp_to_jr
+	ld a,10
+	ret ; peep: jp_to_plain_ret
+L2:
+	cp 2 ; peep: ix_word_small_eq_chain
+	jr nz,L3 ; peep: jp_to_jr
+	ld a,20
+	ret ; peep: jp_to_plain_ret
+L3:
+	cp 9 ; peep: ix_word_small_eq_chain
+	jr nz,Lfallback ; peep: jp_to_jr
+	ld a,90
+	ret ; peep: jp_to_plain_ret
+Lfallback:
+	ld a,0
+	ret
+	public _decline_external_entry
+_decline_external_entry:
+	ld (ix-8),l
+	ld (ix-7),h
+	ld de,4
+	or a
+	sbc hl,de
+	jr nz,Ld2 ; peep: jp_to_jr
+Ld2:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	ld de,5
+	or a
+	sbc hl,de
+	jr nz,Ld3 ; peep: jp_to_jr
+Ld3:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	ld de,6
+	or a
+	sbc hl,de
+	jr z,Ld2 ; peep: jp_to_jr
+	ret
+	end
