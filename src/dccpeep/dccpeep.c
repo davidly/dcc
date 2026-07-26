@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 #define MAX_LINES 400000
 #define MAX_LINE  512
@@ -209,9 +210,11 @@ static void insert_line_tagged(int i, const char *s, const char *tag)
     free(buf);
 }
 
-static int parse_ld_hl_imm(const char *s, char *val)
+static int parse_ld_hl_imm(const char *s, char *val, size_t val_size)
 {
     const char *p;
+    const char *operand;
+    size_t operand_len;
     char tmp[MAX_LINE];
 
     strip_peep_comment_copy(tmp, s);
@@ -219,13 +222,19 @@ static int parse_ld_hl_imm(const char *s, char *val)
     if (strncmp(tmp, p, strlen(p)) != 0)
         return 0;
 
-    strcpy(val, tmp + strlen(p));
+    operand = tmp + strlen(p);
+    operand_len = strlen(operand);
+    if (operand_len >= val_size)
+        return 0;
+    memcpy(val, operand, operand_len + 1);
     return 1;
 }
 
-static int parse_ld_de_imm(const char *s, char *val)
+static int parse_ld_de_imm(const char *s, char *val, size_t val_size)
 {
     const char *p;
+    const char *operand;
+    size_t operand_len;
     char tmp[MAX_LINE];
 
     strip_peep_comment_copy(tmp, s);
@@ -233,7 +242,11 @@ static int parse_ld_de_imm(const char *s, char *val)
     if (strncmp(tmp, p, strlen(p)) != 0)
         return 0;
 
-    strcpy(val, tmp + strlen(p));
+    operand = tmp + strlen(p);
+    operand_len = strlen(operand);
+    if (operand_len >= val_size)
+        return 0;
+    memcpy(val, operand, operand_len + 1);
     return 1;
 }
 
@@ -246,7 +259,10 @@ static int parse_nonneg_int(const char *s, int *out)
 
     v = 0;
     while (*s >= '0' && *s <= '9') {
-        v = v * 10 + (*s - '0');
+        int digit = *s - '0';
+        if (v > (INT_MAX - digit) / 10)
+            return 0;
+        v = v * 10 + digit;
         s++;
     }
 
@@ -807,7 +823,7 @@ static int pass_base_index_addr(void)
     changed = 0;
 
     for (i = 0; i + 6 < nlines; ++i) {
-        if (!parse_ld_hl_imm(lines[i], base))
+        if (!parse_ld_hl_imm(lines[i], base, sizeof(base)))
             continue;
         /* Only rewrite constants/labels that are also legal as ld de,<base>. */
         if (base[0] == '(')
@@ -898,11 +914,11 @@ static int pass_fold_hl_base_const_offset(void)
     for (i = 0; i + 2 < nlines; ++i) {
         if (!input_is_dcc_generated || range_is_user_asm(i, i + 2))
             continue;
-        if (!parse_ld_hl_imm(lines[i], base))
+        if (!parse_ld_hl_imm(lines[i], base, sizeof(base)))
             continue;
         if (base[0] == '(')
             continue;
-        if (!parse_ld_de_imm(lines[i + 1], off_text))
+        if (!parse_ld_de_imm(lines[i + 1], off_text, sizeof(off_text)))
             continue;
         if (!parse_nonneg_int(off_text, &off) || off == 0)
             continue;
@@ -966,7 +982,7 @@ static int pass_fold_hl_label_word_deref(void)
     for (i = 0; i + 4 < nlines; ++i) {
         if (!input_is_dcc_generated || range_is_user_asm(i, i + 4))
             continue;
-        if (!parse_ld_hl_imm(lines[i], label))
+        if (!parse_ld_hl_imm(lines[i], label, sizeof(label)))
             continue;
         if (label[0] == '(')
             continue;
@@ -2058,7 +2074,7 @@ static int offset_used_only_as_expected_read(int fstart, int fend, int off, int 
     int v;
 
     for (i = fstart; i < fend; i++) {
-        if (!parse_ld_hl_imm(lines[i], valbuf)) continue;
+        if (!parse_ld_hl_imm(lines[i], valbuf, sizeof(valbuf))) continue;
         if (!parse_nonneg_int(valbuf, &v)) continue;
         if (v != off) continue;
         if (match_noix_param_read(i, fend) != len) return 0;
@@ -2126,7 +2142,7 @@ static int pass_cache_noix_byte_param_reload(void)
 
         for (i = fstart; i < fend; i++) {
             char valbuf[128];
-            if (!parse_ld_hl_imm(lines[i], valbuf)) continue;
+            if (!parse_ld_hl_imm(lines[i], valbuf, sizeof(valbuf))) continue;
             if (!parse_nonneg_int(valbuf, &off)) continue;
             mlen = match_noix_param_read(i, fend);
             if (mlen == 0) continue;
@@ -2171,7 +2187,7 @@ static int pass_cache_noix_byte_param_reload(void)
             if (safe) {
                 for (i = fstart; i < fend; i++) {
                     char valbuf[128];
-                    if (!parse_ld_hl_imm(lines[i], valbuf)) continue;
+                    if (!parse_ld_hl_imm(lines[i], valbuf, sizeof(valbuf))) continue;
                     if (!parse_nonneg_int(valbuf, &off)) continue;
                     if (off != best_off) continue;
                     if (match_noix_param_read(i, fend) != best_len) continue;
@@ -5284,7 +5300,7 @@ static int pass_dead_hl_load_before_ldhl(void)
     for (i = 0; i + 2 < nlines; ++i) {
         if (peep_parse_ld_l_ix(lines[i], off) &&
             (eq(i + 1, "ld h,0") || peep_parse_ld_h_ix(lines[i + 1], off2)) &&
-            parse_ld_hl_imm(lines[i + 2], imm)) {
+            parse_ld_hl_imm(lines[i + 2], imm, sizeof(imm))) {
             delete_n(i, 2);
             changed = 1;
             if (i > 0) --i;
@@ -5811,7 +5827,7 @@ static int pass_byte_global_ptr_array_addr(void)
     char base[MAX_LINE], off[32], ld_hl_buf[MAX_LINE];
 
     for (i = 0; i + 6 < nlines; i++) {
-        if (!parse_ld_hl_imm(lines[i], base)) continue;
+        if (!parse_ld_hl_imm(lines[i], base, sizeof(base))) continue;
         if (!eq(i + 1, "push hl")) continue;
         if (!peep_parse_ld_l_ix(lines[i + 2], off)) continue;
         if (!eq(i + 3, "ld h,0")) continue;
@@ -7940,7 +7956,7 @@ static int pass_minmax_save_board_addr(void)
         j++;
 
         /* Recompute block: ld hl,_g_board; ld e,(ix-K); ld d,0; add hl,de */
-        if (!parse_ld_hl_imm(lines[j], addr))               continue;
+        if (!parse_ld_hl_imm(lines[j], addr, sizeof(addr))) continue;
         if (strcmp(addr, "_g_board") != 0)                   continue; j++;
         if (!stride_parse_ld_r_ix_neg(lines[j], 'e', &k2))  continue;
         if (k2 != K)                                         continue; j++;
@@ -8034,7 +8050,7 @@ static int pass_array_base_push_to_de(void)
     changed = 0;
 
     for (i = 0; i + 7 < nlines; ++i) {
-        if (parse_ld_hl_imm(lines[i], base) &&
+        if (parse_ld_hl_imm(lines[i], base, sizeof(base)) &&
             eq(i + 1, "push hl") &&
             peep_parse_ld_l_ix(lines[i + 2], base + 100) &&
             eq(i + 3, "ld h,0") &&
@@ -8055,9 +8071,9 @@ static int pass_array_base_push_to_de(void)
         }
 
         if (i + 10 < nlines &&
-            parse_ld_hl_imm(lines[i], base) && base[0] != '(' &&
+            parse_ld_hl_imm(lines[i], base, sizeof(base)) && base[0] != '(' &&
             eq(i + 1, "push hl") &&
-            parse_ld_hl_imm(lines[i + 2], index) && index[0] == '(' &&
+            parse_ld_hl_imm(lines[i + 2], index, sizeof(index)) && index[0] == '(' &&
             eq(i + 3, "push hl") &&
             eq(i + 4, "inc hl") &&
             eq(i + 6, "pop hl") &&
@@ -9124,7 +9140,7 @@ static int pass_once(void)
          */
         if (eq(i, "push hl") &&
             i + 3 < nlines &&
-            parse_ld_hl_imm(lines[i + 1], v) &&
+            parse_ld_hl_imm(lines[i + 1], v, sizeof(v)) &&
             eq(i + 2, "ex de,hl") &&
             eq(i + 3, "pop hl")) {
             sprintf(out, "ld de,%s", v);
@@ -9145,7 +9161,7 @@ static int pass_once(void)
          */
         if (eq(i, "push hl") &&
             i + 2 < nlines &&
-            parse_ld_de_imm(lines[i + 1], v) &&
+            parse_ld_de_imm(lines[i + 1], v, sizeof(v)) &&
             eq(i + 2, "pop hl")) {
             sprintf(out, "ld de,%s", v);
             replace1_tagged(i, out, "push_lde_pop");
@@ -9164,7 +9180,7 @@ static int pass_once(void)
          */
         if (eq(i, "ex de,hl") &&
             i + 4 < nlines &&
-            parse_ld_hl_imm(lines[i + 1], v) &&
+            parse_ld_hl_imm(lines[i + 1], v, sizeof(v)) &&
             eq(i + 2, "add hl,sp") &&
             eq(i + 3, "ld sp,hl") &&
             eq(i + 4, "ex de,hl")) {
@@ -9534,7 +9550,7 @@ static int pass_ldir_memset_rotated(void)
         if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo_ix)) continue; j++;
         if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi_ix)) continue; j++;
         if (hi_ix != lo_ix - 1) continue;
-        if (!parse_ld_de_imm(lines[j], arr_sym) || arr_sym[0] != '_') continue; j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue; j++;
         if (!eq(j, "add hl,de")) continue; j++;
         if (strncmp(lines[j], "ld (hl),", 8) != 0) continue;
         {
@@ -9772,7 +9788,7 @@ static int pass_stride_loop_to_ptr(void)
             if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2)) continue; j++;
             if (lo2 != lo_k || hi2 != hi_k) continue;
         }
-        if (!parse_ld_de_imm(lines[j], arr_sym) || arr_sym[0] != '_') continue; j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue; j++;
         if (!eq(j, "add hl,de")) continue; j++;
         if (!eq(j, "ld (hl),0")) continue; j++;
 
@@ -9999,7 +10015,7 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
         j = body_idx + 1;
         if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2) || lo2 != K) continue; j++;
         if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2) || hi2 != M) continue; j++;
-        if (!parse_ld_de_imm(lines[j], arr_sym) || arr_sym[0] != '_') continue; j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue; j++;
         if (!eq(j, "add hl,de")) continue; j++;
         if (!eq(j, "ld a,(hl)")) continue; j++;
         if (!eq(j, "or a")) continue; j++;
@@ -10637,7 +10653,7 @@ static int pass_const_hl_doubles(void)
         int count;
         unsigned int folded;
 
-        if (!parse_ld_hl_imm(lines[i], imm_text))
+        if (!parse_ld_hl_imm(lines[i], imm_text, sizeof(imm_text)))
             continue;
         if (!parse_nonneg_int(imm_text, &value))
             continue;
@@ -12099,7 +12115,7 @@ static int pass_larg_direct_store(void)
         char tmp[MAX_LINE];
         const char *stub;
 
-        if (!parse_ld_hl_imm(lines[i], addr))
+        if (!parse_ld_hl_imm(lines[i], addr, sizeof(addr)))
             continue;
         /* addr must be a label/symbol (not a register or computed value) */
         if (addr[0] == '(' || (addr[0] >= '0' && addr[0] <= '9'))
@@ -12693,7 +12709,7 @@ static int pass_winner_check_dec_a(void)
         {
             char t4[MAX_LINE];
             strip_peep_comment_copy(t4, lines[i + 4]);
-            if (!parse_ld_hl_imm(lines[i + 4], lab) &&
+            if (!parse_ld_hl_imm(lines[i + 4], lab, sizeof(lab)) &&
                 (strncmp(t4, "ld l,", 5) != 0))
                 continue;
         }
@@ -13517,7 +13533,7 @@ static int ld_hl_const_high_bit_set(const char *s, int *bit15)
     long n;
     int neg = 0;
 
-    if (!parse_ld_hl_imm(s, val))
+    if (!parse_ld_hl_imm(s, val, sizeof(val)))
         return 0;
 
     p = val;
