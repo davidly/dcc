@@ -258,10 +258,10 @@ function Build-WindowsMsvc {
     }
 
     $tools = @(
-        @{ Name = "dccpeep"; Source = Join-Path $repoRoot "src\dccpeep\dccpeep.c" },
-        @{ Name = "dccrtlstrip"; Source = Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c" },
-        @{ Name = "dccmake"; Source = Join-Path $repoRoot "src\dccmake\dccmake.c" },
-        @{ Name = "m80c"; Source = Join-Path $repoRoot "src\m80c\m80c.c" }
+        @{ Name = "dccpeep"; Sources = @(Get-ChildItem (Join-Path $repoRoot "src\dccpeep") -Filter "*.c" | Sort-Object Name | ForEach-Object FullName) },
+        @{ Name = "dccrtlstrip"; Sources = @((Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c")) },
+        @{ Name = "dccmake"; Sources = @((Join-Path $repoRoot "src\dccmake\dccmake.c")) },
+        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src\m80c\m80c.c")) }
     )
 
     foreach ($tool in $tools) {
@@ -270,7 +270,7 @@ function Build-WindowsMsvc {
         $toolOut = Join-Path $repoRoot "$($tool.Name).exe"
         New-BuildDirectory $toolObjDir
 
-        $arguments = @($tool.Source) + $cflags + @(
+        $arguments = @($tool.Sources) + $cflags + @(
             "/Fo:$toolObjDir\",
             "/Fa$toolObjDir\",
             "/Fd:$toolObjDir\$($tool.Name).pdb",
@@ -365,21 +365,25 @@ function Build-UnixNative {
     Invoke-Checked $compiler (@($baseCflags) + $dccObjects + $linkFlags + @("-o", $dccOut)) "linking dcc"
 
     $tools = @(
-        @{ Name = "dccpeep"; Source = Join-Path $repoRoot "src\dccpeep\dccpeep.c" },
-        @{ Name = "dccrtlstrip"; Source = Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c" },
-        @{ Name = "dccmake"; Source = Join-Path $repoRoot "src\dccmake\dccmake.c" },
-        @{ Name = "m80c"; Source = Join-Path $repoRoot "src\m80c\m80c.c" }
+        @{ Name = "dccpeep"; Sources = @(Get-ChildItem (Join-Path $repoRoot "src/dccpeep") -Filter "*.c" | Sort-Object Name | ForEach-Object FullName) },
+        @{ Name = "dccrtlstrip"; Sources = @((Join-Path $repoRoot "src/dccrtlstrip/dccrtlstrip.c")) },
+        @{ Name = "dccmake"; Sources = @((Join-Path $repoRoot "src/dccmake/dccmake.c")) },
+        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src/m80c/m80c.c")) }
     )
 
     foreach ($tool in $tools) {
         Write-Host "`n=== Building $($tool.Name) ==="
         $toolObjDir = Join-Path $outputRoot $tool.Name
-        $toolObject = Join-Path $toolObjDir "$($tool.Name).o"
         $toolOut = Join-Path $repoRoot $tool.Name
         New-BuildDirectory $toolObjDir
 
-        Invoke-Checked $compiler (@($baseCflags) + @("-c", $tool.Source, "-o", $toolObject)) "compiling $($tool.Name)"
-        Invoke-Checked $compiler (@($baseCflags) + @($toolObject) + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
+        $toolObjects = @()
+        foreach ($source in $tool.Sources) {
+            $toolObject = Join-Path $toolObjDir ([System.IO.Path]::ChangeExtension((Split-Path $source -Leaf), ".o"))
+            $toolObjects += $toolObject
+            Invoke-Checked $compiler (@($baseCflags) + @("-I", (Split-Path $source -Parent), "-c", $source, "-o", $toolObject)) "compiling $($tool.Name):$(Split-Path $source -Leaf)"
+        }
+        Invoke-Checked $compiler (@($baseCflags) + $toolObjects + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
     }
 
     return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"))

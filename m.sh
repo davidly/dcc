@@ -31,7 +31,7 @@ echo "Building dcc, dccpeep, dccrtlstrip, dccmake, and m80c in parallel..."
 src/dcc/build-dcc.sh                                                  > "$tmpdir/dcc.log"         2>&1 &
 pid_dcc=$!
 
-gcc -O2 -g $STATICFLAGS -o dccpeep src/dccpeep/dccpeep.c              > "$tmpdir/dccpeep.log"     2>&1 &
+gcc -std=c11 -O2 -g $STATICFLAGS -I src/dccpeep -o dccpeep src/dccpeep/*.c > "$tmpdir/dccpeep.log" 2>&1 &
 pid_dccpeep=$!
 # cp dccpeep /mnt/c/users/david/onedrive/ntvcm/dcc
 
