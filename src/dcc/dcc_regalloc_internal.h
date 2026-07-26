@@ -18,6 +18,10 @@ int line_touches_bc_reg(const char *s);
 int buf_has_unsafe_call(const char *buf);
 int asm_name_is_bc_safe_call(const char *name);
 int asm_name_is_noreturn_call(const char *name);
+/* True if `s` has a captured, codegen-time-substitutable inline body. The
+ * regalloc and LICM scans recurse into that body instead of declining on the
+ * AST_CALL node, matching what codegen will substitute. Defined in dcc_func.c. */
+int is_inline_substitutable(struct Sym *s);
 
 struct Sym *find_bc_regalloc_candidate(int params_end);
 int plain_static_body_can_be_buffered(struct Sym *s, const char *name);

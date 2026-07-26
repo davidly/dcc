@@ -629,13 +629,6 @@ extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
-/* True if `s` has a captured, codegen-time-substitutable inline body (one
- * of inline_return_expr/inline_stmt_expr/inline_stmt_body). Shared with
- * dcc_licm.c/dcc_loop_regalloc.c's eligibility scans, which recurse into
- * that captured body instead of declining outright on the plain AST_CALL
- * node - matching what try_gen_inline_call_ast will actually substitute at
- * codegen time. Defined in dcc_func.c. */
-int is_inline_substitutable(struct Sym *s);
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -814,6 +807,7 @@ void error_here(const char *msg);
 void warn_at(const char *file, int line, const char *msg);
 void *xmalloc(size_t n);
 char *xstrdup2(const char *s);
+char *dcc_read_stream_text(FILE *stream, long *size_out, const char *error_msg);
 int new_label(void);
 void emit_ld_de_const(long v);
 void emit_add_const_to_hl(long v);

@@ -441,6 +441,25 @@ char *xstrdup2(const char *s)
     return p;
 }
 
+char *dcc_read_stream_text(FILE *stream, long *size_out, const char *error_msg)
+{
+    long size;
+    char *buf;
+
+    if (fseek(stream, 0, SEEK_END) != 0)
+        fatal(error_msg);
+    size = ftell(stream);
+    if (size < 0 || fseek(stream, 0, SEEK_SET) != 0)
+        fatal(error_msg);
+
+    buf = (char *)xmalloc((size_t)size + 1);
+    if (size > 0 && fread(buf, 1, (size_t)size, stream) != (size_t)size)
+        fatal(error_msg);
+    buf[size] = 0;
+    *size_out = size;
+    return buf;
+}
+
 int new_label(void)
 {
     return ++label_id;

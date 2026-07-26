@@ -58,6 +58,7 @@
 #include "dcc_ast.h"
 
 #define MAX_NARROW_GROUP 16
+#define MAX_NARROW_CALL_DEPTH 16
 #define NARROW_TARGET_BOUND 255
 #define NARROW_FAIL(st) do { (st)->ok = 0; } while (0)
 
@@ -98,20 +99,27 @@ static int narrow_group_add(struct NarrowGroup *g, const char *name, int is_arra
     return g->n++;
 }
 
-/* A no-argument, single-return-statement function's body, for recursively
+/* A no-argument, single-return-statement function, for recursively
  * bounding a call like rndrm(). Mirrors the same "simple substitution body"
  * shape already recognized for static inline functions, but this walk is
  * independent of (and does not require) the inline machinery - it works for
  * any such function, static inline or not. */
-static const struct AstNode *narrow_get_noarg_return_expr(const char *fname)
+static struct Sym *narrow_get_noarg_function(const char *fname)
 {
     struct Sym *fn;
 
     fn = find_global(fname);
-    if (fn == NULL || fn->storage != SC_FUNC)
+    if (fn == NULL || fn->storage != SC_FUNC || fn->narrow_return_expr == NULL)
         return NULL;
-    return fn->narrow_return_expr;
+    return fn;
 }
+
+/* Calls in captured return expressions may be directly or mutually recursive.
+ * A cycle cannot prove a finite bound, so decline it rather than recursively
+ * walking until the host stack overflows. The depth cap is defensive for a
+ * long acyclic chain; declining only loses an optimization. */
+static struct Sym *g_narrow_call_stack[MAX_NARROW_CALL_DEPTH];
+static int g_narrow_call_depth;
 
 /* A guard fact recording that, at the current point in the walk, `name` is
  * known to be strictly greater than `min_exclusive` - e.g. {N, 9} inside
@@ -291,12 +299,18 @@ static int narrow_expr_bound(const struct AstNode *n, struct NarrowGroup *g,
         return 0;
 
     case AST_CALL: {
-        const struct AstNode *ret_expr;
+        struct Sym *fn;
+        int i;
+        int bounded;
+
         if (n->a == NULL || n->a->kind != AST_IDENT || n->list_len != 0)
             return 0;
-        ret_expr = narrow_get_noarg_return_expr(n->a->sval);
-        if (ret_expr == NULL)
+        fn = narrow_get_noarg_function(n->a->sval);
+        if (fn == NULL || g_narrow_call_depth >= MAX_NARROW_CALL_DEPTH)
             return 0;
+        for (i = 0; i < g_narrow_call_depth; ++i)
+            if (g_narrow_call_stack[i] == fn)
+                return 0;
         /* The callee's own body is analyzed with an EMPTY group of its
          * own - it has no parameters, so nothing in the caller's group
          * could leak in incorrectly, and the callee's return expression
@@ -305,7 +319,11 @@ static int narrow_expr_bound(const struct AstNode *n, struct NarrowGroup *g,
         {
             struct NarrowGroup empty;
             empty.n = 0;
-            return narrow_expr_bound(ret_expr, &empty, out_nonneg, out_bound);
+            g_narrow_call_stack[g_narrow_call_depth++] = fn;
+            bounded = narrow_expr_bound(fn->narrow_return_expr, &empty,
+                                        out_nonneg, out_bound);
+            g_narrow_call_depth--;
+            return bounded;
         }
     }
 
