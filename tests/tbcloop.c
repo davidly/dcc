@@ -29,6 +29,46 @@
 
 static char srcbuf[64];
 static char outbuf[64];
+static int inline_values[16];
+static int unsafe_call_count;
+
+static inline int safe_index(int index)
+{
+    return index * 2;
+}
+
+static int unsafe_index_step(int index)
+{
+    unsafe_call_count++;
+    return index;
+}
+
+static inline int unsafe_index(int index)
+{
+    return unsafe_index_step(index);
+}
+
+static int sum_inline_safe(const int *values, int count)
+{
+    int i;
+    int total;
+
+    total = 0;
+    for (i = 0; i < count; i++)
+        total += values[safe_index(i)];
+    return total;
+}
+
+static int sum_inline_unsafe(const int *values, int count)
+{
+    int i;
+    int total;
+
+    total = 0;
+    for (i = 0; i < count; i++)
+        total += values[unsafe_index(i)];
+    return total;
+}
 
 static long count_long_index(const char *in)
 {
@@ -80,6 +120,8 @@ static void ck_str(const char *got, const char *want, const char *label)
 
 int main(void)
 {
+    int i;
+
     strcpy(srcbuf, "the quick brown fox jumps over the lazy dog");
     ck_long(count_long_index(srcbuf), (long)strlen(srcbuf), "count1");
 
@@ -92,6 +134,17 @@ int main(void)
     ck_long(count_long_index(srcbuf), 3, "count2");
     copy_long_index(srcbuf);
     ck_str(outbuf, "abc", "copy2");
+
+    /* Exercise loop-scoped BC allocation while the loop body expands a pure
+     * inline helper, then an inline wrapper containing a real call. The latter
+     * must make speculative verification decline/fall back without losing or
+     * duplicating the call's side effect. */
+    for (i = 0; i < 16; i++)
+        inline_values[i] = i;
+    ck_long(sum_inline_safe(inline_values, 4), 12, "inline-safe");
+    unsafe_call_count = 0;
+    ck_long(sum_inline_unsafe(inline_values, 4), 6, "inline-unsafe");
+    ck_long(unsafe_call_count, 4, "inline-call-count");
 
     printf("checks=%d failures=%d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");

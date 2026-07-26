@@ -6,7 +6,8 @@
  * code that loads/stores a symbol's address or value (frame-relative or direct
  * for globals), including post-increment/decrement fast paths.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * MODULE: compiled as its own translation unit; register-allocation escape
+ * state is declared in dcc_regalloc_internal.h.
  * Source provenance: monolith src/ddc.c lines 3829-4801.
  */
 

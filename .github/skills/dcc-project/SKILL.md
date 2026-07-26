@@ -1,6 +1,6 @@
 ---
 name: dcc-project
-description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89/C99/C11 front end -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (dccmake), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
+description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89-base front end with selected C99/C11 features -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (dccmake), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
 argument-hint: 'Describe the dcc-project task (change codegen, run the test suite, build a single app, rebuild host tools)'
 ---
 
@@ -33,7 +33,7 @@ Microsoft's `L80` under ntvcm; `dcc-use-emulated-m80=true` selects Microsoft's
 
 | Path | What |
 | ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` driver; phases split across `dcc_preproc.c`, `dcc_decl.c`, `dcc_expr.c`, `dcc_stmt.c`, `dcc_func.c`, `dcc_ops.c`, `dcc_fold.c`/`dcc_constexpr.c` (folding), `dcc_types.c`, `dcc_symbols.c`, `dcc_data.c`, `dcc_diag_emit.c`. **Codegen is a single AST path**: `dcc_ast.c`/`dcc_ast_build.c` build the typed function-local AST (initializers via `ast_emit_init_expr` into an isolated arena), and the AST emitter lives in `dcc_ast_gen.c` + `dcc_ast_gen_support.c`/`_expr.c`/`_cond.c`/`_stmt.c` (behind `dcc_ast_gen_internal.h`). The `dcc_expr.c`/`dcc_ops.c`/`dcc_cmp.c`/`dcc_assign.c`/`dcc_stmt.c` modules provide the low-level emit helpers the AST walker calls into. |
+| `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations, `dcc_global_init.c` records file-scope initializers, and `dcc_regalloc.c`/`dcc_loop_regalloc.c` own speculative register allocation. `dcc_array_narrow.c` proves byte narrowing. **Codegen is a single AST path**: `dcc_ast.c`/`dcc_ast_build.c` build typed function-local ASTs and `dcc_ast_gen*.c` emits them. Low-level helpers live in `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, and `dcc_decl.c`. Focused contracts use `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, and `dcc_regalloc_internal.h`; shared state is defined in `dcc_state.c`. |
 | `src/dccpeep/` | Peephole optimizer (`-Ot` time / `-Os` size). |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
@@ -105,14 +105,16 @@ text.
 
 When adding or changing a test, update `_test_overrides.json` for its runtime
 needs first, then regenerate or edit `tests/baselines/<app>.txt` only when the
-new output is the intended behavior. For every new runnable unit test, also add
-a `tests/perf_baselines.csv` row with both `peep_cycles` and `nopeep_cycles`.
+new output is the intended behavior. New runnable tests need a
+`tests/perf_baselines.csv` row; expanding an existing test's workload normally
+requires updating that row too. Measure both modes with `-Mode full` and change
+only the affected row/columns.
 Measure those values with the normal `runall.ps1` stack-check build (for
 example `pwsh ./scripts/runall.ps1 -Mode full`, then copy the reported new
 app/mode cycle counts) rather than ad-hoc `dccmake` runs, because stack-check
 changes the cycle counts. Avoid broad `-UpdatePerfBaseline` updates unless the
-task is explicitly to refresh all performance baselines; otherwise add or edit
-only the new test's row.
+task explicitly requires them. `-Report` is a separate no-stack-check historical
+report and must not supply checked performance baselines.
 
 When running test apps directly under `ntvcm` for benchmarking or debugging,
 look up the app in `_test_overrides.json` first and pass the same `args`,
@@ -123,7 +125,7 @@ interpreters, expect keyboard input, or are intentionally ignored; raw direct
 runs, for example:
 
 ```sh
-perl -e 'alarm shift; exec @ARGV' 30 ntvcm -p -s:200000000 APP.COM ARGS...
+perl -e 'alarm shift; exec @ARGV' 30 ntvcm -p -s:0 APP.COM ARGS...
 ```
 
 ## Build / debug a single app
@@ -160,6 +162,20 @@ built AST tree to stderr before it is emitted.
 
 ## Rebuild the host tools after a source change
 
+For compiler-only edits, the fastest host build is:
+
+```sh
+sh src/dcc/build-dcc.sh
+```
+
+It links every `src/dcc/*.c`; when adding a module, also add it to the explicit
+`src/dcc/CMakeLists.txt` source list.
+
+The `dcc` implementation is host code, not code for the Z80 target. It may use
+portable C11 supported by modern Clang, GCC, and MSVC; do not constrain it to
+the language subset that dcc accepts as input. Keep vendor-only extensions
+behind platform guards.
+
 ```pwsh
 pwsh ./scripts/build-dcc.ps1            # MSVC on Windows, clang on macOS, gcc on Linux
 ```
@@ -173,9 +189,9 @@ change.
 
 Use measured signals before changing codegen, `dccpeep`, or `DCCRTL.MAC`:
 
-- For cycle measurements, run CP/M binaries with `ntvcm -p -s:200000000` and
-	compare the reported `Z80 cycles`; the `-s` value is a clock rate, not a cycle
-	cap.
+- For cycle measurements, run CP/M binaries with `ntvcm -p -s:0` and compare
+	the reported `Z80 cycles`; full-speed execution does not change the emulated
+	cycle total.
 - For direct benchmark runs, honor `tests/_test_overrides.json` and use a
 	timeout/alarm wrapper so input-driven or long-running apps do not hang the
 	session.
@@ -206,6 +222,18 @@ Important performance lessons from recent work:
 - For AST constant folding, avoid host undefined behavior and host-only
 	semantics. Fold only when target signed/unsigned behavior is provably the
 	same, and use unsigned host arithmetic for low-bit shift folds when needed.
+- Proof-based optimizations must conservatively decline unknown or recursive
+	shapes. Recursive walks over captured ASTs need cycle/depth guards.
+- `EmitSink` purpose (FINAL/DISCARD/VERIFY/DEFERRED) describes the destination,
+	not suppression. Do not blanket-convert raw formatted writes to a
+	`scan_mode`-guarded emitter: verification buffers may need those bytes.
+
+## Behavior-preserving compiler refactors
+
+For parser/codegen restructuring, build before/after compilers and require zero
+`.MAC` differences across `tests/*.c` plus zero stderr differences across
+`tests/diagnostics/*.c`, then run `runall.ps1`. Move a new untracked `.c` module
+aside while building the baseline because `build-dcc.sh` globs all sources.
 
 Useful corpus-mining tactics:
 

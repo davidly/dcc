@@ -53,7 +53,7 @@ into **18 `.c` modules plus one umbrella header**, using true separate compilati
 
 - Largest unit any tool or developer must load drops from **18,841 → 3,482 lines** (~5.4×).
 - Build paths: `src/dcc/build-dcc.sh` and `src/dcc/CMakeLists.txt`.
-- Strict flags: `-std=c89 -Wall -Wextra -Werror=implicit-function-declaration -Werror=implicit-int`.
+- Host-language baseline: portable C11 across Clang, GCC, and MSVC.
 - Behaviour is byte-identical to the monolith (full regression green).
 
 ---

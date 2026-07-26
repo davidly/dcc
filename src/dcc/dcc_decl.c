@@ -5,7 +5,8 @@
  * arrays, structs/unions and bitfields, brace-enclosed initializer lists, and
  * const-scalar folding of local initializers into immediates.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * MODULE: compiled as its own translation unit; E-register allocation state is
+ * declared in dcc_regalloc_internal.h.
  * Source provenance: monolith src/ddc.c lines 13128-13991.
  */
 

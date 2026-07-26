@@ -1,63 +1,21 @@
 /*
- * dcc_array_narrow.c - detect int arrays whose every stored element value is
- * provably in [0,255], so their declared element type can be narrowed to
- * unsigned char before normal codegen runs.
+ * dcc_array_narrow.c - conservative proof engine for narrowing eligible local
+ * int arrays, register scalars, and for-loop counters to unsigned char.
  *
- * Byte arrays are already a completely ordinary, fully-supported C
- * construct in dcc - narrowing an array's type is the entire fix; no new
- * codegen is needed, since type_index_elem_size() and friends already
- * derive addressing arithmetic from the element type dynamically. The hard
- * part, and the only thing this file does, is proving the narrowing is
- * safe.
- *
- * Two independent questions have to be answered, both by lexical/AST
- * scanning rather than symbol-table-based analysis (matching
- * dcc_global_scan.c's approach for the analogous whole-file question):
- *
- *   1. Does this array's name ever escape as a bare pointer (passed to a
- *      function, assigned to a pointer, etc.)? If so, some other code this
- *      scan cannot see might store an unbounded value through it, so
- *      narrowing is declined outright. A bare occurrence of the name not
- *      immediately followed by '[' is treated as an escape.
- *
- *   2. Is every value ever stored into the array provably in [0,255]? This
- *      needs both an upper bound *and* non-negativity - storing a negative
- *      int into unsigned char wraps to a large positive value, which is not
- *      the same value read back, so an upper-bound-only proof is not
- *      sufic.ient. Values that are themselves expressions referencing other
- *      local scalars (not just literals) require bounding those scalars
- *      too, by tracing every place they are reassigned within the same
- *      scope - which can require mutual reasoning (variable X's bound
- *      depends on array A's values, and A's bound depends on X), handled
- *      by hypothesize-then-verify: assume every name in the dependency
- *      closure has the target property, then check every reassignment site
- *      for every name in the closure is consistent with that assumption.
- *      This is a coinductive safety argument, not an inductive one - it is
- *      valid because the property being checked (nonneg-and-bounded) is
- *      preserved by the recognized operators, not because it needs a base
- *      case to build up from.
- *
- * The rule set for "is this expression nonneg and bounded by K" is
- * deliberately small and conservative: literals, +, *, / (bound derived
- * from operands, with / requiring a positive divisor), % (bounded by the
- * divisor's own bound minus 1, and only when the dividend is separately
- * proven nonneg), a bare reference to another name in the assumption set,
- * an index into an array in the assumption set, and a call to a
- * no-argument function whose entire body is a single return statement
- * (recursively bounded the same way). Anything else - unrecognized
- * operators, a variable outside the same function, a function with
- * parameters or a body of more than one statement - is an unconditional
- * decline, never a guess: this can only under-narrow (miss an
- * optimization), never over-narrow (corrupt a value), which is the
- * required safety direction throughout this codebase's other lexical
- * scans (see local_name_used_ahead, local_name_address_taken_ahead,
- * scan_global_write_info).
+ * The proof checks that every stored value is non-negative and <=255 and that
+ * no writable alias escapes its scope. Dependencies are discovered
+ * coinductively, then every write is verified against the small supported rule
+ * set (literals, bounded arithmetic, group references, array reads, and simple
+ * no-argument calls). Unknown shapes, aliases, recursive calls, or exhausted
+ * limits decline narrowing; they never guess. Normal byte codegen then handles
+ * accepted candidates without a separate lowering path.
  */
 
 #include "dcc.h"
 #include "dcc_ast.h"
 
 #define MAX_NARROW_GROUP 16
+#define MAX_NARROW_CALL_DEPTH 16
 #define NARROW_TARGET_BOUND 255
 #define NARROW_FAIL(st) do { (st)->ok = 0; } while (0)
 
@@ -98,20 +56,27 @@ static int narrow_group_add(struct NarrowGroup *g, const char *name, int is_arra
     return g->n++;
 }
 
-/* A no-argument, single-return-statement function's body, for recursively
+/* A no-argument, single-return-statement function, for recursively
  * bounding a call like rndrm(). Mirrors the same "simple substitution body"
  * shape already recognized for static inline functions, but this walk is
  * independent of (and does not require) the inline machinery - it works for
  * any such function, static inline or not. */
-static const struct AstNode *narrow_get_noarg_return_expr(const char *fname)
+static struct Sym *narrow_get_noarg_function(const char *fname)
 {
     struct Sym *fn;
 
     fn = find_global(fname);
-    if (fn == NULL || fn->storage != SC_FUNC)
+    if (fn == NULL || fn->storage != SC_FUNC || fn->narrow_return_expr == NULL)
         return NULL;
-    return fn->narrow_return_expr;
+    return fn;
 }
+
+/* Calls in captured return expressions may be directly or mutually recursive.
+ * A cycle cannot prove a finite bound, so decline it rather than recursively
+ * walking until the host stack overflows. The depth cap is defensive for a
+ * long acyclic chain; declining only loses an optimization. */
+static struct Sym *g_narrow_call_stack[MAX_NARROW_CALL_DEPTH];
+static int g_narrow_call_depth;
 
 /* A guard fact recording that, at the current point in the walk, `name` is
  * known to be strictly greater than `min_exclusive` - e.g. {N, 9} inside
@@ -291,12 +256,18 @@ static int narrow_expr_bound(const struct AstNode *n, struct NarrowGroup *g,
         return 0;
 
     case AST_CALL: {
-        const struct AstNode *ret_expr;
+        struct Sym *fn;
+        int i;
+        int bounded;
+
         if (n->a == NULL || n->a->kind != AST_IDENT || n->list_len != 0)
             return 0;
-        ret_expr = narrow_get_noarg_return_expr(n->a->sval);
-        if (ret_expr == NULL)
+        fn = narrow_get_noarg_function(n->a->sval);
+        if (fn == NULL || g_narrow_call_depth >= MAX_NARROW_CALL_DEPTH)
             return 0;
+        for (i = 0; i < g_narrow_call_depth; ++i)
+            if (g_narrow_call_stack[i] == fn)
+                return 0;
         /* The callee's own body is analyzed with an EMPTY group of its
          * own - it has no parameters, so nothing in the caller's group
          * could leak in incorrectly, and the callee's return expression
@@ -305,7 +276,11 @@ static int narrow_expr_bound(const struct AstNode *n, struct NarrowGroup *g,
         {
             struct NarrowGroup empty;
             empty.n = 0;
-            return narrow_expr_bound(ret_expr, &empty, out_nonneg, out_bound);
+            g_narrow_call_stack[g_narrow_call_depth++] = fn;
+            bounded = narrow_expr_bound(fn->narrow_return_expr, &empty,
+                                        out_nonneg, out_bound);
+            g_narrow_call_depth--;
+            return bounded;
         }
     }
 
@@ -1080,6 +1055,9 @@ static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *nam
     return 1;
 }
 
+/* Proves all visible writes preserve [0,255] and no writable alias escapes.
+ * Returns 0 conservatively for any unsupported, recursive, or over-limit
+ * shape; callers must then keep the original 16-bit representation. */
 int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name)
 {
     return narrow_is_byte_safe_impl(scope, arr_name, 1);

@@ -1,7 +1,9 @@
 # dcc — modularised compiler source
 
-`dcc` is a tiny bootstrap C89 compiler that targets Z80 assembly for the
-Microsoft M80 / LINK-80 toolchain on CP/M-80. This directory holds the
+`dcc` is a compact C compiler with a C89 base language plus selected C99 and
+C11 features that fit the CP/M/Z80 target. It emits Z80 assembly for the
+M80-compatible CP/M toolchain. The compiler implementation is portable C11 host
+code built with modern Clang, GCC, or MSVC. This directory holds the
 **modularised** form of the compiler: the original ~18.8k-line single file was
 split into focused, separately compiled modules — one `.c` per subsystem plus a
 shared umbrella header — so that both human and agentic developers can navigate
@@ -18,9 +20,8 @@ and modify one subsystem at a time.
 `dcc` now lowers function bodies through a **function-local AST**. The parser
 builds typed statement/expression trees for function bodies, then the AST
 walker emits Z80 assembly by calling shared low-level emit helpers. The compiler
-still shares a large amount of file-scope state, so the modules are organised
-the way a classic single-binary C compiler is: **one umbrella header that every
-module includes**, rather than many small per-module headers.
+still shares foundational types/state through `dcc.h`; focused AST,
+preprocessor, and register-allocation contracts use internal headers.
 
 - [`dcc.h`](dcc.h) is the umbrella header. It declares everything shared:
   capacity macros, the type/storage/token constants, the core record types
@@ -211,8 +212,8 @@ cmake -S src/dcc -B build/dcc
 cmake --build build/dcc      # also writes ./dcc at the repo root
 ```
 
-Both compile every module (`dcc.c`, `dcc_state.c`, and the `dcc_*.c` files) with
-`-std=c89 -Wall -Wextra -O2` and link them into `./dcc` at the repository root,
+Both compile every module (`dcc.c`, `dcc_state.c`, and the `dcc_*.c` files) as
+portable C11 and link them into `./dcc` at the repository root,
 matching the conventions the `ma.sh` / `runall.sh` harness expects. The
 companion tools `dccpeep` and `dccrtlstrip` are unchanged and are built by the
 existing root scripts (`mmacos.sh` / `m.sh`).
@@ -220,7 +221,7 @@ existing root scripts (`mmacos.sh` / `m.sh`).
 Override the compiler or flags via environment variables:
 
 ```sh
-CC=gcc CFLAGS="-std=c89 -O2" sh src/dcc/build-dcc.sh
+CC=gcc CFLAGS="-std=c11 -O2" sh src/dcc/build-dcc.sh
 ```
 
 > Note: linking may print `ld: warning: reducing alignment of section

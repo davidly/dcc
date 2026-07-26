@@ -8,7 +8,7 @@
  * tables) - hence "function-local".
  *
  * Design constraints:
- *   - C89 source (the host compiler builds dcc as -std=c89).
+ *   - Portable C11 source for modern Clang, GCC, and MSVC host compilers.
  *   - Must be able to drive the shared emit_* helpers,
  *     so the AST records exactly the information those helpers need (resolved
  *     struct Sym*, dcc type codes, operator token kinds, folded literals).

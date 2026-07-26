@@ -2,17 +2,20 @@
  * dcc_diag_emit.c - diagnostics, allocation, and low-level emit primitives.
  *
  * The compiler's "plumbing": fatal()/error_here() error reporting,
- * source_location_at() for #line-aware positions, xmalloc/xstrdup2, label
- * allocation, the emit()/emit_label()/emit_jp_label() assembly-output
- * primitives, and the raw source character readers (peekc/getc_src).
+ * source_location_at() for #line-aware positions, allocation and checked
+ * stream-reading helpers, EmitSink switching, assembly-output primitives, and
+ * raw source character readers (peekc/getc_src).
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * MODULE: compiled as its own translation unit; macro helpers used for source
+ * rendering are declared in dcc_preproc_internal.h.
  * Source provenance: monolith src/ddc.c lines 495-691.
  */
 
 #include "dcc.h"
 #include "dcc_preproc_internal.h"
 
+/* Starts a nestable output scope and returns the complete previous sink. Every
+ * successful push must be paired with emit_sink_restore on every exit path. */
 EmitSink emit_sink_push(FILE *stream, int purpose)
 {
     EmitSink saved;
@@ -439,6 +442,27 @@ char *xstrdup2(const char *s)
     p = (char *)xmalloc(strlen(s) + 1);
     strcpy(p, s);
     return p;
+}
+
+/* Returns a NUL-terminated copy and leaves stream at EOF. Callers that need to
+ * read the stream again must rewind it. */
+char *dcc_read_stream_text(FILE *stream, long *size_out, const char *error_msg)
+{
+    long size;
+    char *buf;
+
+    if (fseek(stream, 0, SEEK_END) != 0)
+        fatal(error_msg);
+    size = ftell(stream);
+    if (size < 0 || fseek(stream, 0, SEEK_SET) != 0)
+        fatal(error_msg);
+
+    buf = (char *)xmalloc((size_t)size + 1);
+    if (size > 0 && fread(buf, 1, (size_t)size, stream) != (size_t)size)
+        fatal(error_msg);
+    buf[size] = 0;
+    *size_out = size;
+    return buf;
 }
 
 int new_label(void)

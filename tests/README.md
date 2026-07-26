@@ -1,8 +1,8 @@
 # dcc test suite
 
-This folder holds the C source programs used to exercise the `dcc` C89 compiler
-(CP/M-80 / Z80 target) and its runtime, together with the expected-output
-baselines used to verify them.
+This folder holds C source programs used to exercise dcc's C89 base language,
+selected C99/C11 additions, CP/M-80/Z80 target model, and runtime, together with
+the expected-output baselines used to verify them.
 
 ## Layout
 

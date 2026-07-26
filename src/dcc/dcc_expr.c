@@ -1,12 +1,10 @@
 /*
- * dcc_expr.c - expression code generation (core).
+ * dcc_expr.c - low-level expression/declarator parsing and emit helpers.
  *
-    if (!accept('*')) {
- * through HL, struct copies, cast detection and numeric conversions
- * (byte/int/long/float), bitfield extract/insert, pre/post increment-decrement,
- * and function-call stack cleanup. Also holds declaration-side parsing helpers
- * (sizeof operands, function-pointer and array declarators, initializer-atom
- * counting, enum constants, and user-label bookkeeping).
+ * Implements memory loads/stores through HL, struct copies, conversions,
+ * bitfield access, increment/decrement, and call cleanup used by the AST
+ * emitter. It also parses sizeof operands, function-pointer/array declarators,
+ * initializer atoms, enum constants, and user-label bookkeeping.
  *
  * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
  * Source provenance: monolith src/ddc.c lines 5373-8841.

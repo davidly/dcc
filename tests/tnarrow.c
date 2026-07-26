@@ -97,11 +97,58 @@ int narwesc(void)
     return narwptr[3];
 }
 
+/* Mutually recursive captured return expressions must make narrowing decline
+ * rather than recursively walking until the compiler exhausts its host stack.
+ * The call stays in a dead runtime branch: this test is about compilation, not
+ * executing intentionally recursive functions. */
+static int mrright(void);
+
+static int mrleft(void)
+{
+    return mrright();
+}
+
+static int mrright(void)
+{
+    return mrleft();
+}
+
+static int narwrec(void)
+{
+    int mutual[2];
+
+    if (0)
+        mutual[0] = mrleft();
+    mutual[0] = 9;
+    return mutual[0];
+}
+
+/* A finite no-argument call chain remains eligible for proof. */
+static int fcbase(void)
+{
+    return 23;
+}
+
+static int fctop(void)
+{
+    return fcbase();
+}
+
+static int narwchain(void)
+{
+    int values[2];
+
+    values[0] = fctop();
+    return values[0];
+}
+
 int main()
 {
     printf("sum=%d\n", narwsum());
     printf("neg=%d\n", narwneg());
     printf("large=%d\n", narwbig());
     printf("esc=%d\n", narwesc());
+    printf("rec=%d\n", narwrec());
+    printf("chain=%d\n", narwchain());
     return 0;
 }

@@ -1,15 +1,15 @@
 /*
- * dcc.h - umbrella header for the modularised dcc compiler.
+ * dcc.h - foundational shared contract for the modular dcc compiler.
  *
- * dcc is a tiny bootstrap C89 compiler that targets Z80 assembly for the
- * Microsoft M80 / LINK-80 toolchain on CP/M-80. Function bodies are lowered
- * through a function-local AST, while the parser, AST builder, and codegen
- * helpers still share a large amount of file-scope state. Because of that
- * tight coupling, the separate-compilation layout uses ONE shared header (this
- * file) included by every module's .c, in the spirit of a classic
- * single-binary C compiler.
+ * dcc uses C89 as its base language plus selected C99/C11 features suitable
+ * for CP/M/Z80, and emits Z80 assembly for the M80-compatible toolchain.
+ * Function bodies lower through a typed,
+ * function-local AST. This header holds broadly shared target constants, core
+ * records, state declarations, and cross-module APIs; narrower contracts live
+ * in dcc_ast_gen_internal.h, dcc_preproc_internal.h, and
+ * dcc_regalloc_internal.h.
  *
- * This header declares everything the modules agree on:
+ * This foundational contract includes:
  *   1. System headers used across the compiler.
  *   2. Capacity / translation-limit macros (MAX_*).
  *   3. Type-kind, storage-class and token-kind constants.
@@ -17,10 +17,10 @@
  *      StructDef, ConstVal, ByteOperand).
  *   5. `extern` declarations for the shared global state (defined once in
  *      dcc_state.c).
- *   6. Prototypes for every cross-module function, grouped by owning module.
+ *   6. Broadly used cross-module functions, grouped by owning module.
  *
  * Module .c files and their responsibilities:
- *   dcc_state.c     definitions of the shared globals declared extern below
+ *   dcc_state.c     definitions of cross-module compiler state
  *   dcc_asmname.c   C identifier -> M80 assembler symbol mapping
  *   dcc_diag_emit.c diagnostics, allocation, emit primitives, char input
  *   dcc_preproc.c   preprocessor + macro engine + lexer (next_token)
@@ -29,21 +29,25 @@
  *   dcc_constexpr.c integer constant-expression parser
  *   dcc_symbols.c   symbol tables + symbol-access codegen + EXTRN
  *   dcc_fold.c      constant folding + sizeof/offsetof
- *   dcc_expr.c      expression codegen (primary/unary/calls/fast paths)
+ *   dcc_expr.c      declarator parsing + low-level expression emit helpers
  *   dcc_cmp.c       comparison + conditional-branch codegen
  *   dcc_ops.c       binary-operator / arithmetic codegen
- *   dcc_assign.c    assignment, float r-values, gen_expr entry points
- *   dcc_stmt_fast.c statement-level fast-path idioms
+ *   dcc_assign.c    float constants + global byte-array address helper
+ *   dcc_stmt_fast.c in-place increment/decrement address helper
  *   dcc_decl.c      local declaration + initializer codegen
- *   dcc_stmt.c      statement codegen (if/while/for/switch/...)
- *   dcc_func.c      function + top-level declaration parsing
+ *   dcc_stmt.c      token-to-AST statement bridge + switch helpers
+ *   dcc_func.c      functions/top-level declarations + inline-body capture
  *   dcc_global_init.c file-scope object initializer parsing (record path)
  *   dcc_regalloc.c  speculative no-IX / BC-register-allocation codegen
+ *   dcc_loop_regalloc.c loop-scoped BC register allocation
+ *   dcc_global_scan.c whole-file lexical global-write/address scan
+ *   dcc_array_narrow.c conservative byte-narrowing proof
+ *   dcc_licm.c      loop-invariant code motion and loop-local CSE
+ *   dcc_ast*.c      function-local AST storage, building, gates and emission
  *   dcc_data.c      data-section emission
  *   dcc.c           driver: file I/O, #include, CLI, and main()
  *
- * A small amount of state is intentionally NOT declared here because it is
- * private to a single module and kept `static` there:
+ * Examples of state intentionally kept private to its owner:
  *   - pp_expr_p / pp_expr_depth        (dcc_pp_expr.c: #if expression cursor)
  *   - include_dirs / num_include_dirs  (dcc.c: include search path)
  */
@@ -310,6 +314,9 @@ typedef struct DeclState {
     int is_register;
 } DeclState;
 
+/* Destination role is metadata, not suppression: VERIFY sinks may still need
+ * raw formatted writes while scan_mode is active so their text can be read
+ * back for a commit/decline decision. */
 enum EmitSinkPurpose {
     EMIT_SINK_FINAL,
     EMIT_SINK_DISCARD,
@@ -629,13 +636,6 @@ extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
-/* True if `s` has a captured, codegen-time-substitutable inline body (one
- * of inline_return_expr/inline_stmt_expr/inline_stmt_body). Shared with
- * dcc_licm.c/dcc_loop_regalloc.c's eligibility scans, which recurse into
- * that captured body instead of declining outright on the plain AST_CALL
- * node - matching what try_gen_inline_call_ast will actually substitute at
- * codegen time. Defined in dcc_func.c. */
-int is_inline_substitutable(struct Sym *s);
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -814,6 +814,7 @@ void error_here(const char *msg);
 void warn_at(const char *file, int line, const char *msg);
 void *xmalloc(size_t n);
 char *xstrdup2(const char *s);
+char *dcc_read_stream_text(FILE *stream, long *size_out, const char *error_msg);
 int new_label(void);
 void emit_ld_de_const(long v);
 void emit_add_const_to_hl(long v);

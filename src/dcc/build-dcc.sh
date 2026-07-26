@@ -3,9 +3,8 @@
 # build-dcc.sh - build the modularised dcc compiler (separate compilation).
 #
 # Compiles each module translation unit (dcc.c and the dcc_*.c files, all of
-# which include the umbrella header dcc.h) and links them into the `dcc`
-# executable at the repo root, matching the flags used for the monolithic
-# build so the produced binary and its generated assembly are equivalent.
+# which include the shared dcc contracts) and links them into the `dcc`
+# executable at the repo root using the portable C11 host baseline.
 #
 # Usage (from anywhere):
 #   sh src/dcc/build-dcc.sh            # build ./dcc at the repo root
@@ -27,7 +26,7 @@ if [ -z "$CC" ]; then
         *)      CC=gcc ;;
     esac
 fi
-CFLAGS=${CFLAGS:--std=c89 -Wall -Wextra -O2 -g}
+CFLAGS=${CFLAGS:--std=c11 -Wall -Wextra -O2 -g}
 
 # On macOS, clang can emit large tentative definitions into __DATA,__common
 # with very high alignment (for large objects), which triggers an ld warning
