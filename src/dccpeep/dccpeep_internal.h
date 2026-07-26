@@ -37,12 +37,6 @@ void insert_line_tagged(int i, const char *s, const char *tag);
 void read_file(const char *name);
 void write_file(const char *name);
 
-/* Shared line/label predicates (defined in dccpeep.c). */
-int is_uncond_jp(const char *s);
-int label_name_at(int i, char *out);
-int line_is_label_name(int i, const char *name);
-int peep_is_public_line(const char *s);
-
 /* Stateless instruction/operand parsing. */
 int parse_ld_hl_imm(const char *s, char *val, size_t val_size);
 int parse_ld_de_imm(const char *s, char *val, size_t val_size);
@@ -119,5 +113,31 @@ int pass_elim_dead_reg16_reload(void);
 
 /* Single-scan micro-pattern dispatcher (peep_pass_once.c). */
 int pass_once(void);
+
+/* Shared helpers used across the optimizer and the board passes. */
+int is_uncond_jp(const char *s);
+int label_name_at(int i, char *out);
+int line_is_label_name(int i, const char *name);
+int peep_is_public_line(const char *s);
+int bc_regalloc_claimed_before(int at);
+int stride_parse_ld_r_ix_neg(const char *s, char r, int *n);
+
+/* Application-specific board/game passes (peep_pass_minmax.c). */
+int peep_in_function_range(const char *func, int *startp, int *endp);
+int peep_range_has_debug_annotations(int start, int end);
+int pass_posfunc_b_cache(void);
+int pass_minmax_winner_result_no_temp(void);
+int pass_minmax_score_b_cache(void);
+int pass_minmax_loop_ctr_b(void);
+int pass_minmax_value_c(void);
+int pass_minmax_board_ptr_loop(void);
+int pass_minmax_byte_returns(void);
+int pass_minmax_pack_frame(void);
+int pass_minmax_pack_call(void);
+int pass_minmax_save_board_addr(void);
+int pass_reuse_board_addr_for_zero_store(void);
+int pass_minmax_elim_label_reload(void);
+int pass_winner_check_dec_a(void);
+int pass_global_board_const_offsets(void);
 
 #endif
