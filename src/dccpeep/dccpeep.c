@@ -6032,6 +6032,28 @@ static int a_dead_or_overwritten_from(int start, int func_end)
     return 0;
 }
 
+/* A full HL overwrite is harmless to an H-resident loop invariant when the
+ * very next instruction unconditionally exits this loop. The target must be
+ * resolved and lie outside [loop_start, loop_end]; ambiguous or conditional
+ * control flow declines. */
+static int hl_overwrite_exits_loop(int line, int loop_start, int loop_end)
+{
+    char clean[MAX_LINE];
+    char target[128];
+    int target_line;
+
+    strip_peep_comment_copy(clean, lines[line]);
+    if (strncmp(clean, "ld hl,", 6) != 0 || line + 1 >= nlines)
+        return 0;
+    if (!is_uncond_jp(lines[line + 1]) && !is_uncond_jr(lines[line + 1]))
+        return 0;
+    if (!jump_target_any(lines[line + 1], target))
+        return 0;
+    target_line = find_label_line_in_range(target, 0, nlines);
+    return target_line >= 0 &&
+           (target_line < loop_start || target_line > loop_end);
+}
+
 /*
  * pass_walk_hoisted_index_ptr:
  *
@@ -6195,6 +6217,10 @@ static int pass_walk_hoisted_index_ptr(void)
             invariant_load_k = k;
             strcpy(invariant_off, off);
         }
+        if (invariant_load_k < 0 && access_is_cmp && match_k >= i + 3 &&
+            peep_parse_ld_a_ix(lines[match_k - 2], invariant_off) &&
+            eq(match_k - 1, "add a,e"))
+            invariant_load_k = match_k - 2;
         if (invariant_load_k >= 0) {
             char tmp[MAX_LINE];
 
@@ -6212,7 +6238,8 @@ static int pass_walk_hoisted_index_ptr(void)
                 strip_peep_comment_copy(tmp, lines[k]);
                 if (strncmp(tmp, "call ", 5) == 0 ||
                     strncmp(tmp, "rst ", 4) == 0 || strcmp(tmp, "exx") == 0 ||
-                    line_touches_hl(tmp))
+                    (line_touches_hl(tmp) &&
+                     !hl_overwrite_exits_loop(k, i, loop_end)))
                     invariant_ok = 0;
             }
             if (!invariant_ok)
@@ -6343,7 +6370,8 @@ static int pass_walk_hoisted_index_ptr(void)
 
         {
             int access_after_delete = access_k - 4;
-            int invariant_after_delete = invariant_load_k - 4;
+            int invariant_after_delete = invariant_load_k < match_k
+                ? invariant_load_k : invariant_load_k - 4;
             delete_n(match_k, 4);
             if (invariant_load_k >= 0)
                 replace1_tagged(invariant_after_delete, "ld a,h",
