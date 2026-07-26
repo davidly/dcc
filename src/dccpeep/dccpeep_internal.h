@@ -37,6 +37,12 @@ void insert_line_tagged(int i, const char *s, const char *tag);
 void read_file(const char *name);
 void write_file(const char *name);
 
+/* Shared line/label predicates (defined in dccpeep.c). */
+int is_uncond_jp(const char *s);
+int label_name_at(int i, char *out);
+int line_is_label_name(int i, const char *name);
+int peep_is_public_line(const char *s);
+
 /* Stateless instruction/operand parsing. */
 int parse_ld_hl_imm(const char *s, char *val, size_t val_size);
 int parse_ld_de_imm(const char *s, char *val, size_t val_size);
@@ -110,5 +116,8 @@ int jump_target(const char *s, char *out);
 int pass_jp_to_jr(void);
 int pass_fold_const_sign_extend(void);
 int pass_elim_dead_reg16_reload(void);
+
+/* Single-scan micro-pattern dispatcher (peep_pass_once.c). */
+int pass_once(void);
 
 #endif
