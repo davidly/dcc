@@ -11,6 +11,12 @@
 #include <errno.h>
 #include <sys/stat.h>
 
+/* MSVC's <sys/stat.h> defines the S_IFDIR bitmask but not the POSIX
+ * S_ISDIR macro built on top of it - supply the standard fallback. */
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
+#endif
+
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(path) _mkdir(path)
