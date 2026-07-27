@@ -3118,6 +3118,43 @@ __r1s:
         ret
 
 
+        public  __r1p
+; 16-bit signed dividend modulo a power-of-two divisor.
+; Input:  HL = dividend, E = divisor-1 (the mask; divisor = 2..256, 2^k)
+; Output: HL = signed remainder, C truncation semantics (sign of the dividend)
+;
+; C requires `x % 2^k` to truncate toward zero, so it is NOT a plain mask for
+; negative dividends: -10 % 8 is -2, not 6.  It is still only a mask plus two
+; negations, which beats the 16-pass restoring-division loop __r1s/__r1u run.
+; The mask is at most 255, so `(-x) & mask` depends only on the low byte of
+; -x and the high half of the negation never has to be formed.
+__r1p:
+        push    af
+        ld      a,h
+        or      a
+        jp      m,R1PN
+        ; non-negative: the mask alone is the answer, and it clears H
+        ld      a,l
+        and     e
+        ld      l,a
+        ld      h,0
+        pop     af
+        ret
+R1PN:
+        ; negative: r = -((-x) & mask)
+        xor     a
+        sub     l               ; A = low byte of -x
+        and     e               ; A = (-x) & mask, so 0..255
+        ld      l,a
+        xor     a
+        sub     l               ; carry set iff the masked value was non-zero
+        ld      l,a
+        sbc     a,a             ; 0FFh when borrowed, 0 otherwise = sign extend
+        ld      h,a
+        pop     af
+        ret
+
+
         public  __q2u
         public  __r2u
         public  __q2s

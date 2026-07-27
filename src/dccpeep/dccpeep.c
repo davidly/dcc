@@ -1673,6 +1673,14 @@ static int pass_const_divmod_helpers(void)
         if (!oldname && divv <= 255) TRY_DIVMOD_HELPER("__modu", "__r1u");
         if (!oldname) TRY_DIVMOD_HELPER("__modu", "__r2u");
         if (!oldname) TRY_DIVMOD_HELPER("__divs", "__q2s");
+        /* A power-of-two divisor skips division entirely: __r1p masks and,
+         * for a negative dividend, negates twice to get C's truncate-toward-
+         * zero sign.  Capped at 256 so the mask still fits in E.  dcc already
+         * folds the UNSIGNED `x % 2^k` to a plain AND at compile time, but the
+         * signed form has no such fast path and otherwise pays a full 16-pass
+         * restoring division for what is a handful of byte ops. */
+        if (!oldname && divv <= 256 && (divv & (divv - 1)) == 0)
+            TRY_DIVMOD_HELPER("__mods", "__r1p");
         if (!oldname && divv <= 255) TRY_DIVMOD_HELPER("__mods", "__r1s");
         if (!oldname) TRY_DIVMOD_HELPER("__mods", "__r2s");
 
@@ -1695,10 +1703,15 @@ static int pass_const_divmod_helpers(void)
         }
 
         /* __r1u/__r1s only read E, so shrink the 3-byte "ld de,N" divisor
-         * load to the 2-byte "ld e,N" form to match. */
+         * load to the 2-byte "ld e,N" form to match.  __r1p is the same
+         * shape but wants the MASK, one less than the power-of-two divisor. */
         if (!strcmp(newname, "__r1u") || !strcmp(newname, "__r1s")) {
             char l_e[32];
             sprintf(l_e, "ld e,%ld", divv);
+            replace1(i, l_e);
+        } else if (!strcmp(newname, "__r1p")) {
+            char l_e[32];
+            sprintf(l_e, "ld e,%ld", (divv - 1) & 0xff);
             replace1(i, l_e);
         }
 
@@ -1734,7 +1747,7 @@ static int peep_line_is_divmod_extrn(const char *line)
     static const char *names[] = {
         "__divu", "__modu", "__divs", "__mods",
         "__q2u", "__r2u", "__q2s", "__r2s",
-        "__r1u", "__r1s",
+        "__r1u", "__r1s", "__r1p",
         NULL
     };
     int i;
@@ -1762,17 +1775,25 @@ static int peep_line_is_divmod_extrn(const char *line)
  */
 static void pass_fix_divmod_extrns(void)
 {
+    /* Keep in sync with peep_line_is_divmod_extrn's table.  used[] is sized
+     * generously and the length is derived from the NULL terminator so adding
+     * a helper here cannot silently fall off the end of the loops below. */
     static const char *names[] = {
         "__divu", "__modu", "__divs", "__mods",
         "__q2u", "__r2u", "__q2s", "__r2s",
-        "__r1u", "__r1s",
+        "__r1u", "__r1s", "__r1p",
         NULL
     };
-    int used[10];
+    int used[32];
+    int count;
     int i, k;
     char line[64];
 
-    for (k = 0; k < 10; ++k)
+    count = 0;
+    while (names[count] != NULL && count < (int)(sizeof(used) / sizeof(used[0])))
+        ++count;
+
+    for (k = 0; k < count; ++k)
         used[k] = 0;
 
     /* Delete all existing EXTRNs for this helper family. */
@@ -1785,14 +1806,14 @@ static void pass_fix_divmod_extrns(void)
 
     /* Scan final code for calls that remain. */
     for (i = 0; i < nlines; ++i) {
-        for (k = 0; names[k]; ++k) {
+        for (k = 0; k < count; ++k) {
             if (peep_is_exact_call_for(lines[i], names[k]))
                 used[k] = 1;
         }
     }
 
     /* Insert in reverse so final order matches names[]. */
-    for (k = 9; k >= 0; --k) {
+    for (k = count - 1; k >= 0; --k) {
         if (used[k]) {
             sprintf(line, "extrn %s", names[k]);
             insert_line(0, line);
