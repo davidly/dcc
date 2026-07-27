@@ -3055,47 +3055,39 @@ __qs_pprev:     dw      0
 ; Output: HL = remainder
 ; Used for unsigned x % C when C fits in one byte and is not a power of two.
 __r1u:
-        push    bc
-        push    de              ; preserve caller DE (D reused as bit counter)
+        push    bc              ; B reused as the bit counter
         push    af
         ld      a,e
         or      a
         jr      nz,R1U0
         ; Undefined in C, but keep a deterministic fallback for divisor 0.
         pop     af
-        pop     de
         pop     bc
         ret
 R1U0:
-        ld      bc,0            ; BC = partial remainder, kept < divisor
-        ld      d,16            ; D = bit counter (D is otherwise unused here)
+        ; Restoring division, one dividend bit per pass, but the partial
+        ; remainder is held in A alone rather than in a 16-bit register pair.
+        ; The loop invariant is A < E, so shifting one bit in can produce at
+        ; most 2*E-1 <= 509 - a 9-bit value whose top bit is exactly the carry
+        ; RLA leaves behind.  That removes the second half of the register
+        ; pair and with it the `rl b` / `ld a,b` / `or a` / `sbc a,0` chain the
+        ; 16-bit form needed, and frees B to drive a djnz.
+        xor     a               ; A = partial remainder, kept < E
+        ld      b,16            ; bit counter
 R1U1:
         add     hl,hl           ; next dividend bit -> carry
-        rl      c
-        rl      b
-
-        ; if BC >= E, subtract E.  Since E is 8-bit and BC is at most
-        ; 9 bits here, this avoids the full 16-bit divisor compare path.
-        ld      a,b
-        or      a
-        jr      nz,R1US
-        ld      a,c
+        rla                     ; A = 2*A + bit, carry = that value's 9th bit
+        jr      c,R1US          ; 9th bit set => value >= 256 > E, so E fits
         cp      e
-        jr      c,R1UN
+        jr      c,R1UN          ; still below E: nothing to subtract
 R1US:
-        ld      a,c
-        sub     e
-        ld      c,a
-        ld      a,b
-        sbc     a,0
-        ld      b,a
+        sub     e               ; wraps correctly on the carry path too, where
+                                ; the true value is 256+A and 256+A-E < 256
 R1UN:
-        dec     d
-        jr      nz,R1U1
+        djnz    R1U1
+        ld      l,a
         ld      h,0
-        ld      l,c
         pop     af
-        pop     de
         pop     bc
         ret
 
