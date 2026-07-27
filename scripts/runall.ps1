@@ -150,9 +150,9 @@ speed:
     Print a percentage breakdown of where wall-clock time went, for
     diagnosing suite-level slowdowns. Two sections:
       - Top-level phases (main app suite / perf check / diagnostics /
-        narrow-diff / extended suite), each as a % of this run's total time -
-        the same stopwatches already used for "Total time" above, just also
-        reported per phase.
+        dccpeep fixtures / narrow-diff / extended suite), each as a % of
+        this run's total time - the same stopwatches already used for
+        "Total time" above, just also reported per phase.
       - Build pipeline, aggregated across every app and mode built by the
         main suite: dcc / dccpeep / m80 assembly / dccrtlstrip / L80 link
         (each summed from a per-phase wall-clock timing line dccmake itself
@@ -1722,9 +1722,11 @@ Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "RUNNING DCCPEEP FIXTURES" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
+$dccpeepFixturesSw = [System.Diagnostics.Stopwatch]::StartNew()
 & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
     -DccPeep (Join-Path $script:RepoRoot "dccpeep")
 $dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
+$dccpeepFixturesSw.Stop()
 if (-not $dccpeepTestsPassed) {
     $failed++
 }
@@ -1885,6 +1887,7 @@ if ($TimingBreakdown) {
     Write-TimingRow "Main app suite" $mainSuiteSw.Elapsed.TotalMilliseconds $totalMs
     Write-TimingRow "Perf check" $perfCheckSw.Elapsed.TotalMilliseconds $totalMs
     Write-TimingRow "Diagnostics" $diagnosticsSw.Elapsed.TotalMilliseconds $totalMs
+    Write-TimingRow "Dccpeep fixtures" $dccpeepFixturesSw.Elapsed.TotalMilliseconds $totalMs
     if ($NarrowDiff) { Write-TimingRow "Narrow-diff" $narrowDiffSw.Elapsed.TotalMilliseconds $totalMs }
     if ($Extended)   { Write-TimingRow "Extended suite" $extendedSw.Elapsed.TotalMilliseconds $totalMs }
 
