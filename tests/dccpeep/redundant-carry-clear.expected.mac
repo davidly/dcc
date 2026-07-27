@@ -1,0 +1,110 @@
+; Redundant carry-clear elimination before a 16-bit sbc.
+	extrn __stchk
+
+	cseg
+
+; positive 1: "xor 80h" already reset carry, so "or a" is dead.
+_bias:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld de,32775
+	ld a,h
+	xor 80h
+	ld h,a
+	sbc hl,de
+	jr nc,L1
+	ld hl,1
+L1:
+	ld sp,ix
+	pop ix
+	ret
+
+; positive 2: reached only by falling through "jr c", so carry is clear.
+_fallthrough:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld de,7
+	or a
+	sbc hl,de
+	jr c,L2
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld de,9
+	sbc hl,de
+L2:
+	ld sp,ix
+	pop ix
+	ret
+
+; negative 1: reached by falling through "jr nc", so carry is SET.
+_carryset:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld de,7
+	or a
+	sbc hl,de
+	jr nc,L3
+	ld l,(ix+4)
+	ld h,(ix+5)
+	ld de,9
+	or a
+	sbc hl,de
+L3:
+	ld sp,ix
+	pop ix
+	ret
+
+; negative 2: "cp" leaves a data-dependent carry, so the clear is required.
+_datadep:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld a,(ix+4)
+	cp 5
+	ld l,a ; peep: a_tracks_ix
+	ld h,(ix+5)
+	ld de,7
+	or a
+	sbc hl,de
+	ld sp,ix
+	pop ix
+	ret
+
+; negative 3: a referenced label sits between the reset and the clear, so the
+; predecessors of the "or a" are unknown.
+_joined:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld a,(ix+4)
+	or a
+	jr z,L4
+	ld a,h
+	xor 80h
+	ld h,a
+L4:
+	or a
+	sbc hl,de
+	ld sp,ix
+	pop ix
+	ret
+
+; negative 4: the clear does not feed an "sbc hl,rr" at all.
+_notsbc:
+	xor a
+	or a
+	jr z,L5
+	ld hl,1
+L5:
+	ret
+
+	end

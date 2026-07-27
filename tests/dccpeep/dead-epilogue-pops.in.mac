@@ -1,0 +1,46 @@
+; dcc stage-1d output
+
+	cseg
+
+	public _framed
+_framed:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,-2
+	add hl,sp
+	ld sp,hl
+	push hl
+	call _use
+	pop bc
+	pop bc
+	ld hl,0
+	ld sp,ix
+	pop ix
+	ret
+
+	public _bcread
+_bcread:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,-2
+	add hl,sp
+	ld sp,hl
+	push hl
+	call _use
+	pop bc
+	ld l,c
+	ld h,0
+	ld sp,ix
+	pop ix
+	ret
+
+	public _leaf
+_leaf:
+	push hl
+	call _use
+	pop bc
+	ret
+
+	end

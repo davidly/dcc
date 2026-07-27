@@ -1652,6 +1652,57 @@ static int pass_const_divmod_helpers(void)
         if (divv <= 0)
             continue;
 
+        /* Dividing by 1 is the identity and a remainder modulo 1 is always
+         * zero.  dcc cannot always fold these itself, because the divisor may
+         * only become a literal here, after push_lde_pop collapses the way it
+         * was pushed.  Left alone, each one runs a full 16-step restoring
+         * division just to reproduce its own input -- and removing them can
+         * leave the general divider with no callers at all, in which case the
+         * linker drops it and the module shrinks by far more than these few
+         * bytes.  The helpers preserve AF, so deleting a call (or swapping it
+         * for "ld hl,0", which sets no flags) keeps the flag state intact. */
+        if (divv == 1) {
+            static const char *div1[] = {
+                "__divu", "__divs", "__q2u", "__q2s", NULL
+            };
+            static const char *mod1[] = {
+                "__modu", "__mods", "__r2u", "__r2s", NULL
+            };
+            int k;
+            int matched;
+
+            matched = 0;
+            for (k = 0; !matched && div1[k] != NULL; ++k) {
+                sprintf(call_old, "call %s", div1[k]);
+                sprintf(extrn_old, "extrn %s", div1[k]);
+                if (eq(i + 1, extrn_old) && eq(i + 2, call_old)) {
+                    delete_n(i, 3);
+                    matched = 1;
+                } else if (eq(i + 1, call_old)) {
+                    delete_n(i, 2);
+                    matched = 1;
+                }
+            }
+            for (k = 0; !matched && mod1[k] != NULL; ++k) {
+                sprintf(call_old, "call %s", mod1[k]);
+                sprintf(extrn_old, "extrn %s", mod1[k]);
+                if (eq(i + 1, extrn_old) && eq(i + 2, call_old)) {
+                    replace1_tagged(i, "ld hl,0", "divmod_by_one");
+                    delete_n(i + 1, 2);
+                    matched = 1;
+                } else if (eq(i + 1, call_old)) {
+                    replace1_tagged(i, "ld hl,0", "divmod_by_one");
+                    delete_n(i + 1, 1);
+                    matched = 1;
+                }
+            }
+            if (matched) {
+                changed = 1;
+                --i;            /* re-examine whatever now sits at this index */
+                continue;
+            }
+        }
+
         oldname = NULL;
         newname = NULL;
 
@@ -1672,7 +1723,24 @@ static int pass_const_divmod_helpers(void)
          * per-step 8-bit compare instead of __r2u/__r2s's 16-bit one). */
         if (!oldname && divv <= 255) TRY_DIVMOD_HELPER("__modu", "__r1u");
         if (!oldname) TRY_DIVMOD_HELPER("__modu", "__r2u");
+        /* Signed divide by a power of two is a shift of the magnitude plus a
+         * sign restore (__q1p), not a division.  E carries the shift COUNT,
+         * so unlike __r1p this is not limited to byte-sized divisors.  16384
+         * is the largest power of two that is a positive 16-bit signed int:
+         * an "ld de,32768" divisor really means -32768, whose sign flip only
+         * __q2s performs.  parse_ld_de_positive_imm already rejects anything
+         * above 32767, so this cap only makes that dependency explicit. */
+        if (!oldname && divv >= 2 && divv <= 16384 && (divv & (divv - 1)) == 0)
+            TRY_DIVMOD_HELPER("__divs", "__q1p");
         if (!oldname) TRY_DIVMOD_HELPER("__divs", "__q2s");
+        /* A power-of-two divisor skips division entirely: __r1p masks and,
+         * for a negative dividend, negates twice to get C's truncate-toward-
+         * zero sign.  Capped at 256 so the mask still fits in E.  dcc already
+         * folds the UNSIGNED `x % 2^k` to a plain AND at compile time, but the
+         * signed form has no such fast path and otherwise pays a full 16-pass
+         * restoring division for what is a handful of byte ops. */
+        if (!oldname && divv <= 256 && (divv & (divv - 1)) == 0)
+            TRY_DIVMOD_HELPER("__mods", "__r1p");
         if (!oldname && divv <= 255) TRY_DIVMOD_HELPER("__mods", "__r1s");
         if (!oldname) TRY_DIVMOD_HELPER("__mods", "__r2s");
 
@@ -1695,10 +1763,25 @@ static int pass_const_divmod_helpers(void)
         }
 
         /* __r1u/__r1s only read E, so shrink the 3-byte "ld de,N" divisor
-         * load to the 2-byte "ld e,N" form to match. */
+         * load to the 2-byte "ld e,N" form to match.  __r1p is the same
+         * shape but wants the MASK, one less than the power-of-two divisor,
+         * and __q1p wants the SHIFT COUNT, its base-2 logarithm. */
         if (!strcmp(newname, "__r1u") || !strcmp(newname, "__r1s")) {
             char l_e[32];
             sprintf(l_e, "ld e,%ld", divv);
+            replace1(i, l_e);
+        } else if (!strcmp(newname, "__r1p")) {
+            char l_e[32];
+            sprintf(l_e, "ld e,%ld", (divv - 1) & 0xff);
+            replace1(i, l_e);
+        } else if (!strcmp(newname, "__q1p")) {
+            char l_e[32];
+            long shift;
+            long v;
+            shift = 0;
+            for (v = divv; v > 1; v >>= 1)
+                ++shift;
+            sprintf(l_e, "ld e,%ld", shift);
             replace1(i, l_e);
         }
 
@@ -1734,7 +1817,7 @@ static int peep_line_is_divmod_extrn(const char *line)
     static const char *names[] = {
         "__divu", "__modu", "__divs", "__mods",
         "__q2u", "__r2u", "__q2s", "__r2s",
-        "__r1u", "__r1s",
+        "__r1u", "__r1s", "__r1p", "__q1p",
         NULL
     };
     int i;
@@ -1762,17 +1845,25 @@ static int peep_line_is_divmod_extrn(const char *line)
  */
 static void pass_fix_divmod_extrns(void)
 {
+    /* Keep in sync with peep_line_is_divmod_extrn's table.  used[] is sized
+     * generously and the length is derived from the NULL terminator so adding
+     * a helper here cannot silently fall off the end of the loops below. */
     static const char *names[] = {
         "__divu", "__modu", "__divs", "__mods",
         "__q2u", "__r2u", "__q2s", "__r2s",
-        "__r1u", "__r1s",
+        "__r1u", "__r1s", "__r1p", "__q1p",
         NULL
     };
-    int used[10];
+    int used[32];
+    int count;
     int i, k;
     char line[64];
 
-    for (k = 0; k < 10; ++k)
+    count = 0;
+    while (names[count] != NULL && count < (int)(sizeof(used) / sizeof(used[0])))
+        ++count;
+
+    for (k = 0; k < count; ++k)
         used[k] = 0;
 
     /* Delete all existing EXTRNs for this helper family. */
@@ -1785,14 +1876,14 @@ static void pass_fix_divmod_extrns(void)
 
     /* Scan final code for calls that remain. */
     for (i = 0; i < nlines; ++i) {
-        for (k = 0; names[k]; ++k) {
+        for (k = 0; k < count; ++k) {
             if (peep_is_exact_call_for(lines[i], names[k]))
                 used[k] = 1;
         }
     }
 
     /* Insert in reverse so final order matches names[]. */
-    for (k = 9; k >= 0; --k) {
+    for (k = count - 1; k >= 0; --k) {
         if (used[k]) {
             sprintf(line, "extrn %s", names[k]);
             insert_line(0, line);
@@ -9002,6 +9093,8 @@ int main(int argc, char **argv)
         if (RUN_PASS(pass_remove_ix_store_reload_hl))
             changed = 1;
     } while (changed);
+    RUN_PASS(pass_elim_dead_epilogue_cleanup_pops);
+    RUN_PASS(pass_elim_redundant_carry_clear);
     RUN_PASS(pass_elim_dead_reg16_reload);
     RUN_PASS(pass_jp_to_jr);
 
