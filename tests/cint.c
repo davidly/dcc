@@ -1008,6 +1008,7 @@ static inline void mem_set_byte(int base, int idx, unsigned char *m, int v)
 static void call_func(int fi, int retpc, int argc)
 {
     int i, v;
+    struct Func *fnp = &Gst.func[fi];
     if (Gst.fp + 1 >= MAXFRAME) die("frame full");
     Gst.fp++;
     Gst.flp = Gst.floc + Gst.fp * Gst.frame_size;
@@ -1015,11 +1016,11 @@ static void call_func(int fi, int retpc, int argc)
     Gst.fret[Gst.fp] = retpc;
     for (i = argc - 1; i >= 0; i--) {
         v = popv();
-        if (i < Gst.func[fi].nparam) {
-            if (Gst.func[fi].pesz[i] == 1)
-                mem_set_byte(Gst.func[fi].pofs[i], 0, Gst.flp, v);
+        if (i < fnp->nparam) {
+            if (fnp->pesz[i] == 1)
+                mem_set_byte(fnp->pofs[i], 0, Gst.flp, v);
             else
-                mem_set_word(Gst.func[fi].pofs[i], 0, Gst.flp, v);
+                mem_set_word(fnp->pofs[i], 0, Gst.flp, v);
         }
     }
 }

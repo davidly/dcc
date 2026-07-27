@@ -1203,6 +1203,7 @@ static inline void pushv(int v)
 static void call_proc(int pi, struct Ins *retaddr)
 {
     int i;
+    struct Proc *prp = &proc[pi];
 
     if (fp + 1 >= MAXFRAME) {
         fprintf(stderr, "frame overflow\n");
@@ -1212,11 +1213,11 @@ static void call_proc(int pi, struct Ins *retaddr)
     flp += MAXLOC * INT_BYTES;
     memset(flp, 0, MAXLOC * INT_BYTES);
     fret[fp] = retaddr;
-    for (i = proc[pi].nparam - 1; i >= 0; i--)
-        if (proc[pi].pesz[i] == 1)
-            flp[proc[pi].pofs[i]] = (unsigned char)popv();
+    for (i = prp->nparam - 1; i >= 0; i--)
+        if (prp->pesz[i] == 1)
+            flp[prp->pofs[i]] = (unsigned char)popv();
         else
-            *(short *)(flp + proc[pi].pofs[i]) = (short)popv();
+            *(short *)(flp + prp->pofs[i]) = (short)popv();
 }
 
 static void run(void)
@@ -1407,17 +1408,20 @@ static void run(void)
             call_proc(pi, in + 1);
             in = &code[proc[pi].entry];
             continue;
-        case OP_RET:
+        case OP_RET: {
+            int isf;
             pi = in->a;
+            isf = proc[pi].isfunc;
             v = 0;
-            if (proc[pi].isfunc)
+            if (isf)
                 v = popv();
             in = fret[fp];
             fp--;
             flp -= MAXLOC * INT_BYTES;
-            if (proc[pi].isfunc)
+            if (isf)
                 pushv(v);
             continue;
+        }
         case OP_WRI:
             printf("%d", popv());
             break;
