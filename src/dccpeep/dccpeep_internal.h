@@ -287,6 +287,7 @@ int pass_fold_const_sign_extend(void);
 int pass_elim_dead_reg16_reload(void);
 int pass_elim_dead_register_loads(void);
 int pass_elim_dead_epilogue_cleanup_pops(void);
+int pass_elim_redundant_carry_clear(void);
 
 /* Single-scan micro-pattern dispatcher (peep_pass_once.c). */
 int pass_once(void);

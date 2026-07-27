@@ -9003,6 +9003,7 @@ int main(int argc, char **argv)
             changed = 1;
     } while (changed);
     RUN_PASS(pass_elim_dead_epilogue_cleanup_pops);
+    RUN_PASS(pass_elim_redundant_carry_clear);
     RUN_PASS(pass_elim_dead_reg16_reload);
     RUN_PASS(pass_jp_to_jr);
 
