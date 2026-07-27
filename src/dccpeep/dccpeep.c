@@ -6125,6 +6125,91 @@ static int pass_small_const_incr_carry_skip(void)
 }
 
 /*
+ * pass_word_postinc_ix_local_no_save:
+ *
+ * dcc's codegen for `arr[idx++] = val;` (idx a word-sized ix-relative local)
+ * needs idx's PRE-increment value for the address and must also leave idx
+ * incremented in memory, so it round-trips the old value through the stack:
+ *
+ *   ld l,(ix-N) / ld h,(ix-(N-1))   ; HL = old idx
+ *   push hl                        ; [A] save old idx for later use as index
+ *   inc hl                         ; HL = idx+1
+ *   ld (ix-N),l / ld (ix-(N-1)),h   ; store idx+1 back
+ *   pop hl                         ; [B] restore old idx into HL
+ *
+ * The push/pop is unnecessary: HL already holds the old value the whole
+ * time, so the +1 can be applied directly to memory (with dcc's own
+ * byte-wise carry-skip trick - see pass_small_const_incr_carry_skip, which
+ * this mirrors but for the "old value is still needed in a register"
+ * shape) without ever touching HL at all:
+ *
+ *   ld l,(ix-N) / ld h,(ix-(N-1))   ; HL = old idx (unchanged, still needed)
+ *   inc (ix-N)
+ *   jp nz, L                       ; low byte didn't wrap: skip hi-byte bump
+ *   inc (ix-(N-1))
+ *   L:
+ *
+ * Confirmed against z88dk/sdcc's own codegen for the same C source (fint.c's
+ * `lst[lsp++] = in->a;` in run_at) - sdcc already generates exactly this
+ * shape, which is what led to finding this gap.
+ *
+ * The original 7-line sequence never touches any flag (push/inc hl/ld/pop
+ * are all flag-transparent on Z80), so whatever flags were live coming in
+ * are still live going out unchanged. The rewrite's "inc (ix-N)" does set
+ * flags, so this must decline whenever anything reachable after the match
+ * could still be relying on the flags that were live before it - checked
+ * with the real dataflow-based peep_flags_dead_after rather than a blunt
+ * textual scan, since this pass (unlike the older textual-heuristic passes
+ * in this file) has that CFG-based liveness available.
+ */
+static int pass_word_postinc_ix_local_no_save(void)
+{
+    int i;
+    int changed = 0;
+    static int label_counter;
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+
+    for (i = 0; i + 6 < nlines; i++) {
+        int lo, hi, st_lo, st_hi;
+        char label[48];
+        char line_inc_lo[32], line_jp[64], line_inc_hi[32], line_label[56];
+
+        if (!peep_parse_ld_hl_ix_pair(i, &lo))
+            continue;
+        hi = lo - 1;
+        if (!eq(i + 2, "push hl"))
+            continue;
+        if (!eq(i + 3, "inc hl"))
+            continue;
+        if (!peep_parse_st_ix_neg_reg(lines[i + 4], 'l', &st_lo) || st_lo != lo)
+            continue;
+        if (!peep_parse_st_ix_neg_reg(lines[i + 5], 'h', &st_hi) || st_hi != hi)
+            continue;
+        if (!eq(i + 6, "pop hl"))
+            continue;
+
+        if (!peep_flags_dead_after(i + 6, all_flags))
+            continue;
+
+        sprintf(label, "Lpeep_postinc_skip%d", label_counter++);
+        sprintf(line_inc_lo, "inc (ix-%d)", lo);
+        sprintf(line_jp, "jp nz, %s", label);
+        sprintf(line_inc_hi, "inc (ix-%d)", hi);
+        sprintf(line_label, "%s:", label);
+
+        replace1_tagged(i + 2, line_inc_lo, "word_postinc_ix_local_no_save");
+        replace1(i + 3, line_jp);
+        replace1(i + 4, line_inc_hi);
+        replace1(i + 5, line_label);
+        delete_n(i + 6, 1);
+
+        changed = 1;
+    }
+
+    return changed;
+}
+
+/*
  * Collapse DCC's generic code for *(p = p - 1), where p is an int * global.
  * This is the hot pint popv() workaround shape.  The following dereference
  * still sees HL equal to the updated pointer.
@@ -8551,6 +8636,16 @@ int main(int argc, char **argv)
      * and never changes what any label anywhere else in the file targets;
      * pass_labels tidies up regardless. */
     if (RUN_PASS(pass_small_const_incr_carry_skip))
+        RUN_PASS(pass_labels);
+
+    /* pass_word_postinc_ix_local_no_save: same placement rationale as
+     * pass_small_const_incr_carry_skip immediately above (its own call-site
+     * comment covers the pass_stride_loop_to_ptr interaction this section
+     * exists to avoid) - an ix-relative local is this pass's precondition
+     * too, and it likewise introduces new control flow (a conditional jump
+     * and a label), so it runs once here rather than in the main fixed
+     * point, with pass_labels to tidy up. */
+    if (RUN_PASS(pass_word_postinc_ix_local_no_save))
         RUN_PASS(pass_labels);
     if (RUN_PASS(pass_promote_ix_pointer_to_iy)) {
         RUN_PASS(pass_remove_unreferenced_labels);
