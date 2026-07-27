@@ -1095,11 +1095,15 @@ int pass_minmax_save_board_addr(void)
 
         /* Recompute block: ld hl,_g_board; ld e,(ix-K); ld d,0; add hl,de */
         if (!parse_ld_hl_imm(lines[j], addr, sizeof(addr))) continue;
-        if (strcmp(addr, "_g_board") != 0)                   continue; j++;
+        if (strcmp(addr, "_g_board") != 0)                   continue;
+        j++;
         if (!stride_parse_ld_r_ix_neg(lines[j], 'e', &k2))  continue;
-        if (k2 != K)                                         continue; j++;
-        if (!eq(j, "ld d,0"))                               continue; j++;
-        if (!eq(j, "add hl,de"))                            continue; j++;
+        if (k2 != K)                                         continue;
+        j++;
+        if (!eq(j, "ld d,0"))                               continue;
+        j++;
+        if (!eq(j, "add hl,de"))                            continue;
+        j++;
 
         /* ld (hl),0 — restore board cell */
         if (!eq(j, "ld (hl),0")) continue;

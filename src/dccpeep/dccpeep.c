@@ -1100,8 +1100,12 @@ static int pass_cache_noix_byte_param_reload(void)
                  * refuse the whole optimization for this function rather
                  * than risk it - occ[0] is always the earliest occurrence,
                  * so this only needs one scan from occ[0] to the last one. */
-                for (i = occ[0]; i < occ[noc - 1]; i++) {
-                    if (starts_label(lines[i])) { safe = 0; break; }
+                if (noc == 0)
+                    safe = 0;
+                if (safe) {
+                    for (i = occ[0]; i < occ[noc - 1]; i++) {
+                        if (starts_label(lines[i])) { safe = 0; break; }
+                    }
                 }
 
                 if (safe) {
@@ -2912,7 +2916,7 @@ static int pass_word_switch_cmp_avoid_push_pop(void)
     int n;
     char label_ok[128];
     char label_default[128];
-    char buf[64];
+    char buf[160];
 
     for (i = 0; i + 6 < nlines; i++) {
         if (!eq(i, "push hl")) continue;
@@ -3977,11 +3981,15 @@ static int pass_ldir_memset_rotated(void)
         j = i + 1;
 
         /* 2. Body: reload index, compute address, store constant */
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo_ix)) continue; j++;
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi_ix)) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo_ix)) continue;
+        j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi_ix)) continue;
+        j++;
         if (hi_ix != lo_ix - 1) continue;
-        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue; j++;
-        if (!eq(j, "add hl,de")) continue; j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue;
+        j++;
+        if (!eq(j, "add hl,de")) continue;
+        j++;
         if (strncmp(lines[j], "ld (hl),", 8) != 0) continue;
         {
             const char *p = lines[j] + 8;
@@ -3999,30 +4007,40 @@ static int pass_ldir_memset_rotated(void)
         {
             char stored_lo[32];
             sprintf(stored_lo, "inc (ix-%d)", lo_ix);
-            if (!eq(j, stored_lo)) continue; j++;
+            if (!eq(j, stored_lo)) continue;
+            j++;
         }
-        if (!parse_jp_nz_label(lines[j], tmp)) continue; j++;
+        if (!parse_jp_nz_label(lines[j], tmp)) continue;
+        j++;
         {
             char stored_hi[32];
             sprintf(stored_hi, "inc (ix-%d)", hi_ix);
-            if (!eq(j, stored_hi)) continue; j++;
+            if (!eq(j, stored_hi)) continue;
+            j++;
         }
-        if (!line_is_label_name(j, tmp)) continue; j++;
+        if (!line_is_label_name(j, tmp)) continue;
+        j++;
 
         /* 5. Comparison block: reload index, compare bound, branch back to Lbody */
         {
             int lo2, hi2;
-            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2)) continue; j++;
-            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2)) continue; j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2)) continue;
+            j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2)) continue;
+            j++;
             if (lo2 != lo_ix || hi2 != hi_ix) continue;
         }
-        if (!parse_ld_de_positive_imm(lines[j], &size_val)) continue; j++;
+        if (!parse_ld_de_positive_imm(lines[j], &size_val)) continue;
+        j++;
         if (eq(j, "ld a,h") && eq(j+1, "xor 80h") && eq(j+2, "ld h,a") &&
             eq(j+3, "ld a,d") && eq(j+4, "xor 80h") && eq(j+5, "ld d,a"))
             j += 6;
-        if (!eq(j, "or a")) continue; j++;
-        if (!eq(j, "sbc hl,de")) continue; j++;
-        if (!parse_jp_z_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue; j++;
+        if (!eq(j, "or a")) continue;
+        j++;
+        if (!eq(j, "sbc hl,de")) continue;
+        j++;
+        if (!parse_jp_z_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue;
+        j++;
         if (!parse_jp_c_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue;
         ip = j;
 
@@ -4191,10 +4209,13 @@ static int pass_stride_loop_to_ptr(void)
         j = i + 1;
 
         /* 2. Comparison block */
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo_k)) continue; j++;
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi_k)) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo_k)) continue;
+        j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi_k)) continue;
+        j++;
         if (hi_k != lo_k - 1) continue;
-        if (!parse_ld_de_positive_imm(lines[j], &cmp_val)) continue; j++;
+        if (!parse_ld_de_positive_imm(lines[j], &cmp_val)) continue;
+        j++;
         /* Accept both unsigned (or a/sbc) and signed-biased (xor 80h/or a/sbc)
          * comparisons. The generated pointer walk uses unsigned pointer arithmetic,
          * which is semantically correct for non-negative array indices — the only
@@ -4202,25 +4223,36 @@ static int pass_stride_loop_to_ptr(void)
         if (eq(j, "ld a,h") && eq(j+1, "xor 80h") && eq(j+2, "ld h,a") &&
             eq(j+3, "ld a,d") && eq(j+4, "xor 80h") && eq(j+5, "ld d,a"))
             j += 6;
-        if (!eq(j, "or a")) continue; j++;
-        if (!eq(j, "sbc hl,de")) continue; j++;
-        if (!parse_jp_z_label(lines[j], lb)) continue; j++;
-        if (!parse_jp_c_label(lines[j], tmp) || strcmp(tmp, lb) != 0) continue; j++;
-        if (!peep_parse_jp_uncond_label(lines[j], le)) continue; j++;
+        if (!eq(j, "or a")) continue;
+        j++;
+        if (!eq(j, "sbc hl,de")) continue;
+        j++;
+        if (!parse_jp_z_label(lines[j], lb)) continue;
+        j++;
+        if (!parse_jp_c_label(lines[j], tmp) || strcmp(tmp, lb) != 0) continue;
+        j++;
+        if (!peep_parse_jp_uncond_label(lines[j], le)) continue;
+        j++;
 
         /* 3. LB label */
-        if (!line_is_label_name(j, lb)) continue; j++;
+        if (!line_is_label_name(j, lb)) continue;
+        j++;
 
         /* 4. Body: reload index, compute address, store 0 */
         {
             int lo2, hi2;
-            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2)) continue; j++;
-            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2)) continue; j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2)) continue;
+            j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2)) continue;
+            j++;
             if (lo2 != lo_k || hi2 != hi_k) continue;
         }
-        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue; j++;
-        if (!eq(j, "add hl,de")) continue; j++;
-        if (!eq(j, "ld (hl),0")) continue; j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue;
+        j++;
+        if (!eq(j, "add hl,de")) continue;
+        j++;
+        if (!eq(j, "ld (hl),0")) continue;
+        j++;
 
         /* 5. Optional LI label (fall-through increment label) */
         if (starts_label(lines[j]))
@@ -4229,14 +4261,19 @@ static int pass_stride_loop_to_ptr(void)
         /* 6. Increment block: reload index, load stride, update index */
         {
             int lo3, hi3;
-            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo3)) continue; j++;
-            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi3)) continue; j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo3)) continue;
+            j++;
+            if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi3)) continue;
+            j++;
             if (lo3 != lo_k || hi3 != hi_k) continue;
         }
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'e', &lo_s)) continue; j++;
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'd', &hi_s)) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'e', &lo_s)) continue;
+        j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'd', &hi_s)) continue;
+        j++;
         if (hi_s != lo_s - 1) continue;
-        if (!eq(j, "add hl,de")) continue; j++;
+        if (!eq(j, "add hl,de")) continue;
+        j++;
         {
             int lo4;
             if (!stride_parse_ld_ix_neg_r(lines[j], 'l', &lo4) || lo4 != lo_k) continue;
@@ -4414,13 +4451,17 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
         if (!stride_parse_ld_r_ix_neg(lines[i + 1], 'h', &M)) continue;
         if (M != K - 1) continue;
         j = i + 2;
-        if (!parse_ld_de_positive_imm(lines[j], &N)) continue; j++;
+        if (!parse_ld_de_positive_imm(lines[j], &N)) continue;
+        j++;
         if (eq(j, "ld a,h") && eq(j+1, "xor 80h") && eq(j+2, "ld h,a") &&
             eq(j+3, "ld a,d") && eq(j+4, "xor 80h") && eq(j+5, "ld d,a"))
             j += 6;
-        if (!eq(j, "or a")) continue; j++;
-        if (!eq(j, "sbc hl,de")) continue; j++;
-        if (!parse_jp_z_label(lines[j], lbody)) continue; j++;
+        if (!eq(j, "or a")) continue;
+        j++;
+        if (!eq(j, "sbc hl,de")) continue;
+        j++;
+        if (!parse_jp_z_label(lines[j], lbody)) continue;
+        j++;
         if (!parse_jp_c_label(lines[j], tmp) || strcmp(tmp, lbody) != 0) continue;
         cmp_end = j;
 
@@ -4443,12 +4484,18 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
         /* Lbody's prefix: reload the same index, load the array base, add,
          * read the byte, test it, branch on the flag. */
         j = body_idx + 1;
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2) || lo2 != K) continue; j++;
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2) || hi2 != M) continue; j++;
-        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue; j++;
-        if (!eq(j, "add hl,de")) continue; j++;
-        if (!eq(j, "ld a,(hl)")) continue; j++;
-        if (!eq(j, "or a")) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &lo2) || lo2 != K) continue;
+        j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &hi2) || hi2 != M) continue;
+        j++;
+        if (!parse_ld_de_imm(lines[j], arr_sym, sizeof(arr_sym)) || arr_sym[0] != '_') continue;
+        j++;
+        if (!eq(j, "add hl,de")) continue;
+        j++;
+        if (!eq(j, "ld a,(hl)")) continue;
+        j++;
+        if (!eq(j, "or a")) continue;
+        j++;
         /* The flag test itself (jp z/nz,dest) is left untouched by the
          * rewrite below - only confirm it's there so we're not misreading
          * some other shape as this idiom. */
@@ -5959,7 +6006,7 @@ static int pass_promote_ix_pointer_to_iy(void)
 
     for (i = 0; i < nlines; ++i) {
         int func_start, func_end;
-        int offset, init_line = -1, increment_line = -1, increment_amount = 0;
+        int offset = 0, init_line = -1, increment_line = -1, increment_amount = 0;
         int best_candidate_loads = -1;
         int loads[128], load_kinds[128], load_count = 0;
         int safe = 1;
@@ -5973,7 +6020,7 @@ static int pass_promote_ix_pointer_to_iy(void)
 
         /* Find a single canonical small increment candidate first. */
         for (k = i + 1; k + 5 < func_end; ++k) {
-            char offbuf[32], storebuf[32], highbuf[48], target[128];
+            char offbuf[32], storebuf[32], highbuf[160], target[128];
             int parsed_offset, stored_offset;
             int candidate_loads = 0;
             int candidate_amount;
@@ -6740,6 +6787,45 @@ static int pass_double_de_before_add(void)
         replace1_tagged(i, "sla e", "double_de_before_add");
         replace1(i + 1, "rl d");
         delete_n(i + 2, 1);
+        changed = 1;
+        if (i > 0)
+            i--;
+    }
+
+    return changed;
+}
+
+/*
+ * pass_elim_zero_add_hl:
+ *
+ * An inlined helper called with a compile-time-zero index argument (e.g.
+ * mem_get_word(base, 0, m), where the "0" is a literal at every call site)
+ * constant-folds the index's stride multiply down to "ld de,0"/"ld bc,0",
+ * but the following "add hl,de"/"add hl,bc" survives untouched even though
+ * adding zero can never change HL. Found via adaint's profile: OP_LDG, its
+ * single hottest opcode handler at ~12.6% of sieve.ada's total runtime,
+ * does exactly this pair twice per call. Declines whenever anything later
+ * could still depend on the flags this add would have set, using the same
+ * CFG-based liveness as pass_word_postinc_ix_local_no_save above. Any
+ * "ld de,0"/"ld bc,0" left dead by the deletion is swept up later by
+ * pass_elim_dead_register_loads.
+ */
+static int pass_elim_zero_add_hl(void)
+{
+    int i;
+    int changed = 0;
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+
+    for (i = 0; i + 1 < nlines; i++) {
+        int is_de = eq(i, "ld de,0") && eq(i + 1, "add hl,de");
+        int is_bc = eq(i, "ld bc,0") && eq(i + 1, "add hl,bc");
+
+        if (!is_de && !is_bc)
+            continue;
+        if (!peep_flags_dead_after(i + 1, all_flags))
+            continue;
+
+        delete_n(i + 1, 1);
         changed = 1;
         if (i > 0)
             i--;
@@ -8475,41 +8561,55 @@ static int pass_cpir(void)
         /* 2. Loop condition: counter in HL, limit in DE, then sbc+jp.
          * Accept original push/load/ex/pop form, or the ix_pair_load_to_de
          * form (ld e,(ix+N); ld d,(ix+N+1)) if that pass ran first. */
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &cnt_lo)) continue; j++;
-        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &cnt_hi)) continue; j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'l', &cnt_lo)) continue;
+        j++;
+        if (!stride_parse_ld_r_ix_neg(lines[j], 'h', &cnt_hi)) continue;
+        j++;
         if (cnt_hi != cnt_lo - 1) continue;
         if (eq(j, "push hl")) {
             j++;
-            if (!peep_parse_ld_l_ix(lines[j], lim_lo_off)) continue; j++;
-            if (!peep_parse_ld_h_ix(lines[j], lim_hi_off)) continue; j++;
+            if (!peep_parse_ld_l_ix(lines[j], lim_lo_off)) continue;
+            j++;
+            if (!peep_parse_ld_h_ix(lines[j], lim_hi_off)) continue;
+            j++;
             if (!parse_ix_off_numeric(lim_lo_off, &lim_lo_val)) continue;
             { int v; if (!parse_ix_off_numeric(lim_hi_off, &v)) continue;
               if (v != lim_lo_val + 1) continue; }
-            if (!eq(j, "ex de,hl")) continue; j++;
-            if (!eq(j, "pop hl"))   continue; j++;
+            if (!eq(j, "ex de,hl")) continue;
+            j++;
+            if (!eq(j, "pop hl"))   continue;
+            j++;
         } else {
             /* ix_pair_load_to_de form: ld e,(ix+N); ld d,(ix+N+1) */
-            if (!peep_parse_ld_e_ix(lines[j], lim_lo_off)) continue; j++;
-            if (!peep_parse_ld_d_ix(lines[j], lim_hi_off)) continue; j++;
+            if (!peep_parse_ld_e_ix(lines[j], lim_lo_off)) continue;
+            j++;
+            if (!peep_parse_ld_d_ix(lines[j], lim_hi_off)) continue;
+            j++;
             if (!parse_ix_off_numeric(lim_lo_off, &lim_lo_val)) continue;
             { int v; if (!parse_ix_off_numeric(lim_hi_off, &v)) continue;
               if (v != lim_lo_val + 1) continue; }
         }
-        if (!eq(j, "or a"))      continue; j++;
-        if (!eq(j, "sbc hl,de")) continue; j++;
-        if (!parse_jp_nc_label(lines[j], lexit)) continue; j++;
+        if (!eq(j, "or a"))      continue;
+        j++;
+        if (!eq(j, "sbc hl,de")) continue;
+        j++;
+        if (!parse_jp_nc_label(lines[j], lexit)) continue;
+        j++;
 
         /* 3. Byte deref and compare. Two shapes reach here: the classic
          * "ld l,(ix+V); cp l" (6 lines total), or dcc_cmp.c's byte-operand
          * kind-4 fast path (ast_byte_operand/emit_cp_byte_operand), which
          * compares directly against the ix-relative memory operand without
          * first loading it into L - "cp (ix+V)" (5 lines total). */
-        if (!peep_parse_ld_l_ix(lines[j], ptr_lo_off)) continue; j++;
-        if (!peep_parse_ld_h_ix(lines[j], ptr_hi_off)) continue; j++;
+        if (!peep_parse_ld_l_ix(lines[j], ptr_lo_off)) continue;
+        j++;
+        if (!peep_parse_ld_h_ix(lines[j], ptr_hi_off)) continue;
+        j++;
         if (!parse_ix_off_numeric(ptr_lo_off, &ptr_lo_val)) continue;
         { int v; if (!parse_ix_off_numeric(ptr_hi_off, &v)) continue;
           if (v != ptr_lo_val + 1) continue; }
-        if (!eq(j, "ld a,(hl)")) continue; j++;
+        if (!eq(j, "ld a,(hl)")) continue;
+        j++;
         {
             char cptmp[MAX_LINE];
             strip_peep_comment_copy(cptmp, lines[j]);
@@ -8523,12 +8623,15 @@ static int pass_cpir(void)
                 if (!parse_ix_off_numeric(val_off, &val_val)) continue;
                 j++;
             } else {
-                if (!peep_parse_ld_l_ix(lines[j], val_off)) continue; j++;
+                if (!peep_parse_ld_l_ix(lines[j], val_off)) continue;
+                j++;
                 if (!parse_ix_off_numeric(val_off, &val_val)) continue;
-                if (!eq(j, "cp l")) continue; j++;
+                if (!eq(j, "cp l")) continue;
+                j++;
             }
         }
-        if (!parse_jp_z_label(lines[j], lok)) continue; j++;
+        if (!parse_jp_z_label(lines[j], lok)) continue;
+        j++;
         fail_start = j;  /* first line of fail code */
 
         /* Reject if counter, pointer, val, or limit share IX slots */
@@ -8550,20 +8653,28 @@ static int pass_cpir(void)
         /* 5. After Lok: ptr++ (5 lines) */
         k = lok_pos + 1;
         { char lo2[32], hi2[32];
-          if (!peep_parse_ld_l_ix(lines[k], lo2) || strcmp(lo2, ptr_lo_off)) continue; k++;
-          if (!peep_parse_ld_h_ix(lines[k], hi2) || strcmp(hi2, ptr_hi_off)) continue; k++; }
-        if (!eq(k, "inc hl")) continue; k++;
+          if (!peep_parse_ld_l_ix(lines[k], lo2) || strcmp(lo2, ptr_lo_off)) continue;
+          k++;
+          if (!peep_parse_ld_h_ix(lines[k], hi2) || strcmp(hi2, ptr_hi_off)) continue;
+          k++; }
+        if (!eq(k, "inc hl")) continue;
+        k++;
         sprintf(store_ptr_lo, "ld (ix%s),l", ptr_lo_off);
         sprintf(store_ptr_hi, "ld (ix%s),h", ptr_hi_off);
-        if (!eq(k, store_ptr_lo)) continue; k++;
-        if (!eq(k, store_ptr_hi)) continue; k++;
+        if (!eq(k, store_ptr_lo)) continue;
+        k++;
+        if (!eq(k, store_ptr_hi)) continue;
+        k++;
 
         /* 6. Counter increment (4 lines): inc(ix-A); jp nz,Lhead; inc(ix-B); jp Lhead */
         sprintf(inc_cnt_lo, "inc (ix-%d)", cnt_lo);
         sprintf(inc_cnt_hi, "inc (ix-%d)", cnt_hi);
-        if (!eq(k, inc_cnt_lo)) continue; k++;
-        if (!parse_jp_nz_label(lines[k], tmp) || strcmp(tmp, lhead)) continue; k++;
-        if (!eq(k, inc_cnt_hi)) continue; k++;
+        if (!eq(k, inc_cnt_lo)) continue;
+        k++;
+        if (!parse_jp_nz_label(lines[k], tmp) || strcmp(tmp, lhead)) continue;
+        k++;
+        if (!eq(k, inc_cnt_hi)) continue;
+        k++;
         if (!peep_parse_jp_uncond_label(lines[k], tmp) || strcmp(tmp, lhead)) continue;
         ip = k; k++;
 
@@ -8824,6 +8935,7 @@ int main(int argc, char **argv)
         { "pass_elim_ex_de_hl_before_ix_store", pass_elim_ex_de_hl_before_ix_store, 0 },
         { "pass_elim_redundant_pop_push", pass_elim_redundant_pop_push, 0 },
         { "pass_double_de_before_add", pass_double_de_before_add, 0 },
+        { "pass_elim_zero_add_hl", pass_elim_zero_add_hl, 0 },
         { "pass_const_hl_doubles", pass_const_hl_doubles, 0 },
         { "pass_deref_byte_cmp", pass_deref_byte_cmp, 0 },
         { "pass_cpir", pass_cpir, 0 },
