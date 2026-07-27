@@ -2766,6 +2766,88 @@ static int pass_byte_cmp_push_pop_hl(void)
     return changed;
 }
 
+/*
+ * pass_word_switch_cmp_avoid_push_pop:
+ *
+ * emit_switch_jump_table's upper-bound check emits, for every switch
+ * statement dcc compiles to a jump table:
+ *
+ *   push hl           ; save the switch value across the compare
+ *   ld de,N           ; N = maxv-minv (the range width)
+ *   or a
+ *   sbc hl,de         ; destroys hl, sets Z/C
+ *   pop hl            ; restore the switch value (needed again below)
+ *   jp z,OK           ; value == N: still in range
+ *   jp nc,DEFAULT     ; value > N: out of range
+ *
+ * When the switch value was just zero-extended from a byte (`ld h,0`
+ * immediately before "push hl"), pass_byte_cmp_push_pop_hl (just above)
+ * already collapses this whole thing to a single 8-bit `cp` instruction -
+ * far cheaper than anything this pass could do, so this pass explicitly
+ * declines whenever that precondition is present, and only ever fires on
+ * exactly the cases that pass leaves alone.
+ *
+ * For a genuinely word-sized switch value (e.g. fint.c's `int op` field -
+ * dispatched on every single VM instruction of every interpreted program,
+ * confirmed via dccprof profiling to be the hottest code in the whole
+ * interpreter benchmark suite, well above any individual opcode handler),
+ * no such byte collapse is possible, and the push/pop is still avoidable:
+ * swap the operand order (N - hl instead of hl - N) so the SBC destroys
+ * the constant instead of the switch value, keeping the value alive in DE
+ * via an EX DE,HL instead of a push/pop - trading an 11T push + 10T pop
+ * for a cheaper 4T+4T register copy plus a 4T ex. This flips the carry
+ * flag's meaning (borrow now happens when hl > N, not <), so the
+ * out-of-range branch must flip from jp nc, to jp c, to match; Z is
+ * unaffected (N-hl and hl-N are zero at the same time), so jp z, is
+ * untouched. Verified against all three cases (below/at/above the
+ * boundary) with a standalone assembly test before landing this - the
+ * same class of subtle correctness trap a naive version of this
+ * transformation could otherwise hide.
+ *
+ * An earlier, more sweeping attempt applied this same transformation
+ * directly in emit_switch_jump_table itself (dcc_stmt.c), unconditionally
+ * for every switch-to-jump-table compile. That measured as a broad
+ * PERFORMANCE REGRESSION (cint/bint/pint/adaint/cobint all 3-7% slower)
+ * caught by the full suite's perf-baseline check: every one of those
+ * apps' switch values IS byte-sized, so changing the emitted shape
+ * silently defeated pass_byte_cmp_push_pop_hl's much bigger win across
+ * the board. Doing it here instead, gated on that pass's own precondition
+ * being absent, targets only the cases where there is no competing
+ * optimization to lose.
+ */
+static int pass_word_switch_cmp_avoid_push_pop(void)
+{
+    int i, changed = 0;
+    int n;
+    char label_ok[128];
+    char label_default[128];
+    char buf[64];
+
+    for (i = 0; i + 6 < nlines; i++) {
+        if (!eq(i, "push hl")) continue;
+        if (i > 0 && eq(i - 1, "ld h,0")) continue;
+        if (!peep_parse_ld_de_signed(lines[i + 1], &n)) continue;
+        if (!eq(i + 2, "or a")) continue;
+        if (!eq(i + 3, "sbc hl,de")) continue;
+        if (!eq(i + 4, "pop hl")) continue;
+        if (!peep_parse_jp_cond_label(lines[i + 5], "z", label_ok)) continue;
+        if (!peep_parse_jp_cond_label(lines[i + 6], "nc", label_default)) continue;
+
+        replace1_tagged(i, "ld d,h", "word_switch_cmp_avoid_push_pop");
+        insert_line_tagged(i + 1, "ld e,l", "word_switch_cmp_avoid_push_pop");
+        sprintf(buf, "ld hl,%d", n);
+        replace1(i + 2, buf);
+        replace1(i + 5, "ex de,hl");
+        sprintf(buf, "jp c, %s", label_default);
+        replace1(i + 7, buf);
+
+        changed = 1;
+        if (i > 0) i--;
+    }
+
+    return changed;
+}
+
 
 /*
  * Byte-indexed array address through a global base pointer.
@@ -8282,6 +8364,7 @@ int main(int argc, char **argv)
         { "pass_signed_cmp_const_low0", pass_signed_cmp_const_low0, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
+        { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
         { "pass_call_hl_stack_roundtrip", pass_call_hl_stack_roundtrip, 0 },
         { "pass_minmax_winner_result_no_temp", pass_minmax_winner_result_no_temp, 0 },
         { "pass_minmax_score_b_cache", pass_minmax_score_b_cache, 0 },
