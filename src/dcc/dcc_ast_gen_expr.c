@@ -2024,6 +2024,79 @@ void gen_assign_ast(const struct AstNode *n)
     gen_assign_ident_ast(n);
 }
 
+/* `arr[idx] = ident + K;` (or `- K`) where `ident` is a directly-loadable
+ * (ix-relative local/param or global/extern) word-sized, non-bool scalar
+ * and K is a compile-time int constant: recognizes the RHS shape fint.c's
+ * `lcrs[lcrp++] = in + 1;` uses for its VM return-stack push (`in` a
+ * `struct Ins *`, K scaled by sizeof(struct Ins) via the pointer-arithmetic
+ * path below) - hit on every recursive call in the ttt.f benchmark's
+ * minimax search, the largest remaining dcc-vs-sdcc gap in the whole
+ * interpreter suite. Returns the resolved symbol and the final (already
+ * pointer-scaled if applicable) signed delta to add. */
+static int ast_ident_plus_const_rhs(const struct AstNode *rhs, struct Sym **out_sym, long *out_delta)
+{
+    struct Sym *s;
+    long k;
+
+    if (rhs == NULL || rhs->kind != AST_BINARY || (rhs->op != '+' && rhs->op != '-'))
+        return 0;
+    if (rhs->a == NULL || rhs->a->kind != AST_IDENT)
+        return 0;
+    if (rhs->b == NULL || rhs->b->kind != AST_INT_LIT)
+        return 0;
+
+    s = find_sym(rhs->a->sval);
+    if (s == NULL || type_is_bool(s->type) || type_size(s->type) != 2)
+        return 0;
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
+        return 0;
+
+    if (type_ptr_depth(s->type) > 0)
+        k = rhs->b->ival * type_index_elem_size(s->type);
+    else
+        k = rhs->b->ival;
+    if (rhs->op == '-')
+        k = -k;
+
+    *out_sym = s;
+    *out_delta = k;
+    return 1;
+}
+
+/* Emit `(hl) = s + delta` (16-bit, little-endian) via byte-wise accumulator
+ * arithmetic - `ld a,(s_lo); add a,delta_lo; ld (hl),a; inc hl; ld a,(s_hi);
+ * adc a,delta_hi; ld (hl),a` - instead of materializing `s + delta` into a
+ * full 16-bit register pair (which would clobber the address already in
+ * HL and so need a push/pop around it, exactly the generic path below
+ * does). This is the same byte-at-a-time idiom sdcc's own codegen uses for
+ * this exact shape (confirmed via fint.c.lis) - Z80's 8-bit ADD/ADC
+ * naturally wrap and carry-propagate, so this holds for any 16-bit delta,
+ * not just a small one. HL (the destination address) is never touched
+ * except by the final two `inc hl`/store steps; A is the only scratch
+ * register needed. Caller (gen_assign_lvalue_expr_ast) only takes this
+ * path when the assignment's own result is dead, so there is no need to
+ * also reassemble the stored value into a register pair afterward. */
+static void emit_store_ident_plus_const_to_addr_hl(struct Sym *s, long delta)
+{
+    unsigned long lo = (unsigned long)delta & 0xffUL;
+    unsigned long hi = ((unsigned long)delta >> 8) & 0xffUL;
+
+    if (sym_can_ix_direct(s))
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
+    else {
+        emit_extrn_if_needed(s);
+        fprintf(g_emit_sink.stream, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
+    }
+    fprintf(g_emit_sink.stream, "\tadd a,%lu\n", lo);
+    emit("\tld (hl),a\n\tinc hl\n");
+    if (sym_can_ix_direct(s))
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 1);
+    else
+        fprintf(g_emit_sink.stream, "\tld a,(%s+1)\n", asm_name_for(sym_asm_name(s)));
+    fprintf(g_emit_sink.stream, "\tadc a,%lu\n", hi);
+    emit("\tld (hl),a\n");
+}
+
 /* Store to a non-identifier lvalue (subscript arr[i], member s.f / p->f, or
  * deref *p): the address machine differs per lvalue kind, the store tail is
  * uniform. Handles plain = and the arithmetic/bitwise compound operators.
@@ -2139,6 +2212,27 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
         g_expr.type = val_type;
         g_expr.long_from16 = 0;
         return;
+    }
+
+    /* `arr[idx] = ident +/- K;`, result dead (a plain statement, not used
+     * as a further expression): store via byte-wise accumulator arithmetic
+     * directly into the already-computed address in HL, with no push/pop
+     * needed at all - see ast_ident_plus_const_rhs/emit_store_ident_plus_
+     * const_to_addr_hl. Gated on want_dead because that path never
+     * reassembles the stored value into a register pair afterward; the
+     * generic path just below still handles a live-result use of this
+     * same shape. */
+    if (n->op == '=' && want_dead && bf_width == 0 &&
+        type_size(val_type) == 2 && !type_is_bool(val_type)) {
+        struct Sym *rhs_sym;
+        long rhs_delta;
+
+        if (ast_ident_plus_const_rhs(n->b, &rhs_sym, &rhs_delta)) {
+            emit_store_ident_plus_const_to_addr_hl(rhs_sym, rhs_delta);
+            g_expr.type = val_type;
+            g_expr.long_from16 = 0;
+            return;
+        }
     }
 
     if (n->op == '=') {
