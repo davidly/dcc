@@ -343,3 +343,95 @@ int pass_elim_dead_register_loads(void)
     return changed;
 }
 
+/*
+ * Is line `i` a return-value materialization instruction that may legitimately
+ * sit between the dead cleanup pops and the framed epilogue?  Such gap fillers
+ * (`ld hl,N`, `ld l,(ix-2)`, `ld h,(ix-1)`, ...) must be provably harmless to
+ * step over: they touch neither the stack pointer nor BC, perform no control
+ * flow, write nothing to the stack, and have fully known effects.  Blank and
+ * comment lines carry no code and are always skippable.
+ */
+static int epilogue_gap_skippable(int i)
+{
+    const PeepLineInfo *info = peep_line_info(i);
+    unsigned touched;
+
+    if (!info)
+        return 0;
+    if (info->kind == PEEP_LINE_BLANK || info->kind == PEEP_LINE_COMMENT)
+        return 1;
+    if (info->kind != PEEP_LINE_INSTRUCTION)
+        return 0;
+    if (info->effects.unknown || info->effects.control_flow)
+        return 0;
+    if (info->effects.memory_written & PEEP_MEM_STACK)
+        return 0;
+    touched = info->effects.reads | info->effects.writes;
+    if (touched & (PEEP_REG_SP | PEEP_REG_B | PEEP_REG_C))
+        return 0;
+    return 1;
+}
+
+/*
+ * Remove stack-cleanup "pop bc" instructions that are stranded in front of a
+ * framed epilogue.  dcc emits a "pop bc" per pushed argument after every call
+ * to discard the actuals; when the call is the last thing a function does, the
+ * epilogue's "ld sp,ix" resets SP to the frame base and discards whatever the
+ * pops were adjusting - so the pops are pure dead weight (10 T-states and one
+ * byte each).
+ *
+ *     call _foo
+ *     pop bc            <- dead: SP about to be overwritten
+ *     pop bc            <- dead
+ *     ld hl,0           }  optional return-value setup (SP/BC neutral)
+ *     ld sp,ix          <- unconditionally reloads SP from IX
+ *     pop ix
+ *     ret
+ *
+ * Correctness:
+ *   - "ld sp,ix" writes SP without reading it, so the SP value the pops leave
+ *     behind is dead.
+ *   - A "pop bc" that clobbers BC immediately before "ret" proves BC holds no
+ *     live value at return (dcc returns values in HL or DE:HL, never BC); were
+ *     it otherwise the original code would already be wrong.  The gap scan
+ *     additionally rejects any intervening reader of B/C.
+ *   - Only the canonical framed epilogue "ld sp,ix / pop ix / ret" qualifies.
+ *     Leaf functions have no "ld sp,ix", so their trailing pops - which really
+ *     do rebalance the stack for "ret" - are never touched.
+ */
+int pass_elim_dead_epilogue_cleanup_pops(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        int j;
+
+        if (!eq(i, "ld sp,ix") || !eq(i + 1, "pop ix") || !eq(i + 2, "ret"))
+            continue;
+
+        /*
+         * Walk backwards from the epilogue over skippable gap fillers and
+         * delete every "pop bc" that precedes it, stopping at the first
+         * instruction that is neither a cleanup pop nor a safe gap filler.
+         */
+        j = i - 1;
+        while (j >= 0) {
+            if (eq(j, "pop bc")) {
+                delete_n(j, 1);
+                changed = 1;
+                --i;    /* the epilogue and everything after shifted down */
+                --j;
+                continue;
+            }
+            if (epilogue_gap_skippable(j)) {
+                --j;
+                continue;
+            }
+            break;
+        }
+    }
+
+    return changed;
+}
+
