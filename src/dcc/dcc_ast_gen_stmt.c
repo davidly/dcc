@@ -320,6 +320,15 @@ void ast_gen_dead_expr(const struct AstNode *n)
         }
     } else if (ast_is_local_self_add_stmt(n)) {
         ast_emit_local_self_add_stmt(n);
+    } else if (n->kind == AST_IDENT) {
+        /* A dead bare-identifier read (most commonly `(void)param;` to
+         * silence an unused-variable warning) has no observable effect and
+         * can be skipped entirely, UNLESS the object is volatile - a
+         * volatile read's side effect (the memory access itself) must
+         * still happen even though its value is discarded. */
+        struct Sym *s = find_sym(n->sval);
+        if (s == NULL || s->is_volatile)
+            ast_gen_expr(n);
     } else {
         ast_gen_expr(n);
     }
