@@ -5083,6 +5083,190 @@ static int pass_cache_ix_local_word_reload(void)
     return changed;
 }
 
+/* Forward declarations: both defined further down this file (line_mentions_iy
+ * alongside pass_promote_ix_pointer_to_iy, peep_parse_ld_de_ix_pair alongside
+ * that same pass's other parse helpers), needed here for pass_cache_ix_
+ * spill_via_iy below. */
+static int line_mentions_iy(const char *line);
+static int peep_parse_ld_de_ix_pair(int line, int *offset);
+
+static int line_is_call_or_rst(const char *line)
+{
+    char clean[MAX_LINE];
+
+    strip_peep_comment_lower_copy(clean, line);
+    if (strncmp(clean, "call", 4) == 0 && (clean[4] == ' ' || clean[4] == '\t'))
+        return 1;
+    if (strncmp(clean, "rst", 3) == 0 && (clean[3] == ' ' || clean[3] == '\t'))
+        return 1;
+    return 0;
+}
+
+/* Is IY mentioned anywhere in the function containing line `at`, EXCLUDING
+ * lines this same pass already tagged (ix_spill_iy) from an earlier
+ * candidate elsewhere in the same function? The exclusion matters: switch
+ * cases are mutually exclusive at runtime, so two DIFFERENT cases (e.g.
+ * fint.c's OP_ADD and OP_SUB, each independently store/reload their own
+ * short-lived temp) never actually contend for IY even though both this
+ * pass's rewrites live in the same function's text - without the
+ * exclusion, only the first candidate in any given function could ever
+ * benefit, the same "only the very first segment could benefit" trap
+ * ix_cache_bc_used_in_function's own comment (just above) already
+ * documents and works around for the BC case. Everything else that
+ * mentions IY - dcc's own compiler output (never emits it) or
+ * pass_promote_ix_pointer_to_iy's whole-function reservation - still
+ * counts, by design: those really do need to reserve IY for the entire
+ * function, or its whole-file scope in that pass's own case. */
+static int iy_used_in_function(int at)
+{
+    int func_start, func_end;
+    int k;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    for (k = func_start; k < func_end; ++k) {
+        if (strstr(lines[k], "ix_spill_iy") != NULL)
+            continue;
+        if (line_mentions_iy(lines[k]))
+            return 1;
+    }
+    return 0;
+}
+
+/* Is ix-offset `off` (signed, as returned by peep_parse_st_ix_pair/
+ * peep_parse_ld_de_ix_pair - NOT the positive-magnitude convention
+ * ix_offset_written_in_range above uses) referenced anywhere in
+ * [func_start,func_end) OTHER than at the four given line indices (the
+ * matched store's two lines and the matched reload's two lines)? Read OR
+ * write, any register - stronger than ix_offset_written_in_range needs,
+ * because this pass eliminates the frame slot's only store and only
+ * reload both (pass_cache_ix_local_word_reload, by contrast, keeps a real
+ * first store/reload pair around and only rewrites repeats, so it only
+ * ever needs to rule out a WRITE, never a read, in between). */
+static int ix_offset_pair_referenced_outside(int off, int func_start, int func_end,
+                                             int excl_a, int excl_b, int excl_c, int excl_d)
+{
+    char pat_lo[24], pat_hi[24];
+    int i;
+
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    for (i = func_start; i < func_end; ++i) {
+        if (i == excl_a || i == excl_b || i == excl_c || i == excl_d)
+            continue;
+        if (strstr(lines[i], pat_lo) != NULL || strstr(lines[i], pat_hi) != NULL)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * pass_cache_ix_spill_via_iy:
+ *
+ * A block-scoped C temp materialized once from a computed value and read
+ * back exactly once shortly after (e.g. `{ int _t = lst[--lsp]; lst[lsp-1]
+ * += _t; }` - fint.c's OP_ADD/SUB/MUL/EQ/NE/LT/GT/AND/OR, hit on nearly
+ * every binary VM opcode) round-trips through its own frame slot: `ld
+ * (ix+N),l` / `ld (ix+N+1),h` to store (38T), then later `ld e,(ix+N)` /
+ * `ld d,(ix+N+1)` to reload (38T) - 76T total for a value that's dead the
+ * instant it's reloaded. pass_cache_ix_local_word_reload (just above)
+ * targets a related but different shape - a value reloaded 3+ times, kept
+ * in BC - and never fires here: its own >=3-reload threshold is never met
+ * by a single store-then-single-reload. BC itself is also frequently
+ * unavailable for this shape specifically: run_at-style giant dispatch
+ * functions often already reserve BC/C for a DIFFERENT, whole-function
+ * global-pointer cache (pass_cache_global_word_reload), which
+ * ix_cache_bc_used_in_function's own deliberately whole-function-
+ * conservative check (see its comment) correctly declines to disturb.
+ *
+ * IY, however, is very often completely unused in exactly these functions.
+ * Cache the value there instead, via push/pop - the same documented-Z80
+ * idiom pass_promote_ix_pointer_to_iy already uses, not the undocumented
+ * ld iyl/iyh 8-bit forms: `push hl` / `pop iy` to store (25T), `push iy` /
+ * `pop de` to reload (25T) - 50T total, still a real ~34% cut.
+ *
+ * Narrower than pass_promote_ix_pointer_to_iy's whole-function register
+ * promotion: IY only needs to survive a short, straight-line span here, so
+ * this requires - rather than proving every call in the whole file is
+ * IY-safe - simply that no call/rst and no label fall between the store
+ * and the matched reload (a call to code outside this file could touch IY
+ * in ways this file's text can't see; a label would let some other path
+ * reach the reload without ever running the store). Requires IY to be
+ * unused elsewhere in the containing function (iy_used_in_function mirrors
+ * ix_cache_bc_used_in_function's own per-function conservatism, just for
+ * IY - see its own comment for why switch-case candidates still coexist
+ * safely despite this), and the frame slot to be referenced nowhere else
+ * in the function at all (ix_offset_pair_referenced_outside - stronger
+ * than pass_cache_ix_local_word_reload needs, since that pass keeps the
+ * real memory slot around for its first, unrewritten occurrence - this
+ * pass eliminates the memory slot's only store and only reload both, so
+ * nothing else may depend on it holding the value).
+ */
+static int pass_cache_ix_spill_via_iy(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 1 < nlines; ++i) {
+        int off, reload_off;
+        int func_start, func_end;
+        int reload_line;
+        int k;
+
+        if (!peep_parse_st_ix_pair(lines[i], lines[i + 1], &off))
+            continue;
+
+        if (iy_used_in_function(i))
+            continue;
+
+        find_function_bounds_any(i, &func_start, &func_end);
+
+        reload_line = -1;
+        for (k = i + 2; k < func_end; ++k) {
+            int other_off;
+
+            if (starts_label(lines[k]) || line_starts_function_marker(lines[k]) ||
+                line_is_call_or_rst(lines[k]))
+                break;
+            if (peep_parse_ld_de_ix_pair(k, &reload_off) && reload_off == off) {
+                reload_line = k;
+                break;
+            }
+            /* A DIFFERENT local's own store (e.g. tests/tstruct.c's
+             * `i = "Karina"; j = "Winter";` - two distinct register-char*
+             * locals, each independently store/reload-shaped) landing
+             * inside THIS candidate's span means the two candidates'
+             * store-to-reload spans overlap: both would claim IY for
+             * themselves, and whichever fires second clobbers the first's
+             * still-pending value before its own reload ever runs - a real
+             * miscompile (tstruct's stack[0]/[1] fields all reading back
+             * the LAST-stored string instead of their own) caught by the
+             * full suite before this pass ever shipped. Declining whenever
+             * another store-shaped line appears in the span - regardless
+             * of whether IT ends up qualifying as its own candidate - is
+             * the simple, sufficient fix: it forces every accepted
+             * candidate's span to be genuinely self-contained. */
+            if (k != i && k + 1 < nlines &&
+                peep_parse_st_ix_pair(lines[k], lines[k + 1], &other_off)) {
+                break;
+            }
+        }
+        if (reload_line < 0)
+            continue;
+
+        if (ix_offset_pair_referenced_outside(off, func_start, func_end,
+                                              i, i + 1, reload_line, reload_line + 1))
+            continue;
+
+        replace1_tagged(i, "push hl", "ix_spill_iy");
+        replace1_tagged(i + 1, "pop iy", "ix_spill_iy");
+        replace1_tagged(reload_line, "push iy", "ix_spill_iy");
+        replace1(reload_line + 1, "pop de");
+        changed = 1;
+    }
+
+    return changed;
+}
+
 /* Parse dcc's four-line little-endian long load from consecutive ix offsets:
  * ld l,(ix+N) / ld h,(ix+N+1) / ld e,(ix+N+2) / ld d,(ix+N+3). */
 static int peep_parse_ld_long_ix_at(int line, int *offset)
@@ -8289,6 +8473,28 @@ int main(int argc, char **argv)
         RUN_PASS(pass_remove_unreferenced_labels);
         RUN_PASS(pass_labels);
     }
+
+    /* pass_cache_ix_spill_via_iy runs after pass_promote_ix_pointer_to_iy,
+     * not before: that pass's own whole-FILE "IY unused anywhere" gate (see
+     * its own comment) would see this pass's rewrites and decline for the
+     * entire file if this ran first, and its whole-function register
+     * promotion is a substantially bigger win (a value live for a whole
+     * function, not just one short span) than this pass's own per-spill
+     * saving - confirmed as a real regression (forint +2.6%) when this was
+     * tried in the other order: this pass had already claimed IY somewhere
+     * low-value in forint.c before pass_promote_ix_pointer_to_iy got a
+     * chance at eval_e's much more valuable token-pointer promotion, and
+     * that pass's whole-file gate then declined entirely. Running after
+     * means this pass's own per-function iy_used_in_function check simply
+     * sees pass_promote_ix_pointer_to_iy's already-claimed functions (their
+     * rewrites mention "iy") and correctly skips them, same as it already
+     * does for its own earlier candidates elsewhere in a file. Same
+     * post-convergence placement rationale as pass_cache_ix_local_word_
+     * reload (own precondition can be satisfied on an earlier main-loop
+     * iteration than a structural, loop-recognizing pass's own). Purely
+     * local, so a single pass suffices; pass_labels tidies up. */
+    if (RUN_PASS(pass_cache_ix_spill_via_iy))
+        RUN_PASS(pass_labels);
 
     /* Run frame elimination after all other passes have converged, then
      * clean up any newly unreferenced labels created by the removal.
