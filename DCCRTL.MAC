@@ -3155,6 +3155,54 @@ R1PN:
         ret
 
 
+        public  __q1p
+; 16-bit signed dividend divided by a power-of-two divisor.
+; Input:  HL = dividend, E = shift count k (divisor = 2^k, 1 <= k <= 14)
+; Output: HL = quotient, C truncation semantics (toward zero)
+;
+; Like __r1p, an arithmetic shift alone is wrong: it rounds toward minus
+; infinity, so -1 / 2 would give -1 where C requires 0.  Shifting the
+; MAGNITUDE and restoring the sign afterwards truncates the right way.
+; E carries the shift count rather than a mask, so unlike __r1p this is not
+; limited to divisors that fit in a byte.
+;
+; Kept deliberately small: it is selected alongside __q2s rather than instead
+; of it, so in a module that also divides by a non-power of two its bytes are
+; pure addition on top of the general divider.
+__q1p:
+        push    af
+        push    bc
+        ld      b,e             ; B = shift count, so DE is free from here
+        ld      a,h
+        or      a               ; S = sign of the dividend
+        ld      c,a             ; keep the sign byte across the shift
+        jp      p,Q1P0
+        ; negate HL: the low byte borrows into the high one, so "sbc a,a"
+        ; turns that borrow into the 0FFh/0 that "sub h" then needs
+        xor     a
+        sub     l
+        ld      l,a
+        sbc     a,a
+        sub     h
+        ld      h,a             ; HL = |dividend|
+Q1P0:
+        srl     h               ; logical: HL is a magnitude here
+        rr      l
+        djnz    Q1P0
+        bit     7,c
+        jr      z,Q1P1
+        xor     a
+        sub     l
+        ld      l,a
+        sbc     a,a
+        sub     h
+        ld      h,a
+Q1P1:
+        pop     bc
+        pop     af
+        ret
+
+
         public  __q2u
         public  __r2u
         public  __q2s

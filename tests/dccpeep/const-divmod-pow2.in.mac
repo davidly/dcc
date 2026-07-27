@@ -1,0 +1,110 @@
+; Constant power-of-two signed division, and division/modulo by one.
+extrn __stchk
+
+cseg
+
+; positive: signed / 2^k becomes __q1p, whose divisor operand is the SHIFT
+; COUNT in e, not the divisor itself.
+_divpow2:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,2
+call __divs
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,256
+call __divs
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,16384
+call __divs
+ld sp,ix
+pop ix
+ret
+
+; positive: / 1 is the identity, so both the divisor load and the call go away
+; and hl is already the quotient.
+_divone:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,1
+call __divs
+ld sp,ix
+pop ix
+ret
+
+; positive: an unsigned / 1 folds the same way.
+_udivone:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,1
+call __divu
+ld sp,ix
+pop ix
+ret
+
+; positive: % 1 is always zero.
+_modone:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,1
+call __mods
+ld sp,ix
+pop ix
+ret
+
+; negative: 32768 is not a positive 16-bit signed divisor -- as an int it
+; really means -32768 -- so the divisor parser rejects it outright and it stays
+; on the general __divs helper rather than being narrowed at all.
+_div32768:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,32768
+call __divs
+ld sp,ix
+pop ix
+ret
+
+; negative: a non-power-of-two divisor still needs the general divider.
+_divthree:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,3
+call __divs
+ld sp,ix
+pop ix
+ret
+
+; negative: __q1p restores a sign that an unsigned dividend does not have, so
+; the unsigned power-of-two case must stay on __q2u.
+_udivpow2:
+push ix
+ld ix,0
+add ix,sp
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,8
+call __divu
+ld sp,ix
+pop ix
+ret
+
+end
