@@ -506,15 +506,19 @@ static void run(void)
         case OP_PUSH: pushv(in->a); break;
         case OP_LDV: pushv(mem[sym[in->a].scalar]); break;
         case OP_STV: mem[sym[in->a].scalar] = popv(); break;
-        case OP_LDA:
-            idx = popv(); si = in->a;
-            if (sym[si].base < 0 || idx < 0 || idx >= sym[si].size) pushv(0);
-            else pushv(mem[sym[si].base + idx]);
+        case OP_LDA: {
+            struct Sym *symp = &sym[in->a];
+            idx = popv();
+            if (symp->base < 0 || idx < 0 || idx >= symp->size) pushv(0);
+            else pushv(mem[symp->base + idx]);
             break;
-        case OP_STA:
-            v = popv(); idx = popv(); si = in->a;
-            if (sym[si].base >= 0 && idx >= 0 && idx < sym[si].size) mem[sym[si].base + idx] = v;
+        }
+        case OP_STA: {
+            struct Sym *symp = &sym[in->a];
+            v = popv(); idx = popv();
+            if (symp->base >= 0 && idx >= 0 && idx < symp->size) mem[symp->base + idx] = v;
             break;
+        }
         case OP_ADD: b=popv(); a=popv(); pushv(a+b); break;
         case OP_SUB: b=popv(); a=popv(); pushv(a-b); break;
         case OP_MUL: b=popv(); a=popv(); pushv(a*b); break;
@@ -536,17 +540,26 @@ static void run(void)
         case OP_RET:
             if (gsp <= 0) die("return stack empty");
             in = gstk[--gsp]; continue;
-        case OP_FOR:
+        case OP_FOR: {
+            struct ForFrame *fp;
             if (fsp >= MAXFOR) die("for stack full");
-            fstk[fsp].var = in->a; fstk[fsp].limit = popv(); fstk[fsp].step = in->b; fstk[fsp].pc = in + 1; fsp++;
+            fp = &fstk[fsp];
+            fp->var = in->a; fp->limit = popv(); fp->step = in->b; fp->pc = in + 1; fsp++;
             break;
-        case OP_NEXT:
+        }
+        case OP_NEXT: {
+            struct ForFrame *fp;
+            struct Sym *vsp;
+            int newval;
             if (fsp <= 0) die("next without for");
             si = fsp - 1;
-            mem[sym[fstk[si].var].scalar] += fstk[si].step;
-            if (mem[sym[fstk[si].var].scalar] <= fstk[si].limit) { in = fstk[si].pc; continue; }
+            fp = &fstk[si];
+            vsp = &sym[fp->var];
+            newval = (mem[vsp->scalar] += fp->step);
+            if (newval <= fp->limit) { in = fp->pc; continue; }
             fsp--;
             break;
+        }
         case OP_PRI: printf("%d", popv()); break;
         case OP_PRS: printf("%s", strs[in->a]); break;
         case OP_PSP: printf(" "); break;
