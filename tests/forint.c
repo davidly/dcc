@@ -338,6 +338,26 @@ static inline void set_sym_val(int si,int idx,int v)
     else
         set_cell(s->base+resolve_idx(s,idx)*CELL,v);
 }
+/* get_sym_val(si,0)+delta then set_sym_val(si,0,result) in one call - the
+ * DO-loop induction-variable bump (run_prog's OP_CONTINUE, its hottest
+ * per-iteration op) - resolving &g_syms[si] and idx 0's offset only once
+ * instead of once per get/set_sym_val call. Scalar-only (idx fixed at 0):
+ * the only caller is an induction variable, never an array element. */
+static inline int bump_sym_val(int si,int delta)
+{
+    struct Sym *s=&g_syms[si];
+    int v;
+    if(s->type==TYPE_I1) {
+        int off=s->base+resolve_idx(s,0);
+        v=(signed char)g_mem[off]+delta;
+        g_mem[off]=(unsigned char)v;
+    } else {
+        int off=s->base+resolve_idx(s,0)*CELL;
+        v=cell_at(off)+delta;
+        set_cell(off,v);
+    }
+    return v;
+}
 static void eskip(void)
 {
     while(*g_ep && isspace((unsigned char)*g_ep))g_ep++;
@@ -1240,8 +1260,7 @@ static void run_prog(void)
             case OP_CONTINUE: if(g_ndo>0 && g_dos[g_ndo-1].label==g_pc)
             {
                 d=&g_dos[g_ndo-1];
-                v=get_sym_val(d->sym,0)+d->step;
-                set_sym_val(d->sym,0,v);
+                v=bump_sym_val(d->sym,d->step);
                 if((d->step>=0&&v<=d->endv)||(d->step<0&&v>=d->endv))
                 {
                     g_pc=d->pc_after;

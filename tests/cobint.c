@@ -828,6 +828,40 @@ static inline void check_idx(int vi, int ix)
     if (ix < 0 || ix > var[vi].len + 1) die("bad subscript");
 }
 
+/* Combined check_idx+var_get/var_set, sharing &var[vi] and the bounds
+ * test once instead of once per separate call - exec_range's
+ * OP_PUSHVAR_IDX/OP_STORE_IDX/OP_STORE_IDXT, and run_bc's own
+ * OP_PUSHVAR_IDX, all call check_idx then var_get/var_set back-to-back
+ * with the same vi (and idx), each independently re-resolving &var[vi]
+ * since they're separate inline calls. Same idea as this file's own
+ * var_get/var_set fix, one level up the call chain.
+ *
+ * NOTE: a read-modify-write counterpart (bump_var/check_idx_bump,
+ * combining var_get+delta+var_set the same way for the OP_ADD_TO and
+ * OP_SUB_FROM opcodes) was tried and abandoned - it miscompiled once
+ * called from more than a couple of sites within exec_range (confirmed
+ * via bisection: e.cob's digit-by-digit output came out as a constant
+ * wrong value regardless of the true digit, isolated to these two
+ * functions specifically, reproducible independent of whether the delta
+ * argument was a negated expression or a plain variable, and independent
+ * of an early-return vs shared-post-if-else-variable rewrite - never
+ * fully root-caused in dcc's inliner). The OP_ADD_TO/OP_SUB_FROM cases
+ * are left on the original separate var_get()+var_set() calls. */
+static inline int check_idx_get(int vi, int idx)
+{
+    struct Var *vpg = &var[vi];
+    if (idx < 0 || idx > vpg->len + 1) die("bad subscript");
+    return (vpg->esize == 1) ? ((signed char *)vpg->v)[idx] : ((int *)vpg->v)[idx];
+}
+
+static inline void check_idx_set(int vi, int idx, int val)
+{
+    struct Var *vps = &var[vi];
+    if (idx < 0 || idx > vps->len + 1) die("bad subscript");
+    if (vps->esize == 1) ((signed char *)vps->v)[idx] = (signed char)val;
+    else ((int *)vps->v)[idx] = val;
+}
+
 /* run_bc's only caller is exec_range's OP_PERFORM/PM_VARYING case, evaluating
  * a compiled PERFORM ... UNTIL condition block (compile_perform's
  * until_start bytecode: compile_condition() followed by a single OP_RETVAL -
@@ -860,8 +894,7 @@ static int run_bc(struct Ins *start)
             break;
         case OP_PUSHVAR_IDX:
             a = vpop();
-            check_idx(in->a, a);
-            vpush(var_get(in->a, a));
+            vpush(check_idx_get(in->a, a));
             break;
         case OP_NEG:
             a = vpop();
@@ -943,8 +976,7 @@ static void exec_range(int start, int end)
                 break;
             case OP_PUSHVAR_IDX:
                 a = vpop();
-                check_idx(in->a, a);
-                vpush(var_get(in->a, a));
+                vpush(check_idx_get(in->a, a));
                 break;
             case OP_STORE_S:
                 a = vpop();
@@ -953,8 +985,7 @@ static void exec_range(int start, int end)
             case OP_STORE_IDX:
                 a = vpop();
                 b = vpop();
-                check_idx(in->a, a);
-                var_set(in->a, a, b);
+                check_idx_set(in->a, a, b);
                 break;
             case OP_SAVE_IDX:
                 a = vpop();
@@ -962,8 +993,7 @@ static void exec_range(int start, int end)
                 break;
             case OP_STORE_IDXT:
                 b = vpop();
-                check_idx(in->a, idxtmp);
-                var_set(in->a, idxtmp, b);
+                check_idx_set(in->a, idxtmp, b);
                 break;
             case OP_ADD_TO_S:
                 a = vpop();
