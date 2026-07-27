@@ -612,6 +612,31 @@ int peep_parse_ld_hl_paren_sym(const char *s, char *sym)
     return i > 0 && *p == ')' && p[1] == 0;
 }
 
+/* Same as peep_parse_ld_hl_paren_sym above, but for "ld de,(NAME)" - see
+ * that function's own comment for why the fold_hl_label_word_deref
+ * exclusion matters (no DE-producing pass currently emits a struct-field
+ * offset form the same way, but excluding it here too costs nothing and
+ * keeps this parser exactly as conservative as its HL sibling). */
+int peep_parse_ld_de_paren_sym(const char *s, char *sym)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int i;
+
+    if (strstr(s, "fold_hl_label_word_deref"))
+        return 0;
+
+    strip_peep_comment_copy(tmp, s);
+    if (strncmp(tmp, "ld de,(", 7) != 0)
+        return 0;
+    p = tmp + 7;
+    i = 0;
+    while (*p && *p != ')' && i < 120)
+        sym[i++] = *p++;
+    sym[i] = 0;
+    return i > 0 && *p == ')' && p[1] == 0;
+}
+
 int peep_parse_ld_paren_sym_hl(const char *s, char *sym)
 {
     char tmp[MAX_LINE];

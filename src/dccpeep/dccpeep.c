@@ -4704,6 +4704,120 @@ static int pass_cache_global_word_reload(void)
     return changed;
 }
 
+/*
+ * pass_cache_global_word_reload_de:
+ *
+ * Identical in every respect to pass_cache_global_word_reload just above
+ * (same segment/hazard logic, same BC-ownership guards, same >= 3
+ * threshold and its exact cost/benefit reasoning - see that pass's own
+ * comment) except for the register being reloaded: "ld de,(NAME)" instead
+ * of "ld hl,(NAME)". A separate pass rather than a parameterized shared
+ * implementation deliberately: pass_cache_global_word_reload has already
+ * had two hard-won, independently-discovered miscompiles fixed in it (the
+ * forint.c BC-regalloc conflict and the cobint.c segment-crossing-a-
+ * function-boundary bug, both documented in its own comment) - duplicating
+ * its now-proven-safe logic here, rather than editing it to also handle a
+ * second register, keeps zero risk of disturbing either fix while this
+ * new instance gets its own independent verification.
+ *
+ * "ld de,(nn)" costs even more than "ld hl,(nn)" to begin with (20T,
+ * ED-prefixed, vs HL's compact 16T direct form), so each avoided reload
+ * here saves 12T (20 - the 8T "ld e,c"/"ld d,b" replacement), a wider
+ * margin than the HL case's 8T - the same >= 3 threshold that's a bare
+ * break-even-or-better call for HL is a clearer win for DE.
+ *
+ * Found via bint.c's pushv/popv (`st[sp++/--sp]`, inlined into every
+ * arithmetic/comparison opcode's case body in run()): the index
+ * computation naturally lands in HL (doubling sp for word-sized
+ * elements), leaving the array base to load into DE - and a binary op's
+ * standard `b = popv(); a = popv(); pushv(a OP b);` shape reloads that
+ * same DE-based array pointer three times in a single hazard-free span.
+ * The same shape recurs in every other interpreter with a comparable
+ * evaluation-stack helper (fint.c's lst/lsp, cobint.c's vs/vsp, etc.).
+ */
+static int pass_cache_global_word_reload_de(void)
+{
+    int i;
+    int changed = 0;
+    int segstart;
+
+    segstart = 0;
+    for (i = 0; i <= nlines; i++) {
+        int j, k;
+        char sym[128], best_sym[128];
+        int best_count;
+        struct { char name[128]; int count; } seen[32];
+        int nseen;
+        int occ[64];
+        int noc;
+        int delta;
+
+        if (i < nlines && !line_clobbers_bc(lines[i]) &&
+            !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
+            continue;
+
+        nseen = 0;
+        for (j = segstart; j < i; j++) {
+            if (!peep_parse_ld_de_paren_sym(lines[j], sym))
+                continue;
+            for (k = 0; k < nseen; k++)
+                if (!strcmp(seen[k].name, sym)) break;
+            if (k == nseen) {
+                if (nseen < 32) { strcpy(seen[nseen].name, sym); seen[nseen].count = 1; nseen++; }
+            } else {
+                seen[k].count++;
+            }
+        }
+
+        best_count = 0;
+        best_sym[0] = 0;
+        for (k = 0; k < nseen; k++) {
+            if (seen[k].count > best_count) {
+                best_count = seen[k].count;
+                strcpy(best_sym, seen[k].name);
+            }
+        }
+
+        /* Mirrors pass_cache_global_word_reload's identical guard - matches
+         * on the bare substring "global_word_cache_load" so it correctly
+         * treats EITHER pass's still-pending cache load as a hazard, not
+         * just this one's own (see that pass's own comment for the
+         * tptrlhs.c miscompile this guards against). */
+        if (i < nlines && strstr(lines[i], "global_word_cache_load"))
+            best_count = 0;
+
+        if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
+            !symbol_written_in_range(best_sym, segstart, i) &&
+            !bc_regalloc_claimed_before(i)) {
+            noc = 0;
+            for (j = segstart; j < i; j++) {
+                if (!peep_parse_ld_de_paren_sym(lines[j], sym)) continue;
+                if (strcmp(sym, best_sym) != 0) continue;
+                if (noc < 64) occ[noc++] = j;
+            }
+
+            delta = 0;
+            for (k = noc - 1; k >= 1; k--) {
+                replace1_tagged(occ[k], "ld e,c", "global_word_cache_load_de");
+                insert_line(occ[k] + 1, "ld d,b");
+                delta += 1;
+                changed = 1;
+            }
+
+            insert_line_tagged(occ[0] + 1, "ld c,e", "global_word_cache_store_de");
+            insert_line(occ[0] + 2, "ld b,d");
+            delta += 2;
+            changed = 1;
+
+            i += delta;
+        }
+
+        segstart = i + 1;
+    }
+
+    return changed;
+}
+
 /* Parse "push R" or "pop R" for R in {hl,de,bc,af,ix,iy}, reporting which
  * via *reg (lowercase, e.g. "hl") and which mnemonic via *is_push (1 push,
  * 0 pop). Returns 0 for anything else, including a push/pop of a single
@@ -8652,6 +8766,7 @@ int main(int argc, char **argv)
         { "pass_mulu_const", pass_mulu_const, 0 },
         { "pass_cache_noix_byte_param_reload", pass_cache_noix_byte_param_reload, 0 },
         { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
+        { "pass_cache_global_word_reload_de", pass_cache_global_word_reload_de, 0 },
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
         { "pass_labels", pass_labels, 0 },

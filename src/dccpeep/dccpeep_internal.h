@@ -242,6 +242,7 @@ int peep_parse_inc_ix_byte(const char *s, int *off);
 int peep_parse_cp_const(const char *s, int *val);
 int peep_parse_st_ix_de_pair(const char *s1, const char *s2, int *off);
 int peep_parse_ld_hl_paren_sym(const char *s, char *sym);
+int peep_parse_ld_de_paren_sym(const char *s, char *sym);
 int peep_parse_ld_paren_sym_hl(const char *s, char *sym);
 int parse_ix_off_numeric(const char *off, int *val);
 int parse_ld_reg16_dest(const char *s, char *out);
