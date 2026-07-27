@@ -3267,6 +3267,7 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
     int fa_dimc = 0;
     int fa_dims[4];
     int di;
+    long const_index;
 
     for (di = 0; di < 4; ++di)
         fa_dims[di] = 0;
@@ -3538,6 +3539,50 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
         }
     } else {
         s = find_sym(n->a->sval);
+
+        /* One-dimensional global/static array with a non-constant subscript:
+         * take the same symbol-base fast path the N-dimensional branch above
+         * already uses for its first subscript (see emit_array_symbase_index).
+         * That branch is gated on ast_index_symbol_nd_collect, which requires
+         * `count >= 2`, so a plain `arr[i]` - by far the most common array
+         * access in C - could never reach it and always fell through to the
+         * base-first `push hl / ex de,hl / pop hl` round-trip below.
+         *
+         * The base is a link-time constant, so evaluating the index first
+         * costs nothing and lets the base go straight into DE:
+         *
+         *     ld hl,SYM / push hl / <index> / add hl,hl        95 T-states
+         *     / ex de,hl / pop hl / add hl,de
+         *  => <index> / add hl,hl / ld de,SYM / add hl,de      70 T-states
+         *
+         * The peephole cannot do this itself: a relocatable symbol is not a
+         * foldable literal, so its const folds skip the load entirely.
+         *
+         * Restricted to arrays (emit_array_symbase_index rejects anything
+         * else, including a frame-relative SC_LOCAL/SC_PARAM base, whose
+         * address is not a constant). A pointer base deliberately keeps the
+         * base-first shape - see the emit_pointer_symbase_index call at the
+         * top of this function for why reordering that one regressed tbig by
+         * 37%: dccpeep's cross-iteration hoisting passes hoist an invariant
+         * pointer RELOAD out of the loop, which beats this elision. An array
+         * base has no reload to hoist - it is one `ld hl,SYM` - so there is
+         * no such trade here.
+         *
+         * A subscript that FOLDS to a constant is excluded even though it is
+         * not an AST_INT_LIT node (those emit_array_symbase_index rejects by
+         * itself).  For a constant offset the base-first order is strictly
+         * better: dccpeep's fold_hl_base_const_offset rewrites the whole
+         * `ld hl,SYM / push hl / <const> / ... / add hl,de` run into a single
+         * `ld hl,SYM+K`, which no reordering can beat.  Index-first hides the
+         * constant behind `ld de,SYM` and defeats that fold - measured as the
+         * only regressions this change produced (tcptrarr, tinlnpar cycles
+         * and tsyntax size), all of them constant subscripts. */
+        if (s != NULL && s->is_array && n->b != NULL &&
+            !ast_const_fold_strict(n->b, &const_index) &&
+            emit_array_symbase_index(s, n->b, sym_array_index_elem_size(s, 0))) {
+            *out_val_type = s->type;
+            return;
+        }
 
         /* Base load: a global pointer immediately subscripted loads its value with
          * a direct ld hl,(nn); an ix-direct local/param pointer loads its value
