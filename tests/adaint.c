@@ -987,7 +987,14 @@ static inline void mem_set_byte(int base, int idx, unsigned char *m, int v)
     m[base + idx] = (unsigned char)v;
 }
 
-static void call_func(int fi, struct Ins *retpc, int argc)
+/* Returns fnp->entry directly - run()'s OP_CALL case needs the callee's
+ * entry point right after this returns to jump there, and used to
+ * re-resolve &G->func[in->a] from scratch for that (in->a == fi here) even
+ * though this function had already resolved the identical address moments
+ * earlier for its own use. Same fix as this file's other repeated-same-
+ * index-subscript cases, just spanning a function-call boundary instead of
+ * a single case body. */
+static int call_func(int fi, struct Ins *retpc, int argc)
 {
     int i, v;
     struct Func *fnp = &G->func[fi];
@@ -1005,6 +1012,7 @@ static void call_func(int fi, struct Ins *retpc, int argc)
                 mem_set_word(fnp->pofs[i], 0, G->flp, v);
         }
     }
+    return fnp->entry;
 }
 
 static void run(void)
@@ -1054,7 +1062,7 @@ static void run(void)
         case OP_JMP: in = &G->code[in->a]; continue;
         case OP_JZ: a=popv(); if(!a) { in = &G->code[in->a]; continue; } break;
         case OP_CALL:
-            call_func(in->a, in + 1, in->b); in = &G->code[G->func[in->a].entry]; continue;
+            in = &G->code[call_func(in->a, in + 1, in->b)]; continue;
         case OP_RET:
             v=popv(); in=G->fret[G->fp]; G->fp--;
             G->flp = G->floc + G->fp * G->frame_size; pushv(v); continue;
