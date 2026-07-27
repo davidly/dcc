@@ -5912,7 +5912,7 @@ static int peep_parse_st_ix_neg_reg(const char *s, char reg, int *n)
     while (*p >= '0' && *p <= '9')
         v = v * 10 + (*p++ - '0');
     sprintf(suffix, "),%c", reg);
-    if (strcmp(p, suffix) != 0 || v <= 1)
+    if (strcmp(p, suffix) != 0 || v <= 0)
         return 0;
     *n = v;
     return 1;
