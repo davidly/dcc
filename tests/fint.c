@@ -589,16 +589,16 @@ static void run_at(int pc)
         case OP_OR:   { int _t = lst[--lsp]; lst[lsp-1] |= _t; } break;
         case OP_INVERT: lst[lsp-1] = !lst[lsp-1]; break;
         case OP_FETCH:
-            { int _a = lst[lsp-1]; if (_a < 0 || _a+1 >= lmcap) die("bad address");
-              lst[lsp-1] = (int)(short)(lmem[_a] | (lmem[_a+1] << 8)); }
+            { int *tosp = &lst[lsp-1]; int _a = *tosp; if (_a < 0 || _a+1 >= lmcap) die("bad address");
+              *tosp = (int)(short)(lmem[_a] | (lmem[_a+1] << 8)); }
             break;
         case OP_STORE:
             a = lst[--lsp]; if (a < 0 || a+1 >= lmcap) die("bad address");
             b = lst[--lsp]; lmem[a] = (unsigned char)b; lmem[a+1] = (unsigned char)(b >> 8);
             break;
         case OP_CFETCH:
-            { int _a = lst[lsp-1]; if (_a < 0 || _a >= lmcap) die("bad address");
-              lst[lsp-1] = lmem[_a]; }
+            { int *tosp = &lst[lsp-1]; int _a = *tosp; if (_a < 0 || _a >= lmcap) die("bad address");
+              *tosp = lmem[_a]; }
             break;
         case OP_CSTORE:
             a = lst[--lsp]; if (a < 0 || a >= lmcap) die("bad address");
