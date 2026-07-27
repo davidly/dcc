@@ -6209,6 +6209,118 @@ static int pass_word_postinc_ix_local_no_save(void)
     return changed;
 }
 
+/* Matches, starting at `start`:
+ *   ld l,(ix-A) / ld h,(ix-(A-1))   ; word-sized ix-local index
+ *   [dec hl]                        ; optional: reading one slot below TOS
+ *   add hl,hl                       ; index*2 (word-sized array elements)
+ *   ld e,(ix-C) / ld d,(ix-(C-1))   ; word-sized ix-local array base
+ *   add hl,de                       ; &arr[index]
+ * - dcc's standard codegen shape for computing the address of a word-sized
+ * array element indexed by a word-sized ix-local, itself indexed through a
+ * word-sized ix-local base pointer/array-descriptor (the Forth stack-machine
+ * `lst[lsp]`/`lst[lsp-1]` shape). Returns the block length (6 or 7,
+ * depending on whether the optional dec hl is present) on a full match,
+ * filling *a and *c (positive ix- magnitudes) and *has_dec; returns 0 on any
+ * mismatch. */
+static int match_ix_word_array_addr_block(int start, int *a, int *c, int *has_dec)
+{
+    int idx = start;
+    int av;
+    char ebuf[32], dbuf[32];
+    int e, d;
+
+    if (start < 0 || !peep_parse_ld_hl_ix_pair(idx, &av))
+        return 0;
+    idx += 2;
+    *has_dec = eq(idx, "dec hl") ? 1 : 0;
+    if (*has_dec)
+        idx++;
+    if (!eq(idx, "add hl,hl"))
+        return 0;
+    idx++;
+    if (idx + 1 >= nlines)
+        return 0;
+    if (!peep_parse_ld_e_ix(lines[idx], ebuf) || !parse_ix_off_numeric(ebuf, &e))
+        return 0;
+    if (!peep_parse_ld_d_ix(lines[idx + 1], dbuf) || !parse_ix_off_numeric(dbuf, &d))
+        return 0;
+    if (d != e + 1)
+        return 0;
+    idx += 2;
+    if (!eq(idx, "add hl,de"))
+        return 0;
+    idx++;
+
+    *a = av;
+    *c = -e;
+    return idx - start;
+}
+
+/*
+ * pass_elim_dup_ix_word_array_addr_after_push:
+ *
+ * dcc's codegen for a compound assignment through a shared array-element
+ * expression - `arr[idx] = f(arr[idx], x);`, the shape behind every Forth
+ * stack-machine binary op (`lst[lsp-1] = lst[lsp-1] == _t;` and friends) -
+ * doesn't recognize that the read and the write share the same address
+ * expression. It computes &arr[idx] (match_ix_word_array_addr_block's own
+ * shape above), pushes it to use again later as the store target, and then
+ * recomputes the exact same address a second time just to read through it.
+ *
+ * "push hl" doesn't modify HL (or any other register/flag) - it only reads
+ * HL and writes memory + SP - so HL already holds &arr[idx] right after the
+ * push; the second computation is provably redundant and is deleted
+ * outright.
+ *
+ * Deliberately narrow (this one fixed, concrete ix-relative shape) and run
+ * once, after the main fixed-point loop has fully converged, rather than as
+ * a fully general "any duplicate block after any push" pass: an earlier,
+ * broader version of that more general idea matched a global-symbol reload
+ * that pass_defer_global_push_reload was still mid-transforming when both
+ * ran inside the same shared fixed point, silently corrupting
+ * tests/tforblk.c's static-pointer-initializer case (the duplicate lines
+ * were textually identical and individually "safe" by that version's
+ * criteria, but the surrounding transformation was not yet in its final
+ * form). Restricting to this one shape - which no other pass produces or
+ * touches - and running post-convergence, after every other pass has
+ * already settled into its final output, avoids that entire class of
+ * interaction.
+ */
+static int pass_elim_dup_ix_word_array_addr_after_push(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i < nlines; i++) {
+        int a1, c1, dec1, len1;
+        int a2, c2, dec2, len2;
+
+        if (!eq(i, "push hl"))
+            continue;
+
+        len1 = 0;
+        if (i - 7 >= 0 &&
+            match_ix_word_array_addr_block(i - 7, &a1, &c1, &dec1) == 7 &&
+            dec1)
+            len1 = 7;
+        else if (i - 6 >= 0 &&
+                 match_ix_word_array_addr_block(i - 6, &a1, &c1, &dec1) == 6 &&
+                 !dec1)
+            len1 = 6;
+        if (len1 == 0)
+            continue;
+
+        len2 = match_ix_word_array_addr_block(i + 1, &a2, &c2, &dec2);
+        if (len2 != len1 || a2 != a1 || c2 != c1 || dec2 != dec1)
+            continue;
+
+        delete_n(i + 1, len1);
+        changed = 1;
+    }
+
+    return changed;
+}
+
 /*
  * Collapse DCC's generic code for *(p = p - 1), where p is an int * global.
  * This is the hot pint popv() workaround shape.  The following dereference
@@ -8647,6 +8759,14 @@ int main(int argc, char **argv)
      * point, with pass_labels to tidy up. */
     if (RUN_PASS(pass_word_postinc_ix_local_no_save))
         RUN_PASS(pass_labels);
+
+    /* pass_elim_dup_ix_word_array_addr_after_push: see its own comment for
+     * why this runs post-convergence rather than in the shared fixed point
+     * (a real miscompile from an earlier, more general version of this
+     * idea, found on tests/tforblk.c). Pure deletion, no new control flow,
+     * so no pass_labels needed afterward. */
+    RUN_PASS(pass_elim_dup_ix_word_array_addr_after_push);
+
     if (RUN_PASS(pass_promote_ix_pointer_to_iy)) {
         RUN_PASS(pass_remove_unreferenced_labels);
         RUN_PASS(pass_labels);
