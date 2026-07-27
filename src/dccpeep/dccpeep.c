@@ -6098,7 +6098,15 @@ static int pass_small_const_incr_carry_skip(void)
         if (hl_relied_on_after(i + 6))
             continue;
 
-        sprintf(label, "Lpeep_incr_skip%d", label_counter++);
+        /* Real M80 (unlike dcc's own m80c) only honors the first 6
+         * significant characters of a symbol - see dcc_asmname.c's own
+         * comment on the same constraint for PUBLIC symbols. A longer,
+         * more descriptive prefix here would make every generated label in
+         * a file collide on that 6-char prefix ("Lpeep_" alone is already
+         * 6 characters) once there is more than one; "LI" (L + Incr) plus
+         * up to 4 digits keeps every label at or under 6 characters, so
+         * none can ever collide with another. */
+        sprintf(label, "LI%d", label_counter++);
         sprintf(line1, "ld a,(ix-%d)", lo);
         if (k > 0)
             sprintf(line2, "add a,%d", k);
@@ -6191,7 +6199,11 @@ static int pass_word_postinc_ix_local_no_save(void)
         if (!peep_flags_dead_after(i + 6, all_flags))
             continue;
 
-        sprintf(label, "Lpeep_postinc_skip%d", label_counter++);
+        /* Real M80 only honors the first 6 significant characters of a
+         * symbol (see pass_small_const_incr_carry_skip's identical note
+         * just above) - "LP" (L + Postinc) plus up to 4 digits keeps every
+         * label at or under 6 characters, so none can ever collide. */
+        sprintf(label, "LP%d", label_counter++);
         sprintf(line_inc_lo, "inc (ix-%d)", lo);
         sprintf(line_jp, "jp nz, %s", label);
         sprintf(line_inc_hi, "inc (ix-%d)", hi);
