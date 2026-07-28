@@ -5417,6 +5417,7 @@ static int mir_try_emit_general_rollout(FILE *out)
 static int mir_try_emit_home_cfg_rollout(FILE *out)
 {
     int i;
+    int has_loop_phi = 0;
     int parameter_count = 0;
     int return_count = 0;
 
@@ -5424,7 +5425,7 @@ static int mir_try_emit_home_cfg_rollout(FILE *out)
         mir.is_variadic_function || mir.count > 64 ||
         mir.declaration_count > 0 ||
         (mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2 ||
-        mir.allocation_spill_count != 0)
+        mir.allocation_spill_count != 0 || mir_home_uses_iy())
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -5432,8 +5433,16 @@ static int mir_try_emit_home_cfg_rollout(FILE *out)
                                type_ptr_depth(insn->type) > 0))
             return 0;
         switch (insn->opcode) {
-        case MIR_NOP: case MIR_LABEL: case MIR_CONST: case MIR_PHI:
-        case MIR_JUMP: case MIR_BRANCH_FALSE: case MIR_STORE:
+        case MIR_NOP: case MIR_LABEL: case MIR_CONST: case MIR_STORE:
+            break;
+        case MIR_PHI:
+            if ((insn->phi_pred1 >= 0 &&
+                 mir_find_label(insn->phi_pred1) > i) ||
+                (insn->phi_pred2 >= 0 &&
+                 mir_find_label(insn->phi_pred2) > i))
+                has_loop_phi = 1;
+            break;
+        case MIR_JUMP: case MIR_BRANCH_FALSE:
             break;
         case MIR_PARAM:
             ++parameter_count;
@@ -5460,7 +5469,7 @@ static int mir_try_emit_home_cfg_rollout(FILE *out)
             return 0;
         }
     }
-    if (parameter_count == 0 || return_count == 0)
+    if (!has_loop_phi || parameter_count == 0 || return_count == 0)
         return 0;
     return mir_try_emit_homed_scalar_cfg(out);
 }
@@ -6208,6 +6217,8 @@ static int mir_try_emit_automatic_z80(FILE *out)
     if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
         return 1;
     if (mir_try_selector(out, mir_try_emit_countdown_loop))
+        return 1;
+    if (mir_try_selector(out, mir_try_emit_home_cfg_rollout))
         return 1;
     return mir_try_selector(out, mir_try_emit_general_rollout);
 }

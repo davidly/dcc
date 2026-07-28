@@ -815,8 +815,19 @@ cycles faster), and exact retained-home CFG now handles parallel multi-phi edge
 copies, promoted-only local frames, branches, ternaries and loops. A conservative
 69-function rollout passes all correctness gates but produces 29 checked
 performance regressions, including existing specialized-loop cases. Therefore
-home CFG remains exact-development only; profitable specialized loops and the
-zero-regression frameless DAG subset remain automatic.
+arbitrary home CFG remains exact-development only.
+
+Production home-CFG fallback is narrower: require a real backedge phi, no
+spills and no IY home, and try it only after the four specialized loop
+selectors. Requiring control flow first removed straight-line helpers that paid
+the CFG frame cost (29 regressions fell to 12); requiring a loop phi removed
+branch/switch/ternary regressions; rejecting IY removed the final two regressing
+three-live-value loops. The three-register `sum_to` prototype remains eligible
+and 269 cycles faster. `tmircfg` permanently exercises this automatic fallback.
+Do not retire the specialized selectors: the general backend remains slower on
+their shapes, while measured specialized wins include 53% for the accumulator,
+5.75--7.95% for unsigned constant division, and 6.66--14.92% for repeated
+invariant addition.
 
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
