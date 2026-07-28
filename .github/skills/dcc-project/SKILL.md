@@ -608,6 +608,17 @@ yet replayed may use `ast_unique_field_by_name` only when unambiguous; ambiguous
 names require deferred resolution through the declaration-created MIR object's
 type, never an arbitrary same-name field.
 
+Deferred member fixups retain the base symbol name and arrow/dot mode on a
+provisional member address. At function end, reconnect unresolved named loads
+to declaration-created objects or typed declaration stores, resolve the owning
+`FieldDef`, and propagate the resolved field type through nested member loads.
+Array fields alias the provisional value load back to their address. A fixup
+that still cannot resolve becomes `MIR_OPAQUE`; never guess among ambiguous
+same-name fields. This reduces the aggregate-heavy `too` test to zero barriers
+and removes all general assignment barriers from the corpus. Remaining counts:
+VLA declaration 391, member 58, compound literal 31, VLA label 17/goto 15 and
+unary 16.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
