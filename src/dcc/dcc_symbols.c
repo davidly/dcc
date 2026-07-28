@@ -12,6 +12,7 @@
  */
 
 #include "dcc.h"
+#include "dcc_mir.h"
 #include "dcc_regalloc_internal.h"
 
 /*
@@ -173,6 +174,7 @@ int vla_active_scope_depth(void)
 /* HL-free helper: save the current SP into the frame slot at `off`. */
 void emit_vla_save_sp(int off)
 {
+    mir_capture_vla_save(off);
     emit("\tld hl,0\n\tadd hl,sp\n");   /* HL = SP */
     emit("\tpush hl\n");                /* stash SP value */
     emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
@@ -184,6 +186,7 @@ void emit_vla_save_sp(int off)
 /* Restore SP from the frame slot at `off`, reclaiming that scope's VLAs. */
 void emit_vla_restore_sp(int off)
 {
+    mir_capture_vla_restore(off);
     emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
     fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", off);
     emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");  /* HL = saved SP */

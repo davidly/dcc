@@ -1,14 +1,13 @@
-/* dcc_mir.c - analysis-only virtual-register machine IR prototype.
+/* dcc_mir.c - typed virtual-register machine IR and transactional backend.
  *
  * dcc currently assigns HL/DE/BC while walking one statement AST at a time.
  * This module is the first vertical slice toward a real allocator: before an
  * AST is emitted, lower it into a persistent per-function stream of unlimited
  * virtual values, then build CFG successors and solve virtual-value liveness.
  *
- * It is deliberately read-only. Set DCC_MIR_REPORT=1 to dump every generated
- * function attempt, or DCC_MIR_FUNCTION=name to restrict the dump. Normal
- * codegen does not call into the lowering work at all beyond three cheap
- * inactive guards.
+ * Set DCC_MIR_REPORT=1 to dump every generated function attempt, or
+ * DCC_MIR_FUNCTION=name to restrict the dump. MIR emission remains opt-in and
+ * transactional: unsupported functions replay the established backend body.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +31,9 @@ enum MirOpcode {
     MIR_INDEX_LOAD,
     MIR_STORE,
     MIR_STORE_INDIRECT,
+    MIR_VLA_SAVE,
+    MIR_VLA_ALLOC,
+    MIR_VLA_RESTORE,
     MIR_UNARY,
     MIR_BINARY,
     MIR_ARG,
@@ -39,6 +41,7 @@ enum MirOpcode {
     MIR_LABEL,
     MIR_JUMP,
     MIR_BRANCH_FALSE,
+    MIR_DECL_PLACEHOLDER,
     MIR_OBJECT_MERGE,
     MIR_PHI,
     MIR_RETURN,
@@ -63,6 +66,7 @@ struct MirInsn {
     int bit_width;
     int bit_shift;
     unsigned int bit_mask;
+    int secondary_offset;
     char name[64];
 };
 
@@ -99,6 +103,12 @@ struct MirFunction {
     int user_label_count;
     struct MirSwitchContext switches[MAX_FLOW];
     int switch_depth;
+    int declaration_placeholders[1024];
+    int declaration_count;
+    int declaration_cursor;
+    int declaration_capture_start;
+    int declaration_placeholder;
+    int declaration_active;
     int emit_mode;
     int report_mode;
     int return_type;
@@ -107,6 +117,7 @@ struct MirFunction {
     struct MirObject objects[256];
     int object_count;
     struct Sym *initializer_target;
+    struct Sym *vla_target;
     char name[64];
 };
 
@@ -129,6 +140,9 @@ static const char *mir_opcode_name(int opcode)
     case MIR_INDEX_LOAD: return "index";
     case MIR_STORE: return "store";
     case MIR_STORE_INDIRECT: return "storeind";
+    case MIR_VLA_SAVE: return "vlasave";
+    case MIR_VLA_ALLOC: return "vlaalloc";
+    case MIR_VLA_RESTORE: return "vlarestore";
     case MIR_UNARY: return "unary";
     case MIR_BINARY: return "binary";
     case MIR_ARG: return "arg";
@@ -136,6 +150,7 @@ static const char *mir_opcode_name(int opcode)
     case MIR_LABEL: return "label";
     case MIR_JUMP: return "jump";
     case MIR_BRANCH_FALSE: return "brfalse";
+    case MIR_DECL_PLACEHOLDER: return "decl";
     case MIR_OBJECT_MERGE: return "objmerge";
     case MIR_PHI: return "phi";
     case MIR_RETURN: return "return";
@@ -1045,8 +1060,10 @@ static void mir_lower_stmt(const struct AstNode *node)
         (void)mir_lower_expr(node->a);
         return;
     case AST_DECL:
-        insn = mir_emit(MIR_OPAQUE);
-        insn->immediate = AST_DECL;
+        insn = mir_emit(MIR_DECL_PLACEHOLDER);
+        if (mir.declaration_count < 1024)
+            mir.declaration_placeholders[mir.declaration_count++] =
+                (int)(insn - mir.insns);
         return;
     case AST_COMPOUND:
         for (i = 0; i < node->list_len; ++i)
@@ -1167,8 +1184,12 @@ static void mir_lower_stmt(const struct AstNode *node)
         top_label = mir_new_label();
         end_label = mir_new_label();
         continue_label = mir_new_label();
-        if (node->a != NULL)
-            (void)mir_lower_expr(node->a);
+        if (node->a != NULL) {
+            if (node->a->kind == AST_DECL)
+                mir_lower_stmt(node->a);
+            else
+                (void)mir_lower_expr(node->a);
+        }
         mir.break_labels[mir.flow_depth] = end_label;
         mir.continue_labels[mir.flow_depth] = continue_label;
         ++mir.flow_depth;
@@ -1242,8 +1263,12 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla)
     mir.has_vla = has_vla;
     mir.user_label_count = 0;
     mir.switch_depth = 0;
+    mir.declaration_count = 0;
+    mir.declaration_cursor = 0;
+    mir.declaration_active = 0;
     mir.object_count = 0;
     mir.initializer_target = NULL;
+    mir.vla_target = NULL;
     mir.sink_purpose = sink_purpose;
     mir.emit_mode = 0;
     mir.report_mode = getenv("DCC_MIR_REPORT") != NULL ||
@@ -1295,10 +1320,89 @@ void mir_capture_stmt(const struct AstNode *stmt)
         mir_lower_stmt(stmt);
 }
 
+void mir_begin_declaration(void)
+{
+    if (!mir.active || mir.declaration_cursor >= mir.declaration_count) {
+        mir.declaration_active = 0;
+        return;
+    }
+    mir.declaration_placeholder =
+        mir.declaration_placeholders[mir.declaration_cursor++];
+    mir.declaration_capture_start = mir.count;
+    mir.declaration_active = 1;
+}
+
+void mir_end_declaration(void)
+{
+    struct MirInsn *captured;
+    int captured_count;
+    int middle_count;
+    int i;
+
+    if (!mir.active || !mir.declaration_active)
+        return;
+    mir.declaration_active = 0;
+    mir.initializer_target = NULL;
+    mir.vla_target = NULL;
+    captured_count = mir.count - mir.declaration_capture_start;
+    if (mir.declaration_placeholder < 0 ||
+        mir.declaration_placeholder >= mir.declaration_capture_start)
+        fatal("invalid MIR declaration placeholder");
+    mir.insns[mir.declaration_placeholder].opcode = MIR_NOP;
+    if (captured_count == 0)
+        return;
+    captured = (struct MirInsn *)malloc(
+        (size_t)captured_count * sizeof(*captured));
+    if (captured == NULL)
+        fatal("out of memory splicing MIR declaration");
+    memcpy(captured, &mir.insns[mir.declaration_capture_start],
+           (size_t)captured_count * sizeof(*captured));
+    middle_count = mir.declaration_capture_start -
+                   mir.declaration_placeholder - 1;
+    memmove(&mir.insns[mir.declaration_placeholder + 1 + captured_count],
+            &mir.insns[mir.declaration_placeholder + 1],
+            (size_t)middle_count * sizeof(*mir.insns));
+    memcpy(&mir.insns[mir.declaration_placeholder + 1], captured,
+           (size_t)captured_count * sizeof(*captured));
+    free(captured);
+    for (i = mir.declaration_cursor; i < mir.declaration_count; ++i)
+        if (mir.declaration_placeholders[i] > mir.declaration_placeholder &&
+            mir.declaration_placeholders[i] < mir.declaration_capture_start)
+            mir.declaration_placeholders[i] += captured_count;
+}
+
 void mir_set_initializer_target(struct Sym *symbol)
 {
     if (mir.active)
         mir.initializer_target = symbol;
+}
+
+void mir_set_vla_target(struct Sym *symbol)
+{
+    if (mir.active) {
+        struct MirInsn *barrier = mir_emit(MIR_OPAQUE);
+        barrier->immediate = AST_DECL;
+        mir_copy_name(barrier->name, symbol != NULL ? symbol->name : "?");
+        mir.vla_target = symbol;
+    }
+}
+
+void mir_capture_vla_save(int offset)
+{
+    struct MirInsn *insn;
+    if (!mir.active)
+        return;
+    insn = mir_emit(MIR_VLA_SAVE);
+    insn->immediate = offset;
+}
+
+void mir_capture_vla_restore(int offset)
+{
+    struct MirInsn *insn;
+    if (!mir.active)
+        return;
+    insn = mir_emit(MIR_VLA_RESTORE);
+    insn->immediate = offset;
 }
 
 void mir_capture_initializer(const struct AstNode *expr)
@@ -1306,7 +1410,37 @@ void mir_capture_initializer(const struct AstNode *expr)
     struct MirInsn *store;
     int value;
 
-    if (!mir.active || mir.initializer_target == NULL)
+    if (!mir.active)
+        return;
+    if (mir.vla_target != NULL) {
+        struct Sym *target = mir.vla_target;
+        mir.vla_target = NULL;
+        value = mir_lower_expr(expr);
+        if (target->elem_size > 1) {
+            int scale = mir_new_value();
+            int bytes = mir_new_value();
+            struct MirInsn *insn = mir_emit(MIR_CONST);
+            insn->dst = scale;
+            insn->type = TYPE_INT;
+            insn->immediate = target->elem_size;
+            insn = mir_emit(MIR_BINARY);
+            insn->dst = bytes;
+            insn->src1 = value;
+            insn->src2 = scale;
+            insn->type = TYPE_INT;
+            insn->immediate = '*';
+            value = bytes;
+        }
+        store = mir_emit(MIR_VLA_ALLOC);
+        store->src1 = value;
+        store->type = target->type;
+        store->immediate = target->offset;
+        store->secondary_offset = target->vla_size_offset;
+        store->memory_size = target->elem_size;
+        mir_copy_name(store->name, target->name);
+        return;
+    }
+    if (mir.initializer_target == NULL)
         return;
     value = mir_lower_expr(expr);
     store = mir_emit(MIR_STORE);
@@ -2082,6 +2216,8 @@ static int mir_verify_and_dump(void)
         if (insn->bit_width > 0)
             fprintf(stderr, " bit=%d:%d/%u", insn->bit_shift,
                     insn->bit_width, insn->bit_mask);
+                if (insn->secondary_offset != 0)
+                    fprintf(stderr, " off2=%d", insn->secondary_offset);
         if (insn->opcode == MIR_CONST || insn->opcode == MIR_FLOAT_CONST ||
             insn->opcode == MIR_STRING_ADDRESS ||
             insn->opcode == MIR_VLA_SIZE)
@@ -2875,7 +3011,10 @@ static int mir_try_emit_z80(FILE *out)
             mir.insns[i].opcode == MIR_INDEX_ADDRESS ||
             mir.insns[i].opcode == MIR_MEMBER_ADDRESS ||
             mir.insns[i].opcode == MIR_LOAD_INDIRECT ||
-            mir.insns[i].opcode == MIR_STORE_INDIRECT)
+            mir.insns[i].opcode == MIR_STORE_INDIRECT ||
+            mir.insns[i].opcode == MIR_VLA_SAVE ||
+            mir.insns[i].opcode == MIR_VLA_ALLOC ||
+            mir.insns[i].opcode == MIR_VLA_RESTORE)
             return 0;
         else if (mir.insns[i].opcode == MIR_PARAM &&
             (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)
@@ -2960,7 +3099,10 @@ static int mir_try_emit_automatic_z80(FILE *out)
             mir.insns[i].opcode == MIR_INDEX_ADDRESS ||
             mir.insns[i].opcode == MIR_MEMBER_ADDRESS ||
             mir.insns[i].opcode == MIR_LOAD_INDIRECT ||
-            mir.insns[i].opcode == MIR_STORE_INDIRECT)
+            mir.insns[i].opcode == MIR_STORE_INDIRECT ||
+            mir.insns[i].opcode == MIR_VLA_SAVE ||
+            mir.insns[i].opcode == MIR_VLA_ALLOC ||
+            mir.insns[i].opcode == MIR_VLA_RESTORE)
             return 0;
         else if (mir.insns[i].opcode == MIR_PARAM &&
             (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)

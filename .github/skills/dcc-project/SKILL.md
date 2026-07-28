@@ -583,6 +583,24 @@ compound literal 31, VLA-sensitive label 17 and goto 15, and unary 16. Counts
 include speculative function attempts and are a trend metric, not unique AST
 node counts.
 
+Declarations use lexical placeholders because nested compound ASTs are lowered
+before declaration codegen replays their token spans. `mir_begin_declaration`
+and `mir_end_declaration` capture initializer/runtime instructions appended by
+that replay and splice them immediately after the original placeholder; C99
+for-init declarations must use the same lifecycle. Without this splice, a
+nested initializer can appear after later statements and the MIR is not
+semantic even if it verifies. Ordinary and for-init declarations now have zero
+barriers in `tdecl` and `tc99scpe`.
+
+VLA replay records explicit scope-SP save, scaled byte allocation, base/size
+frame slots and restore operations. Actual `mir_set_vla_target` events retain
+an `AST_DECL` barrier until scope-end and flow-exit restores are spliced into
+their exact CFG positions; broad `current_function_has_vla` is suitable for
+conservative goto gating but not for marking every declaration incomplete.
+After declaration capture, remaining corpus counts are: VLA declaration 391,
+member 192, assignment 45, compound literal 31, VLA-sensitive label 17/goto
+15 and unary 16.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

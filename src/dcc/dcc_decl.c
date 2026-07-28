@@ -1279,6 +1279,7 @@ static void emit_vla_alloc(struct Sym *s)
     g_lex.tok_line = g_vla_dim_tok_line;
     g_lex.tok = g_vla_dim_tok;
 
+    mir_set_vla_target(s);
     ast_emit_init_expr();               /* HL = element count */
 
     g_lex.posi = r_posi;

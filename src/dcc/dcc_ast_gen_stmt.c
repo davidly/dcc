@@ -562,7 +562,9 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
         g_func_pass.for_decl_seq = for_seq;
         g_func_pass.for_decl_rename_index = 0;
         g_func_pass.for_decl_recording = 1;
+        mir_begin_declaration();
         ast_emit_decl_span(n->a);
+        mir_end_declaration();
         rename_count = g_func_pass.for_decl_rename_index;
         g_func_pass.for_decl_seq = old_for_decl_seq;
         g_func_pass.for_decl_rename_index = old_for_decl_rename_index;
@@ -1222,7 +1224,9 @@ void ast_gen_stmt(const struct AstNode *n)
         break;
     }
     case AST_DECL:
+        mir_begin_declaration();
         ast_emit_decl_span(n);            /* declaration codegen replay */
+        mir_end_declaration();
         break;
     case AST_EXPR_STMT: {
         /* Expression statement results are dead, so emit with
