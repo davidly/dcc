@@ -472,6 +472,18 @@ for the return. Signed and unsigned termination checks are separate. Against
 the existing peep-optimized compiler on 40 calls of `down(30000)`, cycles fall
 from 67,225,169 to 60,022,609: **-7,202,560 / -10.71%**, identical output.
 
+Loop headers now receive object-merge placeholders for every promotable object
+known before the loop. At a labeled two-predecessor header, each placeholder
+can become an edge-specific object phi; mem2reg reruns after insertion. This
+allows values first used after the loop condition (such as accumulators) to
+stay in SSA rather than remaining ambiguous memory.
+
+The corresponding two-register selector accepts exactly
+`sum=0; while(n>0){sum+=n;--n;} return sum;`. BC holds `n`, DE holds `sum`, and
+the update uses `ex de,hl / add hl,bc / ex de,hl`; neither value touches the
+frame in the loop. On 4000 calls of `accum(100)`, peep cycles fall from
+62,476,309 to 29,356,309: **-33,120,000 / -53.0%**, identical 16-bit output.
+
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where

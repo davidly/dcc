@@ -32,6 +32,7 @@ enum MirOpcode {
     MIR_LABEL,
     MIR_JUMP,
     MIR_BRANCH_FALSE,
+    MIR_OBJECT_MERGE,
     MIR_PHI,
     MIR_RETURN,
     MIR_OPAQUE
@@ -100,6 +101,7 @@ static const char *mir_opcode_name(int opcode)
     case MIR_LABEL: return "label";
     case MIR_JUMP: return "jump";
     case MIR_BRANCH_FALSE: return "brfalse";
+    case MIR_OBJECT_MERGE: return "objmerge";
     case MIR_PHI: return "phi";
     case MIR_RETURN: return "return";
     default: return "opaque";
@@ -245,6 +247,19 @@ static void mir_emit_jump(int label)
     struct MirInsn *insn = mir_emit(MIR_JUMP);
     if (insn != NULL)
         insn->label = label;
+}
+
+static void mir_emit_object_merges(void)
+{
+    int object;
+
+    for (object = 0; object < mir.object_count; ++object) {
+        struct MirInsn *merge = mir_emit(MIR_OBJECT_MERGE);
+        merge->dst = mir_new_value();
+        merge->type = mir.objects[object].type;
+        merge->object = object;
+        mir_copy_name(merge->name, mir.objects[object].name);
+    }
 }
 
 static int mir_lower_expr(const struct AstNode *node);
@@ -541,6 +556,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir.continue_labels[mir.flow_depth] = continue_label;
         ++mir.flow_depth;
         mir_emit_label(top_label);
+        mir_emit_object_merges();
         if (node->kind == AST_WHILE) {
             condition = mir_lower_expr(node->a);
             insn = mir_emit(MIR_BRANCH_FALSE);
@@ -569,6 +585,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir.continue_labels[mir.flow_depth] = continue_label;
         ++mir.flow_depth;
         mir_emit_label(top_label);
+        mir_emit_object_merges();
         if (node->b != NULL) {
             condition = mir_lower_expr(node->b);
             insn = mir_emit(MIR_BRANCH_FALSE);
@@ -921,7 +938,7 @@ static int mir_promote_objects(void)
         struct MirInsn *insn = &mir.insns[i];
         int reaching;
 
-        if (insn->opcode != MIR_LOAD || insn->object < 0)
+        if (insn->opcode != MIR_OBJECT_MERGE || insn->object < 0)
             continue;
         reaching = in_state[(size_t)i * mir.object_count + insn->object];
         if (reaching == MIR_OBJECT_AMBIGUOUS &&
@@ -929,18 +946,37 @@ static int mir_promote_objects(void)
             inserted_phi = 1;
             break;
         }
-        if (reaching < 0 && getenv("DCC_MIR_OBJECT_REPORT") != NULL)
-            fprintf(stderr,
-                "; MIR object unresolved function=%s insn=%d object=%s "
-                "state=%d block-start=%d\n",
-                mir.name, i, mir.objects[insn->object].name, reaching,
-                mir_block_start_for_instruction(i));
-        if (reaching < 0)
-            continue;
-        aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
+        if (reaching >= 0)
+            aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
         insn->opcode = MIR_NOP;
         insn->dst = -1;
-        ++promoted;
+    }
+    if (!inserted_phi) {
+        for (i = 0; i < mir.count; ++i) {
+            struct MirInsn *insn = &mir.insns[i];
+            int reaching;
+
+            if (insn->opcode != MIR_LOAD || insn->object < 0)
+                continue;
+            reaching = in_state[(size_t)i * mir.object_count + insn->object];
+            if (reaching == MIR_OBJECT_AMBIGUOUS &&
+                mir_try_make_object_phi(i, insn->object, out_state)) {
+                inserted_phi = 1;
+                break;
+            }
+            if (reaching < 0 && getenv("DCC_MIR_OBJECT_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR object unresolved function=%s insn=%d object=%s "
+                        "state=%d block-start=%d\n",
+                        mir.name, i, mir.objects[insn->object].name, reaching,
+                        mir_block_start_for_instruction(i));
+            if (reaching < 0)
+                continue;
+            aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
+            insn->opcode = MIR_NOP;
+            insn->dst = -1;
+            ++promoted;
+        }
     }
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
@@ -1633,6 +1669,118 @@ static int mir_try_emit_countdown_loop(FILE *out)
     return 1;
 }
 
+/* Two-register loop selector:
+ *
+ *     int sum = 0;
+ *     while (n > 0) { sum += n; --n; }
+ *     return sum;
+ *
+ * BC holds n and DE holds sum. Both values are object phis at the header and
+ * neither is written back to the frame inside the loop. */
+static int mir_try_emit_accumulator_loop(FILE *out)
+{
+    const struct MirInsn *parameter = NULL;
+    const struct MirInsn *n_phi = NULL;
+    const struct MirInsn *sum_phi = NULL;
+    const struct MirInsn *n_update = NULL;
+    const struct MirInsn *sum_update = NULL;
+    const struct MirInsn *compare = NULL;
+    const struct MirInsn *return_insn = NULL;
+    int n_object = -1;
+    int sum_object = -1;
+    int i;
+    int top_label;
+    int end_label;
+    int unsigned_value;
+
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PARAM) {
+            if (parameter != NULL)
+                return 0;
+            parameter = insn;
+            n_object = insn->object;
+        }
+    }
+    if (parameter == NULL || n_object < 0)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PHI) {
+            if (insn->object == n_object)
+                n_phi = insn;
+            else if (sum_phi == NULL) {
+                sum_phi = insn;
+                sum_object = insn->object;
+            } else {
+                return 0;
+            }
+        } else if (insn->opcode == MIR_STORE) {
+            const struct MirInsn *definition = mir_definition(insn->src1);
+            if (insn->object == n_object)
+                n_update = definition;
+            else if (insn->object == sum_object || sum_object < 0)
+                sum_update = definition;
+        } else if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *candidate = mir_definition(insn->src1);
+            if (candidate != NULL && candidate->opcode == MIR_BINARY &&
+                candidate->immediate == '>')
+                compare = candidate;
+        } else if (insn->opcode == MIR_RETURN) {
+            return_insn = insn;
+        } else if (insn->opcode == MIR_CALL || insn->opcode == MIR_OPAQUE ||
+                   insn->opcode == MIR_INDEX_LOAD || insn->opcode == MIR_ARG) {
+            return 0;
+        }
+    }
+    if (n_phi == NULL || sum_phi == NULL || n_update == NULL ||
+        sum_update == NULL || compare == NULL || return_insn == NULL ||
+        sum_object < 0)
+        return 0;
+    if (n_update->opcode != MIR_BINARY || n_update->immediate != '-' ||
+        n_update->src1 != n_phi->dst || !mir_is_const_value(n_update->src2, 1))
+        return 0;
+    if (sum_update->opcode != MIR_BINARY || sum_update->immediate != '+' ||
+        !((sum_update->src1 == sum_phi->dst && sum_update->src2 == n_phi->dst) ||
+          (sum_update->src2 == sum_phi->dst && sum_update->src1 == n_phi->dst)))
+        return 0;
+    if (compare->src1 != n_phi->dst || !mir_is_const_value(compare->src2, 0) ||
+        return_insn->src1 != sum_phi->dst)
+        return 0;
+    if (!((n_phi->src1 == parameter->dst && n_phi->src2 == n_update->dst) ||
+          (n_phi->src2 == parameter->dst && n_phi->src1 == n_update->dst)))
+        return 0;
+    if (!((mir_is_const_value(sum_phi->src1, 0) &&
+           sum_phi->src2 == sum_update->dst) ||
+          (mir_is_const_value(sum_phi->src2, 0) &&
+           sum_phi->src1 == sum_update->dst)))
+        return 0;
+
+    unsigned_value = (mir.objects[n_object].type & TYPE_UNSIGNED) != 0 ||
+                     type_ptr_depth(mir.objects[n_object].type) > 0;
+    top_label = new_label();
+    end_label = new_label();
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out, "\tld c,(ix%+d)\n", mir.objects[n_object].offset);
+    fprintf(out, "\tld b,(ix%+d)\n", mir.objects[n_object].offset + 1);
+    fputs("\tld de,0\n", out);
+    fprintf(out, "L%d:\n", top_label);
+    if (unsigned_value) {
+        fputs("\tld a,b\n\tor c\n", out);
+        fprintf(out, "\tjp z,L%d\n", end_label);
+    } else {
+        fputs("\tld a,b\n\tor a\n", out);
+        fprintf(out, "\tjp m,L%d\n", end_label);
+        fputs("\tor c\n", out);
+        fprintf(out, "\tjp z,L%d\n", end_label);
+    }
+    fputs("\tex de,hl\n\tadd hl,bc\n\tex de,hl\n\tdec bc\n", out);
+    fprintf(out, "\tjp L%d\n", top_label);
+    fprintf(out, "L%d:\n", end_label);
+    fputs("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    return 1;
+}
+
 /* Strict first CFG selector:
  *
  *     if (a == b) return C1; return C2;
@@ -1764,6 +1912,8 @@ static int mir_try_emit_z80(FILE *out)
     int two_parameter_operation = 0;
     int i;
 
+    if (mir_try_emit_accumulator_loop(out))
+        return 1;
     if (mir_try_emit_countdown_loop(out))
         return 1;
     if (mir_try_emit_comparison_branch(out))
