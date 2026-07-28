@@ -5106,6 +5106,70 @@ static void emit_load_global_field_word_direct(struct Sym *base, struct FieldDef
         fprintf(g_emit_sink.stream, "\tld hl,(%s+%d)\n", asm_name_for(sym_asm_name(base)), fd->offset);
 }
 
+/* Is `n` a plain `P->FIELD` word read whose base pointer P is resident in IY,
+ * with FIELD at a displacement the Z80's indexed addressing mode can encode?
+ *
+ * This is the IY counterpart of ast_member_global_word_field just above, and
+ * exists for the same reason: the generic path materialises the field ADDRESS
+ * in HL and then dereferences it, when the machine can address the field
+ * directly in one instruction pair.
+ *
+ * The saving is the whole point of putting a struct pointer in IY rather than
+ * BC. For `p->weight` at offset 2 the generic path emits
+ *
+ *     push iy / pop hl / inc hl / inc hl / ld e,(hl) / inc hl / ld d,(hl) / ex de,hl
+ *
+ * - 61 T-states, 8 bytes, and it destroys DE. The indexed form is
+ *
+ *     ld l,(iy+2) / ld h,(iy+3)
+ *
+ * - 38 T-states, 6 bytes, and it touches nothing but HL. That is 23 T-states
+ * and 2 bytes per field read, plus the DE pressure removed from every
+ * surrounding expression.
+ *
+ * Restricted to word-sized, non-bitfield, non-array scalar fields: those are
+ * the common case, they need no sign-extension or masking after the load, and
+ * they keep this predicate a straight substitution for the generic path
+ * rather than a second implementation of it. The displacement must fit the
+ * signed 8-bit field the opcode encodes, checked for BOTH bytes of the pair. */
+static int ast_member_iy_word_field(const struct AstNode *n,
+                                    struct FieldDef **out_fd, int *out_val_type)
+{
+    struct Sym *base;
+    struct FieldDef *fd;
+    int sid;
+    int val_type;
+
+    if (n->kind != AST_MEMBER || n->op != TOK_ARROW)
+        return 0;
+    if (n->a->kind != AST_IDENT)
+        return 0;
+    base = find_sym(n->a->sval);
+    if (base == NULL || base->reg_alloc != REG_IY)
+        return 0;
+
+    sid = base_struct_id_from_type(base->type);
+    fd = find_field_def(sid, n->sval);
+    if (fd == NULL || fd->is_array || fd->bit_width > 0)
+        return 0;
+
+    val_type = fd->type;
+    if (type_size(val_type) != 2 || type_is_bool(val_type))
+        return 0;
+    if (fd->offset < 0 || fd->offset + 1 > 127)
+        return 0;
+
+    *out_fd = fd;
+    *out_val_type = val_type;
+    return 1;
+}
+
+static void emit_load_iy_field_word_direct(struct FieldDef *fd)
+{
+    fprintf(g_emit_sink.stream, "\tld l,(iy%+d)\n", fd->offset);
+    fprintf(g_emit_sink.stream, "\tld h,(iy%+d)\n", fd->offset + 1);
+}
+
 static void emit_store_global_field_word_direct(struct Sym *base, struct FieldDef *fd)
 {
     emit_extrn_if_needed(base);
@@ -5124,6 +5188,15 @@ void gen_member_ast(const struct AstNode *n)
 
     if (ast_member_global_word_field(n, &direct_base, &direct_fd, &val_type)) {
         emit_load_global_field_word_direct(direct_base, direct_fd);
+        g_expr.type = val_type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    /* Same shape as the global fast path above: address the field directly
+     * instead of computing its address and dereferencing it. */
+    if (ast_member_iy_word_field(n, &direct_fd, &val_type)) {
+        emit_load_iy_field_word_direct(direct_fd);
         g_expr.type = val_type;
         g_expr.long_from16 = 0;
         return;

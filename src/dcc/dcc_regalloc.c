@@ -1430,17 +1430,30 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
     return 0;
 }
 
-/* True if the generated text in `buf` references IY anywhere. dcc's own
- * codegen never emits an IY instruction except the prologue/epilogue
- * callee-save pair and the priming sequence this attempt itself inserts, so
- * anything else found here came from user inline assembly - the one thing
- * that can invalidate the "nothing else in the image writes IY" invariant
- * REG_IY rests on. Verification for IY is this short precisely because the
- * invariant does the work that regalloc_buffer_finalize's whole trust-
- * tracking machinery has to do for BC: BC is contended by the code generator
- * itself, IY is not contended by anything. */
-static int buf_has_foreign_iy_use(const char *buf, int n_own_lines,
-                                  const char own[6][40])
+/* Does the generated text in `buf` disturb IY in any way this attempt did not
+ * itself emit?
+ *
+ * The question is deliberately about WRITES, not mentions. Reading IY is
+ * always safe - "push iy" copies it, and an indexed access like
+ * "ld l,(iy+2)" or "ld (iy+4),a" uses it as a base address and leaves the
+ * register itself untouched, which is exactly what makes IY worth allocating
+ * for struct access in the first place. Only something that changes IY -
+ * "ld iy,NN", "add iy,rr", "inc iy", "ex (sp),iy", a load into iyh/iyl, or an
+ * unrecognised mnemonic that might - can invalidate the promoted value, and
+ * all of those are rejected here.
+ *
+ * "push iy"/"pop iy" are accepted because they are what dcc's own callee-save
+ * and priming emit. User inline assembly containing the same pair is accepted
+ * too, and safely so: a BALANCED push/pop leaves IY exactly as it found it,
+ * and an unbalanced one is already broken code independent of anything this
+ * pass does. An earlier version required exact counts (one push, two pops) to
+ * exclude user asm entirely, but that rejected every real candidate in the
+ * corpus - trw, nqueens and all five of tchess's - for no safety gained.
+ *
+ * Verification for IY is this short because IY is not contended by the code
+ * generator at all, unlike BC, which needs regalloc_buffer_finalize's whole
+ * trust-tracking and reload-repair machinery. */
+static int buf_has_foreign_iy_use(const char *buf)
 {
     const char *p;
     char linebuf[256];
@@ -1450,7 +1463,6 @@ static int buf_has_foreign_iy_use(const char *buf, int n_own_lines,
         const char *nl = strchr(p, '\n');
         size_t ll = nl ? (size_t)(nl - p) : strlen(p);
         const char *q;
-        int k, own_line;
 
         if (ll >= sizeof(linebuf)) ll = sizeof(linebuf) - 1;
         memcpy(linebuf, p, ll);
@@ -1458,20 +1470,19 @@ static int buf_has_foreign_iy_use(const char *buf, int n_own_lines,
 
         q = linebuf;
         while (*q == ' ' || *q == '\t') q++;
-        if (*q != ';' && strstr(linebuf, "iy") != NULL) {
-            own_line = 0;
-            for (k = 0; k < n_own_lines; k++) {
-                if (strcmp(linebuf, own[k]) == 0) {
-                    own_line = 1;
-                    break;
-                }
-            }
-            if (!own_line)
-                return 1;
+        if (*q != ';' && strstr(linebuf, "iy") != NULL &&
+            strcmp(linebuf, "\tpush iy") != 0 &&
+            strcmp(linebuf, "\tpop iy") != 0 &&
+            strstr(linebuf, "(iy+") == NULL &&
+            strstr(linebuf, "(iy-") == NULL) {
+            /* Not one of ours, and not an indexed access that merely reads
+             * IY - so it writes IY, or is something unrecognised that might. */
+            return 1;
         }
         if (!nl) break;
         p = nl + 1;
     }
+
     return 0;
 }
 
@@ -1510,8 +1521,6 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
     int saved_stack_check;
     int c;
     int errors_before;
-    char own[6][40];
-    int n_own;
     char *buf;
     long size;
     int ok;
@@ -1551,12 +1560,6 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
                            (type & 15) == TYPE_INT && type_ptr_depth(type) == 0);
     asm_suppress_depth--;
 
-    n_own = 0;
-    strcpy(own[n_own++], "\tpush iy");
-    strcpy(own[n_own++], "\tpop iy");
-    strcpy(own[n_own++], "\tpush hl");
-    strcpy(own[n_own++], "\tpop hl");
-
     iy_cand->reg_alloc = REG_NONE;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
@@ -1566,7 +1569,7 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
     if (g_diag_error_count == errors_before && !g_regalloc_address_escaped) {
         buf = dcc_read_stream_text(scratch, &size,
                                    "cannot read speculative iy-regalloc temp file");
-        ok = !buf_has_foreign_iy_use(buf, n_own, own);
+        ok = !buf_has_foreign_iy_use(buf);
         free(buf);
     }
     if (getenv("DCC_TRACE_IY") != NULL)
