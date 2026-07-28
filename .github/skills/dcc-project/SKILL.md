@@ -434,16 +434,22 @@ committed only if the strict selector accepts it. Otherwise the captured
 existing body is copied back byte-for-byte. Partial MIR output can therefore
 never contaminate fallback.
 
-`DCC_MIR_CANDIDATES=1` dry-runs the strict selectors and reports accepted
+`DCC_MIR_CANDIDATES=1` dry-runs all strict selectors and reports accepted
 function names without replacing code. `DCC_MIR_EMIT_ALL=1` transactionally
-tries every function and commits only accepted candidates; it is quiet unless
-one of the explicit MIR report variables is also set. The current automatic
-gate accepts only ordinary 16-bit `int` returns, rejects pointer parameters
-because MIR does not yet represent pointer-arithmetic scaling, and emits the
+tries every function, but automatically commits only the allocation-backed
+countdown and accumulator loop selectors with measured wins. Exact-name mode
+retains the straight-line and comparison selectors for development. Automatic
+use of those selectors caused 29 perf-baseline regressions because existing
+dccpeep already removes more frame traffic from tiny helpers; semantic
+acceptance is therefore not a profitability decision. Emit-all is quiet unless
+one of the explicit MIR report variables is also set. The automatic gate
+accepts only ordinary 16-bit `int` returns, rejects pointer parameters because
+MIR does not yet represent pointer-arithmetic scaling, and emits the
 standard `extrn __stchk / call __stchk` immediately after establishing IX when
 `-fstack-check` is active. Both the default stack-check and no-stack-check fast
 correctness suites pass all 309 runnable apps with emit-all enabled, including
-diagnostics and dccpeep fixtures.
+diagnostics and dccpeep fixtures. Full peep+nopeep validation also passes all
+correctness and checked performance baselines.
 
 The initial selector intentionally supports only one straight-line word return:
 a parameter, a constant, parameter +/- constant, or two parameters added or

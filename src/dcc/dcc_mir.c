@@ -2007,6 +2007,21 @@ static int mir_try_emit_z80(FILE *out)
     return 1;
 }
 
+static int mir_try_emit_automatic_z80(FILE *out)
+{
+    int i;
+
+    if ((mir.return_type & 15) != TYPE_INT)
+        return 0;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_PARAM &&
+            (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)
+            return 0;
+    if (mir_try_emit_accumulator_loop(out))
+        return 1;
+    return mir_try_emit_countdown_loop(out);
+}
+
 static void mir_copy_capture(FILE *out)
 {
     int character;
@@ -2042,10 +2057,15 @@ void mir_end_function(void)
 
         emit_sink_restore(&mir.saved_sink);
         if (verified) {
+            const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
-            emitted = mir_try_emit_z80(generated);
+            if (emit_filter != NULL && emit_filter[0] != 0 &&
+                strcmp(emit_filter, mir.name) == 0)
+                emitted = mir_try_emit_z80(generated);
+            else
+                emitted = mir_try_emit_automatic_z80(generated);
         }
         if (emitted) {
             int character;
