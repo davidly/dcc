@@ -19,6 +19,8 @@ void mir_capture_vla_save(int offset);
 void mir_capture_vla_restore(int offset);
 void mir_capture_init_constant(struct Sym *symbol, int offset, int type,
 							   long value);
+void mir_capture_init_char_array(struct Sym *symbol, const char *bytes,
+								 int length);
 void mir_set_init_expression_target(struct Sym *symbol, int offset, int type);
 void mir_begin_compound_literal(struct Sym *symbol);
 void mir_end_compound_literal(struct Sym *symbol);

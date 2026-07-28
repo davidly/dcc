@@ -1571,11 +1571,16 @@ void gen_local_decl_after_type(int base)
 
         if (s->is_const_value) {
             if (accept('=')) {
-                unsigned long ignored_const_value;
-                if (!try_parse_local_const_initializer(type, &ignored_const_value)) {
+                unsigned long parsed_const_value;
+                if (try_parse_local_const_initializer(type,
+                                                      &parsed_const_value)) {
+                    s->type = type;
+                    s->const_value = parsed_const_value;
+                } else {
                     ast_emit_init_expr();
                 }
             }
+            mir_note_declared_symbol(s);
         } else if (accept('=')) {
             if ((type & TYPE_STRUCT) && type_ptr_depth(type) == 0 && g_lex.tok.kind != '{') {
                 ast_emit_struct_init_expr_assign(s);
@@ -1586,6 +1591,7 @@ void gen_local_decl_after_type(int base)
                 lit = read_adjacent_string_literals_ex(&is_wide, &litlen);
                 if (is_wide)
                     error_here("wide string cannot initialize char array");
+                mir_capture_init_char_array(s, lit, litlen + 1);
                 emit_init_auto_char_array_from_string(s, lit, litlen);
                 free(lit);
             } else if (s->is_array && g_lex.tok.kind == '{' && (type & TYPE_STRUCT) && type_ptr_depth(type) == 0) {
@@ -1632,6 +1638,7 @@ void gen_local_decl_after_type(int base)
                 unsigned long bits;
                 int fast = sym_can_ix_direct(s);
                 if (parse_float_init_literal(&bits)) {
+                    mir_capture_init_constant(s, 0, type, (long)bits);
                     if (fast) {
                         /* Compile-time-constant float bits: write the 4
                          * immediate bytes straight to the frame slot, no
@@ -1659,6 +1666,7 @@ void gen_local_decl_after_type(int base)
                         emit_load_sym_addr(s);
                         emit("\tpush hl\n");
                     }
+                    mir_set_initializer_target(s);
                     ast_emit_init_expr();
                     if (!type_is_float(g_expr.type))
                         emit_convert_int_to_float(g_expr.type);

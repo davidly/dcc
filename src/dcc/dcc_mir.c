@@ -160,6 +160,8 @@ struct MirFunction {
     int declared_offsets[MAX_LOCALS];
     int declared_elem_sizes[MAX_LOCALS];
     int declared_vla_size_offsets[MAX_LOCALS];
+    int declared_is_const[MAX_LOCALS];
+    unsigned long declared_const_values[MAX_LOCALS];
     int declared_count;
     char alias_source_names[MAX_LOCALS][64];
     char alias_internal_names[MAX_LOCALS][64];
@@ -1039,7 +1041,8 @@ static int mir_lower_expr(const struct AstNode *node)
         value = mir_new_value();
         insn = mir_emit(symbol != NULL &&
                 ((symbol->is_array && !symbol->is_vla) ||
-                 type_is_struct_object(symbol->type))
+             type_is_struct_object(symbol->type) ||
+             symbol->storage == SC_FUNC)
                 ? MIR_ADDRESS : MIR_LOAD);
         insn->dst = value;
         insn->type = insn->opcode == MIR_ADDRESS
@@ -1604,11 +1607,18 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_CALL:
         {
         int call_id = mir.next_call_id++;
+        int callee_value = -1;
         const char *call_name = node->a != NULL && node->a->kind == AST_IDENT
             ? node->a->sval : "<indirect>";
         struct Sym *function_symbol = node->a != NULL &&
                                       node->a->kind == AST_IDENT
             ? find_global(call_name) : NULL;
+        if (function_symbol == NULL || function_symbol->storage != SC_FUNC) {
+            call_name = "<indirect>";
+            function_symbol = NULL;
+        }
+        if (strcmp(call_name, "<indirect>") == 0)
+            callee_value = mir_lower_expr(node->a);
         if ((!strcmp(call_name, "__va_start") && node->list_len == 2) ||
             (!strcmp(call_name, "__va_end") && node->list_len == 1)) {
             struct Sym *ap = node->list[0]->kind == AST_IDENT
@@ -1649,6 +1659,7 @@ static int mir_lower_expr(const struct AstNode *node)
         value = mir_new_value();
         insn = mir_emit(MIR_CALL);
         insn->dst = value;
+        insn->src1 = callee_value;
         insn->type = function_symbol != NULL ? function_symbol->type : node->type;
         mir_copy_name(insn->name, call_name);
         insn->secondary_offset = call_id;
@@ -2074,6 +2085,8 @@ void mir_note_declared_symbol(struct Sym *symbol)
             mir.declared_offsets[i] = symbol->offset;
             mir.declared_elem_sizes[i] = symbol->elem_size;
             mir.declared_vla_size_offsets[i] = symbol->vla_size_offset;
+            mir.declared_is_const[i] = symbol->is_const_value;
+            mir.declared_const_values[i] = symbol->const_value;
             return;
         }
     if (mir.declared_count >= MAX_LOCALS)
@@ -2084,6 +2097,8 @@ void mir_note_declared_symbol(struct Sym *symbol)
     mir.declared_offsets[mir.declared_count] = symbol->offset;
     mir.declared_elem_sizes[mir.declared_count] = symbol->elem_size;
     mir.declared_vla_size_offsets[mir.declared_count] = symbol->vla_size_offset;
+    mir.declared_is_const[mir.declared_count] = symbol->is_const_value;
+    mir.declared_const_values[mir.declared_count] = symbol->const_value;
     ++mir.declared_count;
 }
 
@@ -2360,6 +2375,22 @@ void mir_capture_init_constant(struct Sym *symbol, int offset, int type,
     store->object = offset == 0 ? mir_get_object(symbol, store->name) : -1;
 }
 
+void mir_capture_init_char_array(struct Sym *symbol, const char *bytes,
+                                 int length)
+{
+    int offset;
+    int size;
+    if (!mir.active || symbol == NULL || bytes == NULL)
+        return;
+    size = symbol->size > 0 ? symbol->size : symbol->array_len;
+    for (offset = 0; offset < size; ++offset) {
+        unsigned char value = offset < length
+            ? (unsigned char)bytes[offset] : 0;
+        mir_capture_init_constant(symbol, offset,
+                                  TYPE_CHAR | TYPE_UNSIGNED, value);
+    }
+}
+
 void mir_set_init_expression_target(struct Sym *symbol, int offset, int type)
 {
     if (!mir.active)
@@ -2603,6 +2634,22 @@ static int mir_declared_vla_size_offset(const char *name)
     return 0;
 }
 
+static int mir_declared_constant(const char *name, int *type,
+                                 unsigned long *value)
+{
+    int i;
+    for (i = 0; i < mir.declared_count; ++i)
+        if (strcmp(mir.declared_names[i], name) == 0 &&
+            mir.declared_is_const[i]) {
+            if (type != NULL)
+                *type = mir.declared_types[i];
+            if (value != NULL)
+                *value = mir.declared_const_values[i];
+            return 1;
+        }
+    return 0;
+}
+
 static void mir_resolve_deferred_metadata(void)
 {
     int i;
@@ -2631,6 +2678,21 @@ static void mir_resolve_deferred_metadata(void)
                 ? type_add_ptr(mir_named_type(insn->name))
                 : mir_named_type(insn->name);
     }
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_LOAD &&
+            mir.insns[i].name[0] != 0) {
+            int constant_type;
+            unsigned long constant_value;
+            if (mir_declared_constant(mir.insns[i].name, &constant_type,
+                                      &constant_value)) {
+                mir.insns[i].opcode = type_is_float(constant_type)
+                    ? MIR_FLOAT_CONST : MIR_CONST;
+                mir.insns[i].type = constant_type;
+                mir.insns[i].immediate = (long)constant_value;
+                mir.insns[i].object = -1;
+            }
+        }
 
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
@@ -5263,16 +5325,18 @@ static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
         const struct MirObject *object = &mir.objects[insn->object];
         *type = object->type;
         *storage = object->storage;
-        *offset = object->offset;
+        *offset = object->offset + (int)insn->immediate;
         return 1;
     }
-    if (mir_declared_location(insn->name, type, storage, offset))
+    if (mir_declared_location(insn->name, type, storage, offset)) {
+        *offset += (int)insn->immediate;
         return 1;
+    }
     global = find_global(insn->name);
     if (global != NULL) {
         *type = global->type;
         *storage = global->storage;
-        *offset = global->offset;
+        *offset = global->offset + (int)insn->immediate;
         return 1;
     }
     return 0;
@@ -5338,8 +5402,15 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (!mir_scalar_memory_location(insn, &memory_type,
                             &memory_storage, &memory_offset) ||
                 (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
-                 memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN))
+                 memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN &&
+                 memory_storage != SC_FUNC)) {
+                if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+                    fprintf(stderr,
+                            "; MIR unresolved-memory function=%s insn=%d opcode=%s name=%s object=%d\n",
+                            mir.name, i, mir_opcode_name(insn->opcode),
+                            insn->name, insn->object);
                 return mir_scalar_cfg_preflight_reject("memory-location", i);
+            }
             if (type_is_struct_object(memory_type) &&
                 insn->opcode != MIR_ADDRESS)
                 return mir_scalar_cfg_preflight_reject("aggregate-scalar", i);
@@ -5352,7 +5423,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
              (insn->bit_width > 0 && insn->memory_size != 2)))
             return mir_scalar_cfg_preflight_reject("indirect-width", i);
         if (insn->opcode == MIR_CALL &&
-            (strcmp(insn->name, "<indirect>") == 0 ||
+            ((strcmp(insn->name, "<indirect>") == 0 && insn->src1 < 0) ||
              type_size(insn->type) > 4))
             return mir_scalar_cfg_preflight_reject("call-abi", i);
         if (insn->opcode == MIR_CALL_AGGREGATE &&
@@ -5407,11 +5478,14 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 ((memory_storage == SC_LOCAL || memory_storage == SC_PARAM) &&
                  (memory_offset < -128 || memory_offset + 1 > 127)))
                 goto done;
-            if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {
+            if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
+                memory_storage == SC_FUNC) {
                 struct Sym *global = find_global(insn->name);
                 const char *assembly_name = asm_name_for(
                     global != NULL ? sym_asm_name(global) : insn->name);
-                if (memory_storage == SC_EXTERN)
+                if (memory_storage == SC_EXTERN ||
+                    (memory_storage == SC_FUNC && global != NULL &&
+                     global->needs_extrn))
                     fprintf(out, "\textrn %s\n", assembly_name);
                 if (type_size(memory_type) == 4)
                     fprintf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
@@ -5478,14 +5552,18 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            struct Sym *global = find_global(insn->name);
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset))
                 goto done;
-            if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {
-                struct Sym *global = find_global(insn->name);
+            if ((global != NULL && global->storage == SC_FUNC) ||
+                memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
+                memory_storage == SC_FUNC) {
                 const char *assembly_name = asm_name_for(
                     global != NULL ? sym_asm_name(global) : insn->name);
-                if (memory_storage == SC_EXTERN)
+                if (memory_storage == SC_EXTERN ||
+                    (global != NULL && global->storage == SC_FUNC &&
+                     global->needs_extrn))
                     fprintf(out, "\textrn %s\n", assembly_name);
                 fprintf(out, "\tld hl,%s\n", assembly_name);
             } else {
@@ -5698,7 +5776,9 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             } else if (insn->immediate == '+') {
                 /* Unary plus. */
             } else if (insn->immediate == '-') {
-                if (mir_value_is_wide(insn->src1)) {
+                if (type_is_float(insn->type)) {
+                    fputs("\tld a,d\n\txor 128\n\tld d,a\n", out);
+                } else if (mir_value_is_wide(insn->src1)) {
                     int carry_label = new_label();
                     fputs("\tld a,l\n\tcpl\n\tld l,a\n"
                           "\tld a,h\n\tcpl\n\tld h,a\n"
@@ -5757,6 +5837,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_CALL:
             {
                 struct Sym *callee = find_global(insn->name);
+                int is_indirect = strcmp(insn->name, "<indirect>") == 0;
                 const char *assembly_name = insn->base_name[0] != 0
                     ? insn->base_name
                     : asm_name_for(callee != NULL ? sym_asm_name(callee)
@@ -5793,8 +5874,15 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     fputs("\textrn __pfehx\n\tcall __pfehx\n", out);
                 if ((insn->memory_flags & 64) != 0)
                     fputs("\textrn __pfeoc\n\tcall __pfeoc\n", out);
-                fprintf(out, "\textrn %s\n\tcall %s\n",
+                if (is_indirect) {
+                    int return_label = new_label();
+                    mir_emit_virtual_load(out, insn->src1);
+                    fprintf(out, "\tld de,L%d\n\tpush de\n\tjp (hl)\nL%d:\n",
+                        return_label, return_label);
+                } else {
+                    fprintf(out, "\textrn %s\n\tcall %s\n",
                         assembly_name, assembly_name);
+                }
                 for (argument = 0; argument < call_arg_count; ++argument) {
                     fputs("\tpop bc\n", out);
                     if (mir_value_is_wide(call_args[argument]))
