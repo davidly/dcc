@@ -234,6 +234,7 @@ int ast_va_arg_deref_type(const struct AstNode *n, int *out_type);
 int ast_index_composite_elem_type(const struct AstNode *n, int *out_elem);
 int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
                           int *out_no_deref);
+int ast_index_array_row_ptr_type(const struct AstNode *n, int *out_type);
 struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n);
 
 /* Detects a for-loop whose whole body is one assignment to an array-element

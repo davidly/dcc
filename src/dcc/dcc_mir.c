@@ -637,8 +637,50 @@ static int mir_index_stride(const struct AstNode *node)
     return stride > 0 ? stride : 1;
 }
 
+static struct Sym *mir_pointer_array_root(const struct AstNode *node,
+                                          int *dereference_depth)
+{
+    struct Sym *symbol;
+    if (node == NULL)
+        return NULL;
+    if (node->kind == AST_IDENT) {
+        symbol = node->sym != NULL ? node->sym : find_sym(node->sval);
+        if (symbol != NULL && !symbol->is_array &&
+            type_ptr_depth(symbol->type) > 0 && symbol->dim_count > 0)
+            return symbol;
+        return NULL;
+    }
+    if (node->kind == AST_UNARY && node->op == '*') {
+        symbol = mir_pointer_array_root(node->a, dereference_depth);
+        if (symbol != NULL)
+            ++*dereference_depth;
+        return symbol;
+    }
+    if (node->kind == AST_BINARY &&
+        (node->op == '+' || node->op == '-')) {
+        symbol = mir_pointer_array_root(node->a, dereference_depth);
+        if (symbol == NULL)
+            symbol = mir_pointer_array_root(node->b, dereference_depth);
+        return symbol;
+    }
+    return NULL;
+}
+
 static int mir_pointer_arithmetic_stride(const struct AstNode *node)
 {
+    int dereference_depth = 0;
+    struct Sym *pointer_array = mir_pointer_array_root(
+        node, &dereference_depth);
+    if (pointer_array != NULL) {
+        int stride = dereference_depth >= pointer_array->dim_count
+            ? type_size(type_decay_ptr(pointer_array->type))
+            : sym_pointer_array_index_elem_size(
+                pointer_array, pointer_array->type, dereference_depth);
+        if (stride <= 0)
+            stride = type_size(type_decay_ptr(pointer_array->type));
+        if (stride > 0)
+            return stride;
+    }
     if (node != NULL && node->kind == AST_MEMBER) {
         struct FieldDef *field = mir_member_field(node);
         if (field != NULL && field->is_array && field->elem_size > 0)
@@ -662,9 +704,13 @@ static int mir_index_result_is_array(const struct AstNode *node)
     root = mir_index_root(node, &depth);
     while (base != NULL && base->kind == AST_INDEX)
         base = base->a;
-    if (base != NULL && base->kind == AST_MEMBER)
+    if (base != NULL && base->kind == AST_MEMBER) {
         field = mir_member_field(base);
-    return (root != NULL && root->dim_count > depth) ||
+    }
+    return (root != NULL &&
+                        (root->is_array ? root->dim_count > depth
+                                                        : type_ptr_depth(root->type) > 0 &&
+                                                            root->dim_count >= depth)) ||
            (field != NULL && field->dim_count > depth);
 }
 
@@ -1009,6 +1055,7 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_INDEX:
         {
         int element_type = node->type;
+        int row_pointer_type;
         struct Sym *array_symbol = node->a != NULL &&
                        node->a->kind == AST_IDENT
             ? (node->a->sym != NULL ? node->a->sym
@@ -1017,6 +1064,12 @@ static int mir_lower_expr(const struct AstNode *node)
         left = mir_lower_lvalue_address(node);
         if (left < 0)
             break;
+        if (ast_index_array_row_ptr_type(node, &row_pointer_type)) {
+            struct MirInsn *address_definition = mir_mutable_definition(left);
+            if (address_definition != NULL)
+                address_definition->type = row_pointer_type;
+            return left;
+        }
         if (array_symbol != NULL && array_symbol->is_array)
             element_type = array_symbol->type;
         else if (!ast_index_composite_elem_type(node, &element_type)) {
@@ -1107,6 +1160,18 @@ static int mir_lower_expr(const struct AstNode *node)
         if (node->kind == AST_UNARY && node->op == '*') {
             int pointer_type;
             int no_deref;
+            int dereference_depth = 0;
+            struct Sym *pointer_array = mir_pointer_array_root(
+                node->a, &dereference_depth);
+            if (pointer_array != NULL &&
+                pointer_array->dim_count > dereference_depth) {
+                value = mir_lower_expr(node->a);
+                insn = mir_mutable_definition(value);
+                if (insn != NULL)
+                    insn->type = type_add_ptr(type_decay_ptr(
+                        pointer_array->type));
+                return value;
+            }
             if (ast_pointer_expr_type(node->a, &pointer_type, &no_deref) &&
                 no_deref)
                 return mir_lower_expr(node->a);
@@ -1150,9 +1215,32 @@ static int mir_lower_expr(const struct AstNode *node)
             node->b, &right_pointer_type, &right_no_deref);
         left = mir_lower_expr(node->a);
         right = mir_lower_expr(node->b);
+        if (!left_is_pointer) {
+            const struct MirInsn *definition = mir_mutable_definition(left);
+            if (definition != NULL && type_ptr_depth(definition->type) > 0) {
+                left_is_pointer = 1;
+                left_pointer_type = definition->type;
+            }
+        }
+        if (!right_is_pointer) {
+            const struct MirInsn *definition = mir_mutable_definition(right);
+            if (definition != NULL && type_ptr_depth(definition->type) > 0) {
+                right_is_pointer = 1;
+                right_pointer_type = definition->type;
+            }
+        }
         if ((node->op == '+' || node->op == '-') && node->a != NULL &&
             left_is_pointer && !right_is_pointer) {
             int stride = mir_pointer_arithmetic_stride(node->a);
+            const struct MirInsn *pointer_definition =
+                mir_mutable_definition(left);
+            if (stride <= 1 && pointer_definition != NULL &&
+                type_ptr_depth(pointer_definition->type) > 0) {
+                int typed_stride = type_index_elem_size(
+                    pointer_definition->type);
+                if (typed_stride > stride)
+                    stride = typed_stride;
+            }
             if (stride > 1) {
                 int scale = mir_new_value();
                 int scaled = mir_new_value();
@@ -1172,6 +1260,15 @@ static int mir_lower_expr(const struct AstNode *node)
         } else if (node->op == '+' && node->b != NULL &&
                    right_is_pointer && !left_is_pointer) {
             int stride = mir_pointer_arithmetic_stride(node->b);
+            const struct MirInsn *pointer_definition =
+                mir_mutable_definition(right);
+            if (stride <= 1 && pointer_definition != NULL &&
+                type_ptr_depth(pointer_definition->type) > 0) {
+                int typed_stride = type_index_elem_size(
+                    pointer_definition->type);
+                if (typed_stride > stride)
+                    stride = typed_stride;
+            }
             if (stride > 1) {
                 int scale = mir_new_value();
                 int scaled = mir_new_value();
@@ -1202,12 +1299,34 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->dst = value;
         insn->src1 = left;
         insn->src2 = right;
-        insn->type = left_is_pointer ? left_pointer_type
-            : right_is_pointer ? right_pointer_type
+        insn->type = left_is_pointer != right_is_pointer &&
+                     (node->op == '+' || node->op == '-')
+            ? (left_is_pointer ? left_pointer_type : right_pointer_type)
             : node->type != 0 ? node->type : ast_expr_type_for_sizeof(node);
         insn->secondary_offset = node->operand_type != 0
             ? node->operand_type : insn->type;
         insn->immediate = node->op;
+        if (node->op == '-' && left_is_pointer && right_is_pointer) {
+            int stride = mir_pointer_arithmetic_stride(node->a);
+            if (stride > 1) {
+                int divisor = mir_new_value();
+                int difference = mir_new_value();
+                insn->type = TYPE_INT;
+                insn->secondary_offset = TYPE_INT;
+                insn = mir_emit(MIR_CONST);
+                insn->dst = divisor;
+                insn->type = TYPE_INT;
+                insn->immediate = stride;
+                insn = mir_emit(MIR_BINARY);
+                insn->dst = difference;
+                insn->src1 = value;
+                insn->src2 = divisor;
+                insn->type = TYPE_INT;
+                insn->secondary_offset = TYPE_INT;
+                insn->immediate = '/';
+                value = difference;
+            }
+        }
         return value;
         }
     case AST_LOGAND:
@@ -2178,8 +2297,18 @@ void mir_capture_vla_restore(int offset)
     if (!mir.active)
         return;
     if (mir.flow_replay_active) {
+        int i;
         insn = mir_restore_point(mir.flow_replay_point);
+        if (insn == NULL)
+            for (i = mir.count - 1; i >= 0; --i)
+                if (mir.insns[i].opcode == MIR_NOP &&
+                    mir.insns[i].name[0] != 0 &&
+                    mir.insns[i].immediate == 0) {
+                    insn = &mir.insns[i];
+                    break;
+                }
         if (insn != NULL) {
+            insn->opcode = MIR_VLA_RESTORE;
             insn->immediate = offset;
             return;
         }
@@ -2190,6 +2319,7 @@ void mir_capture_vla_restore(int offset)
             if (mir.insns[i].opcode == MIR_VLA_RESTORE &&
                 mir.insns[i].immediate == 0 &&
                 strcmp(mir.insns[i].name, mir.label_replay_name) == 0) {
+                mir.insns[i].opcode = MIR_VLA_RESTORE;
                 mir.insns[i].immediate = offset;
                 return;
             }
@@ -2198,6 +2328,7 @@ void mir_capture_vla_restore(int offset)
         insn = mir_restore_point(
             mir.scope_replay_points[mir.scope_replay_depth - 1]);
         if (insn != NULL) {
+            insn->opcode = MIR_VLA_RESTORE;
             insn->immediate = offset;
             return;
         }
@@ -2411,6 +2542,7 @@ static void mir_replace_value_uses(int old_value, int new_value)
 
 static int mir_named_type(const char *name)
 {
+    struct Sym *global;
     int object;
     int i;
 
@@ -2422,6 +2554,9 @@ static int mir_named_type(const char *name)
     for (i = 0; i < mir.declared_count; ++i)
         if (strcmp(mir.declared_names[i], name) == 0)
             return mir.declared_types[i];
+    global = find_global(name);
+    if (global != NULL)
+        return global->type;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].name[0] != 0 &&
             strcmp(mir.insns[i].name, name) == 0 &&
@@ -2587,6 +2722,7 @@ static void mir_resolve_deferred_metadata(void)
         int declared_type;
         int declared_size;
         int element_size;
+        struct Sym *global;
         int old_size;
         if (insn->opcode != MIR_INDEX_ADDRESS || insn->src1 < 0)
             continue;
@@ -2597,6 +2733,9 @@ static void mir_resolve_deferred_metadata(void)
         declared_type = mir_named_type(base->name);
         declared_size = type_size(declared_type);
         element_size = mir_declared_elem_size(base->name);
+        global = find_global(base->name);
+        if (element_size <= 0 && global != NULL && global->elem_size > 0)
+            element_size = global->elem_size;
         if (element_size > 0)
             declared_size = element_size;
         if (declared_size <= 0)
@@ -4277,6 +4416,10 @@ static int mir_try_emit_homed_scalar_dag(FILE *out)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
+        if ((insn->dst >= 0 && type_size(insn->type) > 2) ||
+            (insn->opcode == MIR_BINARY &&
+             type_size(insn->secondary_offset) > 2))
+            return 0;
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
             return 0;
         if (insn->opcode == MIR_STORE && insn->object < 0)
@@ -4467,6 +4610,10 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
+        if ((insn->dst >= 0 && type_size(insn->type) > 2) ||
+            (insn->opcode == MIR_BINARY &&
+             type_size(insn->secondary_offset) > 2))
+            return 0;
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
             return 0;
         switch (insn->opcode) {
