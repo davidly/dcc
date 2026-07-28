@@ -525,6 +525,18 @@ identical output and all performance baselines passing. This demonstrates the
 unified policy directly: BC and DE carry mutable loop state while IY carries
 the profitable invariant that would otherwise consume repeated frame loads.
 
+Object mem2reg uses three distinct negative states: `UNREACHED` is lattice
+bottom for an instruction/backedge not visited by the fixed-point iteration,
+`UNDEFINED` means a reachable path has no safe object value, and `AMBIGUOUS`
+means reachable predecessors disagree. Never initialize loop dataflow with
+`UNDEFINED`: meeting an entry parameter with an unvisited backedge would then
+falsely make an invariant ambiguous. With `UNREACHED` as the identity element,
+`scale_by` promotes both factor loads to its entry parameter SSA value; the
+reported max-live becomes the truthful four values and allocation simulation
+uses IY. Selector discovery must also ignore stores with `object < 0` and must
+not inspect phi fields before the relevant phi exists; ASan/UBSan on `tcaslv`
+is the focused regression check for this boundary.
+
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where

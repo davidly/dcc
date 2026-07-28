@@ -766,6 +766,7 @@ static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
 
 #define MIR_OBJECT_UNDEFINED (-1)
 #define MIR_OBJECT_AMBIGUOUS (-2)
+#define MIR_OBJECT_UNREACHED (-3)
 
 static int mir_resolve_alias(const int *aliases, int value)
 {
@@ -887,8 +888,8 @@ static int mir_promote_objects(void)
         aliases == NULL)
         fatal("out of memory promoting MIR objects");
     for (i = 0; i < (int)state_count; ++i) {
-        in_state[i] = MIR_OBJECT_UNDEFINED;
-        out_state[i] = MIR_OBJECT_UNDEFINED;
+        in_state[i] = MIR_OBJECT_UNREACHED;
+        out_state[i] = MIR_OBJECT_UNREACHED;
     }
     for (i = 0; i < mir.next_value; ++i)
         aliases[i] = -1;
@@ -917,9 +918,16 @@ static int mir_promote_objects(void)
                         } else {
                             int *predecessor_out =
                                 &out_state[(size_t)predecessor * mir.object_count];
-                            for (object = 0; object < mir.object_count; ++object)
-                                if (next_state[object] != predecessor_out[object])
+                            for (object = 0; object < mir.object_count; ++object) {
+                                if (next_state[object] == MIR_OBJECT_UNREACHED)
+                                    next_state[object] = predecessor_out[object];
+                                else if (predecessor_out[object] ==
+                                         MIR_OBJECT_UNREACHED)
+                                    continue;
+                                else if (next_state[object] !=
+                                         predecessor_out[object])
                                     next_state[object] = MIR_OBJECT_AMBIGUOUS;
+                            }
                         }
                         ++predecessor_count;
                         break;
@@ -1952,7 +1960,7 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
     const struct MirInsn *index_update = NULL;
     const struct MirInsn *compare = NULL;
     const struct MirInsn *return_insn = NULL;
-    const struct MirInsn *factor_loads[2];
+    int factor_values[2];
     int factor_load_count = 0;
     int factor_object = -1;
     int total_object = -1;
@@ -1973,11 +1981,17 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
                    insn->object == factor_object) {
             if (factor_load_count >= 2)
                 return 0;
-            factor_loads[factor_load_count++] = insn;
+            factor_values[factor_load_count++] = insn->dst;
         }
     }
-    if (parameter == NULL || factor_load_count != 2 || factor_object < 0)
+    if (parameter == NULL || factor_object < 0)
         return 0;
+    if (factor_load_count == 0) {
+        factor_values[0] = parameter->dst;
+        factor_values[1] = parameter->dst;
+    } else if (factor_load_count != 2) {
+        return 0;
+    }
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->opcode == MIR_PHI) {
@@ -1992,15 +2006,17 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
             }
         } else if (insn->opcode == MIR_STORE) {
             const struct MirInsn *definition = mir_definition(insn->src1);
-            if (insn->object == total_object) {
+            if (total_phi != NULL && insn->object == total_object) {
                 if (definition != NULL && definition->opcode == MIR_BINARY &&
-                    (definition->src1 == factor_loads[1]->dst ||
-                     definition->src2 == factor_loads[1]->dst))
+                    (definition->src1 == factor_values[1] ||
+                     definition->src2 == factor_values[1]) &&
+                    definition->src1 != total_phi->dst &&
+                    definition->src2 != total_phi->dst)
                     second_add = definition;
                 else if (definition != NULL &&
                          definition->opcode == MIR_BINARY)
                     first_add = definition;
-            } else if (insn->object == index_object) {
+            } else if (index_phi != NULL && insn->object == index_object) {
                 index_update = definition;
             }
         } else if (insn->opcode == MIR_BRANCH_FALSE) {
@@ -2021,15 +2037,15 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
         return 0;
     if (first_add->immediate != '+' ||
         !((first_add->src1 == total_phi->dst &&
-           first_add->src2 == factor_loads[0]->dst) ||
+              first_add->src2 == factor_values[0]) ||
           (first_add->src2 == total_phi->dst &&
-           first_add->src1 == factor_loads[0]->dst)))
+              first_add->src1 == factor_values[0])))
         return 0;
     if (second_add->immediate != '+' ||
         !((second_add->src1 == first_add->dst &&
-           second_add->src2 == factor_loads[1]->dst) ||
+              second_add->src2 == factor_values[1]) ||
           (second_add->src2 == first_add->dst &&
-           second_add->src1 == factor_loads[1]->dst)))
+              second_add->src1 == factor_values[1])))
         return 0;
     if (index_update->opcode != MIR_BINARY || index_update->immediate != '+' ||
         index_update->src1 != index_phi->dst ||
