@@ -447,6 +447,14 @@ MIR store. Conservative mem2reg can then remove the local object entirely.
 Focused runtime tests `local1(39)`, `sum2(20,22)` and `diff2(50,8)` all emit
 MIR and return 42; targeting unsupported `mul2` reports `result=fallback`,
 produces a byte-identical original body, and also returns 42.
+
+The first CFG selector accepts exactly
+`if (a <comparison> b) return C1; return C2;` for word parameters and constant
+returns. `== != < >= > <=` are supported; `>` and `<=` normalize by swapping
+operands. Signed order biases both high-byte sign bits before the ordinary
+16-bit subtract; unsigned/pointer order uses carry directly. Boundary tests
+cover `-1/1` and `65535u/1u` for all four relational directions. Other branch
+graphs still fall back transactionally.
 Do not widen this subset without a focused runtime comparison and a fallback
 identity check.
 

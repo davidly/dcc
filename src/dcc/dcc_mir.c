@@ -1261,6 +1261,126 @@ static int mir_affine_value(int value, const struct MirInsn **parameter,
     return 1;
 }
 
+static void mir_emit_return_constant(FILE *out, long value)
+{
+    fprintf(out, "\tld hl,%ld\n", value);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+/* Strict first CFG selector:
+ *
+ *     if (a == b) return C1; return C2;
+ *
+ * (or !=). This validates labels, branch polarity, two live inputs and
+ * multiple exits without claiming general relational/comparison support. */
+static int mir_try_emit_comparison_branch(FILE *out)
+{
+    const struct MirInsn *branch = NULL;
+    const struct MirInsn *compare;
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+    const struct MirInsn *true_return = NULL;
+    const struct MirInsn *false_return = NULL;
+    const struct MirInsn *true_value;
+    const struct MirInsn *false_value;
+    int branch_index = -1;
+    int target_index;
+    int false_label;
+    int operation;
+    int unsigned_compare;
+    int i;
+
+    for (i = 0; i < mir.count; ++i) {
+        if (mir.insns[i].opcode == MIR_BRANCH_FALSE) {
+            if (branch != NULL)
+                return 0;
+            branch = &mir.insns[i];
+            branch_index = i;
+        }
+    }
+    if (branch == NULL)
+        return 0;
+    target_index = mir_find_label(branch->label);
+    if (target_index <= branch_index)
+        return 0;
+    compare = mir_definition(branch->src1);
+    if (compare == NULL || compare->opcode != MIR_BINARY ||
+        (compare->immediate != TOK_EQ && compare->immediate != TOK_NE &&
+         compare->immediate != '<' && compare->immediate != TOK_GE &&
+         compare->immediate != '>' && compare->immediate != TOK_LE))
+        return 0;
+    left = mir_definition(compare->src1);
+    right = mir_definition(compare->src2);
+    if (left == NULL || right == NULL || left->opcode != MIR_PARAM ||
+        right->opcode != MIR_PARAM)
+        return 0;
+    if (left->object < 0 || left->object >= mir.object_count)
+        return 0;
+    operation = (int)compare->immediate;
+    if (operation == '>') {
+        const struct MirInsn *temporary = left;
+        left = right;
+        right = temporary;
+        operation = '<';
+    } else if (operation == TOK_LE) {
+        const struct MirInsn *temporary = left;
+        left = right;
+        right = temporary;
+        operation = TOK_GE;
+    }
+    unsigned_compare =
+        (mir.objects[left->object].type & TYPE_UNSIGNED) != 0 ||
+        type_ptr_depth(mir.objects[left->object].type) > 0;
+    for (i = branch_index + 1; i < target_index; ++i)
+        if (mir.insns[i].opcode == MIR_RETURN)
+            true_return = &mir.insns[i];
+    for (i = target_index + 1; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_RETURN) {
+            false_return = &mir.insns[i];
+            break;
+        }
+    if (true_return == NULL || false_return == NULL)
+        return 0;
+    true_value = mir_definition(true_return->src1);
+    false_value = mir_definition(false_return->src1);
+    if (true_value == NULL || false_value == NULL ||
+        true_value->opcode != MIR_CONST || false_value->opcode != MIR_CONST)
+        return 0;
+
+    /* Reject any operation outside this exact graph shape. */
+    for (i = 0; i < mir.count; ++i) {
+        int opcode = mir.insns[i].opcode;
+        if (opcode != MIR_PARAM && opcode != MIR_NOP && opcode != MIR_CONST &&
+            opcode != MIR_BINARY && opcode != MIR_BRANCH_FALSE &&
+            opcode != MIR_LABEL && opcode != MIR_RETURN)
+            return 0;
+    }
+
+    false_label = new_label();
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (!mir_emit_load_param(out, left) || !mir_emit_load_param_de(out, right))
+        return 0;
+    if (!unsigned_compare && (operation == '<' || operation == TOK_GE)) {
+        /* Bias the sign bit on both operands, mapping signed order onto
+         * unsigned order before the ordinary 16-bit subtract. */
+        fputs("\tld a,h\n\txor 80h\n\tld h,a\n"
+              "\tld a,d\n\txor 80h\n\tld d,a\n", out);
+    }
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    if (operation == TOK_EQ)
+        fprintf(out, "\tjp nz,L%d\n", false_label);
+    else if (operation == TOK_NE)
+        fprintf(out, "\tjp z,L%d\n", false_label);
+    else if (operation == '<')
+        fprintf(out, "\tjp nc,L%d\n", false_label);
+    else
+        fprintf(out, "\tjp c,L%d\n", false_label);
+    mir_emit_return_constant(out, true_value->immediate);
+    fprintf(out, "L%d:\n", false_label);
+    mir_emit_return_constant(out, false_value->immediate);
+    return 1;
+}
+
 /* First emitted subset: one straight-line return of a word parameter,
  * constant, or parameter +/- constant. This intentionally proves the
  * transactional backend path before attempting general instruction
@@ -1277,6 +1397,9 @@ static int mir_try_emit_z80(FILE *out)
     int two_parameters = 0;
     int two_parameter_operation = 0;
     int i;
+
+    if (mir_try_emit_comparison_branch(out))
+        return 1;
 
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
