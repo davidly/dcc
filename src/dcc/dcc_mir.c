@@ -1506,6 +1506,12 @@ static void mir_emit_prologue(FILE *out)
         fputs("\textrn __stchk\n\tcall __stchk\n", out);
 }
 
+static void mir_emit_iy_prologue(FILE *out)
+{
+    fputs("\tpush iy\n", out);
+    mir_emit_prologue(out);
+}
+
 static int mir_emit_load_param(FILE *out, const struct MirInsn *param)
 {
     const struct MirObject *object;
@@ -1927,6 +1933,151 @@ static int mir_try_emit_unsigned_division_loop(FILE *out)
     return 1;
 }
 
+/* Three-register invariant-add loop:
+ *
+ *     total = 0;
+ *     for (i = 0; i < K; ++i) {
+ *         total += factor;
+ *         total += factor;
+ *     }
+ *
+ * IY holds the loop-invariant 2*factor, BC holds i and DE holds total. */
+static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
+{
+    const struct MirInsn *parameter = NULL;
+    const struct MirInsn *total_phi = NULL;
+    const struct MirInsn *index_phi = NULL;
+    const struct MirInsn *first_add = NULL;
+    const struct MirInsn *second_add = NULL;
+    const struct MirInsn *index_update = NULL;
+    const struct MirInsn *compare = NULL;
+    const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *factor_loads[2];
+    int factor_load_count = 0;
+    int factor_object = -1;
+    int total_object = -1;
+    int index_object = -1;
+    long limit;
+    int top_label;
+    int end_label;
+    int i;
+
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PARAM) {
+            if (parameter != NULL)
+                return 0;
+            parameter = insn;
+            factor_object = insn->object;
+        } else if (insn->opcode == MIR_LOAD &&
+                   insn->object == factor_object) {
+            if (factor_load_count >= 2)
+                return 0;
+            factor_loads[factor_load_count++] = insn;
+        }
+    }
+    if (parameter == NULL || factor_load_count != 2 || factor_object < 0)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PHI) {
+            if (total_phi == NULL) {
+                total_phi = insn;
+                total_object = insn->object;
+            } else if (index_phi == NULL) {
+                index_phi = insn;
+                index_object = insn->object;
+            } else {
+                return 0;
+            }
+        } else if (insn->opcode == MIR_STORE) {
+            const struct MirInsn *definition = mir_definition(insn->src1);
+            if (insn->object == total_object) {
+                if (definition != NULL && definition->opcode == MIR_BINARY &&
+                    (definition->src1 == factor_loads[1]->dst ||
+                     definition->src2 == factor_loads[1]->dst))
+                    second_add = definition;
+                else if (definition != NULL &&
+                         definition->opcode == MIR_BINARY)
+                    first_add = definition;
+            } else if (insn->object == index_object) {
+                index_update = definition;
+            }
+        } else if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *candidate = mir_definition(insn->src1);
+            if (candidate != NULL && candidate->opcode == MIR_BINARY &&
+                candidate->immediate == '<')
+                compare = candidate;
+        } else if (insn->opcode == MIR_RETURN) {
+            return_insn = insn;
+        } else if (insn->opcode == MIR_CALL || insn->opcode == MIR_OPAQUE ||
+                   insn->opcode == MIR_INDEX_LOAD || insn->opcode == MIR_ARG) {
+            return 0;
+        }
+    }
+    if (total_phi == NULL || index_phi == NULL || first_add == NULL ||
+        second_add == NULL || index_update == NULL || compare == NULL ||
+        return_insn == NULL || total_object < 0 || index_object < 0)
+        return 0;
+    if (first_add->immediate != '+' ||
+        !((first_add->src1 == total_phi->dst &&
+           first_add->src2 == factor_loads[0]->dst) ||
+          (first_add->src2 == total_phi->dst &&
+           first_add->src1 == factor_loads[0]->dst)))
+        return 0;
+    if (second_add->immediate != '+' ||
+        !((second_add->src1 == first_add->dst &&
+           second_add->src2 == factor_loads[1]->dst) ||
+          (second_add->src2 == first_add->dst &&
+           second_add->src1 == factor_loads[1]->dst)))
+        return 0;
+    if (index_update->opcode != MIR_BINARY || index_update->immediate != '+' ||
+        index_update->src1 != index_phi->dst ||
+        !mir_is_const_value(index_update->src2, 1) ||
+        compare->src1 != index_phi->dst || return_insn->src1 != total_phi->dst)
+        return 0;
+    {
+        const struct MirInsn *limit_definition = mir_definition(compare->src2);
+        if (limit_definition == NULL || limit_definition->opcode != MIR_CONST)
+            return 0;
+        limit = limit_definition->immediate;
+    }
+    if (limit <= 0 || limit > 32768)
+        return 0;
+    if (!((mir_is_const_value(total_phi->src1, 0) &&
+           total_phi->src2 == second_add->dst) ||
+          (mir_is_const_value(total_phi->src2, 0) &&
+           total_phi->src1 == second_add->dst)) ||
+        !((mir_is_const_value(index_phi->src1, 0) &&
+           index_phi->src2 == index_update->dst) ||
+          (mir_is_const_value(index_phi->src2, 0) &&
+           index_phi->src1 == index_update->dst)))
+        return 0;
+    if (mir.objects[factor_object].storage != SC_PARAM ||
+        type_size(mir.objects[factor_object].type) != 2 ||
+        type_size(mir.objects[total_object].type) != 2 ||
+        (type_size(mir.objects[index_object].type) != 2 &&
+         type_size(mir.objects[index_object].type) != 1) ||
+        (type_size(mir.objects[index_object].type) == 1 && limit > 255))
+        return 0;
+
+    top_label = new_label();
+    end_label = new_label();
+    mir_emit_iy_prologue(out);
+    fprintf(out, "\tld l,(ix%+d)\n", mir.objects[factor_object].offset + 2);
+    fprintf(out, "\tld h,(ix%+d)\n", mir.objects[factor_object].offset + 3);
+    fputs("\tadd hl,hl\n\tpush hl\n\tpop iy\n", out);
+    fputs("\tld bc,0\n\tld de,0\n", out);
+    fprintf(out, "L%d:\n", top_label);
+    fprintf(out, "\tld hl,%ld\n\tadd hl,bc\n", -limit);
+    fprintf(out, "\tjp c,L%d\n", end_label);
+    fputs("\tpush iy\n\tpop hl\n\tadd hl,de\n\tex de,hl\n\tinc bc\n", out);
+    fprintf(out, "\tjp L%d\n", top_label);
+    fprintf(out, "L%d:\n", end_label);
+    fputs("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+    return 1;
+}
+
 /* Strict first CFG selector:
  *
  *     if (a == b) return C1; return C2;
@@ -2071,6 +2222,8 @@ static int mir_try_emit_z80(FILE *out)
         return 1;
     if (mir_try_emit_unsigned_division_loop(out))
         return 1;
+    if (mir_try_emit_repeated_invariant_add_loop(out))
+        return 1;
     if (mir_try_emit_countdown_loop(out))
         return 1;
     if (mir_try_emit_comparison_branch(out))
@@ -2144,6 +2297,8 @@ static int mir_try_emit_automatic_z80(FILE *out)
     if (mir_try_emit_accumulator_loop(out))
         return 1;
     if (mir_try_emit_unsigned_division_loop(out))
+        return 1;
+    if (mir_try_emit_repeated_invariant_add_loop(out))
         return 1;
     return mir_try_emit_countdown_loop(out);
 }

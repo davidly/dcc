@@ -512,6 +512,19 @@ bytes / -1.22%**, and nopeep cycles **-7.95%**, with identical output. This is
 the model for automatic rollout: a strict semantic shape plus measured
 profitability against both existing backend modes.
 
+The first automatic three-register selector accepts the exact repeated-
+invariant-add shape `total=0; for(i=0;i<K;++i){total+=factor;total+=factor;}`.
+It chooses the most useful transformed value rather than blindly caching a
+source object: IY holds callee-saved `2*factor`, BC holds the induction value,
+and DE holds the accumulator. Saving IY before IX shifts parameter offsets by
+two; the MIR emitter accounts for that, emits `__stchk` after both saves, and
+restores IX then IY. A byte-narrowed induction object is accepted only when its
+positive constant bound fits 0..255. On `tbcint:scale_by`, the full stack-check
+suite reports peep cycles **-6.66%** and nopeep cycles **-14.92%**, with
+identical output and all performance baselines passing. This demonstrates the
+unified policy directly: BC and DE carry mutable loop state while IY carries
+the profitable invariant that would otherwise consume repeated frame loads.
+
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where
