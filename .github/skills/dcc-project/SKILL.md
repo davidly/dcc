@@ -760,6 +760,13 @@ experimental and must not be folded into default/automatic emission. Automatic
 MIR remains limited to selectors with measured wins until the emitter consumes
 retained physical homes and boundary moves.
 
+Routing the pure subset through the register/stack DAG selector instead of
+universal spills reduces checked regressions from 87 to 50, but still fails the
+zero-regression profitability gate (notably tcodegen, tarray6 and runtime-heavy
+apps). Therefore this gate remains opt-in as a differential-development tool.
+Production automatic emission is intentionally the measured loop-selector set;
+"complete MIR" does not mean replacing demonstrably faster established code.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

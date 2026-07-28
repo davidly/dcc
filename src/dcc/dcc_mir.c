@@ -3263,7 +3263,12 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
             return 0;
         if (type_size(object->type) == 1) {
             fprintf(out, "\tld l,(ix%+d)\n", object->offset);
-            if ((object->type & TYPE_UNSIGNED) != 0)
+            if (type_is_bool(object->type)) {
+                end_label = new_label();
+                fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                        end_label, end_label);
+            } else if ((object->type & TYPE_UNSIGNED) != 0)
                 fputs("\tld h,0\n", out);
             else {
                 end_label = new_label();
@@ -4424,7 +4429,7 @@ static int mir_try_emit_general_rollout(FILE *out)
     }
     if (return_count != 1)
         return 0;
-    return mir_try_emit_spilled_scalar_cfg(out);
+    return mir_try_emit_scalar_dag(out);
 }
 
 static int mir_is_const_value(int value, long expected)
