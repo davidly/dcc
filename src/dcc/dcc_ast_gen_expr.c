@@ -777,6 +777,7 @@ static void gen_compound_literal_ast(const struct AstNode *n)
     g_lex.tok_line = sp->tok_line;
     g_lex.tok = sp->tok;
 
+    mir_begin_compound_literal(clit_sym);
     if ((clit_type & TYPE_STRUCT) && type_ptr_depth(clit_type) == 0) {
         emit_init_auto_struct_from_list(clit_sym);
     } else if (accept('{')) {
@@ -787,6 +788,7 @@ static void gen_compound_literal_ast(const struct AstNode *n)
     } else {
         emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
     }
+    mir_end_compound_literal(clit_sym);
 
     lex_restore(&_ls);
 

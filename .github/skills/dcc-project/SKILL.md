@@ -619,6 +619,36 @@ and removes all general assignment barriers from the corpus. Remaining counts:
 VLA declaration 391, member 58, compound literal 31, VLA label 17/goto 15 and
 unary 16.
 
+Compound literals now use structured initializer events at the shared
+local-offset store boundary: target symbol, byte offset, target type and either
+constant bits or a captured expression. Events are spliced before a durable
+compound-address definition, recursively for nested literals. Do not replace
+that address while splicing: doing so leaves its virtual value undefined and
+can duplicate the final initializer definition. `tclit` covers scalar, struct,
+designated, nested, argument, assignment, address-taken and struct-return forms
+with zero barriers.
+
+Struct-return calls use `MIR_CALL_AGGREGATE`: the result is the address of the
+AST-reserved hidden temporary, not an HL scalar. Member accesses apply offsets
+to that address. Every replayed declaration publishes stable source-to-internal
+symbol identity and type to MIR; this is required for uninitialized aggregates
+and C99 for-init renames (`i` -> `i#...`) that are unknown when the body AST is
+first captured. Canonicalize those identities before SSA promotion.
+
+VLA allocation and control are fully positioned: lexical scope exits and
+break/continue/goto edges receive stable restore placeholders, then replayed
+scope metadata fills or removes each placeholder. Forward gotos retain their
+target name until label replay resolves the exact restore. `tvla` reports zero
+barriers with explicit allocation/save/restore instructions.
+
+Semantic MIR completeness is now machine-proved: direct compiler runs with
+`DCC_MIR_REQUIRE_COMPLETE=1` pass every non-negative `tests/*.c` source;
+`tgnuexpr` is excluded because its GNU statement expressions are deliberately
+rejected by the parser. The arbitrary 4096-value verifier cap was removed;
+`tptrrhs` verifies with 6231 virtual values. The full stack-check peep+nopeep
+suite passes 309 runnable apps, diagnostics, dccpeep fixtures and performance
+baselines with emit-all enabled.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

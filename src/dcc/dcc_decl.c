@@ -252,6 +252,7 @@ void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
 
     if (type_is_bool(type))
         v = v ? 1 : 0;
+    mir_capture_init_constant(s, off, type, v);
 
     if (local_offset_can_ix_direct(s, off, type_size(type))) {
         /* Constant initializer at a frame-relative offset that fits
@@ -329,6 +330,7 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
         emit("\tpush hl\n");
     }
 
+    mir_set_init_expression_target(s, off, type);
     ast_emit_init_expr();
 
     if (type_is_bool(type)) {
@@ -1550,8 +1552,11 @@ void gen_local_decl_after_type(int base)
                     s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
         }
-        if (freshly_allocated)
+        if (freshly_allocated) {
+            mir_note_declared_symbol(s);
+            mir_note_declared_alias(source_name, s);
             emit_debug_variable(s);
+        }
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
 

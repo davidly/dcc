@@ -1241,11 +1241,15 @@ void ast_gen_stmt(const struct AstNode *n)
         gen_return_ast(n);
         break;
     case AST_BREAK:
+        mir_begin_flow_replay();
         emit_vla_restore_for_flow(flow_scope_depth[nflow - 1]);
+        mir_end_flow_replay();
         emit_jp_label("jp", break_stack[nflow - 1]);
         break;
     case AST_CONTINUE:
+        mir_begin_flow_replay();
         emit_vla_restore_for_flow(flow_scope_depth[nflow - 1]);
+        mir_end_flow_replay();
         emit_jp_label("jp", cont_stack[nflow - 1]);
         break;
     case AST_GOTO:
@@ -1253,6 +1257,7 @@ void ast_gen_stmt(const struct AstNode *n)
             int li;
             int active_depth;
             li = find_or_alloc_user_label_index(n->sval);
+            mir_begin_flow_replay();
             ulabel_referenced[li] = 1;
             active_depth = vla_active_scope_depth();
             if (ulabel_defined[li]) {
@@ -1277,17 +1282,20 @@ void ast_gen_stmt(const struct AstNode *n)
                 ulabel_shallow_fwd_ref[li] = 1;
                 emit_jp_label("jp", ulabel_ids[li]);
             }
+            mir_end_flow_replay();
         }
         break;
     case AST_LABEL:
         {
             int li;
             li = find_or_alloc_user_label_index(n->sval);
+            mir_begin_label_replay(n->sval);
             if (vla_active_scope_depth() != 0 && ulabel_shallow_fwd_ref[li])
                 error_here("goto into a variable-length array scope is not supported");
             /* Emit any deferred forward-goto fixup stubs before the real label
              * (they jump to it and fall-through is guarded). */
             vla_resolve_fwd_gotos(li, ulabel_ids[li]);
+            mir_end_label_replay();
             emit_label(define_user_label(n->sval));
         }
         ast_gen_stmt(n->b);
@@ -1390,6 +1398,7 @@ void ast_gen_stmt(const struct AstNode *n)
          * other hoist's "n->d itself is untouched" discipline. */
         fused = ast_divmod_fuse_compound(n);
         body = fused != NULL ? fused : n;
+        mir_begin_scope_replay();
         enter_scope();
         dead = 0;
         for (i = 0; i < body->list_len; ++i) {
@@ -1426,6 +1435,7 @@ void ast_gen_stmt(const struct AstNode *n)
         if (!dead && g_func_pass.scope_depth < MAX_SCOPE_DEPTH &&
             g_vla_scope_off[g_func_pass.scope_depth] != 0)
             emit_vla_restore_sp(g_vla_scope_off[g_func_pass.scope_depth]);
+        mir_end_scope_replay();
         if (!dead)
             ast_emit_debug_location(n->end_file, n->end_line);
         leave_scope();

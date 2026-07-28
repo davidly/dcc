@@ -23,6 +23,7 @@ enum MirOpcode {
     MIR_FLOAT_CONST,
     MIR_STRING_ADDRESS,
     MIR_ADDRESS,
+    MIR_COMPOUND_ADDRESS,
     MIR_INDEX_ADDRESS,
     MIR_MEMBER_ADDRESS,
     MIR_VLA_SIZE,
@@ -38,6 +39,7 @@ enum MirOpcode {
     MIR_BINARY,
     MIR_ARG,
     MIR_CALL,
+    MIR_CALL_AGGREGATE,
     MIR_LABEL,
     MIR_JUMP,
     MIR_BRANCH_FALSE,
@@ -110,14 +112,38 @@ struct MirFunction {
     int declaration_capture_start;
     int declaration_placeholder;
     int declaration_active;
+    int compound_capture_starts[MAX_FLOW];
+    int compound_depth;
+    int scope_points[1024];
+    int scope_count;
+    int scope_cursor;
+    int scope_replay_points[MAX_FLOW];
+    int scope_replay_depth;
+    int flow_points[1024];
+    int flow_count;
+    int flow_cursor;
+    int flow_replay_point;
+    int flow_replay_active;
+    char label_replay_name[64];
+    int label_replay_active;
     int emit_mode;
     int report_mode;
     int return_type;
+    int opaque_count;
     FILE *capture_stream;
     EmitSink saved_sink;
     struct MirObject objects[256];
     int object_count;
+    char declared_names[MAX_LOCALS][64];
+    int declared_types[MAX_LOCALS];
+    int declared_count;
+    char alias_source_names[MAX_LOCALS][64];
+    char alias_internal_names[MAX_LOCALS][64];
+    int alias_count;
     struct Sym *initializer_target;
+    struct Sym *init_expression_target;
+    int init_expression_offset;
+    int init_expression_type;
     struct Sym *vla_target;
     char name[64];
 };
@@ -133,6 +159,7 @@ static const char *mir_opcode_name(int opcode)
     case MIR_FLOAT_CONST: return "fconst";
     case MIR_STRING_ADDRESS: return "straddr";
     case MIR_ADDRESS: return "address";
+    case MIR_COMPOUND_ADDRESS: return "clitaddr";
     case MIR_INDEX_ADDRESS: return "indexaddr";
     case MIR_MEMBER_ADDRESS: return "memberaddr";
     case MIR_VLA_SIZE: return "vlasize";
@@ -148,6 +175,7 @@ static const char *mir_opcode_name(int opcode)
     case MIR_BINARY: return "binary";
     case MIR_ARG: return "arg";
     case MIR_CALL: return "call";
+    case MIR_CALL_AGGREGATE: return "callagg";
     case MIR_LABEL: return "label";
     case MIR_JUMP: return "jump";
     case MIR_BRANCH_FALSE: return "brfalse";
@@ -339,6 +367,36 @@ static void mir_emit_object_merges(void)
 static int mir_lower_expr(const struct AstNode *node);
 static void mir_lower_stmt(const struct AstNode *node);
 
+static int mir_lower_aggregate_call_address(const struct AstNode *call,
+                                            const struct Sym *temporary)
+{
+    struct MirInsn *insn;
+    int argument;
+    int value;
+    int i;
+
+    if (call == NULL || call->kind != AST_CALL || temporary == NULL)
+        return -1;
+    for (i = 0; i < call->list_len; ++i) {
+        argument = mir_lower_expr(call->list[i]);
+        insn = mir_emit(MIR_ARG);
+        insn->src1 = argument;
+        insn->immediate = i;
+    }
+    value = mir_new_value();
+    insn = mir_emit(MIR_CALL_AGGREGATE);
+    insn->dst = value;
+    insn->type = type_add_ptr(call->type);
+    insn->immediate = temporary->offset;
+    insn->memory_size = type_size(call->type);
+    mir_copy_name(insn->base_name, temporary->name);
+    if (call->a != NULL && call->a->kind == AST_IDENT)
+        mir_copy_name(insn->name, call->a->sval);
+    else
+        mir_copy_name(insn->name, "<indirect>");
+    return value;
+}
+
 static void mir_collect_switch_labels(const struct AstNode *node,
                                       struct MirSwitchContext *context)
 {
@@ -522,6 +580,17 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
         insn->object = mir_get_object(symbol, insn->name);
         return value;
     }
+    if (node->kind == AST_COMPOUND_LITERAL && node->sym != NULL) {
+        value = mir_new_value();
+        insn = mir_emit(MIR_COMPOUND_ADDRESS);
+        insn->dst = value;
+        insn->type = type_add_ptr(node->type);
+        insn->immediate = node->sym->offset;
+        insn->memory_size = type_size(node->type);
+        insn->memory_flags = 8;
+        mir_copy_name(insn->name, node->sym->name);
+        return value;
+    }
     if (node->kind == AST_UNARY && node->op == '*')
         return mir_lower_expr(node->a);
     if (node->kind == AST_INDEX) {
@@ -542,8 +611,12 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
     }
     if (node->kind != AST_MEMBER)
         return -1;
-    base = node->op == TOK_ARROW ? mir_lower_expr(node->a)
-                                 : mir_lower_lvalue_address(node->a);
+    if (node->op == '.' && node->a != NULL && node->a->kind == AST_CALL &&
+        node->sym != NULL)
+        base = mir_lower_aggregate_call_address(node->a, node->sym);
+    else
+        base = node->op == TOK_ARROW ? mir_lower_expr(node->a)
+                                     : mir_lower_lvalue_address(node->a);
     if (base < 0)
         return -1;
     field = mir_member_field(node);
@@ -776,6 +849,19 @@ static int mir_lower_expr(const struct AstNode *node)
                 insn->memory_flags |= 8;
             return value;
         }
+    case AST_COMPOUND_LITERAL:
+        left = mir_lower_lvalue_address(node);
+        if (left < 0)
+            break;
+        if (type_is_struct_object(node->type))
+            return left;
+        value = mir_new_value();
+        insn = mir_emit(MIR_LOAD_INDIRECT);
+        insn->dst = value;
+        insn->src1 = left;
+        insn->type = node->type;
+        mir_set_node_memory(insn, node);
+        return value;
     case AST_CAST:
     case AST_UNARY:
         if (node->op == TOK_INC || node->op == TOK_DEC) {
@@ -1109,9 +1195,17 @@ static void mir_lower_stmt(const struct AstNode *node)
                 (int)(insn - mir.insns);
         return;
     case AST_COMPOUND:
+        {
+        int scope_slot = mir.scope_count++;
         for (i = 0; i < node->list_len; ++i)
             mir_lower_stmt(node->list[i]);
+        insn = mir_emit(MIR_VLA_RESTORE);
+        insn->immediate = 0;
+        insn->label = mir_new_label();
+        if (scope_slot < 1024)
+            mir.scope_points[scope_slot] = insn->label;
         return;
+        }
     case AST_RETURN:
         condition = mir_lower_expr(node->a);
         insn = mir_emit(MIR_RETURN);
@@ -1253,29 +1347,45 @@ static void mir_lower_stmt(const struct AstNode *node)
         --mir.flow_depth;
         return;
     case AST_BREAK:
-        if (mir.flow_depth > 0)
+        if (mir.flow_depth > 0) {
+            int flow_slot = mir.flow_count++;
+            insn = mir_emit(MIR_VLA_RESTORE);
+            insn->label = mir_new_label();
+            if (flow_slot < 1024)
+                mir.flow_points[flow_slot] = insn->label;
             mir_emit_jump(mir.break_labels[mir.flow_depth - 1]);
-        else
+        } else
             (void)mir_emit(MIR_OPAQUE);
         return;
     case AST_CONTINUE:
         if (mir.flow_depth > 0 &&
-            mir.continue_labels[mir.flow_depth - 1] >= 0)
+            mir.continue_labels[mir.flow_depth - 1] >= 0) {
+            int flow_slot = mir.flow_count++;
+            insn = mir_emit(MIR_VLA_RESTORE);
+            insn->label = mir_new_label();
+            if (flow_slot < 1024)
+                mir.flow_points[flow_slot] = insn->label;
             mir_emit_jump(mir.continue_labels[mir.flow_depth - 1]);
-        else
+        } else
             (void)mir_emit(MIR_OPAQUE);
         return;
     case AST_GOTO:
-        if (!mir.has_vla) {
+        {
             int label = mir_user_label(node->sval);
             if (label >= 0) {
+                int flow_slot = mir.flow_count++;
+                insn = mir_emit(MIR_VLA_RESTORE);
+                insn->label = mir_new_label();
+                mir_copy_name(insn->name, node->sval);
+                if (flow_slot < 1024)
+                    mir.flow_points[flow_slot] = insn->label;
                 mir_emit_jump(label);
                 return;
             }
         }
         break;
     case AST_LABEL:
-        if (!mir.has_vla) {
+        {
             int label = mir_user_label(node->sval);
             if (label >= 0) {
                 mir_emit_label(label);
@@ -1309,8 +1419,19 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla)
     mir.declaration_count = 0;
     mir.declaration_cursor = 0;
     mir.declaration_active = 0;
+    mir.compound_depth = 0;
+    mir.scope_count = 0;
+    mir.scope_cursor = 0;
+    mir.scope_replay_depth = 0;
+    mir.flow_count = 0;
+    mir.flow_cursor = 0;
+    mir.flow_replay_active = 0;
+    mir.label_replay_active = 0;
     mir.object_count = 0;
+    mir.declared_count = 0;
+    mir.alias_count = 0;
     mir.initializer_target = NULL;
+    mir.init_expression_target = NULL;
     mir.vla_target = NULL;
     mir.sink_purpose = sink_purpose;
     mir.emit_mode = 0;
@@ -1319,6 +1440,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla)
                       getenv("DCC_MIR_CANDIDATES") != NULL ||
                       getenv("DCC_MIR_EMIT_FUNCTION") != NULL;
     mir.return_type = current_return_type;
+    mir.opaque_count = 0;
     mir.capture_stream = NULL;
     mir_copy_name(mir.name, name);
     mir.active = 1;
@@ -1361,6 +1483,33 @@ void mir_capture_stmt(const struct AstNode *stmt)
 {
     if (mir.active)
         mir_lower_stmt(stmt);
+}
+
+void mir_note_declared_symbol(struct Sym *symbol)
+{
+    int i;
+    if (!mir.active || symbol == NULL)
+        return;
+    for (i = 0; i < mir.declared_count; ++i)
+        if (strcmp(mir.declared_names[i], symbol->name) == 0) {
+            mir.declared_types[i] = symbol->type;
+            return;
+        }
+    if (mir.declared_count >= MAX_LOCALS)
+        return;
+    mir_copy_name(mir.declared_names[mir.declared_count], symbol->name);
+    mir.declared_types[mir.declared_count] = symbol->type;
+    ++mir.declared_count;
+}
+
+void mir_note_declared_alias(const char *source_name, struct Sym *symbol)
+{
+    if (!mir.active || source_name == NULL || symbol == NULL ||
+        strcmp(source_name, symbol->name) == 0 || mir.alias_count >= MAX_LOCALS)
+        return;
+    mir_copy_name(mir.alias_source_names[mir.alias_count], source_name);
+    mir_copy_name(mir.alias_internal_names[mir.alias_count], symbol->name);
+    ++mir.alias_count;
 }
 
 void mir_begin_declaration(void)
@@ -1423,9 +1572,6 @@ void mir_set_initializer_target(struct Sym *symbol)
 void mir_set_vla_target(struct Sym *symbol)
 {
     if (mir.active) {
-        struct MirInsn *barrier = mir_emit(MIR_OPAQUE);
-        barrier->immediate = AST_DECL;
-        mir_copy_name(barrier->name, symbol != NULL ? symbol->name : "?");
         mir.vla_target = symbol;
     }
 }
@@ -1439,13 +1585,198 @@ void mir_capture_vla_save(int offset)
     insn->immediate = offset;
 }
 
+static struct MirInsn *mir_restore_point(int token)
+{
+    int i;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_VLA_RESTORE &&
+            mir.insns[i].label == token)
+            return &mir.insns[i];
+    return NULL;
+}
+
+void mir_begin_scope_replay(void)
+{
+    if (!mir.active || mir.scope_cursor >= mir.scope_count ||
+        mir.scope_replay_depth >= MAX_FLOW)
+        return;
+    mir.scope_replay_points[mir.scope_replay_depth++] =
+        mir.scope_points[mir.scope_cursor++];
+}
+
+void mir_end_scope_replay(void)
+{
+    struct MirInsn *point;
+    int token;
+    if (!mir.active || mir.scope_replay_depth <= 0)
+        return;
+    token = mir.scope_replay_points[--mir.scope_replay_depth];
+    point = mir_restore_point(token);
+    if (point != NULL && point->immediate == 0) {
+        point->opcode = MIR_NOP;
+        point->label = -1;
+    }
+}
+
+void mir_begin_flow_replay(void)
+{
+    if (!mir.active || mir.flow_cursor >= mir.flow_count)
+        return;
+    mir.flow_replay_point = mir.flow_points[mir.flow_cursor++];
+    mir.flow_replay_active = 1;
+}
+
+void mir_end_flow_replay(void)
+{
+    struct MirInsn *point;
+    if (!mir.active || !mir.flow_replay_active)
+        return;
+    point = mir_restore_point(mir.flow_replay_point);
+    if (point != NULL && point->immediate == 0 &&
+        (!mir.has_vla || point->name[0] == 0)) {
+        point->opcode = MIR_NOP;
+        point->label = -1;
+    }
+    mir.flow_replay_active = 0;
+}
+
+void mir_begin_label_replay(const char *name)
+{
+    if (!mir.active)
+        return;
+    mir_copy_name(mir.label_replay_name, name);
+    mir.label_replay_active = 1;
+}
+
+void mir_end_label_replay(void)
+{
+    int i;
+    if (!mir.active || !mir.label_replay_active)
+        return;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_VLA_RESTORE &&
+            mir.insns[i].immediate == 0 &&
+            strcmp(mir.insns[i].name, mir.label_replay_name) == 0) {
+            mir.insns[i].opcode = MIR_NOP;
+            mir.insns[i].label = -1;
+        }
+    mir.label_replay_active = 0;
+}
+
 void mir_capture_vla_restore(int offset)
 {
     struct MirInsn *insn;
     if (!mir.active)
         return;
+    if (mir.flow_replay_active) {
+        insn = mir_restore_point(mir.flow_replay_point);
+        if (insn != NULL) {
+            insn->immediate = offset;
+            return;
+        }
+    }
+    if (mir.label_replay_active) {
+        int i;
+        for (i = 0; i < mir.count; ++i)
+            if (mir.insns[i].opcode == MIR_VLA_RESTORE &&
+                mir.insns[i].immediate == 0 &&
+                strcmp(mir.insns[i].name, mir.label_replay_name) == 0) {
+                mir.insns[i].immediate = offset;
+                return;
+            }
+    }
+    if (mir.scope_replay_depth > 0) {
+        insn = mir_restore_point(
+            mir.scope_replay_points[mir.scope_replay_depth - 1]);
+        if (insn != NULL) {
+            insn->immediate = offset;
+            return;
+        }
+    }
     insn = mir_emit(MIR_VLA_RESTORE);
     insn->immediate = offset;
+}
+
+void mir_capture_init_constant(struct Sym *symbol, int offset, int type,
+                               long value)
+{
+    struct MirInsn *constant;
+    struct MirInsn *store;
+    int result;
+
+    if (!mir.active || symbol == NULL)
+        return;
+    result = mir_new_value();
+    constant = mir_emit(type_is_float(type) ? MIR_FLOAT_CONST : MIR_CONST);
+    constant->dst = result;
+    constant->type = type;
+    constant->immediate = value;
+    store = mir_emit(MIR_STORE);
+    store->src1 = result;
+    store->type = type;
+    store->immediate = offset;
+    store->memory_size = type_size(type);
+    mir_copy_name(store->name, symbol->name);
+    store->object = offset == 0 ? mir_get_object(symbol, store->name) : -1;
+}
+
+void mir_set_init_expression_target(struct Sym *symbol, int offset, int type)
+{
+    if (!mir.active)
+        return;
+    mir.init_expression_target = symbol;
+    mir.init_expression_offset = offset;
+    mir.init_expression_type = type;
+}
+
+void mir_begin_compound_literal(struct Sym *symbol)
+{
+    if (!mir.active || symbol == NULL || mir.compound_depth >= MAX_FLOW)
+        return;
+    mir.compound_capture_starts[mir.compound_depth++] = mir.count;
+}
+
+void mir_end_compound_literal(struct Sym *symbol)
+{
+    struct MirInsn address;
+    struct MirInsn *captured;
+    int capture_start;
+    int captured_count;
+    int placeholder = -1;
+    int middle_count;
+    int i;
+
+    if (!mir.active || symbol == NULL || mir.compound_depth <= 0)
+        return;
+    capture_start = mir.compound_capture_starts[--mir.compound_depth];
+    for (i = capture_start - 1; i >= 0; --i)
+        if (mir.insns[i].opcode == MIR_COMPOUND_ADDRESS &&
+            strcmp(mir.insns[i].name, symbol->name) == 0) {
+            placeholder = i;
+            break;
+        }
+    if (placeholder < 0)
+        return;
+    address = mir.insns[placeholder];
+    captured_count = mir.count - capture_start;
+    if (captured_count > 0) {
+        captured = (struct MirInsn *)malloc(
+            (size_t)captured_count * sizeof(*captured));
+        if (captured == NULL)
+            fatal("out of memory splicing MIR compound literal");
+        memcpy(captured, &mir.insns[capture_start],
+               (size_t)captured_count * sizeof(*captured));
+        middle_count = capture_start - placeholder - 1;
+        memmove(&mir.insns[placeholder + captured_count + 1],
+                &mir.insns[placeholder + 1],
+                (size_t)middle_count * sizeof(*mir.insns));
+        memcpy(&mir.insns[placeholder], captured,
+               (size_t)captured_count * sizeof(*captured));
+        free(captured);
+        placeholder += captured_count;
+    }
+    mir.insns[placeholder] = address;
+    mir.insns[placeholder].memory_flags &= ~8;
 }
 
 void mir_capture_initializer(const struct AstNode *expr)
@@ -1455,6 +1786,21 @@ void mir_capture_initializer(const struct AstNode *expr)
 
     if (!mir.active)
         return;
+    if (mir.init_expression_target != NULL) {
+        struct Sym *target = mir.init_expression_target;
+        int offset = mir.init_expression_offset;
+        int target_type = mir.init_expression_type;
+        mir.init_expression_target = NULL;
+        value = mir_lower_expr(expr);
+        store = mir_emit(MIR_STORE);
+        store->src1 = value;
+        store->type = target_type;
+        store->immediate = offset;
+        store->memory_size = type_size(target_type);
+        mir_copy_name(store->name, target->name);
+        store->object = offset == 0 ? mir_get_object(target, store->name) : -1;
+        return;
+    }
     if (mir.vla_target != NULL) {
         struct Sym *target = mir.vla_target;
         mir.vla_target = NULL;
@@ -1524,6 +1870,9 @@ static int mir_named_type(const char *name)
     object = mir_find_object(name);
     if (object >= 0)
         return mir.objects[object].type;
+    for (i = 0; i < mir.declared_count; ++i)
+        if (strcmp(mir.declared_names[i], name) == 0)
+            return mir.declared_types[i];
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].name[0] != 0 &&
             strcmp(mir.insns[i].name, name) == 0 &&
@@ -1539,6 +1888,21 @@ static void mir_resolve_deferred_metadata(void)
 {
     int i;
 
+    for (i = 0; i < mir.alias_count; ++i) {
+        int internal_object = mir_find_object(mir.alias_internal_names[i]);
+        int instruction;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            struct MirInsn *insn = &mir.insns[instruction];
+            if (strcmp(insn->name, mir.alias_source_names[i]) == 0) {
+                mir_copy_name(insn->name, mir.alias_internal_names[i]);
+                if (internal_object >= 0)
+                    insn->object = internal_object;
+            }
+            if (strcmp(insn->base_name, mir.alias_source_names[i]) == 0)
+                mir_copy_name(insn->base_name, mir.alias_internal_names[i]);
+        }
+    }
+
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
         int object;
@@ -1552,6 +1916,13 @@ static void mir_resolve_deferred_metadata(void)
                 insn->type = mir.objects[object].type;
         }
     }
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_COMPOUND_ADDRESS &&
+            (mir.insns[i].memory_flags & 8) != 0) {
+            mir.insns[i].opcode = MIR_OPAQUE;
+            mir.insns[i].immediate = AST_COMPOUND_LITERAL;
+        }
 
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
@@ -1943,6 +2314,7 @@ static int mir_fixed_color_for_definition(const struct MirInsn *insn)
         return -1;
     switch (insn->opcode) {
     case MIR_CALL:
+    case MIR_CALL_AGGREGATE:
     case MIR_BINARY:
     case MIR_UNARY:
     case MIR_INDEX_LOAD:
@@ -2034,11 +2406,13 @@ static void mir_simulate_allocation(const unsigned char *live_in,
         mir_add_live_set_interference(interference, value_count, in);
         mir_add_live_set_interference(interference, value_count, out);
         if (mir.insns[i].opcode == MIR_CALL ||
+            mir.insns[i].opcode == MIR_CALL_AGGREGATE ||
             mir.insns[i].opcode == MIR_OPAQUE) {
             for (value = 0; value < value_count; ++value) {
                 if (!in[value] || !out[value])
                     continue;
-                if (mir.insns[i].opcode == MIR_CALL)
+                if (mir.insns[i].opcode == MIR_CALL ||
+                    mir.insns[i].opcode == MIR_CALL_AGGREGATE)
                     cross_call[value] = 1;
                 else
                     cross_opaque[value] = 1;
@@ -2222,8 +2596,8 @@ static int mir_verify_and_dump(void)
     int changed;
     int i;
 
-    if (mir.next_value < 0 || mir.next_value > 4096) {
-        fprintf(stderr, "; MIR %s: too many virtual values (%d)\n",
+    if (mir.next_value < 0) {
+        fprintf(stderr, "; MIR %s: invalid virtual value count (%d)\n",
                 mir.name, mir.next_value);
         return 0;
     }
@@ -2283,14 +2657,26 @@ static int mir_verify_and_dump(void)
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
         if (insn->opcode != MIR_PHI &&
-            insn->src1 >= 0 && !defined[insn->src1])
+            insn->src1 >= 0 && !defined[insn->src1]) {
+            if (mir.report_mode)
+                fprintf(stderr, "; MIR %s: instruction %d uses undefined v%d\n",
+                        mir.name, i, insn->src1);
             ++errors;
+        }
         if (insn->opcode != MIR_PHI &&
-            insn->src2 >= 0 && !defined[insn->src2])
+            insn->src2 >= 0 && !defined[insn->src2]) {
+            if (mir.report_mode)
+                fprintf(stderr, "; MIR %s: instruction %d uses undefined v%d\n",
+                        mir.name, i, insn->src2);
             ++errors;
+        }
         if (insn->dst >= 0) {
-            if (defined[insn->dst])
+            if (defined[insn->dst]) {
+                if (mir.report_mode)
+                    fprintf(stderr, "; MIR %s: instruction %d redefines v%d\n",
+                            mir.name, i, insn->dst);
                 ++errors;
+            }
             defined[insn->dst] = 1;
         }
     }
@@ -2430,6 +2816,7 @@ static int mir_verify_and_dump(void)
     }
     if (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL && opaque_count != 0)
         ++errors;
+    mir.opaque_count = opaque_count;
 
     free(live_out);
     free(live_in);
@@ -3173,6 +3560,8 @@ static int mir_try_emit_z80(FILE *out)
         if (mir.insns[i].opcode == MIR_FLOAT_CONST ||
             mir.insns[i].opcode == MIR_STRING_ADDRESS ||
             mir.insns[i].opcode == MIR_VLA_SIZE ||
+            mir.insns[i].opcode == MIR_COMPOUND_ADDRESS ||
+            mir.insns[i].opcode == MIR_CALL_AGGREGATE ||
             mir.insns[i].opcode == MIR_INDEX_ADDRESS ||
             mir.insns[i].opcode == MIR_MEMBER_ADDRESS ||
             mir.insns[i].opcode == MIR_LOAD_INDIRECT ||
@@ -3261,6 +3650,8 @@ static int mir_try_emit_automatic_z80(FILE *out)
         if (mir.insns[i].opcode == MIR_FLOAT_CONST ||
             mir.insns[i].opcode == MIR_STRING_ADDRESS ||
             mir.insns[i].opcode == MIR_VLA_SIZE ||
+            mir.insns[i].opcode == MIR_COMPOUND_ADDRESS ||
+            mir.insns[i].opcode == MIR_CALL_AGGREGATE ||
             mir.insns[i].opcode == MIR_INDEX_ADDRESS ||
             mir.insns[i].opcode == MIR_MEMBER_ADDRESS ||
             mir.insns[i].opcode == MIR_LOAD_INDIRECT ||
@@ -3298,7 +3689,8 @@ void mir_end_function(void)
         return;
     mir_resolve_deferred_metadata();
     verified = mir_verify_and_dump();
-    if (!verified && getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL) {
+    if (mir.opaque_count != 0 &&
+        getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL) {
         fprintf(stderr, "MIR completeness failed for function %s\n", mir.name);
         fatal("incomplete MIR coverage");
     }
