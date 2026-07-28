@@ -733,6 +733,33 @@ storage, bitfields, VLA execution and aggregate assignment. The strict compiler
 corpus and full stack-check peep+nopeep suite pass all 309 runnable apps,
 diagnostics, dccpeep fixtures and performance baselines.
 
+General rollout is a separate opt-in gate: `DCC_MIR_GENERAL_CANDIDATES=1`
+dry-runs it, `DCC_MIR_GENERAL_FUNCTION=name` isolates one function through the
+same backend, and `DCC_MIR_EMIT_GENERAL=1` transactionally tries all permitted
+functions. The conservative policy caps 64 MIR instructions, 64 frame bytes
+and 16-byte aggregate copies; it declines variadic calls, VLA-owning functions,
+runtime/multidimensional stride parameters and pointer subtraction. Exact-name
+general mode retains those paths for focused development.
+
+Rollout differential testing found several load-bearing rules: void/fallthrough
+functions need an implicit epilogue; strings need a durable pool ID before MIR
+emission; dcc arguments are pushed in reverse source index order; call argument
+uses belong at the matching call; phi source uses belong on incoming edges;
+and textual intervals must extend loop invariants across backward edges.
+Variadic calls need per-call printf-family/promoted-argument metadata before
+general emission. Do not weaken these exclusions to increase candidate count.
+The initial general census found 5307 accepted speculative attempts / 1542
+unique names before rollout restrictions, averaging 5.18 reusable slots and a
+maximum of 15. Conservative multi-function rollout now permits only pure,
+single-return, 16-bit scalar DAGs without declarations, calls, memory effects,
+CFG joins, pointers or wide values. It passes all 309 fast-mode apps plus
+diagnostics and dccpeep fixtures. The full peep+nopeep run is also correctness-
+clean but reports 87 performance regressions because the correctness-first
+backend spills every value. Consequently `DCC_MIR_EMIT_GENERAL` remains
+experimental and must not be folded into default/automatic emission. Automatic
+MIR remains limited to selectors with measured wins until the emitter consumes
+retained physical homes and boundary moves.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

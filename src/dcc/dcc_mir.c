@@ -103,6 +103,8 @@ struct MirFunction {
     int continue_labels[MAX_FLOW];
     int flow_depth;
     int has_vla;
+    int has_runtime_stride_param;
+    int is_variadic_function;
     char user_label_names[256][64];
     int user_label_ids[256];
     int user_label_count;
@@ -220,13 +222,20 @@ static int mir_report_enabled(const char *name)
     const char *emit_all = getenv("DCC_MIR_EMIT_ALL");
     const char *coverage = getenv("DCC_MIR_COVERAGE");
     const char *require_complete = getenv("DCC_MIR_REQUIRE_COMPLETE");
+    const char *general_candidates = getenv("DCC_MIR_GENERAL_CANDIDATES");
+    const char *emit_general = getenv("DCC_MIR_EMIT_GENERAL");
+    const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
 
     if (all == NULL && filter == NULL && emit_filter == NULL &&
         candidates == NULL && emit_all == NULL && coverage == NULL &&
-        require_complete == NULL)
+        require_complete == NULL && general_candidates == NULL &&
+        emit_general == NULL && general_filter == NULL)
         return 0;
     if (emit_filter != NULL && emit_filter[0] != 0 &&
         strcmp(emit_filter, name) == 0)
+        return 1;
+    if (general_filter != NULL && general_filter[0] != 0 &&
+        strcmp(general_filter, name) == 0)
         return 1;
     if (filter != NULL && filter[0] != 0 && strcmp(filter, name) != 0)
         return 0;
@@ -379,6 +388,31 @@ static void mir_emit_object_merges(void)
 
 static int mir_lower_expr(const struct AstNode *node);
 static void mir_lower_stmt(const struct AstNode *node);
+static struct MirInsn *mir_mutable_definition(int value);
+
+static int mir_lower_conversion(int value, int target_type)
+{
+    struct MirInsn *definition;
+    struct MirInsn *conversion;
+    int result;
+
+    if (value < 0 || target_type == 0)
+        return value;
+    definition = mir_mutable_definition(value);
+    if (definition == NULL || definition->type == 0 ||
+        definition->type == target_type)
+        return value;
+    if (type_size(definition->type) == type_size(target_type) &&
+        type_is_float(definition->type) == type_is_float(target_type))
+        return value;
+    result = mir_new_value();
+    conversion = mir_emit(MIR_UNARY);
+    conversion->dst = result;
+    conversion->src1 = value;
+    conversion->type = target_type;
+    conversion->immediate = 0;
+    return result;
+}
 
 static int mir_lower_aggregate_call_address(const struct AstNode *call,
                                             const struct Sym *temporary)
@@ -548,6 +582,21 @@ static int mir_index_stride(const struct AstNode *node)
     else
         stride = type_index_elem_size(ast_expr_type_for_sizeof(node->a));
     return stride > 0 ? stride : 1;
+}
+
+static int mir_pointer_arithmetic_stride(const struct AstNode *node)
+{
+    if (node != NULL && node->kind == AST_MEMBER) {
+        struct FieldDef *field = mir_member_field(node);
+        if (field != NULL && field->is_array && field->elem_size > 0)
+            return field->elem_size;
+    }
+    if (node != NULL && node->kind == AST_IDENT) {
+        struct Sym *symbol = node->sym != NULL ? node->sym : find_sym(node->sval);
+        if (symbol != NULL && symbol->is_array && symbol->elem_size > 0)
+            return symbol->elem_size;
+    }
+    return type_index_elem_size(ast_expr_type_for_sizeof(node));
 }
 
 static int mir_index_result_is_array(const struct AstNode *node)
@@ -793,7 +842,9 @@ static int mir_lower_expr(const struct AstNode *node)
         insn = mir_emit(MIR_STRING_ADDRESS);
         insn->dst = value;
         insn->type = node->type;
-        insn->immediate = node->str_index;
+        insn->immediate = node->str_index >= 0
+            ? node->str_index
+            : add_string_ex(node->sval, (int)node->uval, (int)node->ival);
         return value;
     case AST_SIZEOF_TYPE:
         value = mir_new_value();
@@ -830,7 +881,8 @@ static int mir_lower_expr(const struct AstNode *node)
                 ? MIR_ADDRESS : MIR_LOAD);
         insn->dst = value;
         insn->type = symbol != NULL && symbol->is_vla
-            ? type_add_ptr(symbol->type) : node->type;
+            ? type_add_ptr(symbol->type)
+            : symbol != NULL ? symbol->type : node->type;
         mir_copy_name(insn->name, node->sval ? node->sval :
                                   (node->sym ? node->sym->name : "?"));
         insn->object = mir_get_object(symbol, insn->name);
@@ -927,6 +979,57 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_BINARY:
         left = mir_lower_expr(node->a);
         right = mir_lower_expr(node->b);
+        if ((node->op == '+' || node->op == '-') && node->a != NULL &&
+            type_ptr_depth(ast_expr_type_for_sizeof(node->a)) > 0 &&
+            (node->b == NULL ||
+             type_ptr_depth(ast_expr_type_for_sizeof(node->b)) == 0)) {
+            int stride = mir_pointer_arithmetic_stride(node->a);
+            if (stride > 1) {
+                int scale = mir_new_value();
+                int scaled = mir_new_value();
+                insn = mir_emit(MIR_CONST);
+                insn->dst = scale;
+                insn->type = TYPE_INT;
+                insn->immediate = stride;
+                insn = mir_emit(MIR_BINARY);
+                insn->dst = scaled;
+                insn->src1 = right;
+                insn->src2 = scale;
+                insn->type = TYPE_INT;
+                insn->secondary_offset = TYPE_INT;
+                insn->immediate = '*';
+                right = scaled;
+            }
+        } else if (node->op == '+' && node->b != NULL &&
+                   type_ptr_depth(ast_expr_type_for_sizeof(node->b)) > 0 &&
+                   (node->a == NULL ||
+                    type_ptr_depth(ast_expr_type_for_sizeof(node->a)) == 0)) {
+            int stride = mir_pointer_arithmetic_stride(node->b);
+            if (stride > 1) {
+                int scale = mir_new_value();
+                int scaled = mir_new_value();
+                insn = mir_emit(MIR_CONST);
+                insn->dst = scale;
+                insn->type = TYPE_INT;
+                insn->immediate = stride;
+                insn = mir_emit(MIR_BINARY);
+                insn->dst = scaled;
+                insn->src1 = left;
+                insn->src2 = scale;
+                insn->type = TYPE_INT;
+                insn->secondary_offset = TYPE_INT;
+                insn->immediate = '*';
+                left = right;
+                right = scaled;
+            }
+        }
+        if (node->operand_type != 0 &&
+            type_ptr_depth(ast_expr_type_for_sizeof(node->a)) == 0 &&
+            type_ptr_depth(ast_expr_type_for_sizeof(node->b)) == 0) {
+            left = mir_lower_conversion(left, node->operand_type);
+            if (node->op != TOK_SHL && node->op != TOK_SHR)
+                right = mir_lower_conversion(right, node->operand_type);
+        }
         value = mir_new_value();
         insn = mir_emit(MIR_BINARY);
         insn->dst = value;
@@ -1078,11 +1181,14 @@ static int mir_lower_expr(const struct AstNode *node)
         if (node->a->kind == AST_MEMBER) {
             struct FieldDef *field = mir_member_field(node->a);
             int address;
+            int target_type = node->a->type != 0
+                ? node->a->type : ast_expr_type_for_sizeof(node->a);
             address = mir_lower_lvalue_address(node->a);
             if (address < 0)
                 break;
             if (node->op == '=') {
                 value = mir_lower_expr(node->b);
+                value = mir_lower_conversion(value, target_type);
             } else {
                 int binary_operator = mir_compound_binary_operator(node->op);
                 if (binary_operator == 0)
@@ -1097,12 +1203,15 @@ static int mir_lower_expr(const struct AstNode *node)
                 else
                     insn->memory_flags |= 8;
                 right = mir_lower_expr(node->b);
+                if (binary_operator != TOK_SHL && binary_operator != TOK_SHR)
+                    right = mir_lower_conversion(right, target_type);
                 value = mir_new_value();
                 insn = mir_emit(MIR_BINARY);
                 insn->dst = value;
                 insn->src1 = left;
                 insn->src2 = right;
-                insn->type = node->type;
+                insn->type = target_type;
+                insn->secondary_offset = target_type;
                 insn->immediate = binary_operator;
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
@@ -1119,10 +1228,13 @@ static int mir_lower_expr(const struct AstNode *node)
         if (node->a->kind == AST_INDEX ||
             (node->a->kind == AST_UNARY && node->a->op == '*')) {
             int address = mir_lower_lvalue_address(node->a);
+            int target_type = node->a->type != 0
+                ? node->a->type : ast_expr_type_for_sizeof(node->a);
             if (address < 0)
                 break;
             if (node->op == '=') {
                 value = mir_lower_expr(node->b);
+                value = mir_lower_conversion(value, target_type);
             } else {
                 int binary_operator = mir_compound_binary_operator(node->op);
                 if (binary_operator == 0)
@@ -1134,12 +1246,15 @@ static int mir_lower_expr(const struct AstNode *node)
                 insn->type = node->a->type;
                 mir_set_node_memory(insn, node->a);
                 right = mir_lower_expr(node->b);
+                if (binary_operator != TOK_SHL && binary_operator != TOK_SHR)
+                    right = mir_lower_conversion(right, target_type);
                 value = mir_new_value();
                 insn = mir_emit(MIR_BINARY);
                 insn->dst = value;
                 insn->src1 = left;
                 insn->src2 = right;
-                insn->type = node->type;
+                insn->type = target_type;
+                insn->secondary_offset = target_type;
                 insn->immediate = binary_operator;
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
@@ -1153,19 +1268,29 @@ static int mir_lower_expr(const struct AstNode *node)
             break;
         if (node->op == '=') {
             value = mir_lower_expr(node->b);
+            value = mir_lower_conversion(
+                value, node->a->type != 0 ? node->a->type
+                                          : ast_expr_type_for_sizeof(node->a));
         } else {
             int binary_operator = mir_compound_binary_operator(node->op);
             if (binary_operator == 0)
                 break;
             left = mir_lower_expr(node->a);
             right = mir_lower_expr(node->b);
+            {
+                int target_type = node->a->type != 0
+                    ? node->a->type : ast_expr_type_for_sizeof(node->a);
+                if (binary_operator != TOK_SHL && binary_operator != TOK_SHR)
+                    right = mir_lower_conversion(right, target_type);
             value = mir_new_value();
             insn = mir_emit(MIR_BINARY);
             insn->dst = value;
             insn->src1 = left;
             insn->src2 = right;
-            insn->type = node->type;
+            insn->type = target_type;
+            insn->secondary_offset = target_type;
             insn->immediate = binary_operator;
+            }
         }
         mir_emit_ident_store(node->a, value);
         return value;
@@ -1458,6 +1583,12 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.next_call_id = 0;
     mir.flow_depth = 0;
     mir.has_vla = has_vla;
+    {
+        struct Sym *function_symbol = find_global(name);
+        mir.is_variadic_function = function_symbol != NULL &&
+                                   function_symbol->proto_variadic;
+    }
+    mir.has_runtime_stride_param = 0;
     mir.user_label_count = 0;
     mir.switch_depth = 0;
     mir.declaration_count = 0;
@@ -1482,7 +1613,9 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.report_mode = getenv("DCC_MIR_REPORT") != NULL ||
                       getenv("DCC_MIR_FUNCTION") != NULL ||
                       getenv("DCC_MIR_CANDIDATES") != NULL ||
-                      getenv("DCC_MIR_EMIT_FUNCTION") != NULL;
+                      getenv("DCC_MIR_GENERAL_CANDIDATES") != NULL ||
+                      getenv("DCC_MIR_EMIT_FUNCTION") != NULL ||
+                      getenv("DCC_MIR_GENERAL_FUNCTION") != NULL;
     mir.return_type = current_return_type;
     mir.local_bytes = local_bytes;
     mir.opaque_count = 0;
@@ -1493,6 +1626,15 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     if ((emit_filter != NULL && emit_filter[0] != 0 &&
          strcmp(emit_filter, name) == 0) ||
         getenv("DCC_MIR_EMIT_ALL") != NULL) {
+
+        mir.capture_stream = tmpfile();
+        if (mir.capture_stream == NULL)
+            fatal("cannot create MIR capture stream");
+        mir.saved_sink = emit_sink_push(mir.capture_stream, sink_purpose);
+        mir.emit_mode = 1;
+    } else if (getenv("DCC_MIR_EMIT_GENERAL") != NULL ||
+               (getenv("DCC_MIR_GENERAL_FUNCTION") != NULL &&
+                strcmp(getenv("DCC_MIR_GENERAL_FUNCTION"), name) == 0)) {
         mir.capture_stream = tmpfile();
         if (mir.capture_stream == NULL)
             fatal("cannot create MIR capture stream");
@@ -1507,8 +1649,12 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
             int value;
             struct MirInsn *insn;
 
-            if (locals[local].storage == SC_PARAM)
+            if (locals[local].storage == SC_PARAM) {
                 mir_note_declared_symbol(&locals[local]);
+                if (locals[local].dim_count > 0 ||
+                    locals[local].runtime_stride_name[0] != 0)
+                    mir.has_runtime_stride_param = 1;
+            }
             if (locals[local].storage != SC_PARAM ||
                 !mir_object_eligible(&locals[local]))
                 continue;
@@ -3301,6 +3447,37 @@ static int mir_prepare_backend_slots(void)
                     last[argument] = i;
         }
     }
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_PHI) {
+            int predecessor;
+            for (predecessor = 0; predecessor < mir.count; ++predecessor) {
+                int successor;
+                int predecessor_label = mir_block_label_before(predecessor);
+                for (successor = 0;
+                     successor < mir.insns[predecessor].successor_count;
+                     ++successor) {
+                    int target = mir_first_nonlabel_successor(
+                        mir.insns[predecessor].successors[successor]);
+                    if (target != i)
+                        continue;
+                    if (predecessor_label == mir.insns[i].phi_pred1 &&
+                        last[mir.insns[i].src1] < predecessor)
+                        last[mir.insns[i].src1] = predecessor;
+                    if (predecessor_label == mir.insns[i].phi_pred2 &&
+                        last[mir.insns[i].src2] < predecessor)
+                        last[mir.insns[i].src2] = predecessor;
+                }
+            }
+        }
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_JUMP) {
+            int target = mir_find_label(mir.insns[i].label);
+            if (target >= 0 && target < i)
+                for (value = 0; value < mir.next_value; ++value)
+                    if (first[value] < target && last[value] >= target &&
+                        last[value] < i)
+                        last[value] = i;
+        }
     mir.backend_slot_count = 0;
     for (i = 0; i < mir.count; ++i)
         for (value = 0; value < mir.next_value; ++value)
@@ -3710,6 +3887,11 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             (strcmp(insn->name, "<indirect>") == 0 ||
              type_size(insn->type) > 4))
             return mir_scalar_cfg_preflight_reject("call-abi", i);
+        if (insn->opcode == MIR_CALL) {
+            struct Sym *callee = find_global(insn->name);
+            if (callee != NULL && callee->proto_variadic)
+                return mir_scalar_cfg_preflight_reject("variadic-call", i);
+        }
         if (insn->opcode == MIR_ARG) {
             const struct MirInsn *argument = mir_definition(insn->src1);
             if (argument != NULL && type_is_struct_object(argument->type))
@@ -3777,7 +3959,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             }
             if (type_size(memory_type) == 1) {
-                if ((memory_type & TYPE_UNSIGNED) != 0) {
+                if (type_is_bool(memory_type)) {
+                    int bool_label = new_label();
+                    fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                            bool_label, bool_label);
+                } else if ((memory_type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
                 } else {
                     end_label = new_label();
@@ -3874,7 +4061,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                       "\tld d,(hl)\n\tpop hl\n", out);
             } else if (insn->memory_size == 1) {
                 fputs("\tld l,(hl)\n", out);
-                if ((insn->type & TYPE_UNSIGNED) != 0) {
+                if (type_is_bool(insn->type)) {
+                    end_label = new_label();
+                    fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                            end_label, end_label);
+                } else if ((insn->type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
                 } else {
                     end_label = new_label();
@@ -4032,13 +4224,29 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             } else if (insn->immediate == '+') {
                 /* Unary plus. */
             } else if (insn->immediate == '-') {
-                fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
+                if (mir_value_is_wide(insn->src1)) {
+                    int carry_label = new_label();
+                    fputs("\tld a,l\n\tcpl\n\tld l,a\n"
+                          "\tld a,h\n\tcpl\n\tld h,a\n"
+                          "\tld a,e\n\tcpl\n\tld e,a\n"
+                          "\tld a,d\n\tcpl\n\tld d,a\n"
+                          "\tinc hl\n\tld a,h\n\tor l\n", out);
+                      fprintf(out, "\tjp nz,L%d\n\tinc de\nL%d:\n",
+                            carry_label, carry_label);
+                    } else
+                    fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
             } else if (insn->immediate == '~') {
                 fputs("\tld a,l\n\tcpl\n\tld l,a\n\tld a,h\n\tcpl\n\tld h,a\n", out);
+                if (mir_value_is_wide(insn->src1))
+                    fputs("\tld a,e\n\tcpl\n\tld e,a\n"
+                          "\tld a,d\n\tcpl\n\tld d,a\n", out);
             } else if (insn->immediate == '!') {
                 int true_label = new_label();
                 end_label = new_label();
-                fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+                if (mir_value_is_wide(insn->src1))
+                    fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n\tld hl,0\n", out);
+                else
+                    fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
                 fprintf(out, "\tjp z,L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
                         true_label, end_label, true_label, end_label);
             } else {
@@ -4172,6 +4380,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 goto done;
         }
     }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
     accepted = 1;
 done:
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
@@ -4181,6 +4390,41 @@ done:
                     ? mir_opcode_name(mir.insns[i].opcode) : "preflight");
     free(labels);
     return accepted;
+}
+
+static int mir_try_emit_general_rollout(FILE *out)
+{
+    int i;
+    int frame_bytes;
+    int return_count = 0;
+
+    if (mir.has_vla || mir.has_runtime_stride_param ||
+        mir.is_variadic_function || mir.count > 64 ||
+        mir.declaration_count > 0 ||
+        (mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2)
+        return 0;
+    frame_bytes = mir.local_bytes + 2 * mir_prepare_backend_slots();
+    if (frame_bytes > 64)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->dst >= 0 && (type_size(insn->type) > 2 ||
+                               type_ptr_depth(insn->type) > 0))
+            return 0;
+        switch (insn->opcode) {
+        case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
+        case MIR_UNARY: case MIR_BINARY:
+            break;
+        case MIR_RETURN:
+            ++return_count;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (return_count != 1)
+        return 0;
+    return mir_try_emit_spilled_scalar_cfg(out);
 }
 
 static int mir_is_const_value(int value, long expected)
@@ -4942,6 +5186,20 @@ void mir_end_function(void)
             fprintf(stderr, "; MIR candidate function=%s sink=%s\n",
                     mir.name, mir_sink_name(mir.sink_purpose));
     }
+    if (!mir.emit_mode && verified &&
+        getenv("DCC_MIR_GENERAL_CANDIDATES") != NULL) {
+        FILE *candidate = tmpfile();
+        int accepted;
+        if (candidate == NULL)
+            fatal("cannot create MIR general candidate stream");
+        accepted = mir_try_emit_general_rollout(candidate);
+        fclose(candidate);
+        if (accepted)
+            fprintf(stderr, "; MIR general candidate function=%s sink=%s "
+                            "slots=%d\n",
+                    mir.name, mir_sink_name(mir.sink_purpose),
+                    mir.backend_slot_count);
+    }
     if (mir.emit_mode) {
         FILE *destination = mir.saved_sink.stream;
         FILE *generated = NULL;
@@ -4950,12 +5208,18 @@ void mir_end_function(void)
         emit_sink_restore(&mir.saved_sink);
         if (verified) {
             const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
+            const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
             if (emit_filter != NULL && emit_filter[0] != 0 &&
                 strcmp(emit_filter, mir.name) == 0)
                 emitted = mir_try_emit_z80(generated);
+            else if (general_filter != NULL && general_filter[0] != 0 &&
+                    strcmp(general_filter, mir.name) == 0)
+                emitted = mir_try_emit_spilled_scalar_cfg(generated);
+            else if (getenv("DCC_MIR_EMIT_GENERAL") != NULL)
+                emitted = mir_try_emit_general_rollout(generated);
             else
                 emitted = mir_try_emit_automatic_z80(generated);
         }

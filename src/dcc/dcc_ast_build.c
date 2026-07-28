@@ -216,10 +216,15 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
         if ((n->op == '+' || n->op == '-') && lhs_pointer) {
             if (n->op == '-' && rhs_pointer)
                 return TYPE_INT;
+            if (ast_expr_is_array_decay(n->a) || ast_expr_is_array_row(n->a))
+                return type_add_ptr(lt);
             return type_ptr_depth(lt) > 0 ? lt : type_add_ptr(lt);
         }
-        if (n->op == '+' && rhs_pointer)
+        if (n->op == '+' && rhs_pointer) {
+            if (ast_expr_is_array_decay(n->b) || ast_expr_is_array_row(n->b))
+                return type_add_ptr(rt);
             return type_ptr_depth(rt) > 0 ? rt : type_add_ptr(rt);
+        }
         return common_arith_type(lt, rt);
     }
     case AST_LOGAND:
