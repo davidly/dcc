@@ -1054,15 +1054,33 @@ static void scan_function_body_ident_counts(void)
     int prev_kind;
     int address_pending;
     char prev_ident[64];
-    /* Brace depths at which a loop body was opened, innermost last. A `for`,
-     * `while` or `do` sets loop_pending; the next `{` records its depth here
-     * and multiplies the occurrence weight, and the matching `}` undoes it.
-     * A brace-less single-statement loop body is not tracked - it under-
-     * weights rather than over-weights, which is the safe direction for a
+    /* Brace depths at which a loop body was opened, innermost last. A `{`
+     * counts as a loop body only when it is the FIRST token after the loop
+     * header's closing `)` (or straight after `do`), which is what
+     * loop_await_header/loop_header_depth track below.
+     *
+     * Getting that wrong is not a rounding error, it inverts the decision. In
+     *
+     *     for (; y<D; y++) {
+     *         for (; x<D; x++)
+     *             if (chk(x, y) == 0) {  ... n ...
+     *
+     * the inner `for` has no braces of its own, so a scan that simply waits
+     * for the next `{` after seeing `for` attributes the IF's brace to the
+     * loop and scores everything inside it as doubly nested. That is how
+     * 00040b's `go` scored its parameter at 65 from two textual references,
+     * promoted it, and lost 1.1M cycles: the guarded reference does not
+     * execute once per iteration, let alone sixty-four times.
+     *
+     * An unbraced single-statement loop body is therefore not tracked at all,
+     * which under-weights rather than over-weights - the safe direction for a
      * threshold that admits an optimisation. */
     int loop_depths[8];
     int n_loop_depths;
     int loop_pending;
+    int loop_await_header;
+    int loop_header_depth;
+    int loop_arm_next;
 
     g_ident_count_n = 0;
     g_addr_cache_array_count = 0;
@@ -1080,9 +1098,33 @@ static void scan_function_body_ident_counts(void)
     prev_ident[0] = 0;
     n_loop_depths = 0;
     loop_pending = 0;
+    loop_await_header = 0;
+    loop_header_depth = 0;
+    loop_arm_next = 0;
     g_scan_loop_weight = 1;
     next_token();
     while (g_lex.tok.kind != TOK_EOF && depth > 0) {
+        /* Consume a for/while header so the `{` that follows it can be told
+         * apart from the `{` of some other statement standing in as an
+         * unbraced body. Arming is deferred to the NEXT token: the closing
+         * `)` is itself a token, and would otherwise be seen by the
+         * "something other than `{` follows the header" arm below and clear
+         * the flag it had just set. */
+        if (loop_arm_next) {
+            loop_pending = 1;
+            loop_arm_next = 0;
+        }
+        if (loop_await_header) {
+            if (g_lex.tok.kind == '(') {
+                loop_header_depth++;
+            } else if (g_lex.tok.kind == ')') {
+                loop_header_depth--;
+                if (loop_header_depth == 0) {
+                    loop_await_header = 0;
+                    loop_arm_next = 1;
+                }
+            }
+        }
         if (g_lex.tok.kind == TOK_ID) {
             bump_ident_count(g_lex.tok.text);
             if (address_pending)
@@ -1121,10 +1163,22 @@ static void scan_function_body_ident_counts(void)
                     g_scan_loop_weight /= 8;
             }
             depth--;
-        } else if (g_lex.tok.kind == TOK_FOR || g_lex.tok.kind == TOK_WHILE ||
-                   g_lex.tok.kind == TOK_DO)
+        } else if (g_lex.tok.kind == TOK_FOR || g_lex.tok.kind == TOK_WHILE) {
+            /* Header follows; the loop body is whatever comes after it. */
+            loop_await_header = 1;
+            loop_header_depth = 0;
+            loop_pending = 0;
+        } else if (g_lex.tok.kind == TOK_DO) {
+            /* No header - the body starts immediately. */
             loop_pending = 1;
-        else if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
+        } else if (loop_pending) {
+            /* Something other than `{` follows the loop header, so the body
+             * is a single unbraced statement. Stop waiting: any `{` further
+             * on belongs to a nested statement, not to this loop. */
+            loop_pending = 0;
+            if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
+                mark_ident_written(prev_ident);
+        } else if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
             mark_ident_written(prev_ident);
         if (g_lex.tok.kind == TOK_ID) {
             size_t pl = strlen(g_lex.tok.text);
