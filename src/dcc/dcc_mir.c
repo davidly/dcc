@@ -1499,6 +1499,13 @@ static const struct MirInsn *mir_definition(int value)
     return NULL;
 }
 
+static void mir_emit_prologue(FILE *out)
+{
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        fputs("\textrn __stchk\n\tcall __stchk\n", out);
+}
+
 static int mir_emit_load_param(FILE *out, const struct MirInsn *param)
 {
     const struct MirObject *object;
@@ -1666,7 +1673,7 @@ static int mir_try_emit_countdown_loop(FILE *out)
     top_label = new_label();
     end_label = new_label();
 
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    mir_emit_prologue(out);
     fprintf(out, "\tld c,(ix%+d)\n", object->offset);
     fprintf(out, "\tld b,(ix%+d)\n", object->offset + 1);
     fprintf(out, "L%d:\n", top_label);
@@ -1777,7 +1784,7 @@ static int mir_try_emit_accumulator_loop(FILE *out)
                      type_ptr_depth(mir.objects[n_object].type) > 0;
     top_label = new_label();
     end_label = new_label();
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    mir_emit_prologue(out);
     fprintf(out, "\tld c,(ix%+d)\n", mir.objects[n_object].offset);
     fprintf(out, "\tld b,(ix%+d)\n", mir.objects[n_object].offset + 1);
     fputs("\tld de,0\n", out);
@@ -1888,7 +1895,7 @@ static int mir_try_emit_comparison_branch(FILE *out)
     }
 
     false_label = new_label();
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    mir_emit_prologue(out);
     if (!mir_emit_load_param(out, left) || !mir_emit_load_param_de(out, right))
         return 0;
     if (!unsigned_compare && (operation == '<' || operation == TOK_GE)) {
@@ -1931,7 +1938,7 @@ static int mir_try_emit_z80(FILE *out)
 
     /* The current selectors implement only the ordinary 16-bit HL result
      * convention. Other return ABIs remain with the existing backend. */
-    if (opt_stack_check || (mir.return_type & 15) != TYPE_INT)
+    if ((mir.return_type & 15) != TYPE_INT)
         return 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_PARAM &&
@@ -1973,7 +1980,7 @@ static int mir_try_emit_z80(FILE *out)
         !mir_affine_value(return_insn->src1, &parameter, &constant, 0))
         return 0;
 
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    mir_emit_prologue(out);
     if (two_parameters) {
         if (!mir_emit_load_param(out, left_parameter) ||
             !mir_emit_load_param_de(out, right_parameter))
