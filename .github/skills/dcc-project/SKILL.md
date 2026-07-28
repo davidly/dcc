@@ -673,6 +673,24 @@ and eight spills, while `scale_by` colors without spills. Detailed MIR dumps
 show `home=` or `spill=` on each definition. Emission must consume these homes
 and insert boundary moves/saves; do not regress to source-symbol claims.
 
+The correctness-first general backend emits small IX-addressable 16-bit scalar
+CFGs using deterministic two-byte virtual spill slots below the established
+local frame. It supports labels, branches, multiple returns, edge-specific phi
+copies (including intermediate label chains), local/parameter memory,
+member/index addresses, typed indirect loads/stores and direct scalar calls.
+This is a general MIR opcode walk, not a source-shape recognizer. It remains
+exact-name opt-in and caps the combined frame at 120 bytes until colored homes
+replace universal virtual spills.
+
+Every `MIR_ARG` and scalar/aggregate call carries a stable call-site ID. This
+is required because outer arguments and nested-call arguments interleave in
+the instruction stream; argument index alone is ambiguous. The backend gathers
+only matching IDs, pushes in reverse ABI order, calls the resolved assembler
+symbol, performs caller cleanup and stores the HL result. Timeout-tested
+harnesses cover three-return CFG (`clampi`), conditional and loop phis,
+pointer/member/index updates, and nested calls. `DCC_MIR_SELECT_REPORT=1`
+reports preflight reason or failing instruction for transactional fallback.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

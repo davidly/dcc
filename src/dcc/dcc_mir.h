@@ -5,7 +5,8 @@
 struct AstNode;
 struct Sym;
 
-void mir_begin_function(const char *name, int sink_purpose, int has_vla);
+void mir_begin_function(const char *name, int sink_purpose, int has_vla,
+						int local_bytes);
 void mir_capture_stmt(const struct AstNode *stmt);
 void mir_begin_declaration(void);
 void mir_end_declaration(void);
