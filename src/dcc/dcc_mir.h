@@ -10,7 +10,7 @@
 struct AstNode;
 struct Sym;
 
-void mir_begin_function(const char *name, int sink_purpose);
+void mir_begin_function(const char *name, int sink_purpose, int has_vla);
 void mir_capture_stmt(const struct AstNode *stmt);
 void mir_set_initializer_target(struct Sym *symbol);
 void mir_capture_initializer(const struct AstNode *expr);

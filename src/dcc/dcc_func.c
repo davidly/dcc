@@ -2103,7 +2103,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     }
 
     fprintf(g_emit_sink.stream, "%s:\n", aname);
-    mir_begin_function(name, g_emit_sink.purpose);
+    mir_begin_function(name, g_emit_sink.purpose, current_function_has_vla);
     current_omit_ix_frame = omit_ix_frame;
     /* Callee-save of the caller's IY, before the frame is established so the
      * epilogue can restore it with a bare "pop iy" once IX has been popped.

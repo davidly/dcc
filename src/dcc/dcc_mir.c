@@ -24,10 +24,14 @@ enum MirOpcode {
     MIR_FLOAT_CONST,
     MIR_STRING_ADDRESS,
     MIR_ADDRESS,
+    MIR_INDEX_ADDRESS,
+    MIR_MEMBER_ADDRESS,
     MIR_VLA_SIZE,
     MIR_LOAD,
+    MIR_LOAD_INDIRECT,
     MIR_INDEX_LOAD,
     MIR_STORE,
+    MIR_STORE_INDIRECT,
     MIR_UNARY,
     MIR_BINARY,
     MIR_ARG,
@@ -54,6 +58,11 @@ struct MirInsn {
     int successors[2];
     int successor_count;
     int object;
+    int memory_size;
+    int memory_flags;
+    int bit_width;
+    int bit_shift;
+    unsigned int bit_mask;
     char name[64];
 };
 
@@ -63,6 +72,14 @@ struct MirObject {
     int type;
     int offset;
     int entry_value;
+};
+
+struct MirSwitchContext {
+    long values[MAX_SWITCH_CASES];
+    int labels[MAX_SWITCH_CASES];
+    int count;
+    int default_label;
+    int end_label;
 };
 
 struct MirFunction {
@@ -76,6 +93,12 @@ struct MirFunction {
     int break_labels[MAX_FLOW];
     int continue_labels[MAX_FLOW];
     int flow_depth;
+    int has_vla;
+    char user_label_names[256][64];
+    int user_label_ids[256];
+    int user_label_count;
+    struct MirSwitchContext switches[MAX_FLOW];
+    int switch_depth;
     int emit_mode;
     int report_mode;
     int return_type;
@@ -98,10 +121,14 @@ static const char *mir_opcode_name(int opcode)
     case MIR_FLOAT_CONST: return "fconst";
     case MIR_STRING_ADDRESS: return "straddr";
     case MIR_ADDRESS: return "address";
+    case MIR_INDEX_ADDRESS: return "indexaddr";
+    case MIR_MEMBER_ADDRESS: return "memberaddr";
     case MIR_VLA_SIZE: return "vlasize";
     case MIR_LOAD: return "load";
+    case MIR_LOAD_INDIRECT: return "loadind";
     case MIR_INDEX_LOAD: return "index";
     case MIR_STORE: return "store";
+    case MIR_STORE_INDIRECT: return "storeind";
     case MIR_UNARY: return "unary";
     case MIR_BINARY: return "binary";
     case MIR_ARG: return "arg";
@@ -200,6 +227,23 @@ static void mir_copy_name(char *dst, const char *name)
     dst[length] = 0;
 }
 
+static int mir_user_label(const char *name)
+{
+    int i;
+
+    if (name == NULL)
+        return -1;
+    for (i = 0; i < mir.user_label_count; ++i)
+        if (strcmp(mir.user_label_names[i], name) == 0)
+            return mir.user_label_ids[i];
+    if (mir.user_label_count >= 256)
+        return -1;
+    i = mir.user_label_count++;
+    mir_copy_name(mir.user_label_names[i], name);
+    mir.user_label_ids[i] = mir_new_label();
+    return mir.user_label_ids[i];
+}
+
 static int mir_object_eligible(const struct Sym *sym)
 {
     if (sym == NULL)
@@ -277,6 +321,202 @@ static void mir_emit_object_merges(void)
 }
 
 static int mir_lower_expr(const struct AstNode *node);
+static void mir_lower_stmt(const struct AstNode *node);
+
+static void mir_collect_switch_labels(const struct AstNode *node,
+                                      struct MirSwitchContext *context)
+{
+    int i;
+
+    if (node == NULL || node->kind == AST_SWITCH)
+        return;
+    switch (node->kind) {
+    case AST_CASE:
+        if (context->count < MAX_SWITCH_CASES) {
+            context->values[context->count] = node->ival;
+            context->labels[context->count] = mir_new_label();
+            ++context->count;
+        }
+        mir_collect_switch_labels(node->b, context);
+        return;
+    case AST_DEFAULT:
+        if (context->default_label < 0)
+            context->default_label = mir_new_label();
+        mir_collect_switch_labels(node->b, context);
+        return;
+    case AST_COMPOUND:
+        for (i = 0; i < node->list_len; ++i)
+            mir_collect_switch_labels(node->list[i], context);
+        return;
+    case AST_IF:
+        mir_collect_switch_labels(node->b, context);
+        mir_collect_switch_labels(node->c, context);
+        return;
+    case AST_WHILE:
+    case AST_DOWHILE:
+    case AST_LABEL:
+        mir_collect_switch_labels(node->b, context);
+        return;
+    case AST_FOR:
+        mir_collect_switch_labels(node->d, context);
+        return;
+    default:
+        return;
+    }
+}
+
+static int mir_switch_case_label(const struct MirSwitchContext *context,
+                                 long value)
+{
+    int i;
+    for (i = 0; i < context->count; ++i)
+        if ((context->values[i] & 0xffffL) == (value & 0xffffL))
+            return context->labels[i];
+    return -1;
+}
+
+static struct FieldDef *mir_member_field(const struct AstNode *node)
+{
+    int base_type;
+    int struct_id;
+
+    if (node == NULL || node->kind != AST_MEMBER || node->a == NULL ||
+        node->sval == NULL)
+        return NULL;
+    base_type = ast_expr_type_for_sizeof(node->a);
+    if (node->op == TOK_ARROW)
+        base_type = type_decay_ptr(base_type);
+    struct_id = base_struct_id_from_type(base_type);
+    return find_field_def(struct_id, node->sval);
+}
+
+static void mir_set_field_memory(struct MirInsn *insn,
+                                 const struct FieldDef *field)
+{
+    insn->memory_size = field->size > 0 ? field->size : type_size(field->type);
+    insn->memory_flags = field->is_volatile ? 1 : 0;
+    if (field->is_array)
+        insn->memory_flags |= 2;
+    if (type_is_struct_object(field->type))
+        insn->memory_flags |= 4;
+    insn->bit_width = field->bit_width;
+    insn->bit_shift = field->bit_shift;
+    insn->bit_mask = field->bit_mask;
+}
+
+static struct Sym *mir_index_root(const struct AstNode *node, int *depth)
+{
+    const struct AstNode *root = node;
+    struct Sym *symbol;
+    int count = 0;
+
+    while (root != NULL && root->kind == AST_INDEX) {
+        ++count;
+        root = root->a;
+    }
+    if (depth != NULL)
+        *depth = count;
+    if (root == NULL || root->kind != AST_IDENT)
+        return NULL;
+    symbol = root->sym;
+    if (symbol == NULL && root->sval != NULL)
+        symbol = find_sym(root->sval);
+    return symbol;
+}
+
+static int mir_index_stride(const struct AstNode *node)
+{
+    struct Sym *root;
+    int depth;
+    int stride;
+
+    root = mir_index_root(node, &depth);
+    if (root != NULL && root->is_array)
+        stride = sym_array_index_elem_size(root, depth - 1);
+    else if (root != NULL)
+        stride = sym_pointer_array_index_elem_size(root, root->type, depth - 1);
+    else
+        stride = type_index_elem_size(ast_expr_type_for_sizeof(node->a));
+    return stride > 0 ? stride : 1;
+}
+
+static int mir_index_result_is_array(const struct AstNode *node)
+{
+    struct Sym *root;
+    int depth;
+
+    root = mir_index_root(node, &depth);
+    return root != NULL && root->dim_count > depth;
+}
+
+static void mir_set_node_memory(struct MirInsn *insn,
+                                const struct AstNode *node)
+{
+    int size = node != NULL ? type_size(node->type) : 0;
+    insn->memory_size = size > 0 ? size : 1;
+    if (node != NULL && type_is_struct_object(node->type))
+        insn->memory_flags |= 4;
+}
+
+static int mir_lower_lvalue_address(const struct AstNode *node)
+{
+    struct MirInsn *insn;
+    struct FieldDef *field;
+    struct Sym *symbol;
+    int base;
+    int value;
+
+    if (node == NULL)
+        return -1;
+    if (node->kind == AST_IDENT) {
+        symbol = node->sym;
+        if (symbol == NULL && node->sval != NULL)
+            symbol = find_sym(node->sval);
+        value = mir_new_value();
+        insn = mir_emit(MIR_ADDRESS);
+        insn->dst = value;
+        insn->type = node->type;
+        mir_copy_name(insn->name, node->sval != NULL ? node->sval : "?");
+        insn->object = mir_get_object(symbol, insn->name);
+        return value;
+    }
+    if (node->kind == AST_UNARY && node->op == '*')
+        return mir_lower_expr(node->a);
+    if (node->kind == AST_INDEX) {
+        int index;
+        base = mir_lower_expr(node->a);
+        index = mir_lower_expr(node->b);
+        if (base < 0 || index < 0)
+            return -1;
+        value = mir_new_value();
+        insn = mir_emit(MIR_INDEX_ADDRESS);
+        insn->dst = value;
+        insn->src1 = base;
+        insn->src2 = index;
+        insn->type = node->type;
+        insn->immediate = mir_index_stride(node);
+        mir_set_node_memory(insn, node);
+        return value;
+    }
+    if (node->kind != AST_MEMBER)
+        return -1;
+    field = mir_member_field(node);
+    if (field == NULL)
+        return -1;
+    base = node->op == TOK_ARROW ? mir_lower_expr(node->a)
+                                 : mir_lower_lvalue_address(node->a);
+    if (base < 0)
+        return -1;
+    value = mir_new_value();
+    insn = mir_emit(MIR_MEMBER_ADDRESS);
+    insn->dst = value;
+    insn->src1 = base;
+    insn->type = node->type;
+    insn->immediate = field->offset;
+    mir_copy_name(insn->name, node->sval);
+    mir_set_field_memory(insn, field);
+    return value;
+}
 
 static void mir_emit_ident_store(const struct AstNode *ident, int value)
 {
@@ -300,18 +540,40 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
                             int postfix)
 {
     struct MirInsn *insn;
+    struct FieldDef *field = NULL;
+    int address = -1;
     int old_value;
     int one;
     int new_value;
+    long step = 1;
 
-    if (operand == NULL || operand->kind != AST_IDENT)
+    if (operand == NULL)
         return -1;
-    old_value = mir_lower_expr(operand);
+    if (type_ptr_depth(operand->type) > 0)
+        step = type_index_elem_size(operand->type);
+    if (operand->kind == AST_IDENT) {
+        old_value = mir_lower_expr(operand);
+    } else {
+        if (operand->kind == AST_MEMBER)
+            field = mir_member_field(operand);
+        address = mir_lower_lvalue_address(operand);
+        if (address < 0 || (operand->kind == AST_MEMBER && field == NULL))
+            return -1;
+        old_value = mir_new_value();
+        insn = mir_emit(MIR_LOAD_INDIRECT);
+        insn->dst = old_value;
+        insn->src1 = address;
+        insn->type = operand->type;
+        if (field != NULL)
+            mir_set_field_memory(insn, field);
+        else
+            mir_set_node_memory(insn, operand);
+    }
     one = mir_new_value();
     insn = mir_emit(MIR_CONST);
     insn->dst = one;
     insn->type = operand->type;
-    insn->immediate = 1;
+    insn->immediate = step;
     new_value = mir_new_value();
     insn = mir_emit(MIR_BINARY);
     insn->dst = new_value;
@@ -319,7 +581,18 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     insn->src2 = one;
     insn->type = operand->type;
     insn->immediate = operation == TOK_INC ? '+' : '-';
-    mir_emit_ident_store(operand, new_value);
+    if (operand->kind == AST_IDENT) {
+        mir_emit_ident_store(operand, new_value);
+    } else {
+        insn = mir_emit(MIR_STORE_INDIRECT);
+        insn->src1 = address;
+        insn->src2 = new_value;
+        insn->type = operand->type;
+        if (field != NULL)
+            mir_set_field_memory(insn, field);
+        else
+            mir_set_node_memory(insn, operand);
+    }
     return postfix ? old_value : new_value;
 }
 
@@ -420,21 +693,59 @@ static int mir_lower_expr(const struct AstNode *node)
         return value;
         }
     case AST_INDEX:
-        left = mir_lower_expr(node->a);
-        right = mir_lower_expr(node->b);
+        left = mir_lower_lvalue_address(node);
+        if (left < 0)
+            break;
+        if (mir_index_result_is_array(node))
+            return left;
         value = mir_new_value();
-        insn = mir_emit(MIR_INDEX_LOAD);
+        insn = mir_emit(MIR_LOAD_INDIRECT);
         insn->dst = value;
         insn->src1 = left;
-        insn->src2 = right;
         insn->type = node->type;
+        mir_set_node_memory(insn, node);
         return value;
+    case AST_MEMBER:
+        {
+            struct FieldDef *field = mir_member_field(node);
+            left = mir_lower_lvalue_address(node);
+            if (left < 0 || field == NULL)
+                break;
+            if (field->is_array)
+                return left;
+            value = mir_new_value();
+            insn = mir_emit(MIR_LOAD_INDIRECT);
+            insn->dst = value;
+            insn->src1 = left;
+            insn->type = node->type;
+            mir_copy_name(insn->name, node->sval);
+            mir_set_field_memory(insn, field);
+            return value;
+        }
     case AST_CAST:
     case AST_UNARY:
         if (node->op == TOK_INC || node->op == TOK_DEC) {
             value = mir_lower_incdec(node->a, node->op, 0);
             if (value >= 0)
                 return value;
+        }
+        if (node->kind == AST_UNARY && node->op == '&') {
+            value = mir_lower_lvalue_address(node->a);
+            if (value >= 0)
+                return value;
+            break;
+        }
+        if (node->kind == AST_UNARY && node->op == '*') {
+            left = mir_lower_lvalue_address(node);
+            if (left < 0)
+                break;
+            value = mir_new_value();
+            insn = mir_emit(MIR_LOAD_INDIRECT);
+            insn->dst = value;
+            insn->src1 = left;
+            insn->type = node->type;
+            mir_set_node_memory(insn, node);
+            return value;
         }
         left = mir_lower_expr(node->a);
         value = mir_new_value();
@@ -585,7 +896,79 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->type = node->type;
         return value;
     case AST_ASSIGN:
-        if (node->a == NULL || node->a->kind != AST_IDENT)
+        if (node->a == NULL)
+            break;
+        if (node->a->kind == AST_MEMBER) {
+            struct FieldDef *field = mir_member_field(node->a);
+            int address;
+            if (field == NULL)
+                break;
+            address = mir_lower_lvalue_address(node->a);
+            if (address < 0)
+                break;
+            if (node->op == '=') {
+                value = mir_lower_expr(node->b);
+            } else {
+                int binary_operator = mir_compound_binary_operator(node->op);
+                if (binary_operator == 0)
+                    break;
+                left = mir_new_value();
+                insn = mir_emit(MIR_LOAD_INDIRECT);
+                insn->dst = left;
+                insn->src1 = address;
+                insn->type = node->a->type;
+                mir_set_field_memory(insn, field);
+                right = mir_lower_expr(node->b);
+                value = mir_new_value();
+                insn = mir_emit(MIR_BINARY);
+                insn->dst = value;
+                insn->src1 = left;
+                insn->src2 = right;
+                insn->type = node->type;
+                insn->immediate = binary_operator;
+            }
+            insn = mir_emit(MIR_STORE_INDIRECT);
+            insn->src1 = address;
+            insn->src2 = value;
+            insn->type = node->a->type;
+            mir_copy_name(insn->name, node->a->sval);
+            mir_set_field_memory(insn, field);
+            return value;
+        }
+        if (node->a->kind == AST_INDEX ||
+            (node->a->kind == AST_UNARY && node->a->op == '*')) {
+            int address = mir_lower_lvalue_address(node->a);
+            if (address < 0)
+                break;
+            if (node->op == '=') {
+                value = mir_lower_expr(node->b);
+            } else {
+                int binary_operator = mir_compound_binary_operator(node->op);
+                if (binary_operator == 0)
+                    break;
+                left = mir_new_value();
+                insn = mir_emit(MIR_LOAD_INDIRECT);
+                insn->dst = left;
+                insn->src1 = address;
+                insn->type = node->a->type;
+                mir_set_node_memory(insn, node->a);
+                right = mir_lower_expr(node->b);
+                value = mir_new_value();
+                insn = mir_emit(MIR_BINARY);
+                insn->dst = value;
+                insn->src1 = left;
+                insn->src2 = right;
+                insn->type = node->type;
+                insn->immediate = binary_operator;
+            }
+            insn = mir_emit(MIR_STORE_INDIRECT);
+            insn->src1 = address;
+            insn->src2 = value;
+            insn->type = node->a->type;
+            mir_set_node_memory(insn, node->a);
+            return value;
+        }
+        if (node->a->kind != AST_IDENT)
             break;
         if (node->op == '=') {
             value = mir_lower_expr(node->b);
@@ -647,6 +1030,10 @@ static void mir_lower_stmt(const struct AstNode *node)
     int end_label;
     int top_label;
     int continue_label;
+    int next_label;
+    int case_value;
+    int compare_value;
+    struct MirSwitchContext *switch_context;
     int i;
 
     if (node == NULL)
@@ -686,6 +1073,68 @@ static void mir_lower_stmt(const struct AstNode *node)
             mir_emit_label(end_label);
         }
         return;
+    case AST_SWITCH:
+        if (mir.switch_depth >= MAX_FLOW || mir.flow_depth >= MAX_FLOW)
+            break;
+        condition = mir_lower_expr(node->a);
+        switch_context = &mir.switches[mir.switch_depth++];
+        memset(switch_context, 0, sizeof(*switch_context));
+        switch_context->default_label = -1;
+        switch_context->end_label = mir_new_label();
+        mir_collect_switch_labels(node->b, switch_context);
+        for (i = 0; i < switch_context->count; ++i) {
+            next_label = mir_new_label();
+            case_value = mir_new_value();
+            insn = mir_emit(MIR_CONST);
+            insn->dst = case_value;
+            insn->type = node->a != NULL ? node->a->type : TYPE_INT;
+            insn->immediate = switch_context->values[i];
+            compare_value = mir_new_value();
+            insn = mir_emit(MIR_BINARY);
+            insn->dst = compare_value;
+            insn->src1 = condition;
+            insn->src2 = case_value;
+            insn->type = TYPE_INT;
+            insn->immediate = TOK_EQ;
+            insn = mir_emit(MIR_BRANCH_FALSE);
+            insn->src1 = compare_value;
+            insn->label = next_label;
+            mir_emit_jump(switch_context->labels[i]);
+            mir_emit_label(next_label);
+        }
+        mir_emit_jump(switch_context->default_label >= 0
+                      ? switch_context->default_label
+                      : switch_context->end_label);
+        mir.break_labels[mir.flow_depth] = switch_context->end_label;
+        mir.continue_labels[mir.flow_depth] = mir.flow_depth > 0
+            ? mir.continue_labels[mir.flow_depth - 1] : -1;
+        ++mir.flow_depth;
+        mir_lower_stmt(node->b);
+        --mir.flow_depth;
+        mir_emit_label(switch_context->end_label);
+        --mir.switch_depth;
+        return;
+    case AST_CASE:
+        if (mir.switch_depth > 0) {
+            switch_context = &mir.switches[mir.switch_depth - 1];
+            next_label = mir_switch_case_label(switch_context, node->ival);
+            if (next_label >= 0) {
+                mir_emit_label(next_label);
+                mir_lower_stmt(node->b);
+                return;
+            }
+        }
+        break;
+    case AST_DEFAULT:
+        if (mir.switch_depth > 0) {
+            switch_context = &mir.switches[mir.switch_depth - 1];
+            if (switch_context->default_label >= 0) {
+                mir_emit_label(switch_context->default_label);
+                mir_lower_stmt(node->b);
+                return;
+            }
+        }
+        break;
     case AST_WHILE:
     case AST_DOWHILE:
         top_label = mir_new_label();
@@ -746,19 +1195,39 @@ static void mir_lower_stmt(const struct AstNode *node)
             (void)mir_emit(MIR_OPAQUE);
         return;
     case AST_CONTINUE:
-        if (mir.flow_depth > 0)
+        if (mir.flow_depth > 0 &&
+            mir.continue_labels[mir.flow_depth - 1] >= 0)
             mir_emit_jump(mir.continue_labels[mir.flow_depth - 1]);
         else
             (void)mir_emit(MIR_OPAQUE);
         return;
+    case AST_GOTO:
+        if (!mir.has_vla) {
+            int label = mir_user_label(node->sval);
+            if (label >= 0) {
+                mir_emit_jump(label);
+                return;
+            }
+        }
+        break;
+    case AST_LABEL:
+        if (!mir.has_vla) {
+            int label = mir_user_label(node->sval);
+            if (label >= 0) {
+                mir_emit_label(label);
+                mir_lower_stmt(node->b);
+                return;
+            }
+        }
+        break;
     default:
-        insn = mir_emit(MIR_OPAQUE);
-        insn->immediate = node->kind;
-        return;
+        break;
     }
+    insn = mir_emit(MIR_OPAQUE);
+    insn->immediate = node->kind;
 }
 
-void mir_begin_function(const char *name, int sink_purpose)
+void mir_begin_function(const char *name, int sink_purpose, int has_vla)
 {
     const char *emit_filter;
 
@@ -770,6 +1239,9 @@ void mir_begin_function(const char *name, int sink_purpose)
     mir.next_value = 0;
     mir.next_label = 0;
     mir.flow_depth = 0;
+    mir.has_vla = has_vla;
+    mir.user_label_count = 0;
+    mir.switch_depth = 0;
     mir.object_count = 0;
     mir.initializer_target = NULL;
     mir.sink_purpose = sink_purpose;
@@ -1176,6 +1648,9 @@ static int mir_fixed_color_for_definition(const struct MirInsn *insn)
     case MIR_UNARY:
     case MIR_INDEX_LOAD:
     case MIR_VLA_SIZE:
+    case MIR_INDEX_ADDRESS:
+    case MIR_MEMBER_ADDRESS:
+    case MIR_LOAD_INDIRECT:
         /* Current Z80 contracts return expression/call results in HL. A later
          * instruction selector may relax some arithmetic operations, but the
          * allocation simulation must not assume that work has happened. */
@@ -1601,6 +2076,12 @@ static int mir_verify_and_dump(void)
             fprintf(stderr, " %s", insn->name);
         if (insn->object >= 0)
             fprintf(stderr, " {o%d}", insn->object);
+        if (insn->memory_size > 0)
+            fprintf(stderr, " mem=%d%s", insn->memory_size,
+                    (insn->memory_flags & 1) != 0 ? "v" : "");
+        if (insn->bit_width > 0)
+            fprintf(stderr, " bit=%d:%d/%u", insn->bit_shift,
+                    insn->bit_width, insn->bit_mask);
         if (insn->opcode == MIR_CONST || insn->opcode == MIR_FLOAT_CONST ||
             insn->opcode == MIR_STRING_ADDRESS ||
             insn->opcode == MIR_VLA_SIZE)
@@ -2388,7 +2869,15 @@ static int mir_try_emit_z80(FILE *out)
     if ((mir.return_type & 15) != TYPE_INT)
         return 0;
     for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_PARAM &&
+        if (mir.insns[i].opcode == MIR_FLOAT_CONST ||
+            mir.insns[i].opcode == MIR_STRING_ADDRESS ||
+            mir.insns[i].opcode == MIR_VLA_SIZE ||
+            mir.insns[i].opcode == MIR_INDEX_ADDRESS ||
+            mir.insns[i].opcode == MIR_MEMBER_ADDRESS ||
+            mir.insns[i].opcode == MIR_LOAD_INDIRECT ||
+            mir.insns[i].opcode == MIR_STORE_INDIRECT)
+            return 0;
+        else if (mir.insns[i].opcode == MIR_PARAM &&
             (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)
             return 0;
 
@@ -2465,7 +2954,15 @@ static int mir_try_emit_automatic_z80(FILE *out)
     if ((mir.return_type & 15) != TYPE_INT)
         return 0;
     for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_PARAM &&
+        if (mir.insns[i].opcode == MIR_FLOAT_CONST ||
+            mir.insns[i].opcode == MIR_STRING_ADDRESS ||
+            mir.insns[i].opcode == MIR_VLA_SIZE ||
+            mir.insns[i].opcode == MIR_INDEX_ADDRESS ||
+            mir.insns[i].opcode == MIR_MEMBER_ADDRESS ||
+            mir.insns[i].opcode == MIR_LOAD_INDIRECT ||
+            mir.insns[i].opcode == MIR_STORE_INDIRECT)
+            return 0;
+        else if (mir.insns[i].opcode == MIR_PARAM &&
             (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)
             return 0;
     if (mir_try_emit_accumulator_loop(out))

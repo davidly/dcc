@@ -560,6 +560,29 @@ opaque instances of those kinds. Remaining counts are: member 4845, assignment
 literal 47. `tgnuexpr` is the expected census build failure because it is a
 negative GNU statement-expression diagnostic test.
 
+The first-class lvalue layer separates address formation from memory effects:
+object, multidimensional index and member addresses feed typed indirect
+loads/stores. Index instructions retain the resolved byte stride after the AST
+arena is gone; member accesses retain width, volatility and bitfield
+shift/mask. Assignment and prefix/postfix updates evaluate a nontrivial lvalue
+address exactly once. Pointer increment/decrement uses pointee stride rather
+than integer `1`. Exact-shape emitters reject these operations until the
+general backend owns their constraints.
+
+Switch lowers to an ordinary compare/branch CFG with real case/default labels,
+source fallthrough and nested contexts. A switch pushes a break target while
+inheriting an enclosing loop's continue target. Named goto/label also lower to
+real edges for functions without VLAs. Functions flagged by the sizing scan as
+having a VLA deliberately retain goto/label barriers until MIR models scope
+save/restore; do not infer this property from the rebuilt local table.
+
+After the lvalue and non-VLA control-flow milestone, the focused eight-app
+verifier set has zero errors and switch has zero corpus barriers. Remaining
+compile-only census counts are: declaration 1108, member 192, assignment 45,
+compound literal 31, VLA-sensitive label 17 and goto 15, and unary 16. Counts
+include speculative function attempts and are a trend metric, not unique AST
+node counts.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
