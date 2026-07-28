@@ -425,6 +425,22 @@ call-crossing values, and 19 required fixed-result moves. This is analysis,
 not emitted Z80; instruction-specific operand constraints still need to be
 added before the coloring is authoritative.
 
+The first emitted-Z80 gate is opt-in through
+`DCC_MIR_EMIT_FUNCTION=<exact-name>`. `mir_begin_function` redirects the
+existing body to a temporary VERIFY sink after its assembler label; at
+`mir_end_function`, verified MIR is emitted to a second temporary stream and
+committed only if the strict selector accepts it. Otherwise the captured
+existing body is copied back byte-for-byte. Partial MIR output can therefore
+never contaminate fallback.
+
+The initial selector intentionally supports only one straight-line word return:
+a parameter, a constant, or parameter +/- constant. It emits the ordinary IX
+frame and epilogue and recognizes `+/-1` as `inc/dec hl`. A minimal test
+`add1(41)` emits MIR and returns 42; targeting unsupported `mul2` reports
+`result=fallback`, produces a byte-identical original body, and also returns 42.
+Do not widen this subset without a focused runtime comparison and a fallback
+identity check.
+
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where

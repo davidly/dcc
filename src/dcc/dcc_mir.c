@@ -57,6 +57,7 @@ struct MirObject {
     char name[64];
     int storage;
     int type;
+    int offset;
     int entry_value;
 };
 
@@ -71,6 +72,9 @@ struct MirFunction {
     int break_labels[MAX_FLOW];
     int continue_labels[MAX_FLOW];
     int flow_depth;
+    int emit_mode;
+    FILE *capture_stream;
+    EmitSink saved_sink;
     struct MirObject objects[256];
     int object_count;
     char name[64];
@@ -116,9 +120,13 @@ static int mir_report_enabled(const char *name)
 {
     const char *all = getenv("DCC_MIR_REPORT");
     const char *filter = getenv("DCC_MIR_FUNCTION");
+    const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
 
-    if (all == NULL && filter == NULL)
+    if (all == NULL && filter == NULL && emit_filter == NULL)
         return 0;
+    if (emit_filter != NULL && emit_filter[0] != 0 &&
+        strcmp(emit_filter, name) == 0)
+        return 1;
     if (filter != NULL && filter[0] != 0 && strcmp(filter, name) != 0)
         return 0;
     return 1;
@@ -219,6 +227,7 @@ static int mir_get_object(const struct Sym *sym, const char *name)
     mir_copy_name(object->name, name);
     object->storage = sym->storage;
     object->type = sym->type;
+    object->offset = sym->offset;
     object->entry_value = -1;
     return index;
 }
@@ -261,15 +270,20 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->immediate = node->ival;
         return value;
     case AST_IDENT:
+        {
+            struct Sym *symbol = node->sym;
+            if (symbol == NULL && node->sval != NULL)
+                symbol = find_sym(node->sval);
         value = mir_new_value();
-        insn = mir_emit(node->sym != NULL && node->sym->is_array
+        insn = mir_emit(symbol != NULL && symbol->is_array
                         ? MIR_ADDRESS : MIR_LOAD);
         insn->dst = value;
         insn->type = node->type;
         mir_copy_name(insn->name, node->sval ? node->sval :
                                   (node->sym ? node->sym->name : "?"));
-        insn->object = mir_get_object(node->sym, insn->name);
+        insn->object = mir_get_object(symbol, insn->name);
         return value;
+        }
     case AST_INDEX:
         left = mir_lower_expr(node->a);
         right = mir_lower_expr(node->b);
@@ -342,14 +356,19 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_ASSIGN:
         if (node->op != '=' || node->a == NULL || node->a->kind != AST_IDENT)
             break;
+        {
+        struct Sym *symbol = node->a->sym;
+        if (symbol == NULL && node->a->sval != NULL)
+            symbol = find_sym(node->a->sval);
         value = mir_lower_expr(node->b);
         insn = mir_emit(MIR_STORE);
         insn->src1 = value;
         insn->type = node->a->type;
         mir_copy_name(insn->name, node->a->sval ? node->a->sval :
                                   (node->a->sym ? node->a->sym->name : "?"));
-        insn->object = mir_get_object(node->a->sym, insn->name);
+        insn->object = mir_get_object(symbol, insn->name);
         return value;
+        }
     case AST_CALL:
         for (i = 0; i < node->list_len; ++i) {
             left = mir_lower_expr(node->list[i]);
@@ -503,6 +522,8 @@ static void mir_lower_stmt(const struct AstNode *node)
 
 void mir_begin_function(const char *name, int sink_purpose)
 {
+    const char *emit_filter;
+
     if (!mir_report_enabled(name)) {
         mir.active = 0;
         return;
@@ -513,8 +534,19 @@ void mir_begin_function(const char *name, int sink_purpose)
     mir.flow_depth = 0;
     mir.object_count = 0;
     mir.sink_purpose = sink_purpose;
+    mir.emit_mode = 0;
+    mir.capture_stream = NULL;
     mir_copy_name(mir.name, name);
     mir.active = 1;
+    emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
+    if (emit_filter != NULL && emit_filter[0] != 0 &&
+        strcmp(emit_filter, name) == 0) {
+        mir.capture_stream = tmpfile();
+        if (mir.capture_stream == NULL)
+            fatal("cannot create MIR capture stream");
+        mir.saved_sink = emit_sink_push(mir.capture_stream, EMIT_SINK_VERIFY);
+        mir.emit_mode = 1;
+    }
     {
         int local;
         for (local = 0; local < g_frame.nlocals; ++local) {
@@ -1080,6 +1112,8 @@ static int mir_verify_and_dump(void)
             fprintf(stderr, ",v%d", insn->src2);
         if (insn->name[0])
             fprintf(stderr, " %s", insn->name);
+        if (insn->object >= 0)
+            fprintf(stderr, " {o%d}", insn->object);
         if (insn->opcode == MIR_CONST)
             fprintf(stderr, " %ld", insn->immediate);
         if (insn->opcode == MIR_OPAQUE)
@@ -1111,10 +1145,149 @@ static int mir_verify_and_dump(void)
     return errors == 0;
 }
 
+static const struct MirInsn *mir_definition(int value)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].dst == value)
+            return &mir.insns[i];
+    return NULL;
+}
+
+static int mir_emit_load_param(FILE *out, const struct MirInsn *param)
+{
+    const struct MirObject *object;
+
+    if (param == NULL || param->opcode != MIR_PARAM || param->object < 0 ||
+        param->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[param->object];
+    if (object->storage != SC_PARAM || type_size(object->type) != 2)
+        return 0;
+    fprintf(out, "\tld l,(ix%+d)\n", object->offset);
+    fprintf(out, "\tld h,(ix%+d)\n", object->offset + 1);
+    return 1;
+}
+
+/* First emitted subset: one straight-line return of a word parameter,
+ * constant, or parameter +/- constant. This intentionally proves the
+ * transactional backend path before attempting general instruction
+ * selection. Anything else falls back byte-for-byte to the captured existing
+ * codegen. */
+static int mir_try_emit_z80(FILE *out)
+{
+    const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *definition;
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+    int i;
+    int executable = 0;
+
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_NOP || insn->opcode == MIR_PARAM)
+            continue;
+        ++executable;
+        if (insn->opcode == MIR_RETURN)
+            return_insn = insn;
+        else if (insn->opcode != MIR_CONST && insn->opcode != MIR_BINARY)
+            return 0;
+    }
+    if (return_insn == NULL || executable > 3 || return_insn->src1 < 0)
+        return 0;
+    definition = mir_definition(return_insn->src1);
+    if (definition == NULL)
+        return 0;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (definition->opcode == MIR_PARAM) {
+        if (!mir_emit_load_param(out, definition))
+            return 0;
+    } else if (definition->opcode == MIR_CONST) {
+        fprintf(out, "\tld hl,%ld\n", definition->immediate);
+    } else if (definition->opcode == MIR_BINARY) {
+        long constant;
+        int operation = (int)definition->immediate;
+
+        left = mir_definition(definition->src1);
+        right = mir_definition(definition->src2);
+        if (left == NULL || right == NULL)
+            return 0;
+        if (left->opcode == MIR_PARAM && right->opcode == MIR_CONST) {
+            if (!mir_emit_load_param(out, left))
+                return 0;
+            constant = right->immediate;
+        } else if (operation == '+' && left->opcode == MIR_CONST &&
+                   right->opcode == MIR_PARAM) {
+            if (!mir_emit_load_param(out, right))
+                return 0;
+            constant = left->immediate;
+        } else {
+            return 0;
+        }
+        if (operation == '+') {
+            if (constant == 1)
+                fputs("\tinc hl\n", out);
+            else if (constant == -1)
+                fputs("\tdec hl\n", out);
+            else
+                fprintf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
+        } else if (operation == '-') {
+            fprintf(out, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", constant);
+        } else {
+            return 0;
+        }
+    } else {
+        return 0;
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    return 1;
+}
+
+static void mir_copy_capture(FILE *out)
+{
+    int character;
+
+    rewind(mir.capture_stream);
+    while ((character = fgetc(mir.capture_stream)) != EOF)
+        fputc(character, out);
+}
+
 void mir_end_function(void)
 {
+    int verified;
+
     if (!mir.active)
         return;
-    (void)mir_verify_and_dump();
+    verified = mir_verify_and_dump();
+    if (mir.emit_mode) {
+        FILE *destination = mir.saved_sink.stream;
+        FILE *generated = NULL;
+        int emitted = 0;
+
+        emit_sink_restore(&mir.saved_sink);
+        if (verified) {
+            generated = tmpfile();
+            if (generated == NULL)
+                fatal("cannot create MIR generated stream");
+            emitted = mir_try_emit_z80(generated);
+        }
+        if (emitted) {
+            int character;
+            rewind(generated);
+            while ((character = fgetc(generated)) != EOF)
+                fputc(character, destination);
+        } else {
+            mir_copy_capture(destination);
+        }
+        if (generated != NULL)
+            fclose(generated);
+        fprintf(stderr, "; MIR emit function=%s result=%s\n",
+                mir.name, emitted ? "mir" : "fallback");
+        fclose(mir.capture_stream);
+        mir.capture_stream = NULL;
+        mir.emit_mode = 0;
+    }
     mir.active = 0;
 }
