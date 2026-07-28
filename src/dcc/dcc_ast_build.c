@@ -748,6 +748,14 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
         else {
             lhs = ast_binary(ar, AST_BINARY, k, lhs, rhs, 0);
             lhs->peek_type = peek;
+            lhs->type = ast_expr_type_for_sizeof(lhs);
+            if (k == TOK_SHL || k == TOK_SHR)
+                lhs->operand_type = promote_int_type(
+                    ast_expr_type_for_sizeof(lhs->a));
+            else
+                lhs->operand_type = common_arith_type(
+                    ast_expr_type_for_sizeof(lhs->a),
+                    ast_expr_type_for_sizeof(lhs->b));
         }
     }
     return lhs;

@@ -925,7 +925,10 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->dst = value;
         insn->src1 = left;
         insn->src2 = right;
-        insn->type = node->type;
+        insn->type = node->type != 0 ? node->type
+                                     : ast_expr_type_for_sizeof(node);
+        insn->secondary_offset = node->operand_type != 0
+            ? node->operand_type : insn->type;
         insn->immediate = node->op;
         return value;
     case AST_LOGAND:
@@ -1947,6 +1950,14 @@ static void mir_resolve_deferred_metadata(void)
             if (strcmp(insn->base_name, mir.alias_source_names[i]) == 0)
                 mir_copy_name(insn->base_name, mir.alias_internal_names[i]);
         }
+    }
+
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        if (insn->type == 0 && insn->name[0] != 0 &&
+            (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE ||
+             insn->opcode == MIR_ADDRESS || insn->opcode == MIR_PARAM))
+            insn->type = mir_named_type(insn->name);
     }
 
     for (i = 0; i < mir.count; ++i) {
@@ -3241,7 +3252,7 @@ static int mir_prepare_backend_slots(void)
     }
     first = (int *)malloc((size_t)mir.next_value * sizeof(*first));
     last = (int *)malloc((size_t)mir.next_value * sizeof(*last));
-    slot_end = (int *)malloc((size_t)mir.next_value * sizeof(*slot_end));
+    slot_end = (int *)malloc((size_t)mir.next_value * 2 * sizeof(*slot_end));
     if (first == NULL || last == NULL || slot_end == NULL)
         fatal("out of memory computing MIR backend intervals");
     for (value = 0; value < mir.next_value; ++value) {
@@ -3249,6 +3260,7 @@ static int mir_prepare_backend_slots(void)
         last[value] = -1;
         mir.backend_slots[value] = -1;
         slot_end[value] = -1;
+        slot_end[mir.next_value + value] = -1;
     }
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -3274,13 +3286,30 @@ static int mir_prepare_backend_slots(void)
         for (value = 0; value < mir.next_value; ++value)
             if (first[value] == i) {
                 int slot;
-                for (slot = 0; slot < mir.backend_slot_count; ++slot)
-                    if (slot_end[slot] < i)
+                const struct MirInsn *definition = mir_definition(value);
+                int units = definition != NULL &&
+                            type_size(definition->type) > 2 ? 2 : 1;
+                for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
+                    int unit;
+                    int available = 1;
+                    for (unit = 0; unit < units; ++unit)
+                        if (slot_end[slot + unit] >= i) {
+                            available = 0;
+                            break;
+                        }
+                    if (available)
                         break;
-                if (slot == mir.backend_slot_count)
-                    ++mir.backend_slot_count;
+                }
+                if (slot + units > mir.backend_slot_count) {
+                    slot = mir.backend_slot_count;
+                    mir.backend_slot_count += units;
+                }
                 mir.backend_slots[value] = slot;
-                slot_end[slot] = last[value];
+                {
+                    int unit;
+                    for (unit = 0; unit < units; ++unit)
+                        slot_end[slot + unit] = last[value];
+                }
             }
     free(slot_end);
     free(last);
@@ -3298,6 +3327,30 @@ static void mir_emit_virtual_store(FILE *out, int value)
 {
     int offset = mir_virtual_offset(value);
     fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n", offset, offset + 1);
+}
+
+static int mir_value_is_wide(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    return definition != NULL && type_size(definition->type) > 2;
+}
+
+static void mir_emit_virtual_load_wide(FILE *out, int value)
+{
+    int offset = mir_virtual_offset(value);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset - 2, offset - 1);
+}
+
+static void mir_emit_virtual_store_wide(FILE *out, int value)
+{
+    int offset = mir_virtual_offset(value);
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            offset, offset + 1, offset - 2, offset - 1);
 }
 
 static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
@@ -3349,6 +3402,178 @@ static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
     }
 }
 
+static void mir_emit_hl_and_const(FILE *out, unsigned int mask)
+{
+    fprintf(out,
+            "\tld a,l\n\tand %u\n\tld l,a\n"
+            "\tld a,h\n\tand %u\n\tld h,a\n",
+            mask & 0xffU, (mask >> 8) & 0xffU);
+}
+
+static void mir_emit_hl_or_const(FILE *out, unsigned int mask)
+{
+    fprintf(out,
+            "\tld a,l\n\tor %u\n\tld l,a\n"
+            "\tld a,h\n\tor %u\n\tld h,a\n",
+            mask & 0xffU, (mask >> 8) & 0xffU);
+}
+
+static void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
+{
+    int shift;
+    int sign_label;
+    unsigned int value_mask;
+
+    for (shift = 0; shift < insn->bit_shift; ++shift)
+        fputs("\tsrl h\n\trr l\n", out);
+    value_mask = insn->bit_width >= 16
+        ? 0xffffU : (1U << insn->bit_width) - 1U;
+    mir_emit_hl_and_const(out, value_mask);
+    if ((insn->type & TYPE_UNSIGNED) == 0 && insn->bit_width > 0 &&
+        insn->bit_width < 16) {
+        sign_label = new_label();
+        if (insn->bit_width <= 8)
+            fprintf(out, "\tbit %d,l\n", insn->bit_width - 1);
+        else
+            fprintf(out, "\tbit %d,h\n", insn->bit_width - 9);
+        fprintf(out, "\tjp z,L%d\n", sign_label);
+        mir_emit_hl_or_const(out, (~value_mask) & 0xffffU);
+        fprintf(out, "L%d:\n", sign_label);
+    }
+}
+
+static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
+{
+    const char *helper = NULL;
+    int operation = (int)insn->immediate;
+    int operand_type = insn->secondary_offset;
+    if (type_is_float(operand_type)) {
+        if (operation == '+' || operation == '-' || operation == '*' ||
+            operation == '/') {
+            helper = operation == '+' ? "__faf" : operation == '-' ? "__fsf" :
+                     operation == '*' ? "__fmf" : "__fdf";
+        } else if (operation == TOK_EQ || operation == TOK_NE ||
+                   operation == '<' || operation == '>' ||
+                   operation == TOK_LE || operation == TOK_GE) {
+            helper = operation == TOK_EQ ? "__feqf" :
+                     operation == TOK_NE ? "__fnef" :
+                     operation == '<' ? "__fgtf" :
+                     operation == '>' ? "__fltf" :
+                     operation == TOK_LE ? "__fgef" : "__flef";
+        } else {
+            return 0;
+        }
+        fprintf(out, "\textrn %s\n\tcall %s\n\tpop bc\n\tpop bc\n",
+                helper, helper);
+        return 1;
+    }
+    if (operation == TOK_EQ || operation == TOK_NE) {
+        int true_label = new_label();
+        int end_label = new_label();
+        fputs("\tpop bc\n\tld a,c\n\txor l\n\tld l,a\n"
+              "\tld a,b\n\txor h\n\tor l\n\tld l,a\n"
+              "\tpop bc\n\tld a,c\n\txor e\n\tor l\n\tld l,a\n"
+              "\tld a,b\n\txor d\n\tor l\n", out);
+        fprintf(out, operation == TOK_EQ ? "\tjp z,L%d\n" : "\tjp nz,L%d\n",
+                true_label);
+        fprintf(out, "\tld hl,0\n\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+                end_label, true_label, end_label);
+        return 1;
+    }
+    if (operation == '<' || operation == '>' || operation == TOK_LE ||
+        operation == TOK_GE) {
+        int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+        helper = operation == '<' ? (is_unsigned ? "__ltu" : "__lts") :
+                 operation == TOK_LE ? (is_unsigned ? "__leu" : "__les") :
+                 operation == '>' ? (is_unsigned ? "__lgu" : "__lgs") :
+                 (is_unsigned ? "__lku" : "__lks");
+        fprintf(out, "\tpush de\n\tpush hl\n\textrn %s\n\tcall %s\n"
+                     "\tex de,hl\n\tld hl,8\n\tadd hl,sp\n"
+                     "\tld sp,hl\n\tex de,hl\n",
+                helper, helper);
+        return 1;
+    }
+    switch ((int)insn->immediate) {
+    case '+':
+        fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+              "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+        return 1;
+    case '-':
+        fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tor a\n\tsbc hl,bc\n"
+              "\tld b,h\n\tld c,l\n\tpop hl\n\tsbc hl,de\n"
+              "\tld d,b\n\tld e,c\n\tex de,hl\n", out);
+        return 1;
+    case '&': case '|': case '^':
+        {
+            const char *operation = insn->immediate == '&' ? "and" :
+                                    insn->immediate == '|' ? "or" : "xor";
+            fprintf(out,
+                    "\tpop bc\n\tld a,l\n\t%s c\n\tld l,a\n"
+                    "\tld a,h\n\t%s b\n\tld h,a\n"
+                    "\tex de,hl\n\tpop bc\n"
+                    "\tld a,l\n\t%s c\n\tld l,a\n"
+                    "\tld a,h\n\t%s b\n\tld h,a\n\tex de,hl\n",
+                    operation, operation, operation, operation);
+        }
+        return 1;
+    case '*': helper = "__lmul"; break;
+    case '/': helper = (insn->type & TYPE_UNSIGNED) != 0 ? "__ldu" : "__lds"; break;
+    case '%': helper = (insn->type & TYPE_UNSIGNED) != 0 ? "__lmu" : "__lms"; break;
+    default: return 0;
+    }
+    fprintf(out, "\textrn %s\n\tcall %s\n\tpop bc\n\tpop bc\n",
+            helper, helper);
+    return 1;
+}
+
+static int mir_emit_cast(FILE *out, int source_type, int target_type)
+{
+    const char *helper;
+    if (source_type == 0 || target_type == 0 || source_type == target_type)
+        return 1;
+    if (type_is_float(target_type) && !type_is_float(source_type)) {
+        if (type_is_long(source_type))
+            helper = (source_type & TYPE_UNSIGNED) != 0 ? "__fulf" : "__flf";
+        else
+            helper = ((source_type & TYPE_UNSIGNED) != 0 ||
+                      type_ptr_depth(source_type) > 0) ? "__fuf" : "__fif";
+        fprintf(out, "\textrn %s\n\tcall %s\n", helper, helper);
+        return 1;
+    }
+    if (type_is_float(source_type) && !type_is_float(target_type)) {
+        if (type_is_long(target_type))
+            helper = (target_type & TYPE_UNSIGNED) != 0 ? "__fful" : "__ffl";
+        else
+            helper = ((target_type & TYPE_UNSIGNED) != 0 ||
+                      type_ptr_depth(target_type) > 0) ? "__ffu" : "__ffi";
+        fprintf(out, "\textrn %s\n\tcall %s\n", helper, helper);
+        if (type_size(target_type) == 1) {
+            if ((target_type & TYPE_UNSIGNED) != 0)
+                fputs("\tld h,0\n", out);
+            else
+                fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+        }
+        return 1;
+    }
+    if (type_size(target_type) == 4 && type_size(source_type) <= 2) {
+        if ((source_type & TYPE_UNSIGNED) != 0 ||
+            type_ptr_depth(source_type) > 0)
+            fputs("\tld de,0\n", out);
+        else
+            fputs("\tld a,h\n\trlca\n\tsbc a,a\n\tld d,a\n\tld e,a\n", out);
+        return 1;
+    }
+    if (type_size(target_type) <= 2 && type_size(source_type) == 4)
+        return 1;
+    if (type_size(target_type) == 1) {
+        if ((target_type & TYPE_UNSIGNED) != 0)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    }
+    return 1;
+}
+
 static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
                                        int successor)
 {
@@ -3375,6 +3600,7 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
 static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset)
 {
+    struct Sym *global;
     if (insn->object >= 0 && insn->object < mir.object_count) {
         const struct MirObject *object = &mir.objects[insn->object];
         *type = object->type;
@@ -3382,7 +3608,16 @@ static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
         *offset = object->offset;
         return 1;
     }
-    return mir_declared_location(insn->name, type, storage, offset);
+    if (mir_declared_location(insn->name, type, storage, offset))
+        return 1;
+    global = find_global(insn->name);
+    if (global != NULL) {
+        *type = global->type;
+        *storage = global->storage;
+        *offset = global->offset;
+        return 1;
+    }
+    return 0;
 }
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
@@ -3401,8 +3636,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int i;
     int accepted = 0;
 
-    if ((mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2 ||
-        mir.next_value <= 0)
+    if (type_is_struct_object(mir.return_type) ||
+        type_size(mir.return_type) > 4 || mir.next_value <= 0)
         return mir_scalar_cfg_preflight_reject("return-type", -1);
     frame_bytes = mir.local_bytes + 2 * mir_prepare_backend_slots();
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
@@ -3413,10 +3648,11 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         return mir_scalar_cfg_preflight_reject("frame-size", -1);
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
-        if (insn->dst >= 0 && type_size(insn->type) > 2)
+        if (insn->dst >= 0 && type_size(insn->type) > 4)
             return mir_scalar_cfg_preflight_reject("wide-value", i);
         switch (insn->opcode) {
-        case MIR_NOP: case MIR_PARAM: case MIR_CONST: case MIR_STRING_ADDRESS:
+        case MIR_NOP: case MIR_PARAM: case MIR_CONST: case MIR_FLOAT_CONST:
+        case MIR_STRING_ADDRESS:
         case MIR_ADDRESS: case MIR_COMPOUND_ADDRESS: case MIR_INDEX_ADDRESS:
         case MIR_MEMBER_ADDRESS: case MIR_LOAD: case MIR_LOAD_INDIRECT:
         case MIR_STORE: case MIR_STORE_INDIRECT: case MIR_UNARY:
@@ -3433,17 +3669,20 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_offset;
             if (!mir_scalar_memory_location(insn, &memory_type,
                             &memory_storage, &memory_offset) ||
-            (memory_storage != SC_LOCAL && memory_storage != SC_PARAM))
+                (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
+                 memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN))
                 return mir_scalar_cfg_preflight_reject("memory-location", i);
         }
            if ((insn->opcode == MIR_LOAD_INDIRECT ||
                insn->opcode == MIR_STORE_INDIRECT) &&
-              (insn->memory_size <= 0 || insn->memory_size > 2 ||
-               insn->bit_width > 0))
+            (insn->memory_size <= 0 ||
+             (insn->memory_size != 1 && insn->memory_size != 2 &&
+              insn->memory_size != 4) ||
+             (insn->bit_width > 0 && insn->memory_size != 2)))
             return mir_scalar_cfg_preflight_reject("indirect-width", i);
         if (insn->opcode == MIR_CALL &&
             (strcmp(insn->name, "<indirect>") == 0 ||
-             type_size(insn->type) > 2))
+             type_size(insn->type) > 4))
             return mir_scalar_cfg_preflight_reject("call-abi", i);
     }
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
@@ -3478,9 +3717,34 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_offset;
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset) ||
-                memory_offset < -128 || memory_offset + 1 > 127)
+                ((memory_storage == SC_LOCAL || memory_storage == SC_PARAM) &&
+                 (memory_offset < -128 || memory_offset + 1 > 127)))
                 goto done;
-            fprintf(out, "\tld l,(ix%+d)\n", memory_offset);
+            if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {
+                struct Sym *global = find_global(insn->name);
+                const char *assembly_name = asm_name_for(
+                    global != NULL ? sym_asm_name(global) : insn->name);
+                if (memory_storage == SC_EXTERN)
+                    fprintf(out, "\textrn %s\n", assembly_name);
+                if (type_size(memory_type) == 4)
+                    fprintf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
+                            assembly_name, assembly_name);
+                else if (type_size(memory_type) == 1)
+                    fprintf(out, "\tld a,(%s)\n\tld l,a\n", assembly_name);
+                else
+                    fprintf(out, "\tld hl,(%s)\n", assembly_name);
+            } else {
+                fprintf(out, "\tld l,(ix%+d)\n", memory_offset);
+            }
+            if (type_size(memory_type) == 4) {
+                if (memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN)
+                    fprintf(out,
+                            "\tld h,(ix%+d)\n\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                            memory_offset + 1, memory_offset + 2,
+                            memory_offset + 3);
+                mir_emit_virtual_store_wide(out, insn->dst);
+                break;
+            }
             if (type_size(memory_type) == 1) {
                 if ((memory_type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
@@ -3490,7 +3754,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
                             end_label, end_label);
                 }
-            } else {
+            } else if (memory_storage != SC_GLOBAL &&
+                       memory_storage != SC_EXTERN) {
                 fprintf(out, "\tld h,(ix%+d)\n", memory_offset + 1);
             }
             mir_emit_virtual_store(out, insn->dst);
@@ -3498,7 +3763,19 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
         case MIR_CONST:
             fprintf(out, "\tld hl,%ld\n", insn->immediate & 0xffffL);
-            mir_emit_virtual_store(out, insn->dst);
+            if (type_size(insn->type) == 4) {
+                fprintf(out, "\tld de,%lu\n",
+                        ((unsigned long)insn->immediate >> 16) & 0xffffUL);
+                mir_emit_virtual_store_wide(out, insn->dst);
+            } else {
+                mir_emit_virtual_store(out, insn->dst);
+            }
+            break;
+        case MIR_FLOAT_CONST:
+            fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
+                    (unsigned long)insn->immediate & 0xffffUL,
+                    ((unsigned long)insn->immediate >> 16) & 0xffffUL);
+            mir_emit_virtual_store_wide(out, insn->dst);
             break;
         case MIR_STRING_ADDRESS:
             fprintf(out, "\tld hl,S%ld\n", insn->immediate);
@@ -3512,9 +3789,18 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset))
                 goto done;
-            fputs("\tpush ix\n\tpop hl\n", out);
-            if (memory_offset != 0)
-                fprintf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
+            if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {
+                struct Sym *global = find_global(insn->name);
+                const char *assembly_name = asm_name_for(
+                    global != NULL ? sym_asm_name(global) : insn->name);
+                if (memory_storage == SC_EXTERN)
+                    fprintf(out, "\textrn %s\n", assembly_name);
+                fprintf(out, "\tld hl,%s\n", assembly_name);
+            } else {
+                fputs("\tpush ix\n\tpop hl\n", out);
+                if (memory_offset != 0)
+                    fprintf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
+            }
             mir_emit_virtual_store(out, insn->dst);
             break;
             }
@@ -3543,7 +3829,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
         case MIR_LOAD_INDIRECT:
             mir_emit_virtual_load(out, insn->src1);
-            if (insn->memory_size == 1) {
+            if (insn->memory_size == 4) {
+                fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+                      "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
+                      "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
+                      "\tld d,(hl)\n\tpop hl\n", out);
+            } else if (insn->memory_size == 1) {
                 fputs("\tld l,(hl)\n", out);
                 if ((insn->type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
@@ -3556,7 +3847,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             } else {
                 fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
             }
-            mir_emit_virtual_store(out, insn->dst);
+            if (insn->bit_width > 0)
+                mir_emit_bitfield_extract(out, insn);
+            if (insn->memory_size == 4)
+                mir_emit_virtual_store_wide(out, insn->dst);
+            else
+                mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_STORE:
             {
@@ -3565,15 +3861,72 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_offset;
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset) ||
-                memory_offset < -128 || memory_offset + 1 > 127)
+                ((memory_storage == SC_LOCAL || memory_storage == SC_PARAM) &&
+                 (memory_offset < -128 || memory_offset + 1 > 127)))
                 goto done;
             mir_emit_virtual_load(out, insn->src1);
-            fprintf(out, "\tld (ix%+d),l\n", memory_offset);
-            if (type_size(memory_type) > 1)
-                fprintf(out, "\tld (ix%+d),h\n", memory_offset + 1);
+            if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {
+                struct Sym *global = find_global(insn->name);
+                const char *assembly_name = asm_name_for(
+                    global != NULL ? sym_asm_name(global) : insn->name);
+                if (memory_storage == SC_EXTERN)
+                    fprintf(out, "\textrn %s\n", assembly_name);
+                if (type_size(memory_type) == 4) {
+                    mir_emit_virtual_load_wide(out, insn->src1);
+                    fprintf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
+                            assembly_name, assembly_name);
+                } else if (type_size(memory_type) == 1)
+                    fprintf(out, "\tld a,l\n\tld (%s),a\n", assembly_name);
+                else
+                    fprintf(out, "\tld (%s),hl\n", assembly_name);
+            } else {
+                if (type_size(memory_type) == 4) {
+                    mir_emit_virtual_load_wide(out, insn->src1);
+                    fprintf(out,
+                            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+                            memory_offset, memory_offset + 1,
+                            memory_offset + 2, memory_offset + 3);
+                } else {
+                    fprintf(out, "\tld (ix%+d),l\n", memory_offset);
+                }
+                if (type_size(memory_type) == 2)
+                    fprintf(out, "\tld (ix%+d),h\n", memory_offset + 1);
+            }
             break;
             }
         case MIR_STORE_INDIRECT:
+            if (insn->bit_width > 0) {
+                int shift;
+                mir_emit_virtual_load(out, insn->src2);
+                mir_emit_hl_and_const(
+                    out, insn->bit_width >= 16
+                        ? 0xffffU : (1U << insn->bit_width) - 1U);
+                for (shift = 0; shift < insn->bit_shift; ++shift)
+                    fputs("\tadd hl,hl\n", out);
+                mir_emit_hl_and_const(out, insn->bit_mask);
+                fputs("\tpush hl\n", out);
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+                      "\tld h,(hl)\n\tld l,a\n", out);
+                mir_emit_hl_and_const(out, (~insn->bit_mask) & 0xffffU);
+                fputs("\tpop bc\n\tpop de\n"
+                      "\tld a,l\n\tor e\n\tld l,a\n"
+                      "\tld a,h\n\tor d\n\tld h,a\n"
+                      "\tex de,hl\n\tld h,b\n\tld l,c\n"
+                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+                break;
+            }
+            if (insn->memory_size == 4) {
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tpush hl\n", out);
+                mir_emit_virtual_load_wide(out, insn->src2);
+                fputs("\tpop bc\n\tpush de\n\tex de,hl\n"
+                      "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n"
+                      "\tld (hl),d\n\tinc hl\n\tpop de\n"
+                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+                break;
+            }
             mir_emit_virtual_load(out, insn->src1);
             fputs("\tpush hl\n", out);
             mir_emit_virtual_load(out, insn->src2);
@@ -3582,9 +3935,17 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 fputs("\tinc hl\n\tld (hl),d\n", out);
             break;
         case MIR_UNARY:
-            mir_emit_virtual_load(out, insn->src1);
-            if (insn->immediate == 0 || insn->immediate == '+') {
-                /* Cast/no-op. */
+            if (mir_value_is_wide(insn->src1))
+                mir_emit_virtual_load_wide(out, insn->src1);
+            else
+                mir_emit_virtual_load(out, insn->src1);
+            if (insn->immediate == 0) {
+                const struct MirInsn *source = mir_definition(insn->src1);
+                if (!mir_emit_cast(out, source != NULL ? source->type : 0,
+                                   insn->type))
+                    goto done;
+            } else if (insn->immediate == '+') {
+                /* Unary plus. */
             } else if (insn->immediate == '-') {
                 fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
             } else if (insn->immediate == '~') {
@@ -3598,16 +3959,31 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             } else {
                 goto done;
             }
-            mir_emit_virtual_store(out, insn->dst);
+            if (type_size(insn->type) == 4)
+                mir_emit_virtual_store_wide(out, insn->dst);
+            else
+                mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_BINARY:
-            mir_emit_virtual_load(out, insn->src1);
-            fputs("\tpush hl\n", out);
-            mir_emit_virtual_load(out, insn->src2);
-            fputs("\tex de,hl\n\tpop hl\n", out);
-            if (!mir_emit_scalar_operation(out, insn))
-                goto done;
-            mir_emit_virtual_store(out, insn->dst);
+            if (type_size(insn->secondary_offset) == 4) {
+                mir_emit_virtual_load_wide(out, insn->src1);
+                fputs("\tpush de\n\tpush hl\n", out);
+                mir_emit_virtual_load_wide(out, insn->src2);
+                if (!mir_emit_wide_operation(out, insn))
+                    goto done;
+                if (type_size(insn->type) == 4)
+                    mir_emit_virtual_store_wide(out, insn->dst);
+                else
+                    mir_emit_virtual_store(out, insn->dst);
+            } else {
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tpush hl\n", out);
+                mir_emit_virtual_load(out, insn->src2);
+                fputs("\tex de,hl\n\tpop hl\n", out);
+                if (!mir_emit_scalar_operation(out, insn))
+                    goto done;
+                mir_emit_virtual_store(out, insn->dst);
+            }
             break;
         case MIR_ARG:
             break;
@@ -3636,15 +4012,27 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 for (argument = call_arg_count - 1; argument >= 0; --argument) {
                     if (call_args[argument] < 0)
                         goto done;
-                    mir_emit_virtual_load(out, call_args[argument]);
-                    fputs("\tpush hl\n", out);
+                    if (mir_value_is_wide(call_args[argument])) {
+                        mir_emit_virtual_load_wide(out, call_args[argument]);
+                        fputs("\tpush de\n\tpush hl\n", out);
+                    } else {
+                        mir_emit_virtual_load(out, call_args[argument]);
+                        fputs("\tpush hl\n", out);
+                    }
                 }
                 fprintf(out, "\textrn %s\n\tcall %s\n",
                         assembly_name, assembly_name);
-                for (argument = 0; argument < call_arg_count; ++argument)
+                for (argument = 0; argument < call_arg_count; ++argument) {
                     fputs("\tpop bc\n", out);
-                if ((insn->type & 15) != TYPE_VOID)
-                    mir_emit_virtual_store(out, insn->dst);
+                    if (mir_value_is_wide(call_args[argument]))
+                        fputs("\tpop bc\n", out);
+                }
+                if ((insn->type & 15) != TYPE_VOID) {
+                    if (type_size(insn->type) == 4)
+                        mir_emit_virtual_store_wide(out, insn->dst);
+                    else
+                        mir_emit_virtual_store(out, insn->dst);
+                }
             }
             break;
         case MIR_JUMP:
@@ -3675,8 +4063,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_RETURN:
-            if (insn->src1 >= 0)
-                mir_emit_virtual_load(out, insn->src1);
+            if (insn->src1 >= 0) {
+                if (mir_value_is_wide(insn->src1))
+                    mir_emit_virtual_load_wide(out, insn->src1);
+                else
+                    mir_emit_virtual_load(out, insn->src1);
+            }
             fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
             break;
         default:
@@ -4323,6 +4715,9 @@ static int mir_try_emit_z80(FILE *out)
     int two_parameter_operation = 0;
     int i;
 
+    if (mir_try_emit_spilled_scalar_cfg(out))
+        return 1;
+
     /* The current selectors implement only the ordinary 16-bit HL result
      * convention. Other return ABIs remain with the existing backend. */
     if ((mir.return_type & 15) != TYPE_INT)
@@ -4337,8 +4732,6 @@ static int mir_try_emit_z80(FILE *out)
     if (mir_try_emit_countdown_loop(out))
         return 1;
     if (mir_try_emit_comparison_branch(out))
-        return 1;
-    if (mir_try_emit_spilled_scalar_cfg(out))
         return 1;
     if (mir_try_emit_scalar_dag(out))
         return 1;

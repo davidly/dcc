@@ -700,6 +700,22 @@ must feed both interference coloring and backend intervals. The nested-call
 harness requires four reusable slots; CFG and memory harnesses remain correct
 under hard timeouts.
 
+The general backend also supports global/extern scalar storage, 16-bit
+bitfield extraction/read-modify-write, and width-aware one/two-unit virtual
+slots. Wide slots grow downward with the frame: the high word is at
+`offset-2`, not `offset+2`; partial-tail allocation must append both units
+rather than overlap one live unit. Long and float values use DE:HL and the
+established runtime fastcall helpers. Mixed integer/long/float casts use the
+same conversion helpers as the AST backend.
+
+Typed MIR required an AST contract fix: `AST_BINARY` now retains both its C
+expression result type and its effective operand/common computation type.
+Comparisons return `int` but may compare long/float operands; arithmetic must
+not infer width from a formerly-zero node type. Named memory operations also
+resolve declaration/global type before interval sizing. Timeout harnesses prove
+long `70000 + 12345*2 = 94690`, float `1.5 + 2.25*2 = 6.00`, and mixed casts
+`69998 4.50` in emitted code.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
