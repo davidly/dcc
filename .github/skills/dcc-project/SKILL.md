@@ -403,9 +403,27 @@ The first `is_attacked` milestone was 25 MIR blocks, 100 virtual values,
 max-live 49, 12 opaque barriers and 0 verifier errors. Adding semantic
 AST_INDEX and AST_LOGAND lowering removes every barrier in that function: 49
 blocks, 222 virtual values, max-live 26, 0 opaque barriers, 0 verifier errors.
-Phi inputs are currently treated as live at the merge rather than on their
-individual predecessor edges, so liveness/pressure is conservative; physical
-allocation must not begin until edge-specific phi uses are implemented.
+The edge-specific liveness gate is cleared for AST_LOGAND phis: each input records its supplying
+predecessor label and is live only on that incoming edge. `is_attacked`'s
+max-live pressure drops from the conservative 26 to 3 before object promotion.
+
+The prototype also has conservative scalar mem2reg. Exact `Sym` metadata gives
+an object identity only to non-volatile, non-array, 1/2-byte locals and
+parameters whose address is never taken. Parameters receive explicit entry
+definitions. Forward dataflow folds a load only when every CFG predecessor
+agrees on one stored virtual value; ambiguous joins and opaque barriers remain
+memory operations rather than getting synthetic object phis. On `is_attacked`,
+six objects fold 14 loads and expose four persistent values crossing calls.
+
+`mir_simulate_allocation` builds virtual-value interference from MIR liveness
+and greedily colors HL/DE/BC/IY. Values crossing calls may use only callee-saved
+IY; opaque-crossing values spill. HL-fixed operation results are boundary
+constraints, not lifetime-long precolors: if the allocated home differs, the
+simulation counts a register move, which models live-range splitting. For
+`is_attacked`: max-live 4 after object promotion, zero spills, four
+call-crossing values, and 19 required fixed-result moves. This is analysis,
+not emitted Z80; instruction-specific operand constraints still need to be
+added before the coloring is authoritative.
 
 Load-bearing validation for any MIR change while it remains analysis-only:
 
