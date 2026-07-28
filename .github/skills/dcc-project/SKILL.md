@@ -777,6 +777,14 @@ now part of `DCC_MIR_EMIT_ALL` alongside measured loop selectors. The broader
 spill/CFG backend remains available through exact general mode but is not
 automatic.
 
+Frameless home emission is essential for profitability: word parameters load
+relative to SP and avoid IX save/restore when no locals or IY home are needed.
+Zero-input constant helpers remain on established codegen. Inline retained-home
+comparisons were correct but regressed `tcodegen` by 160 cycles, so that
+experiment was removed from automatic home emission; comparisons remain in the
+general CFG backend. The integrated frameless arithmetic/bitwise subset passes
+the full peep+nopeep zero-regression gate.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

@@ -3671,7 +3671,7 @@ static int mir_try_emit_homed_scalar_dag(FILE *out)
                 fputs("\tld a,h\n\tand d\n\tld h,a\n\tld a,l\n\tand e\n\tld l,a\n", out);
             else if (insn->immediate == '|')
                 fputs("\tld a,h\n\tor d\n\tld h,a\n\tld a,l\n\tor e\n\tld l,a\n", out);
-            else
+            else if (insn->immediate == '^')
                 fputs("\tld a,h\n\txor d\n\tld h,a\n\tld a,l\n\txor e\n\tld l,a\n", out);
             if (!mir_emit_hl_to_home(out, insn->dst))
                 return 0;
