@@ -330,9 +330,21 @@ Hard-won rules, each of which cost a measured regression to learn:
 	`push iy` / `pop hl` = 25 T-states against 38 for a frame word, so only 13 are
 	saved. BC is `ld l,c` / `ld h,b` = 8, saving 30 - more than twice as much.
 	`(iy+d)` is 19, identical to `(ix+d)`, so there is no gain in using IY merely
-	as a second base pointer. The largest remaining lever is region-scoped BC
-	over maximal call-free spans, generalising the existing loop-scoped
-	allocator, rather than more IY.
+	as a second base pointer.
+- **Widening candidate supply has failed three times running. Stop proposing
+	it without first improving the model.** Locals-by-reference-count (+5.0M),
+	relaxing the loop scan's control-exit gate so `return`/`break` no longer
+	disqualify a loop (+10.8M, tchess +3.0%), and adding best-value arbitration
+	between loop-BC and whole-function IY (+9,943, neutral) were each implemented
+	fully, measured, and reverted.
+
+	The common cause is that the cost model prices a promotion against an assumed
+	*memory* baseline, when the real baseline is whatever dccpeep would otherwise
+	have done - which is frequently a register already. Every candidate admitted
+	on that basis is a coin flip. Until the compiler can see cross-block liveness
+	and model what the peephole would do with a value, admitting more candidates
+	loses more than it wins. The existing tight gates are load-bearing, not
+	timidity.
 
 ## Behavior-preserving compiler refactors
 
