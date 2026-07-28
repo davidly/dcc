@@ -649,6 +649,21 @@ rejected by the parser. The arbitrary 4096-value verifier cap was removed;
 suite passes 309 runnable apps, diagnostics, dccpeep fixtures and performance
 baselines with emit-all enabled.
 
+The first general instruction selector is exact-name opt-in and consumes an
+arbitrary side-effect-free 16-bit scalar MIR DAG rather than matching source
+shapes. It supports parameters, constants, casts/unary operations, nested
+arithmetic/bitwise operations, signed/unsigned division/remainder helpers, all
+six comparisons and variable shifts through a uniform HL/DE evaluation
+contract. `tkandr:default_int` proves nested multiply/add (dccpeep can still
+rewrite generic `__mulu`), `tcodegen:isneg` proves signed comparison, and
+`tchess:rank_of` proves signed right shift.
+
+Always hard-timeout direct emulator checks. On macOS, where GNU `timeout` is
+not normally installed, use `perl -e 'alarm 15; exec @ARGV' ntvcm ...` and
+check exit 142 for timeout. Supply the app's exact `_test_overrides.json`
+arguments: tchess without `-c -p:1` legitimately waits at `move:` and can look
+like a generated-code hang.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

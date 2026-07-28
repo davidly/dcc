@@ -2935,6 +2935,196 @@ static void mir_emit_return_constant(FILE *out, long value)
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
+{
+    int true_label = new_label();
+    int end_label = new_label();
+
+    if (operation == '>' || operation == TOK_LE) {
+        fputs("\tex de,hl\n", out);
+        operation = operation == '>' ? '<' : TOK_GE;
+    }
+    if (!is_unsigned && operation != TOK_EQ && operation != TOK_NE)
+        fputs("\tld a,h\n\txor 128\n\tld h,a\n"
+              "\tld a,d\n\txor 128\n\tld d,a\n", out);
+    fputs("\tor a\n\tsbc hl,de\n\tld hl,0\n", out);
+    if (operation == TOK_EQ)
+        fprintf(out, "\tjp z,L%d\n", true_label);
+    else if (operation == TOK_NE)
+        fprintf(out, "\tjp nz,L%d\n", true_label);
+    else if (operation == '<')
+        fprintf(out, "\tjp c,L%d\n", true_label);
+    else
+        fprintf(out, "\tjp nc,L%d\n", true_label);
+    fprintf(out, "\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
+            end_label, true_label, end_label);
+}
+
+static void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned)
+{
+    int loop_label = new_label();
+    int end_label = new_label();
+
+    fputs("\tld b,e\n\tld a,b\n\tor a\n", out);
+    fprintf(out, "\tjp z,L%d\nL%d:\n", end_label, loop_label);
+    if (operation == TOK_SHL)
+        fputs("\tadd hl,hl\n", out);
+    else if (is_unsigned)
+        fputs("\tsrl h\n\trr l\n", out);
+    else
+        fputs("\tsra h\n\trr l\n", out);
+    fprintf(out, "\tdjnz L%d\nL%d:\n", loop_label, end_label);
+}
+
+static int mir_emit_scalar_value(FILE *out, int value, int depth)
+{
+    const struct MirInsn *definition;
+    const struct MirObject *object;
+    int false_label;
+    int end_label;
+
+    if (depth > 256)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL || type_size(definition->type) > 2)
+        return 0;
+    switch (definition->opcode) {
+    case MIR_PARAM:
+        if (definition->object < 0 || definition->object >= mir.object_count)
+            return 0;
+        object = &mir.objects[definition->object];
+        if (object->storage != SC_PARAM || type_size(object->type) > 2)
+            return 0;
+        if (type_size(object->type) == 1) {
+            fprintf(out, "\tld l,(ix%+d)\n", object->offset);
+            if ((object->type & TYPE_UNSIGNED) != 0)
+                fputs("\tld h,0\n", out);
+            else {
+                end_label = new_label();
+                fputs("\tld h,0\n\tbit 7,l\n", out);
+                fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
+                        end_label, end_label);
+            }
+        } else {
+            fprintf(out, "\tld l,(ix%+d)\n", object->offset);
+            fprintf(out, "\tld h,(ix%+d)\n", object->offset + 1);
+        }
+        return 1;
+    case MIR_CONST:
+        fprintf(out, "\tld hl,%ld\n", definition->immediate & 0xffffL);
+        return 1;
+    case MIR_UNARY:
+        if (!mir_emit_scalar_value(out, definition->src1, depth + 1))
+            return 0;
+        if (definition->immediate == 0 || definition->immediate == '+')
+            return 1;
+        if (definition->immediate == '-') {
+            fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
+            return 1;
+        }
+        if (definition->immediate == '~') {
+            fputs("\tld a,l\n\tcpl\n\tld l,a\n\tld a,h\n\tcpl\n\tld h,a\n", out);
+            return 1;
+        }
+        if (definition->immediate == '!') {
+            false_label = new_label();
+            end_label = new_label();
+            fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+            fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n", false_label,
+                    false_label);
+            (void)end_label;
+            return 1;
+        }
+        return 0;
+    case MIR_BINARY:
+        if (!mir_emit_scalar_value(out, definition->src1, depth + 1))
+            return 0;
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_scalar_value(out, definition->src2, depth + 1))
+            return 0;
+        fputs("\tex de,hl\n\tpop hl\n", out);
+        switch ((int)definition->immediate) {
+        case '+': fputs("\tadd hl,de\n", out); return 1;
+        case '-': fputs("\tor a\n\tsbc hl,de\n", out); return 1;
+        case '&':
+            fputs("\tld a,h\n\tand d\n\tld h,a\n\tld a,l\n\tand e\n\tld l,a\n", out);
+            return 1;
+        case '|':
+            fputs("\tld a,h\n\tor d\n\tld h,a\n\tld a,l\n\tor e\n\tld l,a\n", out);
+            return 1;
+        case '^':
+            fputs("\tld a,h\n\txor d\n\tld h,a\n\tld a,l\n\txor e\n\tld l,a\n", out);
+            return 1;
+        case '*':
+            fputs("\textrn __mulu\n\tcall __mulu\n", out);
+            return 1;
+        case '/':
+            fprintf(out, "\textrn %s\n\tcall %s\n",
+                    (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs",
+                    (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs");
+            return 1;
+        case '%':
+            fprintf(out, "\textrn %s\n\tcall %s\n",
+                    (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods",
+                    (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods");
+            return 1;
+        case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
+            {
+                const struct MirInsn *left = mir_definition(definition->src1);
+                const struct MirInsn *right = mir_definition(definition->src2);
+                int is_unsigned = (left != NULL &&
+                                   (left->type & TYPE_UNSIGNED) != 0) ||
+                                  (right != NULL &&
+                                   (right->type & TYPE_UNSIGNED) != 0);
+                mir_emit_scalar_compare(out, (int)definition->immediate,
+                                        is_unsigned);
+            }
+            return 1;
+        case TOK_SHL: case TOK_SHR:
+            {
+                const struct MirInsn *left = mir_definition(definition->src1);
+                mir_emit_scalar_shift(out, (int)definition->immediate,
+                                      left != NULL &&
+                                      (left->type & TYPE_UNSIGNED) != 0);
+            }
+            return 1;
+        default:
+            return 0;
+        }
+    default:
+        return 0;
+    }
+}
+
+static int mir_try_emit_scalar_dag(FILE *out)
+{
+    const struct MirInsn *return_insn = NULL;
+    int i;
+
+    if ((mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_RETURN) {
+            if (return_insn != NULL)
+                return 0;
+            return_insn = insn;
+        } else if (insn->opcode != MIR_NOP && insn->opcode != MIR_LABEL &&
+                   insn->opcode != MIR_PARAM && insn->opcode != MIR_CONST &&
+                   insn->opcode != MIR_UNARY && insn->opcode != MIR_BINARY &&
+                   !(insn->opcode == MIR_STORE && insn->object >= 0)) {
+            return 0;
+        }
+    }
+    if (return_insn == NULL || return_insn->src1 < 0)
+        return 0;
+    mir_emit_prologue(out);
+    if (!mir_emit_scalar_value(out, return_insn->src1, 0))
+        return 0;
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    return 1;
+}
+
 static int mir_is_const_value(int value, long expected)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -3583,6 +3773,8 @@ static int mir_try_emit_z80(FILE *out)
     if (mir_try_emit_countdown_loop(out))
         return 1;
     if (mir_try_emit_comparison_branch(out))
+        return 1;
+    if (mir_try_emit_scalar_dag(out))
         return 1;
 
     for (i = 0; i < mir.count; ++i) {
