@@ -316,6 +316,23 @@ Hard-won rules, each of which cost a measured regression to learn:
 	Inline substitution saves and restores it around a callee, leaving it holding
 	that callee's value. Derive per-function facts in
 	`scan_function_body_ident_counts` instead.
+- **Do not promote LOCALS to IY on reference count.** This was tried in full and
+	reverted: net +5.0M cycles. A parameter always arrives in memory, so the
+	"38 T-states becomes 25" model holds. A short-lived local whose live range
+	fits in one basic block is already kept in HL or A by dccpeep and never
+	touches the frame, so promoting it manufactures push/pop traffic. `trw`'s
+	`check_buf` lost 14.8% of the whole application this way. Raising the local
+	threshold does not separate them - `fint`'s `next()` has a local scoring
+	three times the bar that still loses 5.2M. The needed discriminator is
+	liveness across basic blocks, which the token scan cannot supply; a retry
+	must give the candidate search a real CFG first.
+- **Know what IY is worth before planning around it.** Reading it costs
+	`push iy` / `pop hl` = 25 T-states against 38 for a frame word, so only 13 are
+	saved. BC is `ld l,c` / `ld h,b` = 8, saving 30 - more than twice as much.
+	`(iy+d)` is 19, identical to `(ix+d)`, so there is no gain in using IY merely
+	as a second base pointer. The largest remaining lever is region-scoped BC
+	over maximal call-free spans, generalising the existing loop-scoped
+	allocator, rather than more IY.
 
 ## Behavior-preserving compiler refactors
 
