@@ -1805,6 +1805,128 @@ static int mir_try_emit_accumulator_loop(FILE *out)
     return 1;
 }
 
+/* Unsigned quotient/remainder loop:
+ *
+ *     q = 0;
+ *     while (K <= r) { r -= K; ++q; }
+ *     return q;
+ *
+ * BC holds r and DE holds q. Adding -K to BC in HL provides both the
+ * unsigned loop test (carry means r >= K) and the updated remainder. */
+static int mir_try_emit_unsigned_division_loop(FILE *out)
+{
+    const struct MirInsn *parameter = NULL;
+    const struct MirInsn *remainder_phi = NULL;
+    const struct MirInsn *quotient_phi = NULL;
+    const struct MirInsn *remainder_update = NULL;
+    const struct MirInsn *quotient_update = NULL;
+    const struct MirInsn *compare = NULL;
+    const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *divisor_definition;
+    int remainder_object = -1;
+    int quotient_object = -1;
+    long divisor;
+    int top_label;
+    int end_label;
+    int i;
+
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PARAM) {
+            if (parameter != NULL)
+                return 0;
+            parameter = insn;
+            remainder_object = insn->object;
+        }
+    }
+    if (parameter == NULL || remainder_object < 0)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PHI) {
+            if (insn->object == remainder_object)
+                remainder_phi = insn;
+            else if (quotient_phi == NULL) {
+                quotient_phi = insn;
+                quotient_object = insn->object;
+            } else {
+                return 0;
+            }
+        } else if (insn->opcode == MIR_STORE) {
+            const struct MirInsn *definition = mir_definition(insn->src1);
+            if (insn->object == remainder_object)
+                remainder_update = definition;
+            else if (insn->object == quotient_object || quotient_object < 0)
+                quotient_update = definition;
+        } else if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *candidate = mir_definition(insn->src1);
+            if (candidate != NULL && candidate->opcode == MIR_BINARY &&
+                candidate->immediate == TOK_LE)
+                compare = candidate;
+        } else if (insn->opcode == MIR_RETURN) {
+            return_insn = insn;
+        } else if (insn->opcode == MIR_CALL || insn->opcode == MIR_OPAQUE ||
+                   insn->opcode == MIR_INDEX_LOAD || insn->opcode == MIR_ARG) {
+            return 0;
+        }
+    }
+    if (remainder_phi == NULL || quotient_phi == NULL ||
+        remainder_update == NULL || quotient_update == NULL ||
+        compare == NULL || return_insn == NULL || quotient_object < 0)
+        return 0;
+    if (remainder_update->opcode != MIR_BINARY ||
+        remainder_update->immediate != '-' ||
+        remainder_update->src1 != remainder_phi->dst ||
+        quotient_update->opcode != MIR_BINARY ||
+        quotient_update->immediate != '+' ||
+        quotient_update->src1 != quotient_phi->dst ||
+        !mir_is_const_value(quotient_update->src2, 1))
+        return 0;
+    divisor_definition = mir_definition(remainder_update->src2);
+    if (divisor_definition == NULL ||
+        divisor_definition->opcode != MIR_CONST)
+        return 0;
+    if (compare->src2 != remainder_phi->dst ||
+        !mir_is_const_value(compare->src1, divisor_definition->immediate) ||
+        return_insn->src1 != quotient_phi->dst)
+        return 0;
+    divisor = divisor_definition->immediate;
+    if (divisor <= 0 || divisor > 32768)
+        return 0;
+    if (!((remainder_phi->src1 == parameter->dst &&
+           remainder_phi->src2 == remainder_update->dst) ||
+          (remainder_phi->src2 == parameter->dst &&
+           remainder_phi->src1 == remainder_update->dst)))
+        return 0;
+    if (!((mir_is_const_value(quotient_phi->src1, 0) &&
+           quotient_phi->src2 == quotient_update->dst) ||
+          (mir_is_const_value(quotient_phi->src2, 0) &&
+           quotient_phi->src1 == quotient_update->dst)))
+        return 0;
+    if (mir.objects[remainder_object].storage != SC_PARAM ||
+        type_size(mir.objects[remainder_object].type) != 2 ||
+        (mir.objects[remainder_object].type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.objects[quotient_object].type) != 2 ||
+        (mir.objects[quotient_object].type & TYPE_UNSIGNED) == 0)
+        return 0;
+
+    top_label = new_label();
+    end_label = new_label();
+    mir_emit_prologue(out);
+    fprintf(out, "\tld c,(ix%+d)\n", mir.objects[remainder_object].offset);
+    fprintf(out, "\tld b,(ix%+d)\n",
+            mir.objects[remainder_object].offset + 1);
+    fputs("\tld de,0\n", out);
+    fprintf(out, "L%d:\n", top_label);
+    fprintf(out, "\tld hl,%ld\n\tadd hl,bc\n", -divisor);
+    fprintf(out, "\tjp nc,L%d\n", end_label);
+    fputs("\tld b,h\n\tld c,l\n\tinc de\n", out);
+    fprintf(out, "\tjp L%d\n", top_label);
+    fprintf(out, "L%d:\n", end_label);
+    fputs("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    return 1;
+}
+
 /* Strict first CFG selector:
  *
  *     if (a == b) return C1; return C2;
@@ -1947,6 +2069,8 @@ static int mir_try_emit_z80(FILE *out)
 
     if (mir_try_emit_accumulator_loop(out))
         return 1;
+    if (mir_try_emit_unsigned_division_loop(out))
+        return 1;
     if (mir_try_emit_countdown_loop(out))
         return 1;
     if (mir_try_emit_comparison_branch(out))
@@ -2018,6 +2142,8 @@ static int mir_try_emit_automatic_z80(FILE *out)
             (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)
             return 0;
     if (mir_try_emit_accumulator_loop(out))
+        return 1;
+    if (mir_try_emit_unsigned_division_loop(out))
         return 1;
     return mir_try_emit_countdown_loop(out);
 }

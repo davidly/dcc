@@ -502,6 +502,16 @@ the update uses `ex de,hl / add hl,bc / ex de,hl`; neither value touches the
 frame in the loop. On 4000 calls of `accum(100)`, peep cycles fall from
 62,476,309 to 29,356,309: **-33,120,000 / -53.0%**, identical 16-bit output.
 
+The first automatic selector exercised by the checked corpus accepts unsigned
+constant-division loops of the exact form
+`q=0; while(K<=r){r-=K;++q;} return q;`, where `K` is a positive 16-bit
+constant. BC holds the remainder and DE the quotient; `HL=BC-K` supplies both
+the carry-based unsigned test and the next remainder. On `tcrcfix:bcd_div10`,
+the stack-check full suite reports peep cycles **-5.75%**, peep size **-128
+bytes / -1.22%**, and nopeep cycles **-7.95%**, with identical output. This is
+the model for automatic rollout: a strict semantic shape plus measured
+profitability against both existing backend modes.
+
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where
