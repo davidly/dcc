@@ -74,6 +74,8 @@ struct MirFunction {
     int continue_labels[MAX_FLOW];
     int flow_depth;
     int emit_mode;
+    int report_mode;
+    int return_type;
     FILE *capture_stream;
     EmitSink saved_sink;
     struct MirObject objects[256];
@@ -124,8 +126,11 @@ static int mir_report_enabled(const char *name)
     const char *all = getenv("DCC_MIR_REPORT");
     const char *filter = getenv("DCC_MIR_FUNCTION");
     const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
+    const char *candidates = getenv("DCC_MIR_CANDIDATES");
+    const char *emit_all = getenv("DCC_MIR_EMIT_ALL");
 
-    if (all == NULL && filter == NULL && emit_filter == NULL)
+    if (all == NULL && filter == NULL && emit_filter == NULL &&
+        candidates == NULL && emit_all == NULL)
         return 0;
     if (emit_filter != NULL && emit_filter[0] != 0 &&
         strcmp(emit_filter, name) == 0)
@@ -635,16 +640,22 @@ void mir_begin_function(const char *name, int sink_purpose)
     mir.initializer_target = NULL;
     mir.sink_purpose = sink_purpose;
     mir.emit_mode = 0;
+    mir.report_mode = getenv("DCC_MIR_REPORT") != NULL ||
+                      getenv("DCC_MIR_FUNCTION") != NULL ||
+                      getenv("DCC_MIR_CANDIDATES") != NULL ||
+                      getenv("DCC_MIR_EMIT_FUNCTION") != NULL;
+    mir.return_type = current_return_type;
     mir.capture_stream = NULL;
     mir_copy_name(mir.name, name);
     mir.active = 1;
     emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
-    if (emit_filter != NULL && emit_filter[0] != 0 &&
-        strcmp(emit_filter, name) == 0) {
+    if ((emit_filter != NULL && emit_filter[0] != 0 &&
+         strcmp(emit_filter, name) == 0) ||
+        getenv("DCC_MIR_EMIT_ALL") != NULL) {
         mir.capture_stream = tmpfile();
         if (mir.capture_stream == NULL)
             fatal("cannot create MIR capture stream");
-        mir.saved_sink = emit_sink_push(mir.capture_stream, EMIT_SINK_VERIFY);
+        mir.saved_sink = emit_sink_push(mir.capture_stream, sink_purpose);
         mir.emit_mode = 1;
     }
     mir_emit_label(mir_new_label());
@@ -1407,9 +1418,11 @@ static int mir_verify_and_dump(void)
 
     mir_simulate_allocation(live_in, live_out, &allocation);
 
-    fprintf(stderr, "; MIR function=%s sink=%s insns=%d values=%d errors=%d\n",
-            mir.name, mir_sink_name(mir.sink_purpose), mir.count,
-            mir.next_value, errors);
+    if (mir.report_mode)
+        fprintf(stderr,
+                "; MIR function=%s sink=%s insns=%d values=%d errors=%d\n",
+                mir.name, mir_sink_name(mir.sink_purpose), mir.count,
+                mir.next_value, errors);
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
         int in_count = 0;
@@ -1426,6 +1439,8 @@ static int mir_verify_and_dump(void)
             max_live = out_count;
         if (insn->opcode == MIR_OPAQUE)
             ++opaque_count;
+        if (!mir.report_mode)
+            continue;
         fprintf(stderr, ";   %4d %-8s", i, mir_opcode_name(insn->opcode));
         if (insn->dst >= 0)
             fprintf(stderr, " v%d =", insn->dst);
@@ -1451,11 +1466,12 @@ static int mir_verify_and_dump(void)
         fprintf(stderr, "  ; live in=%d out=%d\n", in_count, out_count);
     }
 
-    fprintf(stderr,
-            "; MIR summary function=%s blocks=%d max-live=%d opaque=%d "
-            "objects=%d promoted-loads=%d\n",
-            mir.name, block_count, max_live, opaque_count,
-            mir.object_count, promoted_objects);
+    if (mir.report_mode) {
+        fprintf(stderr,
+                "; MIR summary function=%s blocks=%d max-live=%d opaque=%d "
+                "objects=%d promoted-loads=%d\n",
+                mir.name, block_count, max_live, opaque_count,
+                mir.object_count, promoted_objects);
         fprintf(stderr,
             "; MIR allocation function=%s hl=%d de=%d bc=%d iy=%d spills=%d "
             "cross-call=%d opaque-cross=%d fixed-moves=%d operand-moves=%d "
@@ -1465,6 +1481,7 @@ static int mir_verify_and_dump(void)
             allocation.cross_call_values,
             allocation.opaque_crossing_values, allocation.fixed_moves,
             allocation.operand_moves, allocation.phi_moves);
+    }
 
     free(live_out);
     free(live_in);
@@ -1912,6 +1929,15 @@ static int mir_try_emit_z80(FILE *out)
     int two_parameter_operation = 0;
     int i;
 
+    /* The current selectors implement only the ordinary 16-bit HL result
+     * convention. Other return ABIs remain with the existing backend. */
+    if (opt_stack_check || (mir.return_type & 15) != TYPE_INT)
+        return 0;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_PARAM &&
+            (mir.insns[i].type & (TYPE_PTR | TYPE_PTR2)) != 0)
+            return 0;
+
     if (mir_try_emit_accumulator_loop(out))
         return 1;
     if (mir_try_emit_countdown_loop(out))
@@ -1990,6 +2016,18 @@ void mir_end_function(void)
     if (!mir.active)
         return;
     verified = mir_verify_and_dump();
+    if (!mir.emit_mode && verified &&
+        getenv("DCC_MIR_CANDIDATES") != NULL) {
+        FILE *candidate = tmpfile();
+        int accepted;
+        if (candidate == NULL)
+            fatal("cannot create MIR candidate stream");
+        accepted = mir_try_emit_z80(candidate);
+        fclose(candidate);
+        if (accepted)
+            fprintf(stderr, "; MIR candidate function=%s sink=%s\n",
+                    mir.name, mir_sink_name(mir.sink_purpose));
+    }
     if (mir.emit_mode) {
         FILE *destination = mir.saved_sink.stream;
         FILE *generated = NULL;
@@ -2012,7 +2050,8 @@ void mir_end_function(void)
         }
         if (generated != NULL)
             fclose(generated);
-        fprintf(stderr, "; MIR emit function=%s result=%s\n",
+        if (mir.report_mode)
+            fprintf(stderr, "; MIR emit function=%s result=%s\n",
                 mir.name, emitted ? "mir" : "fallback");
         fclose(mir.capture_stream);
         mir.capture_stream = NULL;

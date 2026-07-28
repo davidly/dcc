@@ -427,11 +427,22 @@ added before the coloring is authoritative.
 
 The first emitted-Z80 gate is opt-in through
 `DCC_MIR_EMIT_FUNCTION=<exact-name>`. `mir_begin_function` redirects the
-existing body to a temporary VERIFY sink after its assembler label; at
+existing body to a temporary stream after its assembler label while preserving
+the original FINAL/VERIFY/DEFERRED sink purpose; at
 `mir_end_function`, verified MIR is emitted to a second temporary stream and
 committed only if the strict selector accepts it. Otherwise the captured
 existing body is copied back byte-for-byte. Partial MIR output can therefore
 never contaminate fallback.
+
+`DCC_MIR_CANDIDATES=1` dry-runs the strict selectors and reports accepted
+function names without replacing code. `DCC_MIR_EMIT_ALL=1` transactionally
+tries every function and commits only accepted candidates; it is quiet unless
+one of the explicit MIR report variables is also set. The current automatic
+gate accepts only ordinary 16-bit `int` returns, rejects pointer parameters
+because MIR does not yet represent pointer-arithmetic scaling, and declines
+all functions under `-fstack-check` until the MIR prologue emits `__stchk`.
+The no-stack-check fast correctness suite passes all 309 runnable apps with
+emit-all enabled, including diagnostics and dccpeep fixtures.
 
 The initial selector intentionally supports only one straight-line word return:
 a parameter, a constant, parameter +/- constant, or two parameters added or
@@ -497,7 +508,7 @@ Load-bearing validation for any MIR change while it remains analysis-only:
 	diff and require that to be the only changed bytes.
 - Run full peep+nopeep `runall.ps1` before committing.
 
-Do not emit Z80 from MIR yet. The next architectural gate is replacing opaque
+Do not enable MIR emission by default yet. The next architectural gate is replacing opaque
 barriers for the integer/pointer subset and proving that MIR CFG/liveness
 matches current generated control flow. Physical allocation comes only after
 that representation is semantically complete for one whole function.
