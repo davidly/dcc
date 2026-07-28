@@ -102,6 +102,10 @@ text.
 - `stack_size`: per-app stack reserve override when the default stack is too
 	small.
 - `ignore`: skip an app that should not be built or compared in the full suite.
+- `perf_ignore`: exclude an app from cycle-count comparison. Some apps are not
+	cycle-deterministic even with a byte-identical `.COM` - `tkbd` varies by
+	several percent between runs - so a "regression" there means nothing. When
+	comparing two builds by hand, exclude these before drawing conclusions.
 
 When adding or changing a test, update `_test_overrides.json` for its runtime
 needs first, then regenerate or edit `tests/baselines/<app>.txt` only when the
@@ -237,6 +241,81 @@ Important performance lessons from recent work:
 - `EmitSink` purpose (FINAL/DISCARD/VERIFY/DEFERRED) describes the destination,
 	not suppression. Do not blanket-convert raw formatted writes to a
 	`scan_mode`-guarded emitter: verification buffers may need those bytes.
+
+## Register allocation
+
+dcc allocates physical registers speculatively: pick a candidate, generate the
+whole body with it promoted, verify the emitted text, then commit or rewind.
+`dcc_regalloc.c` owns the whole-function attempts, `dcc_loop_regalloc.c` the
+loop-scoped ones, and `dcc_func.c` the candidate searches. `Sym.reg_alloc`
+carries the result: `REG_BC`, `REG_E` or `REG_IY`.
+
+**Which register, and why.** BC and E are caller-saved, so a function that
+contains a call cannot use them at all. IY is callee-saved and is therefore the
+only register available in such functions - which is most of them. That rests on
+two facts, both load-bearing:
+
+1. Every dcc function claiming IY pushes the caller's IY ahead of its frame and
+	pops it after restoring IX. `frame_first_param_offset()` accounts for the
+	word this occupies by shifting every parameter by 2.
+2. Nothing else in a linked image writes IY. `DCCRTL.MAC` contains no IY
+	instruction, and CP/M 2.2's BDOS is 8080 code with no index registers. Run
+	`python3 scripts/rtl-iy-safety.py` after any runtime edit; it exits non-zero
+	if the invariant breaks.
+
+**Ownership is published, not inferred.** dcc emits
+`;@dcc.reg claim=<reg> scope=... sym=... kind=... val=<cycles>` and a matching
+`;@dcc.reg free=<reg>` where the live range ends. dccpeep reads these as
+intervals (`bc_regalloc_claimed_in_range` / `_from`), so a loop-scoped claim
+stops forfeiting the register for the rest of the function. A pass must ask
+about the span it actually intends to modify - an unclaimed start no longer
+implies an unclaimed remainder. `peep_reg_used_in_function()` is the shared
+"is this register spoken for here" scan.
+
+**dccpeep's IY passes are not callee-saved.** If dcc has claimed IY anywhere in
+the file, they must stand down (`dcc_iy_claimed_in_file`). File scope, not
+function scope: the hazard is a *callee* borrowing IY and destroying its
+caller's promoted value. This was a real miscompile on `wumpus.c`.
+
+**Cost model.** References are weighted by loop nesting (8 per level, tracked in
+`scan_function_body_ident_counts`) and converted to cycles by
+`regalloc_estimate_value`. Record the value at the decision point and publish
+that same number - do not recompute it at the emission site, or the claim will
+advertise something other than what was decided.
+
+Hard-won rules, each of which cost a measured regression to learn:
+
+- **Verify against the corpus, not against intuition.** Every plausible-sounding
+	arbitration improvement here measured at exactly zero. A census of declined
+	IY candidates attributed 1035 to value, 257 to non-word types, 96 each to
+	written and char parameters, 13 to address-taken, and **zero to register
+	contention**. Candidate *supply* is the constraint, not arbitration. Measure
+	where the losses are before building machinery.
+- **Do not add a `reg_alloc` arm to `gen_deref_addr_ast`'s plain-identifier
+	path.** Promoting a dereferenced pointer defeats dccpeep's cross-iteration
+	hoisting of the invariant pointer reload, which is worth more. `p->field` via
+	`gen_member_addr_ast` is safe and necessary; `*p` and `p[i]` are not.
+- **Loop weighting must respect unbraced bodies.** `for (...) if (c) { ... }`
+	will attribute the `if`'s brace to the loop unless the scan consumes the loop
+	header and only accepts a `{` as the body when it is the first token after
+	the closing `)`. That defect scored a parameter at 65 from two references and
+	cost 1.1M cycles.
+- **Written parameters are eligible for IY but not for BC.** BC's read-only bar
+	exists because `regalloc_buffer_finalize`'s reload-repair treats the frame
+	slot as a valid shadow. IY needs no repair, so the slot is simply dead and no
+	spill is required. `inc iy` is 10 T-states against roughly 82 for the frame
+	read-modify-write - the largest per-reference saving available.
+- **Exclude functions containing a VLA.** They manage SP through per-scope
+	`#vlasp` slots rather than purely `ld sp,ix`; a callee-save push on top of
+	that is not worth the risk, and measured as a loss.
+- **`buf_has_foreign_iy_use` asks whether anything WRITES IY**, not whether text
+	matches. Indexed accesses `(iy+d)` only read it. `inc iy`/`dec iy` are dcc's
+	own. An exact push/pop count guard rejects every real candidate - do not add
+	one.
+- **`current_function_has_call` is not reliable at speculative-attempt time.**
+	Inline substitution saves and restores it around a callee, leaving it holding
+	that callee's value. Derive per-function facts in
+	`scan_function_body_ident_counts` instead.
 
 ## Behavior-preserving compiler refactors
 
