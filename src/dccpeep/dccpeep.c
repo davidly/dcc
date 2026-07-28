@@ -5422,25 +5422,47 @@ static int ix_offset_written_in_range(int off, int start, int end)
  * overlap this pass's own candidate span still declines), but simple, and
  * matches this codebase's own established default of forgoing a smaller
  * optimization rather than risking a data-corrupting one. */
+/* Shared implementation behind every "is this register already spoken for
+ * anywhere in this function?" gate.
+ *
+ * Three passes needed the same three-part answer and each had spelled it out
+ * separately: scan the enclosing function, skip the lines THIS pass itself
+ * tagged on an earlier segment, and report any remaining use of the register.
+ * The tag exclusion is what makes a segment-scoped cache legal at all - each
+ * one is bounded by its own hazard scan, so an already-closed cache earlier in
+ * the same function must not veto a later unrelated one. Without it only the
+ * very first segment in any function could ever benefit, which measured as
+ * most of pass_cache_ix_local_word_reload's value on tests/bint.c alone.
+ *
+ * Everything else that mentions the register still counts, by design: dcc's
+ * own compiler priming, pass_word_loop_var_to_reg_bc,
+ * pass_byte_loop_var_to_reg_c, pass_promote_ix_pointer_to_iy, or anything
+ * this file does not have a name for yet. Deliberately more conservative than
+ * strictly necessary - a function that uses the register only where it
+ * provably cannot overlap the caller's span still declines - but simple, and
+ * in keeping with this codebase's default of forgoing a smaller optimisation
+ * rather than risking a data-corrupting one. */
+int peep_reg_used_in_function(int at, const char *own_tag,
+                                     int (*line_uses_reg)(const char *))
+{
+    int func_start, func_end;
+    int k;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    for (k = func_start; k < func_end; ++k) {
+        if (own_tag != NULL && strstr(lines[k], own_tag) != NULL)
+            continue;
+        if (line_uses_reg(lines[k]))
+            return 1;
+    }
+    return 0;
+}
+
 static int ix_cache_bc_used_in_function(int at)
 {
     int func_start, func_end;
     int k;
 
-    /* Lines this pass itself already tagged, from an earlier (necessarily
-     * lower-indexed - segments are processed in file order) segment in
-     * this same function, are excluded: those caches are segment-scoped
-     * (bounded by line_clobbers_bc the same way any other candidate
-     * segment is), not whole-function reservations, so an already-closed
-     * one from earlier in this function must not prevent a later,
-     * unrelated segment from caching something of its own - without this
-     * exclusion, only the very first segment in any given function could
-     * ever benefit, which measured as most of this pass's value on
-     * tests/bint.c alone. Everything else that mentions B or C - dcc's own
-     * compiler priming, pass_word_loop_var_to_reg_bc,
-     * pass_byte_loop_var_to_reg_c, or anything this file doesn't have a
-     * name for yet - still counts, by design (see this function's own
-     * comment above). */
     find_function_bounds_any(at, &func_start, &func_end);
     for (k = func_start; k < func_end; ++k) {
         if (strstr(lines[k], "ix_local_word_cache"))
@@ -5451,7 +5473,8 @@ static int ix_cache_bc_used_in_function(int at)
          * proves its own segment does not overlap any claim
          * (bc_regalloc_claimed_in_range), so a released span elsewhere in
          * the function is no reason to forfeit BC here - which under the
-         * old blanket scan it always was. */
+         * old blanket scan it always was. This extra allowance is why this
+         * one cannot simply call peep_reg_used_in_function. */
         if (line_in_released_bc_claim(k))
             continue;
         if (line_clobbers_bc(lines[k]))
@@ -5614,22 +5637,12 @@ static int line_is_call_or_rst(const char *line)
  * function, or its whole-file scope in that pass's own case. */
 static int iy_used_in_function(int at)
 {
-    int func_start, func_end;
-    int k;
-
     /* dcc's own IY candidate is callee-saved and live across calls, so a
      * borrow anywhere in the file can corrupt it - see
      * dcc_iy_claimed_in_file's own comment for the wumpus.c miscompile. */
     if (dcc_iy_claimed_in_file())
         return 1;
-    find_function_bounds_any(at, &func_start, &func_end);
-    for (k = func_start; k < func_end; ++k) {
-        if (strstr(lines[k], "ix_spill_iy") != NULL)
-            continue;
-        if (line_mentions_iy(lines[k]))
-            return 1;
-    }
-    return 0;
+    return peep_reg_used_in_function(at, "ix_spill_iy", line_mentions_iy);
 }
 
 /* Is ix-offset `off` (signed, as returned by peep_parse_st_ix_pair/

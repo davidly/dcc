@@ -380,13 +380,7 @@ int pass_word_loop_var_to_reg_bc(void)
          * this variable safely read again after the loop under the
          * whole-function requirement. Reverted to the simpler, strictly
          * safe whole-function scope. */
-        bc_used_elsewhere = 0;
-        for (j = func_start; j < func_end; j++) {
-            if (line_clobbers_bc(lines[j])) {
-                bc_used_elsewhere = 1;
-                break;
-            }
-        }
+        bc_used_elsewhere = peep_reg_used_in_function(i, NULL, line_clobbers_bc);
         if (bc_used_elsewhere)
             continue;
 

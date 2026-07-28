@@ -305,6 +305,13 @@ int bc_regalloc_claimed_before(int at);
  * point; a pass must ask about the span it actually intends to modify. */
 int bc_regalloc_claimed_in_range(int begin, int end);
 int bc_regalloc_claimed_from(int at);
+/* Shared "is this register already spoken for anywhere in this function?"
+ * scan. `own_tag`, when non-NULL, names the peep tag the CALLING pass writes,
+ * so its own earlier segment-scoped claims in the same function do not veto a
+ * later unrelated one. See the definition in dccpeep.c for why everything
+ * else that touches the register still counts. */
+int peep_reg_used_in_function(int at, const char *own_tag,
+                              int (*line_uses_reg)(const char *));
 int stride_parse_ld_r_ix_neg(const char *s, char r, int *n);
 void strip_label_colon(char *s);
 int jump_target_any(const char *s, char *out);
