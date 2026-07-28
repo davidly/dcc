@@ -21,7 +21,10 @@ enum MirOpcode {
     MIR_NOP,
     MIR_PARAM,
     MIR_CONST,
+    MIR_FLOAT_CONST,
+    MIR_STRING_ADDRESS,
     MIR_ADDRESS,
+    MIR_VLA_SIZE,
     MIR_LOAD,
     MIR_INDEX_LOAD,
     MIR_STORE,
@@ -92,7 +95,10 @@ static const char *mir_opcode_name(int opcode)
     case MIR_NOP: return "nop";
     case MIR_PARAM: return "param";
     case MIR_CONST: return "const";
+    case MIR_FLOAT_CONST: return "fconst";
+    case MIR_STRING_ADDRESS: return "straddr";
     case MIR_ADDRESS: return "address";
+    case MIR_VLA_SIZE: return "vlasize";
     case MIR_LOAD: return "load";
     case MIR_INDEX_LOAD: return "index";
     case MIR_STORE: return "store";
@@ -128,9 +134,12 @@ static int mir_report_enabled(const char *name)
     const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
     const char *candidates = getenv("DCC_MIR_CANDIDATES");
     const char *emit_all = getenv("DCC_MIR_EMIT_ALL");
+    const char *coverage = getenv("DCC_MIR_COVERAGE");
+    const char *require_complete = getenv("DCC_MIR_REQUIRE_COMPLETE");
 
     if (all == NULL && filter == NULL && emit_filter == NULL &&
-        candidates == NULL && emit_all == NULL)
+        candidates == NULL && emit_all == NULL && coverage == NULL &&
+        require_complete == NULL)
         return 0;
     if (emit_filter != NULL && emit_filter[0] != 0 &&
         strcmp(emit_filter, name) == 0)
@@ -342,6 +351,10 @@ static int mir_lower_expr(const struct AstNode *node)
     int true_value;
     int false_value;
     int true_label;
+    int rhs_label;
+    int rhs_end_label;
+    int then_exit_label;
+    int else_exit_label;
     int i;
 
     if (node == NULL)
@@ -354,6 +367,43 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->type = node->type;
         insn->immediate = node->ival;
         return value;
+    case AST_FLOAT_LIT:
+        value = mir_new_value();
+        insn = mir_emit(MIR_FLOAT_CONST);
+        insn->dst = value;
+        insn->type = node->type;
+        insn->immediate = (long)node->uval;
+        return value;
+    case AST_STR_LIT:
+        value = mir_new_value();
+        insn = mir_emit(MIR_STRING_ADDRESS);
+        insn->dst = value;
+        insn->type = node->type;
+        insn->immediate = node->str_index;
+        return value;
+    case AST_SIZEOF_TYPE:
+        value = mir_new_value();
+        insn = mir_emit(MIR_CONST);
+        insn->dst = value;
+        insn->type = node->type;
+        insn->immediate = node->ival;
+        return value;
+    case AST_SIZEOF_EXPR:
+        {
+            struct Sym *vla = ast_sizeof_whole_vla_sym(node->a);
+            value = mir_new_value();
+            if (vla != NULL && vla->vla_size_offset != 0) {
+                insn = mir_emit(MIR_VLA_SIZE);
+                insn->immediate = vla->vla_size_offset;
+                mir_copy_name(insn->name, vla->name);
+            } else {
+                insn = mir_emit(MIR_CONST);
+                insn->immediate = ast_sizeof_expr_value(node->a);
+            }
+            insn->dst = value;
+            insn->type = node->type;
+            return value;
+        }
     case AST_IDENT:
         {
             struct Sym *symbol = node->sym;
@@ -448,6 +498,90 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->src2 = false_value;
         insn->phi_pred1 = true_label;
         insn->phi_pred2 = false_label;
+        insn->type = node->type;
+        return value;
+    case AST_LOGOR:
+        /* Normalize the RHS in its own two-way region, then merge that value
+         * with the short-circuit true path. Keeping the two merges separate
+         * gives every two-input phi exact incoming-edge labels. */
+        rhs_label = mir_new_label();
+        true_label = mir_new_label();
+        false_label = mir_new_label();
+        rhs_end_label = mir_new_label();
+        end_label = mir_new_label();
+        left = mir_lower_expr(node->a);
+        insn = mir_emit(MIR_BRANCH_FALSE);
+        insn->src1 = left;
+        insn->label = rhs_label;
+        mir_emit_label(true_label);
+        true_value = mir_new_value();
+        insn = mir_emit(MIR_CONST);
+        insn->dst = true_value;
+        insn->type = node->type;
+        insn->immediate = 1;
+        mir_emit_jump(end_label);
+        mir_emit_label(rhs_label);
+        right = mir_lower_expr(node->b);
+        insn = mir_emit(MIR_BRANCH_FALSE);
+        insn->src1 = right;
+        insn->label = false_label;
+        mir_emit_label(then_exit_label = mir_new_label());
+        left = mir_new_value();
+        insn = mir_emit(MIR_CONST);
+        insn->dst = left;
+        insn->type = node->type;
+        insn->immediate = 1;
+        mir_emit_jump(rhs_end_label);
+        mir_emit_label(false_label);
+        false_value = mir_new_value();
+        insn = mir_emit(MIR_CONST);
+        insn->dst = false_value;
+        insn->type = node->type;
+        insn->immediate = 0;
+        mir_emit_label(rhs_end_label);
+        right = mir_new_value();
+        insn = mir_emit(MIR_PHI);
+        insn->dst = right;
+        insn->src1 = left;
+        insn->src2 = false_value;
+        insn->phi_pred1 = then_exit_label;
+        insn->phi_pred2 = false_label;
+        insn->type = node->type;
+        mir_emit_label(else_exit_label = mir_new_label());
+        mir_emit_jump(end_label);
+        mir_emit_label(end_label);
+        value = mir_new_value();
+        insn = mir_emit(MIR_PHI);
+        insn->dst = value;
+        insn->src1 = true_value;
+        insn->src2 = right;
+        insn->phi_pred1 = true_label;
+        insn->phi_pred2 = else_exit_label;
+        insn->type = node->type;
+        return value;
+    case AST_COND:
+        false_label = mir_new_label();
+        end_label = mir_new_label();
+        left = mir_lower_expr(node->a);
+        insn = mir_emit(MIR_BRANCH_FALSE);
+        insn->src1 = left;
+        insn->label = false_label;
+        true_value = mir_lower_expr(node->b);
+        mir_emit_label(then_exit_label = mir_new_label());
+        mir_emit_jump(end_label);
+        mir_emit_label(false_label);
+        false_value = mir_lower_expr(node->c);
+        mir_emit_label(else_exit_label = mir_new_label());
+        mir_emit_label(end_label);
+        if ((node->type & 15) == TYPE_VOID)
+            return -1;
+        value = mir_new_value();
+        insn = mir_emit(MIR_PHI);
+        insn->dst = value;
+        insn->src1 = true_value;
+        insn->src2 = false_value;
+        insn->phi_pred1 = then_exit_label;
+        insn->phi_pred2 = else_exit_label;
         insn->type = node->type;
         return value;
     case AST_ASSIGN:
@@ -1041,6 +1175,7 @@ static int mir_fixed_color_for_definition(const struct MirInsn *insn)
     case MIR_BINARY:
     case MIR_UNARY:
     case MIR_INDEX_LOAD:
+    case MIR_VLA_SIZE:
         /* Current Z80 contracts return expression/call results in HL. A later
          * instruction selector may relax some arithmetic operations, but the
          * allocation simulation must not assume that work has happened. */
@@ -1307,6 +1442,7 @@ static int mir_verify_and_dump(void)
     int block_count = 0;
     int max_live = 0;
     int opaque_count = 0;
+    int opaque_kinds[AST_DIVMOD_CALL + 1];
     int promoted_objects;
     struct MirAllocationSummary allocation;
     int changed;
@@ -1354,6 +1490,7 @@ static int mir_verify_and_dump(void)
             ++block_count;
     }
 
+    memset(opaque_kinds, 0, sizeof(opaque_kinds));
     promoted_objects = 0;
     for (;;) {
         int promoted_pass = mir_promote_objects();
@@ -1445,8 +1582,12 @@ static int mir_verify_and_dump(void)
             max_live = in_count;
         if (out_count > max_live)
             max_live = out_count;
-        if (insn->opcode == MIR_OPAQUE)
+        if (insn->opcode == MIR_OPAQUE) {
             ++opaque_count;
+            if (insn->immediate >= AST_NONE &&
+                insn->immediate <= AST_DIVMOD_CALL)
+                ++opaque_kinds[insn->immediate];
+        }
         if (!mir.report_mode)
             continue;
         fprintf(stderr, ";   %4d %-8s", i, mir_opcode_name(insn->opcode));
@@ -1460,7 +1601,9 @@ static int mir_verify_and_dump(void)
             fprintf(stderr, " %s", insn->name);
         if (insn->object >= 0)
             fprintf(stderr, " {o%d}", insn->object);
-        if (insn->opcode == MIR_CONST)
+        if (insn->opcode == MIR_CONST || insn->opcode == MIR_FLOAT_CONST ||
+            insn->opcode == MIR_STRING_ADDRESS ||
+            insn->opcode == MIR_VLA_SIZE)
             fprintf(stderr, " %ld", insn->immediate);
         if (insn->opcode == MIR_UNARY || insn->opcode == MIR_BINARY)
             fprintf(stderr, " op=%ld", insn->immediate);
@@ -1490,6 +1633,21 @@ static int mir_verify_and_dump(void)
             allocation.opaque_crossing_values, allocation.fixed_moves,
             allocation.operand_moves, allocation.phi_moves);
     }
+    if (getenv("DCC_MIR_COVERAGE") != NULL && opaque_count != 0) {
+        int kind;
+        int first = 1;
+        fprintf(stderr, "; MIR coverage function=%s opaque=%d kinds=",
+                mir.name, opaque_count);
+        for (kind = AST_NONE; kind <= AST_DIVMOD_CALL; ++kind)
+            if (opaque_kinds[kind] != 0) {
+            fprintf(stderr, "%s%s:%d", first ? "" : ",",
+                ast_kind_name(kind), opaque_kinds[kind]);
+            first = 0;
+            }
+        fputc('\n', stderr);
+    }
+    if (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL && opaque_count != 0)
+        ++errors;
 
     free(live_out);
     free(live_in);
@@ -2335,6 +2493,10 @@ void mir_end_function(void)
     if (!mir.active)
         return;
     verified = mir_verify_and_dump();
+    if (!verified && getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL) {
+        fprintf(stderr, "MIR completeness failed for function %s\n", mir.name);
+        fatal("incomplete MIR coverage");
+    }
     if (!mir.emit_mode && verified &&
         getenv("DCC_MIR_CANDIDATES") != NULL) {
         FILE *candidate = tmpfile();

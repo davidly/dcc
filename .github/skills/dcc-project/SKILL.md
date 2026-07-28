@@ -537,18 +537,46 @@ uses IY. Selector discovery must also ignore stores with `object < 0` and must
 not inspect phi fields before the relevant phi exists; ASan/UBSan on `tcaslv`
 is the focused regression check for this boundary.
 
-Load-bearing validation for any MIR change while it remains analysis-only:
+"Complete MIR" means semantic coverage, not merely replacing opaque nodes:
 
-- `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where
-	N is nonzero.
-- Run at least one hot supported function under ASan/UBSan. The CFG successor
-	arrays are fixed-size (conditional branches have exactly target+fallthrough),
-	so malformed construction must report an invalid edge rather than index a
-	liveness matrix out of bounds.
+- every supported AST expression and statement lowers without `MIR_OPAQUE`;
+- constants preserve kind and type (integer, float bits, string address), and
+	runtime VLA `sizeof` remains an explicit load rather than a folded constant;
+- lvalues are addresses plus typed/volatile memory operations, so member,
+	index, dereference, aggregate and alias behavior remains visible;
+- all control transfers, including short circuit, ternary, switch, goto and
+	labels, produce verified CFG edges and edge-specific phi inputs;
+- instruction selection records Z80 operand/result constraints separately
+	from global allocation; spills, call clobbers and callee saves are explicit;
+- transactional fallback stays available until general MIR emission passes
+	correctness and profitability gates in both peep and nopeep modes.
+
+Use `DCC_MIR_COVERAGE=1` for named per-function opaque-kind reports and
+`DCC_MIR_REQUIRE_COMPLETE=1` as the strict gate: it exits nonzero at the first
+incomplete function. After LOGOR/conditional CFG, typed float/string constants
+and static/dynamic `sizeof` lowering, a compile-only `tests/*.c` census has no
+opaque instances of those kinds. Remaining counts are: member 4845, assignment
+4737, declaration 944, postfix 431, switch 125, label 81, goto 68 and compound
+literal 47. `tgnuexpr` is the expected census build failure because it is a
+negative GNU statement-expression diagnostic test.
+
+Load-bearing validation follows milestone cadence rather than running the full
+suite after every small lowering edit:
+
+- For each edit: build dcc, dump the directly affected function(s), require
+	zero verifier errors, and run focused runtime baselines only if emit-all can
+	reach the changed graph.
+- At a semantic-family milestone: run the focused verifier set (`tchess`,
+	`tiyreg`, `forint`, `tptrlhs`, `tbool`, `tforblk`, `tswitch`, `tvla`) and a
+	compile-only coverage census.
+- Run ASan/UBSan when CFG/dataflow/allocation ownership changes or a crash is
+	plausible. The CFG successor arrays are fixed-size, so malformed construction
+	must report an invalid edge rather than index a liveness matrix out of bounds.
 - Raw compiler `.MAC` must be byte-identical to a clean pre-change worktree.
 	`tstdc` is the expected exception because it embeds `__TIME__`; inspect its
 	diff and require that to be the only changed bytes.
-- Run full peep+nopeep `runall.ps1` before committing.
+- Run full peep+nopeep `runall.ps1` only for shared CFG/dataflow changes,
+	emitted-code milestones, default-enablement gates and final integration.
 
 Do not enable MIR emission by default yet. The next architectural gate is replacing opaque
 barriers for the integer/pointer subset and proving that MIR CFG/liveness
