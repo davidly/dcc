@@ -77,6 +77,7 @@ struct MirFunction {
     EmitSink saved_sink;
     struct MirObject objects[256];
     int object_count;
+    struct Sym *initializer_target;
     char name[64];
 };
 
@@ -533,6 +534,7 @@ void mir_begin_function(const char *name, int sink_purpose)
     mir.next_label = 0;
     mir.flow_depth = 0;
     mir.object_count = 0;
+    mir.initializer_target = NULL;
     mir.sink_purpose = sink_purpose;
     mir.emit_mode = 0;
     mir.capture_stream = NULL;
@@ -575,6 +577,28 @@ void mir_capture_stmt(const struct AstNode *stmt)
 {
     if (mir.active)
         mir_lower_stmt(stmt);
+}
+
+void mir_set_initializer_target(struct Sym *symbol)
+{
+    if (mir.active)
+        mir.initializer_target = symbol;
+}
+
+void mir_capture_initializer(const struct AstNode *expr)
+{
+    struct MirInsn *store;
+    int value;
+
+    if (!mir.active || mir.initializer_target == NULL)
+        return;
+    value = mir_lower_expr(expr);
+    store = mir_emit(MIR_STORE);
+    store->src1 = value;
+    store->type = mir.initializer_target->type;
+    mir_copy_name(store->name, mir.initializer_target->name);
+    store->object = mir_get_object(mir.initializer_target, store->name);
+    mir.initializer_target = NULL;
 }
 
 static int mir_find_label(int label)
@@ -1170,6 +1194,73 @@ static int mir_emit_load_param(FILE *out, const struct MirInsn *param)
     return 1;
 }
 
+static int mir_emit_load_param_de(FILE *out, const struct MirInsn *param)
+{
+    const struct MirObject *object;
+
+    if (param == NULL || param->opcode != MIR_PARAM || param->object < 0 ||
+        param->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[param->object];
+    if (object->storage != SC_PARAM || type_size(object->type) != 2)
+        return 0;
+    fprintf(out, "\tld e,(ix%+d)\n", object->offset);
+    fprintf(out, "\tld d,(ix%+d)\n", object->offset + 1);
+    return 1;
+}
+
+/* Recognize VALUE as one parameter plus a constant. PARAM is NULL for a pure
+ * constant. This is intentionally not a general expression selector; it is a
+ * proof that promoted local temporaries can disappear end-to-end before the
+ * backend grows arbitrary register/stack expression handling. */
+static int mir_affine_value(int value, const struct MirInsn **parameter,
+                            long *constant, int depth)
+{
+    const struct MirInsn *definition;
+    const struct MirInsn *left_parameter;
+    const struct MirInsn *right_parameter;
+    long left_constant;
+    long right_constant;
+
+    if (depth > 64)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_PARAM) {
+        *parameter = definition;
+        *constant = 0;
+        return 1;
+    }
+    if (definition->opcode == MIR_CONST) {
+        *parameter = NULL;
+        *constant = definition->immediate;
+        return 1;
+    }
+    if (definition->opcode != MIR_BINARY ||
+        (definition->immediate != '+' && definition->immediate != '-'))
+        return 0;
+    if (!mir_affine_value(definition->src1, &left_parameter, &left_constant,
+                          depth + 1) ||
+        !mir_affine_value(definition->src2, &right_parameter, &right_constant,
+                          depth + 1))
+        return 0;
+    if (definition->immediate == '+') {
+        if (left_parameter != NULL && right_parameter != NULL)
+            return 0;
+        *parameter = left_parameter != NULL ? left_parameter : right_parameter;
+        *constant = left_constant + right_constant;
+        return 1;
+    }
+    /* PARAM-or-constant minus a parameter needs coefficient -1, outside the
+     * first affine subset. */
+    if (right_parameter != NULL)
+        return 0;
+    *parameter = left_parameter;
+    *constant = left_constant - right_constant;
+    return 1;
+}
+
 /* First emitted subset: one straight-line return of a word parameter,
  * constant, or parameter +/- constant. This intentionally proves the
  * transactional backend path before attempting general instruction
@@ -1178,69 +1269,65 @@ static int mir_emit_load_param(FILE *out, const struct MirInsn *param)
 static int mir_try_emit_z80(FILE *out)
 {
     const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *parameter;
     const struct MirInsn *definition;
-    const struct MirInsn *left;
-    const struct MirInsn *right;
+    const struct MirInsn *left_parameter = NULL;
+    const struct MirInsn *right_parameter = NULL;
+    long constant;
+    int two_parameters = 0;
+    int two_parameter_operation = 0;
     int i;
-    int executable = 0;
 
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
-        if (insn->opcode == MIR_NOP || insn->opcode == MIR_PARAM)
-            continue;
-        ++executable;
         if (insn->opcode == MIR_RETURN)
             return_insn = insn;
-        else if (insn->opcode != MIR_CONST && insn->opcode != MIR_BINARY)
+        else if (insn->opcode != MIR_NOP && insn->opcode != MIR_PARAM &&
+                 insn->opcode != MIR_CONST && insn->opcode != MIR_BINARY &&
+                 !(insn->opcode == MIR_STORE && insn->object >= 0))
             return 0;
     }
-    if (return_insn == NULL || executable > 3 || return_insn->src1 < 0)
+    if (return_insn == NULL || return_insn->src1 < 0)
         return 0;
     definition = mir_definition(return_insn->src1);
-    if (definition == NULL)
+    if (definition != NULL && definition->opcode == MIR_BINARY &&
+        (definition->immediate == '+' || definition->immediate == '-')) {
+        left_parameter = mir_definition(definition->src1);
+        right_parameter = mir_definition(definition->src2);
+        if (left_parameter != NULL && right_parameter != NULL &&
+            left_parameter->opcode == MIR_PARAM &&
+            right_parameter->opcode == MIR_PARAM) {
+            two_parameters = 1;
+            two_parameter_operation = (int)definition->immediate;
+        }
+    }
+    if (!two_parameters &&
+        !mir_affine_value(return_insn->src1, &parameter, &constant, 0))
         return 0;
 
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-    if (definition->opcode == MIR_PARAM) {
-        if (!mir_emit_load_param(out, definition))
+    if (two_parameters) {
+        if (!mir_emit_load_param(out, left_parameter) ||
+            !mir_emit_load_param_de(out, right_parameter))
             return 0;
-    } else if (definition->opcode == MIR_CONST) {
-        fprintf(out, "\tld hl,%ld\n", definition->immediate);
-    } else if (definition->opcode == MIR_BINARY) {
-        long constant;
-        int operation = (int)definition->immediate;
-
-        left = mir_definition(definition->src1);
-        right = mir_definition(definition->src2);
-        if (left == NULL || right == NULL)
+        if (two_parameter_operation == '+')
+            fputs("\tadd hl,de\n", out);
+        else
+            fputs("\tor a\n\tsbc hl,de\n", out);
+        constant = 0;
+    } else if (parameter != NULL) {
+        if (!mir_emit_load_param(out, parameter))
             return 0;
-        if (left->opcode == MIR_PARAM && right->opcode == MIR_CONST) {
-            if (!mir_emit_load_param(out, left))
-                return 0;
-            constant = right->immediate;
-        } else if (operation == '+' && left->opcode == MIR_CONST &&
-                   right->opcode == MIR_PARAM) {
-            if (!mir_emit_load_param(out, right))
-                return 0;
-            constant = left->immediate;
-        } else {
-            return 0;
-        }
-        if (operation == '+') {
-            if (constant == 1)
-                fputs("\tinc hl\n", out);
-            else if (constant == -1)
-                fputs("\tdec hl\n", out);
-            else
-                fprintf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
-        } else if (operation == '-') {
-            fprintf(out, "\tld de,%ld\n\tor a\n\tsbc hl,de\n", constant);
-        } else {
-            return 0;
-        }
     } else {
-        return 0;
+        fprintf(out, "\tld hl,%ld\n", constant);
+        constant = 0;
     }
+    if (constant == 1)
+        fputs("\tinc hl\n", out);
+    else if (constant == -1)
+        fputs("\tdec hl\n", out);
+    else if (constant != 0)
+        fprintf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
 }

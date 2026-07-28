@@ -434,10 +434,19 @@ existing body is copied back byte-for-byte. Partial MIR output can therefore
 never contaminate fallback.
 
 The initial selector intentionally supports only one straight-line word return:
-a parameter, a constant, or parameter +/- constant. It emits the ordinary IX
-frame and epilogue and recognizes `+/-1` as `inc/dec hl`. A minimal test
-`add1(41)` emits MIR and returns 42; targeting unsupported `mul2` reports
-`result=fallback`, produces a byte-identical original body, and also returns 42.
+a parameter, a constant, parameter +/- constant, or two parameters added or
+subtracted. It emits the ordinary IX frame and epilogue and recognizes `+/-1`
+as `inc/dec hl`.
+
+Plain scalar declaration initializers are captured explicitly because they
+bypass statement AST emission. `mir_set_initializer_target` in `dcc_decl.c`
+names the local, and `ast_emit_init_expr` lowers the initializer and records a
+MIR store. Conservative mem2reg can then remove the local object entirely.
+`int x=a+1; return x+2;` emits as parameter `a + 3`, with no frame slot.
+
+Focused runtime tests `local1(39)`, `sum2(20,22)` and `diff2(50,8)` all emit
+MIR and return 42; targeting unsupported `mul2` reports `result=fallback`,
+produces a byte-identical original body, and also returns 42.
 Do not widen this subset without a focused runtime comparison and a fallback
 identity check.
 

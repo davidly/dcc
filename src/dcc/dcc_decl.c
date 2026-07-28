@@ -12,6 +12,7 @@
 
 #include "dcc.h"
 #include "dcc_regalloc_internal.h"
+#include "dcc_mir.h"
 #include "dcc_ast.h"
 int parse_float_init_literal(unsigned long *bits)
 {
@@ -1674,6 +1675,7 @@ void gen_local_decl_after_type(int base)
                  * one- or two-instruction direct store can do once the
                  * value is in HL/DE:HL. */
                 int fast = sym_can_ix_direct(s);
+                mir_set_initializer_target(s);
                 if (!fast) {
                     emit_load_sym_addr(s);
                     emit("\tpush hl\n");

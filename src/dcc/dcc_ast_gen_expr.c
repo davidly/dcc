@@ -6,6 +6,7 @@
  */
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
+#include "dcc_mir.h"
 
 static const struct AstNode *inline_substitution_body(struct Sym *fn);
 static int ast_is_float_madd_rhs(const struct AstNode *rhs);
@@ -1734,6 +1735,9 @@ void ast_emit_init_expr(void)
     n = ast_build_assign_expr(&g_ast_init_arena);
 
     _le = lex_save();
+
+    if (n != NULL)
+        mir_capture_initializer(n);
 
     if (n != NULL && ast_pointer_expr_type(n, &ptr_type, &no_deref)) {
         gen_pointer_expr_ast(n, &ptr_type, &no_deref);
