@@ -345,6 +345,32 @@ Hard-won rules, each of which cost a measured regression to learn:
 	and model what the peephole would do with a value, admitting more candidates
 	loses more than it wins. The existing tight gates are load-bearing, not
 	timidity.
+- **A machine-level allocator in dccpeep was analysed and the rewrite phase was
+	falsified.** `peep_frame_alloc.c` is the retained analysis-only result. It
+	treats `(ix+n)` slots as eagerly-spilled virtual registers, uses the existing
+	CFG/effects/liveness, computes conservative reaching definitions (calls,
+	opaque instructions and indirect writes kill frame definitions), and reports
+	same-block, cross-block, parameter-entry, full-span and split-region
+	candidates under `-fstats`. `DCCPEEP_FRAME_REPORT=1` additionally prints exact
+	line endpoints for profile correlation. It changes no program text.
+
+	The measured stop condition is decisive. Across the complete corpus, 39,196
+	surviving frame loads reduce to 1,025 loads with a unique cross-block store,
+	5,030 parameter-entry loads and 4,049 ambiguous loads at joins. Endpoint-only
+	availability leaves 2,688 loads, but requiring BC/DE to be free over the
+	complete value range leaves just 27 values / 60 uses / 387 static T-states.
+	Live-range splitting recovers only 48 regions / 102 uses / 618 static
+	T-states. tchess - where frame access is 39.3% of executed app cycles - has
+	zero full-span candidates and one two-use DE split region worth 11T
+	statically; dynamic profile correlation shows that region is cold.
+
+	Therefore do **not** implement rewriting, written-value spill splitting, or
+	retire existing allocators on top of this analysis: the plan explicitly made
+	those phases conditional on material candidate supply, and the supply is
+	orders of magnitude too small. The 39.3% frame-access headline is real, but
+	almost all of it occurs while BC/DE already carry live values, crosses calls,
+	or has multiple reaching definitions. Capturing it requires a different
+	compiler IR/allocation architecture, not another dccpeep pass.
 
 ## Behavior-preserving compiler refactors
 

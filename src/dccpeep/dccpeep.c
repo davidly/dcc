@@ -9391,6 +9391,15 @@ int main(int argc, char **argv)
     RUN_PASS(pass_elim_dead_reg16_reload);
     RUN_PASS(pass_jp_to_jr);
 
+    /* Machine-level register-allocation census on the exact final line stream
+     * that is about to be written, so reported line numbers correlate with
+     * .PRN/profile annotations. Frameless functions have no `(ix+n)` traffic
+     * worth analysing anyway. Analysis-only; -fstats prints the summary, and
+     * DCCPEEP_FRAME_REPORT additionally prints each candidate endpoint. */
+    if (peep_context.options.stats_enabled ||
+        getenv("DCCPEEP_FRAME_REPORT") != NULL)
+        peep_frame_alloc_analyze();
+
     write_file(outfile);
     if (peep_context.options.stats_enabled)
         report_stats(passes);

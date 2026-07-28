@@ -267,6 +267,10 @@ int peep_basic_block_count(void);
 int peep_registers_dead_after(int line, unsigned registers);
 int peep_flags_dead_after(int line, unsigned flags);
 
+/* Analysis-only frame-slot register-allocation census. Runs after structural
+ * convergence under -fstats; changes no program text. */
+void peep_frame_alloc_analyze(void);
+
 /* Size-mode shared-helper passes. */
 int pass_shared_frame_stubs(void);
 int pass_lvar_stubs(void);
