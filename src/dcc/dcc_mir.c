@@ -16,6 +16,8 @@
 #include "dcc_ast.h"
 #include "dcc_mir.h"
 
+#define MIR_AGGREGATE_FORWARD_OFFSET (-32768L)
+
 enum MirOpcode {
     MIR_NOP,
     MIR_PARAM,
@@ -139,6 +141,7 @@ struct MirFunction {
     int report_mode;
     int return_type;
     int local_bytes;
+    int aggregate_temp_bytes;
     int opaque_count;
     int *allocation_colors;
     int *allocation_spills;
@@ -247,7 +250,8 @@ static int mir_report_enabled(const char *name)
         strcmp(emit_filter, name) == 0)
         return 1;
     if (general_filter != NULL && general_filter[0] != 0 &&
-        strcmp(general_filter, name) == 0)
+        (strcmp(general_filter, "*") == 0 ||
+         strcmp(general_filter, name) == 0))
         return 1;
     if (filter != NULL && filter[0] != 0 && strcmp(filter, name) != 0)
         return 0;
@@ -414,7 +418,8 @@ static int mir_lower_conversion(int value, int target_type)
     if (definition == NULL || definition->type == 0 ||
         definition->type == target_type)
         return value;
-    if (type_size(definition->type) == type_size(target_type) &&
+    if (!type_is_bool(target_type) &&
+        type_size(definition->type) == type_size(target_type) &&
         type_is_float(definition->type) == type_is_float(target_type))
         return value;
     result = mir_new_value();
@@ -434,25 +439,58 @@ static int mir_lower_aggregate_call_address(const struct AstNode *call,
     int call_id;
     int value;
     int i;
+    struct Sym *function_symbol;
 
-    if (call == NULL || call->kind != AST_CALL || temporary == NULL)
+    if (call == NULL || call->kind != AST_CALL)
         return -1;
+    function_symbol = call->a != NULL && call->a->kind == AST_IDENT
+        ? find_global(call->a->sval) : NULL;
     call_id = mir.next_call_id++;
     for (i = 0; i < call->list_len; ++i) {
-        argument = mir_lower_expr(call->list[i]);
+        int argument_type = ast_expr_type_for_sizeof(call->list[i]);
+        struct Sym nested_temporary;
+        if (function_symbol != NULL && i < function_symbol->proto_nargs) {
+            argument_type = function_symbol->proto_types[i];
+        }
+        if (type_is_struct_object(argument_type) &&
+            call->list[i]->kind == AST_CALL) {
+            const struct Sym *temporary = call->list[i]->sym;
+            if (temporary == NULL) {
+                int size = type_size(argument_type);
+                memset(&nested_temporary, 0, sizeof(nested_temporary));
+                if ((size & 1) != 0)
+                    ++size;
+                mir.aggregate_temp_bytes += size;
+                nested_temporary.type = argument_type;
+                nested_temporary.offset = -mir.local_bytes -
+                                          mir.aggregate_temp_bytes;
+                strcpy(nested_temporary.name, "#miragg");
+                temporary = &nested_temporary;
+            }
+            argument = mir_lower_aggregate_call_address(call->list[i],
+                                                        temporary);
+        } else
+            argument = mir_lower_expr(call->list[i]);
+        if (!type_is_struct_object(argument_type))
+            argument = mir_lower_conversion(argument, argument_type);
         insn = mir_emit(MIR_ARG);
         insn->src1 = argument;
+        insn->type = argument_type;
         insn->immediate = i;
         insn->secondary_offset = call_id;
     }
     value = mir_new_value();
     insn = mir_emit(MIR_CALL_AGGREGATE);
     insn->dst = value;
-    insn->type = type_add_ptr(call->type);
-    insn->immediate = temporary->offset;
-    insn->memory_size = type_size(call->type);
+    insn->type = type_add_ptr(function_symbol != NULL
+                              ? function_symbol->type : call->type);
+    insn->immediate = temporary != NULL ? temporary->offset
+                                        : MIR_AGGREGATE_FORWARD_OFFSET;
+    insn->memory_size = type_size(function_symbol != NULL
+                                  ? function_symbol->type : call->type);
     insn->secondary_offset = call_id;
-    mir_copy_name(insn->base_name, temporary->name);
+    if (temporary != NULL)
+        mir_copy_name(insn->base_name, temporary->name);
     if (call->a != NULL && call->a->kind == AST_IDENT)
         mir_copy_name(insn->name, call->a->sval);
     else
@@ -653,7 +691,7 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
         value = mir_new_value();
         insn = mir_emit(MIR_ADDRESS);
         insn->dst = value;
-        insn->type = node->type;
+        insn->type = type_add_ptr(node->type);
         mir_copy_name(insn->name, node->sval != NULL ? node->sval : "?");
         insn->object = mir_get_object(symbol, insn->name);
         return value;
@@ -673,6 +711,13 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
         return mir_lower_expr(node->a);
     if (node->kind == AST_INDEX) {
         int index;
+        int element_type = node->type;
+        int element_type_resolved;
+        struct Sym *array_symbol = node->a != NULL &&
+                       node->a->kind == AST_IDENT
+            ? (node->a->sym != NULL ? node->a->sym
+                        : find_sym(node->a->sval))
+            : NULL;
         base = mir_lower_expr(node->a);
         index = mir_lower_expr(node->b);
         if (base < 0 || index < 0)
@@ -682,9 +727,23 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
         insn->dst = value;
         insn->src1 = base;
         insn->src2 = index;
-        insn->type = node->type;
+        element_type_resolved = ast_index_composite_elem_type(node,
+                                                              &element_type);
+        if (!element_type_resolved && array_symbol != NULL &&
+            array_symbol->is_array) {
+            element_type = array_symbol->type;
+            element_type_resolved = 1;
+        }
+        if (!element_type_resolved) {
+            const struct MirInsn *base_definition = mir_mutable_definition(base);
+            if (base_definition != NULL &&
+                type_ptr_depth(base_definition->type) > 0)
+                element_type = type_decay_ptr(base_definition->type);
+        }
+        insn->type = type_add_ptr(element_type);
         insn->immediate = mir_index_stride(node);
         mir_set_node_memory(insn, node);
+        insn->memory_size = type_size(element_type);
         return value;
     }
     if (node->kind != AST_MEMBER)
@@ -702,7 +761,7 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
     insn = mir_emit(MIR_MEMBER_ADDRESS);
     insn->dst = value;
     insn->src1 = base;
-    insn->type = field != NULL ? field->type : node->type;
+    insn->type = type_add_ptr(field != NULL ? field->type : node->type);
     insn->immediate = field != NULL ? field->offset : 0;
     mir_copy_name(insn->name, node->sval);
     if (node->a != NULL && node->a->kind == AST_IDENT)
@@ -734,6 +793,35 @@ static void mir_emit_ident_store(const struct AstNode *ident, int value)
     store->object = mir_get_object(symbol, store->name);
 }
 
+static int mir_lvalue_type(const struct AstNode *node)
+{
+    int type;
+    if (node == NULL)
+        return 0;
+    if (node->kind == AST_IDENT) {
+        struct Sym *symbol = node->sym != NULL
+            ? node->sym : find_sym(node->sval);
+        return symbol != NULL ? symbol->type : node->type;
+    }
+    if (node->kind == AST_MEMBER) {
+        struct FieldDef *field = mir_member_field(node);
+        return field != NULL ? field->type : node->type;
+    }
+    if (node->kind == AST_INDEX) {
+        struct Sym *array_symbol = node->a != NULL &&
+                                   node->a->kind == AST_IDENT
+            ? (node->a->sym != NULL ? node->a->sym
+                                    : find_sym(node->a->sval))
+            : NULL;
+        type = node->type;
+        if (!ast_index_composite_elem_type(node, &type) &&
+            array_symbol != NULL && array_symbol->is_array)
+            type = array_symbol->type;
+        return type;
+    }
+    return node->type != 0 ? node->type : ast_expr_type_for_sizeof(node);
+}
+
 static int mir_lower_incdec(const struct AstNode *operand, int operation,
                             int postfix)
 {
@@ -743,12 +831,20 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     int old_value;
     int one;
     int new_value;
+    int operand_type;
     long step = 1;
 
     if (operand == NULL)
         return -1;
-    if (type_ptr_depth(operand->type) > 0)
-        step = type_index_elem_size(operand->type);
+    operand_type = operand->type;
+    if (operand->kind == AST_IDENT) {
+        struct Sym *symbol = operand->sym != NULL
+            ? operand->sym : find_sym(operand->sval);
+        if (symbol != NULL)
+            operand_type = symbol->type;
+    }
+    if (type_ptr_depth(operand_type) > 0)
+        step = type_index_elem_size(operand_type);
     if (operand->kind == AST_IDENT) {
         old_value = mir_lower_expr(operand);
     } else {
@@ -761,7 +857,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
         insn = mir_emit(MIR_LOAD_INDIRECT);
         insn->dst = old_value;
         insn->src1 = address;
-        insn->type = operand->type;
+        insn->type = operand_type;
         if (field != NULL)
             mir_set_field_memory(insn, field);
         else if (operand->kind == AST_MEMBER)
@@ -772,7 +868,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     one = mir_new_value();
     insn = mir_emit(MIR_CONST);
     insn->dst = one;
-    insn->type = operand->type;
+    insn->type = operand_type;
     insn->immediate = step;
     new_value = mir_new_value();
     insn = mir_emit(MIR_BINARY);
@@ -787,7 +883,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
         insn = mir_emit(MIR_STORE_INDIRECT);
         insn->src1 = address;
         insn->src2 = new_value;
-        insn->type = operand->type;
+        insn->type = operand_type;
         if (field != NULL)
             mir_set_field_memory(insn, field);
         else if (operand->kind == AST_MEMBER)
@@ -892,7 +988,9 @@ static int mir_lower_expr(const struct AstNode *node)
                  type_is_struct_object(symbol->type))
                 ? MIR_ADDRESS : MIR_LOAD);
         insn->dst = value;
-        insn->type = symbol != NULL && symbol->is_vla
+        insn->type = insn->opcode == MIR_ADDRESS
+            ? type_add_ptr(symbol != NULL ? symbol->type : node->type)
+            : symbol != NULL && symbol->is_vla
             ? type_add_ptr(symbol->type)
             : symbol != NULL ? symbol->type : node->type;
         mir_copy_name(insn->name, node->sval ? node->sval :
@@ -901,18 +999,37 @@ static int mir_lower_expr(const struct AstNode *node)
         return value;
         }
     case AST_INDEX:
+        {
+        int element_type = node->type;
+        struct Sym *array_symbol = node->a != NULL &&
+                       node->a->kind == AST_IDENT
+            ? (node->a->sym != NULL ? node->a->sym
+                        : find_sym(node->a->sval))
+            : NULL;
         left = mir_lower_lvalue_address(node);
         if (left < 0)
             break;
-        if (mir_index_result_is_array(node))
+        if (!ast_index_composite_elem_type(node, &element_type) &&
+            array_symbol != NULL && array_symbol->is_array)
+            element_type = array_symbol->type;
+        else {
+            const struct MirInsn *address_definition =
+                mir_mutable_definition(left);
+            if (address_definition != NULL &&
+                type_ptr_depth(address_definition->type) > 0)
+                element_type = type_decay_ptr(address_definition->type);
+        }
+        if (mir_index_result_is_array(node) || type_is_struct_object(element_type))
             return left;
         value = mir_new_value();
         insn = mir_emit(MIR_LOAD_INDIRECT);
         insn->dst = value;
         insn->src1 = left;
-        insn->type = node->type;
+        insn->type = element_type;
         mir_set_node_memory(insn, node);
+        insn->memory_size = type_size(element_type);
         return value;
+        }
     case AST_MEMBER:
         {
             struct FieldDef *field = mir_member_field(node);
@@ -1179,10 +1296,12 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->src1 = left;
         insn->label = false_label;
         true_value = mir_lower_expr(node->b);
+        true_value = mir_lower_conversion(true_value, node->type);
         mir_emit_label(then_exit_label = mir_new_label());
         mir_emit_jump(end_label);
         mir_emit_label(false_label);
         false_value = mir_lower_expr(node->c);
+        false_value = mir_lower_conversion(false_value, node->type);
         mir_emit_label(else_exit_label = mir_new_label());
         mir_emit_label(end_label);
         if ((node->type & 15) == TYPE_VOID)
@@ -1214,8 +1333,7 @@ static int mir_lower_expr(const struct AstNode *node)
         if (node->a->kind == AST_MEMBER) {
             struct FieldDef *field = mir_member_field(node->a);
             int address;
-            int target_type = node->a->type != 0
-                ? node->a->type : ast_expr_type_for_sizeof(node->a);
+            int target_type = mir_lvalue_type(node->a);
             address = mir_lower_lvalue_address(node->a);
             if (address < 0)
                 break;
@@ -1236,7 +1354,8 @@ static int mir_lower_expr(const struct AstNode *node)
                 else
                     insn->memory_flags |= 8;
                 right = mir_lower_expr(node->b);
-                if (binary_operator != TOK_SHL && binary_operator != TOK_SHR)
+                if (!type_is_bool(target_type) &&
+                    binary_operator != TOK_SHL && binary_operator != TOK_SHR)
                     right = mir_lower_conversion(right, target_type);
                 value = mir_new_value();
                 insn = mir_emit(MIR_BINARY);
@@ -1246,6 +1365,10 @@ static int mir_lower_expr(const struct AstNode *node)
                 insn->type = target_type;
                 insn->secondary_offset = target_type;
                 insn->immediate = binary_operator;
+                if (type_is_bool(target_type)) {
+                    insn->type = TYPE_INT;
+                    value = mir_lower_conversion(value, target_type);
+                }
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
             insn->src1 = address;
@@ -1261,8 +1384,7 @@ static int mir_lower_expr(const struct AstNode *node)
         if (node->a->kind == AST_INDEX ||
             (node->a->kind == AST_UNARY && node->a->op == '*')) {
             int address = mir_lower_lvalue_address(node->a);
-            int target_type = node->a->type != 0
-                ? node->a->type : ast_expr_type_for_sizeof(node->a);
+            int target_type = mir_lvalue_type(node->a);
             if (address < 0)
                 break;
             if (node->op == '=') {
@@ -1279,7 +1401,8 @@ static int mir_lower_expr(const struct AstNode *node)
                 insn->type = node->a->type;
                 mir_set_node_memory(insn, node->a);
                 right = mir_lower_expr(node->b);
-                if (binary_operator != TOK_SHL && binary_operator != TOK_SHR)
+                if (!type_is_bool(target_type) &&
+                    binary_operator != TOK_SHL && binary_operator != TOK_SHR)
                     right = mir_lower_conversion(right, target_type);
                 value = mir_new_value();
                 insn = mir_emit(MIR_BINARY);
@@ -1289,6 +1412,10 @@ static int mir_lower_expr(const struct AstNode *node)
                 insn->type = target_type;
                 insn->secondary_offset = target_type;
                 insn->immediate = binary_operator;
+                if (type_is_bool(target_type)) {
+                    insn->type = TYPE_INT;
+                    value = mir_lower_conversion(value, target_type);
+                }
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
             insn->src1 = address;
@@ -1301,9 +1428,7 @@ static int mir_lower_expr(const struct AstNode *node)
             break;
         if (node->op == '=') {
             value = mir_lower_expr(node->b);
-            value = mir_lower_conversion(
-                value, node->a->type != 0 ? node->a->type
-                                          : ast_expr_type_for_sizeof(node->a));
+            value = mir_lower_conversion(value, mir_lvalue_type(node->a));
         } else {
             int binary_operator = mir_compound_binary_operator(node->op);
             if (binary_operator == 0)
@@ -1311,9 +1436,9 @@ static int mir_lower_expr(const struct AstNode *node)
             left = mir_lower_expr(node->a);
             right = mir_lower_expr(node->b);
             {
-                int target_type = node->a->type != 0
-                    ? node->a->type : ast_expr_type_for_sizeof(node->a);
-                if (binary_operator != TOK_SHL && binary_operator != TOK_SHR)
+                int target_type = mir_lvalue_type(node->a);
+                if (!type_is_bool(target_type) &&
+                    binary_operator != TOK_SHL && binary_operator != TOK_SHR)
                     right = mir_lower_conversion(right, target_type);
             value = mir_new_value();
             insn = mir_emit(MIR_BINARY);
@@ -1323,6 +1448,10 @@ static int mir_lower_expr(const struct AstNode *node)
             insn->type = target_type;
             insn->secondary_offset = target_type;
             insn->immediate = binary_operator;
+            if (type_is_bool(target_type)) {
+                insn->type = TYPE_INT;
+                value = mir_lower_conversion(value, target_type);
+            }
             }
         }
         mir_emit_ident_store(node->a, value);
@@ -1363,7 +1492,8 @@ static int mir_lower_expr(const struct AstNode *node)
             left = mir_lower_expr(node->list[i]);
             if (function_symbol != NULL && i < function_symbol->proto_nargs) {
                 argument_type = function_symbol->proto_types[i];
-                left = mir_lower_conversion(left, argument_type);
+                if (!type_is_struct_object(argument_type))
+                    left = mir_lower_conversion(left, argument_type);
             }
             insn = mir_emit(MIR_ARG);
             insn->src1 = left;
@@ -1473,7 +1603,14 @@ static void mir_lower_stmt(const struct AstNode *node)
         return;
         }
     case AST_RETURN:
-        condition = mir_lower_expr(node->a);
+        if (type_is_struct_object(mir.return_type) && node->a != NULL &&
+            node->a->kind == AST_CALL)
+            condition = mir_lower_aggregate_call_address(node->a, NULL);
+        else {
+            condition = mir_lower_expr(node->a);
+            if (!type_is_struct_object(mir.return_type))
+                condition = mir_lower_conversion(condition, mir.return_type);
+        }
         insn = mir_emit(MIR_RETURN);
         insn->src1 = condition;
         return;
@@ -1671,6 +1808,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
                         int local_bytes)
 {
     const char *emit_filter;
+    struct Sym *function_symbol;
 
     if (!mir_report_enabled(name)) {
         mir.active = 0;
@@ -1682,11 +1820,9 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.next_call_id = 0;
     mir.flow_depth = 0;
     mir.has_vla = has_vla;
-    {
-        struct Sym *function_symbol = find_global(name);
-        mir.is_variadic_function = function_symbol != NULL &&
-                                   function_symbol->proto_variadic;
-    }
+    function_symbol = find_global(name);
+    mir.is_variadic_function = function_symbol != NULL &&
+                               function_symbol->proto_variadic;
     mir.has_runtime_stride_param = 0;
     mir.user_label_count = 0;
     mir.switch_depth = 0;
@@ -1718,6 +1854,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
                       getenv("DCC_MIR_GENERAL_FUNCTION") != NULL;
     mir.return_type = current_return_type;
     mir.local_bytes = local_bytes;
+    mir.aggregate_temp_bytes = 0;
     mir.opaque_count = 0;
     mir.capture_stream = NULL;
     mir_copy_name(mir.name, name);
@@ -1735,7 +1872,8 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     } else if (getenv("DCC_MIR_EMIT_GENERAL") != NULL ||
                getenv("DCC_MIR_EMIT_HOME_CFG") != NULL ||
                (getenv("DCC_MIR_GENERAL_FUNCTION") != NULL &&
-                strcmp(getenv("DCC_MIR_GENERAL_FUNCTION"), name) == 0)) {
+                                (strcmp(getenv("DCC_MIR_GENERAL_FUNCTION"), "*") == 0 ||
+                                 strcmp(getenv("DCC_MIR_GENERAL_FUNCTION"), name) == 0))) {
         mir.capture_stream = tmpfile();
         if (mir.capture_stream == NULL)
             fatal("cannot create MIR capture stream");
@@ -2169,6 +2307,38 @@ void mir_capture_initializer(const struct AstNode *expr)
     mir.initializer_target = NULL;
 }
 
+void mir_capture_struct_initializer(struct Sym *target,
+                                    const struct AstNode *expr)
+{
+    struct MirInsn *insn;
+    int destination;
+    int source;
+
+    if (!mir.active || target == NULL || expr == NULL)
+        return;
+    if (expr->kind == AST_CALL && type_is_struct_object(target->type)) {
+        (void)mir_lower_aggregate_call_address(expr, target);
+        return;
+    }
+    destination = mir_new_value();
+    insn = mir_emit(MIR_ADDRESS);
+    insn->dst = destination;
+    insn->type = type_add_ptr(target->type);
+    insn->object = mir_get_object(target, target->name);
+    mir_copy_name(insn->name, target->name);
+    source = mir_lower_expr(expr);
+    if (source < 0) {
+        insn = mir_emit(MIR_OPAQUE);
+        insn->immediate = AST_DECL;
+        return;
+    }
+    insn = mir_emit(MIR_COPY_AGGREGATE);
+    insn->src1 = destination;
+    insn->src2 = source;
+    insn->type = target->type;
+    insn->memory_size = type_size(target->type);
+}
+
 static struct MirInsn *mir_mutable_definition(int value)
 {
     int i;
@@ -2254,7 +2424,9 @@ static void mir_resolve_deferred_metadata(void)
         if (insn->type == 0 && insn->name[0] != 0 &&
             (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE ||
              insn->opcode == MIR_ADDRESS || insn->opcode == MIR_PARAM))
-            insn->type = mir_named_type(insn->name);
+            insn->type = insn->opcode == MIR_ADDRESS
+                ? type_add_ptr(mir_named_type(insn->name))
+                : mir_named_type(insn->name);
     }
 
     for (i = 0; i < mir.count; ++i) {
@@ -2267,7 +2439,9 @@ static void mir_resolve_deferred_metadata(void)
         if (object >= 0) {
             insn->object = object;
             if (insn->type == 0)
-                insn->type = mir.objects[object].type;
+                insn->type = insn->opcode == MIR_ADDRESS
+                    ? type_add_ptr(mir.objects[object].type)
+                    : mir.objects[object].type;
         }
     }
 
@@ -2299,7 +2473,7 @@ static void mir_resolve_deferred_metadata(void)
             if (base_definition != NULL)
                 base_type = base_definition->type;
         }
-        if ((insn->memory_flags & 16) != 0)
+        if (type_ptr_depth(base_type) > 0)
             base_type = type_decay_ptr(base_type);
         field = find_field_def(base_struct_id_from_type(base_type), insn->name);
         if (field == NULL)
@@ -2310,7 +2484,7 @@ static void mir_resolve_deferred_metadata(void)
             continue;
         }
         insn->immediate = field->offset;
-        insn->type = field->type;
+        insn->type = type_add_ptr(field->type);
         mir_set_field_memory(insn, field);
     }
 
@@ -2386,8 +2560,14 @@ static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
     if (first < 0 || first >= mir.count || mir.insns[first].opcode != MIR_PHI)
         return 0;
     predecessor_label = mir_block_label_before(predecessor);
-    while (first < mir.count && mir.insns[first].opcode == MIR_PHI) {
+    while (first < mir.count) {
         const struct MirInsn *phi = &mir.insns[first];
+        if (phi->opcode == MIR_NOP) {
+            ++first;
+            continue;
+        }
+        if (phi->opcode != MIR_PHI)
+            break;
         if (predecessor_label == phi->phi_pred1 && value == phi->src1)
             return 1;
         if (predecessor_label == phi->phi_pred2 && value == phi->src2)
@@ -3641,9 +3821,14 @@ static int mir_emit_homed_phi_copies(FILE *out, int predecessor,
     int i;
 
     while (instruction >= 0 && instruction < mir.count &&
-           mir.insns[instruction].opcode == MIR_PHI) {
+           (mir.insns[instruction].opcode == MIR_PHI ||
+            mir.insns[instruction].opcode == MIR_NOP)) {
         const struct MirInsn *phi = &mir.insns[instruction];
         int source;
+        if (phi->opcode == MIR_NOP) {
+            ++instruction;
+            continue;
+        }
         if (predecessor_label == phi->phi_pred1)
             source = phi->src1;
         else if (predecessor_label == phi->phi_pred2)
@@ -4329,7 +4514,18 @@ static int mir_virtual_offset(int value)
     if (value >= 0 && value < mir.next_value && mir.backend_slots != NULL &&
         mir.backend_slots[value] >= 0)
         slot = mir.backend_slots[value];
-    return -mir.local_bytes - 2 * (slot + 1);
+    return -mir.local_bytes - mir.aggregate_temp_bytes - 2 * (slot + 1);
+}
+
+static int mir_definition_is_wide(const struct MirInsn *definition)
+{
+    if (definition == NULL)
+        return 0;
+    if ((definition->opcode == MIR_LOAD_INDIRECT ||
+         definition->opcode == MIR_INDEX_LOAD) &&
+        definition->memory_size > 2)
+        return 1;
+    return type_size(definition->type) > 2;
 }
 
 static int mir_prepare_backend_slots(void)
@@ -4384,8 +4580,12 @@ static int mir_prepare_backend_slots(void)
             int phi_start = i;
             int predecessor;
             while (phi_start > 0 &&
-                   mir.insns[phi_start - 1].opcode == MIR_PHI)
+               (mir.insns[phi_start - 1].opcode == MIR_PHI ||
+                mir.insns[phi_start - 1].opcode == MIR_NOP))
                 --phi_start;
+            while (phi_start < i &&
+               mir.insns[phi_start].opcode == MIR_NOP)
+            ++phi_start;
             for (predecessor = 0; predecessor < mir.count; ++predecessor) {
                 int successor;
                 int predecessor_label = mir_block_label_before(predecessor);
@@ -4420,8 +4620,7 @@ static int mir_prepare_backend_slots(void)
             if (first[value] == i) {
                 int slot;
                 const struct MirInsn *definition = mir_definition(value);
-                int units = definition != NULL &&
-                            type_size(definition->type) > 2 ? 2 : 1;
+                int units = mir_definition_is_wide(definition) ? 2 : 1;
                 for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
                     int unit;
                     int available = 1;
@@ -4464,8 +4663,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
 
 static int mir_value_is_wide(int value)
 {
-    const struct MirInsn *definition = mir_definition(value);
-    return definition != NULL && type_size(definition->type) > 2;
+    return mir_definition_is_wide(mir_definition(value));
 }
 
 static void mir_emit_virtual_load_wide(FILE *out, int value)
@@ -4662,6 +4860,18 @@ static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
 static int mir_emit_cast(FILE *out, int source_type, int target_type)
 {
     const char *helper;
+    if (type_is_bool(target_type) && !type_is_bool(source_type)) {
+        int nonzero_label = new_label();
+        int end_label = new_label();
+        if (type_size(source_type) > 2)
+            fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
+        else
+            fputs("\tld a,h\n\tor l\n", out);
+        fputs("\tld hl,0\n", out);
+        fprintf(out, "\tjp nz,L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
+                nonzero_label, end_label, nonzero_label, end_label);
+        return 1;
+    }
     if (source_type == 0 || target_type == 0 || source_type == target_type)
         return 1;
     if (type_is_float(target_type) && !type_is_float(source_type)) {
@@ -4712,20 +4922,50 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
 {
     int predecessor_label = mir_block_label_before(predecessor);
     int instruction = mir_first_nonlabel_successor(successor);
+    int sources[MAX_FLOW];
+    int destinations[MAX_FLOW];
+    int copy_count = 0;
+    int copy;
 
     while (instruction >= 0 && instruction < mir.count &&
-           mir.insns[instruction].opcode == MIR_PHI) {
+           (mir.insns[instruction].opcode == MIR_PHI ||
+            mir.insns[instruction].opcode == MIR_NOP)) {
         const struct MirInsn *phi = &mir.insns[instruction];
         int source;
+        if (phi->opcode == MIR_NOP) {
+            ++instruction;
+            continue;
+        }
         if (predecessor_label == phi->phi_pred1)
             source = phi->src1;
         else if (predecessor_label == phi->phi_pred2)
             source = phi->src2;
         else
             return 0;
-        mir_emit_virtual_load(out, source);
-        mir_emit_virtual_store(out, phi->dst);
+        if (copy_count >= (int)(sizeof(sources) / sizeof(sources[0])))
+            return 0;
+        sources[copy_count] = source;
+        destinations[copy_count] = phi->dst;
+        ++copy_count;
         ++instruction;
+    }
+    for (copy = 0; copy < copy_count; ++copy) {
+        if (mir_value_is_wide(sources[copy])) {
+            mir_emit_virtual_load_wide(out, sources[copy]);
+            fputs("\tpush de\n\tpush hl\n", out);
+        } else {
+            mir_emit_virtual_load(out, sources[copy]);
+            fputs("\tpush hl\n", out);
+        }
+    }
+    for (copy = copy_count - 1; copy >= 0; --copy) {
+        if (mir_value_is_wide(destinations[copy])) {
+            fputs("\tpop hl\n\tpop de\n", out);
+            mir_emit_virtual_store_wide(out, destinations[copy]);
+        } else {
+            fputs("\tpop hl\n", out);
+            mir_emit_virtual_store(out, destinations[copy]);
+        }
     }
     return 1;
 }
@@ -4769,14 +5009,19 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int i;
     int accepted = 0;
 
-    if (type_is_struct_object(mir.return_type) ||
-        type_size(mir.return_type) > 4 || mir.next_value <= 0)
+    if ((!type_is_struct_object(mir.return_type) &&
+         type_size(mir.return_type) > 4) ||
+        (type_is_struct_object(mir.return_type) &&
+         (type_size(mir.return_type) <= 0 || type_size(mir.return_type) > 1024)) ||
+        mir.next_value <= 0)
         return mir_scalar_cfg_preflight_reject("return-type", -1);
-    frame_bytes = mir.local_bytes + 2 * mir_prepare_backend_slots();
+    frame_bytes = mir.local_bytes + mir.aggregate_temp_bytes +
+                  2 * mir_prepare_backend_slots();
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR scalar-cfg frame function=%s locals=%d slots=%d bytes=%d\n",
-                mir.name, mir.local_bytes, mir.backend_slot_count, frame_bytes);
+                mir.name, mir.local_bytes + mir.aggregate_temp_bytes,
+                mir.backend_slot_count, frame_bytes);
     if (frame_bytes <= 0 || frame_bytes > 120)
         return mir_scalar_cfg_preflight_reject("frame-size", -1);
     for (i = 0; i < mir.count; ++i) {
@@ -4793,7 +5038,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_VLA_SAVE: case MIR_VLA_ALLOC: case MIR_VLA_RESTORE:
         case MIR_COPY_AGGREGATE: case MIR_VA_START: case MIR_VA_END:
         case MIR_VA_ARG:
-        case MIR_BINARY: case MIR_ARG: case MIR_CALL:
+        case MIR_BINARY: case MIR_ARG: case MIR_CALL: case MIR_CALL_AGGREGATE:
         case MIR_LABEL:
         case MIR_JUMP: case MIR_BRANCH_FALSE: case MIR_PHI: case MIR_RETURN:
             break;
@@ -4825,6 +5070,13 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             (strcmp(insn->name, "<indirect>") == 0 ||
              type_size(insn->type) > 4))
             return mir_scalar_cfg_preflight_reject("call-abi", i);
+        if (insn->opcode == MIR_CALL_AGGREGATE &&
+            (strcmp(insn->name, "<indirect>") == 0 ||
+             insn->memory_size <= 0 ||
+             (insn->immediate != MIR_AGGREGATE_FORWARD_OFFSET &&
+              (insn->immediate < -128 ||
+               insn->immediate + insn->memory_size - 1 > 127))))
+            return mir_scalar_cfg_preflight_reject("aggregate-call-abi", i);
         if (insn->opcode == MIR_VA_ARG &&
             (insn->immediate < -128 || insn->immediate + 1 > 127 ||
              (insn->secondary_offset != 2 && insn->secondary_offset != 4)))
@@ -5271,6 +5523,83 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
             }
             break;
+        case MIR_CALL_AGGREGATE:
+            {
+                struct Sym *callee = find_global(insn->name);
+                const char *assembly_name = asm_name_for(
+                    callee != NULL ? sym_asm_name(callee) : insn->name);
+                const struct MirInsn *call_args[MAX_PROTO_PARAMS];
+                int call_arg_count = 0;
+                int argument_bytes = 0;
+                int argument;
+                int scan;
+                for (argument = 0; argument < MAX_PROTO_PARAMS; ++argument)
+                    call_args[argument] = NULL;
+                for (scan = 0; scan < i; ++scan)
+                    if (mir.insns[scan].opcode == MIR_ARG &&
+                        mir.insns[scan].secondary_offset ==
+                            insn->secondary_offset) {
+                        int index = (int)mir.insns[scan].immediate;
+                        if (index < 0 || index >= MAX_PROTO_PARAMS)
+                            goto done;
+                        call_args[index] = &mir.insns[scan];
+                        if (call_arg_count <= index)
+                            call_arg_count = index + 1;
+                    }
+                for (argument = call_arg_count - 1; argument >= 0; --argument) {
+                    const struct MirInsn *arg = call_args[argument];
+                    int size;
+                    if (arg == NULL)
+                        goto done;
+                    size = type_size(arg->type);
+                    if (type_is_struct_object(arg->type)) {
+                        int byte;
+                        if (size <= 0 || size > 1024)
+                            goto done;
+                        mir_emit_virtual_load(out, arg->src1);
+                        fputs("\tex de,hl\n", out);
+                        fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+                                size);
+                        for (byte = 0; byte < size; ++byte) {
+                            fputs("\tld a,(de)\n\tld (hl),a\n", out);
+                            if (byte + 1 < size)
+                                fputs("\tinc de\n\tinc hl\n", out);
+                        }
+                        argument_bytes += size;
+                    } else if (size == 4) {
+                        mir_emit_virtual_load_wide(out, arg->src1);
+                        fputs("\tpush de\n\tpush hl\n", out);
+                        argument_bytes += 4;
+                    } else {
+                        mir_emit_virtual_load(out, arg->src1);
+                        fputs("\tpush hl\n", out);
+                        argument_bytes += 2;
+                    }
+                }
+                if (insn->immediate == MIR_AGGREGATE_FORWARD_OFFSET)
+                    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n", out);
+                else
+                    fputs("\tpush ix\n\tpop hl\n", out);
+                if (insn->immediate != 0 &&
+                    insn->immediate != MIR_AGGREGATE_FORWARD_OFFSET)
+                    fprintf(out, "\tld de,%ld\n\tadd hl,de\n",
+                            insn->immediate);
+                fputs("\tpush hl\n", out);
+                fprintf(out, "\textrn %s\n\tcall %s\n",
+                        assembly_name, assembly_name);
+                fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
+                        argument_bytes + 2);
+                if (insn->immediate == MIR_AGGREGATE_FORWARD_OFFSET)
+                    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n", out);
+                else
+                    fputs("\tpush ix\n\tpop hl\n", out);
+                if (insn->immediate != 0 &&
+                    insn->immediate != MIR_AGGREGATE_FORWARD_OFFSET)
+                    fprintf(out, "\tld de,%ld\n\tadd hl,de\n",
+                            insn->immediate);
+                mir_emit_virtual_store(out, insn->dst);
+            }
+            break;
         case MIR_VA_START:
             if (insn->immediate < -128 || insn->immediate + 1 > 127)
                 goto done;
@@ -5339,7 +5668,19 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_RETURN:
-            if (insn->src1 >= 0) {
+            if (type_is_struct_object(mir.return_type)) {
+                int byte;
+                int size = type_size(mir.return_type);
+                if (insn->src1 < 0)
+                    goto done;
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tex de,hl\n\tld l,(ix+4)\n\tld h,(ix+5)\n", out);
+                for (byte = 0; byte < size; ++byte) {
+                    fputs("\tld a,(de)\n\tld (hl),a\n", out);
+                    if (byte + 1 < size)
+                        fputs("\tinc de\n\tinc hl\n", out);
+                }
+            } else if (insn->src1 >= 0) {
                 if (mir_value_is_wide(insn->src1))
                     mir_emit_virtual_load_wide(out, insn->src1);
                 else
@@ -6299,7 +6640,8 @@ void mir_end_function(void)
                 strcmp(emit_filter, mir.name) == 0)
                 emitted = mir_try_emit_z80(generated);
             else if (general_filter != NULL && general_filter[0] != 0 &&
-                    strcmp(general_filter, mir.name) == 0) {
+                    (strcmp(general_filter, "*") == 0 ||
+                     strcmp(general_filter, mir.name) == 0)) {
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_homed_scalar_cfg);
                 if (!emitted)

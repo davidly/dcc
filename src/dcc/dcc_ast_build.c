@@ -780,7 +780,11 @@ static struct AstNode *p_conditional(struct AstArena *ar)
         if (g_lex.tok.kind == ':')
             next_token();
         else_e = p_conditional(ar);
-        return ast_cond(ar, c, then_e, else_e, 0);
+        {
+            struct AstNode *conditional = ast_cond(ar, c, then_e, else_e, 0);
+            conditional->type = ast_expr_type_for_sizeof(conditional);
+            return conditional;
+        }
     }
     return c;
 }

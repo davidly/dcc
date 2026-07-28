@@ -13,6 +13,8 @@ void mir_end_declaration(void);
 void mir_set_initializer_target(struct Sym *symbol);
 void mir_set_vla_target(struct Sym *symbol);
 void mir_capture_initializer(const struct AstNode *expr);
+void mir_capture_struct_initializer(struct Sym *target,
+									const struct AstNode *expr);
 void mir_capture_vla_save(int offset);
 void mir_capture_vla_restore(int offset);
 void mir_capture_init_constant(struct Sym *symbol, int offset, int type,

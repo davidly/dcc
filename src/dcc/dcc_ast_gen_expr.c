@@ -1799,6 +1799,9 @@ void ast_emit_struct_init_expr_assign(struct Sym *s)
     lhs->sym = s;
     lhs->type = s->type;
 
+    if (rhs != NULL)
+        mir_capture_struct_initializer(s, rhs);
+
     if (rhs != NULL && ast_struct_return_call_assign_supported(s->type, rhs)) {
         gen_struct_return_call_assign_ast(lhs, rhs);
         ast_arena_reset(&g_ast_init_arena);

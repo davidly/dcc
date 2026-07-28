@@ -231,6 +231,7 @@ int ast_expr_type_for_sizeof(const struct AstNode *n);
 int ast_sizeof_expr_value(const struct AstNode *n);
 struct FieldDef *ast_unique_field_by_name(const char *name);
 int ast_va_arg_deref_type(const struct AstNode *n, int *out_type);
+int ast_index_composite_elem_type(const struct AstNode *n, int *out_elem);
 struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n);
 
 /* Detects a for-loop whose whole body is one assignment to an array-element
