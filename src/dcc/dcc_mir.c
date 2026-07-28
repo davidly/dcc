@@ -3396,6 +3396,306 @@ static int mir_try_emit_scalar_dag(FILE *out)
     return 1;
 }
 
+static int mir_home_uses_iy(void)
+{
+    int value;
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir.allocation_colors[value] == MIR_COLOR_IY)
+            return 1;
+    return 0;
+}
+
+static int mir_emit_home_to_hl(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL: return 1;
+    case MIR_COLOR_DE: fputs("\tpush de\n\tpop hl\n", out); return 1;
+    case MIR_COLOR_BC: fputs("\tld h,b\n\tld l,c\n", out); return 1;
+    case MIR_COLOR_IY: fputs("\tpush iy\n\tpop hl\n", out); return 1;
+    default: return 0;
+    }
+}
+
+static int mir_emit_home_to_de(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_DE: return 1;
+    case MIR_COLOR_BC: fputs("\tld d,b\n\tld e,c\n", out); return 1;
+    case MIR_COLOR_IY: fputs("\tpush iy\n\tpop de\n", out); return 1;
+    default: return 0;
+    }
+}
+
+static int mir_emit_hl_to_home(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL: return 1;
+    case MIR_COLOR_DE: fputs("\tex de,hl\n", out); return 1;
+    case MIR_COLOR_BC: fputs("\tld b,h\n\tld c,l\n", out); return 1;
+    case MIR_COLOR_IY: fputs("\tpush hl\n\tpop iy\n", out); return 1;
+    default: return 0;
+    }
+}
+
+static int mir_emit_constant_to_home(FILE *out, int value, long immediate)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL: fprintf(out, "\tld hl,%ld\n", immediate & 0xffffL); return 1;
+    case MIR_COLOR_DE: fprintf(out, "\tld de,%ld\n", immediate & 0xffffL); return 1;
+    case MIR_COLOR_BC: fprintf(out, "\tld bc,%ld\n", immediate & 0xffffL); return 1;
+    case MIR_COLOR_IY: fprintf(out, "\tld iy,%ld\n", immediate & 0xffffL); return 1;
+    default: return 0;
+    }
+}
+
+static int mir_emit_word_param_to_home(FILE *out, int value, int offset)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL:
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n", offset, offset + 1);
+        return 1;
+    case MIR_COLOR_DE:
+        fprintf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n", offset, offset + 1);
+        return 1;
+    case MIR_COLOR_BC:
+        fprintf(out, "\tld c,(ix%+d)\n\tld b,(ix%+d)\n", offset, offset + 1);
+        return 1;
+    case MIR_COLOR_IY:
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n", offset, offset + 1);
+        fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset)
+{
+    int stack_offset = offset - 2;
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL:
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n", stack_offset);
+        fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+        return 1;
+    case MIR_COLOR_DE:
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n", stack_offset + 2);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpop hl\n", out);
+        return 1;
+    case MIR_COLOR_BC:
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n", stack_offset + 2);
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tpop hl\n", out);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void mir_emit_home_prologue(FILE *out, int uses_iy)
+{
+    if (uses_iy)
+        fputs("\tpush iy\n", out);
+    mir_emit_prologue(out);
+}
+
+static void mir_emit_home_epilogue(FILE *out, int uses_iy)
+{
+    fputs("\tld sp,ix\n\tpop ix\n", out);
+    if (uses_iy)
+        fputs("\tpop iy\n", out);
+    fputs("\tret\n", out);
+}
+
+static int mir_try_emit_homed_scalar_dag(FILE *out)
+{
+    int uses_iy;
+    int frameless;
+    int return_value = -1;
+    int parameter_count = 0;
+    int operation_count = 0;
+    int i;
+
+    if ((mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2 ||
+        mir.allocation_spill_count != 0)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
+            return 0;
+        switch (insn->opcode) {
+        case MIR_NOP: case MIR_LABEL: case MIR_CONST:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_UNARY:
+            ++operation_count;
+            if (insn->immediate != 0 && insn->immediate != '+' &&
+                insn->immediate != '-' && insn->immediate != '~' &&
+                insn->immediate != '!')
+                return 0;
+            break;
+        case MIR_BINARY:
+            ++operation_count;
+            if (insn->immediate != '+' && insn->immediate != '-' &&
+                insn->immediate != '&' && insn->immediate != '|' &&
+                insn->immediate != '^')
+                return 0;
+            if (mir.allocation_colors[insn->src2] == MIR_COLOR_HL)
+                return 0;
+            break;
+        case MIR_RETURN:
+            if (return_value >= 0)
+                return 0;
+            return_value = insn->src1;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (return_value < 0)
+        return 0;
+    if (parameter_count == 0 && operation_count == 0)
+        return 0;
+
+    uses_iy = mir_home_uses_iy();
+    frameless = !uses_iy && mir.local_bytes == 0;
+    if (frameless) {
+        for (i = 0; i < mir.count; ++i)
+            if (mir.insns[i].opcode == MIR_PARAM &&
+                mir.insns[i].object >= 0 &&
+                type_size(mir.objects[mir.insns[i].object].type) != 2)
+                frameless = 0;
+    }
+    if (frameless) {
+        if (opt_stack_check)
+            fputs("\textrn __stchk\n\tcall __stchk\n", out);
+    } else {
+        mir_emit_home_prologue(out, uses_iy);
+    }
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        const struct MirObject *object;
+        int parameter_offset;
+        int true_label;
+
+        switch (insn->opcode) {
+        case MIR_NOP: case MIR_LABEL:
+            break;
+        case MIR_PARAM:
+            if (insn->object < 0 || insn->object >= mir.object_count)
+                return 0;
+            object = &mir.objects[insn->object];
+            parameter_offset = object->offset + (uses_iy ? 2 : 0);
+            if (type_size(object->type) == 1) {
+                int preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL;
+                if (preserve_hl)
+                    fputs("\tpush hl\n", out);
+                fprintf(out, "\tld l,(ix%+d)\n", parameter_offset);
+                if (type_is_bool(object->type)) {
+                    true_label = new_label();
+                    fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                            true_label, true_label);
+                } else if ((object->type & TYPE_UNSIGNED) != 0) {
+                    fputs("\tld h,0\n", out);
+                } else {
+                    true_label = new_label();
+                    fputs("\tld h,0\n\tbit 7,l\n", out);
+                    fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
+                            true_label, true_label);
+                }
+                if (!mir_emit_hl_to_home(out, insn->dst))
+                    return 0;
+                if (preserve_hl)
+                    fputs("\tpop hl\n", out);
+                break;
+            } else {
+                if (!(frameless
+                    ? mir_emit_stack_word_param_to_home(
+                        out, insn->dst, object->offset)
+                    : mir_emit_word_param_to_home(
+                        out, insn->dst, parameter_offset)))
+                    return 0;
+                break;
+            }
+            break;
+        case MIR_CONST:
+            if (!mir_emit_constant_to_home(out, insn->dst, insn->immediate))
+                return 0;
+            break;
+        case MIR_UNARY:
+            {
+            int preserve_hl = mir.allocation_colors[insn->src1] != MIR_COLOR_HL &&
+                              mir.allocation_colors[insn->dst] != MIR_COLOR_HL;
+            if (preserve_hl)
+                fputs("\tpush hl\n", out);
+            if (!mir_emit_home_to_hl(out, insn->src1))
+                return 0;
+            if (insn->immediate == '-')
+                fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
+            else if (insn->immediate == '~')
+                fputs("\tld a,l\n\tcpl\n\tld l,a\n\tld a,h\n\tcpl\n\tld h,a\n", out);
+            else if (insn->immediate == '!') {
+                true_label = new_label();
+                fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+                fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n",
+                        true_label, true_label);
+            }
+            if (!mir_emit_hl_to_home(out, insn->dst))
+                return 0;
+            if (preserve_hl)
+                fputs("\tpop hl\n", out);
+            break;
+            }
+        case MIR_BINARY:
+            {
+            int preserve_hl = mir.allocation_colors[insn->src1] != MIR_COLOR_HL &&
+                              mir.allocation_colors[insn->dst] != MIR_COLOR_HL;
+            int preserve_de = mir.allocation_colors[insn->src2] != MIR_COLOR_DE &&
+                              mir.allocation_colors[insn->dst] != MIR_COLOR_DE;
+            if (preserve_hl)
+                fputs("\tpush hl\n", out);
+            if (preserve_de)
+                fputs("\tpush de\n", out);
+            if (!mir_emit_home_to_hl(out, insn->src1) ||
+                !mir_emit_home_to_de(out, insn->src2))
+                return 0;
+            if (insn->immediate == '+')
+                fputs("\tadd hl,de\n", out);
+            else if (insn->immediate == '-')
+                fputs("\tor a\n\tsbc hl,de\n", out);
+            else if (insn->immediate == '&')
+                fputs("\tld a,h\n\tand d\n\tld h,a\n\tld a,l\n\tand e\n\tld l,a\n", out);
+            else if (insn->immediate == '|')
+                fputs("\tld a,h\n\tor d\n\tld h,a\n\tld a,l\n\tor e\n\tld l,a\n", out);
+            else
+                fputs("\tld a,h\n\txor d\n\tld h,a\n\tld a,l\n\txor e\n\tld l,a\n", out);
+            if (!mir_emit_hl_to_home(out, insn->dst))
+                return 0;
+            if (preserve_de)
+                fputs("\tpop de\n", out);
+            if (preserve_hl)
+                fputs("\tpop hl\n", out);
+            break;
+            }
+        case MIR_RETURN:
+            if (!mir_emit_home_to_hl(out, insn->src1))
+                return 0;
+            if (frameless)
+                fputs("\tret\n", out);
+            else
+                mir_emit_home_epilogue(out, uses_iy);
+            break;
+        default:
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int mir_virtual_offset(int value)
 {
     int slot = value;
@@ -4402,6 +4702,7 @@ static int mir_try_emit_general_rollout(FILE *out)
     int i;
     int frame_bytes;
     int return_count = 0;
+    int parameter_count = 0;
 
     if (mir.has_vla || mir.has_runtime_stride_param ||
         mir.is_variadic_function || mir.count > 64 ||
@@ -4417,8 +4718,11 @@ static int mir_try_emit_general_rollout(FILE *out)
                                type_ptr_depth(insn->type) > 0))
             return 0;
         switch (insn->opcode) {
-        case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
+        case MIR_NOP: case MIR_LABEL: case MIR_CONST:
         case MIR_UNARY: case MIR_BINARY:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
             break;
         case MIR_RETURN:
             ++return_count;
@@ -4427,9 +4731,9 @@ static int mir_try_emit_general_rollout(FILE *out)
             return 0;
         }
     }
-    if (return_count != 1)
+    if (return_count != 1 || parameter_count == 0)
         return 0;
-    return mir_try_emit_scalar_dag(out);
+    return mir_try_emit_homed_scalar_dag(out);
 }
 
 static int mir_is_const_value(int value, long expected)
@@ -5154,7 +5458,9 @@ static int mir_try_emit_automatic_z80(FILE *out)
         return 1;
     if (mir_try_emit_repeated_invariant_add_loop(out))
         return 1;
-    return mir_try_emit_countdown_loop(out);
+    if (mir_try_emit_countdown_loop(out))
+        return 1;
+    return mir_try_emit_general_rollout(out);
 }
 
 static void mir_copy_capture(FILE *out)

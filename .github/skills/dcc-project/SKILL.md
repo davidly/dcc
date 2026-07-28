@@ -767,6 +767,16 @@ apps). Therefore this gate remains opt-in as a differential-development tool.
 Production automatic emission is intentionally the measured loop-selector set;
 "complete MIR" does not mean replacing demonstrably faster established code.
 
+After direct retained-home emission and frameless stack-relative parameter
+loads, a narrower pure subset (at least one parameter; one 16-bit return; no
+spills, declarations, calls, memory, CFG joins, pointers or helper-clobbering
+ops) passes the full zero-regression gate. Constants/parameters materialize
+directly in HL/DE/BC/IY, boundary operand registers preserve unrelated live
+homes, and IY save/parameter offsets follow the callee-save ABI. This subset is
+now part of `DCC_MIR_EMIT_ALL` alongside measured loop selectors. The broader
+spill/CFG backend remains available through exact general mode but is not
+automatic.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
