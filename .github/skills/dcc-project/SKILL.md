@@ -458,6 +458,20 @@ graphs still fall back transactionally.
 Do not widen this subset without a focused runtime comparison and a fallback
 identity check.
 
+Scalar compound assignments and prefix/postfix inc/dec lower as explicit
+load/binary/store operations. At a labeled two-predecessor join, the first
+ambiguous object load may become an object phi when both predecessor states
+provide distinct known values; the phi is associated with those predecessor
+labels and dataflow is rerun. Unlabeled or multi-predecessor joins remain
+memory. This is enough to form induction-variable SSA for simple loops.
+
+The first allocation-backed loop selector accepts exactly
+`while (n > 0) --n; return n;` for one word parameter. It materializes `n` in
+BC at entry, keeps it there across the complete loop, and copies BC to HL only
+for the return. Signed and unsigned termination checks are separate. Against
+the existing peep-optimized compiler on 40 calls of `down(30000)`, cycles fall
+from 67,225,169 to 60,022,609: **-7,202,560 / -10.71%**, identical output.
+
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where

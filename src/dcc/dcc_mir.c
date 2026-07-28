@@ -247,6 +247,70 @@ static void mir_emit_jump(int label)
         insn->label = label;
 }
 
+static int mir_lower_expr(const struct AstNode *node);
+
+static void mir_emit_ident_store(const struct AstNode *ident, int value)
+{
+    struct MirInsn *store;
+    struct Sym *symbol;
+
+    if (ident == NULL || ident->kind != AST_IDENT)
+        return;
+    symbol = ident->sym;
+    if (symbol == NULL && ident->sval != NULL)
+        symbol = find_sym(ident->sval);
+    store = mir_emit(MIR_STORE);
+    store->src1 = value;
+    store->type = ident->type;
+    mir_copy_name(store->name, ident->sval ? ident->sval :
+                               (symbol ? symbol->name : "?"));
+    store->object = mir_get_object(symbol, store->name);
+}
+
+static int mir_lower_incdec(const struct AstNode *operand, int operation,
+                            int postfix)
+{
+    struct MirInsn *insn;
+    int old_value;
+    int one;
+    int new_value;
+
+    if (operand == NULL || operand->kind != AST_IDENT)
+        return -1;
+    old_value = mir_lower_expr(operand);
+    one = mir_new_value();
+    insn = mir_emit(MIR_CONST);
+    insn->dst = one;
+    insn->type = operand->type;
+    insn->immediate = 1;
+    new_value = mir_new_value();
+    insn = mir_emit(MIR_BINARY);
+    insn->dst = new_value;
+    insn->src1 = old_value;
+    insn->src2 = one;
+    insn->type = operand->type;
+    insn->immediate = operation == TOK_INC ? '+' : '-';
+    mir_emit_ident_store(operand, new_value);
+    return postfix ? old_value : new_value;
+}
+
+static int mir_compound_binary_operator(int assignment_operator)
+{
+    switch (assignment_operator) {
+    case TOK_ADDEQ: return '+';
+    case TOK_SUBEQ: return '-';
+    case TOK_MULEQ: return '*';
+    case TOK_DIVEQ: return '/';
+    case TOK_MODEQ: return '%';
+    case TOK_ANDEQ: return '&';
+    case TOK_OREQ: return '|';
+    case TOK_XOREQ: return '^';
+    case TOK_SHLEQ: return TOK_SHL;
+    case TOK_SHREQ: return TOK_SHR;
+    default: return 0;
+    }
+}
+
 static int mir_lower_expr(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -297,6 +361,11 @@ static int mir_lower_expr(const struct AstNode *node)
         return value;
     case AST_CAST:
     case AST_UNARY:
+        if (node->op == TOK_INC || node->op == TOK_DEC) {
+            value = mir_lower_incdec(node->a, node->op, 0);
+            if (value >= 0)
+                return value;
+        }
         left = mir_lower_expr(node->a);
         value = mir_new_value();
         insn = mir_emit(MIR_UNARY);
@@ -305,6 +374,13 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->type = node->type;
         insn->immediate = node->op;
         return value;
+    case AST_POSTFIX:
+        if (node->op == TOK_INC || node->op == TOK_DEC) {
+            value = mir_lower_incdec(node->a, node->op, 1);
+            if (value >= 0)
+                return value;
+        }
+        break;
     case AST_BINARY:
         left = mir_lower_expr(node->a);
         right = mir_lower_expr(node->b);
@@ -355,21 +431,26 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->type = node->type;
         return value;
     case AST_ASSIGN:
-        if (node->op != '=' || node->a == NULL || node->a->kind != AST_IDENT)
+        if (node->a == NULL || node->a->kind != AST_IDENT)
             break;
-        {
-        struct Sym *symbol = node->a->sym;
-        if (symbol == NULL && node->a->sval != NULL)
-            symbol = find_sym(node->a->sval);
-        value = mir_lower_expr(node->b);
-        insn = mir_emit(MIR_STORE);
-        insn->src1 = value;
-        insn->type = node->a->type;
-        mir_copy_name(insn->name, node->a->sval ? node->a->sval :
-                                  (node->a->sym ? node->a->sym->name : "?"));
-        insn->object = mir_get_object(symbol, insn->name);
-        return value;
+        if (node->op == '=') {
+            value = mir_lower_expr(node->b);
+        } else {
+            int binary_operator = mir_compound_binary_operator(node->op);
+            if (binary_operator == 0)
+                break;
+            left = mir_lower_expr(node->a);
+            right = mir_lower_expr(node->b);
+            value = mir_new_value();
+            insn = mir_emit(MIR_BINARY);
+            insn->dst = value;
+            insn->src1 = left;
+            insn->src2 = right;
+            insn->type = node->type;
+            insn->immediate = binary_operator;
         }
+        mir_emit_ident_store(node->a, value);
+        return value;
     case AST_CALL:
         for (i = 0; i < node->list_len; ++i) {
             left = mir_lower_expr(node->list[i]);
@@ -549,6 +630,7 @@ void mir_begin_function(const char *name, int sink_purpose)
         mir.saved_sink = emit_sink_push(mir.capture_stream, EMIT_SINK_VERIFY);
         mir.emit_mode = 1;
     }
+    mir_emit_label(mir_new_label());
     {
         int local;
         for (local = 0; local < g_frame.nlocals; ++local) {
@@ -673,13 +755,81 @@ static void mir_object_transfer(const struct MirInsn *insn,
     int object;
 
     memcpy(output, input, (size_t)mir.object_count * sizeof(*output));
-    if ((insn->opcode == MIR_STORE || insn->opcode == MIR_PARAM) &&
+    if ((insn->opcode == MIR_STORE || insn->opcode == MIR_PARAM ||
+         insn->opcode == MIR_PHI) &&
         insn->object >= 0)
         output[insn->object] =
             insn->opcode == MIR_STORE ? insn->src1 : insn->dst;
     else if (insn->opcode == MIR_OPAQUE)
         for (object = 0; object < mir.object_count; ++object)
             output[object] = MIR_OBJECT_UNDEFINED;
+}
+
+static int mir_block_start_for_instruction(int instruction)
+{
+    int start = instruction;
+
+    while (start > 0) {
+        int previous_opcode;
+        if (mir.insns[start].opcode == MIR_LABEL)
+            break;
+        previous_opcode = mir.insns[start - 1].opcode;
+        if (previous_opcode == MIR_JUMP ||
+            previous_opcode == MIR_BRANCH_FALSE ||
+            previous_opcode == MIR_RETURN)
+            break;
+        --start;
+    }
+    return start;
+}
+
+static int mir_try_make_object_phi(int instruction, int object,
+                                   const int *out_state)
+{
+    int block_start = mir_block_start_for_instruction(instruction);
+    int predecessor_values[2];
+    int predecessor_labels[2];
+    int predecessor_count = 0;
+    int predecessor;
+    struct MirInsn *load;
+
+    /* Phi association uses labels, so decline unlabeled fallthrough blocks
+     * rather than inventing an imprecise edge identity. */
+    if (block_start < 0 || block_start >= mir.count ||
+        mir.insns[block_start].opcode != MIR_LABEL)
+        return 0;
+    for (predecessor = 0; predecessor < mir.count; ++predecessor) {
+        int successor;
+        for (successor = 0;
+             successor < mir.insns[predecessor].successor_count;
+             ++successor) {
+            int value;
+            int label;
+            if (mir.insns[predecessor].successors[successor] != block_start)
+                continue;
+            if (predecessor_count >= 2)
+                return 0;
+            value = out_state[(size_t)predecessor * mir.object_count + object];
+            label = mir_block_label_before(predecessor);
+            if (value < 0 || label < 0)
+                return 0;
+            predecessor_values[predecessor_count] = value;
+            predecessor_labels[predecessor_count] = label;
+            ++predecessor_count;
+            break;
+        }
+    }
+    if (predecessor_count != 2 ||
+        predecessor_values[0] == predecessor_values[1])
+        return 0;
+    load = &mir.insns[instruction];
+    load->opcode = MIR_PHI;
+    load->src1 = predecessor_values[0];
+    load->src2 = predecessor_values[1];
+    load->phi_pred1 = predecessor_labels[0];
+    load->phi_pred2 = predecessor_labels[1];
+    load->object = object;
+    return 1;
 }
 
 /* Promote scalar object loads when every CFG predecessor agrees on the same
@@ -695,6 +845,7 @@ static int mir_promote_objects(void)
     int *aliases;
     int changed;
     int promoted = 0;
+    int inserted_phi = 0;
     int i;
 
     if (mir.object_count == 0 || mir.count == 0)
@@ -773,6 +924,17 @@ static int mir_promote_objects(void)
         if (insn->opcode != MIR_LOAD || insn->object < 0)
             continue;
         reaching = in_state[(size_t)i * mir.object_count + insn->object];
+        if (reaching == MIR_OBJECT_AMBIGUOUS &&
+            mir_try_make_object_phi(i, insn->object, out_state)) {
+            inserted_phi = 1;
+            break;
+        }
+        if (reaching < 0 && getenv("DCC_MIR_OBJECT_REPORT") != NULL)
+            fprintf(stderr,
+                "; MIR object unresolved function=%s insn=%d object=%s "
+                "state=%d block-start=%d\n",
+                mir.name, i, mir.objects[insn->object].name, reaching,
+                mir_block_start_for_instruction(i));
         if (reaching < 0)
             continue;
         aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
@@ -792,7 +954,9 @@ static int mir_promote_objects(void)
     free(next_state);
     free(out_state);
     free(in_state);
-    return promoted;
+    /* Negative encoding asks the caller to rerun dataflow after the inserted
+     * phi: -(N+1) preserves how many ordinary loads were already folded. */
+    return inserted_phi ? -(promoted + 1) : promoted;
 }
 
 struct MirAllocationSummary {
@@ -801,6 +965,8 @@ struct MirAllocationSummary {
     int cross_call_values;
     int opaque_crossing_values;
     int fixed_moves;
+    int operand_moves;
+    int phi_moves;
 };
 
 enum MirPhysicalColor {
@@ -875,6 +1041,7 @@ static void mir_simulate_allocation(const unsigned char *live_in,
     int *order;
     int *color;
     int *fixed_color;
+    int *preferences;
     int i;
 
     memset(summary, 0, sizeof(*summary));
@@ -888,8 +1055,11 @@ static void mir_simulate_allocation(const unsigned char *live_in,
     order = (int *)malloc((size_t)value_count * sizeof(*order));
     color = (int *)malloc((size_t)value_count * sizeof(*color));
     fixed_color = (int *)malloc((size_t)value_count * sizeof(*fixed_color));
+    preferences = (int *)calloc((size_t)value_count * MIR_COLOR_COUNT,
+                                sizeof(*preferences));
     if (interference == NULL || cross_call == NULL || cross_opaque == NULL ||
-        degree == NULL || order == NULL || color == NULL || fixed_color == NULL)
+        degree == NULL || order == NULL || color == NULL || fixed_color == NULL ||
+        preferences == NULL)
         fatal("out of memory simulating MIR allocation");
 
     for (i = 0; i < mir.count; ++i) {
@@ -921,9 +1091,39 @@ static void mir_simulate_allocation(const unsigned char *live_in,
                                                i, other);
     }
     for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].dst >= 0)
+        if (mir.insns[i].dst >= 0) {
             fixed_color[mir.insns[i].dst] =
                 mir_fixed_color_for_definition(&mir.insns[i]);
+            if (fixed_color[mir.insns[i].dst] >= 0)
+                ++preferences[(size_t)mir.insns[i].dst * MIR_COLOR_COUNT +
+                              fixed_color[mir.insns[i].dst]];
+        }
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        int required1 = -1;
+        int required2 = -1;
+
+        switch (insn->opcode) {
+        case MIR_BINARY:
+        case MIR_INDEX_LOAD:
+            required1 = MIR_COLOR_HL;
+            required2 = MIR_COLOR_DE;
+            break;
+        case MIR_UNARY:
+        case MIR_ARG:
+        case MIR_BRANCH_FALSE:
+        case MIR_RETURN:
+        case MIR_STORE:
+            required1 = MIR_COLOR_HL;
+            break;
+        default:
+            break;
+        }
+        if (required1 >= 0 && insn->src1 >= 0)
+            ++preferences[(size_t)insn->src1 * MIR_COLOR_COUNT + required1];
+        if (required2 >= 0 && insn->src2 >= 0)
+            ++preferences[(size_t)insn->src2 * MIR_COLOR_COUNT + required2];
+    }
     /* Stable selection sort is plenty for the small per-function prototype. */
     for (i = 0; i < value_count; ++i) {
         int best = i;
@@ -955,21 +1155,30 @@ static void mir_simulate_allocation(const unsigned char *live_in,
             ++summary->spills;
             continue;
         }
-        for (chosen = first_color; chosen <= last_color; ++chosen) {
-            int other;
-            int available = 1;
-            for (other = 0; other < value_count; ++other) {
-                if (color[other] == chosen &&
-                    mir_values_interfere(interference, value_count,
-                                         value, other)) {
-                    available = 0;
-                    break;
+        chosen = -1;
+        {
+            int candidate;
+            int best_preference = -1;
+            for (candidate = first_color; candidate <= last_color; ++candidate) {
+                int other;
+                int available = 1;
+                int preference = preferences[(size_t)value * MIR_COLOR_COUNT +
+                                             candidate];
+                for (other = 0; other < value_count; ++other) {
+                    if (color[other] == candidate &&
+                        mir_values_interfere(interference, value_count,
+                                             value, other)) {
+                        available = 0;
+                        break;
+                    }
+                }
+                if (available && preference > best_preference) {
+                    chosen = candidate;
+                    best_preference = preference;
                 }
             }
-            if (available)
-                break;
         }
-        if (chosen > last_color) {
+        if (chosen < 0) {
             ++summary->spills;
         } else {
             color[value] = chosen;
@@ -982,7 +1191,50 @@ static void mir_simulate_allocation(const unsigned char *live_in,
         }
     }
 
+    /* Price the operand side of current Z80 instruction contracts. These are
+     * boundary copies, not lifetime homes: the allocator may keep a value in
+     * BC/IY and move it to HL only for an operation that requires HL. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        int required1 = -1;
+        int required2 = -1;
+
+        switch (insn->opcode) {
+        case MIR_BINARY:
+        case MIR_INDEX_LOAD:
+            required1 = MIR_COLOR_HL;
+            required2 = MIR_COLOR_DE;
+            break;
+        case MIR_UNARY:
+        case MIR_ARG:
+        case MIR_BRANCH_FALSE:
+        case MIR_RETURN:
+        case MIR_STORE:
+            required1 = MIR_COLOR_HL;
+            break;
+        case MIR_PHI:
+            if (insn->dst >= 0 && insn->src1 >= 0 &&
+                color[insn->dst] >= 0 && color[insn->src1] >= 0 &&
+                color[insn->dst] != color[insn->src1])
+                ++summary->phi_moves;
+            if (insn->dst >= 0 && insn->src2 >= 0 &&
+                color[insn->dst] >= 0 && color[insn->src2] >= 0 &&
+                color[insn->dst] != color[insn->src2])
+                ++summary->phi_moves;
+            break;
+        default:
+            break;
+        }
+        if (required1 >= 0 && insn->src1 >= 0 &&
+            color[insn->src1] >= 0 && color[insn->src1] != required1)
+            ++summary->operand_moves;
+        if (required2 >= 0 && insn->src2 >= 0 &&
+            color[insn->src2] >= 0 && color[insn->src2] != required2)
+            ++summary->operand_moves;
+    }
+
     free(color);
+    free(preferences);
     free(fixed_color);
     free(order);
     free(degree);
@@ -1047,7 +1299,16 @@ static int mir_verify_and_dump(void)
             ++block_count;
     }
 
-    promoted_objects = mir_promote_objects();
+    promoted_objects = 0;
+    for (;;) {
+        int promoted_pass = mir_promote_objects();
+        if (promoted_pass < 0) {
+            promoted_objects += -promoted_pass - 1;
+            continue;
+        }
+        promoted_objects += promoted_pass;
+        break;
+    }
 
     /* Object promotion rewrites uses and removes load definitions. Rebuild
      * the simple defined-value check from the transformed stream. */
@@ -1055,9 +1316,11 @@ static int mir_verify_and_dump(void)
     errors = 0;
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
-        if (insn->src1 >= 0 && !defined[insn->src1])
+        if (insn->opcode != MIR_PHI &&
+            insn->src1 >= 0 && !defined[insn->src1])
             ++errors;
-        if (insn->src2 >= 0 && !defined[insn->src2])
+        if (insn->opcode != MIR_PHI &&
+            insn->src2 >= 0 && !defined[insn->src2])
             ++errors;
         if (insn->dst >= 0) {
             if (defined[insn->dst])
@@ -1140,6 +1403,8 @@ static int mir_verify_and_dump(void)
             fprintf(stderr, " {o%d}", insn->object);
         if (insn->opcode == MIR_CONST)
             fprintf(stderr, " %ld", insn->immediate);
+        if (insn->opcode == MIR_UNARY || insn->opcode == MIR_BINARY)
+            fprintf(stderr, " op=%ld", insn->immediate);
         if (insn->opcode == MIR_OPAQUE)
             fprintf(stderr, " ast=%ld", insn->immediate);
         if (insn->opcode == MIR_LABEL || insn->opcode == MIR_JUMP ||
@@ -1157,11 +1422,13 @@ static int mir_verify_and_dump(void)
             mir.object_count, promoted_objects);
         fprintf(stderr,
             "; MIR allocation function=%s hl=%d de=%d bc=%d iy=%d spills=%d "
-            "cross-call=%d opaque-cross=%d fixed-moves=%d\n",
+            "cross-call=%d opaque-cross=%d fixed-moves=%d operand-moves=%d "
+            "phi-moves=%d\n",
             mir.name, allocation.colors[0], allocation.colors[1],
             allocation.colors[2], allocation.colors[3], allocation.spills,
             allocation.cross_call_values,
-            allocation.opaque_crossing_values, allocation.fixed_moves);
+            allocation.opaque_crossing_values, allocation.fixed_moves,
+            allocation.operand_moves, allocation.phi_moves);
 
     free(live_out);
     free(live_in);
@@ -1265,6 +1532,105 @@ static void mir_emit_return_constant(FILE *out, long value)
 {
     fprintf(out, "\tld hl,%ld\n", value);
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static int mir_is_const_value(int value, long expected)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    return definition != NULL && definition->opcode == MIR_CONST &&
+           definition->immediate == expected;
+}
+
+/* Strict first loop selector:
+ *
+ *     while (n > 0) --n;
+ *     return n;
+ *
+ * N is one word parameter represented by an object phi at the loop header.
+ * Keep it in BC for the complete loop: this is the first emitted path that
+ * consumes a MIR allocation decision rather than merely using fixed HL/DE
+ * expression conventions. */
+static int mir_try_emit_countdown_loop(FILE *out)
+{
+    const struct MirInsn *parameter = NULL;
+    const struct MirInsn *phi = NULL;
+    const struct MirInsn *decrement = NULL;
+    const struct MirInsn *compare = NULL;
+    const struct MirInsn *branch = NULL;
+    const struct MirInsn *return_insn = NULL;
+    const struct MirObject *object;
+    int object_index = -1;
+    int top_label;
+    int end_label;
+    int i;
+    int unsigned_value;
+
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PARAM) {
+            if (parameter != NULL)
+                return 0;
+            parameter = insn;
+            object_index = insn->object;
+        } else if (insn->opcode == MIR_PHI && insn->object == object_index) {
+            phi = insn;
+        } else if (insn->opcode == MIR_STORE && insn->object == object_index) {
+            decrement = mir_definition(insn->src1);
+        } else if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *candidate = mir_definition(insn->src1);
+            if (candidate != NULL && candidate->opcode == MIR_BINARY &&
+                candidate->immediate == '>') {
+                compare = candidate;
+                branch = insn;
+            }
+        } else if (insn->opcode == MIR_RETURN) {
+            return_insn = insn;
+        } else if (insn->opcode == MIR_CALL || insn->opcode == MIR_OPAQUE ||
+                   insn->opcode == MIR_INDEX_LOAD || insn->opcode == MIR_ARG) {
+            return 0;
+        }
+    }
+    if (parameter == NULL || phi == NULL || decrement == NULL ||
+        compare == NULL || branch == NULL || return_insn == NULL ||
+        object_index < 0 || object_index >= mir.object_count)
+        return 0;
+    if (decrement->opcode != MIR_BINARY || decrement->immediate != '-' ||
+        decrement->src1 != phi->dst ||
+        !mir_is_const_value(decrement->src2, 1))
+        return 0;
+    if (compare->src1 != phi->dst || !mir_is_const_value(compare->src2, 0) ||
+        return_insn->src1 != phi->dst)
+        return 0;
+    if (!((phi->src1 == parameter->dst && phi->src2 == decrement->dst) ||
+          (phi->src2 == parameter->dst && phi->src1 == decrement->dst)))
+        return 0;
+
+    object = &mir.objects[object_index];
+    if (object->storage != SC_PARAM || type_size(object->type) != 2)
+        return 0;
+    unsigned_value = (object->type & TYPE_UNSIGNED) != 0 ||
+                     type_ptr_depth(object->type) > 0;
+    top_label = new_label();
+    end_label = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out, "\tld c,(ix%+d)\n", object->offset);
+    fprintf(out, "\tld b,(ix%+d)\n", object->offset + 1);
+    fprintf(out, "L%d:\n", top_label);
+    if (unsigned_value) {
+        fputs("\tld a,b\n\tor c\n", out);
+        fprintf(out, "\tjp z,L%d\n", end_label);
+    } else {
+        fputs("\tld a,b\n\tor a\n", out);
+        fprintf(out, "\tjp m,L%d\n", end_label);
+        fputs("\tor c\n", out);
+        fprintf(out, "\tjp z,L%d\n", end_label);
+    }
+    fputs("\tdec bc\n", out);
+    fprintf(out, "\tjp L%d\n", top_label);
+    fprintf(out, "L%d:\n", end_label);
+    fputs("\tld l,c\n\tld h,b\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    return 1;
 }
 
 /* Strict first CFG selector:
@@ -1398,6 +1764,8 @@ static int mir_try_emit_z80(FILE *out)
     int two_parameter_operation = 0;
     int i;
 
+    if (mir_try_emit_countdown_loop(out))
+        return 1;
     if (mir_try_emit_comparison_branch(out))
         return 1;
 
@@ -1407,6 +1775,7 @@ static int mir_try_emit_z80(FILE *out)
             return_insn = insn;
         else if (insn->opcode != MIR_NOP && insn->opcode != MIR_PARAM &&
                  insn->opcode != MIR_CONST && insn->opcode != MIR_BINARY &&
+                 insn->opcode != MIR_LABEL &&
                  !(insn->opcode == MIR_STORE && insn->object >= 0))
             return 0;
     }
