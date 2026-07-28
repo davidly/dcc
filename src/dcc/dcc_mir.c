@@ -136,6 +136,9 @@ struct MirFunction {
     int *allocation_spills;
     int allocation_capacity;
     int allocation_spill_count;
+    int *backend_slots;
+    int backend_slot_capacity;
+    int backend_slot_count;
     FILE *capture_stream;
     EmitSink saved_sink;
     struct MirObject objects[256];
@@ -2083,6 +2086,19 @@ static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
     return 0;
 }
 
+static int mir_call_uses_value(const struct MirInsn *call, int value)
+{
+    int i;
+    if (call->opcode != MIR_CALL && call->opcode != MIR_CALL_AGGREGATE)
+        return 0;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_ARG &&
+            mir.insns[i].secondary_offset == call->secondary_offset &&
+            mir.insns[i].src1 == value)
+            return 1;
+    return 0;
+}
+
 #define MIR_OBJECT_UNDEFINED (-1)
 #define MIR_OBJECT_AMBIGUOUS (-2)
 #define MIR_OBJECT_UNREACHED (-3)
@@ -2774,6 +2790,8 @@ static int mir_verify_and_dump(void)
                 if (insn->opcode != MIR_PHI &&
                     (value == insn->src1 || value == insn->src2))
                     next_in = 1;
+                if (mir_call_uses_value(insn, value))
+                    next_in = 1;
                 if (out[value] != next_out || in[value] != next_in) {
                     out[value] = (unsigned char)next_out;
                     in[value] = (unsigned char)next_in;
@@ -3198,7 +3216,76 @@ static int mir_try_emit_scalar_dag(FILE *out)
 
 static int mir_virtual_offset(int value)
 {
-    return -mir.local_bytes - 2 * (value + 1);
+    int slot = value;
+    if (value >= 0 && value < mir.next_value && mir.backend_slots != NULL &&
+        mir.backend_slots[value] >= 0)
+        slot = mir.backend_slots[value];
+    return -mir.local_bytes - 2 * (slot + 1);
+}
+
+static int mir_prepare_backend_slots(void)
+{
+    int *first;
+    int *last;
+    int *slot_end;
+    int value;
+    int i;
+
+    if (mir.backend_slot_capacity < mir.next_value) {
+        int *new_slots = (int *)realloc(
+            mir.backend_slots, (size_t)mir.next_value * sizeof(*new_slots));
+        if (new_slots == NULL)
+            fatal("out of memory allocating MIR backend slots");
+        mir.backend_slots = new_slots;
+        mir.backend_slot_capacity = mir.next_value;
+    }
+    first = (int *)malloc((size_t)mir.next_value * sizeof(*first));
+    last = (int *)malloc((size_t)mir.next_value * sizeof(*last));
+    slot_end = (int *)malloc((size_t)mir.next_value * sizeof(*slot_end));
+    if (first == NULL || last == NULL || slot_end == NULL)
+        fatal("out of memory computing MIR backend intervals");
+    for (value = 0; value < mir.next_value; ++value) {
+        first[value] = mir.count;
+        last[value] = -1;
+        mir.backend_slots[value] = -1;
+        slot_end[value] = -1;
+    }
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->dst >= 0) {
+            first[insn->dst] = i;
+            last[insn->dst] = i;
+        }
+        if (insn->src1 >= 0 && last[insn->src1] < i)
+            last[insn->src1] = i;
+        if (insn->src2 >= 0 && last[insn->src2] < i)
+            last[insn->src2] = i;
+        if (insn->opcode == MIR_CALL ||
+            insn->opcode == MIR_CALL_AGGREGATE) {
+            int argument;
+            for (argument = 0; argument < mir.next_value; ++argument)
+                if (mir_call_uses_value(insn, argument) &&
+                    last[argument] < i)
+                    last[argument] = i;
+        }
+    }
+    mir.backend_slot_count = 0;
+    for (i = 0; i < mir.count; ++i)
+        for (value = 0; value < mir.next_value; ++value)
+            if (first[value] == i) {
+                int slot;
+                for (slot = 0; slot < mir.backend_slot_count; ++slot)
+                    if (slot_end[slot] < i)
+                        break;
+                if (slot == mir.backend_slot_count)
+                    ++mir.backend_slot_count;
+                mir.backend_slots[value] = slot;
+                slot_end[slot] = last[value];
+            }
+    free(slot_end);
+    free(last);
+    free(first);
+    return mir.backend_slot_count;
 }
 
 static void mir_emit_virtual_load(FILE *out, int value)
@@ -3317,7 +3404,11 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     if ((mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2 ||
         mir.next_value <= 0)
         return mir_scalar_cfg_preflight_reject("return-type", -1);
-    frame_bytes = mir.local_bytes + 2 * mir.next_value;
+    frame_bytes = mir.local_bytes + 2 * mir_prepare_backend_slots();
+    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR scalar-cfg frame function=%s locals=%d slots=%d bytes=%d\n",
+                mir.name, mir.local_bytes, mir.backend_slot_count, frame_bytes);
     if (frame_bytes <= 0 || frame_bytes > 120)
         return mir_scalar_cfg_preflight_reject("frame-size", -1);
     for (i = 0; i < mir.count; ++i) {

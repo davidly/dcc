@@ -691,6 +691,15 @@ harnesses cover three-return CFG (`clampi`), conditional and loop phis,
 pointer/member/index updates, and nested calls. `DCC_MIR_SELECT_REPORT=1`
 reports preflight reason or failing instruction for transactional fallback.
 
+Virtual spill storage uses conservative linear live intervals and reuses a slot
+only when the previous interval ends before the next definition. Call arguments
+are semantic uses at their matching `MIR_CALL`, not merely at the earlier
+`MIR_ARG`; otherwise an outer argument can be assigned the same slot as a
+nested call result and silently change `19` to `16`. Call-site-aware liveness
+must feed both interference coloring and backend intervals. The nested-call
+harness requires four reusable slots; CFG and memory harnesses remain correct
+under hard timeouts.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
