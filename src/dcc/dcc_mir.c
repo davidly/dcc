@@ -402,7 +402,10 @@ static struct FieldDef *mir_member_field(const struct AstNode *node)
     if (node->op == TOK_ARROW)
         base_type = type_decay_ptr(base_type);
     struct_id = base_struct_id_from_type(base_type);
-    return find_field_def(struct_id, node->sval);
+    {
+        struct FieldDef *field = find_field_def(struct_id, node->sval);
+        return field != NULL ? field : ast_unique_field_by_name(node->sval);
+    }
 }
 
 static void mir_set_field_memory(struct MirInsn *insn,
@@ -442,14 +445,30 @@ static struct Sym *mir_index_root(const struct AstNode *node, int *depth)
 static int mir_index_stride(const struct AstNode *node)
 {
     struct Sym *root;
+    const struct AstNode *base = node;
+    struct FieldDef *field = NULL;
     int depth;
     int stride;
+    int dimension;
 
     root = mir_index_root(node, &depth);
+    while (base != NULL && base->kind == AST_INDEX)
+        base = base->a;
+    if (base != NULL && base->kind == AST_MEMBER)
+        field = mir_member_field(base);
     if (root != NULL && root->is_array)
         stride = sym_array_index_elem_size(root, depth - 1);
     else if (root != NULL)
         stride = sym_pointer_array_index_elem_size(root, root->type, depth - 1);
+    else if (field != NULL && field->is_array) {
+        stride = field->elem_size > 0 ? field->elem_size
+                                      : type_size(field->elem_type);
+        if (stride <= 0)
+            stride = 1;
+        for (dimension = depth; dimension < field->dim_count; ++dimension)
+            if (field->dims[dimension] > 0)
+                stride *= field->dims[dimension];
+    }
     else
         stride = type_index_elem_size(ast_expr_type_for_sizeof(node->a));
     return stride > 0 ? stride : 1;
@@ -458,10 +477,17 @@ static int mir_index_stride(const struct AstNode *node)
 static int mir_index_result_is_array(const struct AstNode *node)
 {
     struct Sym *root;
+    const struct AstNode *base = node;
+    struct FieldDef *field = NULL;
     int depth;
 
     root = mir_index_root(node, &depth);
-    return root != NULL && root->dim_count > depth;
+    while (base != NULL && base->kind == AST_INDEX)
+        base = base->a;
+    if (base != NULL && base->kind == AST_MEMBER)
+        field = mir_member_field(base);
+    return (root != NULL && root->dim_count > depth) ||
+           (field != NULL && field->dim_count > depth);
 }
 
 static void mir_set_node_memory(struct MirInsn *insn,

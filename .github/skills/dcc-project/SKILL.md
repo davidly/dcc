@@ -601,6 +601,13 @@ After declaration capture, remaining corpus counts are: VLA declaration 391,
 member 192, assignment 45, compound literal 31, VLA-sensitive label 17/goto
 15 and unary 16.
 
+Member-array indexing must retain dimensions from `FieldDef`, not infer stride
+from the scalar result type. For a field such as `Node *cells[2][3]`, the first
+index stride is six bytes and the second is two. A member rooted on a local not
+yet replayed may use `ast_unique_field_by_name` only when unambiguous; ambiguous
+names require deferred resolution through the declaration-created MIR object's
+type, never an arbitrary same-name field.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
