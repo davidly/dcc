@@ -372,6 +372,48 @@ Hard-won rules, each of which cost a measured regression to learn:
 	or has multiple reaching definitions. Capturing it requires a different
 	compiler IR/allocation architecture, not another dccpeep pass.
 
+### MIR prototype
+
+`src/dcc/dcc_mir.c` / `dcc_mir.h` are the analysis-only first slice of that
+different architecture. dcc builds one statement AST at a time and resets its
+arena immediately after emission, so the prototype lowers each statement into
+a persistent per-function stream *before* physical Z80 register assignment.
+The stream has unlimited virtual values, loads/stores, constants, unary/binary
+operations, calls/arguments, labels, branches and returns. Unsupported
+semantics (currently member/index expressions, compound assignments,
+short-circuit logic, switch/goto and declaration replay) remain explicit
+`opaque` barriers rather than being represented incorrectly.
+
+Enable a dump without changing codegen:
+
+```sh
+DCC_MIR_FUNCTION=is_attacked ./dccmake tests/tchess.c \
+    dcc-output=MI dcc-peep=false
+# Or DCC_MIR_REPORT=1 for every function attempt.
+```
+
+Each dump names its emit-sink purpose because speculative regalloc can generate
+the same function more than once under a VERIFY sink. The verifier resolves
+branch labels, builds instruction successors, checks virtual use-before-def and
+duplicate definitions, solves iterative backwards virtual-value liveness, and
+reports block count, maximum live pressure and opaque-barrier count. The
+initial `is_attacked` milestone is 25 MIR blocks, 100 virtual values, max-live
+49, 12 opaque barriers, 0 verifier errors.
+
+Load-bearing validation for any MIR change while it remains analysis-only:
+
+- `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where
+	N is nonzero.
+- Raw compiler `.MAC` must be byte-identical to a clean pre-change worktree.
+	`tstdc` is the expected exception because it embeds `__TIME__`; inspect its
+	diff and require that to be the only changed bytes.
+- Run full peep+nopeep `runall.ps1` before committing.
+
+Do not emit Z80 from MIR yet. The next architectural gate is replacing opaque
+barriers for the integer/pointer subset and proving that MIR CFG/liveness
+matches current generated control flow. Physical allocation comes only after
+that representation is semantically complete for one whole function.
+
 ## Behavior-preserving compiler refactors
 
 For parser/codegen restructuring, build before/after compilers and require zero

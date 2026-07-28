@@ -25,6 +25,7 @@
 #include "dcc.h"
 #include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
+#include "dcc_mir.h"
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -2102,6 +2103,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     }
 
     fprintf(g_emit_sink.stream, "%s:\n", aname);
+    mir_begin_function(name, g_emit_sink.purpose);
     current_omit_ix_frame = omit_ix_frame;
     /* Callee-save of the caller's IY, before the frame is established so the
      * epilogue can restore it with a bare "pop iy" once IX has been popped.
@@ -2305,6 +2307,7 @@ void emit_function_epilogue(int implicit_zero_return)
     if (opt_debug && !scan_mode && current_debug_function[0])
         fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
+    mir_end_function();
     current_debug_function[0] = 0;
     current_debug_function_source_name[0] = 0;
     current_omit_ix_frame = 0;

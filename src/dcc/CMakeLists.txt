@@ -56,10 +56,11 @@ set(DCC_SOURCES
     dcc_ast_gen_expr.c      # AST expression emitters
     dcc_ast_gen_cond.c      # AST condition and branch emitters
     dcc_ast_gen_stmt.c      # AST statement/switch/for emitters
+    dcc_mir.c               # analysis-only virtual-register MIR prototype
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h
-                   dcc_preproc_internal.h dcc_regalloc_internal.h)
+                   dcc_preproc_internal.h dcc_regalloc_internal.h dcc_mir.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")

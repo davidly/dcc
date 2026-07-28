@@ -6,6 +6,7 @@
  */
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
+#include "dcc_mir.h"
 
 
 /* Emit `arr[E] = lo; arr[E+1] = hi;` (mem_set_word-shaped code, matched by
@@ -1493,6 +1494,7 @@ int ast_try_emit_statement(void)
         g_func_pass.for_seq = sv_for_seq;
         if (g_ast_build_enabled == 2)
             ast_dump(n, 0);
+        mir_capture_stmt(n);
         ast_gen_stmt(n);
         g_ast_last_stmt_exits = ast_stmt_exits(n);
         ast_arena_reset(&g_ast_arena);
