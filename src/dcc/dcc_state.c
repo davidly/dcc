@@ -117,6 +117,8 @@ int g_loop_regalloc_bc_claimed;
 struct Sym *g_iy_regalloc_sym;
 int g_iy_regalloc_escaped;
 int g_iy_regalloc_last_ref_count;
+long g_iy_regalloc_last_value;
+long g_bc_regalloc_last_value;
 int current_function_had_call_at_scan;
 int current_function_has_vla;
 

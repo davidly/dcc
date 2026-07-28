@@ -1081,6 +1081,16 @@ static void scan_function_body_ident_counts(void)
     int loop_await_header;
     int loop_header_depth;
     int loop_arm_next;
+    /* Unbraced single-statement loop bodies: "for (...) t += p->a;". These
+     * carry the same per-iteration cost as a braced body and must be weighted
+     * the same, but they have no brace to hang the scope on. Each one is
+     * closed at the first `;` outside parentheses, or at the first `}` -
+     * whichever comes first, which covers "for (...) if (c) { ... }" where
+     * the body is a compound statement ending in a brace. They nest without
+     * braces ("for (...) for (...) x++;"), so the terminator closes all of
+     * them at once. */
+    int n_stmt_loops;
+    int paren_depth;
 
     g_ident_count_n = 0;
     g_addr_cache_array_count = 0;
@@ -1101,6 +1111,8 @@ static void scan_function_body_ident_counts(void)
     loop_await_header = 0;
     loop_header_depth = 0;
     loop_arm_next = 0;
+    n_stmt_loops = 0;
+    paren_depth = 0;
     g_scan_loop_weight = 1;
     next_token();
     while (g_lex.tok.kind != TOK_EOF && depth > 0) {
@@ -1173,9 +1185,15 @@ static void scan_function_body_ident_counts(void)
             loop_pending = 1;
         } else if (loop_pending) {
             /* Something other than `{` follows the loop header, so the body
-             * is a single unbraced statement. Stop waiting: any `{` further
-             * on belongs to a nested statement, not to this loop. */
+             * is a single unbraced statement. It still runs once per
+             * iteration, so weight it like a braced body and remember to
+             * close it at the statement's end. */
             loop_pending = 0;
+            if (n_stmt_loops < 8) {
+                n_stmt_loops++;
+                if (g_scan_loop_weight <= 64)
+                    g_scan_loop_weight *= 8;
+            }
             if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
                 mark_ident_written(prev_ident);
         } else if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
@@ -1199,6 +1217,21 @@ static void scan_function_body_ident_counts(void)
                 current_function_had_call_at_scan = 1;
             prev_ident[0] = 0;
         }
+        /* Parenthesis depth, so a `;` inside a nested for-header is not
+         * mistaken for the end of an unbraced body. */
+        if (g_lex.tok.kind == '(')
+            paren_depth++;
+        else if (g_lex.tok.kind == ')' && paren_depth > 0)
+            paren_depth--;
+        if (n_stmt_loops > 0 &&
+            ((g_lex.tok.kind == ';' && paren_depth == 0) || g_lex.tok.kind == '}')) {
+            while (n_stmt_loops > 0) {
+                n_stmt_loops--;
+                if (g_scan_loop_weight > 1)
+                    g_scan_loop_weight /= 8;
+            }
+        }
+
         if (g_lex.tok.kind == '&')
             address_pending = 1;
         else if (address_pending && g_lex.tok.kind != '(' && g_lex.tok.kind != ')')
@@ -1316,6 +1349,7 @@ struct Sym *find_bc_regalloc_candidate(int params_end)
         best = g;
         best_value = value;
     }
+    g_bc_regalloc_last_value = best ? best_value : 0;
     return best;
 }
 
@@ -1333,15 +1367,16 @@ struct Sym *find_bc_regalloc_candidate(int params_end)
  * score 7 and do not.
  *
  * Set to 32 - four loop-resident references, or a doubly-nested one - from a
- * sweep over the whole test corpus (8/16/24/32/48/64/96). The raw break-even
- * of 8 fires more often but admits marginal claims that lose more than they
- * gain; 32 is where the curve flattens, and raising it further only turns
- * real wins away (48 gives -6.9M against 32's -9.2M). Three marginal cases
- * remain net-negative at any threshold that keeps the wins - 00040b +0.066%,
- * pint +0.138%, tvlax +0.236% - because they are genuinely loop-resident and
- * so cannot be told apart from the winners by this model. They are the
- * honest cost of a static estimate, and small beside tchess -2.57%,
- * tlngnarw -3.95% and nqueens -1.04%. */
+ * sweep over the whole test corpus, re-run after the weighting was corrected
+ * for unbraced loop bodies: 32 gives -15.41M, 48 gives -13.10M, 64 gives
+ * -13.10M, and 96 and above flatten at -12.55M. The raw break-even of 8 fires
+ * more often but admits marginal claims that lose more than they gain.
+ *
+ * One case remains net-negative at any threshold that keeps the wins - pint
+ * +0.002% - because it is genuinely loop-resident and so cannot be told apart
+ * from the winners by a static estimate. That is the honest cost of the
+ * model, and negligible beside tchess -2.57%, tlngnarw -3.95%, tnestfor
+ * -1.15% and nqueens -1.04%. */
 #define IY_REGALLOC_MIN_WEIGHT 32
 
 /* Pick the whole-function IY candidate: a word-sized parameter that is read
@@ -1401,10 +1436,16 @@ struct Sym *find_iy_regalloc_candidate(int params_end)
         best_weight = weight;
     }
     g_iy_regalloc_last_ref_count = best ? ident_count_for(best->name) : 0;
+    /* Recorded here, at the decision point, rather than recomputed at the
+     * emission site: the claim directive must publish the SAME number the
+     * choice was made on. See regalloc_publish_value's comment. */
+    g_iy_regalloc_last_value =
+        best ? regalloc_estimate_value(best, (int)best_weight, 0) : 0;
     if (getenv("DCC_TRACE_IY") != NULL)
-        fprintf(stderr, "[iy] candidate=%s weight=%ld refs=%d has_call=%d\n",
+        fprintf(stderr, "[iy] candidate=%s weight=%ld refs=%d value=%ld has_call=%d\n",
                 best ? best->name : "(none)", best_weight,
-                g_iy_regalloc_last_ref_count, current_function_has_call);
+                g_iy_regalloc_last_ref_count, g_iy_regalloc_last_value,
+                current_function_has_call);
     return best;
 }
 
@@ -2106,8 +2147,7 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
          * function - which is exactly right here, and (unlike the old
          * blanket rule) no longer imposed on loop-scoped claims too. */
         emit_regalloc_claim("bc", "func", g_bc_regalloc_sym, "ro",
-                            regalloc_estimate_value(g_bc_regalloc_sym,
-                                                    ident_count_for(g_bc_regalloc_sym->name), 0));
+                            g_bc_regalloc_last_value);
         if (g_bc_regalloc_sym->storage == SC_GLOBAL || g_bc_regalloc_sym->storage == SC_EXTERN) {
             emit_extrn_if_needed(g_bc_regalloc_sym);
             fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");

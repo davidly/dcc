@@ -1563,8 +1563,7 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
     emit_function_prologue(name, local_bytes, 0);
     /* Prime IY from the parameter's frame slot. There is no "ld iy,(ix+d)"
      * on Z80, so the value goes through HL. 63 T-states, paid once. */
-    emit_regalloc_claim("iy", "func", iy_cand, "ro",
-                        regalloc_estimate_value(iy_cand, g_iy_regalloc_last_ref_count, 0));
+    emit_regalloc_claim("iy", "func", iy_cand, "ro", g_iy_regalloc_last_value);
     fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", iy_cand->offset);
     fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", iy_cand->offset + 1);
     emit("\tpush hl\n");

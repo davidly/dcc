@@ -319,6 +319,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
  * claim directive can publish what the claim is worth. */
 extern int loop_regalloc_last_ref_count;
 extern int loop_regalloc_last_depth;
+extern long loop_regalloc_last_value;
 int ast_try_emit_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */

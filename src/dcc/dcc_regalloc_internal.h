@@ -71,6 +71,12 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
                                              int body_start_nlocals,
                                              int body_start_local_size);
 extern int g_iy_regalloc_last_ref_count;
+/* Estimated value of the candidate each search last chose, recorded at the
+ * decision point so the emitted claim directive publishes exactly the number
+ * the choice was made on rather than a second, independently recomputed one.
+ * See emit_regalloc_claim's comment (dcc_regalloc.c). */
+extern long g_iy_regalloc_last_value;
+extern long g_bc_regalloc_last_value;
 int frame_first_param_offset(void);
 int plain_static_body_can_be_buffered(struct Sym *s, const char *name);
 int function_qualifies_for_speculative_noix(const char *name, int local_bytes);

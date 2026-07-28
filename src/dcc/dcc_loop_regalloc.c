@@ -68,6 +68,7 @@
  * above an otherwise identical one in straight-line code. */
 int loop_regalloc_last_ref_count;
 int loop_regalloc_last_depth;
+long loop_regalloc_last_value;
 
 struct LoopIdentCount {
     const char *name;
@@ -630,17 +631,22 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
         if (out_is_write != NULL)
             *out_is_write = 0;
         loop_regalloc_last_ref_count = best_ro_count;
+        loop_regalloc_last_value = regalloc_estimate_value(best_ro, best_ro_count,
+                                                           loop_regalloc_last_depth);
         return best_ro;
     }
     if (best_write != NULL) {
         if (out_is_write != NULL)
             *out_is_write = 1;
         loop_regalloc_last_ref_count = best_write_count;
+        loop_regalloc_last_value = regalloc_estimate_value(best_write, best_write_count,
+                                                           loop_regalloc_last_depth);
         return best_write;
     }
     if (out_is_write != NULL)
         *out_is_write = 0;
     loop_regalloc_last_ref_count = 0;
+    loop_regalloc_last_value = 0;
     return NULL;
 }
 
@@ -751,9 +757,7 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * global_word_direct (dcc_symbols.c) plus a transfer into bc. Must stay
      * in exact lockstep with bc_regalloc_entry_lines (dcc_regalloc.c), which
      * regalloc_buffer_finalize uses to recognize/reinsert this same text. */
-    emit_regalloc_claim("bc", "loop", cand, "ro",
-                        regalloc_estimate_value(cand, loop_regalloc_last_ref_count,
-                                                loop_regalloc_last_depth));
+    emit_regalloc_claim("bc", "loop", cand, "ro", loop_regalloc_last_value);
     emit_loop_regalloc_bc_prime(cand);
 
     errors_before = g_diag_error_count;
@@ -968,9 +972,7 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
      * candidate_safe uses to recognize this same text - see try_loop_
      * regalloc_bc's identical comment on the read-only priming for why
      * globals need a 3-instruction sequence instead of locals'/params' 2. */
-    emit_regalloc_claim("bc", "loop", cand, "rw",
-                        regalloc_estimate_value(cand, loop_regalloc_last_ref_count,
-                                                loop_regalloc_last_depth));
+    emit_regalloc_claim("bc", "loop", cand, "rw", loop_regalloc_last_value);
     emit_loop_regalloc_bc_prime(cand);
 
     errors_before = g_diag_error_count;
