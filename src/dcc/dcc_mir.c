@@ -130,6 +130,10 @@ struct MirFunction {
     int report_mode;
     int return_type;
     int opaque_count;
+    int *allocation_colors;
+    int *allocation_spills;
+    int allocation_capacity;
+    int allocation_spill_count;
     FILE *capture_stream;
     EmitSink saved_sink;
     struct MirObject objects[256];
@@ -2365,9 +2369,9 @@ static void mir_add_live_set_interference(unsigned char *interference,
  * Values live across a call may use only IY. Values live across an opaque
  * barrier are forced to spill. Everything else prefers HL, DE, BC, then IY.
  * Order is descending interference degree, with call-crossing values first. */
-static void mir_simulate_allocation(const unsigned char *live_in,
-                                    const unsigned char *live_out,
-                                    struct MirAllocationSummary *summary)
+static void mir_allocate_registers(const unsigned char *live_in,
+                                   const unsigned char *live_out,
+                                   struct MirAllocationSummary *summary)
 {
     int value_count = mir.next_value;
     unsigned char *interference;
@@ -2383,6 +2387,22 @@ static void mir_simulate_allocation(const unsigned char *live_in,
     memset(summary, 0, sizeof(*summary));
     if (value_count == 0)
         return;
+    if (mir.allocation_capacity < value_count) {
+        int *new_colors = (int *)realloc(
+            mir.allocation_colors, (size_t)value_count * sizeof(*new_colors));
+        int *new_spills = (int *)realloc(
+            mir.allocation_spills, (size_t)value_count * sizeof(*new_spills));
+        if (new_colors == NULL || new_spills == NULL)
+            fatal("out of memory retaining MIR allocation");
+        mir.allocation_colors = new_colors;
+        mir.allocation_spills = new_spills;
+        mir.allocation_capacity = value_count;
+    }
+    for (i = 0; i < value_count; ++i) {
+        mir.allocation_colors[i] = -1;
+        mir.allocation_spills[i] = -1;
+    }
+    mir.allocation_spill_count = 0;
     interference = (unsigned char *)calloc(
         (size_t)value_count * value_count, 1);
     cross_call = (unsigned char *)calloc((size_t)value_count, 1);
@@ -2491,6 +2511,7 @@ static void mir_simulate_allocation(const unsigned char *live_in,
         if (cross_opaque[value]) {
             ++summary->opaque_crossing_values;
             ++summary->spills;
+            mir.allocation_spills[value] = mir.allocation_spill_count++;
             continue;
         }
         chosen = -1;
@@ -2518,8 +2539,10 @@ static void mir_simulate_allocation(const unsigned char *live_in,
         }
         if (chosen < 0) {
             ++summary->spills;
+            mir.allocation_spills[value] = mir.allocation_spill_count++;
         } else {
             color[value] = chosen;
+            mir.allocation_colors[value] = chosen;
             ++summary->colors[chosen];
             /* The instruction produces the value in a fixed result register,
              * then a boundary move places it in its allocated lifetime home.
@@ -2721,7 +2744,7 @@ static int mir_verify_and_dump(void)
         }
     } while (changed);
 
-    mir_simulate_allocation(live_in, live_out, &allocation);
+    mir_allocate_registers(live_in, live_out, &allocation);
 
     if (mir.report_mode)
         fprintf(stderr,
@@ -2782,6 +2805,15 @@ static int mir_verify_and_dump(void)
             fprintf(stderr, " L%d", insn->label);
         if (insn->opcode == MIR_PHI)
             fprintf(stderr, " [L%d,L%d]", insn->phi_pred1, insn->phi_pred2);
+        if (insn->dst >= 0 && insn->dst < mir.next_value) {
+            static const char *homes[] = { "hl", "de", "bc", "iy" };
+            if (mir.allocation_colors[insn->dst] >= 0)
+                fprintf(stderr, " home=%s",
+                        homes[mir.allocation_colors[insn->dst]]);
+            else if (mir.allocation_spills[insn->dst] >= 0)
+                fprintf(stderr, " spill=%d",
+                        mir.allocation_spills[insn->dst]);
+        }
         fprintf(stderr, "  ; live in=%d out=%d\n", in_count, out_count);
     }
 

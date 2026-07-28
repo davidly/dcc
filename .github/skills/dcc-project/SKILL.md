@@ -664,6 +664,15 @@ check exit 142 for timeout. Supply the app's exact `_test_overrides.json`
 arguments: tchess without `-c -p:1` legitimately waits at `move:` and can look
 like a generated-code hang.
 
+Register allocation now retains its result instead of reporting and discarding
+it. Every virtual value has an HL/DE/BC/IY lifetime home or a deterministic
+numbered spill slot; fixed-result and operand registers remain boundary
+constraints, not lifetime precolors. Call-crossing values may use only
+callee-saved IY, so `is_attacked`'s nine crossing values produce one IY home
+and eight spills, while `scale_by` colors without spills. Detailed MIR dumps
+show `home=` or `spill=` on each definition. Emission must consume these homes
+and insert boundary moves/saves; do not regress to source-symbol claims.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
