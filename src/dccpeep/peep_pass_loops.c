@@ -131,10 +131,11 @@ int pass_byte_loop_counter_to_reg_c(void)
          * shapes above, but that alone doesn't prove BC is actually free
          * here - dcc's own reg_alloc may already hold a whole-function or
          * earlier-loop candidate resident in BC across this exact point,
-         * invisible to a scan confined to [i+3, loop_end) alone. See
-         * bc_regalloc_claimed_before's own comment; this is the same
-         * collision class pass_cache_global_word_reload was fixed for. */
-        if (bc_regalloc_claimed_before(i))
+         * invisible to a scan confined to [i+3, loop_end) alone. The
+         * counter this pass puts in C is live only for the loop, so the
+         * span to ask about is exactly [i, loop_end) - a claim dcc has
+         * already released before the loop no longer blocks it. */
+        if (bc_regalloc_claimed_in_range(i, loop_end))
             continue;
 
         /* In-place replacements first, while every index computed above is
@@ -727,9 +728,9 @@ int pass_byte_for_counter_to_reg_c(void)
 
         /* line_touches_bc above only covers this loop's own body - it can't
          * see a whole-function or earlier-loop reg_alloc candidate primed
-         * before this loop and still live here. See
-         * bc_regalloc_claimed_before's own comment. */
-        if (bc_regalloc_claimed_before(i))
+         * before this loop and still live here. Asked over the loop's own
+         * span, since that is exactly how long this pass needs C. */
+        if (bc_regalloc_claimed_in_range(i, loop_end))
             continue;
 
         /* In-place replacements first, while every index computed above is

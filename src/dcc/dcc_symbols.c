@@ -899,6 +899,16 @@ void emit_load_sym_value_direct(struct Sym *s)
         emit("\tld h,0\n");
         return;
     }
+    if (s->reg_alloc == REG_IY) {
+        /* 25 T-states and 2 bytes, against 38 and 6 for the "ld l,(ix+d)" /
+         * "ld h,(ix+d+1)" frame reload this replaces. Modest per reference
+         * next to BC's 30, but it applies where BC cannot apply at all: this
+         * symbol's function contains calls, which disqualifies every
+         * caller-saved register outright. */
+        emit("\tpush iy\n");
+        emit("\tpop hl\n");
+        return;
+    }
     if (is_global_word_sym(s)) {
         emit_load_global_word_direct(s);
         return;

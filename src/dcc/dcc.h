@@ -424,16 +424,27 @@ struct Sym {
                             * per-function address-cache scan) */
     int addr_cache_offset; /* frame offset of the 2-byte pointer slot holding
                             * this array's address, valid when has_addr_cache */
-    int reg_alloc;         /* REG_NONE or REG_BC - this pointer parameter is
-                            * resident in BC for the whole function body
-                            * instead of a frame slot (see dcc_func.c's
-                            * find_bc_regalloc_candidate /
-                            * try_speculative_bc_regalloc_function_body) */
+    int reg_alloc;         /* REG_NONE, or the physical register this symbol
+                            * is resident in for the whole function body (or,
+                            * for REG_BC, possibly just one loop) instead of
+                            * a frame slot. See find_bc_regalloc_candidate /
+                            * try_speculative_bc_regalloc_function_body
+                            * (dcc_func.c, dcc_regalloc.c) for BC and E, and
+                            * find_iy_regalloc_candidate for IY. */
 };
 
 #define REG_NONE 0
 #define REG_BC   1
 #define REG_E    2
+/* IY differs from BC and E in one decisive way: it is CALLEE-SAVED. A
+ * function claiming it pushes the caller's IY on entry and pops it on exit,
+ * and nothing else in a linked image ever writes IY - DCCRTL contains no IY
+ * instruction at all (verified by scripts/rtl-iy-safety.py), and CP/M's
+ * 8080-coded BDOS has no index registers to write with. So a value in IY
+ * survives an arbitrary call, which is exactly what BC cannot do: that is
+ * why IY is the only register dcc can allocate in a function that calls
+ * anything, and why it is not simply a third choice alongside the others. */
+#define REG_IY   3
 
 struct Def {
     char name[64];

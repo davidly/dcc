@@ -299,6 +299,12 @@ int label_name_at(int i, char *out);
 int line_is_label_name(int i, const char *name);
 int peep_is_public_line(const char *s);
 int bc_regalloc_claimed_before(int at);
+/* Interval forms of the same question. dcc publishes its own BC claims as
+ * paired "@dcc.reg claim=bc" / "@dcc.reg free=bc" directives, so ownership
+ * is a set of intervals rather than a single "claimed from here onward"
+ * point; a pass must ask about the span it actually intends to modify. */
+int bc_regalloc_claimed_in_range(int begin, int end);
+int bc_regalloc_claimed_from(int at);
 int stride_parse_ld_r_ix_neg(const char *s, char r, int *n);
 void strip_label_colon(char *s);
 int jump_target_any(const char *s, char *out);

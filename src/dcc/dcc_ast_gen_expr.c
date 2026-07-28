@@ -4978,8 +4978,18 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
          * one instruction - or the equivalent direct ix-relative load for a
          * local) instead of computing &s and then dereferencing it, which
          * is the correct-but-needlessly-expensive general path required
-         * only when s has no direct load form at all. */
-        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s))) {
+         * only when s has no direct load form at all.
+         *
+         * A register-resident symbol has to be included explicitly:
+         * sym_can_ix_direct bails on any non-zero reg_alloc (it answers
+         * "is this reachable at (ix+d)", which a promoted symbol is not),
+         * so without the reg_alloc arm here a promoted pointer would fall
+         * into emit_load_sym_addr below and set g_regalloc_address_escaped,
+         * declining the whole promotion. That made `p->field` silently
+         * disqualify its own pointer from ever being promoted - the single
+         * most common shape a pointer parameter appears in. */
+        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s) ||
+                      s->reg_alloc != REG_NONE)) {
             emit_load_sym_value_direct(s);
         } else {
             emit_load_sym_addr(s);
@@ -5501,6 +5511,16 @@ void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type)
     if (s->is_array) {
         emit_load_sym_addr(s);
     } else if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
+        /* Deliberately NOT extended with a `s->reg_alloc != REG_NONE` arm,
+         * unlike the member path in gen_member_addr_ast. Doing so does make
+         * `p[i]` promotable, but it changes the shape of the indexed access
+         * enough to defeat dccpeep's cross-iteration passes, which hoist the
+         * invariant pointer RELOAD out of the loop - and that hoist is worth
+         * more than the promotion. Measured: adding the arm cost 00040b
+         * +1.11M, pint +354K and tvlax +341K, turning a -10.30M corpus result
+         * into -8.98M. A promoted pointer used only for indexing simply
+         * declines its own promotion here (via g_regalloc_address_escaped),
+         * which is the right outcome. */
         emit_load_sym_value_direct(s);
     } else {
         emit_load_sym_addr(s);

@@ -369,10 +369,11 @@ int pass_minmax_loop_ctr_b(void)
 
     /* _MinMax is an ordinary function like any other: dcc's own reg_alloc
      * could in principle have claimed BC for a whole-function candidate
-     * here too, and this pass has no visibility into that. See
-     * bc_regalloc_claimed_before's own comment - end, not start, since the
-     * whole [start,end) range is being claimed for B, not just one loop. */
-    if (bc_regalloc_claimed_before(end))
+     * here too, and this pass has no visibility into that. The whole
+     * [start,end) range is being claimed for B, not just one loop, so the
+     * range form is what is needed - a point query at `end` would now miss
+     * a claim that opens and closes inside the range. */
+    if (bc_regalloc_claimed_in_range(start, end))
         return 0;
 
     /* Replace all (ix-3) loop-counter references with B.
@@ -467,8 +468,9 @@ int pass_minmax_value_c(void)
     /* Transitively covered by pass_minmax_loop_ctr_b's own guard today (the
      * "ld b,c" this pass requires above only exists if that pass already
      * committed), but checked explicitly anyway rather than relying on that
-     * chain never changing - see bc_regalloc_claimed_before's own comment. */
-    if (bc_regalloc_claimed_before(end))
+     * chain never changing. Range form: C is claimed across all of
+     * [start,end). */
+    if (bc_regalloc_claimed_in_range(start, end))
         return 0;
 
     /* Replace (ix-1) value references with C. */
@@ -984,7 +986,7 @@ int pass_minmax_pack_call(void)
         int fs_start, fs_end;
         if (peep_in_function_range("_FindSolution:", &fs_start, &fs_end) &&
             !peep_range_has_debug_annotations(fs_start, fs_end) &&
-            !bc_regalloc_claimed_before(fs_end)) {
+            !bc_regalloc_claimed_in_range(fs_start, fs_end)) {
             for (i = fs_start; i + 12 < fs_end; i++) {
                 int j, npopcnt;
                 char off[32];

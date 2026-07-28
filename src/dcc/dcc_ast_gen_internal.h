@@ -313,6 +313,12 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
                           void (*gen_loop_impl)(const struct AstNode *));
 int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand,
                                 void (*gen_loop_impl)(const struct AstNode *));
+/* Reference count of the last candidate returned, and the loop nesting
+ * depth the search ran at. The depth is maintained by ast_try_loop_regalloc
+ * (dcc_ast_gen_stmt.c); both feed regalloc_estimate_value so the emitted
+ * claim directive can publish what the claim is worth. */
+extern int loop_regalloc_last_ref_count;
+extern int loop_regalloc_last_depth;
 int ast_try_emit_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */

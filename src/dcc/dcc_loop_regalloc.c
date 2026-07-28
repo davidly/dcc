@@ -58,6 +58,17 @@
 #define LOOP_REGALLOC_MIN_REFS 2
 #define MAX_LOOP_IDENT_COUNTS 32
 
+/* Reference count of the candidate loop_regalloc_find_bc_candidate last
+ * returned, and the loop nesting depth it was found at. Recorded rather
+ * than recomputed purely so the claim directive can publish what the claim
+ * is worth (regalloc_estimate_value, dcc_regalloc.c) without threading a
+ * second out-parameter through every caller of the candidate search. Depth
+ * is maintained by ast_try_loop_regalloc (dcc_ast_gen_stmt.c) around the
+ * loop it is generating, so a candidate found in an inner loop is ranked
+ * above an otherwise identical one in straight-line code. */
+int loop_regalloc_last_ref_count;
+int loop_regalloc_last_depth;
+
 struct LoopIdentCount {
     const char *name;
     int count;
@@ -618,15 +629,18 @@ struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
     if (best_ro != NULL) {
         if (out_is_write != NULL)
             *out_is_write = 0;
+        loop_regalloc_last_ref_count = best_ro_count;
         return best_ro;
     }
     if (best_write != NULL) {
         if (out_is_write != NULL)
             *out_is_write = 1;
+        loop_regalloc_last_ref_count = best_write_count;
         return best_write;
     }
     if (out_is_write != NULL)
         *out_is_write = 0;
+    loop_regalloc_last_ref_count = 0;
     return NULL;
 }
 
@@ -737,11 +751,21 @@ int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
      * global_word_direct (dcc_symbols.c) plus a transfer into bc. Must stay
      * in exact lockstep with bc_regalloc_entry_lines (dcc_regalloc.c), which
      * regalloc_buffer_finalize uses to recognize/reinsert this same text. */
+    emit_regalloc_claim("bc", "loop", cand, "ro",
+                        regalloc_estimate_value(cand, loop_regalloc_last_ref_count,
+                                                loop_regalloc_last_depth));
     emit_loop_regalloc_bc_prime(cand);
 
     errors_before = g_diag_error_count;
     asm_suppress_depth++;
     gen_loop_impl(loop_node);
+    /* The candidate's live range ends with the loop: everything after it
+     * reads the (never stale, since this is the read-only phase) frame slot
+     * again, so BC is genuinely dead here and dccpeep may reuse it for the
+     * rest of the function. Publishing that explicitly is the whole point of
+     * the free directive - the previous protocol could only say "claimed
+     * somewhere earlier", which forfeited BC for every later line. */
+    emit_regalloc_free("bc");
     asm_suppress_depth--;
     g_inline_body_buffering--;
 
@@ -853,6 +877,23 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
             if (nl) *nl = 0;
             linelen = strlen(line);
 
+            /* Comment-only lines execute nothing, so they can neither make
+             * the span unsafe nor clear the noreturn state. The same guard
+             * regalloc_buffer_finalize and bc_loop_body_self_consistent
+             * (dcc_regalloc.c) already carry, needed here for the same
+             * reason: the ";@dcc.reg claim=bc ..." directive this file now
+             * emits alongside the prime contains a bare "bc" token that
+             * line_touches_bc_reg would otherwise read as a real use and
+             * decline the entire attempt on. */
+            {
+                const char *cq = line;
+                while (*cq == ' ' || *cq == '\t') cq++;
+                if (*cq == ';') {
+                    line = nl ? nl + 1 : buf + size;
+                    continue;
+                }
+            }
+
             if (linelen > 0 && line[0] == 'L' && isdigit((unsigned char)line[1]) &&
                 line[linelen - 1] == ':')
                 after_noreturn_call = 0;
@@ -927,6 +968,9 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
      * candidate_safe uses to recognize this same text - see try_loop_
      * regalloc_bc's identical comment on the read-only priming for why
      * globals need a 3-instruction sequence instead of locals'/params' 2. */
+    emit_regalloc_claim("bc", "loop", cand, "rw",
+                        regalloc_estimate_value(cand, loop_regalloc_last_ref_count,
+                                                loop_regalloc_last_depth));
     emit_loop_regalloc_bc_prime(cand);
 
     errors_before = g_diag_error_count;
@@ -938,6 +982,10 @@ int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand
      * suppressed/buffered span - this is unconditionally part of what gets
      * verified and either committed whole or discarded whole. */
     emit_loop_regalloc_bc_spill(cand);
+    /* Only now, once the spill has resynced the frame slot, is BC dead - a
+     * write candidate's slot is deliberately stale for the whole loop, so
+     * the free directive must follow the spill, never precede it. */
+    emit_regalloc_free("bc");
     asm_suppress_depth--;
     g_inline_body_buffering--;
 

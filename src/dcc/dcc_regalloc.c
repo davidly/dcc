@@ -310,6 +310,48 @@ int function_qualifies_for_speculative_regalloc(const char *name)
     return 1;
 }
 
+/* The IY counterpart, and deliberately the near-inverse of the test above.
+ *
+ * A call is a DISQUALIFIER for BC and a PRECONDITION for IY. In a call-free
+ * function BC is available and strictly cheaper on every count (30 T-states
+ * saved per reference against 13, no callee-save pair, no priming through
+ * HL), so the BC path will already have taken it and IY would only be a
+ * pessimisation. IY's entire purpose is to reach the functions BC cannot.
+ *
+ * Requiring the flag rather than relying on ordering alone was measured, not
+ * assumed. Dropping it - on the reasoning that IY is the last attempt in the
+ * chain and so only ever gets what BC declined - admits IY into bodies where
+ * BC declined for reasons that have nothing to do with call safety, and the
+ * corpus rejected that decisively: 3 apps regressed (00040b +1.1M, pint
+ * +354K, tvlax +341K), two tests failed outright, and net cycles went from
+ * -10.30M to -9.35M. The flag is doing real work as a proxy for "a register
+ * that survives calls is the only kind that helps here".
+ *
+ * main() is excluded for the same reason it is excluded from the other
+ * speculative paths: the CRT's __mrun shim depends on its exact frame shape,
+ * and the callee-save push would change it. */
+int function_qualifies_for_speculative_iy_regalloc(const char *name)
+{
+    const char *off;
+
+    /* Kill switch, for bisecting a suspected IY-related miscompile against an
+     * otherwise identical build. Set to "1" to disable IY promotion entirely,
+     * or to a comma-separated list of function names to disable it for just
+     * those. */
+    off = getenv("DCC_NO_IY_REGALLOC");
+    if (off != NULL) {
+        if (strcmp(off, "1") == 0)
+            return 0;
+        if (strstr(off, name) != NULL)
+            return 0;
+    }
+    if (strcmp(name, "main") == 0)
+        return 0;
+    if (!current_function_had_call_at_scan)
+        return 0;
+    return 1;
+}
+
 /* Ported from dccpeep.c's line_touches_reg_pair (proven correct there across
  * today's dccpeep pass work) rather than reinvented: true if `s` references
  * register B, C, or the BC pair as an operand anywhere in the line - as
@@ -610,6 +652,73 @@ static void bc_regalloc_find_loop_headers(const char *buf, long size,
 
         p = nl ? nl + 1 : buf + size;
     }
+}
+
+/* Machine-readable register-claim directives, the explicit replacement for
+ * the text signature dccpeep used to have to infer a claim from ("ld c,(ix"
+ * / "ld b,(ix" - see line_is_regalloc_bc_priming, dccpeep.c). A claim states
+ * WHICH register is reserved, over WHAT scope, for WHICH symbol, and - once
+ * the cost model lands - what the claim is WORTH, so dccpeep can decide
+ * whether its own candidate for that register is the better one rather than
+ * simply always yielding.
+ *
+ * The pairing rule is deliberately simple, because dccpeep consumes these by
+ * a linear text walk: a claim stays live until the matching free directive,
+ * or until the end of the enclosing function if there is none. A whole-
+ * function claim therefore emits no free at all; a loop-scoped one emits its
+ * free immediately after the loop (read-only) or after the spill store
+ * (write), at which point BC really is dead and dccpeep is free to use it
+ * for the rest of the function - the single largest source of missed
+ * optimisation under the old "claimed once, claimed forever" rule.
+ *
+ * Emitted as comments so they are inert to the assembler, and skipped by
+ * every speculative verifier's scan (regalloc_buffer_finalize,
+ * bc_loop_body_self_consistent, loop_regalloc_write_candidate_safe) on the
+ * shared "comment-only lines execute nothing" guard - which also stops the
+ * bare "bc" token in the directive itself from tripping line_touches_bc_reg. */
+void emit_regalloc_claim(const char *reg, const char *scope,
+                         struct Sym *cand, const char *kind, long value)
+{
+    fprintf(g_emit_sink.stream, ";@dcc.reg claim=%s scope=%s sym=%s kind=%s val=%ld\n",
+            reg, scope, cand->name, kind, value);
+}
+
+void emit_regalloc_free(const char *reg)
+{
+    fprintf(g_emit_sink.stream, ";@dcc.reg free=%s\n", reg);
+}
+
+/* Estimated dynamic cycles saved by holding `cand` in a 16-bit register
+ * across `refs` references sitting at loop nesting depth `depth`.
+ *
+ * The per-reference figures are exact for this target, not guesses. A
+ * local/param word lives in a frame slot, so a read is "ld l,(ix+d)" plus
+ * "ld h,(ix+d+1)" = 19+19 = 38 T-states, against "ld l,c"/"ld h,b" = 4+4 =
+ * 8 from BC: 30 saved per read, and the one-off prime that establishes it
+ * costs that same 38. A global word reads as "ld hl,(nn)" = 16 T-states
+ * against the same 8, so only 8 is saved per read, and its prime is the
+ * 16-T load plus an 8-T transfer into the pair = 24. That asymmetry matters:
+ * a global needs nearly four times as many references as a local before it
+ * is worth the same register.
+ *
+ * Depth is weighted by the conventional factor of 8 per nesting level -
+ * dcc has the exact nesting depth available from the AST for free, and
+ * without it a reference inside a doubly-nested loop would be ranked
+ * identically to one in straight-line code, which is precisely the ranking
+ * failure that made every previous cost gate collapse into "whoever asked
+ * first wins". Clamped so a deeply nested candidate cannot overflow into a
+ * nonsense value. */
+long regalloc_estimate_value(struct Sym *cand, int refs, int depth)
+{
+    long per_ref, prime, weight;
+    int is_global = (cand->storage == SC_GLOBAL || cand->storage == SC_EXTERN);
+
+    per_ref = is_global ? 8 : 30;
+    prime = is_global ? 24 : 38;
+    weight = 1;
+    while (depth-- > 0 && weight <= 4096)
+        weight *= 8;
+    return (long)refs * per_ref * weight - prime;
 }
 
 /* Computes a BC-resident candidate's own fixed priming-instruction text, as
@@ -1314,6 +1423,173 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
 
     /* Undo every bit of per-function codegen state this discarded attempt
      * touched, exactly like try_speculative_noix_function_body's own rewind. */
+    speculative_body_discard_rewind(s, body_start_pos, body_start_tok_start,
+                                    body_start_line, body_start_tok_line,
+                                    body_start_tok, body_start_nlocals,
+                                    body_start_local_size);
+    return 0;
+}
+
+/* True if the generated text in `buf` references IY anywhere. dcc's own
+ * codegen never emits an IY instruction except the prologue/epilogue
+ * callee-save pair and the priming sequence this attempt itself inserts, so
+ * anything else found here came from user inline assembly - the one thing
+ * that can invalidate the "nothing else in the image writes IY" invariant
+ * REG_IY rests on. Verification for IY is this short precisely because the
+ * invariant does the work that regalloc_buffer_finalize's whole trust-
+ * tracking machinery has to do for BC: BC is contended by the code generator
+ * itself, IY is not contended by anything. */
+static int buf_has_foreign_iy_use(const char *buf, int n_own_lines,
+                                  const char own[6][40])
+{
+    const char *p;
+    char linebuf[256];
+
+    p = buf;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        size_t ll = nl ? (size_t)(nl - p) : strlen(p);
+        const char *q;
+        int k, own_line;
+
+        if (ll >= sizeof(linebuf)) ll = sizeof(linebuf) - 1;
+        memcpy(linebuf, p, ll);
+        linebuf[ll] = 0;
+
+        q = linebuf;
+        while (*q == ' ' || *q == '\t') q++;
+        if (*q != ';' && strstr(linebuf, "iy") != NULL) {
+            own_line = 0;
+            for (k = 0; k < n_own_lines; k++) {
+                if (strcmp(linebuf, own[k]) == 0) {
+                    own_line = 1;
+                    break;
+                }
+            }
+            if (!own_line)
+                return 1;
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return 0;
+}
+
+/* Speculative whole-function IY promotion.
+ *
+ * Structurally the same speculate/verify/commit-or-rewind shape as the BC
+ * attempt above, but with two substantive differences, both stemming from IY
+ * being callee-saved rather than contended:
+ *
+ *  - There is no call whitelist and no equivalent of buf_has_unsafe_call.
+ *    Every call preserves IY, so a function full of calls - precisely the
+ *    population function_qualifies_for_speculative_regalloc rejects outright,
+ *    and which therefore gets no register allocation at all today - is
+ *    exactly the population this serves.
+ *
+ *  - Verification reduces to "did anything other than our own emitted lines
+ *    mention IY", i.e. user inline assembly, plus the shared address-escape
+ *    check every promotion needs.
+ *
+ * The candidate is primed once, at function entry, after the frame is
+ * established: entry dominates every use, so no reload repair or loop-header
+ * analysis is needed either. */
+int try_speculative_iy_regalloc_function_body(const char *name, int type,
+                                              int local_bytes, struct Sym *s,
+                                              struct Sym *iy_cand,
+                                              long body_start_pos,
+                                              long body_start_tok_start,
+                                              int body_start_line,
+                                              int body_start_tok_line,
+                                              struct Token body_start_tok,
+                                              int body_start_nlocals,
+                                              int body_start_local_size)
+{
+    FILE *scratch;
+    EmitSink saved_sink;
+    int saved_stack_check;
+    int c;
+    int errors_before;
+    char own[6][40];
+    int n_own;
+    char *buf;
+    long size;
+    int ok;
+
+    scratch = tmpfile();
+    if (scratch == NULL)
+        fatal("cannot create speculative iy-regalloc temp file");
+
+    saved_stack_check = opt_stack_check;
+    saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
+    opt_stack_check = s->stack_check_enabled;
+    g_inline_body_buffering++;
+    g_buffering_epoch++;
+    reset_function_codegen_state(s);
+
+    /* Set BEFORE the prologue is emitted: emit_function_prologue keys the
+     * "push iy" off this, and recompute_param_offsets keys the +2 parameter
+     * shift off it too, so both must see it. */
+    g_iy_regalloc_sym = iy_cand;
+    recompute_param_offsets();
+    iy_cand->reg_alloc = REG_IY;
+    g_regalloc_address_escaped = 0;
+
+    errors_before = g_diag_error_count;
+    asm_suppress_depth++;
+    emit_function_prologue(name, local_bytes, 0);
+    /* Prime IY from the parameter's frame slot. There is no "ld iy,(ix+d)"
+     * on Z80, so the value goes through HL. 63 T-states, paid once. */
+    emit_regalloc_claim("iy", "func", iy_cand, "ro",
+                        regalloc_estimate_value(iy_cand, g_iy_regalloc_last_ref_count, 0));
+    fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", iy_cand->offset);
+    fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", iy_cand->offset + 1);
+    emit("\tpush hl\n");
+    emit("\tpop iy\n");
+    gen_compound();
+    emit_function_epilogue(strcmp(name, "main") == 0 &&
+                           (type & 15) == TYPE_INT && type_ptr_depth(type) == 0);
+    asm_suppress_depth--;
+
+    n_own = 0;
+    strcpy(own[n_own++], "\tpush iy");
+    strcpy(own[n_own++], "\tpop iy");
+    strcpy(own[n_own++], "\tpush hl");
+    strcpy(own[n_own++], "\tpop hl");
+
+    iy_cand->reg_alloc = REG_NONE;
+    g_inline_body_buffering--;
+    opt_stack_check = saved_stack_check;
+    emit_sink_restore(&saved_sink);
+
+    ok = 0;
+    if (g_diag_error_count == errors_before && !g_regalloc_address_escaped) {
+        buf = dcc_read_stream_text(scratch, &size,
+                                   "cannot read speculative iy-regalloc temp file");
+        ok = !buf_has_foreign_iy_use(buf, n_own, own);
+        free(buf);
+    }
+    if (getenv("DCC_TRACE_IY") != NULL)
+        fprintf(stderr, "[iy] %s: errors=%d escaped=%d accepted=%d\n", name,
+                g_diag_error_count - errors_before, g_regalloc_address_escaped, ok);
+
+    if (ok) {
+        check_undefined_user_labels();
+        rewind(scratch);
+        while ((c = fgetc(scratch)) != EOF)
+            fputc(c, g_emit_sink.stream);
+        fclose(scratch);
+        /* Left set through the caller's own bookkeeping is wrong for the same
+         * reason the BC path documents at length: the next function must not
+         * inherit this one's frame shape. */
+        g_iy_regalloc_sym = NULL;
+        recompute_param_offsets();
+        return 1;
+    }
+
+    fclose(scratch);
+    g_iy_regalloc_sym = NULL;
+    recompute_param_offsets();
     speculative_body_discard_rewind(s, body_start_pos, body_start_tok_start,
                                     body_start_line, body_start_tok_line,
                                     body_start_tok, body_start_nlocals,

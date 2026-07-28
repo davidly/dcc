@@ -811,6 +811,16 @@ static int ast_try_loop_regalloc(const struct AstNode *loop_node,
     int is_write;
     struct Sym *cand;
 
+    /* Nesting depth of the loop about to be generated, for the cost model
+     * behind the emitted claim directive. nflow counts the enclosing
+     * breakable scopes and has not yet been incremented for THIS loop, so
+     * it is exactly the number of loops/switches wrapped around it. A
+     * candidate inside a nested loop is worth far more per reference than
+     * the same candidate in straight-line code, and publishing that is what
+     * lets dccpeep tell a valuable claim from a marginal one instead of
+     * unconditionally yielding BC to whichever claim it happens to see. */
+    loop_regalloc_last_depth = nflow;
+
     cand = loop_regalloc_find_bc_candidate(cond, inc, body, &is_write);
     if (cand == NULL)
         return 0;

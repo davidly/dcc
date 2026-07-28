@@ -114,6 +114,10 @@ int g_e_regalloc_claim_active;
 int g_e_regalloc_claimed;
 struct Sym *g_e_regalloc_sym;
 int g_loop_regalloc_bc_claimed;
+struct Sym *g_iy_regalloc_sym;
+int g_iy_regalloc_escaped;
+int g_iy_regalloc_last_ref_count;
+int current_function_had_call_at_scan;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];

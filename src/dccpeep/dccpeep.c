@@ -1008,6 +1008,7 @@ static int line_starts_function_marker(const char *line)
  * passes defined earlier in the file than that. */
 static int line_is_regalloc_bc_priming(const char *line);
 int bc_regalloc_claimed_before(int at);
+int bc_regalloc_claimed_in_range(int begin, int end);
 
 static int pass_cache_noix_byte_param_reload(void)
 {
@@ -4071,9 +4072,9 @@ static int pass_ldir_memset_rotated(void)
          * may already have a whole-function or earlier-loop candidate live
          * in BC right through this exact point, invisible to a match that
          * never had any reason to look at B/C. See
-         * bc_regalloc_claimed_before's own comment; same collision class
+         * bc_regalloc_claimed_from's own comment; same collision class
          * pass_cache_global_word_reload was fixed for. */
-        if (bc_regalloc_claimed_before(i))
+        if (bc_regalloc_claimed_from(i))
             continue;
 
         /* All checks passed.  Replace the rotated loop with LDIR. */
@@ -4298,10 +4299,10 @@ static int pass_stride_loop_to_ptr(void)
          * keeps BC live as the end-address for the loop's entire new
          * duration, and dcc's own reg_alloc may already have a
          * whole-function or earlier-loop candidate live in BC right
-         * through this exact point. See bc_regalloc_claimed_before's own
+         * through this exact point. See bc_regalloc_claimed_from's own
          * comment; same collision class pass_cache_global_word_reload was
          * fixed for. */
-        if (bc_regalloc_claimed_before(i))
+        if (bc_regalloc_claimed_from(i))
             continue;
 
         /* Pattern matched. Delete old block and insert pointer-walk version.
@@ -4590,45 +4591,196 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
  * for by dcc's own codegen from this point in the function onward - see
  * that pass's own use of this for why a purely per-segment view (line_
  * clobbers_bc) isn't enough here. */
+/* True if `line` is a compiler-side register claim from dcc covering BC.
+ *
+ * Two forms are recognised, in order of preference:
+ *
+ *  1. The explicit "@dcc.reg claim=bc ..." directive (emit_regalloc_claim,
+ *     dcc_regalloc.c). This states the register, the scope, the symbol and
+ *     what the claim is worth, and - crucially - is paired with an
+ *     "@dcc.reg free=bc" directive at the point the candidate's live range
+ *     actually ends. Being told is strictly better than inferring: it is
+ *     what lets bc_regalloc_claimed_in_range below give a real interval
+ *     answer instead of the old "claimed once, claimed for the rest of the
+ *     function" approximation.
+ *
+ *  2. The legacy text signature "ld c,(ix" / "ld b,(ix", the priming pair
+ *     dcc emits for a local/param candidate, plus the older bare
+ *     "@dcc-regalloc-bc-prime" marker used for globals. Kept because it
+ *     costs nothing and fails safe: a claim inferred this way simply has
+ *     no matching free, so it falls back to exactly the old whole-function
+ *     behaviour rather than to something unsound. */
 static int line_is_regalloc_bc_priming(const char *line)
 {
     char clean[MAX_LINE];
 
+    if (strstr(line, "@dcc.reg claim=bc") != NULL)
+        return 1;
     if (strstr(line, "@dcc-regalloc-bc-prime") != NULL)
         return 1;
     strip_peep_comment_copy(clean, line);
     return strncmp(clean, "ld c,(ix", 8) == 0 || strncmp(clean, "ld b,(ix", 8) == 0;
 }
 
-/* Shared by every dccpeep pass that wants to write its own value into B, C,
- * or the BC pair (a loop counter, a cached pointer, a packed call argument,
- * ...): true if dcc's own reg_alloc priming line for a loop-scoped or
- * whole-function BC candidate appears anywhere between the start of the
- * function containing line `at` and `at` itself. Deliberately conservative,
- * matching pass_cache_global_word_reload's own reg_alloc_seen tracking
- * (this is in fact the same check, generalized to a single callable
- * primitive instead of that pass's own local forward-scan state - see this
- * function's own commit history for why the two were unified): once a
- * priming line has appeared anywhere earlier in the function, BC is treated
- * as spoken for through the rest of that function, not just until some
- * text-detected spill point - a real reg_alloc candidate's spill, if it has
- * one, would genuinely free BC back up before the function ends, but
- * reliably proving that from text alone isn't worth the complexity for what
- * stays a missed optimization either way, never a correctness risk.
+/* True if `line` ends a compiler-side BC claim (emit_regalloc_free,
+ * dcc_regalloc.c). dcc emits this only where the candidate is genuinely
+ * dead: immediately after a read-only loop candidate's loop (every later
+ * read goes back to the never-stale frame slot), or after a write
+ * candidate's spill store has resynced that slot. */
+static int line_is_regalloc_bc_release(const char *line)
+{
+    return strstr(line, "@dcc.reg free=bc") != NULL;
+}
+
+/* Does dcc's own compiler-side BC reservation cover ANY line in
+ * [begin,end)?
  *
- * A caller with a candidate insertion point that isn't itself the very
- * start of a loop/segment (e.g. a whole-function pass like the _MinMax
- * family below) should pass the END of its own scan range instead of a
- * single point, so the backward scan still covers every line the pass is
- * about to touch, not just a prefix of it. */
+ * This is the query every dccpeep pass that wants to write into B, C or BC
+ * really needs, and the one the old point-valued bc_regalloc_claimed_before
+ * could only approximate. It walks forward from the start of the enclosing
+ * function tracking claim/free directives, so a claim that dcc has
+ * explicitly released - a loop-scoped candidate whose loop has ended - stops
+ * blocking every later line in that function. That single change is the
+ * largest source of recovered opportunity here: a 20-line loop claim in a
+ * 400-line function used to forfeit BC for the other 380 lines, so
+ * pass_cache_global_word_reload, pass_cache_ix_local_word_reload,
+ * pass_hoist_index_ptr_to_bc and pass_byte_loop_counter_to_reg_c all
+ * declined regions where BC was in fact dead.
+ *
+ * A claim with no matching free (a whole-function candidate, or one
+ * inferred from the legacy text signature) stays live to the end of the
+ * function, preserving the previous behaviour exactly for those cases.
+ * Callers must pass the true span they intend to modify, not just its first
+ * line: with intervals in play, an unclaimed start no longer implies an
+ * unclaimed remainder. */
+int bc_regalloc_claimed_in_range(int begin, int end)
+{
+    int func_start, func_end;
+    int i, live;
+
+    if (begin < 0)
+        begin = 0;
+    if (end > nlines)
+        end = nlines;
+    if (begin >= end)
+        return 0;
+
+    find_function_bounds_any(begin, &func_start, &func_end);
+    if (func_end < end)
+        end = func_end;
+
+    live = 0;
+    for (i = func_start; i < end; i++) {
+        if (line_is_regalloc_bc_release(lines[i])) {
+            live = 0;
+            continue;
+        }
+        if (line_is_regalloc_bc_priming(lines[i]))
+            live = 1;
+        if (live && i >= begin)
+            return 1;
+    }
+    return 0;
+}
+
+/* Point form of the range query above, kept for the callers whose affected
+ * span really is a single line. Everything with a wider span must use
+ * bc_regalloc_claimed_in_range and pass that span, or it will miss a claim
+ * that opens partway through it. */
 int bc_regalloc_claimed_before(int at)
+{
+    return bc_regalloc_claimed_in_range(at, at + 1);
+}
+
+/* "Is BC spoken for anywhere from `at` to the end of its function?" - the
+ * right question for a pass that inserts priming at `at` and then relies on
+ * BC staying its own for the remainder of the body (the loop-registerisation
+ * passes, which have no cheap upper bound on where the promoted value is
+ * last read).
+ *
+ * Strictly safer than the point query these callers used before: that only
+ * looked at claims already open at `at`, so a claim dcc opened LATER in the
+ * same function was invisible to it. It is also strictly more permissive
+ * where it matters, because a claim that dcc has already released before
+ * `at` no longer counts - which is the whole point of the free directive. */
+int bc_regalloc_claimed_from(int at)
+{
+    int func_start, func_end;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    return bc_regalloc_claimed_in_range(at, func_end);
+}
+
+/* Is line `k` inside a dcc BC claim that dcc explicitly RELEASES - i.e. one
+ * with a matching "@dcc.reg free=bc" directive?
+ *
+ * This is what lets the whole-function "is B or C touched anywhere?" gates
+ * become precise without becoming unsafe. Those gates exist to catch
+ * whole-function BC reservations made by other passes, which they detect by
+ * the blunt proxy of any B/C mention anywhere in the body. dcc's own
+ * loop-scoped priming and uses trip that proxy - "ld c,(ix+d)", "ld l,c" and
+ * friends are all B/C mentions - so a single promoted loop used to disqualify
+ * BC caching for the entire rest of the function even though dcc had already
+ * told us, via the free directive, precisely where that value dies.
+ *
+ * Only CLOSED intervals qualify. A whole-function claim (scope=func) emits no
+ * free and so is never skipped, and neither is a claim inferred from the
+ * legacy text signature, which likewise has no free - both keep their old,
+ * fully conservative treatment. Any B/C use that is not inside a span dcc has
+ * both claimed and released still counts, so an unrelated pass's reservation
+ * is as visible as it ever was. */
+int line_in_released_bc_claim(int k)
+{
+    int func_start, func_end;
+    int i, open_at;
+
+    if (k < 0 || k >= nlines)
+        return 0;
+    find_function_bounds_any(k, &func_start, &func_end);
+
+    open_at = -1;
+    for (i = func_start; i < func_end; i++) {
+        if (line_is_regalloc_bc_release(lines[i])) {
+            if (open_at >= 0 && k >= open_at && k <= i)
+                return 1;
+            open_at = -1;
+            continue;
+        }
+        if (line_is_regalloc_bc_priming(lines[i]) && open_at < 0)
+            open_at = i;
+    }
+    return 0;
+}
+
+/* Has dcc claimed IY for a register-allocated candidate ANYWHERE in this
+ * file?
+ *
+ * IY ownership is program-scoped the moment dcc uses it, and this is the one
+ * question every dccpeep pass that wants IY must ask. dcc's IY candidate is
+ * callee-saved and stays live ACROSS CALLS - that is the entire reason it can
+ * be allocated in a function containing calls, where no caller-saved register
+ * can. dccpeep's own IY uses are not callee-saved: pass_cache_ix_spill_via_iy
+ * borrows IY over a straight-line span, and pass_promote_ix_pointer_to_iy
+ * holds it for a function, neither saving the incoming value. That was sound
+ * while dcc never emitted IY at all, because no caller could have anything
+ * live in it. Once dcc allocates IY, a callee that borrows it destroys its
+ * caller's promoted value.
+ *
+ * Confirmed as a real miscompile on tests/wumpus.c: dcc gave cturn's "g"
+ * pointer to IY, and pass_cache_ix_spill_via_iy independently borrowed IY
+ * inside a function cturn calls, so "g" came back corrupted and the game took
+ * a different branch.
+ *
+ * File scope, not function scope, and deliberately so: the hazard is a
+ * CALLEE's borrow of IY, so checking only the function a pass is editing
+ * would miss exactly the case that breaks. dcc runs first, so its claim is
+ * always visible here by the time any pass asks. */
+int dcc_iy_claimed_in_file(void)
 {
     int i;
 
-    for (i = at - 1; i >= 0; i--) {
-        if (line_starts_function_marker(lines[i]))
-            return 0;
-        if (line_is_regalloc_bc_priming(lines[i]))
+    for (i = 0; i < nlines; i++) {
+        if (strstr(lines[i], "@dcc.reg claim=iy") != NULL)
             return 1;
     }
     return 0;
@@ -4807,7 +4959,7 @@ static int pass_cache_global_word_reload(void)
          * otherwise-unrelated tests before this threshold was raised). */
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
             !symbol_written_in_range(best_sym, segstart, i) &&
-            !bc_regalloc_claimed_before(i)) {
+            !bc_regalloc_claimed_in_range(segstart, i + 1)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
                 if (!peep_parse_ld_hl_paren_sym(lines[j], sym)) continue;
@@ -4926,7 +5078,7 @@ static int pass_cache_global_word_reload_de(void)
 
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
             !symbol_written_in_range(best_sym, segstart, i) &&
-            !bc_regalloc_claimed_before(i)) {
+            !bc_regalloc_claimed_in_range(segstart, i + 1)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
                 if (!peep_parse_ld_de_paren_sym(lines[j], sym)) continue;
@@ -5293,6 +5445,15 @@ static int ix_cache_bc_used_in_function(int at)
     for (k = func_start; k < func_end; ++k) {
         if (strstr(lines[k], "ix_local_word_cache"))
             continue;
+        /* Lines dcc has both claimed and explicitly released are accounted
+         * for: they are that candidate's own priming and uses, and dcc has
+         * told us exactly where its live range ends. The caller separately
+         * proves its own segment does not overlap any claim
+         * (bc_regalloc_claimed_in_range), so a released span elsewhere in
+         * the function is no reason to forfeit BC here - which under the
+         * old blanket scan it always was. */
+        if (line_in_released_bc_claim(k))
+            continue;
         if (line_clobbers_bc(lines[k]))
             return 1;
     }
@@ -5363,7 +5524,7 @@ static int pass_cache_ix_local_word_reload(void)
          * same "don't rewrite a pattern some other, more specific pass might
          * still want to match in its original form" caution applies, and
          * >= 3 is the threshold already proven safe for that. */
-        if (best_count >= 3 && !bc_regalloc_claimed_before(i) &&
+        if (best_count >= 3 && !bc_regalloc_claimed_in_range(segstart, i + 1) &&
             !ix_cache_bc_used_in_function(i)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
@@ -5456,6 +5617,11 @@ static int iy_used_in_function(int at)
     int func_start, func_end;
     int k;
 
+    /* dcc's own IY candidate is callee-saved and live across calls, so a
+     * borrow anywhere in the file can corrupt it - see
+     * dcc_iy_claimed_in_file's own comment for the wumpus.c miscompile. */
+    if (dcc_iy_claimed_in_file())
+        return 1;
     find_function_bounds_any(at, &func_start, &func_end);
     for (k = func_start; k < func_end; ++k) {
         if (strstr(lines[k], "ix_spill_iy") != NULL)
@@ -7222,8 +7388,10 @@ static int pass_hoist_index_ptr_to_bc(void)
              * Check through the shared ownership guard so both IX-based
              * local/parameter primes and marker-tagged global primes are
              * covered, along with BC claims made by an earlier peephole
-             * iteration. */
-            if (bc_regalloc_claimed_before(func_end))
+             * iteration. The priming this pass inserts sits before the loop
+             * header and stays live to the end of the function, so the span
+             * asked about is the whole function body. */
+            if (bc_regalloc_claimed_in_range(func_start, func_end))
                 continue;
             for (k = func_start; k < func_end; ++k) {
                 if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
