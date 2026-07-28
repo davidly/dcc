@@ -379,10 +379,12 @@ different architecture. dcc builds one statement AST at a time and resets its
 arena immediately after emission, so the prototype lowers each statement into
 a persistent per-function stream *before* physical Z80 register assignment.
 The stream has unlimited virtual values, loads/stores, constants, unary/binary
-operations, calls/arguments, labels, branches and returns. Unsupported
-semantics (currently member/index expressions, compound assignments,
-short-circuit logic, switch/goto and declaration replay) remain explicit
-`opaque` barriers rather than being represented incorrectly.
+operations, indexed loads, calls/arguments, labels, branches, phi-like merges
+and returns. `&&` is lowered with real short-circuit control flow - the RHS is
+not reachable from the false-LHS edge - rather than an eager binary operation.
+Unsupported semantics (currently member expressions, compound assignments,
+`||`, conditional expressions, switch/goto and declaration replay) remain
+explicit `opaque` barriers rather than being represented incorrectly.
 
 Enable a dump without changing codegen:
 
@@ -397,13 +399,22 @@ the same function more than once under a VERIFY sink. The verifier resolves
 branch labels, builds instruction successors, checks virtual use-before-def and
 duplicate definitions, solves iterative backwards virtual-value liveness, and
 reports block count, maximum live pressure and opaque-barrier count. The
-initial `is_attacked` milestone is 25 MIR blocks, 100 virtual values, max-live
-49, 12 opaque barriers, 0 verifier errors.
+The first `is_attacked` milestone was 25 MIR blocks, 100 virtual values,
+max-live 49, 12 opaque barriers and 0 verifier errors. Adding semantic
+AST_INDEX and AST_LOGAND lowering removes every barrier in that function: 49
+blocks, 222 virtual values, max-live 26, 0 opaque barriers, 0 verifier errors.
+Phi inputs are currently treated as live at the merge rather than on their
+individual predecessor edges, so liveness/pressure is conservative; physical
+allocation must not begin until edge-specific phi uses are implemented.
 
 Load-bearing validation for any MIR change while it remains analysis-only:
 
 - `DCC_MIR_REPORT=1` over every `tests/*.c` must report zero `errors=N` where
 	N is nonzero.
+- Run at least one hot supported function under ASan/UBSan. The CFG successor
+	arrays are fixed-size (conditional branches have exactly target+fallthrough),
+	so malformed construction must report an invalid edge rather than index a
+	liveness matrix out of bounds.
 - Raw compiler `.MAC` must be byte-identical to a clean pre-change worktree.
 	`tstdc` is the expected exception because it embeds `__TIME__`; inspect its
 	diff and require that to be the only changed bytes.

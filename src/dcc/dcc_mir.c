@@ -19,7 +19,9 @@
 
 enum MirOpcode {
     MIR_CONST,
+    MIR_ADDRESS,
     MIR_LOAD,
+    MIR_INDEX_LOAD,
     MIR_STORE,
     MIR_UNARY,
     MIR_BINARY,
@@ -28,6 +30,7 @@ enum MirOpcode {
     MIR_LABEL,
     MIR_JUMP,
     MIR_BRANCH_FALSE,
+    MIR_PHI,
     MIR_RETURN,
     MIR_OPAQUE
 };
@@ -65,7 +68,9 @@ static const char *mir_opcode_name(int opcode)
 {
     switch (opcode) {
     case MIR_CONST: return "const";
+    case MIR_ADDRESS: return "address";
     case MIR_LOAD: return "load";
+    case MIR_INDEX_LOAD: return "index";
     case MIR_STORE: return "store";
     case MIR_UNARY: return "unary";
     case MIR_BINARY: return "binary";
@@ -74,6 +79,7 @@ static const char *mir_opcode_name(int opcode)
     case MIR_LABEL: return "label";
     case MIR_JUMP: return "jump";
     case MIR_BRANCH_FALSE: return "brfalse";
+    case MIR_PHI: return "phi";
     case MIR_RETURN: return "return";
     default: return "opaque";
     }
@@ -170,6 +176,10 @@ static int mir_lower_expr(const struct AstNode *node)
     int left;
     int right;
     int value;
+    int false_label;
+    int end_label;
+    int true_value;
+    int false_value;
     int i;
 
     if (node == NULL)
@@ -184,11 +194,22 @@ static int mir_lower_expr(const struct AstNode *node)
         return value;
     case AST_IDENT:
         value = mir_new_value();
-        insn = mir_emit(MIR_LOAD);
+        insn = mir_emit(node->sym != NULL && node->sym->is_array
+                        ? MIR_ADDRESS : MIR_LOAD);
         insn->dst = value;
         insn->type = node->type;
         mir_copy_name(insn->name, node->sval ? node->sval :
                                   (node->sym ? node->sym->name : "?"));
+        return value;
+    case AST_INDEX:
+        left = mir_lower_expr(node->a);
+        right = mir_lower_expr(node->b);
+        value = mir_new_value();
+        insn = mir_emit(MIR_INDEX_LOAD);
+        insn->dst = value;
+        insn->src1 = left;
+        insn->src2 = right;
+        insn->type = node->type;
         return value;
     case AST_CAST:
     case AST_UNARY:
@@ -210,6 +231,40 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->src2 = right;
         insn->type = node->type;
         insn->immediate = node->op;
+        return value;
+    case AST_LOGAND:
+        /* Preserve C short-circuit semantics explicitly. The result is a
+         * fresh boolean value merged from constants on the true and false
+         * paths; the RHS is unreachable when the LHS is false. */
+        false_label = mir_new_label();
+        end_label = mir_new_label();
+        left = mir_lower_expr(node->a);
+        insn = mir_emit(MIR_BRANCH_FALSE);
+        insn->src1 = left;
+        insn->label = false_label;
+        right = mir_lower_expr(node->b);
+        insn = mir_emit(MIR_BRANCH_FALSE);
+        insn->src1 = right;
+        insn->label = false_label;
+        true_value = mir_new_value();
+        insn = mir_emit(MIR_CONST);
+        insn->dst = true_value;
+        insn->type = node->type;
+        insn->immediate = 1;
+        mir_emit_jump(end_label);
+        mir_emit_label(false_label);
+        false_value = mir_new_value();
+        insn = mir_emit(MIR_CONST);
+        insn->dst = false_value;
+        insn->type = node->type;
+        insn->immediate = 0;
+        mir_emit_label(end_label);
+        value = mir_new_value();
+        insn = mir_emit(MIR_PHI);
+        insn->dst = value;
+        insn->src1 = true_value;
+        insn->src2 = false_value;
+        insn->type = node->type;
         return value;
     case AST_ASSIGN:
         if (node->op != '=' || node->a == NULL || node->a->kind != AST_IDENT)
@@ -450,11 +505,11 @@ static int mir_verify_and_dump(void)
         }
         if (insn->opcode == MIR_BRANCH_FALSE && i + 1 < mir.count)
             insn->successors[insn->successor_count++] = i + 1;
-        if (i == 0 || insn->opcode == MIR_LABEL)
-            ++block_count;
         else if (insn->opcode != MIR_JUMP && insn->opcode != MIR_RETURN &&
                  i + 1 < mir.count)
             insn->successors[insn->successor_count++] = i + 1;
+        if (i == 0 || insn->opcode == MIR_LABEL)
+            ++block_count;
     }
 
     do {
@@ -469,9 +524,18 @@ static int mir_verify_and_dump(void)
             for (value = 0; value < mir.next_value; ++value) {
                 int next_out = 0;
                 int next_in;
-                for (successor = 0; successor < insn->successor_count; ++successor)
+                for (successor = 0; successor < insn->successor_count; ++successor) {
+                    if (insn->successors[successor] < 0 ||
+                        insn->successors[successor] >= mir.count) {
+                        fprintf(stderr,
+                                "; MIR %s: instruction %d has invalid successor %d\n",
+                                mir.name, i, insn->successors[successor]);
+                        ++errors;
+                        continue;
+                    }
                     next_out |= live_in[(size_t)insn->successors[successor] *
                                         mir.next_value + value];
+                }
                 next_in = next_out && value != insn->dst;
                 if (value == insn->src1 || value == insn->src2)
                     next_in = 1;
@@ -514,6 +578,8 @@ static int mir_verify_and_dump(void)
             fprintf(stderr, " %s", insn->name);
         if (insn->opcode == MIR_CONST)
             fprintf(stderr, " %ld", insn->immediate);
+        if (insn->opcode == MIR_OPAQUE)
+            fprintf(stderr, " ast=%ld", insn->immediate);
         if (insn->opcode == MIR_LABEL || insn->opcode == MIR_JUMP ||
             insn->opcode == MIR_BRANCH_FALSE)
             fprintf(stderr, " L%d", insn->label);
