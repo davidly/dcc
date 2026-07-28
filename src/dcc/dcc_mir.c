@@ -32,6 +32,7 @@ enum MirOpcode {
     MIR_INDEX_LOAD,
     MIR_STORE,
     MIR_STORE_INDIRECT,
+    MIR_COPY_AGGREGATE,
     MIR_VLA_SAVE,
     MIR_VLA_ALLOC,
     MIR_VLA_RESTORE,
@@ -179,6 +180,7 @@ static const char *mir_opcode_name(int opcode)
     case MIR_INDEX_LOAD: return "index";
     case MIR_STORE: return "store";
     case MIR_STORE_INDIRECT: return "storeind";
+    case MIR_COPY_AGGREGATE: return "copyagg";
     case MIR_VLA_SAVE: return "vlasave";
     case MIR_VLA_ALLOC: return "vlaalloc";
     case MIR_VLA_RESTORE: return "vlarestore";
@@ -822,10 +824,13 @@ static int mir_lower_expr(const struct AstNode *node)
             if (symbol == NULL && node->sval != NULL)
                 symbol = find_sym(node->sval);
         value = mir_new_value();
-        insn = mir_emit(symbol != NULL && symbol->is_array
-                        ? MIR_ADDRESS : MIR_LOAD);
+        insn = mir_emit(symbol != NULL &&
+                ((symbol->is_array && !symbol->is_vla) ||
+                 type_is_struct_object(symbol->type))
+                ? MIR_ADDRESS : MIR_LOAD);
         insn->dst = value;
-        insn->type = node->type;
+        insn->type = symbol != NULL && symbol->is_vla
+            ? type_add_ptr(symbol->type) : node->type;
         mir_copy_name(insn->name, node->sval ? node->sval :
                                   (node->sym ? node->sym->name : "?"));
         insn->object = mir_get_object(symbol, insn->name);
@@ -894,6 +899,8 @@ static int mir_lower_expr(const struct AstNode *node)
             left = mir_lower_lvalue_address(node);
             if (left < 0)
                 break;
+            if (type_is_struct_object(node->type))
+                return left;
             value = mir_new_value();
             insn = mir_emit(MIR_LOAD_INDIRECT);
             insn->dst = value;
@@ -1056,6 +1063,18 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_ASSIGN:
         if (node->a == NULL)
             break;
+        if (type_is_struct_object(node->a->type)) {
+            int destination = mir_lower_lvalue_address(node->a);
+            int source = mir_lower_expr(node->b);
+            if (destination < 0 || source < 0)
+                break;
+            insn = mir_emit(MIR_COPY_AGGREGATE);
+            insn->src1 = destination;
+            insn->src2 = source;
+            insn->type = node->a->type;
+            insn->memory_size = type_size(node->a->type);
+            return destination;
+        }
         if (node->a->kind == AST_MEMBER) {
             struct FieldDef *field = mir_member_field(node->a);
             int address;
@@ -2075,7 +2094,8 @@ static int mir_block_label_before(int instruction)
 static int mir_first_nonlabel_successor(int successor)
 {
     while (successor >= 0 && successor < mir.count &&
-           mir.insns[successor].opcode == MIR_LABEL)
+           (mir.insns[successor].opcode == MIR_LABEL ||
+            mir.insns[successor].opcode == MIR_NOP))
         ++successor;
     return successor;
 }
@@ -3654,9 +3674,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_NOP: case MIR_PARAM: case MIR_CONST: case MIR_FLOAT_CONST:
         case MIR_STRING_ADDRESS:
         case MIR_ADDRESS: case MIR_COMPOUND_ADDRESS: case MIR_INDEX_ADDRESS:
-        case MIR_MEMBER_ADDRESS: case MIR_LOAD: case MIR_LOAD_INDIRECT:
+        case MIR_MEMBER_ADDRESS: case MIR_VLA_SIZE: case MIR_LOAD:
+        case MIR_LOAD_INDIRECT:
         case MIR_STORE: case MIR_STORE_INDIRECT: case MIR_UNARY:
-        case MIR_BINARY: case MIR_ARG: case MIR_CALL: case MIR_LABEL:
+        case MIR_VLA_SAVE: case MIR_VLA_ALLOC: case MIR_VLA_RESTORE:
+        case MIR_COPY_AGGREGATE: case MIR_BINARY: case MIR_ARG: case MIR_CALL:
+        case MIR_LABEL:
         case MIR_JUMP: case MIR_BRANCH_FALSE: case MIR_PHI: case MIR_RETURN:
             break;
         default:
@@ -3672,6 +3695,9 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
                  memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN))
                 return mir_scalar_cfg_preflight_reject("memory-location", i);
+            if (type_is_struct_object(memory_type) &&
+                insn->opcode != MIR_ADDRESS)
+                return mir_scalar_cfg_preflight_reject("aggregate-scalar", i);
         }
            if ((insn->opcode == MIR_LOAD_INDIRECT ||
                insn->opcode == MIR_STORE_INDIRECT) &&
@@ -3684,6 +3710,11 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             (strcmp(insn->name, "<indirect>") == 0 ||
              type_size(insn->type) > 4))
             return mir_scalar_cfg_preflight_reject("call-abi", i);
+        if (insn->opcode == MIR_ARG) {
+            const struct MirInsn *argument = mir_definition(insn->src1);
+            if (argument != NULL && type_is_struct_object(argument->type))
+                return mir_scalar_cfg_preflight_reject("aggregate-argument", i);
+        }
     }
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
     if (labels == NULL)
@@ -3810,6 +3841,13 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 fprintf(out, "\tld de,%ld\n\tadd hl,de\n", insn->immediate);
             mir_emit_virtual_store(out, insn->dst);
             break;
+        case MIR_VLA_SIZE:
+            if (insn->immediate < -128 || insn->immediate + 1 > 127)
+                goto done;
+            fprintf(out, "\tld l,(ix%+ld)\n\tld h,(ix%+ld)\n",
+                    insn->immediate, insn->immediate + 1);
+            mir_emit_virtual_store(out, insn->dst);
+            break;
         case MIR_MEMBER_ADDRESS:
             mir_emit_virtual_load(out, insn->src1);
             if (insn->immediate != 0)
@@ -3933,6 +3971,53 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n", out);
             if (insn->memory_size > 1)
                 fputs("\tinc hl\n\tld (hl),d\n", out);
+            break;
+        case MIR_VLA_SAVE:
+            if (insn->immediate < -128 || insn->immediate + 1 > 127)
+                goto done;
+            fputs("\tld hl,0\n\tadd hl,sp\n", out);
+            fprintf(out, "\tld (ix%+ld),l\n\tld (ix%+ld),h\n",
+                    insn->immediate, insn->immediate + 1);
+            break;
+        case MIR_VLA_ALLOC:
+            if (insn->immediate < -128 || insn->immediate + 1 > 127 ||
+                insn->secondary_offset < -128 ||
+                insn->secondary_offset + 1 > 127)
+                goto done;
+            mir_emit_virtual_load(out, insn->src1);
+            fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                    insn->secondary_offset, insn->secondary_offset + 1);
+            fputs("\tex de,hl\n\tld hl,0\n\tadd hl,sp\n"
+                  "\tor a\n\tsbc hl,de\n\tld sp,hl\n", out);
+            if (opt_stack_check)
+                fputs("\textrn __stchk\n\tcall __stchk\n", out);
+            fputs("\tld hl,0\n\tadd hl,sp\n", out);
+            fprintf(out, "\tld (ix%+ld),l\n\tld (ix%+ld),h\n",
+                    insn->immediate, insn->immediate + 1);
+            break;
+        case MIR_VLA_RESTORE:
+            if (insn->immediate == 0)
+                break;
+            if (insn->immediate < -128 || insn->immediate + 1 > 127)
+                goto done;
+            fprintf(out, "\tld l,(ix%+ld)\n\tld h,(ix%+ld)\n\tld sp,hl\n",
+                    insn->immediate, insn->immediate + 1);
+            break;
+        case MIR_COPY_AGGREGATE:
+            {
+                int byte;
+                if (insn->memory_size <= 0 || insn->memory_size > 1024)
+                    goto done;
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tpush hl\n", out);
+                mir_emit_virtual_load(out, insn->src2);
+                fputs("\tld b,h\n\tld c,l\n\tpop hl\n", out);
+                for (byte = 0; byte < insn->memory_size; ++byte) {
+                    fputs("\tld a,(bc)\n\tld (hl),a\n", out);
+                    if (byte + 1 < insn->memory_size)
+                        fputs("\tinc bc\n\tinc hl\n", out);
+                }
+            }
             break;
         case MIR_UNARY:
             if (mir_value_is_wide(insn->src1))

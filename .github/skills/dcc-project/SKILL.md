@@ -716,6 +716,23 @@ resolve declaration/global type before interval sizing. Timeout harnesses prove
 long `70000 + 12345*2 = 94690`, float `1.5 + 2.25*2 = 6.00`, and mixed casts
 `69998 4.50` in emitted code.
 
+The general backend now executes VLA save/size/allocation/base/restore opcodes,
+global/extern byte/word storage, 16-bit bitfields, aggregate byte copies, and
+one/two-unit long/float virtual values. VLA identifiers load their runtime base
+pointer from the frame slot; they are not fixed-array addresses. Phi discovery
+must skip promoted NOPs between labels and phis, or loop induction values are
+never initialized. `tvla:vla_1d` passes the complete tvla baseline under a hard
+timeout.
+
+Wide virtual units grow downward and never overlap a partial free tail. Named
+memory types must resolve before interval sizing, and unary AST nodes must carry
+durable dereference/result type. Aggregate dereference yields an address;
+`MIR_COPY_AGGREGATE` copies bytes explicitly rather than pretending a struct is
+a scalar. Timeout harnesses pass long and float arithmetic, mixed casts, global
+storage, bitfields, VLA execution and aggregate assignment. The strict compiler
+corpus and full stack-check peep+nopeep suite pass all 309 runnable apps,
+diagnostics, dccpeep fixtures and performance baselines.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 

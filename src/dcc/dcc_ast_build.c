@@ -653,9 +653,12 @@ static struct AstNode *p_unary(struct AstArena *ar)
     if (k == '-' || k == '+' || k == '!' || k == '~' ||
         k == '*' || k == '&' || k == TOK_INC || k == TOK_DEC) {
         struct AstNode *operand;
+        struct AstNode *unary;
         next_token();
         operand = p_unary(ar);
-        return ast_unary(ar, k, operand, 0);
+        unary = ast_unary(ar, k, operand, 0);
+        unary->type = ast_expr_type_for_sizeof(unary);
+        return unary;
     }
 
     if (k == TOK_SIZEOF) {
