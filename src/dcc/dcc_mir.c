@@ -43,6 +43,8 @@ struct MirInsn {
     int type;
     long immediate;
     int label;
+    int phi_pred1;
+    int phi_pred2;
     int successors[2];
     int successor_count;
     char name[64];
@@ -130,6 +132,8 @@ static struct MirInsn *mir_emit(int opcode)
     insn->src1 = -1;
     insn->src2 = -1;
     insn->label = -1;
+    insn->phi_pred1 = -1;
+    insn->phi_pred2 = -1;
     return insn;
 }
 
@@ -180,6 +184,7 @@ static int mir_lower_expr(const struct AstNode *node)
     int end_label;
     int true_value;
     int false_value;
+    int true_label;
     int i;
 
     if (node == NULL)
@@ -238,6 +243,7 @@ static int mir_lower_expr(const struct AstNode *node)
          * paths; the RHS is unreachable when the LHS is false. */
         false_label = mir_new_label();
         end_label = mir_new_label();
+        true_label = mir_new_label();
         left = mir_lower_expr(node->a);
         insn = mir_emit(MIR_BRANCH_FALSE);
         insn->src1 = left;
@@ -246,6 +252,7 @@ static int mir_lower_expr(const struct AstNode *node)
         insn = mir_emit(MIR_BRANCH_FALSE);
         insn->src1 = right;
         insn->label = false_label;
+        mir_emit_label(true_label);
         true_value = mir_new_value();
         insn = mir_emit(MIR_CONST);
         insn->dst = true_value;
@@ -264,6 +271,8 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->dst = value;
         insn->src1 = true_value;
         insn->src2 = false_value;
+        insn->phi_pred1 = true_label;
+        insn->phi_pred2 = false_label;
         insn->type = node->type;
         return value;
     case AST_ASSIGN:
@@ -458,6 +467,49 @@ static int mir_find_label(int label)
     return -1;
 }
 
+static int mir_block_label_before(int instruction)
+{
+    int i;
+
+    for (i = instruction; i >= 0; --i) {
+        if (mir.insns[i].opcode == MIR_LABEL)
+            return mir.insns[i].label;
+        if (i < instruction &&
+            (mir.insns[i].opcode == MIR_JUMP ||
+             mir.insns[i].opcode == MIR_BRANCH_FALSE ||
+             mir.insns[i].opcode == MIR_RETURN))
+            break;
+    }
+    return -1;
+}
+
+/* A successor may start with one or more label pseudo-instructions; return
+ * the first executable/pseudo-value operation in that block. */
+static int mir_first_nonlabel_successor(int successor)
+{
+    while (successor >= 0 && successor < mir.count &&
+           mir.insns[successor].opcode == MIR_LABEL)
+        ++successor;
+    return successor;
+}
+
+static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
+{
+    int first = mir_first_nonlabel_successor(successor);
+    int predecessor_label;
+    const struct MirInsn *phi;
+
+    if (first < 0 || first >= mir.count || mir.insns[first].opcode != MIR_PHI)
+        return 0;
+    phi = &mir.insns[first];
+    predecessor_label = mir_block_label_before(predecessor);
+    if (predecessor_label == phi->phi_pred1)
+        return value == phi->src1;
+    if (predecessor_label == phi->phi_pred2)
+        return value == phi->src2;
+    return 0;
+}
+
 static int mir_verify_and_dump(void)
 {
     unsigned char *defined;
@@ -535,9 +587,13 @@ static int mir_verify_and_dump(void)
                     }
                     next_out |= live_in[(size_t)insn->successors[successor] *
                                         mir.next_value + value];
+                    if (mir_phi_edge_uses_value(
+                            i, insn->successors[successor], value))
+                        next_out = 1;
                 }
                 next_in = next_out && value != insn->dst;
-                if (value == insn->src1 || value == insn->src2)
+                if (insn->opcode != MIR_PHI &&
+                    (value == insn->src1 || value == insn->src2))
                     next_in = 1;
                 if (out[value] != next_out || in[value] != next_in) {
                     out[value] = (unsigned char)next_out;
@@ -583,6 +639,8 @@ static int mir_verify_and_dump(void)
         if (insn->opcode == MIR_LABEL || insn->opcode == MIR_JUMP ||
             insn->opcode == MIR_BRANCH_FALSE)
             fprintf(stderr, " L%d", insn->label);
+        if (insn->opcode == MIR_PHI)
+            fprintf(stderr, " [L%d,L%d]", insn->phi_pred1, insn->phi_pred2);
         fprintf(stderr, "  ; live in=%d out=%d\n", in_count, out_count);
     }
 
