@@ -3247,6 +3247,10 @@ void scan_static_local_decl_after_type(int base)
             l->dim_count = g->dim_count;
             memcpy(l->dims, g->dims, sizeof(l->dims));
         }
+        if (l != NULL) {
+            mir_note_declared_symbol(l);
+            mir_note_declared_alias(name, l);
+        }
 
         if (!accept(',')) break;
     }
