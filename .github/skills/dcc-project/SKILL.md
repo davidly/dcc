@@ -785,6 +785,15 @@ experiment was removed from automatic home emission; comparisons remain in the
 general CFG backend. The integrated frameless arithmetic/bitwise subset passes
 the full peep+nopeep zero-regression gate.
 
+Every selector in a fallback chain must write to its own temporary stream;
+outer function-level transactions do not prevent a declining selector's partial
+text from contaminating the next selector. Phi edge liveness and backend
+intervals must scan every consecutive phi, not only the first. Retained-home
+CFG emission uses parallel push-all/pop-reverse edge copies and is available in
+exact general mode. Ternary and loop-phi harnesses pass, but `sum_to` is still
+317 cycles slower because comparison booleans and conservative boundary saves
+are materialized, so home CFG is not automatic yet.
+
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:
 
