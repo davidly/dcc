@@ -592,6 +592,14 @@ nested initializer can appear after later statements and the MIR is not
 semantic even if it verifies. Ordinary and for-init declarations now have zero
 barriers in `tdecl` and `tc99scpe`.
 
+Match declaration replays to their stable `AST_DECL` node, not replay order:
+nested C99 declarations can be replayed in a different order from lexical MIR
+lowering. Parsing may also capture a nested initializer before its statement
+placeholder exists. Mark that span provisional and NOP it when the matching
+declaration replay supplies the correctly positioned span; otherwise a
+side-effecting initializer such as `va_arg` executes once before the loop and
+once inside it.
+
 VLA replay records explicit scope-SP save, scaled byte allocation, base/size
 frame slots and restore operations. Actual `mir_set_vla_target` events retain
 an `AST_DECL` barrier until scope-end and flow-exit restores are spliced into
@@ -746,8 +754,16 @@ functions need an implicit epilogue; strings need a durable pool ID before MIR
 emission; dcc arguments are pushed in reverse source index order; call argument
 uses belong at the matching call; phi source uses belong on incoming edges;
 and textual intervals must extend loop invariants across backward edges.
-Variadic calls need per-call printf-family/promoted-argument metadata before
-general emission. Do not weaken these exclusions to increase candidate count.
+Variadic calls carry per-call printf-family symbols, hook flags and promoted
+argument types. Model `va_start`, `va_arg` and `va_end` as explicit MIR
+intrinsics, never ordinary calls or guessed dereferences. `va_start` stores the
+address immediately after the last fixed parameter; `va_arg` returns the old
+pointer's typed value and advances the local `va_list` by at least two bytes;
+`va_end` clears it. Exact-general timeout tests cover vprintf/vfprintf/vsprintf
+forwarding and int, long, pointer and declaration-initializer `va_arg` uses.
+Automatic rollout still excludes call-heavy variadic functions on
+profitability grounds. Do not weaken that exclusion merely to increase the
+candidate count.
 The initial general census found 5307 accepted speculative attempts / 1542
 unique names before rollout restrictions, averaging 5.18 reusable slots and a
 maximum of 15. Conservative multi-function rollout now permits only pure,
@@ -793,6 +809,14 @@ CFG emission uses parallel push-all/pop-reverse edge copies and is available in
 exact general mode. Ternary and loop-phi harnesses pass, but `sum_to` is still
 317 cycles slower because comparison booleans and conservative boundary saves
 are materialized, so home CFG is not automatic yet.
+
+Direct zero-test branches remove that boolean overhead (`sum_to` becomes 269
+cycles faster), and exact retained-home CFG now handles parallel multi-phi edge
+copies, promoted-only local frames, branches, ternaries and loops. A conservative
+69-function rollout passes all correctness gates but produces 29 checked
+performance regressions, including existing specialized-loop cases. Therefore
+home CFG remains exact-development only; profitable specialized loops and the
+zero-regression frameless DAG subset remain automatic.
 
 Load-bearing validation follows milestone cadence rather than running the full
 suite after every small lowering edit:

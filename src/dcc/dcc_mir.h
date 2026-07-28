@@ -8,7 +8,7 @@ struct Sym;
 void mir_begin_function(const char *name, int sink_purpose, int has_vla,
 						int local_bytes);
 void mir_capture_stmt(const struct AstNode *stmt);
-void mir_begin_declaration(void);
+void mir_begin_declaration(const struct AstNode *node);
 void mir_end_declaration(void);
 void mir_set_initializer_target(struct Sym *symbol);
 void mir_set_vla_target(struct Sym *symbol);
