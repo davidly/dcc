@@ -5585,15 +5585,19 @@ void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type)
         emit_load_sym_addr(s);
     } else if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
         /* Deliberately NOT extended with a `s->reg_alloc != REG_NONE` arm,
-         * unlike the member path in gen_member_addr_ast. Doing so does make
-         * `p[i]` promotable, but it changes the shape of the indexed access
-         * enough to defeat dccpeep's cross-iteration passes, which hoist the
+         * unlike the member path in gen_member_addr_ast. Doing so does make a
+         * dereferenced pointer (`*p`, and `p[i]` which routes here as
+         * `*(p+i)`) promotable, but it changes the shape of the access enough
+         * to defeat dccpeep's cross-iteration passes, which hoist the
          * invariant pointer RELOAD out of the loop - and that hoist is worth
          * more than the promotion. Measured: adding the arm cost 00040b
          * +1.11M, pint +354K and tvlax +341K, turning a -10.30M corpus result
-         * into -8.98M. A promoted pointer used only for indexing simply
-         * declines its own promotion here (via g_regalloc_address_escaped),
-         * which is the right outcome. */
+         * into -8.98M.
+         *
+         * A promoted pointer that is only ever dereferenced therefore
+         * declines its own promotion here, via g_regalloc_address_escaped,
+         * which is the intended outcome - IY is left for candidates whose
+         * uses it can actually improve. */
         emit_load_sym_value_direct(s);
     } else {
         emit_load_sym_addr(s);

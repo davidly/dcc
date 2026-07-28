@@ -1382,7 +1382,21 @@ struct Sym *find_iy_regalloc_candidate(int params_end)
         if (weight < IY_REGALLOC_MIN_WEIGHT) continue;
         if (weight <= best_weight) continue;
         if (ident_addr_taken_for(p->name)) continue;
-        if (ident_written_for(p->name)) continue;
+        /* Written parameters ARE eligible, unlike the whole-function BC
+         * candidate. BC's read-only bar exists because
+         * regalloc_buffer_finalize's reload-repair treats the frame slot as a
+         * permanent valid shadow it can fall back on, which a written
+         * candidate would invalidate. IY needs no such repair - entry
+         * dominates every use and nothing else can disturb the register - so
+         * the slot is simply dead after the prime, and no spill is needed
+         * either, since a candidate whose address is never taken has no other
+         * reader.
+         *
+         * This is where most of IY's remaining value is. A written parameter
+         * is usually a walked pointer or a counter, and "inc iy" costs 10
+         * T-states against roughly 82 for the frame-slot read-modify-write it
+         * replaces - by a wide margin the largest per-reference saving on
+         * offer here. */
         best = p;
         best_weight = weight;
     }
@@ -3578,6 +3592,7 @@ void parse_function_or_global(int base_type)
 
                 current_return_type = type;
                 current_function_has_call = 0;
+                current_function_has_vla = 0;
                 g_func_pass.static_local_func_index = (int)(s - globals);
                 g_func_pass.static_local_seq = 0;
                 asm_suppress_depth++;

@@ -22,6 +22,10 @@ extern int g_iy_regalloc_escaped;
  * frame-sizing scan - before any speculative codegen pass could overwrite
  * current_function_has_call with a substituted callee's value. */
 extern int current_function_had_call_at_scan;
+/* Set while compiling a function that declares a variable-length array, which
+ * makes the function manage SP itself through the per-scope "#vlasp" save
+ * slots rather than purely through IX. */
+extern int current_function_has_vla;
 
 /* Verifies generated text in `f`. On success, returns 1 and transfers a newly
  * allocated, rewound commit stream through out_f; the caller owns that FILE.

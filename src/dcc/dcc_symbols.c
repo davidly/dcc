@@ -154,6 +154,10 @@ int vla_scope_ensure_save_slot(void)
         return 0;                       /* already allocated for this scope */
     s = add_local_alloc("#vlasp", TYPE_INT, 2);
     g_vla_scope_off[g_func_pass.scope_depth] = s->offset;
+    /* Noted for the IY register allocator, which must stay out of functions
+     * that juggle SP themselves - see
+     * function_qualifies_for_speculative_iy_regalloc. */
+    current_function_has_vla = 1;
     return s->offset;
 }
 
@@ -1151,6 +1155,18 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
         emit("\tld c,l\n\tld b,h\n");
         return;
     }
+    if (s->reg_alloc == REG_IY) {
+        /* 25 T-states against 38 for the "ld (ix+d),l" / "ld (ix+d+1),h"
+         * frame store this replaces. As with the BC write candidate above,
+         * the frame slot is deliberately left stale - but unlike BC there is
+         * no spill to resync it later, and none is needed: this is a
+         * whole-function candidate whose address is never taken, so IY is the
+         * only thing that ever reads the value after entry. */
+        if (type_is_bool(s->type))
+            emit_bool_normalize_hl(s->type);
+        emit("\tpush hl\n\tpop iy\n");
+        return;
+    }
     if (is_global_word_sym(s)) {
         emit_store_global_word_direct(s);
         return;
@@ -1274,6 +1290,20 @@ void emit_incdec_sym_direct(struct Sym *s, int op)
          * inside a for-condition comma expression, a real wrong-answer
          * bug, not just a missed optimization. */
         emit(op == TOK_INC ? "\tinc bc\n" : "\tdec bc\n");
+        return;
+    }
+    if (s->reg_alloc == REG_IY && type_ptr_depth(s->type) == 0) {
+        /* 10 T-states, against roughly 82 for the frame-slot read-modify-
+         * write it replaces (two 19T loads, inc hl, two 19T stores). This is
+         * the single biggest per-reference saving IY offers, and the reason
+         * written parameters are worth promoting at all.
+         *
+         * Pointers deliberately fall through, exactly as they do for BC and
+         * for the same reason: ++/-- on a pointer must advance by the pointee
+         * size, not by one, and "inc iy" would silently advance by a byte.
+         * The generic path below scales correctly and is already REG_IY-aware
+         * through emit_load_sym_value_direct/emit_store_hl_to_sym_direct. */
+        emit(op == TOK_INC ? "\tinc iy\n" : "\tdec iy\n");
         return;
     }
 

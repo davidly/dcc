@@ -52,6 +52,8 @@ struct Node {
 
 int consume(int v);
 void bump(const int **pp);
+int counter(int k, const int *a);
+int walkptr(const int *p, int n);
 
 int consume(int v)
 {
@@ -102,8 +104,11 @@ int nested(const int *a, int n)
     return total;
 }
 
-/* Negative control: the parameter itself is written, so promotion must be
- * declined - the frame slot is the only correct home for it. */
+/* A written POINTER parameter walked with ++, mixed with reads. Expected to
+ * DECLINE: `*a` routes through gen_deref_addr_ast, whose plain-identifier
+ * path deliberately has no reg_alloc arm because promoting there defeats
+ * dccpeep's loop-invariant pointer hoisting. Here to pin that decision down -
+ * if it ever changes, the answer must still be right. */
 int written(const int *a, int n)
 {
     int total = 0;
@@ -113,6 +118,44 @@ int written(const int *a, int n)
         total += *a + abs(*a + 1) + abs(*a - 1);
         ++a;
         total += abs(*a - 1) + abs(*a + 2);
+    }
+    return total;
+}
+
+/* A WRITTEN word parameter is eligible for IY, unlike the read-only-only BC
+ * candidate: entry dominates every use, nothing else can disturb the
+ * register, and a parameter whose address is never taken has no reader other
+ * than IY - so the frame slot is simply dead and needs no spill.
+ *
+ * `--k` on a non-pointer word is "dec iy", 10 T-states against roughly 82 for
+ * the frame-slot read-modify-write, which is the largest per-reference saving
+ * IY offers. Cross-checked against clang like every other case here. */
+int counter(int k, const int *a)
+{
+    int total = 0;
+
+    while (k > 0) {
+        --k;
+        total += abs(a[k & 3]) + k;
+        total += abs(k + 1) + abs(k - 1) + k;
+    }
+    return total;
+}
+
+/* The same, but the written parameter is a POINTER. ++/-- must advance by the
+ * pointee size, so this deliberately does NOT become "inc iy". Like written()
+ * above it is expected to decline promotion outright, because dereferencing
+ * `*p` is what escapes; the value of the case is that the arithmetic must
+ * stay correct either way - a pointer advancing by one byte instead of one
+ * int would show up here immediately. */
+int walkptr(const int *p, int n)
+{
+    int total = 0;
+
+    while (n-- > 0) {
+        total += abs(*p) + abs(*p + 1);
+        total += abs(*p - 1) + abs(*p * 2);
+        ++p;
     }
     return total;
 }
@@ -150,5 +193,7 @@ int main(void)
     printf("nested  = %d\n", nested(data, 4));
     printf("written = %d\n", written(data, 6));
     printf("addrof  = %d\n", addrof(data, 6));
+    printf("counter = %d\n", counter(9, data));
+    printf("walkptr = %d\n", walkptr(data, 6));
     return 0;
 }

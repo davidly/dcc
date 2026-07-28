@@ -118,6 +118,7 @@ struct Sym *g_iy_regalloc_sym;
 int g_iy_regalloc_escaped;
 int g_iy_regalloc_last_ref_count;
 int current_function_had_call_at_scan;
+int current_function_has_vla;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */
 int break_stack[MAX_FLOW];

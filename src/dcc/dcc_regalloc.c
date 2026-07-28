@@ -349,6 +349,15 @@ int function_qualifies_for_speculative_iy_regalloc(const char *name)
         return 0;
     if (!current_function_had_call_at_scan)
         return 0;
+    /* A function containing a variable-length array manages SP itself,
+     * saving and restoring it through per-scope "#vlasp" slots rather than
+     * relying solely on the epilogue's "ld sp,ix". Adding a callee-save push
+     * ahead of the frame puts a second SP-relative assumption on top of that,
+     * and the two together are not worth the risk for what the corpus shows
+     * is a losing trade anyway: tvlax's nested_stable was the one such
+     * function promoted, and it cost 95,238 cycles. */
+    if (current_function_has_vla)
+        return 0;
     return 1;
 }
 
@@ -1443,12 +1452,15 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
  * all of those are rejected here.
  *
  * "push iy"/"pop iy" are accepted because they are what dcc's own callee-save
- * and priming emit. User inline assembly containing the same pair is accepted
- * too, and safely so: a BALANCED push/pop leaves IY exactly as it found it,
- * and an unbalanced one is already broken code independent of anything this
- * pass does. An earlier version required exact counts (one push, two pops) to
- * exclude user asm entirely, but that rejected every real candidate in the
- * corpus - trw, nqueens and all five of tchess's - for no safety gained.
+ * and priming emit, and "inc iy"/"dec iy" because they are what a written
+ * candidate's ++/-- emits (emit_incdec_sym_direct, dcc_symbols.c) - the one
+ * place dcc produces either. User inline assembly containing the same push/pop
+ * pair is accepted too, and safely so: a BALANCED push/pop leaves IY exactly
+ * as it found it, and an unbalanced one is already broken code independent of
+ * anything this pass does. An earlier version required exact counts (one push,
+ * two pops) to exclude user asm entirely, but that rejected every real
+ * candidate in the corpus - trw, nqueens and all five of tchess's - for no
+ * safety gained.
  *
  * Verification for IY is this short because IY is not contended by the code
  * generator at all, unlike BC, which needs regalloc_buffer_finalize's whole
@@ -1473,6 +1485,8 @@ static int buf_has_foreign_iy_use(const char *buf)
         if (*q != ';' && strstr(linebuf, "iy") != NULL &&
             strcmp(linebuf, "\tpush iy") != 0 &&
             strcmp(linebuf, "\tpop iy") != 0 &&
+            strcmp(linebuf, "\tinc iy") != 0 &&
+            strcmp(linebuf, "\tdec iy") != 0 &&
             strstr(linebuf, "(iy+") == NULL &&
             strstr(linebuf, "(iy-") == NULL) {
             /* Not one of ours, and not an indexed access that merely reads
