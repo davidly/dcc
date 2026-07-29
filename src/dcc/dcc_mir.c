@@ -435,6 +435,7 @@ static const struct MirInsn *mir_definition(int value);
 static struct MirInsn *mir_mutable_definition(int value);
 static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
+static int mir_word_load_is_single_call_argument(int value);
 static int mir_object_is_fully_promoted(int object);
 static int mir_value_is_wide(int value);
 static int mir_find_label(int label);
@@ -3861,6 +3862,19 @@ static int mir_value_has_use(int value)
     return 0;
 }
 
+static int mir_value_has_use_after(int value, int instruction)
+{
+    int i;
+
+    for (i = instruction + 1; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->src1 == value || insn->src2 == value ||
+            mir_call_uses_value(insn, value))
+            return 1;
+    }
+    return 0;
+}
+
 static int mir_value_use_count(int value)
 {
     int count = 0;
@@ -4833,7 +4847,22 @@ static void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
         fprintf(out, "\tjp c,L%d\n", true_label);
     else
         fprintf(out, "\tjp nc,L%d\n", true_label);
-    fprintf(out, "\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
+    fprintf(out, "\tjp L%d\nL%d:\n\tinc l\nL%d:\n",
+            end_label, true_label, end_label);
+}
+
+static void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
+{
+    int true_label = new_label();
+    int end_label = new_label();
+
+    fputs("\tld a,h\n\txor 128\n\tld h,a\n"
+          "\tsbc hl,de\n\tld hl,0\n", out);
+    if (operation == '<')
+        fprintf(out, "\tjp c,L%d\n", true_label);
+    else
+        fprintf(out, "\tjp nc,L%d\n", true_label);
+    fprintf(out, "\tjp L%d\nL%d:\n\tinc l\nL%d:\n",
             end_label, true_label, end_label);
 }
 
@@ -5301,6 +5330,7 @@ static int mir_emit_homed_binary_instruction(FILE *out,
                                              const struct MirInsn *insn,
                                              int allow_comparison)
 {
+    int instruction = (int)(insn - mir.insns);
     int left = insn->src1;
     int right = insn->src2;
     int commutative = insn->immediate == '+' || insn->immediate == '&' ||
@@ -5308,6 +5338,10 @@ static int mir_emit_homed_binary_instruction(FILE *out,
                       insn->immediate == TOK_EQ || insn->immediate == TOK_NE;
     int preserve_hl;
     int preserve_de;
+    const struct MirInsn *left_definition;
+    const struct MirInsn *right_definition;
+    int comparison_unsigned;
+    int biased_right_constant;
 
     if (mir.allocation_colors[right] == MIR_COLOR_HL) {
         int temporary;
@@ -5317,14 +5351,33 @@ static int mir_emit_homed_binary_instruction(FILE *out,
         left = right;
         right = temporary;
     }
-    preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL;
-    preserve_de = mir.allocation_colors[insn->dst] != MIR_COLOR_DE;
+        preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+                                    !(mir.allocation_colors[left] == MIR_COLOR_HL &&
+                                        !mir_value_has_use_after(left, instruction));
+        preserve_de = mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
+                                    !(mir.allocation_colors[right] == MIR_COLOR_DE &&
+                                        !mir_value_has_use_after(right, instruction));
+        left_definition = mir_definition(left);
+        right_definition = mir_definition(right);
+        comparison_unsigned = (left_definition != NULL &&
+                               (left_definition->type & TYPE_UNSIGNED) != 0) ||
+                              (right_definition != NULL &&
+                               (right_definition->type & TYPE_UNSIGNED) != 0);
+        biased_right_constant = allow_comparison && !comparison_unsigned &&
+                                (insn->immediate == '<' ||
+                                 insn->immediate == TOK_GE) &&
+                                right_definition != NULL &&
+                                right_definition->opcode == MIR_CONST;
     if (preserve_hl)
         fputs("\tpush hl\n", out);
     if (preserve_de)
         fputs("\tpush de\n", out);
-    if (!mir_emit_home_to_hl(out, left) ||
-        !mir_emit_home_to_de(out, right))
+    if (!mir_emit_home_to_hl(out, left))
+        return 0;
+    if (biased_right_constant)
+        fprintf(out, "\tld de,%ld\n",
+                (right_definition->immediate ^ 0x8000L) & 0xffffL);
+    else if (!mir_emit_home_to_de(out, right))
         return 0;
     if (insn->immediate == '+')
         fputs("\tadd hl,de\n", out);
@@ -5340,13 +5393,12 @@ static int mir_emit_homed_binary_instruction(FILE *out,
              (insn->immediate == TOK_EQ || insn->immediate == TOK_NE ||
               insn->immediate == '<' || insn->immediate == '>' ||
               insn->immediate == TOK_LE || insn->immediate == TOK_GE)) {
-        const struct MirInsn *left = mir_definition(insn->src1);
-        const struct MirInsn *right = mir_definition(insn->src2);
-        int is_unsigned = (left != NULL &&
-                           (left->type & TYPE_UNSIGNED) != 0) ||
-                          (right != NULL &&
-                           (right->type & TYPE_UNSIGNED) != 0);
-        mir_emit_scalar_compare(out, (int)insn->immediate, is_unsigned);
+        if (biased_right_constant)
+            mir_emit_scalar_compare_biased_right(
+                out, (int)insn->immediate);
+        else
+            mir_emit_scalar_compare(out, (int)insn->immediate,
+                                    comparison_unsigned);
     } else {
         return 0;
     }
@@ -6006,6 +6058,18 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
     const struct MirInsn *definition = mir_definition(value);
     unsigned long bits;
 
+    if (size == 2 && mir_word_load_is_single_call_argument(value)) {
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+        if (!mir_scalar_memory_location(definition, &memory_type,
+                                        &memory_storage, &memory_offset))
+            return 0;
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                memory_offset, memory_offset + 1);
+        return 1;
+    }
+
     if (!mir_call_only_constant(value))
         return 0;
     if (definition->opcode == MIR_STRING_ADDRESS) {
@@ -6132,6 +6196,43 @@ static int mir_definition_is_wide(const struct MirInsn *definition)
     return type_size(definition->type) > 2;
 }
 
+static int mir_word_load_is_single_call_argument(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int argument_count = 0;
+    int call_id = -1;
+    int call_argument_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_LOAD ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        type_size(memory_type) != 2 ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src2 == value)
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        if (insn->opcode != MIR_ARG || ++argument_count > 1)
+            return 0;
+        call_id = insn->secondary_offset;
+    }
+    if (argument_count != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ARG &&
+            mir.insns[instruction].secondary_offset == call_id)
+            ++call_argument_count;
+    return call_argument_count <= 3;
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
@@ -6230,6 +6331,9 @@ static int mir_prepare_backend_slots(void)
                 int slot;
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
+                if (last[value] <= first[value] ||
+                    mir_word_load_is_single_call_argument(value))
+                    continue;
                 for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
                     int unit;
                     int available = 1;
@@ -6286,6 +6390,9 @@ static void mir_emit_virtual_load(FILE *out, int value)
 
 static void mir_emit_virtual_store(FILE *out, int value)
 {
+    if (value < 0 || value >= mir.next_value || mir.backend_slots == NULL ||
+        mir.backend_slots[value] < 0)
+        return;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
     int forward_to_store = mir_can_forward_hl_to_next(value) &&
@@ -6384,6 +6491,9 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
 
 static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
+    if (value < 0 || value >= mir.next_value || mir.backend_slots == NULL ||
+        mir.backend_slots[value] < 0)
+        return;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
     int call_instruction = mir_call_argument_cache_target(value);
@@ -6912,7 +7022,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         labels[i] = new_label();
 
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-    fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n", frame_bytes);
+    if (frame_bytes != 0)
+        fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n", frame_bytes);
     mir_virtual_iy_base = 0;
     mir_virtual_iy_frame_bytes = frame_bytes;
     mir_forwarded_hl_value = -1;
@@ -6947,6 +7058,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            if (mir_word_load_is_single_call_argument(insn->dst))
+                break;
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset))
                 goto done;
@@ -8849,6 +8962,12 @@ void mir_end_function(void)
         FILE *destination = mir.saved_sink.stream;
         FILE *generated = NULL;
         int emitted = 0;
+        const char *selector_name = "none";
+        const char *fallback_reason = verified ? "selector" : "verify";
+        long generated_size = -1;
+        long captured_size = -1;
+        int generated_instructions = -1;
+        int captured_instructions = -1;
 
         emit_sink_restore(&mir.saved_sink);
         if (verified) {
@@ -8858,45 +8977,75 @@ void mir_end_function(void)
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
             if (emit_filter != NULL && emit_filter[0] != 0 &&
-                strcmp(emit_filter, mir.name) == 0)
+                strcmp(emit_filter, mir.name) == 0) {
+                selector_name = "specialized";
                 emitted = mir_try_emit_z80(generated);
-                else if (general_filter != NULL && general_filter[0] != 0 &&
-                    (strcmp(general_filter, "*") == 0 ||
-                     strcmp(general_filter, mir.name) == 0)) {
+            } else if (general_filter != NULL && general_filter[0] != 0 &&
+                       (strcmp(general_filter, "*") == 0 ||
+                        strcmp(general_filter, mir.name) == 0)) {
+                selector_name = "homed-scalar-cfg";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_homed_scalar_cfg);
-                if (!emitted)
+                if (!emitted) {
+                    selector_name = "spilled-scalar-cfg";
                     emitted = mir_try_selector(generated,
                                                mir_try_emit_spilled_scalar_cfg);
-            }
-            else if (getenv("DCC_MIR_EMIT_GENERAL") != NULL)
+                }
+            } else if (getenv("DCC_MIR_EMIT_GENERAL") != NULL) {
+                selector_name = "general-rollout";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_general_rollout);
-            else if (getenv("DCC_MIR_EMIT_HOME_CFG") != NULL)
+            } else if (getenv("DCC_MIR_EMIT_HOME_CFG") != NULL) {
+                selector_name = "home-cfg-rollout";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_home_cfg_rollout);
-            else
+            } else {
+                selector_name = "homed-scalar-cfg";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_homed_scalar_cfg);
+            }
             if (!emitted && (general_filter == NULL ||
-                             general_filter[0] == 0))
+                             general_filter[0] == 0)) {
+                selector_name = "spilled-scalar-cfg";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_spilled_scalar_cfg);
+            }
             if (emitted) {
-                long generated_size = mir_stream_size(generated);
-                long captured_size = mir_stream_size(mir.capture_stream);
-                int generated_instructions =
-                    mir_stream_instruction_count(generated);
-                int captured_instructions =
+                generated_size = mir_stream_size(generated);
+                captured_size = mir_stream_size(mir.capture_stream);
+                generated_instructions = mir_stream_instruction_count(generated);
+                captured_instructions =
                     mir_stream_instruction_count(mir.capture_stream);
-                if (generated_size < 0 || captured_size < 0 ||
-                    generated_instructions < 0 || captured_instructions < 0 ||
-                    generated_size > captured_size ||
-                    generated_instructions > captured_instructions ||
-                    mir_cfg_block_count() > 64 ||
-                    mir_has_inline_substitution_call() ||
-                    mir_has_declared_pointer_array() ||
-                    mir_has_cfg_backedge())
+                fallback_reason = NULL;
+                {
+                    const char *forced_function =
+                        getenv("DCC_MIR_FORCE_FALLBACK_FUNCTION");
+                    if (getenv("DCC_MIR_FORCE_FALLBACK") != NULL ||
+                        (forced_function != NULL &&
+                         !strcmp(forced_function, mir.name)))
+                        fallback_reason = "forced";
+                }
+                if (fallback_reason != NULL) {
+                    /* Keep the selected reason. */
+                }
+                else if (generated_size < 0 || captured_size < 0 ||
+                    generated_instructions < 0 || captured_instructions < 0)
+                    fallback_reason = "measurement";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         generated_size > captured_size)
+                    fallback_reason = "text-size";
+                else if (generated_instructions > captured_instructions +
+                         (!strcmp(selector_name, "homed-scalar-cfg") ? 1 : 0))
+                    fallback_reason = "instruction-count";
+                else if (mir_cfg_block_count() > 64)
+                    fallback_reason = "cfg-block-count";
+                else if (mir_has_inline_substitution_call())
+                    fallback_reason = "inline-substitution";
+                else if (mir_has_declared_pointer_array())
+                    fallback_reason = "pointer-array";
+                else if (mir_has_cfg_backedge())
+                    fallback_reason = "cfg-backedge";
+                if (fallback_reason != NULL)
                     emitted = 0;
             }
         }
@@ -8916,6 +9065,15 @@ void mir_end_function(void)
         if (mir.report_mode)
             fprintf(stderr, "; MIR emit function=%s result=%s\n",
                 mir.name, emitted ? "mir" : "fallback");
+        if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR selection function=%s selector=%s result=%s "
+                    "reason=%s generated-bytes=%ld captured-bytes=%ld "
+                    "generated-insns=%d captured-insns=%d blocks=%d\n",
+                    mir.name, selector_name, emitted ? "mir" : "fallback",
+                    fallback_reason != NULL ? fallback_reason : "accepted",
+                    generated_size, captured_size, generated_instructions,
+                    captured_instructions, mir_cfg_block_count());
         fclose(mir.capture_stream);
         mir.capture_stream = NULL;
         mir.emit_mode = 0;
