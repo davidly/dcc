@@ -435,7 +435,7 @@ static const struct MirInsn *mir_definition(int value);
 static struct MirInsn *mir_mutable_definition(int value);
 static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
-static int mir_word_load_is_single_call_argument(int value);
+static int mir_load_is_single_call_argument(int value, int size);
 static int mir_object_is_fully_promoted(int object);
 static int mir_value_is_wide(int value);
 static int mir_find_label(int label);
@@ -5843,6 +5843,8 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             fprintf(out, "L%d:\n", labels[insn->label]);
             break;
         case MIR_PARAM:
+            if (!mir_value_has_use(insn->dst))
+                break;
             object = &mir.objects[insn->object];
             if (!(frameless
                   ? mir_emit_stack_word_param_to_home(
@@ -5968,20 +5970,46 @@ static int mir_virtual_iy_offset(int value)
            mir.aggregate_temp_bytes;
 }
 
+static int mir_function_has_any_call(void)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_CALL ||
+            mir.insns[i].opcode == MIR_CALL_AGGREGATE)
+            return 1;
+    return 0;
+}
+
 static int mir_can_forward_hl_to_next(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
     const struct MirInsn *next;
+    int next_instruction;
     int instruction;
 
-    if (!mir_virtual_iy_base || mir_emit_instruction_index < 0 ||
+    if (mir_emit_instruction_index < 0 ||
         mir_emit_instruction_index + 1 >= mir.count)
         return 0;
     if (definition != NULL &&
         (definition->opcode == MIR_CALL ||
          definition->opcode == MIR_CALL_AGGREGATE))
         return 0;
-    next = &mir.insns[mir_emit_instruction_index + 1];
+    next_instruction = mir_emit_instruction_index + 1;
+    while (next_instruction < mir.count &&
+           mir.insns[next_instruction].opcode == MIR_NOP)
+        ++next_instruction;
+    if (next_instruction >= mir.count)
+        return 0;
+    next = &mir.insns[next_instruction];
+    if (next_instruction != mir_emit_instruction_index + 1) {
+        if (next->opcode != MIR_RETURN)
+            return 0;
+    } else if (!mir_virtual_iy_base && next->opcode != MIR_RETURN)
+        return 0;
+    if (next->opcode == MIR_RETURN &&
+        (mir.has_vla || mir_function_has_any_call()))
+        return 0;
     if (next->opcode == MIR_INDEX_ADDRESS) {
         if (next->src2 != value)
             return 0;
@@ -5998,6 +6026,8 @@ static int mir_can_forward_hl_to_next(int value)
     case MIR_STORE_INDIRECT:
         if (next->bit_width > 0 || next->memory_size > 2)
             return 0;
+        break;
+    case MIR_RETURN:
         break;
     case MIR_STORE:
         {
@@ -6017,7 +6047,7 @@ static int mir_can_forward_hl_to_next(int value)
     default:
         return 0;
     }
-    for (instruction = mir_emit_instruction_index + 2;
+    for (instruction = next_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->src1 == value || insn->src2 == value)
@@ -6092,7 +6122,8 @@ static int mir_binary_only_constant(int value)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
-        if (insn->opcode == MIR_BINARY && insn->src2 == value &&
+        if (insn->opcode == MIR_BINARY &&
+            (insn->src1 == value || insn->src2 == value) &&
             type_size(insn->secondary_offset) <= 2) {
             if (mir.has_vla &&
                 (insn->immediate == TOK_EQ || insn->immediate == TOK_NE ||
@@ -6115,7 +6146,69 @@ static int mir_binary_only_constant(int value)
     return 1;
 }
 
-static int mir_power_of_two_multiply_constant(int value)
+/* Caps how many Z80 instructions the shift/add decomposition below may
+ * unroll to before falling back to __mulu. Mirrors MUL_CONST_MAX_OPS in
+ * dcc_ops.c's emit_mul_hl_const, which this routine is a port of, so the
+ * MIR backend reaches the same code-size/quality tradeoff as the legacy
+ * AST backend for constant multiplication. */
+#define MIR_MUL_CONST_MAX_OPS 10
+
+/* Number of instructions mir_emit_mul_hl_const_general would emit for uv (a
+ * 16-bit unsigned pattern, uv != 0 and not already a single power of two):
+ * one "add hl,hl" per bit position below the highest set bit (the
+ * doublings), plus one "add hl,de" per OTHER set bit (the highest bit
+ * itself is free - it's the starting value). */
+static int mir_mul_const_op_count(unsigned long uv)
+{
+    int bit;
+    int highest = -1;
+    int adds = 0;
+
+    for (bit = 15; bit >= 0; --bit) {
+        if (uv & (1uL << (unsigned)bit)) {
+            if (highest < 0)
+                highest = bit;
+            else
+                ++adds;
+        }
+    }
+    if (highest <= 0)
+        return 0;
+    return highest + adds;
+}
+
+/* True if value 'v' is the size operand feeding a VLA allocation.
+ * A general (non-power-of-two) strength-reduced multiply that both
+ * sizes a VLA allocation *and* shares the function with a later integer
+ * division/modulo drives a runtime stack-pointer adjustment whose
+ * surrounding VLA frame slot traffic is undercounted by the static
+ * byte/instruction cost gate: it is cheap in bytes yet not free in
+ * cycles, and only the peephole optimizer (dccpeep) currently cleans it
+ * up. Restrict that specific combination to the existing __mulu path;
+ * VLA-alloc-sizing multiplies without a subsequent division (e.g. a
+ * pure sizeof expression) are unaffected and still benefit below. */
+static int mir_value_feeds_vla_alloc(int v)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_VLA_ALLOC && mir.insns[i].src1 == v)
+            return 1;
+    return 0;
+}
+
+static int mir_has_integer_division(void)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_BINARY &&
+            (mir.insns[i].immediate == '/' || mir.insns[i].immediate == '%'))
+            return 1;
+    return 0;
+}
+
+static int mir_multiply_by_small_constant(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
     int uses = 0;
@@ -6139,23 +6232,59 @@ static int mir_power_of_two_multiply_constant(int value)
         unsigned long multiplier =
             (unsigned long)definition->immediate & 0xffffUL;
         return multiplier == 0 ||
-               (multiplier & (multiplier - 1)) == 0;
+               (multiplier & (multiplier - 1)) == 0 ||
+               mir_mul_const_op_count(multiplier) <= MIR_MUL_CONST_MAX_OPS;
     }
 }
 
-static int mir_has_power_of_two_vla_alloc(void)
+/* HL = HL * uv via a fully unrolled left-to-right binary-method shift/add
+ * sequence - no runtime loop, unlike __mulu. Port of emit_mul_hl_const_general
+ * in dcc_ops.c (the legacy AST backend); keeping the MIR backend's constant
+ * multiplication at the same quality avoids MIR losing the cost-gate race
+ * against captured legacy output for any function that multiplies by a
+ * compile-time constant (array/struct element sizes, VLA row strides, etc).
+ * Caller guarantees uv is nonzero, fits 16 bits, and is not a single power
+ * of two (those are handled separately by the caller with plain shifts). */
+static void mir_emit_mul_hl_const_general(FILE *out, unsigned long uv)
 {
-    int instruction;
+    int bit;
+    int highest = -1;
 
-    for (instruction = 0; instruction + 1 < mir.count; ++instruction) {
-        const struct MirInsn *binary = &mir.insns[instruction];
-        if (binary->opcode == MIR_BINARY && binary->immediate == '*' &&
-            mir.insns[instruction + 1].opcode == MIR_VLA_ALLOC &&
-            mir.insns[instruction + 1].src1 == binary->dst &&
-            mir_power_of_two_multiply_constant(binary->src2))
-            return 1;
+    for (bit = 15; bit >= 0; --bit) {
+        if (uv & (1uL << (unsigned)bit)) {
+            highest = bit;
+            break;
+        }
     }
-    return 0;
+    fputs("\tld d,h\n\tld e,l\n", out);
+    for (bit = highest - 1; bit >= 0; --bit) {
+        fputs("\tadd hl,hl\n", out);
+        if (uv & (1uL << (unsigned)bit))
+            fputs("\tadd hl,de\n", out);
+    }
+}
+
+/* HL = HL * v for any compile-time constant multiplier, matching the
+ * legacy AST backend's emit_mul_hl_const: exact power-of-two constants
+ * become plain shifts, other constants that stay within the instruction
+ * budget use the general shift/add decomposition above, and anything else
+ * still falls back to a runtime __mulu call. */
+static void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
+{
+    if (multiplier == 0) {
+        fputs("\tld hl,0\n", out);
+    } else if ((multiplier & (multiplier - 1)) == 0) {
+        unsigned long remaining = multiplier;
+        while (remaining > 1) {
+            fputs("\tadd hl,hl\n", out);
+            remaining >>= 1;
+        }
+    } else if (mir_mul_const_op_count(multiplier) <= MIR_MUL_CONST_MAX_OPS) {
+        mir_emit_mul_hl_const_general(out, multiplier);
+    } else {
+        fprintf(out, "\tld de,%lu\n\textrn __mulu\n\tcall __mulu\n",
+                multiplier);
+    }
 }
 
 static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
@@ -6163,7 +6292,8 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
     const struct MirInsn *definition = mir_definition(value);
     unsigned long bits;
 
-    if (size == 2 && mir_word_load_is_single_call_argument(value)) {
+    if ((size == 2 || size == 4) &&
+        mir_load_is_single_call_argument(value, size)) {
         int memory_type;
         int memory_storage;
         int memory_offset;
@@ -6172,6 +6302,9 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
             return 0;
         fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                 memory_offset, memory_offset + 1);
+        if (size == 4)
+            fprintf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                    memory_offset + 2, memory_offset + 3);
         return 1;
     }
 
@@ -6301,7 +6434,7 @@ static int mir_definition_is_wide(const struct MirInsn *definition)
     return type_size(definition->type) > 2;
 }
 
-static int mir_word_load_is_single_call_argument(int value)
+static int mir_load_is_single_call_argument(int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
     int argument_count = 0;
@@ -6315,9 +6448,9 @@ static int mir_word_load_is_single_call_argument(int value)
     if (definition == NULL || definition->opcode != MIR_LOAD ||
         !mir_scalar_memory_location(definition, &memory_type,
                                     &memory_storage, &memory_offset) ||
-        type_size(memory_type) != 2 ||
+        type_size(memory_type) != size ||
         (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
-        memory_offset < -128 || memory_offset + 1 > 127)
+        memory_offset < -128 || memory_offset + size - 1 > 127)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -6325,7 +6458,8 @@ static int mir_word_load_is_single_call_argument(int value)
             return 0;
         if (insn->src1 != value)
             continue;
-        if (insn->opcode != MIR_ARG || ++argument_count > 1)
+        if (insn->opcode != MIR_ARG || type_size(insn->type) != size ||
+            ++argument_count > 1)
             return 0;
         call_id = insn->secondary_offset;
     }
@@ -6436,11 +6570,44 @@ static int mir_prepare_backend_slots(void)
                 int slot;
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
+                int reusable_source = -1;
                 if (last[value] <= first[value] ||
-                    mir_call_only_constant(value) ||
-                    mir_power_of_two_multiply_constant(value) ||
-                    mir_word_load_is_single_call_argument(value))
+                                        mir_call_only_constant(value) ||
+                                        mir_multiply_by_small_constant(value) ||
+                                        ((type_size(definition->type) == 2 ||
+                                            type_size(definition->type) == 4) &&
+                                         mir_load_is_single_call_argument(value,
+                                                                                                            type_size(definition->type))))
                     continue;
+                if (definition != NULL && definition->opcode == MIR_BINARY &&
+                    ((units == 1 && type_size(definition->secondary_offset) == 2) ||
+                     (units == 2 && type_size(definition->secondary_offset) == 4))) {
+                    if (definition->src1 >= 0 && last[definition->src1] == i &&
+                        mir.backend_slots[definition->src1] >= 0 &&
+                        (mir_definition_is_wide(mir_definition(
+                             definition->src1)) ? 2 : 1) == units)
+                        reusable_source = definition->src1;
+                    else if (definition->src2 >= 0 && last[definition->src2] == i &&
+                             mir.backend_slots[definition->src2] >= 0 &&
+                             (mir_definition_is_wide(mir_definition(
+                                  definition->src2)) ? 2 : 1) == units)
+                        reusable_source = definition->src2;
+                } else if (definition != NULL && definition->opcode == MIR_UNARY &&
+                    definition->src1 >= 0 &&
+                    (mir_definition_is_wide(mir_definition(
+                         definition->src1)) ? 2 : 1) == units &&
+                    last[definition->src1] == i &&
+                    mir.backend_slots[definition->src1] >= 0) {
+                    reusable_source = definition->src1;
+                }
+                if (reusable_source >= 0) {
+                    int unit;
+                    slot = mir.backend_slots[reusable_source];
+                    mir.backend_slots[value] = slot;
+                    for (unit = 0; unit < units; ++unit)
+                        slot_end[slot + unit] = last[value];
+                    continue;
+                }
                 for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
                     int unit;
                     int available = 1;
@@ -6499,15 +6666,20 @@ static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
+    int forward_instruction = mir_emit_instruction_index + 1;
     if (!has_slot)
         return;
+    while (forward_instruction < mir.count &&
+           mir.insns[forward_instruction].opcode == MIR_NOP)
+        ++forward_instruction;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
     int forward_to_store = mir_can_forward_hl_to_next(value) &&
-        mir.insns[mir_emit_instruction_index + 1].opcode == MIR_STORE;
+        forward_instruction < mir.count &&
+        mir.insns[forward_instruction].opcode == MIR_STORE;
     if (!forward_to_store && mir_can_forward_hl_to_next(value)) {
         mir_forwarded_hl_value = value;
-        mir_forwarded_hl_instruction = mir_emit_instruction_index;
+        mir_forwarded_hl_instruction = forward_instruction - 1;
         return;
     }
     if (mir_can_forward_stack_to_index(value)) {
@@ -6532,7 +6704,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
                 iy_offset, iy_offset + 1);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
-            mir_forwarded_hl_instruction = mir_emit_instruction_index;
+            mir_forwarded_hl_instruction = forward_instruction - 1;
         }
         return;
     }
@@ -6547,7 +6719,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
     }
     if (forward_to_store) {
         mir_forwarded_hl_value = value;
-        mir_forwarded_hl_instruction = mir_emit_instruction_index;
+        mir_forwarded_hl_instruction = forward_instruction - 1;
     }
 }
 
@@ -7076,7 +7248,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
-    if (i == mir.count)
+    if (i == mir.count && (mir.return_type & 15) != TYPE_VOID)
         return mir_scalar_cfg_preflight_reject("implicit-return", -1);
 
     if ((!type_is_struct_object(mir.return_type) &&
@@ -7202,7 +7374,9 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir.backend_slots[insn->dst] < 0 &&
                 !mir_value_has_use(insn->dst))
                 break;
-            if (mir_word_load_is_single_call_argument(insn->dst))
+            if ((type_size(insn->type) == 2 || type_size(insn->type) == 4) &&
+                mir_load_is_single_call_argument(insn->dst,
+                                                  type_size(insn->type)))
                 break;
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset))
@@ -7318,9 +7492,10 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
             }
         case MIR_CONST:
-            if (mir_call_only_constant(insn->dst) ||
+            if (!mir_value_has_use(insn->dst) ||
+                mir_call_only_constant(insn->dst) ||
                 mir_binary_only_constant(insn->dst) ||
-                mir_power_of_two_multiply_constant(insn->dst))
+                mir_multiply_by_small_constant(insn->dst))
                 break;
             fprintf(out, "\tld hl,%ld\n", insn->immediate & 0xffffL);
             if (type_size(insn->type) == 4) {
@@ -7742,7 +7917,13 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 unsigned long multiplier = right_definition != NULL
                     ? (unsigned long)right_definition->immediate & 0xffffUL
                     : 0;
-                mir_emit_virtual_load(out, insn->src1);
+                if (mir_binary_only_constant(insn->src1)) {
+                    const struct MirInsn *constant =
+                        mir_definition(insn->src1);
+                    fprintf(out, "\tld hl,%ld\n",
+                            constant->immediate & 0xffffL);
+                } else
+                    mir_emit_virtual_load(out, insn->src1);
                 if (divmod_partner >= 0) {
                     const struct MirInsn *other = &mir.insns[divmod_partner];
                     int modulo_value = insn->immediate == '%' ? insn->dst
@@ -7770,14 +7951,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (insn->immediate == '*' && right_definition != NULL &&
                     right_definition->opcode == MIR_CONST &&
                     (multiplier == 0 ||
-                     (multiplier & (multiplier - 1)) == 0)) {
-                    if (multiplier == 0)
-                        fputs("\tld hl,0\n", out);
-                    else
-                        while (multiplier > 1) {
-                            fputs("\tadd hl,hl\n", out);
-                            multiplier >>= 1;
-                        }
+                     (multiplier & (multiplier - 1)) == 0 ||
+                     (mir_mul_const_op_count(multiplier) <=
+                          MIR_MUL_CONST_MAX_OPS &&
+                      !(mir_value_feeds_vla_alloc(insn->dst) &&
+                        mir_has_integer_division())))) {
+                    mir_emit_mul_hl_const(out, multiplier);
                     mir_emit_virtual_store(out, insn->dst);
                     break;
                 }
@@ -8987,8 +9166,18 @@ static int mir_is_profiled_near_cost_single_block(long generated_size,
                                                    int captured_instructions)
 {
     return !mir.has_vla && mir_cfg_block_count() == 1 &&
-           generated_size <= captured_size + 20 &&
+           generated_size <= captured_size + 24 &&
            generated_instructions <= captured_instructions + 2;
+}
+
+static int mir_is_byte_profitable_single_block(long generated_size,
+                                                long captured_size,
+                                                int generated_instructions,
+                                                int captured_instructions)
+{
+    return !mir.has_vla && mir_cfg_block_count() == 1 &&
+           generated_size <= captured_size - 20 &&
+           generated_instructions <= captured_instructions + 3;
 }
 
 static int mir_is_profiled_constant_bound_loop_pair(
@@ -9299,6 +9488,10 @@ void mir_end_function(void)
                                                  !mir_is_profiled_near_cost_single_block(
                                                      generated_size, captured_size,
                                                      generated_instructions,
+                                                     captured_instructions) &&
+                                                 !mir_is_byte_profitable_single_block(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
                                                      captured_instructions))
                     fallback_reason = "text-size";
                 else if (generated_instructions > captured_instructions +
@@ -9307,6 +9500,9 @@ void mir_end_function(void)
                         : (!strcmp(selector_name, "spilled-scalar-cfg") &&
                            generated_size <= captured_size ? 1 : 0)) &&
                          !mir_is_profiled_near_cost_single_block(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_byte_profitable_single_block(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_constant_bound_loop_pair(
@@ -9330,8 +9526,6 @@ void mir_end_function(void)
                              generated_size, captured_size,
                              generated_instructions, captured_instructions))
                     fallback_reason = "cfg-backedge";
-                else if (mir_has_power_of_two_vla_alloc())
-                    fallback_reason = "vla-power-of-two";
                 {
                     const char *forced_accept =
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
