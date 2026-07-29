@@ -6105,6 +6105,49 @@ static int mir_binary_only_constant(int value)
     return 1;
 }
 
+static int mir_power_of_two_multiply_constant(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int uses = 0;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_CONST)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value)
+            return 0;
+        if (insn->src2 != value)
+            continue;
+        if (insn->opcode != MIR_BINARY || insn->immediate != '*')
+            return 0;
+        ++uses;
+    }
+    if (uses != 1)
+        return 0;
+    {
+        unsigned long multiplier =
+            (unsigned long)definition->immediate & 0xffffUL;
+        return multiplier == 0 ||
+               (multiplier & (multiplier - 1)) == 0;
+    }
+}
+
+static int mir_has_power_of_two_vla_alloc(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction + 1 < mir.count; ++instruction) {
+        const struct MirInsn *binary = &mir.insns[instruction];
+        if (binary->opcode == MIR_BINARY && binary->immediate == '*' &&
+            mir.insns[instruction + 1].opcode == MIR_VLA_ALLOC &&
+            mir.insns[instruction + 1].src1 == binary->dst &&
+            mir_power_of_two_multiply_constant(binary->src2))
+            return 1;
+    }
+    return 0;
+}
+
 static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -6385,6 +6428,7 @@ static int mir_prepare_backend_slots(void)
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 if (last[value] <= first[value] ||
                     mir_call_only_constant(value) ||
+                    mir_power_of_two_multiply_constant(value) ||
                     mir_word_load_is_single_call_argument(value))
                     continue;
                 for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
@@ -6443,8 +6487,9 @@ static void mir_emit_virtual_load(FILE *out, int value)
 
 static void mir_emit_virtual_store(FILE *out, int value)
 {
-    if (value < 0 || value >= mir.next_value || mir.backend_slots == NULL ||
-        mir.backend_slots[value] < 0)
+    int has_slot = value >= 0 && value < mir.next_value &&
+                   mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
+    if (!has_slot)
         return;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
@@ -6544,8 +6589,9 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
 
 static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
-    if (value < 0 || value >= mir.next_value || mir.backend_slots == NULL ||
-        mir.backend_slots[value] < 0)
+    int has_slot = value >= 0 && value < mir.next_value &&
+                   mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
+    if (!has_slot)
         return;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
@@ -7228,7 +7274,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
         case MIR_CONST:
             if (mir_call_only_constant(insn->dst) ||
-                mir_binary_only_constant(insn->dst))
+                mir_binary_only_constant(insn->dst) ||
+                mir_power_of_two_multiply_constant(insn->dst))
                 break;
             fprintf(out, "\tld hl,%ld\n", insn->immediate & 0xffffL);
             if (type_size(insn->type) == 4) {
@@ -7644,7 +7691,26 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 else
                     mir_emit_virtual_store(out, insn->dst);
             } else {
+                const struct MirInsn *right_definition =
+                    mir_definition(insn->src2);
+                unsigned long multiplier = right_definition != NULL
+                    ? (unsigned long)right_definition->immediate & 0xffffUL
+                    : 0;
                 mir_emit_virtual_load(out, insn->src1);
+                if (insn->immediate == '*' && right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST &&
+                    (multiplier == 0 ||
+                     (multiplier & (multiplier - 1)) == 0)) {
+                    if (multiplier == 0)
+                        fputs("\tld hl,0\n", out);
+                    else
+                        while (multiplier > 1) {
+                            fputs("\tadd hl,hl\n", out);
+                            multiplier >>= 1;
+                        }
+                    mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
                 fputs("\tpush hl\n", out);
                 if (mir_binary_only_constant(insn->src2)) {
                     const struct MirInsn *constant =
@@ -9085,7 +9151,12 @@ void mir_end_function(void)
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
-                         generated_size > captured_size + 1)
+                                                 generated_size > captured_size + 1 &&
+                                                 !(mir.local_bytes == 0 &&
+                                                     mir.aggregate_temp_bytes == 0 &&
+                                                     mir.backend_slot_count == 0 && !mir.has_vla &&
+                                                     mir_cfg_block_count() == 1 &&
+                                                     generated_instructions <= captured_instructions))
                     fallback_reason = "text-size";
                 else if (generated_instructions > captured_instructions +
                         (!strcmp(selector_name, "homed-scalar-cfg")
@@ -9100,6 +9171,15 @@ void mir_end_function(void)
                     fallback_reason = "pointer-array";
                 else if (mir_has_cfg_backedge())
                     fallback_reason = "cfg-backedge";
+                else if (mir_has_power_of_two_vla_alloc())
+                    fallback_reason = "vla-power-of-two";
+                {
+                    const char *forced_accept =
+                        getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
+                    if (forced_accept != NULL &&
+                        !strcmp(forced_accept, mir.name))
+                        fallback_reason = NULL;
+                }
                 if (fallback_reason != NULL)
                     emitted = 0;
             }

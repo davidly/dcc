@@ -184,8 +184,11 @@ def compare_rows(
     newly_mir: list[tuple[str, str]] = []
     regressed: list[tuple[str, str]] = []
     changed_apps: set[str] = set()
+    compared_apps = {app for app, _ in new}
 
-    for key in sorted(old.keys() | new.keys()):
+    for key in sorted(
+        key for key in old.keys() | new.keys() if key[0] in compared_apps
+    ):
         before = old.get(key)
         after = new.get(key)
         if before == after:
