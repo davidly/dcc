@@ -192,6 +192,31 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   -Extended` passed corpus-wide (319 apps, 0 failures). New baseline:
   promoted directly to `build/mir-plan-50-baseline.tsv`.
 
+- Items 6/7/8 completed together (binary/unary/divmod results forwarded
+  directly to a following store share one mechanism, since divmod is
+  emitted as `MIR_BINARY`). Investigation found the `MIR_STORE` case in
+  `mir_can_forward_hl_to_next`'s switch was unreachable dead code: the
+  function's leading gate collapsed to "only `MIR_RETURN` is ever a valid
+  forwarding target" because it required `mir_virtual_iy_base` for any
+  other next-opcode, and `mir_virtual_iy_base` is initialized to 0 and
+  never set true anywhere in the file (reserved scaffolding for an
+  IY-relative virtual frame base that was never implemented). Fixed by
+  (1) broadening the `MIR_STORE` case's producer check from
+  `MIR_LOAD_INDIRECT`-only to also accept `MIR_BINARY`/`MIR_UNARY`
+  producers, and (2) adding an explicit `next->opcode != MIR_STORE`
+  exception to the leading gate so the adjacent (no intervening `MIR_NOP`)
+  store case is reachable without requiring the dead `mir_virtual_iy_base`
+  flag. Left the `mir_virtual_iy_base`-gated `MEMBER_ADDRESS`/
+  `INDEX_ADDRESS`/`STORE_INDIRECT`-as-next cases untouched (out of scope
+  for this batch; each needs its own targeted investigation). Census
+  against the Item-5 baseline showed 0 newly-admitted functions but 204
+  apps with smaller fallback-candidate sizes, 0 of which required runtime
+  validation (no currently-accepted function's generated size changed).
+  `runall.ps1 -Mode full -Extended` passed corpus-wide (319 apps, 0
+  failures) as an extra safety check given the breadth of previously-dead
+  code now reachable. New baseline: promoted directly to
+  `build/mir-plan-50-baseline.tsv`.
+
 - Item 37 completed: general 16-bit multiply-by-constant strength reduction,
   ported from the legacy `dcc_ops.c` reference algorithm
   (`emit_mul_hl_const`/`mul_const_op_count`/`emit_mul_hl_const_general`,

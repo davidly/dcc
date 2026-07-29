@@ -6005,7 +6005,8 @@ static int mir_can_forward_hl_to_next(int value)
     if (next_instruction != mir_emit_instruction_index + 1) {
         if (next->opcode != MIR_RETURN)
             return 0;
-    } else if (!mir_virtual_iy_base && next->opcode != MIR_RETURN)
+    } else if (!mir_virtual_iy_base && next->opcode != MIR_RETURN &&
+               next->opcode != MIR_STORE)
         return 0;
     if (next->opcode == MIR_RETURN &&
         (mir.has_vla || mir_function_has_any_call()))
@@ -6034,9 +6035,11 @@ static int mir_can_forward_hl_to_next(int value)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            int producer_opcode = mir.insns[mir_emit_instruction_index].opcode;
             if (mir_object_is_fully_promoted(next->object) ||
-                mir.insns[mir_emit_instruction_index].opcode !=
-                    MIR_LOAD_INDIRECT ||
+                (producer_opcode != MIR_LOAD_INDIRECT &&
+                 producer_opcode != MIR_BINARY &&
+                 producer_opcode != MIR_UNARY) ||
                 !mir_scalar_memory_location(next, &memory_type,
                                             &memory_storage, &memory_offset) ||
                 type_is_struct_object(memory_type) ||
