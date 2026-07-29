@@ -1289,6 +1289,16 @@ static int mir_lower_expr(const struct AstNode *node)
             const char *name = mir_ident_name(node);
             struct Sym *symbol = mir_ident_symbol(node);
             int enum_index;
+        if (!strcmp(name, "stdin") || !strcmp(name, "stdout") ||
+            !strcmp(name, "stderr")) {
+            value = mir_new_value();
+            insn = mir_emit(MIR_CONST);
+            insn->dst = value;
+            insn->type = TYPE_INT;
+            insn->immediate = !strcmp(name, "stdin") ? 0
+                : !strcmp(name, "stdout") ? 1 : 2;
+            return value;
+        }
         enum_index = node->sval != NULL ? find_enum_const(name) : -1;
         if (symbol == NULL && enum_index >= 0) {
             value = mir_new_value();
@@ -3713,6 +3723,24 @@ static void mir_resolve_deferred_metadata(void)
                 insn->dst = -1;
             }
         }
+    }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        struct MirInsn *source;
+        if (insn->opcode != MIR_UNARY || insn->immediate != 0 ||
+            insn->memory_flags != 0 || insn->src1 < 0)
+            continue;
+        source = mir_mutable_definition(insn->src1);
+        if (source == NULL || type_size(source->type) != 2 ||
+            type_size(insn->type) != 2 || type_is_float(source->type) ||
+            type_is_float(insn->type) || type_is_struct_object(source->type) ||
+            type_is_struct_object(insn->type))
+            continue;
+        mir_replace_value_uses(insn->dst, insn->src1);
+        insn->opcode = MIR_NOP;
+        insn->dst = -1;
+        insn->src1 = -1;
+        insn->src2 = -1;
     }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_STORE_INDIRECT &&
