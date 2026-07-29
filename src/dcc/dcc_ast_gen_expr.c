@@ -1738,8 +1738,11 @@ void ast_emit_init_expr(void)
 
     _le = lex_save();
 
-    if (n != NULL)
+    if (n != NULL) {
         mir_capture_initializer(n);
+        g_expr.type = ast_expr_type_for_sizeof(n);
+        g_expr.long_from16 = 0;
+    }
 
     if (n != NULL && ast_pointer_expr_type(n, &ptr_type, &no_deref)) {
         gen_pointer_expr_ast(n, &ptr_type, &no_deref);
@@ -1752,7 +1755,7 @@ void ast_emit_init_expr(void)
                       ast_pointer_assign_rhs_supported(n) ||
                       (n->kind == AST_CALL && ast_value_is_pointer_word(n) &&
                        ast_call_named_args_supported(n)))) {
-        ast_gen_expr(n);
+                ast_gen_expr(n);
         ast_arena_reset(&g_ast_init_arena);
         return;
     }

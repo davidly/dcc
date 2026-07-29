@@ -131,6 +131,7 @@ static void reset_function_codegen_state(struct Sym *s)
     g_func_pass.for_decl_rename_index = 0;
     g_func_pass.for_decl_recording = 0;
     g_func_pass.scope_depth = 0;
+    g_func_pass.block_seq = 0;
     g_func_pass.static_local_func_index = (int)(s - globals);
     g_func_pass.static_local_seq = 0;
     g_func_pass.compound_literal_seq = 0;

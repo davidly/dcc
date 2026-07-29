@@ -228,6 +228,7 @@ void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int inde
 
     elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
+    mir_capture_init_constant(s, index * elem_size, elem_type, v);
 
     emit_load_sym_addr(s);
     emit_add_const_to_hl((long)index * elem_size);
@@ -1377,6 +1378,10 @@ void gen_local_decl_after_type(int base)
             rn = enter_for_decl_rename(name);
             strncpy(name, rn, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
+        } else {
+            const char *rn = enter_block_decl_rename(name);
+            strncpy(name, rn, sizeof(name) - 1);
+            name[sizeof(name) - 1] = 0;
         }
 
         arrlen = g_funcptr_decl_array_len;
@@ -1610,6 +1615,7 @@ void gen_local_decl_after_type(int base)
                     emit_load_sym_addr(s);
                     emit("\tpush hl\n");
                 }
+                mir_set_initializer_target(s);
                 ast_emit_init_expr();
                 if (type_is_long(type)) {
                     if (type_is_float(g_expr.type))

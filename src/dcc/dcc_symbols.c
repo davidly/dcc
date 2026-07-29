@@ -15,6 +15,9 @@
 #include "dcc_mir.h"
 #include "dcc_regalloc_internal.h"
 
+static int block_scope_ids[MAX_SCOPE_DEPTH];
+static int block_scope_rename_counts[MAX_SCOPE_DEPTH];
+
 /*
  * C99 for-init renames.  While code generation (or the frame-sizing scan) is
  * inside a for-loop with init declarations, each declared source name is mapped
@@ -94,6 +97,46 @@ const char *enter_for_decl_rename(const char *name)
     return g_for_rename_to[g_func_pass.for_decl_seq][n];
 }
 
+const char *enter_block_decl_rename(const char *name)
+{
+    static char renamed[MAX_SCOPE_DEPTH][MAX_FOR_SCOPE_RENAMES][64];
+    int depth;
+    int ordinal;
+
+    if (g_func_pass.scope_depth <= 0 || find_local_decl(name) != NULL ||
+        find_local(name) == NULL)
+        return name;
+    depth = g_func_pass.scope_depth - 1;
+    ordinal = block_scope_rename_counts[depth];
+    if (ordinal >= MAX_FOR_SCOPE_RENAMES)
+        fatal("too many block-scope shadow declarations");
+    snprintf(renamed[depth][ordinal], sizeof(renamed[depth][ordinal]),
+             "%s#b%d#%d", name, block_scope_ids[depth], ordinal);
+    push_for_rename(name, renamed[depth][ordinal]);
+    block_scope_rename_counts[depth] = ordinal + 1;
+    return renamed[depth][ordinal];
+}
+
+const char *enter_static_local_rename(const char *name,
+                                      const char *backing_name)
+{
+    static char renamed[MAX_SCOPE_DEPTH][MAX_FOR_SCOPE_RENAMES][64];
+    int depth;
+    int ordinal;
+
+    if (g_func_pass.scope_depth <= 0)
+        return name;
+    depth = g_func_pass.scope_depth - 1;
+    ordinal = block_scope_rename_counts[depth];
+    if (ordinal >= MAX_FOR_SCOPE_RENAMES)
+        fatal("too many block-scope shadow declarations");
+    snprintf(renamed[depth][ordinal], sizeof(renamed[depth][ordinal]),
+             "%s#%s", name, backing_name);
+    push_for_rename(name, renamed[depth][ordinal]);
+    block_scope_rename_counts[depth] = ordinal + 1;
+    return renamed[depth][ordinal];
+}
+
 void push_for_rename(const char *from, const char *to)
 {
     if (g_func_pass.forren_n >= MAX_FORREN)
@@ -131,6 +174,8 @@ void enter_scope(void)
 {
     if (g_func_pass.scope_depth >= MAX_SCOPE_DEPTH)
         fatal("too many nested block scopes");
+    block_scope_ids[g_func_pass.scope_depth] = g_func_pass.block_seq++;
+    block_scope_rename_counts[g_func_pass.scope_depth] = 0;
     g_scope_watermark[g_func_pass.scope_depth++] = g_frame.nlocals;
     /* A freshly opened scope has no VLA save slot yet. */
     if (g_func_pass.scope_depth < MAX_SCOPE_DEPTH)
@@ -399,7 +444,12 @@ void leave_scope(void)
     /* Block-local names leave scope.  local_size is intentionally left alone:
      * storage is monotonic (slots are never reused), so the frame size still
      * equals the sum over every scope. */
-    first = g_scope_watermark[--g_func_pass.scope_depth];
+    --g_func_pass.scope_depth;
+    while (block_scope_rename_counts[g_func_pass.scope_depth] > 0) {
+        pop_for_rename();
+        --block_scope_rename_counts[g_func_pass.scope_depth];
+    }
+    first = g_scope_watermark[g_func_pass.scope_depth];
     for (i = first; i < g_frame.nlocals; ++i)
         emit_debug_variable_end(&locals[i]);
     g_frame.nlocals = first;

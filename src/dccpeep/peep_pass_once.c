@@ -1125,8 +1125,80 @@ static int try_small_positive_offset_at(int i)
     return 0;
 }
 
+static int subtract_one_transfer_is_safe(int i, unsigned flags)
+{
+    int transferred = 0;
+    int transfer_line = -1;
+    int j;
+
+    for (j = i + 3; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        if (info == NULL || info->kind == PEEP_LINE_LABEL ||
+            info->kind == PEEP_LINE_DIRECTIVE ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (!transferred && eq(j, "ex de,hl")) {
+            if (j + 1 >= nlines || !eq(j + 1, "pop hl"))
+                return 0;
+            transferred = 1;
+            transfer_line = j;
+        } else if (!transferred &&
+                   ((info->effects.reads | info->effects.writes) &
+                    (PEEP_REG_D | PEEP_REG_E)) != 0)
+            return 0;
+        if ((info->effects.unknown && j != transfer_line) ||
+            info->effects.control_flow ||
+            (info->effects.flags_read & flags) != 0)
+            return 0;
+        flags &= ~info->effects.flags_written;
+        if (transferred && flags == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int subtract_one_bc_loop_flags_dead(int i, unsigned flags)
+{
+    const PeepFlowLine *jump_flow;
+    int j;
+
+    if (i + 5 >= nlines || !eq(i + 3, "ld c,l") ||
+        !eq(i + 4, "ld b,h") ||
+        (strncmp(lines[i + 5], "jr ", 3) != 0 &&
+         strncmp(lines[i + 5], "jp ", 3) != 0))
+        return 0;
+    jump_flow = peep_flow_line(i + 5);
+    if (jump_flow == NULL || jump_flow->successor_count != 1)
+        return 0;
+    for (j = jump_flow->successors[0]; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        if (info == NULL || info->kind == PEEP_LINE_DIRECTIVE ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (info->effects.unknown || info->effects.control_flow ||
+            (info->effects.flags_read & flags) != 0)
+            return 0;
+        flags &= ~info->effects.flags_written;
+        if (flags == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int subtract_one_call_argument_is_safe(int i)
+{
+    return i + 5 < nlines && eq(i + 3, "push hl") &&
+           !strncmp(lines[i + 4], "call ", 5) && eq(i + 5, "pop bc");
+}
+
 static int try_subtract_one_at(int i)
 {
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z |
+                               PEEP_FLAG_S | PEEP_FLAG_PV;
     /*
      * HL -= 1 via signed subtract:
      *   ld de,1
@@ -1143,7 +1215,11 @@ static int try_subtract_one_at(int i)
         eq(i + 1, "or a") &&
         eq(i + 2, "sbc hl,de") &&
         i + 3 < nlines &&
-        strncmp(lines[i + 3], "jp ", 3) != 0) {
+                (((peep_flags_dead_after(i + 2, all_flags) ||
+                     subtract_one_bc_loop_flags_dead(i, all_flags)) &&
+                    peep_registers_dead_after(i + 2, PEEP_REG_D | PEEP_REG_E)) ||
+                     subtract_one_transfer_is_safe(i, all_flags) ||
+                     subtract_one_call_argument_is_safe(i))) {
         replace1_tagged(i, "dec hl", "sbc_de1_to_dec");
         delete_n(i + 1, 2);
         return 1;

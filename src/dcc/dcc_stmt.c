@@ -10,6 +10,7 @@
 
 #include "dcc.h"
 #include "dcc_ast.h"
+#include "dcc_mir.h"
 
 static int current_identifier_starts_label(void)
 {
@@ -76,6 +77,7 @@ void gen_compound(void)
                 if (n == NULL || !ast_stmt_supported(n))
                     fatal("unsupported AST statement");
                 if (ast_stmt_has_reentry_label(n)) {
+                    mir_capture_stmt(n);
                     ast_gen_stmt(n);
                     dead = ast_stmt_exits(n);
                 }

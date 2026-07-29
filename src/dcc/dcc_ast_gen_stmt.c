@@ -1484,6 +1484,7 @@ int ast_try_emit_statement(void)
     LexState _ls;
     LexState _le;
     int sv_for_seq;
+    int sv_block_seq;
     struct AstNode *n;
     int report;
 
@@ -1496,6 +1497,7 @@ int ast_try_emit_statement(void)
 
     _ls = lex_save();
     sv_for_seq = g_func_pass.for_seq;
+    sv_block_seq = g_func_pass.block_seq;
 
     n = ast_build_stmt(&g_ast_arena);
 
@@ -1506,6 +1508,7 @@ int ast_try_emit_statement(void)
 
     if (n != NULL && ast_stmt_supported(n)) {
         g_func_pass.for_seq = sv_for_seq;
+        g_func_pass.block_seq = sv_block_seq;
         if (g_ast_build_enabled == 2)
             ast_dump(n, 0);
         mir_capture_stmt(n);
@@ -1559,6 +1562,7 @@ int ast_try_emit_statement(void)
     }
 
     g_func_pass.for_seq = sv_for_seq;
+    g_func_pass.block_seq = sv_block_seq;
     ast_arena_reset(&g_ast_arena);
     return 1;
 }

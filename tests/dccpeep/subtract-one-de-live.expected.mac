@@ -1,0 +1,53 @@
+; HL -= 1 may become DEC HL only when DE is dead afterward.
+
+	cseg
+
+; Positive: DE is overwritten before it can be read.
+_de_dead:
+	dec hl ; peep: sbc_de1_to_dec
+	ld de,7
+	xor a
+	ret
+
+; Positive: EX transfers the result to DE and POP kills the old DE in HL.
+_de_transfer:
+	dec hl ; peep: sbc_de1_to_dec
+	ex de,hl
+	pop hl
+	add hl,de
+	xor a
+	ret
+
+; Positive: the result is a call argument; the ABI call clobbers DE/flags.
+_call_arg:
+	dec hl ; peep: sbc_de1_to_dec
+	push hl
+	call _callee
+	pop bc
+	ret
+
+; Negative: the original sequence defines DE=1 for the following read.
+_de_live:
+	ld de,1
+	or a
+	sbc hl,de
+	ld a,d
+	or e
+	ret
+
+; Negative: JR consumes the zero flag produced by SBC HL,DE.
+_flags_live:
+	ld de,1
+	or a
+	sbc hl,de
+	jr nz,_not_zero
+	ld hl,1
+	ret
+_not_zero:
+	ld hl,0
+	ret
+
+_callee:
+	ret
+
+	end

@@ -296,6 +296,7 @@ typedef struct FunctionPassState {
     int for_decl_rename_index;
     int for_decl_recording;
     int scope_depth;
+    int block_seq;
     int static_local_func_index;
     int static_local_seq;
     int compound_literal_seq;
@@ -665,6 +666,9 @@ const char *resolve_local_rename(const char *name);
 void make_for_rename_name(char *dst, int dstsz, const char *from, int for_seq, int rename_index);
 void add_for_scope_rename(int for_seq, const char *from);
 const char *enter_for_decl_rename(const char *name);
+const char *enter_block_decl_rename(const char *name);
+const char *enter_static_local_rename(const char *name,
+                                      const char *backing_name);
 void push_for_rename(const char *from, const char *to);
 void pop_for_rename(void);
 

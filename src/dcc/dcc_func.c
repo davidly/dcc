@@ -2681,6 +2681,7 @@ typedef struct SpecParseState {
     int for_decl_rename_index;
     int for_decl_recording;
     int scope_depth;
+    int block_seq;
     int compound_literal_seq;
     int licm_seq;
     int decl_is_volatile;
@@ -2697,6 +2698,7 @@ static SpecParseState spec_parse_save(void)
     s.for_decl_rename_index = g_func_pass.for_decl_rename_index;
     s.for_decl_recording = g_func_pass.for_decl_recording;
     s.scope_depth = g_func_pass.scope_depth;
+    s.block_seq = g_func_pass.block_seq;
     s.compound_literal_seq = g_func_pass.compound_literal_seq;
     s.licm_seq = g_func_pass.licm_seq;
     s.decl_is_volatile = g_decl.is_volatile;
@@ -2713,6 +2715,7 @@ static void spec_parse_restore(const SpecParseState *s)
     g_func_pass.for_decl_rename_index = s->for_decl_rename_index;
     g_func_pass.for_decl_recording = s->for_decl_recording;
     g_func_pass.scope_depth = s->scope_depth;
+    g_func_pass.block_seq = s->block_seq;
     g_func_pass.compound_literal_seq = s->compound_literal_seq;
     g_func_pass.licm_seq = s->licm_seq;
     g_decl.is_volatile = s->decl_is_volatile;
@@ -2959,6 +2962,10 @@ void scan_local_decl_after_type(int base)
             rn = enter_for_decl_rename(name);
             strncpy(name, rn, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
+        } else {
+            const char *rn = enter_block_decl_rename(name);
+            strncpy(name, rn, sizeof(name) - 1);
+            name[sizeof(name) - 1] = 0;
         }
 
         arrlen = g_funcptr_decl_array_len;
@@ -3141,6 +3148,7 @@ void scan_static_local_decl_after_type(int base)
     int base_is_volatile;
     int base_pointee_is_volatile;
     char name[64];
+    char source_name[64];
     char backing_name[64];
     struct Sym *g;
     struct Sym *l;
@@ -3163,6 +3171,8 @@ void scan_static_local_decl_after_type(int base)
 
         strncpy(name, g_lex.tok.text, sizeof(name) - 1);
         name[sizeof(name) - 1] = 0;
+        strncpy(source_name, name, sizeof(source_name) - 1);
+        source_name[sizeof(source_name) - 1] = 0;
         next_token();
 
         arrlen = g_funcptr_decl_array_len;
@@ -3201,6 +3211,14 @@ void scan_static_local_decl_after_type(int base)
         } else {
             sprintf(backing_name, "__sl%d_%d", g_func_pass.static_local_func_index,
                     g_func_pass.static_local_seq++);
+        }
+
+        {
+            const char *renamed = enter_static_local_rename(
+                source_name, backing_name);
+            strncpy(name, renamed, sizeof(name) - 1);
+            name[sizeof(name) - 1] = 0;
+            l = find_local_decl(name);
         }
 
         g = add_global(backing_name, type, SC_GLOBAL);
@@ -3249,7 +3267,7 @@ void scan_static_local_decl_after_type(int base)
         }
         if (l != NULL) {
             mir_note_declared_symbol(l);
-            mir_note_declared_alias(name, l);
+            mir_note_declared_alias(source_name, l);
         }
 
         if (!accept(',')) break;
@@ -3271,6 +3289,7 @@ void scan_function_body(void)
     g_func_pass.for_decl_rename_index = 0;
     g_func_pass.for_decl_recording = 0;
     g_func_pass.scope_depth = 0;
+    g_func_pass.block_seq = 0;
     g_func_pass.compound_literal_seq = 0;
     g_func_pass.licm_seq = 0;
     g_vla_fwd_ngoto = 0;
@@ -3697,6 +3716,7 @@ void parse_function_or_global(int base_type)
                 g_frame.nlocals = saved_nlocals;
                 g_frame.local_size = saved_local_size;
                 g_func_pass.scope_depth = 0;
+                g_func_pass.block_seq = 0;
                 g_func_pass.static_local_func_index = (int)(s - globals);
                 g_func_pass.static_local_seq = 0;
                 g_func_pass.compound_literal_seq = 0;

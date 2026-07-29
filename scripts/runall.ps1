@@ -62,6 +62,10 @@ speed:
 .PARAMETER Extended
     Also run the extended c-testsuite single-exec corpus after the main app suite.
 
+.PARAMETER RunTimeout
+    Per-test timeout in seconds for each build pass and each emulator run
+    (default: 60). A timeout terminates the process and its descendants.
+
 .PARAMETER Serial
   Build and verify apps sequentially in the shared build directory. By default
   the suite runs in parallel; use -Serial as a fallback (e.g. for debugging or
@@ -229,6 +233,7 @@ param(
     [string]$Mode = "fast",
     [switch]$Help,
     [switch]$Extended,
+    [string]$Apps = "",
     [int]$RunTimeout = 60,
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
@@ -411,6 +416,17 @@ if ($testFiles.Count -eq 0) {
     Write-Error "No test files found in $testDir" -ErrorAction Stop
 }
 
+if ($Apps) {
+    $requestedApps = @($Apps -split ',' | ForEach-Object {
+        $_.Trim().ToLowerInvariant()
+    } | Where-Object { $_ })
+    $unknownApps = @($requestedApps | Where-Object { $_ -notin $testFiles })
+    if ($unknownApps.Count -gt 0) {
+        Write-Error "Unknown app(s): $($unknownApps -join ', ')" -ErrorAction Stop
+    }
+    $testFiles = @($testFiles | Where-Object { $_ -in $requestedApps })
+}
+
 Write-Host "Found $($testFiles.Count) test applications" -ForegroundColor Cyan
 
 # Helper functions
@@ -546,6 +562,100 @@ function Get-DccMakeCommand {
     return "dccmake"
 }
 
+function Stop-ProcessTree {
+    param([System.Diagnostics.Process]$Process)
+
+    if ($null -eq $Process -or $Process.HasExited) { return }
+    if ($IsWindows) {
+        try { $Process.Kill($true) } catch { try { $Process.Kill() } catch { } }
+        return
+    }
+
+    $children = @{}
+    try {
+        foreach ($line in @(& ps -axo pid=,ppid= 2>$null)) {
+            if ($line -match '^\s*(\d+)\s+(\d+)\s*$') {
+                $pidValue = [int]$Matches[1]
+                $parentValue = [int]$Matches[2]
+                if (-not $children.ContainsKey($parentValue)) {
+                    $children[$parentValue] = [System.Collections.Generic.List[int]]::new()
+                }
+                $children[$parentValue].Add($pidValue)
+            }
+        }
+        $pending = [System.Collections.Generic.Stack[int]]::new()
+        $descendants = [System.Collections.Generic.List[int]]::new()
+        $pending.Push($Process.Id)
+        while ($pending.Count -gt 0) {
+            $parent = $pending.Pop()
+            if (-not $children.ContainsKey($parent)) { continue }
+            foreach ($child in $children[$parent]) {
+                $descendants.Add($child)
+                $pending.Push($child)
+            }
+        }
+        for ($index = $descendants.Count - 1; $index -ge 0; --$index) {
+            try { Stop-Process -Id $descendants[$index] -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+    catch { }
+    try { $Process.Kill($true) } catch { try { $Process.Kill() } catch { } }
+}
+
+function Invoke-ProcessWithTimeout {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$WorkingDirectory,
+        [int]$TimeoutSeconds,
+        [string]$StandardInput = ""
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $startInfo.ArgumentList.Add([string]$argument)
+    }
+    try {
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) { throw "failed to start $FilePath" }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if ($StandardInput) {
+            $process.StandardInput.Write($StandardInput)
+            if (-not $StandardInput.EndsWith("`n")) {
+                $process.StandardInput.Write("`n")
+            }
+        }
+        $process.StandardInput.Close()
+        $timedOut = $TimeoutSeconds -gt 0 -and
+            -not $process.WaitForExit($TimeoutSeconds * 1000)
+        if ($timedOut) {
+            Stop-ProcessTree -Process $process
+            $process.WaitForExit()
+        }
+        else {
+            $process.WaitForExit()
+        }
+        $output = $stdoutTask.GetAwaiter().GetResult() +
+                  $stderrTask.GetAwaiter().GetResult()
+        return [pscustomobject]@{
+            ExitCode = if ($timedOut) { -1 } else { $process.ExitCode }
+            TimedOut = $timedOut
+            Output = $output
+        }
+    }
+    catch {
+        return [pscustomobject]@{ ExitCode = 1; TimedOut = $false; Output = "$_" }
+    }
+}
+
 function Invoke-DccMakeBuild {
     param(
         [Parameter(Mandatory)]
@@ -560,6 +670,7 @@ function Invoke-DccMakeBuild {
         [object]$DccLongio = $null,
         [switch]$UseEmulatedM80,
         [switch]$Quiet,
+        [int]$TimeoutSeconds = 60,
         [ref]$TimingOut
     )
 
@@ -567,8 +678,8 @@ function Invoke-DccMakeBuild {
     if ($modeLower -eq "full") {
         $fastTiming = $null
         $nopeepTiming = $null
-        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimingOut ([ref]$fastTiming)
-        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimingOut ([ref]$nopeepTiming)
+        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimeoutSeconds $TimeoutSeconds -TimingOut ([ref]$fastTiming)
+        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimeoutSeconds $TimeoutSeconds -TimingOut ([ref]$nopeepTiming)
         if ($TimingOut) { $TimingOut.Value = @{ peep = $fastTiming; nopeep = $nopeepTiming } }
         return ($fastOk -and $nopeepOk)
     }
@@ -603,7 +714,7 @@ function Invoke-DccMakeBuild {
     }
 
     if (-not $sourceFile) {
-        Write-Error "Source file not found for: $Name" -ErrorAction Continue
+        if (-not $Quiet) { Write-Warning "Source file not found for: $Name" }
         return $false
     }
 
@@ -636,9 +747,11 @@ function Invoke-DccMakeBuild {
     }
 
     $dccmakeSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $buildOut = & $dccmake @args 2>&1
+    $buildResult = Invoke-ProcessWithTimeout -FilePath $dccmake -Arguments $args `
+        -WorkingDirectory (Get-Location).Path -TimeoutSeconds $TimeoutSeconds
     $dccmakeSw.Stop()
-    $exitCode = $LASTEXITCODE
+    $buildOut = @($buildResult.Output -split "`r?`n")
+    $exitCode = $buildResult.ExitCode
     if ($TimingOut) {
         $timingLine = @($buildOut) | Where-Object { $_ -match '^dccmake: timing ' } | Select-Object -Last 1
         if ($timingLine -match 'dcc=(\d+)ms peep=(\d+)ms asm=(\d+)ms\((\w+)\) rtlstrip=(\d+)ms link=(\d+)ms other=(\d+)ms total=(\d+)ms') {
@@ -656,15 +769,19 @@ function Invoke-DccMakeBuild {
         }
     }
     if (-not $Quiet) { $buildOut | Write-Host }
+    if ($buildResult.TimedOut) {
+        if (-not $Quiet) { Write-Warning "dccmake timed out for $Name ($Mode) after ${TimeoutSeconds}s" }
+        return $false
+    }
     if ($exitCode -ne 0) {
-        Write-Error "dccmake failed for $Name ($Mode) with exit code $exitCode" -ErrorAction Continue
+        if (-not $Quiet) { Write-Warning "dccmake failed for $Name ($Mode) with exit code $exitCode" }
         return $false
     }
 
     $buildWarnings = @($buildOut | Where-Object { $_ -match '%Mult\. Def\.|%Phase error|%Undefined' })
     if ($buildWarnings) {
         $buildWarnings | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
-        Write-Error "Build warnings treated as errors for $Name" -ErrorAction Continue
+        if (-not $Quiet) { Write-Warning "Build warnings treated as errors for $Name" }
         return $false
     }
 
@@ -673,7 +790,7 @@ function Invoke-DccMakeBuild {
         return $true
     }
 
-    Write-Error "Build failed: .COM file not produced for $Name" -ErrorAction Continue
+    if (-not $Quiet) { Write-Warning "Build failed: .COM file not produced for $Name" }
     return $false
 }
 
@@ -742,25 +859,59 @@ function Invoke-ComRunAndCompare {
         [System.Collections.IDictionary]$Placeholders,
         [string]$BaselinePath,
         [string]$DiffPrefix,
-        [System.Collections.Generic.List[string]]$Lines
+        [System.Collections.Generic.List[string]]$Lines,
+        [int]$RunTimeout
     )
 
     Push-Location $BuildDir
     $runSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $runFailed = $false
+    $runTimedOut = $false
     try {
         $appArgs = if ($RunArgs) { @($RunArgs -split '\s+') } else { @() }
         $nativeArgs = @($EmulatorRunArgs) + @($ComFileName) + $appArgs
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $Emulator
+        $startInfo.WorkingDirectory = (Get-Location).Path
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        foreach ($nativeArg in $nativeArgs) {
+            $startInfo.ArgumentList.Add([string]$nativeArg)
+        }
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw "failed to start emulator"
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if ($RunStdin) {
-            $out = $RunStdin | & $Emulator @nativeArgs 2>&1
+            $process.StandardInput.Write($RunStdin)
+            if (-not $RunStdin.EndsWith("`n")) {
+                $process.StandardInput.Write("`n")
+            }
         }
-        else {
-            $out = & $Emulator @nativeArgs 2>&1
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit($RunTimeout * 1000)) {
+            Stop-ProcessTree -Process $process
+            $process.WaitForExit()
+            $Lines.Add("    ${DiffPrefix}ERROR running ${ComFileName}: timed out after ${RunTimeout}s")
+            $runTimedOut = $true
+        } elseif ($process.ExitCode -ne 0) {
+            $Lines.Add("    ${DiffPrefix}Emulator exit code: $($process.ExitCode)")
         }
-        $output = ($out -join "`n")
+        $output = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($stderr) {
+            $output += $stderr
+        }
     }
     catch {
         $output = ""
         $Lines.Add("    ${DiffPrefix}ERROR running ${ComFileName}: $_")
+        $runFailed = $true
     }
     finally {
         $runSw.Stop()
@@ -790,7 +941,7 @@ function Invoke-ComRunAndCompare {
     $output = [regex]::Replace($output, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
 
     $result = [pscustomobject]@{
-        Passed      = $true
+        Passed      = -not ($runTimedOut -or $runFailed)
         Ms          = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
         Cycles      = $ntvcmCycles
         ClockHz     = $ntvcmClockHz
@@ -855,7 +1006,8 @@ function Invoke-AppTest {
         [string[]]$EmulatorRunArgs,
         [object[]]$Fixtures,
         [bool]$StageFixtures = $true,
-        [object[]]$ExtraScenarios = @()
+        [object[]]$ExtraScenarios = @(),
+        [int]$RunTimeout
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -914,7 +1066,7 @@ function Invoke-AppTest {
         $ok = $false
         $modeTiming = $null
         try {
-            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet -TimingOut ([ref]$modeTiming)
+            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet -TimeoutSeconds $RunTimeout -TimingOut ([ref]$modeTiming)
         }
         catch { $ok = $false }
         if ($modeTiming) { $buildTimingByMode[$buildMode] = $modeTiming }
@@ -939,7 +1091,8 @@ function Invoke-AppTest {
         $primaryResult = Invoke-ComRunAndCompare -BuildDir $BuildDir -ComFileName "$upper.COM" `
             -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -RunArgs $RunArgs -RunStdin $RunStdin `
             -HasBaseline $hasBaseline -Expected $expected -Placeholders $Placeholders `
-            -BaselinePath "$BaselineDir/$AppName.txt" -DiffPrefix "" -Lines $lines
+            -BaselinePath "$BaselineDir/$AppName.txt" -DiffPrefix "" -Lines $lines `
+            -RunTimeout $RunTimeout
 
         $modeMetrics[$buildMode] = [pscustomobject]@{
             Ms          = $primaryResult.Ms
@@ -962,7 +1115,8 @@ function Invoke-AppTest {
                 -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -RunArgs $scenario.args `
                 -RunStdin $(if ($scenario.stdin) { $scenario.stdin } else { "" }) `
                 -HasBaseline $sb.HasBaseline -Expected $sb.Expected -Placeholders $Placeholders `
-                -BaselinePath $sb.Path -DiffPrefix "[$($scenario.suffix)] " -Lines $lines
+                -BaselinePath $sb.Path -DiffPrefix "[$($scenario.suffix)] " -Lines $lines `
+                -RunTimeout $RunTimeout
             if (-not $scenarioResult.Passed) { $appPassed = $false }
         }
     }
@@ -1005,7 +1159,8 @@ function Invoke-NarrowDiffTest {
         [object]$DccLongio,
         [switch]$UseEmulatedM80,
         [string[]]$EmulatorRunArgs,
-        [object[]]$Fixtures
+        [object[]]$Fixtures,
+        [int]$RunTimeout
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -1029,11 +1184,11 @@ function Invoke-NarrowDiffTest {
     $okNoNarrow = $false
     try {
         $okNarrow = Invoke-DccMakeBuild -Name $AppName -Mode fast -BuildDir $narrowDir -Emulator $Emulator `
-            -StackSize $stackSizeInt -DccArgs $baseDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet
+            -StackSize $stackSizeInt -DccArgs $baseDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet -TimeoutSeconds $RunTimeout
     } catch { $okNarrow = $false }
     try {
         $okNoNarrow = Invoke-DccMakeBuild -Name $AppName -Mode fast -BuildDir $noNarrowDir -Emulator $Emulator `
-            -StackSize $stackSizeInt -DccArgs $noNarrowDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet
+            -StackSize $stackSizeInt -DccArgs $noNarrowDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet -TimeoutSeconds $RunTimeout
     } catch { $okNoNarrow = $false }
 
     if (-not $okNarrow -or -not $okNoNarrow) {
@@ -1053,14 +1208,17 @@ function Invoke-NarrowDiffTest {
     $appArgs = if ($RunArgs) { @($RunArgs -split '\s+') } else { @() }
     $nativeArgs = @($EmulatorRunArgs) + @("$upper.COM") + $appArgs
 
-    Push-Location $narrowDir
-    try {
-        $outNarrow = if ($RunStdin) { ($RunStdin | & $Emulator @nativeArgs 2>&1) -join "`n" } else { (& $Emulator @nativeArgs 2>&1) -join "`n" }
-    } finally { Pop-Location }
-    Push-Location $noNarrowDir
-    try {
-        $outNoNarrow = if ($RunStdin) { ($RunStdin | & $Emulator @nativeArgs 2>&1) -join "`n" } else { (& $Emulator @nativeArgs 2>&1) -join "`n" }
-    } finally { Pop-Location }
+    $narrowRun = Invoke-ProcessWithTimeout -FilePath $Emulator -Arguments $nativeArgs `
+        -WorkingDirectory $narrowDir -TimeoutSeconds $RunTimeout -StandardInput $RunStdin
+    $noNarrowRun = Invoke-ProcessWithTimeout -FilePath $Emulator -Arguments $nativeArgs `
+        -WorkingDirectory $noNarrowDir -TimeoutSeconds $RunTimeout -StandardInput $RunStdin
+    if ($narrowRun.TimedOut -or $noNarrowRun.TimedOut) {
+        $sw.Stop()
+        $lines.Add("    ERROR: narrow-diff emulator timed out after ${RunTimeout}s")
+        return [pscustomobject]@{ App = $AppName; Passed = $false; Elapsed = $sw.Elapsed; Lines = $lines.ToArray() }
+    }
+    $outNarrow = $narrowRun.Output
+    $outNoNarrow = $noNarrowRun.Output
 
     # Strip the ntvcm -p performance block: cycle counts legitimately differ
     # between a narrowed and unnarrowed build (that's the whole point of
@@ -1558,6 +1716,8 @@ if ($Parallel) {
     $cfuDef       = ${function:Copy-FixtureUpper}.ToString()
     $ctbsDef      = ${function:ConvertTo-BooleanSetting}.ToString()
     $gdmDef       = ${function:Get-DccMakeCommand}.ToString()
+    $sptDef       = ${function:Stop-ProcessTree}.ToString()
+    $ipwtDef      = ${function:Invoke-ProcessWithTimeout}.ToString()
     $idmbDef      = ${function:Invoke-DccMakeBuild}.ToString()
     $stackCheckOn = [bool]$StackCheck
     $runArgs      = @($emulatorRunArgs)
@@ -1575,6 +1735,8 @@ if ($Parallel) {
         ${function:Copy-FixtureUpper}    = $using:cfuDef
         ${function:ConvertTo-BooleanSetting} = $using:ctbsDef
         ${function:Get-DccMakeCommand}   = $using:gdmDef
+        ${function:Stop-ProcessTree}     = $using:sptDef
+        ${function:Invoke-ProcessWithTimeout} = $using:ipwtDef
         ${function:Invoke-DccMakeBuild}  = $using:idmbDef
         ${function:Invoke-ComRunAndCompare} = $using:icrcDef
         ${function:Invoke-AppTest}       = $using:iatDef
@@ -1589,7 +1751,7 @@ if ($Parallel) {
             -UseEmulatedM80:$using:UseEmulatedM80 `
             -EmulatorRunArgs $using:runArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
-            -ExtraScenarios $item.ExtraScenarios
+            -ExtraScenarios $item.ExtraScenarios -RunTimeout $using:RunTimeout
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -1619,18 +1781,19 @@ if ($Parallel) {
     }
 }
 else {
-    # Serial: stage fixtures once into the shared build dir and reuse it.
-    Stage-FixtureInputs
+    # Keep serial runs isolated too: CP/M programs observe their current
+    # directory, so artifacts from earlier apps must not become test input.
     foreach ($item in $workItems) {
-        $result = Invoke-AppTest -AppName $item.App -Modes $modes -BuildDir $BuildDir `
+        $appBuildDir = Join-Path $BuildDir $item.App
+        $result = Invoke-AppTest -AppName $item.App -Modes $modes -BuildDir $appBuildDir `
             -BaselineDir $BaselineDir -Emulator $Emulator -Placeholders $Placeholders `
             -RunArgs $item.RunArgs -RunStdin $item.RunStdin `
             -StackSize $item.StackSize -DccArgs $item.DccArgs `
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
             -UseEmulatedM80:$UseEmulatedM80 `
             -EmulatorRunArgs $emulatorRunArgs `
-            -Fixtures $fixtureList -StageFixtures $false `
-            -ExtraScenarios $item.ExtraScenarios
+            -Fixtures $item.Fixtures -StageFixtures $true `
+            -ExtraScenarios $item.ExtraScenarios -RunTimeout $RunTimeout
         Show-AppResult $result
         $results += $result
     }
@@ -1704,30 +1867,34 @@ if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -o
 $perfCheckSw.Stop()
 
 $diagnosticsPassed = $null
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
 $diagnosticsSw = [System.Diagnostics.Stopwatch]::StartNew()
-& pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
-$diagnosticsExitCode = $LASTEXITCODE
+if (-not $Apps) {
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
+    $diagnosticsExitCode = $LASTEXITCODE
+    $diagnosticsPassed = ($diagnosticsExitCode -eq 0)
+}
 $diagnosticsSw.Stop()
-$diagnosticsPassed = ($diagnosticsExitCode -eq 0)
-if (-not $diagnosticsPassed) {
+if ($null -ne $diagnosticsPassed -and -not $diagnosticsPassed) {
     $failed++
 }
 
 $dccpeepTestsPassed = $null
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "RUNNING DCCPEEP FIXTURES" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
 $dccpeepFixturesSw = [System.Diagnostics.Stopwatch]::StartNew()
-& pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
-    -DccPeep (Join-Path $script:RepoRoot "dccpeep")
-$dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
+if (-not $Apps) {
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "RUNNING DCCPEEP FIXTURES" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
+        -DccPeep (Join-Path $script:RepoRoot "dccpeep")
+    $dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
+}
 $dccpeepFixturesSw.Stop()
-if (-not $dccpeepTestsPassed) {
+if ($null -ne $dccpeepTestsPassed -and -not $dccpeepTestsPassed) {
     $failed++
 }
 
@@ -1754,6 +1921,8 @@ if ($NarrowDiff) {
         $ndCfuDef   = ${function:Copy-FixtureUpper}.ToString()
         $ndGdmDef   = ${function:Get-DccMakeCommand}.ToString()
         $ndCtbsDef  = ${function:ConvertTo-BooleanSetting}.ToString()
+        $ndSptDef   = ${function:Stop-ProcessTree}.ToString()
+        $ndIpwtDef  = ${function:Invoke-ProcessWithTimeout}.ToString()
         $ndIdmbDef  = ${function:Invoke-DccMakeBuild}.ToString()
         $ndIndtDef  = ${function:Invoke-NarrowDiffTest}.ToString()
         $ndRunArgs  = @($emulatorRunArgs)
@@ -1765,6 +1934,8 @@ if ($NarrowDiff) {
             ${function:Copy-FixtureUpper}    = $using:ndCfuDef
             ${function:Get-DccMakeCommand}   = $using:ndGdmDef
             ${function:ConvertTo-BooleanSetting} = $using:ndCtbsDef
+            ${function:Stop-ProcessTree}     = $using:ndSptDef
+            ${function:Invoke-ProcessWithTimeout} = $using:ndIpwtDef
             ${function:Invoke-DccMakeBuild}  = $using:ndIdmbDef
             ${function:Invoke-NarrowDiffTest} = $using:ndIndtDef
 
@@ -1773,7 +1944,7 @@ if ($NarrowDiff) {
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
                 -UseEmulatedM80:$using:UseEmulatedM80 `
-                -EmulatorRunArgs $using:ndRunArgs -Fixtures $item.Fixtures
+                -EmulatorRunArgs $using:ndRunArgs -Fixtures $item.Fixtures -RunTimeout $using:RunTimeout
         } | ForEach-Object {
             $result = $_
             $narrowResults += $result
@@ -1796,7 +1967,7 @@ if ($NarrowDiff) {
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
                 -UseEmulatedM80:$UseEmulatedM80 `
-                -EmulatorRunArgs $emulatorRunArgs -Fixtures $item.Fixtures
+                -EmulatorRunArgs $emulatorRunArgs -Fixtures $item.Fixtures -RunTimeout $RunTimeout
             $narrowResults += $result
             $narrowDone++
             $status = if ($result.Passed) { "PASS" } else { "FAIL" }
@@ -1857,8 +2028,8 @@ Write-Host "  Skipped:      $skipped"
 if ($Extended) {
     Write-Host "  Extended:     $(if ($extendedPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($extendedPassed) { "Green" } else { "Red" })
 }
-Write-Host "  Diagnostics:  $(if ($diagnosticsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($diagnosticsPassed) { "Green" } else { "Red" })
-Write-Host "  Dccpeep:      $(if ($dccpeepTestsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($dccpeepTestsPassed) { "Green" } else { "Red" })
+Write-Host "  Diagnostics:  $(if ($null -eq $diagnosticsPassed) { 'skipped' } elseif ($diagnosticsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($null -eq $diagnosticsPassed) { "DarkGray" } elseif ($diagnosticsPassed) { "Green" } else { "Red" })
+Write-Host "  Dccpeep:      $(if ($null -eq $dccpeepTestsPassed) { 'skipped' } elseif ($dccpeepTestsPassed) { 'passed' } else { 'failed' })" -ForegroundColor $(if ($null -eq $dccpeepTestsPassed) { "DarkGray" } elseif ($dccpeepTestsPassed) { "Green" } else { "Red" })
 if ($perfCheck -and -not $UpdatePerfBaseline) {
     $perfLabel = if ($perfCheck.Regressions.Count -eq 0) { "passed" } else { "$($perfCheck.Regressions.Count) regression(s)" }
     Write-Host "  Performance:  $perfLabel" -ForegroundColor $(if ($perfCheck.Regressions.Count -eq 0) { "Green" } else { "Red" })
@@ -1962,11 +2133,11 @@ if ($Extended -and -not $extendedPassed) {
     Write-Host ""
     Write-Host "Extended c-testsuite failed" -ForegroundColor Red
 }
-if (-not $diagnosticsPassed) {
+if ($null -ne $diagnosticsPassed -and -not $diagnosticsPassed) {
     Write-Host ""
     Write-Host "Diagnostics suite failed" -ForegroundColor Red
 }
-if (-not $dccpeepTestsPassed) {
+if ($null -ne $dccpeepTestsPassed -and -not $dccpeepTestsPassed) {
     Write-Host ""
     Write-Host "Dccpeep fixture suite failed" -ForegroundColor Red
 }
