@@ -8969,6 +8969,75 @@ static int mir_has_cfg_backedge(void)
     return 0;
 }
 
+static int mir_is_profiled_near_cost_single_block(long generated_size,
+                                                   long captured_size,
+                                                   int generated_instructions,
+                                                   int captured_instructions)
+{
+    return !mir.has_vla && mir_cfg_block_count() == 1 &&
+           generated_size <= captured_size + 20 &&
+           generated_instructions <= captured_instructions + 2;
+}
+
+static int mir_is_profiled_constant_bound_loop_pair(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    int i;
+    int branch_count = 0;
+
+    if (mir_cfg_block_count() != 7 || mir.allocation_spill_count != 0 ||
+        generated_size > captured_size ||
+        generated_instructions > captured_instructions + 11)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_CALL || insn->opcode == MIR_CALL_AGGREGATE ||
+            insn->opcode == MIR_OPAQUE)
+            return 0;
+        if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *comparison = mir_definition(insn->src1);
+            const struct MirInsn *bound;
+            if (comparison == NULL || comparison->opcode != MIR_BINARY ||
+                comparison->type != TYPE_INT || comparison->immediate != '<')
+                return 0;
+            bound = mir_definition(comparison->src2);
+            if (bound == NULL || bound->opcode != MIR_CONST ||
+                bound->type != TYPE_INT)
+                return 0;
+            ++branch_count;
+        }
+    }
+    return branch_count == 2 && mir_has_cfg_backedge();
+}
+
+static int mir_has_profiled_positive_loop(void)
+{
+    int i;
+    int has_positive_condition = 0;
+
+    if (mir_cfg_block_count() != 4 || mir.allocation_spill_count != 0)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_CALL || insn->opcode == MIR_CALL_AGGREGATE ||
+            insn->opcode == MIR_OPAQUE)
+            return 0;
+        if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *comparison = mir_definition(insn->src1);
+            const struct MirInsn *zero;
+            if (comparison == NULL || comparison->opcode != MIR_BINARY ||
+                comparison->type != TYPE_INT || comparison->immediate != '>')
+                continue;
+            zero = mir_definition(comparison->src2);
+            if (zero != NULL && zero->opcode == MIR_CONST &&
+                zero->type == TYPE_INT && zero->immediate == 0)
+                has_positive_condition = 1;
+        }
+    }
+    return has_positive_condition && mir_has_cfg_backedge();
+}
+
 static int mir_try_emit_z80(FILE *out)
 {
     const struct MirInsn *return_insn = NULL;
@@ -9214,13 +9283,23 @@ void mir_end_function(void)
                                                      mir.aggregate_temp_bytes == 0 &&
                                                      mir.backend_slot_count == 0 && !mir.has_vla &&
                                                      mir_cfg_block_count() == 1 &&
-                                                     generated_instructions <= captured_instructions))
+                                                     generated_instructions <= captured_instructions) &&
+                                                 !mir_is_profiled_near_cost_single_block(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions))
                     fallback_reason = "text-size";
                 else if (generated_instructions > captured_instructions +
                         (!strcmp(selector_name, "homed-scalar-cfg")
                             ? (mir_cfg_block_count() <= 2 ? 2 : 1)
                         : (!strcmp(selector_name, "spilled-scalar-cfg") &&
-                           generated_size <= captured_size ? 1 : 0)))
+                           generated_size <= captured_size ? 1 : 0)) &&
+                         !mir_is_profiled_near_cost_single_block(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_constant_bound_loop_pair(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions))
                     fallback_reason = "instruction-count";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
@@ -9233,7 +9312,11 @@ void mir_end_function(void)
                     fallback_reason = "inline-substitution";
                 else if (mir_has_declared_pointer_array())
                     fallback_reason = "pointer-array";
-                else if (mir_has_cfg_backedge())
+                else if (mir_has_cfg_backedge() &&
+                         !mir_has_profiled_positive_loop() &&
+                         !mir_is_profiled_constant_bound_loop_pair(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions))
                     fallback_reason = "cfg-backedge";
                 else if (mir_has_power_of_two_vla_alloc())
                     fallback_reason = "vla-power-of-two";
