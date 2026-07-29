@@ -443,6 +443,8 @@ static int mir_lvalue_type(const struct AstNode *node);
 static int mir_value_use_count(int value);
 static int mir_fold_constant_binary(int op, long left, long right,
                                     int operand_type, long *result);
+static int mir_fold_constant_compare(int op, long left, long right,
+                                     int operand_type, long *result);
 
 static const char *mir_ident_name(const struct AstNode *node)
 {
@@ -1582,17 +1584,25 @@ static int mir_lower_expr(const struct AstNode *node)
             struct MirInsn *left_definition = mir_mutable_definition(left);
             struct MirInsn *right_definition = mir_mutable_definition(right);
             long folded;
+            int is_compare_op = node->op == TOK_EQ || node->op == TOK_NE ||
+                                 node->op == '<' || node->op == '>' ||
+                                 node->op == TOK_LE || node->op == TOK_GE;
+            int fold_type = node->operand_type != 0
+                                ? node->operand_type
+                                : node->type != 0
+                                      ? node->type
+                                      : ast_expr_type_for_sizeof(node);
             if (left_definition != NULL && right_definition != NULL &&
                 left_definition->opcode == MIR_CONST &&
                 right_definition->opcode == MIR_CONST &&
-                mir_fold_constant_binary(node->op, left_definition->immediate,
-                                          right_definition->immediate,
-                                          node->operand_type != 0
-                                              ? node->operand_type
-                                              : node->type != 0
-                                                    ? node->type
-                                                    : ast_expr_type_for_sizeof(node),
-                                          &folded)) {
+                (is_compare_op
+                     ? mir_fold_constant_compare(
+                           node->op, left_definition->immediate,
+                           right_definition->immediate, fold_type, &folded)
+                     : mir_fold_constant_binary(
+                           node->op, left_definition->immediate,
+                           right_definition->immediate, fold_type,
+                           &folded))) {
                 /* A literal constant value id can be shared by more than
                  * one consumer (e.g. the frontend's constant-value
                  * caching), so only retire an operand's MIR_CONST to
@@ -6215,6 +6225,43 @@ static int mir_fold_constant_binary(int op, long left, long right,
             value -= 0x100000000L;
     }
     *result = value;
+    return 1;
+}
+
+/* Evaluates a scalar relational/equality operation over two compile-time
+ * constant operands, comparing them per `operand_type`'s width and
+ * signedness (the common type both operands were already converted to by
+ * the caller), and produces the boolean 0/1 result the target Z80 compare
+ * sequence would compute at runtime. A separate fold from Item 13's
+ * arithmetic/bitwise/shift fold above since the result here is always a
+ * width-independent boolean rather than a value truncated to
+ * `operand_type`. */
+static int mir_fold_constant_compare(int op, long left, long right,
+                                     int operand_type, long *result)
+{
+    int type_bytes = type_size(operand_type);
+    int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+    int cmp;
+
+    if (is_unsigned) {
+        unsigned long mask = type_bytes == 2 ? 0xffffUL
+                            : type_bytes == 4 ? 0xffffffffUL
+                                               : (unsigned long)-1L;
+        unsigned long uleft = (unsigned long)left & mask;
+        unsigned long uright = (unsigned long)right & mask;
+        cmp = uleft < uright ? -1 : uleft > uright ? 1 : 0;
+    } else {
+        cmp = left < right ? -1 : left > right ? 1 : 0;
+    }
+    switch (op) {
+    case TOK_EQ: *result = cmp == 0; break;
+    case TOK_NE: *result = cmp != 0; break;
+    case '<':    *result = cmp < 0; break;
+    case '>':    *result = cmp > 0; break;
+    case TOK_LE: *result = cmp <= 0; break;
+    case TOK_GE: *result = cmp >= 0; break;
+    default: return 0;
+    }
     return 1;
 }
 

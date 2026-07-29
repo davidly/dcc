@@ -346,3 +346,32 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   validation. `runall.ps1 -Mode full -Extended` passed corpus-wide (319
   apps, 310 runnable, 196 extended, 0 failures) after both fixes above.
   New baseline: promoted directly to `build/mir-plan-50-baseline.tsv`.
+
+- Item 14 completed: fold constant scalar relational/equality operations
+  (`== != < > <= >=`) at MIR-lowering time when both operands are already
+  `MIR_CONST`, via a new `mir_fold_constant_compare`, wired into the same
+  `AST_BINARY` fold site as Item 13 and sharing its operand-conversion,
+  operand-retirement, and result-emission logic (selected by an
+  `is_compare_op` check on `node->op`). Kept as a separate function from
+  Item 13's `mir_fold_constant_binary` rather than folded into it, because
+  a comparison's result is always a width-independent boolean 0/1, not a
+  value truncated/sign-extended to the operand type the way arithmetic
+  results are — reusing the same masking logic for both would have been
+  incorrect. Compares operands as unsigned (using `operand_type`'s width
+  and a matching mask) or signed per `operand_type`'s `TYPE_UNSIGNED` flag,
+  matching the signedness the target Z80 compare sequence would use.
+  Reused Item 13's existing use-count-guarded `MIR_CONST`-to-`MIR_NOP`
+  retirement, so no new orphaned-instruction class was introduced.
+
+  Census against the Item 13 baseline showed 3 newly-admitted functions
+  (`tc89size.nb_between_locals`, `tvla.vla_sizeof_2d_row`,
+  `tvla.vla_sizeof_op_mulrhs`) and 261 apps with census changes, 8 of
+  which required runtime validation
+  (tc89comp,tc89size,tcrcfix,tdmfuse,tscanf,tstdlib,tsyntax,tvla) — the
+  first Item since 11/12 to newly admit functions, since removing a
+  comparison ahead of a branch/materialization can cross an acceptance
+  cost threshold on its own. Focused `runall.ps1 -Mode full` on those 8
+  apps passed (0 failures, 10 performance improvements, 0 regressions).
+  `runall.ps1 -Mode full -Extended` then passed corpus-wide (319 apps, 310
+  runnable, 196 extended, 0 failures). New baseline: promoted directly to
+  `build/mir-plan-50-baseline.tsv`.
