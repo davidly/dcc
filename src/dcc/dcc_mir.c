@@ -9161,11 +9161,16 @@ void mir_end_function(void)
                 else if (generated_instructions > captured_instructions +
                         (!strcmp(selector_name, "homed-scalar-cfg")
                             ? (mir_cfg_block_count() <= 2 ? 2 : 1)
-                            : 0))
+                        : (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                           generated_size <= captured_size ? 1 : 0)))
                     fallback_reason = "instruction-count";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
-                else if (mir_has_inline_substitution_call())
+                else if (mir_has_inline_substitution_call() &&
+                         !(generated_instructions >= captured_instructions &&
+                           generated_instructions <=
+                               captured_instructions + 1 &&
+                           generated_size <= captured_size))
                     fallback_reason = "inline-substitution";
                 else if (mir_has_declared_pointer_array())
                     fallback_reason = "pointer-array";
