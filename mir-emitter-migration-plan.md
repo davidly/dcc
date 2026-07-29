@@ -308,3 +308,41 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   is a new class of analysis (backward per-object liveness) rather than a
   variation on prior work. New baseline: promoted directly to
   `build/mir-plan-50-baseline.tsv`.
+
+- Item 13 completed: fold constant scalar binary arithmetic/bitwise/shift
+  operations (`+ - * / % & | ^ << >>`) at MIR-lowering time when both
+  operands are already `MIR_CONST`, via a new `mir_fold_constant_binary`
+  evaluated in `mir_lower_expr`'s `AST_BINARY` case, right after pointer
+  scaling and the usual operand conversions. Deliberately excludes
+  relational/equality operators (Item 14's separate scope) and refuses to
+  fold a division or modulo by a zero divisor, leaving that case to emit
+  its normal runtime instruction sequence unchanged. The fold truncates
+  and sign-extends its host-`long` result to match the operation's 16-bit
+  `int` or 32-bit `long` operand type, mirroring what the target Z80 code
+  would compute at runtime.
+
+  A first version of this fold left the original operand `MIR_CONST`
+  instructions in place, unreferenced, once folded. `runall.ps1 -Mode full
+  -Extended` caught a real regression this created: extended test 00093
+  (`sizeof(a) != 4*sizeof(int)`) returned 1 instead of 0. Root-caused via
+  `DCC_MIR_REPORT=1` MIR dumps to a backend-slot-assignment interaction —
+  this fold is the first structural change able to leave a wholly
+  unreferenced `MIR_CONST` sitting in the instruction stream (every prior
+  fold or forwarding item still left both operands reachable from some
+  instruction), and `mir_try_emit_spilled_scalar_cfg`'s slot assignment
+  does not expect that shape. Fixed by retiring each operand's defining
+  `MIR_CONST` to `MIR_NOP` once folded — but only when
+  `mir_value_use_count` confirms it has zero other consumers, since a
+  literal constant value id can be shared by more than one use elsewhere
+  (the frontend caches some constant values); a first attempt that
+  retired both operands unconditionally regressed `tcaslv.main` with a
+  "uses undefined v612" MIR verify error, caught by the same
+  `runall.ps1 -Mode full -Extended` safety net before promotion.
+
+  Census against the Items-11/12 baseline showed 0 newly-admitted
+  functions (expected: pure constant folding removes a `MIR_BINARY` and
+  its cost rather than crossing an acceptance threshold on its own) but 40
+  apps with smaller generated-candidate sizes, 0 of which required runtime
+  validation. `runall.ps1 -Mode full -Extended` passed corpus-wide (319
+  apps, 310 runnable, 196 extended, 0 failures) after both fixes above.
+  New baseline: promoted directly to `build/mir-plan-50-baseline.tsv`.

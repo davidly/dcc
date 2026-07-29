@@ -441,6 +441,8 @@ static int mir_value_is_wide(int value);
 static int mir_find_label(int label);
 static int mir_lvalue_type(const struct AstNode *node);
 static int mir_value_use_count(int value);
+static int mir_fold_constant_binary(int op, long left, long right,
+                                    int operand_type, long *result);
 
 static const char *mir_ident_name(const struct AstNode *node)
 {
@@ -1575,6 +1577,48 @@ static int mir_lower_expr(const struct AstNode *node)
             left = mir_lower_conversion(left, node->operand_type);
             if (node->op != TOK_SHL && node->op != TOK_SHR)
                 right = mir_lower_conversion(right, node->operand_type);
+        }
+        if (!left_is_pointer && !right_is_pointer) {
+            struct MirInsn *left_definition = mir_mutable_definition(left);
+            struct MirInsn *right_definition = mir_mutable_definition(right);
+            long folded;
+            if (left_definition != NULL && right_definition != NULL &&
+                left_definition->opcode == MIR_CONST &&
+                right_definition->opcode == MIR_CONST &&
+                mir_fold_constant_binary(node->op, left_definition->immediate,
+                                          right_definition->immediate,
+                                          node->operand_type != 0
+                                              ? node->operand_type
+                                              : node->type != 0
+                                                    ? node->type
+                                                    : ast_expr_type_for_sizeof(node),
+                                          &folded)) {
+                /* A literal constant value id can be shared by more than
+                 * one consumer (e.g. the frontend's constant-value
+                 * caching), so only retire an operand's MIR_CONST to
+                 * MIR_NOP when nothing else in the function still
+                 * references it - otherwise leave it in place, still
+                 * unused by this fold but available to its other
+                 * consumer(s). Retiring genuinely dead ones avoids
+                 * leaving unreferenced MIR_CONST instructions in the
+                 * stream, which downstream backend-slot assignment does
+                 * not expect and can mishandle. */
+                if (mir_value_use_count(left) == 0) {
+                    left_definition->opcode = MIR_NOP;
+                    left_definition->dst = -1;
+                }
+                if (mir_value_use_count(right) == 0) {
+                    right_definition->opcode = MIR_NOP;
+                    right_definition->dst = -1;
+                }
+                value = mir_new_value();
+                insn = mir_emit(MIR_CONST);
+                insn->dst = value;
+                insn->type = node->type != 0 ? node->type
+                                              : ast_expr_type_for_sizeof(node);
+                insn->immediate = folded;
+                return value;
+            }
         }
         value = mir_new_value();
         insn = mir_emit(MIR_BINARY);
@@ -6111,6 +6155,67 @@ static int mir_call_only_constant(int value)
             return 0;
     }
     return argument_count == 1;
+}
+
+/* Evaluates a scalar binary arithmetic/bitwise/shift operation over two
+ * compile-time constant operands, truncated and sign-extended to match
+ * `operand_type` (16-bit int or 32-bit long, per its TYPE_UNSIGNED flag),
+ * so a later Item 13 fold sees the exact result the target Z80 code would
+ * compute at runtime. Deliberately excludes relational/equality operators
+ * (Item 14's scope, a separate fold) and refuses to fold a division or
+ * modulo by a zero divisor, leaving that case to emit its normal runtime
+ * instruction sequence unchanged (matching prior behavior for this
+ * already-undefined-in-C case). Assumes the host `long` is at least
+ * 32 bits wide, true for every host this project builds on. */
+static int mir_fold_constant_binary(int op, long left, long right,
+                                    int operand_type, long *result)
+{
+    int type_bytes = type_size(operand_type);
+    int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+    long value;
+    unsigned long mask;
+
+    switch (op) {
+    case '+': value = left + right; break;
+    case '-': value = left - right; break;
+    case '*': value = left * right; break;
+    case '/':
+        if (right == 0)
+            return 0;
+        value = left / right;
+        break;
+    case '%':
+        if (right == 0)
+            return 0;
+        value = left % right;
+        break;
+    case '&': value = left & right; break;
+    case '|': value = left | right; break;
+    case '^': value = left ^ right; break;
+    case TOK_SHL:
+        if (right < 0 || right >= type_bytes * 8)
+            return 0;
+        value = left << right;
+        break;
+    case TOK_SHR:
+        if (right < 0 || right >= type_bytes * 8)
+            return 0;
+        value = left >> right;
+        break;
+    default:
+        return 0;
+    }
+    mask = type_bytes == 2 ? 0xffffUL
+         : type_bytes == 4 ? 0xffffffffUL : (unsigned long)-1L;
+    value = (long)((unsigned long)value & mask);
+    if (!is_unsigned) {
+        if (type_bytes == 2 && (value & 0x8000L) != 0)
+            value -= 0x10000L;
+        else if (type_bytes == 4 && (value & 0x80000000L) != 0)
+            value -= 0x100000000L;
+    }
+    *result = value;
+    return 1;
 }
 
 static int mir_binary_only_constant(int value)
