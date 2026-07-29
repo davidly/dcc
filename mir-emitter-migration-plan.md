@@ -268,3 +268,43 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   `runall.ps1 -Mode full -Extended` also passed (319 apps, 310 runnable, 196
   extended, 0 failures). New baseline: promoted directly to
   `build/mir-plan-50-baseline.tsv`.
+
+- Items 11/12 completed together (dead promoted-local initialization store
+  elimination and dead overwritten-before-read store elimination reduce to
+  one mechanism). First confirmed via `mir_object_is_fully_promoted`'s use
+  in `mir_try_emit_spilled_scalar_cfg`'s `MIR_STORE` emission case that
+  objects with zero `MIR_LOAD` instructions anywhere already have every
+  store to them skipped unconditionally — so Items 11/12 needed to target
+  the narrower, harder case of *partially* promoted objects (some real
+  loads remain, e.g. from an ambiguous CFG join `mir_promote_objects`
+  couldn't resolve to a phi) where an *individual* store instruction is
+  still provably dead. Implemented `mir_store_is_dead(instruction)`: a
+  backward liveness fixed point over the same successor-edge structure
+  used by the existing per-value liveness computation in
+  `mir_verify_and_dump`, specialised per-object so a `MIR_LOAD` of the
+  object is a use (forces liveness) and a `MIR_STORE` of the object is a
+  kill (its own liveness doesn't depend on anything reachable before it);
+  a store is dead iff its own `live_out` is empty — i.e. no reachable path
+  reads the object before it is next stored or the function ends. This one
+  fixed point covers both a dead initialization store (Item 11) and a
+  store overwritten before any intervening read (Item 12) without separate
+  code paths. Added a conservative safety guard,
+  `mir_object_address_taken(object)`, that scans for any `MIR_ADDRESS`
+  referencing the object (confirmed via the two `mir_emit(MIR_ADDRESS)`
+  call sites that it always sets `insn->object`) and refuses to consider
+  any store to that object dead if its address is ever taken, since a
+  store could then be observed through an escaped pointer that a static
+  scan of `MIR_LOAD` instructions cannot see (`MIR_COMPOUND_ADDRESS`, used
+  only for compound-literal temporaries, does not alias a named object and
+  needed no corresponding check). Wired into the `MIR_STORE` case in
+  `mir_try_emit_spilled_scalar_cfg` (the dominant selector, 2207/2319
+  admissions) alongside the existing `mir_object_is_fully_promoted` check.
+  Census against the Item-37 baseline showed 0 newly-admitted functions
+  (expected: this only shrinks already-fallback candidate sizes) but 39
+  apps with smaller generated-candidate sizes, 0 of which required runtime
+  validation (no currently-accepted function's generated size changed).
+  `runall.ps1 -Mode full -Extended` passed corpus-wide (319 apps, 310
+  runnable, 196 extended, 0 failures) as an extra safety check given this
+  is a new class of analysis (backward per-object liveness) rather than a
+  variation on prior work. New baseline: promoted directly to
+  `build/mir-plan-50-baseline.tsv`.

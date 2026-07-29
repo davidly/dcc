@@ -6363,6 +6363,77 @@ static int mir_object_is_fully_promoted(int object)
     return 1;
 }
 
+static int mir_object_address_taken(int object)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ADDRESS &&
+            mir.insns[instruction].object == object)
+            return 1;
+    return 0;
+}
+
+/* True if the value written by the MIR_STORE at `instruction` can never be
+ * observed: no real MIR_LOAD of the same object is reachable along any
+ * successor path before the object is next stored or the function ends.
+ * A backward liveness fixed point mirrors the per-value computation in
+ * mir_verify_and_dump, specialised so a MIR_LOAD of the object is a "use"
+ * (forces liveness) and a MIR_STORE of the object is a "kill" (the store's
+ * own liveness does not depend on anything reachable before it). This
+ * single mechanism covers both a dead initialisation store (never read
+ * before the function ends) and a store overwritten by a later store
+ * before any intervening read. Bails conservatively if the object's
+ * address is ever taken, since a store could then be observed through an
+ * escaped pointer that a static scan of MIR_LOAD instructions cannot see. */
+static int mir_store_is_dead(int instruction)
+{
+    int object;
+    unsigned char *live_in;
+    unsigned char *live_out;
+    int i;
+    int changed;
+    int dead;
+
+    if (mir.insns[instruction].opcode != MIR_STORE)
+        return 0;
+    object = mir.insns[instruction].object;
+    if (object < 0 || object >= mir.object_count ||
+        mir_object_address_taken(object))
+        return 0;
+    live_in = (unsigned char *)calloc((size_t)mir.count, 1);
+    live_out = (unsigned char *)calloc((size_t)mir.count, 1);
+    if (mir.count && (live_in == NULL || live_out == NULL))
+        fatal("out of memory computing MIR store liveness");
+    do {
+        changed = 0;
+        for (i = mir.count - 1; i >= 0; --i) {
+            const struct MirInsn *insn = &mir.insns[i];
+            int successor;
+            int next_out = 0;
+            int next_in;
+
+            for (successor = 0; successor < insn->successor_count; ++successor)
+                next_out |= live_in[insn->successors[successor]];
+            if (insn->opcode == MIR_LOAD && insn->object == object)
+                next_in = 1;
+            else if (insn->opcode == MIR_STORE && insn->object == object)
+                next_in = 0;
+            else
+                next_in = next_out;
+            if (live_out[i] != next_out || live_in[i] != next_in) {
+                live_out[i] = (unsigned char)next_out;
+                live_in[i] = (unsigned char)next_in;
+                changed = 1;
+            }
+        }
+    } while (changed);
+    dead = !live_out[instruction];
+    free(live_in);
+    free(live_out);
+    return dead;
+}
+
 static int mir_call_argument_cache_target(int value)
 {
     int argument_instruction = -1;
@@ -7692,7 +7763,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
-            if (mir_object_is_fully_promoted(insn->object))
+            if (mir_object_is_fully_promoted(insn->object) ||
+                mir_store_is_dead(i))
                 break;
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset))
