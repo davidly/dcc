@@ -6581,16 +6581,24 @@ static int mir_prepare_backend_slots(void)
                     continue;
                 if (definition != NULL && definition->opcode == MIR_BINARY &&
                     ((units == 1 && type_size(definition->secondary_offset) == 2) ||
-                     (units == 2 && type_size(definition->secondary_offset) == 4))) {
+                     (units == 2 && type_size(definition->secondary_offset) == 4) ||
+                     (units == 1 && type_size(definition->secondary_offset) == 4))) {
+                    /* A narrow (16-bit) boolean result from a wide (32-bit)
+                     * comparison still has two dying 32-bit operand units
+                     * available; match reuse against the operand width, not
+                     * the (narrower) result width, and take only the first
+                     * unit of a wide operand's slot for the result. */
+                    int operand_units =
+                        type_size(definition->secondary_offset) == 4 ? 2 : 1;
                     if (definition->src1 >= 0 && last[definition->src1] == i &&
                         mir.backend_slots[definition->src1] >= 0 &&
                         (mir_definition_is_wide(mir_definition(
-                             definition->src1)) ? 2 : 1) == units)
+                             definition->src1)) ? 2 : 1) == operand_units)
                         reusable_source = definition->src1;
                     else if (definition->src2 >= 0 && last[definition->src2] == i &&
                              mir.backend_slots[definition->src2] >= 0 &&
                              (mir_definition_is_wide(mir_definition(
-                                  definition->src2)) ? 2 : 1) == units)
+                                  definition->src2)) ? 2 : 1) == operand_units)
                         reusable_source = definition->src2;
                 } else if (definition != NULL && definition->opcode == MIR_UNARY &&
                     definition->src1 >= 0 &&

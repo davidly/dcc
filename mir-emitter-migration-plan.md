@@ -174,6 +174,24 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   validation. New baseline: `build/mir-plan-50-item-34.tsv` (promoted to
   `build/mir-plan-50-baseline.tsv`).
 
+- Item 5 completed: generalized the Item 1-4 dead-operand slot-reuse check in
+  `mir_prepare_backend_slots` to match against operand width
+  (`operand_units`, derived from `secondary_offset`) instead of result
+  width, adding the one previously-missing case: a narrow (16-bit) boolean
+  result from a wide (32-bit) comparison (`<`, `>`, `==`, etc. on `long`
+  operands) now reuses the first unit of a dying wide operand's two-unit
+  slot, freeing the second unit for reuse elsewhere. The prior two cases
+  (narrow-from-narrow, wide-from-wide) are unaffected — `operand_units`
+  reduces to the same value as `units` for both. Census against the
+  Item-37 baseline showed 0 newly-admitted functions (as expected: this
+  only shrinks already-fallback candidate sizes) but 84 apps with smaller
+  generated-candidate sizes, 4 of which (`tcrcfix`, `tscanf`, `tstdlib`,
+  `tsyntax`) required runtime validation for already-accepted functions
+  whose byte counts changed. `runall.ps1 -Apps tcrcfix,tscanf,tstdlib,tsyntax
+  -Mode full` passed with zero regressions, and `runall.ps1 -Mode full
+  -Extended` passed corpus-wide (319 apps, 0 failures). New baseline:
+  promoted directly to `build/mir-plan-50-baseline.tsv`.
+
 - Item 37 completed: general 16-bit multiply-by-constant strength reduction,
   ported from the legacy `dcc_ops.c` reference algorithm
   (`emit_mul_hl_const`/`mul_const_op_count`/`emit_mul_hl_const_general`,
