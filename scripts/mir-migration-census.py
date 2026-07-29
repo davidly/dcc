@@ -184,6 +184,7 @@ def compare_rows(
     newly_mir: list[tuple[str, str]] = []
     regressed: list[tuple[str, str]] = []
     changed_apps: set[str] = set()
+    runtime_apps: set[str] = set()
     compared_apps = {app for app, _ in new}
 
     for key in sorted(
@@ -198,8 +199,12 @@ def compare_rows(
         after_result = after["result"] if after else "missing"
         if before_result != "mir" and after_result == "mir":
             newly_mir.append(key)
+            runtime_apps.add(key[0])
         elif before_result == "mir" and after_result != "mir":
             regressed.append(key)
+            runtime_apps.add(key[0])
+        elif before_result == "mir" and after_result == "mir":
+            runtime_apps.add(key[0])
 
     print("\nSnapshot delta")
     print(f"  newly MIR-emitted: {len(newly_mir)}")
@@ -208,15 +213,16 @@ def compare_rows(
     print(f"  no longer MIR-emitted: {len(regressed)}")
     for app, function in regressed:
         print(f"    - {app}.{function}")
-    print(f"  affected apps: {len(changed_apps)}")
-    if changed_apps:
-        app_list = ",".join(sorted(changed_apps))
+    print(f"  apps with census changes: {len(changed_apps)}")
+    print(f"  apps requiring runtime validation: {len(runtime_apps)}")
+    if runtime_apps:
+        app_list = ",".join(sorted(runtime_apps))
         print("\nFocused validation")
         print(
             "  pwsh ./scripts/runall.ps1 "
             f"-Apps {app_list} -Mode full -RunTimeout 20"
         )
-    return changed_apps, len(regressed)
+    return runtime_apps, len(regressed)
 
 
 def main() -> int:

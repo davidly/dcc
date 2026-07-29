@@ -3728,9 +3728,13 @@ static void mir_resolve_deferred_metadata(void)
         struct MirInsn *insn = &mir.insns[i];
         struct MirInsn *source;
         if (insn->opcode != MIR_UNARY || insn->immediate != 0 ||
-            insn->memory_flags != 0 || insn->src1 < 0)
+            insn->src1 < 0)
             continue;
         source = mir_mutable_definition(insn->src1);
+        if (insn->memory_flags != 0 &&
+            !(insn->memory_flags == 512 && source != NULL &&
+              source->type == insn->type))
+            continue;
         if (source == NULL || type_size(source->type) != 2 ||
             type_size(insn->type) != 2 || type_is_float(source->type) ||
             type_is_float(insn->type) || type_is_struct_object(source->type) ||
@@ -6546,6 +6550,31 @@ static int mir_value_is_wide(int value)
     return mir_definition_is_wide(mir_definition(value));
 }
 
+static int mir_divmod_partner(int instruction)
+{
+    const struct MirInsn *candidate;
+    int partner;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return -1;
+    candidate = &mir.insns[instruction];
+    if (candidate->opcode != MIR_BINARY ||
+        (candidate->immediate != '/' && candidate->immediate != '%') ||
+        type_size(candidate->secondary_offset) > 2)
+        return -1;
+    for (partner = 0; partner < mir.count; ++partner) {
+        const struct MirInsn *other = &mir.insns[partner];
+        if (partner == instruction || other->opcode != MIR_BINARY ||
+            other->src1 != candidate->src1 || other->src2 != candidate->src2 ||
+            other->secondary_offset != candidate->secondary_offset)
+            continue;
+        if ((candidate->immediate == '/' && other->immediate == '%') ||
+            (candidate->immediate == '%' && other->immediate == '/'))
+            return partner;
+    }
+    return -1;
+}
+
 static void mir_emit_virtual_load_wide(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -7157,6 +7186,10 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            if (insn->dst >= 0 && mir.backend_slots != NULL &&
+                mir.backend_slots[insn->dst] < 0 &&
+                !mir_value_has_use(insn->dst))
+                break;
             if (mir_word_load_is_single_call_argument(insn->dst))
                 break;
             if (!mir_scalar_memory_location(insn, &memory_type,
@@ -7691,12 +7724,37 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 else
                     mir_emit_virtual_store(out, insn->dst);
             } else {
+                int divmod_partner = mir_divmod_partner(i);
                 const struct MirInsn *right_definition =
                     mir_definition(insn->src2);
                 unsigned long multiplier = right_definition != NULL
                     ? (unsigned long)right_definition->immediate & 0xffffUL
                     : 0;
                 mir_emit_virtual_load(out, insn->src1);
+                if (divmod_partner >= 0) {
+                    const struct MirInsn *other = &mir.insns[divmod_partner];
+                    int modulo_value = insn->immediate == '%' ? insn->dst
+                                                               : other->dst;
+                    int division_value = insn->immediate == '/' ? insn->dst
+                                                                 : other->dst;
+                    int saved_instruction = mir_emit_instruction_index;
+                    if (divmod_partner < i)
+                        break;
+                    fputs("\tpush hl\n", out);
+                    mir_emit_virtual_load(out, insn->src2);
+                    fputs("\tex de,hl\n\tpop hl\n", out);
+                    if ((insn->secondary_offset & TYPE_UNSIGNED) != 0)
+                        fputs("\textrn __udivmod\n\tcall __udivmod\n", out);
+                    else
+                        fputs("\textrn __sdivmod\n\tcall __sdivmod\n", out);
+                    mir_emit_instruction_index = -1;
+                    fputs("\tpush hl\n\tex de,hl\n", out);
+                    mir_emit_virtual_store(out, modulo_value);
+                    fputs("\tpop hl\n", out);
+                    mir_emit_virtual_store(out, division_value);
+                    mir_emit_instruction_index = saved_instruction;
+                    break;
+                }
                 if (insn->immediate == '*' && right_definition != NULL &&
                     right_definition->opcode == MIR_CONST &&
                     (multiplier == 0 ||
@@ -9167,7 +9225,8 @@ void mir_end_function(void)
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
                 else if (mir_has_inline_substitution_call() &&
-                         !(generated_instructions >= captured_instructions &&
+                         !(generated_instructions * 100 >=
+                             captured_instructions * 95 &&
                            generated_instructions <=
                                captured_instructions + 1 &&
                            generated_size <= captured_size))
