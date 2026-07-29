@@ -5772,12 +5772,18 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             return 0;
         switch (insn->opcode) {
         case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
-        case MIR_PHI: case MIR_JUMP: case MIR_BRANCH_FALSE: case MIR_STORE:
+        case MIR_PHI: case MIR_JUMP: case MIR_BRANCH_FALSE:
+            break;
+        case MIR_STORE:
+            if (!mir_object_is_fully_promoted(insn->object))
+                return 0;
             break;
         case MIR_UNARY:
             if (insn->immediate != 0 && insn->immediate != '+' &&
                 insn->immediate != '-' && insn->immediate != '~' &&
                 insn->immediate != '!')
+                return 0;
+            if (insn->immediate == '!')
                 return 0;
             break;
         case MIR_BINARY:
@@ -7067,7 +7073,13 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int i;
     int accepted = 0;
 
-        if ((!type_is_struct_object(mir.return_type) &&
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_RETURN)
+            break;
+    if (i == mir.count)
+        return mir_scalar_cfg_preflight_reject("implicit-return", -1);
+
+    if ((!type_is_struct_object(mir.return_type) &&
             (mir.return_type & 15) != TYPE_VOID &&
          type_size(mir.return_type) > 4) ||
         (type_is_struct_object(mir.return_type) &&
