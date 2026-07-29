@@ -9035,7 +9035,9 @@ void mir_end_function(void)
                          generated_size > captured_size + 1)
                     fallback_reason = "text-size";
                 else if (generated_instructions > captured_instructions +
-                         (!strcmp(selector_name, "homed-scalar-cfg") ? 1 : 0))
+                        (!strcmp(selector_name, "homed-scalar-cfg")
+                            ? (mir_cfg_block_count() <= 2 ? 2 : 1)
+                            : 0))
                     fallback_reason = "instruction-count";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
