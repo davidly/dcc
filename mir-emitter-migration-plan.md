@@ -74,6 +74,41 @@ new instruction form. Items 48-50 are architectural work; their current gates
 must remain in place until the stated lowering exists and passes full-mode
 validation.
 
+## Next Batch (20 items)
+
+Completed so far: 1, 2, 3, 4, 9, 10, 37. This batch picks the next 20 items,
+ordered for maximum reuse of already-validated infrastructure before moving to
+higher-risk CFG/call work. Same completion bar as above applies to each.
+
+| Order | # | Emitter migration | Why next |
+|---|---|---|---|
+| 1 | 5 | Reuse a dead compare operand slot for a subsequent materialized boolean | Completes the Item 1-4 slot-reuse family with the one remaining operand class |
+| 2 | 6 | Forward binary results directly to following stores | Same forwarding mechanism validated by Item 9/10, applied to stores instead of returns |
+| 3 | 7 | Forward unary results directly to following stores | Pairs directly with Item 6 |
+| 4 | 8 | Forward division/modulo results directly to following stores | Completes the forward-to-store family; division results are the highest-cost case to avoid re-spilling |
+| 5 | 11 | Eliminate dead promoted-local initialization stores | Low-risk dead-store elimination, no new instruction forms |
+| 6 | 12 | Eliminate overwritten promoted-local initialization stores | Pairs directly with Item 11 |
+| 7 | 13 | Fold constant binary operations before slot assignment | Removes slot pressure before it exists rather than reusing after the fact |
+| 8 | 14 | Fold constant comparison operations before slot assignment | Pairs directly with Item 13 |
+| 9 | 15 | Fold constant shifts before slot assignment | Completes the constant-fold family |
+| 10 | 16 | Materialize constant divisors directly without a slot | Immediate follow-on to Item 37 in the same arithmetic-lowering area |
+| 11 | 17 | Materialize constant dividend directly without a slot | Pairs directly with Item 16 |
+| 12 | 38 | Lower signed divide/mod by powers of two with C-correct rounding | Continues the constant-arithmetic strength reduction started by Item 37 while the `dcc_ops.c` reference algorithms are fresh context |
+| 13 | 39 | Lower unsigned divide/mod by powers of two | Pairs directly with Item 38 |
+| 14 | 18 | Improve constant address-plus-offset materialization | Enables Items 19/20 below |
+| 15 | 19 | Rematerialize repeated short string addresses at calls | Depends on Item 18 |
+| 16 | 20 | Rematerialize repeated function addresses at indirect calls | Depends on Item 18 |
+| 17 | 23 | Avoid storing unused scalar call results | Independent, low-risk dead-store elimination at call sites |
+| 18 | 24 | Avoid storing unused wide scalar call results | Pairs directly with Item 23 |
+| 19 | 21 | Cache a two-argument call value across adjacent arguments | Call-argument caching; higher risk (aliasing) so scheduled after the dead-store items |
+| 20 | 22 | Cache a three-argument call value across adjacent arguments | Pairs directly with Item 21 |
+
+Deferred to the following batch: Items 26-36 (CFG/branch/PHI selection,
+needs evidence from a broader set of two-block functions), Items 40-50
+(div/mod fusion, 32-bit lowering, float, switch, inline-substitution, and
+the architectural loop/pointer-array item), each of which either depends on
+CFG selection groundwork not yet built or needs its own dedicated benchmark.
+
 ## Current Execution Log
 
 - Item 1 completed: scalar `MIR_BINARY` results reuse a dead 16-bit operand's
