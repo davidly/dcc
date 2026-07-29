@@ -6332,6 +6332,7 @@ static int mir_prepare_backend_slots(void)
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 if (last[value] <= first[value] ||
+                    mir_call_only_constant(value) ||
                     mir_word_load_is_single_call_argument(value))
                     continue;
                 for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
