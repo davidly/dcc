@@ -2,6 +2,54 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `mir-migration-census.py`
+
+Measures active MIR rollout across `tests/*.c`, records why each remaining
+function falls back, and compares two snapshots to produce the smallest
+`runall.ps1 -Apps ...` validation command for a compiler change.
+
+The script is read-only with respect to test and performance baselines. It
+compiles each source with `DCC_MIR_SELECT_REPORT=1`, deduplicates repeated
+verify/deferred reports by `(app, function)`, and writes a stable tab-separated
+snapshot containing selector, result, fallback reason, assembly-text size,
+instruction count, and CFG block count.
+
+### Fast staged MIR workflow
+
+```sh
+# 1. Snapshot before changing a selector or MIR optimization.
+python3 scripts/mir-migration-census.py \
+  --output build/mir-before.tsv
+
+# 2. Edit and rebuild dcc.
+sh src/dcc/build-dcc.sh
+
+# 3. Measure the new rollout and print newly accepted/regressed functions plus
+#    the exact focused validation command for affected apps.
+python3 scripts/mir-migration-census.py \
+  --output build/mir-after.tsv \
+  --compare build/mir-before.tsv \
+  --fail-on-regression
+
+# 4. Run the printed command, for example:
+pwsh ./scripts/runall.ps1 -Apps tret,tatexit -Mode full -RunTimeout 20
+```
+
+Use `--apps app1,app2` while developing a local change. Run the complete census
+only when the focused hypothesis succeeds. Reserve an unfiltered
+`runall.ps1 -Mode full` for a material coverage milestone instead of every
+selector iteration.
+
+Apps marked `ignore` in `tests/_test_overrides.json` are skipped by default, so
+the complete census matches the runnable app suite. Pass `--include-ignored`
+when deliberately investigating those sources. Per-app `dcc_args` overrides
+are forwarded automatically.
+
+`--fail-on-regression` returns nonzero when a function that emitted through MIR
+in the comparison snapshot now falls back. A newly MIR-emitted function is not
+automatically considered safe: run the generated focused command to verify
+correctness, peep/nopeep cycles, and both sizes before committing it.
+
 ## `publish-package.ps1`
 
 Publishes or republishes the binary package release. By default it reads the

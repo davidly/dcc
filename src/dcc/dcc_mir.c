@@ -3742,6 +3742,30 @@ static void mir_resolve_deferred_metadata(void)
         insn->src1 = -1;
         insn->src2 = -1;
     }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        struct MirInsn *source;
+        unsigned long bits;
+        if (insn->opcode != MIR_UNARY || insn->src1 < 0 ||
+            type_size(insn->type) != 2)
+            continue;
+        source = mir_mutable_definition(insn->src1);
+        if (source == NULL || source->opcode != MIR_CONST)
+            continue;
+        bits = (unsigned long)source->immediate & 0xffffUL;
+        if (insn->immediate == '-')
+            bits = (0UL - bits) & 0xffffUL;
+        else if (insn->immediate == '~')
+            bits = (~bits) & 0xffffUL;
+        else if (insn->immediate == '!')
+            bits = bits == 0;
+        else if (insn->immediate != 0 && insn->immediate != '+')
+            continue;
+        insn->opcode = MIR_CONST;
+        insn->src1 = -1;
+        insn->src2 = -1;
+        insn->immediate = (long)bits;
+    }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_STORE_INDIRECT &&
             mir.insns[i].memory_size > 4)
