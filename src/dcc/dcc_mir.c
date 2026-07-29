@@ -6363,6 +6363,19 @@ static int mir_has_integer_division(void)
     return 0;
 }
 
+/* Single source of truth for whether a constant multiply may use the
+ * unrolled shift/add fast path (mir_emit_mul_hl_const) instead of __mulu.
+ * Both the frame slot-count accounting (mir_multiply_by_small_constant)
+ * and the actual emission site in mir_try_emit_spilled_scalar_cfg call
+ * this, so they cannot fall out of sync the way they once did. */
+static int mir_mul_const_fast_path_eligible(unsigned long multiplier, int dst)
+{
+    return multiplier == 0 ||
+           (multiplier & (multiplier - 1)) == 0 ||
+           (mir_mul_const_op_count(multiplier) <= MIR_MUL_CONST_MAX_OPS &&
+            !(mir_value_feeds_vla_alloc(dst) && mir_has_integer_division()));
+}
+
 static int mir_multiply_by_small_constant(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -6386,9 +6399,15 @@ static int mir_multiply_by_small_constant(int value)
     {
         unsigned long multiplier =
             (unsigned long)definition->immediate & 0xffffUL;
-        return multiplier == 0 ||
-               (multiplier & (multiplier - 1)) == 0 ||
-               mir_mul_const_op_count(multiplier) <= MIR_MUL_CONST_MAX_OPS;
+        int multiply_instruction;
+        int multiply_dst = -1;
+        for (multiply_instruction = 0; multiply_instruction < mir.count;
+             ++multiply_instruction)
+            if (mir.insns[multiply_instruction].src2 == value) {
+                multiply_dst = mir.insns[multiply_instruction].dst;
+                break;
+            }
+        return mir_mul_const_fast_path_eligible(multiplier, multiply_dst);
     }
 }
 
@@ -8185,25 +8204,48 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 if (insn->immediate == '*' && right_definition != NULL &&
                     right_definition->opcode == MIR_CONST &&
-                    (multiplier == 0 ||
-                     (multiplier & (multiplier - 1)) == 0 ||
-                     (mir_mul_const_op_count(multiplier) <=
-                          MIR_MUL_CONST_MAX_OPS &&
-                      !(mir_value_feeds_vla_alloc(insn->dst) &&
-                        mir_has_integer_division())))) {
+                    mir_mul_const_fast_path_eligible(multiplier, insn->dst)) {
                     mir_emit_mul_hl_const(out, multiplier);
                     mir_emit_virtual_store(out, insn->dst);
                     break;
                 }
-                fputs("\tpush hl\n", out);
-                if (mir_binary_only_constant(insn->src2)) {
+                /* A constant divisor/modulus needs no dividend-preserving
+                 * push/pop dance: the dividend is already sitting in HL
+                 * from src1's evaluation above and a constant load cannot
+                 * clobber it, so the divisor can be materialized directly
+                 * into DE (Item 16). Every other operator keeps the
+                 * existing push/ex/pop sequence, since src2 there may be
+                 * evaluated via a call or memory access that does clobber
+                 * HL.
+                 *
+                 * Skip this shortcut in functions with a VLA: shaving a
+                 * few bytes off this one instruction can tip a borderline
+                 * function's byte-size-based accept/fallback gate over to
+                 * "mir accepted" (particularly under -fstack-check, whose
+                 * extra call-site bytes shift the size comparison), and
+                 * VLA frames lean on ix-relative slot traffic that is
+                 * byte-cheap but T-state-expensive - the resulting switch
+                 * from the legacy path to the MIR path can be a net cycle
+                 * regression even though every individual instruction
+                 * changed here is unambiguously cheaper in isolation. */
+                if ((insn->immediate == '/' || insn->immediate == '%') &&
+                    !mir.has_vla &&
+                    mir_binary_only_constant(insn->src2)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src2);
-                    fprintf(out, "\tld hl,%ld\n",
+                    fprintf(out, "\tld de,%ld\n",
                             constant->immediate & 0xffffL);
-                } else
-                    mir_emit_virtual_load(out, insn->src2);
-                fputs("\tex de,hl\n\tpop hl\n", out);
+                } else {
+                    fputs("\tpush hl\n", out);
+                    if (mir_binary_only_constant(insn->src2)) {
+                        const struct MirInsn *constant =
+                            mir_definition(insn->src2);
+                        fprintf(out, "\tld hl,%ld\n",
+                                constant->immediate & 0xffffL);
+                    } else
+                        mir_emit_virtual_load(out, insn->src2);
+                    fputs("\tex de,hl\n\tpop hl\n", out);
+                }
                 if (!mir_emit_scalar_operation(out, insn))
                     goto done;
                 mir_emit_virtual_store(out, insn->dst);

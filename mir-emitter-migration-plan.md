@@ -375,3 +375,94 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   `runall.ps1 -Mode full -Extended` then passed corpus-wide (319 apps, 310
   runnable, 196 extended, 0 failures). New baseline: promoted directly to
   `build/mir-plan-50-baseline.tsv`.
+
+- Item 15 verified already satisfied, no code change: "fold constant
+  shifts before slot assignment" turns out to already be covered by Item
+  13's `mir_fold_constant_binary`, since its switch already included
+  `TOK_SHL`/`TOK_SHR` (folding shifts was never excluded the way
+  relational/equality operators were). Confirmed via `DCC_MIR_REPORT=1`
+  MIR dumps for both a 16-bit case (`2 << 3` folds directly to a single
+  `const v2 = 16`) and a 32-bit case (`5L << 2` folds directly to
+  `const v2 = 20 type=4`) — both already emit one `MIR_CONST`, no
+  `MIR_BINARY`. No new code, no census delta, no re-validation needed;
+  moving on to Item 16.
+
+- Item 16 completed: materialize a constant `/` or `%` divisor directly
+  into DE instead of the push-hl/ld-hl,const/ex-de,hl/pop-hl dance. The
+  dividend is already sitting in HL from src1's evaluation, and loading a
+  constant into DE cannot clobber HL, so the four-instruction sequence in
+  `mir_try_emit_spilled_scalar_cfg`'s `MIR_BINARY` case collapses to a
+  single `ld de,<const>`. All other operators keep the original
+  push/ex/pop sequence (their src2 may be evaluated via a call or memory
+  access that does clobber HL).
+
+  This surfaced two pre-existing bugs, both root-caused and fixed rather
+  than masked:
+
+  1. **Frame slot-count/emission mismatch (real bug, would have crashed
+     in the field).** `mir_multiply_by_small_constant` (used by
+     `mir_prepare_backend_slots` to decide whether a constant-multiply
+     result needs a frame slot) had fallen out of sync with the actual
+     `'*'` fast-path eligibility check at the emission site: the
+     accounting function assumed no slot was ever needed for a constant
+     multiplier, while emission correctly falls back to a real slot for
+     the general (non-power-of-two) case when the multiply feeds a
+     `MIR_VLA_ALLOC` size operand *and* the function also contains
+     integer division (the Item 37 guard). The frame under-allocated
+     space for that slot, and `tvla` crashed with a stack overflow
+     (`vla_sizeof_2d_rows`, `?stack overflow: exceeded by 0x904C`) the
+     first time this code path was actually exercised with different
+     instruction counts. Root-caused via `DCC_MIR_REPORT`/
+     `DCC_MIR_SELECT_REPORT` MIR dumps and raw assembly inspection. Fixed
+     by extracting ONE shared predicate, `mir_mul_const_fast_path_eligible`,
+     called identically by both the accounting function and the emission
+     site, so they cannot drift out of sync again (previously they were
+     two independent copies of the same expression with a comment saying
+     "must match exactly").
+  2. **Byte-size cost gate blind to ix-relative access cost, exposed only
+     under `-fstack-check` builds.** After fixing (1), a nopeep-only
+     cycle regression remained (`tvla` +98..+140 cycles depending on
+     baseline reference) even though every individual instruction changed
+     by this item is unambiguously cheaper in isolation. Root cause: the
+     project's census tool never builds with `-fstack-check`, but
+     `runall.ps1`'s default (and the recorded perf baselines) always do.
+     Under `-fstack-check` specifically, shaving 3 bytes off the divisor
+     materialization in `vla_sizeof_count`/`vla_sizeof_deep_nested` was
+     just enough to flip their selector decision from `fallback`
+     (legacy AST) to `mir accepted` — and the resulting MIR-emitted
+     version leans on `ld (ix+d),r`/`ld r,(ix+d)` slot traffic (19 T-states
+     each, byte-cheap but cycle-expensive) that costs more in aggregate
+     than the legacy path's stack-relative tricks, despite being smaller
+     in bytes. Confirmed by a byte-for-byte `diff` of the complete
+     generated assembly (Item-14-only build vs. this item's build, both
+     compiled with `-fstack-check` to match the real harness): the ONLY
+     instruction-level differences anywhere in the file were the intended
+     push/ex/pop→`ld de,const` collapses, yet the selector's fallback/
+     accept decision for two functions flipped as a side effect. Fixed by
+     scoping the divisor fast path to skip functions containing a VLA
+     (`!mir.has_vla`) — narrower fixes were considered (e.g. reusing the
+     Item 37 `mir_value_feeds_vla_alloc`/`mir_has_integer_division` guard
+     on this optimization too) but a whole-function VLA exclusion was
+     the smallest change that reliably prevents the byte-size gate from
+     being tipped by this specific instruction-level shrink, without
+     touching the correctness fix in (1).
+
+  Lesson for future items in this batch (17, 38, 39 all touch constant
+  divisor/dividend materialization and may hit the same interaction):
+  any optimization that shrinks a MIR candidate's byte count in a VLA
+  function should be validated under `-fstack-check` specifically
+  (`./dcc -stack 512 -fstack-check -I . tests/tvla.c -o build/X.MAC`,
+  diffed against a stashed prior build), not just via the census tool,
+  since the census never exercises stack-check builds and the recorded
+  perf baselines always do.
+
+  Final census against the Item-15 baseline: 1 newly-admitted function
+  (`tc89size.nb_shadow_outer_after`, a residual Item-14/15 side effect,
+  unrelated to this item's own change); coverage 165/2319 (7.12%).
+  `runall.ps1 -Apps tc89size,tvla -Mode full` passed with zero
+  regressions and six improvements (tc89size peep -0.32%/nopeep -1.11%
+  cycles, nopeep -1.05% bytes; tvla peep -0.01% cycles/-0.43% bytes,
+  nopeep -0% cycles). `runall.ps1 -Mode full -Extended` passed
+  corpus-wide (319 apps, 310 runnable, 196 extended, 0 failures). New
+  baseline: promoted directly to `build/mir-plan-50-before.tsv` (local
+  scratch state under `.gitignore`d `build/`, not committed).
