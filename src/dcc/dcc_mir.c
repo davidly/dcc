@@ -9032,7 +9032,7 @@ void mir_end_function(void)
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
-                         generated_size > captured_size)
+                         generated_size > captured_size + 1)
                     fallback_reason = "text-size";
                 else if (generated_instructions > captured_instructions +
                          (!strcmp(selector_name, "homed-scalar-cfg") ? 1 : 0))
