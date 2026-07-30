@@ -247,7 +247,7 @@ its live range never needs it.
 | 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | verified already satisfied - see Execution Log |
 | 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | investigated, found inert - see Execution Log |
 | 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | done - see Execution Log |
-| 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | |
+| 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | done - see Execution Log |
 | 32 | Add `tests/tmirconstfast.c` covering every new fast path, clang baseline | | |
 | 33 | Full census + full-mode validation | | |
 | 34 | Milestone checkpoint | | |
@@ -1056,4 +1056,66 @@ _(append one entry per completed item, in table order, starting with Item
   tc89comp`: 0 regressions. Milestone `-Mode full -Extended` run:
   312/321 apps passed (9 skipped as expected), extended suite 196/196
   passed, diagnostics/dccpeep fixtures/performance all passed.
+
+- **Item 31** (2026-07-31): Added an `inc (ix+n)`/`dec (ix+n)` in-place
+  fast path for a bare `x++;`/`x--;` on a 16-bit non-pointer local or
+  parameter, mirroring the legacy backend's `emit_incdec_sym_direct`
+  (`dcc_symbols.c` ~line 1322) exactly, including its carry-checked
+  byte-pair form (`inc (ix+n)` / `jp nz,done` / `inc (ix+n+1)` for
+  increment; the decrement side needs an extra `ld a,(ix+n)` / `or a`
+  before the low-byte `dec` because `dec` alone doesn't leave the right
+  flag state to detect a low-byte borrow the way `inc`'s NZ-after-wrap
+  does for the high-byte carry). Added
+  `mir_binary_is_selfstore_incdec(index, *store_index)`: matches a
+  `MIR_BINARY` `+`/`-` against the exact constant `1`, whose left operand
+  is a 16-bit non-pointer local/parameter memory location, and whose
+  result has exactly one use anywhere in the function - a plain
+  `MIR_STORE` writing back to that identical location. Wired into the
+  `MIR_BINARY` emission case (emits the fused sequence and skips the
+  general binary-op path) and the `MIR_STORE` emission case (skips
+  emitting the now-redundant store). Also added
+  `mir_value_is_selfstore_incdec(value)`, a value-indexed wrapper used to
+  extend `mir_prepare_backend_slots()`'s existing slot-skip condition
+  chain (alongside `mir_call_only_constant`/`mir_multiply_by_small_constant`/
+  `fused_away`) so the fused-away `MIR_BINARY` result no longer wastes a
+  backend frame slot.
+  
+  While building this item's own correctness test, discovered the real
+  applicability of the "exactly one use, and it's a store" condition is
+  narrower than the initial hypothesis: dcc's MIR construction does local
+  value numbering, so any later reference to the same source variable
+  within the same basic block - or across a loop-carrying PHI merge at a
+  block boundary - reuses this `MIR_BINARY`'s `dst` value directly rather
+  than re-loading from memory, which gives the value a second use and
+  correctly disqualifies it. That means this fusion's real hit population
+  is a genuinely dead-after-increment local (e.g. `x++;` as the last
+  touch of `x` before an unrelated `return`), not the more commonly
+  imagined "hot loop induction variable" shape - loop-carried variables
+  either stay in registers or flow through PHI nodes, and any register
+  spill for them is one the allocator itself decided was necessary, not a
+  redundant round-trip this fusion should remove. Documented this scope
+  narrowing directly in the function's header comment for future
+  readers.
+  
+  Correctness was verified directly: since the fused value's single
+  legitimate use forbids any observation of the post-increment value
+  through the normal SSA-tracked reference (by construction), the test
+  takes the address of the local (`int *p = &x;`) so a `*p` read goes
+  through an independent `MIR_LOAD_INDIRECT` mechanism instead of
+  reusing the `MIR_BINARY`'s tracked value, exposing the true memory
+  write. Force-accepted `inc_test`/`dec_test` functions built this way
+  for boundary-case inputs (255→256 byte-boundary carry, `-1`→`0` and
+  `0xFFFF`→`0` wraparound for increment; `256`→`255` byte-boundary
+  borrow, `0`→`-1` and `1`→`0` for decrement), run under `ntvcm`: all
+  matched expected 16-bit-wrapped values exactly, and the generated
+  assembly was inspected directly to confirm the fused `inc (ix+n)`/
+  `jp nz,...`/`inc (ix+n+1)` sequence appears with no redundant
+  reload/store around it. Census (`--fail-on-regression`) vs
+  `build/phase3-before.tsv`: 0 newly/no-longer MIR-emitted, 145 apps with
+  metric churn (cumulative since Items 25/27/30 folded into the same
+  running snapshot), 5 apps (`tesc, tscanf, tsprintf, tstr3, tsyntax`)
+  flagged for runtime validation - focused `-Mode full` run on exactly
+  those 5: 0 regressions, all passed. Milestone `-Mode full -Extended`
+  run: 312/321 apps passed (9 skipped as expected), extended suite
+  196/196 passed, diagnostics/dccpeep fixtures/performance all passed.
 

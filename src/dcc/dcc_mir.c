@@ -438,6 +438,8 @@ static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
 static int mir_load_is_single_call_argument(int value, int size);
 static int mir_object_is_fully_promoted(int object);
 static int mir_value_is_wide(int value);
+static int mir_binary_is_selfstore_incdec(int index, int *store_index);
+static int mir_value_is_selfstore_incdec(int value);
 static int mir_find_label(int label);
 static int mir_lvalue_type(const struct AstNode *node);
 static int mir_value_use_count(int value);
@@ -7008,6 +7010,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_call_only_constant(value) ||
                                         mir_multiply_by_small_constant(value) ||
                                         (fused_away != NULL && fused_away[value]) ||
+                                        mir_value_is_selfstore_incdec(value) ||
                                         ((type_size(definition->type) == 2 ||
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
@@ -7866,6 +7869,127 @@ static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     return 0;
 }
 
+/* Item 31 (mir-migration-plan-100): a bare "x++;"/"x--;" statement on a
+ * frame-local scalar lowers (mir_lower_incdec) to load-x / add-or-sub-1 /
+ * store-x, going through the general spilled-scalar-cfg load/store path
+ * even though the whole operation only ever touches x's own memory. The
+ * legacy AST backend already has a dedicated fast path for exactly this
+ * shape (emit_incdec_sym_direct, dcc_symbols.c ~line 1322): "inc (ix+n)"
+ * (or a carry-checked byte-pair form for 16-bit values) directly against
+ * the frame slot, with no register round-trip at all. This mirrors that
+ * fast path for the MIR backend, restricted to the same population
+ * legacy restricts itself to - non-pointer, frame-local-or-parameter,
+ * 16-bit scalars (pointer ++/-- must scale by the pointee size, not a
+ * raw +-1, so it is deliberately excluded here exactly as it is in
+ * emit_incdec_sym_direct; 8-bit char and 32-bit long operands are also
+ * out of scope for this item, left for a future extension since they
+ * need their own byte-width-specific carry-chain shape).
+ *
+ * Returns 1 and sets *store_index to the sole store instruction re-writing
+ * the result back to the same frame slot iff every one of the following
+ * holds: the operator is '+' or '-' against the exact constant 1; the
+ * left operand's value is bound to a 16-bit non-pointer local/parameter
+ * memory location; and the result value (insn->dst) has exactly one use
+ * anywhere in the function, which is a plain MIR_STORE writing to that
+ * identical memory location.
+ *
+ * Note on scope: within a single basic block, or across a loop-carrying
+ * PHI merge, any later reference to the same source variable reuses this
+ * MIR_BINARY's dst value directly (dcc's MIR construction does local value
+ * numbering, confirmed while building this item's test coverage), which
+ * gives the value a second use and disqualifies it here - that is by
+ * design, since the fused instruction only replaces a genuine store-then-
+ * never-read-again sequence, not a live loop induction variable (those
+ * stay in registers or flow through PHI nodes, and any store back to a
+ * frame slot for them is a spill the register allocator itself decided
+ * was necessary, not a redundant round-trip this fusion should remove).
+ * This makes the fusion's real-world hit population the population of
+ * dead-after-increment locals (e.g. "x++;" as the last touch of x before
+ * an unrelated return), confirmed narrow by census (see Execution Log). */
+static int mir_binary_is_selfstore_incdec(int index, int *store_index)
+{
+    const struct MirInsn *insn = &mir.insns[index];
+    const struct MirInsn *left_definition;
+    const struct MirInsn *right_definition;
+    int memory_type, memory_storage, memory_offset;
+    int store_type, store_storage, store_offset;
+    int uses = 0;
+    int found_store = -1;
+    int scan;
+
+    if (insn->opcode != MIR_BINARY ||
+        (insn->immediate != '+' && insn->immediate != '-'))
+        return 0;
+    if (type_ptr_depth(insn->secondary_offset) > 0 ||
+        type_size(insn->secondary_offset) != 2)
+        return 0;
+    right_definition = mir_definition(insn->src2);
+    if (right_definition == NULL || right_definition->opcode != MIR_CONST ||
+        right_definition->immediate != 1)
+        return 0;
+    left_definition = mir_definition(insn->src1);
+    if (left_definition == NULL ||
+        !mir_scalar_memory_location(left_definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        type_ptr_depth(memory_type) > 0 || type_size(memory_type) != 2)
+        return 0;
+    for (scan = 0; scan < mir.count; ++scan) {
+        const struct MirInsn *use = &mir.insns[scan];
+        if (use->src1 != insn->dst && use->src2 != insn->dst)
+            continue;
+        if (use->opcode != MIR_STORE || use->src1 != insn->dst ||
+            !mir_scalar_memory_location(use, &store_type, &store_storage,
+                                        &store_offset) ||
+            store_storage != memory_storage || store_offset != memory_offset)
+            return 0;
+        found_store = scan;
+        ++uses;
+    }
+    if (uses != 1)
+        return 0;
+    *store_index = found_store;
+    return 1;
+}
+
+/* Value-indexed wrapper around mir_binary_is_selfstore_incdec for slot-
+ * assignment callers that only have a value, not its defining instruction
+ * index (mirroring how mir_call_only_constant/mir_binary_only_constant are
+ * both value-indexed too). */
+static int mir_value_is_selfstore_incdec(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int store_index;
+
+    if (definition == NULL || definition->opcode != MIR_BINARY)
+        return 0;
+    return mir_binary_is_selfstore_incdec((int)(definition - mir.insns),
+                                          &store_index);
+}
+
+/* Emits the Item 31 carry-checked byte-pair increment/decrement directly
+ * against a frame slot, mirroring emit_incdec_sym_direct's 2-byte form
+ * exactly: "inc (ix+n)" cannot ripple a carry into the high byte on its
+ * own, so an explicit "jp nz" skips the high-byte adjustment on the
+ * common case where the low byte doesn't wrap. */
+static void mir_emit_selfstore_incdec(FILE *out, int offset, int is_inc)
+{
+    int done = new_label();
+
+    if (is_inc) {
+        fprintf(out, "\tinc (ix%+d)\n", offset);
+        fprintf(out, "\tjp nz,L%d\n", done);
+        fprintf(out, "\tinc (ix%+d)\n", offset + 1);
+    } else {
+        fprintf(out, "\tld a,(ix%+d)\n", offset);
+        fprintf(out, "\tdec (ix%+d)\n", offset);
+        fputs("\tor a\n", out);
+        fprintf(out, "\tjp nz,L%d\n", done);
+        fprintf(out, "\tdec (ix%+d)\n", offset + 1);
+    }
+    fprintf(out, "L%d:\n", done);
+}
+
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
 {
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
@@ -8322,6 +8446,15 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            const struct MirInsn *producer = mir_definition(insn->src1);
+            if (producer != NULL && producer->opcode == MIR_BINARY) {
+                int producer_index = (int)(producer - mir.insns);
+                int selfstore_store_index;
+                if (mir_binary_is_selfstore_incdec(producer_index,
+                                                   &selfstore_store_index) &&
+                    selfstore_store_index == i)
+                    break;
+            }
             if (mir_object_is_fully_promoted(insn->object) ||
                 mir_store_is_dead(i))
                 break;
@@ -8542,6 +8675,18 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_BINARY:
+            {
+            int selfstore_store_index;
+            if (mir_binary_is_selfstore_incdec(i, &selfstore_store_index)) {
+                int memory_type, memory_storage, memory_offset;
+                mir_scalar_memory_location(mir_definition(insn->src1),
+                                            &memory_type, &memory_storage,
+                                            &memory_offset);
+                mir_emit_selfstore_incdec(out, memory_offset,
+                                          insn->immediate == '+');
+                break;
+            }
+            }
             if (type_size(insn->secondary_offset) == 4) {
                 mir_emit_virtual_load_wide(out, insn->src1);
                 fputs("\tpush de\n\tpush hl\n", out);
