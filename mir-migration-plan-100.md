@@ -242,8 +242,8 @@ its live range never needs it.
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
 | 25 | Emit `ld a,h / or l` directly for compare-with-constant-zero at the Phase-1 fusion site | pre-peep evidence in the `check_s` case study (`push/ld hl,0/ex de,hl/pop hl/or a/sbc hl,de`) | done - see Execution Log |
-| 26 | Add an 8-bit-range compare-with-small-constant fast path (`cp` byte form) instead of full 16-bit `sbc hl,de` | | |
-| 27 | Add a sign-bit test (`bit 7,h`) fast path for `<`/`>=` against constant 0 | | |
+| 26 | Add an 8-bit-range compare-with-small-constant fast path (`cp` byte form) instead of full 16-bit `sbc hl,de` | | deferred - see Execution Log |
+| 27 | Add a sign-bit test (`bit 7,h`) fast path for `<`/`>=` against constant 0 | | done - see Execution Log |
 | 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | |
 | 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | |
 | 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | |
@@ -944,6 +944,42 @@ _(append one entry per completed item, in table order, starting with Item
   0 failed. Milestone `-Mode full -Extended` run: 312/321 apps passed (9
   skipped as expected), extended suite 196/196 passed, diagnostics/dccpeep
   fixtures/performance all passed.
+
+- **Item 26 - deferred** (2026-07-30): Investigated an 8-bit-range
+  `cp`-based fast path for comparisons against a small constant. By the
+  time a comparison reaches `MIR_BINARY`, C's usual arithmetic conversions
+  have already promoted any narrower operand to a full 16-bit int, and
+  MIR does not track an operand's pre-promotion original type or a proven
+  small value range surviving to that point. Proving either operand is
+  guaranteed to fit in a single byte (so a single `cp`/`or`/`and` byte
+  comparison could replace the full 16-bit `sbc hl,de`) would require new
+  semantic/range-tracking infrastructure, not a small selector tweak -
+  the same class of design gap that made Item 6 and Item 14 defer/skip
+  candidates rather than in-scope edits. Deferred until such tracking
+  exists; no code changed for this item.
+
+- **Item 27** (2026-07-30): Emitted `bit 7,h` directly for signed `<`/`>=`
+  comparisons against the constant 0 at the same Phase-1 fusion site as
+  Item 25, instead of materializing 0 into DE and running the full
+  sign-flip-and-`sbc hl,de` sequence. Added
+  `mir_fused_compare_is_signed_zero_sign_test()` (rejects the unsigned
+  case, where `x < 0` is always false and `x >= 0` is always true - a
+  different, constant-fold opportunity this item does not attempt) and
+  used it at the call site, guarded by the same
+  `mir_binary_is_fusable_comparison()` check as Item 25, to skip the
+  DE-load entirely. `mir_emit_fused_comparison_branch` now emits `bit 7,h`
+  and branches on `z`/`nz` directly (2 instructions instead of 8: no DE
+  load, no `xor 128` sign-flip pair on either operand, no `sbc hl,de`).
+  Rebuilt clean. Census (`--fail-on-regression`) vs `build/phase3-before.tsv`:
+  0 newly/no-longer emitted (171/2353, 7.27%), 126 apps with changed
+  metrics, 5 flagged for runtime validation
+  (`tesc, tscanf, tsprintf, tstr3, tsyntax`). Runtime-validated those 5 in
+  `-Mode full`: 0 regressions. Broader spot-check across
+  `cint, tc89comp, tc89decl, tmuldiv, tlong, tswitch, tcmp`: 0 regressions.
+  Wide fast-mode safety net (`-Mode fast`, 321 apps): 312 passed / 9
+  skipped / 0 failed. Milestone `-Mode full -Extended` run: 312/321 apps
+  passed (9 skipped as expected), extended suite 196/196 passed,
+  diagnostics/dccpeep fixtures/performance all passed.
 
 
 

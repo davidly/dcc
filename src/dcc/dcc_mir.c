@@ -7415,6 +7415,41 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index)
            (right->immediate & 0xffffL) == 0;
 }
 
+/* Item 26 (mir-migration-plan-100): an 8-bit-range `cp`-based fast path for
+ * "small constant" comparisons was investigated and deferred. MIR reaches
+ * MIR_BINARY only after C's usual arithmetic conversions have already
+ * promoted narrower operands to a full 16-bit int - there is no tracking of
+ * an operand's pre-promotion original type (or a proven small value range)
+ * surviving to this point, so proving either operand is guaranteed to fit in
+ * a single byte would require new semantic/range-tracking infrastructure,
+ * not a small selector tweak. Deferred until such tracking exists (same
+ * "defer, don't guess" rationale as Item 6/Item 14). */
+
+/* Item 27 (mir-migration-plan-100): a signed `<`/`>=` comparison against the
+ * constant 0 needs only the sign bit of the left operand - `bit 7,h` sets Z
+ * from bit 7 of H directly, with no DE materialization or 16-bit `sbc
+ * hl,de` (and no xor-128 sign-flip dance, which exists only to make an
+ * unsigned `sbc` behave like a signed compare against a non-zero DE). This
+ * only applies when the comparison is provably signed: if either operand is
+ * unsigned, "x < 0" is always false and "x >= 0" is always true, which is a
+ * different (constant-fold) opportunity this item does not attempt. */
+static int mir_fused_compare_is_signed_zero_sign_test(int compare_index)
+{
+    const struct MirInsn *compare = &mir.insns[compare_index];
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+
+    if (compare->immediate != '<' && compare->immediate != TOK_GE)
+        return 0;
+    left = mir_definition(compare->src1);
+    right = mir_definition(compare->src2);
+    if ((left != NULL && (left->type & TYPE_UNSIGNED) != 0) ||
+        (right != NULL && (right->type & TYPE_UNSIGNED) != 0))
+        return 0;
+    return right != NULL && right->opcode == MIR_CONST &&
+           (right->immediate & 0xffffL) == 0;
+}
+
 static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
                                              int compare_index, int negate)
 {
@@ -7441,6 +7476,25 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
         /* Item 25: DE was never loaded for this case (the caller skips it
          * on this same const-zero-rhs test), so test HL directly. */
         fputs("\tld a,h\n\tor l\n", out);
+    } else if ((operation == '<' || operation == TOK_GE) &&
+               mir_fused_compare_is_signed_zero_sign_test(compare_index)) {
+        /* Item 27: DE was never loaded for this case either (the caller
+         * skips it on this same signed-zero-sign-test), so the sign bit of
+         * HL is tested directly instead of a 16-bit sbc. `bit 7,h` sets Z
+         * when the sign bit is clear (value >= 0) and NZ when it is set
+         * (value < 0) - the opposite sense of the c/nc pair the sbc path
+         * produces, so this case picks its own true_condition below rather
+         * than falling into the shared switch. */
+        fputs("\tbit 7,h\n", out);
+        true_condition = operation == '<' ? "nz" : "z";
+        fallthrough_label = new_label();
+        fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
+        if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate,
+                                          target))
+            return 0;
+        fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label],
+                fallthrough_label);
+        return 1;
     } else {
         if (operation == '>' || operation == TOK_LE) {
             fputs("\tex de,hl\n", out);
@@ -8530,6 +8584,13 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                      * entirely; the fused branch emitter below tests HL
                      * directly with "ld a,h / or l" instead of
                      * "or a / sbc hl,de". */
+                } else if (mir_binary_is_fusable_comparison(i) > 0 &&
+                           mir_fused_compare_is_signed_zero_sign_test(i)) {
+                    /* Item 27: same reasoning as Item 25 above, but for a
+                     * signed `<`/`>=` comparison against the constant 0 -
+                     * the fused branch emitter tests the sign bit of HL
+                     * directly with "bit 7,h" instead of loading 0 into DE
+                     * for a 16-bit sbc. */
                 } else {
                     fputs("\tpush hl\n", out);
                     if (mir_binary_only_constant(insn->src2)) {
