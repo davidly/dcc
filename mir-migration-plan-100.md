@@ -659,5 +659,36 @@ _(append one entry per completed item, in table order, starting with Item
   apps): 311 passed / 9 skipped / 0 failed. Baseline snapshot promoted to
   `build/mir-plan-fresh-before.tsv`.
 
+- **Item 14** (2026-07-30, deferred): Investigated extending Item 13's
+  slot-skip across a `MIR_CALL` boundary for a value consumed only as a call
+  argument. `mir_emit_virtual_store` already has a mechanism for exactly this
+  case - `mir_call_argument_cache_target()`/`mir_emit_cached_call_argument()`,
+  which moves a value into `BC` (or `DE:HL` via `exx` for wide values)
+  instead of its home slot when its only remaining use is a later
+  `MIR_ARG`+`MIR_CALL` pair. However, unlike Item 13's HL-forward predicate
+  (`mir_can_forward_hl_to_next`, a pure function of the MIR instruction
+  stream), `mir_call_argument_cache_target()`'s own gate -
+  `mir_cached_call_value >= 0` / `mir_cached_wide_call_value >= 0` - depends
+  on whether an *earlier, not-yet-consumed* cached value from a different
+  definition is already occupying that same register pair at the moment of
+  emission: a dynamic, emission-order-dependent property that a one-pass
+  static scan over `first[value]` (as `mir_prepare_backend_slots` performs)
+  cannot evaluate without re-simulating the emitter's cache-occupancy state
+  transition by transition. Reusing this predicate directly for a
+  slot-allocation decision - the same "one predicate, no drift" approach that
+  made Item 13 safe - is therefore not available for this case, and
+  duplicating that stateful simulation inside the accounting pass is exactly
+  the two-divergent-paths hazard the repo's own Item 19 discriminator warns
+  about (documented root cause of a prior stack-corruption bug). A
+  provably-safe subset exists in principle - skip the slot only when static
+  analysis proves at most one BC-cacheable and one wide-cacheable candidate
+  exists anywhere in the function, so the runtime occupancy check could never
+  actually trigger - but implementing and proving that whole-function
+  uniqueness scan is materially more machinery than a single item's minimal
+  edit, for a case this codebase's current selectors already handle
+  correctly (just with a slot that goes unused, not a correctness bug).
+  Deferred pending a dedicated whole-function occupancy-safety pass; not
+  attempted here. No code change; coverage unchanged (171/2343, 7.30%).
+
 
 
