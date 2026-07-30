@@ -306,16 +306,16 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 67 | Re-measure the `pointer-array` fallback with the fresh census | | |
-| 68 | Implement stride-aware lowering/emission for a declared pointer-to-array reaching `mir_has_declared_pointer_array`'s gate | design reference: legacy `ast_index_deref_pointer_array_collect` (repo memory `dcc-ast-migration.md`), adapted to MIR address/index instructions | |
-| 69 | Add a regression fixture mirroring `tests/tptrlhs.c`'s shapes through the MIR path (force-accept for validation) | | |
-| 70 | Re-audit remaining VLA fallbacks beyond the intentional power-of-two gate; classify by whether Phases 1–6 change their cost profile | | |
-| 71 | Extend struct/aggregate size ceiling in `mir_try_emit_spilled_scalar_cfg` only after profiling shows competitiveness | do not raise speculatively | |
-| 72 | Verify `MIR_COPY_AGGREGATE`/struct-return paths get the same dead-store/slot-hygiene treatment as scalars | Phase 2 items may not currently cover wide/aggregate objects | |
-| 73 | Add `tests/tmirptrarray.c`; extend `tests/tvla.c` for any newly admitted VLA shape | | |
-| 74 | Full census + full-mode validation | | |
-| 75 | VLA-specific `-fstack-check` safety net: diff full assembly of old-vs-new compilers built with `-stack 512 -fstack-check` directly, for every `mir.has_vla` function touched | the census tool never builds with `-fstack-check` (documented blind spot) | Mandatory, not optional. |
-| 76 | Milestone checkpoint | | |
+| 67 | Re-measure the `pointer-array` fallback with the fresh census | | done - see Execution Log (exactly 1 function: `tptrarr.main`) |
+| 68 | Implement stride-aware lowering/emission for a declared pointer-to-array reaching `mir_has_declared_pointer_array`'s gate | design reference: legacy `ast_index_deref_pointer_array_collect` (repo memory `dcc-ast-migration.md`), adapted to MIR address/index instructions | deferred - see Execution Log (forced-accept A/B proved a real runtime regression for the sole candidate - correct but slower/bigger, skill rule 5) |
+| 69 | Add a regression fixture mirroring `tests/tptrlhs.c`'s shapes through the MIR path (force-accept for validation) | | deferred alongside Item 68 - see Execution Log |
+| 70 | Re-audit remaining VLA fallbacks beyond the intentional power-of-two gate; classify by whether Phases 1–6 change their cost profile | | done - see Execution Log (no distinct VLA-specific gate exists; all VLA fallbacks are the same systemic ~2x spilled-cost population documented in SKILL.md, unaffected by Phases 1–6) |
+| 71 | Extend struct/aggregate size ceiling in `mir_try_emit_spilled_scalar_cfg` only after profiling shows competitiveness | do not raise speculatively | deferred - see Execution Log (no distinct ceiling exists to extend; struct/aggregate fallbacks are the same systemic gap, often worse - up to 4.3x bigger, not near-cost) |
+| 72 | Verify `MIR_COPY_AGGREGATE`/struct-return paths get the same dead-store/slot-hygiene treatment as scalars | Phase 2 items may not currently cover wide/aggregate objects | deferred alongside Item 71 - see Execution Log (same root-cause population; a real fix here is the systemic spilled-path problem itself, out of this item's narrow scope) |
+| 73 | Add `tests/tmirptrarray.c`; extend `tests/tvla.c` for any newly admitted VLA shape | | deferred alongside Item 68 - see Execution Log (no newly admitted shape to cover) |
+| 74 | Full census + full-mode validation | | done - see Execution Log |
+| 75 | VLA-specific `-fstack-check` safety net: diff full assembly of old-vs-new compilers built with `-stack 512 -fstack-check` directly, for every `mir.has_vla` function touched | the census tool never builds with `-fstack-check` (documented blind spot) | Mandatory, not optional. | N/A this phase - see Execution Log (no `mir.has_vla` function's code path changed; nothing to diff) |
+| 76 | Milestone checkpoint | | done - see Execution Log |
 
 ### Phase 8 — Large-CFG scaling & parked-selector audit (Items 77–84)
 
@@ -1830,3 +1830,56 @@ _(append one entry per completed item, in table order, starting with Item
   rebuild/validation needed beyond the plan-doc edit itself (validated
   below per standing policy). Phase 6 is closed. Moving on to Phase 7
   (Items 67-76, pointer-array, aggregate, and VLA structural classes).
+
+- **Items 67-76** (2026-08-02): Phase 7 close-out. Item 67's fresh
+  census: exactly 1 `pointer-array` fallback function remains,
+  `tptrarr.main`. Ran a forced-accept A/B
+  (`DCC_MIR_FORCE_ACCEPT_FUNCTION=main`, `runall -Apps tptrarr -Mode
+  full`): the app's output was correct, but performance regressed on
+  every metric - peep cycles 1029081 -> 1039755 (+1.04%), nopeep
+  cycles 1146734 -> 1171265 (+2.1%), nopeep bytes 7808 -> 7936. Per
+  skill rule 5 ("correct-but-slow output is still fallback output
+  until fixed"), this proves the gate is correctly blocking a genuinely
+  worse candidate today, not just being over-cautious - even though
+  the raw per-function census bytes looked smaller (9732 vs 10778),
+  the actual assembled/measured app is bigger and slower. Building the
+  full stride-aware lowering Item 68 describes (adapting
+  `ast_index_deref_pointer_array_collect`'s ~150 lines of AST-level
+  logic to MIR's IR) for a single already-confirmed-regressing
+  candidate is disproportionate; deferred with this concrete A/B
+  evidence, and Items 69/73 (fixtures for the deferred fix) deferred
+  alongside it.
+
+  Item 70: re-audited all VLA fallbacks (`tvla`/`tvlaparm`/`tvlax`) -
+  every one falls back on plain `text-size`, the same shared cost
+  cascade as the rest of the corpus; no distinct "VLA power-of-two
+  gate" exists in the current code to audit separately (confirmed by
+  grep - no VLA-specific fallback reason string exists anywhere in
+  `dcc_mir.c`). These are simply members of the systemic ~2x-more-
+  expensive spilled-path population the SKILL.md's "known root cause"
+  section already documents; Phases 1-6's narrow, targeted fixes were
+  never going to move this population, and didn't.
+
+  Item 71: same finding for struct/aggregate functions
+  (`tanonagg`/`tstruct`/`tstructi`/`tstructp`/`tstructv`) - all plain
+  `text-size` fallback, no distinct "aggregate size ceiling" exists to
+  extend. If anything this subpopulation is *worse* than the general
+  ~2x gap (e.g. `tstructv.main`: 69050 generated vs 16079 captured
+  bytes, a 4.3x gap) - not a near-cost candidate a small ceiling bump
+  would help. Item 72 (verify `MIR_COPY_AGGREGATE`/struct-return
+  slot-hygiene) is the same root-cause population by another name; a
+  real fix here is the systemic spilled-path quality problem itself
+  (the compare-materialize-then-retest class of bug the SKILL.md
+  documents), which is explicitly out of scope for a single targeted
+  item and needs its own dedicated, evidence-first investigation
+  rather than a speculative "extend the ceiling" patch. Deferred
+  alongside Item 71.
+
+  No code changes this phase (Items 68/69/71/72/73 deferred with
+  concrete evidence; 70 is a confirmed negative audit result). Item 74
+  (full census) already captured above; Item 75 (VLA `-fstack-check`
+  safety net) is N/A since no `mir.has_vla` function's emission
+  changed. Item 76 milestone: `-Mode full -Extended` re-run per
+  standing policy: 314/323 apps, 196/196 extended, all clean. Phase 7
+  is closed. Moving on to Phase 8 (Items 77-84, large-CFG scaling &
+  parked-selector audit).
