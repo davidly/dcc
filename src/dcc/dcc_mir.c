@@ -6734,6 +6734,54 @@ static int mir_fuse_report_materialized_count;
  * for such values, so this stays off for every other caller. */
 static int mir_backend_slots_skip_fused_comparisons = 0;
 
+/* Item 13 (mir-migration-plan-100): a definition whose single use is the
+ * immediately following instruction (no intervening label/call/aliasing
+ * store) never needs a backend slot at all - mir_emit_virtual_store already
+ * skips storing it via mir_can_forward_hl_to_next (kept in HL across the
+ * one-instruction gap) whenever the forward target isn't itself a MIR_STORE;
+ * mir_prepare_backend_slots was still handing out a slot number/frame byte
+ * for it regardless. Reuse mir_can_forward_hl_to_next itself (rather than a
+ * second copy of the same forwarding predicate) so the accounting pass and
+ * the real emission-time skip can never drift apart - the repo's own Item 19
+ * caution. Only 1-unit (narrow, HL-sized) values ever reach
+ * mir_emit_virtual_store/mir_can_forward_hl_to_next; wide values use the
+ * separate _wide store path and must still get a slot. */
+static int mir_backend_slot_forward_target_is_store(int instruction)
+{
+    int next_instruction = instruction + 1;
+    while (next_instruction < mir.count &&
+           mir.insns[next_instruction].opcode == MIR_NOP)
+        ++next_instruction;
+    return next_instruction < mir.count &&
+           mir.insns[next_instruction].opcode == MIR_STORE &&
+           next_instruction == instruction + 1;
+}
+
+static int mir_backend_slot_forwardable(int value, int units, int instruction)
+{
+    int saved_index;
+    int forwardable;
+
+    if (units != 1)
+        return 0;
+    /* A MIR_PHI destination is never written by the normal linear emission
+     * loop at its own instruction index - mir_emit_spilled_phi_copies writes
+     * it from each predecessor's jump/branch instruction instead, with
+     * mir_emit_instruction_index left at that unrelated predecessor index.
+     * Evaluating mir_can_forward_hl_to_next() there would check the wrong
+     * "next instruction" entirely (found live during Item 13 validation via
+     * tvla.c's fixed_cast_bounds regression), so phi destinations must always
+     * keep a real slot. */
+    if (mir.insns[instruction].opcode == MIR_PHI)
+        return 0;
+    saved_index = mir_emit_instruction_index;
+    mir_emit_instruction_index = instruction;
+    forwardable = mir_can_forward_hl_to_next(value) &&
+                  !mir_backend_slot_forward_target_is_store(instruction);
+    mir_emit_instruction_index = saved_index;
+    return forwardable;
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
@@ -6853,7 +6901,8 @@ static int mir_prepare_backend_slots(void)
                                         ((type_size(definition->type) == 2 ||
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
-                                                                                                            type_size(definition->type))))
+                                                                                                            type_size(definition->type))) ||
+                                        mir_backend_slot_forwardable(value, units, i))
                     continue;
                 if (definition != NULL && definition->opcode == MIR_BINARY &&
                     ((units == 1 && type_size(definition->secondary_offset) == 2) ||
@@ -6952,8 +7001,22 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
     int forward_instruction = mir_emit_instruction_index + 1;
-    if (!has_slot)
+    if (!has_slot) {
+        /* Item 13 (mir-migration-plan-100): mir_prepare_backend_slots skips
+         * allocating a slot for a value it already proved via
+         * mir_backend_slot_forwardable() can only ever be consumed through
+         * this same HL-forwarding path (never stored to memory) - still set
+         * up the forwarding handoff so the immediately-following use skips
+         * its own reload; anything else with no slot is genuinely dead. */
+        if (mir_can_forward_hl_to_next(value)) {
+            while (forward_instruction < mir.count &&
+                   mir.insns[forward_instruction].opcode == MIR_NOP)
+                ++forward_instruction;
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction = forward_instruction - 1;
+        }
         return;
+    }
     while (forward_instruction < mir.count &&
            mir.insns[forward_instruction].opcode == MIR_NOP)
         ++forward_instruction;

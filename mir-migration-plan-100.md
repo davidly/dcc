@@ -610,5 +610,54 @@ _(append one entry per completed item, in table order, starting with Item
   (Items 13–24, backend-slot live-range hygiene / dead-store
   elimination).
 
+- **Item 13** (2026-07-30): Skip backend-slot allocation entirely for a
+  definition whose single use is the immediately following instruction with
+  no intervening label/call/aliasing store. `mir_emit_virtual_store` already
+  had a register-handoff fast path (`mir_can_forward_hl_to_next`) that skips
+  the store/reload for such a value when it's about to feed a compatible
+  next instruction directly in HL - but `mir_prepare_backend_slots` was still
+  reserving a slot/frame byte for it regardless, since nothing told the
+  accounting pass this value would never be spilled. Added
+  `mir_backend_slot_forwardable()` (`dcc_mir.c`, next to
+  `mir_prepare_backend_slots`), which re-evaluates the exact same
+  `mir_can_forward_hl_to_next()` predicate used at emission time (rather than
+  a second copy of the same logic - the Item 19 drift lesson) with
+  `mir_emit_instruction_index` temporarily pointed at the candidate
+  definition, plus a `mir_backend_slot_forward_target_is_store()` guard so a
+  value whose forward target is itself a `MIR_STORE` (which
+  `mir_emit_virtual_store`'s own `forward_to_store` branch still writes to
+  its home slot for) keeps its slot. Also extended `mir_emit_virtual_store`'s
+  `!has_slot` early-return to still arm the HL-forwarding handoff
+  (`mir_forwarded_hl_value`/`mir_forwarded_hl_instruction`) for a value that
+  was skipped this way, since the old early-return assumed "no slot" only
+  ever meant "value is dead."
+
+  **Bug found and fixed during validation:** the first build introduced a
+  genuine regression in `tvla.c`'s `fixed_cast_bounds` (newly admitted to MIR
+  by the smaller frame) - its final `MIR_PHI` result read from a bogus stack
+  offset (`(ix-68)` in a 40-byte frame) because `mir_emit_spilled_phi_copies`
+  writes a phi destination's value from each *predecessor's* jump/branch
+  instruction, with `mir_emit_instruction_index` left at that unrelated
+  predecessor index - not from the phi's own position. Evaluating
+  `mir_can_forward_hl_to_next()` there checked the wrong "next instruction"
+  entirely and wrongly elided the phi destination's slot. Fixed by excluding
+  any `MIR_PHI` destination from `mir_backend_slot_forwardable()` unconditionally
+  (phi destinations always keep a real slot); confirmed correct-again
+  assembly with a direct before/after `.MAC` diff for the function, and the
+  full `--fail-on-regression` census gate now passes clean at 171/2343 (only
+  `tbool.bool_identity` newly admitted; `fixed_cast_bounds` no longer crosses
+  the threshold at this checkpoint since its slot count is unchanged once phi
+  destinations are excluded - not a "verified already satisfied" case, but a
+  real premise (Item 13's slot-skip) that needed the phi carve-out before it
+  was actually safe).
+
+  Coverage 170/2343 (7.26%) -> 171/2343 (7.30%), 1 newly MIR-emitted function
+  (`tbool.bool_identity`). Runtime-validated `tbool` (`-Mode full`): 0
+  regressions, 2 genuine improvements (peep 57,444 -> 57,356 cycles, -0.15%;
+  nopeep 60,173 -> 60,065 cycles, -0.18%; sizes unchanged) - perf baseline
+  updated for `tbool` only. Wide fast-mode safety net (`-Mode fast`, 320
+  apps): 311 passed / 9 skipped / 0 failed. Baseline snapshot promoted to
+  `build/mir-plan-fresh-before.tsv`.
+
 
 
