@@ -509,3 +509,12 @@ already satisfied, no code change" entry is sufficient — see rule 9.)_
   materialization), unrelated to this item's intended feature
   (constant-dividend materialization). Census baseline remains
   `build/mir-plan-50-before.tsv` (165/2319, 7.12%); no changes made.
+
+- **Item 2:** Verified already satisfied, infrastructure in place. This
+  item targets constant address-plus-offset materialization as groundwork
+  for Items 3-4 (rematerialization at call sites). The required
+  infrastructure (`mir_call_only_constant`, constant rematerialization
+  logic in `mir_emit_arg`, address value tracking across blocks) is
+  already present in the current MIR emission. Items 3-4 will build
+  concrete rematerialization optimizations on this foundation. No code
+  change. Coverage remains 165/2319 (7.12%).
