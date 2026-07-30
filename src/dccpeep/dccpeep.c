@@ -2085,13 +2085,21 @@ int stride_parse_ld_r_ix_neg(const char *s, char r, int *n); /* forward */
  * Safety checks: abort if any line in the body contains "(ix" (live IX usage)
  * or if an un-removed local-allocation sequence is present.
  */
+/* Upper bound on distinct reachable-or-duplicate epilogues tracked per
+ * function by pass_elim_ix_frame().  A function with more early-return
+ * paths than this is left untouched entirely (see the epi_count overflow
+ * check below) - always safe, just misses an optimization opportunity
+ * that essentially never occurs in practice. */
+#define MAX_ELIM_IX_EPILOGUES 64
+
 static int pass_elim_ix_frame(void)
 {
     int i, j;
     int changed;
     int next_func;
     int has_ix_use;
-    int epi;
+    int epi_positions[MAX_ELIM_IX_EPILOGUES];
+    int epi_count;
 
     changed = 0;
 
@@ -2108,15 +2116,43 @@ static int pass_elim_ix_frame(void)
             }
         }
 
-        /* Scan the body for IX usage and locate the epilogue */
+        /* Scan the body for IX usage and locate every epilogue occurrence.
+         *
+         * A function can legitimately contain more than one matching
+         * epilogue - either multiple reachable early-return paths, or a
+         * genuinely reachable epilogue followed by a dead-code duplicate
+         * dcc sometimes emits after an unconditional return.  A single
+         * "epi" slot that gets overwritten by whichever match is found
+         * *last* silently drops the earlier, actually-reachable epilogue:
+         * the prologue is removed on the (correct) assumption that some
+         * epilogue was found, but the wrong occurrence gets its "ld
+         * sp,ix / pop ix" stripped, leaving the real return path still
+         * restoring SP/IX from a frame pointer that no longer exists.
+         * That corrupts SP with whatever garbage IX held on entry, and
+         * the following "pop ix; ret" then returns to a garbage address -
+         * this is exactly what tests/extended-tests 00062 et al. exposed
+         * under -fstack-check, where the __stchk call between the
+         * prologue and body pushed the reachable epilogue earlier than a
+         * dead-code copy the old single-slot scan preferred. */
         has_ix_use = 0;
-        epi = -1;
+        epi_count = 0;
         for (j = i + 3; j < next_func; j++) {
-            /* Locate epilogue first.  Its IX references are the only ones
-             * allowed when deciding whether the frame pointer is dead. */
+            /* Locate epilogue occurrences first.  Their IX references are
+             * the only ones allowed when deciding whether the frame
+             * pointer is dead. */
             if (eq(j, "ld sp,ix") && j + 2 < next_func &&
                 eq(j + 1, "pop ix") && eq(j + 2, "ret")) {
-                epi = j;
+                if (epi_count >= MAX_ELIM_IX_EPILOGUES) {
+                    /* More epilogues than we can track individually:
+                     * bail out on this function rather than removing the
+                     * prologue while only deleting the first N epilogues,
+                     * which would leave the remaining ones dangling on a
+                     * now-nonexistent frame pointer - the same corruption
+                     * this rewrite exists to fix. */
+                    has_ix_use = 1;
+                    break;
+                }
+                epi_positions[epi_count++] = j;
                 j += 1;
                 continue;
             }
@@ -2169,10 +2205,17 @@ static int pass_elim_ix_frame(void)
             }
         }
 
-        if (!has_ix_use && epi >= 0) {
+        if (!has_ix_use && epi_count > 0) {
+            int k;
+
             delete_n(i, 3);     /* remove push ix / ld ix,0 / add ix,sp */
-            epi -= 3;
-            delete_n(epi, 2);   /* remove ld sp,ix / pop ix; "ret" stays */
+            /* Delete every epilogue occurrence, highest index first, so
+             * that earlier positions in epi_positions[] stay valid as
+             * later ones are removed. */
+            for (k = epi_count - 1; k >= 0; k--) {
+                int epipos = epi_positions[k] - 3;
+                delete_n(epipos, 2); /* remove ld sp,ix / pop ix; "ret" stays */
+            }
             changed = 1;
             i--;                /* re-examine same position after deletions */
         }
