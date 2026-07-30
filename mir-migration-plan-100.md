@@ -707,25 +707,49 @@ _(append one entry per completed item, in table order, starting with Item
   so the Item 19 "one predicate, no drift" discipline extends to the new
   label case exactly as it already did for NOPs. Skipping more than one label
   is deliberately unsupported - it would require reasoning about a chain of
-  merges instead of a single, locally-verifiable non-merge point. Rebuilt
-  clean (no new warnings). Census (`--fail-on-regression`): 0 newly/no-longer
-  emitted (171/2343, 7.30% - Item 13's slot-skip already fires directly on
-  many of the label-adjacent cases; this item's coverage effect is in
-  *already-emitted* functions' generated code, not new admissions), 19 apps
-  with changed metrics. Runtime-validated all 19 changed apps
+  merges instead of a single, locally-verifiable non-merge point.
+
+  A combined attempt that also completed Item 14's call-argument-cache
+  slot-skip (`mir_backend_slot_call_cacheable`, tracking per-lane "busy
+  until" high-water marks with isolated save/restore probes of the real
+  cache globals, plus the `MIR_PHI` exclusion guard and the matching
+  `mir_emit_virtual_store_wide` fix) was implemented, built clean, and
+  committed, but its regression-gated census showed a real correctness-class
+  regression - `cint.if_stmt` flipped from `accepted` to a categorical
+  `inline-substitution` fallback (a structural gate, not a size threshold)
+  despite *smaller* generated code - across a 277-app blast radius. This is
+  exactly the emission-order-dependent occupancy hazard the original Item 14
+  deferral (above) warned about materializing in practice. That combined
+  commit was reverted immediately; Item 14 stays deferred pending the
+  dedicated whole-function occupancy-safety pass already described there.
+  Item 15 alone (this entry) carries no such risk - it only affects the
+  `mir_can_forward_hl_to_next` HL-forwarding predicate already proven safe
+  for Item 13, extended to one additional, locally-verifiable case.
+
+  Rebuilt clean (no new warnings). Census (`--fail-on-regression`) for Item
+  15 alone against the Item 13 baseline: 0 newly/no-longer emitted
+  (171/2343, 7.30% - unchanged, since this item only improves
+  *already-emitted* functions' generated code rather than admitting new
+  ones), 19 apps with changed metrics
   (`tbcint, tbcregno, tc89comp, tc89size, tc99apar, tc99scpe, tcrcfix,
   tctxflt, tenumfsm, tforinc, tkandr, tmatbit, tnarrow, tnestfor, tpeepal,
-  tptrixld, treg, tregnarw, tvla`) in `-Mode full`: 0 regressions, 15 genuine
-  improvements (e.g. `tc99scpe` peep 44,072 -> 43,475 cycles/-1.35%, 7,040 ->
-  6,912 bytes/-1.82%; `tc89size` nopeep 119,498 -> 118,177 cycles/-1.11%).
-  Wide fast-mode safety net (`-Mode fast`, 320 apps): first run showed 2
-  transient failures (diagnostics + a 24-cycle `tbool` perf blip) that did
-  not reproduce on immediate re-run (311 passed / 9 skipped / 0 failed,
-  clean) - consistent with the skill's documented "code-placement sensitivity
-  in interpreter heaps" noise class, not attributed to this change. Baseline
-  snapshot promoted to `build/mir-plan-fresh-before.tsv`; perf baselines
-  updated for the 15 improved apps via `-UpdatePerfBaseline` after the clean
-  full-mode proof.
+  tptrixld, treg, tregnarw, tvla`). Runtime-validated all 19 in `-Mode full`:
+  0 regressions, cycle counts/sizes unchanged (this item's code-shape changes
+  did not move the needle on these particular apps' hot paths) - confirmed
+  via `-UpdatePerfBaseline` producing no diff. Wide fast-mode safety net
+  (`-Mode fast`, 320 apps): 311 passed / 9 skipped / 0 failed, clean.
+  Baseline snapshot promoted to `build/mir-plan-fresh-before.tsv`. No perf
+  baseline changes needed (no genuine improvement or regression detected).
+
+  Note: this session's working tree was intermittently reset (`git reset
+  --hard HEAD`) by an external, unidentified process while this item was in
+  progress, twice silently discarding uncommitted edits before they could be
+  committed (visible in `git stash list`/`git reflog` as recurring "WIP on
+  perf/unified-regalloc" / "reset: moving to HEAD" entries). Both the
+  originally-lost Item 15 work and a separately-lost Item 14 attempt were
+  recovered from the stash list and re-validated from scratch; all commits
+  in this item's history were made immediately after each successful build
+  to minimize exposure to that hazard.
 
 
 
