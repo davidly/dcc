@@ -6717,11 +6717,21 @@ static int mir_load_is_single_call_argument(int value, int size)
     return call_argument_count <= 3;
 }
 
+static int mir_binary_is_fusable_comparison(int i);
+
+/* Item 8 (mir-migration-plan-100): when set, mir_prepare_backend_slots must
+ * not allocate a frame slot for a comparison result (or intervening '!'
+ * result) that mir_try_emit_spilled_scalar_cfg's Items 1/4 fusion consumes
+ * entirely in registers - only that selector actually skips the store/load
+ * for such values, so this stays off for every other caller. */
+static int mir_backend_slots_skip_fused_comparisons = 0;
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
     int *last;
     int *slot_end;
+    char *fused_away = NULL;
     int value;
     int i;
 
@@ -6743,6 +6753,18 @@ static int mir_prepare_backend_slots(void)
     slot_end = (int *)malloc((size_t)mir.next_value * 2 * sizeof(*slot_end));
     if (first == NULL || last == NULL || slot_end == NULL)
         fatal("out of memory computing MIR backend intervals");
+    if (mir_backend_slots_skip_fused_comparisons) {
+        fused_away = (char *)calloc((size_t)mir.next_value, 1);
+        if (fused_away == NULL)
+            fatal("out of memory computing MIR fused-comparison set");
+        for (i = 0; i < mir.count; ++i) {
+            int skip = mir_binary_is_fusable_comparison(i);
+            if (skip > 0)
+                fused_away[mir.insns[i].dst] = 1;
+            if (skip == 2)
+                fused_away[mir.insns[i + 1].dst] = 1;
+        }
+    }
     for (value = 0; value < mir.next_value; ++value) {
         first[value] = mir.count;
         last[value] = -1;
@@ -6819,6 +6841,7 @@ static int mir_prepare_backend_slots(void)
                 if (last[value] <= first[value] ||
                                         mir_call_only_constant(value) ||
                                         mir_multiply_by_small_constant(value) ||
+                                        (fused_away != NULL && fused_away[value]) ||
                                         ((type_size(definition->type) == 2 ||
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
@@ -6883,6 +6906,7 @@ static int mir_prepare_backend_slots(void)
                         slot_end[slot + unit] = last[value];
                 }
             }
+    free(fused_away);
     free(slot_end);
     free(last);
     free(first);
@@ -7606,8 +7630,10 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         (type_is_struct_object(mir.return_type) &&
          (type_size(mir.return_type) <= 0 || type_size(mir.return_type) > 1024)))
         return mir_scalar_cfg_preflight_reject("return-type", -1);
+    mir_backend_slots_skip_fused_comparisons = 1;
     frame_bytes = mir.local_bytes + mir.aggregate_temp_bytes +
                   2 * mir_prepare_backend_slots();
+    mir_backend_slots_skip_fused_comparisons = 0;
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR scalar-cfg frame function=%s locals=%d slots=%d bytes=%d\n",

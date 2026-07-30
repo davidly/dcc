@@ -491,4 +491,34 @@ _(append one entry per completed item, in table order, starting with Item
   out of the general single-use check already in place and needs no separate
   change.)
 
+- **Items 5 and 7** (2026-07-30, verified, no code change): confirmed via
+  forced-accept assembly inspection (`/tmp/titem5.c`, an `a<b && c<d` chain
+  through `spilled-scalar-cfg`) that `&&`/`||` already lower to one
+  independent `compare -> MIR_BRANCH_FALSE` pair per term, each of which
+  Item 1 already fuses on its own (0 `inc l` materializations in the forced
+  assembly) - Item 5 needs no separate work. Item 7's "exact
+  `mir_value_use_count` check, not positional scanning" is also already how
+  `mir_binary_is_fusable_comparison` is written.
+
+- **Item 8** (2026-07-30): `mir_prepare_backend_slots` was still allocating a
+  live frame slot for every fused comparison's (and, for negated fusions, the
+  intervening `!`'s) result, even though `mir_try_emit_spilled_scalar_cfg`
+  never emits the store/load for it after Items 1/4 - a genuinely dead
+  reservation, not a dead store dccpeep could ever see (nothing in the
+  instruction stream to strip). Added a `mir_backend_slots_skip_fused_comparisons`
+  gate (set only around the one production call site in
+  `mir_try_emit_spilled_scalar_cfg`, left off for
+  `mir_try_emit_general_rollout`'s diagnostic-only call so the two callers
+  can't silently drift - the lesson from the earlier `__r1u`/`*` frame-slot
+  drift bug) and a one-pass `fused_away[]` precompute reusing
+  `mir_binary_is_fusable_comparison`. Coverage unchanged (170/2319, 7.33%,
+  expected - the freed slot was never visible in emitted bytes since `(ix+d)`
+  displacement bytes and the fixed 3-byte `ld hl,-N` frame adjustment don't
+  vary with slot count); one still-fallback function (`tcrcfix.check_i`)
+  shrank by 2 bytes from a downstream slot-reuse effect, 0 regressions.
+  Runtime-validated tcrcfix; rebuilt all 6 fusion-touched apps under
+  `-fstack-check` directly (the documented census blind spot) with 0 build
+  failures; full fast-mode corpus (310 apps) passed.
+
+
 
