@@ -233,7 +233,7 @@ its live range never needs it.
 | 19 | Ensure slot-count *accounting* (`mir_prepare_backend_slots`) and the real emission-time skip decision share one predicate function | repo lesson: drift between an accounting pass and the real emission path previously caused a stack-corruption bug (Item 16 divisor/dividend work, documented in perf-optimization memory) | High caution item. Audited, no code change. |
 | 20 | Add `DCC_MIR_SLOT_REPORT=1`: slots requested vs. slots still read, per function | | done |
 | 21 | Add `tests/tmirslot.c`: immediate-use, cross-call, cross-label, and dead-store elision cases, clang baseline | | done |
-| 22 | Full census + full-mode validation of every changed app | | |
+| 22 | Full census + full-mode validation of every changed app | | done |
 | 23 | Dynamic cycle-count comparison (peep and nopeep) for the largest-yield apps | skill rule 4 | |
 | 24 | Milestone checkpoint; baseline update for genuinely improved rows only | wide safety net | |
 
@@ -847,6 +847,22 @@ _(append one entry per completed item, in table order, starting with Item
   enabled), then a wide `-Mode fast` safety net across the whole corpus
   (321 apps total incl. the new fixture: 312 passed / 9 skipped / 0
   failed, dccpeep fixtures 17/17 passed, diagnostics passed).
+
+- **Item 22** (2026-07-30): Milestone-tier validation of the whole Phase 2
+  batch (Items 13/15/16/17/18/20/21) against `build/item13-after.tsv`, the
+  last fully-validated pre-Phase-2 baseline. Full census
+  (`--fail-on-regression`, exit 0): coverage 171/2353 (7.27%; the `+10`
+  function count vs. the 2343 prior total is `tmirslot.c`'s own 10 test
+  functions), 0 newly/no-longer MIR-emitted, 20 apps with census metric
+  changes (byte-count deltas from Item 15's label-forwarding and Item 20's
+  diagnostic-only counters), **0 apps flagged as requiring runtime
+  validation** by the census tool itself. Ran the milestone tier anyway
+  per the skill's "before merging" guidance: whole-corpus
+  `runall -Mode full` (fast+nopeep, 321 apps): 312 passed / 9 skipped / 0
+  failed, dccpeep fixtures 17/17 passed, diagnostics passed, performance
+  passed (no regressions). Promoted `build/item22-full.tsv` to
+  `build/mir-plan-fresh-before.tsv` as the new rolling baseline for
+  subsequent items.
 
 
 
