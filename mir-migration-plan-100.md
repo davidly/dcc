@@ -472,3 +472,23 @@ _(append one entry per completed item, in table order, starting with Item
   passed peep+nopeep with 0 regressions / 5 improvements (perf baselines
   promoted); full fast-mode corpus (310 apps) passed with 0 failures.
 
+- **Item 4** (2026-07-30): Extended Item 1's fusion through a single
+  intervening logical-not: `!(a OP b)` feeding a `MIR_BRANCH_FALSE` is
+  exactly the branch on the complementary comparison operator (`TOK_EQ` <->
+  `TOK_NE`, `<` <-> `TOK_GE`, `>` <-> `TOK_LE`), so `mir_binary_is_fusable_comparison`
+  now also matches `compare -> MIR_UNARY '!' -> MIR_BRANCH_FALSE` (each with a
+  single use) and returns a skip count instead of a bool;
+  `mir_emit_fused_comparison_branch` takes a `negate` flag and looks the
+  branch up at `compare_index + 1 + negate`. No functions crossed the
+  accept/fallback threshold at this checkpoint (coverage held at 170/2319,
+  7.33%) - the only census delta was 6 still-fallback functions in `tc89c2`
+  shrinking by 400-3200 bytes each with 0 regressions
+  (`--fail-on-regression` clean). Runtime-validated `tc89c2`
+  (`-Mode full`); full fast-mode corpus (310 apps) passed with 0 failures.
+  (Items 2/3 skipped for now: 2's homed-scalar-cfg sign-bias variant isn't a
+  fallback source at this checkpoint and would need a shared-operand-loading
+  refactor for low payoff; 3 - call-result operand fusion - folds naturally
+  out of the general single-use check already in place and needs no separate
+  change.)
+
+

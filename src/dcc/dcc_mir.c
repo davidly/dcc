@@ -7191,10 +7191,28 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
  * would otherwise materialize an explicit 0/1 boolean into HL, spill it to a
  * backend slot, and reload it just so the branch can re-test it with
  * `ld a,h / or l`. Test the flags directly instead and jump straight to the
- * branch's targets, eliding the materialize/spill/reload entirely. */
+ * branch's targets, eliding the materialize/spill/reload entirely.
+ *
+ * Item 4 extends this through a single intervening logical-not: `!(a OP b)`
+ * feeding a branch is exactly the branch on the complementary operator, so
+ * `mir_binary_is_fusable_comparison` returns 2 (skip compare, not, branch)
+ * instead of 1 (skip compare, branch) and the caller negates the operator. */
+static int mir_negate_comparison_operator(int operation)
+{
+    switch (operation) {
+    case TOK_EQ: return TOK_NE;
+    case TOK_NE: return TOK_EQ;
+    case '<': return TOK_GE;
+    case TOK_GE: return '<';
+    case '>': return TOK_LE;
+    default: return '>'; /* TOK_LE */
+    }
+}
+
 static int mir_binary_is_fusable_comparison(int i)
 {
     const struct MirInsn *insn = &mir.insns[i];
+    const struct MirInsn *next;
 
     if (insn->opcode != MIR_BINARY || type_size(insn->secondary_offset) == 4)
         return 0;
@@ -7204,23 +7222,32 @@ static int mir_binary_is_fusable_comparison(int i)
     default:
         return 0;
     }
-    if (mir_value_use_count(insn->dst) != 1)
+    if (mir_value_use_count(insn->dst) != 1 || i + 1 >= mir.count)
         return 0;
-    return i + 1 < mir.count &&
-           mir.insns[i + 1].opcode == MIR_BRANCH_FALSE &&
-           mir.insns[i + 1].src1 == insn->dst;
+    next = &mir.insns[i + 1];
+    if (next->opcode == MIR_BRANCH_FALSE && next->src1 == insn->dst)
+        return 1;
+    if (next->opcode == MIR_UNARY && next->immediate == '!' &&
+        next->src1 == insn->dst && !mir_value_is_wide(next->src1) &&
+        mir_value_use_count(next->dst) == 1 && i + 2 < mir.count &&
+        mir.insns[i + 2].opcode == MIR_BRANCH_FALSE &&
+        mir.insns[i + 2].src1 == next->dst)
+        return 2;
+    return 0;
 }
 
 static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
-                                             int compare_index)
+                                             int compare_index, int negate)
 {
     const struct MirInsn *compare = &mir.insns[compare_index];
-    const struct MirInsn *branch = &mir.insns[compare_index + 1];
+    const struct MirInsn *branch = &mir.insns[compare_index + 1 + negate];
     const struct MirInsn *left = mir_definition(compare->src1);
     const struct MirInsn *right = mir_definition(compare->src2);
     int is_unsigned = (left != NULL && (left->type & TYPE_UNSIGNED) != 0) ||
                        (right != NULL && (right->type & TYPE_UNSIGNED) != 0);
-    int operation = (int)compare->immediate;
+    int operation = negate ? mir_negate_comparison_operator(
+                                 (int)compare->immediate)
+                           : (int)compare->immediate;
     int target;
     int fallthrough_label;
     const char *true_condition;
@@ -7246,7 +7273,7 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
     }
     fallthrough_label = new_label();
     fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
-    if (!mir_emit_spilled_phi_copies(out, compare_index + 1, target))
+    if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate, target))
         return 0;
     fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label], fallthrough_label);
     return 1;
@@ -8315,11 +8342,15 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         mir_emit_virtual_load(out, insn->src2);
                     fputs("\tex de,hl\n\tpop hl\n", out);
                 }
-                if (mir_binary_is_fusable_comparison(i)) {
-                    if (!mir_emit_fused_comparison_branch(out, labels, i))
-                        goto done;
-                    ++i;
-                    continue;
+                {
+                    int fuse_skip = mir_binary_is_fusable_comparison(i);
+                    if (fuse_skip > 0) {
+                        if (!mir_emit_fused_comparison_branch(
+                                out, labels, i, fuse_skip - 1))
+                            goto done;
+                        i += fuse_skip;
+                        continue;
+                    }
                 }
                 if (!mir_emit_scalar_operation(out, insn))
                     goto done;
