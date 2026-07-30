@@ -7183,6 +7183,75 @@ static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
     }
 }
 
+static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
+                                       int successor);
+
+/* Item 1 (mir-migration-plan-100): when a scalar comparison feeds nothing
+ * but the MIR_BRANCH_FALSE that immediately follows it, mir_emit_scalar_compare
+ * would otherwise materialize an explicit 0/1 boolean into HL, spill it to a
+ * backend slot, and reload it just so the branch can re-test it with
+ * `ld a,h / or l`. Test the flags directly instead and jump straight to the
+ * branch's targets, eliding the materialize/spill/reload entirely. */
+static int mir_binary_is_fusable_comparison(int i)
+{
+    const struct MirInsn *insn = &mir.insns[i];
+
+    if (insn->opcode != MIR_BINARY || type_size(insn->secondary_offset) == 4)
+        return 0;
+    switch ((int)insn->immediate) {
+    case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
+        break;
+    default:
+        return 0;
+    }
+    if (mir_value_use_count(insn->dst) != 1)
+        return 0;
+    return i + 1 < mir.count &&
+           mir.insns[i + 1].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[i + 1].src1 == insn->dst;
+}
+
+static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
+                                             int compare_index)
+{
+    const struct MirInsn *compare = &mir.insns[compare_index];
+    const struct MirInsn *branch = &mir.insns[compare_index + 1];
+    const struct MirInsn *left = mir_definition(compare->src1);
+    const struct MirInsn *right = mir_definition(compare->src2);
+    int is_unsigned = (left != NULL && (left->type & TYPE_UNSIGNED) != 0) ||
+                       (right != NULL && (right->type & TYPE_UNSIGNED) != 0);
+    int operation = (int)compare->immediate;
+    int target;
+    int fallthrough_label;
+    const char *true_condition;
+
+    if (branch->label < 0 || branch->label >= mir.next_label)
+        return 0;
+    target = mir_find_label(branch->label);
+    if (target < 0)
+        return 0;
+    if (operation == '>' || operation == TOK_LE) {
+        fputs("\tex de,hl\n", out);
+        operation = operation == '>' ? '<' : TOK_GE;
+    }
+    if (!is_unsigned && operation != TOK_EQ && operation != TOK_NE)
+        fputs("\tld a,h\n\txor 128\n\tld h,a\n"
+              "\tld a,d\n\txor 128\n\tld d,a\n", out);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    switch (operation) {
+    case TOK_EQ: true_condition = "z"; break;
+    case TOK_NE: true_condition = "nz"; break;
+    case '<': true_condition = "c"; break;
+    default: true_condition = "nc"; break; /* TOK_GE */
+    }
+    fallthrough_label = new_label();
+    fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
+    if (!mir_emit_spilled_phi_copies(out, compare_index + 1, target))
+        return 0;
+    fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label], fallthrough_label);
+    return 1;
+}
+
 static void mir_emit_hl_and_const(FILE *out, unsigned int mask)
 {
     fprintf(out,
@@ -8245,6 +8314,12 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     } else
                         mir_emit_virtual_load(out, insn->src2);
                     fputs("\tex de,hl\n\tpop hl\n", out);
+                }
+                if (mir_binary_is_fusable_comparison(i)) {
+                    if (!mir_emit_fused_comparison_branch(out, labels, i))
+                        goto done;
+                    ++i;
+                    continue;
                 }
                 if (!mir_emit_scalar_operation(out, insn))
                     goto done;

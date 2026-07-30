@@ -69,6 +69,49 @@ section near `mir_end_function()` has historically included:
 These are migration boundaries, not permanent architecture. Remove each only
 when its underlying selector or cost problem is solved.
 
+## Known root cause: `text-size` fallback is systemic, not near-miss (2026-07-30)
+
+At a 165/2319 (7.12%) coverage checkpoint, a full census showed **every**
+`text-size` fallback (2,109 of 2,319 functions) is attempted through the same
+selector, `mir_try_emit_spilled_scalar_cfg`, and bucketing the byte/instruction
+gap showed 99.1% are more than 64 bytes over the legacy backend and 96.8% have
+an instruction-count gap over 4. This population is **uniformly ~2x more
+expensive**, not marginally short — do not assume "near-cost" is still the
+dominant shape without re-bucketing the gap first.
+
+Forced-accept diffs of two representative functions (`check_s`, identical
+across `tests/tesc.c`/`tstr3.c`/`tsyntax.c`, and `and_expr` in
+`tests/adaint.c`, a `while` loop) both showed the same bug: `mir_emit_scalar_compare`
+(`dcc_mir.c` ~line 4939) unconditionally materializes an explicit 0/1 boolean
+(a label + `inc l` dance) for *every* comparison, which then gets spilled to a
+backend slot and reloaded later just to be re-tested by `MIR_BRANCH_FALSE`
+(whose own test sequence, `ld a,h / or l / jp nz`, is already fine in
+isolation). The narrow `mir_try_emit_comparison_branch` selector already fuses
+compare+branch directly, but only for the whole-function shape `if (param OP
+param) return A; return B;` — it never fires for the general case, which is
+what `mir_try_emit_spilled_scalar_cfg` handles for the other 91% of the
+corpus. `dccpeep`'s same-basic-block redundant-reload pass removes *one* of
+the resulting store/reload round-trips but not the second, which is a
+genuinely dead store (never reloaded anywhere in the function) — a different
+bug class the existing peephole passes don't target.
+
+Before proposing new fallback-reduction work, re-run the census and re-bucket
+the gap (see `mir-migration-plan-100.md`'s "current measured state" section
+for the exact commands) rather than assuming the old "near-cost real
+functions" priority still applies — at this checkpoint it barely did (3
+functions total).
+
+A fresh, evidence-grounded 100-item continuation plan reflecting this finding
+lives at `mir-migration-plan-100.md` (repo root). It supersedes any earlier
+plan document of the same or similar name: two prior documents reused
+overlapping item numbers across separate files and had started producing
+"verified already satisfied" no-ops, a sign that vein of small, independent
+pattern folds (constant materialization, alias folding, divmod fusion, etc.)
+was running dry. When resuming multi-session MIR work, re-derive the plan from
+a fresh census and direct assembly inspection rather than continuing stale
+item numbering, and retire the old plan document once its content is folded
+into the new one.
+
 ## Fast migration loop
 
 ### 1. Start from a committed checkpoint
