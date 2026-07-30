@@ -6035,6 +6035,59 @@ static int mir_function_has_any_call(void)
     return 0;
 }
 
+/* Item 15 (mir-migration-plan-100): count exact CFG predecessors of a label
+ * instruction using the successors[]/successor_count arrays mir_verify_and_dump
+ * already computes for every function (jump targets, branch-false
+ * fallthrough+target, plain fallthrough). Reused instead of re-deriving the
+ * CFG so this stays consistent with liveness/allocation, which trust the
+ * same arrays. */
+static int mir_label_predecessor_count(int label_instruction)
+{
+    int predecessor;
+    int successor;
+    int count = 0;
+
+    for (predecessor = 0; predecessor < mir.count; ++predecessor) {
+        const struct MirInsn *insn = &mir.insns[predecessor];
+        for (successor = 0; successor < insn->successor_count; ++successor)
+            if (insn->successors[successor] == label_instruction)
+                ++count;
+    }
+    return count;
+}
+
+/* Item 15 (mir-migration-plan-100): a value's "next instruction" for
+ * HL-forwarding purposes may legitimately sit just past a MIR_LABEL that is
+ * textually adjacent but has exactly one CFG predecessor (i.e. it is not a
+ * real merge point - the label exists only because some other emitter
+ * concern, such as a goto target or loop back-edge landing elsewhere,
+ * required a name for this position). Skip at most one such label, in
+ * addition to any NOPs, so straight-line code that happens to be split by a
+ * label still gets the same forwarding Item 13 already applies across NOPs.
+ * Skipping more than one label at a time is deliberately not supported: it
+ * would require reasoning about a chain of merges instead of a single,
+ * locally-verifiable non-merge point. */
+static int mir_forward_skip_target(int instruction)
+{
+    int next_instruction = instruction + 1;
+    int skipped_label = 0;
+
+    for (;;) {
+        while (next_instruction < mir.count &&
+               mir.insns[next_instruction].opcode == MIR_NOP)
+            ++next_instruction;
+        if (!skipped_label && next_instruction < mir.count &&
+            mir.insns[next_instruction].opcode == MIR_LABEL &&
+            mir_label_predecessor_count(next_instruction) == 1) {
+            skipped_label = 1;
+            ++next_instruction;
+            continue;
+        }
+        break;
+    }
+    return next_instruction;
+}
+
 static int mir_can_forward_hl_to_next(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -6049,10 +6102,7 @@ static int mir_can_forward_hl_to_next(int value)
         (definition->opcode == MIR_CALL ||
          definition->opcode == MIR_CALL_AGGREGATE))
         return 0;
-    next_instruction = mir_emit_instruction_index + 1;
-    while (next_instruction < mir.count &&
-           mir.insns[next_instruction].opcode == MIR_NOP)
-        ++next_instruction;
+    next_instruction = mir_forward_skip_target(mir_emit_instruction_index);
     if (next_instruction >= mir.count)
         return 0;
     next = &mir.insns[next_instruction];
@@ -6748,10 +6798,7 @@ static int mir_backend_slots_skip_fused_comparisons = 0;
  * separate _wide store path and must still get a slot. */
 static int mir_backend_slot_forward_target_is_store(int instruction)
 {
-    int next_instruction = instruction + 1;
-    while (next_instruction < mir.count &&
-           mir.insns[next_instruction].opcode == MIR_NOP)
-        ++next_instruction;
+    int next_instruction = mir_forward_skip_target(instruction);
     return next_instruction < mir.count &&
            mir.insns[next_instruction].opcode == MIR_STORE &&
            next_instruction == instruction + 1;
@@ -7000,7 +7047,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
-    int forward_instruction = mir_emit_instruction_index + 1;
+    int forward_instruction = mir_forward_skip_target(mir_emit_instruction_index);
     if (!has_slot) {
         /* Item 13 (mir-migration-plan-100): mir_prepare_backend_slots skips
          * allocating a slot for a value it already proved via
@@ -7009,17 +7056,11 @@ static void mir_emit_virtual_store(FILE *out, int value)
          * up the forwarding handoff so the immediately-following use skips
          * its own reload; anything else with no slot is genuinely dead. */
         if (mir_can_forward_hl_to_next(value)) {
-            while (forward_instruction < mir.count &&
-                   mir.insns[forward_instruction].opcode == MIR_NOP)
-                ++forward_instruction;
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
         }
         return;
     }
-    while (forward_instruction < mir.count &&
-           mir.insns[forward_instruction].opcode == MIR_NOP)
-        ++forward_instruction;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
     int forward_to_store = mir_can_forward_hl_to_next(value) &&
