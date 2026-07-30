@@ -59,6 +59,17 @@ speed:
 .PARAMETER Help
     Show this help text and exit without building or running tests.
 
+.PARAMETER FailFast
+    Stop dispatching new work as soon as the first correctness failure or
+    per-app performance regression is observed. Apps already in flight when
+    the trigger fires still finish (parallel workers cannot be cancelled
+    mid-run), but no further apps are started, and the run's exit code still
+    reflects only the failures actually observed - it does not treat
+    not-yet-run apps as failed. Skipped apps are reported separately from
+    pass/fail counts. Use this to shorten the feedback loop while iterating;
+    prefer a full unthrottled run (without -FailFast) for the final
+    pre-commit validation so every app's status is known.
+
 .PARAMETER Extended
     Also run the extended c-testsuite single-exec corpus after the main app suite.
 
@@ -246,6 +257,7 @@ param(
     [switch]$NarrowDiff,
     [switch]$KeepBuild,
     [switch]$TimingBreakdown,
+    [switch]$FailFast,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -1705,6 +1717,12 @@ $results = @()
 $totalToRun = $workItems.Count
 $mainSuiteSw = [System.Diagnostics.Stopwatch]::StartNew()
 
+# Precomputed once, up front, so -FailFast can run the identical per-app perf
+# comparison (Test-PerfRegressions, unchanged) as each result streams in,
+# rather than duplicating its regression formula.
+$failFastPerfIgnoreApps = @($testFiles | Where-Object { Get-PerfIgnoreApp $_ })
+$failFastPerfCheckActive = (Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck) -and (-not $UpdatePerfBaseline)
+
 if ($Parallel) {
     # Each worker runs in its own runspace with its own filesystem location, so
     # per-app build dirs (build/<app>) prevent the shared-file clobbering that
@@ -1722,12 +1740,29 @@ if ($Parallel) {
     $stackCheckOn = [bool]$StackCheck
     $runArgs      = @($emulatorRunArgs)
 
+    # Shared abort signal for -FailFast: a synchronized hashtable is a
+    # reference type, so every parallel runspace observes live mutations made
+    # by the collector below as soon as the first failure/regression is seen.
+    # This cannot cancel work already dispatched (ForEach-Object -Parallel has
+    # no built-in mid-run cancellation hook), but it stops the throttle pool
+    # from starting any NEW app once triggered, bounding the extra work to
+    # whatever was already in flight (at most ThrottleLimit-1 apps).
+    $failFastState = [hashtable]::Synchronized(@{ Triggered = $false })
+
     # ForEach-Object -Parallel streams each worker's result as it completes, so
     # pipe straight into a loop that prints a live status line per app. Results
     # arrive in completion order (not sorted); we collect them for the summary.
     $done = 0
     $workItems | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
         $item = $_
+        if ($using:FailFast -and ($using:failFastState).Triggered) {
+            # Abort already signalled before this item started: skip it
+            # entirely rather than spending an emulator/build slot on it.
+            return [pscustomobject]@{
+                App = $item.App; Passed = $true; Skipped = $true
+                Elapsed = [TimeSpan]::Zero; Lines = @(); Metrics = $null; Timing = $null
+            }
+        }
         Set-Location $using:repoRoot
         if ($using:stackCheckOn) { $env:DCC_FORCE_STACK_CHECK = "1" }
         # Bring the needed functions into this runspace.
@@ -1760,6 +1795,10 @@ if ($Parallel) {
         $elapsedStr = if ($elapsed.TotalSeconds -ge 60) { "{0:m\m\ s\.f\s}" -f $elapsed } else { "{0:0.00}s" -f $elapsed.TotalSeconds }
         $counter = "[{0,3}/{1}]" -f $done, $totalToRun
         $scTag = if ($StackCheck) { "Stack Check Enabled" } else { "No Stack Check" }
+        if ($result.Skipped) {
+            Write-Host ("{0} SKIP  {1,-12} (fail-fast: not started)" -f $counter, $result.App) -ForegroundColor DarkGray
+            return
+        }
         $status = if ($result.Passed) { "PASS" } else { "FAIL" }
         # Columns: counter | status | app | time | run-wide stack-check tag
         $line = "{0} {1}  {2,-12} {3,8} | {4}" -f $counter, $status, $result.App, $elapsedStr, $scTag
@@ -1775,6 +1814,29 @@ if ($Parallel) {
                     Write-Host "        $($detail.Trim())" -ForegroundColor Red
                 } elseif ($detail -match '^    (\[\S+\] )?DIFF\+') {
                     Write-Host "        $($detail.Trim())" -ForegroundColor Green
+                }
+            }
+        }
+
+        if ($FailFast -and (-not $failFastState.Triggered)) {
+            if (-not $result.Passed) {
+                $failFastState.Triggered = $true
+                Write-Host ("  FAIL-FAST: correctness failure in {0} - no new apps will be started" -f $result.App) -ForegroundColor Yellow
+            } elseif ($failFastPerfCheckActive) {
+                # Reuses Test-PerfRegressions unchanged (Item 86 discipline:
+                # one cost formula, not a second hand-rolled comparison) on a
+                # singleton result so this check is always identical to the
+                # end-of-run perf check, just evaluated per-app instead of
+                # only after every app has finished.
+                $singlePerfCheck = Test-PerfRegressions -Results @($result) -ModesRun $modes `
+                    -BaselineFile $PerfBaselineFile -IgnoreApps $failFastPerfIgnoreApps
+                if ($singlePerfCheck.Regressions.Count -gt 0) {
+                    $failFastState.Triggered = $true
+                    Write-Host ("  FAIL-FAST: performance regression in {0} - no new apps will be started" -f $result.App) -ForegroundColor Yellow
+                    foreach ($r in $singlePerfCheck.Regressions) {
+                        $pct = if ($r.Baseline -gt 0) { [math]::Round((($r.Actual - $r.Baseline) / $r.Baseline) * 100, 2) } else { 0 }
+                        Write-Host ("        - ({0,-6}) {1:N0} -> {2:N0} {3} (+{4}%)" -f $r.Mode, $r.Baseline, $r.Actual, $r.Metric, $pct) -ForegroundColor Red
+                    }
                 }
             }
         }
@@ -1796,13 +1858,42 @@ else {
             -ExtraScenarios $item.ExtraScenarios -RunTimeout $RunTimeout
         Show-AppResult $result
         $results += $result
+        if ($FailFast) {
+            $stop = $false
+            if (-not $result.Passed) {
+                Write-Host ("  FAIL-FAST: correctness failure in {0} - stopping" -f $result.App) -ForegroundColor Yellow
+                $stop = $true
+            } elseif ($failFastPerfCheckActive) {
+                $singlePerfCheck = Test-PerfRegressions -Results @($result) -ModesRun $modes `
+                    -BaselineFile $PerfBaselineFile -IgnoreApps $failFastPerfIgnoreApps
+                if ($singlePerfCheck.Regressions.Count -gt 0) {
+                    Write-Host ("  FAIL-FAST: performance regression in {0} - stopping" -f $result.App) -ForegroundColor Yellow
+                    foreach ($r in $singlePerfCheck.Regressions) {
+                        $pct = if ($r.Baseline -gt 0) { [math]::Round((($r.Actual - $r.Baseline) / $r.Baseline) * 100, 2) } else { 0 }
+                        Write-Host ("        - ({0,-6}) {1:N0} -> {2:N0} {3} (+{4}%)" -f $r.Mode, $r.Baseline, $r.Actual, $r.Metric, $pct) -ForegroundColor Red
+                    }
+                    $stop = $true
+                }
+            }
+            if ($stop) { break }
+        }
     }
 }
 $mainSuiteSw.Stop()
+if ($FailFast) {
+    $failFastSkippedApps = @($workItems.App | Where-Object { $_ -notin @($results.App) })
+    if ($failFastSkippedApps.Count -gt 0) {
+        Write-Host ("  ({0} app(s) not started due to -FailFast: {1})" -f $failFastSkippedApps.Count, ($failFastSkippedApps -join ', ')) -ForegroundColor DarkGray
+        $skipped += $failFastSkippedApps.Count
+    }
+}
 
 # Tally results.
 foreach ($result in $results) {
-    if ($result.Passed) {
+    if ($result.Skipped) {
+        $skipped++
+        continue
+    } elseif ($result.Passed) {
         $passed++
     } else {
         $failed++

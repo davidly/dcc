@@ -363,6 +363,15 @@ Required result:
 
 Do not run the full suite after every local edit.
 
+`scripts/runall.ps1` also accepts `-FailFast`: it stops dispatching new apps as
+soon as the first correctness failure or per-app performance regression is
+seen (apps already in flight finish; not-yet-started apps are reported as
+skipped, not failed). Apps already running when the trigger fires still
+finish, so it shortens iteration feedback without changing what a full,
+unthrottled run reports. Use it while iterating on a batch; still run the full
+suite (without `-FailFast`) for the milestone-tier validation before a commit,
+so every app's status is actually known rather than short-circuited.
+
 ## Prioritization scoring
 
 When several candidates compete, score each class using:
