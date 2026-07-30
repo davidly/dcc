@@ -6719,6 +6719,14 @@ static int mir_load_is_single_call_argument(int value, int size)
 
 static int mir_binary_is_fusable_comparison(int i);
 
+/* Item 9 (mir-migration-plan-100): DCC_MIR_FUSE_REPORT=1 prints, per function,
+ * how many scalar comparisons the Item 1/4 fusion caught versus how many
+ * still fell through to mir_emit_scalar_compare's materialize-then-store
+ * path, so future regressions in fusion coverage are visible without
+ * re-reading assembly. */
+static int mir_fuse_report_fused_count;
+static int mir_fuse_report_materialized_count;
+
 /* Item 8 (mir-migration-plan-100): when set, mir_prepare_backend_slots must
  * not allocate a frame slot for a comparison result (or intervening '!'
  * result) that mir_try_emit_spilled_scalar_cfg's Items 1/4 fusion consumes
@@ -7630,6 +7638,8 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
         (type_is_struct_object(mir.return_type) &&
          (type_size(mir.return_type) <= 0 || type_size(mir.return_type) > 1024)))
         return mir_scalar_cfg_preflight_reject("return-type", -1);
+    mir_fuse_report_fused_count = 0;
+    mir_fuse_report_materialized_count = 0;
     mir_backend_slots_skip_fused_comparisons = 1;
     frame_bytes = mir.local_bytes + mir.aggregate_temp_bytes +
                   2 * mir_prepare_backend_slots();
@@ -8374,9 +8384,18 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         if (!mir_emit_fused_comparison_branch(
                                 out, labels, i, fuse_skip - 1))
                             goto done;
+                        ++mir_fuse_report_fused_count;
                         i += fuse_skip;
                         continue;
                     }
+                }
+                switch ((int)insn->immediate) {
+                case TOK_EQ: case TOK_NE: case '<': case '>':
+                case TOK_LE: case TOK_GE:
+                    ++mir_fuse_report_materialized_count;
+                    break;
+                default:
+                    break;
                 }
                 if (!mir_emit_scalar_operation(out, insn))
                     goto done;
@@ -8733,6 +8752,13 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_emit_virtual_iy_epilogue(out);
     accepted = 1;
 done:
+    if (getenv("DCC_MIR_FUSE_REPORT") != NULL &&
+        (mir_fuse_report_fused_count > 0 ||
+         mir_fuse_report_materialized_count > 0))
+        fprintf(stderr,
+                "; MIR fuse-report function=%s fused=%d materialized=%d\n",
+                mir.name, mir_fuse_report_fused_count,
+                mir_fuse_report_materialized_count);
     mir_virtual_iy_base = 0;
     mir_virtual_iy_frame_bytes = 0;
     mir_emit_instruction_index = -1;

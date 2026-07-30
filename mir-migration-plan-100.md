@@ -209,7 +209,7 @@ comparison's only consumer is a branch.
 | 3 | Extend fusion when an operand is a call result, not just `MIR_PARAM`/`MIR_CONST` | `check_s` (`tests/tesc.c`/`tstr3.c`/`tsyntax.c`) | The case study function itself; confirm identical fix applies to all 3 apps at once. |
 | 4 | Fuse through a `!` (logical negation) feeding a branch | invert the fused condition instead of materializing NOT then re-testing | |
 | 5 | Fuse each term of a `&&`/`||` short-circuit chain individually | one `MIR_BRANCH_FALSE` per operand | Don't assume only the final term is fusable. |
-| 6 | Fuse when the branch condition arrives via a `MIR_PHI` (ternary-in-condition) | | Lower risk than Phase 4's general phi work; scoped to boolean phis only. |
+| 6 | Fuse when the branch condition arrives via a `MIR_PHI` (ternary-in-condition) | | **Deferred** (see Execution Log): needs cross-block code motion the current one-pass emitter can't do; actually Phase-4-class risk, not "lower risk" as originally assessed. |
 | 7 | Tighten the "single use" precondition to an exact `mir_value_use_count` check, not positional scanning | | Safety net for out-of-order MIR sequences. |
 | 8 | Remove the now-dead backend slot allocation for fused comparisons in `mir_prepare_backend_slots` | | The slot must never be *counted*, not just unused at emission — shrinks `frame_bytes` and stack-check cost too. |
 | 9 | Add `DCC_MIR_FUSE_REPORT=1`: per-function fused-vs-materialized comparison counts | | Diagnostic only; makes future regressions visible without re-reading assembly. |
@@ -519,6 +519,73 @@ _(append one entry per completed item, in table order, starting with Item
   Runtime-validated tcrcfix; rebuilt all 6 fusion-touched apps under
   `-fstack-check` directly (the documented census blind spot) with 0 build
   failures; full fast-mode corpus (310 apps) passed.
+
+- **Item 6** (2026-07-30, deferred): Investigated fusing a branch whose
+  condition arrives via a `MIR_PHI` merging two comparison results (the
+  `(cmp1) ? (cmp2) : 0` ternary-in-condition pattern), using constructed
+  fixtures (`/tmp/titem6.c`, two variants) and `DCC_MIR_REPORT=1
+  DCC_MIR_FUNCTION=f` MIR dumps. Confirmed the phi genuinely has a single
+  use (the branch) when the ternary result isn't stored to a named
+  variable, so it's fusable in principle - but doing so would require
+  moving/duplicating the branch decision into each predecessor block, which
+  `mir_try_emit_spilled_scalar_cfg`'s current one-pass linear emission
+  architecture cannot do (it can't retroactively rewrite an
+  already-emitted predecessor block). The plan's own risk assessment
+  ("Lower risk than Phase 4's general phi work") was optimistic - this is
+  architecturally closer to Phase 4's cross-block work than to Items 1/4's
+  local peephole fusion. Deferred until Phase 4 or a dedicated cross-block
+  restructuring pass; not attempted in Phase 1. (Separately confirmed: when
+  the ternary result is instead stored to a named local, the phi's result
+  picks up a second use from the store even if the local is never read
+  afterward - a conservative-memory-semantics artifact, not a bug, and a
+  case `mir_binary_is_fusable_comparison`'s single-use check is already
+  correctly rejecting.)
+
+- **Item 9** (2026-07-30): Added a `DCC_MIR_FUSE_REPORT=1` diagnostic to
+  `mir_try_emit_spilled_scalar_cfg`: two new global counters
+  (`mir_fuse_report_fused_count` / `mir_fuse_report_materialized_count`),
+  incremented at the fusion check-and-skip site and in the still-materializing
+  comparison-emission `switch` respectively, reset per function, and printed
+  at the `done:` label as `; MIR fuse-report function=%s fused=%d
+  materialized=%d` when either counter is non-zero. Purely diagnostic
+  (gated behind `getenv()`, no change to emitted code paths) - spot-checked
+  correct against `tests/tesc.c`'s `check` function (`fused=1
+  materialized=0`, matching Item 1's own finding that `check`/`check_s` is a
+  canonical single-fused-comparison case), then confirmed with the full
+  census (`--fail-on-regression`: 0 newly/no-longer MIR-emitted) and the
+  full fast-mode corpus (320 apps, including Item 10's new fixture; 311
+  passed, 9 skipped, 0 failed) that adding the diagnostic changes no emitted
+  bytes anywhere.
+
+- **Item 10** (2026-07-30): Added `tests/tmirfuse.c` (named to fit CP/M's
+  8.3 filename limit; originally drafted as `tmircmpfuse.c`, which
+  `dccmake`/`runall.ps1` reject outright as an invalid CP/M basename) as a
+  permanent regression fixture for the Item 1/4 fusion logic. Covers every
+  comparison operator (`==`,`!=`,`<`,`>`,`<=`,`>=`) signed and unsigned,
+  bare and negated (`!(...)`) - the two `mir_binary_is_fusable_comparison`
+  return codes - across boundary values (`INT_MIN`/`INT_MAX`, 0/-1,
+  unsigned wraparound via `(unsigned int)-1`), plus three functions with
+  extra locals (`slt_spilled`, `nslt_spilled`, `and_chain_spilled`) intended
+  to steer the selector toward `mir_try_emit_spilled_scalar_cfg`. At the
+  current checkpoint every function in the file (including the `_spilled`
+  ones) still falls back on `reason=text-size`, so the fixture doesn't yet
+  exercise the fused path under the compiler's own selection heuristics -
+  confirmed this doesn't leave the new logic actually unverified by
+  building the `_spilled` functions three times with
+  `DCC_MIR_FORCE_ACCEPT_FUNCTION=<name>` each, then running all three
+  resulting `.COM` files under `ntvcm`: all passed
+  (`tmirfuse: all tests passed`, exit 0), matching the normal (unforced)
+  build's own output. Baseline added at `tests/baselines/tmirfuse.txt`.
+  Validated via `runall.ps1 -Apps tmirfuse -Mode full` (pass, perf baseline
+  captured) and the full fast-mode corpus (320 apps, 311 passed / 9
+  skipped / 0 failed, 0 performance regressions); census
+  (`--fail-on-regression`) shows 0 newly/no-longer MIR-emitted functions
+  from adding the fixture itself, as expected since none of its functions
+  currently cross the acceptance threshold. This fixture will start
+  exercising the fused path automatically (without any further test
+  changes) once a future item's selector-cost change lets
+  `mir_try_emit_spilled_scalar_cfg` win on `slt_spilled`/`nslt_spilled`/
+  `and_chain_spilled`.
 
 
 
