@@ -199,6 +199,13 @@ The complete census skips apps marked `ignore` in
 `tests/_test_overrides.json`, forwards per-app `dcc_args`, and has a per-compile
 timeout. Pass `--include-ignored` only for deliberate research.
 
+The census runs each app's compile concurrently by default (`--jobs`, default
+CPU count; each compile is an independent short-lived subprocess so this
+scales well) - output is sorted before being written, so `--jobs` never
+changes the resulting `.tsv` (verified byte-identical against `--jobs 1`).
+Pass `--jobs 1` only when you need strictly sequential per-app progress
+output, e.g. while diagnosing a single hanging compile.
+
 ### 3. Choose a batch from evidence
 
 Prioritize in this order:

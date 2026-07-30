@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SELECTION_RE = re.compile(
     r"MIR selection function=(?P<function>\S+) "
@@ -64,6 +65,16 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="extra dcc flags appended to every compile, e.g. -fstack-check "
         "(applied after per-app overrides' dcc_args)",
+    )
+    parser.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        default=os.cpu_count() or 1,
+        help="parallel compiles (default: CPU count; each compile is an "
+        "independent, short-lived subprocess.run call, so this scales well "
+        "up to core count). Use -j1 for strictly sequential, deterministic "
+        "progress-line ordering (e.g. when diagnosing a single hang).",
     )
     return parser.parse_args()
 
@@ -247,22 +258,42 @@ def main() -> int:
     rows: list[dict[str, str]] = []
     failures: list[tuple[str, str]] = []
     with tempfile.TemporaryDirectory(prefix="dcc-mir-census-") as directory:
-        assembly = Path(directory) / "census.mac"
-        for index, source in enumerate(sources, 1):
+        directory_path = Path(directory)
+
+        def run_one(index: int, source: Path) -> tuple[int, Path, list[dict[str, str]], str | None]:
+            # Each worker writes to its own assembly file: compiles run
+            # concurrently (subprocess.run releases the GIL while the child
+            # process runs, so a thread pool scales across cores same as
+            # runall.ps1's parallel app suite), and a shared output path
+            # would let two in-flight compiles clobber each other's .mac.
+            worker_assembly = directory_path / f"census-{index}.mac"
             app_rows, error = compile_source(
                 args.compiler,
                 source,
-                assembly,
+                worker_assembly,
                 args.stack,
                 args.timeout,
                 shlex.split(str(overrides.get(source.stem, {}).get("dcc_args", "")))
                 + shlex.split(args.extra_args),
             )
-            if error:
-                failures.append((source.stem, error))
-            else:
-                rows.extend(app_rows)
-            print(f"\r[{index:3d}/{len(sources)}] {source.stem:12s}", end="", flush=True)
+            return index, source, app_rows, error
+
+        done = 0
+        with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as executor:
+            futures = [
+                executor.submit(run_one, index, source)
+                for index, source in enumerate(sources, 1)
+            ]
+            for future in as_completed(futures):
+                index, source, app_rows, error = future.result()
+                done += 1
+                if error:
+                    failures.append((source.stem, error))
+                else:
+                    rows.extend(app_rows)
+                # Completion order (not dispatch order) with -j>1, matching
+                # runall.ps1's own parallel status-line convention.
+                print(f"\r[{done:3d}/{len(sources)}] {source.stem:12s}", end="", flush=True)
     print()
 
     if failures:
