@@ -232,7 +232,7 @@ its live range never needs it.
 | 18 | Audit `mir_emit_spilled_phi_copies` for copies into a slot Items 13–17 already proved dead on all live incoming edges | | verified already satisfied |
 | 19 | Ensure slot-count *accounting* (`mir_prepare_backend_slots`) and the real emission-time skip decision share one predicate function | repo lesson: drift between an accounting pass and the real emission path previously caused a stack-corruption bug (Item 16 divisor/dividend work, documented in perf-optimization memory) | High caution item. Audited, no code change. |
 | 20 | Add `DCC_MIR_SLOT_REPORT=1`: slots requested vs. slots still read, per function | | done |
-| 21 | Add `tests/tmirslot.c`: immediate-use, cross-call, cross-label, and dead-store elision cases, clang baseline | | |
+| 21 | Add `tests/tmirslot.c`: immediate-use, cross-call, cross-label, and dead-store elision cases, clang baseline | | done |
 | 22 | Full census + full-mode validation of every changed app | | |
 | 23 | Dynamic cycle-count comparison (peep and nopeep) for the largest-yield apps | skill rule 4 | |
 | 24 | Milestone checkpoint; baseline update for genuinely improved rows only | wide safety net | |
@@ -827,6 +827,26 @@ _(append one entry per completed item, in table order, starting with Item
   behavior change: rebuilt clean, census identical to baseline (171/2343,
   0 apps changed, exit 0), wide `-Mode fast` safety net (320 apps): 311
   passed / 9 skipped / 0 failed.
+
+- **Item 21** (2026-07-30): Added `tests/tmirslot.c`, a permanent regression
+  fixture covering the scenarios Items 13/15/16/17/18 elide slot traffic
+  for: `immediate_use` (call result consumed by the very next instruction),
+  `forward_across_label`/`forward_across_label` variants (Item 15's
+  single-predecessor label forwarding, both branches taken and not taken),
+  `forward_into_store` (value forwarded straight into a local with no
+  intervening use), `dead_store_elision` (a local written twice but never
+  read after its final write - Item 16/17's dead-store/backward-liveness
+  elision), and `phi_partial_dead` (a phi destination dead down one
+  incoming edge but live down the other, to guard Item 18's dead-copy skip
+  against misfiring on the live edge). All expected values were
+  cross-checked against a native `clang` build of the same source before
+  wiring the dcc baseline. Added `tests/baselines/tmirslot.txt` and
+  captured initial peep/nopeep perf baselines via `-UpdatePerfBaseline`
+  (first-time capture, not a movement of an existing row). Validated:
+  `runall -Apps tmirslot -Mode full` (fast+nopeep, both pass, stack-check
+  enabled), then a wide `-Mode fast` safety net across the whole corpus
+  (321 apps total incl. the new fixture: 312 passed / 9 skipped / 0
+  failed, dccpeep fixtures 17/17 passed, diagnostics passed).
 
 
 
