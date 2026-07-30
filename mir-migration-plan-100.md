@@ -249,8 +249,8 @@ its live range never needs it.
 | 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | done - see Execution Log |
 | 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | done - see Execution Log |
 | 32 | Add `tests/tmirconstfast.c` covering every new fast path, clang baseline | | done - see Execution Log (file named `tests/tmirfast.c`; CP/M 8.3 name limit) |
-| 33 | Full census + full-mode validation | | |
-| 34 | Milestone checkpoint | | |
+| 33 | Full census + full-mode validation | | done - see Execution Log |
+| 34 | Milestone checkpoint | | done - see Execution Log |
 
 ### Phase 4 — CFG shape hygiene (Items 35–44)
 
@@ -1153,4 +1153,56 @@ _(append one entry per completed item, in table order, starting with Item
   `-Mode full -Extended` run: 313/322 apps passed (9 skipped as
   expected, tmirfast now included), extended suite 196/196 passed,
   diagnostics/dccpeep fixtures/performance all passed.
+
+- **Item 33** (2026-07-31): Full-corpus census (`--fail-on-regression`)
+  vs `build/phase3-before.tsv` (the Phase 3 starting snapshot): 0
+  regressions, 172/2371 functions now MIR-emitted (7.25%, up from
+  165/2319, 7.12%, at the start of Phase 3 - the +52 denominator growth
+  is `tmirfast.c`'s own 18 new functions plus other unrelated corpus
+  churn since the baseline was taken; the +7 numerator growth is
+  `tmirfast.side_effect` (Item 32) plus functions gained across Items
+  25-31's fused-compare/multiplier/incdec paths in existing apps). 1
+  newly MIR-emitted function (`tmirfast.side_effect`), 0 no-longer
+  emitted, 146 apps with census metric churn (cumulative since Items
+  25/27/30/31 folded into the same running snapshot), 6 apps flagged for
+  runtime validation (`tesc, tmirfast, tscanf, tsprintf, tstr3, tsyntax`)
+  - focused `-Mode full` on exactly those 6: 0 regressions, all passed.
+  Milestone `-Mode full -Extended` run: 313/322 apps passed (9 skipped as
+  expected), extended suite 196/196 passed, diagnostics/dccpeep
+  fixtures/performance all passed. This closes the required validation
+  tier for Phase 3 (Items 25-32); Item 34 records the phase summary.
+
+- **Item 34** (2026-07-31): Phase 3 milestone checkpoint. **Phase 3
+  summary (Items 25-34):** coverage moved 165/2319 (7.12%) -> 172/2371
+  (7.25%) across the phase; six independent fast-path/verification items
+  landed with committed code or documented findings: Item 25 (compare-
+  with-zero fast path, `9356673`), Item 26 (8-bit-range compare fast
+  path, deferred - no pre-promotion range info survives to `MIR_BINARY`,
+  same class of gap as Items 6/14), Item 27 (signed sign-bit-test fast
+  path, `85ba6a1`), Item 28 (power-of-two divmod, verified already
+  satisfied by `dccpeep`'s existing `pass_const_divmod_helpers`,
+  `7624984`), Item 29 (call-argument rematerialization for constants also
+  consumed by a post-call binary op, implemented then reverted after
+  census proved it provably inert - dcc's AST-to-MIR lowering never
+  interns/CSEs constants, so every source-level literal already gets its
+  own independent `MIR_CONST` value already covered by existing
+  single-use predicates; documented as a key finding for future
+  candidates in this class, `5b67991`), Item 30 (shift-and-subtract fast
+  path for ones-run multipliers, correctness-proven directly via `ntvcm`
+  but 0 measured corpus hits today, `93443e2`), Item 31 (fused
+  `inc (ix+n)`/`dec (ix+n)` for dead-after-increment locals, narrower
+  real-world scope than hypothesized due to dcc's MIR value numbering -
+  documented in the function's own header comment, `7e58180`), and
+  Item 32 (permanent regression fixture `tests/tmirfast.c` covering all
+  four items' semantics, `627b9c9`). Items 33-34 close the phase with a
+  clean full-corpus census and `-Mode full -Extended` milestone run (see
+  Item 33's entry above for the exact numbers). Two items in this phase
+  (29, 31) surfaced the same underlying lesson worth carrying into Phase
+  4: several remaining "reusable pattern" hypotheses in this codebase are
+  narrower in practice than they look on paper, because dcc's MIR
+  construction already does local value numbering and never CSEs source
+  constants - future candidates in this vein should be census-checked
+  for real corpus hits *before* investing in correctness testing and
+  emitter wiring, not after. Phase 3 is complete; Phase 4 (Items 35-44)
+  has not yet been started.
 
