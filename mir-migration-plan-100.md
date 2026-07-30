@@ -261,8 +261,8 @@ its live range never needs it.
 | 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | deferred - see Execution Log (breaks object-phi promotion's block-identity lookup) |
 | 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | done - see Execution Log |
 | 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | deferred - see Execution Log (real byte-cost win, but an asymmetric-branch-cost runtime regression a static gate can't catch) |
-| 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | Mandatory re-scoping step before Phase 5. |
-| 41 | Add `DCC_MIR_PHI_REPORT=1`: phi-join reuse hits/misses | | |
+| 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | done - see Execution Log (no change; same 5 functions remain fallback) |
+| 41 | Add `DCC_MIR_PHI_REPORT=1`: phi-join reuse hits/misses | | done - see Execution Log |
 | 42 | Add `tests/tmircfgshape.c`: nested if/else value joins + loop continue-block collapsing, clang baseline | | |
 | 43 | Full census + full-mode validation | | |
 | 44 | Milestone checkpoint | wide safety net | |
@@ -1512,4 +1512,51 @@ _(append one entry per completed item, in table order, starting with Item
   or per-branch-outcome profiling, not a single static byte/instruction
   gate - that is future work beyond this item's "smallest reusable
   edit" scope. Moving on to Item 40.
+
+- **Item 40** (2026-08-02): Mandatory re-scoping checkpoint before
+  Phase 5. Ran a fresh full census and compared it against
+  `build/phase3-after.tsv` (the pre-Item-35 baseline, i.e. the actual
+  starting point of the set of items that landed: 35, 36, 38 - Item 37
+  and 39 were both deferred with no code change surviving). Result:
+  `cfg-block-count` fallback still has exactly the same 3 functions
+  (`adaint.run`, `cobint.exec_range`, `fint.prim`), and `cfg-backedge`
+  still has exactly the same 2 (`tcrcfix.bcd_div10`, `tregnarw.lres`) -
+  none moved to accepted. `cobint.exec_range`'s block count rose
+  slightly (130 -> 132) and `fint.prim`'s did too (94 -> 95), most
+  likely from Item 38's then-arm label adding one block on some
+  internal if/else inside those functions; this had no effect on their
+  fallback status since they were already well past any of the
+  relevant exact-match/threshold gates in both directions. Overall
+  outcome counts: `text-size` 2141 -> 2140, `accepted` 172 -> 173 (the
+  net Item 38 gain), everything else unchanged. Conclusion: Items
+  35/36/38's jump-chain collapsing and phi-join labeling are real but
+  too localized to shift any of these 5 functions' raw label/block
+  counts across the specific thresholds their selectors gate on -
+  Phase 5's loop-competitiveness work should not assume any "for free"
+  wins here from Phase 4 alone. No code change; scratch census files
+  removed per SKILL rule 7. Moving on to Item 41.
+
+- **Item 41** (2026-08-02): Added `DCC_MIR_PHI_REPORT=1` to
+  `mir_try_make_object_phi()` (`dcc_mir.c` ~4159): every early-return
+  path now reports a miss with a specific reason
+  (`unlabeled-block`, `too-many-predecessors`,
+  `predecessor-unresolved`, `insufficient-predecessors`,
+  `already-identical`), and the success path reports a hit with the
+  destination value and both predecessor values/labels. This gives
+  direct visibility into exactly which join case Items 38/39
+  investigated by hand (`unlabeled-block`/`predecessor-unresolved` was
+  the Item 39 bare-if/fallthrough symptom) without needing a one-off
+  synthetic test and manual object-report reading each time. Verified
+  against the same synthetic functions used in Items 38/39: `pick`
+  (if/else, identical value both arms) reports `phi hit ... pred1=v5@L3
+  pred2=v9@L1`; `bump` (bare if, no else) reports `phi miss ...
+  reason=predecessor-unresolved ... label=-1`, confirming the guard
+  correctly identifies the still-unresolved fallthrough case Item 39
+  deferred. Diagnostic-only change (no behavior change): regression-
+  gated census vs `build/phase3-after.tsv` is byte-for-byte identical
+  to Item 40's snapshot (173/2371 coverage, same 5 remaining
+  cfg-block-count/cfg-backedge functions). Focused `-Mode full` on
+  `cint, tc99scpe, tdead, tphi`: 4/4 passed, 0 regressions. Milestone
+  `-Mode full -Extended`: 313/322 apps, 196/196 extended, diagnostics/
+  dccpeep/performance all clean. Moving on to Item 42.
 

@@ -4165,12 +4165,20 @@ static int mir_try_make_object_phi(int instruction, int object,
     int predecessor_count = 0;
     int predecessor;
     struct MirInsn *load;
+    int phi_report = getenv("DCC_MIR_PHI_REPORT") != NULL;
 
     /* Phi association uses labels, so decline unlabeled fallthrough blocks
      * rather than inventing an imprecise edge identity. */
     if (block_start < 0 || block_start >= mir.count ||
-        mir.insns[block_start].opcode != MIR_LABEL)
+        mir.insns[block_start].opcode != MIR_LABEL) {
+        if (phi_report)
+            fprintf(stderr,
+                    "; MIR phi miss function=%s insn=%d object=%s "
+                    "reason=unlabeled-block block-start=%d\n",
+                    mir.name, instruction, mir.objects[object].name,
+                    block_start);
         return 0;
+    }
     for (predecessor = 0; predecessor < mir.count; ++predecessor) {
         int successor;
         for (successor = 0;
@@ -4180,21 +4188,50 @@ static int mir_try_make_object_phi(int instruction, int object,
             int label;
             if (mir.insns[predecessor].successors[successor] != block_start)
                 continue;
-            if (predecessor_count >= 2)
+            if (predecessor_count >= 2) {
+                if (phi_report)
+                    fprintf(stderr,
+                            "; MIR phi miss function=%s insn=%d object=%s "
+                            "reason=too-many-predecessors\n",
+                            mir.name, instruction, mir.objects[object].name);
                 return 0;
+            }
             value = out_state[(size_t)predecessor * mir.object_count + object];
             label = mir_block_label_before(predecessor);
-            if (value < 0 || label < 0)
+            if (value < 0 || label < 0) {
+                if (phi_report)
+                    fprintf(stderr,
+                            "; MIR phi miss function=%s insn=%d object=%s "
+                            "reason=predecessor-unresolved predecessor=%d "
+                            "value=%d label=%d\n",
+                            mir.name, instruction, mir.objects[object].name,
+                            predecessor, value, label);
                 return 0;
+            }
             predecessor_values[predecessor_count] = value;
             predecessor_labels[predecessor_count] = label;
             ++predecessor_count;
             break;
         }
     }
-    if (predecessor_count != 2 ||
-        predecessor_values[0] == predecessor_values[1])
+    if (predecessor_count != 2) {
+        if (phi_report)
+            fprintf(stderr,
+                    "; MIR phi miss function=%s insn=%d object=%s "
+                    "reason=insufficient-predecessors count=%d\n",
+                    mir.name, instruction, mir.objects[object].name,
+                    predecessor_count);
         return 0;
+    }
+    if (predecessor_values[0] == predecessor_values[1]) {
+        if (phi_report)
+            fprintf(stderr,
+                    "; MIR phi miss function=%s insn=%d object=%s "
+                    "reason=already-identical value=%d\n",
+                    mir.name, instruction, mir.objects[object].name,
+                    predecessor_values[0]);
+        return 0;
+    }
     load = &mir.insns[instruction];
     load->opcode = MIR_PHI;
     load->src1 = predecessor_values[0];
@@ -4202,6 +4239,13 @@ static int mir_try_make_object_phi(int instruction, int object,
     load->phi_pred1 = predecessor_labels[0];
     load->phi_pred2 = predecessor_labels[1];
     load->object = object;
+    if (phi_report)
+        fprintf(stderr,
+                "; MIR phi hit function=%s insn=%d object=%s dst=%d "
+                "pred1=v%d@L%d pred2=v%d@L%d\n",
+                mir.name, instruction, mir.objects[object].name, load->dst,
+                predecessor_values[0], predecessor_labels[0],
+                predecessor_values[1], predecessor_labels[1]);
     return 1;
 }
 
