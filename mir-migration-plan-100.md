@@ -263,7 +263,7 @@ its live range never needs it.
 | 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | deferred - see Execution Log (real byte-cost win, but an asymmetric-branch-cost runtime regression a static gate can't catch) |
 | 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | done - see Execution Log (no change; same 5 functions remain fallback) |
 | 41 | Add `DCC_MIR_PHI_REPORT=1`: phi-join reuse hits/misses | | done - see Execution Log |
-| 42 | Add `tests/tmircfgshape.c`: nested if/else value joins + loop continue-block collapsing, clang baseline | | |
+| 42 | Add `tests/tmircfgshape.c`: nested if/else value joins + loop continue-block collapsing, clang baseline | | done - see Execution Log (file named `tests/tphijoin.c`; CP/M 8.3 name limit) |
 | 43 | Full census + full-mode validation | | |
 | 44 | Milestone checkpoint | wide safety net | |
 
@@ -1559,4 +1559,32 @@ _(append one entry per completed item, in table order, starting with Item
   `cint, tc99scpe, tdead, tphi`: 4/4 passed, 0 regressions. Milestone
   `-Mode full -Extended`: 313/322 apps, 196/196 extended, diagnostics/
   dccpeep/performance all clean. Moving on to Item 42.
+
+- **Item 42** (2026-08-02): Added `tests/tphijoin.c` (named for CP/M 8.3's
+  8-char base limit; `tmircfgshape` is too long), a permanent regression
+  fixture covering the CFG-shape hygiene surface Items 35-41 touch:
+  `if_else_join` (Item 38's target - both arms of an if/else define the
+  same value identically), `nested_if_else_join` (an inner if/else join
+  feeding an outer if/else join, stacking Item 38's fix two levels deep -
+  confirmed via `DCC_MIR_PHI_REPORT=1` this currently still misses with
+  `reason=too-many-predecessors`, since the outer join sees 3 incoming
+  edges once the inner join is counted, an open gap beyond this item's
+  scope), `sum_even_with_continue` (Items 35/36's jump-chain-collapsing
+  target - a `while` loop with an interior `continue`, confirmed via
+  `DCC_MIR_SELECT_REPORT=1` still falls back on `text-size` for this
+  particular function, but exercises the collapsing machinery), and
+  `loop_header_phi` (the loop-carried value phi Item 37 found already
+  works, confirmed still forming via two `phi hit` reports for `total`
+  and `i`). All expected values were cross-checked against a native
+  `clang` build of the source (`clang -Wall tests/tphijoin.c`, ignoring
+  the expected K&R-prototype warnings) before wiring the dcc baseline,
+  matching the Item 21/32 precedent. Added
+  `tests/baselines/tphijoin.txt` and captured initial peep/nopeep perf
+  baselines via `-UpdatePerfBaseline` (clean single-row first-time
+  capture, not a movement of an existing row). Validated: `runall
+  -Apps tphijoin -Mode full` (fast+nopeep, both pass, stack-check
+  enabled), then milestone `-Mode full -Extended`: 314/323 apps passed
+  (9 skipped as expected, +1 app vs Item 41's count for the new
+  fixture), 196/196 extended, diagnostics/dccpeep/performance all
+  clean. Moving on to Item 43.
 
