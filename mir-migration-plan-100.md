@@ -500,3 +500,12 @@ bugs found/fixed with root cause, the census delta, the runtime validation
 results including exact commands and pass/fail counts, and the new
 coverage fraction. If an item's premise didn't hold, a short "verified
 already satisfied, no code change" entry is sufficient — see rule 9.)_
+
+- **Item 1:** Verified already satisfied, no code change. Target
+  `tc89size.nb_shadow_outer_after` performs a compile-time constant
+  division (`sizeof(int[5]) / sizeof(int)` = 20/4 = 5), which is folded
+  to a constant at MIR-construction time. The function was admitted as a
+  residual side-effect of the prior plan's Item 16 (constant divisor
+  materialization), unrelated to this item's intended feature
+  (constant-dividend materialization). Census baseline remains
+  `build/mir-plan-50-before.tsv` (165/2319, 7.12%); no changes made.
