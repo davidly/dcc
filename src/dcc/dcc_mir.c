@@ -7394,6 +7394,27 @@ static int mir_binary_is_fusable_comparison(int i)
     return 0;
 }
 
+/* Item 25 (mir-migration-plan-100): an `==`/`!=` comparison against the
+ * constant 0 needs neither operand materialized into DE nor a 16-bit
+ * `sbc hl,de` - HL already holds the left operand (loaded unconditionally
+ * before every MIR_BINARY), and `ld a,h / or l` sets Z/NZ from it directly.
+ * This only applies to the right operand being the zero constant (the
+ * overwhelmingly common `x == 0` / `x != 0` source shape); a zero constant
+ * on the left (`0 == x`) still loads HL with the constant first, so no
+ * benefit is available without reordering operand evaluation, which this
+ * item does not attempt. */
+static int mir_fused_compare_is_const_zero_rhs(int compare_index)
+{
+    const struct MirInsn *compare = &mir.insns[compare_index];
+    const struct MirInsn *right;
+
+    if (compare->immediate != TOK_EQ && compare->immediate != TOK_NE)
+        return 0;
+    right = mir_definition(compare->src2);
+    return right != NULL && right->opcode == MIR_CONST &&
+           (right->immediate & 0xffffL) == 0;
+}
+
 static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
                                              int compare_index, int negate)
 {
@@ -7415,14 +7436,21 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
     target = mir_find_label(branch->label);
     if (target < 0)
         return 0;
-    if (operation == '>' || operation == TOK_LE) {
-        fputs("\tex de,hl\n", out);
-        operation = operation == '>' ? '<' : TOK_GE;
+    if ((operation == TOK_EQ || operation == TOK_NE) &&
+        mir_fused_compare_is_const_zero_rhs(compare_index)) {
+        /* Item 25: DE was never loaded for this case (the caller skips it
+         * on this same const-zero-rhs test), so test HL directly. */
+        fputs("\tld a,h\n\tor l\n", out);
+    } else {
+        if (operation == '>' || operation == TOK_LE) {
+            fputs("\tex de,hl\n", out);
+            operation = operation == '>' ? '<' : TOK_GE;
+        }
+        if (!is_unsigned && operation != TOK_EQ && operation != TOK_NE)
+            fputs("\tld a,h\n\txor 128\n\tld h,a\n"
+                  "\tld a,d\n\txor 128\n\tld d,a\n", out);
+        fputs("\tor a\n\tsbc hl,de\n", out);
     }
-    if (!is_unsigned && operation != TOK_EQ && operation != TOK_NE)
-        fputs("\tld a,h\n\txor 128\n\tld h,a\n"
-              "\tld a,d\n\txor 128\n\tld d,a\n", out);
-    fputs("\tor a\n\tsbc hl,de\n", out);
     switch (operation) {
     case TOK_EQ: true_condition = "z"; break;
     case TOK_NE: true_condition = "nz"; break;
@@ -8493,6 +8521,15 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         mir_definition(insn->src2);
                     fprintf(out, "\tld de,%ld\n",
                             constant->immediate & 0xffffL);
+                } else if (mir_binary_is_fusable_comparison(i) > 0 &&
+                           mir_fused_compare_is_const_zero_rhs(i)) {
+                    /* Item 25: this comparison will be fused directly into
+                     * the following branch (mir_binary_is_fusable_comparison
+                     * is the single source of truth for that) against the
+                     * constant 0. Skip materializing that 0 into DE
+                     * entirely; the fused branch emitter below tests HL
+                     * directly with "ld a,h / or l" instead of
+                     * "or a / sbc hl,de". */
                 } else {
                     fputs("\tpush hl\n", out);
                     if (mir_binary_only_constant(insn->src2)) {

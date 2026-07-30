@@ -241,7 +241,7 @@ its live range never needs it.
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 25 | Emit `ld a,h / or l` directly for compare-with-constant-zero at the Phase-1 fusion site | pre-peep evidence in the `check_s` case study (`push/ld hl,0/ex de,hl/pop hl/or a/sbc hl,de`) | Do this at emission time, don't rely on `dccpeep`'s `push_lde_pop`/`cmp0_or_hl` passes to clean it up post hoc. |
+| 25 | Emit `ld a,h / or l` directly for compare-with-constant-zero at the Phase-1 fusion site | pre-peep evidence in the `check_s` case study (`push/ld hl,0/ex de,hl/pop hl/or a/sbc hl,de`) | done - see Execution Log |
 | 26 | Add an 8-bit-range compare-with-small-constant fast path (`cp` byte form) instead of full 16-bit `sbc hl,de` | | |
 | 27 | Add a sign-bit test (`bit 7,h`) fast path for `<`/`>=` against constant 0 | | |
 | 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | |
@@ -913,6 +913,37 @@ _(append one entry per completed item, in table order, starting with Item
   (recovered instances are noted inline). Phase 2 is complete; Phase 3
   (Items 25-34) was out of scope for this task and was not started.
 
+- **Item 25** (2026-07-30): Emitted `ld a,h / or l` directly for `==`/`!=`
+  comparisons against the constant 0 at the Phase-1 comparison-branch
+  fusion site, instead of materializing the 0 into DE and running a full
+  16-bit `or a / sbc hl,de`. Added `mir_fused_compare_is_const_zero_rhs()`
+  and used it at the call site (guarded by the existing
+  `mir_binary_is_fusable_comparison()` check, the single source of truth
+  for whether the comparison is really about to be fused, so DE is never
+  skipped for a comparison that falls through to the unfused
+  `mir_emit_scalar_compare` path) to skip the `push hl / ld hl,0 / ex de,hl
+  / pop hl` DE-load entirely when the right-hand operand is a zero
+  constant, and updated `mir_emit_fused_comparison_branch` to test HL
+  directly with `ld a,h / or l` in that case (2 instructions instead of 7).
+  Only the right-hand-side-is-zero shape (`x == 0` / `x != 0`) is handled;
+  the left-hand-side case (`0 == x`) still loads HL with the constant
+  first via the unconditional src1 load, so no benefit is available there
+  without reordering operand evaluation, which this item does not attempt.
+  Rebuilt clean. Census (`--fail-on-regression`): 0 newly/no-longer
+  emitted (171/2353, 7.27% - this changes generated code within
+  already-classified categories, not acceptance), 111 apps with changed
+  metrics, 5 flagged for runtime validation
+  (`tesc, tscanf, tsprintf, tstr3, tsyntax`). Runtime-validated those 5 in
+  `-Mode full`: 0 regressions. Broader spot-check across
+  `cint, tc89comp, tc89decl, tmuldiv` (functions the case-study history
+  flagged as `==`/`!=`-with-zero heavy) found 0 regressions and a genuine
+  improvement in `tc89decl` (peep 43,810 -> 43,781 cycles/-0.07%; nopeep
+  44,612 -> 44,571 cycles/-0.09%; sizes unchanged) - baseline updated for
+  `tc89decl` only via `-UpdatePerfBaseline` after the full-mode proof. Wide
+  fast-mode safety net (`-Mode fast`, 321 apps): 312 passed / 9 skipped /
+  0 failed. Milestone `-Mode full -Extended` run: 312/321 apps passed (9
+  skipped as expected), extended suite 196/196 passed, diagnostics/dccpeep
+  fixtures/performance all passed.
 
 
 
