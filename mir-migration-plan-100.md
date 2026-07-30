@@ -245,7 +245,7 @@ its live range never needs it.
 | 26 | Add an 8-bit-range compare-with-small-constant fast path (`cp` byte form) instead of full 16-bit `sbc hl,de` | | deferred - see Execution Log |
 | 27 | Add a sign-bit test (`bit 7,h`) fast path for `<`/`>=` against constant 0 | | done - see Execution Log |
 | 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | verified already satisfied - see Execution Log |
-| 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | |
+| 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | investigated, found inert - see Execution Log |
 | 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | |
 | 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | |
 | 32 | Add `tests/tmirconstfast.c` covering every new fast path, clang baseline | | |
@@ -994,5 +994,34 @@ _(append one entry per completed item, in table order, starting with Item
   matching (`src/dccpeep/dccpeep.c` ~line 1636) already covers MIR-emitted
   divmod calls with no gap. No code changed for this item.
 
-
+- **Item 29 - investigated, found inert** (2026-07-30): Extended call-argument
+  rematerialization to also cover a constant used both as a call argument
+  and consumed by a post-call comparison/binary op (`mir_call_only_constant`
+  and `mir_binary_only_constant` each individually require the value have
+  no *other* use, so a value satisfying both roles simultaneously fell
+  through to a real backend slot today). Implemented a new
+  `mir_call_and_binary_only_constant()` predicate mirroring
+  `mir_binary_only_constant`'s exact eligibility rules (VLA-comparison
+  exclusion, `type_size<=2`, binary-result-not-fed-to-`MIR_VLA_ALLOC`) plus
+  exactly one `MIR_ARG` use, and wired it into every slot-avoidance/
+  rematerialization gate alongside the two existing "only" predicates (the
+  slot-assignment skip, the `MIR_CONST` definition-site skip, the deferred
+  call-argument scan, and both binary-operand immediate-load fast paths).
+  A full corpus census showed **zero** functions with any generated-code
+  delta from this change (`build/item29-after.tsv` is byte-for-byte
+  identical to `build/item27-after.tsv`) - the underlying premise does not
+  arise in dcc's current architecture: the AST-to-MIR lowering never
+  interns/CSEs constants, so every source-level literal occurrence
+  produces its own independent `MIR_CONST` value. Two `foo(42)` /
+  `x == 42` occurrences in the same function are already two separate
+  values, each already covered on its own by the existing single-use
+  predicates - there is no shared value for the combined predicate to
+  ever match. Since the added code was fully inert (unreachable in every
+  test app, unverifiable by any existing regression test, pure
+  maintenance burden with no measured benefit), it was reverted rather
+  than kept as speculative dead code (matching skill rule 6's "derive a
+  structural predicate", not add a wired-up-but-untested path for a
+  pattern the frontend doesn't produce). No net code change for this
+  item; rebuilt clean after reverting and reconfirmed identical to the
+  pre-item baseline.
 
