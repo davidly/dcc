@@ -248,7 +248,7 @@ its live range never needs it.
 | 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | investigated, found inert - see Execution Log |
 | 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | done - see Execution Log |
 | 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | done - see Execution Log |
-| 32 | Add `tests/tmirconstfast.c` covering every new fast path, clang baseline | | |
+| 32 | Add `tests/tmirconstfast.c` covering every new fast path, clang baseline | | done - see Execution Log (file named `tests/tmirfast.c`; CP/M 8.3 name limit) |
 | 33 | Full census + full-mode validation | | |
 | 34 | Milestone checkpoint | | |
 
@@ -1118,4 +1118,39 @@ _(append one entry per completed item, in table order, starting with Item
   those 5: 0 regressions, all passed. Milestone `-Mode full -Extended`
   run: 312/321 apps passed (9 skipped as expected), extended suite
   196/196 passed, diagnostics/dccpeep fixtures/performance all passed.
+
+- **Item 32** (2026-07-31): Added a permanent regression fixture,
+  `tests/tmirfast.c` (registered plan filename `tmirconstfast.c` renamed
+  to fit CP/M's 8.3 filename limit), covering the semantics of every
+  fast path added in Items 25/27/30/31: compare-with-zero (`eqz`/`nez`),
+  signed sign-bit test (`ltz`/`gez`), the six ones-run multiplier shapes
+  (`mul7`/`mul15`/`mul31`/`mul63`/`mul127`/`mul255`, including a
+  16-bit-wrap case for `mul255`), and dead-after-increment/decrement
+  locals (`inc_dead`/`dec_dead`, plus `inc_observe`/`dec_observe` which
+  take the address of the local so the fused write can be observed
+  through an independent `MIR_LOAD_INDIRECT` read rather than the
+  normal SSA-tracked value). Expected values were derived with a small
+  Python script modeling exact 16-bit wraparound arithmetic (not by
+  hand), then cross-checked by compiling the same source under host
+  `clang`: every check matched except the two cases that are
+  intentionally 16-bit-target-specific (`mul255`'s wraparound case and
+  `inc_observe(0xFFFF)`), which differ only because the host's `int` is
+  wider than dcc's 16-bit target `int` - both are correctly documented
+  as such in the source. `DCC_MIR_SELECT_REPORT=1` confirms every helper
+  in the fixture still falls back to the legacy backend under today's
+  text-size acceptance gate (only the trivial `side_effect` helper
+  reaches MIR, via `homed-scalar-cfg`) - consistent with Items 30/31's
+  finding that these fast paths' current real-world hit population is
+  narrow to nonexistent; the fixture exists as a permanent safety net
+  against a legacy-backend regression in this exact set of semantics,
+  and will begin protecting the MIR-emitted forms too once acceptance
+  criteria naturally admit functions of this shape. Added
+  `tests/baselines/tmirfast.txt` and captured an initial performance
+  baseline for the new app in `tests/perf_baselines.csv` (additive-only
+  row, not a modification of any existing app's baseline). Ran the new
+  test under `dcc`/`ntvcm` directly (`pwsh ./scripts/ma.ps1 tmirfast full`
+  then `ntvcm TMIRFAST.COM`): `tmirfast: all tests passed`. Milestone
+  `-Mode full -Extended` run: 313/322 apps passed (9 skipped as
+  expected, tmirfast now included), extended suite 196/196 passed,
+  diagnostics/dccpeep fixtures/performance all passed.
 
