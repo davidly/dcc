@@ -257,7 +257,7 @@ its live range never needs it.
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
 | 35 | Collapse a label immediately followed only by an unconditional jump into a direct predecessor retarget | `and_expr` case study's `L3575: jp L3573` | done - see Execution Log |
-| 36 | Generalize to transitive jump-to-jump chains | bound iteration to avoid cyclic label chains | |
+| 36 | Generalize to transitive jump-to-jump chains | bound iteration to avoid cyclic label chains | done - see Execution Log |
 | 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | Keeps `mir_cfg_block_count()` accurate so it doesn't wrongly trip the block-count gate. |
 | 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | Extend to non-loop conditional joins. |
 | 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | |
@@ -1257,4 +1257,47 @@ _(append one entry per completed item, in table order, starting with Item
   all passed, 0 regressions. Milestone `-Mode full -Extended`: 313/322
   apps passed (9 skipped as expected), 196/196 extended passed,
   diagnostics/dccpeep fixtures/performance all clean.
+
+- **Item 36** (2026-08-01): generalized `mir_thread_jumps()` to chase
+  transitive jump-to-jump chains (`label -> jump -> label -> jump ->
+  ... -> final target`) instead of only a single hop, tracking each
+  visited label id in a small fixed-size buffer (`MIR_THREAD_JUMPS_MAX_
+  CHAIN`, 256) so a pathological cycle - which real lowering cannot
+  produce, since each jump-only link has exactly one successor and the
+  label graph is otherwise acyclic, but which would spin the chase
+  forever if it somehow existed - stops the chase at the last good
+  target instead. Also fixed the chase to skip over `MIR_NOP`
+  instructions between a label and the jump that follows it: user-named
+  `goto` labels get an `MIR_NOP` carrying the source label's name
+  immediately after the `MIR_LABEL` for diagnostics (compiler-
+  synthesized loop labels like `continue_label` don't), which hid an
+  otherwise-identical jump-only shape from Item 35's original
+  immediately-next-instruction check. Confirmed via `dcc_mir.c`'s
+  emitter that `MIR_NOP` never emits any code (`case MIR_NOP: break;`),
+  so skipping past one changes nothing about which instruction the
+  retargeted jump actually reaches.
+
+  Verified directly with a synthetic four-hop `goto` chain
+  (`a: goto b; b: goto c; c: goto d; d: return n*2;` guarded by an
+  `if (n > 0)`, not committed): `DCC_MIR_REPORT=1` confirmed the
+  original `goto a`'s jump, which previously chased only as far as the
+  next link, now retargets directly to the final block with real work,
+  collapsing all four intermediate jump-only labels in one pass; ran
+  under `ntvcm` and got the correct results for both the positive and
+  non-positive branches.
+
+  Full census vs `build/phase3-after.tsv`: 0 regressions, coverage
+  unchanged at 172/2371 (7.25%, expected for the same reason as Item 35
+  - this pass reshapes jumps, not acceptance decisions). 7 apps showed
+  census metric changes (`a1`, `bint`, `cpmenumd`, `forint`, `tc89swjt`,
+  `tchess`, `too` - the nop-skip fix widened the pattern's reach to
+  `goto`-heavy code), 0 apps required runtime validation per the census.
+  Focused `-Mode full` on those 7 plus `adaint`/`tgoto`/`tgotocap`: all
+  passed, 0 regressions, and one genuine improvement surfaced -
+  `tgoto` dropped 45,022->44,838 cycles (-0.41%) and 6,272->6,144 bytes
+  (-2.04%) in peep mode, with matching nopeep improvements - accepted via
+  `-UpdatePerfBaseline` (purely additive single-row change, verified with
+  `git diff`). Milestone `-Mode full -Extended`: 313/322 apps passed (9
+  skipped as expected), 196/196 extended passed, diagnostics/dccpeep
+  fixtures/performance all clean.
 

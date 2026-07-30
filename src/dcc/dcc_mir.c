@@ -3254,47 +3254,90 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
     return &mir.insns[index];
 }
 
-/* Item 35 (mir-migration-plan-100): thread an explicit jump/branch through
- * a label whose only content is an immediately-following unconditional
- * jump, retargeting straight to the final destination. The canonical case
- * is a loop's "continue:" landing block with no actual continue statement
- * targeting it (and_expr, tests/adaint.c: "L3575: jp L3573") - the legacy
- * AST backend's loop lowering never needs a separate continuation block
- * for the simple case, but mir_lower_stmt's AST_WHILE/AST_FOR/AST_DOWHILE
- * handling always allocates one so AST_CONTINUE has somewhere to target,
- * whether or not the loop body actually contains a continue statement.
+/* Item 35/36 (mir-migration-plan-100): thread an explicit jump/branch
+ * through a chain of labels whose only content is an immediately-
+ * following unconditional jump, retargeting straight to the final
+ * destination. The canonical case is a loop's "continue:" landing block
+ * with no actual continue statement targeting it (and_expr,
+ * tests/adaint.c: "L3575: jp L3573") - the legacy AST backend's loop
+ * lowering never needs a separate continuation block for the simple
+ * case, but mir_lower_stmt's AST_WHILE/AST_FOR/AST_DOWHILE handling
+ * always allocates one so AST_CONTINUE has somewhere to target, whether
+ * or not the loop body actually contains a continue statement.
  *
- * This is purely jump threading: the intermediate label was always going
- * to fall straight through to that same unconditional jump, so retargeting
- * an explicit predecessor to skip it cannot change which instruction
- * executes next for any input. Running this before mir_cfg_block_count(),
- * mir_has_cfg_backedge(), and the phi-construction pass that all run
- * later in mir_end_function/the selectors means every one of those later
- * analyses sees the already-simplified CFG directly, rather than needing
- * their own special-casing for the redundant hop. Only a single level of
- * chasing is done here (a jump straight into another such label is left
- * alone); Item 36 extends this to transitive chains. */
+ * This is purely jump threading: every intermediate label was always
+ * going to fall straight through to the next jump in the chain, so
+ * retargeting an explicit predecessor to skip the whole chain cannot
+ * change which instruction executes next for any input. Running this
+ * before mir_cfg_block_count(), mir_has_cfg_backedge(), and the
+ * phi-construction pass that all run later in mir_end_function/the
+ * selectors means every one of those later analyses sees the
+ * already-simplified CFG directly, rather than needing their own
+ * special-casing for the redundant hops.
+ *
+ * Item 36 generalizes Item 35's single-hop chase to transitive chains
+ * (label -> jump -> label -> jump -> ... -> final target), and also
+ * skips over any MIR_NOP instructions between a label and the jump that
+ * follows it - user-named goto labels (unlike compiler-synthesized loop
+ * labels) get an MIR_NOP carrying the source name immediately after the
+ * MIR_LABEL for diagnostics, which would otherwise hide an identical
+ * jump-only shape from Item 35's original immediately-next-instruction
+ * check. MIR_NOP never emits any code (dcc_mir.c's emitter simply
+ * `break`s on it), so skipping past one changes nothing about which
+ * instruction the retargeted jump actually reaches. The chase tracks
+ * each label id visited so far in a small fixed-size buffer; if a
+ * jump-only chain ever revisits an id (which cannot arise from real
+ * lowering - a legitimate loop's label graph is acyclic through pure
+ * unconditional jumps - but would otherwise spin the loop forever), the
+ * chase stops at the last good target instead of following the cycle.
+ * The buffer size bounds the longest chain threaded in one pass; a chain
+ * longer than that is left partially threaded, which is only a missed
+ * optimization, never a correctness problem. */
+#define MIR_THREAD_JUMPS_MAX_CHAIN 256
 static void mir_thread_jumps(void)
 {
     int i;
 
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
-        int label_index;
-        int target;
+        int visited[MIR_THREAD_JUMPS_MAX_CHAIN];
+        int visited_count = 0;
+        int current = insn->label;
 
         if (insn->opcode != MIR_JUMP && insn->opcode != MIR_BRANCH_FALSE)
             continue;
-        label_index = mir_find_label(insn->label);
-        if (label_index < 0 || label_index + 1 >= mir.count ||
-            mir.insns[label_index + 1].opcode != MIR_JUMP)
-            continue;
-        target = mir.insns[label_index + 1].label;
-        if (target == insn->label)
-            continue; /* degenerate self-jump; leave alone */
-        insn->label = target;
+        visited[visited_count++] = current;
+        for (;;) {
+            int label_index = mir_find_label(current);
+            int scan;
+            int next;
+            int j;
+            int cyclic;
+
+            if (label_index < 0)
+                break;
+            scan = label_index + 1;
+            while (scan < mir.count && mir.insns[scan].opcode == MIR_NOP)
+                ++scan;
+            if (scan >= mir.count || mir.insns[scan].opcode != MIR_JUMP)
+                break;
+            next = mir.insns[scan].label;
+            cyclic = 0;
+            for (j = 0; j < visited_count; ++j) {
+                if (visited[j] == next) {
+                    cyclic = 1;
+                    break;
+                }
+            }
+            if (cyclic || visited_count >= MIR_THREAD_JUMPS_MAX_CHAIN)
+                break;
+            visited[visited_count++] = next;
+            current = next;
+        }
+        insn->label = current;
     }
 }
+#undef MIR_THREAD_JUMPS_MAX_CHAIN
 
 static void mir_resolve_deferred_metadata(void)
 {
