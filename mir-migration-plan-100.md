@@ -587,5 +587,28 @@ _(append one entry per completed item, in table order, starting with Item
   `mir_try_emit_spilled_scalar_cfg` win on `slt_spilled`/`nslt_spilled`/
   `and_chain_spilled`.
 
+- **Items 11–12** (2026-07-30, Phase 1 milestone): Full census re-run
+  confirms coverage held at 170/2343 (7.26%) with the current checkpoint
+  (Items 2/3/5/6/7 having needed no code change or being deferred, so
+  Item 1 is still the sole source of the coverage jump). Full-mode
+  `runall.ps1` on the 5 apps newly admitted to MIR by Item 1 (`tesc`,
+  `tstr3`, `tsyntax`, `tscanf`, `tsprintf`) - all pass with 0 performance
+  regressions, confirming the jump is a genuine perf win and not just
+  smaller text (skill rule 4). Milestone safety net: `runall.ps1 -Mode
+  full -Extended` - 320 apps (311 passed / 9 skipped / 0 failed) plus the
+  extended C-standard suite (196/196 runnable cases passed, 24
+  target-inapplicable skips for long long/double/GNU-extension/wchar
+  reasons unrelated to this phase), 0 performance regressions, direct
+  `-fstack-check` rebuilds clean. No perf-baseline changes needed beyond
+  the already-captured Item 1 rows and the new `tmirfuse` app's own
+  freshly-captured baseline (Item 10). Coverage snapshot and gotchas
+  recorded in repo memory (`perf-optimization.md`): CP/M 8.3 filename
+  limit for new test basenames, `runall.ps1 -Apps` comma-list quoting,
+  and the `DCC_MIR_FORCE_ACCEPT_FUNCTION` + `dccmake` verification
+  recipe for exercising a selector-rejected code path directly.
+  **Phase 1 (Items 1–12) is now complete.** Proceeding to Phase 2
+  (Items 13–24, backend-slot live-range hygiene / dead-store
+  elimination).
+
 
 
