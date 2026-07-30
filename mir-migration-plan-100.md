@@ -259,7 +259,7 @@ its live range never needs it.
 | 35 | Collapse a label immediately followed only by an unconditional jump into a direct predecessor retarget | `and_expr` case study's `L3575: jp L3573` | done - see Execution Log |
 | 36 | Generalize to transitive jump-to-jump chains | bound iteration to avoid cyclic label chains | done - see Execution Log |
 | 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | deferred - see Execution Log (breaks object-phi promotion's block-identity lookup) |
-| 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | Extend to non-loop conditional joins. |
+| 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | done - see Execution Log |
 | 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | |
 | 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | Mandatory re-scoping step before Phase 5. |
 | 41 | Add `DCC_MIR_PHI_REPORT=1`: phi-join reuse hits/misses | | |
@@ -1358,4 +1358,63 @@ _(append one entry per completed item, in table order, starting with Item
   with the CFG-successor/predecessor-tracking rework Items 38/39 already
   need for the same underlying data, not as an isolated label-removal
   pass. Moving on to Item 38.
+
+- **Item 38** (2026-08-02): Investigated `mir_promote_objects()`/
+  `mir_try_make_object_phi()` (`dcc_mir.c` ~4143-4356) before writing any
+  code, because Item 37 had just shown this machinery is easy to
+  misjudge. Found it is *already* a fully general dataflow pass, not
+  loop-specific: it walks every instruction's reaching object state and
+  calls `mir_try_make_object_phi()` whenever a load or object-merge sees
+  `MIR_OBJECT_AMBIGUOUS` (predecessors disagree), and directly aliases to
+  the existing value with no phi at all when predecessors already agree
+  (`reaching >= 0`) - this second case is exactly non-loop straight-line
+  reuse and evidently already works. The real gap was structural, not
+  semantic: `mir_try_make_object_phi()` requires
+  `mir_block_label_before(predecessor) >= 0` for *every* predecessor, and
+  a plain `if (cond) { ... } else { ... }` statement's then-arm is pure
+  fallthrough right after the `MIR_BRANCH_FALSE` - it has no label of its
+  own (nothing ever jumps to it), so `mir_block_label_before()` walks
+  straight past it to whatever precedes the `if`, or hits the `brfalse`
+  itself and returns -1. Confirmed this by hand with a synthetic function
+  (`pick`, `if (cond) y = x*2; else y = x*2;` then `return y + x;`):
+  `DCC_MIR_OBJECT_REPORT=1` showed `y`'s post-join load stuck at
+  `state=-2` (ambiguous) with the phi attempt silently failing every
+  time, even though both arms compute the identical expression.
+
+  Fix: in `mir_lower_stmt()`'s `AST_IF` case, emit a label at the start
+  of the then-arm - giving it the same physical predecessor identity the
+  else-arm/end-label already have - but *only* when `node->c != NULL`
+  (there is an else-arm, so a genuine two-predecessor join exists at
+  `end_label`). First tried this unconditionally for every `if`
+  (including bare `if` with no `else`) and caught a real regression via
+  the regression-gated census before committing anything: `tlongopt`'s
+  `br_lt_hex_u`/`br_ult_hex_u` (`if (x < 0xffff) return 1; return 0;`,
+  no else, nothing to ever merge) flipped from accepted to fallback,
+  because the unconditional extra label perturbed the narrow
+  whole-function `homed-scalar-cfg` selector into materializing an extra
+  block boundary - `generated-bytes` rose 191->197 even though nothing
+  needed the label. Scoping the label to the `node->c != NULL` case only
+  fixed both regressions with no loss to the intended non-loop-join
+  case (verified `pick` still produces `phi v15 = v9,v13 y {o4} type=2
+  [L3,L1]` at the join, directly merging the two live values instead of
+  reloading `y` from memory).
+
+  Took a real before/after census pair (`build/item38-before.tsv` built
+  from the pre-Item-38 binary, since `phase3-after.tsv` predates Items
+  35/36): first pass (unconditional label) failed
+  `--fail-on-regression` with 2 functions regressed
+  (`tlongopt.br_lt_hex_u`, `tlongopt.br_ult_hex_u`); after scoping the
+  fix to the `else`-present case, the census passed clean - 0
+  regressions, coverage 172/2371 -> 173/2371 (+1,
+  `tc99scpe.conditional_decl`), 72 apps with census metric changes
+  (mostly fallback-only label-count churn), 3 apps needing runtime
+  validation (`cint`, `tc99scpe`, `tdead`). Focused `-Mode full` on those
+  3 plus `tifcom`, `tlongopt`, `tphi`, `tmircfg`, `tinlnpar` (if/else and
+  phi-heavy apps): all 8 passed, 0 regressions, 9 genuine cycle/byte
+  improvements (`tmircfg` -8.66% nopeep cycles/-2.38% bytes, `tdead`
+  -0.66%, `tc99scpe` -0.99%, `tlongopt` -0.05%, all with matching peep
+  numbers) - accepted via `-UpdatePerfBaseline` (verified a clean 4-row
+  diff, all decreases, no byte increases). Milestone `-Mode full
+  -Extended`: 313/322 apps, 196/196 extended, diagnostics/dccpeep/
+  performance all clean.
 
