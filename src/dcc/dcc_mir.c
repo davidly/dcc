@@ -6358,12 +6358,32 @@ static int mir_binary_only_constant(int value)
  * AST backend for constant multiplication. */
 #define MIR_MUL_CONST_MAX_OPS 10
 
+/* Item 30 (mir-migration-plan-100): a contiguous run of set bits at the
+ * bottom of the multiplier (uv == (1 << k) - 1 for some k, e.g. 7, 15, 31,
+ * 63, 127...) is cheaper to build as "(x << k) - x" (k doublings plus one
+ * 16-bit subtract) than as the naive per-bit shift/add decomposition below
+ * (k-1 doublings plus k-1 adds). Returns the run length k and 1 if uv is
+ * such a run (k in [2,16] - k=1 would be uv=1, already handled as the
+ * trivial multiply-by-one case before this path is ever reached), 0
+ * otherwise. */
+static int mir_mul_const_is_ones_run(unsigned long uv, int *shift_count)
+{
+    int k;
+
+    for (k = 2; k <= 16; ++k)
+        if (uv == (1uL << (unsigned)k) - 1uL) {
+            *shift_count = k;
+            return 1;
+        }
+    return 0;
+}
+
 /* Number of instructions mir_emit_mul_hl_const_general would emit for uv (a
  * 16-bit unsigned pattern, uv != 0 and not already a single power of two):
  * one "add hl,hl" per bit position below the highest set bit (the
  * doublings), plus one "add hl,de" per OTHER set bit (the highest bit
  * itself is free - it's the starting value). */
-static int mir_mul_const_op_count(unsigned long uv)
+static int mir_mul_const_naive_op_count(unsigned long uv)
 {
     int bit;
     int highest = -1;
@@ -6380,6 +6400,23 @@ static int mir_mul_const_op_count(unsigned long uv)
     if (highest <= 0)
         return 0;
     return highest + adds;
+}
+
+/* Single source of truth for the instruction cost of a constant multiply
+ * that isn't already a plain power of two: the cheaper of the naive
+ * per-bit decomposition and the Item 30 shift-and-subtract form for a
+ * bottom-aligned run of ones, so a caller never has to duplicate the
+ * "which form is cheaper" comparison mir_emit_mul_hl_const_general also
+ * makes. */
+static int mir_mul_const_op_count(unsigned long uv)
+{
+    int naive = mir_mul_const_naive_op_count(uv);
+    int shift_count;
+
+    if (mir_mul_const_is_ones_run(uv, &shift_count) &&
+        shift_count + 1 < naive)
+        return shift_count + 1;
+    return naive;
 }
 
 /* True if value 'v' is the size operand feeding a VLA allocation.
@@ -6473,7 +6510,18 @@ static void mir_emit_mul_hl_const_general(FILE *out, unsigned long uv)
 {
     int bit;
     int highest = -1;
+    int shift_count;
 
+    if (mir_mul_const_is_ones_run(uv, &shift_count) &&
+        shift_count + 1 < mir_mul_const_naive_op_count(uv)) {
+        /* Item 30: "(x << shift_count) - x" beats the per-bit add
+         * decomposition for a bottom-aligned run of ones. */
+        fputs("\tld d,h\n\tld e,l\n", out);
+        for (bit = 0; bit < shift_count; ++bit)
+            fputs("\tadd hl,hl\n", out);
+        fputs("\tor a\n\tsbc hl,de\n", out);
+        return;
+    }
     for (bit = 15; bit >= 0; --bit) {
         if (uv & (1uL << (unsigned)bit)) {
             highest = bit;

@@ -246,7 +246,7 @@ its live range never needs it.
 | 27 | Add a sign-bit test (`bit 7,h`) fast path for `<`/`>=` against constant 0 | | done - see Execution Log |
 | 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | verified already satisfied - see Execution Log |
 | 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | investigated, found inert - see Execution Log |
-| 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | |
+| 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | done - see Execution Log |
 | 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | |
 | 32 | Add `tests/tmirconstfast.c` covering every new fast path, clang baseline | | |
 | 33 | Full census + full-mode validation | | |
@@ -1024,4 +1024,36 @@ _(append one entry per completed item, in table order, starting with Item
   pattern the frontend doesn't produce). No net code change for this
   item; rebuilt clean after reverting and reconfirmed identical to the
   pre-item baseline.
+
+- **Item 30** (2026-07-30): Audited `mir_mul_const_fast_path_eligible`/
+  `mir_mul_const_op_count` for additional profitable multiplier shapes.
+  Found that a bottom-aligned run of ones (`uv == (1 << k) - 1`, e.g.
+  7, 15, 31, 63, 127, 255) is cheaper to compute as `(x << k) - x` (`k`
+  doublings plus one 16-bit `sbc hl,de`) than the existing per-bit
+  add decomposition (`k - 1` doublings plus `k - 1` adds) - for `k >= 4`
+  this form is strictly fewer instructions, and for `k >= 7` (127, 255,
+  ...) it can bring a multiplier that previously exceeded
+  `MIR_MUL_CONST_MAX_OPS` (and therefore fell back to a runtime `__mulu`
+  call) back under the cap into the shift/subtract fast path. Added
+  `mir_mul_const_is_ones_run()` and refactored the existing per-bit
+  counter into `mir_mul_const_naive_op_count()`, with
+  `mir_mul_const_op_count()` (the single source of truth used by both the
+  frame-slot accounting and the emission site) returning the cheaper of
+  the two forms, and `mir_emit_mul_hl_const_general()` emitting the
+  shift-and-subtract sequence whenever it wins. Correctness was verified
+  directly: forced-accepted `x*7`, `x*15`, `x*31`, `x*63`, `x*127`, and
+  `x*255` for a spread of inputs (`0, 1, 2, 3, -1, -5, 100, -100, 1000`,
+  including a case that overflows 16 bits) run under `ntvcm` and compared
+  byte-for-byte against Python-computed 16-bit-wrapped expected results -
+  all matched exactly. Census (`--fail-on-regression`) vs
+  `build/phase3-before.tsv`: 0 newly/no-longer emitted, identical to the
+  Item 29 snapshot (no function in the current corpus reaches this
+  selector for one of these multiplier shapes, so this is a coverage/cost
+  improvement for future/broader corpora rather than a measured win in
+  today's apps - the shift-and-subtract form has already been directly
+  verified correct above, independent of census evidence). Focused
+  `-Mode full` on `tesc, tscanf, tsprintf, tstr3, tsyntax, tmuldiv,
+  tc89comp`: 0 regressions. Milestone `-Mode full -Extended` run:
+  312/321 apps passed (9 skipped as expected), extended suite 196/196
+  passed, diagnostics/dccpeep fixtures/performance all passed.
 
