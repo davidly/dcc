@@ -112,6 +112,59 @@ a fresh census and direct assembly inspection rather than continuing stale
 item numbering, and retire the old plan document once its content is folded
 into the new one.
 
+## Known pattern: selectors reachable only via a diagnostic env var (2026-08-02)
+
+Plan-100's Phase 4 (Items 45-46) and Phase 8 (Items 78-80) each independently
+found a `mir_try_emit_*` selector wrapper that was fully implemented, passed
+its own structural gate, but was **never called from the true production
+default path** in `mir_end_function()` — only from a diagnostic branch gated
+by an env var (`DCC_MIR_EMIT_FUNCTION`/`DCC_MIR_CANDIDATES` in Item 46's case,
+`DCC_MIR_EMIT_GENERAL`/`DCC_MIR_EMIT_HOME_CFG` in Item 78's). Two prior staged
+rollouts had been built, gated, and diagnosably tested, then simply never
+wired in. Before assuming a fallback population needs a brand-new selector
+built from scratch, grep `dcc_mir.c` for `mir_try_emit_` functions and check
+whether each one is reachable from `mir_end_function()`'s unconditional
+`else` branch — some may already exist and only need wiring plus an A/B proof.
+
+When such a selector is found, first classify it, because the two cases need
+different fixes:
+
+- **Distinct emitter, never used elsewhere** (e.g. `general_rollout` →
+  `mir_try_emit_homed_scalar_dag`, used nowhere else in the codebase): a real,
+  valuable, promotable candidate. Prove it with a full census cross-reference
+  against the current production baseline (env-var-forced sweep, byte-compare
+  every match) *and* a forced full-app A/B (`DCC_MIR_FORCE_ACCEPT_FUNCTION`
+  or the env var itself with `runall -Mode full`) before promoting — do not
+  assume smaller-and-different means strictly better everywhere (Item 78
+  found 26 of 27 wins but 1 real loss). Promote with a safe swap: try the new
+  selector into a separate stream, and only replace the incumbent's output if
+  the alternative structurally matches and is strictly smaller, or the
+  incumbent failed outright. This is the same fresh-stream-swap pattern Item
+  46 established for its loop-family retry.
+- **Wrapper whose body calls an emitter already active in production** (e.g.
+  `home_cfg_rollout` → `mir_try_emit_homed_scalar_cfg`, the same function
+  production tries unconditionally): provably redundant scaffolding with zero
+  possible behavioral difference from the always-on path. Confirm with an
+  env-var-forced census showing byte-identical output to production, then
+  delete the wrapper and its diagnostic call sites outright — no A/B needed,
+  since there is nothing it could add.
+
+## Discipline note: consolidate parallel cost-gate formulas as they accumulate
+
+Multiple `mir_try_emit_*` gates independently recompute the same
+frame-size/cost estimate (`mir.local_bytes + mir.aggregate_temp_bytes + 2 *
+mir_prepare_backend_slots()`, or a narrower subset of it) inline rather than
+calling one shared predicate. This is Item 19's "one-predicate discipline"
+lesson recurring at the frame-size layer (found again at Item 86): when a
+narrower gate's subset structurally guarantees a term is always zero (e.g.
+`aggregate_temp_bytes` is always 0 for any candidate whose opcode whitelist
+excludes `MIR_CALL`, since only call-argument struct temporaries increment
+it), including the full shared formula anyway is free and keeps the two gates
+textually identical instead of silently drifting apart. Prefer factoring such
+formulas into one `static int` helper as soon as a second call site appears,
+and verify the refactor with a byte-identical regression-gated census diff
+before relying on it being behavior-preserving.
+
 ## Fast migration loop
 
 ### 1. Start from a committed checkpoint

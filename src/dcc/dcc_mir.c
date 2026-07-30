@@ -8144,6 +8144,20 @@ static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
     return 0;
 }
 
+/* Item 86: single shared frame-size accounting predicate. Calls
+ * mir_prepare_backend_slots() (which has the side effect of assigning
+ * backend slots), so call it exactly once per candidate emitter, same as
+ * both call sites below did individually before this consolidation.
+ * aggregate_temp_bytes is always 0 for callers that structurally exclude
+ * MIR_CALL (e.g. mir_try_emit_general_rollout's opcode whitelist), so
+ * including it here is always safe and never changes behavior for them.
+ */
+static int mir_current_frame_bytes(void)
+{
+    return mir.local_bytes + mir.aggregate_temp_bytes +
+           2 * mir_prepare_backend_slots();
+}
+
 static int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -8166,8 +8180,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_fuse_report_fused_count = 0;
     mir_fuse_report_materialized_count = 0;
     mir_backend_slots_skip_fused_comparisons = 1;
-    frame_bytes = mir.local_bytes + mir.aggregate_temp_bytes +
-                  2 * mir_prepare_backend_slots();
+    frame_bytes = mir_current_frame_bytes();
     mir_backend_slots_skip_fused_comparisons = 0;
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
@@ -9351,7 +9364,7 @@ static int mir_try_emit_general_rollout(FILE *out)
         mir.declaration_count > 0 ||
         (mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2)
         return 0;
-    frame_bytes = mir.local_bytes + 2 * mir_prepare_backend_slots();
+    frame_bytes = mir_current_frame_bytes();
     if (frame_bytes > 64)
         return 0;
     for (i = 0; i < mir.count; ++i) {

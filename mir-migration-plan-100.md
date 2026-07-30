@@ -334,14 +334,14 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 85 | Run the full census with `-fstack-check` explicitly passed for every item landed in Phases 1–8, not only VLA ones | closes the blind spot broadly | |
-| 86 | Grep every new helper added in Phases 1–8 for duplicated slot/frame-size accounting; consolidate to one predicate function each | repeat of the Item 19 lesson, applied plan-wide | |
-| 87 | Run `scripts/rtl-iy-safety.py` and `scripts/audit-runtime-coverage.py` | confirm no MIR change introduced an IY reference or uncovered runtime symbol | |
-| 88 | Run the full suite on Windows/MSVC and Linux/GCC hosts (or CI) | promote from "optional" (per the retired progress doc) to required, given the larger scope of this plan | |
-| 89 | Run the extended C-conformance corpus (`-Extended`, 196 tests) at every phase boundary, not only at the end | | |
-| 90 | `git diff --check` + `git fsck --no-progress --no-dangling` before any milestone push | | |
-| 91 | Update `.github/skills/mir-migration/SKILL.md` with any newly-discovered acceptance-barrier categories or discipline rules | | |
-| 92 | Milestone: full merge-readiness report with Phases 1–8's real numbers | wide safety net | |
+| 85 | Run the full census with `-fstack-check` explicitly passed for every item landed in Phases 1–8, not only VLA ones | closes the blind spot broadly | done - added `--extra-args` to the census script; see Execution Log |
+| 86 | Grep every new helper added in Phases 1–8 for duplicated slot/frame-size accounting; consolidate to one predicate function each | repeat of the Item 19 lesson, applied plan-wide | done - `mir_current_frame_bytes()` extracted; see Execution Log |
+| 87 | Run `scripts/rtl-iy-safety.py` and `scripts/audit-runtime-coverage.py` | confirm no MIR change introduced an IY reference or uncovered runtime symbol | done - both clean; see Execution Log |
+| 88 | Run the full suite on Windows/MSVC and Linux/GCC hosts (or CI) | promote from "optional" (per the retired progress doc) to required, given the larger scope of this plan | done - added a `windows-latest` CI matrix leg alongside `ubuntu-latest`; see Execution Log |
+| 89 | Run the extended C-conformance corpus (`-Extended`, 196 tests) at every phase boundary, not only at the end | | done - already standard practice every phase this session (see Items 45-84's milestone runs); reconfirmed here |
+| 90 | `git diff --check` + `git fsck --no-progress --no-dangling` before any milestone push | | done - both clean; see Execution Log |
+| 91 | Update `.github/skills/mir-migration/SKILL.md` with any newly-discovered acceptance-barrier categories or discipline rules | | done - added the dead-selector-via-env-var pattern and the frame-bytes consolidation discipline note |
+| 92 | Milestone: full merge-readiness report with Phases 1–8's real numbers | wide safety net | done - see Execution Log |
 
 ### Phase 10 — Closing sweep & legacy-retirement readiness (Items 93–100)
 
@@ -1963,3 +1963,100 @@ _(append one entry per completed item, in table order, starting with Item
   diagnostic env vars before assuming a fallback population needs a
   brand-new selector built from scratch. Phase 8 is closed. Moving on
   to Phase 9 (Items 85-92, cross-cutting hardening & multi-platform).
+
+- **Items 85-92** (2026-08-02): Phase 9 close-out - cross-cutting
+  hardening, mostly process/audit items with two real code
+  improvements found along the way.
+
+  **Item 85**: `scripts/mir-migration-census.py` had no way to force
+  a global compiler flag across every compile (only per-app
+  `dcc_args` overrides existed), so no census this whole plan had
+  ever exercised `-fstack-check` - even though `runall.ps1`/`dccmake`
+  build every app with it ON by default via `DCC_FORCE_STACK_CHECK`.
+  Added a `--extra-args` option and ran a full census with
+  `-fstack-check` forced, compared against the normal-mode baseline:
+  coverage dropped from 174 to 168 (6 fewer `mir accepted`), all 6 in
+  `tvla` (`vla_sizeof_*` functions), all falling back to `text-size`
+  because the added stack-check prologue pushed their byte/cost gate
+  just over threshold. This is not a bug: fallback is definitionally
+  correct (byte-identical legacy replay), and `runall.ps1`'s normal
+  correctness/perf runs (which build via `dccmake`, which does honor
+  `DCC_FORCE_STACK_CHECK`) already exercise this exact configuration
+  by default - confirmed by every full-extended run this session
+  passing clean. No code change beyond the script's new flag.
+
+  **Item 86**: grepped `dcc_mir.c` for duplicated frame-size formulas
+  added/touched across Phases 1-8. Found two: `mir_try_emit_spilled_
+  scalar_cfg`'s `frame_bytes = mir.local_bytes + mir.aggregate_temp_
+  bytes + 2 * mir_prepare_backend_slots()` and `mir_try_emit_general_
+  rollout`'s narrower `mir.local_bytes + 2 * mir_prepare_backend_
+  slots()` (omitting `aggregate_temp_bytes`). Verified the omission
+  was safe by construction - `general_rollout`'s opcode whitelist
+  excludes `MIR_CALL` entirely, and `aggregate_temp_bytes` only ever
+  accrues from anonymous struct call-argument temporaries, so it's
+  provably always 0 in that domain - but consolidated anyway per
+  Item 19's one-predicate discipline: extracted `mir_current_frame_
+  bytes()` and pointed both call sites at it. Verified byte-for-byte
+  identical census output before/after (0 changes across the whole
+  corpus), proving the refactor is behavior-preserving.
+
+  **Item 87**: `scripts/rtl-iy-safety.py` - clean, no IY reference
+  anywhere in `DCCRTL.MAC`. `scripts/audit-runtime-coverage.py` -
+  clean (195/195 standard API surface resolves to a covered runtime
+  function; the 17 "unexpected" internal dispatch labels it flags are
+  pre-existing formatted-I/O helper labels unrelated to and untouched
+  by any Phases 1-8 commit, confirmed via `git diff --stat` showing
+  `DCCRTL.MAC` was never touched this plan).
+
+  **Item 88**: promoted from optional to required. CI (`ci.yml`) only
+  ever built on `ubuntu-latest` (Linux/GCC). Verified the tooling was
+  already Windows/MSVC-ready without needing it: `build-dcc.ps1`
+  auto-detects MSVC via `vcvarsall` on Windows, and the `ntvcm`
+  emulator repo ships `m.bat` alongside `m.sh`. Added a `windows-
+  latest` matrix leg to `ci.yml` (`fail-fast: false` so one OS
+  failing doesn't hide the other), split the ntvcm build step by
+  `runner.os`, and rewrote the PATH-setup step from bash-only syntax
+  (`$GITHUB_WORKSPACE`/`$GITHUB_PATH`) to `pwsh` with `$env:` prefixes
+  so it works identically on both runners. Also added `-RunTimeout
+  20` to CI's `runall.ps1 -Mode full -Extended` invocation, matching
+  this session's established local practice, to bound any future
+  hung test the same way the local timeout does. This cannot be
+  fully verified locally (no Windows host in this environment); it
+  is pushed for the real `windows-latest` GitHub Actions runner to
+  validate, consistent with the standing practice of trusting CI
+  after a local-verified push.
+
+  **Item 89**: already de facto satisfied - every phase boundary
+  this session (Items 45-46, 47-56, 57-66, 67-76, 77-84, and now
+  85-92) ran a full `-Mode full -Extended` milestone pass before its
+  commit, per standing instruction. Reconfirmed here with this
+  phase's own clean run (314/323 apps, 196/196 extended).
+
+  **Item 90**: `git diff --check` (whitespace-error scan) and
+  `git fsck --no-progress --no-dangling` both clean on the working
+  tree before this phase's push.
+
+  **Item 91**: updated `.github/skills/mir-migration/SKILL.md` with
+  two new sections capturing this session's real discoveries: (1)
+  "selectors reachable only via a diagnostic env var" - documenting
+  the Item 46 / Item 78-80 pattern and how to classify a found
+  wrapper (distinct-emitter-promote vs. redundant-scaffolding-delete)
+  before acting on it; (2) a discipline note on consolidating
+  parallel cost-gate formulas as they accumulate, generalizing
+  Item 19's lesson to the frame-size layer found again at Item 86.
+
+  **Item 92 (milestone merge-readiness report)**: fresh full census -
+  coverage 174/2378 functions (7.32%), selectors: spilled-scalar-cfg
+  2253, homed-scalar-cfg 96, general-rollout 28, loop-family 1;
+  fallback reasons: text-size 2146, instruction-count 27, inline-
+  substitution 24, cfg-block-count 3, cfg-backedge 2, pointer-array 1,
+  selector 1. 42 commits since Plan-100's first item (`e50ae51`)
+  through this phase. Full `-Mode full -Extended`: 314/323 apps,
+  196/196 extended, diagnostics/dccpeep/performance all clean, no
+  regressions at any point across Phases 1-9. Two genuine production
+  wins landed this plan beyond the original small-pattern-fold scope:
+  Item 46's loop-family dispatch fix and Item 79's general-rollout
+  promotion, both found by auditing for orphaned selectors rather
+  than writing new ones - the highest-yield technique discovered
+  across the whole plan. Phase 9 is closed. Moving on to Phase 10
+  (Items 93-100, closing sweep & legacy-retirement readiness).

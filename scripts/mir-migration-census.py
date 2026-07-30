@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="exit nonzero if a previously MIR-emitted function falls back",
     )
+    parser.add_argument(
+        "--extra-args",
+        default="",
+        help="extra dcc flags appended to every compile, e.g. -fstack-check "
+        "(applied after per-app overrides' dcc_args)",
+    )
     return parser.parse_args()
 
 
@@ -249,7 +255,8 @@ def main() -> int:
                 assembly,
                 args.stack,
                 args.timeout,
-                shlex.split(str(overrides.get(source.stem, {}).get("dcc_args", ""))),
+                shlex.split(str(overrides.get(source.stem, {}).get("dcc_args", "")))
+                + shlex.split(args.extra_args),
             )
             if error:
                 failures.append((source.stem, error))
