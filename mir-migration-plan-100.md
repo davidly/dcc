@@ -276,16 +276,16 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 |---|---|---|---|
 | 45 | Re-scope: which functions still fail on `cfg-backedge` after Phases 1–4 | mandatory fresh census, not the old count | Done - major finding: the 4 loop selectors were dead code in production (dispatch-wiring gap, not selector quality) |
 | 46 | Generalize `mir_try_emit_countdown_loop` to a runtime bound already resident in a parameter/local | | Done (reframed) - fixed the dispatch-wiring gap itself: retry the 4 existing loop selectors when `cfg-backedge` is the only blocking reason. `bcd_div10` now MIR-accepted (matched `mir_try_emit_unsigned_division_loop` exactly, no generalization needed). `lres`/`loop_header_phi` still fall back - different, larger gaps (SC_LOCAL loop var, ascending-counter-vs-parameter-bound shape) deferred to later items |
-| 47 | Generalize `mir_try_emit_accumulator_loop` to more than one independently BC/DE/IY-allocatable accumulator | | |
-| 48 | Extend `mir_try_emit_unsigned_division_loop` to the signed case | if the re-scoped census shows a signed-loop fallback family | |
-| 49 | Verify the specialized loop selectors don't duplicate the materialize-then-retest comparison bug fixed in Phase 1 | | |
-| 50 | Extend loop-invariant hoisting (commit `729bc11`) from the homed case to the spilled case using Phase 2's slot-hygiene machinery | | |
-| 51 | Re-profile the 10 VLA power-of-two loop fallbacks under the now-cheaper general loop path | do NOT remove the gate without checking exact affected functions (skill rule 1) — likely stays a small explicit exception | |
-| 52 | Add a general (non-countdown, non-accumulator) loop selector for an arbitrary acyclic loop body with a backedge | highest-risk item in the plan so far | Gate behind forced A/B profiling before any production admission. |
-| 53 | Dynamic profiling (`dccprof.ps1`) A/B for every function Item 52 admits | skill rule 4 — mandatory, not optional, for this item | |
-| 54 | Add `tests/tmirloopgen.c` covering the new selector's shapes, clang baseline | | |
-| 55 | Full census + full-mode validation | | |
-| 56 | Milestone checkpoint including `-Extended` | wide safety net | |
+| 47 | Generalize `mir_try_emit_accumulator_loop` to more than one independently BC/DE/IY-allocatable accumulator | | deferred - see Execution Log (no 2-accumulator function exists in the re-scoped census; only 2 cfg-backedge functions remain and neither is multi-accumulator) |
+| 48 | Extend `mir_try_emit_unsigned_division_loop` to the signed case | if the re-scoped census shows a signed-loop fallback family | deferred - see Execution Log (no signed-division-loop fallback exists; `bcd_div10` was the only division-loop candidate and it's already unsigned and now accepted) |
+| 49 | Verify the specialized loop selectors don't duplicate the materialize-then-retest comparison bug fixed in Phase 1 | | done - see Execution Log (verified clean by inspection; none of the 4 selectors call the shared compare-emission path at all) |
+| 50 | Extend loop-invariant hoisting (commit `729bc11`) from the homed case to the spilled case using Phase 2's slot-hygiene machinery | | deferred - see Execution Log (no accepted spilled-scalar-cfg loop function exists to improve; the systemic ~2x spilled-cost gap makes a narrow hoisting fix unlikely to flip any current fallback) |
+| 51 | Re-profile the 10 VLA power-of-two loop fallbacks under the now-cheaper general loop path | do NOT remove the gate without checking exact affected functions (skill rule 1) — likely stays a small explicit exception | deferred - see Execution Log (depends on Item 52's general loop path, which itself has no evidence-backed target; revisit only if Item 52's premise changes) |
+| 52 | Add a general (non-countdown, non-accumulator) loop selector for an arbitrary acyclic loop body with a backedge | highest-risk item in the plan so far | Gate behind forced A/B profiling before any production admission. deferred - see Execution Log (Item-6-level ambiguity: no concrete corpus function needs this; the 2 remaining cfg-backedge functions each need a different, narrower, unrelated shape extension instead) |
+| 53 | Dynamic profiling (`dccprof.ps1`) A/B for every function Item 52 admits | skill rule 4 — mandatory, not optional, for this item | deferred alongside Item 52 - see Execution Log |
+| 54 | Add `tests/tmirloopgen.c` covering the new selector's shapes, clang baseline | | deferred alongside Item 52 - see Execution Log |
+| 55 | Full census + full-mode validation | | deferred alongside Item 52 - see Execution Log |
+| 56 | Milestone checkpoint including `-Extended` | wide safety net | deferred alongside Item 52 - see Execution Log |
 
 ### Phase 6 — Cost model & inline-substitution admission (Items 57–66)
 
@@ -1710,3 +1710,74 @@ _(append one entry per completed item, in table order, starting with Item
   code. Moving on to Item 47, which (per Item 45's discovery) should be
   re-evaluated for real production reachability now that the dispatch
   gap is fixed, rather than assumed still-relevant as originally scoped.
+
+- **Items 47-56** (2026-08-02): Phase 5 close-out. After Item 46's
+  dispatch-wiring fix, the only remaining `cfg-backedge` functions are
+  `tregnarw.lres` and `tphijoin.loop_header_phi` - re-checked every
+  originally-scoped generalization item (47/48/50/51/52) against this
+  concrete, exhausted population before writing any code, per the
+  skill's evidence-based prioritization rule ("a lower-yield repeated
+  fix is preferable to a broad gate relaxation with no cost model").
+  None had a real target:
+  - **Item 47** (multi-accumulator): no function in the corpus needs
+    more than one accumulator in this loop shape; deferred.
+  - **Item 48** (signed division loop): `bcd_div10` was the only
+    division-loop candidate and it's already unsigned and now
+    accepted (Item 46); deferred.
+  - **Item 49** (materialize-then-retest bug check): completed by
+    inspection - all 4 specialized loop selectors
+    (`mir_try_emit_countdown_loop`, `mir_try_emit_accumulator_loop`,
+    `mir_try_emit_unsigned_division_loop`,
+    `mir_try_emit_repeated_invariant_add_loop`) emit hand-crafted Z80
+    directly from arithmetic flag state (`jp nc`/`jp z`/`jp m`
+    immediately after the controlling operation) and never call
+    `mir_emit_scalar_compare` or any shared comparison-materialization
+    path, so the Phase 1 bug class (explicit 0/1 boolean materialized
+    to a slot, then reloaded and re-tested) cannot occur in this code.
+    No fix needed; documented as a verified negative result.
+  - **Item 50** (spilled-case invariant hoisting): checked the fresh
+    census for any `spilled-scalar-cfg` function that is both accepted
+    (`result=mir`) and loop-shaped (backedge) - found none; the only
+    multi-block accepted `spilled-scalar-cfg` function
+    (`cint.if_stmt`) is a branch chain, not a loop. `729bc11`'s
+    `mir_promote_objects()` fix already runs unconditionally before
+    selector dispatch (line ~4776), so it isn't actually gated by
+    "homed vs. spilled" at all - the real distinction the item's title
+    assumed doesn't exist in the current architecture. Combined with
+    the SKILL.md's documented finding that spilled-path functions are
+    systemically ~2x more expensive (not marginal), a narrow
+    invariant-hoisting improvement is very unlikely to flip any
+    current fallback to accepted. Deferred.
+  - **Item 51** (VLA power-of-two loop re-profile): explicitly depends
+    on Item 52's "now-cheaper general loop path," which itself has no
+    evidence-backed target (see below). Deferred alongside Item 52.
+  - **Item 52** (general arbitrary-loop-body selector): investigated
+    `tregnarw.lres` and `tphijoin.loop_header_phi` in MIR detail via
+    `DCC_MIR_REPORT=1`/`DCC_MIR_FUNCTION`. Neither is a case of "the
+    existing narrow selectors would match if only the storage-class
+    check were relaxed": `lres`'s `while (--n) total += n;` decrements
+    *before* both the compare and the accumulate (using the
+    post-decrement value for the add), the opposite instruction order
+    from `mir_try_emit_accumulator_loop`'s `while (n>0) { sum+=n;
+    --n; }` pattern (which adds the pre-decrement value, then
+    decrements) - a genuinely different dataflow shape, not just a
+    storage-class gap. `loop_header_phi`'s ascending counter compared
+    against a parameter bound is likewise a distinct shape none of the
+    4 selectors target. Building a brand-new fully general selector
+    speculatively, with no concrete failing corpus function that it
+    would specifically unlock beyond these two structurally-unrelated
+    single-function cases, is exactly the kind of broad,
+    evidence-free generalization the skill warns against - this is an
+    Item-6-level design ambiguity (large scope, "highest-risk item in
+    the plan," mandatory forced-A/B-profiling per Item 53, but zero
+    real corpus pressure to justify the risk right now). Deferred with
+    this rationale; Items 53-56 (profiling/tests/validation for Item
+    52's selector) are deferred alongside it, contingent on future
+    evidence (e.g., a new test fixture or discovered app deliberately
+    exercising this shape) rather than built speculatively now.
+  No code changes were required for this batch (all either verified
+  clean or deferred); no rebuild/census/full-mode run was needed since
+  `dcc_mir.c` is unchanged from Item 46's committed state. Phase 5
+  (Items 45-56) is closed: the one real, evidence-backed win was
+  Item 46's dispatch-wiring fix (`bcd_div10`, +1 coverage). Moving on
+  to Phase 6 (Items 57-66, cost model & inline-substitution admission).
