@@ -291,16 +291,16 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 57 | Re-measure `inline-substitution` fallbacks with the fresh census | confirm none were incidentally fixed by Phases 1–5 | |
-| 58 | Build a static cost model (instruction count × call-site count vs. one-time expansion) | the previously-tried unconditional expansion enlarged nested bodies and didn't admit callers (documented in the retired progress doc) | |
-| 59 | Prototype cost-gated substitution for single-call-site static-inline functions only | least risky subset first | |
-| 60 | Extend to multi-call-site static-inline functions only when the callee body is provably small | reuse Phase 2's slot-count accounting as the size proxy | |
-| 61 | Verify substituted bodies get the same Phase 1–4 quality treatment as top-level functions | no separate/weaker code path for substituted bodies | |
-| 62 | Forced A/B profiling for every newly admitted inline-substitution candidate | skill: structural acceptance exceptions require profiling first | |
-| 63 | Add `tests/tmirinline.c`: single- and multi-call-site admission | | |
-| 64 | Full census + full-mode validation | | |
-| 65 | Dynamic profiling for any app whose code size grows from inlining | confirm growth is still a net cycle win | |
-| 66 | Milestone checkpoint | | |
+| 57 | Re-measure `inline-substitution` fallbacks with the fresh census | confirm none were incidentally fixed by Phases 1–5 | done - see Execution Log (24 functions, unchanged population - `cobint` x17, `forint` x2, `tinline` x3, `tinlinfb` x1) |
+| 58 | Build a static cost model (instruction count × call-site count vs. one-time expansion) | the previously-tried unconditional expansion enlarged nested bodies and didn't admit callers (documented in the retired progress doc) | deferred - see Execution Log (Item-6-level scope: MIR has zero inlining capability today; this is a new compiler pass, not a structural fix) |
+| 59 | Prototype cost-gated substitution for single-call-site static-inline functions only | least risky subset first | deferred alongside Item 58 - see Execution Log |
+| 60 | Extend to multi-call-site static-inline functions only when the callee body is provably small | reuse Phase 2's slot-count accounting as the size proxy | deferred alongside Item 58 - see Execution Log |
+| 61 | Verify substituted bodies get the same Phase 1–4 quality treatment as top-level functions | no separate/weaker code path for substituted bodies | deferred alongside Item 58 - see Execution Log |
+| 62 | Forced A/B profiling for every newly admitted inline-substitution candidate | skill: structural acceptance exceptions require profiling first | deferred alongside Item 58 - see Execution Log |
+| 63 | Add `tests/tmirinline.c`: single- and multi-call-site admission | | deferred alongside Item 58 - see Execution Log |
+| 64 | Full census + full-mode validation | | deferred alongside Item 58 - see Execution Log |
+| 65 | Dynamic profiling for any app whose code size grows from inlining | confirm growth is still a net cycle win | deferred alongside Item 58 - see Execution Log |
+| 66 | Milestone checkpoint | | deferred alongside Item 58 - see Execution Log |
 
 ### Phase 7 — Pointer-array, aggregate, and VLA structural classes (Items 67–76)
 
@@ -1781,3 +1781,52 @@ _(append one entry per completed item, in table order, starting with Item
   (Items 45-56) is closed: the one real, evidence-backed win was
   Item 46's dispatch-wiring fix (`bcd_div10`, +1 coverage). Moving on
   to Phase 6 (Items 57-66, cost model & inline-substitution admission).
+
+- **Items 57-66** (2026-08-02): Phase 6 close-out. Item 57's fresh
+  census confirms 24 `inline-substitution` fallback functions,
+  unchanged from before Phase 1-5 (`cobint` x17: `compile_add`,
+  `compile_compute`, `compile_condition`, `compile_divide`,
+  `compile_expr`, `compile_factor`, `compile_goto`, `compile_move`,
+  `compile_multiply`, `compile_perform`, `compile_primary`,
+  `compile_rel_one`, `compile_store_after_value`, `compile_subtract`,
+  `compile_term`, `compile_var_load`, `need`, `run_bc`; `forint` x2:
+  `assign_pre`, `bump_sym_val`; `tinline` x3: `inline_nest_check`,
+  `inline_order_check`, `nest_scale_and_clamp`; `tinlinfb` x1: `main`).
+  Traced the gate's real meaning by code reading: `dcc_ast_gen_expr.c`
+  already implements a full AST-level `static inline` call-site body
+  substitution (`inline_substitution_body`,
+  `try_gen_inline_call_ast`, `clone_inline_expr`, and supporting
+  argument-temp machinery, ~300 lines around line 3765-4148) that
+  legacy's capture uses whenever a caller invokes a `static inline`
+  function - producing the "captured" byte/instruction counts these
+  24 functions are compared against. MIR's own lowering
+  (`mir_lower_expr`'s call-emission path, `dcc_mir.c` ~2038) never
+  attempts substitution at all: it unconditionally emits a plain
+  `MIR_CALL` for every callee, merely tagging calls to substitutable
+  functions with a diagnostic flag (`memory_flags |= 2048`) that
+  `mir_has_inline_substitution_call()` (~10120) uses purely to trigger
+  the cautious size-parity veto in `mir_end_function()`'s cascade.
+  **This confirms Items 58-66 are not a gate-relaxation or emitter
+  tuning question at all - they describe building an entirely new
+  MIR-native call-site inlining pass from scratch**, duplicating (at
+  the MIR IR level) machinery the AST backend already has at the
+  source level. This is Item-6/Item-52-level design ambiguity, for
+  three concrete reasons: (1) the discriminator column for Item 58
+  itself documents that "the previously-tried unconditional expansion
+  enlarged nested bodies and didn't admit callers" - a prior attempt
+  at this exact feature is on record as having already failed; (2)
+  today's fallback for all 24 functions is fully correct (byte-
+  identical legacy replay per the mixed-mode architecture), so there is
+  no correctness debt whatsoever, only a coverage/purity metric; (3)
+  even a fully successful implementation caps out at 24 of 2378
+  functions (~1% of the corpus), a modest yield for a high-effort,
+  previously-failed, novel compiler pass with its own mandatory cost
+  model, multi-call-site extension, and per-candidate forced-profiling
+  gate (Item 62). Per the skill's evidence-based prioritization ("a
+  lower-yield repeated fix is preferable to a broad gate relaxation
+  with no cost model") and the standing guidance to defer genuine
+  Item-6-level ambiguity rather than attempt a risky speculative
+  build, Items 58-66 are deferred as a group. No code changes; no
+  rebuild/validation needed beyond the plan-doc edit itself (validated
+  below per standing policy). Phase 6 is closed. Moving on to Phase 7
+  (Items 67-76, pointer-array, aggregate, and VLA structural classes).
