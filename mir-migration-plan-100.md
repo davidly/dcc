@@ -235,7 +235,7 @@ its live range never needs it.
 | 21 | Add `tests/tmirslot.c`: immediate-use, cross-call, cross-label, and dead-store elision cases, clang baseline | | done |
 | 22 | Full census + full-mode validation of every changed app | | done |
 | 23 | Dynamic cycle-count comparison (peep and nopeep) for the largest-yield apps | skill rule 4 | no candidate — see Execution Log |
-| 24 | Milestone checkpoint; baseline update for genuinely improved rows only | wide safety net | |
+| 24 | Milestone checkpoint; baseline update for genuinely improved rows only | wide safety net | done |
 
 ### Phase 3 — Constant / small-operand instruction-selection fast paths (Items 25–34)
 
@@ -882,6 +882,36 @@ _(append one entry per completed item, in table order, starting with Item
   `dccprof`/cycle counts. Documented as a deliberate no-op rather than
   fabricating a profiling run against unchanged binaries; skipped, no
   regression risk.
+
+- **Item 24** (2026-07-30): Phase 2 milestone checkpoint. No source changes
+  occurred between Item 22's milestone validation and this checkpoint, so
+  Item 22's whole-corpus `runall -Mode full` run (321 apps: 312 passed / 9
+  skipped / 0 failed, dccpeep fixtures 17/17, diagnostics passed,
+  performance passed) stands as the closing wide safety net for this
+  phase; re-running it against byte-identical binaries would have added
+  no information. Per Item 23, no MIR-accepted function's generated code
+  changed this phase (Item 15's forwarding only shrank rejected-candidate
+  sizes on already-`fallback` functions), so there is nothing to promote
+  into `tests/perf_baselines.csv` beyond `tmirslot.c`'s own first-time
+  capture (Item 21) - no existing baseline row is moved.
+  **Phase 2 summary (Items 13-24):** coverage held at 171/2353
+  (7.27%, +10 functions vs. the 2343 pre-phase total from `tmirslot.c`'s
+  own fixtures); one real code change survived (Item 15's label-forwarding
+  extension of Item 13, `51eb33a`); one attempted combination (Item 14's
+  call-argument-cache slot skip) was implemented, empirically found to
+  regress `cint.if_stmt`'s acceptance category, and reverted (`3bfb0c4` /
+  `d0b1cab`) - Item 14 remains deferred pending a provably-safe subset
+  design; Items 16-19 were audited/verified already satisfied by existing
+  infrastructure (no code change); Item 20 added a diagnostic
+  (`DCC_MIR_SLOT_REPORT`); Item 21 added a permanent regression fixture;
+  Items 22-23 closed the phase with a clean milestone census/full-mode run
+  and a documented absence of a dynamic-profiling candidate. An external,
+  unidentified process was found to be periodically resetting/stashing
+  this working tree mid-session (see Item 15's log entry) - all commits in
+  this phase were made immediately after each build to minimize exposure
+  to that hazard, and no work is known to have been permanently lost
+  (recovered instances are noted inline). Phase 2 is complete; Phase 3
+  (Items 25-34) was out of scope for this task and was not started.
 
 
 
