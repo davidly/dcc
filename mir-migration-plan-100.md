@@ -258,7 +258,7 @@ its live range never needs it.
 |---|---|---|---|
 | 35 | Collapse a label immediately followed only by an unconditional jump into a direct predecessor retarget | `and_expr` case study's `L3575: jp L3573` | done - see Execution Log |
 | 36 | Generalize to transitive jump-to-jump chains | bound iteration to avoid cyclic label chains | done - see Execution Log |
-| 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | Keeps `mir_cfg_block_count()` accurate so it doesn't wrongly trip the block-count gate. |
+| 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | deferred - see Execution Log (breaks object-phi promotion's block-identity lookup) |
 | 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | Extend to non-loop conditional joins. |
 | 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | |
 | 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | Mandatory re-scoping step before Phase 5. |
@@ -1300,4 +1300,62 @@ _(append one entry per completed item, in table order, starting with Item
   `git diff`). Milestone `-Mode full -Extended`: 313/322 apps passed (9
   skipped as expected), 196/196 extended passed, diagnostics/dccpeep
   fixtures/performance all clean.
+
+- **Item 37** (2026-08-01): **deferred - Item 6-level design ambiguity,
+  same caution bar.** Implemented `mir_remove_dead_labels()` (neutralize
+  any `MIR_LABEL` to `MIR_NOP` when its id is referenced by neither a
+  live `MIR_JUMP`/`MIR_BRANCH_FALSE` target nor any existing `MIR_PHI`'s
+  `phi_pred1`/`phi_pred2`), first alongside `mir_thread_jumps()` and then,
+  after discovering a problem, moved to run after `mir_verify_and_dump()`
+  so it wouldn't preempt that pass's own `mir_promote_objects()` call.
+  Neither placement is actually safe, and the reason is architectural,
+  not a simple ordering bug: `mir_try_make_object_phi()` (the loop-header
+  object-phi promotion this item was explicitly supposed to build on per
+  Item 38's note) identifies a candidate phi's predecessor blocks via
+  `mir_block_label_before()`, which walks *backward from an instruction's
+  physical position* to the nearest preceding `MIR_LABEL` - it has
+  nothing to do with whether that label is still a live jump target. A
+  label with zero incoming jumps can still be the sole physical identity
+  of a block whose own outgoing edge (most commonly a loop latch's
+  unconditional jump back to the header, i.e. exactly the shape Items
+  35/36 just orphaned) feeds a real, still-relevant predecessor edge.
+
+  Caught this empirically, not just by re-reading the code: a synthetic
+  `while` loop with `continue;` (`sum_evens_while`, the same shape used
+  to validate Item 35/36) has a genuine loop-header object phi merging
+  the entry value of `i` and its loop-latch value - confirmed present in
+  the `DCC_MIR_REPORT=1` dump before this item's code existed. After
+  neutralizing the orphaned entry label and/or the orphaned continue
+  label, the phi silently stopped forming (the loop fell back to a plain
+  per-iteration reload of `i` instead) - `DCC_MIR_FORCE_ACCEPT_FUNCTION`
+  confirmed the function still emits *correct* code either way (this is
+  a missed-optimization regression, not a miscompile, matching the
+  general safety argument from Item 35/36's design phase), but it is a
+  real, measurable step backward for exactly the promotion Items 38/39
+  are supposed to extend.
+
+  A correct fix needs to protect any label that is `mir_block_label_
+  before()` of *any* instruction whose successor is a real `MIR_LABEL`
+  block start, not just labels currently referenced by a live jump or an
+  already-existing phi. Tried this stricter rule by hand-tracing it
+  against both test cases: it correctly preserves `sum_evens_while`'s
+  phi, but it also ends up protecting `and_expr`'s orphaned labels too
+  (its continue-label's block still has a real outgoing edge to the loop
+  header, even though `and_expr` has no loop-carried scalar to ever phi-
+  promote there) - meaning the stricter, actually-safe rule protects
+  almost every label in any function with a loop or branch, leaving
+  little to no real reduction in `mir_cfg_block_count()` and defeating
+  this item's motivating purpose. A version that reclaims the block-count
+  win without this cost would need real relabeling/redirection plumbing
+  (propagating a removed block's identity forward into any phi that
+  keyed on it) well beyond this item's "smallest reusable edit" scope.
+
+  Reverted all Item 37 code; `src/dcc/dcc_mir.c` is back to exactly its
+  post-Item-36 committed state (confirmed via `git diff` showing no
+  changes before rebuilding). Deferring rather than shipping an unsound
+  or vacuous version - if `mir_cfg_block_count()` needs to look past
+  Items 35/36's newly-orphaned labels, the eventual fix belongs together
+  with the CFG-successor/predecessor-tracking rework Items 38/39 already
+  need for the same underlying data, not as an isolated label-removal
+  pass. Moving on to Item 38.
 
