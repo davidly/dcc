@@ -244,7 +244,7 @@ its live range never needs it.
 | 25 | Emit `ld a,h / or l` directly for compare-with-constant-zero at the Phase-1 fusion site | pre-peep evidence in the `check_s` case study (`push/ld hl,0/ex de,hl/pop hl/or a/sbc hl,de`) | done - see Execution Log |
 | 26 | Add an 8-bit-range compare-with-small-constant fast path (`cp` byte form) instead of full 16-bit `sbc hl,de` | | deferred - see Execution Log |
 | 27 | Add a sign-bit test (`bit 7,h`) fast path for `<`/`>=` against constant 0 | | done - see Execution Log |
-| 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | |
+| 28 | Re-check whether `%`/`/` by a power of two reaching `spilled-scalar-cfg` already gets `dccpeep`'s `pass_const_divmod_helpers` treatment post-emission | may be "verified already satisfied" — check before implementing (skill rule 1) | verified already satisfied - see Execution Log |
 | 29 | Extend call-argument rematerialization to a constant operand consumed by a post-call comparison/binary op | current rematerialization only covers "single-use call arguments" per the (retired) progress doc | |
 | 30 | Audit `mir_mul_const_fast_path_eligible` for additional profitable multiplier shapes the fresh census surfaces | | |
 | 31 | Add an `inc (ix+n)`/`dec (ix+n)` in-place fast path for ±1 updates to a spilled slot | mirrors the legacy backend's already-proven idiom (perf-optimization memory) | |
@@ -980,6 +980,19 @@ _(append one entry per completed item, in table order, starting with Item
   skipped / 0 failed. Milestone `-Mode full -Extended` run: 312/321 apps
   passed (9 skipped as expected), extended suite 196/196 passed,
   diagnostics/dccpeep fixtures/performance all passed.
+
+- **Item 28 - verified already satisfied** (2026-07-30): Checked whether
+  `%`/`/` by a power of two reaching `spilled-scalar-cfg` (or any other
+  MIR selector) already gets `dccpeep`'s `pass_const_divmod_helpers`
+  treatment post-emission, before implementing anything (skill rule 1).
+  Confirmed via `DCC_MIR_FORCE_ACCEPT_FUNCTION` on a small `/`-by-4
+  function: MIR emits `ld de,<const>` / `extrn __divs` / `call __divs`
+  (the same call-symbol shape the legacy backend emits), and running the
+  resulting `.mac` through `dccpeep` directly rewrites it to
+  `ld e,2 / call __q1p` (the power-of-two shift helper) - confirming
+  `pass_const_divmod_helpers`'s `__divu`/`__divs`/`__modu`/`__mods` symbol
+  matching (`src/dccpeep/dccpeep.c` ~line 1636) already covers MIR-emitted
+  divmod calls with no gap. No code changed for this item.
 
 
 
