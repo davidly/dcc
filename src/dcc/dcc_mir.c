@@ -3254,8 +3254,51 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
     return &mir.insns[index];
 }
 
+/* Item 35 (mir-migration-plan-100): thread an explicit jump/branch through
+ * a label whose only content is an immediately-following unconditional
+ * jump, retargeting straight to the final destination. The canonical case
+ * is a loop's "continue:" landing block with no actual continue statement
+ * targeting it (and_expr, tests/adaint.c: "L3575: jp L3573") - the legacy
+ * AST backend's loop lowering never needs a separate continuation block
+ * for the simple case, but mir_lower_stmt's AST_WHILE/AST_FOR/AST_DOWHILE
+ * handling always allocates one so AST_CONTINUE has somewhere to target,
+ * whether or not the loop body actually contains a continue statement.
+ *
+ * This is purely jump threading: the intermediate label was always going
+ * to fall straight through to that same unconditional jump, so retargeting
+ * an explicit predecessor to skip it cannot change which instruction
+ * executes next for any input. Running this before mir_cfg_block_count(),
+ * mir_has_cfg_backedge(), and the phi-construction pass that all run
+ * later in mir_end_function/the selectors means every one of those later
+ * analyses sees the already-simplified CFG directly, rather than needing
+ * their own special-casing for the redundant hop. Only a single level of
+ * chasing is done here (a jump straight into another such label is left
+ * alone); Item 36 extends this to transitive chains. */
+static void mir_thread_jumps(void)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        int label_index;
+        int target;
+
+        if (insn->opcode != MIR_JUMP && insn->opcode != MIR_BRANCH_FALSE)
+            continue;
+        label_index = mir_find_label(insn->label);
+        if (label_index < 0 || label_index + 1 >= mir.count ||
+            mir.insns[label_index + 1].opcode != MIR_JUMP)
+            continue;
+        target = mir.insns[label_index + 1].label;
+        if (target == insn->label)
+            continue; /* degenerate self-jump; leave alone */
+        insn->label = target;
+    }
+}
+
 static void mir_resolve_deferred_metadata(void)
 {
+
     int i;
 
     for (i = mir.alias_count - 1; i >= 0; --i) {
@@ -10212,6 +10255,7 @@ void mir_end_function(void)
         mir.active = 0;
         return;
     }
+    mir_thread_jumps();
     mir_resolve_deferred_metadata();
     verified = mir_verify_and_dump();
     if (mir.opaque_count != 0 &&

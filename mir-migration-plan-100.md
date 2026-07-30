@@ -256,7 +256,7 @@ its live range never needs it.
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 35 | Collapse a label immediately followed only by an unconditional jump into a direct predecessor retarget | `and_expr` case study's `L3575: jp L3573` | Do this at MIR emission time for every MIR-emitted function, not just relying on `dccpeep`'s jump threading. |
+| 35 | Collapse a label immediately followed only by an unconditional jump into a direct predecessor retarget | `and_expr` case study's `L3575: jp L3573` | done - see Execution Log |
 | 36 | Generalize to transitive jump-to-jump chains | bound iteration to avoid cyclic label chains | |
 | 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | Keeps `mir_cfg_block_count()` accurate so it doesn't wrongly trip the block-count gate. |
 | 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | Extend to non-loop conditional joins. |
@@ -1205,4 +1205,56 @@ _(append one entry per completed item, in table order, starting with Item
   for real corpus hits *before* investing in correctness testing and
   emitter wiring, not after. Phase 3 is complete; Phase 4 (Items 35-44)
   has not yet been started.
+
+- **Item 35** (2026-08-01): added `mir_thread_jumps()` to
+  `src/dcc/dcc_mir.c`, called from `mir_end_function()` immediately
+  before `mir_resolve_deferred_metadata()` (so it runs before any
+  selector/CFG-successor/PHI-construction pass observes the CFG). For
+  every `MIR_JUMP`/`MIR_BRANCH_FALSE`, if the target label is immediately
+  followed by an unconditional `MIR_JUMP` to a different target, the
+  original instruction's `.label` is retargeted straight to that final
+  destination (single-level chase only; a `target == insn->label`
+  self-jump is left alone to avoid a pointless no-op assignment). This is
+  pure jump threading: the intermediate label was always going to fall
+  straight through to that same jump, so no input can observe a
+  difference in which instruction executes next.
+
+  Investigated the motivating case study (`and_expr` in `tests/adaint.c`,
+  `while (acc_word("and")) { ... }`) directly via `DCC_MIR_REPORT=1`: its
+  `continue_label` (`L3`) turned out to have *no* incoming jump at all in
+  this specific function (the loop body has no `continue;` statement, so
+  `L3` is reached only by fallthrough from the previous statement) -
+  meaning this exact function doesn't exercise the new pass at all; the
+  real fix for its redundant `L3: jp L1` structure is Item 37's dead-label
+  removal, not jump threading. Constructed a second, more representative
+  synthetic case instead (`while` loop with an explicit `continue;`
+  statement, `/tmp/titem35b.c`, not committed) and confirmed via
+  `DCC_MIR_REPORT=1` that the `continue;` statement's jump - previously
+  emitted as `jump L3` where `L3: jump L1` - now emits directly as
+  `jump L1`, with `L3` left as a dead, unreferenced label (Item 37's
+  future job to remove). This is the real target population: `while`/
+  `do-while` loops whose `continue_label` has no loop-increment work,
+  reached via an explicit `continue;` rather than only by fallthrough.
+  Verified correctness by building and running this synthetic case under
+  `ntvcm` (four `n` values including `n=0` and `n=1` boundary cases): all
+  matched hand-computed expected sums. Confirmed by inspecting the
+  `AST_WHILE`/`AST_FOR`/`AST_DOWHILE` lowering that `for` loops don't
+  exhibit this exact shape as often, because their `continue_label` is
+  where the increment expression lives, not an empty jump-only block -
+  so the highest-yield population for this fix is specifically
+  `while`/`do-while` loops with a `continue;` statement in the body.
+
+  Full census vs `build/phase3-after.tsv`: 0 regressions, 0 newly
+  MIR-emitted, 0 no-longer-emitted, coverage unchanged at 172/2371
+  (7.25%, expected - this pass only reshapes jump targets, it doesn't
+  change any acceptance decision by itself; that's Item 40's job after
+  Items 35-39 land together). Only 2 apps showed any census metric
+  change at all (`tc89swjt`, `too`), both fallback-only functions whose
+  byte/instruction counts shifted from the jump retargeting; census
+  reported 0 apps requiring runtime validation. Focused `-Mode full` run
+  on those 2 apps plus `adaint` and several loop/continue-heavy apps
+  (`tdowhile`, `tforcomm`, `tforinc`, `tforpred`, `tlcont`, `tnestfor`):
+  all passed, 0 regressions. Milestone `-Mode full -Extended`: 313/322
+  apps passed (9 skipped as expected), 196/196 extended passed,
+  diagnostics/dccpeep fixtures/performance all clean.
 
