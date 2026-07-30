@@ -6035,6 +6035,59 @@ static int mir_function_has_any_call(void)
     return 0;
 }
 
+/* Item 15 (mir-migration-plan-100): exact predecessor count for a
+ * MIR_LABEL instruction, computed from the CFG successor edges
+ * mir_verify_and_dump() already builds (each MIR_JUMP/MIR_BRANCH_FALSE/
+ * fallthrough edge records its target instruction index in successors[]).
+ * A label with exactly one predecessor is not a real merge point - it is
+ * safe to treat forwarding across it the same as forwarding across a
+ * MIR_NOP, since only one control-flow path can ever reach it. */
+static int mir_label_predecessor_count(int label_instruction)
+{
+    int count = 0;
+    int instruction;
+    int successor;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        for (successor = 0; successor < insn->successor_count; ++successor)
+            if (insn->successors[successor] == label_instruction)
+                ++count;
+    }
+    return count;
+}
+
+/* Shared "what is the next real instruction after `instruction`" scan used
+ * both by mir_can_forward_hl_to_next's own eligibility check and by its
+ * callers when they need to record the exact instruction the forwarded
+ * value will be consumed at (mir_forwarded_hl_instruction). Keeping this in
+ * one place means the eligibility predicate and the bookkeeping that relies
+ * on it can never disagree about which instruction is "next" - the same
+ * one-predicate discipline Item 13 used for the accounting/emission split. */
+static int mir_forward_skip_target(int instruction)
+{
+    int next_instruction = instruction + 1;
+    int labels_skipped = 0;
+
+    for (;;) {
+        if (next_instruction >= mir.count)
+            break;
+        if (mir.insns[next_instruction].opcode == MIR_NOP) {
+            ++next_instruction;
+            continue;
+        }
+        if (labels_skipped == 0 &&
+            mir.insns[next_instruction].opcode == MIR_LABEL &&
+            mir_label_predecessor_count(next_instruction) == 1) {
+            ++labels_skipped;
+            ++next_instruction;
+            continue;
+        }
+        break;
+    }
+    return next_instruction;
+}
+
 static int mir_can_forward_hl_to_next(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -6049,10 +6102,7 @@ static int mir_can_forward_hl_to_next(int value)
         (definition->opcode == MIR_CALL ||
          definition->opcode == MIR_CALL_AGGREGATE))
         return 0;
-    next_instruction = mir_emit_instruction_index + 1;
-    while (next_instruction < mir.count &&
-           mir.insns[next_instruction].opcode == MIR_NOP)
-        ++next_instruction;
+    next_instruction = mir_forward_skip_target(mir_emit_instruction_index);
     if (next_instruction >= mir.count)
         return 0;
     next = &mir.insns[next_instruction];
@@ -6782,6 +6832,66 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
     return forwardable;
 }
 
+/* Item 14 (mir-migration-plan-100): a definition whose single use is as a
+ * call argument reachable through mir_call_argument_cache_target's existing
+ * BC/DE register-caching path never needs a backend slot either -
+ * mir_emit_virtual_store/_wide already skip the store for such a value
+ * (caching it in BC/DE instead) whenever the single-slot cache lane is
+ * free. mir_call_argument_cache_target itself only consults the real
+ * mir_cached_call_value/mir_cached_wide_call_value globals to refuse
+ * double-booking that lane; at prepare time those globals hold whatever a
+ * *previous* function's compilation left behind (they are reset only after
+ * mir_prepare_backend_slots returns), so this predicate must never consult
+ * them directly - it tracks its own local "lane busy through instruction N"
+ * high-water marks across the same ascending (instruction, value) walk
+ * mir_prepare_backend_slots already performs, forcing the real globals to
+ * -1 for the duration of each isolated feasibility probe so the probe's
+ * answer can never be contaminated by cross-function or cross-value state,
+ * then advances its local marks to the call instruction returned so a later
+ * value in the same function correctly sees the lane as still occupied
+ * until that call site. This mirrors the true runtime occupancy window
+ * (claimed at the value's store, released at the call) without touching
+ * the real cache globals used by actual emission. */
+static int mir_backend_slot_call_cacheable(int value, int units,
+                                            int instruction,
+                                            int *narrow_busy_until,
+                                            int *wide_busy_until)
+{
+    int *busy_until = units == 2 ? wide_busy_until : narrow_busy_until;
+    int saved_index;
+    int saved_narrow;
+    int saved_wide;
+    int call_instruction;
+
+    if (units != 1 && units != 2)
+        return 0;
+    /* Same phi-destination hazard already fixed for Item 13: a MIR_PHI
+     * destination is stored by mir_emit_spilled_phi_copies from each
+     * predecessor's jump/branch instruction, not from the phi's own
+     * position, so mir_call_argument_cache_target's own instruction-relative
+     * scan (anchored on mir_emit_instruction_index) would see the wrong
+     * "rest of function" window if evaluated there. Phi destinations always
+     * keep a real slot. */
+    if (mir.insns[instruction].opcode == MIR_PHI)
+        return 0;
+    if (instruction <= *busy_until)
+        return 0;
+    saved_index = mir_emit_instruction_index;
+    saved_narrow = mir_cached_call_value;
+    saved_wide = mir_cached_wide_call_value;
+    mir_emit_instruction_index = instruction;
+    mir_cached_call_value = -1;
+    mir_cached_wide_call_value = -1;
+    call_instruction = mir_call_argument_cache_target(value);
+    mir_emit_instruction_index = saved_index;
+    mir_cached_call_value = saved_narrow;
+    mir_cached_wide_call_value = saved_wide;
+    if (call_instruction < 0)
+        return 0;
+    *busy_until = call_instruction;
+    return 1;
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
@@ -6790,6 +6900,8 @@ static int mir_prepare_backend_slots(void)
     char *fused_away = NULL;
     int value;
     int i;
+    int call_cache_narrow_busy_until = -1;
+    int call_cache_wide_busy_until = -1;
 
     if (mir.next_value <= 0) {
         mir.backend_slot_count = 0;
@@ -6902,7 +7014,11 @@ static int mir_prepare_backend_slots(void)
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
                                                                                                             type_size(definition->type))) ||
-                                        mir_backend_slot_forwardable(value, units, i))
+                                        mir_backend_slot_forwardable(value, units, i) ||
+                                        mir_backend_slot_call_cacheable(
+                                            value, units, i,
+                                            &call_cache_narrow_busy_until,
+                                            &call_cache_wide_busy_until))
                     continue;
                 if (definition != NULL && definition->opcode == MIR_BINARY &&
                     ((units == 1 && type_size(definition->secondary_offset) == 2) ||
@@ -7000,7 +7116,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
-    int forward_instruction = mir_emit_instruction_index + 1;
+    int forward_instruction = mir_forward_skip_target(mir_emit_instruction_index);
     if (!has_slot) {
         /* Item 13 (mir-migration-plan-100): mir_prepare_backend_slots skips
          * allocating a slot for a value it already proved via
@@ -7009,17 +7125,11 @@ static void mir_emit_virtual_store(FILE *out, int value)
          * up the forwarding handoff so the immediately-following use skips
          * its own reload; anything else with no slot is genuinely dead. */
         if (mir_can_forward_hl_to_next(value)) {
-            while (forward_instruction < mir.count &&
-                   mir.insns[forward_instruction].opcode == MIR_NOP)
-                ++forward_instruction;
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
         }
         return;
     }
-    while (forward_instruction < mir.count &&
-           mir.insns[forward_instruction].opcode == MIR_NOP)
-        ++forward_instruction;
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
     int forward_to_store = mir_can_forward_hl_to_next(value) &&
@@ -7146,8 +7256,21 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
     int has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
-    if (!has_slot)
+    if (!has_slot) {
+        /* Item 14 (mir-migration-plan-100): mir_prepare_backend_slots may
+         * skip a slot for a wide value it proved via
+         * mir_backend_slot_call_cacheable() will always win the DE:HL cache
+         * lane (via exx) at real emission time - still perform that caching
+         * here instead of silently doing nothing, otherwise the value would
+         * never be materialized for its later call argument use. */
+        int call_instruction = mir_call_argument_cache_target(value);
+        if (call_instruction >= 0) {
+            fputs("\texx\n", out);
+            mir_cached_wide_call_value = value;
+            mir_cached_wide_call_instruction = call_instruction;
+        }
         return;
+    }
     int offset = mir_virtual_offset(value);
     int iy_offset = mir_virtual_iy_offset(value);
     int call_instruction = mir_call_argument_cache_target(value);
