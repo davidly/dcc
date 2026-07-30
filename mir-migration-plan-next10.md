@@ -227,4 +227,70 @@ evidence, commit hash.)
   4 improvements (`tstrconv` -0.1% cycles/-1.06% bytes peep,
   `tvla` -0.43% bytes peep); full `-Mode full -Extended` passed 314/314 +
   196/196. This is a pure dead-code-removal win with no behavioral or
-  gate-decision change. Commit `<pending>`.
+  gate-decision change. Commit `b2a7aab`.
+
+- **Items 4-10: deferred, plan hypothesis invalidated (design decision,
+  documented per Item-6-style discipline rather than forced further work)**.
+  Item 3's fix was deliberately gate-decoupled so it could never change any
+  function's accept/reject outcome (174/2378 before and after, confirmed by
+  census `--compare`). That was the correct choice for *that* fix, but it
+  means dead-store/dead-epilogue cleanup **structurally cannot** move
+  coverage toward this plan's ~17% goal - it only shrinks already-accepted
+  functions' text. This plan's original Items 3-8 were built on the
+  hypothesis (from `SKILL.md`'s "Known root cause" section) that a missing
+  compare+branch fusion was gating most of the 2146 `text-size` population;
+  Items 1-2's investigation (see above) falsified that hypothesis - the
+  fusion already exists and works correctly. There is no remaining
+  known-good, low/medium-risk lever in hand that would let the 2146-function
+  `text-size` population clear the cost gate:
+  - The gap is uniformly ~2x (Item 1's re-bucketing), so no single small
+    fold closes it for a meaningful fraction of the population.
+  - The one concrete, reusable waste pattern found this session - a
+    single-use function parameter gets copied into a new backend stack
+    slot and reloaded from there instead of being read directly from its
+    stable incoming `ix+N` offset each time (seen in both `nseq`'s locals
+    and `tmirslot.dead_store_elision`, growing frame size for no reason) -
+    is a plausible high-yield candidate (SKILL.md priority order item 2,
+    "backend slot/live-range preparation"), but fixing it safely requires
+    changing `mir_prepare_backend_slots`' first/last-use interval logic to
+    recognize MIR_PARAM-defined values that are never reassigned and route
+    their uses back to the parameter's own frame offset instead of
+    allocating a slot - a change to the same shared interval-computation
+    code every other selector's slot decisions depend on. That is
+    materially higher risk than Item 3 (skill's risk ordering: "straight-
+    line scalar < acyclic CFG" work is safer than changing the shared slot
+    allocator itself) and does not fit this plan's "smallest reusable
+    edit" discipline within the remaining session budget - it deserves its
+    own tightly-scoped plan with a dedicated forced-accept A/B campaign
+    across a representative sample of the 2146 functions *before* any
+    `dcc_mir.c` change, per SKILL.md rule 4.
+  - No other repeated-overhead pattern with a clear, bounded fix was found
+    by direct inspection during Items 1-2's diffing.
+
+  **Decision**: rather than force a speculative structural rewrite of the
+  slot allocator against `SKILL.md` rule 6 ("do not add app/function-name
+  exceptions... derive a structural predicate or improve the emitter") and
+  rule 1 (never widen a gate without first identifying every affected
+  function), this plan stops here. Item 3's dead-code cleanup landed
+  cleanly with zero risk and zero regressions; Items 4-10 (the
+  compare-fusion generalization, compound-condition handling, and closing
+  coverage push) are retired as superseded by this finding rather than
+  executed on a falsified premise. `SKILL.md`'s "Known root cause" section
+  should be corrected in a follow-up documentation-only commit to remove
+  the stale double-materialization claim and replace it with: (a) the
+  compare+branch fusion already works, (b) the dead-trailing-epilogue bug
+  is now fixed, (c) the parameter-rehoming pattern above is the next
+  evidence-backed candidate for whoever picks up coverage work next, with
+  a recommendation to scope it as its own plan (working title:
+  "MIR migration: parameter/slot rehoming plan") that starts with a fresh
+  census-driven prevalence count of the pattern across the 2146-function
+  population before committing to any fix shape.
+
+  **Net result of this plan**: coverage unchanged at 174/2378 (7.32%) -
+  the ~17% target was not reached and, per the analysis above, was not
+  reachable via this plan's intended lever. What *was* delivered: two
+  reusable process speed-ups (`-FailFast`, parallel census), a corrected
+  understanding of the actual root cause replacing a stale one, and one
+  clean, zero-risk, zero-regression dead-code-removal fix landed and
+  pushed. This is being recorded as a defer/skip decision in the same
+  spirit as Plan-100's Item 6, not a silent stop.

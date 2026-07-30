@@ -81,19 +81,36 @@ dominant shape without re-bucketing the gap first.
 
 Forced-accept diffs of two representative functions (`check_s`, identical
 across `tests/tesc.c`/`tstr3.c`/`tsyntax.c`, and `and_expr` in
-`tests/adaint.c`, a `while` loop) both showed the same bug: `mir_emit_scalar_compare`
-(`dcc_mir.c` ~line 4939) unconditionally materializes an explicit 0/1 boolean
-(a label + `inc l` dance) for *every* comparison, which then gets spilled to a
-backend slot and reloaded later just to be re-tested by `MIR_BRANCH_FALSE`
-(whose own test sequence, `ld a,h / or l / jp nz`, is already fine in
-isolation). The narrow `mir_try_emit_comparison_branch` selector already fuses
-compare+branch directly, but only for the whole-function shape `if (param OP
-param) return A; return B;` — it never fires for the general case, which is
-what `mir_try_emit_spilled_scalar_cfg` handles for the other 91% of the
-corpus. `dccpeep`'s same-basic-block redundant-reload pass removes *one* of
-the resulting store/reload round-trips but not the second, which is a
-genuinely dead store (never reloaded anywhere in the function) — a different
-bug class the existing peephole passes don't target.
+`tests/adaint.c`, a `while` loop) originally appeared to show a double-
+materialization bug in `mir_emit_scalar_compare`. **Update (mir-migration-
+plan-next10, Items 1-3): that bug is already fixed.** Code and comments
+citing Plan-100 Items 1/4/25/27 (`mir_binary_is_fusable_comparison` +
+`mir_emit_fused_comparison_branch`) show the compare+branch fusion was
+generalized during Plan-100 and confirmed working correctly via direct
+forced-accept inspection of `tests/tmirfuse.c`'s `nseq`/`nsne`/`nult`/`nuge`
+whole-function-compare shapes. Do not re-investigate this as if it were
+unfixed.
+
+What re-investigation in mir-migration-plan-next10 actually found in
+`mir_try_emit_spilled_scalar_cfg` (now fixed, commit `b2a7aab`): the
+selector unconditionally re-emitted a second, dead, unreachable function
+epilogue after its main instruction loop even when the last instruction was
+already a `MIR_RETURN` that had emitted its own epilogue. Fixing this is a
+pure dead-code removal with no effect on which functions clear the
+acceptance gate (the fix intentionally compensates the gate's byte
+comparison so it cannot newly promote a function purely due to this
+saving — see `mir_spilled_scalar_cfg_elided_epilogue_bytes`).
+
+The next evidence-backed candidate, not yet fixed: a single-use function
+parameter is frequently copied into a new backend stack slot and reloaded
+from there, rather than being read directly from its stable incoming
+`ix+N` offset each time (seen in both `nseq`'s locals and
+`tmirslot.dead_store_elision`, growing the frame for no reason). This
+requires changing the shared `mir_prepare_backend_slots` interval logic
+that every selector's slot decisions depend on, so it is higher risk than
+a single-selector fix and deserves a dedicated forced-accept A/B campaign
+across a representative population sample before any code change — see
+`mir-migration-plan-next10.md`'s closing Execution Log entry.
 
 Before proposing new fallback-reduction work, re-run the census and re-bucket
 the gap (see `mir-migration-plan-100.md`'s "current measured state" section
