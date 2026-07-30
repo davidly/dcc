@@ -227,8 +227,8 @@ its live range never needs it.
 | 13 | Skip slot allocation when a definition's single use is the very next instruction with no intervening label/call/aliasing store | | General register hand-off case. |
 | 14 | Extend Item 13 across a `MIR_CALL` boundary when the value is consumed before the call or is itself an already-pushed argument | | |
 | 15 | Extend Item 13 across a `MIR_LABEL` with exactly one predecessor (textually split but structurally straight-line) | done | see Execution Log |
-| 16 | Eliminate the `check_s`-class dead store: a slot written but never read again anywhere in the function | evidence: second spill in the `check_s` case study, which `dccpeep`'s same-block reload pass cannot see | |
-| 17 | Generalize Item 16 with a per-object backward-liveness pass over the whole function | reuse the Items 11/12 (dead promoted-local stores) liveness infra as a model | |
+| 16 | Eliminate the `check_s`-class dead store: a slot written but never read again anywhere in the function | evidence: second spill in the `check_s` case study, which `dccpeep`'s same-block reload pass cannot see | verified already satisfied |
+| 17 | Generalize Item 16 with a per-object backward-liveness pass over the whole function | reuse the Items 11/12 (dead promoted-local stores) liveness infra as a model | verified already satisfied |
 | 18 | Audit `mir_emit_spilled_phi_copies` for copies into a slot Items 13–17 already proved dead on all live incoming edges | | |
 | 19 | Ensure slot-count *accounting* (`mir_prepare_backend_slots`) and the real emission-time skip decision share one predicate function | repo lesson: drift between an accounting pass and the real emission path previously caused a stack-corruption bug (Item 16 divisor/dividend work, documented in perf-optimization memory) | High caution item. |
 | 20 | Add `DCC_MIR_SLOT_REPORT=1`: slots requested vs. slots still read, per function | | Finds remaining low-hanging cases. |
@@ -750,6 +750,45 @@ _(append one entry per completed item, in table order, starting with Item
   recovered from the stash list and re-validated from scratch; all commits
   in this item's history were made immediately after each successful build
   to minimize exposure to that hazard.
+
+- **Item 16** (2026-07-30, verified already satisfied): Investigated the
+  `check_s`-class dead-store case cited as evidence for this item (the
+  skill's documented root-cause finding: a compare result gets
+  spilled/reloaded twice, and dccpeep's same-block redundant-reload pass
+  only removes one round-trip). Traced `check_s` in `tests/tstr3.c`/
+  `tests/tsyntax.c` directly: `call __scmp` / `pop bc` / `pop bc` / `ld
+  (ix-2),l` / `ld (ix-1),h` / `ld l,(ix-2)` / `ld h,(ix-1)` / `push hl`. This
+  store *is* read - exactly once, immediately afterward - so it is not the
+  "written but never read again anywhere" dead store Item 16 describes; it
+  is a call-result HL-forwarding gap, structurally identical to what Item 14
+  investigated and deferred (`mir_can_forward_hl_to_next` unconditionally
+  rejects any `MIR_CALL`/`MIR_CALL_AGGREGATE`-defined value, precisely to
+  avoid assuming no intervening register-clobbering code exists between the
+  call and the store without the same occupancy-safety proof). For the
+  literal "genuinely dead value" case Item 16 asks for,
+  `mir_prepare_backend_slots` already has this covered: `if (last[value] <=
+  first[value] || ...) continue;` skips slot allocation for any backend-slot
+  value whose `last[value]` (updated for every `src1`/`src2`/`MIR_CALL`
+  argument/`MIR_PHI` source use) never advances past its own definition
+  instruction - i.e. a value stored but never read anywhere in the function
+  already gets no slot at all, predating this session. No function in the
+  runnable corpus was found where a currently-emitted value violates this.
+  No code change; coverage unchanged (171/2343, 7.30%).
+
+- **Item 17** (2026-07-30, verified already satisfied): Item 17 asks to
+  generalize Item 16 with a per-object backward-liveness pass over the whole
+  function, reusing the Items 11/12 dead-promoted-local-store infrastructure
+  as a model. That infrastructure already exists and already performs
+  exactly this: commit `de0174f` ("MIR: eliminate dead promoted-local stores
+  via per-object backward liveness") added per-object backward liveness for
+  partially-promoted objects (objects with zero loads anywhere were already
+  unconditionally elided via `mir_object_is_fully_promoted`; that commit
+  extended elision to objects with *some* real loads but a store that is
+  dead on every live path from it). Combined with Item 16's backend-slot
+  value-level dead-value check (above), both the object-store and the
+  virtual-value domains already have backward-liveness-based dead-store
+  elision. No further generalization identified; no code change; coverage
+  unchanged (171/2343, 7.30%).
 
 
 
