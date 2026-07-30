@@ -36,6 +36,10 @@ jobs:
           repository: davidly/ntvcm
           path: ntvcm
 
+      - name: Set up MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Build ntvcm emulator (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
