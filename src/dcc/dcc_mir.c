@@ -6784,6 +6784,18 @@ static int mir_fuse_report_materialized_count;
  * for such values, so this stays off for every other caller. */
 static int mir_backend_slots_skip_fused_comparisons = 0;
 
+/* Item 20 (mir-migration-plan-100): DCC_MIR_SLOT_REPORT=1 prints, per
+ * function, how many values mir_prepare_backend_slots considered for a
+ * frame slot ("requested" - every value reaching its own first-definition
+ * point that was not already unconditionally excluded, i.e. still a live
+ * candidate) versus how many actually received one ("assigned" - the rest
+ * were elided by Items 13-18's dead-value/forwarding/fusion/reuse skip
+ * predicates). A large requested/assigned gap on a function flags it as a
+ * good candidate for further slot-elision work; a small one means most of
+ * that function's slot traffic is already necessary. */
+static int mir_slot_report_requested_count;
+static int mir_slot_report_assigned_count;
+
 /* Item 13 (mir-migration-plan-100): a definition whose single use is the
  * immediately following instruction (no intervening label/call/aliasing
  * store) never needs a backend slot at all - mir_emit_virtual_store already
@@ -6934,6 +6946,8 @@ static int mir_prepare_backend_slots(void)
                         last[value] = i;
         }
     mir.backend_slot_count = 0;
+    mir_slot_report_requested_count = 0;
+    mir_slot_report_assigned_count = 0;
     for (i = 0; i < mir.count; ++i)
         for (value = 0; value < mir.next_value; ++value)
             if (first[value] == i) {
@@ -6941,6 +6955,7 @@ static int mir_prepare_backend_slots(void)
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 int reusable_source = -1;
+                ++mir_slot_report_requested_count;
                 if (last[value] <= first[value] ||
                                         mir_call_only_constant(value) ||
                                         mir_multiply_by_small_constant(value) ||
@@ -6951,6 +6966,7 @@ static int mir_prepare_backend_slots(void)
                                                                                                             type_size(definition->type))) ||
                                         mir_backend_slot_forwardable(value, units, i))
                     continue;
+                ++mir_slot_report_assigned_count;
                 if (definition != NULL && definition->opcode == MIR_BINARY &&
                     ((units == 1 && type_size(definition->secondary_offset) == 2) ||
                      (units == 2 && type_size(definition->secondary_offset) == 4) ||
@@ -7014,6 +7030,12 @@ static int mir_prepare_backend_slots(void)
     free(slot_end);
     free(last);
     free(first);
+    if (getenv("DCC_MIR_SLOT_REPORT") != NULL &&
+        mir_slot_report_requested_count > 0)
+        fprintf(stderr,
+                "; MIR slot-report function=%s requested=%d assigned=%d\n",
+                mir.name, mir_slot_report_requested_count,
+                mir_slot_report_assigned_count);
     return mir.backend_slot_count;
 }
 
