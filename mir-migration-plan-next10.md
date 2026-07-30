@@ -294,3 +294,88 @@ evidence, commit hash.)
   clean, zero-risk, zero-regression dead-code-removal fix landed and
   pushed. This is being recorded as a defer/skip decision in the same
   spirit as Plan-100's Item 6, not a silent stop.
+
+- **Items 4-10, resumed and landed: parameter-rehoming ("param-direct")
+  optimization**. The prior entry's defer decision is **superseded** by
+  explicit user direction to keep pursuing real structural levers rather
+  than stop at 174/2378. The candidate pattern identified above (a
+  never-reassigned scalar function parameter gets copied into a fresh
+  backend stack slot and reloaded from there instead of being read
+  directly from its stable incoming `ix+N` offset) was implemented as
+  `mir_param_value_is_direct()` in `dcc_mir.c`: for a scalar (2/4-byte,
+  non-struct) `MIR_PARAM`-defined value whose underlying object is never
+  the target of an `MIR_STORE`, `mir_prepare_backend_slots` now skips slot
+  allocation entirely and `mir_emit_virtual_load(_wide)` read straight from
+  the parameter's own frame offset (mirroring the original `MIR_PARAM`
+  binding site's exact load forms, including the `iy`-relative fast path
+  and the register-forwarding elision - see below);
+  `mir_emit_virtual_store(_wide)` become no-ops for these values.
+  Reaching a clean, regression-free state required three follow-up
+  structural narrowings, each confirmed via forced-accept A/B and a real
+  full-mode run before being folded in permanently:
+  1. **Divmod-interval correctness fix**: `mir_prepare_backend_slots`'
+     liveness computation only tracked each divmod result's own defining
+     instruction as its `first[]` point, but `mir_divmod_partner`'s fused
+     `__sdivmod`/`__udivmod` call eagerly stores *both* paired results at
+     whichever operator is encountered first - understating the true
+     live-range start. Exposed (not caused) by param-direct's incidental
+     slot-renumbering; fixed by widening `first[]` for both operands of a
+     fused pair to the earlier instruction. Caught and verified via
+     `tests/tmuldiv.c`'s `ui16_test`.
+  2. **Divmod-fusion frame-growth exclusion**: a fused divmod pair needs
+     two simultaneous result slots (bigger frame) versus legacy's serial
+     one-slot-reused replay; under `-fstack-check` that's a real runtime
+     cost the static text-size gate can't see. `mir_param_value_is_direct`
+     now returns false for any parameter that is a live operand of a fused
+     divmod pair, keeping that class on the ordinary slot path. Caught and
+     verified via `tests/tdmfuse.c`'s `sdm_pair`/`sdm_pair_r`.
+  3. **Variadic and VLA exclusions**: `tests/tsnprtf.c`'s `call_vsnprintf`
+     (variadic) and several of `tests/tvla.c`'s `vla_sizeof_*` functions
+     (VLA) showed small but real full-mode regressions unrelated to the
+     divmod cases. `mir_param_value_is_direct` now also returns false when
+     `mir.is_variadic_function` or `mir.has_vla` is set, following the
+     same caution the existing `general-rollout` selector already applies
+     to both classes - a structural, evidence-backed exclusion rather than
+     a function-name exception (rule 6). A related bug found and fixed
+     along the way: the direct-load path was missing the pre-existing
+     `iy`-relative fast-path and HL-register-forwarding checks that the
+     slot-based load path already had, so a param-direct value read
+     multiple times in a loop re-emitted a full reload every time instead
+     of reusing the still-resident register - fixed by running the
+     forwarding check unconditionally before the param-direct branch in
+     `mir_emit_virtual_load`, and adding the matching `iy`-relative form to
+     both `mir_emit_virtual_load` and `mir_emit_virtual_load_wide`.
+  A distinct, deliberately **not pursued** finding surfaced during this
+  work: some trivial single-expression leaf functions (e.g.
+  `tests/tc89fnty.c`'s `mulb`) are replayed by legacy using a frameless,
+  `sp`-relative addressing convention (`ld hl,2 / add hl,sp`, no
+  `push ix`/`ld ix,0`/`add ix,sp` at all), while `mir_try_emit_spilled_
+  scalar_cfg` always pays for a full `ix` frame regardless. Byte-shaving
+  fixes (this one included) can incidentally tip such functions across the
+  text-size gate despite the real, unaccounted-for frame-setup/teardown
+  cost - the same "smaller text is not proof of faster code" hazard
+  (skill rule 4), but a distinct root cause from the divmod and
+  variadic/VLA cases above (a genuine gap in the selector's frame-elision
+  capability, not an interaction with this fix specifically). Scoping and
+  fixing that gap is out of scope for this item; it is a candidate for a
+  future, separately-scoped plan item (working title: "MIR migration:
+  frameless leaf-function selector path").
+  **Verification**: full census `--compare` against the 174/2378 baseline
+  shows **186/2378 (7.82%)**, +12 newly-emitted, 0 no-longer-emitted, 0
+  regression flagged by `--fail-on-regression`. Focused
+  `-Mode full` validation across all 14 affected apps
+  (`a1,fint,t,tbcloop,tbool,tc89size,tdecinit,tinline,tinlinfb,tmirslot,
+  ts,tstrconv,tunary,tvla`) passed 14/14 with 0 regressions and 10
+  improvements (up to -1.06% bytes / -0.36% cycles). Full `-Mode full
+  -Extended` passed 314/314 + 196/196 with 0 regressions.
+  **Net result so far**: coverage 174 -> 186/2378 (+12 functions, 7.32% ->
+  7.82%). This is real, verified progress toward the ~17% goal, though
+  still well short of it; the parameter-rehoming lever itself now appears
+  close to exhausted for the shapes it can safely reach (every function it
+  could help either already qualifies or falls into one of the three
+  excluded classes above). Continuing past this point per explicit user
+  direction: the next evidence-backed candidate is the frameless
+  leaf-function selector gap identified above, which is larger in scope
+  (touches `mir_try_emit_spilled_scalar_cfg`'s frame-setup, not just its
+  slot preparation) and needs its own forced-accept A/B prevalence survey
+  before a fix shape is chosen.

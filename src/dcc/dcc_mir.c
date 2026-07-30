@@ -7012,6 +7012,13 @@ static int mir_backend_slots_skip_fused_comparisons = 0;
  * that function's slot traffic is already necessary. */
 static int mir_slot_report_requested_count;
 static int mir_slot_report_assigned_count;
+/* mir-migration-plan-next10 parameter-rehoming investigation: how many
+ * assigned slots are for a value whose sole definition is MIR_PARAM (i.e.
+ * a function parameter re-copied into a fresh backend slot instead of
+ * being re-read from its own stable incoming ix+N offset each time it is
+ * needed again). Diagnostic-only counter; not read by any acceptance
+ * gate. */
+static int mir_slot_report_param_assigned_count;
 
 /* Item 13 (mir-migration-plan-100): a definition whose single use is the
  * immediately following instruction (no intervening label/call/aliasing
@@ -7056,6 +7063,123 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
                   !mir_backend_slot_forward_target_is_store(instruction);
     mir_emit_instruction_index = saved_index;
     return forwardable;
+}
+
+static int mir_divmod_partner(int instruction);
+
+/* mir-migration-plan-next10 (leaf frame-convention safety): legacy sometimes
+ * emits a function with no `ix` frame at all - reading parameters directly
+ * off `sp` with a leading `add hl,sp` - for sufficiently trivial leaf
+ * bodies. `mir_try_emit_spilled_scalar_cfg` has no equivalent frameless
+ * path: it always pays for `push ix`/`ld ix,0`/`add ix,sp` and the matching
+ * teardown. Ordinarily that fixed overhead keeps such functions out of the
+ * text-size gate entirely, but direct-object-forwarding a parameter can
+ * shrink the rest of the body just enough to tip the gate anyway, even
+ * though the resulting machine code pays real extra frame-setup cost
+ * legacy never incurred (skill rule 4). Detected by inspecting the already-
+ * captured legacy replay stream for this function: if it never emits
+ * `push ix`, treat the function as using a lighter-weight convention MIR
+ * cannot match yet, and keep every parameter on the ordinary slot path so
+ * this optimization cannot be the deciding factor for that gate. Confirmed
+ * via tc89fnty's mulb full-mode regression. */
+static int mir_capture_stream_uses_frame(void)
+{
+    static int cached_result = -1;
+    static const FILE *cached_stream = NULL;
+    static const char needle[] = "push ix";
+    int character;
+    int matched;
+    long saved_position;
+
+    if (mir.capture_stream == NULL)
+        return 1;
+    if (cached_stream == mir.capture_stream && cached_result >= 0)
+        return cached_result;
+    cached_stream = mir.capture_stream;
+    saved_position = ftell(mir.capture_stream);
+    rewind(mir.capture_stream);
+    cached_result = 0;
+    matched = 0;
+    while ((character = fgetc(mir.capture_stream)) != EOF) {
+        if (character == needle[matched]) {
+            ++matched;
+            if (needle[matched] == '\0') {
+                cached_result = 1;
+                break;
+            }
+        } else {
+            matched = (character == needle[0]) ? 1 : 0;
+        }
+    }
+    if (saved_position >= 0)
+        fseek(mir.capture_stream, saved_position, SEEK_SET);
+    return cached_result;
+}
+
+/* mir-migration-plan-next10 (post Item 3): a function-parameter value never
+ * needs its own dedicated backend slot when the underlying parameter object
+ * is never reassigned anywhere in the function (no MIR_STORE targets it) -
+ * every later use can simply re-read the same stable incoming ix+N slot the
+ * parameter already lives in, instead of copying it into a fresh local slot
+ * at the MIR_PARAM definition site and reloading from there. This removes
+ * both the copy (store) instructions and the frame-byte growth for every
+ * multi-use scalar parameter. Restricted to plain scalars (2 or 4 byte,
+ * non-struct, non-aggregate) so the load/store emitters below can reuse the
+ * exact same in-range/out-of-range addressing forms the original MIR_PARAM
+ * binding already uses - this must stay purely additive: any value this
+ * returns false for keeps its prior slot-based behavior unchanged. */
+static int mir_param_value_is_direct(int value)
+{
+    const struct MirInsn *definition;
+    int object;
+    int i;
+
+    if (value < 0 || value >= mir.next_value)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL || definition->opcode != MIR_PARAM)
+        return 0;
+    if (type_is_struct_object(definition->type) ||
+        (type_size(definition->type) != 2 && type_size(definition->type) != 4))
+        return 0;
+    object = definition->object;
+    if (object < 0 || object >= mir.object_count)
+        return 0;
+    if (mir.is_variadic_function)
+        return 0;
+    if (mir.has_vla)
+        return 0;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_STORE && mir.insns[i].object == object)
+            return 0;
+    if (!mir_capture_stream_uses_frame())
+        return 0;
+    /* mir-migration-plan-next10 (divmod-fusion safety): a fused divmod pair
+     * (mir_divmod_partner) must eagerly materialize BOTH its quotient and
+     * remainder results into two simultaneous backend slots at whichever
+     * operator is encountered first, unlike legacy's serial one-slot-
+     * reused-in-turn replay - this needs strictly more frame bytes than
+     * legacy for that pair alone. Direct-object-forwarding one of the
+     * pair's own parameter operands then quietly shrinks the *rest* of the
+     * function's frame just enough to tip its text-size accept/reject
+     * gate over, even though the fused pair's own extra frame bytes make
+     * the real (stack-check-instrumented) machine code slower, not
+     * faster - confirmed via tdmfuse's sdm_pair/sdm_pair_r full-mode
+     * regression (skill rule 4: static byte counts are not proof of real
+     * cost). Keep any parameter that is a live operand of a fused
+     * divmod pair on its ordinary backend-slot path so this optimization
+     * cannot influence that gate decision for these functions, while
+     * still applying normally to every parameter not involved in such a
+     * pair. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_BINARY &&
+            (insn->immediate == '/' || insn->immediate == '%') &&
+            (insn->src1 == value || insn->src2 == value) &&
+            mir_divmod_partner(i) >= 0)
+            return 0;
+    }
+    return 1;
 }
 
 static int mir_prepare_backend_slots(void)
@@ -7162,9 +7286,41 @@ static int mir_prepare_backend_slots(void)
                         last[value] < i)
                         last[value] = i;
         }
+    /* mir-migration-plan-next10 (param-direct follow-up): a fused
+     * divmod pair (mir_divmod_partner, emission ~9000) writes BOTH the
+     * modulo and division result values eagerly at whichever of the two
+     * MIR_BINARY instructions is encountered first in program order, not
+     * at each result's own defining instruction - the second instruction
+     * only "break"s without emitting anything, trusting the earlier
+     * store. first[]/last[] computed above only account for each value's
+     * own instruction index, so a result written early this way was
+     * still reported as first-live only at its own (later) instruction,
+     * understating its true live range by the gap between the two
+     * instructions. Any other value's slot reused across exactly that
+     * gap can then alias and clobber the early-written result before its
+     * real use - a latent hazard nothing forced into the open until the
+     * parameter-rehoming change (below) perturbed slot numbering enough
+     * for two such values to collide (surfaced as tmuldiv's ui16_test
+     * modulo/division mixups). Extend both partners' first[] to the
+     * earlier instruction so slot reuse across that gap is impossible. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        int partner;
+        if (insn->opcode != MIR_BINARY ||
+            (insn->immediate != '/' && insn->immediate != '%'))
+            continue;
+        partner = mir_divmod_partner(i);
+        if (partner > i) {
+            if (first[insn->dst] > i)
+                first[insn->dst] = i;
+            if (first[mir.insns[partner].dst] > i)
+                first[mir.insns[partner].dst] = i;
+        }
+    }
     mir.backend_slot_count = 0;
     mir_slot_report_requested_count = 0;
     mir_slot_report_assigned_count = 0;
+    mir_slot_report_param_assigned_count = 0;
     for (i = 0; i < mir.count; ++i)
         for (value = 0; value < mir.next_value; ++value)
             if (first[value] == i) {
@@ -7182,9 +7338,12 @@ static int mir_prepare_backend_slots(void)
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
                                                                                                             type_size(definition->type))) ||
-                                        mir_backend_slot_forwardable(value, units, i))
+                                        mir_backend_slot_forwardable(value, units, i) ||
+                                        mir_param_value_is_direct(value))
                     continue;
                 ++mir_slot_report_assigned_count;
+                if (definition != NULL && definition->opcode == MIR_PARAM)
+                    ++mir_slot_report_param_assigned_count;
                 if (definition != NULL && definition->opcode == MIR_BINARY &&
                     ((units == 1 && type_size(definition->secondary_offset) == 2) ||
                      (units == 2 && type_size(definition->secondary_offset) == 4) ||
@@ -7251,22 +7410,60 @@ static int mir_prepare_backend_slots(void)
     if (getenv("DCC_MIR_SLOT_REPORT") != NULL &&
         mir_slot_report_requested_count > 0)
         fprintf(stderr,
-                "; MIR slot-report function=%s requested=%d assigned=%d\n",
+                "; MIR slot-report function=%s requested=%d assigned=%d "
+                "param_assigned=%d\n",
                 mir.name, mir_slot_report_requested_count,
-                mir_slot_report_assigned_count);
+                mir_slot_report_assigned_count,
+                mir_slot_report_param_assigned_count);
     return mir.backend_slot_count;
 }
 
 static void mir_emit_virtual_load(FILE *out, int value)
 {
-    int offset = mir_virtual_offset(value);
-    int iy_offset = mir_virtual_iy_offset(value);
+    int offset;
+    int iy_offset;
     if (mir_forwarded_hl_value == value &&
         mir_forwarded_hl_instruction + 1 == mir_emit_instruction_index) {
+        /* This check must precede the param-direct branch below: the
+         * register-forwarding optimization elides the reload entirely
+         * when the value is already resident in HL from the immediately
+         * preceding instruction, regardless of whether this value is
+         * slot-based or param-direct. Skipping it here regressed
+         * tvla's vla_sizeof_c99_type_bytes (a param read many times in
+         * a loop) by re-emitting a full ix-relative reload on every use
+         * instead of reusing HL when available. */
         mir_forwarded_hl_value = -1;
         mir_forwarded_hl_instruction = -1;
         return;
     }
+    if (mir_param_value_is_direct(value)) {
+        /* mir-migration-plan-next10: read straight from the parameter's own
+         * stable incoming ix+N home instead of a duplicated backend slot -
+         * see mir_param_value_is_direct's comment. Mirrors exactly the
+         * in-range/out-of-range forms the original MIR_PARAM binding site
+         * uses for a narrow scalar, including the IY-relative fast path
+         * hot loops rely on (skipping it caused a measurable, if tiny,
+         * cycle regression in tsnprtf's call_vsnprintf). */
+        int object_offset = mir.objects[mir_definition(value)->object].offset;
+        int object_iy_offset = object_offset + mir.local_bytes +
+                                mir.aggregate_temp_bytes;
+        if (mir_virtual_iy_base && object_iy_offset >= -128 &&
+            object_iy_offset + 1 <= 127) {
+            fprintf(out, "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
+                    object_iy_offset, object_iy_offset + 1);
+        } else if (object_offset >= -128 && object_offset + 1 <= 127) {
+            fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                    object_offset, object_offset + 1);
+        } else {
+            fputs("\tpush ix\n\tpop hl\n", out);
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                         "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+                    object_offset);
+        }
+        return;
+    }
+    offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
     if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 1 <= 127) {
         fprintf(out, "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
                 iy_offset, iy_offset + 1);
@@ -7285,9 +7482,16 @@ static void mir_emit_virtual_load(FILE *out, int value)
 
 static void mir_emit_virtual_store(FILE *out, int value)
 {
-    int has_slot = value >= 0 && value < mir.next_value &&
+    int has_slot;
+    int forward_instruction;
+    if (mir_param_value_is_direct(value))
+        /* mir-migration-plan-next10: nothing to store - later uses of this
+         * value re-read it directly from its stable parameter home (see
+         * mir_emit_virtual_load); the loaded HL is simply not persisted. */
+        return;
+    has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
-    int forward_instruction = mir_forward_skip_target(mir_emit_instruction_index);
+    forward_instruction = mir_forward_skip_target(mir_emit_instruction_index);
     if (!has_slot) {
         /* Item 13 (mir-migration-plan-100): mir_prepare_backend_slots skips
          * allocating a slot for a value it already proved via
@@ -7385,8 +7589,8 @@ static int mir_divmod_partner(int instruction)
 static void mir_emit_virtual_load_wide(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
-    int offset = mir_virtual_offset(value);
-    int iy_offset = mir_virtual_iy_offset(value);
+    int offset;
+    int iy_offset;
 
     if (!mir_definition_is_wide(definition)) {
         mir_emit_virtual_load(out, value);
@@ -7400,6 +7604,40 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
                   out);
         return;
     }
+    if (mir_param_value_is_direct(value)) {
+        /* mir-migration-plan-next10: wide (4-byte) parameter counterpart
+         * of mir_emit_virtual_load - object storage for a wide parameter is
+         * ascending (offset..offset+3), unlike the descending backend-slot
+         * convention below, so this mirrors the original MIR_PARAM binding
+         * site's load form exactly rather than reusing mir_virtual_offset.
+         * Also mirrors the IY-relative fast path hot loops rely on. */
+        int object_offset = mir.objects[definition->object].offset;
+        int object_iy_offset = object_offset + mir.local_bytes +
+                                mir.aggregate_temp_bytes;
+        if (mir_virtual_iy_base && object_iy_offset >= -128 &&
+            object_iy_offset + 3 <= 127) {
+            fprintf(out,
+                    "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+                    "\tld e,(iy%+d)\n\tld d,(iy%+d)\n",
+                    object_iy_offset, object_iy_offset + 1,
+                    object_iy_offset + 2, object_iy_offset + 3);
+        } else if (object_offset >= -128 && object_offset + 3 <= 127) {
+            fprintf(out,
+                    "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+                    "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                    object_offset, object_offset + 1,
+                    object_offset + 2, object_offset + 3);
+        } else {
+            fputs("\tpush ix\n\tpop hl\n", out);
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n", object_offset);
+            fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+                  "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                  "\tld h,b\n\tld l,c\n", out);
+        }
+        return;
+    }
+    offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
     if (mir_virtual_iy_base && iy_offset - 2 >= -128 &&
         iy_offset + 1 <= 127) {
         fprintf(out,
@@ -8316,6 +8554,16 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            if (insn->opcode == MIR_PARAM &&
+                mir_param_value_is_direct(insn->dst))
+                /* mir-migration-plan-next10: this parameter value never
+                 * gets a backend slot (see mir_param_value_is_direct) -
+                 * every real use reloads directly from the parameter's own
+                 * ix+N home (mir_emit_virtual_load[_wide]), so the load
+                 * this MIR_PARAM instruction would otherwise perform here
+                 * is dead work; skip it entirely rather than load-then-
+                 * discard. */
+                break;
             if (insn->dst >= 0 && mir.backend_slots != NULL &&
                 mir.backend_slots[insn->dst] < 0 &&
                 !mir_value_has_use(insn->dst))
