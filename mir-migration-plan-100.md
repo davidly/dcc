@@ -347,14 +347,14 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 93 | Full fresh census; final coverage fraction and complete remaining fallback-reason table | | |
-| 94 | Document, per remaining fallback reason, whether it's an intentional gate or genuinely unimplemented | skill completion criterion 1: no unexplained fallback | |
-| 95 | Assess whether a MIR-required emission mode can now pass correctness across the full corpus | | |
-| 96 | If not ready, write the specific blocking classes into the handoff for the next plan | do not silently drop them | |
-| 97 | Measure whether skipping legacy capture/replay for long-track-record MIR functions saves `dccmake` wall time | compile-time optimization only, no output-behavior change | |
-| 98 | Final whole-corpus performance summary (peep + nopeep) vs. the pre-Phase-1 baseline | confirm zero net regressions and highlight the largest wins | |
-| 99 | Update `perf_baselines.csv` for every genuinely improved row, with the full-mode diff attached | | |
-| 100 | Write the closing status report and hand off for a possible next 100-item plan, using this same "fresh census first" discipline | | |
+| 93 | Full fresh census; final coverage fraction and complete remaining fallback-reason table | | done - 174/2378 (7.32%); see Execution Log |
+| 94 | Document, per remaining fallback reason, whether it's an intentional gate or genuinely unimplemented | skill completion criterion 1: no unexplained fallback | done - all 7 reasons classified; see Execution Log |
+| 95 | Assess whether a MIR-required emission mode can now pass correctness across the full corpus | | done - not ready at 7.32% coverage; see Execution Log |
+| 96 | If not ready, write the specific blocking classes into the handoff for the next plan | do not silently drop them | done - see Execution Log's closing handoff |
+| 97 | Measure whether skipping legacy capture/replay for long-track-record MIR functions saves `dccmake` wall time | compile-time optimization only, no output-behavior change | deferred - evidence shows no meaningful yield at 7.32% coverage; see Execution Log |
+| 98 | Final whole-corpus performance summary (peep + nopeep) vs. the pre-Phase-1 baseline | confirm zero net regressions and highlight the largest wins | done - 18 apps improved, 0 regressed; see Execution Log |
+| 99 | Update `perf_baselines.csv` for every genuinely improved row, with the full-mode diff attached | | done - already current, all improvements accepted incrementally each phase |
+| 100 | Write the closing status report and hand off for a possible next 100-item plan, using this same "fresh census first" discipline | | done - see Execution Log's closing entry |
 
 ## Universal per-item execution playbook
 
@@ -2060,3 +2060,137 @@ _(append one entry per completed item, in table order, starting with Item
   than writing new ones - the highest-yield technique discovered
   across the whole plan. Phase 9 is closed. Moving on to Phase 10
   (Items 93-100, closing sweep & legacy-retirement readiness).
+
+- **Items 93-100** (2026-08-02): Phase 10 close-out - the plan's
+  closing sweep and legacy-retirement readiness assessment.
+
+  **Item 93 (fresh final census)**: coverage 174/2378 functions
+  (7.32%). Complete fallback-reason table: `text-size` 2146,
+  `instruction-count` 27, `inline-substitution` 24, `cfg-block-count`
+  3, `cfg-backedge` 2, `pointer-array` 1, `selector` 1 (2204 total
+  fallback + 174 accepted = 2378).
+
+  **Item 94 (per-reason classification)**:
+  - `text-size` (2146, 90.2% of all fallback) - **genuinely
+    unimplemented**, the dominant blocker. Root cause documented in
+    SKILL.md's "Known root cause" section:
+    `mir_emit_scalar_compare` unconditionally materializes an
+    explicit 0/1 boolean for every comparison, which then gets
+    spilled and reloaded just to be re-tested, and the existing
+    narrow `mir_try_emit_comparison_branch` selector only fuses
+    compare+branch for the single whole-function shape `if (param OP
+    param) return A; return B;`, never the general case that
+    `mir_try_emit_spilled_scalar_cfg` handles for 91% of the corpus.
+    Fixing this needs a real new capability (a general compare+branch
+    fusion selector, or fixing the double-materialization bug
+    directly), not an incremental fold - Item-6/58-level scope.
+  - `instruction-count` (27) - **intentional cost gate**, correctly
+    blocking candidates whose generated code is measurably worse than
+    legacy by count, with existing profiled-near-cost/byte-
+    profitable/constant-bound-loop-pair exceptions already carved out
+    in Phases 2-3. Re-audited: no new near-miss population found this
+    plan (see Items 25-31's fast-path additions, which already mined
+    this space).
+  - `inline-substitution` (24) - **intentional gate** (Item 57-66's
+    Phase 6 finding): the legacy static-inline call-site substitution
+    mechanism is correct and byte-identical; MIR's call emission has
+    no substitution pass. Building one is a from-scratch inliner
+    (Item-6-level scope), deferred with rationale already documented.
+  - `cfg-block-count` (3: `adaint.run`, `cobint.exec_range`,
+    `fint.prim`) - **intentional gate**, re-confirmed unchanged since
+    Item 40. Raising the 64-block ceiling for only 3 functions in the
+    highest-risk category is a disproportionate risk (Item 77's
+    finding).
+  - `cfg-backedge` (2: `tregnarw.lres`, `tphijoin.loop_header_phi`) -
+    **genuinely unimplemented**, but deliberately deferred: both were
+    inspected in MIR detail (Item 52) and are genuinely different,
+    unrelated loop shapes from the 4 specialized selectors Item 46
+    already wired in; building a general arbitrary-loop selector with
+    only 2 known targets and no shared pattern is Item-6-level
+    ambiguity.
+  - `pointer-array` (1: `tptrarr.main`) - **intentional gate, proven
+    correct**: Item 67's forced A/B showed relaxing it would be a
+    real performance regression (peep +1.04%, nopeep +2.1% cycles).
+  - `selector` (1: `tgotocap.internal_label_loop`) - **intentional
+    semantic-risk gate**: `DCC_MIR_SELECT_REPORT` traced this to an
+    `implicit-return` preflight rejection - the function uses
+    GNU computed-goto control flow that MIR's straight-line return-
+    path preflight scan doesn't attempt to model, correctly declining
+    rather than risk an unverified transformation (skill rule 5).
+
+  **Items 95-96 (MIR-required-mode readiness)**: **not ready.** At
+  7.32% coverage, 92.68% of functions still depend on legacy replay.
+  The blocking classes for the next plan, in priority order by yield:
+  (1) the systemic `text-size`/`spilled-scalar-cfg` population (2146
+  functions, 90.2% of all fallback) - by far the highest-value target,
+  requiring a genuinely new general compare-branch-fusion selector or
+  a fix to `mir_emit_scalar_compare`'s double-materialization bug,
+  both real engineering efforts, not incremental folds; (2) a from-
+  scratch MIR-native static-inline substitution pass (24 functions);
+  (3) a general arbitrary-loop selector once a second concrete
+  `cfg-backedge` target with a shared pattern appears (currently only
+  2, unrelated shapes); (4) the large-CFG ceiling (3 functions, low
+  priority given the effort/yield ratio). This exact breakdown is the
+  explicit handoff for a possible next 100-item plan (Item 100).
+
+  **Item 97 (capture/replay skip measurement)**: investigated
+  `dcc_func.c`'s `emit_function_epilogue` - legacy AST-driven Z80
+  emission always runs in full for every function (writes directly
+  to `g_emit_sink.stream`), and `mir_end_function()` only decides
+  afterward whether to keep it or truncate-and-replace with MIR's
+  output; there is no existing mode that skips legacy emission
+  itself, only ones (`DCC_MIR_FORCE_FALLBACK`) that still run MIR in
+  full and then discard its result. Timed 3 of the corpus's largest
+  files (`adaint.c` 1172 lines, `cobint.c` 1302 lines, `tchess.c`
+  1011 lines): 0.57s/0.79s/0.98s wall each, with only 0/67, 1/61, and
+  2/39 of their functions MIR-accepted respectively. Since MIR
+  acceptance is 0-5% even in the corpus's largest files, and legacy
+  emission is architecturally interleaved with the AST walk's
+  parsing/symbol/scope resolution (not a separable pass an accepted
+  function could trivially skip), any wall-time saving from skipping
+  capture for already-trusted functions is bounded well under 1-2% of
+  total compile time today - not worth the engineering risk of
+  breaking the safety-net comparison this migration's whole design
+  relies on. Deferred; revisit only once coverage is substantially
+  higher (e.g. >30-50%), where the bound becomes meaningfully larger.
+
+  **Item 98 (whole-corpus performance vs. pre-Phase-1 baseline)**:
+  diffed `tests/perf_baselines.csv` at the pre-Phase-1 commit
+  (`e50ae51^`) against today's, 307 apps in common. Whole-corpus
+  totals: peep cycles -0.000% (net neutral - the plan's wins are
+  concentrated in a few apps, not spread thin), nopeep cycles
+  -0.000%, peep size -0.020%. **18 apps improved, 0 regressed** -
+  every single measured change across the whole plan was an
+  improvement, never once a regression accepted into the baseline.
+  Largest wins: `tcrcfix` -5.75% peep cycles (Item 46's loop-family
+  fix), `tmircfg` -3.30%, `tc99scpe` -1.91%, plus 15 smaller
+  improvements from Items 25-31's fast paths and Item 79's
+  general-rollout promotion.
+
+  **Item 99**: already current - every genuinely improved row was
+  accepted into `tests/perf_baselines.csv` incrementally at its own
+  phase boundary (Items 45-46, 77-84) via `-UpdatePerfBaseline` after
+  a clean full-mode diff, never in bulk and never hiding a regression.
+
+  **Item 100 (closing status report)**: Plan-100 is complete - all
+  ten phases (Items 1-100) executed, documented, and pushed across 44
+  commits from `e50ae51` through this entry. Final state: coverage
+  174/2378 functions (7.32%), 0 regressions accepted at any point,
+  18 apps with genuine measured performance improvements and 0 apps
+  regressed against the pre-Phase-1 baseline. Two production-
+  unlocking dispatch-wiring fixes (Items 46, 79) were found by
+  auditing for orphaned `mir_try_emit_*` selectors reachable only via
+  diagnostic env vars - the single highest-yield technique discovered
+  across the whole plan, now documented in SKILL.md for reuse. The
+  dominant remaining blocker for further coverage growth is the
+  systemic `text-size` fallback population (90.2% of all fallback),
+  which needs real new selector/emitter engineering, not further
+  incremental pattern folds - this is the clear starting point for
+  any next plan, which should re-derive its item list from a fresh
+  census (per SKILL.md's own discipline) rather than continuing this
+  plan's numbering. Handoff: search `dcc_mir.c` for `mir_try_emit_`
+  functions not reachable from `mir_end_function()`'s default path
+  before writing any new selector from scratch; then invest in a
+  general compare-branch-fusion selector or a fix to
+  `mir_emit_scalar_compare`'s double-materialization bug as the
+  highest-value next step.
