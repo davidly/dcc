@@ -226,7 +226,7 @@ its live range never needs it.
 |---|---|---|---|
 | 13 | Skip slot allocation when a definition's single use is the very next instruction with no intervening label/call/aliasing store | | General register hand-off case. |
 | 14 | Extend Item 13 across a `MIR_CALL` boundary when the value is consumed before the call or is itself an already-pushed argument | | |
-| 15 | Extend Item 13 across a `MIR_LABEL` with exactly one predecessor (textually split but structurally straight-line) | | |
+| 15 | Extend Item 13 across a `MIR_LABEL` with exactly one predecessor (textually split but structurally straight-line) | done | see Execution Log |
 | 16 | Eliminate the `check_s`-class dead store: a slot written but never read again anywhere in the function | evidence: second spill in the `check_s` case study, which `dccpeep`'s same-block reload pass cannot see | |
 | 17 | Generalize Item 16 with a per-object backward-liveness pass over the whole function | reuse the Items 11/12 (dead promoted-local stores) liveness infra as a model | |
 | 18 | Audit `mir_emit_spilled_phi_copies` for copies into a slot Items 13–17 already proved dead on all live incoming edges | | |
@@ -689,6 +689,43 @@ _(append one entry per completed item, in table order, starting with Item
   correctly (just with a slot that goes unused, not a correctness bug).
   Deferred pending a dedicated whole-function occupancy-safety pass; not
   attempted here. No code change; coverage unchanged (171/2343, 7.30%).
+
+- **Item 15** (2026-07-30): Extended Item 13's forwarding to tolerate a
+  `MIR_LABEL` sitting between a value's definition and its single consuming
+  instruction, when that label has exactly one CFG predecessor (i.e. it is
+  not a real merge point - just a name given to a position for an unrelated
+  reason, such as a `goto` target reached from nowhere else or tooling that
+  always labels certain positions). Added `mir_label_predecessor_count()`,
+  which sums `successors[]`/`successor_count` matches across every
+  instruction - the same CFG arrays `mir_verify_and_dump()` already builds
+  for every function and that liveness/allocation already trust - and
+  factored a single shared `mir_forward_skip_target(instruction)` helper that
+  skips NOPs and, at most once, one such single-predecessor label. Rewired
+  both the accounting-time predicate (`mir_can_forward_hl_to_next`,
+  `mir_backend_slot_forward_target_is_store`) and the two emission-time
+  "what's next" lookups in `mir_emit_virtual_store` to call this one helper,
+  so the Item 19 "one predicate, no drift" discipline extends to the new
+  label case exactly as it already did for NOPs. Skipping more than one label
+  is deliberately unsupported - it would require reasoning about a chain of
+  merges instead of a single, locally-verifiable non-merge point. Rebuilt
+  clean (no new warnings). Census (`--fail-on-regression`): 0 newly/no-longer
+  emitted (171/2343, 7.30% - Item 13's slot-skip already fires directly on
+  many of the label-adjacent cases; this item's coverage effect is in
+  *already-emitted* functions' generated code, not new admissions), 19 apps
+  with changed metrics. Runtime-validated all 19 changed apps
+  (`tbcint, tbcregno, tc89comp, tc89size, tc99apar, tc99scpe, tcrcfix,
+  tctxflt, tenumfsm, tforinc, tkandr, tmatbit, tnarrow, tnestfor, tpeepal,
+  tptrixld, treg, tregnarw, tvla`) in `-Mode full`: 0 regressions, 15 genuine
+  improvements (e.g. `tc99scpe` peep 44,072 -> 43,475 cycles/-1.35%, 7,040 ->
+  6,912 bytes/-1.82%; `tc89size` nopeep 119,498 -> 118,177 cycles/-1.11%).
+  Wide fast-mode safety net (`-Mode fast`, 320 apps): first run showed 2
+  transient failures (diagnostics + a 24-cycle `tbool` perf blip) that did
+  not reproduce on immediate re-run (311 passed / 9 skipped / 0 failed,
+  clean) - consistent with the skill's documented "code-placement sensitivity
+  in interpreter heaps" noise class, not attributed to this change. Baseline
+  snapshot promoted to `build/mir-plan-fresh-before.tsv`; perf baselines
+  updated for the 15 improved apps via `-UpdatePerfBaseline` after the clean
+  full-mode proof.
 
 
 
