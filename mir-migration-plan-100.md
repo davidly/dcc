@@ -234,7 +234,7 @@ its live range never needs it.
 | 20 | Add `DCC_MIR_SLOT_REPORT=1`: slots requested vs. slots still read, per function | | done |
 | 21 | Add `tests/tmirslot.c`: immediate-use, cross-call, cross-label, and dead-store elision cases, clang baseline | | done |
 | 22 | Full census + full-mode validation of every changed app | | done |
-| 23 | Dynamic cycle-count comparison (peep and nopeep) for the largest-yield apps | skill rule 4 | |
+| 23 | Dynamic cycle-count comparison (peep and nopeep) for the largest-yield apps | skill rule 4 | no candidate — see Execution Log |
 | 24 | Milestone checkpoint; baseline update for genuinely improved rows only | wide safety net | |
 
 ### Phase 3 — Constant / small-operand instruction-selection fast paths (Items 25–34)
@@ -863,6 +863,25 @@ _(append one entry per completed item, in table order, starting with Item
   passed (no regressions). Promoted `build/item22-full.tsv` to
   `build/mir-plan-fresh-before.tsv` as the new rolling baseline for
   subsequent items.
+
+- **Item 23** (2026-07-30): Searched for a "largest-yield app" to profile
+  dynamically per skill rule 4. Diffed every row of `build/item13-after.tsv`
+  against `build/item22-full.tsv`: every byte-count delta this phase
+  produced (Item 15's label-forwarding candidate-size shrink, ~50-60 bytes
+  each across `tbcint`, `tbcregno`, `tc89comp`, `tc89size`, `tc99apar`,
+  `tc99scpe`, `tcrcfix`, and others) belongs exclusively to functions still
+  in `fallback text-size` - i.e. functions whose *emitted* code is still
+  the captured legacy replay, unaffected by the smaller MIR candidate that
+  was measured but rejected. Zero functions changed `result` from
+  `fallback` to `mir` or vice versa, and zero already-`mir`-accepted
+  functions had any generated-byte delta at all (confirmed by an exact
+  script diff, 0 matches). This matches the census tool's own verdict from
+  Item 22 (`apps requiring runtime validation: 0`): there is no
+  behavioral or performance difference for any binary this phase produced,
+  so there is no candidate app/function pair to profile with
+  `dccprof`/cycle counts. Documented as a deliberate no-op rather than
+  fabricating a profiling run against unchanged binaries; skipped, no
+  regression risk.
 
 
 
