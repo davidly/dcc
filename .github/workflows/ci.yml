@@ -16,13 +16,9 @@ concurrency:
 
 jobs:
   tests:
-    name: Unit tests and extended suite (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Unit tests and extended suite
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout dcc
@@ -36,28 +32,16 @@ jobs:
           repository: davidly/ntvcm
           path: ntvcm
 
-      - name: Set up MSVC dev environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build ntvcm emulator (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Build ntvcm emulator
         run: |
           chmod +x ./m.sh
           ./m.sh
         working-directory: ntvcm
 
-      - name: Build ntvcm emulator (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: m.bat
-        working-directory: ntvcm
-
       - name: Add tool directories to PATH
-        shell: pwsh
         run: |
-          Add-Content -Path $env:GITHUB_PATH -Value $env:GITHUB_WORKSPACE
-          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $env:GITHUB_WORKSPACE "ntvcm")
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
 
       - name: Build dcc host tools
         shell: pwsh

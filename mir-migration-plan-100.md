@@ -337,7 +337,7 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 | 85 | Run the full census with `-fstack-check` explicitly passed for every item landed in Phases 1–8, not only VLA ones | closes the blind spot broadly | done - added `--extra-args` to the census script; see Execution Log |
 | 86 | Grep every new helper added in Phases 1–8 for duplicated slot/frame-size accounting; consolidate to one predicate function each | repeat of the Item 19 lesson, applied plan-wide | done - `mir_current_frame_bytes()` extracted; see Execution Log |
 | 87 | Run `scripts/rtl-iy-safety.py` and `scripts/audit-runtime-coverage.py` | confirm no MIR change introduced an IY reference or uncovered runtime symbol | done - both clean; see Execution Log |
-| 88 | Run the full suite on Windows/MSVC and Linux/GCC hosts (or CI) | promote from "optional" (per the retired progress doc) to required, given the larger scope of this plan | done - added a `windows-latest` CI matrix leg alongside `ubuntu-latest`; see Execution Log |
+| 88 | Run the full suite on Windows/MSVC and Linux/GCC hosts (or CI) | promote from "optional" (per the retired progress doc) to required, given the larger scope of this plan | deferred - CI infra changes are out of scope for this plan; reverted after review, see Execution Log |
 | 89 | Run the extended C-conformance corpus (`-Extended`, 196 tests) at every phase boundary, not only at the end | | done - already standard practice every phase this session (see Items 45-84's milestone runs); reconfirmed here |
 | 90 | `git diff --check` + `git fsck --no-progress --no-dangling` before any milestone push | | done - both clean; see Execution Log |
 | 91 | Update `.github/skills/mir-migration/SKILL.md` with any newly-discovered acceptance-barrier categories or discipline rules | | done - added the dead-selector-via-env-var pattern and the frame-bytes consolidation discipline note |
@@ -2008,23 +2008,19 @@ _(append one entry per completed item, in table order, starting with Item
   by any Phases 1-8 commit, confirmed via `git diff --stat` showing
   `DCCRTL.MAC` was never touched this plan).
 
-  **Item 88**: promoted from optional to required. CI (`ci.yml`) only
-  ever built on `ubuntu-latest` (Linux/GCC). Verified the tooling was
-  already Windows/MSVC-ready without needing it: `build-dcc.ps1`
+  **Item 88**: investigated readiness (`build-dcc.ps1` already
   auto-detects MSVC via `vcvarsall` on Windows, and the `ntvcm`
-  emulator repo ships `m.bat` alongside `m.sh`. Added a `windows-
-  latest` matrix leg to `ci.yml` (`fail-fast: false` so one OS
-  failing doesn't hide the other), split the ntvcm build step by
-  `runner.os`, and rewrote the PATH-setup step from bash-only syntax
-  (`$GITHUB_WORKSPACE`/`$GITHUB_PATH`) to `pwsh` with `$env:` prefixes
-  so it works identically on both runners. Also added `-RunTimeout
-  20` to CI's `runall.ps1 -Mode full -Extended` invocation, matching
-  this session's established local practice, to bound any future
-  hung test the same way the local timeout does. This cannot be
-  fully verified locally (no Windows host in this environment); it
-  is pushed for the real `windows-latest` GitHub Actions runner to
-  validate, consistent with the standing practice of trusting CI
-  after a local-verified push.
+  emulator repo ships `m.bat` alongside `m.sh`, so the tooling is
+  Windows/MSVC-ready), but modifying CI infrastructure (adding a
+  `windows-latest` matrix leg to `ci.yml`) is out of scope for a MIR
+  selector migration plan - reverted after user feedback flagged it
+  as scope creep. Deferred: added `-RunTimeout 20` to CI's `runall.ps1
+  -Mode full -Extended` invocation only (matching this session's
+  established local practice, requested independently by the user),
+  left `ci.yml` otherwise as `ubuntu-latest`/Linux/GCC only, same as
+  before this plan. A Windows/MSVC CI leg remains a legitimate future
+  improvement but should be proposed and actioned as its own
+  deliberate infrastructure change, not folded into this plan.
 
   **Item 89**: already de facto satisfied - every phase boundary
   this session (Items 45-46, 47-56, 57-66, 67-76, 77-84, and now
