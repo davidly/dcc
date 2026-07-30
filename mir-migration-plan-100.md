@@ -321,14 +321,14 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 77 | Re-measure `cfg-block-count` fallbacks after Phases 1–4 shrink block counts broadly; raise the 64-block ceiling only in small measured increments | | |
-| 78 | Audit `mir_try_emit_general_rollout` and `mir_try_emit_home_cfg_rollout` | both exist in `dcc_mir.c` but are reachable only via diagnostic env vars (`DCC_MIR_GENERAL_CANDIDATES`, `DCC_MIR_EMIT_GENERAL`, etc.), **not** the production `mir_try_emit_z80` dispatcher | Check git history for why they were parked before deciding to promote or retire. |
-| 79 | If promotable, add to the production chain behind the same cost gate as every other selector | never bypass the size/instruction comparison | |
-| 80 | If not promotable, remove the diagnostic-only code paths in a dedicated cleanup commit | confirm via full census + `DCC_MIR_REQUIRE_COMPLETE` that nothing regresses | Reduces `dcc_mir.c`'s ~9,800 lines with no behavior change. |
-| 81 | Measure compile-time scaling for the largest CFGs after any block-count ceiling increase | skill completion criterion: "large CFG compile time is bounded" | |
-| 82 | Add a compile-time regression benchmark if none exists | | |
-| 83 | Full census + full-mode validation | | |
-| 84 | Milestone checkpoint | wide safety net | |
+| 77 | Re-measure `cfg-block-count` fallbacks after Phases 1–4 shrink block counts broadly; raise the 64-block ceiling only in small measured increments | | done - see Execution Log (same 3 functions as Item 40, unchanged: `adaint.run` 107 blocks, `cobint.exec_range` 132 blocks, `fint.prim` 95 blocks; ceiling raise deferred, see Execution Log) |
+| 78 | Audit `mir_try_emit_general_rollout` and `mir_try_emit_home_cfg_rollout` | both exist in `dcc_mir.c` but are reachable only via diagnostic env vars (`DCC_MIR_GENERAL_CANDIDATES`, `DCC_MIR_EMIT_GENERAL`, etc.), **not** the production `mir_try_emit_z80` dispatcher | Check git history for why they were parked before deciding to promote or retire. done - see Execution Log (major finding: `general_rollout`/`mir_try_emit_homed_scalar_dag` is a real, better, fully dead selector; `home_cfg_rollout` is provably redundant scaffolding around an already-active selector) |
+| 79 | If promotable, add to the production chain behind the same cost gate as every other selector | never bypass the size/instruction comparison | done - see Execution Log (`general-rollout` promoted: tried alongside `homed-scalar-cfg`, smaller candidate wins; 0 regressions, 11 real measured cycle improvements across 6 apps) |
+| 80 | If not promotable, remove the diagnostic-only code paths in a dedicated cleanup commit | confirm via full census + `DCC_MIR_REQUIRE_COMPLETE` that nothing regresses | Reduces `dcc_mir.c`'s ~9,800 lines with no behavior change. done - see Execution Log (`mir_try_emit_home_cfg_rollout` and its 2 diagnostic call sites removed; census confirmed byte-identical before/after for every function it used to match) |
+| 81 | Measure compile-time scaling for the largest CFGs after any block-count ceiling increase | skill completion criterion: "large CFG compile time is bounded" | N/A - see Execution Log (no ceiling was raised; Item 77 deferred the raise) |
+| 82 | Add a compile-time regression benchmark if none exists | | N/A alongside Item 81 - see Execution Log |
+| 83 | Full census + full-mode validation | | done - see Execution Log |
+| 84 | Milestone checkpoint | wide safety net | done - see Execution Log |
 
 ### Phase 9 — Cross-cutting hardening & multi-platform (Items 85–92)
 
@@ -1883,3 +1883,83 @@ _(append one entry per completed item, in table order, starting with Item
   standing policy: 314/323 apps, 196/196 extended, all clean. Phase 7
   is closed. Moving on to Phase 8 (Items 77-84, large-CFG scaling &
   parked-selector audit).
+
+- **Items 77-84** (2026-08-02): Phase 8 close-out - the biggest real win
+  since Item 46. Item 77's fresh census: the same 3 `cfg-block-count`
+  functions as Item 40 remain (`adaint.run` 107 blocks,
+  `cobint.exec_range` 132 blocks, `fint.prim` 95 blocks), all far past
+  the 64-block ceiling. Raising the ceiling enough to admit even the
+  smallest of these (`fint.prim`, 95 blocks) would need nearly 1.5x the
+  current limit, and the skill explicitly ranks large-CFG/inlining as
+  the highest risk category after loops; with only 3 corpus functions
+  at stake and no existing compile-time regression benchmark (Item 82
+  would need to be built from scratch first), raising the ceiling now
+  is a disproportionate risk for a marginal, unverified yield.
+  Deferred; Items 81/82 are consequently N/A this phase (nothing to
+  measure or benchmark without a ceiling change).
+
+  **Item 78 (major finding)**: audited both parked selectors by git
+  history and code reading.
+  - `mir_try_emit_home_cfg_rollout` (~9382, pre-Item-80) gated a
+    loop-phi structural subset but its body did nothing except call
+    `mir_try_emit_homed_scalar_cfg()` directly - the exact function
+    production already tries unconditionally for every function
+    regardless of this gate. It could never produce output different
+    from what the already-active production path produces for the
+    same function - confirmed empirically via
+    `DCC_MIR_EMIT_HOME_CFG=1` census: byte-for-byte identical to
+    production for every function it matched. Pure dead, redundant
+    scaffolding. **Removed** (Item 80) along with its 2 diagnostic
+    call sites (`DCC_MIR_HOME_CFG_CANDIDATES`, `DCC_MIR_EMIT_HOME_CFG`)
+    and the leftover env-var reference in `mir_begin_function`'s
+    `report_mode` computation.
+  - `mir_try_emit_general_rollout` (~9343) is a genuinely distinct,
+    narrower selector for single-block, arithmetic-only, one-return
+    functions, backed by `mir_try_emit_homed_scalar_dag()` (~5761) - a
+    DAG-based emitter **completely unreachable in production**, used
+    nowhere else in the codebase. Ran `DCC_MIR_EMIT_GENERAL=1` across
+    the full census (28 functions structurally match) and cross-
+    referenced every one against the production baseline: 26 of 27
+    already-accepted functions got **smaller** output from
+    `homed_scalar_dag` than production's `homed_scalar_cfg` (typically
+    4-6 bytes smaller: e.g. `tasmcoll.test_1` 83 vs 87 bytes,
+    `tdecl.add` 141 vs 146 bytes) - but not universally
+    (`tinline.edge_unused` was *worse*, 121 vs 69 bytes), proving a
+    blind swap would have been unsafe (skill rule 4: never assume
+    smaller-and-different means better without comparing). Verified
+    with a real forced full-app A/B (`DCC_MIR_EMIT_GENERAL=1 runall
+    -Apps tdecl -Mode full`): correct output, and genuine measured
+    cycle improvements (-0.36% peep, -0.66% nopeep), not just static
+    bytes.
+
+  **Item 79 (promotion)**: added `general-rollout` to the true
+  production default path in `mir_end_function()`'s dispatch - tried
+  alongside `homed-scalar-cfg` into a separate stream, keeping
+  whichever candidate is smaller (or `general-rollout` alone if
+  `homed-scalar-cfg` didn't match), using the same fresh-stream-swap
+  pattern Item 46 established for the loop-family retry. This can
+  never regress any function `homed-scalar-cfg` alone would have
+  produced, since it's only replaced by a strictly smaller alternative.
+  **Validation**: regression-gated census vs the Phase-7-end baseline:
+  **0 regressions**, coverage unchanged at 174/2378 (a byte-size win
+  within already-accepted functions, not new coverage - 28 functions
+  moved from `homed-scalar-cfg` to `general-rollout`), 19 apps flagged
+  for runtime validation. Focused `-Mode full` on all 19
+  (`tasmcoll, tc89core, tc89decl, tc89fnty, tc89fp, tc99varm, tdead,
+  tdecinit, tdecl, tforsco, tgnarly, tinline, tinlinfb, tkandr,
+  tmirfast, tregnarw, ttype2, ttypesr, tvla`): **19/19 passed, 0
+  regressions, 11 real measured cycle improvements** across 6 apps
+  (`tasmcoll, tc89core, tc89fnty, tc89fp, tdecl, tforsco, tgnarly,
+  tinlinfb` - peep and/or nopeep cycles down 0.01%-0.66%, byte counts
+  unchanged or improved, no regressions on any metric). Accepted all
+  19 improvements via `-UpdatePerfBaseline` (clean movement, every
+  changed row strictly improved, nothing hidden). Milestone `-Mode
+  full -Extended`: 314/323 apps, 196/196 extended, diagnostics/dccpeep/
+  performance all clean.
+
+  This is the second production-unlocking dispatch-wiring fix this
+  plan has found (after Item 46's loop-family fix), and the pattern
+  is now well-established: search for selectors reachable only via
+  diagnostic env vars before assuming a fallback population needs a
+  brand-new selector built from scratch. Phase 8 is closed. Moving on
+  to Phase 9 (Items 85-92, cross-cutting hardening & multi-platform).

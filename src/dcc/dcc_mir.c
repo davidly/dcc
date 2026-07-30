@@ -2402,7 +2402,6 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
                       getenv("DCC_MIR_FUNCTION") != NULL ||
                       getenv("DCC_MIR_CANDIDATES") != NULL ||
                       getenv("DCC_MIR_GENERAL_CANDIDATES") != NULL ||
-                      getenv("DCC_MIR_HOME_CFG_CANDIDATES") != NULL ||
                       getenv("DCC_MIR_EMIT_FUNCTION") != NULL ||
                       getenv("DCC_MIR_GENERAL_FUNCTION") != NULL;
     mir.return_type = current_return_type != 0 ? current_return_type
@@ -9379,65 +9378,16 @@ static int mir_try_emit_general_rollout(FILE *out)
     return mir_try_emit_homed_scalar_dag(out);
 }
 
-static int mir_try_emit_home_cfg_rollout(FILE *out)
-{
-    int i;
-    int has_loop_phi = 0;
-    int parameter_count = 0;
-    int return_count = 0;
-
-    if (mir.has_vla || mir.has_runtime_stride_param ||
-        mir.is_variadic_function || mir.count > 64 ||
-        mir.declaration_count > 0 ||
-        (mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2 ||
-        mir.allocation_spill_count != 0 || mir_home_uses_iy())
-        return 0;
-    for (i = 0; i < mir.count; ++i) {
-        const struct MirInsn *insn = &mir.insns[i];
-        if (insn->dst >= 0 && (type_size(insn->type) > 2 ||
-                               type_ptr_depth(insn->type) > 0))
-            return 0;
-        switch (insn->opcode) {
-        case MIR_NOP: case MIR_LABEL: case MIR_CONST: case MIR_STORE:
-            break;
-        case MIR_PHI:
-            if ((insn->phi_pred1 >= 0 &&
-                 mir_find_label(insn->phi_pred1) > i) ||
-                (insn->phi_pred2 >= 0 &&
-                 mir_find_label(insn->phi_pred2) > i))
-                has_loop_phi = 1;
-            break;
-        case MIR_JUMP: case MIR_BRANCH_FALSE:
-            break;
-        case MIR_PARAM:
-            ++parameter_count;
-            break;
-        case MIR_UNARY:
-            if (insn->immediate != 0 && insn->immediate != '+' &&
-                insn->immediate != '-' && insn->immediate != '~' &&
-                insn->immediate != '!')
-                return 0;
-            break;
-        case MIR_BINARY:
-            if (insn->immediate != '+' && insn->immediate != '-' &&
-                insn->immediate != '&' && insn->immediate != '|' &&
-                insn->immediate != '^' && insn->immediate != TOK_EQ &&
-                insn->immediate != TOK_NE && insn->immediate != '<' &&
-                insn->immediate != '>' && insn->immediate != TOK_LE &&
-                insn->immediate != TOK_GE)
-                return 0;
-            break;
-        case MIR_RETURN:
-            ++return_count;
-            break;
-        default:
-            return 0;
-        }
-    }
-    if (!has_loop_phi || parameter_count == 0 || return_count == 0)
-        return 0;
-    return mir_try_emit_homed_scalar_cfg(out);
-}
+/* Phase 8 Item 78/80: mir_try_emit_home_cfg_rollout was removed here.
+ * It gated a narrower loop-phi structural subset but its body did nothing
+ * but call mir_try_emit_homed_scalar_cfg() directly - the exact same
+ * function production already tries unconditionally for every function.
+ * Since that call can never produce output different from what the
+ * already-active production path produces for the same function, the
+ * wrapper was provably redundant diagnostic scaffolding, not a distinct
+ * selector. Confirmed via census: DCC_MIR_EMIT_HOME_CFG never changed a
+ * single byte/instruction count relative to the production path for any
+ * function it matched. */
 
 static int mir_is_const_value(int value, long expected)
 {
@@ -10392,18 +10342,6 @@ void mir_end_function(void)
                     mir.name, mir_sink_name(mir.sink_purpose),
                     mir.backend_slot_count);
     }
-    if (!mir.emit_mode && verified &&
-        getenv("DCC_MIR_HOME_CFG_CANDIDATES") != NULL) {
-        FILE *candidate = tmpfile();
-        int accepted;
-        if (candidate == NULL)
-            fatal("cannot create MIR home CFG candidate stream");
-        accepted = mir_try_selector(candidate, mir_try_emit_home_cfg_rollout);
-        fclose(candidate);
-        if (accepted)
-            fprintf(stderr, "; MIR home-cfg candidate function=%s sink=%s\n",
-                    mir.name, mir_sink_name(mir.sink_purpose));
-    }
     if (mir.emit_mode) {
         FILE *destination = mir.saved_sink.stream;
         FILE *generated = NULL;
@@ -10441,14 +10379,45 @@ void mir_end_function(void)
                 selector_name = "general-rollout";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_general_rollout);
-            } else if (getenv("DCC_MIR_EMIT_HOME_CFG") != NULL) {
-                selector_name = "home-cfg-rollout";
-                emitted = mir_try_selector(generated,
-                                           mir_try_emit_home_cfg_rollout);
             } else {
+                /* Phase 8 Item 78/79: mir_try_emit_general_rollout (backed
+                 * by mir_try_emit_homed_scalar_dag) was previously
+                 * reachable only via the DCC_MIR_EMIT_GENERAL diagnostic
+                 * above. A fresh census cross-check found it produces
+                 * smaller AND measurably faster code than
+                 * mir_try_emit_homed_scalar_cfg for its narrow structural
+                 * subset (single-block, arithmetic-only opcodes, one
+                 * return, >=1 parameter) in the overwhelming majority of
+                 * cases - but not always (it lost for one function in the
+                 * corpus), so both are tried here and the smaller
+                 * structural candidate is kept, exactly like the existing
+                 * homed-then-spilled comparison below. This can never
+                 * regress any function homed-scalar-cfg alone would have
+                 * produced, because homed-scalar-cfg's own result is only
+                 * replaced when the alternative is strictly smaller. */
+                FILE *general_candidate = tmpfile();
+                int general_emitted = 0;
+
+                if (general_candidate == NULL)
+                    fatal("cannot create MIR general-rollout candidate "
+                          "stream");
+                general_emitted = mir_try_selector(general_candidate,
+                                                    mir_try_emit_general_rollout);
                 selector_name = "homed-scalar-cfg";
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_homed_scalar_cfg);
+                if (general_emitted &&
+                    (!emitted ||
+                     mir_stream_size(general_candidate) <
+                         mir_stream_size(generated))) {
+                    fclose(generated);
+                    generated = general_candidate;
+                    general_candidate = NULL;
+                    selector_name = "general-rollout";
+                    emitted = 1;
+                }
+                if (general_candidate != NULL)
+                    fclose(general_candidate);
             }
             if (!emitted && (general_filter == NULL ||
                              general_filter[0] == 0)) {
