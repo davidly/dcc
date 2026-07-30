@@ -171,3 +171,60 @@ evidence, commit hash.)
   speed-up measures above. Commits `143f587` (`-FailFast`), `1ce33a9`
   (parallel census). Both verified with a full `-Mode full -Extended` run
   (314/314 + 196/196, 0 regressions) before pushing.
+
+- **Items 1-2 (investigation only, no code change)**: fresh full census
+  confirmed coverage unchanged at 174/2378 (7.32%) since this plan's
+  baseline; re-bucketing the `text-size` fallback gap reconfirmed
+  Plan-100's finding that the population is uniformly ~2x over cost (98%
+  byte-gap >64, 95.6% instruction-gap >4), not near-miss. Forced-accept
+  diffs of representative shapes (`tests/tret.c` trivial returns,
+  `tests/tmirfuse.c`'s `nseq`/`nsne`/`nult`/`nuge` whole-function compare
+  shape) found that SKILL.md's "Known root cause" section describing an
+  unfixed `mir_emit_scalar_compare` double-materialization bug is **stale**:
+  code comments citing Plan-100 Items 1/4/25/27 show
+  `mir_binary_is_fusable_comparison` + `mir_emit_fused_comparison_branch`
+  already fixed this during Plan-100, and direct inspection of `nseq`
+  confirmed it works correctly. The actual waste found in `nseq`'s output
+  was a genuinely new bug: a duplicate/dead trailing epilogue (see Item 3).
+  This plan's original Items 3-4 (targeting the already-fixed compare bug)
+  are superseded; Item 3 below documents the pivot. SKILL.md's stale
+  section should be corrected in a follow-up documentation commit.
+
+- **Item 3: dead trailing-epilogue deduplication in
+  `mir_try_emit_spilled_scalar_cfg`**. `mir_try_emit_spilled_scalar_cfg`
+  (the largest selector, 2253 functions) unconditionally called
+  `mir_emit_virtual_iy_epilogue(out)` again after its main instruction
+  loop, even when the function's last IR instruction was `MIR_RETURN`
+  (whose own case already emits the epilogue) - producing dead,
+  unreachable `ld sp,ix / pop ix / ret` after every return-terminated
+  function through this selector. Fixed by skipping the trailing call when
+  `mir.insns[mir.count - 1].opcode == MIR_RETURN`.
+  A naive version of this fix (skip only, no gate compensation) raised
+  coverage 174 -> 180 with a clean census delta, but the SKILL.md-mandated
+  focused `-Mode full` run exposed 3 real regressions
+  (`tmirslot.dead_store_elision`, and 2 of 3
+  `tvla.vla_sizeof_op_{add,mullhs,sub}` combined) - the byte savings from
+  deduplication tipped these already-marginal functions over the
+  acceptance gate, exposing a pre-existing, unrelated MIR
+  parameter-homing inefficiency (a single-use parameter is homed to a
+  local stack slot and reloaded instead of reused directly from its
+  incoming `ix` offset) that the gate's static text-size proxy could not
+  see as a real regression. Rather than fix that separate inefficiency or
+  add a function-name exception (forbidden by skill rule 6), the fix was
+  changed to decouple emission from the gate: a new
+  `mir_spilled_scalar_cfg_elided_epilogue_bytes` global records the
+  elided epilogue's text length (measured via `fmemopen`, since
+  `mir_emit_virtual_iy_epilogue` only reads module globals and has no
+  side effect beyond writing text) whenever the dedup applies, and the
+  acceptance-gate's `generated_size` computation adds this back for the
+  `spilled-scalar-cfg` selector before the accept/reject comparison -
+  restoring the exact pre-fix gate outcome while leaving the real emitted
+  text deduplicated for every function already accepted independently.
+  Verified: full census with `--compare` against the pre-fix baseline
+  shows exactly 0 newly-emitted and 0 no-longer-emitted functions
+  (174/2378 unchanged); the focused validation
+  (`tbool,tc89size,tstrconv,tvla -Mode full`) now shows 0 regressions and
+  4 improvements (`tstrconv` -0.1% cycles/-1.06% bytes peep,
+  `tvla` -0.43% bytes peep); full `-Mode full -Extended` passed 314/314 +
+  196/196. This is a pure dead-code-removal win with no behavioral or
+  gate-decision change. Commit `<pending>`.

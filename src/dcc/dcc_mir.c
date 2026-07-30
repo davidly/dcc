@@ -6972,6 +6972,28 @@ static int mir_binary_is_fusable_comparison(int i);
 static int mir_fuse_report_fused_count;
 static int mir_fuse_report_materialized_count;
 
+/* mir-migration-plan-next10 Item 3: mir_try_emit_spilled_scalar_cfg no
+ * longer emits a second, unreachable copy of the function epilogue after a
+ * function whose last IR instruction is already a MIR_RETURN (that case's
+ * own emission already wrote one). That is a pure win for every function
+ * already accepted through this selector - real dead code, never executed,
+ * removed. But letting the resulting few saved bytes decide accept/reject
+ * for a function that was NOT already accepted before this fix would widen
+ * the acceptance gate as an unreviewed side effect of a dead-code cleanup,
+ * which is exactly what skill rule 1 warns against ("never widen a fallback
+ * gate without identifying the exact affected functions first"). Measured:
+ * of 6 functions this fix newly promoted, 3 (tmirslot's dead_store_elision,
+ * tvla's vla_sizeof_op_add/mullhs/sub) showed real cycle/byte regressions in
+ * -Mode full despite passing the static cost gate - the byte savings here
+ * is exactly the kind of static-metric improvement skill rule 4 warns is not
+ * proof of real speed/size. So: the accept/reject gate below adds this
+ * elided text back to `generated_size` before comparing against
+ * `captured_size` (restoring the exact pre-fix gate outcome, and therefore
+ * the exact pre-fix accepted-function set), while the function's real,
+ * already-deduplicated emitted text is what actually gets written for any
+ * function that clears the gate on its own unrelated merits. */
+static long mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
+
 /* Item 8 (mir-migration-plan-100): when set, mir_prepare_backend_slots must
  * not allocate a frame slot for a comparison result (or intervening '!'
  * result) that mir_try_emit_spilled_scalar_cfg's Items 1/4 fusion consumes
@@ -8165,6 +8187,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int i;
     int accepted = 0;
 
+    mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
@@ -9324,7 +9347,36 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 goto done;
         }
     }
-    mir_emit_virtual_iy_epilogue(out);
+    /* mir-migration-plan-next10 Item 3: MIR_RETURN's own case (above) already
+     * emits the function epilogue before its `break`. If the function's very
+     * last IR instruction was a MIR_RETURN, that epilogue was already
+     * written and this unconditional trailing call would duplicate it
+     * (dead, unreachable "ld sp,ix / pop ix / ret" after the real return) -
+     * every function using this selector paid for this every time. Only
+     * emit it here for the true fall-off-the-end case, i.e. when the last
+     * instruction was something else (a label, a jump target, etc.). */
+    if (mir.count == 0 || mir.insns[mir.count - 1].opcode != MIR_RETURN) {
+        mir_emit_virtual_iy_epilogue(out);
+    } else {
+        /* mir-migration-plan-next10 Item 3: the duplicate epilogue this
+         * skips would have been counted in generated_size before this
+         * fix. Measure its exact text length into a scratch buffer (the
+         * epilogue text depends only on module globals, not on `out`,
+         * so this has no side effect) and record it so the acceptance
+         * gate's cost comparison is unaffected by this dead-code removal
+         * - only the real emitted text shrinks, not the accept/reject
+         * decision (skill rule 1: never widen a fallback gate as a side
+         * effect of an unrelated fix). */
+        char elided_buf[128];
+        FILE *elided_scratch = fmemopen(elided_buf, sizeof(elided_buf), "w");
+        if (elided_scratch != NULL) {
+            mir_emit_virtual_iy_epilogue(elided_scratch);
+            fflush(elided_scratch);
+            mir_spilled_scalar_cfg_elided_epilogue_bytes =
+                (int)ftell(elided_scratch);
+            fclose(elided_scratch);
+        }
+    }
     accepted = 1;
 done:
     if (getenv("DCC_MIR_FUSE_REPORT") != NULL &&
@@ -10440,6 +10492,18 @@ void mir_end_function(void)
             }
             if (emitted) {
                 generated_size = mir_stream_size(generated);
+                if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                    mir_spilled_scalar_cfg_elided_epilogue_bytes > 0 &&
+                    generated_size >= 0)
+                    /* mir-migration-plan-next10 Item 3: restore the byte
+                     * count the acceptance gate would have seen before the
+                     * dead trailing epilogue was deduplicated, so this
+                     * unrelated dead-code removal cannot newly promote a
+                     * function that only cleared the gate because of its
+                     * savings (skill rule 1). The real emitted stream
+                     * `generated` is left untouched and still
+                     * deduplicated. */
+                    generated_size += mir_spilled_scalar_cfg_elided_epilogue_bytes;
                 captured_size = mir_stream_size(mir.capture_stream);
                 generated_instructions = mir_stream_instruction_count(generated);
                 captured_instructions =
