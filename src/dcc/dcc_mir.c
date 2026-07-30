@@ -2159,17 +2159,16 @@ static void mir_lower_stmt(const struct AstNode *node)
         insn->src1 = condition;
         insn->label = else_label;
         /* Only an if/else has a genuine two-predecessor join at end_label
-         * below; a bare if with no else has nothing to merge (the then-arm
-         * either returns or falls straight into else_label, which is
-         * already labeled). Labeling the then-arm unconditionally was tried
-         * and measured to add real Z80 bytes to the plain-if shape (it
-         * perturbs narrow whole-function selectors that expect exactly two
-         * blocks), so this label is scoped to the if/else case only, where
-         * it gives mir_try_make_object_phi() a physical predecessor
-         * identity for the join: without it, an object stored identically
-         * from both arms of an if/else can never be recognized as a safe
-         * reuse, because mir_block_label_before() requires a real label on
-         * every predecessor block. */
+         * below; a bare if with no else has nothing to merge there (the
+         * then-arm either returns or falls straight into else_label, which
+         * is already labeled) - Item 39 tried extending this label to the
+         * bare-if/fallthrough case too and deferred it, see the Execution
+         * Log. Scoped to the if/else case only, this label gives
+         * mir_try_make_object_phi() a physical predecessor identity for the
+         * join: without it, an object stored identically from both arms of
+         * an if/else can never be recognized as a safe reuse, because
+         * mir_block_label_before() requires a real label on every
+         * predecessor block. */
         if (node->c != NULL) {
             then_label = mir_new_label();
             mir_emit_label(then_label);

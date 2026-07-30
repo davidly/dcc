@@ -260,7 +260,7 @@ its live range never needs it.
 | 36 | Generalize to transitive jump-to-jump chains | bound iteration to avoid cyclic label chains | done - see Execution Log |
 | 37 | Remove a `MIR_LABEL` with zero remaining predecessors after Items 35–36 | | deferred - see Execution Log (breaks object-phi promotion's block-identity lookup) |
 | 38 | Reuse an already-live value across a two-predecessor join when both predecessors define it identically, instead of spilling | build on the loop-header object-phi work already landed (commits `6144885`, `1ffeb1e`, `729bc11`) | done - see Execution Log |
-| 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | |
+| 39 | Extend Item 38 to a join where only one predecessor differs and the other is a plain fallthrough | | deferred - see Execution Log (real byte-cost win, but an asymmetric-branch-cost runtime regression a static gate can't catch) |
 | 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | Mandatory re-scoping step before Phase 5. |
 | 41 | Add `DCC_MIR_PHI_REPORT=1`: phi-join reuse hits/misses | | |
 | 42 | Add `tests/tmircfgshape.c`: nested if/else value joins + loop continue-block collapsing, clang baseline | | |
@@ -1417,4 +1417,99 @@ _(append one entry per completed item, in table order, starting with Item
   diff, all decreases, no byte increases). Milestone `-Mode full
   -Extended`: 313/322 apps, 196/196 extended, diagnostics/dccpeep/
   performance all clean.
+
+- **Item 39** (2026-08-02): **deferred - real static win, but a
+  measured runtime regression a byte/instruction-count gate can't
+  safely catch.** Extended Item 38's then-arm labeling to the bare
+  `if (cond) { ... }` case with no `else` - the then-arm still falls
+  straight through into `else_label` (which is already the join point
+  there), so this is structurally the same missing-predecessor-identity
+  gap Item 38 fixed for if/else, just with the fallthrough arm playing
+  the role of the second predecessor instead of a real else-arm.
+  Confirmed empirically first: a synthetic `bump` (`int y = a; if (cond)
+  y = a + 1; return y * 2;`) showed the same `state=-2` stuck-ambiguous
+  symptom Item 38 found, for the same `mir_block_label_before()` reason.
+
+  First tried labeling every bare `if` unconditionally. This reproduced
+  Item 38's exact `tlongopt.br_lt_hex_u`/`br_ult_hex_u` regression
+  (`if (x < 0xffff) return 1; return 0;`, which never reaches any join
+  at all): 191 -> 197 bytes, fallback. Suspected `mir_cfg_block_count()`
+  itself was the selector's real gate (it backs several exact-match
+  whole-function shape checks, e.g. `== 7`, `== 4`, and cost heuristics
+  like `<= 2 ? 2 : 1`), so tried making it "live-label-aware" - only
+  counting labels with a real incoming jump or phi-predecessor
+  reference, ignoring dead ones. This was a bigger mistake than it
+  looked: every function's own entry label is *always* "dead" by this
+  definition (nothing inside a function ever jumps back to its own
+  entry), so this change silently dropped the block count of every
+  straight-line function by 1, breaking the `== 1`/single-basic-block
+  cost-exception checks used throughout the selector set. Census caught
+  it immediately: 13 previously-accepted functions regressed to
+  fallback, a net -9 coverage swing versus Item 38's state. Reverted
+  `mir_cfg_block_count()` back to its original plain definition and
+  confirmed via census that this alone was not the fix - `tlongopt`
+  still regressed with the label always present. Root cause was
+  narrower and more architectural than a block-count gate: the
+  register-homing emitter itself conservatively treats crossing *any*
+  `MIR_LABEL` (dead or live) as an unknown-register-state boundary
+  requiring extra reload/preserve overhead, independent of whether
+  anything actually jumps there.
+
+  Added a narrow, false-favoring `mir_stmt_always_returns()` syntactic
+  check (recognizes `AST_RETURN` directly, an `AST_COMPOUND` ending in
+  one, and `AST_IF`/`else` where both branches always return; anything
+  else - loops, switch, goto, break/continue - is conservatively treated
+  as "may fall through", so this only ever wastes an unused label, never
+  skips a needed one) and gated the then-arm label on
+  `!mir_stmt_always_returns(node->b)`. This fixed `tlongopt`: both
+  `bump`'s phi now formed correctly, and `br_lt_hex_u`/`br_ult_hex_u`
+  were back to 191 bytes/accepted, since the then-arm there always
+  returns and the label got skipped.
+
+  Ran the full regression-gated census: clean, 0 regressions, coverage
+  173/2371 -> 175/2371 (+2: `tc99scpe.conditional_decl`,
+  `tc99scpe.if_body_decl`, `tinlnpar.clamp_low`), 216 apps with census
+  changes, 12 apps needing runtime validation. Focused `-Mode full` on
+  those 12 plus `tifcom`, `tlongopt`, `tphi`, `tmircfg`, `tdead`: all
+  17/17 passed correctness, but 2 performance regressions surfaced -
+  `tinlnpar` +0.53% peep cycles / +0.52% nopeep cycles (19128 -> 19229,
+  19372 -> 19473). Root-caused to `tinlnpar.clamp_low` (`if (cond)
+  idx = 0; return idx + 1;` - exactly this item's target shape), newly
+  MIR-accepted by this fix. Confirmed via forced A/B
+  (`DCC_MIR_FORCE_ACCEPT_FUNCTION=clamp_low` vs
+  `DCC_MIR_FORCE_FALLBACK_FUNCTION=clamp_low`) that the MIR version is
+  genuinely slower at runtime, despite having fewer static bytes/
+  instructions than the legacy version it replaced - a direct instance
+  of SKILL rule #4 ("a smaller assembly-text stream or instruction count
+  is not proof of faster or smaller Z80 code").
+
+  Hand-disassembled both versions and computed Z80 T-state costs for
+  both branch outcomes: the two approaches are asymmetric, not
+  uniformly better or worse - MIR is faster on the `cond` **true**
+  (`idx = 0`) path (166 vs legacy 204 T-states) but slower on the
+  **false** (`idx` unchanged) path (187 vs legacy 149 T-states). For
+  `tinlnpar`'s exact call pattern (`clamp_low(1,5)` then
+  `clamp_low(0,5)`, one call of each outcome), the hand-computed totals
+  came out exactly equal (353 T-states either way) - yet the measured
+  runtime still showed a real, reproducible regression, meaning either
+  an uncounted cost exists (e.g. prologue/epilogue/frame differences
+  between the two emitted shapes) or some other subtlety wasn't
+  captured by the by-hand model. Either way, this is a genuine
+  cost-modeling gap: a single aggregate byte/instruction-count gate
+  cannot safely predict runtime cost for a phi-join shape whose two
+  incoming branches have asymmetric costs, and no cheap structural
+  predicate found here closes that gap.
+
+  Reverted this item's code back to exactly Item 38's committed shape
+  (label scoped to `node->c != NULL` only; removed the now-unused
+  `mir_stmt_always_returns()` helper) - confirmed via `git diff` that
+  `src/dcc/dcc_mir.c` matches the `d654327` commit exactly, and via a
+  fresh census against `build/item38-before.tsv` that behavior is back
+  to Item 38's exact post-state (173/2371 coverage, same 72-app delta).
+  Deferring rather than shipping a measured regression, in the same
+  spirit as Items 6/37: a real fix for the bare-if/fallthrough join case
+  needs either a genuine cycle-cost model for phi-containing candidates
+  or per-branch-outcome profiling, not a single static byte/instruction
+  gate - that is future work beyond this item's "smallest reusable
+  edit" scope. Moving on to Item 40.
 
