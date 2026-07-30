@@ -10525,6 +10525,58 @@ void mir_end_function(void)
                              generated_size, captured_size,
                              generated_instructions, captured_instructions))
                     fallback_reason = "cfg-backedge";
+                /* Phase 5 Item 46: homed/spilled-scalar-cfg already passed
+                 * every other cost gate above - the *only* reason this
+                 * candidate is about to fall back is the generic backedge
+                 * veto. The specialized loop selectors below exist
+                 * precisely to hand-verify specific backedge shapes as
+                 * safe; since conceding to legacy output is the only other
+                 * option at this point, retry them here before giving up.
+                 * This can never affect any function homed/spilled-scalar-
+                 * cfg would otherwise accept outright, because
+                 * fallback_reason only ever reaches exactly
+                 * "cfg-backedge" once every earlier gate has already
+                 * passed for the original candidate. */
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "cfg-backedge") &&
+                    (mir.return_type & 15) == TYPE_INT) {
+                    FILE *loop_candidate = tmpfile();
+                    if (loop_candidate == NULL)
+                        fatal("cannot create MIR loop-selector candidate "
+                              "stream");
+                    if (mir_try_selector(loop_candidate,
+                                         mir_try_emit_accumulator_loop) ||
+                        mir_try_selector(loop_candidate,
+                                         mir_try_emit_unsigned_division_loop) ||
+                        mir_try_selector(
+                            loop_candidate,
+                            mir_try_emit_repeated_invariant_add_loop) ||
+                        mir_try_selector(loop_candidate,
+                                         mir_try_emit_countdown_loop)) {
+                        long loop_size = mir_stream_size(loop_candidate);
+                        int loop_instructions =
+                            mir_stream_instruction_count(loop_candidate);
+                        if (loop_size >= 0 && loop_instructions >= 0 &&
+                            !(loop_size > captured_size + 1 &&
+                              !mir_is_profiled_near_cost_single_block(
+                                  loop_size, captured_size,
+                                  loop_instructions, captured_instructions) &&
+                              !mir_is_byte_profitable_single_block(
+                                  loop_size, captured_size,
+                                  loop_instructions,
+                                  captured_instructions))) {
+                            fclose(generated);
+                            generated = loop_candidate;
+                            loop_candidate = NULL;
+                            selector_name = "loop-family";
+                            generated_size = loop_size;
+                            generated_instructions = loop_instructions;
+                            fallback_reason = NULL;
+                        }
+                    }
+                    if (loop_candidate != NULL)
+                        fclose(loop_candidate);
+                }
                 {
                     const char *forced_accept =
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");

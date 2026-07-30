@@ -274,8 +274,8 @@ Skill risk ordering places loops/backedges above only large-CFG/inlining
 
 | # | Title | Discriminator | Notes |
 |---|---|---|---|
-| 45 | Re-scope: which functions still fail on `cfg-backedge` after Phases 1–4 | mandatory fresh census, not the old count | |
-| 46 | Generalize `mir_try_emit_countdown_loop` to a runtime bound already resident in a parameter/local | | |
+| 45 | Re-scope: which functions still fail on `cfg-backedge` after Phases 1–4 | mandatory fresh census, not the old count | Done - major finding: the 4 loop selectors were dead code in production (dispatch-wiring gap, not selector quality) |
+| 46 | Generalize `mir_try_emit_countdown_loop` to a runtime bound already resident in a parameter/local | | Done (reframed) - fixed the dispatch-wiring gap itself: retry the 4 existing loop selectors when `cfg-backedge` is the only blocking reason. `bcd_div10` now MIR-accepted (matched `mir_try_emit_unsigned_division_loop` exactly, no generalization needed). `lres`/`loop_header_phi` still fall back - different, larger gaps (SC_LOCAL loop var, ascending-counter-vs-parameter-bound shape) deferred to later items |
 | 47 | Generalize `mir_try_emit_accumulator_loop` to more than one independently BC/DE/IY-allocatable accumulator | | |
 | 48 | Extend `mir_try_emit_unsigned_division_loop` to the signed case | if the re-scoped census shows a signed-loop fallback family | |
 | 49 | Verify the specialized loop selectors don't duplicate the materialize-then-retest comparison bug fixed in Phase 1 | | |
@@ -1631,3 +1631,82 @@ _(append one entry per completed item, in table order, starting with Item
   5 (Items 45-56, loop competitiveness generalization - flagged in the
   plan as needing the most caution) has not yet been started.
 
+
+- **Item 45** (2026-08-02): Mandatory re-scoping census before Phase 5.
+  Fresh census vs `build/phase3-before.tsv`: 3 functions still fail on
+  `cfg-backedge` - `tcrcfix.bcd_div10`, `tphijoin.loop_header_phi` (new,
+  from our own Item 42 fixture), `tregnarw.lres`. Confirmed Items
+  35/36/38 did not shift any of these (same set as Item 40's earlier
+  snapshot, plus the new fixture function). **Major discovery, made by
+  reading `mir_end_function()`'s dispatch cascade carefully**: the 4
+  specialized loop selectors (`mir_try_emit_countdown_loop`,
+  `mir_try_emit_accumulator_loop`, `mir_try_emit_unsigned_division_loop`,
+  `mir_try_emit_repeated_invariant_add_loop`) are called *only* from
+  `mir_try_emit_z80()`, which is itself reachable *only* via the
+  diagnostic `DCC_MIR_CANDIDATES`/`DCC_MIR_EMIT_FUNCTION` env-var
+  overrides - never from production's default dispatch path. Verified
+  three independent ways: (a) code reading of the cascade in
+  `mir_end_function`, showing the production `else` branch only ever
+  tries `homed-scalar-cfg` then `spilled-scalar-cfg`; (b) empirically,
+  `DCC_MIR_EMIT_FUNCTION=bcd_div10` still fell back identically, because
+  `mir_try_emit_z80()`'s own internal ordering tries `homed-scalar-cfg`
+  FIRST and that succeeds structurally before ever reaching the loop
+  selectors; (c) a census-wide selector-name distribution across all
+  2378 functions showing zero occurrences of any loop-family selector
+  name (only `homed-scalar-cfg`/`spilled-scalar-cfg`/`selector`
+  appeared). This reframes Phase 5 entirely: Items 46-48 as originally
+  scoped (generalizing the loop selectors' structural coverage) would
+  have had zero production effect until the dispatch-wiring gap itself
+  is fixed - the selectors were fully correct but unreachable. Folded
+  into Item 46's fix below rather than committed standalone.
+
+- **Item 46** (2026-08-02): Reframed from "generalize
+  `mir_try_emit_countdown_loop`" to "fix the dispatch-wiring gap Item 45
+  found" - generalizing dead code first would have been wasted work.
+  **Fix**: in `mir_end_function()`, when the fallback-reason cascade
+  computes exactly `"cfg-backedge"` (meaning every earlier cost gate -
+  `text-size`, `instruction-count`, `cfg-block-count`,
+  `inline-substitution`, `pointer-array` - already passed for the
+  homed/spilled candidate) and the function returns `TYPE_INT`, retry
+  the 4 specialized loop selectors into a fresh stream, in
+  `mir_try_emit_z80`'s exact priority order (accumulator ->
+  unsigned-division -> repeated-invariant-add -> countdown). If one
+  structurally matches, apply the same near-cost/byte-profitability
+  checks (explicitly excluding the `cfg-backedge` veto itself, since
+  matching one of these hand-verified structural selectors is the proof
+  of safety for that specific loop shape) and swap it in as the accepted
+  candidate. This can never affect any function homed/spilled-scalar-cfg
+  would otherwise accept outright - it only activates when the *only*
+  remaining objection is the generic backedge veto and the alternative
+  is legacy fallback anyway. **Result**: `tcrcfix.bcd_div10` (repeated-
+  subtraction unsigned division loop) now matches
+  `mir_try_emit_unsigned_division_loop` exactly with no generalization
+  needed - the selector was already correct, only unreachable. `lres`
+  still falls back as predicted: it takes no parameters at all, so none
+  of the 4 selectors' `SC_PARAM`-storage requirement for the loop
+  counter is met (a separate, deferred generalization - accepting
+  `SC_LOCAL`-storage loop variables whose only reaching value is a
+  constant at function entry). `loop_header_phi` (our own `tphijoin.c`
+  fixture, `for(i=1;i<=n;i=i+1) total+=i;`) also still falls back as
+  expected: `n` is only a comparison bound, never itself the decrementing
+  counter - none of the 4 selectors target an ascending-counter-vs-
+  parameter-bound shape (they all require the parameter itself to BE the
+  counter, counting toward zero). Both are distinct, larger structural
+  gaps left for later items, not this one's scope. **Validation**:
+  regression-gated census vs `build/phase3-before.tsv`: **0
+  regressions**, coverage 173/2378 -> 174/2378 (+1: `tcrcfix.bcd_div10`),
+  only `tcrcfix` app affected. Focused `-Mode full` on `tcrcfix`: passed,
+  with real measured cycle improvements (not just static bytes):
+  -5.75% peep cycles (234962 -> 221446), -7.95% nopeep cycles (268864 ->
+  247494), -1.22% peep bytes (10496 -> 10368), nopeep bytes unchanged
+  (11136). A forced-fallback A/B sanity check
+  (`DCC_MIR_FORCE_FALLBACK_FUNCTION=bcd_div10`) also passed cleanly,
+  confirming correctness either way. Accepted the verified improvement
+  via `-UpdatePerfBaseline` (clean single-row movement, all metrics
+  improved, no regressions). Milestone `-Mode full -Extended`: 314/323
+  apps passed (9 skipped as expected), 196/196 extended, diagnostics/
+  dccpeep/performance all clean. This is the first time any of the 4
+  specialized loop selectors have ever produced live production Z80
+  code. Moving on to Item 47, which (per Item 45's discovery) should be
+  re-evaluated for real production reachability now that the dispatch
+  gap is fixed, rather than assumed still-relevant as originally scoped.
