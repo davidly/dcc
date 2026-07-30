@@ -264,8 +264,8 @@ its live range never needs it.
 | 40 | Re-run the fresh census after Items 35–39 to see whether `cfg-block-count`/`cfg-backedge` fallbacks move to accepted purely from lower block counts | | done - see Execution Log (no change; same 5 functions remain fallback) |
 | 41 | Add `DCC_MIR_PHI_REPORT=1`: phi-join reuse hits/misses | | done - see Execution Log |
 | 42 | Add `tests/tmircfgshape.c`: nested if/else value joins + loop continue-block collapsing, clang baseline | | done - see Execution Log (file named `tests/tphijoin.c`; CP/M 8.3 name limit) |
-| 43 | Full census + full-mode validation | | |
-| 44 | Milestone checkpoint | wide safety net | |
+| 43 | Full census + full-mode validation | | done - see Execution Log |
+| 44 | Milestone checkpoint | wide safety net | done - see Execution Log (Phase 4 complete) |
 
 ### Phase 5 — Loop competitiveness generalization (Items 45–56)
 
@@ -1587,4 +1587,47 @@ _(append one entry per completed item, in table order, starting with Item
   (9 skipped as expected, +1 app vs Item 41's count for the new
   fixture), 196/196 extended, diagnostics/dccpeep/performance all
   clean. Moving on to Item 43.
+
+- **Item 43** (2026-08-02): Full census vs `build/phase3-before.tsv`
+  (the true pre-Phase-4 baseline, predating Items 25-42): **0
+  regressions**, coverage 165/2319 (7.12%) -> 173/2378 (7.28%, +8
+  functions vs the phase's start; 7 of the 2378 total are new functions
+  from Item 42's `tphijoin.c` fixture itself), 2 newly MIR-emitted
+  (`tc99scpe.conditional_decl`, `tmirfast.side_effect`), 0 no-longer-
+  emitted, 167 apps with census metric changes, 9 apps flagged for
+  runtime validation. Focused `-Mode full` on all 9
+  (`cint, tc99scpe, tdead, tesc, tmirfast, tscanf, tsprintf, tstr3,
+  tsyntax`): 9/9 passed, 0 regressions.
+
+- **Item 44** (2026-08-02): Phase 4 milestone checkpoint. **Phase 4
+  summary (Items 35-44):** coverage moved 172/2371 (7.25%) -> 173/2378
+  (7.28%) across the phase (net +1 MIR-accepted function, plus 7 new
+  functions from the phase's own regression fixture). Landed: Item 35
+  (jump-to-jump collapse via `mir_thread_jumps()`, `ca4cf6b`), Item 36
+  (transitive jump-chain generalization, bounded iteration, `d0bab33`),
+  Item 38 (if/else then-arm labeling enabling object-phi reuse across
+  two-predecessor joins, `d654327`), Item 40 (re-scoping census
+  confirming Items 35/36/38 did not shift any
+  `cfg-block-count`/`cfg-backedge` fallback to accepted), Item 41
+  (`DCC_MIR_PHI_REPORT=1` diagnostic), Item 42 (permanent regression
+  fixture `tests/tphijoin.c`), and this item's full-corpus close-out.
+  Deferred with documented rationale (same Item-6-level caution bar):
+  Item 37 (removing zero-predecessor labels after Items 35/36 - breaks
+  object-phi promotion's block-identity lookup for still-relevant
+  loop-latch labels with zero *incoming-jump* references but a real
+  outgoing edge) and Item 39 (extending Item 38's fix to a bare-if/no-
+  else fallthrough join - fixed the static-byte regression it first
+  reintroduced from Item 38's history, but then exposed a genuine,
+  asymmetric-branch-cost runtime regression, `tinlnpar.clamp_low`, that
+  a static byte/instruction gate cannot safely catch). The dominant
+  theme this phase, echoed across Items 37/38/39: `mir_promote_objects()`
+  /`mir_try_make_object_phi()` is a real, general dataflow pass whose
+  only practical blocker is *label-based predecessor identity*, not
+  semantic ambiguity - every remaining gap in this area is really "does
+  this block have a stable, physical label" rather than "can the
+  compiler prove these values agree." Milestone `-Mode full -Extended`:
+  314/323 apps passed (9 skipped as expected), 196/196 extended,
+  diagnostics/dccpeep/performance all clean. Phase 4 is complete; Phase
+  5 (Items 45-56, loop competitiveness generalization - flagged in the
+  plan as needing the most caution) has not yet been started.
 
