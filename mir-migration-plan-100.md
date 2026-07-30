@@ -229,8 +229,8 @@ its live range never needs it.
 | 15 | Extend Item 13 across a `MIR_LABEL` with exactly one predecessor (textually split but structurally straight-line) | done | see Execution Log |
 | 16 | Eliminate the `check_s`-class dead store: a slot written but never read again anywhere in the function | evidence: second spill in the `check_s` case study, which `dccpeep`'s same-block reload pass cannot see | verified already satisfied |
 | 17 | Generalize Item 16 with a per-object backward-liveness pass over the whole function | reuse the Items 11/12 (dead promoted-local stores) liveness infra as a model | verified already satisfied |
-| 18 | Audit `mir_emit_spilled_phi_copies` for copies into a slot Items 13–17 already proved dead on all live incoming edges | | |
-| 19 | Ensure slot-count *accounting* (`mir_prepare_backend_slots`) and the real emission-time skip decision share one predicate function | repo lesson: drift between an accounting pass and the real emission path previously caused a stack-corruption bug (Item 16 divisor/dividend work, documented in perf-optimization memory) | High caution item. |
+| 18 | Audit `mir_emit_spilled_phi_copies` for copies into a slot Items 13–17 already proved dead on all live incoming edges | | verified already satisfied |
+| 19 | Ensure slot-count *accounting* (`mir_prepare_backend_slots`) and the real emission-time skip decision share one predicate function | repo lesson: drift between an accounting pass and the real emission path previously caused a stack-corruption bug (Item 16 divisor/dividend work, documented in perf-optimization memory) | High caution item. Audited, no code change. |
 | 20 | Add `DCC_MIR_SLOT_REPORT=1`: slots requested vs. slots still read, per function | | Finds remaining low-hanging cases. |
 | 21 | Add `tests/tmirslot.c`: immediate-use, cross-call, cross-label, and dead-store elision cases, clang baseline | | |
 | 22 | Full census + full-mode validation of every changed app | | |
@@ -789,6 +789,30 @@ _(append one entry per completed item, in table order, starting with Item
   virtual-value domains already have backward-liveness-based dead-store
   elision. No further generalization identified; no code change; coverage
   unchanged (171/2343, 7.30%).
+
+- **Item 18** (2026-07-30, verified already satisfied): `mir_emit_spilled_phi_copies`
+  already guards each phi-destination copy with `if (!mir_value_has_use(phi->dst))
+  { ++instruction; continue; }` before emitting the source-load/destination-store
+  pair, where `mir_value_has_use` scans the whole function for any `src1`/`src2`/
+  call-argument use - the same whole-function liveness definition Items 13-17
+  rely on. A phi destination already proved dead is therefore already skipped
+  entirely, not just its backend slot. No code change; coverage unchanged
+  (171/2343, 7.30%).
+
+- **Item 19** (2026-07-30, audited, no code change): Audited every skip
+  predicate `mir_prepare_backend_slots`'s accounting loop consults -
+  `mir_call_only_constant`, `mir_multiply_by_small_constant`,
+  `mir_load_is_single_call_argument`, `mir_binary_is_fusable_comparison`
+  (via `fused_away`), and `mir_backend_slot_forwardable` (Item 13/15) - and
+  confirmed each is the *same* function called again at its corresponding
+  emission site (`mir_emit_virtual_load`/`mir_emit_virtual_store`,
+  `mir_emit_fused_comparison_branch`, etc.), never a re-derived duplicate of
+  the same logic. This is the discipline the repo's own Item 19 lesson
+  requires (a prior stack-corruption bug traced to an accounting pass and
+  its emission-time counterpart drifting apart). No violation found across
+  the current predicate set; no code change needed. This audit itself is the
+  deliverable for this item; coverage unchanged (171/2343, 7.30%).
+
 
 
 
