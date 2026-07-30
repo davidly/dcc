@@ -466,3 +466,11 @@ CFG selection groundwork not yet built or needs its own dedicated benchmark.
   corpus-wide (319 apps, 310 runnable, 196 extended, 0 failures). New
   baseline: promoted directly to `build/mir-plan-50-before.tsv` (local
   scratch state under `.gitignore`d `build/`, not committed).
+
+- **This plan's remaining items (17-50, excluding the already-completed 37)
+  are superseded by a new, renumbered, more detailed plan:
+  `mir-migration-plan-100.md`.** That document restarts numbering at 1 from
+  this exact checkpoint (165/2319, 7.12%) and carries these items forward
+  verbatim as its Part A (items 1-33), then adds 67 further items (34-100).
+  Do not resume numbering from this file — all future execution log entries
+  for MIR migration work belong in `mir-migration-plan-100.md`, not here.
