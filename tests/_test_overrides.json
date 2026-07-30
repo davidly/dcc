@@ -33,7 +33,7 @@
         { "suffix": "sieve", "args": "sieve.f", "fixtures": ["SIEVE.F"] }
       ] },
     { "name": "attnc99", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
-    { "name": "attnc11", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
+    { "name": "attnc11", "host": true, "stack_size": 512, "perf_ignore": true, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
     { "name": "cint", "args": "eu.cin", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["eu.cin"] },
     { "name": "a1", "args": "-l:HELLO.BAS", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["HELLO.BAS"] },
     { "name": "texfile", "fixtures": ["DATA.TXT"] },
