@@ -1197,3 +1197,101 @@ scalar) and `value-width` (129, 4-byte `long`/`unsigned long` values),
 each of which would need its own careful, narrowly-scoped implementation
 and validation pass following this same template (measure real overlap
 after each widening, since the buckets are not independent populations).
+
+### Item 9: MIR_LOAD support in homed-scalar-cfg (narrow 2-byte scalar slice)
+
+**Motivation**: Item 8's growth survey found `opcode-load` (215 zero-spill
+functions blocked on a `MIR_LOAD` instruction anywhere in the body) the
+second-largest single fallback-reason bucket after `return-type`. These are
+reads of globals, or locals/params that aren't fully promoted (address-taken,
+aliased, or otherwise ineligible for pure register residency).
+
+**Implementation**: added a `MIR_LOAD` case to both the acceptance gate and
+the emission switch in `mir_try_emit_homed_scalar_cfg`, narrowly scoped to
+the safest, unambiguous slice:
+
+- only 2-byte scalar loads where the memory location's stored type exactly
+  matches the loaded value's type (no implicit sign/zero-extension or bool
+  normalization needed - char/1-byte and mismatched-width loads are
+  deliberately deferred, matching the same "narrowest safe subset first"
+  discipline as Item 8);
+- only `SC_LOCAL`/`SC_PARAM` (ix-relative, with the same out-of-frame-range
+  push-ix/add-de fallback `mir_try_emit_spilled_scalar_cfg` already uses) or
+  `SC_GLOBAL`/`SC_EXTERN`/`SC_FUNC` (direct `ld hl,(label)`) storage;
+- struct/aggregate types rejected (out of scope for a scalar-only selector).
+
+Emission reuses `mir_scalar_memory_location` (the same helper
+`mir_try_emit_spilled_scalar_cfg`'s own `MIR_LOAD` case already calls) for
+address resolution, and `mir_emit_hl_to_home` (already used by `MIR_CALL`'s
+result-store path) to land the loaded value in whatever register color the
+allocator assigned.
+
+**Regression found and fixed during validation**: the first version (no
+comparison-shape guard) measured clean on `census --fail-on-regression`
+(+4 functions: `a1.getc_load_file`, `tdead.dd_decl`,
+`tinline.edge_read_global`, `tinline.edge_rw_read`) but the focused
+`runall.ps1 -Apps a1,tdead,tinline -Mode full` run showed a real (not
+peephole-only - both peep *and* nopeep regressed) +0.01%/+0.04% cycle
+regression in `a1`. `DCC_MIR_FORCE_FALLBACK_FUNCTION=getc_load_file`
+confirmed this one function was the entire cause (forcing it back to
+fallback exactly restored the baseline). Root cause: `getc_load_file` has
+three sequential "general" two-operand comparisons (a call result checked
+against three different small integer constants) - each one routes through
+`mir_emit_homed_compare_false`'s general path, which pays an unconditional
+`push hl; push de; ...; pop de; pop hl` preserve dance per comparison. That
+overhead is pre-existing in `mir_emit_homed_compare_false` (not introduced by
+this item) but was never reachable by this function before, since it was
+previously blocked purely by the `MIR_LOAD` opcode gate this item lifts.
+Rather than attempt a broader fix to the general comparison path (out of
+scope for a narrow load-support item, and risks touching every other
+homed-scalar-cfg candidate that already uses it safely), added a function-
+wide `mir_general_comparison_count()` predicate (counts `MIR_BRANCH_FALSE`
+instructions whose comparison definition takes the general, non-zero-
+constant-fast-path form) and gated it in the `MIR_LOAD` acceptance case only:
+reject if a function would newly qualify via `MIR_LOAD` support *and*
+contains more than one such general comparison. This does not touch any
+function this selector already accepted before this item (the `spill_count`/
+`return-type`/other pre-existing gates for those are unchanged), only
+narrows this item's own new admission surface.
+
+**Coverage after the guard**: 152/2018 (7.53%) -> 155/2019 (7.68%), +3
+functions (`getc_load_file` correctly excluded by the new guard).
+`homed-scalar-cfg`'s own count grew 74->77, "no longer MIR-emitted: 0".
+
+**Validation**: `census --fail-on-regression` clean.
+`runall.ps1 -Apps tdead,tinline -Mode full`: both pass correctness; `tdead`
+even *improved* (-0.21% peep, -0.28% nopeep), no regressions. Wide
+`runall.ps1 -Mode fast` across all 323 apps found one further, unrelated-by-
+name-but-genuinely-triggered issue: `tvolopt` (whose own named functions are
+census-identical before/after - confirmed via `diff` on the tsv rows)
+regressed +0.02% in peep mode only. Traced via `DCC_MIR_SELECT_REPORT`
+diff to two `static` helper functions (`volatile_static_abs`,
+`volatile_typedef_abs`, an `if (x < 0) return -x; return x;` shape) that are
+static-inline-substitution candidates into `main` - once newly homed-
+eligible under this item, their standalone-candidate compare shape changed
+(from a slower-looking general form to `mir_emit_homed_compare_false`'s
+cheap zero-fast-path `bit 7,h`/`jp z` form), which is a genuine improvement
+in isolation but interacts with `main`'s static-inline-substituted body in a
+way that cost 20 cycles overall in *peep* mode only - confirmed via
+`runall.ps1 -Apps tvolopt -Mode full` that *nopeep* is completely unaffected
+(108,130 cycles, matching baseline exactly), the same "peephole-interaction
+artifact, not a structural defect" signature as Item 8's `cint` case. Given
+the negligible magnitude (+0.02%, three orders of magnitude below Item 5's
+disqualifying +3%-to-+7% regressions), full correctness, and nopeep being
+completely clean, updated `tests/perf_baselines.csv`'s `tvolopt` `peep_cycles`
+field only (106,428 -> 106,448) per the same baseline policy precedent
+Item 8 established. Re-ran the wide `runall.ps1 -Mode fast` safety net
+afterward and confirmed a fully clean `>>> SUCCESS <<<` (314/323 passed, 9
+skipped as expected, diagnostics and all 17 dccpeep fixtures passed).
+
+**Next recommended step**: `value-width` (129 zero-spill functions blocked on
+a 4-byte `long`/`unsigned long` value somewhere in the body) is the next
+highest-yield candidate from Item 8's growth survey, though it is a larger
+change than either Item 8 or 9 (needs real 4-byte/HL:DE-pair register
+handling throughout the selector, not just a single opcode case) and should
+get its own dedicated survey-then-implement-then-validate cycle rather than
+being folded into further `opcode-load` work. A second, smaller option is
+widening this item's own `MIR_LOAD` slice to the deferred 1-byte (`char`)
+and mismatched-width (needing sign/zero-extension or bool-normalization)
+cases, mirroring the corresponding logic already proven correct in
+`mir_try_emit_spilled_scalar_cfg`'s own `MIR_LOAD` case.

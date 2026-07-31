@@ -5684,12 +5684,50 @@ static int mir_emit_homed_binary_instruction(FILE *out,
     return 1;
 }
 
+/* Item 9 (mir-migration-plan-to-100pct.md): mir_emit_homed_compare_false's
+ * fast path (compare against literal 0 with the left operand already
+ * homed in HL) is cheap; its general two-operand path pays an
+ * unconditional push/pop preserve dance for both live homes. Measured via
+ * A/B (DCC_MIR_FORCE_FALLBACK_FUNCTION) that a1's getc_load_file - unlocked
+ * by this item's new MIR_LOAD support - has three such general-path
+ * compares in a row (a value repeatedly checked against three different
+ * small constants) and that this, not the load itself, was the real
+ * source of a1's measured (not peephole-only) app-level cycle regression:
+ * forcing just that one function back to fallback restored the baseline
+ * exactly. This predicate is used to keep this item's MIR_LOAD-driven
+ * expansion from newly admitting that repeated-general-compare shape,
+ * without touching any function this selector already accepted before
+ * this item (spill_count/return-type/etc. gates are unchanged for those). */
+static int mir_compare_is_general_form(int compare_index)
+{
+    const struct MirInsn *compare = &mir.insns[compare_index];
+    const struct MirInsn *right_definition = mir_definition(compare->src2);
+    if (right_definition != NULL && right_definition->opcode == MIR_CONST &&
+        right_definition->immediate == 0 &&
+        mir.allocation_colors[compare->src1] == MIR_COLOR_HL)
+        return 0;
+    return 1;
+}
+
+static int mir_general_comparison_count(void)
+{
+    int count = 0;
+    int instruction;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int compare_index;
+        if (mir.insns[instruction].opcode != MIR_BRANCH_FALSE)
+            continue;
+        compare_index = mir_compare_definition_for_branch(instruction);
+        if (compare_index >= 0 && mir_compare_is_general_form(compare_index))
+            ++count;
+    }
+    return count;
+}
+
 static int mir_emit_homed_compare_false(FILE *out,
                                         const struct MirInsn *compare,
                                         int false_label)
-{
-    int left = compare->src1;
-    int right = compare->src2;
+{    int left = compare->src1;    int right = compare->src2;
     int operation = (int)compare->immediate;
     const struct MirInsn *left_definition;
     const struct MirInsn *right_definition;
@@ -6004,6 +6042,40 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (!mir_object_is_fully_promoted(insn->object))
                 return 0;
             break;
+        case MIR_LOAD:
+            {
+                /* Item 9 (mir-migration-plan-to-100pct.md): the "opcode-load"
+                 * fallback bucket found by Item 8's groundwork survey is
+                 * mostly reads of globals or non-promoted (address-taken,
+                 * aliased, or too-large-to-register-fully) locals/params.
+                 * Only the narrowest, unambiguous slice is accepted here:
+                 * a plain 2-byte scalar whose storage type is exactly the
+                 * loaded value's type (no implicit sign/zero-extension or
+                 * bool normalization needed), read from a local, parameter,
+                 * or global/extern/func-linkage location. 1-byte (char) and
+                 * mismatched-width loads are deliberately deferred - they
+                 * need the same sign/zero-extend and bool-normalization
+                 * logic mir_try_emit_spilled_scalar_cfg's MIR_LOAD case
+                 * carries, which is real but separate scope creep from this
+                 * narrow first step. */
+                int memory_type, memory_storage, memory_offset;
+                if (!mir_scalar_memory_location(insn, &memory_type,
+                                                &memory_storage,
+                                                &memory_offset))
+                    return 0;
+                if (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
+                    memory_storage != SC_GLOBAL &&
+                    memory_storage != SC_EXTERN && memory_storage != SC_FUNC)
+                    return 0;
+                if (type_is_struct_object(memory_type) ||
+                    type_is_struct_object(insn->type))
+                    return 0;
+                if (type_size(memory_type) != 2 || type_size(insn->type) != 2)
+                    return 0;
+                if (mir_general_comparison_count() > 1)
+                    return 0;
+            }
+            break;
         case MIR_UNARY:
             if (insn->immediate != 0 && insn->immediate != '+' &&
                 insn->immediate != '-' && insn->immediate != '~' &&
@@ -6097,6 +6169,42 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
 
         switch (insn->opcode) {
         case MIR_NOP: case MIR_PHI: case MIR_STORE:
+            break;
+        case MIR_LOAD:
+            {
+                int memory_type, memory_storage, memory_offset;
+                if (!mir_scalar_memory_location(insn, &memory_type,
+                                                &memory_storage,
+                                                &memory_offset))
+                    goto done;
+                if (memory_storage == SC_LOCAL ||
+                    memory_storage == SC_PARAM) {
+                    if (memory_offset >= -128 &&
+                        memory_offset + 1 <= 127) {
+                        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                                memory_offset, memory_offset + 1);
+                    } else {
+                        fputs("\tpush ix\n\tpop hl\n", out);
+                        fprintf(out,
+                                "\tld de,%d\n\tadd hl,de\n"
+                                "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n"
+                                "\tld l,a\n",
+                                memory_offset);
+                    }
+                } else {
+                    struct Sym *global = find_global(insn->name);
+                    const char *assembly_name = asm_name_for(
+                        global != NULL ? sym_asm_name(global)
+                                       : mir_declared_link_name(insn->name));
+                    if (memory_storage == SC_EXTERN ||
+                        (memory_storage == SC_FUNC && global != NULL &&
+                         global->needs_extrn))
+                        fprintf(out, "\textrn %s\n", assembly_name);
+                    fprintf(out, "\tld hl,(%s)\n", assembly_name);
+                }
+                if (!mir_emit_hl_to_home(out, insn->dst))
+                    goto done;
+            }
             break;
         case MIR_LABEL:
             if (insn->label < 0 || insn->label >= mir.next_label)
