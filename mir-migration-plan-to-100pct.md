@@ -1338,3 +1338,93 @@ worth surveying further before moving to `value-width` or re-running a
 fresh growth survey against the *current* population (Item 8's original
 997/215/129/etc. buckets are now stale after Items 8 and 9 each removed
 some of that population).
+
+### Item 11: re-surveyed the current population for value-width - large real yield, but requires a register-allocator extension, not a selector change
+
+Item 8's growth-survey buckets (997/215/129/...) were measured against the
+pre-Item-8 population and are now stale after Items 8-9 each removed part of
+it. Before investing in `value-width` (the next candidate per Item 9's own
+recommendation), re-ran the same growth-survey methodology against the
+*current* (post-Item-9) population, this time simulating "what if this
+selector's <=2-byte ceiling were <=4 bytes instead" (widening every
+`type_size(...) > 2` check in the acceptance loop to `> 4`, including the
+return type and per-instruction/per-argument checks) and reporting, for each
+zero-spill function, either `accepted` (would pass entirely) or the first
+remaining real blocker otherwise. Ran this over the whole `tests/*.c` corpus
+(323 files) via a temporary `DCC_MIR_WIDTH_SURVEY` env-gated duplicate of the
+acceptance loop (same disposable-survey pattern as Item 7/8, fully reverted
+afterward via `git checkout --`).
+
+**Result**: of 4883 zero-spill function-compilations surveyed (raw count,
+includes the same function name recompiled once per `.c` file it appears
+in), 742 would be `accepted` under a hypothetical 4-byte ceiling. Cross-
+referencing the 269 *unique* function names among those against a fresh
+census's actual current fallback set (`result=fallback`, 1231 unique
+names) found **97 unique function names** (e.g. `check`, `check_i`,
+`check_s`, `check_int`, `check_long`, `add`, `add_if`, `add_uf`,
+`bitops`, `attacked_by_slider`, ...) that are *currently* fallback and
+would be accepted purely by this width relaxation with no other blocker -
+some of these names recur across many test files (e.g. `check` appears in
+25 different apps), so the real function-instance count this would move is
+almost certainly well over 97 and likely the single largest remaining lever
+measured this entire session, larger than Item 8's 997-candidate
+"return-type" survey ever translated into (that yielded +1 real function
+after accounting for compounding blockers) - `long`/`unsigned long` values
+are evidently a much less entangled population than `void`/other-return-type
+was.
+
+**Why this is not a narrow, safely-scoped selector change like Items 8-10**:
+confirmed via direct inspection that `homed-scalar-cfg`'s entire register
+model (`enum MirPhysicalColor { MIR_COLOR_HL, MIR_COLOR_DE, MIR_COLOR_BC,
+MIR_COLOR_IY, MIR_COLOR_COUNT }`, `dcc_mir.c` ~line 4414) is a graph coloring
+over exactly **four single 16-bit register pairs** - there is no existing
+representation for a 4-byte value living across two colors simultaneously
+(`mir_allocate_registers` assigns exactly one color per value, full stop).
+Supporting `long`/`unsigned long` values in this selector is therefore not
+a matter of adding one more `MIR_LOAD`/`MIR_BINARY` case (as Items 8-10
+were) - it requires either (a) extending the allocator itself to assign a
+*pair* of colors to any value whose type is 4 bytes wide (immediately
+halving the effective register budget for any function using one, and
+requiring every `mir_emit_home_to_hl`/`_de`/`_push`/`_hl_to_home`-style
+helper in this selector to grow a wide (HL:DE-pair) counterpart), or (b) a
+narrower, harder-to-generalize special case for functions with at most one
+live wide value at a time. Either path is real, multi-day-scale work
+touching the allocator's interference graph and every homed emission helper
+- a materially different risk class (allocator/coloring bugs are far more
+subtle and harder to bound than a single opcode's acceptance gate) than
+anything landed this session, and should get its own dedicated
+implementation session with its own careful incremental validation ladder,
+not be folded into this session's remaining budget.
+
+**Decision**: measured and documented, instrumentation reverted (same
+disposable-survey discipline as every other survey this session), no
+production code change. This is the clear, well-evidenced next major
+lever for a following session.
+
+**Handoff for the next session** (per SKILL.md's handoff template):
+- Owner: unassigned
+- Base commit: this item's commit
+- Fallback class: `value-width` (4-byte `long`/`unsigned long` scalars in
+  the already-register-aware `homed-scalar-cfg` selector)
+- Candidate apps/functions: the 97-unique-name set found above is a
+  reasonable starting worklist; re-run this item's survey methodology
+  (`DCC_MIR_WIDTH_SURVEY`, not currently in tree - re-add temporarily
+  following this item's exact description) to regenerate it against
+  whatever the population looks like when work starts, since it will have
+  drifted further.
+- Hypothesis: most of these functions have at most one live 4-byte value
+  at a time (arithmetic on a single `long` local/parameter, no concurrent
+  second wide value) - if true, a *narrower* first slice restricted to
+  "functions with only one wide-typed value in their entire `mir.next_value`
+  range" might be implementable as a special-cased single-wide-value path
+  (using two of the four colors as a fixed HL:DE pair whenever exactly one
+  wide value exists) without a full general-purpose pair-coloring rewrite
+  of the allocator - this should be measured (another disposable survey)
+  before committing to the larger allocator-rewrite path.
+- Files expected to change: `mir_allocate_registers` and its interference-
+  graph/color-assignment logic (~`dcc_mir.c` 4408-4700), every
+  `mir_emit_home_*`/`mir_emit_*_to_home` helper (~5290-5350) needs a wide
+  counterpart, and `mir_try_emit_homed_scalar_cfg`'s acceptance loop and
+  per-opcode emission switch.
+- Rejected experiments and why: none yet for this class - this handoff is
+  the starting point, not a retry of a failed attempt.
