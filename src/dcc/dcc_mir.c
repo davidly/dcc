@@ -5334,6 +5334,20 @@ static int mir_emit_hl_to_home(FILE *out, int value)
     }
 }
 
+/* Push a homed value's register pair verbatim. Used only for narrow
+ * (<=2 byte) call arguments in mir_try_emit_homed_scalar_cfg: HL/DE/BC/IY
+ * are all directly pushable, so no intermediate move is needed. */
+static int mir_emit_home_push(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL: fputs("\tpush hl\n", out); return 1;
+    case MIR_COLOR_DE: fputs("\tpush de\n", out); return 1;
+    case MIR_COLOR_BC: fputs("\tpush bc\n", out); return 1;
+    case MIR_COLOR_IY: fputs("\tpush iy\n", out); return 1;
+    default: return 0;
+    }
+}
+
 static int mir_emit_constant_to_home(FILE *out, int value, long immediate)
 {
     switch (mir.allocation_colors[value]) {
@@ -5999,6 +6013,29 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_RETURN:
             ++return_count;
             break;
+        case MIR_ARG:
+            if (type_is_struct_object(insn->type) || type_size(insn->type) > 2)
+                return 0;
+            break;
+        case MIR_CALL:
+            {
+                struct Sym *callee = find_global(insn->name);
+                int is_indirect = strcmp(insn->name, "<indirect>") == 0;
+                /* Only calls to functions this translation unit defines are
+                 * provably safe here: mir_emit_home_prologue/epilogue push
+                 * and pop iy around any dcc-compiled function body that uses
+                 * it as a home register, so a defined callee transparently
+                 * preserves iy for its caller. Indirect calls and calls to
+                 * undefined/external symbols (including the whole runtime
+                 * library) are not covered by that guarantee here and must
+                 * stay on the spilled path, which recomputes its own
+                 * (unrelated) virtual iy base after such calls instead. */
+                if (is_indirect || callee == NULL || !callee->is_defined)
+                    return 0;
+                if ((insn->memory_flags & (32 | 64)) != 0)
+                    return 0;
+            }
+            break;
         default:
             return 0;
         }
@@ -6127,6 +6164,53 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (i + 1 < mir.count &&
                 !mir_emit_homed_phi_copies(out, i, i + 1))
                 goto done;
+            break;
+        case MIR_ARG:
+            break;
+        case MIR_CALL:
+            {
+                struct Sym *callee = find_global(insn->name);
+                const char *assembly_name = insn->base_name[0] != 0
+                    ? insn->base_name
+                    : asm_name_for(sym_asm_name(callee));
+                int call_arg_count = 0;
+                int argument_bytes = 0;
+                int argument;
+                int scan;
+                for (scan = 0; scan < i; ++scan)
+                    if (mir.insns[scan].opcode == MIR_ARG &&
+                        mir.insns[scan].secondary_offset ==
+                            insn->secondary_offset) {
+                        int index = (int)mir.insns[scan].immediate;
+                        if (index != call_arg_count)
+                            goto done;
+                        ++call_arg_count;
+                    }
+                argument = call_arg_count - 1;
+                for (scan = i - 1; scan >= 0; --scan) {
+                    const struct MirInsn *arg = &mir.insns[scan];
+                    if (arg->opcode != MIR_ARG ||
+                        arg->secondary_offset != insn->secondary_offset)
+                        continue;
+                    if (arg->immediate != argument--)
+                        goto done;
+                    if (!mir_emit_home_push(out, arg->src1))
+                        goto done;
+                    argument_bytes += 2;
+                }
+                if (argument != -1)
+                    goto done;
+                if (callee->needs_extrn)
+                    fprintf(out, "\textrn %s\n", assembly_name);
+                fprintf(out, "\tcall %s\n", assembly_name);
+                for (argument = 0; argument < argument_bytes / 2; ++argument)
+                    fputs("\tpop bc\n", out);
+                if (type_ptr_depth(insn->type) > 0 ||
+                    (insn->type & 15) != TYPE_VOID) {
+                    if (!mir_emit_hl_to_home(out, insn->dst))
+                        goto done;
+                }
+            }
             break;
         case MIR_RETURN:
             if (!mir_emit_home_to_hl(out, insn->src1))

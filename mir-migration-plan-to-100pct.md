@@ -245,5 +245,75 @@ debugging this and the prior session spent the most wall-clock time on;
 
 ## Execution Log
 
-(To be appended as Phase 1's incremental slices land, in the same style as
-`mir-migration-plan-100.md` and `mir-migration-plan-next200.md`.)
+### Phase 1, Item 1: `homed-scalar-cfg` gains calls to statically-defined callees
+
+**IY-safety precheck (blocking question from the plan, resolved before any
+code change):** does a call clobber `iy` when `homed-scalar-cfg` is relying on
+it as a live cross-call value's home register?
+
+- `DCCRTL.MAC` never references `iy` at all (`grep -c '\biy\b' DCCRTL.MAC` ==
+  0) — the entire runtime library is IY-clean today, but that is an empirical
+  fact about the current runtime, not a documented/enforced contract.
+- Every dcc-compiled function that uses `iy` as a home register already
+  `push iy`s in its prologue and `pop iy`s in its epilogue
+  (`mir_emit_home_prologue`/`mir_emit_home_epilogue`, ~line 5540) — so a call
+  to any function *this translation unit defines* transparently preserves the
+  caller's `iy`, regardless of whether the callee itself uses `iy` internally.
+  This is a real, structural guarantee, not an empirical accident.
+- `mir_emit_restore_virtual_iy` (~line 7715), invoked by the *spilled* path
+  specifically `if (is_indirect || callee == NULL || !callee->is_defined)`,
+  is unrelated machinery (it recomputes a *different* "virtual iy base" used
+  as a second frame pointer for far-slot addressing) but its trigger
+  condition is exactly the right conservative predicate to reuse: "not
+  statically known to be a dcc-defined function in this TU" is precisely the
+  set of calls we cannot prove safe for register-homed `iy`.
+
+**Decision:** widen `homed-scalar-cfg`'s acceptance scan to admit `MIR_CALL`
+and narrow (<=2 byte, non-struct) `MIR_ARG`, but *only* when
+`callee != NULL && callee->is_defined && !is_indirect`. Indirect calls and
+calls to external/undefined symbols (including the whole runtime library)
+stay on the spilled path unconditionally — this is a narrower, more
+conservative gate than "IY happens to be safe today," matching SKILL.md rule
+1 (identify the exact affected functions/guarantee before widening).
+
+**Implementation** (`src/dcc/dcc_mir.c`):
+- Added `mir_emit_home_push` (HL/DE/BC/IY are all directly pushable — no
+  intermediate move needed for narrow args).
+- Acceptance scan: `MIR_ARG` rejects struct/>2-byte args; `MIR_CALL` rejects
+  indirect/undefined/non-defined callees and the `pfehx`/`pfeoc` hook flags
+  (kept out of scope for this slice).
+- Emission: `MIR_ARG` is a no-op at its own position (args are found via a
+  backward scan when the paired `MIR_CALL` is emitted, mirroring
+  `spilled-scalar-cfg`'s existing pattern); `MIR_CALL` pushes each home
+  register in argument order, calls (with `extrn` if `needs_extrn`), pops the
+  stack back with `pop bc` per word (all args are 2 bytes, so no odd-byte SP
+  trick is needed), and stores a non-void result via `mir_emit_hl_to_home`.
+
+**Validation:**
+- Census: 185/2378 (7.78%) -> 196/2378 (8.24%), +11 functions, 0 regressions
+  reported by `--fail-on-regression`
+  (`tbcloop.unsafe_index`, `tgnarly.implicit_test`, `tmirfast.dec_dead`,
+  `tmirfast.inc_dead`, `tmirslot.cross_call`, `tmirslot.forward_into_store`,
+  `tnarrow.fctop`, `tnarrow.mrright`, `tponce.aval`, `tponce.bval`,
+  `tpostinc.main`).
+- Focused `-Mode full` on the 7 affected apps: 7/7 correctness pass. Two tiny
+  peep-mode cycle regressions surfaced (`tmirslot` +42 cycles/+0.13%,
+  `tmirfast` +42 cycles/+0.06%) alongside larger nopeep improvements in the
+  *same* functions (`tmirslot` nopeep -2.41% cycles/-1.96% bytes, `tmirfast`
+  nopeep -0.07% cycles/-1.47% bytes, plus `tponce` -2.27% bytes). The
+  identical +42-cycle delta in both apps points to one fixed-size call-site
+  overhead (this selector's call sequence vs. the previous spilled-path
+  sequence), not a scaling/algorithmic regression, and dccpeep simply hasn't
+  learned this new call shape's pattern yet. Net binary size moved down, not
+  up, in every affected app. Accepted per the baseline policy's explicit
+  allowance ("update baselines only after a complete full-mode run proves the
+  new profile is intentional and correctness-clean") and updated
+  `tests/perf_baselines.csv` for `tmirslot`/`tmirfast` accordingly — this is
+  not a hidden regression, it's a documented, understood, net-positive
+  tradeoff.
+- Wide `-Mode fast -FailFast`: 314/314 pass.
+- Full `-Mode full -Extended -FailFast`: 314/314 + 196/196 pass.
+
+**Next slice for Phase 1:** widen further to calls with wide (4-byte) or
+struct arguments/returns, then to `is_indirect`/external calls once (or if)
+a documented IY-preservation contract exists for `DCCRTL.MAC`.
