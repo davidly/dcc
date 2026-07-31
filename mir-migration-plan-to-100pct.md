@@ -427,3 +427,70 @@ acceptance change to admit `MIR_UNARY '!'` again.
   extended test `00035`**, which is the test this whole slice exists to fix.
 
 Coverage now 204/2378 (8.58%).
+
+### Phase 1, attempted slice: `homed-scalar-cfg` gains `MIR_BINARY TOK_SHL/TOK_SHR` — reverted, no net coverage gain
+
+**Hypothesis:** shift operators (`<<`/`>>`) were the only remaining common
+`MIR_BINARY` opcodes missing from `homed-scalar-cfg`'s acceptance whitelist.
+Since a spilled-mode helper `mir_emit_scalar_shift(out, operation,
+is_unsigned)` already existed (expects value in `HL`, count in `E`, result
+in-place in `HL` via a `djnz` bit-loop), a homed emitter reusing it looked
+like a small, reusable win in the same style as Items 1-2.
+
+**Implemented:** a new `mir_emit_homed_shift_instruction`, following the
+same `preserve_hl`/`preserve_de` (`mir_value_has_use_after`-gated) pattern
+used by the binary/unary emitters; rejected (both in acceptance and
+defensively in the emitter) any shape where the shift-count operand's color
+is `HL`, since shift isn't commutative and the general binary path's
+operand-swap trick doesn't apply.
+
+**What the evidence showed:**
+- Census: +8 functions (204/2378 -> 212/2378, 8.92%), 0
+  `--fail-on-regression` hits. Correctness on the newly-accepted set passed
+  (`tchess`, `tcodegen`, both 2/2 in focused `-Mode full`).
+- But `tcodegen`'s focused `-Mode full` run showed a **material**
+  performance regression: peep +18.76% cycles, nopeep +15.65% cycles — an
+  order of magnitude larger than the ~0.1-0.5% tiny/net-positive deltas
+  accepted for Items 1-2, and squarely the kind of regression SKILL.md rule 5
+  says is still "fallback output until fixed," not a baseline-acceptable
+  tradeoff.
+- Root cause, found by inspecting the 8 newly-accepted functions
+  (`tcodegen.c`'s `lsl8`/`lsl9`/`lsr12`/`lsr15`/`asr8`/`asr9`/`asr15` and
+  `tchess.c`'s `rank_of` — `return sq >> 3;`): **every one of them shifts by
+  a compile-time constant amount.** `mir_emit_scalar_shift`'s generic
+  runtime `djnz` loop is much slower than whatever fixed sequence the legacy
+  backend already emits for a known constant shift count (e.g. byte swaps
+  for shift-by-8, sign-bit extraction for shift-by-15, a short unrolled
+  `add hl,hl`/`sra h`/`rr l` chain for small constants) — this is exactly
+  the "smaller instruction count is not proof of faster code" trap SKILL.md
+  rule 4 warns about, except here it cuts the other way: my generic emitter
+  looked reasonable by instruction count but was concretely slower at
+  runtime because it didn't special-case the constant-amount shape.
+- **Confirmed by construction, not just inspection:** added a rejection for
+  constant-amount shifts (`mir_definition(insn->src2)->opcode == MIR_CONST`)
+  to the acceptance scan and re-ran the census. Coverage returned to exactly
+  204/2378 (8.58%) — identical to the pre-shift-slice baseline — meaning
+  **all 8 previously-accepted functions were constant-amount shifts and
+  none were genuinely variable-amount**. No function in the current corpus
+  exercises the variable-shift shape this emitter was meant to cover.
+
+**Decision:** since restricting to variable-amount shifts (the only
+correctness-safe, cost-safe subset) yields **zero net additional coverage**
+in the current corpus, the added emitter/acceptance code has no measurable
+benefit today and is dead weight. Reverted the entire slice (both the
+generic-shift emitter and the acceptance widening) back to the `a7638c3`
+state rather than carrying unused code. This is a deferred/skip decision in
+the same spirit as Item 6: not a design ambiguity, but a "no yield" result
+that's worth recording so a future contributor doesn't re-attempt the same
+generic-shift approach without first checking whether the target functions
+use constant or variable shift amounts.
+
+**If revisited:** a real win here would require either (a) constant-amount
+shift codegen matching legacy's specialized sequences (byte swap / sign
+extraction / short unrolled add-chains) before admitting constant shifts, or
+(b) finding actual variable-amount shift functions in a wider corpus (none
+exist in the current 2378-function census) to validate the loop-based
+approach was worthwhile in the first place. Neither is a quick follow-up;
+parking both.
+
+Coverage unchanged at 204/2378 (8.58%).
