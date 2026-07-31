@@ -100,15 +100,22 @@ this is not a single patch. It requires, in rough dependency order:
    set `spilled-scalar-cfg` already supports).
 
 **Suggested first concrete slice** (small enough to validate in one
-session): extend `mir_try_emit_homed_scalar_cfg` itself to permit
+session) - **superseded, see Execution Log Items 1, 3, and 7**: this
+originally proposed extending `mir_try_emit_homed_scalar_cfg` to permit
 `MIR_CALL` when every live-across-call value is provably spilled or
-fixed-color-safe per the existing interference data, instead of building
-a whole new selector immediately. This directly grows the *already-
-correct* 96-function population with the least new emission-logic risk,
-and produces real evidence (yield, blast radius, regression rate) before
-committing to the harder general-spill-aware emitter in item 1-4 above.
+fixed-color-safe. Items 1 and 3 (below) landed exactly this - calls to
+both in-TU-defined and external/library callees are now accepted,
+excluding only indirect calls - leaving the zero-spill requirement
+itself as the true remaining lever. Item 7 measured that lever's yield
+directly (a corpus-wide survey: only 11 functions, 8 of them single-
+spill) and judged it too small to justify the regression risk of adding
+spill-aware branches to `homed-scalar-cfg`'s shared emission helpers,
+which the already-correct 96+-function zero-spill population also
+depends on. The falsifiable check below is likewise superseded by
+Item 7's direct measurement.
 
-**Falsifiable check before starting**: pick 5-10 representative
+**Falsifiable check before starting** (superseded by Item 7's direct
+survey): pick 5-10 representative
 fallback functions from the `text-size` bucket that contain exactly one
 call and otherwise fit `homed-scalar-cfg`'s existing instruction
 whitelist, forced-accept them today (expect rejection today, since calls
@@ -1005,3 +1012,73 @@ proof). Deferred, not attempted,
 per the same Item-6-level-design-ambiguity threshold the user
 authorized skipping past. Working tree confirmed clean and matching
 151/2018 (7.48%) after removing the temporary survey instrumentation.
+
+### Phase 1, Item 7: measure the yield ceiling for a spill-tolerant `homed-scalar-cfg` - measured, deferred as high-risk/low-reward
+
+This item picks up Phase 1's own "Suggested first concrete slice" text
+above (extend `homed-scalar-cfg` to permit values beyond the current
+strict `mir.allocation_spill_count != 0` zero-spill requirement). That
+suggestion predates this session's Items 1 and 3, which already landed
+`MIR_CALL` support in `homed-scalar-cfg` for both in-TU-defined and
+external/library callees - so the "allow calls" half of the original
+suggestion is done, and the true remaining lever is exactly the
+zero-spill gate itself.
+
+**Falsifiable check performed**: a temporary, env-gated survey
+(`DCC_MIR_HOMED_SPILL_SURVEY`) relaxed only the `allocation_spill_count
+!= 0` structural rejection (and the paired "every dst must have a real
+register color" rejection, which spilled values fail by definition),
+leaving every other `homed-scalar-cfg` structural check - return type,
+operand width, opcode whitelist, call-ABI rules, single-word `MIR_PARAM`
+requirement - unchanged, and printed (never emitted) each candidate that
+would pass everything else. Ran corpus-wide with default args against
+every non-ignored app in `tests/_test_overrides.json`.
+
+**Result**: only **11 distinct functions** corpus-wide would newly
+qualify structurally: `byte_loop_cache` (tpeepal), `edge_outer_body`
+(tinline), `eqz`/`gez`/`ltz`/`nez` (tmirfast), `scale_by` (tbcint),
+`sum_stride` (tnestfor) - all with exactly 1 spilled value - plus
+`slt_spilled` (5 spills), `nslt_spilled` (6 spills), and
+`and_chain_spilled` (11 spills) from tmirfuse (whose names make clear
+they exist specifically to exercise multi-spill shapes). Restricting to
+the cheapest single-spill case still yields only 8 functions.
+
+**Why this is deferred rather than implemented, despite fitting
+SKILL.md's "1-20 functions" batch-size guidance**: the yield is real but
+small, and the *only* way to realize it is to add spilled-value (ix-
+slot) load/store support directly inside `homed-scalar-cfg`'s shared
+emission helpers - `mir_emit_homed_unary_instruction`,
+`mir_emit_homed_binary_instruction`, `mir_emit_homed_phi_copies`, and the
+prologue/frame-size logic in `mir_emit_home_prologue` - every one of
+which is currently exercised, correctly and with zero spill-handling
+complexity, by the **96+ already-accepted zero-spill functions**. Adding
+a spilled-value code path to each of these shared helpers (particularly
+correct PHI/merge-point handling when the merged value is a slot rather
+than a fixed register - exactly the "primary correctness risk" Phase 1's
+own hypothesis text calls out for the *general* spilled-CFG rework) means
+every homed-scalar-cfg change from here on carries real regression risk
+for a population 9-12x larger than the reward. This is a legitimate
+future project, but not a "smallest reusable edit" for this slice: it is
+the same class of large, correctness-sensitive, multi-step work
+(register liveness at merge points, call-clobber correctness) that
+Phase 1's own text already flags as needing incremental rollout with a
+narrowest-safe-subset start, and 8-11 functions is not enough evidence to
+justify that risk right now, especially compared to the theoretical
+scale of the still-unaddressed *general* `spilled-scalar-cfg`
+register-awareness hypothesis, which covers the ~1930-function dominant
+fallback population and is Phase 1's actual "largest expected yield"
+target.
+
+**Recommended for a future, dedicated slice**: if pursued at all, start
+with the 8 single-spill functions only, using a *dedicated* one-slot
+frame extension (a single fixed `ix`-relative word reserved whenever
+`allocation_spill_count == 1`) and add spill-aware branches only to the
+specific helpers these 8 functions' MIR actually exercises (verified
+narrowly, not broadened preemptively), then validate every currently-
+accepted `homed-scalar-cfg` function still round-trips byte-identically
+(a regression in the emitted bytes for any of the 96+ already-accepted
+functions, not just a runtime failure, should be treated as a blocking
+signal given how easy it is for a shared-helper edit to change an
+unrelated code path). Temporary survey instrumentation was fully
+reverted (`git checkout --`); working tree and census confirmed back at
+exactly 151/2018 (7.48%) with zero diff.
