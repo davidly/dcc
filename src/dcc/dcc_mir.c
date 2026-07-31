@@ -5569,8 +5569,16 @@ static void mir_emit_home_epilogue(FILE *out, int uses_iy)
 static int mir_emit_homed_unary_instruction(FILE *out,
                                             const struct MirInsn *insn)
 {
-    int preserve_hl = mir.allocation_colors[insn->src1] != MIR_COLOR_HL &&
-                      mir.allocation_colors[insn->dst] != MIR_COLOR_HL;
+    int instruction = (int)(insn - mir.insns);
+    /* preserve_hl must also cover the case where src1's home register IS hl
+     * (so mir_emit_home_to_hl below is a no-op) but src1 is still live
+     * after this instruction, and the result is stored to a different home
+     * (e.g. mir_emit_hl_to_home's DE case uses "ex de,hl", which swaps hl's
+     * contents rather than just moving into de - clobbering src1's still-
+     * live value if it isn't saved and restored around the computation). */
+    int preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+                      (mir.allocation_colors[insn->src1] != MIR_COLOR_HL ||
+                       mir_value_has_use_after(insn->src1, instruction));
     int label;
 
     if (preserve_hl)
@@ -5997,8 +6005,6 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (insn->immediate != 0 && insn->immediate != '+' &&
                 insn->immediate != '-' && insn->immediate != '~' &&
                 insn->immediate != '!')
-                return 0;
-            if (insn->immediate == '!')
                 return 0;
             break;
         case MIR_BINARY:

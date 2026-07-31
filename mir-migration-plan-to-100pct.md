@@ -380,3 +380,50 @@ belong bundled with a coverage-widening commit. Filed here as the next
 concrete Phase 1/register-model bug to fix in its own dedicated slice, with
 `tests/00035.c`-equivalent (`/tmp/t35e.c`-style: `!x` then a later `-x` on
 the same operand) as the falsifying regression test to check against.
+
+### Phase 1, Item 2: fix the `mir_emit_homed_unary_instruction` clobber bug, re-enable `'!'`
+
+Landed the deferred fix from the previous slice, in its own dedicated
+commit as planned.
+
+**Fix** (`src/dcc/dcc_mir.c`, `mir_emit_homed_unary_instruction`):
+`preserve_hl` now also covers the case the old check missed — `src1`'s home
+register *is* `HL` (so `mir_emit_home_to_hl` is a no-op) but `src1` is still
+used later in the function (`mir_value_has_use_after(insn->src1,
+instruction)`, an existing helper) and the result is stored to a *different*
+home. In that case `HL` is pushed before the computation and popped back
+after, exactly restoring `src1`'s original value regardless of whatever
+`mir_emit_hl_to_home` does to `HL` internally (including the `ex de,hl`
+exchange). All four existing cases are otherwise unchanged: `src1==HL &&
+dst==HL` (true in-place update, no preserve needed), `src1==HL && dst!=HL
+&& src1 dies here` (safe to clobber, no preserve — unchanged), `src1!=HL &&
+dst==HL` (unchanged), `src1!=HL && dst!=HL` (already preserved before).
+
+This is a general register-model correctness fix, not specific to `'!'` —
+it also protects `'-'`/`'~'` from the same clobber if the allocator ever
+produces the same "operand homed to HL, still live, result homed elsewhere"
+shape for them (a shape the existing 96/111-function population happened
+never to exercise, but nothing prevented it in principle).
+
+With the fix in place, re-applied the previously-reverted one-line
+acceptance change to admit `MIR_UNARY '!'` again.
+
+**Validation:**
+- Reproducer (`x=4; if (!x!=0) return 1; if (-x!=0-4) return 1; return 0;`,
+  matching extended test `00035`'s shape) now runs correctly end-to-end via
+  `dccmake`/`ntvcm` (exit 0), where it previously failed (exit 1).
+- Census vs. a fresh `72b3754` baseline: 196/2378 (8.24%) -> 204/2378
+  (8.58%), +8 functions (the same `tmirfuse.n*` set as the reverted attempt),
+  0 `--fail-on-regression` hits. One fallback-only metric churn
+  (`tnarwin.sumten`, still fallback, +4 bytes/+4 insns from the extra
+  push/pop — no runtime effect, correctly excluded from the "requires
+  validation" set).
+- Focused `-Mode full` on `tmirfuse`: correctness passed. Same understood
+  tiny peep-mode delta as before (+0.52% cycles) offset by a larger nopeep
+  improvement (-1.89% cycles, -1.3% bytes) in the same app; accepted into
+  `perf_baselines.csv` again under the same policy as Item 1.
+- Wide `-Mode fast -FailFast`: 314/314 pass.
+- **Full `-Mode full -Extended -FailFast`: 314/314 + 196/196 pass, including
+  extended test `00035`**, which is the test this whole slice exists to fix.
+
+Coverage now 204/2378 (8.58%).
