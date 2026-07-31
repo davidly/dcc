@@ -2156,3 +2156,50 @@ its own new emission helpers before it can be added safely):
 - Wide `MIR_BINARY`/`MIR_UNARY` arithmetic (Item 20e's actual scope - add,
   sub, negate first, matching the fastcall family's opcode-by-opcode
   rollout discipline from Items 15/17/18).
+
+### Item 20e: wide MIR_BINARY arithmetic - scope finding, deferred pending BC:IY design (2026, this session)
+
+Before writing any wide-arithmetic emission code, checked whether Item
+20d's `HL:DE`-only restriction (rejecting any function needing
+`MIR_COLOR_BC_IY`) leaves room for `MIR_BINARY` (`+`/`-`) to be added
+next as a small increment. It does not: a binary op's two operands
+(`src1`, `src2`) are both live *at* the instruction that consumes them,
+so if both are wide values they necessarily interfere and the allocator
+must assign them different physical locations - meaning any function with
+a wide `MIR_BINARY` unavoidably needs both `HL:DE` *and* `BC:IY`
+simultaneously. Item 20d's probe already rejects any such function
+(`summary.colors[MIR_COLOR_BC_IY] == 0` gate), so relaxing the
+`MIR_BINARY` width check alone would not accept any real function - the
+`BC:IY` pair-move/arithmetic-across-pairs support has to come first.
+
+That support is materially harder than the `HL:DE`-only moves Item 20d
+added: the Z80 has direct 16-bit register-pair instructions for `HL`
+(`add hl,de`/`add hl,bc`) and `IY` (`add iy,de`/`add iy,bc`), but no
+single instruction adds two arbitrary pairs together as one 32-bit
+operation when one half lives in `IY` - a 32-bit `add`/`sub` across
+`HL:DE` and `BC:IY` needs either (a) a temporary move of one pair's
+halves into 8-bit registers before an 8-bit-at-a-time add-with-carry
+chain (`ld a,l \ add a,c \ ld l,a \ ld a,h \ adc a,b \ ...` for the low
+word, then similarly for the high word via `e`/`d` and `iyl`/`iyh` -
+`iyl`/`iyh` access is itself an undocumented-opcode form, already used
+elsewhere in this codebase per `tests/loop-registers.undoc.c`, so it is
+available but adds a second layer of correctness risk), or (b) spilling
+one operand to a scratch memory slot first and reusing the already-
+working spilled-scalar-cfg wide-arithmetic path — which would partially
+give up homed-scalar-cfg's whole benefit (avoiding memory round-trips)
+for exactly the pressure-heavy functions this extension targets.
+
+**Decision**: defer Item 20e's real implementation pending a follow-up
+session with room for its own incremental micro-steps (mirroring the
+20a-20d decomposition): (20e-a) design and validate 8-bit-chain wide
+add/sub across `HL:DE`/`BC:IY`, gated by its own disposable survey of how
+often it's actually needed vs. how often a wide function only ever uses
+one live wide value at a time (in which case Item 20d's existing
+`HL:DE`-only path already suffices, once `MIR_BINARY` itself is added
+back for the *single-simultaneous-wide-value* case - a smaller, safe
+next slice that does NOT need `BC:IY` support at all). This narrower
+"one live wide value" rediscovery is the concrete, low-risk next step,
+not full general `BC:IY` arithmetic - marking Item 20e blocked and
+recording this rationale rather than attempting the harder cross-pair
+arithmetic without dedicated validation time, per SKILL.md's guidance on
+genuine design/scope decisions.
