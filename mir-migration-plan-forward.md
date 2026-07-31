@@ -329,3 +329,47 @@ and D was never independently scoped. The next session should re-derive a
 fresh plan from a new census and fallback-reason breakdown rather than
 continue numbering in this document, exactly as SKILL.md prescribes when
 a vein like this runs dry.
+
+## Fresh fallback-reason breakdown (post Items A-C, for the next session)
+
+Re-ran the reason classification against the current census
+(`build/mir-item-c-closed.tsv`, 2174 fallback functions):
+
+```
+2112  text-size
+  29  instruction-count
+  26  inline-substitution
+   3  cfg-block-count
+   2  cfg-backedge
+   1  selector
+   1  pointer-array
+```
+
+`text-size` still dominates overwhelmingly (97% of all fallback), exactly
+as SKILL.md's "Known root cause" section already documented at an earlier
+checkpoint (99.1% of that population is >64 bytes over legacy - a
+uniform ~2x cost gap, not a near-miss population). The 26
+`inline-substitution` fallbacks are the functions Item A's fixed gate now
+correctly protects and should stay on fallback permanently (that is
+expected, not a target). The handful of `instruction-count`/`cfg-*`/
+`pointer-array` fallbacks are too few to matter next.
+
+A quick spot-check of the nearest `text-size` near-misses (gap under 20
+bytes: `tinline.inline_fold_check` +9, `tstr3.test_strcoll` +12,
+`tvla.vla_sizeof_op_add`/`_mullhs`/`_sub` +18 each) shows the VLA-`sizeof`
+trio generates *fewer* instructions than legacy (51 vs 61) but *more*
+bytes (606 vs 588) - each MIR instruction is individually pricier than its
+legacy counterpart there, a different shape than the previously-documented
+"double 0/1 materialization" pattern (Items 3/4/25/27 already fixed that
+shared sub-case for both selectors). This single spot-check is not enough
+to generalize from - the next session should re-run the full bucketing
+methodology from SKILL.md's "Known root cause" section (byte/instruction
+gap histogram, forced-accept diffs of several representative shapes
+across the *current* 2112-function population, not the pre-Items-A-D
+one) before choosing its next slice, per SKILL.md's own instruction to
+re-derive rather than assume the old analysis still applies verbatim.
+
+This `mir-migration-plan-forward.md` document's scope (Items A-D) is now
+fully closed. The next session should start a new, separately-named plan
+document seeded from the breakdown above, per SKILL.md's guidance to
+retire a plan document once its content is folded into the next one.
