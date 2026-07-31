@@ -1459,3 +1459,50 @@ code changed. Item 11's handoff stands as written; this item removes the
 "maybe a narrower slice avoids the allocator work" open question it left,
 so the next session can start directly on the allocator extension rather
 than re-testing this hypothesis first.
+
+### Item 13: measured and rejected - MIR_STORE (`store-not-promoted`) support in homed-scalar-cfg has zero yield
+
+**Motivation**: after the user rejected further pure-survey/deferral cycles
+("stop planning and start implementing"), searched the remaining Item 8
+growth-survey buckets for another narrow, non-allocator-touching lever.
+`mir_object_is_fully_promoted` gates `homed-scalar-cfg`'s `MIR_STORE`
+acceptance: any function that stores to an object which also has a real
+`MIR_LOAD` elsewhere (i.e. isn't provably register-only) is rejected
+outright. This is the direct `MIR_STORE` counterpart to Item 9's `MIR_LOAD`
+widening, and touches no allocator code.
+
+**Implementation**: widened the acceptance case to accept a 1- or 2-byte
+scalar `MIR_STORE` to a local/param (ix-relative, with an out-of-range
+push-ix/add-de fallback matching `mir_try_emit_spilled_scalar_cfg`'s own
+idiom) or global/extern/func location, rejecting structs and explicit
+`insn->memory_size` overrides. Emission mirrored the existing `MIR_LOAD`
+side: `mir_emit_home_to_hl` moves the stored value into HL, with a
+conservative `preserve_hl` push/pop (matching the `MIR_BRANCH_FALSE`/
+`MIR_BINARY` idiom) whenever HL wasn't already the value's home register,
+plus an unconditional push/pop of `bc`/`de` around the rare out-of-range-ix
+path since it uses both as scratch via `ex de,hl` and `add hl,bc` — a real
+hazard in the homed model (unlike the always-memory-backed spilled path)
+since `bc`/`de` may hold another still-live homed value at that program
+point. `mir_store_is_dead` (already used for the fully-promoted case) also
+elides genuinely dead stores at emission time.
+
+**Validation**: `git stash`/rebuild/census confirmed the exact 155/2019
+(7.68%) baseline first. With the change rebuilt and re-censused
+(`--fail-on-regression`), the result was **zero yield**: `newly
+MIR-emitted: 0`, `apps with census changes: 0` — coverage stayed exactly
+155/2019 with the identical outcome/selector breakdown. Every zero-spill
+function with a non-fully-promoted `MIR_STORE` is evidently also blocked by
+another gate (most likely `text-size`'s systemic ~2x cost gap, or a
+co-occurring `MIR_LOAD` shape narrower than Item 9's 2-byte-exact slice),
+the same "real but redundant with an existing blocker" pattern Item 10's
+char-load widening found.
+
+**Decision**: reverted the code (`git checkout --`) rather than keep unused
+complexity, verified the revert restored the exact 155/2019 baseline, and
+documented the negative result here per SKILL.md's "document negative
+results" guidance so a future contributor does not repeat this measurement.
+`store-not-promoted` is retired as a lever on its own; if it is ever
+revisited, it should be paired with widening the co-occurring `MIR_LOAD`
+acceptance slice (e.g. 1-byte/mismatched-width loads, Item 10's already-
+zero-yield candidate) at the same time, since neither alone appears to
+unblock any function in the current population.
