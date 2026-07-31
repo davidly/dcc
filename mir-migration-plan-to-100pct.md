@@ -882,3 +882,99 @@ independent yield to justify a narrower shift/multiply-free gate on its
 own. Working tree fully reverted to the Item 4 checkpoint (`0bb502b`);
 confirmed via a fresh census matching 151/2018 (7.48%) exactly with no
 residual diff.
+
+### Phase 1, Item 6: constant-shift strength reduction - scoped and scored, not implemented (deferred as Item-6-level design complexity)
+
+Item 5's rejection pointed at a root cause worth investigating on its own
+merits, independent of the scalar-dag rescue: **the production
+`mir_emit_scalar_operation`/`mir_emit_scalar_shift` path (used by
+`spilled-scalar-cfg`, the dominant selector for 1930 of 2018 attempted
+functions) has no constant-operand strength reduction for `TOK_SHL`/
+`TOK_SHR` at all**, unlike `'*'` (which already has
+`mir_mul_const_fast_path_eligible`/`mir_emit_mul_hl_const`, ~line 6609)
+and `'/'`/`'%'` (which already has a constant-divisor shortcut, ~line
+9284). Every shift, even by a literal compile-time constant, always
+materializes the count into a register and runs a generic `djnz`-counted
+loop.
+
+**Corpus-wide scope, measured directly** (temporary
+`DCC_MIR_SHIFT_CONST_SURVEY` debug hook in `mir_emit_scalar_operation`'s
+caller, removed after use): 32 distinct app.function pairs across 21 apps
+use a shift with a literal constant count. Cross-referencing against a
+fresh census: the large majority (`a1.emulate`/`op_bcd_math`/`op_rotate`,
+`adaint.mem_get_word`/`mem_set_word`, `cint.mem_get_word`/`mem_set_word`/
+`global_decl_or_func`, `fint`/`forint.cell_at`/`set_cell`/`run_at`,
+`pihex.powermod16`, `tarray.aHexByte`/`aHexWord`,
+`tbdos`/`tbfinit`/`tbitfld`/`tbits32`/`tcaslv`/`tpromo2`/`tpromo32`/`ts`/
+`ts32.main`, `tchess.rank_of`, `tinline.mem_get`/`mem_set`) are already
+on `text-size` fallback via `spilled-scalar-cfg`, but with generated/
+captured byte ratios ranging from ~1.4x (`tchess.rank_of`: 243 vs 132,
+the one plausible near-miss) up to ~3.7x (`a1.emulate`: 99760 vs 26573) -
+meaning shift codegen is very rarely the *sole* or even dominant cause of
+these functions' bloat; most have other, larger, compounding text-size
+issues. **Realistic yield from this fix alone is therefore likely small
+(low single digits of newly-accepted functions), even though the
+underlying quality gap is real and touches a meaningful fraction of the
+corpus.**
+
+**A second, independent discovery surfaced during this scoping pass**:
+`tcodegen.c`'s dedicated shift-test functions (`lsl8`/`lsl9`/`asr8`/
+`asr9`/`asr15`/`lsr8`/`lsr12`/`lsr15`) never appear in
+`DCC_MIR_SELECT_REPORT`/the census at all in the current committed
+build, despite having their own standalone `.mac` symbols - a "MIR
+scalar-cfg frame" preflight debug line prints for them (confirming
+`mir_try_emit_spilled_scalar_cfg`'s preflight runs), but the terminal
+"MIR selection" line is never reached or is suppressed. This is
+consistent with `mir_end_function`'s documented
+`g_speculative_codegen_active` mechanism (legacy retries codegen from
+scratch for several discard-capable speculative regalloc attempts -
+no-IX-frame among them - and correctly suppresses reporting for the
+*discarded* attempts, per the existing comment above the
+`MIR_MAX_ROLLOUT_INSNS` early-return case) but the frame-preflight debug
+line itself is not gated on that flag, so it leaks through even when the
+final report is (correctly) suppressed. This means **the census/select-
+report undercounts an unknown number of functions corpus-wide** whenever
+their kept, final codegen comes from a speculative no-IX-frame (or
+similar) attempt - a separate tooling-completeness gap from the shift
+question, not something this session's changes caused (reproduced on
+the unmodified `0bb502b` checkoint), and worth a dedicated audit before
+trusting census totals as fully exhaustive.
+
+**Why this was scoped but not implemented this session:** legacy's own
+constant-shift codegen (inspected directly via `.mac` capture) is not a
+simple fixed unroll - it has a real per-count strategy table: plain
+`add hl,hl`/`sra h;rr l`/`srl h;rr l` unrolling for small counts (e.g.
+shift-by-8/9 in `lsl8`/`lsl9`), a byte-boundary move-and-extend shortcut
+at counts >= 8 (`lsr8`: `ld l,h / ld h,0`, zero total shift instructions
+beyond the move; `asr8`: `ld a,h/ld l,h/rla/sbc a,a/ld h,a`, a sign-
+replication trick), and a combination of the move-and-extend shortcut
+plus a remainder unroll for counts between 9 and 15 (`lsr12`: move+zero
+then 4 more `srl l`; `asr9`: sign-trick then 1 more `sra h/rr l` pair).
+Faithfully replicating this table - across 16 possible counts x 2
+signedness x 2 directions, with correctness (not just size) on the line
+for a change to the dominant production selector affecting 1930+
+functions - is a legitimate "improve the emitter" project per SKILL.md
+step 6, but is **not** the "smallest reusable edit" this slice's risk
+budget supports without a dedicated test matrix (every count 0-15 x
+signed/unsigned x left/right, verified by actual execution, not just
+static byte inspection - directly on point after the Item 5 lesson that
+smaller generated-byte counts do not certify correctness or speed).
+
+**Recommended for a future, dedicated slice**, in this order: (1) fix the
+`DCC_MIR_SELECT_REPORT` undercounting gap first (gate the
+`mir_scalar-cfg frame` debug line on `!g_speculative_codegen_active`, or
+audit why it isn't already), so the true corpus-wide shift-const
+population and its actual fallback/accepted breakdown can be measured
+precisely - the current 32-function count is very likely an
+undercount; (2) implement constant-shift strength reduction as a
+narrow, incrementally-tested selector improvement (start with the
+safest subset - small counts 1-7 with plain unrolling only, matching
+legacy exactly, before attempting the byte-boundary/sign-trick
+shortcuts for counts >= 8); (3) validate with the full ladder
+(`census --fail-on-regression`, then `runall.ps1 -Mode full` on every
+app in the cross-reference list above, not just the ones that flip to
+`mir`, since already-*accepted* functions using shift would also change
+shape and need the same non-regression proof). Deferred, not attempted,
+per the same Item-6-level-design-ambiguity threshold the user
+authorized skipping past. Working tree confirmed clean and matching
+151/2018 (7.48%) after removing the temporary survey instrumentation.
