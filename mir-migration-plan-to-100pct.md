@@ -1428,3 +1428,34 @@ lever for a following session.
   per-opcode emission switch.
 - Rejected experiments and why: none yet for this class - this handoff is
   the starting point, not a retry of a failed attempt.
+
+### Item 12: tested Item 11's "single wide-value" narrower-slice hypothesis - not proportionate, confirms the allocator-extension path is required
+
+Item 11's handoff proposed a possible smaller first step: restrict wide-value
+support to functions with only one live 4-byte-typed value, using a fixed
+HL:DE pair for it without a general pair-coloring rewrite. Tested this via
+another temporary, disposable survey (`DCC_MIR_WIDE_COUNT_SURVEY`, counting
+distinct wide-typed value *definitions* per zero-spill function as an
+upper-bound proxy for "how many live wide values does this function have")
+across the same 323-file corpus.
+
+**Result**: only 73 of 1660 surveyed zero-spill functions have exactly one
+wide-typed value definition in their entire body - the overwhelming rest
+(1587) have 2 or more (many have dozens, one has 399), meaning most real
+`long`-using functions carry multiple wide values (loop counters with
+multiple SSA versions, several `long` locals/params, or repeated
+sub-expression values), not the single-touch shape the narrower slice would
+cover. 73 is well short of the ~97+ (likely much larger, given repeated
+function names across apps) real fallback yield found in Item 11's main
+survey, and would not even cleanly justify its own selector-only special
+case given how much smaller it is than the full population.
+
+**Decision**: this rules out a cheap narrower first step - the real yield
+requires the general register-allocator pair-coloring extension Item 11
+already scoped as the necessary (larger, multi-day) piece of work. No further
+narrower slice is worth surveying before that work begins. Reverted the
+survey instrumentation (same disposable-survey discipline); no production
+code changed. Item 11's handoff stands as written; this item removes the
+"maybe a narrower slice avoids the allocator work" open question it left,
+so the next session can start directly on the allocator extension rather
+than re-testing this hypothesis first.
