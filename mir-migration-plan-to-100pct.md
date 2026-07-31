@@ -136,6 +136,58 @@ investigation (start with `forint.assign_pre` and `forint.bump_sym_val`
 separately, `DCC_MIR_REPORT=1` dump each, compare fused-branch output
 against legacy bit-for-bit on several concrete input values) before any
 further widening of the gates that currently keep these functions safely
+on fallback in production - **no shipped behavior is at risk today**;
+`assign_pre`/`bump_sym_val` remain on the fallback path by construction of
+the existing acceptance gates, and this whole section is pre-emptive
+investigation for a *future* gate-widening, not a live regression.
+
+**Progress this session (2026-07-31): reproduced and narrowed, root cause
+still open.** Re-confirmed both functions are still independently
+implicated via `scripts/mir-migration-bisect.sh forint
+assign_pre,bump_sym_val` (both PASS individually when forced to fallback,
+matching the prior session's finding). Added new evidence for
+`assign_pre`'s specific failure signature: comparing raw `ntvcm` output
+byte-for-byte between the unforced build and
+`DCC_MIR_FORCE_ACCEPT_FUNCTION=assign_pre` shows the forced build produces
+**zero bytes of output** where the correct build produces 192 bytes (a
+full digit-computation result) - i.e. this is not a subtle off-by-one in
+one computed value, it is a total loss of all subsequent program behavior,
+consistent with a stack- or control-flow-level corruption rather than an
+arithmetic error. Manually traced the generated assembly for `assign_pre`'s
+`idx=idxe>=0?eval_e(idxe):0` ternary (the Item-27 signed-zero-sign-test
+fusion) instruction-by-instruction for both `idxe>=0` and `idxe<0` concrete
+cases and found the `bit 7,h` / `jp z,...` branch logic, and the two
+paths' PHI-merge stack balance, to be individually correct by hand
+simulation - the bug (if it is Item 27's fusion specifically, rather than
+something else in `mir_try_emit_spilled_scalar_cfg`'s general call/frame
+handling that this function also exercises) was not isolated to a single
+instruction this session. An attempt to instrument `assign_pre` with an
+inserted `fprintf` trace call to compare live variable values at runtime
+between builds was inconclusive: it changes the function's MIR shape
+enough (adding a 5-argument variadic call) that it may be exercising a
+different code path than the original bug, and is not trustworthy evidence
+either way - noted here so a future session doesn't repeat it without this
+caveat.
+
+**Deferred, with rationale, same as Item 6/the shift-slice above**: fully
+isolating this bug requires instruction-level register tracing across a
+call boundary (e.g. a custom `ntvcm` single-step trace, or bisecting the
+generated assembly by selectively reverting individual emission choices
+inside `mir_try_emit_spilled_scalar_cfg` for just this one function) - a
+multi-hour, dedicated-session task, not a continuation of the current
+session's budget. Recommended concrete next steps for whoever picks this
+up: (a) get a Z80 instruction-level trace of `assign_pre`'s first call
+site's return address and stack pointer immediately before/after the call,
+to confirm or rule out a stack-imbalance/corrupt-return hypothesis; (b)
+bisect within `assign_pre` itself by locally reverting just the Item-27
+fusion (temporarily forcing `mir_fused_compare_is_signed_zero_sign_test`
+to always return 0 for this one function only, as a diagnostic, not a
+production change) to see whether the failure disappears - this would
+conclusively confirm or rule out Item 27 as the culprit, separating it from
+whatever else `spilled-scalar-cfg` does for this function's calls/frame.
+No source change made this session as a result; the acceptance gates
+already keep this class safely on fallback in production, so there is no
+regression to fix, only future-coverage work to unblock.
 on fallback. Fixing real bugs behind existing gates is lower-risk and
 higher-value than widening gates further.
 
