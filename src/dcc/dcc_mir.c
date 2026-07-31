@@ -6027,16 +6027,25 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             {
                 struct Sym *callee = find_global(insn->name);
                 int is_indirect = strcmp(insn->name, "<indirect>") == 0;
-                /* Only calls to functions this translation unit defines are
-                 * provably safe here: mir_emit_home_prologue/epilogue push
-                 * and pop iy around any dcc-compiled function body that uses
-                 * it as a home register, so a defined callee transparently
-                 * preserves iy for its caller. Indirect calls and calls to
-                 * undefined/external symbols (including the whole runtime
-                 * library) are not covered by that guarantee here and must
-                 * stay on the spilled path, which recomputes its own
-                 * (unrelated) virtual iy base after such calls instead. */
-                if (is_indirect || callee == NULL || !callee->is_defined)
+                /* Phase 1 (mir-migration-plan-to-100pct.md): a defined-in-TU
+                 * callee was previously required, on the theory that only
+                 * mir_emit_home_prologue/epilogue's own push/pop iy could be
+                 * trusted to preserve a caller's IY. That is stricter than
+                 * the invariant the rest of the compiler already relies on
+                 * (dcc.h's REG_IY comment, verified by
+                 * scripts/rtl-iy-safety.py): IY is CALLEE-SAVED across *any*
+                 * call, defined or not - DCCRTL contains no IY instruction
+                 * at all, and CP/M's 8080-coded BDOS has no index registers
+                 * to write with, so nothing reachable from an ordinary call
+                 * can clobber it. This is exactly the same guarantee
+                 * function_qualifies_for_speculative_iy_regalloc
+                 * (dcc_regalloc.c) already leans on for the legacy backend,
+                 * which claims IY for any call-containing function without
+                 * distinguishing defined-in-TU calls from library calls.
+                 * Only an indirect call (whose target isn't known at
+                 * compile time, so it can't be proven to be dcc-compiled or
+                 * part of DCCRTL/BDOS) remains excluded here. */
+                if (is_indirect || callee == NULL)
                     return 0;
                 if ((insn->memory_flags & (32 | 64)) != 0)
                     return 0;

@@ -630,3 +630,72 @@ read as "measured with a since-corrected reporting bug" rather than
 literal ground truth. Do not use any pre-`fbff14c` coverage number as a
 baseline for `--compare`/`--fail-on-regression` without regenerating it
 against a post-fix binary first.
+
+### Phase 1, Item 3: `homed-scalar-cfg` gains calls to undefined/external callees
+
+**Hypothesis:** Item 1's `MIR_CALL` gate (`callee != NULL && callee->is_defined
+&& !is_indirect`) is stricter than necessary. The IY-safety precheck it was
+built on ("a defined callee's own prologue/epilogue push/pop iy around it")
+is *one sufficient* proof of safety, but not the only one, and the gate
+conflated "provably safe" with "defined in this TU." `dcc.h` (~line 439-447)
+documents a broader, already-relied-upon invariant: IY is CALLEE-SAVED across
+*any* call in a linked image, because `DCCRTL.MAC` contains zero IY
+references (`grep -ic '\biy\b' DCCRTL.MAC` == 0, matching the automated
+check in `scripts/rtl-iy-safety.py`) and CP/M's 8080-coded BDOS has no index
+registers to clobber it with. The legacy backend's own
+`function_qualifies_for_speculative_iy_regalloc` (`dcc_regalloc.c` ~line 336)
+already leans on exactly this invariant and does not distinguish
+defined-in-TU calls from calls to undefined/external (DCCRTL) symbols. An
+indirect call remains the only case that must stay excluded, since its true
+target isn't known at compile time and can't be proven to be dcc-compiled or
+part of DCCRTL/BDOS.
+
+**Implementation** (`src/dcc/dcc_mir.c`, `mir_try_emit_homed_scalar_cfg`'s
+`MIR_CALL` acceptance case, ~line 6026): removed the `!callee->is_defined`
+condition, keeping only `is_indirect || callee == NULL`. Updated the code
+comment to cite the broader invariant and the legacy backend's matching
+precedent instead of the narrower "this TU defines it" rationale. No emission
+changes were needed: `sym_asm_name(callee)`/the existing `extrn` handling
+already treat any non-NULL `callee` uniformly regardless of `is_defined`,
+matching the pattern already used by `spilled-scalar-cfg`/`general-rollout`
+for their own (always-had-this-case) `MIR_CALL` emission.
+
+**A second, larger blocker found while falsifying the hypothesis:**
+`tscanf.c`'s `check_str` (chosen as the test candidate: calls both `strcmp`
+[external] and `fail_str` [in-TU-defined], `spills=0, cross-call=0` per
+`DCC_MIR_REPORT`) remained on `spilled-scalar-cfg` fallback even after this
+change (`DCC_MIR_GENERAL_FUNCTION=check_str` confirms `homed-scalar-cfg`
+still rejects it). Root cause: `mir_try_emit_homed_scalar_cfg`'s acceptance
+switch has **no `case MIR_LOAD:`** at all — any function whose parameters or
+locals are promoted to an addressable object (needing an explicit reload
+after a branch, rather than being reused as a pure SSA value) falls through
+to `default: return 0` regardless of the `MIR_CALL` gate. This affects far
+more of the corpus than just calls: even `tesc.c`'s `check()` (int
+params, no calls to undefined callees at all — only calls `fail`, already
+in-TU-defined and already accepted since Item 1) uses `MIR_LOAD` for its
+`name` parameter (reloaded for the failure-branch's second use) and was
+never reaching the `MIR_CALL` gate either. This is a separate, likely
+higher-yield selector gap (any multi-use parameter/local across a branch)
+and is out of scope for this slice; recommended as the next Phase 1 item.
+
+**Yield of this slice alone (measured, `--fail-on-regression` clean):**
++2 functions — `tnarrow.mrleft` and `wumpus.flsh` (both are pure-SSA,
+no-`MIR_LOAD` functions that call an undefined/external callee, e.g. a
+runtime helper). Coverage: 139/2018 (6.89%) -> **141/2018 (6.99%)**. No
+functions regressed to fallback, no already-active MIR function's generated
+metrics changed except the two newcomers. Focused
+`pwsh ./scripts/runall.ps1 -Apps tnarrow,wumpus -Mode full -RunTimeout 20`:
+2/2 pass, 0 regressions, 2 minor nopeep improvements (tnarrow -0.07%, wumpus
+-0.13%). Wide `-Mode fast`: 314/314 apps, 106/106 diagnostics, 17/17 dccpeep
+fixtures, performance all pass.
+
+**Conclusion:** the relaxation is correct and safe but low-yield in
+isolation because it is gated behind the much larger `MIR_LOAD` gap above.
+Landing it now removes a proven-unnecessary restriction (SKILL.md rule 1:
+identify the exact affected functions before widening — done here) and
+unblocks the two functions that don't also need `MIR_LOAD`, but the real
+lever for Phase 1's "biggest expected yield" framing is adding `MIR_LOAD`
+support (acceptance + emission) to `homed-scalar-cfg`, which is a
+substantially larger, separate slice (needs a reload/store strategy for
+promoted objects, not just a gate check) and should be scoped and attempted
+independently next.
