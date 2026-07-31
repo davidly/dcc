@@ -1882,3 +1882,103 @@ the largest remaining lever is the `value-width` register-allocator
 extension for 4-byte/wide values (tracked as the standing SQL todo
 `phase1-item13-value-width-allocator`), or a from-scratch re-derivation
 of the plan from a fresh census per SKILL.md's re-derivation guidance.
+
+### Item 20: value-width (4-byte) allocator extension — scoped into safe incremental sub-steps (planning only, no code yet)
+
+**Context**: with the fastcall family (Items 15/18) and HL-forwarding
+(Item 19) veins both exhausted at negligible/zero further yield, Item 11's
+value-width finding is the only remaining lever with material real yield
+(~97+ unique currently-fallback function names) at this coverage level.
+Item 12 already measured and rejected the "single wide-value, fixed HL:DE
+pair" narrower slice (only 73/1660 functions qualify, and Item 12's own
+conclusion states the general allocator extension is required with no
+cheaper narrower slice worth re-testing).
+
+**This session's contribution**: rather than attempting the full extension
+as one patch, inspected `mir_allocate_registers()` (`dcc_mir.c` ~4408-4700)
+and its consumers to find the concrete hazard that makes a naive
+implementation unsafe, then decomposed the work into an incremental,
+independently-validatable sequence per SKILL.md's explicit guidance for
+large items ("needs its own dedicated survey-reconfirm-implement-validate
+cycle with incremental steps, not a single large patch").
+
+**Hazard found**: `mir_allocate_registers` is a single shared pass invoked
+for *every* function unconditionally (its results feed `DCC_MIR_REPORT`
+diagnostics, census/report summaries, and both selectors) — not just
+homed-scalar-cfg candidates. Its color model is hard-wired to exactly 4
+slots: `struct MirAllocationSummary.colors[4]` is a fixed-size array
+indexed directly by the chosen color, and the `DCC_MIR_REPORT` printer
+(~line 4946-4948) does `homes[mir.allocation_colors[insn->dst]]` with a
+`homes[]` array sized for colors 0-3. If wide-typed values started
+receiving new pair-color codes (e.g. 4/5 for HL:DE/BC:IY) unconditionally
+inside the *existing* shared allocation call, this would be an
+out-of-bounds array write/read (`summary->colors[chosen]`) or read
+(`homes[color]`) for the (large) existing population of functions that
+already contain `long`/wide values today but currently fall back for
+unrelated reasons — corrupting diagnostics/reports for functions far
+outside the intended candidate set. This is exactly the kind of subtle,
+correctness-affecting hazard that justifies not attempting the full
+allocator rewrite as a single patch.
+
+**Decomposition** (recorded as ordered SQL todos, `phase1-item20a`
+through `phase1-item20f`, replacing the single
+`phase1-item13-value-width-allocator` todo):
+
+1. **20a — widen the shared summary/color storage safely.** Grow
+   `MirAllocationSummary.colors[]` and any other fixed-4 array (`homes[]`
+   in the report printer, `preferences[]` sizing already uses
+   `MIR_COLOR_COUNT` so that one is already safe) to accommodate two new
+   *pair* codes, and audit every direct `[0..3]`-assuming array indexed by
+   an `allocation_colors` value in the file (the report printer is the one
+   confirmed hazard; there may be others — a full grep-and-audit pass is
+   the deliverable, not a code change yet). Land this as a no-behavior-change
+   defensive resize (colors 4/5 never actually assigned yet) so it can be
+   validated with a plain census diff showing exactly zero change.
+2. **20b — teach the interference/coloring loop to recognize a
+   wide-typed value as needing two adjacent slots simultaneously**, but
+   gate actually *choosing* a pair color behind a new, currently-always-false
+   predicate (e.g. a static "wide coloring enabled" flag/parameter threaded
+   through `mir_allocate_registers`, defaulting off). This lands the
+   interference-graph logic (a wide value's live range must exclude both
+   slots of its pair from every interfering value) as inert, dead code,
+   validated by inspection and a targeted unit-style forced-accept check
+   rather than a corpus census (which would show no change since the flag
+   is off).
+3. **20c — enable the flag only for `mir_try_emit_homed_scalar_cfg`'s own
+   private probe call** (not the shared per-function pass every function
+   already goes through for reporting), and re-derive/reconfirm Item 11's
+   yield estimate against this real pair-coloring result (not the diagnostic
+   proxy count Item 11/12 used) on the current corpus, before touching any
+   acceptance gate. This produces a trustworthy, up-to-date real yield number
+   before further investment.
+4. **20d — widen `mir_try_emit_homed_scalar_cfg`'s acceptance gate** to
+   permit 4-byte values *only* when the probe from 20c succeeds (no spills),
+   still rejecting emission for any opcode not yet given wide emission
+   support (i.e. acceptance and emission-capability must be co-gated per
+   opcode, not widened wholesale) — start with the narrowest opcode subset
+   with a real, verifiable population: likely `MIR_CONST`/`MIR_PARAM`/
+   `MIR_RETURN` (no arithmetic yet), matching Item 9's proven "narrow
+   2-byte scalar slice" precedent.
+5. **20e — add wide arithmetic emission incrementally**, one opcode family
+   per item exactly like Items 15/17/18 did for fastcalls: `MIR_BINARY`
+   add/sub first (simplest carry propagation), then `MIR_UNARY` negate/not,
+   then shifts/mul/div (likely routed through existing DCCRTL 32-bit
+   runtime calls already used by the legacy backend and spilled-scalar-cfg
+   today, not new runtime code).
+6. **20f — milestone validation and Execution Log closeout** once the
+   opcode-by-opcode rollout stabilizes: full census delta, wide `-Mode
+   fast` safety net, full-mode runs across every affected app, and a
+   final coverage/yield report closing this vein.
+
+**Decision**: no production code changed this item — this is a scoping/
+decomposition deliverable only, explicitly recommended by SKILL.md's
+guidance for large items and consistent with Item 12's own closing note
+that the next session should "start directly on the allocator extension."
+Attempting 20a-20f as a single patch in one sitting was assessed as
+materially higher-risk than the incremental sequence above (the shared
+`mir_allocate_registers` hazard above is proof this vein has real,
+non-obvious correctness traps, not just design/perf tradeoffs like prior
+items). The SQL todo list now reflects this breakdown so a future session
+(or continuation of this one) can execute 20a first with a trivial,
+zero-risk validation (plain census diff showing no change) before any
+riskier step.

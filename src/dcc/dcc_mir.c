@@ -4421,22 +4421,32 @@ static int mir_promote_objects(void)
     return inserted_phi ? -(promoted + 1) : promoted;
 }
 
+enum MirPhysicalColor {
+    MIR_COLOR_HL,
+    MIR_COLOR_DE,
+    MIR_COLOR_BC,
+    MIR_COLOR_IY,
+    /* Reserved for a future value-width (4-byte) allocator extension
+     * (mir-migration-plan-to-100pct.md Item 20): a wide value would occupy
+     * two adjacent single-register-pair slots simultaneously. Never
+     * assigned by mir_allocate_registers today - MIR_COLOR_COUNT below,
+     * and every array indexed directly by an allocation_colors value (the
+     * MirAllocationSummary.colors[] field and the DCC_MIR_REPORT "homes"
+     * printer), is sized to tolerate these codes so that a later patch can
+     * introduce them without an audit of every consumer. */
+    MIR_COLOR_HL_DE,
+    MIR_COLOR_BC_IY,
+    MIR_COLOR_COUNT
+};
+
 struct MirAllocationSummary {
-    int colors[4];              /* HL, DE, BC, IY */
+    int colors[MIR_COLOR_COUNT]; /* HL, DE, BC, IY, (reserved) HL:DE, BC:IY */
     int spills;
     int cross_call_values;
     int opaque_crossing_values;
     int fixed_moves;
     int operand_moves;
     int phi_moves;
-};
-
-enum MirPhysicalColor {
-    MIR_COLOR_HL,
-    MIR_COLOR_DE,
-    MIR_COLOR_BC,
-    MIR_COLOR_IY,
-    MIR_COLOR_COUNT
 };
 
 static int mir_fixed_color_for_definition(const struct MirInsn *insn)
@@ -4942,7 +4952,8 @@ static int mir_verify_and_dump(void)
         if (insn->opcode == MIR_PHI)
             fprintf(stderr, " [L%d,L%d]", insn->phi_pred1, insn->phi_pred2);
         if (insn->dst >= 0 && insn->dst < mir.next_value) {
-            static const char *homes[] = { "hl", "de", "bc", "iy" };
+            static const char *homes[] = { "hl", "de", "bc", "iy",
+                                            "hl:de", "bc:iy" };
             if (mir.allocation_colors[insn->dst] >= 0)
                 fprintf(stderr, " home=%s",
                         homes[mir.allocation_colors[insn->dst]]);
