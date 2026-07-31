@@ -818,3 +818,67 @@ inefficiently per-case rather than via a jump table). None match
 compare/branch/return-constant shape, so this slice does not touch them.
 Recommended as separate future slices, each needing its own falsifiable
 hypothesis rather than a blanket gate relaxation.
+
+### Phase 1, Item 5: `mir_try_emit_scalar_dag` production rescue - rejected experiment, deferred
+
+Following Item 4's pattern, `mir_try_emit_scalar_dag` (single-return,
+branch-free, purely-arithmetic bodies) was found to be the *other*
+selector only reachable via the `DCC_MIR_EMIT_FUNCTION` diagnostic
+dispatcher, never from `mir_end_function`'s real production path. A
+corpus-wide structural survey (temporary `DCC_MIR_SCALAR_DAG_SURVEY` env
+hook, removed after use) found 32 distinct functions across 11 apps
+(`tbool.bool_param_sum`, `tc89size.nb_c99_type_counts`,
+`tc99varm.two`/`three`, `tcodegen.lsl8`/`lsl9`/`asr15`/`asr8`/`asr9`,
+`tkandr.default_int`/`uchar_mix`, `tmulpow2.umul_lhs`/`umul_rhs`,
+`tv6`/`mystery_fn`/`mulb`/`multh`/`mul2`/`mul7`/`mul15`/`mul31`/`mul63`/
+`mul127`/`mul255`/`scale`/`pat`/`rpat`/`rank_of`/`file_of`) currently
+rejected for `text-size` or `instruction-count`, of which ~11 passed the
+existing near-cost/byte-profitable static gate (the same cost check
+Item 4 reused).
+
+**A full second-chance rescue was implemented (mirroring Item 4's
+structure exactly), rebuilt, and passed `census --fail-on-regression`
+cleanly: +11 functions, 151/2018 (7.48%) -> 162/2023 (8.01%), 0
+regressions in the static census metrics.** A byte-delta in a handful of
+*unrelated* caller functions (`tcodegen.main`/`scnt`/`scod`/`srdy`) was
+investigated and confirmed to be a harmless artifact of the shared global
+label counter (renumbered labels shift later functions' assembly-text
+length by 1-2 characters with zero effect on assembled Z80 bytes,
+confirmed via direct side-by-side `.mac` diff normalizing label numbers)
+- not a real widened blast radius, and not itself a reason for concern.
+
+**However, the mandatory focused `-Mode full` run
+(`tbool,tc89size,tc99varm,tcodegen,tkandr,tmulpow2`) found real,
+significant performance regressions in 5 of the 6 affected apps:**
+`tcodegen` peep +7.12%/nopeep +6.17%, `tmulpow2` peep +3.04%/nopeep
++5.6%, `tc99varm` nopeep +3.6%, `tkandr` peep +0.01%/nopeep +1.55%. Only
+`tc89size` (pure add/sub/compare arithmetic, no shifts or multiplies)
+improved cleanly. Root cause: `mir_try_emit_scalar_dag`'s shift/multiply
+codegen (`mir_emit_scalar_shift`, the `'*'` case in `mir_emit_scalar_value`)
+has no constant-operand specialization at all - it always emits the
+fully generic runtime form (a `push ix`/`add ix,sp` frame plus a `djnz`
+counted loop for shifts, `call __mulu` for every multiply), whereas
+legacy's AST-level codegen constant-folds a compile-time shift count into
+a straight-line unrolled `add hl,hl` sequence (no frame, no loop) and
+specializes small-constant multiplies similarly. The static byte/instruction
+gate could not see this: `lsl8`'s rescued form measured 177 generated vs
+179 captured *assembly-text* bytes (a near-tie), but the real assembled
+code is a stack-framed runtime loop (~33 bytes, N loop iterations) against
+legacy's tight unrolled sequence (~21 bytes, zero branches) - exactly the
+SKILL.md rule 4 case ("a smaller assembly-text stream or instruction count
+is not proof of faster or smaller Z80 code").
+
+**Rejected and reverted, not merged.** Fixing this properly requires
+adding constant-operand strength reduction to `mir_emit_scalar_shift` and
+the multiply case of `mir_emit_scalar_value` (detect a `MIR_CONST` shift
+count / multiplicand and emit legacy's unrolled/specialized form instead
+of the generic loop/runtime-call form) - a separate, larger emitter-quality
+project, not a "smallest reusable edit" for this slice, and squarely a
+prerequisite rather than an extension of this rescue. Re-attempting the
+scalar-dag production rescue is only safe after that emitter work lands;
+until then only `tc89size.nb_c99_type_counts` (and similarly shift/multiply-
+free bodies) would be genuinely safe to promote, which is not enough
+independent yield to justify a narrower shift/multiply-free gate on its
+own. Working tree fully reverted to the Item 4 checkpoint (`0bb502b`);
+confirmed via a fresh census matching 151/2018 (7.48%) exactly with no
+residual diff.
