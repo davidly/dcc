@@ -292,3 +292,40 @@ committing to building new spill-slot infrastructure for the homed path.
 If that count is small, this item should be re-scored against other
 `text-size`/`instruction-count` fallback classes in a fresh census rather
 than assumed to be the next-best lever.
+
+## Item C: measured and closed - negligible yield, do not implement
+
+Built a temporary, diagnostic-only measurement (a parallel dry-run of
+`mir_try_emit_homed_scalar_cfg`'s structural pre-scan that bypasses only
+the two spill-related rejections, and only for the narrowest sub-case: a
+function with exactly one spill, where that spill is a cross-call value
+that lost the single-IY-slot contest rather than a cross-opaque-forced or
+general-pressure spill) to get a real number before committing engineering
+time, per the refined scoping note above.
+
+**Result**: of 319 currently-fallback functions with exactly one spill
+corpus-wide, only **one** (`tinline.edge_outer_body`, 390 vs 317 bytes,
+34 vs 26 instructions, single block) would structurally clear every other
+`homed-scalar-cfg` gate if spill-slot storage for this narrow case
+existed. All measurement instrumentation was removed after the survey
+(never committed) - `git diff` against the pre-survey commit is empty.
+
+**Decision**: closed, not implemented. Building new spill-slot storage for
+the homed path (frame layout, store-at-spill/load-at-use, forcing a frame
+for currently-frameless candidates) is a materially large, correctness-
+sensitive engineering effort for a yield of exactly one function. This
+fails the plan's own prioritization scoring (Yield is negligible; Risk is
+high - same class as the bug fixed in Item A) by a wide margin. Item C is
+retired as a lever; do not revisit unless a future census shows a
+materially different corpus composition.
+
+**Item D** was gated on Item C's measured yield. With that yield now
+known to be negligible, Item D (PHI register-identity reconciliation) is
+not motivated by Item C data at all - it remains what it always was, "not
+yet scoped enough to implement," and per SKILL.md's own guidance this
+whole `mir-migration-plan-forward.md` vein (Items A-D) is now run dry:
+Item A landed a real fix, Item B and C both closed as measured non-levers,
+and D was never independently scoped. The next session should re-derive a
+fresh plan from a new census and fallback-reason breakdown rather than
+continue numbering in this document, exactly as SKILL.md prescribes when
+a vein like this runs dry.
