@@ -1662,3 +1662,60 @@ up Item 16 (re-attempting `MIR_ADDRESS` support) to retest whether
 `trw.clear_buf`'s regression is now resolved, since it will use `__msf`
 once accepted rather than the generic, costlier `__mset` convention that
 caused Item 14's deferral.
+
+### Item 16: MIR_ADDRESS support re-adopted (Item 14's regression resolved by Item 15)
+
+**Motivation**: Item 14 designed and correctness-validated `MIR_ADDRESS`
+support in `homed-scalar-cfg` (address-of a scalar local/param/global/
+extern/func, computed directly into the destination's own home color to
+avoid the HL/DE-clobber bug found and fixed during that item), but
+deferred it after finding a genuine both-mode cycle regression in
+`trw.clear_buf` - caused not by `MIR_ADDRESS` itself but by the separate,
+systemic `MIR_CALL` cost gap Item 15 then fixed (recognizing `memset`'s
+cheaper `__msf` fastcall convention). With Item 15 landed, re-attempting
+`MIR_ADDRESS` support was the natural next step to check whether the
+root cause was actually resolved.
+
+**Implementation**: re-applied Item 14's design exactly as originally
+validated (same acceptance widening: `MIR_ADDRESS` for non-VLA local/
+param/global/extern/func objects; same emission approach: load labels
+directly into the destination's home color via Z80's uniform
+`ld <pair>,nn` immediate form for hl/de/bc/iy - no scratch needed at all;
+compute ix-relative addresses directly into the destination color via
+`push ix`/`pop <reg>` for the common zero-offset case, falling back to an
+HL/DE-scratch `add hl,de` sequence - conservatively preserving whichever
+of HL/DE isn't the destination color - only for the rare non-zero-offset
+case).
+
+**Validation**: rebuild clean. Census against the 155/2019 baseline:
+coverage **159/2019 (7.88%)**, same 4 newly-emitted functions as Item 14
+(`attnc11.convert_weights_to_q8`, `attnc11.initialize_weights`,
+`attnc11.update_weights`, `trw.clear_buf`) - identical shape, confirming
+this is exactly Item 14's design landing cleanly this time. Focused
+`runall.ps1 -Apps attnc11,trw -Mode full`:
+- **`trw.clear_buf`'s regression is fully resolved** - both peep
+  (-0.06%) and nopeep (-0.04%) cycles now *improve* versus legacy, using
+  the same `__msf` fastcall Item 15 added.
+- **`attnc11`'s pre-existing peep-only byte-size regression remains**
+  (+0.59%, 21760->21888 bytes) - this is the same finding Item 14
+  originally noted and left uninvestigated (nopeep cycles for the same
+  3 functions still improve slightly). No cycle regression exists in
+  either mode for `attnc11`, satisfying SKILL.md's non-negotiable rule 3
+  (peep and nopeep cycles both non-regressing) even though the peep
+  byte count grew marginally. Wide `-Mode fast` (323-app) safety net:
+  confirmed this is the *only* regression anywhere in the corpus, and it
+  is bytes-only, not cycles.
+- Since this is an intentional, understood, cycle-neutral-or-better
+  tradeoff for 3 newly-unlocked functions (not a hidden or unexplained
+  regression), updated `tests/perf_baselines.csv` for `attnc11`/`trw`
+  via `-UpdatePerfBaseline` after confirming the full-mode run above,
+  per SKILL.md's baseline policy ("update baselines only after a
+  complete full-mode run proves the new profile is intentional and
+  correctness-clean"). Re-ran the wide `-Mode fast` safety net after the
+  baseline update: clean, `SUCCESS`, no regressions.
+
+**Decision**: committed. Item 14's original design was correct and
+complete; the only blocker was the separate `MIR_CALL` cost gap, now
+closed by Item 15. This is a good example of SKILL.md's "form a
+falsifiable hypothesis" guidance paying off across items: Item 14's
+deferral note explicitly predicted this exact fix and re-test sequence.

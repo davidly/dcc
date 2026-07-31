@@ -5345,6 +5345,64 @@ static int mir_emit_home_push(FILE *out, int value)
     }
 }
 
+/* Item 16 (mir-migration-plan-to-100pct.md): load a label's address
+ * directly into a value's own home color. Z80's "ld <pair>,nn" immediate
+ * form works identically for hl/de/bc/iy, so no HL/DE scratch is needed
+ * at all for this case - unlike Item 14's original (reverted) attempt,
+ * which always routed through HL first and could clobber another
+ * still-live homed value. */
+static int mir_emit_label_address_to_home(FILE *out, int value,
+                                           const char *assembly_name)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL: fprintf(out, "\tld hl,%s\n", assembly_name); return 1;
+    case MIR_COLOR_DE: fprintf(out, "\tld de,%s\n", assembly_name); return 1;
+    case MIR_COLOR_BC: fprintf(out, "\tld bc,%s\n", assembly_name); return 1;
+    case MIR_COLOR_IY: fprintf(out, "\tld iy,%s\n", assembly_name); return 1;
+    default: return 0;
+    }
+}
+
+/* Item 16: compute the address of an ix-relative (local/param) scalar
+ * directly into a value's own home color. The zero-offset case (the
+ * object sits exactly at ix, e.g. a first local/param) is address==ix,
+ * transferable to any register pair via push ix/pop <reg> with no
+ * scratch at all. A non-zero offset needs an "add hl,de"-style
+ * computation, which does require HL and DE as scratch - so that path
+ * conservatively preserves whichever of HL/DE isn't the destination
+ * color via push/pop, protecting any other still-live homed value
+ * (the same defensive pattern used by Item 13's MIR_STORE widening). */
+static int mir_emit_ix_offset_address_to_home(FILE *out, int value,
+                                               int offset)
+{
+    int color = mir.allocation_colors[value];
+    if (offset == 0) {
+        switch (color) {
+        case MIR_COLOR_HL: fputs("\tpush ix\n\tpop hl\n", out); return 1;
+        case MIR_COLOR_DE: fputs("\tpush ix\n\tpop de\n", out); return 1;
+        case MIR_COLOR_BC: fputs("\tpush ix\n\tpop bc\n", out); return 1;
+        case MIR_COLOR_IY: fputs("\tpush ix\n\tpop iy\n", out); return 1;
+        default: return 0;
+        }
+    }
+    if (color != MIR_COLOR_HL && color != MIR_COLOR_DE &&
+        color != MIR_COLOR_BC && color != MIR_COLOR_IY)
+        return 0;
+    {
+        int preserve_hl = color != MIR_COLOR_HL;
+        int preserve_de = color != MIR_COLOR_DE;
+        if (preserve_hl) fputs("\tpush hl\n", out);
+        if (preserve_de) fputs("\tpush de\n", out);
+        fputs("\tpush ix\n\tpop hl\n", out);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+        if (color != MIR_COLOR_HL && !mir_emit_hl_to_home(out, value))
+            return 0;
+        if (preserve_de) fputs("\tpop de\n", out);
+        if (preserve_hl) fputs("\tpop hl\n", out);
+    }
+    return 1;
+}
+
 static int mir_emit_constant_to_home(FILE *out, int value, long immediate)
 {
     switch (mir.allocation_colors[value]) {
@@ -6045,6 +6103,28 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (!mir_object_is_fully_promoted(insn->object))
                 return 0;
             break;
+        case MIR_ADDRESS:
+            {
+                /* Item 16 (mir-migration-plan-to-100pct.md): address-of a
+                 * scalar object, mirroring mir_scalar_memory_location's
+                 * existing storage dispatch (same as the spilled-scalar-cfg
+                 * selector's own MIR_ADDRESS case). VLA objects are
+                 * excluded here - their address is itself loaded from a
+                 * memory slot (ix-relative pointer read), a different
+                 * shape not yet worth widening this selector for. */
+                int memory_type, memory_storage, memory_offset;
+                if (!mir_scalar_memory_location(insn, &memory_type,
+                                                &memory_storage,
+                                                &memory_offset))
+                    return 0;
+                if (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
+                    memory_storage != SC_GLOBAL &&
+                    memory_storage != SC_EXTERN && memory_storage != SC_FUNC)
+                    return 0;
+                if (mir_declared_is_vla_object(insn->name))
+                    return 0;
+            }
+            break;
         case MIR_LOAD:
             {
                 /* Item 9 (mir-migration-plan-to-100pct.md): the "opcode-load"
@@ -6207,6 +6287,45 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 }
                 if (!mir_emit_hl_to_home(out, insn->dst))
                     goto done;
+            }
+            break;
+        case MIR_ADDRESS:
+            {
+                /* Item 16 (mir-migration-plan-to-100pct.md, re-adopting
+                 * Item 14 now that Item 15's memset fastcall removes the
+                 * MIR_CALL cost gap that caused Item 14's regression):
+                 * compute the address directly into the destination's own
+                 * home color wherever possible, so this never has to
+                 * route through HL/DE as scratch and risk clobbering
+                 * another still-live homed value (the bug Item 14's first
+                 * attempt hit). Only the non-zero-offset ix-relative case
+                 * still needs HL/DE scratch, handled conservatively by
+                 * mir_emit_ix_offset_address_to_home. */
+                int memory_type, memory_storage, memory_offset;
+                struct Sym *global = find_global(insn->name);
+                if (!mir_scalar_memory_location(insn, &memory_type,
+                                                &memory_storage,
+                                                &memory_offset))
+                    goto done;
+                if ((global != NULL && global->storage == SC_FUNC) ||
+                    memory_storage == SC_GLOBAL ||
+                    memory_storage == SC_EXTERN ||
+                    memory_storage == SC_FUNC) {
+                    const char *assembly_name = asm_name_for(
+                        global != NULL ? sym_asm_name(global)
+                                       : mir_declared_link_name(insn->name));
+                    if (memory_storage == SC_EXTERN ||
+                        (global != NULL && global->storage == SC_FUNC &&
+                         global->needs_extrn))
+                        fprintf(out, "\textrn %s\n", assembly_name);
+                    if (!mir_emit_label_address_to_home(out, insn->dst,
+                                                        assembly_name))
+                        goto done;
+                } else {
+                    if (!mir_emit_ix_offset_address_to_home(out, insn->dst,
+                                                            memory_offset))
+                        goto done;
+                }
             }
             break;
         case MIR_LABEL:
