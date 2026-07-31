@@ -740,3 +740,81 @@ Recommended as a dedicated future slice, scoped and validated on its own
 (start from the narrowest case: an object with exactly one cross-block
 reload and no address-taken/aliasing, prove register identity is preserved
 before allowing more).
+
+### Phase 1, Item 4: promote the dead `mir_try_emit_comparison_branch` selector into production, gated on `instruction-count` rejection
+
+**Discovery while implementing Item 3's reorder attempt:** an initial
+attempt to fix the `instruction-count` fallback bucket (23 functions, e.g.
+`tmirfuse.c`'s `sge`/`sgt`/`sle`/`slt`/`sne`/`uge`/`ugt`/`ule`/`ult`/`seq`,
+all the exact whole-function shape `if (param OP param) return CONST;
+return CONST;`) by reordering `mir_try_emit_z80`'s selector list so
+`mir_try_emit_comparison_branch` ran before `homed-scalar-cfg` had **zero
+effect** - because `mir_try_emit_z80` is not the production dispatcher at
+all. It is only reachable via two diagnostic env vars
+(`DCC_MIR_CANDIDATES`, `DCC_MIR_EMIT_FUNCTION`). The real production path
+(`mir_end_function`, ~line 10895) calls `mir_try_emit_general_rollout`/
+`mir_try_emit_homed_scalar_cfg`/`mir_try_emit_spilled_scalar_cfg` directly,
+with a separate, narrowly-gated "rescue" mechanism (Phase 5 Item 46) that
+retries the loop-family selectors only when `fallback_reason ==
+"cfg-backedge"`. `mir_try_emit_comparison_branch` (and
+`mir_try_emit_scalar_dag`) have **no such rescue** and are therefore fully
+dead code in every normal build - a genuine, previously-uncounted gap in
+an already-implemented, already-tested selector, matching this project's
+earlier "promoting dead selectors" pattern (Phase 5/8 in this same
+Execution Log).
+
+**Fix**: added a second rescue block, modeled exactly on the Phase 5 Item
+46 loop-family rescue, that retries `mir_try_emit_comparison_branch`
+whenever `fallback_reason == "instruction-count"` (the exact bucket this
+selector's shape addresses) and `mir.return_type` is a 16-bit int. Kept
+only if not worse than legacy's captured cost, using the same
+`mir_is_profiled_near_cost_single_block`/`mir_is_byte_profitable_single_block`
+checks as the existing rescue. This can never affect any function
+homed/spilled-scalar-cfg would otherwise accept outright, because the
+rescue only fires once every earlier gate has already failed with exactly
+this one reason.
+
+**Regression found and fixed during validation (SKILL.md rule 4 in
+practice):** the first `-Mode full` run showed a genuine **peep-mode
+regression** for `tests/tmirfuse.c` (9,216 -> 9,344 bytes, +1.39%) despite
+nopeep improving (-1.32%) and every individual function's raw generated
+byte/instruction count being smaller than legacy's capture. Root cause:
+`mir_try_emit_comparison_branch` called `mir_emit_return_constant` twice
+(once per return path), and that helper unconditionally emits the *full*
+`ld sp,ix / pop ix / ret` epilogue every time it's called - duplicating
+the epilogue instead of sharing one between both paths the way legacy's
+own capture already does (`ld hl,1 / jr L193` / `ld hl,0` falling through
+into one shared `L193: ld sp,ix / pop ix / ret`). Pre-peephole this still
+measured smaller per function (fewer total instructions than legacy's
+push/pop-heavy comparison sequence), but dccpeep's `jp_to_jr` and
+dead-epilogue passes were tuned to legacy's merged-epilogue shape, so the
+duplicated-epilogue version came out net larger after peephole across the
+whole app. Fixed by rewriting the two `mir_emit_return_constant` calls
+into an explicit shared-epilogue sequence (`ld hl,<true> / jp
+L<epilogue>` ... `L<false>: ld hl,<false>` ... `L<epilogue>: ld sp,ix /
+pop ix / ret`), matching legacy's shape exactly. `mir_emit_return_constant`
+had no other callers after this change and was removed (confirmed via
+`-Wunused-function`).
+
+**Yield:** +10 functions, all in `tests/tmirfuse.c`
+(`seq,sge,sgt,sle,slt,sne,uge,ugt,ule,ult`). Coverage 141/2018 (6.99%) ->
+**151/2018 (7.48%)**. `instruction-count` fallback bucket: 23 -> 13.
+`census --fail-on-regression` clean (0 regressions, 10 newly-emitted,
+0 apps' already-active MIR metrics changed). Focused
+`pwsh ./scripts/runall.ps1 -Apps tmirfuse -Mode full -RunTimeout 20`:
+1/1 pass, 0 regressions (after the epilogue fix), 3 improvements (peep
+cycles -0.04%, nopeep cycles -1.08%, nopeep bytes -1.32%). Wide `-Mode
+fast`: 314/314 apps, 106/106 diagnostics, 17/17 dccpeep fixtures,
+performance passed.
+
+**Remaining `instruction-count` bucket (13 functions) after this slice**
+(from a fresh census): `attnc11.process_sequence`, `tc89swjt.swdn`/`swsp`,
+`tc99scpe.for_multi_declarators`, `tchess.file_of`/`on_board`,
+`tinline.edge_and`/`edge_conditional`/`edge_or`, `tmirslot.immediate_use`,
+`tregnarw.lbig`/`lusr`, and one large outlier `tswitch.f` (459 generated
+vs 95 captured instructions - a `switch` statement, likely lowered
+inefficiently per-case rather than via a jump table). None match
+`mir_try_emit_comparison_branch`'s narrow whole-function
+compare/branch/return-constant shape, so this slice does not touch them.
+Recommended as separate future slices, each needing its own falsifiable
+hypothesis rather than a blanket gate relaxation.
