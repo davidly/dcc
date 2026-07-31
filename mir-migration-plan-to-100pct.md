@@ -317,3 +317,66 @@ conservative gate than "IY happens to be safe today," matching SKILL.md rule
 **Next slice for Phase 1:** widen further to calls with wide (4-byte) or
 struct arguments/returns, then to `is_indirect`/external calls once (or if)
 a documented IY-preservation contract exists for `DCCRTL.MAC`.
+
+### Phase 1, attempted slice: `homed-scalar-cfg` gains `MIR_UNARY '!'` — reverted, real bug found
+
+`mir_emit_homed_unary_instruction` already fully implements `'!'` (boolean
+materialization via a fresh label pair) and looked emitter-complete, but the
+acceptance scan carries an explicit, redundant
+`if (insn->immediate == '!') return 0;` right after allowing it into the
+opcode whitelist — a deliberate wall around otherwise-implemented code.
+Removing that wall (isolated one-line change) was tried and validated:
+
+- Census: +8 functions (204/2378, 8.58%), 0 `--fail-on-regression` hits.
+- Focused `-Mode full` on the one affected app (`tmirfuse`): correctness
+  passed, with a small (+0.52%) peep-mode cycle regression offset by a larger
+  nopeep improvement in the same app (-1.89% cycles, -1.3% bytes) — the same
+  shape of understood, acceptable tradeoff as Item 1's, and was provisionally
+  accepted into `perf_baselines.csv`.
+- Wide `-Mode fast -FailFast`: 314/314 pass.
+- **Full `-Mode full -Extended -FailFast`: 1 failure** — extended
+  c-testsuite case `00035`
+  (`tests/extended-tests/tests/single-exec/00035.c`), a genuinely new
+  correctness break, not a flaky/pre-existing one (confirmed via
+  `DCC_MIR_FORCE_FALLBACK_FUNCTION=main`, which passes; only the
+  MIR-accepted path fails).
+
+**Root cause, confirmed by hand-simulating the generated assembly** for the
+minimal reproducer (`x=4; if (!x != 0) return 1; if (-x != 0-4) return 1;`):
+the allocator colors `x`'s value to `HL` for its *entire* live range, which
+correctly spans past the `!x` computation because `x` has a second, later
+use (`-x`). `mir_emit_homed_unary_instruction` computes `!x` in `HL` as
+scratch (since `x`'s home already *is* `HL`, `mir_emit_home_to_hl` is a
+no-op) and only skips preserving `HL` when *neither* the operand *nor* the
+result is colored `HL` — but that check doesn't cover this case, where the
+operand's home is `HL` yet the *result* is homed to a different register
+(`DE`). Storing that result via `mir_emit_hl_to_home`'s `DE` case emits
+`ex de,hl` — an **exchange, not a move** — which clobbers `HL` with `DE`'s
+old contents instead of leaving `x`'s still-live value intact. The next use
+of `x` (for `-x`) then silently reads garbage. This is a real bug in the
+`mir_emit_homed_unary_instruction` / `mir_emit_hl_to_home` interaction
+whenever an operand's home register is reused as scratch, its output is
+stored to a *different* home via an exchange-based move, and the operand is
+still live afterward. It is not unique to `'!'` in principle — `'-'`/`'~'`
+share the same code path and swap-based store — but the coloring never
+happened to produce this exact "operand in HL, result in DE, operand still
+live" shape for those operators in the existing 96/119-function population,
+so it was never exercised before this slice.
+
+**Decision (Item-6-style defer, not a silent skip):** reverted the one-line
+acceptance change and its paired `perf_baselines.csv` update in full — tree
+is byte-identical to the prior commit (`72b3754`) for `src/dcc/dcc_mir.c`.
+Re-verified `00035` passes again on the reverted build. This is deferred,
+not abandoned: the real fix is either (a) make `mir_emit_hl_to_home`'s
+non-`HL` cases use a true move instead of `ex de,hl`/register-shuffle when
+the source register's prior occupant might still be live, or (b) make the
+allocator/liveness model treat "operand's home reused as unary scratch, dst
+homed elsewhere" as an interference case that never colors the operand to
+the scratch register when the operand survives past the instruction. Either
+fix is a legitimate, higher-value target of its own (also benefits `'-'`
+and `'~'` correctness robustness, not just `'!'`), but is a register-model
+correctness change, not a narrow acceptance-gate widening, so it does not
+belong bundled with a coverage-widening commit. Filed here as the next
+concrete Phase 1/register-model bug to fix in its own dedicated slice, with
+`tests/00035.c`-equivalent (`/tmp/t35e.c`-style: `!x` then a later `-x` on
+the same operand) as the falsifying regression test to check against.
