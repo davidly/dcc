@@ -4801,6 +4801,63 @@ static void mir_allocate_registers(const unsigned char *live_in,
     free(interference);
 }
 
+/* Item 20d (mir-migration-plan-to-100pct.md): permanent (non-disposable)
+ * wide-coloring probe for mir_try_emit_homed_scalar_cfg. Re-runs the
+ * shared allocator with allow_wide_colors=1 using the persisted
+ * mir.live_in/mir.live_out (Item 20d part 1) and reports whether every
+ * wide (4-byte long) value fits in a single wide pair-color (HL:DE) with
+ * zero spills. MIR_COLOR_BC_IY is deliberately rejected here too: moving
+ * a value between BC:IY and HL:DE needs its own emission helpers, which
+ * do not exist yet, so this first slice only accepts functions whose
+ * wide-coloring solution needs at most one simultaneously-live wide
+ * value (BC:IY support is separate follow-up scope).
+ *
+ * mir.allocation_colors/allocation_spills/allocation_spill_count are
+ * shared, per-function state that other selectors later in the same
+ * dispatch chain read if mir_try_emit_homed_scalar_cfg ultimately
+ * rejects the function for any other reason (see mir_try_emit_z80's
+ * dispatch order) - so a failed or unused probe must restore the
+ * original width-blind coloring exactly, not leave the wide attempt's
+ * side effects behind. */
+static int mir_probe_wide_colors_for_homed(void)
+{
+    int value_count = mir.next_value;
+    int *saved_colors;
+    int *saved_spills;
+    int saved_spill_count;
+    struct MirAllocationSummary summary;
+    int ok;
+
+    if (mir.live_in == NULL || mir.live_out == NULL || value_count == 0)
+        return 0;
+    saved_colors = (int *)malloc((size_t)value_count * sizeof(*saved_colors));
+    saved_spills = (int *)malloc((size_t)value_count * sizeof(*saved_spills));
+    if (saved_colors == NULL || saved_spills == NULL) {
+        free(saved_colors);
+        free(saved_spills);
+        return 0;
+    }
+    memcpy(saved_colors, mir.allocation_colors,
+           (size_t)value_count * sizeof(*saved_colors));
+    memcpy(saved_spills, mir.allocation_spills,
+           (size_t)value_count * sizeof(*saved_spills));
+    saved_spill_count = mir.allocation_spill_count;
+
+    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1);
+
+    ok = summary.spills == 0 && summary.colors[MIR_COLOR_BC_IY] == 0;
+    if (!ok) {
+        memcpy(mir.allocation_colors, saved_colors,
+               (size_t)value_count * sizeof(*saved_colors));
+        memcpy(mir.allocation_spills, saved_spills,
+               (size_t)value_count * sizeof(*saved_spills));
+        mir.allocation_spill_count = saved_spill_count;
+    }
+    free(saved_colors);
+    free(saved_spills);
+    return ok;
+}
+
 static int mir_verify_and_dump(void)
 {
     unsigned char *defined;
@@ -5424,6 +5481,21 @@ static int mir_emit_hl_to_home(FILE *out, int value)
     }
 }
 
+/* Item 20d (mir-migration-plan-to-100pct.md): move a wide (4-byte long)
+ * homed value into HL:DE, the same convention mir_emit_virtual_load_wide
+ * already uses for the spilled-scalar-cfg selector's MIR_RETURN case (L=
+ * byte0, H=byte1, E=byte2, D=byte3). Only MIR_COLOR_HL_DE is supported -
+ * mir_probe_wide_colors_for_homed() only ever accepts a function whose
+ * wide values all fit in this single pair, so MIR_COLOR_BC_IY never
+ * reaches here (its move would need its own helper, not yet written). */
+static int mir_emit_wide_home_to_hl_de(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL_DE: return 1;
+    default: return 0;
+    }
+}
+
 /* Push a homed value's register pair verbatim. Used only for narrow
  * (<=2 byte) call arguments in mir_try_emit_homed_scalar_cfg: HL/DE/BC/IY
  * are all directly pushable, so no intermediate move is needed. */
@@ -5504,6 +5576,25 @@ static int mir_emit_constant_to_home(FILE *out, int value, long immediate)
     case MIR_COLOR_BC: fprintf(out, "\tld bc,%ld\n", immediate & 0xffffL); return 1;
     case MIR_COLOR_IY: fprintf(out, "\tld iy,%ld\n", immediate & 0xffffL); return 1;
     default: return 0;
+    }
+}
+
+/* Item 20d: materialize a wide (4-byte long) constant directly into a
+ * value's homed pair color. Only MIR_COLOR_HL_DE is reachable (see
+ * mir_emit_wide_home_to_hl_de's comment) since the accept-time probe
+ * rejects any function needing MIR_COLOR_BC_IY. Low word (bytes 0-1) goes
+ * to HL, high word (bytes 2-3) to DE, matching mir_emit_virtual_load_wide's
+ * established wide value representation. */
+static int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate)
+{
+    long lo = immediate & 0xffffL;
+    long hi = (immediate >> 16) & 0xffffL;
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL_DE:
+        fprintf(out, "\tld hl,%ld\n\tld de,%ld\n", lo, hi);
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -6167,6 +6258,17 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
     int return_count = 0;
     int i;
     int accepted = 0;
+    /* Item 20d (mir-migration-plan-to-100pct.md): whether this function
+     * contains any wide (4-byte long) value, restricted below to only
+     * MIR_CONST dst and a wide long return. If set, acceptance is
+     * conditional on mir_probe_wide_colors_for_homed() succeeding
+     * (single wide value fits in HL:DE with zero spills) - see that
+     * function's comment for why MIR_COLOR_BC_IY is excluded from this
+     * first slice, and why MIR_PARAM/MIR_BINARY wide operands remain
+     * deferred (no wide move/frame-offset helpers exist for them yet). */
+    int has_wide = 0;
+    int wide_return = type_is_long(mir.return_type) &&
+                      type_size(mir.return_type) == 4;
 
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
@@ -6177,14 +6279,21 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
      * below (skip storing a result to home when the callee's type is
      * void) already establishes the pattern MIR_RETURN reuses. */
     if (((mir.return_type & 15) != TYPE_INT &&
-         (mir.return_type & 15) != TYPE_VOID) ||
-        type_size(mir.return_type) > 2 || mir.allocation_spill_count != 0)
+         (mir.return_type & 15) != TYPE_VOID && !wide_return) ||
+        (!wide_return && type_size(mir.return_type) > 2) ||
+        mir.allocation_spill_count != 0)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
-        if ((insn->dst >= 0 && type_size(insn->type) > 2) ||
-            (insn->opcode == MIR_BINARY &&
-             type_size(insn->secondary_offset) > 2))
+        if (insn->dst >= 0 && type_size(insn->type) > 2) {
+            if (insn->opcode == MIR_CONST && type_is_long(insn->type) &&
+                type_size(insn->type) == 4)
+                has_wide = 1;
+            else
+                return 0;
+        }
+        if (insn->opcode == MIR_BINARY &&
+            type_size(insn->secondary_offset) > 2)
             return 0;
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
             return 0;
@@ -6313,6 +6422,11 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
      * one MIR_RETURN unconditionally. */
     if (return_count == 0 && (mir.return_type & 15) != TYPE_VOID)
         return 0;
+    /* Item 20d: a wide long return with no wide value at all (e.g. an
+     * implicit-int-promoted narrow expression) still needs the probe, so
+     * gate on wide_return too, not just has_wide. */
+    if ((has_wide || wide_return) && !mir_probe_wide_colors_for_homed())
+        return 0;
 
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
     if (labels == NULL)
@@ -6438,8 +6552,19 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 goto done;
             break;
         case MIR_CONST:
-            if (!mir_emit_constant_to_home(out, insn->dst, insn->immediate))
+            /* Item 20d: dst may be wide (long) only if mir_probe_wide_
+             * colors_for_homed accepted this function - dispatch on the
+             * value's own type rather than a separate has_wide flag so
+             * this stays correct even if more wide-eligible opcodes are
+             * added above later. */
+            if (type_is_long(insn->type) && type_size(insn->type) == 4) {
+                if (!mir_emit_wide_constant_to_home(out, insn->dst,
+                                                    insn->immediate))
+                    goto done;
+            } else if (!mir_emit_constant_to_home(out, insn->dst,
+                                                  insn->immediate)) {
                 goto done;
+            }
             break;
         case MIR_UNARY:
             if (!mir_emit_homed_unary_instruction(out, insn))
@@ -6672,10 +6797,19 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_RETURN:
             /* void: nothing to load into HL (MIR_RETURN's src1 is not a
              * real value for "return;") - mirrors MIR_CALL's own
-             * void-result skip above. */
-            if ((mir.return_type & 15) != TYPE_VOID &&
-                !mir_emit_home_to_hl(out, insn->src1))
-                goto done;
+             * void-result skip above. Item 20d: a wide (long) return
+             * loads HL:DE instead of just HL, matching the calling
+             * convention mir_emit_virtual_load_wide already establishes
+             * for the spilled-scalar-cfg selector. */
+            if ((mir.return_type & 15) != TYPE_VOID) {
+                if (type_is_long(mir.return_type) &&
+                    type_size(mir.return_type) == 4) {
+                    if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
+                        goto done;
+                } else if (!mir_emit_home_to_hl(out, insn->src1)) {
+                    goto done;
+                }
+            }
             if (frameless)
                 fputs("\tret\n", out);
             else

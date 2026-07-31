@@ -2065,3 +2065,94 @@ permanent (committed) probe wired into `mir_try_emit_homed_scalar_cfg`'s
 acceptance path with proper save/restore around the shared allocation
 state, gating the narrowest wide opcode subset (`MIR_CONST`/`MIR_PARAM`/
 `MIR_RETURN`) as originally planned.
+
+### Item 20d: permanent wide-coloring probe wired into homed-scalar-cfg (MIR_CONST + MIR_RETURN slice)
+
+**Part 1 (structural prerequisite, `8de8032`)**: promoted `live_in`/
+`live_out` from locals of `mir_verify_and_dump()` to persistent
+`mir.live_in`/`mir.live_out` struct fields (freed in `mir_end_function()`),
+since `mir_try_emit_homed_scalar_cfg` runs after the locals that computed
+liveness would otherwise have gone out of scope, and a permanent
+wide-coloring probe needs to re-run the allocator with the real liveness
+data. Verified zero behavior change via census diff + wide fast safety net.
+
+**Part 2 (this commit)**: added `mir_probe_wide_colors_for_homed()`, a
+permanent (non-disposable) counterpart to Item 20c's survey: it saves
+`mir.allocation_colors`/`allocation_spills`/`allocation_spill_count`,
+re-runs `mir_allocate_registers` with `allow_wide_colors=1`, and restores
+the saved state unless the probe both hits zero spills *and* needs no
+`MIR_COLOR_BC_IY` pair (this first slice intentionally accepts only
+functions whose wide-coloring solution fits in a single wide pair,
+`HL:DE` - moving a value between `BC:IY` and `HL:DE` needs its own move
+helpers that do not exist yet, deferred to a later item). The restore
+path matters because `mir_try_emit_accumulator_loop`,
+`mir_try_emit_comparison_branch`, and other selectors later in the same
+function's dispatch chain read `mir.allocation_spill_count` if
+homed-scalar-cfg itself ultimately rejects - a failed/unused probe must
+never leave those fields mutated.
+
+Wired the probe into `mir_try_emit_homed_scalar_cfg`'s acceptance gate,
+narrowly:
+- the top-level return-type gate now also accepts a `long` (4-byte)
+  return type (`wide_return`);
+- the per-instruction dst-width check now also accepts a wide dst
+  specifically for `MIR_CONST` (`has_wide`) - every other opcode with a
+  wide dst is still rejected exactly as before (in particular `MIR_PARAM`
+  and `MIR_BINARY` wide operands remain out of scope for this slice: a
+  wide `MIR_PARAM` still falls back today, since its ix/frame-offset
+  loading needs its own new helpers not yet written);
+- if `has_wide || wide_return`, `mir_probe_wide_colors_for_homed()` gates
+  acceptance; otherwise the narrow path is completely unchanged (the
+  original width-blind coloring is used as-is, matching the "zero
+  behavior change for functions untouched by this item" requirement).
+
+Added the emission side: `mir_emit_wide_constant_to_home()` (materializes
+a 32-bit immediate's low/high words into `HL`/`DE` respectively) and
+`mir_emit_wide_home_to_hl_de()` (a home-to-`HL:DE` move, trivial since
+this slice only ever colors a wide value to `MIR_COLOR_HL_DE` itself) are
+used by `MIR_CONST` and `MIR_RETURN`'s emission cases respectively,
+reusing the exact `HL:DE` wide-value convention `mir_emit_virtual_load_wide`
+already established for the spilled-scalar-cfg selector's own `MIR_RETURN`
+case (verified by reading that function: low word to `HL`, high word to
+`DE`).
+
+**Validation**:
+- Hand-crafted test (`long f(void){return 100000L;}`, called through a
+  function pointer to defeat static inlining) compiled to:
+  `ld hl,34464 \ ld de,1 \ ret` (100000 = 0x186A0, low word 0x86A0=34464,
+  high word 0x1=1) - correct materialization.
+- End-to-end runtime check: built the same shape as a full test app
+  (`printf("%ld\n", v)` after calling `f` through a function pointer),
+  ran the resulting `.COM` under `ntvcm -s:0` directly - printed `100000`,
+  confirming the `HL:DE` wide-return convention this selector now emits
+  is understood correctly by the calling code (`printf`'s va_arg long
+  read) exactly like the already-working spilled-scalar-cfg path.
+- Full corpus census (`--fail-on-regression` against the Item 20b
+  baseline): **zero regressions, zero census delta** - the current 323-app
+  test corpus has no standalone function whose only wide-value uses are
+  `MIR_CONST`/`MIR_RETURN` (real `long` test apps like `tlong.c` all use
+  wide arithmetic, which remains out of scope until Item 20e), so this
+  item is measured-safe infrastructure with no corpus-visible yield yet -
+  expected, since real yield needs `MIR_BINARY`/`MIR_PARAM` support next.
+- Wide `-Mode fast` safety net (323 apps): 314 passed, 0 failed, 9 skipped
+  (unaffected apps' skip list unchanged), diagnostics/dccpeep/performance
+  all passed.
+
+**Decision**: land as real, permanent (non-disposable) production code -
+unlike Item 20c, this wires an actual acceptance/emission path, not just
+a survey. Coverage is unchanged on the current corpus (0 delta) because
+no test app currently exercises the narrow `MIR_CONST`-or-`MIR_RETURN`-only
+wide shape without also using wide arithmetic, but the calling-convention
+correctness is now proven end-to-end, and the `MIR_COLOR_BC_IY` exclusion
+plus the wide-`MIR_PARAM` deferral are documented, bounded next steps
+(Item 20e) rather than open questions.
+
+**Deferred explicitly** (structurally, not a design ambiguity - each needs
+its own new emission helpers before it can be added safely):
+- `MIR_COLOR_BC_IY` wide values (need `BC:IY <-> HL:DE` move helpers).
+- Wide `MIR_PARAM` (needs framed *and* frameless ix/sp-relative 4-byte
+  load helpers - the existing narrow `mir_emit_word_param_to_home`/
+  `mir_emit_stack_word_param_to_home` only handle single-register colors).
+- Wide `MIR_BINARY`/`MIR_UNARY` arithmetic (Item 20e's actual scope - add,
+  sub, negate first, matching the fastcall family's opcode-by-opcode
+  rollout discipline from Items 15/17/18).
