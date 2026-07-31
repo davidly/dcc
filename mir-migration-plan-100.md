@@ -2190,3 +2190,74 @@ _(append one entry per completed item, in table order, starting with Item
   general compare-branch-fusion selector or a fix to
   `mir_emit_scalar_compare`'s double-materialization bug as the
   highest-value next step.
+
+## Post-Plan-100 investigation note: `check`-family text-size near-misses (session follow-up)
+
+Investigated the `text-size` fallback population's small (~34-function)
+near-miss subset (byte gap < 64), looking for a repeated shared shape as a
+high-leverage fix. Found one: `check`/`check_i`/`check_int`, a 3-arg
+test-helper (`if (got != expected) fail(name, got, expected);`), appears with
+identical generated/captured byte counts (459 generated vs 424 captured)
+across 9 apps (`tesc`, `trtl2`, `tscanf`, `tstdlib`, `tstr3`, `tmirfast`,
+`tmirfuse`, `tmirslot`, `tphijoin`) - fixing the root cause here would convert
+~9 functions at once.
+
+Hypothesized the existing `mir_param_value_is_direct` /
+`mir_capture_stream_uses_frame` optimization (skips backend-slot allocation
+for a multi-use scalar parameter, letting every use reload from its original
+`ix+N` offset instead of copying to a new slot) should already apply to
+`check` but isn't firing, since `check`'s real fallback output does use an
+`ix` frame (`push ix / ld ix,0 / add ix,sp`). Added temporary
+`DCC_MIR_TRACE_CAPTURE_PTR`-gated diagnostics (since reverted; instrumentation
+never committed) to `mir_capture_stream_uses_frame()` and found something more
+surprising than the original hypothesis:
+
+- `mir.capture_stream` for `check`, read **during** `mir_prepare_backend_slots`
+  (i.e. mid-compile, while MIR's own analysis is running concurrently with
+  legacy's dual-emission capture), contains a fully-formed, correctly-sized
+  (424-byte) function body that uses a **frameless, sp-relative addressing
+  convention** (`ld hl,N / add hl,sp / ...`, no `push ix` at all).
+- The same function, recompiled standalone with no MIR/env-var involvement
+  moments later (`./dcc -stack 512 -I . tests/tesc.c -o /tmp/tesc_fresh.mac`),
+  shows legacy's **real, final, replayed fallback output** for the identical
+  `check` function using the **ix-frame convention** instead (`push ix / ld
+  ix,0 / add ix,sp / ld l,(ix+6) ...`).
+- Both are for the same function, same source, same binary, same compile
+  session characteristics (`-stack 512`) - yet legacy's own codegen chose two
+  different stack-addressing conventions for the identical function depending
+  on whether the read happened via the mid-compile capture-stream scan or via
+  the final replayed/standalone output.
+
+This means `mir_capture_stream_uses_frame()`'s scan is not simply looking at
+stale/incomplete data (length matches the final byte count exactly at scan
+time) - the **captured content itself differs in kind** from what legacy
+ultimately emits for the same function. This points at a deeper, previously
+undocumented bug: legacy's frame-convention decision (frameless sp-relative
+vs. `ix`-framed) is not purely a function of the AST it is compiling: it
+appears to depend on some piece of shared/global compiler state that differs
+between "compiling while MIR construction is concurrently running" and
+"compiling standalone/replay," and that shared state is influencing which
+codegen convention legacy chooses for identical source. This is a distinct,
+deeper root cause than the originally suspected `mir_capture_stream_uses_frame`
+text-scan bug, and is NOT yet root-caused.
+
+**Deferred, not fixed this session** (Item 6-style ambiguity - this needs
+architectural investigation, not a quick patch): the fix requires finding
+which global/shared state legacy's frame-convention chooser reads (likely a
+running stack-depth/temp-count bookkeeping variable that MIR's parallel
+analysis inadvertently perturbs), confirming whether the *mid-compile*
+capture or the *final replay* reflects what a pure-legacy build (with MIR
+entirely disabled) would produce, and only then deciding whether
+`mir_capture_stream_uses_frame`'s scan target is even the correct one to fix
+against. Fixing `mir_param_value_is_direct` against the wrong reference frame
+convention risks trading the current well-understood cost gap for a
+correctness or performance regression (echoing the `tc89fnty`/`mulb` history
+this predicate was built to avoid). Flagged as the top candidate for a future
+plan document's first item; do not resume by re-adding scan instrumentation
+without first tracing legacy's frame-convention decision point directly
+(likely in `dcc_ast_gen_stmt.c` / `dcc_symbols.c` frame-size bookkeeping) to
+see what state differs between the two compile paths.
+
+No code changes were made in this investigation; all temporary diagnostics
+were reverted (`git status --short` clean, matching commit `849a7d0`'s tree)
+before this note was appended.
