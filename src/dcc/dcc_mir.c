@@ -9534,12 +9534,45 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (insn->label < 0 || insn->label >= mir.next_label)
                 goto done;
             {
-                int fallthrough_label = new_label();
                 int target = mir_find_label(insn->label);
                 const struct MirInsn *condition =
                     mir_definition(insn->src1);
+                FILE *phi_probe;
+                int phi_ok;
+                int phi_bytes;
                 if (target < 0)
                     goto done;
+                /* mir-migration-plan-next200 Item 1: the general form below
+                 * always emits a "skip past the direct jump" branch plus a
+                 * separate unconditional jump plus a fallthrough label,
+                 * even when there are no PHI copies to guard between them -
+                 * the overwhelmingly common case for a plain if-statement
+                 * with no live cross-block merge value. That degrades to
+                 * two jump instructions where legacy needs only one
+                 * (inverted-condition jump straight to the target). Probe
+                 * first (mir_emit_spilled_phi_copies is side-effect-free
+                 * beyond writing text, so a dry run into a scratch stream
+                 * costs nothing but a tmpfile) and take the single-jump
+                 * form whenever no copies are needed.
+                 *
+                 * mir_emit_spilled_phi_copies is NOT safe to call twice:
+                 * the virtual load/store helpers it calls update live
+                 * register-cache state as a side effect of emitting text,
+                 * so a second "real" call after a probe call double-applies
+                 * those state transitions and corrupts codegen whenever
+                 * copy_count > 0. Call it exactly once (into the probe
+                 * stream) and, if it wrote any bytes, copy that captured
+                 * text verbatim into the real output instead of invoking
+                 * the function again. */
+                phi_probe = tmpfile();
+                if (phi_probe == NULL)
+                    fatal("cannot create MIR phi-copy probe stream");
+                phi_ok = mir_emit_spilled_phi_copies(phi_probe, i, target);
+                phi_bytes = phi_ok ? (int)ftell(phi_probe) : 0;
+                if (!phi_ok) {
+                    fclose(phi_probe);
+                    goto done;
+                }
                 if (mir_value_is_wide(insn->src1)) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                     if (condition != NULL && type_is_float(condition->type))
@@ -9551,11 +9584,29 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_emit_virtual_load(out, insn->src1);
                     fputs("\tld a,h\n\tor l\n", out);
                 }
-                fprintf(out, "\tjp nz,L%d\n", fallthrough_label);
-                if (!mir_emit_spilled_phi_copies(out, i, target))
-                    goto done;
-                fprintf(out, "\tjp L%d\nL%d:\n", labels[insn->label],
-                        fallthrough_label);
+                if (phi_bytes == 0) {
+                    fclose(phi_probe);
+                    fprintf(out, "\tjp z,L%d\n", labels[insn->label]);
+                } else {
+                    int fallthrough_label = new_label();
+                    char buf[256];
+                    int remaining = phi_bytes;
+                    fprintf(out, "\tjp nz,L%d\n", fallthrough_label);
+                    rewind(phi_probe);
+                    while (remaining > 0) {
+                        int chunk = remaining < (int)sizeof(buf)
+                                        ? remaining
+                                        : (int)sizeof(buf);
+                        if (fread(buf, 1, (size_t)chunk, phi_probe) !=
+                            (size_t)chunk)
+                            fatal("cannot replay MIR phi-copy probe stream");
+                        fwrite(buf, 1, (size_t)chunk, out);
+                        remaining -= chunk;
+                    }
+                    fclose(phi_probe);
+                    fprintf(out, "\tjp L%d\nL%d:\n", labels[insn->label],
+                            fallthrough_label);
+                }
             }
             break;
         case MIR_RETURN:
