@@ -917,28 +917,54 @@ issues. **Realistic yield from this fix alone is therefore likely small
 underlying quality gap is real and touches a meaningful fraction of the
 corpus.**
 
-**A second, independent discovery surfaced during this scoping pass**:
-`tcodegen.c`'s dedicated shift-test functions (`lsl8`/`lsl9`/`asr8`/
-`asr9`/`asr15`/`lsr8`/`lsr12`/`lsr15`) never appear in
+**A second, independent discovery surfaced during this scoping pass, and
+was traced to its exact source rather than left as a surface
+observation**: `tcodegen.c`'s dedicated shift-test functions (`lsl8`/
+`lsl9`/`asr8`/`asr9`/`asr15`/`lsr8`/`lsr12`/`lsr15`) never appear in
 `DCC_MIR_SELECT_REPORT`/the census at all in the current committed
-build, despite having their own standalone `.mac` symbols - a "MIR
-scalar-cfg frame" preflight debug line prints for them (confirming
-`mir_try_emit_spilled_scalar_cfg`'s preflight runs), but the terminal
-"MIR selection" line is never reached or is suppressed. This is
-consistent with `mir_end_function`'s documented
-`g_speculative_codegen_active` mechanism (legacy retries codegen from
-scratch for several discard-capable speculative regalloc attempts -
-no-IX-frame among them - and correctly suppresses reporting for the
-*discarded* attempts, per the existing comment above the
-`MIR_MAX_ROLLOUT_INSNS` early-return case) but the frame-preflight debug
-line itself is not gated on that flag, so it leaks through even when the
-final report is (correctly) suppressed. This means **the census/select-
-report undercounts an unknown number of functions corpus-wide** whenever
-their kept, final codegen comes from a speculative no-IX-frame (or
-similar) attempt - a separate tooling-completeness gap from the shift
-question, not something this session's changes caused (reproduced on
-the unmodified `0bb502b` checkoint), and worth a dedicated audit before
-trusting census totals as fully exhaustive.
+build, despite having their own standalone, correct `.mac` symbols with
+real generated code. A temporary probe print confirmed
+`g_speculative_codegen_active` is `1` every single time
+`mir_try_emit_spilled_scalar_cfg`'s frame preflight runs for these
+functions, and tracing into `try_speculative_noix_function_body`
+(`dcc_regalloc.c` ~line 190) confirmed why: **this is not a suppressed
+duplicate report of a real, separately-reportable final pass - there is
+no second pass**. Legacy's no-IX-frame speculative attempt runs
+`gen_compound()` (driving `mir_begin_function`/`mir_end_function`
+exactly once) inside a scratch buffer under
+`g_speculative_codegen_active`, and if that attempt is smaller/kept, its
+scratch output is copied *directly* to the real destination stream by
+the caller - the "normal" codegen path (and any further
+`mir_end_function` invocation) never runs again for that function.
+`mir_end_function`'s own reporting suppression is therefore working
+exactly as designed (avoiding a double/discarded-attempt report); the
+gap is that **`DCC_MIR_SELECT_REPORT`/`mir-migration-census.py` have no
+visibility into this entire class of functions**, because a function
+whose real, final, kept output comes from any of legacy's four
+discard-capable speculative regalloc variants (no-IX-frame, confirmed
+directly; BC/E regalloc, IY regalloc, and loop-scoped-BC-first are
+structurally identical per the matching `g_speculative_codegen_active`
+pairs at `dcc_regalloc.c` lines ~1285, ~1365, ~1557) is invisible to the
+census - not misclassified, but **entirely absent from both the
+numerator and the denominator**. Measured directly for one file:
+`tests/tcodegen.c` has 12 function definitions total, but only 7 ever
+appear in `DCC_MIR_SELECT_REPORT` - the missing 5 are exactly
+`lsl8`/`lsl9`/`asr8`/`asr9`/`asr15`, a ~42% blind spot for this
+particular file. This means the census's reported denominator (this
+session's snapshots all read "151/2018") likely **understates the true
+corpus size**, and the true MIR coverage percentage is unverified until
+this blind spot is measured corpus-wide - a distinct, and arguably more
+consequential, finding from the shift-strength-reduction question above,
+not something this session's changes caused (reproduced identically on
+the unmodified `0bb502b` checkpoint before any of today's edits), and
+worth a dedicated corpus-wide measurement (not just a per-file spot
+check) before treating any current or future census percentage as
+exhaustive. A plausible fix is to have `mir_try_selector`/
+`mir_try_emit_spilled_scalar_cfg` (or the callers in
+`dcc_regalloc.c` that invoke speculative attempts) emit a
+`DCC_MIR_SELECT_REPORT` line of their own when a speculative attempt is
+kept, rather than relying on `mir_end_function`'s normal report path
+which structurally never runs a second time for these functions.
 
 **Why this was scoped but not implemented this session:** legacy's own
 constant-shift codegen (inspected directly via `.mac` capture) is not a
@@ -960,21 +986,22 @@ signed/unsigned x left/right, verified by actual execution, not just
 static byte inspection - directly on point after the Item 5 lesson that
 smaller generated-byte counts do not certify correctness or speed).
 
-**Recommended for a future, dedicated slice**, in this order: (1) fix the
-`DCC_MIR_SELECT_REPORT` undercounting gap first (gate the
-`mir_scalar-cfg frame` debug line on `!g_speculative_codegen_active`, or
-audit why it isn't already), so the true corpus-wide shift-const
-population and its actual fallback/accepted breakdown can be measured
-precisely - the current 32-function count is very likely an
-undercount; (2) implement constant-shift strength reduction as a
-narrow, incrementally-tested selector improvement (start with the
-safest subset - small counts 1-7 with plain unrolling only, matching
-legacy exactly, before attempting the byte-boundary/sign-trick
-shortcuts for counts >= 8); (3) validate with the full ladder
-(`census --fail-on-regression`, then `runall.ps1 -Mode full` on every
-app in the cross-reference list above, not just the ones that flip to
-`mir`, since already-*accepted* functions using shift would also change
-shape and need the same non-regression proof). Deferred, not attempted,
+**Recommended for a future, dedicated slice**, in this order: (1)
+measure the speculative-attempt blind spot corpus-wide (add a report
+line where a speculative attempt is kept, per the note above), so the
+true corpus-wide shift-const population and its actual fallback/accepted
+breakdown - and the true overall coverage denominator - can be measured
+precisely; the current 32-function count and the 2018-function corpus
+size are both very likely undercounts; (2) implement constant-shift
+strength reduction as a narrow, incrementally-tested selector
+improvement (start with the safest subset - small counts 1-7 with plain
+unrolling only, matching legacy exactly, before attempting the
+byte-boundary/sign-trick shortcuts for counts >= 8); (3) validate with
+the full ladder (`census --fail-on-regression`, then
+`runall.ps1 -Mode full` on every app in the cross-reference list above,
+not just the ones that flip to `mir`, since already-*accepted* functions
+using shift would also change shape and need the same non-regression
+proof). Deferred, not attempted,
 per the same Item-6-level-design-ambiguity threshold the user
 authorized skipping past. Working tree confirmed clean and matching
 151/2018 (7.48%) after removing the temporary survey instrumentation.
