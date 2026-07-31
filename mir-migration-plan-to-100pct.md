@@ -605,3 +605,28 @@ the corpus, and would relaxing the gate *soundly* (e.g., by proving a
 callee is address-taken or otherwise forced to have a real body) be worth
 pursuing - remains open and is deferred to a future session per the
 original Item B scope.
+
+## Correction (2026-07-31): coverage numbers above predate a census double-counting fix
+
+Every coverage figure recorded above in this document (185/2378, 196/2378,
+204/2378, 212/2378, etc.) was measured before a since-fixed bug in
+`mir_end_function`'s reporting (commit `fbff14c`, `dcc_mir.c`): legacy's
+discard-capable speculative codegen attempts (no-IX-frame, BC/E regalloc,
+IY regalloc, loop-scoped-BC-first — all in `dcc_regalloc.c`) each re-drove
+`mir_begin_function`/`mir_end_function` in lockstep, and every discarded
+attempt's `; MIR selection ...` line was printed to `DCC_MIR_SELECT_REPORT`/
+the census alongside the one real, kept attempt's line — inflating both the
+numerator (functions incorrectly counted as covered from a discarded
+attempt) and, more subtly, corrupting `captured-bytes` for many `text-size`
+fallback rows (proven directly: `check()` in `tests/tesc.c` reported 5
+different `captured-bytes` values in one compile before the fix).
+
+**Corrected, current, trustworthy coverage: 139/2018 functions (6.89%).**
+This is not a regression — no code/output changed (verified: 0 differences
+across all 295 `tests/t*.c` apps' generated `.mac` output, pre-fix vs
+post-fix). All prior session narrative, root-cause findings, and phase
+reasoning above remain valid; only the specific percentages should be
+read as "measured with a since-corrected reporting bug" rather than
+literal ground truth. Do not use any pre-`fbff14c` coverage number as a
+baseline for `--compare`/`--fail-on-regression` without regenerating it
+against a post-fix binary first.
