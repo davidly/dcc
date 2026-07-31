@@ -2028,3 +2028,40 @@ wide home exists yet) rather than attempting an unsupported color.
 decomposition; the wide pair-coloring capability now exists and is
 verified correct, but remains completely inert in production until Item
 20c wires it into `mir_try_emit_homed_scalar_cfg`'s own probe path.
+
+### Item 20c: re-derived real value-width yield using the actual pair-coloring probe (survey only, no permanent code)
+
+**Implementation**: rather than wiring Item 20b's `allow_wide_colors` flag
+directly into `mir_try_emit_homed_scalar_cfg`'s real acceptance path (which
+would have required saving/restoring the shared `mir.allocation_colors`/
+`mir.allocation_spills`/`mir.allocation_spill_count` state around every
+candidate function to avoid contaminating other selectors and
+`DCC_MIR_REPORT` diagnostics that read the same global arrays - a
+correctness hazard, not just a perf one), implemented this step as a
+disposable, env-gated survey (`DCC_MIR_WIDE_COLORING_SURVEY=1`), matching
+the established Item 8/11/12/19 discipline: for each function with at
+least one 4-byte-typed value definition and zero spills under the
+existing (width-blind) allocation, saved the shared allocation arrays,
+re-ran `mir_allocate_registers` with `allow_wide_colors=1` into a private
+local summary, reported the resulting spill count, then restored the
+saved arrays exactly - so no other code path ever observed the wide-aware
+result.
+
+**Result**: across the 323-file corpus, 461 unique function names matched
+the candidate filter (wide value present, already zero-spill under
+naive/width-blind coloring); **225 of those 461 (49%) have zero spills
+under the real pair-coloring probe too** - a substantially larger and now
+trustworthy real yield number than Item 11's earlier diagnostic-proxy
+estimate (~97+) or Item 12's narrower single-wide-value slice (73/1660).
+This confirms the general allocator extension (not a narrower special
+case) is worth the investment Item 12 already concluded was necessary,
+and gives a concrete, measured target population size for Items 20d/20e's
+opcode-by-opcode acceptance/emission rollout.
+
+**Decision**: reverted the survey instrumentation (`git checkout --`) -
+disposable-survey discipline, no permanent production code changed this
+item, matching Items 8/11/12/19. The next step (Item 20d) is a real,
+permanent (committed) probe wired into `mir_try_emit_homed_scalar_cfg`'s
+acceptance path with proper save/restore around the shared allocation
+state, gating the narrowest wide opcode subset (`MIR_CONST`/`MIR_PARAM`/
+`MIR_RETURN`) as originally planned.
