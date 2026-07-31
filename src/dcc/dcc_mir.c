@@ -152,6 +152,15 @@ struct MirFunction {
     int *allocation_spills;
     int allocation_capacity;
     int allocation_spill_count;
+    /* Retained past mir_verify_and_dump()'s own scope (Item 20d,
+     * mir-migration-plan-to-100pct.md) so a selector's acceptance probe
+     * (e.g. mir_try_emit_homed_scalar_cfg's wide-value re-coloring check)
+     * can re-run mir_allocate_registers with different parameters using
+     * the exact same liveness data verification already computed, without
+     * duplicating the dataflow fixed-point loop. Freed once per function in
+     * mir_end_function(), after every selector has had a chance to run. */
+    unsigned char *live_in;
+    unsigned char *live_out;
     int *backend_slots;
     int backend_slot_capacity;
     int backend_slot_count;
@@ -5047,9 +5056,15 @@ static int mir_verify_and_dump(void)
         ++errors;
     mir.opaque_count = opaque_count;
 
-    free(live_out);
-    free(live_in);
     free(defined);
+    /* Transfer ownership to the persistent mir.live_in/mir.live_out fields
+     * (Item 20d) instead of freeing here, so a later selector's acceptance
+     * probe can reuse this exact liveness data. mir_end_function() frees
+     * these once every selector has run. */
+    free(mir.live_in);
+    free(mir.live_out);
+    mir.live_in = live_in;
+    mir.live_out = live_out;
     return errors == 0;
 }
 
@@ -11969,5 +11984,9 @@ void mir_end_function(void)
         mir.capture_stream = NULL;
         mir.emit_mode = 0;
     }
+    free(mir.live_in);
+    free(mir.live_out);
+    mir.live_in = NULL;
+    mir.live_out = NULL;
     mir.active = 0;
 }
