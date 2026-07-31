@@ -1769,3 +1769,46 @@ and bytes, `tstrcmpi` both peep and nopeep cycles).
 follow-up list from Item 15; the systemic `MIR_CALL` generic-convention
 cost gap for these five library functions is now addressed uniformly
 across both selectors.
+
+### Item 18: MIR_CALL learns the remaining fastcall family (memcpy, memchr, strcpy, strrchr, strstr, stricmp, bioshl)
+
+**Motivation**: a further pass over `dcc_ast_gen_expr.c` found seven more
+legacy fastcall special-cases beyond Items 15/17's five: `memcpy`
+(->`__mcf`), `memchr` (->`__mhf`), `strcpy` (->`__scf`), `strrchr`
+(->`__rcf`), `strstr` (->`__ssf`), `stricmp` (->`__icf`), and `bioshl`
+(->`__bhf`, a fourth member of the bdos/bdoshl/bios family). Each shares
+an argument-count-and-register shape identical to an already-ported
+sibling (`memcpy`~`memcmp`, `memchr`~`memset`, `strrchr`~`strchr`,
+`strcpy`/`strstr`/`stricmp` all share one new 2-arg DE/HL shape), so this
+is the same evidence-backed, low-risk pattern completed to full coverage
+of `dcc_ast_gen_expr.c`'s fastcall list.
+
+**Implementation**: added `mir_call_is_memcpy_fastcall`,
+`mir_call_is_memchr_fastcall`, `mir_call_is_strrchr_fastcall` (each a thin
+wrapper around `mir_call_matches_fastcall_shape` with a different call
+name, mirroring their already-ported sibling's exact shape), a new
+`mir_call_is_de_hl_fastcall` family matcher covering `strcpy`/`strstr`/
+`stricmp` (arg1 lands in HL with no move since it's evaluated last; arg0
+is pushed then popped into DE), and extended the existing
+`mir_call_is_bdos_family_fastcall` table with `bioshl`->`__bhf`. Wired
+all of these into both `homed-scalar-cfg` and `spilled-scalar-cfg`'s
+`MIR_CALL` emission, reusing each shape's already-established push/pop
+sequence from Items 15/17.
+
+**Validation**: rebuild clean. Census against the 159/2019 (7.88%) Item
+17 baseline: **zero coverage change** (cost-only fix), **zero
+already-active MIR functions changed** (`apps requiring runtime
+validation: 0`), 29 apps show small `generated_bytes` reductions in
+still-fallback functions calling one of these seven functions. Wide
+`-Mode fast` (323-app) safety net: clean. A focused `-Mode full` run
+across all 31 apps whose sources call one of these seven functions
+(`adaint, attnc11, bint, cint, cobint, cpmenumd, fint, forint, pint,
+tarray, tbcloop, tbdos, tbios, tctype, texstrct, tfcarg2d, tfpcall,
+tlocalfp, tlongidx, too, tpostinc, trtl2, tstfield, tstr, tstr2, tstr3,
+tstrcmpi, tstrconv, tstring, tvapinit, wumpus`): all 31 pass, **zero
+regressions**, 9 improvements (`tpostinc`, `cint`, `tstrcmpi`,
+`tstrconv`, `wumpus` - cycles and/or bytes, both peep and nopeep).
+
+**Decision**: committed. This completes every fastcall special-case
+`dcc_ast_gen_expr.c` defines - `MIR_CALL`'s systemic generic-convention
+cost gap for library-call shapes is now fully closed for both selectors.
