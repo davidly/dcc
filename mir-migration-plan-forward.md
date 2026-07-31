@@ -160,3 +160,30 @@ family reduces risk of conflating a pre-existing bug with a new
 regression). Do Item B between them (cheap, informs priority). Do not
 start Item D until C is committed, measured, and this document is updated
 with C's actual yield.
+
+## Item B: resolved as not-applicable (surveyed, no action needed)
+
+Re-checked the premise before surveying: Item 27
+(`mir_fused_compare_is_signed_zero_sign_test`) is an **emission-quality**
+fusion applied unconditionally inside the binary-op emitter for any
+*already-accepted* function - it is not, and never was, an acceptance
+gate that Item A's fix disabled or re-enabled. The only thing Item A
+removed was a diagnostic-only per-function disable hook
+(`DCC_MIR_DISABLE_ITEM27_FUNCTION`) used to bisect a different bug; it
+never affected production behavior. So there is no "trust the fusion
+again" yield to measure - the fusion has been continuously active in
+production the whole time.
+
+Ran the survey anyway to have a concrete number: of the 2174 functions
+currently on fallback (post-Item-A census), 628 contain at least one
+`<`/`>=` binary comparison anywhere in their MIR (a deliberately loose
+upper bound - not filtered for constant-0 RHS or signed operand type, so
+the true Item-27-shape count is smaller). This is irrelevant to Item 27
+specifically, since none of these functions are being kept on fallback
+*because of* Item 27 - their `fallback_reason` values are the usual
+`text-size`/`instruction-count`/`cfg-backedge`/etc. Whether any of them
+move to MIR is governed entirely by those other gates, independent of
+this fusion.
+
+**Conclusion**: Item B is complete with a "no action" result. Proceeding
+directly to Item C, which is the actual lever for additional coverage.
