@@ -1719,3 +1719,53 @@ complete; the only blocker was the separate `MIR_CALL` cost gap, now
 closed by Item 15. This is a good example of SKILL.md's "form a
 falsifiable hypothesis" guidance paying off across items: Item 14's
 deferral note explicitly predicted this exact fix and re-test sequence.
+
+### Item 17: MIR_CALL learns strlen/strchr/memcmp/bdos-family fastcalls
+
+**Motivation**: Item 15's own follow-up list - the four remaining
+`dcc_ast_gen_expr.c` fastcall special-cases (`strlen`->`__slf`,
+`strchr`->`__chf`, `memcmp`->`__cmpf`, and the `bdos`/`bdoshl`/`bios`
+family, all sharing one DE=dearg/C=fn-low-byte convention ->
+`__bdosf`/`__bhlf`/`__biosf`) not yet ported to `MIR_CALL`'s emission.
+Same evidence-backed, low-risk, broadly-reusable shape as Item 15.
+
+**Implementation**: factored Item 15's `mir_call_is_memset_fastcall`
+matching logic into a shared `mir_call_matches_fastcall_shape(call_index,
+name, argc, values[])` core (exact call name + arg count + no struct/
+4-byte args), then added four new detectors on top of it:
+`mir_call_is_strlen_fastcall` (1 arg), `mir_call_is_strchr_fastcall`
+(2 args), `mir_call_is_memcmp_fastcall` (3 args), and
+`mir_call_is_bdos_family_fastcall` (2 args, matching any of
+`bdos`/`bdoshl`/`bios` and returning which DCCRTL entry point to call).
+Wired all four into both `MIR_CALL` emission sites, mirroring each
+fastcall's exact legacy AST register sequence:
+- `homed-scalar-cfg`: `strlen` needs no push at all (move `s` straight to
+  HL via `mir_emit_home_to_hl`, call, move result home); `strchr`/
+  `memcmp`/bdos-family push each argument via `mir_emit_home_push` in
+  source order and pop/reshuffle into the exact target registers the
+  legacy fastcall expects (mirroring Item 15's own memset pattern).
+- `spilled-scalar-cfg`: added a small `mir_emit_spilled_arg_to_hl` helper
+  (the repeated cached/rematerialized/virtual-load fallback chain,
+  factored out since these four fastcalls needed it eight times) and the
+  same push/pop reshuffling sequence.
+
+**Validation**: rebuild clean (one forward-declaration fix needed for
+`mir_emit_virtual_load`, defined later in the file but now referenced
+from the earlier `mir_emit_spilled_arg_to_hl` helper). Census against the
+159/2019 (7.88%) Item 16 baseline: **zero coverage change** (expected -
+cost-only fix), **zero already-active MIR functions changed**
+(`apps requiring runtime validation: 0`), 24 apps show small
+`generated_bytes` reductions in still-fallback functions calling one of
+these four functions. Wide `-Mode fast` (323-app) safety net: clean. A
+focused `-Mode full` run across all 30 apps whose sources call
+`strlen`/`strchr`/`memcmp`/`bdos*` (`a1, adaint, bint, cint, cobint,
+cpmenumd, fint, forint, pint, tbcloop, tbdos, tbios, tc89c2, tchess,
+tcmt99, tfcarg2d, tfpcall, tlocalfp, too, tprintf, tptr2dv, tqsort,
+trtl2, tstr, tstr3, tstrcmpi, tstring, tstrnul, tsvbuf2, tvapinit`):
+all 30 pass, **zero regressions**, 4 improvements (`cint` nopeep cycles
+and bytes, `tstrcmpi` both peep and nopeep cycles).
+
+**Decision**: committed. This closes out the full fastcall-family
+follow-up list from Item 15; the systemic `MIR_CALL` generic-convention
+cost gap for these five library functions is now addressed uniformly
+across both selectors.

@@ -440,6 +440,15 @@ static int mir_object_is_fully_promoted(int object);
 static int mir_store_is_dead(int instruction);
 static int mir_call_is_memset_fastcall(int call_index, int *dest_value,
                                        int *fill_value, int *count_value);
+static int mir_call_is_strlen_fastcall(int call_index, int *s_value);
+static int mir_call_is_strchr_fastcall(int call_index, int *s_value,
+                                      int *c_value);
+static int mir_call_is_memcmp_fastcall(int call_index, int *s1_value,
+                                       int *s2_value, int *n_value);
+static int mir_call_is_bdos_family_fastcall(int call_index,
+                                           const char **rtl_name,
+                                           int *fn_value, int *dearg_value);
+static void mir_emit_virtual_load(FILE *out, int value);
 static int mir_value_is_wide(int value);
 static int mir_binary_is_selfstore_incdec(int index, int *store_index);
 static int mir_value_is_selfstore_incdec(int value);
@@ -6431,6 +6440,10 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int argument;
                 int scan;
                 int dest_value, fill_value, count_value;
+                int s_value, c_value;
+                int s1_value, s2_value, n_value;
+                int fn_value, dearg_value;
+                const char *rtl_name;
                 if (mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
                                                 &count_value)) {
                     if (!mir_emit_home_push(out, dest_value) ||
@@ -6446,6 +6459,51 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                     }
                     break;
                 }
+                if (mir_call_is_strlen_fastcall(i, &s_value)) {
+                    if (!mir_emit_home_to_hl(out, s_value))
+                        goto done;
+                    fputs("\textrn __slf\n\tcall __slf\n", out);
+                    if (!mir_emit_hl_to_home(out, insn->dst))
+                        goto done;
+                    break;
+                }
+                if (mir_call_is_strchr_fastcall(i, &s_value, &c_value)) {
+                    if (!mir_emit_home_push(out, s_value) ||
+                        !mir_emit_home_push(out, c_value))
+                        goto done;
+                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n"
+                          "\textrn __chf\n\tcall __chf\n", out);
+                    if (!mir_emit_hl_to_home(out, insn->dst))
+                        goto done;
+                    break;
+                }
+                if (mir_call_is_memcmp_fastcall(i, &s1_value, &s2_value,
+                                               &n_value)) {
+                    if (!mir_emit_home_push(out, s1_value) ||
+                        !mir_emit_home_push(out, s2_value) ||
+                        !mir_emit_home_push(out, n_value))
+                        goto done;
+                    fputs("\tpop bc\n\tpop hl\n\tpop de\n"
+                          "\textrn __cmpf\n\tcall __cmpf\n", out);
+                    if (!mir_emit_hl_to_home(out, insn->dst))
+                        goto done;
+                    break;
+                }
+                if (mir_call_is_bdos_family_fastcall(i, &rtl_name, &fn_value,
+                                                    &dearg_value)) {
+                    if (!mir_emit_home_push(out, fn_value) ||
+                        !mir_emit_home_push(out, dearg_value))
+                        goto done;
+                    fprintf(out, "\tpop de\n\tpop hl\n\tld c,l\n"
+                            "\textrn %s\n\tcall %s\n", rtl_name, rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (!mir_emit_hl_to_home(out, insn->dst))
+                            goto done;
+                    }
+                    break;
+                }
+
                 for (scan = 0; scan < i; ++scan)
                     if (mir.insns[scan].opcode == MIR_ARG &&
                         mir.insns[scan].secondary_offset ==
@@ -7125,6 +7183,19 @@ static int mir_emit_cached_call_argument(FILE *out, int value)
     return 1;
 }
 
+/* Item 17 (mir-migration-plan-to-100pct.md): load a narrow argument value
+ * into HL for spilled-scalar-cfg's fastcall emission, using the exact
+ * same cached/rematerialized/virtual-load fallback chain the generic
+ * MIR_CALL argument loop below already uses per argument - factored out
+ * since the strlen/strchr/memcmp/bdos-family fastcalls each need this
+ * several times. */
+static void mir_emit_spilled_arg_to_hl(FILE *out, int value)
+{
+    if (!mir_emit_cached_call_argument(out, value) &&
+        !mir_emit_rematerialized_argument(out, value, 2))
+        mir_emit_virtual_load(out, value);
+}
+
 static int mir_emit_cached_wide_call_argument(FILE *out, int value)
 {
     if (mir_cached_wide_call_value != value ||
@@ -7156,15 +7227,22 @@ static int mir_emit_cached_wide_call_argument(FILE *out, int value)
  * fastcall requires); returns 0 otherwise (any struct/wide/int-promoted
  * argument, or an argument count other than 3, falls back to the generic
  * convention rather than risk a mismatched register width). */
-static int mir_call_is_memset_fastcall(int call_index, int *dest_value,
-                                       int *fill_value, int *count_value)
+/* Item 17 (mir-migration-plan-to-100pct.md): shared core for every
+ * MIR_CALL fastcall detector below. Matches a call named exactly `name`
+ * with exactly `argc` narrow (non-struct, non-4-byte) arguments, and
+ * fills `values[0..argc-1]` with each argument's defining value index in
+ * source-argument order (not push order). This is the same matching
+ * shape Item 15's mir_call_is_memset_fastcall originally used, factored
+ * out so strlen/strchr/memcmp/bdos-family don't each re-derive it. */
+static int mir_call_matches_fastcall_shape(int call_index, const char *name,
+                                          int argc, int *values)
 {
     const struct MirInsn *call = &mir.insns[call_index];
-    int found[3];
     int scan;
 
-    found[0] = found[1] = found[2] = -1;
-    if (strcmp(call->name, "memset") != 0)
+    for (scan = 0; scan < argc; ++scan)
+        values[scan] = -1;
+    if (strcmp(call->name, name) != 0)
         return 0;
     for (scan = 0; scan < call_index; ++scan) {
         const struct MirInsn *arg = &mir.insns[scan];
@@ -7173,18 +7251,91 @@ static int mir_call_is_memset_fastcall(int call_index, int *dest_value,
             arg->secondary_offset != call->secondary_offset)
             continue;
         index = (int)arg->immediate;
-        if (index < 0 || index > 2)
+        if (index < 0 || index >= argc)
             return 0;
         if (type_is_struct_object(arg->type) || type_size(arg->type) == 4)
             return 0;
-        found[index] = arg->src1;
+        values[index] = arg->src1;
     }
-    if (found[0] < 0 || found[1] < 0 || found[2] < 0)
-        return 0;
-    *dest_value = found[0];
-    *fill_value = found[1];
-    *count_value = found[2];
+    for (scan = 0; scan < argc; ++scan)
+        if (values[scan] < 0)
+            return 0;
     return 1;
+}
+
+static int mir_call_is_memset_fastcall(int call_index, int *dest_value,
+                                       int *fill_value, int *count_value)
+{
+    int values[3];
+    if (!mir_call_matches_fastcall_shape(call_index, "memset", 3, values))
+        return 0;
+    *dest_value = values[0];
+    *fill_value = values[1];
+    *count_value = values[2];
+    return 1;
+}
+
+/* dcc_ast_gen_expr.c's legacy fastcall for strlen(s): DCCRTL's __slf takes
+ * s directly in HL and returns the length in HL. */
+static int mir_call_is_strlen_fastcall(int call_index, int *s_value)
+{
+    int values[1];
+    if (!mir_call_matches_fastcall_shape(call_index, "strlen", 1, values))
+        return 0;
+    *s_value = values[0];
+    return 1;
+}
+
+/* Legacy fastcall for strchr(s,c): DCCRTL's __chf takes s in HL and c's
+ * low byte in A, returning the match (or 0) in HL. */
+static int mir_call_is_strchr_fastcall(int call_index, int *s_value,
+                                      int *c_value)
+{
+    int values[2];
+    if (!mir_call_matches_fastcall_shape(call_index, "strchr", 2, values))
+        return 0;
+    *s_value = values[0];
+    *c_value = values[1];
+    return 1;
+}
+
+/* Legacy fastcall for memcmp(s1,s2,n): DCCRTL's __cmpf takes s1 in DE,
+ * s2 in HL, n in BC directly. */
+static int mir_call_is_memcmp_fastcall(int call_index, int *s1_value,
+                                       int *s2_value, int *n_value)
+{
+    int values[3];
+    if (!mir_call_matches_fastcall_shape(call_index, "memcmp", 3, values))
+        return 0;
+    *s1_value = values[0];
+    *s2_value = values[1];
+    *n_value = values[2];
+    return 1;
+}
+
+/* Legacy fastcall for bdos(fn,dearg)/bdoshl(fn,dearg)/bios(fn,dearg): all
+ * three share the same DE=dearg, C=fn-low-byte argument convention,
+ * differing only in which DCCRTL entry point is called (__bdosf/__bhlf/
+ * __biosf respectively - see dcc_ast_gen_expr.c). */
+static int mir_call_is_bdos_family_fastcall(int call_index,
+                                           const char **rtl_name,
+                                           int *fn_value, int *dearg_value)
+{
+    static const struct { const char *name; const char *rtl; } family[] = {
+        { "bdos", "__bdosf" }, { "bdoshl", "__bhlf" }, { "bios", "__biosf" }
+    };
+    size_t i;
+    int values[2];
+    for (i = 0; i < sizeof(family) / sizeof(family[0]); ++i) {
+        if (mir_call_matches_fastcall_shape(call_index, family[i].name, 2,
+                                            values)) {
+            *rtl_name = family[i].rtl;
+            *fn_value = values[0];
+            *dearg_value = values[1];
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int mir_object_is_fully_promoted(int object)
@@ -9686,6 +9837,10 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int argument;
                 int scan;
                 int dest_value, fill_value, count_value;
+                int s_value, c_value;
+                int s1_value, s2_value, n_value;
+                int fn_value, dearg_value;
+                const char *rtl_name;
                 if (!is_indirect &&
                     mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
                                                 &count_value)) {
@@ -9712,6 +9867,61 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     }
                     break;
                 }
+                if (!is_indirect &&
+                    mir_call_is_strlen_fastcall(i, &s_value)) {
+                    mir_emit_spilled_arg_to_hl(out, s_value);
+                    fputs("\textrn __slf\n\tcall __slf\n", out);
+                    if (type_size(insn->type) == 4)
+                        mir_emit_virtual_store_wide(out, insn->dst);
+                    else
+                        mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+                if (!is_indirect &&
+                    mir_call_is_strchr_fastcall(i, &s_value, &c_value)) {
+                    mir_emit_spilled_arg_to_hl(out, s_value);
+                    fputs("\tpush hl\n", out);
+                    mir_emit_spilled_arg_to_hl(out, c_value);
+                    fputs("\tld a,l\n\tpop hl\n"
+                          "\textrn __chf\n\tcall __chf\n", out);
+                    mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+                if (!is_indirect &&
+                    mir_call_is_memcmp_fastcall(i, &s1_value, &s2_value,
+                                               &n_value)) {
+                    mir_emit_spilled_arg_to_hl(out, s1_value);
+                    fputs("\tpush hl\n", out);
+                    mir_emit_spilled_arg_to_hl(out, s2_value);
+                    fputs("\tpush hl\n", out);
+                    mir_emit_spilled_arg_to_hl(out, n_value);
+                    fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tpop de\n"
+                          "\textrn __cmpf\n\tcall __cmpf\n", out);
+                    if (type_size(insn->type) == 4)
+                        mir_emit_virtual_store_wide(out, insn->dst);
+                    else
+                        mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+                if (!is_indirect &&
+                    mir_call_is_bdos_family_fastcall(i, &rtl_name, &fn_value,
+                                                    &dearg_value)) {
+                    mir_emit_spilled_arg_to_hl(out, fn_value);
+                    fputs("\tpush hl\n", out);
+                    mir_emit_spilled_arg_to_hl(out, dearg_value);
+                    fputs("\tex de,hl\n\tpop hl\n\tld c,l\n", out);
+                    fprintf(out, "\textrn %s\n\tcall %s\n", rtl_name,
+                            rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (type_size(insn->type) == 4)
+                            mir_emit_virtual_store_wide(out, insn->dst);
+                        else
+                            mir_emit_virtual_store(out, insn->dst);
+                    }
+                    break;
+                }
+
                 for (scan = 0; scan < i; ++scan)
                     if (mir.insns[scan].opcode == MIR_ARG &&
                         mir.insns[scan].secondary_offset ==
