@@ -1295,3 +1295,46 @@ widening this item's own `MIR_LOAD` slice to the deferred 1-byte (`char`)
 and mismatched-width (needing sign/zero-extension or bool-normalization)
 cases, mirroring the corresponding logic already proven correct in
 `mir_try_emit_spilled_scalar_cfg`'s own `MIR_LOAD` case.
+
+### Item 10: measured and rejected - 1-byte (char) MIR_LOAD widening has zero yield
+
+Following Item 9's own "next recommended step" note, implemented the deferred
+1-byte (char) slice of `homed-scalar-cfg`'s `MIR_LOAD` support: widened the
+acceptance gate to also allow `type_size(memory_type) == 1` (in addition to
+the already-accepted `== 2`), and added a `mir_emit_extend_a_to_hl` helper
+mirroring `mir_try_emit_spilled_scalar_cfg`'s own byte-widening logic exactly
+(bool -> 0/1 normalize, unsigned char -> zero-extend, signed char ->
+sign-extend), wired into both the local/param (ix-relative) and global/
+extern/func emission paths.
+
+**Measured result**: `census --fail-on-regression` against a fresh
+155/2019 baseline showed **zero effect** - `newly MIR-emitted: 0`,
+`no longer MIR-emitted: 0`, `apps with census changes: 0`. Every function
+in the corpus with a byte-sized `MIR_LOAD` that would newly qualify under
+this widening is *also* blocked by at least one other, still-unaddressed
+gate (this matches the compounding-blockers caveat noted in Item 8's
+technical findings: reason-bucketed surveys report upper bounds, not
+guaranteed real yield, since fixing one condition rarely fixes a function
+whose real blocker is elsewhere).
+
+**Decision**: reverted (`git checkout -- src/dcc/dcc_mir.c`) rather than
+committing unused complexity for zero functional benefit, per the same
+"document negative results, they prevent the next contributor from
+repeating a correct-but-slower gate experiment" discipline the skill
+document asks for. Verified the revert restores the exact 155/2019
+baseline via a fresh census run.
+
+**Next recommended step**: since both of Item 9's neighboring narrow slices
+(comparison-heavy shapes excluded, char loads now measured at zero yield)
+are exhausted, the next highest-yield candidate from Item 8's original
+growth survey is `value-width` (129 zero-spill functions blocked on a
+4-byte `long`/`unsigned long` value) - a larger structural change (needs
+real HL:DE-pair register handling throughout the selector, not a single
+opcode case) that deserves its own dedicated survey-then-implement cycle.
+Given `opcode-load`'s remaining un-widened slice (mismatched-width loads
+via an explicit `insn->memory_size` override) is a narrower and likely even
+lower-yield population than the char case just measured at zero, it is not
+worth surveying further before moving to `value-width` or re-running a
+fresh growth survey against the *current* population (Item 8's original
+997/215/129/etc. buckets are now stale after Items 8 and 9 each removed
+some of that population).
