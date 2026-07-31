@@ -546,3 +546,62 @@ approach was worthwhile in the first place. Neither is a quick follow-up;
 parking both.
 
 Coverage unchanged at 204/2378 (8.58%).
+
+## Phase 2 resolved: root cause found and fixed (mir-migration-plan-forward.md Item A)
+
+**Root cause**: `set_sym_val` (`tests/forint.c:333`) is `static inline`.
+Legacy's AST-level inline substitution (`dcc_ast_gen_expr.c`,
+`try_gen_inline_call_ast`) eliminates every call site, so `set_sym_val`
+never gets a standalone emitted body anywhere in the program (confirmed:
+neither the base nor a forced `.mac`/`.PRN` contains a `_Z0026:` label
+definition for it - only `call _Z0026` references). MIR lowering already
+tracks this correctly via `mir_inline_substitutable()` and tags such
+`MIR_CALL` instructions with `memory_flags |= 2048`, and the acceptance
+gate at `mir_has_inline_substitution_call()` exists precisely to keep any
+function containing such a call on fallback. However, a "near-cost"
+exception introduced with the Phase 2 fused-comparison-branch batch let a
+candidate through this gate anyway whenever the MIR-generated code was
+within 5%/+1 instruction and no larger in bytes than the legacy capture -
+with no check that the callee actually has a materialized body. This is
+exactly the shape `assign_pre` would hit if forced through the gate,
+producing a real `call` to a symbol with zero bytes of code anywhere,
+which explains the byte-exact "192 bytes -> 0 bytes" corruption signature
+investigated earlier this session under `DCC_MIR_FORCE_ACCEPT_FUNCTION`.
+
+**Verification the exception was unsound but not yet live**: a corpus-wide
+scan (instrumenting the exception branch to log every function that would
+hit it) over all of `tests/*.c` found **zero functions currently exploit
+it** - `assign_pre` itself is correctly rejected in production by the base
+gate already (57 vs 229 generated/captured instructions, 666 vs 2509
+bytes, nowhere near the near-cost threshold). So this was a landmine, not
+an active regression: no coverage was gained by having the exception, and
+none is lost by removing it.
+
+**Fix landed**: removed the unsound near-cost exception entirely from the
+`inline-substitution` fallback-reason check in `dcc_mir.c` - any function
+containing an inline-substitution-eligible call now unconditionally falls
+back, with no byte/instruction-count carve-out, per SKILL.md rule 6
+(derive a structural predicate, not a name/cost-based exception without a
+materialization proof). Also removed the now-superseded
+`DCC_MIR_DISABLE_ITEM27_FUNCTION` diagnostic gate from
+`mir_fused_compare_is_signed_zero_sign_test`, which had already served its
+purpose this session (conclusively exonerating Item 27's fusion as the
+cause of the `assign_pre`/`bump_sym_val` force-accept corruption).
+
+**Validation**: full census against `build/mir-next10-before.tsv` shows no
+regression (`--fail-on-regression` passed cleanly, coverage unchanged at
+204/2378 - consistent with zero functions exploiting the removed
+exception); focused `-Mode full` on the 14 apps with any census churn
+(`cint,tbcloop,tc99scpe,tcrcfix,tgnarly,tmirfast,tmirfuse,tmirslot,
+tnarrow,tponce,tpostinc,tscanf,tstdlib,tsyntax`) all pass with 0
+performance regressions (5 minor nopeep improvements, unrelated); wide
+`-Mode fast -FailFast` passes 314/314 with dccpeep fixtures green.
+
+**`mir-migration-plan-forward.md` Item A is complete.** Item B (prevalence
+survey of the Item-27 shape) is now largely moot for `forint` specifically
+since neither implicated function was ever live in production, but the
+underlying question - how common is this static-inline-call shape across
+the corpus, and would relaxing the gate *soundly* (e.g., by proving a
+callee is address-taken or otherwise forced to have a real body) be worth
+pursuing - remains open and is deferred to a future session per the
+original Item B scope.

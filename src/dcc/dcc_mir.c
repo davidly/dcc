@@ -7992,8 +7992,10 @@ static int mir_fused_compare_is_signed_zero_sign_test(int compare_index)
     if ((left != NULL && (left->type & TYPE_UNSIGNED) != 0) ||
         (right != NULL && (right->type & TYPE_UNSIGNED) != 0))
         return 0;
-    return right != NULL && right->opcode == MIR_CONST &&
-           (right->immediate & 0xffffL) == 0;
+    if (right == NULL || right->opcode != MIR_CONST ||
+        (right->immediate & 0xffffL) != 0)
+        return 0;
+    return 1;
 }
 
 static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
@@ -10945,12 +10947,21 @@ void mir_end_function(void)
                     fallback_reason = "instruction-count";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
-                else if (mir_has_inline_substitution_call() &&
-                         !(generated_instructions * 100 >=
-                             captured_instructions * 95 &&
-                           generated_instructions <=
-                               captured_instructions + 1 &&
-                           generated_size <= captured_size))
+                /* Item A (mir-migration-plan-forward.md): the previous
+                 * "near-cost" exception here let a MIR_CALL to a
+                 * static-inline callee through even though such a callee
+                 * has no standalone emitted body once legacy's AST-level
+                 * inline substitution eliminates every call site (verified
+                 * via DCC_MIR_FORCE_ACCEPT_FUNCTION=assign_pre in
+                 * tests/forint.c: MIR emitted `call _Z0026` to
+                 * set_sym_val, a label with zero definitions anywhere in
+                 * the program, causing total loss of execution). A
+                 * corpus-wide scan confirmed no function currently
+                 * exploits the exception (dead code, zero net coverage
+                 * change), but it remains unsound because it never checks
+                 * whether the callee actually has a materialized body.
+                 * Any inline-substitution call must always fall back. */
+                else if (mir_has_inline_substitution_call())
                     fallback_reason = "inline-substitution";
                 else if (mir_has_declared_pointer_array())
                     fallback_reason = "pointer-array";
