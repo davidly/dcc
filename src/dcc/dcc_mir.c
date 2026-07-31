@@ -437,6 +437,9 @@ static int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 static int mir_load_is_single_call_argument(int value, int size);
 static int mir_object_is_fully_promoted(int object);
+static int mir_store_is_dead(int instruction);
+static int mir_call_is_memset_fastcall(int call_index, int *dest_value,
+                                       int *fill_value, int *count_value);
 static int mir_value_is_wide(int value);
 static int mir_binary_is_selfstore_incdec(int index, int *store_index);
 static int mir_value_is_selfstore_incdec(int value);
@@ -6308,6 +6311,22 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int argument_bytes = 0;
                 int argument;
                 int scan;
+                int dest_value, fill_value, count_value;
+                if (mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
+                                                &count_value)) {
+                    if (!mir_emit_home_push(out, dest_value) ||
+                        !mir_emit_home_push(out, fill_value) ||
+                        !mir_emit_home_push(out, count_value))
+                        goto done;
+                    fputs("\tpop bc\n\tpop de\n\tpop hl\n"
+                          "\textrn __msf\n\tcall __msf\n", out);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (!mir_emit_hl_to_home(out, insn->dst))
+                            goto done;
+                    }
+                    break;
+                }
                 for (scan = 0; scan < i; ++scan)
                     if (mir.insns[scan].opcode == MIR_ARG &&
                         mir.insns[scan].secondary_offset ==
@@ -6995,6 +7014,57 @@ static int mir_emit_cached_wide_call_argument(FILE *out, int value)
     fputs("\texx\n", out);
     mir_cached_wide_call_value = -1;
     mir_cached_wide_call_instruction = -1;
+    return 1;
+}
+
+/* Item 15 (mir-migration-plan-to-100pct.md): mirrors dcc_ast_gen_expr.c's
+ * legacy AST "fastcall" recognition of memset(dest,c,count) - DCCRTL's
+ * __msf takes dest in HL, the fill byte in E, count in BC directly,
+ * skipping both the general push-3-args/call/pop-3 convention MIR_CALL's
+ * generic emission otherwise always uses and __mset's own ~10-instruction
+ * stack-marshaling prologue. Item 14 found this gap costs a genuine
+ * both-mode performance regression once a memset call becomes MIR-
+ * reachable (mir_try_emit_homed_scalar_cfg's MIR_ADDRESS support unlocked
+ * trw's clear_buf, a `memset` trampoline, but its MIR_CALL emission had no
+ * knowledge of the specialized runtime convention the legacy backend
+ * already exploits). This is shared, selector-independent detection logic
+ * so it benefits every MIR_CALL emitter (spilled- and homed-scalar-cfg
+ * alike), not just newly-unlocked functions - closing the gap for any
+ * memset call already reachable via MIR today too. Returns 1 and fills
+ * `*dest_value`/`*fill_value`/`*count_value` with the three arguments'
+ * value indices if `call_index` is a MIR_CALL to memset with exactly
+ * three non-struct, non-4-byte arguments (the same shape the legacy
+ * fastcall requires); returns 0 otherwise (any struct/wide/int-promoted
+ * argument, or an argument count other than 3, falls back to the generic
+ * convention rather than risk a mismatched register width). */
+static int mir_call_is_memset_fastcall(int call_index, int *dest_value,
+                                       int *fill_value, int *count_value)
+{
+    const struct MirInsn *call = &mir.insns[call_index];
+    int found[3];
+    int scan;
+
+    found[0] = found[1] = found[2] = -1;
+    if (strcmp(call->name, "memset") != 0)
+        return 0;
+    for (scan = 0; scan < call_index; ++scan) {
+        const struct MirInsn *arg = &mir.insns[scan];
+        int index;
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index > 2)
+            return 0;
+        if (type_is_struct_object(arg->type) || type_size(arg->type) == 4)
+            return 0;
+        found[index] = arg->src1;
+    }
+    if (found[0] < 0 || found[1] < 0 || found[2] < 0)
+        return 0;
+    *dest_value = found[0];
+    *fill_value = found[1];
+    *count_value = found[2];
     return 1;
 }
 
@@ -9496,6 +9566,33 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int argument_bytes = 0;
                 int argument;
                 int scan;
+                int dest_value, fill_value, count_value;
+                if (!is_indirect &&
+                    mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
+                                                &count_value)) {
+                    if (!mir_emit_cached_call_argument(out, dest_value) &&
+                        !mir_emit_rematerialized_argument(out, dest_value, 2))
+                        mir_emit_virtual_load(out, dest_value);
+                    fputs("\tpush hl\n", out);
+                    if (!mir_emit_cached_call_argument(out, fill_value) &&
+                        !mir_emit_rematerialized_argument(out, fill_value, 2))
+                        mir_emit_virtual_load(out, fill_value);
+                    fputs("\tpush hl\n", out);
+                    if (!mir_emit_cached_call_argument(out, count_value) &&
+                        !mir_emit_rematerialized_argument(out, count_value,
+                                                          2))
+                        mir_emit_virtual_load(out, count_value);
+                    fputs("\tld b,h\n\tld c,l\n\tpop de\n\tpop hl\n"
+                          "\textrn __msf\n\tcall __msf\n", out);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (type_size(insn->type) == 4)
+                            mir_emit_virtual_store_wide(out, insn->dst);
+                        else
+                            mir_emit_virtual_store(out, insn->dst);
+                    }
+                    break;
+                }
                 for (scan = 0; scan < i; ++scan)
                     if (mir.insns[scan].opcode == MIR_ARG &&
                         mir.insns[scan].secondary_offset ==

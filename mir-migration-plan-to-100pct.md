@@ -1605,3 +1605,60 @@ of the generic stack convention - would very likely unlock `MIR_ADDRESS`
 call such a helper) without this regression, and is a reasonable next
 candidate for a future session focused specifically on `MIR_CALL` emission
 quality rather than acceptance-gate widening.
+
+### Item 15: MIR_CALL learns the `memset` fastcall convention (shared, selector-independent)
+
+**Motivation**: Item 14's deferral identified the actual blocker as a
+systemic gap, not a `MIR_ADDRESS`-specific one: `MIR_CALL`'s emission
+(in both `mir_try_emit_spilled_scalar_cfg` and
+`mir_try_emit_homed_scalar_cfg`) always uses the fully generic
+push-args/call/pop-args convention, with no knowledge of the small set of
+runtime helpers `dcc_ast_gen_expr.c`'s legacy AST codegen already
+special-cases with a cheaper register-passed "fastcall" convention
+(`strlen`/`strchr`/`memcmp`/`memset`/`bdos`, calling `__slf`/`__chf`/
+`__cmpf`/`__msf`/`__bdosf` respectively instead of the generic
+`__mset`-style stack-marshaling entry points). This is exactly the
+"repeated selector overhead" class SKILL.md ranks as the top-priority
+improvement (benefits every currently-MIR-active call site calling these
+functions, not just newly-unlocked ones), and directly closes the gap
+Item 14 hit.
+
+**Implementation**: added `mir_call_is_memset_fastcall()` - shared,
+selector-independent detection matching the exact shape
+`dcc_ast_gen_expr.c`'s `memset` fastcall requires (call name `"memset"`,
+exactly 3 arguments, none struct or 4-byte) - and wired it into both
+`MIR_CALL` emission sites. Each pushes its own selector's natural argument
+representation (`mir_emit_home_push` for `homed-scalar-cfg`'s register
+colors - pushing a value's own color directly needs no scratch register
+and so carries none of Item 14's clobber risk; the existing
+cached/rematerialized/`mir_emit_virtual_load` chain for
+`spilled-scalar-cfg`'s memory-backed values) in `dest, fill, count` order,
+then pops directly into `bc=count, de=fill, hl=dest` (or takes the
+already-loaded `count` value straight into `bc` without an extra
+push/pop round-trip, matching the legacy fastcall's own instruction
+sequence exactly) before calling `__msf` instead of the generic `__mset`.
+Only `memset` was scoped for this item (it was the exact function Item 14
+regressed on); the other fastcall-eligible library functions
+(`strlen`/`strchr`/`memcmp`/`bdos`) are documented here as immediate,
+low-risk follow-ups using the identical pattern.
+
+**Validation**: rebuild clean. Census against the 155/2019 (7.68%)
+baseline: **zero coverage change** (expected - this is a call-emission
+quality fix, not an acceptance-gate change) and, critically, **zero
+already-active MIR functions changed** (`apps requiring runtime
+validation: 0`) - the only metric deltas were 38 rows across 22 apps, all
+`generated_bytes` shrinking slightly for functions still on `text-size`
+fallback (their generated-candidate cost dropped, moving them closer to
+but not over the acceptance threshold - `trw.clear_buf` itself dropped
+from 247 to 244 candidate bytes, still not enough to cross without
+`MIR_ADDRESS` support). Since no currently-emitted output changed at all,
+there was no correctness or performance risk to validate against real
+apps; ran a wide `-Mode fast` (323-app) safety net anyway given the shared
+nature of the change (touches both selectors' `MIR_CALL` cases) - clean,
+`SUCCESS`, no regressions.
+
+**Decision**: committed as a standalone, zero-risk improvement. This sets
+up Item 16 (re-attempting `MIR_ADDRESS` support) to retest whether
+`trw.clear_buf`'s regression is now resolved, since it will use `__msf`
+once accepted rather than the generic, costlier `__mset` convention that
+caused Item 14's deferral.
