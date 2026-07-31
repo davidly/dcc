@@ -4117,6 +4117,38 @@ static int mir_value_has_use_after(int value, int instruction)
     return 0;
 }
 
+/* True if some OTHER value already occupies home color `color` at
+ * `instruction` (defined strictly before it) and is still needed
+ * strictly after it. A homed-scalar-cfg emission case that must
+ * temporarily route a fresh load/computation through a specific
+ * physical register before moving it to its own home (e.g. MIR_LOAD's
+ * "ld hl,(name)" scratch step) has to push/pop-protect that register
+ * first when this returns true, or it silently clobbers the other
+ * value - exactly the bug MIR_STRING_ADDRESS support exposed for
+ * MIR_LOAD's unconditional HL scratch use once homed-scalar-cfg started
+ * accepting functions with multiple simultaneously-live homed values. */
+static int mir_home_color_live_across(int instruction, int color)
+{
+    int value;
+
+    for (value = 0; value < mir.next_value; ++value) {
+        const struct MirInsn *definition;
+        int def_index;
+
+        if (mir.allocation_colors[value] != color)
+            continue;
+        definition = mir_definition(value);
+        if (definition == NULL)
+            continue;
+        def_index = (int)(definition - mir.insns);
+        if (def_index >= instruction)
+            continue;
+        if (mir_value_has_use_after(value, instruction))
+            return 1;
+    }
+    return 0;
+}
+
 static int mir_value_use_count(int value)
 {
     int count = 0;
@@ -5824,8 +5856,21 @@ static int mir_emit_homed_unary_instruction(FILE *out,
         fputs("\tpush hl\n", out);
     if (!mir_emit_home_to_hl(out, insn->src1))
         return 0;
-    if (insn->immediate == 0 || insn->immediate == '+') {
-        /* Cast/no-op in the 16-bit home subset. */
+    if (insn->immediate == 0) {
+        /* Cast in the 16-bit home subset: usually a no-op, except a cast to
+         * _Bool must normalize any nonzero value to exactly 1 (C requires
+         * every _Bool object to hold only 0 or 1). Matches mir_emit_cast's
+         * spilled-scalar-cfg handling of the same case (MIR_UNARY op=0
+         * with a bool destination and non-bool source). */
+        const struct MirInsn *source = mir_definition(insn->src1);
+        if (type_is_bool(insn->type) &&
+            !type_is_bool(source != NULL ? source->type : 0)) {
+            label = new_label();
+            fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+            fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n", label, label);
+        }
+    } else if (insn->immediate == '+') {
+        /* Unary plus: no-op. */
     } else if (insn->immediate == '-') {
         fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
     } else if (insn->immediate == '~') {
@@ -6283,6 +6328,27 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
         (!wide_return && type_size(mir.return_type) > 2) ||
         mir.allocation_spill_count != 0)
         return 0;
+    /* Item 21 fix (mir-migration-plan-to-100pct.md): this selector's
+     * prologue (mir_emit_home_prologue -> mir_emit_prologue) never
+     * reserves any stack space for memory-resident locals - it only
+     * knows how to push/pop iy and set up ix, exactly as needed for
+     * purely register-homed scalars. Widening MIR_ADDRESS/MIR_LOAD
+     * acceptance to admit SC_LOCAL objects (Items 9/16) silently let
+     * through functions with a real memory-backed local object (e.g. a
+     * char array whose address is taken and passed to a callee) whose
+     * frame slot was never allocated at all: mir.local_bytes bytes of
+     * "local" storage that legacy always subtracts from sp are simply
+     * never subtracted here, so any MIR_ADDRESS of such an object
+     * computes an ix-relative pointer into unreserved (and later
+     * clobbered by push/call activity) stack memory. Found via
+     * tests/tptrixld.c's `main` (a local `char buf[32]` passed to two
+     * callees) silently corrupting its contents. Reject outright until
+     * this selector grows real frame-space reservation/restore support -
+     * mir.local_bytes is always 0 for pure scalar-only frames (the
+     * previously-exercised population), so this only newly excludes the
+     * unsafe aggregate-local shape, not the existing scalar coverage. */
+    if (mir.local_bytes != 0)
+        return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->dst >= 0 && type_size(insn->type) > 2) {
@@ -6326,6 +6392,15 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if (mir_declared_is_vla_object(insn->name))
                     return 0;
             }
+            break;
+        case MIR_STRING_ADDRESS:
+            /* Item 21 (mir-migration-plan-to-100pct.md): the address of a
+             * string literal is always a plain 2-byte pointer immediate
+             * (assembler label `S<n>`) - no memory-storage dispatch or
+             * width concern at all, unlike MIR_ADDRESS above, so there is
+             * nothing further to validate here; emission reuses Item 16's
+             * mir_emit_label_address_to_home exactly like MIR_ADDRESS's
+             * global/extern/func case. */
             break;
         case MIR_LOAD:
             {
@@ -6463,10 +6538,16 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_LOAD:
             {
                 int memory_type, memory_storage, memory_offset;
+                int instruction = (int)(insn - mir.insns);
+
                 if (!mir_scalar_memory_location(insn, &memory_type,
                                                 &memory_storage,
                                                 &memory_offset))
                     goto done;
+                preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+                    mir_home_color_live_across(instruction, MIR_COLOR_HL);
+                if (preserve_hl)
+                    fputs("\tpush hl\n", out);
                 if (memory_storage == SC_LOCAL ||
                     memory_storage == SC_PARAM) {
                     if (memory_offset >= -128 &&
@@ -6494,6 +6575,8 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 }
                 if (!mir_emit_hl_to_home(out, insn->dst))
                     goto done;
+                if (preserve_hl)
+                    fputs("\tpop hl\n", out);
             }
             break;
         case MIR_ADDRESS:
@@ -6533,6 +6616,14 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                                                             memory_offset))
                         goto done;
                 }
+            }
+            break;
+        case MIR_STRING_ADDRESS:
+            {
+                char label[32];
+                sprintf(label, "S%ld", insn->immediate);
+                if (!mir_emit_label_address_to_home(out, insn->dst, label))
+                    goto done;
             }
             break;
         case MIR_LABEL:

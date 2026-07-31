@@ -2203,3 +2203,141 @@ not full general `BC:IY` arithmetic - marking Item 20e blocked and
 recording this rationale rather than attempting the harder cross-pair
 arithmetic without dedicated validation time, per SKILL.md's guidance on
 genuine design/scope decisions.
+
+### Item 21: MIR_STRING_ADDRESS support, surfacing and fixing three latent bugs (2026, this session)
+
+A fresh disposable-survey pass (temporarily instrumenting
+`mir_try_emit_homed_scalar_cfg`'s acceptance gate to record line/opcode
+hit counts instead of returning early) found that 77% of "text-size
+fallback, single-block, typical-size" functions are already
+zero-spill/zero-cross-call and rejected purely by an opcode whitelist
+gap, not a real cost problem. The largest single gap was
+`MIR_STRING_ADDRESS` (68 hits) - the address of a string literal, used
+for example as a `printf` format-string argument.
+
+**Implemented**: `MIR_STRING_ADDRESS` acceptance and emission in
+`mir_try_emit_homed_scalar_cfg`, reusing Item 16's
+`mir_emit_label_address_to_home` helper unmodified (a string-literal
+label address is a plain 2-byte immediate identically to a
+global/extern/func address, so no new emission logic was needed - only
+the acceptance-gate `case`).
+
+Coverage jumped from 159/2019 (7.88%) to 213/2019 (10.55%) - the single
+largest jump of the whole migration effort. Focused full-mode validation
+on the ~55 newly-affected apps initially **failed**: 7 apps with output
+mismatches and ~25 with small perf regressions. Investigating the
+mismatches surfaced three separate, real, pre-existing latent bugs that
+this feature was simply the first to reach - none are specific to string
+addresses themselves:
+
+1. **`dccpeep` extrn/dead-code interaction** (`src/dccpeep/dccpeep.c`):
+   the "duplicate declaration" cleanup pass deletes a later `extrn X`
+   line when an identical line appears earlier in the file, without
+   knowing whether the earlier occurrence's enclosing block will later be
+   deleted as unreachable dead code by a separate pass. When both
+   triggered together (found via `tassert`: an `assert()` on a
+   compile-time-true condition), every surviving `call X` ended up with
+   zero `extrn X` declarations anywhere in the file. M80/L80 do not error
+   on this - they silently resolve the undefined external to address 0
+   (CP/M's warm-boot vector), producing a silent, diagnostic-free abort.
+   **Fixed** with a new final cleanup pass, `pass_fix_missing_extrns()`
+   (plus `capture_original_extrns()`/`symbol_still_referenced()`),
+   mirroring the existing `pass_fix_divmod_extrns`/`pass_fix_mulu_extrn`
+   precedent but generalized to every symbol originally declared `extrn`
+   in the input: if no `extrn X` line survives optimization but some
+   reference to X still does, one is re-inserted. This is a general
+   dccpeep hardening fix, not specific to this feature or to homed-cfg -
+   it could have been triggered by any future selector change with the
+   same block-reachability shape.
+2. **`_Bool` cast normalization missing in homed-cfg's unary emitter**
+   (found via `tbool`: `b |= 4` produced `4` instead of the required
+   normalized `1`). `mir_emit_cast()` (used by `spilled-scalar-cfg`)
+   already special-cases a cast *to* `TYPE_BOOL` by normalizing any
+   nonzero value to exactly 1; `mir_emit_homed_unary_instruction`
+   (`homed-scalar-cfg`'s unary emitter) never had the equivalent logic,
+   since no `homed-scalar-cfg`-accepted function had previously exercised
+   a `_Bool`-target unary cast. **Fixed** by adding the same
+   `type_is_bool()` normalization inline into the `insn->immediate == 0`
+   cast branch.
+3. **`MIR_LOAD`'s unconditional HL-scratch clobber** (found via `tvlax`:
+   a string address homed in `hl` was clobbered by an unrelated global
+   load immediately after it). Z80 can only direct-address memory into
+   `HL` (`ld hl,(nn)`), so `MIR_LOAD`'s global-variable path always
+   routes through `HL` as scratch before moving the result to its real
+   home color - but, unlike the binary/unary emitters' existing
+   `preserve_hl`/`preserve_de` checks, it had no protection at all for
+   another value that happened to still be resident in `HL` at that
+   point. This was a pre-existing latent bug, never previously
+   triggered because no function with a live cross-instruction
+   `HL`-homed value (like a string address) had ever reached
+   `homed-scalar-cfg` before this item's acceptance widening. **Fixed**
+   by adding `mir_home_color_live_across(instruction, color)` (checks if
+   any *other* value with the given color is defined strictly before and
+   used strictly after the given instruction) and wrapping `MIR_LOAD`'s
+   emission case with `preserve_hl` push/pop protection using it.
+
+After all three fixes, `-Mode full` on the 7 originally-failing apps
+passed correctness-clean, but a fourth issue then surfaced from a wider
+re-run: **`tptrixld`** (a dedicated regression test for pointer-parameter
+indexing) failed with a corrupted result (`sum=304` instead of `1488`).
+Root cause: a distinct, more serious latent gap - `homed-scalar-cfg`'s
+prologue (`mir_emit_home_prologue` -> `mir_emit_prologue`) only ever
+pushes `iy` and sets up `ix`; it never reserves any stack space for
+memory-resident locals. `MIR_ADDRESS`'s existing acceptance for
+`SC_LOCAL` objects (Item 16) never checked whether the local actually
+needed real frame storage (e.g. a `char buf[32]` whose address is taken
+and passed to a callee, as opposed to a small scalar spill) - so any such
+object's address was computed as an `ix`-relative pointer into stack
+space that was never subtracted from `sp`, i.e. unreserved memory that
+subsequent `push`/`call` activity legitimately overwrote before the
+object was fully used. **Fixed conservatively** by rejecting acceptance
+outright whenever `mir.local_bytes != 0` (this selector has no frame-
+space reservation/restore support yet); `mir.local_bytes` is always 0 for
+the previously-exercised pure-scalar-homed population, so this excludes
+only the newly-unsafe aggregate-local shape, not any prior coverage.
+
+This last fix is stricter than needed for correctness alone: a regression-
+gated census re-run against the pre-item21 baseline showed it also
+returns 21 previously-`homed-scalar-cfg`-accepted functions (across 19
+apps, e.g. `tc99scpe`, `tgoto`, `tmirslot`, `tunused`) to legacy fallback
+- functions that took the address of a `mir.local_bytes != 0` local but
+happened to never trigger the bug in practice (short enough live ranges,
+no intervening call). Per SKILL.md's rule 5 ("correct-but-slow is still
+fallback"), this is the right trade: those functions were relying on
+never-validated, accidentally-safe latent behavior, not a proven
+invariant. Net coverage after all fixes: **159/2019 (7.88%) -> 183/2019
+(9.07%)**, a net gain of 24 functions despite the 21 given back.
+
+**Validation**:
+- Focused `-Mode full` on the 7 originally-failing apps: all pass,
+  correctness-clean, after the four fixes above.
+- Regression-gated census (`--fail-on-regression` vs. the pre-item21
+  committed baseline): confirmed net +24 coverage, 21 functions returned
+  to fallback (all with a concrete, understood rationale above), no
+  functions newly *broken* in a way the runtime validation didn't already
+  catch.
+- Focused `-Mode full` on the census's full reported affected-app list
+  (59 apps): all pass correctness-clean. Small perf regressions in ~25
+  apps traced entirely to functions correctly reverting to legacy
+  fallback (giving up a previously-buggy-but-faster MIR path) - not
+  functions still on the MIR path getting slower. Accepted via
+  `-UpdatePerfBaseline` per SKILL.md's baseline policy, since each
+  movement is fully explained by a proven-necessary correctness fix, not
+  hidden regression.
+- Wide `-Mode fast` safety net across the full runnable corpus (323
+  apps): found 2 further apps (`tmircfg`, `tnestfor`) with the same
+  explained perf-only regression class; confirmed correctness-clean via
+  `-Mode full`, baseline updated. Final full-corpus `-Mode fast` re-run:
+  314/314 runnable apps pass, 0 regressions.
+
+**Next recommended class**: continue the opcode-whitelist-widening vein
+that produced this item - `MIR_MEMBER_ADDRESS` (50 hits) and
+`MIR_INDEX_ADDRESS` (22 hits) are the next candidates from the same
+disposable survey. Given this item's experience, proactively check any
+new acceptance widening for the same two latent-bug classes uncovered
+here: (a) any homed-cfg emission case that must scratch through a fixed
+physical register regardless of destination color (`MIR_LOAD`'s `HL`
+scratch was the first instance found - worth auditing for others), and
+(b) any acceptance path that admits an `SC_LOCAL`/`SC_PARAM` object
+without checking whether it actually requires real frame storage beyond
+what the selector's prologue reserves.
