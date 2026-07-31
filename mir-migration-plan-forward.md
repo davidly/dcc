@@ -254,3 +254,41 @@ audit is still directly reusable):
 
 Item D remains not-yet-scoped, unchanged, and still gated on Item C
 landing first.
+
+## Item C: refined scoping note (before any implementation attempt)
+
+Before starting the opcode-by-opcode implementation above, checked
+whether `spilled-scalar-cfg`'s existing memory helpers are actually
+reusable as assumed. They are not, without more work than "call the
+existing helper":
+
+- `mir.allocation_spills[value]` (the homed allocator's own spill-slot
+  index) is **dead outside diagnostics** - the only non-diagnostic write
+  is at spill time in `mir_summarize_allocation`; the only read is in the
+  `DCC_MIR_REPORT` pretty-printer. No frame-slot storage is ever actually
+  allocated or addressed through it today.
+- `homed-scalar-cfg` has two distinct frame shapes: "frameless" (no
+  `push ix`/`ld sp,ix`/`pop ix` at all - just stack-check + `ret`) when
+  `!mir_home_uses_iy()`, and a minimal `push iy` + generic prologue/epilogue
+  otherwise. Neither reserves any local byte range for spill slots the way
+  `spilled-scalar-cfg`'s `mir.local_bytes`/backend-slot frame does.
+
+So "route a spilled value through spilled-scalar-cfg's existing ix-relative
+helpers" is not a drop-in reuse - it requires **building actual spill-slot
+storage for the homed path from scratch** (reserve stack bytes, decide
+slot layout, emit store-at-spill-definition and load-at-each-use, and
+force a real frame even for currently-frameless candidates that would
+newly need one). This is a materially larger and higher-risk change than
+this item's original framing ("reuse existing helpers"), on top of the
+already-documented per-opcode rewrite risk.
+
+**Updated decision**: Item C's yield-to-risk ratio needs re-examination
+before any implementation session, not just an opcode-level how-to. A
+future session should first measure how many currently-fallback,
+otherwise-homed-eligible functions have *exactly the single-cross-call-
+value-over-IY-capacity* shape (the narrowest, safest sub-case - one
+already-near-miss spill, not general register-pressure spills) before
+committing to building new spill-slot infrastructure for the homed path.
+If that count is small, this item should be re-scored against other
+`text-size`/`instruction-count` fallback classes in a fresh census rather
+than assumed to be the next-best lever.
