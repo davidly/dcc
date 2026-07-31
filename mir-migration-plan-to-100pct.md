@@ -1506,3 +1506,102 @@ revisited, it should be paired with widening the co-occurring `MIR_LOAD`
 acceptance slice (e.g. 1-byte/mismatched-width loads, Item 10's already-
 zero-yield candidate) at the same time, since neither alone appears to
 unblock any function in the current population.
+
+### Item 14: implemented, found and fixed a real correctness bug, then hit a genuine both-mode performance regression rooted in a separate systemic MIR_CALL gap - deferred
+
+**Motivation**: after Item 13's zero-yield result, moved to the next largest
+untried Item 8 survey bucket: `opcode-address`/`opcode-straddr` (170 combined).
+`MIR_ADDRESS` (address-of a scalar object) was entirely unhandled by
+`homed-scalar-cfg`'s acceptance switch (falling through to `default: return
+0;`), so any function taking the address of a local/param/global (e.g. to
+pass an array/buffer to a callee) was rejected outright regardless of how
+simple the rest of its body was.
+
+**Implementation**: accepted `MIR_ADDRESS` for non-VLA scalar objects (VLA
+addresses need an extra ix-relative pointer *load* rather than plain address
+arithmetic - deferred, mirroring `mir_try_emit_spilled_scalar_cfg`'s own
+`MIR_ADDRESS` split). Emission mirrored `mir_scalar_memory_location`'s
+existing storage dispatch (global/extern/func label vs. ix-relative local/
+param).
+
+**Bug found and fixed during validation**: the first implementation always
+computed the address into HL first (`ld hl,label` or `push ix / pop hl` +
+offset), then moved HL to the destination's actual home color via
+`mir_emit_hl_to_home`. This silently clobbered any *other* still-live value
+already homed in HL (or DE, via the resulting `ex de,hl`) - a real bug, not
+hypothetical: `attnc11`'s `convert_weights_to_q8` computes two back-to-back
+`MIR_ADDRESS` values (one homed HL, one homed DE) as two of a three-argument
+call's operands; overwriting HL to compute the second address destroyed the
+first before the call could read it, corrupting the call and producing
+all-zero output (confirmed via `runall.ps1 -Mode full`: `attnc11` accuracy
+dropped from 14/14 to 0/14). Root-caused via `DCC_MIR_REPORT`'s per-function
+MIR dump showing the two address values' colors, then fixed by emitting the
+address computation *directly* into the destination's own color whenever
+possible (Z80's `ld de,label`/`ld bc,label`/`ld iy,label` immediate loads and
+`pop de`/`pop bc`/`pop iy` all work on any register pair, so the common
+paths - global/extern/func label, and the very common ix+0 local/param case -
+need no HL/DE scratch at all). Only the non-zero-offset ix-relative case
+still genuinely needs HL (the only register `add hl,de` can target) and DE
+(to hold the offset) as scratch, so that path now conservatively
+push/pops whichever of HL/DE isn't itself the destination color before
+touching it.
+
+**Validation after the fix**: `attnc11` and `trw` both passed correctness
+(`runall.ps1 -Mode full`: `PASS` for both, accuracy restored to 14/14).
+Census: 155/2019 -> **159/2019 (7.88%)**, 4 newly-emitted functions
+(`attnc11.convert_weights_to_q8`, `attnc11.initialize_weights`,
+`attnc11.update_weights`, `trw.clear_buf`).
+
+**Performance regression found (both modes) - the actual blocker**:
+`trw.clear_buf` (`void clear_buf(int size) { memset(buf, 0x69, size); }`,
+called from a hot loop) regressed in **both** peep (+0.06%) and nopeep
+(+0.04%) cycle counts - a direct violation of SKILL.md's non-negotiable rule
+3 ("Peep and nopeep must both be non-regressing for newly emitted
+functions"), confirmed as real (not a coincidental unrelated change) via
+`DCC_MIR_FORCE_FALLBACK_FUNCTION=clear_buf`, which restored the exact prior
+baseline. Direct assembly comparison of the two emissions showed the root
+cause: legacy backend recognizes `memset` with a compile-time-constant fill
+byte and calls a specialized register-argument runtime helper (`__msf`,
+args passed directly in `bc`/`de`/`hl`, no stack traffic), whereas MIR's
+`MIR_CALL` emission always uses the generic stack-based calling convention
+(`__mset`, three `push`/three `pop` around the call) regardless of whether
+the callee is a runtime helper with a faster specialized convention
+available. This is the exact same class of systemic gap SKILL.md's "Known
+root cause" section already documents as the dominant, structural cause of
+`text-size` fallback across ~91% of the corpus (`mir_emit_scalar_compare`'s
+unconditional boolean materialization) - here manifesting specifically as
+"MIR_CALL never recognizes a specialized-convention runtime helper", a
+distinct but analogous instance of the same broader class: MIR's call
+emission is uniformly more expensive than legacy's hand-tuned runtime
+integration for known library calls. (`attnc11` separately showed a small
+peep-only byte-size regression, +0.59%, on its 3 newly-emitted functions -
+not investigated further given the `trw` finding already required deferring
+this item, but likely a related or peephole-interaction artifact given
+nopeep cycles for the same functions *improved*.)
+
+**Decision**: this is a genuine, both-mode, structurally-rooted performance
+regression that cannot be fixed within the scope of a `MIR_ADDRESS`
+acceptance change - the real fix (teaching `MIR_CALL`'s emission to
+recognize known runtime-helper callees with cheaper specialized
+calling conventions, mirroring the legacy backend's `__msf`-style
+optimizations) is a separate, broader unit of work touching call emission
+for every selector, not specific to address-of support. Reverted the
+`MIR_ADDRESS` code entirely (`git checkout --`), verified the exact
+155/2019 (7.68%) baseline restored via a fresh census, and documented this
+finding in full (including the fixed HL/DE-clobber bug, preserved here in
+case `MIR_ADDRESS` support is revisited once the call-convention gap is
+closed) so a future contributor does not need to re-discover either issue.
+This is the "genuine test regression that a fix can't resolve" pause
+condition the user's standing instructions explicitly sanction as a reason
+to defer-and-move-on rather than force an unsafe acceptance.
+
+**Recommended follow-up** (not undertaken here, out of scope): a
+`mir_call_prefers_runtime_convention`-style structural check in `MIR_CALL`'s
+emission - recognizing a small fixed set of runtime helpers with known
+cheaper specialized calling conventions (`memset`/`memmove`/similar,
+verifiable via `DCCRTL.MAC`) and emitting their register-passed form instead
+of the generic stack convention - would very likely unlock `MIR_ADDRESS`
+(and any other currently-deferred opcode whose blocking function happens to
+call such a helper) without this regression, and is a reasonable next
+candidate for a future session focused specifically on `MIR_CALL` emission
+quality rather than acceptance-gate widening.
