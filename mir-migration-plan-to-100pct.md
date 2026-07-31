@@ -202,6 +202,27 @@ skill-rule-4 hazard). Scoping this needs a forced-accept prevalence survey
 (how many of the 44 near-miss + how many of the 2090 far-miss functions
 would this affect) before choosing an implementation shape.
 
+**Prevalence survey run (2026-08-01), Phase 3 retired - zero yield
+available:** scanned every currently-runnable app, classifying each
+function by its `DCC_MIR_SELECT_REPORT` outcome and scanning its emitted
+`.mac` body for the presence/absence of `push ix`. Result: **0 of 1320
+functions currently on `result=fallback reason=text-size`** are captured
+with legacy's frameless convention - every one of them is captured
+`ix`-framed already. (A broader whole-corpus scan found 118/1771 frameless
+bodies overall, but these are all either already-MIR-accepted functions -
+`homed-scalar-cfg` itself already emits genuinely frameless, SP-relative
+code today, e.g. `tbug2.gt_post`, directly contradicting this phase's
+original premise that "every current selector" forces an `ix` frame - or
+fallback functions for a reason other than `text-size`.) Legacy's own
+`function_qualifies_for_speculative_noix` pre-filter (`dcc_regalloc.c`
+~line 58) evidently never selects the frameless convention for any
+function currently blocked on `text-size`, so there is no fallback
+population left for a frameless MIR selector path to unlock right now.
+**Retired as a lever for the current checkpoint** - not implemented; revisit
+only if a future census shows frameless-captured functions appearing in
+the fallback population (e.g. after Phase 1's deeper spilled-scalar-cfg
+rework changes which functions reach `text-size` at all).
+
 ## Phase 4: remaining acceptance gates (cfg-block-count, cfg-backedge,
 pointer-array, oversized MIR streams, inline-substitution)
 
@@ -699,3 +720,23 @@ support (acceptance + emission) to `homed-scalar-cfg`, which is a
 substantially larger, separate slice (needs a reload/store strategy for
 promoted objects, not just a gate check) and should be scoped and attempted
 independently next.
+
+**Defer decision (Item-6-level design ambiguity, not a quick follow-on
+slice):** inspecting *why* `tesc.c`'s `check()` needs a real `MIR_LOAD` for
+`name` (single use, inside the branch taken only on failure) rather than
+the "resident-in-register, demote to NOP" treatment `got`/`expected` already
+get, confirms this is exactly the complexity the plan's own Phase 1 item 2
+warned about: whether a value is still provably resident in its entry
+register at a later use depends on cross-block register liveness at
+merge/branch points, which `homed-scalar-cfg` does not reason about at all
+today (it has no notion of "this register may have been reassigned to a
+different value across a branch"). Getting this wrong would silently read
+the wrong register - a correctness bug, not a missed-optimization. Building
+it properly needs the same cross-block register-identity design the plan
+already flags as the *harder*, general-spill-aware emitter (Phase 1 items
+1-4), not a small acceptance-gate widening. Per SKILL.md's discipline for a
+design decision this significant: **deferred, not attempted this session.**
+Recommended as a dedicated future slice, scoped and validated on its own
+(start from the narrowest case: an object with exactly one cross-block
+reload and no address-taken/aliasing, prove register identity is preserved
+before allowing more).
