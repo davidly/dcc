@@ -1903,6 +1903,110 @@ static int peep_line_is_mulu_extrn(const char *line)
 }
 
 /*
+ * pass_fix_missing_extrns:
+ *
+ * peep_pass_once.c's duplicate-declaration cleanup ("Duplicate declarations
+ * anywhere before code are safe to remove") keeps only the textually first
+ * "extrn X" line for a given symbol and deletes later ones as redundant.
+ * That is correct only if the first occurrence's own basic block is never
+ * later deleted by dead/unreachable-code elimination. When a symbol is
+ * called from multiple blocks and the block holding the surviving "extrn X"
+ * is itself unreachable (e.g. a compile-time-false `assert()` whose call
+ * site is folded away), every remaining "call X" in the file is left
+ * without any "extrn X" declaration. M80/L80 then resolve the undeclared
+ * symbol to address 0 instead of erroring, so the bug silently manifests
+ * as a wild jump to the CP/M warm-boot vector at runtime instead of a link
+ * error - exactly the failure mode this pass prevents.
+ *
+ * Mirrors pass_fix_divmod_extrns/pass_fix_mulu_extrn's established shape,
+ * generalized to every symbol declared "extrn" in the original input: strip
+ * all remaining declarations for that symbol, then re-insert exactly one if
+ * any reference to it still exists in the final code.
+ */
+#define MAX_ORIGINAL_EXTRNS 256
+static char original_extrn_names[MAX_ORIGINAL_EXTRNS][64];
+static int original_extrn_count;
+
+static void capture_original_extrns(void)
+{
+    int i;
+    char name[128];
+    char extra;
+
+    original_extrn_count = 0;
+    for (i = 0; i < nlines && original_extrn_count < MAX_ORIGINAL_EXTRNS; ++i) {
+        int j;
+        int dup = 0;
+
+        if (sscanf(lines[i], "extrn %127s %c", name, &extra) != 1)
+            continue;
+        for (j = 0; j < original_extrn_count; ++j) {
+            if (strcmp(original_extrn_names[j], name) == 0) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup)
+            strncpy(original_extrn_names[original_extrn_count++], name, 63);
+    }
+}
+
+/* Non-zero if `name` is still referenced by any surviving instruction, i.e.
+ * used as an operand/target rather than merely declared via extrn/public. */
+static int symbol_still_referenced(const char *name)
+{
+    int i;
+    size_t len = strlen(name);
+
+    for (i = 0; i < nlines; ++i) {
+        const char *p = lines[i];
+
+        if (strncmp(p, "extrn ", 6) == 0 || strncmp(p, "public ", 7) == 0)
+            continue;
+        p = strstr(lines[i], name);
+        while (p != NULL) {
+            char before = (p == lines[i]) ? 0 : p[-1];
+            char after = p[len];
+            int before_ok = !(isalnum((unsigned char)before) || before == '_');
+            int after_ok = !(isalnum((unsigned char)after) || after == '_');
+
+            if (before_ok && after_ok)
+                return 1;
+            p = strstr(p + 1, name);
+        }
+    }
+    return 0;
+}
+
+static void pass_fix_missing_extrns(void)
+{
+    int k;
+
+    for (k = 0; k < original_extrn_count; ++k) {
+        const char *name = original_extrn_names[k];
+        int i;
+        int has_extrn = 0;
+
+        for (i = 0; i < nlines; ++i) {
+            if (peep_is_exact_extrn_for(lines[i], name)) {
+                has_extrn = 1;
+                break;
+            }
+        }
+        if (has_extrn)
+            continue;
+        if (!symbol_still_referenced(name))
+            continue;
+
+        {
+            char line[80];
+            sprintf(line, "extrn %s", name);
+            insert_line(0, line);
+        }
+    }
+}
+
+/*
  * pass_fix_mulu_extrn:
  *
  * pass_mulu_const may consume the one EXTRN __mulu line when it inlines or
@@ -9091,6 +9195,7 @@ int main(int argc, char **argv)
     }
 
     read_file(infile);
+    capture_original_extrns();
 
     /* Needed by both pass_byte_loop_counter_to_reg_iyl (undocumented-Z80
      * only, gated below) and pass_walk_row_cached_float_index (always on -
@@ -9415,6 +9520,7 @@ int main(int argc, char **argv)
 
     pass_fix_divmod_extrns();
     pass_fix_mulu_extrn();
+    pass_fix_missing_extrns();
 
     /* Final cleanup: drop dead 16-bit reloads, then relax in-range absolute
      * jumps to relative jumps.  Both run after every structural pass so they
