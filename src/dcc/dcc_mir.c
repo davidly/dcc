@@ -10755,7 +10755,27 @@ void mir_end_function(void)
         rewind(mir.capture_stream);
         while ((character = fgetc(mir.capture_stream)) != EOF)
             fputc(character, destination);
-        if (mir.report_mode)
+        /* Item (post-Plan-100): legacy retries a function's codegen from
+         * scratch - and re-drives mir_begin_function/mir_end_function in
+         * lockstep - for every discard-capable speculative attempt (no-IX-
+         * frame, BC/E regalloc, IY regalloc, loop-scoped-BC-first; see
+         * g_speculative_codegen_active's call sites in dcc_regalloc.c).
+         * Each discarded attempt uses its own frame convention and register
+         * allocation, so its generated/captured byte counts do not describe
+         * the function's real, final, committed codegen at all - only the
+         * attempt that is actually kept (or the plain fallback path) does.
+         * Deliberately NOT gated on g_inline_body_buffering: the static-
+         * inline/plain-static body-buffering branches in dcc_func.c set that
+         * flag too, but only to defer real, kept output to a file for later
+         * placement - that output is final and must still be reported.
+         * Reporting from a discarded speculative attempt pollutes
+         * DCC_MIR_SELECT_REPORT/the census with numbers from a codegen path
+         * whose output never reaches the real .mac output, which was
+         * observed directly: a single compile of `check` in tests/tesc.c
+         * emitted five different "captured-bytes" values (424/311/370/370/
+         * 311) for the one function, none reliably the real committed
+         * size. */
+        if (mir.report_mode && !g_speculative_codegen_active)
             fprintf(stderr, "; MIR emit function=%s result=oversized-fallback\n",
                     mir.name);
         fclose(mir.capture_stream);
@@ -11047,10 +11067,14 @@ void mir_end_function(void)
         }
         if (generated != NULL)
             fclose(generated);
-        if (mir.report_mode)
+        if (mir.report_mode && !g_speculative_codegen_active)
             fprintf(stderr, "; MIR emit function=%s result=%s\n",
                 mir.name, emitted ? "mir" : "fallback");
-        if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+        /* See the oversized-fallback report above: a buffered/speculative
+         * legacy attempt's generated/captured sizes describe codegen that
+         * is discarded and never reaches the real output, so it must not
+         * be reported to the census or DCC_MIR_SELECT_REPORT consumers. */
+        if (getenv("DCC_MIR_SELECT_REPORT") != NULL && !g_speculative_codegen_active)
             fprintf(stderr,
                     "; MIR selection function=%s selector=%s result=%s "
                     "reason=%s generated-bytes=%ld captured-bytes=%ld "

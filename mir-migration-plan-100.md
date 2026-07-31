@@ -2261,3 +2261,68 @@ see what state differs between the two compile paths.
 No code changes were made in this investigation; all temporary diagnostics
 were reverted (`git status --short` clean, matching commit `849a7d0`'s tree)
 before this note was appended.
+
+## Post-Plan-100 follow-up: census/report double-counting bug found and fixed
+
+The `check`-family investigation above (frame-convention discrepancy)
+resolved to a much larger, previously undocumented bug, not merely a deferred
+architectural question. Root cause: legacy retries a function's codegen from
+scratch for every discard-capable speculative attempt it tries before
+settling on the real, final body - no-IX-frame (`try_speculative_noix_
+function_body`), BC/E regalloc, IY regalloc, and loop-scoped-BC-first (all in
+`dcc_regalloc.c`) each fully re-run `emit_function_prologue`/`gen_compound`/
+`emit_function_epilogue` into a scratch buffer, validate, and either keep or
+discard the attempt. Every one of these re-drives `mir_begin_function`/
+`mir_end_function` in lockstep (MIR construction is tied to the same AST
+walk), and `mir_end_function` unconditionally printed its `; MIR emit ...`/
+`; MIR selection ...` diagnostic lines every time it ran - once per discarded
+attempt, plus once for the real pass. Direct evidence: a single compile of
+`check` in `tests/tesc.c` printed **five** different `; MIR selection
+function=check ...` lines with different `captured-bytes` values
+(424/311/370/370/311), none of which the report/console consumer had any way
+to distinguish from the one real, final, committed body.
+
+This explains why the `check`-family investigation's frame-convention puzzle
+never resolved cleanly: the "424-byte, frameless, sp-relative" content
+inspected was captured legacy output for the FIRST (no-IX) speculative
+attempt, unrelated to the real final push-`ix` body eventually kept
+(captured-bytes is genuinely 311, not 424, once report pollution is
+removed).
+
+**Fix** (`dcc_mir.c`, `dcc_regalloc.c`, `dcc_state.c`, `dcc.h`): added a new
+global, `g_speculative_codegen_active`, incremented/decremented only around
+the four discard-capable speculative attempt functions in `dcc_regalloc.c`
+(deliberately NOT reusing `g_inline_body_buffering`, which the static-inline/
+plain-static body-buffering branches in `dcc_func.c` also set even though
+their buffered output is real and kept, just deferred to a file for later
+placement). `mir_end_function`'s three report `fprintf`s (`oversized-
+fallback`, `; MIR emit`, `; MIR selection`) are now gated on `!g_speculative_
+codegen_active`, so only the report from the attempt that is actually kept
+(or the unconditional plain fallback path) is ever printed.
+
+**Verified zero risk to actual codegen**: this only gates diagnostic
+`fprintf(stderr, ...)` calls; the `emitted`/`fallback_reason` decision logic
+and the bytes written to the real output stream are completely untouched.
+Confirmed by diffing every generated `.mac` file across all 295 `tests/t*.c`
+apps between a pre-fix and post-fix build - 0 differences.
+
+**Measured impact on reported coverage**: the fix corrects the coverage
+denominator/numerator that were both being inflated by duplicate rows from
+discarded attempts. Fresh census: **139/2018 functions (6.89%)**, down from
+the previously reported 204/2378 (8.58%) - the earlier number was an
+artifact of this reporting bug, not a real regression. This is the first
+fully accurate corpus-wide MIR coverage measurement; all coverage
+percentages reported before this fix should be treated as unreliable upper
+bounds, not verified figures.
+
+**Validation**: `-Mode fast` full corpus run - 314/314 apps passed
+(9 skipped, as before), diagnostics 106/106 passed, dccpeep fixtures 17/17
+passed, performance passed. No `.mac` output changed for any test app
+(verified above), so no further `-Mode full` targeted run was needed beyond
+the direct byte-for-byte diff.
+
+**Next recommended step**: re-run the near-miss/gap bucketing analysis from
+scratch now that `captured-bytes` is trustworthy - the previous ~34-function
+near-miss subset (including the `check`-family) was partly an artifact of
+this bug and needs to be recomputed against accurate numbers before
+resuming the search for a high-leverage `text-size` fix.

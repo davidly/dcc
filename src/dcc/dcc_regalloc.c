@@ -228,6 +228,7 @@ int try_speculative_noix_function_body(const char *name, int type,
      * so a self-contained attempt's EXTRNs are complete and correct whether
      * it's kept or discarded, instead of relying on the global cache. */
     g_inline_body_buffering++;
+    g_speculative_codegen_active++;
     g_buffering_epoch++;
     reset_function_codegen_state(s);
     /* Suppress diagnostics for the duration of this possibly-discarded
@@ -244,6 +245,7 @@ int try_speculative_noix_function_body(const char *name, int type,
     gen_compound();
     emit_function_epilogue(implicit_zero_return);
     asm_suppress_depth--;
+    g_speculative_codegen_active--;
     g_inline_body_buffering--;
     generated_stack_check = opt_stack_check;
     opt_stack_check = saved_stack_check;
@@ -1280,6 +1282,7 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
+    g_speculative_codegen_active++;
     g_buffering_epoch++;
     reset_function_codegen_state(s);
     g_loop_regalloc_bc_claimed = 0;
@@ -1291,6 +1294,7 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     emit_function_epilogue(strcmp(name, "main") == 0 &&
                             (type & 15) == TYPE_INT && type_ptr_depth(type) == 0);
     asm_suppress_depth--;
+    g_speculative_codegen_active--;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
     emit_sink_restore(&saved_sink);
@@ -1358,6 +1362,7 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
     saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
+    g_speculative_codegen_active++;
     g_buffering_epoch++;
     reset_function_codegen_state(s);
     if (bc_cand != NULL) {
@@ -1403,6 +1408,7 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
     if (bc_cand != NULL)
         bc_cand->reg_alloc = REG_NONE;
     g_e_regalloc_claim_active = 0;
+    g_speculative_codegen_active--;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
     emit_sink_restore(&saved_sink);
@@ -1548,6 +1554,7 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
     saved_sink = emit_sink_push(scratch, EMIT_SINK_VERIFY);
     opt_stack_check = s->stack_check_enabled;
     g_inline_body_buffering++;
+    g_speculative_codegen_active++;
     g_buffering_epoch++;
     reset_function_codegen_state(s);
 
@@ -1575,6 +1582,7 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
     asm_suppress_depth--;
 
     iy_cand->reg_alloc = REG_NONE;
+    g_speculative_codegen_active--;
     g_inline_body_buffering--;
     opt_stack_check = saved_stack_check;
     emit_sink_restore(&saved_sink);

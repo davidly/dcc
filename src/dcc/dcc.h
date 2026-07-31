@@ -648,6 +648,18 @@ extern int current_omit_ix_frame;
 extern int current_function_has_call;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
+/* Set only around a discard-capable speculative codegen attempt (no-IX-
+ * frame, BC/E regalloc, IY regalloc, loop-scoped-BC-first - see their
+ * g_speculative_codegen_active++/-- pairs in dcc_regalloc.c), never around
+ * the static-inline/plain-static body-buffering branches in dcc_func.c that
+ * defer real, kept output to a file purely for later placement. Distinct
+ * from g_inline_body_buffering, which both cases set: MIR's own
+ * mir_begin_function/mir_end_function pair reruns in lockstep with every
+ * discarded speculative attempt (each with its own frame/register
+ * convention), so a MIR selection report emitted while this flag is set
+ * describes codegen that is thrown away and never reaches the real .mac
+ * output - it must not be reported to DCC_MIR_SELECT_REPORT/the census. */
+extern int g_speculative_codegen_active;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];

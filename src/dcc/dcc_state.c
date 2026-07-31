@@ -108,6 +108,7 @@ int current_omit_ix_frame;
 int current_function_has_call;
 int g_inline_body_buffering;
 int g_buffering_epoch;
+int g_speculative_codegen_active;
 struct Sym *g_bc_regalloc_sym;
 int g_regalloc_address_escaped;
 int g_e_regalloc_claim_active;
