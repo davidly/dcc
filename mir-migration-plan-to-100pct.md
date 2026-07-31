@@ -125,12 +125,19 @@ of any acceptance-gate threshold. `cobint`, `tinline`, and `tinlinfb` also
 newly failed when an unrelated gate was experimentally relaxed this
 session (see `mir-migration-plan-next200.md`'s Item 1 entry) - these are
 very likely the same or a closely related bug class, currently masked by
-conservative acceptance gates rather than fixed. This needs its own
-focused investigation (start with `forint.assign_pre`, `DCC_MIR_REPORT=1`
-dump, compare fused-branch output against legacy bit-for-bit on several
-concrete input values) before any further widening of the gates that
-currently keep these functions safely on fallback. Fixing real bugs behind
-existing gates is lower-risk and higher-value than widening gates further.
+conservative acceptance gates rather than fixed. **Automatic bisection
+(using the new `scripts/mir-migration-bisect.sh`, see "Automating the
+migration loop" below) sharpened this further**: `forint.bump_sym_val` is
+independently buggy too, not merely collateral from `assign_pre` - forcing
+either one alone to fallback still fails `forint`, but forcing both (via
+`DCC_MIR_FORCE_FALLBACK=1`) fixes it, so there are at least two distinct
+latent bugs in this one app alone. This needs its own focused
+investigation (start with `forint.assign_pre` and `forint.bump_sym_val`
+separately, `DCC_MIR_REPORT=1` dump each, compare fused-branch output
+against legacy bit-for-bit on several concrete input values) before any
+further widening of the gates that currently keep these functions safely
+on fallback. Fixing real bugs behind existing gates is lower-risk and
+higher-value than widening gates further.
 
 ## Phase 3: frameless leaf-function selector path
 
@@ -196,14 +203,26 @@ calls later.
 When a wide validation run fails after a gate change (as happened this
 session with the inline-substitution relaxation), the manual process was:
 census delta -> guess candidate functions -> forced-accept/forced-fallback
-each one by hand. This can be scripted: given a census delta's
-"newly-emitted" list and a failing app, automatically loop
-`DCC_MIR_FORCE_FALLBACK_FUNCTION=<each candidate>` + a quick `-Mode fast`
-run per candidate to isolate exactly which newly-emitted function(s) caused
-the failure, rather than reasoning it out from assembly diffs by hand.
-This would have identified `forint.assign_pre` mechanically in under a
-minute instead of the multi-step manual MIR-instruction-dump investigation
-this session needed.
+each one by hand. This has been scripted as
+`scripts/mir-migration-bisect.sh <app> <candidate1,candidate2,...>`: it
+loops `DCC_MIR_FORCE_FALLBACK_FUNCTION=<each candidate>` + a quick
+`-Mode fast` run per candidate, reporting which function(s), when forced
+back to legacy fallback alone, make the app pass again.
+
+**Verified working against this session's own regression**: re-applying
+the reverted inline-substitution relaxation and running
+`scripts/mir-migration-bisect.sh forint assign_pre,bump_sym_val`
+correctly reported that *neither* function's fallback alone fixes
+`forint` - which, cross-checked with `DCC_MIR_FORCE_FALLBACK=1` (fixes
+it), revealed a sharper finding than this session's manual investigation
+originally had: **both `forint.assign_pre` and `forint.bump_sym_val` are
+independently buggy**, not just `assign_pre` as manually confirmed at the
+time. This mechanical loop found that in under two minutes, versus the
+multi-step manual `DCC_MIR_REPORT`/assembly-diff investigation the
+original bisection needed - exactly the speedup this tool is meant to
+provide. Both functions remain a documented candidate for the Phase 2
+fused-comparison-branch investigation above (not yet root-caused which
+bug each hits).
 
 ### 4. Extend `mir-migration-census.py` with automatic candidate ranking
 
