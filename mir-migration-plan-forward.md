@@ -187,3 +187,70 @@ this fusion.
 
 **Conclusion**: Item B is complete with a "no action" result. Proceeding
 directly to Item C, which is the actual lever for additional coverage.
+
+## Item C: audited, deferred with rationale (Item-6-style)
+
+**Audit finding (step 1 from the plan above)**: the allocator's cross-call
+handling is more nuanced than assumed when Item C was scoped. In
+`mir_summarize_allocation`, a value live across a call is *not* always
+spilled - it is preferentially colored into `MIR_COLOR_IY` (the one
+register available across calls) when no other cross-call value
+conflicts with it; it only spills when `cross_opaque` is also set, or
+when IY is already claimed by a higher-priority cross-call value (the
+sort by `cross_call[]` then `degree[]` picks a winner). So
+`allocation_spill_count != 0` in `mir_try_emit_homed_scalar_cfg`'s entry
+gate is not purely a "calls are present" signal - it also fires for
+plain register-pressure spills unrelated to any call, and for the
+"second or later" cross-call value once IY is taken.
+
+Widening this gate is not a single-line change: `mir_try_emit_homed_scalar_cfg`
+(272 lines) has a **second**, independent rejection inside its main
+instruction loop - `if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
+return 0;` - which fires for every spilled value's *definition*, and the
+rest of the function's ~15 opcode cases (`MIR_BINARY`, `MIR_UNARY`,
+`MIR_ARG`, `MIR_CALL`, `MIR_RETURN`, comparisons, etc.) all assume every
+operand already has a register color and use register-move helpers
+directly - none of them fall through to `spilled-scalar-cfg`'s
+`ix`-relative memory helpers. Safely mixing "homed value in a register"
+and "spilled value via memory" within the same emission pass, per
+operand, across every opcode case, is a correctness-sensitive rewrite of
+comparable risk to the bug just fixed in Item A (a wrong fallthrough for
+even one opcode case would silently corrupt a spilled value's load/store,
+with the same kind of "runs fine until it doesn't" failure signature) -
+this is exactly the class of change SKILL.md's risk ordering places above
+"calls/PHIs" and below "large CFG/inline substitution."
+
+**Decision**: defer Item C rather than implement it under this session's
+remaining scope. Implementing and *validating* a mixed homed/spilled
+emission path correctly requires the same falsifiable, per-opcode
+hand-verification discipline Item A needed (structural audit already done
+above; next is hand-verifying `spilled-scalar-cfg`'s existing memory
+helpers against each of homed-scalar-cfg's ~15 opcode cases one at a time,
+which is genuinely a full session's work on its own, not a continuation
+of this one).
+
+**Concrete starting point for the next session** (per the plan's own
+guidance to re-derive rather than continue stale numbering, but this
+audit is still directly reusable):
+
+1. Confirm the exact "spilled-value" sentinel: `mir.allocation_colors[v] < 0`
+   marks a spill (confirmed above); `mir.allocation_spills[v]` holds its
+   assigned slot index once spilled (see `mir_summarize_allocation`,
+   `mir.allocation_spills[value] = mir.allocation_spill_count++`).
+2. For each opcode case in `mir_try_emit_homed_scalar_cfg`, decide per
+   operand: if its color is a real register, keep the existing homed
+   register-move code path; if its color is `< 0` (spilled), redirect to
+   `spilled-scalar-cfg`'s existing `ix`-relative load/store helpers for
+   that one value only. Do this one opcode at a time (e.g., start with
+   `MIR_CALL`'s `MIR_ARG` operands only, since that is the concrete case
+   this item was originally motivated by), hand-verifying against
+   `spilled-scalar-cfg`'s output for 5-10 forced-accept candidates before
+   moving to the next opcode.
+3. Re-run the standard validation ladder (census --fail-on-regression,
+   focused full, wide fast, full extended) after every single opcode is
+   widened, not just once at the end - each opcode case is its own
+   falsifiable unit and should be its own commit, matching this session's
+   Item A discipline.
+
+Item D remains not-yet-scoped, unchanged, and still gated on Item C
+landing first.
