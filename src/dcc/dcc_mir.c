@@ -5976,8 +5976,17 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
     int i;
     int accepted = 0;
 
-    if ((mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2 ||
-        mir.allocation_spill_count != 0)
+    /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
+     * zero-spill-fallback survey found "return-type" (base type != int)
+     * is by far the single largest homed-scalar-cfg rejection cause
+     * (997 of 1861 zero-spill functions surveyed). void is the safest
+     * subset to add first: no calling-convention width change, no new
+     * return-value register to track, and MIR_CALL's own void handling
+     * below (skip storing a result to home when the callee's type is
+     * void) already establishes the pattern MIR_RETURN reuses. */
+    if (((mir.return_type & 15) != TYPE_INT &&
+         (mir.return_type & 15) != TYPE_VOID) ||
+        type_size(mir.return_type) > 2 || mir.allocation_spill_count != 0)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -6049,7 +6058,12 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             return 0;
         }
     }
-    if (return_count == 0)
+    /* A void function may legitimately fall off the end with no explicit
+     * "return;" at all - mir_try_emit_spilled_scalar_cfg's own preflight
+     * (the "implicit-return" reject reason) already treats this as valid
+     * only for TYPE_VOID; mirror that here instead of requiring at least
+     * one MIR_RETURN unconditionally. */
+    if (return_count == 0 && (mir.return_type & 15) != TYPE_VOID)
         return 0;
 
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
@@ -6222,7 +6236,11 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_RETURN:
-            if (!mir_emit_home_to_hl(out, insn->src1))
+            /* void: nothing to load into HL (MIR_RETURN's src1 is not a
+             * real value for "return;") - mirrors MIR_CALL's own
+             * void-result skip above. */
+            if ((mir.return_type & 15) != TYPE_VOID &&
+                !mir_emit_home_to_hl(out, insn->src1))
                 goto done;
             if (frameless)
                 fputs("\tret\n", out);
@@ -6237,6 +6255,19 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
             mir_edge_phi_names_predecessor(i, i + 1) &&
             !mir_emit_homed_phi_copies(out, i, i + 1))
             goto done;
+    }
+    /* A void function that falls off the end (no MIR_RETURN reached as
+     * the final instruction - either return_count==0 entirely, or the
+     * last statement was an early "return;" followed by more code with
+     * no trailing return) still needs the epilogue emitted once at the
+     * true end of the body, mirroring what every MIR_RETURN case above
+     * already does inline. */
+    if ((mir.return_type & 15) == TYPE_VOID &&
+        (mir.count == 0 || mir.insns[mir.count - 1].opcode != MIR_RETURN)) {
+        if (frameless)
+            fputs("\tret\n", out);
+        else
+            mir_emit_home_epilogue(out, uses_iy);
     }
     accepted = 1;
 done:
