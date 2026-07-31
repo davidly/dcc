@@ -4507,9 +4507,34 @@ static void mir_add_live_set_interference(unsigned char *interference,
  * Values live across a call may use only IY. Values live across an opaque
  * barrier are forced to spill. Everything else prefers HL, DE, BC, then IY.
  * Order is descending interference degree, with call-crossing values first. */
+static int mir_color_shares_slot(int left, int right)
+{
+    /* Reserved wide pair-colors (mir-migration-plan-to-100pct.md Item 20)
+     * occupy two adjacent single-register slots simultaneously; every
+     * other color occupies exactly its own slot. This generalizes the
+     * old `left == right` check to slot-overlap so a scalar value can
+     * never share a physical register with a wide value's pair, while
+     * reducing to the exact old behavior when neither side is a wide
+     * color (each singleton footprint only overlaps itself). */
+    if (left == right)
+        return 1;
+    if (left == MIR_COLOR_HL_DE || right == MIR_COLOR_HL_DE) {
+        int other = (left == MIR_COLOR_HL_DE) ? right : left;
+        if (other == MIR_COLOR_HL || other == MIR_COLOR_DE)
+            return 1;
+    }
+    if (left == MIR_COLOR_BC_IY || right == MIR_COLOR_BC_IY) {
+        int other = (left == MIR_COLOR_BC_IY) ? right : left;
+        if (other == MIR_COLOR_BC || other == MIR_COLOR_IY)
+            return 1;
+    }
+    return 0;
+}
+
 static void mir_allocate_registers(const unsigned char *live_in,
                                    const unsigned char *live_out,
-                                   struct MirAllocationSummary *summary)
+                                   struct MirAllocationSummary *summary,
+                                   int allow_wide_colors)
 {
     int value_count = mir.next_value;
     unsigned char *interference;
@@ -4640,9 +4665,32 @@ static void mir_allocate_registers(const unsigned char *live_in,
     }
     for (i = 0; i < value_count; ++i) {
         int value = order[i];
-        int first_color = cross_call[value] ? MIR_COLOR_IY : MIR_COLOR_HL;
-        int last_color = cross_call[value] ? MIR_COLOR_IY : MIR_COLOR_IY;
+        int is_wide = 0;
+        int first_color;
+        int last_color;
         int chosen;
+
+        if (allow_wide_colors) {
+            const struct MirInsn *definition = mir_definition(value);
+            is_wide = definition != NULL && type_size(definition->type) == 4;
+        }
+        if (is_wide) {
+            /* A wide value crossing a call cannot be safely held in a
+             * single register pair today (no callee-saved wide home
+             * exists) - force it to spill instead of attempting an
+             * unsupported color, leaving first_color > last_color so the
+             * candidate loop below finds nothing available. */
+            if (cross_call[value]) {
+                first_color = MIR_COLOR_COUNT;
+                last_color = MIR_COLOR_COUNT - 1;
+            } else {
+                first_color = MIR_COLOR_HL_DE;
+                last_color = MIR_COLOR_BC_IY;
+            }
+        } else {
+            first_color = cross_call[value] ? MIR_COLOR_IY : MIR_COLOR_HL;
+            last_color = cross_call[value] ? MIR_COLOR_IY : MIR_COLOR_IY;
+        }
 
         if (cross_call[value])
             ++summary->cross_call_values;
@@ -4662,7 +4710,8 @@ static void mir_allocate_registers(const unsigned char *live_in,
                 int preference = preferences[(size_t)value * MIR_COLOR_COUNT +
                                              candidate];
                 for (other = 0; other < value_count; ++other) {
-                    if (color[other] == candidate &&
+                    if (color[other] >= 0 &&
+                        mir_color_shares_slot(color[other], candidate) &&
                         mir_values_interfere(interference, value_count,
                                              value, other)) {
                         available = 0;
@@ -4685,6 +4734,7 @@ static void mir_allocate_registers(const unsigned char *live_in,
             /* The instruction produces the value in a fixed result register,
              * then a boundary move places it in its allocated lifetime home.
              * This is live-range splitting, not a spill to memory. */
+
             if (fixed_color[value] >= 0 && fixed_color[value] != chosen)
                 ++summary->fixed_moves;
         }
@@ -4884,7 +4934,7 @@ static int mir_verify_and_dump(void)
         }
     } while (changed);
 
-    mir_allocate_registers(live_in, live_out, &allocation);
+    mir_allocate_registers(live_in, live_out, &allocation, 0);
 
     if (mir.report_mode)
         fprintf(stderr,

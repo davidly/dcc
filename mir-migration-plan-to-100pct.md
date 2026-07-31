@@ -1982,3 +1982,49 @@ items). The SQL todo list now reflects this breakdown so a future session
 (or continuation of this one) can execute 20a first with a trivial,
 zero-risk validation (plain census diff showing no change) before any
 riskier step.
+
+### Item 20b: inert wide pair-coloring interference/coloring logic (still gated off in production)
+
+**Implementation**: added `mir_color_shares_slot(left, right)`, generalizing
+the coloring loop's availability check from an exact `color[other] ==
+candidate` match to physical-slot overlap: every ordinary color's footprint
+is still just itself, but the two reserved pair-colors
+(`MIR_COLOR_HL_DE`/`MIR_COLOR_BC_IY`) now correctly report overlap with
+their two component single-register colors. Added an `allow_wide_colors`
+parameter to `mir_allocate_registers` (the file's only call site passes
+`0`, so production behavior is unchanged: with the flag off, no value is
+ever classified `is_wide`, and the availability check's slot-overlap
+result degenerates to exactly the old equality check in the
+0-3-only color domain). When the flag is set, a value whose defining
+instruction has `type_size(...) == 4` is now colored against the two pair
+candidates instead of the four single-register candidates, and a wide
+value crossing a call is deliberately forced to spill (no callee-saved
+wide home exists yet) rather than attempting an unsupported color.
+
+**Validation**:
+- Production path (flag always `0`): rebuild clean, census diff against
+  the Item 20a baseline shows **zero change** (`apps with census
+  changes: 0`), and the wide `-Mode fast` (323-app) safety net passed
+  cleanly - confirming the generalized availability check is behaviorally
+  identical to the original when no wide value is ever colored.
+- Disposable sanity check (not committed): temporarily flipped the one
+  call site's flag to `1` and re-built. `DCC_MIR_REPORT=1
+  DCC_MIR_FUNCTION=main` on `tests/tlong.c` confirmed wide `long`
+  constants/arithmetic values correctly received `home=hl:de` or
+  `home=bc:iy` while interfering narrow values (e.g. a `straddr` result)
+  still correctly claimed `hl` independently when not live at the same
+  time as a wide value's pair - proving the slot-overlap interference
+  check works as intended. A full corpus census run with the flag
+  temporarily enabled compiled cleanly with no crashes across all 314
+  apps and produced **identical coverage** (159/2019), confirming
+  `mir_try_emit_homed_scalar_cfg`'s own acceptance gate is still the sole
+  and sufficient thing preventing wide functions from being selected
+  today. Reverted the temporary flag flip before committing - the flag
+  remains `0` in the committed code, exactly as Item 20's plan requires
+  (real enablement is scoped to Item 20c's private probe, not this
+  shared, every-function allocation pass).
+
+**Decision**: committed. This is the second of the six-step Item 20
+decomposition; the wide pair-coloring capability now exists and is
+verified correct, but remains completely inert in production until Item
+20c wires it into `mir_try_emit_homed_scalar_cfg`'s own probe path.
