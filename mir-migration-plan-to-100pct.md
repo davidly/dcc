@@ -1812,3 +1812,73 @@ regressions**, 9 improvements (`tpostinc`, `cint`, `tstrcmpi`,
 **Decision**: committed. This completes every fastcall special-case
 `dcc_ast_gen_expr.c` defines - `MIR_CALL`'s systemic generic-convention
 cost gap for library-call shapes is now fully closed for both selectors.
+
+### Item 19: call-result HL-forwarding exclusion (rejected — no measured yield)
+
+**Motivation**: with the fastcall vein exhausted (Item 18), re-inspected
+`check_s`'s (`tests/tesc.c`) generated assembly and found a redundant
+store-to-spill-slot/immediate-reload of a `strcmp` call result that is
+used exactly once by an immediately-following comparison+branch. The
+general HL-forwarding mechanism, `mir_can_forward_hl_to_next()`
+(`dcc_mir.c` ~line 6720), already elides exactly this store/reload
+pattern for values defined by `MIR_LOAD_INDIRECT`/`MIR_BINARY`/
+`MIR_UNARY`/etc., but explicitly excludes values defined by `MIR_CALL`/
+`MIR_CALL_AGGREGATE` via an early `return 0`. The general (non-fastcall)
+`MIR_CALL` emission path stores its result via the same
+`mir_emit_virtual_store`/`mir_emit_virtual_store_wide` calls every other
+producer uses, so the store-side mechanics already exist; the exclusion
+appeared to be purely in the forwarding eligibility check.
+
+**Hypothesis**: removing the `MIR_CALL`/`MIR_CALL_AGGREGATE` exclusion
+from `mir_can_forward_hl_to_next()` would let call results participate
+in the same store/reload elision as other producers, reducing generated
+bytes for call-result-into-comparison shapes across the corpus.
+
+**Implementation tested**: removed the 4-line exclusion block (and the
+now-unused `definition` local it required). Rebuilt clean.
+
+**Validation**: census against the Item 18 baseline showed **zero
+effect whatsoever** — `apps with census changes: 0` across the entire
+314-app/2019-function corpus, not even a single-byte change in any
+still-fallback function. Root cause: `mir_can_forward_hl_to_next()`
+requires the consuming instruction to be the *literal next* MIR
+instruction (`next_instruction == mir_emit_instruction_index + 1`,
+modulo a narrow `MIR_RETURN`/`MIR_STORE` exception under
+`mir_virtual_iy_base`). In `check_s`'s actual MIR stream the call
+(`v5 = call strcmp`) is followed by a separate `MIR_CONST` instruction
+(`v6 = const 0`) *before* the consuming `MIR_BINARY` compare — the
+constant-zero RHS is skipped only during the *comparison selector's own*
+fusion logic (`mir_fused_compare_is_const_zero_rhs`-style handling),
+not by emitting an actual `MIR_NOP` in the instruction stream, so
+`mir_forward_skip_target` (which only skips real `MIR_NOP`/single-pred
+`MIR_LABEL` instructions) never advances past it. The call-result
+exclusion was therefore never the operative blocker for this shape; the
+adjacency requirement is. This also explains why the corpus-wide census
+shows zero movement: any call result immediately followed by a fusable
+binary is *never* immediately-adjacent in the MIR stream when the
+comparison's RHS is a materialized constant, which is the common case
+this pattern targets.
+
+**Decision**: reverted (`git checkout -- src/dcc/dcc_mir.c`); zero
+measured yield for real risk (touching a correctness-sensitive core
+forwarding gate) with no benefit. **Not pursued further**: closing this
+gap for real would require teaching `mir_forward_skip_target` (or an
+adjacent lookahead) to skip over a `MIR_CONST` instruction whenever the
+*specific consuming instruction* would itself elide materializing that
+constant — a chicken-and-egg dependency between the skip-target
+lookahead and the consuming selector's own fusion decision, which is a
+meaningfully larger and riskier change than this item's scope. If
+revisited, treat it as a new item that generalizes both
+`mir_forward_skip_target` and the const-zero-RHS fusion check together,
+re-validated against `check_s`/`tstr3`/`tsyntax` specifically before any
+corpus-wide census run.
+
+**Next recommended step**: re-bucket the fallback population fresh (per
+SKILL.md's guidance) rather than continuing to chase this specific
+lever — the fastcall vein and this HL-forwarding vein are both now
+exhausted at negligible/zero yield. The dominant `text-size` gap
+(1732/1816 functions with >128-byte gap) remains the systemic blocker;
+the largest remaining lever is the `value-width` register-allocator
+extension for 4-byte/wide values (tracked as the standing SQL todo
+`phase1-item13-value-width-allocator`), or a from-scratch re-derivation
+of the plan from a fresh census per SKILL.md's re-derivation guidance.
