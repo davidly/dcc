@@ -5600,6 +5600,37 @@ static int mir_emit_ix_offset_address_to_home(FILE *out, int value,
     return 1;
 }
 
+/* Item 22 (mir-migration-plan-to-100pct.md): compute (base value +
+ * constant byte offset) directly into a value's own home color, for
+ * MIR_MEMBER_ADDRESS (a struct/union member's address, base=src1) and
+ * MIR_INDEX_ADDRESS's constant-index case (base=src1, offset already
+ * reduced to a byte count by the caller). Mirrors mir_emit_ix_offset_
+ * address_to_home's proven push/pop discipline exactly, substituting
+ * "load base value into hl" for that helper's "push ix/pop hl": preserve
+ * hl/de around the computation whenever the destination isn't that color
+ * (the register allocator guarantees dst's own color slot has nothing
+ * else live there needing preservation), so this also correctly restores
+ * base's own value afterward when base's home is hl or de and base still
+ * has a use later in the function. */
+static int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
+                                                    int base, long offset)
+{
+    int dst_color = mir.allocation_colors[dst];
+    int preserve_hl = dst_color != MIR_COLOR_HL;
+    int preserve_de = dst_color != MIR_COLOR_DE;
+    if (preserve_hl) fputs("\tpush hl\n", out);
+    if (preserve_de) fputs("\tpush de\n", out);
+    if (!mir_emit_home_to_hl(out, base))
+        return 0;
+    if (offset != 0)
+        fprintf(out, "\tld de,%ld\n\tadd hl,de\n", offset);
+    if (dst_color != MIR_COLOR_HL && !mir_emit_hl_to_home(out, dst))
+        return 0;
+    if (preserve_de) fputs("\tpop de\n", out);
+    if (preserve_hl) fputs("\tpop hl\n", out);
+    return 1;
+}
+
 static int mir_emit_constant_to_home(FILE *out, int value, long immediate)
 {
     switch (mir.allocation_colors[value]) {
@@ -6402,6 +6433,60 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
              * mir_emit_label_address_to_home exactly like MIR_ADDRESS's
              * global/extern/func case. */
             break;
+        case MIR_MEMBER_ADDRESS:
+            /* Item 22 (mir-migration-plan-to-100pct.md): a struct/union
+             * member's address is always src1 (an already-homed pointer
+             * value, not a memory location) plus a compile-time-constant
+             * byte offset (insn->immediate) - the single biggest opcode
+             * gap found by a fresh disposable-survey re-run after Item 21
+             * (261 hits across the corpus). Unlike MIR_ADDRESS, there is
+             * no memory-storage dispatch at all here: src1's color was
+             * already validated when its own defining instruction was
+             * visited (every value assigned a color earlier in the
+             * function has already passed the generic dst-color check at
+             * the top of this loop), so nothing further needs validating
+             * before accepting. Emission is mir_emit_pointer_address_to_
+             * home (a new, general "base value + constant offset" helper
+             * shared with MIR_INDEX_ADDRESS's constant-index case below). */
+            break;
+        case MIR_INDEX_ADDRESS:
+            /* Item 22: only the constant-index subset is accepted here -
+             * the same narrow slice mir_try_emit_spilled_scalar_cfg's own
+             * fast path special-cases (index_definition->opcode ==
+             * MIR_CONST). A variable (runtime) index needs a __mulu
+             * runtime call for the stride multiply, and insn->base_name
+             * set means a VLA whose stride itself is a memory-resident
+             * value - both are real, separate scope creep from this first
+             * step (mirroring Item 9's own narrow-first-slice precedent
+             * for MIR_LOAD). Emission reuses the same mir_emit_pointer_
+             * offset_address_to_home helper as MIR_MEMBER_ADDRESS, with
+             * the constant byte offset folded at selection time exactly
+             * like the spilled-scalar-cfg selector already does. */
+            {
+                const struct MirInsn *index_definition =
+                    mir_definition(insn->src2);
+                if (insn->base_name[0] != 0)
+                    return 0;
+                if (index_definition == NULL ||
+                    index_definition->opcode != MIR_CONST)
+                    return 0;
+            }
+            break;
+        case MIR_LOAD_INDIRECT:
+            /* Item 22: dereferencing an arbitrary already-homed pointer
+             * value (e.g. `*p`), as opposed to MIR_LOAD's fixed ix/global
+             * memory location. Narrowest safe slice, mirroring MIR_LOAD's
+             * own Item 9 restriction: a plain 2-byte scalar, no bitfield
+             * extraction and no 1-byte (char) sign/zero-extend or bool-
+             * normalization logic (those need the same extra machinery
+             * mir_try_emit_spilled_scalar_cfg's own MIR_LOAD_INDIRECT case
+             * carries - real, but separate scope creep). 4-byte (long)
+             * loads are also deferred (no wide-value support here yet). */
+            if (type_is_struct_object(insn->type) ||
+                type_size(insn->type) != 2 || insn->bit_width > 0 ||
+                (insn->memory_size != 0 && insn->memory_size != 2))
+                return 0;
+            break;
         case MIR_LOAD:
             {
                 /* Item 9 (mir-migration-plan-to-100pct.md): the "opcode-load"
@@ -6624,6 +6709,41 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 sprintf(label, "S%ld", insn->immediate);
                 if (!mir_emit_label_address_to_home(out, insn->dst, label))
                     goto done;
+            }
+            break;
+        case MIR_MEMBER_ADDRESS:
+            if (!mir_emit_pointer_offset_address_to_home(
+                    out, insn->dst, insn->src1, insn->immediate))
+                goto done;
+            break;
+        case MIR_INDEX_ADDRESS:
+            {
+                const struct MirInsn *index_definition =
+                    mir_definition(insn->src2);
+                long byte_offset;
+                if (index_definition == NULL ||
+                    index_definition->opcode != MIR_CONST)
+                    goto done;
+                byte_offset = index_definition->immediate * insn->immediate;
+                if (!mir_emit_pointer_offset_address_to_home(
+                        out, insn->dst, insn->src1, byte_offset))
+                    goto done;
+            }
+            break;
+        case MIR_LOAD_INDIRECT:
+            {
+                int instruction = (int)(insn - mir.insns);
+                int preserve_hl =
+                    mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+                    mir_home_color_live_across(instruction, MIR_COLOR_HL);
+                if (preserve_hl) fputs("\tpush hl\n", out);
+                if (!mir_emit_home_to_hl(out, insn->src1))
+                    goto done;
+                fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+                if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+                    !mir_emit_hl_to_home(out, insn->dst))
+                    goto done;
+                if (preserve_hl) fputs("\tpop hl\n", out);
             }
             break;
         case MIR_LABEL:

@@ -2341,3 +2341,98 @@ scratch was the first instance found - worth auditing for others), and
 (b) any acceptance path that admits an `SC_LOCAL`/`SC_PARAM` object
 without checking whether it actually requires real frame storage beyond
 what the selector's prologue reserves.
+
+### Item 22: MIR_MEMBER_ADDRESS, constant-index MIR_INDEX_ADDRESS, and narrow MIR_LOAD_INDIRECT (2026, this session)
+
+A fresh disposable-survey re-run after Item 21 (same instrumentation
+technique, re-run on the full 323-app test corpus rather than just the
+runnable census subset) re-ranked the remaining opcode-whitelist gaps:
+`MIR_MEMBER_ADDRESS` (261 hits - a struct/union member's address, e.g.
+`&s.field` or the base step of `s.field` itself), `MIR_INDEX_ADDRESS`
+(95 hits - an array/pointer index's address, e.g. `&a[i]`/`p[i]`),
+`MIR_LOAD_INDIRECT` (68 hits - a pointer dereference read, e.g. `*p`),
+`MIR_COPY_AGGREGATE` (12), `MIR_STORE_INDIRECT` (4), `MIR_CALL_AGGREGATE`
+(2). The prior 68-hit `MIR_STRING_ADDRESS` count from Item 21's survey
+no longer appears at all, confirming that fix's effectiveness.
+
+**Implemented**, all three together in one slice since they are the
+common shapes real struct/array/pointer code combines (a single function
+rarely uses only one):
+
+1. **`MIR_MEMBER_ADDRESS`**: unlike `MIR_ADDRESS`, there is no memory-
+   storage dispatch at all - `insn->src1` is always an already-homed
+   pointer *value* (not an ix-relative or global memory location) plus a
+   compile-time-constant byte offset (`insn->immediate`). Added a new
+   general helper, `mir_emit_pointer_offset_address_to_home(dst, base,
+   offset)`, mirroring Item 16's `mir_emit_ix_offset_address_to_home`'s
+   proven push/pop discipline exactly (substituting "load base value into
+   hl" for that helper's "push ix/pop hl"): preserve hl/de around the
+   computation whenever the destination isn't that color (the allocator
+   guarantees dst's own color slot is otherwise free), which also
+   correctly restores base's own value afterward if base's home is hl or
+   de and base still has a later use.
+2. **`MIR_INDEX_ADDRESS`** (constant-index subset only): mirrors
+   `mir_try_emit_spilled_scalar_cfg`'s own existing constant-index fast
+   path (`index_definition->opcode == MIR_CONST`) - folds the byte offset
+   at selection time (`index * stride`) and reuses the exact same
+   `mir_emit_pointer_offset_address_to_home` helper as
+   `MIR_MEMBER_ADDRESS`. A variable (runtime) index needs a `__mulu`
+   runtime call for the stride multiply, and `insn->base_name` set means
+   a VLA whose stride is itself a memory-resident value - both are
+   deliberately deferred, real scope creep from this first narrow slice
+   (mirroring Item 9's own narrow-first precedent for `MIR_LOAD`).
+3. **`MIR_LOAD_INDIRECT`** (narrow 2-byte, non-bitfield subset):
+   dereferencing an arbitrary already-homed pointer value, as opposed to
+   `MIR_LOAD`'s fixed ix-relative/global memory location. Restricted to
+   exactly `MIR_LOAD`'s own Item 9 narrowness (plain 2-byte scalar, no
+   bitfield extraction, no 1-byte sign/zero-extend or bool-normalization
+   logic, no 4-byte/long support) for the same reason: those need real,
+   separate machinery `mir_try_emit_spilled_scalar_cfg`'s own
+   `MIR_LOAD_INDIRECT` case already carries. Reused Item 21's
+   `mir_home_color_live_across()` helper for `preserve_hl` protection
+   around the mandatory `HL` memory-read scratch (`ld a,(hl)/inc hl/ld
+   h,(hl)/ld l,a`) - proactively applying the exact latent-bug class
+   Item 21 found in `MIR_LOAD`'s global path, rather than waiting to
+   rediscover it here.
+
+**Bug found and fixed during implementation** (not a design issue, a
+mechanical slip): the first edit adding the `MIR_MEMBER_ADDRESS`
+acceptance `case` accidentally deleted the `case MIR_LOAD:` label
+immediately below it, silently merging `MIR_LOAD`'s entire acceptance
+body into unreachable dead code after `MIR_MEMBER_ADDRESS`'s `break;`.
+This regressed coverage from 183 to 155 (losing all `MIR_LOAD`
+acceptance) - caught immediately by the standard before/after census
+comparison (the whole reason step 2's "snapshot before editing" is
+mandatory), not by runtime testing. Restored the `case MIR_LOAD:` label
+and re-verified before proceeding.
+
+Coverage: 183/2019 (9.07%) -> 185/2018 (9.17%) - a modest but real net
+gain (30 newly-emitted functions, 0 regressed to fallback), smaller than
+Item 21's jump because most struct/array-heavy functions combine several
+of these opcodes plus others (aggregate copies, variable-index array
+accesses, char loads) still gated elsewhere; the survey's raw hit counts
+measure per-instruction rejection causes, not directly the number of
+whole functions unlocked.
+
+**Validation**:
+- Regression-gated census (`--fail-on-regression` vs. the pre-item22
+  baseline): +30 newly MIR-emitted functions, 0 functions returned to
+  fallback, 45 apps with census changes.
+- Focused `-Mode full` on the 29 apps the census flagged as requiring
+  runtime validation: all 29 pass correctness-clean. One negligible
+  (+0.001%, +5,905 of 466M cycles) perf blip in `adaint` (peep mode),
+  outweighed by a larger simultaneous nopeep improvement in the same
+  app (-0.35% bytes) - accepted via `-UpdatePerfBaseline` as noise, not
+  a material regression.
+- Wide `-Mode fast` safety net across the full runnable corpus (323
+  apps): 314/314 pass, 0 regressions.
+
+**Next recommended class**: the variable-index (`__mulu`-multiplied)
+subset of `MIR_INDEX_ADDRESS` deferred here, plus `MIR_COPY_AGGREGATE`
+(12 hits) and `MIR_STORE_INDIRECT` (4 hits) - the two other opcodes now
+visible in the same disposable survey. `MIR_STORE_INDIRECT` in
+particular mirrors this item's `MIR_LOAD_INDIRECT` shape closely (write
+through an arbitrary homed pointer rather than read) and should reuse
+the same `mir_home_color_live_across`-protected-scratch-through-`HL`
+pattern, since Z80 can only `ld (hl),n`/`ld (hl),r` for indirect stores
+just as it can only `ld hl,(nn)` for indirect loads.
