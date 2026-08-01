@@ -849,6 +849,32 @@ retired history; do not resume numbering from them.
   proven correct end to end; extending the consumer switch to
   `MIR_STORE` next (the single most common wide-value shape) should
   start showing coverage movement.
+- **Item T41 candidate attempted, reverted (two real correctness
+  bugs found, Item-6-level design ambiguity)**: extending
+  `mir_can_forward_hl_de_to_next` to recognize `MIR_STORE` as a second
+  consumer. Two versions tried, both caught by *runtime* testing
+  (`ntvcm` execution, not just static census/inspection) before being
+  committed: (1) a version with a recursive look-through of an
+  intervening identity-cast `MIR_UNARY` miscomputed a synthetic
+  `gr = a + b;` test (`2949120` instead of `3000000`); (2) a narrower,
+  non-recursive version (adjacency-only) passed that same synthetic
+  test but failed `tc89flta`'s real test suite (`f_st`, a wide
+  parameter assigned to a global) - force-accept-diff showed the
+  generated code correctly loaded the parameter then **overwrote HL
+  with a partial reload from an uninitialized backend slot** before
+  storing the corrupted value. Both bugs were fully reverted
+  (`git checkout --`, working tree confirmed clean, `tc89flta`
+  re-verified passing) before any commit - no broken code was ever
+  pushed. Root cause suspected (not confirmed) to be `mir_prepare_
+  backend_slots` having no wide-forwarding awareness at all, unlike
+  the scalar path (Item 13 taught the scalar slot allocator this
+  exact class of interaction deliberately). Deferred with full
+  rationale in `mir-text-size-plan.md`'s Item T41 entry, including a
+  recommended next-session approach (teach `mir_prepare_backend_
+  slots` wide-forwarding awareness *first*, build a richer synthetic
+  test battery verified via `ntvcm` execution, before re-attempting).
+  `mir_can_forward_hl_de_to_next` remains at its safe Item T40 state
+  (`MIR_RETURN` only) in the meantime.
 
 ## Next session should
 
@@ -873,16 +899,19 @@ retired history; do not resume numbering from them.
    forwarding gap (item 3 below), and `MIR_COMPOUND_ADDRESS` had no
    confirmed trigger. Do not keep chasing this specific whitelist
    without a fresh concrete motivating example.
-3. **Extend wide-value forwarding to `MIR_STORE`, then `MIR_BINARY`/
-   `MIR_ARG` consumers** (Item T40's carried-forward next slice):
-   `mir_can_forward_hl_de_to_next` currently only recognizes the
-   `MIR_RETURN` consumer. Extend it to `MIR_STORE` next (the single
-   most common shape, matching `long r = a + b;` patterns where the
-   result is stored to a named local before being read again) - this
-   is expected to start showing real coverage movement, unlike T40's
-   `MIR_RETURN`-only slice. Stage one consumer shape per item, forced-
-   accept-diff 2-3 representative functions before generalizing
-   further, exactly as the scalar predicate's own history did.
+3. **`MIR_STORE` wide forwarding: DO NOT retry without new groundwork
+   first** (Item T41's finding): two independent real correctness bugs
+   were found and reverted this session when extending
+   `mir_can_forward_hl_de_to_next` to `MIR_STORE` (see `mir-text-size-
+   plan.md`'s Item T41 entry for full detail on both). Before
+   attempting again: (a) teach `mir_prepare_backend_slots` itself
+   wide-forwarding awareness (mirroring Item 13's scalar-path
+   precedent - this is the suspected actual root cause, since both
+   bugs manifested as reads from slots that should never have been
+   touched); (b) build a richer synthetic test battery (param-direct
+   operands, plain SSA temps, mixed cases) each verified via actual
+   `ntvcm` execution, not just force-accept-diff inspection or census
+   byte counts, before considering any version safe to land.
 4. **Do a final sweep of `mir_can_forward_hl_to_next`'s `MIR_STORE`
    producer whitelist** (now `MIR_LOAD_INDIRECT`/`MIR_BINARY`/
    `MIR_UNARY`/`MIR_CONST`/`MIR_CALL`/`MIR_ADDRESS` after Items T31/

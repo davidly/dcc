@@ -3913,3 +3913,85 @@ already tracked in the backlog) can each extend
 time, exactly as the scalar predicate's own history did, and should
 start showing coverage movement once the `MIR_STORE` consumer (the
 single most common shape, matching `addlong`'s pattern) lands.
+
+## Item T41 candidate: wide `MIR_STORE` forwarding attempted, reverted (two real correctness bugs found) (2026-08-01)
+
+**Attempted**: extending `mir_can_forward_hl_de_to_next` (Item T40) to
+recognize `MIR_STORE` as a second consumer shape, matching the scalar
+predicate's own progression. Two versions were tried, both **reverted
+before commit** after being caught by direct runtime testing (not just
+the static census, which showed no problem in either case):
+
+1. **First version** (adjacency-only `MIR_BINARY`/`MIR_UNARY` producer
+   check for a directly-adjacent `MIR_STORE`, plus a recursive
+   look-through of an intervening identity-cast `MIR_UNARY` so a
+   `MIR_BINARY` result feeding `unary(identity) -> store` could also
+   skip its own store): a synthetic runtime test
+   (`static long gr; void computelong(long a, long b) { gr = a + b; }`,
+   compiled and executed under `ntvcm`, not just inspected statically)
+   showed `gr` computed as `2949120` instead of the correct `3000000`
+   - a genuine miscompilation. The exact mechanism was not fully
+   root-caused before reverting (suspected: the recursive call's
+   `mir_emit_instruction_index` save/restore interacting incorrectly
+   with the outer caller's own `forward_instruction` computation, but
+   this was not confirmed).
+
+2. **Second, narrower version** (same producer check, but *without*
+   the recursive identity-unary look-through - only a `MIR_BINARY`/
+   `MIR_UNARY` producer *directly* adjacent to the store qualifies):
+   the synthetic test above now passed correctly (confirmed via
+   `ntvcm`), and the whole-corpus census showed 0 regressions with
+   `+1` newly-accepted function (`tc89flta.f_st`). However, the
+   *focused* `runall.ps1 -Mode full` validation (not just the
+   synthetic test) caught a **second, independent correctness bug**:
+   `tc89flta`'s actual test suite failed (`FAIL fst got 232 expected
+   0`, twice). Force-accept-diffing `f_st` (`static void f_st(float x)
+   { gg = x; }` - `x` is a direct-eligible wide parameter, Item T35)
+   showed the generated code correctly loaded `x` into `HL:DE` from its
+   parameter home, but then **overwrote `HL` with a partial 2-byte
+   reload from an uninitialized backend slot** (`ld l,(ix-2)/ld
+   h,(ix-1)`) immediately before storing the corrupted value to `gg` -
+   a distinct bug from the first, only manifesting when the
+   `MIR_BINARY`/`MIR_UNARY` producer is itself consuming a
+   *param-direct* wide value (Item T35) rather than a plain computed
+   SSA temp (the shape the first synthetic test exercised). This was
+   also not fully root-caused before reverting.
+
+**Both versions were fully reverted (`git checkout --`) before any
+commit; the working tree was confirmed clean and re-verified against
+`tc89flta` after reverting.** No broken code was ever pushed.
+
+**Why this is deferred rather than continuing to iterate (Item-6-level
+design ambiguity)**: two independent, real correctness bugs surfaced
+in successive attempts at what looked like a narrow, well-precedented
+extension (mirroring the scalar `MIR_STORE` case's own history).
+This is a strong signal that wide-value (`HL:DE`) forwarding into a
+`MIR_STORE` consumer has a genuine safety gap not present in the
+`MIR_RETURN`-only slice (Item T40, still safely landed) - most likely
+related to `mir_prepare_backend_slots` having no wide-forwarding
+awareness at all (unlike the scalar path, where Item 13 documented and
+handled this exact class of interaction deliberately), causing some
+interaction between skipped stores/loads and the slot-numbering/
+liveness analysis that the interval-based allocator performs
+independently. Diagnosing this properly needs a from-scratch,
+dedicated investigation (likely instrumenting `mir_prepare_backend_
+slots`'s own view of wide values, and/or building 3-4 more varied
+synthetic+real test cases *before* attempting a fix again), not
+another quick iteration - continuing to poke at this without that
+groundwork risks a third, different bug.
+
+**Recommendation for next session**: before attempting `MIR_STORE`
+wide forwarding again, (1) make `mir_prepare_backend_slots` itself
+aware of wide forwarding opportunities (mirroring how the scalar
+path's Item 13 taught the slot allocator to skip reserving a slot for
+a value it can already prove will be forwarded, rather than reserving
+one and separately deciding not to use it at emission time) - this may
+be the actual missing piece, since both bugs manifested as reads from
+slots that should never have been touched at all; (2) build a
+richer battery of synthetic tests covering param-direct operands,
+plain SSA temps, and mixed cases, each verified end-to-end via
+`ntvcm` execution (not just force-accept-diff inspection) before
+considering the predicate safe to extend; (3) only then re-attempt,
+following the same full SKILL.md validation discipline. `mir_can_
+forward_hl_de_to_next` remains at its Item T40 state (`MIR_RETURN`
+consumer only, safely committed and validated) in the meantime.
