@@ -11,15 +11,25 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 190/2021 runnable functions MIR-accepted (9.40%).
-- `text-size` fallback is still the dominant reason (1,749/2021, ~86%
+- Coverage: 195/2021 runnable functions MIR-accepted (9.65%).
+- `text-size` fallback is still the dominant reason (1,744/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
-- Combined byte-sum reduction from this vein's Items T1-T4:
-  -1,542,587 bytes (~18.4%) across the whole corpus vs. the
-  pre-T1 baseline, with 0 real regressions (only digit-width text-
-  metric artifacts from T2/T3, each independently confirmed non-real
-  via a label/offset-normalized diff; T4 had 0 regressions outright).
+  Fresh re-bucketing (post-T5) still shows the gap population
+  dominated by "far" (>256 bytes over legacy): near=2, close=31,
+  mid=282, far=1,429; 941/1,429 (66%) of the far bucket shows a
+  ≥1.6x generated/captured instruction-count ratio, matching SKILL.md's
+  documented boolean-materialization/dead-store bloat signature in the
+  general `mir_try_emit_spilled_scalar_cfg` selector - this remains the
+  single biggest unaddressed lever (see `mir-text-size-plan.md`'s "Root
+  causes to close" list carried over from this session's plan).
+- Combined byte-sum reduction from this vein's Items T1-T5:
+  -1,542,587 bytes (~18.4%, T1-T4) plus Item T5's aggregate-return
+  fix (which, uniquely among T1-T5, also moved coverage: +5 functions)
+  across the whole corpus vs. the pre-T1 baseline, with 0 real
+  regressions (only digit-width text-metric artifacts from T2/T3, each
+  independently confirmed non-real via a label/offset-normalized diff;
+  T4/T5 had 0 regressions outright).
 - **`src/dcc/dcc_mir.c` has been split into 6 files** (this session):
   `dcc_mir.c` (core: lowering, capture API, CFG/dataflow analysis,
   register allocation), `dcc_mir_emit_common.c` (shared scalar-value
@@ -60,18 +70,48 @@ retired history; do not resume numbering from them.
   as Item T3, found via the same `git log -S` methodology). -71,913
   bytes across 135 apps, 0 regressions, coverage unchanged (still-
   rejected candidates got smaller without crossing acceptance).
+- **Item T5**: found and fixed `MIR_RETURN`'s struct-object case fully
+  unrolling a byte-by-byte aggregate copy instead of using the Z80
+  `ldir` block-copy instruction (legacy's equivalent path uses a
+  `djnz` runtime loop, never unrolled). Replaced with `ldir`. **+5
+  newly-accepted functions** (190 -> 195, 9.40% -> 9.65%) - the first
+  Item since T1 to move coverage, not just shrink still-rejected
+  candidates. 0 regressions; focused full-mode run showed 6 genuine
+  performance improvements (real cycle-count/`.COM`-size wins),
+  baselines updated for the 3 affected apps only.
 
 ## Next session should
 
-1. Continue the `text-size` root-cause work per `mir-text-size-plan.md`:
-   - Investigate Root Cause C's residual (`mir_try_emit_spilled_scalar_cfg`
-     gives every MIR value a fixed home slot and unconditionally
-     stores/reloads it even with zero intervening side effects) beyond
-     what the existing single-use HL/stack-forwarding mechanisms (now
-     both live, per Items T3/T4) already cover - non-adjacent single-use
-     values separated by a skippable label, or more complex live ranges.
+1. Execute the dedicated `text-size` plan (drafted this session,
+   carried into `mir-text-size-plan.md`'s Execution Log after each
+   item lands):
+   - Survey struct assignment/copy sites for the same unrolled-copy
+     defect Item T5 fixed in `MIR_RETURN` (legacy's shared
+     `emit_copy_de_to_hl_bytes` convention suggests it plausibly exists
+     there too) - quick win if found, same `ldir` fix applies.
+   - Then tackle the single biggest lever: extend compare+branch
+     fusion (the shape `mir_try_emit_comparison_branch` already does
+     for a narrow whole-function pattern) into the general
+     `mir_try_emit_spilled_scalar_cfg` path that 91% of the corpus goes
+     through, where `mir_emit_scalar_compare` still unconditionally
+     materializes and spills/reloads an explicit 0/1 boolean for every
+     comparison. Stage narrowly: forced-accept-diff 2-3 representative
+     functions first (`tesc::check_s`, `adaint::and_expr`), define the
+     narrowest adjacency predicate, validate iteration-tier then
+     milestone-tier (this touches the dominant selector).
+   - Re-evaluate a complementary dead-store-elimination dccpeep pass
+     after the selector-side fix lands (SKILL.md notes dccpeep's
+     existing same-basic-block pass only removes one of the two
+     store/reload round-trips from this pattern, leaving a second,
+     genuinely dead store).
+   - Continue Root Cause C's residual (non-adjacent single-use
+     forwarding) once the above land and the far-bucket population has
+     been re-measured.
    - Re-run the full census and re-bucket the `text-size` gap fresh
-     before picking the next item; the population shifts as items land.
+     before picking each next item; the population shifts as items
+     land (this session already caught one stale-ranking trap this
+     way - the prior top outlier dropped out of the list entirely
+     after Item T5 landed).
 2. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to

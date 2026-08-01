@@ -3907,16 +3907,25 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
         case MIR_RETURN:
             if (type_is_struct_object(mir.return_type)) {
-                int byte;
                 int size = type_size(mir.return_type);
                 if (insn->src1 < 0)
                     goto done;
                 mir_emit_virtual_load(out, insn->src1);
-                fputs("\tex de,hl\n\tld l,(ix+4)\n\tld h,(ix+5)\n", out);
-                for (byte = 0; byte < size; ++byte) {
-                    fputs("\tld a,(de)\n\tld (hl),a\n", out);
-                    if (byte + 1 < size)
-                        fputs("\tinc de\n\tinc hl\n", out);
+                /* mir-text-size Item T5: HL already holds the source
+                 * address after mir_emit_virtual_load above. Load DE
+                 * directly with the hidden return-buffer pointer (no
+                 * need to route it through HL via `ex de,hl` first) and
+                 * copy with the Z80 `ldir` block-copy instruction
+                 * instead of a fully unrolled byte-by-byte sequence.
+                 * Legacy's own struct-return path (emit_copy_de_to_hl_bytes,
+                 * dcc_expr.c) already avoids unrolling with a `djnz`
+                 * loop; `ldir` is both smaller and faster than either
+                 * the old unrolled form or a djnz loop, and is the same
+                 * idiom already used pervasively for block copies in
+                 * DCCRTL.MAC. */
+                if (size > 0) {
+                    fputs("\tld e,(ix+4)\n\tld d,(ix+5)\n", out);
+                    fprintf(out, "\tld bc,%d\n\tldir\n", size);
                 }
             } else if (insn->src1 >= 0) {
                 if (mir_value_is_wide(insn->src1))
