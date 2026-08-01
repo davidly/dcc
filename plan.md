@@ -33,6 +33,10 @@ the work back up without re-reading the whole log.
   functions shifted fallback-selector-attempt order only, zero
   generated-code change) - correct, safe groundwork for combining with
   future items rather than a standalone yield.
+- **Item 24**: `MIR_COPY_AGGREGATE` (struct/union assignment by value),
+  reusing the spilled selector's own `hl`/`bc` byte-copy loop shape.
+  +0 functions unlocked, 0 census changes at all - confirms no function
+  in the current corpus is blocked solely by this opcode either.
 
 ## Next recommended items (ranked by a fresh full-corpus disposable survey)
 
@@ -41,20 +45,22 @@ in the Execution Log (Item 22 entry) - re-survey before trusting these
 numbers if more than one session has passed, since each landed item
 changes the ranking underneath the next one:
 
-1. **`MIR_COPY_AGGREGATE`** (~12 hits): struct/union assignment by
-   value. Larger scope - needs a byte-range copy loop or `ldir`-style
-   emission, not a single-instruction fold like the address opcodes
-   above. Per Item 23's finding, measure real expected yield first (a
-   restricted survey of functions blocked ONLY by this one remaining
-   opcode) before implementing, since combining opcodes rather than
-   individual hit counts is what actually unlocks whole functions.
+1. **`MIR_CALL_AGGREGATE`** (~2 hits): passing/returning structs by
+   value through calls - last remaining opcode from the original
+   survey. Completing it makes the survey's whole opcode set land in
+   `homed-scalar-cfg`, after which a fresh survey should reveal what (if
+   anything) is now the sole remaining blocker for previously-untouched
+   functions.
 2. **Variable-index `MIR_INDEX_ADDRESS`** (the subset Item 22 deferred):
    needs a `__mulu` runtime-call emission path for the stride multiply
    when the index isn't a compile-time constant.
-3. **`MIR_CALL_AGGREGATE`** (~2 hits): passing/returning structs by
-   value through calls. Lowest yield of the currently-surveyed set: do
-   last unless it turns out to gate a disproportionate number of whole
-   functions once 1-2 are done.
+3. **Combination analysis** (recommended pivot after two consecutive
+   zero-yield single-opcode items): pick several concrete still-
+   fallback functions and trace opcode-by-opcode which single
+   acceptance check each fails first, to check whether a two-or-three-
+   opcode combined admit (rather than one narrow opcode at a time)
+   unlocks a meaningful cluster that individual narrow admits keep
+   missing.
 
 ## Non-negotiable process reminders (see SKILL.md for full text)
 

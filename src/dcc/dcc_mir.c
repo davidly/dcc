@@ -6500,6 +6500,19 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 (insn->memory_size != 0 && insn->memory_size != 2))
                 return 0;
             break;
+        case MIR_COPY_AGGREGATE:
+            /* Item 24 (mir-migration-plan-to-100pct.md): struct/union
+             * assignment by value between two already-homed pointer
+             * values (dst/src addresses), mirroring the byte-copy loop
+             * mir_try_emit_spilled_scalar_cfg already uses (ld a,(bc)/
+             * ld (hl),a, walking both pointers in lockstep via bc/hl).
+             * Same size cap as that selector's own case (1..1024 bytes)
+             * to bound the emitted instruction stream; zero-size or
+             * negative-size aggregates are not valid C and are rejected
+             * defensively. */
+            if (insn->memory_size <= 0 || insn->memory_size > 1024)
+                return 0;
+            break;
         case MIR_LOAD:
             {
                 /* Item 9 (mir-migration-plan-to-100pct.md): the "opcode-load"
@@ -6787,6 +6800,40 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if (insn->memory_size != 1)
                     fputs("\tinc hl\n\tld (hl),d\n", out);
                 if (preserve_de) fputs("\tpop de\n", out);
+                if (preserve_hl) fputs("\tpop hl\n", out);
+            }
+            break;
+        case MIR_COPY_AGGREGATE:
+            {
+                /* Item 24: struct/union assignment by value between two
+                 * already-homed pointer addresses. Mirrors the byte-copy
+                 * loop mir_try_emit_spilled_scalar_cfg's own
+                 * MIR_COPY_AGGREGATE case uses (hl=dst, bc=src, walking
+                 * both in lockstep). Both hl and bc are used
+                 * unconditionally as scratch below regardless of
+                 * src1/src2's actual home colors, so protect any OTHER
+                 * value still live there across this instruction the
+                 * same way Item 23 protects hl/de for MIR_STORE_INDIRECT. */
+                int byte;
+                int instruction = (int)(insn - mir.insns);
+                int preserve_hl =
+                    mir_home_color_live_across(instruction, MIR_COLOR_HL);
+                int preserve_bc =
+                    mir_home_color_live_across(instruction, MIR_COLOR_BC);
+                if (preserve_hl) fputs("\tpush hl\n", out);
+                if (preserve_bc) fputs("\tpush bc\n", out);
+                if (!mir_emit_home_to_hl(out, insn->src1))
+                    goto done;
+                fputs("\tpush hl\n", out);
+                if (!mir_emit_home_to_hl(out, insn->src2))
+                    goto done;
+                fputs("\tld b,h\n\tld c,l\n\tpop hl\n", out);
+                for (byte = 0; byte < insn->memory_size; ++byte) {
+                    fputs("\tld a,(bc)\n\tld (hl),a\n", out);
+                    if (byte + 1 < insn->memory_size)
+                        fputs("\tinc bc\n\tinc hl\n", out);
+                }
+                if (preserve_bc) fputs("\tpop bc\n", out);
                 if (preserve_hl) fputs("\tpop hl\n", out);
             }
             break;

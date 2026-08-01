@@ -2489,3 +2489,54 @@ prioritize whichever of these two is more likely to combine with
 same real functions - re-run the disposable survey restricted to
 functions that already pass every currently-accepted opcode except one
 of these two, to measure real expected yield before implementing either.
+
+### Item 24: MIR_COPY_AGGREGATE (2026, this session)
+
+Added struct/union assignment by value (`dst_struct = src_struct;`)
+between two already-homed pointer addresses, mirroring
+`mir_try_emit_spilled_scalar_cfg`'s own existing `MIR_COPY_AGGREGATE`
+byte-copy loop exactly (`hl`=dst address, `bc`=src address, walking
+both in lockstep with `ld a,(bc)/ld (hl),a`/`inc bc`/`inc hl`). Same
+1..1024-byte size cap as that selector's case, to bound the emitted
+instruction stream for large aggregates. Both `hl` and `bc` are used
+unconditionally as scratch, so protected with
+`mir_home_color_live_across`-gated `preserve_hl`/`preserve_bc` around
+the whole sequence - the same discipline Item 23 established for
+`MIR_STORE_INDIRECT`'s `hl`/`de` pair, applied here to `hl`/`bc` since
+this emission form reuses the spilled selector's own register choice
+rather than inventing a new one.
+
+**Result**: 0 newly-unlocked functions, 0 apps with any census changes
+at all (not even a selector-attempt-order shift, unlike Item 23's 8).
+This confirms Item 23's finding continues to hold: in the current test
+corpus, no function is blocked *solely* by `MIR_COPY_AGGREGATE` at the
+point `homed-scalar-cfg`'s acceptance loop reaches it - every candidate
+also depends on at least one other still-gated opcode or cost limit
+encountered earlier in the same function. As with Item 23, this is
+correct, low-risk, necessary groundwork (verified to be exercised
+correctly via direct code inspection and the build's clean warnings)
+rather than a standalone yield-producing change on its own.
+
+**Validation**:
+- Regression-gated census (`--fail-on-regression` vs. the pre-item24
+  baseline): 0 newly MIR-emitted, 0 returned to fallback, 0 apps with
+  any census changes, 0 apps flagged as requiring runtime validation.
+- Wide `-Mode fast` safety net across the full runnable corpus (323
+  apps): 314/314 pass, 0 regressions. (No apps required `-Mode full`
+  validation since no function's generated output changed at all.)
+
+**Next recommended class**: given two consecutive zero-yield-but-safe
+items, the remaining single-opcode gaps (`MIR_CALL_AGGREGATE`,
+variable-index `MIR_INDEX_ADDRESS`) are increasingly likely to show the
+same pattern individually. The more promising next move is either (a)
+implement `MIR_CALL_AGGREGATE` next since it is the last remaining
+opcode from the original disposable survey and would make the full
+survey's opcode set complete in `homed-scalar-cfg`, then re-run a fresh
+disposable survey to see what opcode(s), if any, are now the *sole*
+remaining blocker for previously-untouched functions; or (b) pivot away
+from single-opcode narrow admits entirely and instead investigate
+*combinations* directly - pick a handful of concrete still-fallback
+functions and trace, opcode-by-opcode, exactly which single acceptance
+check each one fails first, to find out whether any two-or-three-opcode
+combination (rather than one at a time) would unlock a meaningful
+cluster.
