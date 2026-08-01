@@ -99,34 +99,67 @@ retired history; do not resume numbering from them.
   byte reduction merely exposed, not something T6 introduced. 0
   coverage change (195/2021, 9.65%), 0 regressions in the final
   (post-revert) validation.
+- **Item T7** (deferred, no code change): investigated `check_s`'s
+  34-byte gap directly. Found the compare-fusion work this plan
+  originally flagged as the single biggest lever (Items 1/2/4/25/27)
+  was **already landed** in an earlier migration phase - `check_s`'s
+  boolean is already fully elided. The real remaining gap is a call
+  result (`v = call strcmp`) still being stored/reloaded because
+  `mir_can_forward_hl_to_next` unconditionally excludes `MIR_CALL`-
+  defined values, plus a separate `MIR_CONST` (the compare's `0` RHS)
+  sitting in between that the forwarding skip-logic doesn't know is
+  silent. Confirmed this exact idea was already investigated and
+  deferred twice in `mir-migration-plan-100.md` (Items 14 and 16), for
+  a documented "occupancy-safety" hazard (dynamic emission-order state
+  a static accounting pass can't safely prove). This session's own
+  narrow attempt (dropping just the `MIR_CALL` exclusion, plus a
+  silent-`MIR_CONST` skip) produced 0 measurable coverage/byte win in
+  isolation - it only helps once a third, independently-risky change
+  (loosening an equality-check gate that may also make Item 15's
+  label-skip capability dead-on-arrival) is *also* made. Reverted;
+  documented in `mir-text-size-plan.md`'s Item T7 entry as a defer,
+  same rationale class as Item 6/14/16 - a real opportunity exists but
+  needs its own dedicated occupancy-safety design work, not a
+  stacked-on-top follow-on edit.
 
 ## Next session should
 
 1. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
-   - Tackle the single biggest lever: extend compare+branch
-     fusion (the shape `mir_try_emit_comparison_branch` already does
-     for a narrow whole-function pattern) into the general
-     `mir_try_emit_spilled_scalar_cfg` path that 91% of the corpus goes
-     through, where `mir_emit_scalar_compare` still unconditionally
-     materializes and spills/reloads an explicit 0/1 boolean for every
-     comparison. Stage narrowly: forced-accept-diff 2-3 representative
-     functions first (`tesc::check_s`, `adaint::and_expr`), define the
-     narrowest adjacency predicate, validate iteration-tier then
-     milestone-tier (this touches the dominant selector).
+   - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
+     in an earlier migration phase) - do not re-attempt it; Item T7
+     confirmed `check_s`'s boolean is already fully elided.
+   - The single biggest remaining lever is now the **call-result
+     HL-forwarding gap** (Item T7, deferred): `mir_can_forward_hl_to_next`
+     unconditionally excludes `MIR_CALL`-defined values from the
+     store/reload-elision path, even for a single, immediately-
+     following use. This is deferred pending a **whole-function
+     occupancy-safety pass** (design work Item 14 already called for,
+     reaffirmed by Item 16 and this session's Item T7) - do not retry
+     the narrow "just drop the exclusion" edit without that design in
+     place first; this session confirmed it produces 0 measurable win
+     alone and needs at least one more independently-risky change
+     (loosening `mir_forward_skip_target`'s equality-check gate,
+     which may also make Item 15's label-skip dead) stacked on top.
+     If tackled, scope it as its own multi-item project, starting with
+     verifying whether Item 15's label-skip capability is actually
+     reachable today for any real function (this session's evidence
+     suggests it may not be) before touching call-result forwarding.
    - Re-evaluate a complementary dead-store-elimination dccpeep pass
-     after the selector-side fix lands (SKILL.md notes dccpeep's
-     existing same-basic-block pass only removes one of the two
-     store/reload round-trips from this pattern, leaving a second,
-     genuinely dead store).
+     (SKILL.md notes dccpeep's existing same-basic-block pass only
+     removes one of two store/reload round-trips from this pattern,
+     leaving a second, genuinely dead store) as a lower-risk
+     alternative/complement that doesn't require the occupancy-safety
+     proof.
    - Continue Root Cause C's residual (non-adjacent single-use
-     forwarding) once the above land and the far-bucket population has
-     been re-measured. Fixing Root Cause C's redundant-address-
-     recomputation bug would also unblock re-applying Item T6's
-     deferred `MIR_CALL`/`MIR_CALL_AGGREGATE` struct-argument-copy
-     `ldir` fix (see `mir-text-size-plan.md`'s Item T6 entry) as a
-     direct bonus - check that first when starting Root Cause C work.
+     forwarding) - this shares the same occupancy-safety design need
+     as Item T7's call-result forwarding, so consider designing them
+     together. Fixing Root Cause C's redundant-address-recomputation
+     bug would also unblock re-applying Item T6's deferred
+     `MIR_CALL`/`MIR_CALL_AGGREGATE` struct-argument-copy `ldir` fix
+     (see `mir-text-size-plan.md`'s Item T6 entry) as a direct bonus -
+     check that first when starting Root Cause C work.
    - Re-run the full census and re-bucket the `text-size` gap fresh
      before picking each next item; the population shifts as items
      land (this session already caught one stale-ranking trap this

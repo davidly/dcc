@@ -815,3 +815,91 @@ Cause 1, selector-side) as the next highest-yield item, or continue
 Root Cause C's residual directly - fixing Root Cause C first would
 also unblock re-applying the deferred call-argument `ldir` fix as a
 bonus.
+
+## Item T7: call-result HL-forwarding across the store/reload gap (2026-08-01, deferred)
+
+**Hypothesis**: SKILL.md's own root-cause finding names `check_s`
+(`if (strcmp(got, expected) != 0) fail_s(...);`) as a representative
+example of unconditional boolean materialization. Direct inspection
+this session found the *actual* remaining gap is narrower than
+originally framed: `mir_binary_is_fusable_comparison` (Items 1/2/4/25/
+27, already landed in a prior phase of this migration) already fully
+elides the 0/1 boolean materialization for `check_s`'s compare - the
+generated code tests the `strcmp` call's raw HL result directly with
+`or l` and branches, exactly as hoped. The remaining 34-byte gap
+against legacy is a *different*, narrower defect: the call result
+itself (`v5 = call strcmp`) is still stored to a backend slot
+immediately after the call and reloaded one instruction later purely
+because `mir_can_forward_hl_to_next` has a blanket
+`definition->opcode == MIR_CALL` exclusion, and because
+`mir_forward_skip_target`'s existing "skip a silent instruction"
+mechanism (already used for NOPs and single-predecessor labels) doesn't
+know a `MIR_CONST` sitting between the call and its one use can also be
+silent (elided entirely elsewhere whenever it is only ever consumed as
+one narrow comparison operand, a call argument, or a small multiplier).
+
+**Investigation**: implemented a two-part fix - (1) drop the
+unconditional `MIR_CALL` exclusion in `mir_can_forward_hl_to_next`
+(keeping `MIR_CALL_AGGREGATE` excluded, since its result is an address
+via a hidden return pointer, a materially different case not
+investigated here); (2) extend `mir_forward_skip_target` to also skip
+a `MIR_CONST` instruction proven to emit no code of its own (reusing
+`mir_call_only_constant`/`mir_binary_only_constant`/
+`mir_multiply_by_small_constant` - the exact predicates the real
+emission loop already uses to decide whether that constant's own
+`MIR_CONST` case emits anything). Neither change alone nor combined
+moved `check_s` off `fallback text-size`, because a *third*, older
+check in `mir_can_forward_hl_to_next` (`next_instruction !=
+mir_emit_instruction_index + 1 && next->opcode != MIR_RETURN`) rejects
+any skip target that isn't the literal next array position (except for
+`MIR_RETURN`, explicitly carved out) - meaning Item 15's own
+single-predecessor-label skip capability, and any NOP run longer than
+one, appear to suffer this exact same dead-on-arrival problem today
+(both call sites of `mir_forward_skip_target` re-apply this same
+equality check). Confirmed via a whole-corpus census
+(`--fail-on-regression`) with parts (1)+(2) alone: 0 regressions, 0
+newly-emitted, 0 no-longer-emitted, 57 apps with (harmless, still-
+fallback-only) census metric changes, 0 apps requiring runtime
+validation - i.e. no measurable win materializes without also
+loosening that third equality check.
+
+**Decision to defer, not implement the full chain**: `mir-migration-
+plan-100.md`'s own Item 14 (2026-07-30) already investigated an
+adjacent form of this exact idea (forwarding a call-argument-cached
+value across a call boundary) and deferred it, citing a documented
+"occupancy-safety" hazard: whether a value can safely be assumed to
+still be resident in a register at a given emission point depends on
+dynamic, emission-order state that a static one-pass accounting scan
+(`mir_prepare_backend_slots`) cannot always prove matches what the
+real emitter does later, without duplicating that state machine - "the
+two-divergent-paths hazard the repo's own Item 19 discriminator warns
+about (documented root cause of a prior stack-corruption bug)". Item
+16 (also 2026-07-30) directly examined `check_s`'s pattern and
+classified it as "structurally identical" to Item 14's hazard, and
+also deferred without attempting even the narrow call-exclusion
+removal tried here. This session's experiment is a genuine, evidence-
+based attempt to test whether the *narrower* slice (just the
+`MIR_CALL` forwarding case, not the argument-cache mechanism Item 14
+was actually about) is safe on its own - but since it requires
+*also* loosening the equality-check gate (a third, independently
+untested change with its own blast radius across every existing NOP/
+label-skip site) before it produces any measurable effect, the
+combined change is no longer the narrow, single-concept edit this
+migration's discipline calls for. Rather than stack three
+compounding, previously-flagged-risky changes together to chase one
+34-byte gap, this is deferred - same rationale class as Item 6's and
+Items 14/16's precedent: a real opportunity exists, but proving it
+safe requires the same "whole-function occupancy-safety pass" Item 14
+already called for, not an incremental follow-on to this session's
+work.
+
+**Outcome**: reverted both changes (working tree restored to the pre-
+T7 state); 0 coverage change, 0 risk taken. Documented for a future
+session: the concrete next step, if this is revisited, is to first
+fix the `mir_forward_skip_target`/equality-check mismatch in
+isolation (verifying Item 15's label-skip actually activates for a
+real function, which the evidence here suggests it currently does
+not), independently validate that narrow fix alone, and only then
+reconsider whether call-result forwarding across the resulting wider
+skip window is provably safe - each as its own separately-validated
+item, not a combined one.
