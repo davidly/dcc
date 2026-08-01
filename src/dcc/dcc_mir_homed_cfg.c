@@ -557,6 +557,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_UNARY:
+            /* mir-text-size Item T12: same dead-result skip as the
+             * spilled-scalar-cfg selector's MIR_UNARY case - see
+             * dcc_mir_spilled_cfg.c for the full rationale. */
+            if (!mir_value_has_use(insn->dst))
+                break;
             if (!mir_emit_homed_unary_instruction(out, insn))
                 goto done;
             break;

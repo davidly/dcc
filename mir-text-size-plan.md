@@ -1262,3 +1262,128 @@ Item 16 still blocks the fix for VLA-bearing functions like `tvla`'s
 by this item) - revisit whether a narrower, VLA-safe version of the
 same fix is possible as a future item, now that the general case is
 proven safe.
+
+### Item T12: skip a value's entire producer chain when its only use is a dead MIR_UNARY (2026-08-02)
+
+**Hypothesis**: a fresh worst-ratio sweep post-T11 surfaced
+`bint::goto_line_op` (22-byte gap). Forced-accept diffing it against
+legacy found two distinct causes. The first (investigated first, since
+it matched the plan's already-documented Root Cause C): a wasted
+store-then-immediate-reload of a freshly-loaded global (`tok`) right
+before its single use. `DCC_MIR_REPORT=1` showed the root cause was an
+intervening `MIR_CONST` between the load and its use that emits zero
+text of its own (folded directly into the consuming `MIR_BINARY` per
+Item 16/T11) - so `mir_forward_skip_target`'s existing NOP/label-skip
+loop would need to also skip over such elided constants for the
+existing `mir_can_forward_hl_to_next` machinery to bridge the gap.
+
+**Blocking discovery (deferred, not fixed this item - see below)**:
+tracing `mir_can_forward_hl_to_next`'s own adjacency gate found that
+*any* gap `mir_forward_skip_target` computes (NOP, label, or a
+hypothetical elided-constant skip) is unconditionally rejected for
+every consumer opcode except `MIR_RETURN`:
+```c
+if (next_instruction != mir_emit_instruction_index + 1 &&
+    next->opcode != MIR_RETURN)
+    return 0;
+```
+`git log -S`/`git show` on `fed34c9` (the commit that introduced this
+line, "MIR: general constant-multiply strength reduction (Item 37)")
+confirms this `MIR_RETURN`-only carve-out is original, deliberate
+design, not a stale/dead relic like the `mir_virtual_iy_base` gate
+Items T1/T3 fixed - so relaxing it to help non-return consumers is a
+genuinely new capability, not a bug fix, and needs the same
+whole-function occupancy-safety proof already flagged as an open risk
+for the previously-deferred Item T7 (call-result forwarding). Deferred
+per the same discipline as Item 6/T7: this is a real design decision,
+not a same-session fix, and is left as a fully-scoped candidate for a
+future item (see "Deferred: Item T12b" below).
+
+**A separate, distinct cause was pursued instead this item**: while
+investigating `goto_line_op`, a much more broadly reusable defect
+surfaced independently in `too::scale_all_visitor`
+(`(void)w; shape_scale(s, 200);` - the common cast-to-void idiom used
+to silence unused-parameter warnings in callback/visitor signatures).
+`mir_try_emit_spilled_scalar_cfg`'s `MIR_UNARY` case already skips
+emitting the cast/store when its own result has no use, but it
+unconditionally loads its *operand* into `hl` first regardless -
+`mir_value_has_use(value)` only asks whether *some* instruction
+references `value`, not whether that referencing instruction's own
+result will ever be observed. For `(void)w`, the load of `w` (v2) is
+"used" by the void-cast (`MIR_UNARY op=0`, v3), but v3 itself has zero
+uses - so the emitted code loaded `w` into `hl` (`ld l,(ix+6)/ld
+h,(ix+7)`) and then immediately overwrote it with `ld hl,200` for the
+call argument, two lines later, without ever reading it.
+
+**Fix**: added `mir_value_only_used_by_dead_unary(value)`
+(`dcc_mir_spilled_cfg.c`), mirroring the existing
+`mir_value_only_used_by_dead_stores` precedent from Item T10: a value
+is "only used by a dead unary" when every reference to it is as
+`src1` of a `MIR_UNARY` instruction whose own `dst` has no use. Wired
+into three places: (1) `mir_prepare_backend_slots`'s slot-skip
+OR-chain, so such a value never gets a backend slot at all; (2)
+`MIR_LOAD`'s existing dead-value skip condition, alongside
+`!mir_value_has_use`; (3) `MIR_CONST`'s existing dead-value skip
+OR-chain, for consistency with the same producer-side treatment Item
+T10 already gave `MIR_STORE`-only-dead values. Applied the identical
+reasoning to `dcc_mir_homed_cfg.c`'s `MIR_UNARY` case (the
+`mir_emit_homed_unary_instruction` call site), which had the same
+missing `!mir_value_has_use(insn->dst)` guard `MIR_PARAM`/`MIR_CONST`
+already have in that selector, added as a matching one-line skip.
+
+**Validation**:
+- Whole-corpus census (`--fail-on-regression`) vs. post-T11 baseline:
+  0 regressions, **+2 newly-accepted functions**
+  (`tdecl.pick_same_node`, `too.scale_all_visitor`) - coverage
+  202/2021 (10.00%) -> **204/2022 (10.09%)**. 14 apps had census
+  changes; 2 apps (`tdecl`, `too`) required runtime validation.
+- Focused `runall.ps1 -Apps tdecl,too -Mode full`: 2/2 correctness
+  pass, 0 regressions, 2 genuine tiny improvements (`tdecl` peep
+  -0.02%, `too` peep -0.01%). Accepted and baselined via
+  `-UpdatePerfBaseline`.
+- Wide `-Mode fast` safety net (323 apps): 314 passed, 0 failed, 9
+  skipped, clean.
+- Given this touches core `MIR_LOAD`/`MIR_CONST`/`MIR_UNARY` emission
+  paths shared by nearly every MIR-accepted function in the corpus
+  (not just the 2 newly-flipped ones), also ran the milestone-tier
+  full `-Mode full` safety net (323 apps): 314 passed, 0 failed,
+  diagnostics (106/106), dccpeep fixtures (17/17), performance (both
+  peep and nopeep) all passed cleanly.
+
+**Outcome**: +2 newly-accepted functions (204/2022, 10.09%), 0
+unaccepted regressions, 2 genuine tiny performance wins. Small direct
+yield, but the underlying predicate (a value whose only use is itself
+provably dead) is a broadly reusable structural pattern, and the
+`(void)param;` idiom it targets is common across the corpus's many
+callback/visitor/comparator function signatures.
+
+**Deferred: Item T12b - relax `mir_can_forward_hl_to_next`'s
+`MIR_RETURN`-only gap-forwarding carve-out.** Not attempted this
+session; documented here so a future session does not have to
+re-derive the finding. The gate quoted above means `mir_forward_skip_
+target`'s NOP/label-skip capability (Item 15) - and any future
+elided-constant-skip built on top of it for cases like
+`bint::goto_line_op` - can only ever matter when the very next real
+instruction after the skipped gap happens to be the function's
+`return`. Confirmed via `git log -S`/`git show` on `fed34c9` that this
+restriction is original, deliberate design (not a stale flag like the
+ones Items T1/T3 fixed), so relaxing it for other consumer opcodes is
+a new capability, not a bug fix. Before attempting: (1) determine
+whether the `MIR_RETURN`-specific carve-out exists for a reason tied
+to `mir_emit_virtual_iy_epilogue`'s own register-clobbering behavior
+or the `has_vla`/`mir_function_has_any_call()` check already
+special-cased immediately below it for `MIR_RETURN`, or is genuinely
+general-purpose; (2) if judged safe, implement cautiously and validate
+on a minimal focused set (`bint` plus 2-3 representative apps) before
+any wider census run, since this is core selector-path logic touched
+by nearly every MIR-accepted function; (3) this stacks with the
+previously-deferred Item T7 (call-result HL-forwarding), which flagged
+the exact same gate as a prerequisite risk - a future session should
+resolve both together rather than separately.
+
+**Next**: re-sweep the worst-ratio list fresh again post-T12 (14 apps
+changed); continue down the post-T11 bucket list toward the next
+non-VLA, non-T12b-blocked candidate (e.g. `tenumfsm::main`,
+`pint::while_stmt`, `tstructv::assign_return_pair_ptr`,
+`tdmfuse::sdm_pair`/`sdm_pair_r`, `tesc::check_s`/`tscanf::check_str`/
+`tstr3::check_s`/`tsyntax::check_s`).

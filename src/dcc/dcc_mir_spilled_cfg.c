@@ -963,6 +963,33 @@ static int mir_value_only_used_by_dead_stores(int value)
     return found_use;
 }
 
+/* Item T12 (mir-text-size-plan.md): analogous to
+ * mir_value_only_used_by_dead_stores above, but for a value whose only
+ * use is as the operand of a MIR_UNARY instruction (cast, +, -, ~, !)
+ * whose own destination in turn has no use - the common "(void)param;"
+ * idiom used to silence unused-parameter warnings in callback/visitor
+ * signatures. The MIR_UNARY emission case already skips itself entirely
+ * once its own dst is unused, so loading a value that only ever feeds
+ * such a dead unary is pure waste: it is loaded into hl and immediately
+ * discarded, never observed by anything. */
+static int mir_value_only_used_by_dead_unary(int value)
+{
+    int instruction;
+    int found_use = 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 != value && insn->src2 != value &&
+            !mir_call_uses_value(insn, value))
+            continue;
+        found_use = 1;
+        if (insn->opcode != MIR_UNARY || insn->src1 != value ||
+            mir_value_has_use(insn->dst))
+            return 0;
+    }
+    return found_use;
+}
+
 static int mir_call_argument_cache_target(int value)
 {
     int argument_instruction = -1;
@@ -1453,6 +1480,7 @@ static int mir_prepare_backend_slots(void)
                                                                                                             type_size(definition->type))) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
                                         mir_value_only_used_by_dead_stores(value) ||
+                                        mir_value_only_used_by_dead_unary(value) ||
                                         mir_param_value_is_direct(value))
                     continue;
                 ++mir_slot_report_assigned_count;
@@ -2756,7 +2784,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             if (insn->dst >= 0 && mir.backend_slots != NULL &&
                 mir.backend_slots[insn->dst] < 0 &&
-                !mir_value_has_use(insn->dst))
+                (!mir_value_has_use(insn->dst) ||
+                 mir_value_only_used_by_dead_unary(insn->dst)))
                 break;
             if ((type_size(insn->type) == 2 || type_size(insn->type) == 4) &&
                 mir_load_is_single_call_argument(insn->dst,
@@ -2880,7 +2909,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_call_only_constant(insn->dst) ||
                 mir_binary_only_constant(insn->dst) ||
                 mir_multiply_by_small_constant(insn->dst) ||
-                mir_value_only_used_by_dead_stores(insn->dst))
+                mir_value_only_used_by_dead_stores(insn->dst) ||
+                mir_value_only_used_by_dead_unary(insn->dst))
                 break;
             fprintf(out, "\tld hl,%ld\n", insn->immediate & 0xffffL);
             if (type_size(insn->type) == 4) {
@@ -3254,6 +3284,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_UNARY:
+            /* mir-text-size Item T12: every unary op here (cast, +, -, ~,
+             * !) is a pure value transform with no side effect beyond
+             * producing insn->dst - if that result has no use (the common
+             * "(void)param;" idiom used to silence unused-parameter
+             * warnings in callback/visitor signatures), skip the whole
+             * instruction, including the operand load, instead of loading
+             * src1 into hl only to immediately discard it. */
+            if (!mir_value_has_use(insn->dst))
+                break;
             if (mir_value_is_wide(insn->src1))
                 mir_emit_virtual_load_wide(out, insn->src1);
             else

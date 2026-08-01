@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 202/2021 runnable functions MIR-accepted (10.00%).
+- Coverage: 204/2022 runnable functions MIR-accepted (10.09%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -42,13 +42,17 @@ retired history; do not resume numbering from them.
   newly-accepted functions, the biggest single-item coverage jump
   since T5, crossing 10% coverage for the first time; 254 apps with
   byte changes; 10 genuine cycle/size wins across the 8 focused apps)
+  plus Item T12's `mir_value_only_used_by_dead_unary` fix (a value
+  whose only use is a dead `MIR_UNARY`, e.g. the `(void)param;`
+  cast-to-void idiom, no longer forces its own load; +2 newly-accepted
+  functions, 14 apps with byte changes, 2 genuine tiny cycle wins)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -148,6 +152,26 @@ retired history; do not resume numbering from them.
   same rationale class as Item 6/14/16 - a real opportunity exists but
   needs its own dedicated occupancy-safety design work, not a
   stacked-on-top follow-on edit.
+- **Item T12**: added `mir_value_only_used_by_dead_unary` (mirroring
+  Item T10's `mir_value_only_used_by_dead_stores`): a value whose only
+  use is as the operand of a `MIR_UNARY` (cast, +, -, ~, !) whose own
+  result has no use - the common `(void)param;` idiom in
+  callback/visitor signatures - no longer forces its own load. Wired
+  into `mir_prepare_backend_slots`'s slot-skip chain plus
+  `MIR_LOAD`/`MIR_CONST`'s dead-value skip checks in
+  `dcc_mir_spilled_cfg.c`, and the matching one-line guard added to
+  `dcc_mir_homed_cfg.c`'s `MIR_UNARY` case. **+2 newly-accepted
+  functions** (`tdecl.pick_same_node`, `too.scale_all_visitor`;
+  202/2021 10.00% -> 204/2022 10.09%), 0 regressions, 2 genuine tiny
+  cycle wins. Also investigated (but **deferred**, see "Item T12b" in
+  `mir-text-size-plan.md`) a second, harder finding from the same
+  `bint::goto_line_op` investigation: `mir_can_forward_hl_to_next`'s
+  adjacency gate makes its own NOP/label-skip capability (Item 15)
+  dead-on-arrival for every consumer except `MIR_RETURN` - confirmed
+  via `git log -S`/`git show` on `fed34c9` this is original, deliberate
+  design (not a stale flag like Items T1/T3's fixes), so relaxing it
+  needs the same occupancy-safety design work already flagged as an
+  open risk for Item T7 - left fully scoped for a future session.
 
 ## Next session should
 
@@ -269,6 +293,24 @@ retired history; do not resume numbering from them.
      via both the slot-allocation and peephole changes, and Item T11
      shifted 254 apps' byte counts - re-derive the near-miss ranking
      fresh rather than reusing any list from before T11).
+   - **Item T12 landed** (`mir_value_only_used_by_dead_unary`, see
+     "Recently landed" above): **+2 newly-accepted functions**
+     (202/2021 10.00% -> 204/2022 10.09%), 0 regressions, 14 apps with
+     byte changes, milestone-tier full run clean given the core-path
+     touch. **Item T12b deferred** (same entry): relaxing
+     `mir_can_forward_hl_to_next`'s `MIR_RETURN`-only gap-forwarding
+     gate to help non-return consumers - confirmed via `git log -S`
+     this is deliberate original design, not a stale flag, so treat as
+     a genuinely new capability requiring the same occupancy-safety
+     design work already flagged for Item T7 before attempting; do not
+     retry the narrow "just relax the gate" edit alone.
+   - Continue down the post-T11/T12 near-miss bucket list toward the
+     next non-VLA, non-T7/T12b-blocked candidate: `tenumfsm::main`,
+     `pint::while_stmt`, `tstructv::assign_return_pair_ptr`,
+     `tdmfuse::sdm_pair`/`sdm_pair_r`, `tesc::check_s`/
+     `tscanf::check_str`/`tstr3::check_s`/`tsyntax::check_s` are the
+     next-ranked candidates from the last bucket sweep - re-derive a
+     fresh sweep first since T12 changed 14 apps' byte counts.
 2. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to
