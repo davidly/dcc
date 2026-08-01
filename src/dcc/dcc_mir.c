@@ -9730,8 +9730,27 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
     if (frame_bytes != 0)
         fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n", frame_bytes);
-    mir_virtual_iy_base = 0;
+    /* Item T1 (mir-text-size-plan.md): a frame this large guarantees some
+     * local/param/backend-slot offset falls outside the Z80's signed
+     * 8-bit (ix+d) range (-128..127) - every access to it would otherwise
+     * pay a 6-instruction push-ix/pop-hl/ld-de,N/add-hl,de recompute on
+     * EVERY read and write. Establish the virtual-iy frame base (iy =
+     * ix - (local_bytes + aggregate_temp_bytes), the boundary between
+     * locals and backend spill slots) so those accesses can use a small,
+     * bounded iy-relative offset instead. Every read/write site, the
+     * defensive post-call restore, and every epilogue already check
+     * mir_virtual_iy_base and fall back to the pre-existing behavior when
+     * it's unset or when even the iy-relative offset is still out of
+     * range - this can only ever help or be neutral for any single
+     * access, never regress one. push iy here saves the caller's iy in
+     * exactly the stack position mir_emit_virtual_iy_epilogue's own
+     * "frame_bytes + 2" math already expects when restoring it. */
+    mir_virtual_iy_base = frame_bytes > 150;
     mir_virtual_iy_frame_bytes = frame_bytes;
+    if (mir_virtual_iy_base) {
+        fputs("\tpush iy\n", out);
+        mir_emit_restore_virtual_iy(out);
+    }
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
     mir_forwarded_stack_value = -1;
