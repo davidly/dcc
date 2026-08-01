@@ -3032,7 +3032,6 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 !type_is_struct_object(insn->type))
                 memory_type = insn->type;
             if (type_is_struct_object(memory_type)) {
-                int byte;
                 int size = type_size(memory_type);
                 mir_emit_virtual_load(out, insn->src1);
                 fputs("\tex de,hl\n", out);
@@ -3051,10 +3050,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         fprintf(out, "\tld bc,%d\n\tadd hl,bc\n",
                                 memory_offset);
                 }
-                for (byte = 0; byte < size; ++byte) {
-                    fputs("\tld a,(de)\n\tld (hl),a\n", out);
-                    if (byte + 1 < size)
-                        fputs("\tinc de\n\tinc hl\n", out);
+                /* mir-text-size Item T6: the two `ex de,hl` swaps above
+                 * leave DE=source, HL=dest; swap once more (HL=source,
+                 * DE=dest, a pure register exchange with no stack/frame
+                 * side effects) and copy the whole struct with one
+                 * `ldir` instead of an unrolled byte-by-byte loop - the
+                 * same fix as Item T5's MIR_RETURN case, applied here to
+                 * struct assignment/store. */
+                if (size > 0) {
+                    fputs("\tex de,hl\n", out);
+                    fprintf(out, "\tld bc,%d\n\tldir\n", size);
                 }
                 break;
             }
@@ -3179,18 +3184,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
         case MIR_COPY_AGGREGATE:
             {
-                int byte;
                 if (insn->memory_size <= 0 || insn->memory_size > 1024)
                     goto done;
                 mir_emit_virtual_load(out, insn->src1);
                 fputs("\tpush hl\n", out);
                 mir_emit_virtual_load(out, insn->src2);
-                fputs("\tld b,h\n\tld c,l\n\tpop hl\n", out);
-                for (byte = 0; byte < insn->memory_size; ++byte) {
-                    fputs("\tld a,(bc)\n\tld (hl),a\n", out);
-                    if (byte + 1 < insn->memory_size)
-                        fputs("\tinc bc\n\tinc hl\n", out);
-                }
+                /* mir-text-size Item T6: `insn->src2` (source) is already
+                 * loaded into HL here - exactly what `ldir` needs - so
+                 * just pop the saved destination address straight into
+                 * DE (no need for the old ld b,h/ld c,l + second pop hl
+                 * dance) and copy the whole struct in one instruction
+                 * instead of an unrolled byte-by-byte loop. Same fix
+                 * shape as Item T5's MIR_RETURN case. */
+                fputs("\tpop de\n", out);
+                fprintf(out, "\tld bc,%d\n\tldir\n", insn->memory_size);
             }
             break;
         case MIR_UNARY:
@@ -3587,6 +3594,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         fprintf(out,
                                 "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
                                 size);
+                        /* mir-text-size Item T6: deliberately NOT
+                         * switched to `ldir` here (unlike the
+                         * MIR_RETURN/MIR_STORE/MIR_COPY_AGGREGATE
+                         * sites) - see mir-text-size-plan.md's Item T6
+                         * defer note. Byte-for-byte here still
+                         * unrolls; this call-argument copy site is
+                         * deferred pending a Root-Cause-C fix for a
+                         * pre-existing redundant address-recomputation
+                         * pattern that a real regression exposed when
+                         * this site's byte count was reduced. */
                         for (byte = 0; byte < size; ++byte) {
                             fputs("\tld a,(de)\n\tld (hl),a\n", out);
                             if (byte + 1 < size)
@@ -3700,6 +3717,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         fputs("\tex de,hl\n", out);
                         fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
                                 size);
+                        /* mir-text-size Item T6: deliberately NOT
+                         * switched to `ldir` here - see the matching
+                         * defer note in the MIR_CALL struct-argument
+                         * case above and mir-text-size-plan.md's Item
+                         * T6 defer rationale. */
                         for (byte = 0; byte < size; ++byte) {
                             fputs("\tld a,(de)\n\tld (hl),a\n", out);
                             if (byte + 1 < size)

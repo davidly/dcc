@@ -493,15 +493,19 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_COPY_AGGREGATE:
             {
                 /* Item 24: struct/union assignment by value between two
-                 * already-homed pointer addresses. Mirrors the byte-copy
-                 * loop mir_try_emit_spilled_scalar_cfg's own
-                 * MIR_COPY_AGGREGATE case uses (hl=dst, bc=src, walking
-                 * both in lockstep). Both hl and bc are used
-                 * unconditionally as scratch below regardless of
+                 * already-homed pointer addresses. Both hl and bc are
+                 * used unconditionally as scratch below regardless of
                  * src1/src2's actual home colors, so protect any OTHER
                  * value still live there across this instruction the
-                 * same way Item 23 protects hl/de for MIR_STORE_INDIRECT. */
-                int byte;
+                 * same way Item 23 protects hl/de for MIR_STORE_INDIRECT.
+                 *
+                 * mir-text-size Item T6: src2 (source) lands in HL
+                 * directly from mir_emit_home_to_hl - exactly what
+                 * `ldir` needs - so pop the saved destination straight
+                 * into DE and copy with `ldir` instead of the old
+                 * unrolled byte-by-byte loop (same fix shape as
+                 * mir_try_emit_spilled_scalar_cfg's own
+                 * MIR_COPY_AGGREGATE case, Item T5/T6). */
                 int instruction = (int)(insn - mir.insns);
                 int preserve_hl =
                     mir_home_color_live_across(instruction, MIR_COLOR_HL);
@@ -514,12 +518,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 fputs("\tpush hl\n", out);
                 if (!mir_emit_home_to_hl(out, insn->src2))
                     goto done;
-                fputs("\tld b,h\n\tld c,l\n\tpop hl\n", out);
-                for (byte = 0; byte < insn->memory_size; ++byte) {
-                    fputs("\tld a,(bc)\n\tld (hl),a\n", out);
-                    if (byte + 1 < insn->memory_size)
-                        fputs("\tinc bc\n\tinc hl\n", out);
-                }
+                fputs("\tpop de\n", out);
+                if (insn->memory_size > 0)
+                    fprintf(out, "\tld bc,%d\n\tldir\n", insn->memory_size);
                 if (preserve_bc) fputs("\tpop bc\n", out);
                 if (preserve_hl) fputs("\tpop hl\n", out);
             }

@@ -700,3 +700,118 @@ struct assignment (`dcc_ast_gen_expr.c` lines ~1825, ~4831-4878) -
 check whether `dcc_mir_spilled_cfg.c`/`dcc_mir_emit_common.c` have
 equivalent unrolled-copy sites for struct assignment (not just struct
 return) and apply the same `ldir` fix there if so.
+
+## Item T6: struct-copy/assignment sites beyond `return` (2026-08-01)
+
+**Hypothesis** (T5's own "Next" note): the same unrolled
+byte-by-byte copy defect T5 fixed for `MIR_RETURN`'s struct-object
+case plausibly exists at other struct-copy/assignment sites, since
+legacy shares one `emit_copy_de_to_hl_bytes` helper across both the
+return path and assignment paths (`dcc_ast_gen_expr.c` lines ~1825,
+~4831-4878), but the MIR backend implements each site independently.
+
+**Investigation**: grepped `dcc_mir_spilled_cfg.c` and
+`dcc_mir_homed_cfg.c` for the same unrolled-copy pattern (`ld a,(de)` /
+`ld (hl),a` / `inc de` / `inc hl` loops) T5 removed, and found 5 more
+occurrences of the identical bug:
+- `dcc_mir_spilled_cfg.c` `MIR_STORE`'s struct-object case (struct
+  assignment to a global/local/param destination).
+- `dcc_mir_spilled_cfg.c` `MIR_COPY_AGGREGATE` (general struct
+  assignment, `a = b;`).
+- `dcc_mir_spilled_cfg.c` `MIR_CALL`'s struct-argument-copy case
+  (passing a struct byval argument onto the stack).
+- `dcc_mir_spilled_cfg.c` `MIR_CALL_AGGREGATE`'s struct-argument-copy
+  case (same, for calls returning a struct).
+- `dcc_mir_homed_cfg.c` `MIR_COPY_AGGREGATE` (the homed-scalar-cfg
+  selector's equivalent struct-copy case).
+
+**Fix (landed)**: applied the identical `ldir` fix from T5 to the
+first 3 of these 5 sites - `MIR_STORE`, `MIR_COPY_AGGREGATE` in
+`dcc_mir_spilled_cfg.c`, and `MIR_COPY_AGGREGATE` in
+`dcc_mir_homed_cfg.c`. Each required a register-swap variant tailored
+to how source/destination already flow through existing code (an
+extra `ex de,hl` where the code already naturally swaps, or a
+`push`/`pop` pair where destination is computed via `push ix/pop hl`
+after `mir_emit_virtual_load`/`mir_emit_home_to_hl` loads the source),
+always preserving the original call order of
+`mir_emit_virtual_load`/`mir_emit_home_to_hl` relative to any
+HL-clobbering address computation (these functions have an internal
+HL-forwarding fast path keyed on instruction adjacency - reordering
+would silently load stale/wrong data, not just cost performance).
+
+**Fix (found but reverted - deferred)**: the `MIR_CALL` and
+`MIR_CALL_AGGREGATE` struct-argument-copy sites also had the exact
+same unrolled-copy bug and were initially fixed the same way. Doing so
+caused `tsretret.make_normal` (`struct Pair result =
+make_pair(first, second); return normalize(result);`) to cross the
+`text-size` acceptance threshold as a **new** MIR-emitted function -
+but `runall.ps1 -Mode full` showed it **regressed** real cycle counts
+(peep +0.03%, nopeep +0.2%), violating SKILL.md's Rule 3 (peep and
+nopeep must both be non-regressing for newly emitted functions).
+Root-caused via a stash-based before/after A/B test (per SKILL.md
+step 9): reverted to the pre-fix unrolled form, force-accepted
+`make_normal` via `DCC_MIR_FORCE_ACCEPT_FUNCTION`, and re-measured -
+the regression was present **and slightly worse** without this fix
+(peep 61504/nopeep 62481 vs. 61485/62462 with the `ldir` fix). This
+proves the `ldir` fix itself is not the cause; it's a **latent,
+pre-existing defect** that this fix's byte reduction merely exposed by
+letting the function cross the acceptance threshold for the first
+time. Assembly/MIR inspection of `make_normal` found the real cause:
+the address of the local struct `result` is recomputed **three
+separate times** in the generated code (`push ix / pop hl / ld
+de,-8 / add hl,de`, 4 instructions each) - once for `make_pair`'s
+hidden destination-pointer setup, and twice more immediately after
+(once for `MIR_ADDRESS`'s own store-to-spill-slot emission, and again
+when the struct-argument-copy code reloads that same address value
+from scratch via `mir_emit_virtual_load` rather than reloading the
+just-written spill slot). This matches the already-documented,
+deferred **Root Cause C** class below (general single-use
+immediate store/reload not elided) - it is not a new bug, and not in
+scope for this item's quick fix.
+
+**Decision**: reverted just the `MIR_CALL`/`MIR_CALL_AGGREGATE`
+struct-argument-copy sites back to their original unrolled form (the
+other 3 sites are unaffected by this regression - `make_normal`'s MIR
+stream doesn't use `MIR_STORE`, and its `MIR_COPY_AGGREGATE` calls, if
+any, aren't census-visible as changed). This is deferred, not
+abandoned: once Root Cause C's residual (below) is fixed - eliminating
+the redundant address recomputation - it should become safe to
+re-apply the call-argument `ldir` fix without regression, since the
+`ldir` fix's own contribution was proven to *improve*, not worsen,
+`make_normal`'s cycles in isolation.
+
+**Validation** (final, post-revert):
+- Whole-corpus census before/after (`--fail-on-regression`): 0
+  regressions, 0 no-longer-emitted, **0 newly-emitted** (confirms the
+  revert successfully avoided flipping `make_normal` or any other
+  function to acceptance - the 3 landed sub-fixes only shrink
+  `generated_bytes` within functions still on `fallback text-size`).
+  Coverage unchanged at 195/2021 (9.65%). 8 apps had census changes
+  (`fint`, `tclit`, `tgnarly`, `tptrlhs`, `tstruct`, `tstructp`,
+  `tstructv`, `tunion2`); 0 apps required runtime validation (no
+  already-shipped MIR output changed - safe by construction).
+- Focused `runall.ps1 -Apps fint,tclit,tgnarly,tptrlhs,tstruct,tstructp,tstructv,tunion2 -Mode full`:
+  8/8 passed, 0 regressions.
+- Wide safety net `runall.ps1 -Mode fast`: 314/323 passed (9 skipped,
+  as usual), 0 failed, diagnostics/dccpeep/performance all passed.
+- No baseline update needed (no already-shipped app's output or
+  performance profile changed).
+
+**Outcome**: 0 functions newly accepted this item (coverage holds at
+195/2021, 9.65%), 0 regressions. 3 of 5 surveyed struct-copy sites
+landed the `ldir` fix (shrinking `generated_bytes` broadly across the
+still-fallback population, moving many struct-copy/assignment-heavy
+functions closer to the `text-size` threshold for a future item to
+flip). The remaining 2 sites (`MIR_CALL`/`MIR_CALL_AGGREGATE`
+struct-argument-copy) are a **documented defer**, same discipline as
+Item 6's precedent: a valid, proven-beneficial-in-isolation fix exists
+but is withheld because it exposes an unrelated, pre-existing
+Root-Cause-C-class bug in the one function it currently affects: this
+is not a rejection of the fix, just a sequencing dependency on Root
+Cause C landing first.
+
+**Next**: proceed to the comparison-fusion project (this plan's Root
+Cause 1, selector-side) as the next highest-yield item, or continue
+Root Cause C's residual directly - fixing Root Cause C first would
+also unblock re-applying the deferred call-argument `ldir` fix as a
+bonus.
