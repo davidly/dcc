@@ -615,3 +615,74 @@ int pass_elim_redundant_carry_clear(void)
     return changed;
 }
 
+/*
+ * pass_local_alloc_wide: shrink a small (3 or 4 byte) local stack
+ * allocation from the general form
+ *
+ *   ld hl,-N
+ *   add hl,sp
+ *   ld sp,hl
+ *
+ * into N copies of "dec sp". Each "dec sp" is 1 byte/6 cycles, so N of
+ * them (N bytes, 6N cycles) beats the 3-instruction form (6 bytes, 27
+ * cycles) in *both* bytes and cycles simultaneously only for N<=4 (N=4:
+ * 4 bytes/24 cycles vs 6 bytes/27; N=5 would already cost more cycles
+ * despite fewer bytes, which this project's "smaller text isn't proof of
+ * faster" rule forbids relying on) - the rewrite is capped there.
+ *
+ * peep_pass_once.c's try_local_alloc_at already does this for N=1/2, but
+ * deliberately does NOT handle N=3/4: it runs inside pass_once, which is
+ * first in the fixed-point pass list, so eagerly consuming "ld hl,-4"/
+ * "ld hl,-3" there would permanently destroy that exact text before
+ * function-specific frame-shrinking passes elsewhere in the SAME
+ * fixed-point list (pass_shrink_minmax_frame3_after_score_cache,
+ * pass_shrink_minmax_frame2_after_loop_ctr_b - which look for that
+ * literal text once they have proven the corresponding (ix-N) slot is
+ * unused - and, given the fixed-point loop, only ever run in the SAME
+ * iteration, before pass_once loops back around) ever get a chance to
+ * shrink the allocation further. Running this pass here, after the whole
+ * fixed-point group has already converged, guarantees every such
+ * function-specific shrink has already had every opportunity to fire -
+ * confirmed necessary via ttt.c's _MinMax regressing when the N=3/4
+ * rewrite was tried inline in pass_once instead (see Item T10 of the
+ * text-size MIR migration, which needed this widening for
+ * tgoto.gt_block_label/gt_basic once MIR started allocating exactly 4
+ * frame bytes for some newly-accepted functions).
+ *
+ * The rewrite deletes the definition of HL (the address of the fresh
+ * allocation), so it must only fire when the following code fully
+ * rewrites HL before reading it (local_alloc_hl_result_dead, shared with
+ * peep_pass_once.c).
+ */
+int pass_local_alloc_wide(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i < nlines; ++i) {
+        char tmp[MAX_LINE];
+        int n;
+        int k;
+
+        if (!eq(i + 1, "add hl,sp") || !eq(i + 2, "ld sp,hl"))
+            continue;
+
+        strip_peep_comment_copy(tmp, lines[i]);
+        if (strncmp(tmp, "ld hl,-", 7) != 0)
+            continue;
+        if (sscanf(tmp + 7, "%d", &n) != 1 || n < 3 || n > 4)
+            continue;
+        if (!local_alloc_hl_result_dead(i + 3))
+            continue;
+
+        for (k = 0; k < n && k < 3; k++)
+            replace1_tagged(i + k, "dec sp", "local_alloc_wide");
+        if (n > 3)
+            insert_line_tagged(i + 3, "dec sp", "local_alloc_wide");
+
+        changed = 1;
+        --i;
+    }
+
+    return changed;
+}

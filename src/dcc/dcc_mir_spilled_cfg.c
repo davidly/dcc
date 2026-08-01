@@ -929,6 +929,40 @@ static int mir_store_is_dead(int instruction)
     return dead;
 }
 
+/* Item T10 (mir-text-size-plan.md): a value-defining instruction (const,
+ * float const, address materialisation, ...) unconditionally checks
+ * mir_value_has_use(dst) before deciding whether it needs to write its
+ * result into dst's own backend home slot at all - but "has a use" only
+ * asks whether some later instruction's src operand names this value, not
+ * whether that later instruction will actually emit any code. A MIR_STORE
+ * consuming this value can itself turn out to be fully dead (see
+ * mir_object_is_fully_promoted/mir_store_is_dead above) and emit nothing,
+ * in which case materialising the value into its home was pure waste - a
+ * write that is now provably never read by any surviving instruction.
+ * This mirrors the exact two conditions the MIR_STORE case itself already
+ * uses to decide it will emit nothing, so a value is only ever treated as
+ * "unused" here when every one of its uses is a store this selector has
+ * independently already proven dead - never a broader guess. */
+static int mir_value_only_used_by_dead_stores(int value)
+{
+    int instruction;
+    int found_use = 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 != value && insn->src2 != value &&
+            !mir_call_uses_value(insn, value))
+            continue;
+        found_use = 1;
+        if (insn->opcode != MIR_STORE || insn->src1 != value)
+            return 0;
+        if (!(mir_object_is_fully_promoted(insn->object) ||
+              mir_store_is_dead(instruction)))
+            return 0;
+    }
+    return found_use;
+}
+
 static int mir_call_argument_cache_target(int value)
 {
     int argument_instruction = -1;
@@ -1418,6 +1452,7 @@ static int mir_prepare_backend_slots(void)
                                          mir_load_is_single_call_argument(value,
                                                                                                             type_size(definition->type))) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
+                                        mir_value_only_used_by_dead_stores(value) ||
                                         mir_param_value_is_direct(value))
                     continue;
                 ++mir_slot_report_assigned_count;
@@ -2844,7 +2879,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (!mir_value_has_use(insn->dst) ||
                 mir_call_only_constant(insn->dst) ||
                 mir_binary_only_constant(insn->dst) ||
-                mir_multiply_by_small_constant(insn->dst))
+                mir_multiply_by_small_constant(insn->dst) ||
+                mir_value_only_used_by_dead_stores(insn->dst))
                 break;
             fprintf(out, "\tld hl,%ld\n", insn->immediate & 0xffffL);
             if (type_size(insn->type) == 4) {

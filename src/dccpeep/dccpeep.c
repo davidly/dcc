@@ -9321,6 +9321,27 @@ int main(int argc, char **argv)
         peep_context.stats.iterations = passes;
     } while (changed && passes < 30);
 
+    /* Widen the local-alloc "ld hl,-N / add hl,sp / ld sp,hl" -> N x "dec sp"
+     * rewrite to N=3/4 (peep_pass_once.c's pass_once already handles N=1/2
+     * inside the fixed-point loop above). This MUST run only after the
+     * fixed-point loop has fully converged: function-specific frame-shrink
+     * passes inside that loop (pass_shrink_minmax_frame3_after_score_cache,
+     * pass_shrink_minmax_frame2_after_loop_ctr_b) look for the exact
+     * "ld hl,-4"/"ld hl,-3" text once they have proven the corresponding
+     * (ix-N) slot is dead, and each such reduction may only become provable
+     * on a later fixed-point iteration than the one where the allocation
+     * first appears at that size. Running this widening inside the
+     * fixed-point loop (even positioned after those two passes) still let it
+     * consume "ld hl,-3" on an iteration where the frame had *just* been
+     * shrunk from -4 to -3 but the (ix-3) elimination the -3-to-2 shrink
+     * depends on had not yet converged that same iteration, permanently
+     * blocking the deeper shrink - confirmed via ttt.c's _MinMax settling at
+     * an unnecessary 3-byte frame instead of its true 2-byte minimum. Placed
+     * here, after every such shrink opportunity is fully exhausted, it only
+     * ever fires on allocations that are already at their true minimum
+     * size. */
+    RUN_PASS(pass_local_alloc_wide);
+
     /* General signed-compare constant-bias fold runs once after the main loop
      * converges.  It rewrites a signed 16-bit compare against a constant
      * (ld de,CONST + a 6-instruction xor-80h bias) into the already-biased

@@ -11,8 +11,8 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 196/2021 runnable functions MIR-accepted (9.70%).
-- `text-size` fallback is still the dominant reason (1,742/2021, ~86%
+- Coverage: 197/2021 runnable functions MIR-accepted (9.75%).
+- `text-size` fallback is still the dominant reason (1,741/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
   Fresh re-bucketing (post-T9) still shows the gap population
@@ -32,12 +32,19 @@ retired history; do not resume numbering from them.
   functions, 1 genuine real-cycle win on `tdead`) plus Item T9's
   single-copy phi-merge push/pop elision (+1 newly-accepted function,
   `tvla.fixed_cast_bounds`; 170 apps with byte changes; 3 genuine
-  cycle/size wins on `tvla`) (0 coverage change for T6/T8, byte
+  cycle/size wins on `tvla`) plus Item T10's dead-store-feeding-value
+  slot-allocation elision + dccpeep `local_alloc_wide` peephole (+1
+  newly-accepted function, `tgoto.gt_block_label`; 8 genuine cycle/size
+  wins on `tbug2`/`tdmfuse`/`tgoto`/`tmirslot`/`tvla`; a real, general
+  dccpeep peephole gap closed for 3-/4-byte stack-only frames) (0
+  coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9 had 0 regressions outright). Item T6 also found and
+  diff; T4/T5/T6/T8/T9/T10 had 0 unaccepted regressions - T10's tiny
+  `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
+  documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
   struct-argument-copy) that is provably beneficial in isolation but
   was withheld because it exposes a pre-existing, unrelated Root-Cause-C
@@ -196,13 +203,41 @@ retired history; do not resume numbering from them.
      gap) shrank further but is now blocked by `inline-substitution`
      instead of `text-size` - worth a direct look as a possible next
      near-miss once its actual blocker is understood.
+   - **Item T10 landed** (dead-store-feeding-value elision extended
+     from emission time to `mir_prepare_backend_slots`'s slot
+     allocation, `dcc_mir_spilled_cfg.c`, plus a general dccpeep
+     peephole widening, `pass_local_alloc_wide` in
+     `peep_pass_final.c`, compacting 3-/4-byte stack-only frame
+     allocations to N x `dec sp` the same way the existing
+     `try_local_alloc_at` already did for 1-/2-byte frames): **+1
+     newly-accepted function** (`tgoto.gt_block_label`, 196->197,
+     9.70%->9.75%), 0 unaccepted regressions, 8 genuine cycle/size
+     wins across `tbug2`/`tdmfuse`/`tgoto`/`tmirslot`/`tvla` (baselines
+     updated), plus a genuinely tiny (+0.047%) `cobint` residual
+     traced in full to SKILL.md's documented "code-placement
+     sensitivity in interpreter heaps" class (baseline updated after
+     exhaustive tracing showed the underlying `.mac` diff is a clean,
+     objectively-cheaper conversion with no other differences).
+     **Important discovered discipline**: widening an existing
+     fixed-point-internal dccpeep pass in place can permanently and
+     irreversibly consume text that a later-converging,
+     precondition-dependent pass in the same `fixed_point_passes[]`
+     array (e.g. `tests/ttt.c`'s `_MinMax`-specific frame-shrink
+     passes) still needs on a later iteration - caused and then fixed
+     a real +1.08% regression on `ttt` this item. Any future
+     peephole widening must check for this hazard first and, if
+     present, add the widening as a new post-convergence
+     `RUN_PASS(...)` call (after the fixed-point `do-while` loop
+     exits) rather than editing the existing pass in place.
    - Re-run the full census and re-bucket the `text-size` gap fresh
      before picking each next item; the population shifts as items
      land (this session already caught one stale-ranking trap this
      way - the prior top outlier dropped out of the list entirely
      after Item T5 landed, Item T8 shifted 51 functions' byte counts,
-     and Item T9 shifted 170 more - re-derive the near-miss ranking
-     fresh rather than reusing any list from before T9).
+     Item T9 shifted 170 more, and Item T10 shifted the population
+     again via both the slot-allocation and peephole changes -
+     re-derive the near-miss ranking fresh rather than reusing any
+     list from before T10).
 2. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to

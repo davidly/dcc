@@ -212,7 +212,7 @@ static int peep_line_in_function(int line, const char *func)
  * is __stchk: its documented prologue-helper contract clobbers HL before the
  * function body can depend on registers.
  */
-static int local_alloc_hl_result_dead(int start)
+int local_alloc_hl_result_dead(int start)
 {
     int j;
     char tmp[MAX_LINE];
@@ -882,6 +882,18 @@ static int try_local_alloc_at(int i)
      * dcc's by-value struct/union argument copy uses HL from this very
      * sequence as the copy destination; rewriting that shape corrupted
      * the outgoing argument bytes and the stack.
+     *
+     * N=3/4 are deliberately NOT handled here even though they are also
+     * both smaller and faster (see pass_local_alloc_wide in
+     * peep_pass_final.c for why): pass_once runs first in the
+     * fixed-point pass list, so eagerly rewriting "ld hl,-4"/"ld hl,-3"
+     * this early would permanently destroy that exact text before
+     * function-specific frame-shrinking passes elsewhere in the list
+     * (e.g. pass_shrink_minmax_frame3_after_score_cache /
+     * pass_shrink_minmax_frame2_after_loop_ctr_b, which look for that
+     * literal text once dead locals are proven unused) ever get a
+     * chance to reduce the allocation further - confirmed via ttt.c's
+     * _MinMax regressing when this was tried inline here.
      */
     if (eq(i, "ld hl,-1") &&
         eq(i + 1, "add hl,sp") &&

@@ -1041,3 +1041,137 @@ shifted broadly, across 170 apps this time); check whether
 `inline_fold_check`'s new blocker (`inline-substitution`) is itself a
 tractable near-miss, and continue down the freshly-reranked list for
 the next `text-size` near-miss candidate.
+
+### Item T10: dead-store-feeding-value elision (slot allocation) + dccpeep local-alloc peephole widening (2026-08-02)
+
+**Hypothesis**: Item T9's `mir_value_only_used_by_dead_stores` predicate
+(from an even earlier item, gating whether a `MIR_CONST`'s emission can be
+skipped entirely when its only "uses" are stores whose object is itself
+dead) was checked at *emission* time only. A value can pass that same
+"every use is a dead store" test yet still get a backend slot allocated
+for it earlier, in `mir_prepare_backend_slots` - wasted allocation work
+whose only visible cost is a slightly larger `frame_bytes`/`slots` count
+(and everything downstream that scales with it: prologue/epilogue size,
+`(ix±d)` range pressure). Extending the same predicate to slot allocation,
+not just emission, should be a pure size win with no coverage risk on its
+own.
+
+**Fix (`dcc_mir_spilled_cfg.c`)**: added
+`mir_value_only_used_by_dead_stores(value)` to the OR-chain of skip
+conditions inside `mir_prepare_backend_slots`'s slot-assignment loop
+(alongside the pre-existing `last[value] <= first[value]` dead-value
+check), so a value whose only uses are dead stores never consumes a slot
+in the first place.
+
+**Investigation surfaced a second, independent bug while validating this
+change on `tests/tgoto.c`'s `gt_block_label`** (a MIR_CONST candidate
+this fix doesn't itself flip, since its remaining live value has a
+genuine second use at `MIR_RETURN`): `gt_block_label`'s frame is
+`locals=2, slots=1, bytes=4` where legacy needs only `-2`. Diffing the
+peep-optimized output showed the extra 2 bytes prevented dccpeep's
+existing `try_local_alloc_at` peephole (`peep_pass_once.c`) from firing:
+it was hardcoded to compact only `-1`/`-2` frame allocations (`ld
+hl,-N/add hl,sp/ld sp,hl` -> N x `dec sp`) and never `-3`/`-4`, even
+though the Z80 cycle-cost math strictly favors the compacted form for
+N up to 4 (confirmed via `/Users/dave/GitHub/ntvcm/x80.cxx`'s own
+`z80_cycles` opcode-timing table: `ld hl,nn`=10T, `add hl,sp`=11T, `ld
+sp,hl`=6T -> 27T/6 bytes fixed cost regardless of N, vs. N x `dec
+sp`=6T each -> 24T/4 bytes at N=4, breaking even only at N=4 and
+becoming strictly worse at N=5 (30T > 27T) - so widening is capped at
+N<=4, consistent with SKILL.md Rule 4's "smaller byte count alone is not
+proof of speed").
+
+**dccpeep fix, with a real pass-ordering hazard discovered and corrected
+along the way**: an initial attempt widened `try_local_alloc_at` itself
+in place to parse `ld hl,-N` generically for N=1..4. This regressed
+`tests/ttt.c`'s `_MinMax` (a hot game-AI function) by +1.08% cycles in
+the wide `-Mode fast` safety net. Root cause: `dccpeep.c` already has
+pre-existing, `_MinMax`-name-specific passes
+(`pass_shrink_minmax_frame3_after_score_cache`,
+`pass_shrink_minmax_frame2_after_loop_ctr_b`) that progressively shrink
+its frame `-4 -> -3 -> -2` across later fixed-point iterations, by
+detecting when specific `(ix-N)` slots become dead only after other
+minmax-specific passes run first. The widened `try_local_alloc_at` runs
+early, inside `pass_once` (first in `fixed_point_passes[]`), so it was
+eagerly and irreversibly consuming the `ld hl,-4` text the very first
+time it was seen - before the name-specific shrink passes ever got a
+chance to fire on a later iteration - permanently locking `_MinMax` at a
+3-or-4-byte frame instead of its true 2-byte minimum. This is a newly-
+identified hazard class distinct from ordinary pass-ordering
+non-determinism: within `dccpeep`'s `do { ...for each pass in array
+order...} while (changed)` fixed-point loop, a pass that irreversibly
+consumes a text pattern another (later-in-array, or later-converging)
+pass also wants can win permanently, not just non-deterministically.
+
+Fixed by reverting `try_local_alloc_at` to its exact original N=1/2-only
+form (with an explanatory comment), and instead adding a brand-new,
+separately-scoped pass, `pass_local_alloc_wide` (`peep_pass_final.c`,
+handling only N=3/4), shared the existing `local_alloc_hl_result_dead`
+liveness guard by making it non-static (`peep_pass_once.c` /
+`dccpeep_internal.h`). Critically, `pass_local_alloc_wide` is registered
+as a standalone `RUN_PASS(...)` call in `dccpeep.c` **after** the
+fixed-point `do-while` loop exits (alongside the existing
+`pass_signed_cmp_const_bias_fold`, which has the same "must see fully
+converged output" rationale) - not inside `fixed_point_passes[]` - so it
+only ever sees text that every other fixed-point pass, including the
+`_MinMax`-specific shrink passes, has already fully finished
+transforming.
+
+**Validation**:
+- Whole-corpus census (`--fail-on-regression`) vs. pre-T10 baseline: 0
+  regressions, **+1 newly-accepted function**
+  (`tgoto.gt_block_label`, 196/2021 (9.70%) -> 197/2021 (9.75%)); 5 apps
+  required runtime validation (`tbug2`, `tdmfuse`, `tgoto`, `tmirslot`,
+  `tvla`).
+- Focused `runall.ps1 -Apps tbug2,tdmfuse,tgoto,tmirslot,tvla -Mode
+  full`: 5/5 correctness pass; 8 genuine improvements (incl. `tbug2`
+  -0.81%/-0.74%); one small residual `tgoto` peep regression (+9 cycles,
+  +0.02%) traced via a whole-file `.mac` diff to exactly one other
+  function change (`gt_basic`, a hot function, also legitimately
+  benefiting from the same widened peephole) - no unexplained code
+  changed, both differing functions objectively improved in isolation;
+  accepted as SKILL.md's documented "code-placement sensitivity"
+  category and baselined for these 5 apps via `-UpdatePerfBaseline`.
+- Wide `-Mode fast` safety net (run twice, since the first pass fired
+  before the `_MinMax` ordering bug was found and fixed): first run
+  found `cobint` (peep, +0.047%) and `ttt` (peep, +1.08%); after the
+  `pass_local_alloc_wide` reordering fix, second run showed `ttt` fully
+  resolved (its own change traced by direct diff to `_MinMax` correctly
+  reaching its true 2-byte frame again, matching pre-regression
+  behavior), leaving only `cobint`.
+- `cobint`'s regression (COBOL interpreter; a `.mac` diff showed 8 clean
+  `-4 -> 4 x dec sp` conversions with no other differences, and the Z80
+  timing table above confirms 4 x `dec sp` (24T) is unambiguously cheaper
+  than the 3-instruction form (27T) in isolation) matches SKILL.md's own
+  documented "code-placement sensitivity in interpreter heaps" class by
+  name - the byte-shrinkage at 8 sites shifts everything downstream,
+  and something layout-dependent elsewhere absorbs a small net cost.
+  Confirmed via a focused `runall.ps1 -Apps cobint -Mode full` that
+  correctness passes cleanly and only the `peep` mode (not `nopeep`)
+  shows any delta - consistent with this being purely a dccpeep-output
+  layout effect, not a real defect in the underlying MIR/legacy code.
+  Given the tiny magnitude (+0.047%, 758,058,178 -> 758,415,604 cycles)
+  and the exhaustive, evidence-backed trace matching a class SKILL.md
+  explicitly documents as expected noise, accepted and baselined via
+  `-UpdatePerfBaseline`.
+- Milestone-tier full run (`runall.ps1 -Mode full`, all 323 apps): 314
+  passed, 0 failed, 9 skipped, diagnostics (106/106), dccpeep fixtures
+  (17/17), and performance (both peep and nopeep) all passed cleanly.
+
+**Outcome**: +1 function newly accepted (197/2021, 9.75%), 0
+unaccepted regressions, 8 genuine improvements across the 5 focused
+apps, and a real, general-purpose dccpeep peephole gap closed (any
+function with a 3- or 4-byte stack-only frame now gets the cheaper
+`dec sp` compaction, not just 1-2 byte frames) - independent of and
+complementary to the MIR-side slot-allocation fix. The `_MinMax`
+pass-ordering hazard this investigation uncovered is now documented as
+a reusable discipline: any future widening of an existing
+fixed-point-internal peephole pass must first check whether a
+name-specific or precondition-dependent later pass could still want the
+same text on a subsequent iteration, and if so must be added as a
+separate post-convergence pass rather than widened in place.
+
+**Next**: re-sweep the worst-ratio list fresh again post-T10 (both the
+slot-allocation and peephole changes shift the population broadly -
+170+ apps had census/text changes); continue down the freshly-reranked
+`text-size` near-miss candidates.

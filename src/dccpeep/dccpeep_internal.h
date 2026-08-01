@@ -296,6 +296,13 @@ int pass_elim_redundant_carry_clear(void);
 /* Single-scan micro-pattern dispatcher (peep_pass_once.c). */
 int pass_once(void);
 
+/* Guard for local-alloc rewrites: HL (the fresh allocation's address) must
+ * be provably dead before deleting its definition. Shared between
+ * peep_pass_once.c's early N=1/2 rewrite and peep_pass_final.c's
+ * post-convergence N=3/4 rewrite (peep_pass_once.c). */
+int local_alloc_hl_result_dead(int start);
+int pass_local_alloc_wide(void);
+
 /* Shared helpers used across the optimizer and the board passes. */
 int is_uncond_jp(const char *s);
 int is_jump_line(const char *s);
