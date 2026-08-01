@@ -15,11 +15,11 @@ retired history; do not resume numbering from them.
 - `text-size` fallback is still the dominant reason (1,749/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
-- Combined byte-sum reduction from this vein's Items T1-T3:
-  -1,470,674 bytes (~17.5%) across the whole corpus vs. the
+- Combined byte-sum reduction from this vein's Items T1-T4:
+  -1,542,587 bytes (~18.4%) across the whole corpus vs. the
   pre-T1 baseline, with 0 real regressions (only digit-width text-
-  metric artifacts, each independently confirmed non-real via a
-  label/offset-normalized diff).
+  metric artifacts from T2/T3, each independently confirmed non-real
+  via a label/offset-normalized diff; T4 had 0 regressions outright).
 - **`src/dcc/dcc_mir.c` has been split into 6 files** (this session):
   `dcc_mir.c` (core: lowering, capture API, CFG/dataflow analysis,
   register allocation), `dcc_mir_emit_common.c` (shared scalar-value
@@ -55,20 +55,21 @@ retired history; do not resume numbering from them.
   (`tptrlhs::touch_ptr_to_array_deref`). Committed `a7605b7`.
 - **`dcc_mir.c` file split** (this session, see above). Committed in
   this same session.
+- **Item T4**: removed the analogous dead `mir_virtual_iy_base` gate
+  from `mir_can_forward_stack_to_index` (same root cause and fix shape
+  as Item T3, found via the same `git log -S` methodology). -71,913
+  bytes across 135 apps, 0 regressions, coverage unchanged (still-
+  rejected candidates got smaller without crossing acceptance).
 
 ## Next session should
 
 1. Continue the `text-size` root-cause work per `mir-text-size-plan.md`:
-   - Audit `mir_can_forward_stack_to_index`'s `!mir_virtual_iy_base`
-     entry gate using the same git-blame + forced-accept-probe
-     methodology as Item T3, to determine if it's also dead scaffolding
-     or a genuine correctness dependency.
    - Investigate Root Cause C's residual (`mir_try_emit_spilled_scalar_cfg`
      gives every MIR value a fixed home slot and unconditionally
      stores/reloads it even with zero intervening side effects) beyond
-     what the existing single-use HL-forwarding mechanism already
-     covers - non-adjacent single-use values separated by a skippable
-     label, or more complex live ranges.
+     what the existing single-use HL/stack-forwarding mechanisms (now
+     both live, per Items T3/T4) already cover - non-adjacent single-use
+     values separated by a skippable label, or more complex live ranges.
    - Re-run the full census and re-bucket the `text-size` gap fresh
      before picking the next item; the population shifts as items land.
 2. Now that the module is split, prefer editing the specific

@@ -175,7 +175,17 @@ static int mir_can_forward_stack_to_index(int value)
     const struct MirInsn *index;
     int instruction;
 
-    if (!mir_virtual_iy_base || mir_emit_instruction_index < 0 ||
+    /* Item T4 (mir-text-size-plan.md): mir_virtual_iy_base was a constant
+     * 0 (dead scaffolding) when this helper and its gate were introduced
+     * in 938c45b, so this optimization was dead on arrival - it only
+     * started firing, for large frames only, once a later session gave
+     * mir_virtual_iy_base a real value. The push/pop handoff below is a
+     * self-contained physical-stack round-trip over a fixed 2-instruction
+     * window with no intervening branch or call, unrelated to whether the
+     * eventual store destination would use ix- or iy-relative addressing,
+     * so the gate is removed the same way Item T3 removed the analogous
+     * dead gate from mir_can_forward_hl_to_next. */
+    if (mir_emit_instruction_index < 0 ||
         mir_emit_instruction_index + 2 >= mir.count)
         return 0;
     middle = &mir.insns[mir_emit_instruction_index + 1];

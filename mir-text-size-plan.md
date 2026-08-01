@@ -559,3 +559,63 @@ not just non-regressing):
 sessions should edit the specific `dcc_mir_*.c` file that owns a given
 selector/helper rather than re-growing a single monolithic file, and
 add any new cross-file prototypes to `dcc_mir_internal.h`.
+
+## Item T4: dead `mir_virtual_iy_base` gate on stack-forwarding (2026-08-01)
+
+**Hypothesis**: `mir_can_forward_stack_to_index` (its sibling,
+`mir_can_forward_hl_to_next`, was fixed in Item T3) has the same class
+of bug - a `!mir_virtual_iy_base` entry gate that was dead scaffolding
+when introduced and has come back to life, wrongly, for large frames
+only.
+
+**Investigation**: `git log -S "mir_can_forward_stack_to_index"`
+showed this helper and its `mir_virtual_iy_base` gate were both
+introduced in the same commit, `938c45b` ("make full rollout
+transactional and regression-free"), which also set
+`mir_virtual_iy_base = 0;` (a hard-coded constant) at both of that
+commit's own assignment sites - i.e. the gate was unconditionally false
+at introduction, exactly like the `mir_can_forward_hl_to_next` case in
+Item T3. The optimization itself is a self-contained physical `push
+hl` / `pop hl-or-de` handoff spanning a fixed 2-instruction window
+(`MIR_CONST` then `MIR_INDEX_ADDRESS` using this value as the array
+base) with a use-count check ruling out any call or repeat use in
+between - nothing about it depends on whether the eventual store
+destination uses `ix`- or `iy`-relative addressing. Session earlier
+than this one's Item T1 gave `mir_virtual_iy_base` a real per-function
+value (`frame_bytes > 140`), which reawakened this dead gate for large
+frames only, silently denying the optimization to the ~93% of
+functions with smaller frames.
+
+**Fix**: removed the `!mir_virtual_iy_base` condition from
+`mir_can_forward_stack_to_index`'s entry gate in
+`src/dcc/dcc_mir_spilled_cfg.c`, leaving the existing
+opcode/use-count checks as the sole safety gate (same shape as Item
+T3's fix).
+
+**Validation**:
+- Whole-corpus census before/after (`--fail-on-regression`): 0
+  newly/no-longer-emitted functions, 0 regressions - every one of the
+  230 changed functions got *smaller* (`-71,913` bytes total across
+  135 apps); the worst single-function "delta" was actually an
+  improvement (`-35` bytes, several apps), i.e. there were no positive
+  deltas at all.
+- `apps requiring runtime validation: 0` - since no already-*accepted*
+  MIR function's generated output changed (only still-`text-size`-
+  fallback candidates got smaller without crossing the acceptance
+  threshold), no already-active MIR selection changed at all, so this
+  change cannot affect any currently-shipped Z80 output.
+- Wide safety net: `runall.ps1 -Mode full` (fast + nopeep), 323 apps:
+  314 passed, 0 failed, 9 skipped, diagnostics/dccpeep/performance all
+  passed.
+
+**Outcome**: -71,913 bytes across the corpus, 0 regressions, 0
+baseline changes needed (no already-active function's output changed).
+Coverage unchanged at 190/2021 (9.40%) - this narrows the size gap for
+still-rejected candidates without flipping any across the acceptance
+threshold this time.
+
+**Next**: re-run the full census and re-bucket the `text-size` gap
+fresh (population shifts with every item); investigate Root Cause C's
+remaining residual (non-adjacent single-use values, or values with
+more complex live ranges than the single-adjacent-use case Items T3/T4
+now cover).
