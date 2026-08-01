@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 232/2022 runnable functions MIR-accepted (11.47%).
+- Coverage: 236/2022 runnable functions MIR-accepted (11.67%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -119,6 +119,18 @@ retired history; do not resume numbering from them.
   see `mir-text-size-plan.md`'s Item T25 entry for the full
   investigation, including a stale-`git-stash` hazard hit and avoided
   via a `git worktree add` A/B comparison instead)
+  plus Item T26's removal of an overly-cautious
+  `mir.is_variadic_function` exclusion from `mir_param_value_is_direct`
+  (named parameters of variadic functions can now use the same
+  direct-forwarding path non-variadic functions already had, since
+  `va_start`'s own address computation doesn't depend on it; +4
+  newly-accepted functions - all 4 the same shared `call_vsnprintf`
+  function across the `-ffloatio`/`-flongio` flag-matrix test apps -
+  232/2022 -> 236/2022, 11.67%; 3 of 4 apps clean/improved, 1
+  (`tsnprtf`) carries a tiny <=0.12% residual traced to a still-open,
+  deeper follow-on - a parameter reached via an intervening same-object
+  `MIR_LOAD` rather than a bare `MIR_PARAM` value doesn't yet get the
+  same direct-forwarding recognition - left un-baselined and visible)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
@@ -438,19 +450,27 @@ retired history; do not resume numbering from them.
 
 ## Next session should
 
-1. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
+1. **The `buf`/`fmt`-via-intervening-`MIR_LOAD` gap** identified by
+   Item T26: `mir_param_value_is_direct` only recognizes a bare
+   `MIR_PARAM` value used directly; a parameter re-read through a
+   separate `MIR_LOAD` of the same object (as `tsnprtf.call_vsnprintf`'s
+   `buf`/`fmt` are) doesn't yet get the same direct-forwarding
+   treatment. Closing this would resolve `tsnprtf`'s tiny residual and
+   likely generalizes wherever a parameter is read back through an
+   explicit reload rather than used directly.
+2. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
    +0.78% under Item T25 but not fully closed)** would need a
    predicate that follows the value through additional intervening
    definitions/uses beyond the single-load case Item T25 covers -
    worth a dedicated look if `tc89core` keeps recurring as a residual
    across future items, otherwise leave it as a documented, visible,
    un-baselined residual.
-2. Execute the dedicated `text-size` plan (drafted this session,
+3. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
-   - **Re-sweep the worst-ratio/bucket list fresh post-T25** before
-     picking the next candidate. Census snapshot: `/tmp/census-post-t25-final.tsv`
-     (the final validated post-T25 state; treat as the new baseline).
+   - **Re-sweep the worst-ratio/bucket list fresh post-T26** before
+     picking the next candidate. Census snapshot: `/tmp/census-after-t26.tsv`
+     (the final validated post-T26 state; treat as the new baseline).
      `MIR_BINARY`'s operand-adjacency forwarding now covers both
      src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
      (T16), **for both plain arithmetic and fusable comparisons**

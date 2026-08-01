@@ -1511,8 +1511,6 @@ static int mir_param_value_is_direct(int value)
     object = definition->object;
     if (object < 0 || object >= mir.object_count)
         return 0;
-    if (mir.is_variadic_function)
-        return 0;
     if (mir.has_vla)
         return 0;
     for (i = 0; i < mir.count; ++i)

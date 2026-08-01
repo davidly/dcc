@@ -2386,3 +2386,97 @@ covers — worth a dedicated look if `tc89core` keeps recurring as a
 residual across future items. Otherwise, re-derive the next candidate
 from a fresh gap-bucket sweep rather than assuming the prior session's
 ranking still holds.
+
+## Item T26: enable direct scalar-parameter forwarding for variadic functions (2026-08-01)
+
+**Hypothesis**: `mir_param_value_is_direct` (added in commit `88d28d1`,
+"rehome never-reassigned scalar parameters to their frame slot") was
+given an explicit `if (mir.is_variadic_function) return 0;` gate at
+introduction, but the commit's own message frames this as caution
+("matching the same caution `mir_try_emit_general_rollout` already
+applies"), not a proven hazard — it explicitly names
+`tests/tsnprtf.c`'s `call_vsnprintf` as the motivating example without
+having tested whether the optimization is actually unsafe for
+variadic functions. A forced A/B diff of `call_vsnprintf` showed
+legacy reads each named parameter (`buf`, `n`, `fmt`) directly from
+its own incoming `ix+N` offset when building the `vsnprintf` call's
+arguments, while MIR unconditionally copies every named parameter into
+a fresh backend slot first (this is exactly the class of redundant
+copy `mir_param_value_is_direct` exists to eliminate for
+non-variadic functions) — `va_start`'s own `ap` address computation is
+independent of whether other named parameters are "direct" or
+"copied", since it only computes a fixed offset past the last named
+parameter's own stable stack position, so there is no structural
+reason this optimization should be unsafe for variadic functions.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): removed the
+`if (mir.is_variadic_function) return 0;` line from
+`mir_param_value_is_direct`, keeping the `mir.has_vla` exclusion (a
+separate, unrelated concern) and every other existing safety check
+(struct/size gating, the divmod-fusion-pair exclusion, the
+never-stored-to check) untouched.
+
+**Validation**:
+- Whole-corpus census vs pre-change: **+4 newly-accepted functions**
+  (232/2022 -> 236/2022, 11.67%), **0 census regressions**:
+  `tpfio.call_vsnprintf`, `tpflio.call_vsnprintf`, `tplng.call_vsnprintf`,
+  `tsnprtf.call_vsnprintf` — all 4 are the *same* shared function
+  (`static void call_vsnprintf(...)` defined identically in all 4 test
+  files, which cover the `-ffloatio`/`-flongio` flag-combination
+  matrix for the printf family), landing together from one predicate
+  change, exactly the "reuse" scoring criterion SKILL.md's
+  prioritization rubric favors. 6 apps with census changes, 4 flagged
+  for runtime validation.
+- Focused `runall.ps1 -Apps tpfio,tpflio,tplng,tsnprtf -Mode full`: all
+  4 PASS correctness. `tpfio`/`tplng`/`tpflio` all show genuine
+  improvements (peep cycles -0.09% to -0.12%, nopeep cycles -0.03% to
+  -0.04%, and real `.COM`-size shrinks for `tpfio`/`tplng`: -1.54%/
+  -1.56%). `tsnprtf` alone shows a tiny residual regression (peep
+  +0.04%, nopeep +0.12% cycles, no byte-size regression flagged).
+  Root-caused via `DCC_MIR_REPORT=1`: of `call_vsnprintf`'s 3 named
+  parameters, only `n` (the one used directly by its own `MIR_ARG`
+  with no intervening instruction) gets the new direct-forwarding
+  benefit; `buf` and `fmt` are both first re-read through a separate
+  `MIR_LOAD` of the same object before being used as call arguments
+  (`v4 = load(buf)` / `v6 = load(fmt)`, distinct values from the
+  `MIR_PARAM` values themselves) — `mir_param_value_is_direct` only
+  recognizes a `MIR_PARAM` value used *directly*, not a `MIR_LOAD` of
+  the same underlying object reached through an intermediate reload,
+  so `buf`/`fmt` still get a real (if smaller than before) win: MIR's
+  new 2-instruction `ap` store (`ld (ix-2),l`/`ld (ix-1),h`) replaces
+  legacy's 12-instruction manual byte-store-via-pointer-arithmetic
+  dance, but this is now partly offset by 2 pairs of genuinely new
+  `ld r,(ix+d)`/`ld (ix+d),r` reload/store instructions for `buf`/`fmt`
+  that legacy never needed (each Z80 `(ix+d)`-relative op costs 19
+  T-states, much more than the register-only ops it's mixed with) —
+  net bytes still shrink (609 -> 556, below legacy's 564) but the
+  instruction mix costs a handful of extra cycles per call, a direct
+  instance of SKILL.md's rule 4 ("a smaller instruction/byte count is
+  not proof of faster... code"). This residual is a distinct,
+  deeper follow-on (extending direct-forwarding recognition through an
+  intervening same-object `MIR_LOAD`, not just a bare `MIR_PARAM`
+  value) — left undone here; the regression is tiny (<=0.12%, smaller
+  than any prior accepted residual this session) and `tsnprtf`'s
+  baseline is deliberately left untouched so it stays visible.
+- Wide `-Mode fast` safety net (full 323-app corpus): 314/323 passed,
+  9 skipped, only the 2 pre-existing residuals (`tatof`, `tc89core`)
+  plus this item's own new `tsnprtf` residual flagged — no other app
+  in the corpus regressed.
+- Baselines updated for `tpfio`/`tplng`/`tpflio` (all clean/improved);
+  `tsnprtf` deliberately left untouched.
+
+**Outcome**: +4 newly-accepted functions (232/2022 -> 236/2022,
+11.67%), 0 census regressions, 1 conservative-gate relaxation landed
+(variadic functions now benefit from the same direct scalar-parameter
+forwarding non-variadic functions already had). 3 of 4 affected apps
+clean/improved; 1 (`tsnprtf`) carries a tiny, fully-diagnosed residual
+left visible rather than hidden.
+
+**Next**: the `buf`/`fmt`-via-intervening-`MIR_LOAD` gap identified
+above (extending `mir_param_value_is_direct`-style recognition through
+a same-object reload, not just a bare `MIR_PARAM` value) would close
+`tsnprtf`'s residual and likely apply more broadly wherever a
+parameter is read back through an explicit reload rather than used
+directly — worth a dedicated look as its own item. Otherwise, re-sweep
+the worst-ratio/bucket list fresh post-T26 before picking the next
+candidate.
