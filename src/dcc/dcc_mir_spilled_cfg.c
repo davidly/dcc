@@ -234,7 +234,22 @@ static int mir_can_forward_hl_to_next(int value)
              * still spilled to a temporary slot and reloaded before the
              * following store, an identical dead round trip to the T31/T37
              * cases. The value sits in HL right after the load completes,
-             * exactly like every other whitelisted producer here. */
+             * exactly like every other whitelisted producer here.
+             *
+             * Item T39 (mir-text-size-plan.md): the rest of the "address"
+             * family - MIR_STRING_ADDRESS (a string literal's address, e.g.
+             * `gp = "hello";`), MIR_MEMBER_ADDRESS (`gp = &s.field;`), and
+             * MIR_INDEX_ADDRESS (`gp = &arr[i];`) - were missing for the
+             * exact same reason MIR_ADDRESS was (Item T37): none are a
+             * deliberate exclusion, all are pure, side-effect-free address
+             * computations whose value sits in HL right after computing it,
+             * with no dependency on the following store's own fixed
+             * ix-relative destination offset. Confirmed via three synthetic
+             * tests (mirroring T38's methodology), each showing the
+             * identical dead round trip. MIR_COMPOUND_ADDRESS was checked
+             * too but a synthetic trigger for it was not found this
+             * session - left out until a concrete motivating case
+             * confirms it needs the same treatment. */
             if (mir_object_is_fully_promoted(next->object) ||
                 (producer_opcode != MIR_LOAD_INDIRECT &&
                  producer_opcode != MIR_LOAD &&
@@ -242,7 +257,10 @@ static int mir_can_forward_hl_to_next(int value)
                  producer_opcode != MIR_UNARY &&
                  producer_opcode != MIR_CONST &&
                  producer_opcode != MIR_CALL &&
-                 producer_opcode != MIR_ADDRESS) ||
+                 producer_opcode != MIR_ADDRESS &&
+                 producer_opcode != MIR_STRING_ADDRESS &&
+                 producer_opcode != MIR_MEMBER_ADDRESS &&
+                 producer_opcode != MIR_INDEX_ADDRESS) ||
                 !mir_scalar_memory_location(next, &memory_type,
                                             &memory_storage, &memory_offset) ||
                 type_is_struct_object(memory_type) ||

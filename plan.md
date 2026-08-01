@@ -808,11 +808,24 @@ retired history; do not resume numbering from them.
   baseline updated. Wide safety net: `-Mode fast` showed one flaky
   failure (`tkbd`, already flagged `perf_ignore: true` for known
   nondeterminism) that did not reproduce on two re-runs; full-corpus
-  `-Mode full` clean (314/323). Audit continues: `MIR_FLOAT_CONST`/
-  `MIR_STRING_ADDRESS`/`MIR_COMPOUND_ADDRESS`/`MIR_INDEX_ADDRESS`/
-  `MIR_MEMBER_ADDRESS` look like further plausible candidates by the
-  same "pure producer" reasoning but were not yet confirmed against a
-  concrete motivating example.
+  `-Mode full` clean (314/323).
+- **Item T39 landed**: continued the whitelist audit - confirmed via
+  three synthetic tests that `MIR_STRING_ADDRESS`, `MIR_MEMBER_
+  ADDRESS`, and `MIR_INDEX_ADDRESS` all showed the identical dead
+  round trip `MIR_ADDRESS` (T37) already fixed. Added all three to
+  the whitelist. Whole-corpus census: 0 regressions, coverage
+  unchanged (314/2023 - 31 apps had byte reductions, none crossing
+  acceptance this round; 0 apps flagged for runtime validation). Wide
+  safety net run anyway per SKILL.md discipline: both `-Mode fast` and
+  full-corpus `-Mode full` clean (314/323), no performance deltas at
+  all. **Audit status**: the whitelist now covers `MIR_LOAD_INDIRECT`/
+  `MIR_LOAD`/`MIR_BINARY`/`MIR_UNARY`/`MIR_CONST`/`MIR_CALL`/
+  `MIR_ADDRESS`/`MIR_STRING_ADDRESS`/`MIR_MEMBER_ADDRESS`/`MIR_INDEX_
+  ADDRESS`. `MIR_FLOAT_CONST`'s redundancy (when present) was found to
+  be entirely a *wide-value* forwarding gap (a separate, already-
+  tracked backlog item), not a 16-bit whitelist gap; `MIR_COMPOUND_
+  ADDRESS` had no confirmed trigger found. This audit line is likely
+  exhausted for the 16-bit path.
 
 ## Next session should
 
@@ -830,15 +843,13 @@ retired history; do not resume numbering from them.
    (affects evaluation-order semantics for every call site) than a
    narrow producer-whitelist fix - deferred with this rationale for a
    dedicated future investigation, not attempted this session.
-2. **Continue the `MIR_STORE` producer-whitelist audit** (Item T38's
-   carried-forward finding): `MIR_FLOAT_CONST`, `MIR_STRING_ADDRESS`,
-   `MIR_COMPOUND_ADDRESS`, `MIR_INDEX_ADDRESS`, `MIR_MEMBER_ADDRESS`
-   all look like further plausible "pure producer" candidates by the
-   same reasoning that unlocked `MIR_CALL` (T31), `MIR_ADDRESS` (T37),
-   and `MIR_LOAD` (T38) - but none have been confirmed against a
-   concrete motivating example yet. Construct a synthetic test for
-   each (mirroring T38's `g2 = g1;` approach) before adding any of them
-   speculatively.
+2. **DONE (Item T39)**: `MIR_STRING_ADDRESS`/`MIR_MEMBER_ADDRESS`/
+   `MIR_INDEX_ADDRESS` confirmed and added to the whitelist. This
+   audit line is now likely exhausted for the 16-bit path -
+   `MIR_FLOAT_CONST`'s only confirmed redundancy is a wide-value
+   forwarding gap (item 3 below), and `MIR_COMPOUND_ADDRESS` had no
+   confirmed trigger. Do not keep chasing this specific whitelist
+   without a fresh concrete motivating example.
 3. **Extend wide-value forwarding to computed values** (Item T35's
    carried-forward finding): `mir_emit_virtual_store_wide` still
    unconditionally spills any non-param wide value with an assigned
