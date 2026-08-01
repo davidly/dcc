@@ -3995,3 +3995,97 @@ considering the predicate safe to extend; (3) only then re-attempt,
 following the same full SKILL.md validation discipline. `mir_can_
 forward_hl_de_to_next` remains at its Item T40 state (`MIR_RETURN`
 consumer only, safely committed and validated) in the meantime.
+
+## Item T42: remove a stale `call_argument_count <= 3` cap on rematerializable call arguments (2026-08-01)
+
+**Context**: v3 plan's Priority 1 - a fresh structural-shape search
+(not name-filtered for the fix itself, per SKILL.md Rule 6; names were
+only used to *locate* recurring instances for investigation) found
+**152 fallback functions** matching a 2-3-argument assertion-helper
+shape (`check`/`chk`/`ck`/`okb`/`fail`/`chki`/`cku`/`check_long`/...
+across dozens of test files) - the single largest concrete opportunity
+identified this session (~9.5% of the entire remaining fallback
+population).
+
+**Root cause**: `t2darr.c`'s `check(const char *name, int got, int
+expected)` calls `printf("FAIL %s got %d expected %d\n", name, got,
+expected)` on failure - a **4-argument** call. `name`'s value (a
+never-reassigned parameter) is evaluated in *source* order (leftmost
+first) but must be *pushed* in reverse order (this target's calling
+convention), so it needs to survive across the other arguments'
+evaluation. `mir_load_is_single_call_argument`
+(`src/dcc/dcc_mir_spilled_cfg.c`) already exists specifically to
+recognize this exact shape and defer such a value's load to push time
+instead of caching it - but it silently required the call's *total*
+argument count to be `<= 3` (a second, separate scan with no
+explaining comment anywhere), which `printf`'s 4-argument call
+exceeds. Its sibling, `mir_address_is_single_call_argument` (added in
+the same original commit, T20/T21), has **no such cap at all** - it
+only ever checks the value's own use count, never the call's total
+arity. This asymmetry, the complete absence of any comment justifying
+the `<=3` limit, and the fact that nothing about recomputing a value
+fresh from its own fixed `ix`-relative offset at push time depends on
+how many *other* arguments the same call has (`ix` never moves during
+argument evaluation, regardless of arity) - all match the same
+"conservative-at-introduction, never revisited" pattern already found
+and fixed in Items T3/T4/T30/T35/T37/T38/T39.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): removed the
+second scan and the `call_argument_count <= 3` check from
+`mir_load_is_single_call_argument` entirely; the function now returns
+as soon as the value's own single-use-as-`MIR_ARG` condition is
+confirmed (the same shape its sibling already accepts unconditionally).
+
+**Validation** (given this touches call-argument lowering, and per the
+new discipline this plan added after Item T41's two correctness bugs,
+validated with *real `ntvcm` execution*, not just census/force-accept-
+diff inspection):
+- `check`: `generated-bytes=456` → **`424`** (`captured=394`,
+  `42`→`38` generated instructions) - force-accept-diff confirmed
+  `name`'s value is now loaded fresh (`ld l,(ix+4)/ld h,(ix+5)`)
+  immediately before its push, byte-for-byte identical to legacy's
+  own argument-pushing sequence, with no `bc`-cache dance at all.
+- **Synthetic `ntvcm`-executed correctness test**: built a standalone
+  program (`static void check(...) {...}`, four calls with two
+  deliberate mismatches) with `check` force-accepted via
+  `DCC_MIR_FORCE_ACCEPT_FUNCTION`, compiled via `dccmake`, and run
+  under `ntvcm` - both failure messages printed the correct `name`/
+  `got`/`expected` values exactly (`FAIL second_mismatch got 42
+  expected 99`, `FAIL fourth_mismatch got 5 expected 6`), confirming
+  the deferred-load argument ordering is genuinely correct at
+  runtime, not just plausible from static inspection.
+- Whole-corpus census (`build/mir-t42.tsv` vs
+  `build/mir-current-planning.tsv`, `--fail-on-regression`): **0
+  regressions, +11 newly-accepted functions** (314→325/2023,
+  15.52%→16.07%): `tbcloop.ck_str`, `tc89init.cs`, `texscan.main`,
+  `tfpos.chkstr`, `tmatha.chkx`, `tmathf.chkx`, `too.check_s`,
+  `trtl2.check_s`, `tstretst.fail`, `tvplain.check_str`, `tzpad.eq` -
+  all members of the same 152-function family, confirming the fix
+  generalizes correctly. The other ~141 family members had their
+  `generated_bytes` reduced (many now much closer to the line, in the
+  now-much-larger `close` bucket) without yet crossing the acceptance
+  threshold this round - each still carries its own additional,
+  independent residual gap.
+- Focused `runall.ps1 -Mode full` on all 16 flagged apps (tallocx,
+  tbcloop, tc89init, texscan, tfpos, tmatha, tmathf, too, tpfio,
+  tpflio, tplng, trtl2, tsnprtf, tstretst, tvplain, tzpad): **16/16
+  correctness PASS**. 8 apps showed peep-mode-only performance
+  deltas (+0.01% to +0.14% cycles; `tbcloop` additionally showed
+  +1.96% peep bytes) with the *same* apps' nopeep numbers improving in
+  every case - the established dccpeep "quality gap" signature from
+  Items T27-T30/T32 (dccpeep's own optimization effectiveness varying
+  with the new, smaller pre-peephole code shape, not a defect in this
+  fix's own logic). 23 genuine improvements overall (up to -0.43%
+  cycles). Baselines updated via `-UpdatePerfBaseline` for all 16 apps
+  after confirming correctness.
+- Wide safety net (both required tiers): `-Mode fast` 314/323 clean;
+  full-corpus `-Mode full` also 314/323 clean, diagnostics/dccpeep/
+  performance all passed.
+
+**Residual for the family**: `t2darr.check` itself is still 30 bytes
+over (`424` vs `394`, down from `62`) - a smaller, distinct gap
+remains (likely a lingering backend-slot allocation for the
+comparison result or similar; not yet investigated). The ~141 other
+family members each have their own independent residual too. Worth a
+fresh forced-accept-diff on a few representative members next to find
+what's left before considering this family "done."

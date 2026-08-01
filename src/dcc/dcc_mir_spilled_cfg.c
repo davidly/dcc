@@ -1335,8 +1335,6 @@ int mir_load_is_single_call_argument(int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
     int argument_count = 0;
-    int call_id = -1;
-    int call_argument_count = 0;
     int memory_type;
     int memory_storage;
     int memory_offset;
@@ -1358,15 +1356,24 @@ int mir_load_is_single_call_argument(int value, int size)
         if (insn->opcode != MIR_ARG || type_size(insn->type) != size ||
             ++argument_count > 1)
             return 0;
-        call_id = insn->secondary_offset;
     }
-    if (argument_count != 1)
-        return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction)
-        if (mir.insns[instruction].opcode == MIR_ARG &&
-            mir.insns[instruction].secondary_offset == call_id)
-            ++call_argument_count;
-    return call_argument_count <= 3;
+    /* Item T42 (mir-text-size-plan.md): this used to also require the
+     * call's *total* argument count to be <=3 (a second scan counting
+     * every MIR_ARG sharing this value's own call_id) - a restriction
+     * this function's own sibling, mir_address_is_single_call_argument
+     * just below, never had (it only ever checks this *value's* own use
+     * count, never the call's total arity). No comment anywhere
+     * explained the cap, and nothing about recomputing a value fresh
+     * from its own fixed ix-relative offset at push time depends on how
+     * many *other* arguments the same call has - IX never moves during
+     * argument evaluation regardless of arity. Found via
+     * tests/t2darr.c's check() (`printf("FAIL %s got %d expected %d\n",
+     * name, got, expected)`, a 4-argument call): `name`'s value,
+     * otherwise eligible for this exact rematerialization, was falling
+     * through to mir_call_argument_cache_target's costlier BC-cache
+     * round trip purely because the call had one argument more than
+     * this arbitrary cap allowed. */
+    return argument_count == 1;
 }
 
 /* mir-text-size Item T20 (mir-text-size-plan.md): sibling to

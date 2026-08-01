@@ -875,23 +875,90 @@ retired history; do not resume numbering from them.
   test battery verified via `ntvcm` execution, before re-attempting).
   `mir_can_forward_hl_de_to_next` remains at its safe Item T40 state
   (`MIR_RETURN` only) in the meantime.
+- **New v3 text-size plan written** (session workspace `plan.md`,
+  full rewrite, before Item T42): fresh re-analysis found the
+  `close`/`near` buckets nearly quadrupled (48→180, 13→15) with the
+  median gap dropping 505→386 bytes and median ratio 1.62x→1.48x -
+  confirming T34-T40's fixes are systemic (shrink the whole
+  population, not just accepted functions). Identified two major new
+  levers: (1) a ~152-function call-argument-caching family
+  (assertion-helper shape, `check`/`chk`/`ck`/`okb`/`fail`/...), and
+  (2) a much bigger but Item-6-level-risky hypothesis that pointer
+  parameters/locals can never use "direct" (object-free) re-read
+  eligibility at all (`mir_object_eligible` excludes every pointer),
+  confirmed via `too.c`'s `rect_perim` but deliberately not attempted
+  without further staged investigation given T41's lesson. Also added
+  a new standing discipline: any change touching parameter-forwarding/
+  call-argument/backend-slot logic must be validated with a real
+  `ntvcm`-executed synthetic test, not just census/inspection.
+- **Item T42 landed**: found and fixed the ~152-function family's
+  root cause - `mir_load_is_single_call_argument` (`src/dcc/dcc_mir_
+  spilled_cfg.c`) already existed to defer a never-reassigned
+  parameter's load to push time instead of caching it, but silently
+  required the call's *total* argument count to be `<=3` (no
+  explaining comment anywhere) - `check`'s 4-argument `printf` call
+  exceeded it. Its sibling, `mir_address_is_single_call_argument`, has
+  no such cap at all - the same "conservative-at-introduction, never
+  revisited" pattern as Items T3/T4/T30/T35/T37/T38/T39. Removed the
+  cap. Validated with a **real `ntvcm`-executed synthetic test**
+  (deliberate `check()` mismatches, force-accepted, compiled via
+  `dccmake`, run under `ntvcm`) confirming the deferred-load argument
+  ordering is genuinely correct at runtime - both failure messages
+  printed exactly the right `name`/`got`/`expected` values. Whole-
+  corpus census: **0 regressions, +11 newly-accepted functions**
+  (314→325/2023, 15.52%→16.07%), all members of the same family; the
+  other ~141 members had real byte reductions without yet crossing
+  acceptance (each has its own additional residual). Focused
+  `runall.ps1 -Mode full` on 16 apps: 16/16 correctness PASS, 8 apps
+  showed tiny peep-only deltas (matching the established dccpeep
+  quality-gap signature, confirmed via nopeep improving in every
+  case), 23 genuine improvements; baselines updated. Wide safety net:
+  both `-Mode fast` and full-corpus `-Mode full` clean (314/323).
 
 ## Next session should
 
-1. **`check()`'s call-argument-caching residual investigated, deferred**
-   (Item-6-style): the remaining gap in `t2darr.c`'s `check` (456 vs
-   394 bytes post-T36) traces to MIR lowering call arguments in
-   *source* order then caching whichever are evaluated out of *push*
-   order (right-to-left for this ABI) - e.g. `name` (evaluated first,
-   pushed last) gets cached into `bc` (`ld c,l/ld b,h` ... `ld l,c/
-   ld h,b`, 4 bytes) where legacy just evaluates each argument once,
-   directly in push order, with no caching at all. Fixing this at the
-   root (lowering call arguments right-to-left to match push order)
-   could be a broad, systemic win across most multi-argument calls in
-   the corpus, but is a much bigger, riskier architectural change
-   (affects evaluation-order semantics for every call site) than a
-   narrow producer-whitelist fix - deferred with this rationale for a
-   dedicated future investigation, not attempted this session.
+1. **DONE (Item T42)**: `check()`'s call-argument-caching gap was
+   found and fixed - not the broad "lower args right-to-left"
+   architectural change speculated below, but a much narrower,
+   surgical fix: `mir_load_is_single_call_argument` already existed to
+   defer a never-reassigned parameter's load to push time, but had an
+   unexplained `call_argument_count <= 3` cap (absent from its sibling
+   `mir_address_is_single_call_argument`) that `check`'s 4-argument
+   `printf` call exceeded. Removed the cap. +11 functions this round
+   (314→325/2023, 16.07%); ~141 more family members had real byte
+   reductions without yet crossing acceptance - each has its own
+   additional residual gap (e.g. `t2darr.check` itself: 456→424 vs
+   394, i.e. 30 bytes left, down from 62). **Next**: force-accept-diff
+   a few representative family members (different argument-type
+   shapes - an `int`-only variant like `okb`, a `long` variant like
+   `chkl`) to find what's left before considering this family "done";
+   likely a smaller, distinct backend-slot or comparison-result issue,
+   not more call-argument caching.
+1b. **Priority 2 from the v3 plan, still pending, Item-6-level risk -
+   stage carefully**: investigate extending "direct" (object-free)
+   re-read eligibility to never-reassigned pointer *parameters*.
+   `mir_object_eligible` (`src/dcc/dcc_mir.c`) excludes every pointer
+   via `type_ptr_depth(sym->type) > 0`, unlike the already-relaxed
+   scalar/wide size restriction (Item T35) - confirmed via `too.c`'s
+   `rect_perim` (a local pointer cast from a parameter, dereferenced
+   twice, showing a store-then-immediate-reload round trip not fixable
+   by any existing `MIR_STORE`-whitelist mechanism since it has 2
+   uses). Potentially the single biggest remaining lever (pointer
+   parameters/locals are pervasive in the interpreter-style apps that
+   dominate the `far` bucket - `too`, `adaint`, `pint`, `cint`,
+   `forint`, `cobint`, `attnc11`, `a1`), but explicitly higher risk
+   than T42: `mir_object_eligible` feeds general mem2reg/object-
+   promotion/phi-merge machinery, not just direct-parameter-reads, and
+   Item T41 already showed this exact neighborhood (parameter/value
+   direct-forwarding eligibility) can hide subtle correctness bugs
+   that pass a synthetic test but fail on a real corpus function -
+   twice. Stage narrowest-first (parameter-only, dereference-only,
+   never stored/address-taken), research the dataflow interaction
+   before any code change, and validate every step with real
+   `ntvcm`-executed synthetic tests before trusting census/inspection
+   alone. If risk looks disproportionate to a single-session slice,
+   document a defer/skip rationale (Item-6-style) rather than forcing
+   it - see the session workspace `plan.md` v3 for full detail.
 2. **DONE (Item T39)**: `MIR_STRING_ADDRESS`/`MIR_MEMBER_ADDRESS`/
    `MIR_INDEX_ADDRESS` confirmed and added to the whitelist. This
    audit line is now likely exhausted for the 16-bit path -
