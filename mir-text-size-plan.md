@@ -4274,3 +4274,153 @@ function. The wide (32-bit) shift path
 (`src/dcc/dcc_mir_spilled_cfg.c`'s wide-operation shift case, ~line
 2955) has the identical generic-runtime-loop shape and is a natural
 follow-up (Item T45 candidate) once this item is confirmed stable.
+
+## Item T45: wide (32-bit) shift-by-constant unroll, upgraded to match legacy's byte-move decomposition, plus Item T46: `long * power-of-two-constant` strength reduction (2026-08-01)
+
+**Hypothesis**: Item T44 fixed the scalar (16-bit) shift path; the wide
+(32-bit) `TOK_SHL`/`TOK_SHR` case in `mir_emit_wide_operation`
+(`dcc_mir_spilled_cfg.c`, ~line 2955) has the identical shape - a
+compile-time-constant shift count still goes through a generic
+runtime `ld a,l/ld b,a/loop: shift; dec b; jp` bit-loop
+unconditionally. Separately, while searching for more items to batch
+together, `dcc_ops.c` (the legacy AST backend) was found to already
+special-case `long_expr * <compile-time power-of-two constant>` via
+`emit_mul_pow2_long_const` (~line 837), strength-reducing it to a
+shift instead of a call to the generic `__lmul` runtime helper - MIR's
+`mir_emit_wide_operation`'s `case '*':` has no equivalent and always
+calls `__lmul` regardless of whether either operand is a compile-time
+power-of-two constant. Both gaps are fixed together in this item since
+the multiply fast path directly reuses the shift-unroll machinery.
+
+**Evidence for the byte-move upgrade**: while implementing the wide
+shift fix, `dcc_ops.c`'s `emit_shift_const_long` (~line 689, the
+direct wide counterpart of the scalar fix Item T44 already ported)
+was found to decompose a compile-time-constant shift count into a
+whole-byte register-move (0-3 bytes, via dedicated move sequences for
+each byte count, with correct zero-fill/sign-fill for the vacated
+bytes) plus only the *remaining* 0-7 bits as unrolled
+`add hl,hl`/`rl e`/`rl d` (or the unsigned/signed right-shift
+equivalents) steps - strictly cheaper than unconditionally unrolling
+every bit of the count one at a time (the initial, simpler version of
+this item's fix, before this was found). This decomposition was ported
+verbatim as a new shared helper, `mir_emit_wide_shift_by_constant`, and
+the originally-planned bit-only unroll was replaced with it before
+this item was ever committed - so what ships as "Item T45" already
+includes the byte-move optimization; there was no separate simpler
+version ever landed.
+
+**Evidence for Item T46 (multiply-by-power-of-2)**: `dcc_ops.c`'s
+`emit_mul_pow2_long_const` (~line 837) and its caller
+(`dcc_ast_gen_expr.c` ~line 1196) confirmed the exact scope: multiplier
+0 and 1 are deliberately *not* special-cased (`ulong_log2_pow2`
+returns 0 for multiplier 1, and legacy checks `shift <= 0` to bail
+out) - "rare enough as literal long multipliers not to be worth
+special-casing separately" per the existing comment - and any
+non-power-of-two multiplier falls through to the generic `__lmul`
+path unchanged. Legacy's version only special-cases the constant
+appearing as the AST's syntactic right operand (`n->b`); MIR's
+lowering does **not** canonicalize commutative operands at all
+(confirmed via `DCC_MIR_REPORT`: `x * 4L` lowers with the constant as
+`src2`, `4L * x` lowers with the constant as `src1`), so a MIR-level
+fix must handle both orderings to be at least as good as legacy - and
+handling both is a strict improvement over legacy for the
+constant-as-src1 ordering, which legacy itself never optimizes.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Added `mir_emit_wide_shift_by_constant(FILE *out, int is_left, int
+  is_unsigned, long count)`: a direct port of
+  `emit_shift_const_long`'s byte/bit decomposition (byte-count switch
+  over 1/2/3 whole bytes with dedicated register-move sequences per
+  direction/signedness, then a 0-7 bit remainder unrolled directly).
+  Count 0 emits nothing.
+- Added `mir_ulong_log2_pow2(unsigned long v)`: a direct port of
+  `ulong_log2_pow2`, returning the shift count for an exact power of
+  two, or -1 for 0/non-power-of-two values.
+- Rewrote the `TOK_SHL`/`TOK_SHR` case's constant-count fast path
+  (previously a plain bit-only unroll, not yet committed at that
+  point) to call `mir_emit_wide_shift_by_constant` instead, after the
+  existing `pop hl; pop de` that restores src1 from the stack. The
+  non-constant/out-of-range fallback (the original runtime loop) is
+  unchanged.
+- Changed `case '*':` from the unconditional `helper = "__lmul";
+  break;` one-liner to first check `mir_definition(insn->src2)` and
+  `mir_definition(insn->src1)` (in that order) for a `MIR_CONST` whose
+  value is a power of two (`mir_ulong_log2_pow2(...) > 0`, matching
+  legacy's exact 0/1 exclusion). If `src2` is the constant: `DE:HL`
+  (already loaded with `src2`'s now-dead value, per the shared caller
+  convention of loading `src1` first/pushing it, then loading `src2`
+  last into `DE:HL`) is discarded via `pop hl; pop de`, restoring
+  `src1` (the real multiplicand) from the stack - identical to the
+  shift case's own restore sequence. If `src1` is the constant:
+  `DE:HL` already holds `src2` (the real multiplicand, loaded most
+  recently, needing no restore at all) and the dead constant pushed
+  earlier for `src1` is simply discarded via `pop bc; pop bc` (the
+  same "drop 2 words" idiom the pre-existing divmod/AND/OR/XOR paths
+  already use elsewhere in this function). Either match calls
+  `mir_emit_wide_shift_by_constant(out, 1, 1, shift)` (always a left
+  shift; signedness is irrelevant for `TOK_SHL`) and returns 1
+  immediately, never reaching the shared `__lmul`-calling fallthrough.
+  If neither operand is a usable power-of-two constant, falls through
+  unchanged to `helper = "__lmul"; break;`.
+
+**Validation**:
+- Whole-corpus census (`build/mir-t46.tsv` vs. the T44 baseline
+  `build/mir-t44.tsv`, 326/2023): `--fail-on-regression` passed clean
+  (exit 0), 0 newly-accepted functions, 0 functions returned to
+  fallback (coverage unchanged at 326/2023 = 16.11% - this item is a
+  pure code-size/quality win for functions already on the fallback or
+  accepted path, not an acceptance-threshold crosser), 21 apps showed
+  census metric changes. Direct byte-savings comparison across every
+  function present in both snapshots: **32 functions improved across
+  16 apps** (`attnc11`, `ln2`, `tap`, `tbcreld`, `tbig`, `tcrcfix`,
+  `tctxops`, `tlong`, `tlongopt`, `tlongreg`, `too`, `tpromo32`,
+  `treg`, `ts`, `ts32`, `tshlmac`), **3,267 total generated-bytes
+  saved**, 0 functions regressed in generated-bytes.
+- Synthetic `ntvcm`-executed correctness battery (`/tmp/t46test/
+  tt46c.c`, 11 functions): both operand orderings (`x * 4L` and
+  `4L * x`), a byte-aligned shift (`x * 256L`, `65536L * x`), signed
+  and unsigned, a shift-count-31 edge case (`x * 0x80000000L`), and
+  three deliberate non-fast-path exercises (`x * 3L` - non-power-of-2,
+  `x * 0L`, `x * 1L` - explicitly excluded per legacy's scope, and
+  `x * -4L` - negative, not a power of two as unsigned) to confirm the
+  `__lmul` fallback still fires and is still correct. All 11 printed
+  results matched hand-computed expected values exactly, including the
+  32-bit signed-overflow wraparound for the `0x80000000L` case
+  (`1 * 0x80000000` wraps to `-2147483648` as a signed 32-bit result,
+  matching plain two's-complement multiplication semantics with no
+  special UB-avoidance needed). Force-accept-diffed `l4x` (`4L * x`,
+  the constant-as-`src1` ordering) directly to confirm the generated
+  assembly: `pop bc\n\tpop bc\n` immediately followed by two
+  `add hl,hl\n\trl e\n\trl d\n` pairs (shift count 2, matching
+  `log2(4)`), with no `__lmul` call anywhere in that function's body -
+  confirming the src1-constant branch fires correctly, not just the
+  more commonly-shaped src2-constant branch already exercised by every
+  `x * 4L`-shaped call in the corpus.
+- Focused `runall.ps1 -Apps tlong,tmulpow2,tshlmac,tmod3216 -Mode
+  full`: 4/4 passed, 0 regressions.
+- Wide safety net, both required tiers: `runall.ps1 -Mode fast` (full
+  323-app corpus) - 314/314 passed, all diagnostics (106) and dccpeep
+  fixtures (17) passed. `runall.ps1 -Mode full` (peep+nopeep, full
+  corpus) - 314/314 passed, all diagnostics and dccpeep fixtures
+  passed, performance check: **0 regressions**.
+
+**Disposition**: landed (both T45 and T46 in one commit, per the
+user's request to batch several validated, same-class, low-risk items
+together rather than validate each individually). Both are pure
+code-generation quality improvements (opcode selection for
+compile-time-known operands), not changes to any forwarding/
+eligibility/backend-slot predicate, so neither falls into this
+session's demonstrated-fragile neighborhood (T41 x2, T43 x1). Known
+scope choices, matching legacy exactly: shift counts outside `[0,31]`
+and multipliers that are 0, 1, or not an exact power of two are left
+on their existing generic paths unchanged - no attempt was made to
+also special-case multiplier 0/1, since legacy itself doesn't bother
+(same reasoning: too rare as literal constants to be worth the
+complexity). A residual, deliberately deferred follow-up: for the
+`case '*':` src2-constant branch, the dead constant is still loaded
+into `DE:HL` by the shared pre-switch `mir_emit_virtual_load_wide`
+call before being immediately discarded - the same class of
+known-but-deferred redundant-load residual already documented for
+Item T44/T45's shift paths, left unfixed here for the same reason
+(keeping this item's blast radius to the `case '*':`/shift-case
+bodies alone, not the shared caller-level operand-loading code).

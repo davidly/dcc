@@ -2879,6 +2879,78 @@ static void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
     }
 }
 
+/* Item T45 (mir-text-size-plan.md): ported directly from
+ * emit_shift_const_long (dcc_ops.c, the legacy AST backend) - any wide
+ * shift count 1..31 decomposes into a whole-byte register-move (0-3
+ * bytes, reusing the same move sequences legacy already validated) plus
+ * a 0-7 bit remainder unrolled directly, since the count is already
+ * known at compile time and a runtime b-counted loop would only add
+ * control overhead for no benefit. A count of exactly 0 emits nothing.
+ * The caller guarantees count is in [0,31] - counts >= 32 are handled
+ * separately (or left on the runtime-loop path) since they are outside
+ * the range this decomposition was validated for. Shared with Item T46's
+ * multiply-by-power-of-two-constant fast path below, which is always an
+ * `is_left` shift regardless of the multiplicand's signedness. */
+static void mir_emit_wide_shift_by_constant(FILE *out, int is_left,
+                                            int is_unsigned, long count)
+{
+    int bytes;
+    int bits;
+
+    if (count <= 0)
+        return;
+    bytes = (int)(count / 8);
+    bits = (int)(count % 8);
+
+    if (is_left) {
+        switch (bytes) {
+        case 1: fputs("\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n", out); break;
+        case 2: fputs("\tld e,l\n\tld d,h\n\tld hl,0\n", out); break;
+        case 3: fputs("\tld d,l\n\tld e,0\n\tld hl,0\n", out); break;
+        default: break;
+        }
+        while (bits-- > 0)
+            fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    } else if (is_unsigned) {
+        switch (bytes) {
+        case 1: fputs("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,0\n", out); break;
+        case 2: fputs("\tld l,e\n\tld h,d\n\tld de,0\n", out); break;
+        case 3: fputs("\tld l,d\n\tld h,0\n\tld de,0\n", out); break;
+        default: break;
+        }
+        while (bits-- > 0)
+            fputs("\tsrl d\n\trr e\n\trr h\n\trr l\n", out);
+    } else {
+        if (bytes > 0) {
+            fputs("\tld a,d\n\trla\n\tsbc a,a\n", out);
+            switch (bytes) {
+            case 1: fputs("\tld l,h\n\tld h,e\n\tld e,d\n\tld d,a\n", out); break;
+            case 2: fputs("\tld l,e\n\tld h,d\n\tld e,a\n\tld d,a\n", out); break;
+            case 3: fputs("\tld l,d\n\tld h,a\n\tld e,a\n\tld d,a\n", out); break;
+            default: break;
+            }
+        }
+        while (bits-- > 0)
+            fputs("\tsra d\n\trr e\n\trr h\n\trr l\n", out);
+    }
+}
+
+/* log2 of a power-of-two 32-bit unsigned value; returns -1 if v is 0 or
+ * not an exact power of two. Ported from ulong_log2_pow2 (dcc_ops.c). */
+static int mir_ulong_log2_pow2(unsigned long v)
+{
+    int n;
+
+    if (v == 0 || (v & (v - 1)) != 0)
+        return -1;
+    n = 0;
+    while (v > 1) {
+        v >>= 1;
+        ++n;
+    }
+    return n;
+}
+
 static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
 {
     const char *helper = NULL;
@@ -2955,22 +3027,105 @@ static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
         return 1;
     case TOK_SHL: case TOK_SHR:
         {
-            int loop_label = new_label();
-            int done_label = new_label();
-            fputs("\tld a,l\n\tpop hl\n\tpop de\n\tld b,a\n", out);
-            fprintf(out, "L%d:\n\tld a,b\n\tor a\n\tjp z,L%d\n",
-                    loop_label, done_label);
-            if (insn->immediate == TOK_SHL)
-                fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
-            else if ((operand_type & TYPE_UNSIGNED) != 0)
-                fputs("\tsrl d\n\trr e\n\trr h\n\trr l\n", out);
-            else
-                fputs("\tsra d\n\trr e\n\trr h\n\trr l\n", out);
-            fprintf(out, "\tdec b\n\tjp L%d\nL%d:\n",
-                    loop_label, done_label);
+            /* Item T45 (mir-text-size-plan.md): the wide (32-bit)
+             * counterpart of Item T44's scalar shift unroll - a
+             * compile-time-constant shift count still went through the
+             * generic runtime bit-loop unconditionally. When insn->src2
+             * resolves to a MIR_CONST in the only meaningful range for
+             * a 32-bit value (0-31; wider counts are undefined
+             * behavior in C and left on the loop path unchanged),
+             * decompose into the same whole-byte-move-plus-bit-remainder
+             * sequence legacy's emit_shift_const_long already uses (see
+             * mir_emit_wide_shift_by_constant above) instead of a
+             * generic per-bit unroll - the count is already known, so
+             * the loop's `ld a,l` (extracting the runtime count from
+             * src2's low byte) and `ld b,a`/`dec b`/`jp` bookkeeping are
+             * unneeded entirely, not just the loop body repetition. A
+             * shift count of 0 collapses to just the two pops that
+             * restore src1 from the stack, with no shift instructions
+             * at all. */
+            const struct MirInsn *count_definition =
+                mir_definition(insn->src2);
+            int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+
+            if (count_definition != NULL &&
+                count_definition->opcode == MIR_CONST &&
+                count_definition->immediate >= 0 &&
+                count_definition->immediate < 32) {
+                long count = count_definition->immediate;
+
+                fputs("\tpop hl\n\tpop de\n", out);
+                mir_emit_wide_shift_by_constant(out,
+                                                 insn->immediate == TOK_SHL,
+                                                 is_unsigned, count);
+            } else {
+                int loop_label = new_label();
+                int done_label = new_label();
+                fputs("\tld a,l\n\tpop hl\n\tpop de\n\tld b,a\n", out);
+                fprintf(out, "L%d:\n\tld a,b\n\tor a\n\tjp z,L%d\n",
+                        loop_label, done_label);
+                if (insn->immediate == TOK_SHL)
+                    fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+                else if (is_unsigned)
+                    fputs("\tsrl d\n\trr e\n\trr h\n\trr l\n", out);
+                else
+                    fputs("\tsra d\n\trr e\n\trr h\n\trr l\n", out);
+                fprintf(out, "\tdec b\n\tjp L%d\nL%d:\n",
+                        loop_label, done_label);
+            }
         }
         return 1;
-    case '*': helper = "__lmul"; break;
+    case '*':
+        {
+            /* Item T46 (mir-text-size-plan.md): ported from
+             * emit_mul_pow2_long_const (dcc_ops.c) - `long_expr *
+             * <compile-time power-of-two constant>` strength-reduces to
+             * a left shift instead of a call to the generic __lmul
+             * runtime helper, reusing mir_emit_wide_shift_by_constant
+             * (Item T45, above). Unlike legacy's AST-level version
+             * (which only ever sees the constant in the syntactic right
+             * operand position), MIR's lowering does not canonicalize
+             * commutative operands - `x * 4L` lowers with the constant
+             * as src2, `4L * x` lowers with the constant as src1 - so
+             * both positions are checked. When src2 is the constant,
+             * DE:HL (already loaded with src2's now-dead value) is
+             * discarded and src1 (the real multiplicand) is restored
+             * from the stack, mirroring Item T45's shift-fix exactly.
+             * When src1 is the constant, DE:HL already holds src2 (the
+             * real multiplicand, loaded most recently) and the dead
+             * constant left on the stack from src1's evaluation is
+             * simply popped off - no register restore needed at all.
+             * Declines (falls through to __lmul) for 0, 1, and any
+             * non-power-of-two multiplier, matching legacy's exact
+             * scope - 0 and 1 are rare enough as literal long
+             * multipliers not to be worth special-casing separately. */
+            const struct MirInsn *src2_definition =
+                mir_definition(insn->src2);
+            const struct MirInsn *src1_definition =
+                mir_definition(insn->src1);
+
+            if (src2_definition != NULL &&
+                src2_definition->opcode == MIR_CONST) {
+                int shift = mir_ulong_log2_pow2(
+                    (unsigned long)src2_definition->immediate);
+                if (shift > 0) {
+                    fputs("\tpop hl\n\tpop de\n", out);
+                    mir_emit_wide_shift_by_constant(out, 1, 1, shift);
+                    return 1;
+                }
+            }
+            if (src1_definition != NULL &&
+                src1_definition->opcode == MIR_CONST) {
+                int shift = mir_ulong_log2_pow2(
+                    (unsigned long)src1_definition->immediate);
+                if (shift > 0) {
+                    fputs("\tpop bc\n\tpop bc\n", out);
+                    mir_emit_wide_shift_by_constant(out, 1, 1, shift);
+                    return 1;
+                }
+            }
+        }
+        helper = "__lmul"; break;
     case '/': helper = (insn->type & TYPE_UNSIGNED) != 0 ? "__ldu" : "__lds"; break;
     case '%': helper = (insn->type & TYPE_UNSIGNED) != 0 ? "__lmu" : "__lms"; break;
     default: return 0;
