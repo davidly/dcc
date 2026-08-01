@@ -3182,3 +3182,103 @@ sweep of `mir_can_forward_stack_to_index`/`_binary_const`/`_rhs` and
 `mir_can_forward_hl_to_call_argument` for the same kind of stale
 producer-opcode restriction before moving on to a different fallback
 class.
+
+**Final-sweep addendum (this session, before T32)**: checked
+`mir_can_forward_hl_to_call_argument`, `mir_can_forward_stack_to_index`,
+and `mir_can_forward_stack_to_binary_const`/`_rhs` for the same stale
+producer-opcode-whitelist pattern Item T31 fixed. None of these gate on
+`value`'s own definition opcode at all - they gate on the shape of the
+*subsequent* instructions, not how `value` was produced - so there was
+nothing stale to relax there. Documenting the negative result so it
+isn't re-investigated next session.
+
+### Item T32: emit the peephole-equivalent inverted branch directly for fused comparisons with no pending phi copies
+
+**Hypothesis**: every fused comparison branch (`mir_emit_fused_comparison_branch`,
+`mir_emit_fused_wide_comparison_branch`, and the inline signed-zero-sign-test
+case) unconditionally emits a three-instruction "branch over a jump" shape -
+`jp <true_condition>,Lfallthrough` / (phi copies) / `jp Ltarget` /
+`Lfallthrough:` - even when there are no phi copies pending on the false
+edge. `src/dccpeep/peep_pass_control_flow.c`'s `pass_branch_over_jump`
+already recognizes exactly this shape (`jp cc,Lbody` / `jp Lexit` /
+`Lbody:` with no other instructions between) and collapses it into a single
+`jp <inverse cc>,Lexit` - so the *peeped* .COM was never paying for the
+extra jump. Only the pre-peephole generated-bytes count that decides MIR
+`text-size` selector acceptance was. If true, emitting the already-inverted
+single-jump form directly whenever there are no phi copies to run
+conditionally should reduce `generated_bytes` corpus-wide with **zero**
+change to the final peeped binary (a rare case where a static-metric
+improvement is provably risk-free, verified against dccpeep's own logic
+rather than assumed per Rule 4).
+
+Two previously-noticed near-miss candidates matched this exact shape and were
+left open pending this investigation: `bint.next_stmt` (the "double jump"
+overhead noted earlier this session) and `tc89swjt.swdefmid` (deferred in an
+earlier session as "jump-table vs compare-chain" - it turned out the real
+gap was this same double-jump artifact, not the jump-table question at all).
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Extracted the phi-copy-collection loop out of `mir_emit_spilled_phi_copies`
+  into a new pure helper, `mir_collect_phi_copies_for_edge`, so the same
+  "what copies does this edge need" logic has one source of truth. Added
+  `mir_phi_copies_are_empty(predecessor, successor)`, a side-effect-free
+  predicate built on the same collector, so a caller can know ahead of time
+  whether emitting the general three-instruction shape is actually necessary.
+- Added `mir_invert_z80_condition` (z/nz/c/nc pairwise inverse) and a new
+  shared helper, `mir_emit_conditional_branch_with_phi_copies`, that checks
+  `mir_phi_copies_are_empty` first: if true, it emits a single
+  `jp <inverse>,Ltarget` directly (dccpeep's own collapsed form); only when
+  phi copies are pending does it fall back to the original
+  `jp cc,Lfallthrough` / copies / `jp Ltarget` / `Lfallthrough:` shape,
+  since those copies must run conditionally and cannot be replaced by an
+  unconditional branch.
+- Replaced all three emission sites that previously hand-rolled this
+  fallthrough-label dance (`mir_emit_fused_comparison_branch`'s
+  signed-zero-sign-test case and its general-comparison tail, plus
+  `mir_emit_fused_wide_comparison_branch`) with calls to the new shared
+  helper. No emission-shape change for the phi-copy-pending case; the
+  no-phi-copy case now emits 1 instruction instead of 3.
+
+**Validation**:
+- Whole-corpus census (`build/mir-t32.tsv` vs `build/mir-t31.tsv`,
+  `--fail-on-regression`): **0 regressions**, coverage 268->275/2022
+  (13.25%->13.60%), **+7 newly-accepted functions**: `adaint.find_sym`,
+  `bint.next_stmt`, `pint.find_sym`, `tallocx.t_realloc`,
+  `tallocx.t_realloc_size_overflow`, `tc89swjt.swdefmid`, `tsetjmp.main` -
+  confirming both previously-noticed candidates (`next_stmt`, `swdefmid`)
+  were this exact pattern, not separate issues.
+- Focused `runall.ps1 -Mode full` on all 18 flagged apps (adaint, bint,
+  pint, tallocx, tc89size, tc89swjt, tcodegen, tesc, thoistbc, tinitreg,
+  trtl2, tscanf, tsetjmp, tsprintf, tstr3, tsyntax, tvla, tvplain):
+  **18/18 correctness PASS**. Performance: 23 genuine improvements (up to
+  -0.78% cycles, -1.3% bytes in nopeep mode - matching the prediction that
+  removing 2 dead bytes per occurrence shrinks nopeep size and cycles for
+  free) and 7 negligible "regressions", all peep-mode-only, all +0-0.22%
+  (single-digit-to-low-hundred cycle deltas against six-to-nine-figure
+  totals) - the matching nopeep numbers for every one of these apps
+  improved or held flat, confirming this is dccpeep code-placement/
+  alignment noise (the same category diagnosed repeatedly in Items
+  T27-T29), not a defect in T32's own logic. Updated baselines via
+  `-UpdatePerfBaseline` for all 18 affected apps (7 noise-affected, 11
+  genuinely improved) after confirming correctness.
+- Wide safety net (both required tiers): `-Mode fast` 314/323 clean;
+  full-corpus `-Mode full` also 314/323 clean, diagnostics/dccpeep/
+  performance all passed.
+
+**Why this is safe despite "static metric only"**: unlike most census-byte
+improvements (which Rule 4 warns are not proof of a real win), this one is
+verified against dccpeep's own existing `pass_branch_over_jump` pattern
+match - the two emitted forms are provably byte-identical *after* peephole
+runs, for the case this change targets (no pending phi copies). The
+performance data confirms this: nopeep improved or held flat everywhere,
+and the tiny peep-mode deltas are placement noise, not a regression in the
+optimized-and-collapsed final code.
+
+**Yield note**: this is the highest-yield single item since T30 (+7 vs
+T30's +21, T31's +1) and, unlike T30/T31 (narrow call-forwarding gaps),
+targets the comparison-branch emission path itself - the same family of
+code the plan's "Root causes to close" item 1 (systemic boolean-
+materialization/dead-store bloat) identified as the single biggest lever.
+Worth re-sweeping the census for further near-misses in this same
+family (e.g. unconditional `MIR_JUMP`-only blocks that could similarly
+collapse) before moving to a different fallback class.

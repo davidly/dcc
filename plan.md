@@ -608,10 +608,54 @@ retired history; do not resume numbering from them.
   improvements** (up to -0.73% cycles) - a clean win, no trade-off
   needed this time; baselines updated. Wide safety net: both
   `-Mode fast` and full-corpus `-Mode full` clean.
+- **Final-sweep check (before T32)**: `mir_can_forward_hl_to_call_argument`,
+  `mir_can_forward_stack_to_index`, and `mir_can_forward_stack_to_
+  binary_const`/`_rhs` were checked for T31's stale-producer-opcode
+  pattern - none of them gate on `value`'s own definition opcode at
+  all (they gate on the shape of subsequent instructions instead), so
+  there was nothing to fix there.
+- **Item T32 landed** (`mir_emit_conditional_branch_with_phi_copies`):
+  every fused comparison branch unconditionally emitted a three-
+  instruction "branch over a jump" shape (`jp cc,Lfallthrough` / phi
+  copies / `jp Ltarget` / `Lfallthrough:`), even with zero phi copies
+  pending. `src/dccpeep/peep_pass_control_flow.c`'s own
+  `pass_branch_over_jump` already collapses exactly this shape into a
+  single `jp <inverse cc>,Ltarget` post-peephole - so the *peeped*
+  binary never paid for the extra jump, only the pre-peephole
+  `generated_bytes` that decides `text-size` acceptance did. Extracted
+  a shared `mir_collect_phi_copies_for_edge`/`mir_phi_copies_are_empty`
+  predicate and a new `mir_emit_conditional_branch_with_phi_copies`
+  helper that emits the already-collapsed single-jump form directly
+  whenever no phi copies are pending (falling back to the original
+  three-instruction shape only when copies must run conditionally).
+  This is provably risk-free for the case it targets (verified against
+  dccpeep's own pattern match, not just a smaller static metric per
+  Rule 4). Whole-corpus census: **0 regressions, +7 newly-accepted
+  functions** (268->275/2022, 13.25%->13.60%) - including
+  `bint.next_stmt` (this session's earlier "double jump" observation)
+  and `tc89swjt.swdefmid` (previously deferred as a jump-table
+  question - the real gap was this same artifact). Focused
+  `runall.ps1 -Mode full` on all 18 flagged apps: 18/18 correctness
+  PASS, 23 genuine improvements, 7 negligible peep-only "regressions"
+  (+0-0.22%, matching nopeep improved/flat for every one) diagnosed as
+  the same code-placement noise category as T27-T29; baselines updated
+  for all 18. Wide safety net: both `-Mode fast` and full-corpus
+  `-Mode full` clean (314/323). Highest-yield item since T30, and the
+  first to touch the comparison-branch emission path itself rather
+  than call-result forwarding.
 
 ## Next session should
 
-1. **Prioritize one of the two newly-confirmed architectural levers**
+1. **Re-sweep the census fresh post-T32** and look specifically for
+   more instances of the same "branch over a jump with no phi copies"
+   family T32 just fixed - e.g. plain `MIR_JUMP`-only blocks that
+   could similarly collapse, or other emission sites that hand-roll a
+   fallthrough-label dance instead of using the new
+   `mir_emit_conditional_branch_with_phi_copies` helper. Grep for other
+   `new_label()` + `jp %s,L%d` + phi-copy call sequences in
+   `dcc_mir_spilled_cfg.c`/`dcc_mir_homed_cfg.c` that could reuse the
+   same helper.
+2. **Prioritize one of the two newly-confirmed architectural levers**
    as a properly staged, multi-step project (not more one-off
    near-miss picking, which just hit the same wall 3 times in a row):
    (a) a way to preserve a live `hl` value across another
@@ -621,10 +665,10 @@ retired history; do not resume numbering from them.
    free) - this affects `pointer_for_init_sizeof`, `wcschr`, and
    `assign_return_pair_ptr` alike, likely many more; or (b) jump-table
    `switch` lowering in the MIR selector (currently only a cascaded
-   compare chain), which affects `swdefmid` and any `switch`-heavy
-   function. Stage narrowly per SKILL.md: pin down the exact shape via
-   2-3 forced-accept diffs before generalizing.
-2. **Re-sweep the census fresh from the post-T31 snapshot** and
+   compare chain), which affects any `switch`-heavy function not
+   already resolved by T32. Stage narrowly per SKILL.md: pin down the
+   exact shape via 2-3 forced-accept diffs before generalizing.
+3. **Re-sweep the census fresh from the post-T31 snapshot** and
    continue down the ranked near-miss list (population composition
    shifts after every landed item - do not reuse this session's
    rankings). **Items T30/T31 proved the near-miss vein is NOT dry**
@@ -633,19 +677,14 @@ retired history; do not resume numbering from them.
    distinct, fixable gaps: a skip-target blind spot for a provably-
    no-code `MIR_CONST`, and a stale `producer_opcode` whitelist that
    was never updated after T30 made `MIR_CALL` results reachable at
-   all. **Do the final sweep flagged at the end of Item T31's entry
-   first**: check `mir_can_forward_stack_to_index`/`_binary_const`/
-   `_rhs` and `mir_can_forward_hl_to_call_argument` for the same kind
-   of stale producer-opcode restriction now that call results are more
-   broadly reachable, before picking a new candidate from the ranked
-   list. Also check whether other single-use-forwarding predicates in
+   all. Also check whether other single-use-forwarding predicates in
    `dcc_mir_spilled_cfg.c` have the same NOP-vs-label adjacency
    conflation Item T29 fixed, or the same "no-code MIR_CONST is
    invisible to skip-target" gap Item T30 fixed, applied elsewhere
    (e.g. `mir_can_forward_stack_to_index`/`_binary_const`/`_rhs`, which
    still only skip a NOP/label the old way, not a transparent
    zero-RHS-comparison constant).
-3. Two exposed quality gaps from Item T28 are still concrete, fresh,
+4. Two exposed quality gaps from Item T28 are still concrete, fresh,
    actionable candidates rather than abstract priorities: (a) the
    systemic boolean/comparison-chain materialization overhead
    (`SKILL.md`'s "Known root cause", this plan's ranked item

@@ -2423,6 +2423,56 @@ static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
 
 static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
                                        int successor);
+static int mir_phi_copies_are_empty(int predecessor, int successor);
+
+static const char *mir_invert_z80_condition(const char *condition)
+{
+    if (strcmp(condition, "z") == 0) return "nz";
+    if (strcmp(condition, "nz") == 0) return "z";
+    if (strcmp(condition, "c") == 0) return "nc";
+    if (strcmp(condition, "nc") == 0) return "c";
+    return NULL;
+}
+
+/* Item T32 (mir-text-size-plan.md): every fused comparison branch below
+ * previously always emitted the three-instruction "branch over a jump"
+ * shape - `jp <true_condition>,Lfallthrough` / (phi copies) /
+ * `jp Ltarget` / `Lfallthrough:` - even when there were no phi copies to
+ * run on the false edge. dccpeep's own pass_branch_over_jump
+ * (peep_pass_control_flow.c) already collapses exactly this shape into a
+ * single `jp <inverse>,Ltarget` whenever the two instructions between the
+ * conditional jump and its target label are just an unconditional jump, so
+ * the peeped .COM was never actually paying for the extra jump - only the
+ * pre-peephole selector-acceptance byte count was. Emitting the already-
+ * collapsed form directly here means the census-visible generated_bytes
+ * (which decide MIR text-size acceptance) match what dccpeep would have
+ * produced anyway, unlocking acceptance for functions that were only over
+ * budget by this redundant jump, with zero change to the final peeped
+ * binary. The three-instruction shape is still required, unchanged, when
+ * there are phi copies pending on the false edge (they must run
+ * conditionally, so they cannot be replaced by a single unconditional
+ * branch to `target`). */
+static int mir_emit_conditional_branch_with_phi_copies(
+    FILE *out, const int *labels, const char *true_condition,
+    int predecessor, int target, int branch_label)
+{
+    int fallthrough_label;
+    const char *inverse;
+
+    if (mir_phi_copies_are_empty(predecessor, target)) {
+        inverse = mir_invert_z80_condition(true_condition);
+        if (inverse != NULL) {
+            fprintf(out, "\tjp %s,L%d\n", inverse, labels[branch_label]);
+            return 1;
+        }
+    }
+    fallthrough_label = new_label();
+    fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
+    if (!mir_emit_spilled_phi_copies(out, predecessor, target))
+        return 0;
+    fprintf(out, "\tjp L%d\nL%d:\n", labels[branch_label], fallthrough_label);
+    return 1;
+}
 
 /* Item 1 (mir-migration-plan-100): when a scalar comparison feeds nothing
  * but the MIR_BRANCH_FALSE that immediately follows it, mir_emit_scalar_compare
@@ -2545,7 +2595,6 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
                                  (int)compare->immediate)
                            : (int)compare->immediate;
     int target;
-    int fallthrough_label;
     const char *true_condition;
 
     if (branch->label < 0 || branch->label >= mir.next_label)
@@ -2569,14 +2618,9 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
          * than falling into the shared switch. */
         fputs("\tbit 7,h\n", out);
         true_condition = operation == '<' ? "nz" : "z";
-        fallthrough_label = new_label();
-        fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
-        if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate,
-                                          target))
-            return 0;
-        fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label],
-                fallthrough_label);
-        return 1;
+        return mir_emit_conditional_branch_with_phi_copies(
+            out, labels, true_condition, compare_index + 1 + negate, target,
+            branch->label);
     } else {
         if (operation == '>' || operation == TOK_LE) {
             fputs("\tex de,hl\n", out);
@@ -2593,12 +2637,9 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
     case '<': true_condition = "c"; break;
     default: true_condition = "nc"; break; /* TOK_GE */
     }
-    fallthrough_label = new_label();
-    fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
-    if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate, target))
-        return 0;
-    fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label], fallthrough_label);
-    return 1;
+    return mir_emit_conditional_branch_with_phi_copies(
+        out, labels, true_condition, compare_index + 1 + negate, target,
+        branch->label);
 }
 
 /* Item T2 (mir-text-size-plan): the 32-bit ("wide") comparison operators
@@ -2621,7 +2662,6 @@ static int mir_emit_fused_wide_comparison_branch(FILE *out, const int *labels,
 {
     const struct MirInsn *branch = &mir.insns[compare_index + 1 + negate];
     int target;
-    int fallthrough_label;
     const char *true_condition;
 
     if (branch->label < 0 || branch->label >= mir.next_label)
@@ -2631,12 +2671,9 @@ static int mir_emit_fused_wide_comparison_branch(FILE *out, const int *labels,
         return 0;
     fputs("\tld a,h\n\tor l\n", out);
     true_condition = negate ? "z" : "nz";
-    fallthrough_label = new_label();
-    fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
-    if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate, target))
-        return 0;
-    fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label], fallthrough_label);
-    return 1;
+    return mir_emit_conditional_branch_with_phi_copies(
+        out, labels, true_condition, compare_index + 1 + negate, target,
+        branch->label);
 }
 
 static void mir_emit_hl_and_const(FILE *out, unsigned int mask)
@@ -2841,16 +2878,20 @@ static int mir_emit_cast(FILE *out, int source_type, int target_type)
     return 1;
 }
 
-static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
-                                       int successor)
+/* Item T32 (mir-text-size-plan.md): mir_emit_fused_comparison_branch and its
+ * wide/sign-test siblings need to know, before committing to an emission
+ * shape, whether a given CFG edge has any phi copies to run at all - see
+ * mir_phi_copies_are_empty below. Both that predicate and
+ * mir_emit_spilled_phi_copies itself now share this single collection
+ * routine so the "what copies does this edge need" logic can never drift
+ * between the two callers. */
+static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
+                                            int *sources, int *destinations)
 {
     int predecessor_label = mir_block_label_before(predecessor);
     int edge_label = -1;
     int instruction = mir_first_nonlabel_successor(successor);
-    int sources[MAX_FLOW];
-    int destinations[MAX_FLOW];
     int copy_count = 0;
-    int copy;
 
     if (predecessor >= 0 && predecessor < mir.count &&
         (mir.insns[predecessor].opcode == MIR_JUMP ||
@@ -2874,14 +2915,43 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
         source = mir_phi_source_for_edge(phi, predecessor_label, edge_label,
                                          successor, instruction);
         if (source < 0)
-            return 0;
-        if (copy_count >= (int)(sizeof(sources) / sizeof(sources[0])))
-            return 0;
+            return -1;
+        if (copy_count >= MAX_FLOW)
+            return -1;
         sources[copy_count] = source;
         destinations[copy_count] = phi->dst;
         ++copy_count;
         ++instruction;
     }
+    return copy_count;
+}
+
+/* Item T32: true only when the edge from `predecessor` to `successor`
+ * definitely has no phi copies to run (a hard-fail collection is treated as
+ * "not provably empty" so the caller falls back to the general path, which
+ * will itself surface the same failure mir_emit_spilled_phi_copies always
+ * has). Callers use this to decide whether a fused comparison branch can
+ * skip straight to a single inverted jump - see
+ * mir_emit_conditional_branch_with_phi_copies. */
+static int mir_phi_copies_are_empty(int predecessor, int successor)
+{
+    int sources[MAX_FLOW];
+    int destinations[MAX_FLOW];
+    return mir_collect_phi_copies_for_edge(predecessor, successor, sources,
+                                            destinations) == 0;
+}
+
+static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
+                                       int successor)
+{
+    int sources[MAX_FLOW];
+    int destinations[MAX_FLOW];
+    int copy_count = mir_collect_phi_copies_for_edge(predecessor, successor,
+                                                      sources, destinations);
+    int copy;
+
+    if (copy_count < 0)
+        return 0;
     /* Item T9 (mir-text-size-plan.md): the general push-all-sources-then-
      * pop-all-destinations-in-reverse shape below exists to let several
      * simultaneous phi copies swap through each other safely (a later
