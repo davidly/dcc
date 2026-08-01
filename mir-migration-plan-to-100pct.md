@@ -2540,3 +2540,87 @@ functions and trace, opcode-by-opcode, exactly which single acceptance
 check each one fails first, to find out whether any two-or-three-opcode
 combination (rather than one at a time) would unlock a meaningful
 cluster.
+
+### Item 25: MIR_CALL_AGGREGATE - deferred (2026, this session)
+
+Investigated implementing `MIR_CALL_AGGREGATE` (struct-by-value
+arguments and returns through calls) as the last remaining opcode gap
+from the original disposable survey. Reviewed
+`mir_try_emit_spilled_scalar_cfg`'s own existing `MIR_CALL_AGGREGATE`
+case (`dcc_mir.c` ~line 10724) in detail: it is substantially larger
+and more intertwined than any address/load/store/copy opcode landed so
+far this session - it must walk backward through the preceding
+`MIR_ARG` chain to reconstruct argument order and types, handle three
+different argument-passing shapes in the same loop (arbitrary-size
+struct arguments via a stack-pointer-adjust-then-byte-copy sequence,
+4-byte wide scalars via `push de`/`push hl` with an `exx`-based caching
+fast path, and plain 2-byte scalars via
+`mir_emit_cached_call_argument`/`mir_emit_rematerialized_argument`
+fallback chains), then separately handle the aggregate *return* value
+across three destination shapes. None of `mir_emit_cached_call_argument`,
+`mir_emit_rematerialized_argument`, or the argument-order/type
+reconstruction scan currently have homed-cfg equivalents; porting this
+faithfully would mean either duplicating a large, correctness-sensitive
+piece of the spilled selector's cached/rematerialized-argument
+machinery into the homed selector (real risk of subtle divergence bugs
+if the two copies drift), or a shared-helper refactor of
+`mir_try_emit_spilled_scalar_cfg` itself (materially larger blast
+radius than every prior item this session).
+
+Before committing to that scope, re-ran the disposable-survey
+instrumentation (per the technique documented in Item 22's entry) fresh
+across the full `tests/*.c` corpus with Items 22-24 landed: it found
+only 2 total `SURVEY-OPCODE callagg` hits and **zero** hits for any
+other previously-unhandled opcode. This confirms the acceptance loop's
+`default:` (truly-unrecognized-opcode) rejection path is now, for all
+practical purposes, closed except for this one opcode.
+
+**Decision: defer, do not implement**, following the same
+"measure real cost/yield before committing scope" discipline as the
+Item 6 and Item C precedents in this plan family. Rationale: (1) yield
+is at most 2 functions in the current corpus, unconfirmed even those 2
+pass every other gate; (2) implementation risk is high relative to
+every other item this session - the first item requiring either
+cached-argument code duplication or a cross-selector refactor; (3) the
+survey confirms no other function is blocked by any opcode-recognition
+gap at all anymore - **the "opcode" fallback-rejection reason is, in
+effect, retired as a lever** for further `homed-scalar-cfg` coverage
+growth in the current corpus, matching Item C's precedent of retiring a
+lever once its yield is shown negligible relative to cost.
+
+**What this confirms about where remaining fallback now lives**: a
+fresh full census after Items 22-24 shows the exact same shape
+SKILL.md's "Known root cause" section already documented: `text-size`
+alone accounts for 1,756 of 1,833 (95.8%) fallback functions, with
+`instruction-count` (43), `inline-substitution` (25), `cfg-backedge`
+(5), `cfg-block-count` (3), and `pointer-array` (1) accounting for the
+rest. No function in the current corpus falls back purely because of
+an unrecognized opcode anymore. This means further single-opcode
+narrow-admit items (of the kind Items 9, 16, 21-24 have been) have
+structurally run out of easy independent yield in the current
+`homed-scalar-cfg` acceptance loop - the systemic `text-size` cost gap
+(already root-caused in SKILL.md as `mir_emit_scalar_compare`'s
+unconditional 0/1 boolean materialization plus a dead-store class
+`dccpeep`'s existing passes don't target) is now the only path to
+material further coverage growth, and is a `spilled-scalar-cfg`
+selector-quality fix, not a `homed-scalar-cfg` acceptance-loop item.
+
+**Validation**: build clean (instrumentation added and reverted;
+`git status --short` clean before and after). No functional code
+change landed with this item - a defer decision, not an implementation,
+so no census/runtime validation applies.
+
+**Next recommended class**: this closes out the "single-opcode
+admission" vein for `homed-scalar-cfg` (Items 9-24). The next
+productive body of work is the systemic `text-size` root cause: fixing
+`mir_emit_scalar_compare` (`dcc_mir.c` ~line 4939) to stop
+unconditionally materializing an explicit 0/1 boolean for every
+comparison whose result only feeds a branch, and/or adding a dead-store
+elimination pass (in `dccpeep` or as a MIR-level pass) for the second,
+never-reloaded store `dccpeep`'s existing same-basic-block redundant-
+reload pass doesn't catch. This is materially larger in scope than any
+single item landed this session (touches the shared
+`spilled-scalar-cfg` selector every fallback function goes through, not
+an isolated new-opcode admit) and should be planned as its own
+dedicated multi-item body of work rather than folded into this
+document's single-opcode vein.
