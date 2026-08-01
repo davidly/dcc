@@ -3845,8 +3845,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int target = mir_find_label(insn->label);
                 if (target < 0 || !mir_emit_spilled_phi_copies(out, i, target))
                     goto done;
+                /* mir-text-size Item T8: a jump whose target label is the
+                 * literal next MIR instruction is a pure fallthrough -
+                 * control already lands there once any phi copies above
+                 * have executed, so the `jp` mnemonic itself is dead
+                 * weight. This mirrors legacy, which never emits a jump
+                 * to the position immediately following it. */
+                if (target != i + 1)
+                    fprintf(out, "\tjp L%d\n", labels[insn->label]);
             }
-            fprintf(out, "\tjp L%d\n", labels[insn->label]);
             break;
         case MIR_BRANCH_FALSE:
             if (insn->label < 0 || insn->label >= mir.next_label)

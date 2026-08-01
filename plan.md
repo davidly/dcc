@@ -23,21 +23,31 @@ retired history; do not resume numbering from them.
   general `mir_try_emit_spilled_scalar_cfg` selector - this remains the
   single biggest unaddressed lever (see `mir-text-size-plan.md`'s "Root
   causes to close" list carried over from this session's plan).
-- Combined byte-sum reduction from this vein's Items T1-T6:
-  -1,542,587 bytes (~18.4%, T1-T4) plus Item T5's aggregate-return
+- Combined byte-sum reduction from this vein's Items T1-T8:
+-1,542,587 bytes (~18.4%, T1-T4) plus Item T5's aggregate-return
   fix (which, uniquely among T1-T5, also moved coverage: +5 functions)
-  plus Item T6's 3 landed struct-copy/assignment `ldir` fixes (0
-  coverage change, byte reduction across the still-fallback
+  plus Item T6's 3 landed struct-copy/assignment `ldir` fixes plus
+  Item T8's jump-to-fallthrough elision (-2,582 bytes across 51
+  functions, 1 genuine real-cycle win on `tdead`) (0 coverage change
+  for T6/T8, byte reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6 had 0 regressions outright). Item T6 also found and
+  diff; T4/T5/T6/T8 had 0 regressions outright). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
   struct-argument-copy) that is provably beneficial in isolation but
   was withheld because it exposes a pre-existing, unrelated Root-Cause-C
   redundant-address-recomputation bug in the one function it currently
   affects (`tsretret.make_normal`) - see `mir-text-size-plan.md`'s
-  Item T6 entry for the full stash-based A/B proof.
+  Item T6 entry for the full stash-based A/B proof. Item T7 (comparison-
+  fusion) was investigated and **deferred without shipping code**: the
+  fusion angle SKILL.md originally flagged is already fully implemented
+  from an earlier phase; the real remaining lever (call-result
+  HL-forwarding) is a previously-identified occupancy-safety hazard
+  (see `mir-migration-plan-100.md` Items 14/16) that this session's own
+  narrow experiment confirmed produces 0 measurable win without
+  stacking a third, independently-risky change - see `mir-text-size-
+  plan.md`'s Item T7 entry for the full rationale.
 - **`src/dcc/dcc_mir.c` has been split into 6 files** (this session):
   `dcc_mir.c` (core: lowering, capture API, CFG/dataflow analysis,
   register allocation), `dcc_mir_emit_common.c` (shared scalar-value
@@ -160,11 +170,23 @@ retired history; do not resume numbering from them.
      `MIR_CALL`/`MIR_CALL_AGGREGATE` struct-argument-copy `ldir` fix
      (see `mir-text-size-plan.md`'s Item T6 entry) as a direct bonus -
      check that first when starting Root Cause C work.
+   - **Item T8 landed** (jump-to-fallthrough elision in the `MIR_JUMP`
+     case of both `dcc_mir_spilled_cfg.c` and `dcc_mir_homed_cfg.c`):
+     0 coverage change, -2,582 bytes across 51 still-fallback
+     candidates, 1 genuine real-cycle win (`tdead`, baseline updated).
+     `gt_block_label`'s gap narrowed from 14 to 5 bytes but didn't
+     flip - it also has a second, separate dead-store bug (a store
+     immediately overwritten across the `goto`) that does NOT appear
+     to be covered by the existing Item 16/17 dead-store-elimination
+     infrastructure; worth investigating why as its own item before
+     assuming that infra is complete.
    - Re-run the full census and re-bucket the `text-size` gap fresh
      before picking each next item; the population shifts as items
      land (this session already caught one stale-ranking trap this
      way - the prior top outlier dropped out of the list entirely
-     after Item T5 landed).
+     after Item T5 landed, and Item T8 shifted 51 more functions'
+     byte counts, e.g. `gt_block_label` and likely the `tvla` trio
+     `vla_sizeof_op_add/mullhs/sub`).
 2. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to

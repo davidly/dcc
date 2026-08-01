@@ -903,3 +903,66 @@ not), independently validate that narrow fix alone, and only then
 reconsider whether call-result forwarding across the resulting wider
 skip window is provably safe - each as its own separately-validated
 item, not a combined one.
+
+## Item T8: unconditional jump to the literal next instruction is never elided (2026-08-01)
+
+**Hypothesis**: a fresh worst-ratio sweep of the whole-corpus
+`text-size` population (looking for near-miss candidates not related
+to Item T7's deferred call-forwarding class) surfaced `tgoto::gt_block_label`
+(`int r; r = 0; goto block; block: { r = 7; } return r;`) at only a
+14-byte gap (223 generated vs. 209 captured). Direct MIR IR inspection
+showed `MIR_JUMP L1` immediately followed by `MIR_LABEL L1` - a
+`goto` whose target is the literal next MIR instruction, i.e. a pure
+fallthrough with nothing between the jump and its target. The `jp
+L1\nL1:\n` pair `mir_try_emit_spilled_scalar_cfg`'s `MIR_JUMP` case
+unconditionally emits is dead weight in this case: legacy never emits
+a jump to the position immediately following it.
+
+**Investigation**: confirmed this isn't specific to `gt_block_label`
+or to `goto` - any straight-line `if` with no `else` whose true-branch
+label happens to land immediately after an unconditional jump (e.g.
+the end of a preceding loop body, a `switch` case falling through to
+the next label, or - as here - a source-level `goto` to the very next
+statement) hits the identical pattern. `MIR_BRANCH_FALSE` already
+avoids the analogous waste via the existing `mir-migration-plan-next200`
+Item 1 fix (probes for phi-copies first and folds to a single
+inverted-condition jump when none exist) - `MIR_JUMP` alone had no
+equivalent check.
+
+**Fix**: in both `dcc_mir_spilled_cfg.c`'s and `dcc_mir_homed_cfg.c`'s
+`MIR_JUMP` case, after resolving the jump's target instruction index
+and emitting any needed phi copies (unchanged), skip emitting the `jp
+Lxxx` line entirely when the target equals the jump's own instruction
+index + 1 - the literal next MIR instruction, meaning control already
+falls through there once the phi copies (if any) have executed.
+
+**Validation**:
+- Whole-corpus census before/after (`--fail-on-regression`): 0
+  regressions, 0 newly/no-longer-emitted (coverage unchanged, 195/2021,
+  9.65% - this item only shrinks bytes, it doesn't flip any additional
+  function to acceptance on its own). 51 apps had census changes
+  (byte-sum -2,582 across the corpus's still-generated candidates);
+  **1 app required runtime validation** (`tdead`, whose already-
+  accepted MIR output changed).
+- Focused `runall.ps1 -Apps tdead -Mode full`: passed, 0 regressions,
+  **1 genuine improvement** (nopeep 35,211 -> 35,201 cycles, -0.03% -
+  a real, if small, win from the shorter code path, not just a static-
+  metric artifact). Accepted via `-UpdatePerfBaseline` for `tdead` only.
+- Wide safety net `runall.ps1 -Mode fast`: 314/323 passed (9 skipped,
+  as usual), 0 failed, diagnostics/dccpeep/performance all passed.
+
+**Outcome**: 0 functions newly accepted this item (195/2021, 9.65%
+unchanged), 0 regressions, 1 genuine (if small) real performance win
+on `tdead`. Byte-sum shrink across 51 still-fallback candidates
+(-2,582 bytes) moves several closer to the `text-size` threshold for a
+future item to flip (e.g. `gt_block_label`'s gap narrowed from 14 to
+5 bytes) - a reusable, low-risk emitter fix (any function whose
+control flow happens to produce a jump-to-fallthrough shape benefits
+automatically), independent of and complementary to the still-deferred
+Item T7 call-forwarding class.
+
+**Next**: re-bucket and re-sweep the worst-ratio list again fresh
+(byte counts shifted for 51 functions this item); `gt_block_label`
+(gap now ~5 bytes) and the `tvla` trio (`vla_sizeof_op_add/mullhs/sub`,
+each ~18-byte gaps before this item) are worth a direct look first, as
+the closest remaining non-Item-T7-class candidates.

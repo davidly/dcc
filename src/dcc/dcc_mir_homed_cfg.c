@@ -570,7 +570,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             target = mir_find_label(insn->label);
             if (target < 0 || !mir_emit_homed_phi_copies(out, i, target))
                 goto done;
-            fprintf(out, "\tjp L%d\n", labels[insn->label]);
+            /* mir-text-size Item T8: same fallthrough-jump elision as the
+             * spilled-scalar-cfg selector - see dcc_mir_spilled_cfg.c's
+             * MIR_JUMP case for the full rationale. */
+            if (target != i + 1)
+                fprintf(out, "\tjp L%d\n", labels[insn->label]);
             break;
         case MIR_BRANCH_FALSE:
             target = mir_find_label(insn->label);
