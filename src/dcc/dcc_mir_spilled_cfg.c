@@ -2951,6 +2951,73 @@ static int mir_ulong_log2_pow2(unsigned long v)
     return n;
 }
 
+/* AND one 16-bit register pair (hi_reg:lo_reg) with a compile-time word
+ * mask in place, without a temporary register pair: a byte that is
+ * all-ones in the mask is left untouched, a byte that is all-zero
+ * collapses to a single immediate load, and anything else gets one
+ * immediate `and`. Ported from emit_and_word_const (dcc_ops.c). */
+static void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
+                                        unsigned int word_mask)
+{
+    unsigned int hib = (word_mask >> 8) & 0xffU;
+    unsigned int lob = word_mask & 0xffU;
+
+    if (word_mask == 0xffffU)
+        return;
+    if (word_mask == 0) {
+        fprintf(out, "\tld %c%c,0\n", hi_reg, lo_reg);
+        return;
+    }
+    if (hib == 0)
+        fprintf(out, "\tld %c,0\n", hi_reg);
+    else if (hib != 0xffU)
+        fprintf(out, "\tld a,%c\n\tand %u\n\tld %c,a\n", hi_reg, hib, hi_reg);
+    if (lob == 0)
+        fprintf(out, "\tld %c,0\n", lo_reg);
+    else if (lob != 0xffU)
+        fprintf(out, "\tld a,%c\n\tand %u\n\tld %c,a\n", lo_reg, lob, lo_reg);
+}
+
+/* Item T47 (mir-text-size-plan.md): AND the DE:HL long value in place with
+ * a compile-time 32-bit mask, byte by byte, instead of the generic
+ * push/pop/ex-de-hl AND dance. Ported from emit_and_long_const
+ * (dcc_ops.c). */
+static void mir_emit_wide_and_constant(FILE *out, unsigned long mask)
+{
+    mir_emit_word_and_constant(out, 'd', 'e',
+                                (unsigned int)((mask >> 16) & 0xffffUL));
+    mir_emit_word_and_constant(out, 'h', 'l', (unsigned int)(mask & 0xffffUL));
+}
+
+/* Checks whether insn (a wide '&') has a MIR_CONST operand and, if so,
+ * emits the byte-wise mask-AND fast path and returns 1. Checks src2
+ * first (the common `x & CONST` shape - DE:HL already holds src2's
+ * now-dead value, discarded via pop hl/pop de to restore src1, the real
+ * lhs, from the stack, mirroring Items T45/T46's identical restore
+ * sequence), then src1 (the `CONST & x` shape MIR does not canonicalize
+ * away - DE:HL already holds src2, the real lhs, needing no restore;
+ * the dead constant pushed for src1 is simply discarded via pop bc/pop
+ * bc). Returns 0 (emits nothing) if neither operand is a compile-time
+ * constant, leaving the caller to fall back to the generic AND path. */
+static int mir_emit_wide_and_constant_fastpath(FILE *out,
+                                                const struct MirInsn *insn)
+{
+    const struct MirInsn *src2_definition = mir_definition(insn->src2);
+    const struct MirInsn *src1_definition = mir_definition(insn->src1);
+
+    if (src2_definition != NULL && src2_definition->opcode == MIR_CONST) {
+        fputs("\tpop hl\n\tpop de\n", out);
+        mir_emit_wide_and_constant(out, (unsigned long)src2_definition->immediate);
+        return 1;
+    }
+    if (src1_definition != NULL && src1_definition->opcode == MIR_CONST) {
+        fputs("\tpop bc\n\tpop bc\n", out);
+        mir_emit_wide_and_constant(out, (unsigned long)src1_definition->immediate);
+        return 1;
+    }
+    return 0;
+}
+
 static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
 {
     const char *helper = NULL;
@@ -3013,6 +3080,15 @@ static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
               "\tld d,b\n\tld e,c\n\tex de,hl\n", out);
         return 1;
     case '&': case '|': case '^':
+        /* Item T47 (mir-text-size-plan.md): `long_expr & <compile-time
+         * constant mask>` skips the generic push/pop/ex-de-hl AND dance
+         * entirely in favor of a byte-wise mask apply, mirroring
+         * legacy's emit_and_long_const. Only '&' is special-cased here,
+         * matching legacy exactly - there is no equivalent OR/XOR
+         * constant-mask optimization in the legacy backend to port. */
+        if (insn->immediate == '&' &&
+            mir_emit_wide_and_constant_fastpath(out, insn))
+            return 1;
         {
             const char *operation = insn->immediate == '&' ? "and" :
                                     insn->immediate == '|' ? "or" : "xor";

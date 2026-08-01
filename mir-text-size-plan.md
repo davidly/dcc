@@ -4424,3 +4424,104 @@ known-but-deferred redundant-load residual already documented for
 Item T44/T45's shift paths, left unfixed here for the same reason
 (keeping this item's blast radius to the `case '*':`/shift-case
 bodies alone, not the shared caller-level operand-loading code).
+
+## Item T47: `long_expr & <compile-time constant mask>` byte-wise strength reduction (2026-08-01)
+
+**Hypothesis**: while searching for a fourth/fifth item to batch
+alongside T45/T46, `dcc_ops.c`'s `emit_and_long_const` (~line 666,
+referenced but not yet ported when the prior item's investigation
+concluded) was confirmed to be a genuine, analogous MIR gap: legacy
+skips the generic push/pop/`ex de,hl` AND dance for `long_expr &
+<compile-time constant mask>` entirely, applying the mask byte by
+byte in place (a byte that is all-ones in the mask is left untouched,
+an all-zero byte collapses to a single immediate load, only a
+genuinely mixed byte needs a real `and`) - this also covers the common
+byte-extraction idiom `(v >> 24) & 0xff`. MIR's `mir_emit_wide_operation`'s
+`case '&':` (shared with `'|'`/`'^'`) has no such special-casing and
+always emits the full 12-instruction generic dance regardless of
+whether either operand is a compile-time constant.
+
+**Scope confirmation**: `dcc_ast_gen_expr.c`'s caller (~line 1178) only
+special-cases `'&'`, not `'|'`/`'^'` - there is no legacy precedent for
+an OR/XOR constant-mask optimization, so this item is scoped to `'&'`
+only, matching legacy's exact coverage rather than speculatively
+generalizing to the other two bitwise operators. As with Item T46,
+MIR's lowering does not canonicalize commutative operands, so both
+`x & CONST` (constant as `src2`) and `CONST & x` (constant as `src1`)
+are handled, even though legacy's AST-level version only ever sees the
+constant in the syntactic right-operand position.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Added `mir_emit_word_and_constant(FILE *out, char hi_reg, char
+  lo_reg, unsigned int word_mask)`: a direct port of
+  `emit_and_word_const`, applied to a 16-bit register pair.
+- Added `mir_emit_wide_and_constant(FILE *out, unsigned long mask)`: a
+  direct port of `emit_and_long_const`, calling the word helper twice
+  (DE for the high word, HL for the low word).
+- Added `mir_emit_wide_and_constant_fastpath(FILE *out, const struct
+  MirInsn *insn)`: checks `mir_definition(insn->src2)` then
+  `mir_definition(insn->src1)` for a `MIR_CONST`; on a match, emits
+  the same restore-then-apply sequence already established by Items
+  T45/T46 (`pop hl; pop de` to discard a dead src2 constant and
+  restore the real src1 from the stack, or `pop bc; pop bc` to
+  discard a dead src1 constant with no restore needed since `DE:HL`
+  already holds the real src2), then calls
+  `mir_emit_wide_and_constant`, and returns 1. Returns 0 (emitting
+  nothing) if neither operand is constant.
+- Wired this into `case '&':` (kept combined with `'|'`/`'^'` in the
+  same case label, per the existing switch structure) via an early
+  `if (insn->immediate == '&' && mir_emit_wide_and_constant_fastpath(...))
+  return 1;` guard before the existing generic AND/OR/XOR body -
+  deliberately avoiding C switch-case fallthrough syntax (not used
+  elsewhere in this style in this file) in favor of an explicit early
+  return, keeping the generic path's code untouched and still shared
+  by `'|'`/`'^'` and any `'&'` that isn't constant-optimizable.
+
+**Validation**:
+- Whole-corpus census (`build/mir-t47.tsv` vs. the T46 baseline,
+  326/2023): `--fail-on-regression` passed clean (exit 0), 0
+  newly-accepted functions, 0 functions returned to fallback (coverage
+  unchanged at 326/2023 = 16.11%), 9 apps showed census metric
+  changes. Direct byte-savings comparison: **10 functions improved
+  across 9 apps** (`tbig`, `tbits32`, `tlong`, `tlongopt`, `tlongreg`,
+  `tmatbit`, `tpromo2`, `tpromo32`, `treg`), **1,082 total
+  generated-bytes saved**, 0 functions regressed.
+- Synthetic `ntvcm`-executed correctness battery (`/tmp/t47test/
+  tt47c.c`, 7 functions): both operand orderings (`x & 0xFF00FF00UL`
+  and `0x00FFFF00UL & x`), a signed mask, an all-zero mask, an
+  all-ones mask (confirming the `word_mask == 0xffff` early-return
+  no-op case), the byte-extraction idiom `(x >> 24) & 0xff`, and a
+  fully mixed (no all-0/all-1 byte) mask to exercise the real-`and`
+  fallback within the byte-wise helper itself. All 7 printed results
+  matched hand-computed expected values exactly. Force-accept-diffed
+  both `uandmask` (`src2`-constant) and `maskuand` (`src1`-constant)
+  directly: both correctly emitted only the two `ld <reg>,0`
+  instructions for the mask's two all-zero bytes (leaving the two
+  all-one bytes untouched) with no `pop bc/ex de,hl` generic dance
+  anywhere in either function body, confirming both fast-path branches
+  fire correctly.
+- Focused `runall.ps1 -Apps tbig,tbits32,tlong,tlongopt,tlongreg,
+  tmatbit,tpromo2,tpromo32,treg -Mode full`: 9/9 passed, 0
+  regressions, 3 real cycle-count improvements (`tmatbit` -0.01%,
+  `treg` -0.07%, `tbig` -0.01%, all peep-mode).
+- Wide safety net, both required tiers: `runall.ps1 -Mode fast` (full
+  323-app corpus) - first run showed a single `tkbd` failure;
+  `tkbd` is a known-flaky, `perf_ignore`-flagged interactive
+  (stdin-driven) app, confirmed unrelated to this change by (a)
+  passing in isolation via `-Apps tkbd -KeepBuild` and (b) a full
+  corpus re-run passing 314/314 clean. `runall.ps1 -Mode full`
+  (peep+nopeep, full corpus) showed the same `tkbd`-only flake on its
+  first run, then passed 314/314 clean on a second full-corpus run -
+  confirming pre-existing flakiness, not a regression caused by this
+  item.
+
+**Disposition**: landed (third item in this batch, alongside T45/T46,
+per the user's "batch 4-5 changes" request). A pure code-generation
+quality improvement (opcode selection for a compile-time-known bitmask
+operand), not a change to any forwarding/eligibility/backend-slot
+predicate - does not fall into this session's demonstrated-fragile
+neighborhood (T41 x2, T43 x1). Deliberately scoped to `'&'` only, with
+no OR/XOR equivalent added, since legacy itself has no such
+optimization to port and inventing an ungrounded generalization would
+violate this plan's discipline of deriving fixes from confirmed
+legacy-vs-MIR asymmetries rather than speculative new patterns.
