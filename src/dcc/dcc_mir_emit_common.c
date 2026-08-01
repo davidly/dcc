@@ -320,6 +320,30 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
         case '+': fputs("\tadd hl,de\n", out); return 1;
         case '-': fputs("\tor a\n\tsbc hl,de\n", out); return 1;
         case '&':
+            {
+                /* Item T48 (mir-text-size-plan.md): `int_expr &
+                 * <compile-time constant>` mirrors legacy's
+                 * emit_and_hl_const via the shared
+                 * mir_emit_word_and_constant helper (Item T47) - a byte
+                 * that is all-ones in the mask is left untouched, an
+                 * all-zero byte collapses to a single immediate load,
+                 * only a genuinely mixed byte needs a real `and`. The
+                 * shared prologue above still unconditionally evaluates
+                 * src2 (the constant) and pushes/pops it through DE -
+                 * that redundant materialization is the same
+                 * deliberately deferred residual already documented for
+                 * the spilled-cfg selector's Items T44-T47, left as-is
+                 * here for the same reason (blast radius). */
+                const struct MirInsn *right_definition =
+                    mir_definition(definition->src2);
+                if (right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST) {
+                    mir_emit_word_and_constant(
+                        out, 'h', 'l',
+                        (unsigned int)(right_definition->immediate & 0xffffL));
+                    return 1;
+                }
+            }
             fputs("\tld a,h\n\tand d\n\tld h,a\n\tld a,l\n\tand e\n\tld l,a\n", out);
             return 1;
         case '|':
@@ -904,8 +928,25 @@ int mir_emit_homed_binary_instruction(FILE *out,
         fputs("\tadd hl,de\n", out);
     else if (insn->immediate == '-')
         fputs("\tor a\n\tsbc hl,de\n", out);
-    else if (insn->immediate == '&')
-        fputs("\tld a,h\n\tand d\n\tld h,a\n\tld a,l\n\tand e\n\tld l,a\n", out);
+    else if (insn->immediate == '&') {
+        /* Item T48 (mir-text-size-plan.md): same byte-skip mask
+         * optimization as the other three scalar/wide '&' call sites
+         * (mir_emit_scalar_value above, and the two dcc_mir_spilled_cfg.c
+         * sites) - this is the homed-scalar-cfg selector's own copy,
+         * needed because it is tried before spilled-scalar-cfg and
+         * so intercepts small straight-line functions like `x & 0xFF`
+         * first. DE already holds right's materialized value from the
+         * unconditional mir_emit_home_to_de call above (that redundant
+         * load is the same deliberately deferred residual already
+         * documented at the other call sites) - only the actual AND
+         * instruction sequence is improved here. */
+        if (right_definition != NULL && right_definition->opcode == MIR_CONST)
+            mir_emit_word_and_constant(
+                out, 'h', 'l',
+                (unsigned int)(right_definition->immediate & 0xffffL));
+        else
+            fputs("\tld a,h\n\tand d\n\tld h,a\n\tld a,l\n\tand e\n\tld l,a\n", out);
+    }
     else if (insn->immediate == '|')
         fputs("\tld a,h\n\tor d\n\tld h,a\n\tld a,l\n\tor e\n\tld l,a\n", out);
     else if (insn->immediate == '^')

@@ -2955,9 +2955,13 @@ static int mir_ulong_log2_pow2(unsigned long v)
  * mask in place, without a temporary register pair: a byte that is
  * all-ones in the mask is left untouched, a byte that is all-zero
  * collapses to a single immediate load, and anything else gets one
- * immediate `and`. Ported from emit_and_word_const (dcc_ops.c). */
-static void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
-                                        unsigned int word_mask)
+ * immediate `and`. Ported from emit_and_word_const (dcc_ops.c). Not
+ * static: also called from dcc_mir_emit_common.c's mir_emit_scalar_value
+ * (Item T48) for the trivial-single-return selector's own scalar '&'
+ * case, mirroring how mir_emit_scalar_shift is already shared between
+ * both files (Item T44). */
+void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
+                                 unsigned int word_mask)
 {
     unsigned int hib = (word_mask >> 8) & 0xffU;
     unsigned int lob = word_mask & 0xffU;
@@ -4505,6 +4509,30 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     right_definition->opcode == MIR_CONST &&
                     mir_mul_const_fast_path_eligible(multiplier, insn->dst)) {
                     mir_emit_mul_hl_const(out, multiplier);
+                    mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+                /* Item T48 (mir-text-size-plan.md): `int_expr &
+                 * <compile-time constant>` (e.g. `sq & 7`, `flags &
+                 * MASK`) - mirrors legacy's emit_and_hl_const, ported
+                 * for the wide path as mir_emit_word_and_constant in
+                 * Item T47 and reused directly here (a scalar is just
+                 * one 16-bit register pair). HL already holds src1's
+                 * real value at this point (either freshly loaded above,
+                 * or itself the constant in the degenerate `const &
+                 * const` case, which is still correct either way) -
+                 * unless stack_forwarded_left is set, in which case HL
+                 * was deliberately left unloaded (the value is still on
+                 * the stack, pending a later pop) and this fast path
+                 * must not run. Matches legacy's exact scope: only the
+                 * constant-as-syntactic-right-operand shape is
+                 * recognized, since that is the only one
+                 * emit_and_hl_const's own caller ever special-cases. */
+                if (insn->immediate == '&' && !stack_forwarded_left &&
+                    right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST) {
+                    mir_emit_word_and_constant(out, 'h', 'l',
+                                                (unsigned int)multiplier);
                     mir_emit_virtual_store(out, insn->dst);
                     break;
                 }

@@ -4525,3 +4525,137 @@ no OR/XOR equivalent added, since legacy itself has no such
 optimization to port and inventing an ungrounded generalization would
 violate this plan's discipline of deriving fixes from confirmed
 legacy-vs-MIR asymmetries rather than speculative new patterns.
+
+### Item T48: scalar (16-bit) `int_expr & <compile-time constant>` byte-wise strength reduction, across all four scalar '&' emission sites
+
+**Hypothesis**: mirroring Item T47's wide (32-bit) fix, the scalar
+(16-bit) `'&'` path should get the same byte-skip optimization ported
+from legacy's `emit_and_hl_const` (`dcc_ast_gen_expr.c` ~1541), reusing
+Item T47's `mir_emit_word_and_constant` helper directly on the H/L
+register pair (a scalar is just one 16-bit register pair, exactly what
+that helper already operates on).
+
+**Discovery: four separate call sites needed the same fix, not one.**
+Unlike T45-T47 (which each needed only one or two call sites), the
+scalar `'&'` operator turned out to be emitted from *four* independent
+code paths, each reached by a different MIR selector for a different
+shape of function, discovered only by testing a real function
+(`andmask` from a synthetic 6-function battery) through the actual
+(non-forced) compilation pipeline and finding the fast path silently
+not firing after each successive fix:
+
+1. `mir_emit_scalar_operation` (`dcc_mir_spilled_cfg.c` ~line 4634,
+   defined ~line 2537) - a low-level "operator only" helper called
+   from the spilled-scalar-cfg selector's generic fallback path (after
+   HL/DE are already loaded). No fast-path check was added here
+   directly; instead, the *caller* (below) already intercepts the
+   `'&'`-with-constant case before this helper is ever reached.
+2. The spilled-scalar-cfg selector's own inline binary-operation
+   caller (`dcc_mir_spilled_cfg.c` ~line 4527, immediately after the
+   pre-existing `'*'`-with-constant fast path) - checks
+   `insn->immediate == '&' && !stack_forwarded_left &&
+   mir_definition(insn->src2)->opcode == MIR_CONST` and calls
+   `mir_emit_word_and_constant(out, 'h', 'l', mask)` directly, `break`-
+   ing before ever reaching call site 1's generic dance. Scoped to the
+   `src2`-constant case only (matching legacy's `emit_and_hl_const`
+   caller, which also only checks the syntactic right operand) -
+   `src1`-as-constant was not attempted here since it would require
+   reordering the pre-existing unconditional `mir_binary_only_constant
+   (insn->src1)` load logic that runs earlier in the same function, a
+   larger and riskier change for comparatively little extra yield.
+3. `mir_emit_scalar_value` (`dcc_mir_emit_common.c` ~line 322) - the
+   recursive-descent value emitter used by `mir_try_emit_scalar_dag`,
+   the trivial-single-expression-return selector. This selector is
+   tried *after* both `mir_try_emit_homed_scalar_cfg` and
+   `mir_try_emit_spilled_scalar_cfg` in `mir_try_emit_z80`'s selector
+   order, so it only matters for shapes those two selectors decline
+   (return type outside `TYPE_INT`/size constraints, etc.) - added the
+   same `mir_definition(definition->src2)->opcode == MIR_CONST` check
+   before the shared prologue's generic AND-dance, calling
+   `mir_emit_word_and_constant` and returning early. The shared
+   prologue (evaluate src1, push, evaluate src2, `ex de,hl`/`pop hl`)
+   still runs unconditionally before this check - the same
+   deliberately deferred redundant-materialization residual already
+   accepted for T45-T47, left as-is here for the same reason (blast
+   radius vs. yield).
+4. `mir_emit_homed_binary_instruction` (`dcc_mir_emit_common.c` ~line
+   874) - the actual function reached first for a trivial one-
+   parameter, straight-line, no-CFG-branch function like `andmask`,
+   since `mir_try_emit_homed_scalar_cfg` is tried *before*
+   `mir_try_emit_spilled_scalar_cfg` in `mir_try_emit_z80`. This is
+   the call site whose absence caused the initial confusion: force-
+   accept-diffing `andmask` after fixing call sites 2 and 3 still
+   showed the old generic `ld de,255 / and d / and e` pattern,
+   because `andmask` is actually routed through the *homed*-scalar-cfg
+   selector, not spilled-scalar-cfg or scalar-dag. Added the same
+   `right_definition->opcode == MIR_CONST` check (the function already
+   computes `right_definition` for its own pre-existing
+   `biased_right_constant` comparison-bias logic, so this is a
+   pre-established, proven-safe pattern in this exact function) before
+   the generic AND-dance body; DE is still unconditionally
+   materialized with the constant beforehand (same deferred residual
+   as elsewhere) but is simply unused when the fast path fires.
+
+**Shared infrastructure change**: `mir_emit_word_and_constant`
+(originally `static` in `dcc_mir_spilled_cfg.c`, added by Item T47)
+was promoted to external linkage and declared in
+`dcc_mir_internal.h`, so call sites 3 and 4 (both in
+`dcc_mir_emit_common.c`) could call it directly instead of duplicating
+its logic - mirroring the existing pattern of `mir_emit_scalar_shift`
+(added by Item T44), which is likewise defined once in
+`dcc_mir_emit_common.c` and shared across both files' selectors.
+
+**Validation**:
+- Whole-corpus census (`build/mir-t48-full.tsv` vs. the T47 baseline,
+  `build/mir-t47-base.tsv`, 326/2023 -> 327/2023): `--fail-on-regression`
+  passed clean (exit 0). **+1 newly-accepted function** (`tchess.
+  file_of`, previously just over the size threshold, tipped over by
+  this item's byte savings), 0 functions returned to fallback, 29 apps
+  showed census metric changes (`a1`, `adaint`, `attnc11`, `cint`,
+  `fint`, `forint`, `pihex`, `pint`, `tarray`, `tatof`, `tbdos`,
+  `tbfinit`, `tbool`, `tbug`, `tcaslv`, `tchess`, `tcpirlp`, `tinline`,
+  `tm`, `tpragstk`, `tpromo2`, `tpromo32`, `tptrcnd`, `tptrrhs`, `trw`,
+  `tstackov`, `tsyntax`, `ttt`, `tvla`).
+- Synthetic `ntvcm`-executed correctness battery (`/tmp/t48test/
+  tt48c.c`, 6 functions: `andmask`/`x & 0xFF`, `andzero`/`x & 0`,
+  `andall`/`x & 0xFFFF`, `andbyteext`/`(x>>8)&0xff`, `andmixed`/`x &
+  0x1234` mixed mask, `uandmask`/unsigned `x & 0x00FF`): all 6 printed
+  results (`34`, `0`, `dead`, `12`, `224`, `cd`) matched hand-computed
+  expected values exactly, confirmed via `printf("%x\n", ...)` against
+  `0x1234`/`0xDEAD`/`0x8765`/`0xABCD` inputs. Force-accept-diffed and
+  natural (non-forced) compilations of every function in the battery
+  directly: `andmask`/`uandmask` correctly collapsed to a single `ld
+  h,0` (mask's high byte all-zero, low byte all-one, left untouched),
+  `andzero` collapsed to `ld hl,0`, `andall` emitted no AND
+  instructions at all (mask `0xFFFF`, both bytes all-one, true no-op),
+  `andbyteext` showed the same `ld h,0` collapse after its shift, and
+  `andmixed` (genuinely mixed-byte mask `0x1234`) correctly still used
+  the generic `and d`/`and e` dance since neither byte is all-0 or
+  all-1 - confirming the fast path fires correctly for all four call
+  sites and the byte-skip logic degrades correctly to the generic path
+  when no byte qualifies for skipping.
+- Focused `runall.ps1 -Apps a1,adaint,attnc11,cint,fint,forint,pihex,
+  pint,tarray,tatof,tbdos,tbfinit,tbool,tbug,tcaslv,tchess,tcpirlp,
+  tinline,tm,tpragstk,tpromo2,tpromo32,tptrcnd,tptrrhs,trw,tstackov,
+  tsyntax,ttt,tvla -Mode full`: 29/29 passed, 0 regressions, 13 real
+  cycle/size improvements (`pihex`, `tbug`, `tbool`, `attnc11` x2,
+  `tcaslv`, `cint` x2, `fint`, `ttt`, `a1`, all peep and/or nopeep
+  mode, ranging -0.02% to -0.58%).
+- Wide safety net, both required tiers: `runall.ps1 -Mode fast` (full
+  323-app corpus) - 314/314 passed clean, no flakes this run.
+  `runall.ps1 -Mode full` (peep+nopeep, full corpus) - 314/314 passed
+  clean, 0 regressions.
+
+**Disposition**: landed. A pure code-generation quality improvement
+(opcode selection for a compile-time-known bitmask operand) applied
+consistently across all four scalar `'&'` emission sites that exist in
+the current selector set - discovering and fixing all four in one
+item, rather than declaring success after the first one or two,
+follows the Item T44 precedent (scalar shift also needed two call
+sites) and this session's `andmask`-driven investigation that
+surfaced sites 3 and 4 specifically because a real function's natural
+(non-forced) compilation was checked end to end rather than trusting
+census/force-accept alone. Does not fall into this session's
+demonstrated-fragile neighborhood (T41 x2, T43 x1) - no forwarding/
+eligibility/backend-slot/phi-copy predicate was touched, only opcode
+selection for an operand already known to be a compile-time constant.
