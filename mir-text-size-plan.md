@@ -4171,3 +4171,106 @@ caught only by real execution testing across *multiple* representative
 shapes, not the one that motivated the change - reinforcing that any
 future attempt here must budget for a multi-shape battery test from
 the start, not just the originating example.
+
+## Item T44: unroll a compile-time-constant-count scalar shift instead of the generic runtime bit-loop (2026-08-02)
+
+**Hypothesis**: `mir_emit_scalar_shift` (`src/dcc/dcc_mir_emit_common.c`)
+always emitted the same generic runtime loop for `TOK_SHL`/`TOK_SHR`
+(`ld b,e / ld a,b / or a / jp z,Lend / Lloop: <shift-body> / djnz
+Lloop / Lend:`), even when the shift amount is a compile-time constant
+(the overwhelmingly common case in real code - `x >> 8`, `x << 1`,
+mask-then-shift idioms, etc.). This is systemically wasteful: the loop
+costs a fixed ~6-byte/~22-T-state setup plus `count * (shift-body +
+2-byte/~13-T-state djnz)`, while a compile-time-known count can simply
+be unrolled into `count` straight-line shift instructions with zero
+setup or per-iteration branch overhead - strictly smaller *and* faster
+for every count in the only meaningful range for a 16-bit value
+(0-15; counts >= 16 are undefined behavior in C and are left
+untouched on the original runtime-loop path). A shift by exactly 8 is
+further collapsible to a single register move (plus zero/sign
+extension of the vacated byte), since shifting a 16-bit value by a
+whole byte is nothing more than relabeling which register holds which
+half.
+
+**Evidence**: found via the far-bucket classifier sampling
+(`tests/tarray.c`'s `aHexWord`, gap=270 bytes: `p = aHexByte(p, (val
+>> 8) & 0xff); p = aHexByte(p, val & 0xff); return p;`). Legacy's own
+backend already recognizes `(val >> 8) & 0xff` as a plain byte move
+(`ld l,h / ld h,0` twice, once for the shift and once for the
+redundant `& 0xff` mask) with no loop at all, while the MIR path
+force-accept-diff showed the full generic loop (`ld de,8 / ld b,e /
+ld a,b / or a / jp z,L61 / L60: srl h / rr l / djnz L60 / L61:`) for
+the exact same shift. Since shift operators appear pervasively
+throughout the corpus (not just in one function or app), this was
+recognized as a likely-systemic, not narrow, opportunity - unlike most
+prior items, whose motivating example was drawn from the far/close
+gap buckets specifically.
+
+**Implementation**: `mir_emit_scalar_shift`'s signature gained a
+fourth parameter, the shift-count operand's own MIR value id, letting
+it call `mir_definition` on that value and check whether it is a
+`MIR_CONST`. When the resolved constant is in `[0,15]`, a new
+`mir_emit_scalar_shift_by_constant` helper emits (a) nothing at all
+for count 0, (b) a single register move (plus
+`mir_emit_signed_byte_extend` for the signed-right-shift case) for
+count 8, or (c) `count` unrolled straight-line shift instructions
+(`add hl,hl` for `TOK_SHL`; `srl h/rr l` or `sra h/rr l` for
+`TOK_SHR`) otherwise. Every other count (unknown at compile time, or
+out of the safe `[0,15]` range) falls through unchanged to the
+original runtime loop. Both call sites (`dcc_mir_spilled_cfg.c`'s
+`mir_emit_scalar_operation`, the primary spilled-cfg selector path,
+and `dcc_mir_emit_common.c`'s `mir_emit_scalar_value`, the
+`mir_try_emit_scalar_dag` trivial-single-return selector) were updated
+to pass their binary instruction's `src2`/`definition->src2` through
+to the new parameter. No change was needed to the surrounding
+const-materialization code that loads the shift count into DE before
+the switch (Item T11) - it still runs unconditionally and is now a
+harmless redundant load in the constant-count case, left as a small
+known follow-up rather than risking a wider change to that shared
+code path in the same item.
+
+**Validation**:
+- Whole-corpus census (`build/mir-t44.tsv` vs. the T42 baseline
+  `build/mir-t42-post.tsv`/`build/mir-t42-verify.tsv`, 325/2023):
+  `--fail-on-regression` passed clean (exit 0), +1 newly-accepted
+  function (`attnc11.elapsed_seconds`, 325→326/2023 = 16.11%), 0
+  functions returned to fallback, 19 apps showed census metric
+  changes (byte-count reductions from the shift fix appearing
+  throughout already-accepted functions, not just the one that newly
+  crossed the acceptance threshold - the same systemic-improvement
+  signature already established for T34-T40).
+- Synthetic `ntvcm`-executed correctness battery
+  (`/tmp/shifttest/tshftc.c`, 10 functions covering: unsigned/signed,
+  SHL/SHR, counts 0/1/4/7/8/15, a masked-shift matching the motivating
+  `aHexWord` shape, and a shift-then-truncate-to-16-bit-overflow case)
+  - every one of the 11 printed results matched hand-computed 16-bit
+  two's-complement expected values exactly.
+- Focused `runall.ps1 -Apps attnc11 -Mode full`: 1/1 passed, 0
+  regressions, 3 improvements (attnc11 peep/nopeep cycles and .COM
+  size all decreased).
+- Wide safety net, both required tiers: `runall.ps1 -Mode fast`
+  (full 323-app corpus) - 314/314 passed, all diagnostics (106) and
+  dccpeep fixtures (17) passed. `runall.ps1 -Mode full` (peep+nopeep,
+  full corpus) - 314/314 passed, all diagnostics and dccpeep fixtures
+  passed, performance check: **0 regressions, 77 improvements**
+  across dozens of apps (`mm`, `attnc11`, `nqueens`, `pihex`, `cint`,
+  `fint`, `tbios` -2.22% bytes, `tbsearch` -0.18% cycles, `a1` -0.15%
+  cycles, `tdivmod`, `texsort`, and many more) - confirming this is a
+  genuinely broad, corpus-wide win exactly as hypothesized, far larger
+  in real impact than the +1 acceptance-count number alone suggests.
+
+**Disposition**: landed. No follow-up risk flags - this is a pure
+code-generation quality improvement (opcode selection for a
+compile-time-known shift count), not a change to any
+forwarding/eligibility/backend-slot predicate, so it does not fall
+into this session's demonstrated-fragile neighborhood (T41 x2, T43
+x1). Known small residual left for a future item: the shift-count
+constant is still redundantly loaded into DE even when the new
+constant-count path makes it unused - skipping that load would need a
+small change to the shared "materialize a constant right-hand operand
+into DE" code in `dcc_mir_spilled_cfg.c`'s `mir_emit_scalar_operation`
+caller, deliberately deferred to keep this item's blast radius to one
+function. The wide (32-bit) shift path
+(`src/dcc/dcc_mir_spilled_cfg.c`'s wide-operation shift case, ~line
+2955) has the identical generic-runtime-loop shape and is a natural
+follow-up (Item T45 candidate) once this item is confirmed stable.

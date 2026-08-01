@@ -2575,7 +2575,8 @@ static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
             const struct MirInsn *left = mir_definition(insn->src1);
             mir_emit_scalar_shift(out, (int)insn->immediate,
                                   left != NULL &&
-                                  (left->type & TYPE_UNSIGNED) != 0);
+                                  (left->type & TYPE_UNSIGNED) != 0,
+                                  insn->src2);
         }
         return 1;
     default:

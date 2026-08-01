@@ -169,11 +169,74 @@ static void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
             end_label, true_label, end_label);
 }
 
-void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned)
+/* Item T44 (mir-text-size-plan.md): a shift whose amount operand is a
+ * compile-time constant previously still went through the same runtime
+ * bit-at-a-time loop as a variable shift count (`ld b,e / ld a,b / or a /
+ * jp z,Lend / Lloop: srl h/rr l (or add hl,hl) / djnz Lloop / Lend:`),
+ * even though the exact iteration count is already known at code-
+ * generation time. Found via tests/tarray.c's aHexWord(), where legacy
+ * recognizes `(val >> 8) & 0xff` as nothing more than a byte move (the
+ * high byte of a 16-bit value moved into the low byte, high byte
+ * zeroed) while the MIR path paid for the full generic loop (6-byte
+ * setup plus one djnz-guarded iteration) for every shift whose count
+ * happens to be a literal in the source.
+ *
+ * For any shift count known to be in [0,15] (the only meaningful range
+ * for a 16-bit value - counts >= 16 are undefined behavior in C and are
+ * left on the unmodified runtime-loop path below, matching prior
+ * behavior exactly), unrolling into that many straight-line shift
+ * instructions is *always* smaller AND faster than the loop: the loop
+ * costs a 6-byte/~22-T-state setup plus count * (shift-body + 2-byte/
+ * ~13-T-state djnz), while unrolling costs only count * shift-body with
+ * no setup or per-iteration branch overhead at all. A shift by exactly
+ * 8 is further special-cased as a single register move (plus zero/sign
+ * extension of the vacated byte), mirroring legacy's recognition of
+ * this exact shape. */
+static void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
+                                              int is_unsigned, long count)
 {
-    int loop_label = new_label();
-    int end_label = new_label();
+    long i;
 
+    if (count == 0)
+        return;
+    if (count == 8) {
+        if (operation == TOK_SHL) {
+            fputs("\tld h,l\n\tld l,0\n", out);
+        } else if (is_unsigned) {
+            fputs("\tld l,h\n\tld h,0\n", out);
+        } else {
+            fputs("\tld l,h\n", out);
+            mir_emit_signed_byte_extend(out);
+        }
+        return;
+    }
+    for (i = 0; i < count; ++i) {
+        if (operation == TOK_SHL)
+            fputs("\tadd hl,hl\n", out);
+        else if (is_unsigned)
+            fputs("\tsrl h\n\trr l\n", out);
+        else
+            fputs("\tsra h\n\trr l\n", out);
+    }
+}
+
+void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned,
+                           int count_value)
+{
+    const struct MirInsn *count_definition = mir_definition(count_value);
+    int loop_label;
+    int end_label;
+
+    if (count_definition != NULL && count_definition->opcode == MIR_CONST) {
+        long count = count_definition->immediate & 0xffffL;
+        if (count < 16) {
+            mir_emit_scalar_shift_by_constant(out, operation, is_unsigned,
+                                              count);
+            return;
+        }
+    }
+    loop_label = new_label();
+    end_label = new_label();
     fputs("\tld b,e\n\tld a,b\n\tor a\n", out);
     fprintf(out, "\tjp z,L%d\nL%d:\n", end_label, loop_label);
     if (operation == TOK_SHL)
@@ -295,7 +358,8 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
                 const struct MirInsn *left = mir_definition(definition->src1);
                 mir_emit_scalar_shift(out, (int)definition->immediate,
                                       left != NULL &&
-                                      (left->type & TYPE_UNSIGNED) != 0);
+                                      (left->type & TYPE_UNSIGNED) != 0,
+                                      definition->src2);
             }
             return 1;
         default:
