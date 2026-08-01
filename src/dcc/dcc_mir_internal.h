@@ -1,0 +1,335 @@
+#ifndef DCC_MIR_INTERNAL_H
+#define DCC_MIR_INTERNAL_H
+
+/* Internal MIR module header: shared IR types, global compiler state,
+ * and prototypes for helpers that cross the dcc_mir_*.c file split.
+ * Not part of the public dcc_mir.h API - only the dcc_mir_*.c
+ * translation units that implement the MIR backend include this.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "dcc.h"
+#include "dcc_ast.h"
+#include "dcc_mir.h"
+
+#define MIR_AGGREGATE_FORWARD_OFFSET (-32768L)
+#define MIR_AGGREGATE_VALUE_DEST_OFFSET (-32767L)
+#define MIR_AGGREGATE_GLOBAL_DEST_OFFSET (-32766L)
+#define MIR_MAX_ROLLOUT_INSNS 4096
+
+enum MirOpcode {
+    MIR_NOP,
+    MIR_PARAM,
+    MIR_CONST,
+    MIR_FLOAT_CONST,
+    MIR_STRING_ADDRESS,
+    MIR_ADDRESS,
+    MIR_COMPOUND_ADDRESS,
+    MIR_INDEX_ADDRESS,
+    MIR_MEMBER_ADDRESS,
+    MIR_VLA_SIZE,
+    MIR_LOAD,
+    MIR_LOAD_INDIRECT,
+    MIR_INDEX_LOAD,
+    MIR_STORE,
+    MIR_STORE_INDIRECT,
+    MIR_COPY_AGGREGATE,
+    MIR_VLA_SAVE,
+    MIR_VLA_ALLOC,
+    MIR_VLA_RESTORE,
+    MIR_UNARY,
+    MIR_BINARY,
+    MIR_ARG,
+    MIR_CALL,
+    MIR_CALL_AGGREGATE,
+    MIR_VA_START,
+    MIR_VA_END,
+    MIR_VA_ARG,
+    MIR_LABEL,
+    MIR_JUMP,
+    MIR_BRANCH_FALSE,
+    MIR_DECL_PLACEHOLDER,
+    MIR_OBJECT_MERGE,
+    MIR_PHI,
+    MIR_RETURN,
+    MIR_OPAQUE
+};
+
+struct MirInsn {
+    int opcode;
+    int dst;
+    int src1;
+    int src2;
+    int type;
+    long immediate;
+    int label;
+    int phi_pred1;
+    int phi_pred2;
+    int successors[2];
+    int successor_count;
+    int object;
+    int memory_size;
+    int memory_flags;
+    int bit_width;
+    int bit_shift;
+    unsigned int bit_mask;
+    int secondary_offset;
+    char name[64];
+    char base_name[64];
+};
+
+struct MirObject {
+    char name[64];
+    int storage;
+    int type;
+    int offset;
+    int entry_value;
+};
+
+struct MirSwitchContext {
+    long values[MAX_SWITCH_CASES];
+    int labels[MAX_SWITCH_CASES];
+    int count;
+    int default_label;
+    int end_label;
+};
+
+struct MirFunction {
+    struct MirInsn *insns;
+    int count;
+    int capacity;
+    int next_value;
+    int next_label;
+    int next_call_id;
+    int active;
+    int sink_purpose;
+    int break_labels[MAX_FLOW];
+    int continue_labels[MAX_FLOW];
+    int flow_depth;
+    int has_vla;
+    int has_runtime_stride_param;
+    int is_variadic_function;
+    char user_label_names[256][64];
+    int user_label_ids[256];
+    int user_label_count;
+    struct MirSwitchContext switches[MAX_FLOW];
+    int switch_depth;
+    int declaration_placeholders[1024];
+    int declaration_scope_ends[1024];
+    const struct AstNode *declaration_nodes[1024];
+    unsigned char declaration_consumed[1024];
+    int declaration_count;
+    int declaration_cursor;
+    int declaration_capture_start;
+    int declaration_placeholder;
+    int declaration_active_index;
+    int declaration_active;
+    int compound_capture_starts[MAX_FLOW];
+    int compound_depth;
+    int scope_points[1024];
+    int scope_count;
+    int scope_cursor;
+    int scope_replay_points[MAX_FLOW];
+    int scope_replay_depth;
+    int flow_points[1024];
+    int flow_count;
+    int flow_cursor;
+    int flow_replay_point;
+    int flow_replay_active;
+    char label_replay_name[64];
+    int label_replay_active;
+    int emit_mode;
+    int report_mode;
+    int return_type;
+    int local_bytes;
+    int aggregate_temp_bytes;
+    int opaque_count;
+    int *allocation_colors;
+    int *allocation_spills;
+    int allocation_capacity;
+    int allocation_spill_count;
+    /* Retained past mir_verify_and_dump()'s own scope (Item 20d,
+     * mir-migration-plan-to-100pct.md) so a selector's acceptance probe
+     * (e.g. mir_try_emit_homed_scalar_cfg's wide-value re-coloring check)
+     * can re-run mir_allocate_registers with different parameters using
+     * the exact same liveness data verification already computed, without
+     * duplicating the dataflow fixed-point loop. Freed once per function in
+     * mir_end_function(), after every selector has had a chance to run. */
+    unsigned char *live_in;
+    unsigned char *live_out;
+    int *backend_slots;
+    int backend_slot_capacity;
+    int backend_slot_count;
+    FILE *capture_stream;
+    EmitSink saved_sink;
+    struct MirObject objects[256];
+    int object_count;
+    char declared_names[MAX_LOCALS][64];
+    int declared_types[MAX_LOCALS];
+    int declared_storage[MAX_LOCALS];
+    int declared_offsets[MAX_LOCALS];
+    int declared_sizes[MAX_LOCALS];
+    int declared_dim_counts[MAX_LOCALS];
+    int declared_dims[MAX_LOCALS][MAX_ARRAY_DIMS];
+    char declared_link_names[MAX_LOCALS][64];
+    int declared_elem_sizes[MAX_LOCALS];
+    int declared_vla_size_offsets[MAX_LOCALS];
+    int declared_is_vla[MAX_LOCALS];
+    int declared_is_array[MAX_LOCALS];
+    int declared_dynamic_strides[MAX_LOCALS];
+    char declared_runtime_stride_names[MAX_LOCALS][64];
+    int declared_is_const[MAX_LOCALS];
+    unsigned long declared_const_values[MAX_LOCALS];
+    int declared_is_funcptr[MAX_LOCALS];
+    int declared_has_proto[MAX_LOCALS];
+    int declared_proto_nargs[MAX_LOCALS];
+    int declared_proto_types[MAX_LOCALS][MAX_PROTO_PARAMS];
+    int declared_count;
+    char alias_source_names[MAX_LOCALS][64];
+    char alias_internal_names[MAX_LOCALS][64];
+    int alias_declaration_indices[MAX_LOCALS];
+    int alias_count;
+    struct Sym *initializer_target;
+    int initializer_capture_start;
+    struct Sym *init_expression_target;
+    int init_expression_offset;
+    int init_expression_type;
+    struct Sym *vla_target;
+    int vla_capture_start;
+    char name[64];
+};
+
+enum MirPhysicalColor {
+    MIR_COLOR_HL,
+    MIR_COLOR_DE,
+    MIR_COLOR_BC,
+    MIR_COLOR_IY,
+    /* Reserved for a future value-width (4-byte) allocator extension
+     * (mir-migration-plan-to-100pct.md Item 20): a wide value would occupy
+     * two adjacent single-register-pair slots simultaneously. Never
+     * assigned by mir_allocate_registers today - MIR_COLOR_COUNT below,
+     * and every array indexed directly by an allocation_colors value (the
+     * MirAllocationSummary.colors[] field and the DCC_MIR_REPORT "homes"
+     * printer), is sized to tolerate these codes so that a later patch can
+     * introduce them without an audit of every consumer. */
+    MIR_COLOR_HL_DE,
+    MIR_COLOR_BC_IY,
+    MIR_COLOR_COUNT
+};
+
+extern struct MirFunction mir;
+extern int mir_virtual_iy_base;
+extern int mir_virtual_iy_frame_bytes;
+extern int mir_emit_instruction_index;
+extern int mir_forwarded_hl_value;
+extern int mir_forwarded_hl_instruction;
+extern int mir_forwarded_stack_value;
+extern int mir_forwarded_stack_instruction;
+extern int mir_cached_call_value;
+extern int mir_cached_call_instruction;
+extern int mir_cached_wide_call_value;
+extern int mir_cached_wide_call_instruction;
+
+/* Cross-file helper prototypes (defined in exactly one dcc_mir_*.c file,
+ * used from at least one other). */
+int mir_affine_value(int value, const struct MirInsn **parameter,
+                            long *constant, int depth);
+int mir_block_label_before(int instruction);
+int mir_call_is_bdos_family_fastcall(int call_index,
+                                           const char **rtl_name,
+                                           int *fn_value, int *dearg_value);
+int mir_call_is_de_hl_fastcall(int call_index, const char **rtl_name,
+                                     int *arg0_value, int *arg1_value);
+int mir_call_is_memchr_fastcall(int call_index, int *s_value,
+                                      int *c_value, int *n_value);
+int mir_call_is_memcmp_fastcall(int call_index, int *s1_value,
+                                       int *s2_value, int *n_value);
+int mir_call_is_memcpy_fastcall(int call_index, int *dst_value,
+                                      int *src_value, int *n_value);
+int mir_call_is_memset_fastcall(int call_index, int *dest_value,
+                                       int *fill_value, int *count_value);
+int mir_call_is_strchr_fastcall(int call_index, int *s_value,
+                                      int *c_value);
+int mir_call_is_strlen_fastcall(int call_index, int *s_value);
+int mir_call_is_strrchr_fastcall(int call_index, int *s_value,
+                                       int *c_value);
+int mir_call_uses_value(const struct MirInsn *call, int value);
+int mir_compare_definition_for_branch(int instruction);
+int mir_current_frame_bytes(void);
+int mir_declared_is_vla_object(const char *name);
+const char *mir_declared_link_name(const char *name);
+int mir_declared_location(const char *name, int *type, int *storage,
+                                 int *offset);
+int mir_direct_branch_for_comparison(int instruction);
+int mir_edge_phi_names_predecessor(int predecessor, int successor);
+int mir_emit_constant_to_home(FILE *out, int value, long immediate);
+int mir_emit_hl_to_home(FILE *out, int value);
+void mir_emit_home_epilogue(FILE *out, int uses_iy);
+void mir_emit_home_prologue(FILE *out, int uses_iy);
+int mir_emit_home_push(FILE *out, int value);
+int mir_emit_home_to_hl(FILE *out, int value);
+int mir_emit_homed_binary_instruction(FILE *out,
+                                             const struct MirInsn *insn,
+                                             int allow_comparison);
+int mir_emit_homed_compare_false(FILE *out,
+                                        const struct MirInsn *compare,
+                                        int false_label);
+int mir_emit_homed_phi_copies(FILE *out, int predecessor,
+                                     int successor);
+int mir_emit_homed_unary_instruction(FILE *out,
+                                            const struct MirInsn *insn);
+int mir_emit_ix_offset_address_to_home(FILE *out, int value,
+                                               int offset);
+void mir_emit_iy_prologue(FILE *out);
+int mir_emit_label_address_to_home(FILE *out, int value,
+                                           const char *assembly_name);
+int mir_emit_load_param(FILE *out, const struct MirInsn *param);
+int mir_emit_load_param_de(FILE *out, const struct MirInsn *param);
+int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
+                                                    int base, long offset);
+void mir_emit_prologue(FILE *out);
+void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned);
+void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned);
+int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset);
+int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate);
+int mir_emit_wide_home_to_hl_de(FILE *out, int value);
+int mir_emit_word_param_to_home(FILE *out, int value, int offset);
+int mir_find_label(int label);
+int mir_first_nonlabel_successor(int successor);
+int mir_fold_constant_binary(int op, long left, long right,
+                                    int operand_type, long *result);
+int mir_fold_constant_compare(int op, long left, long right,
+                                     int operand_type, long *result);
+int mir_general_comparison_count(void);
+int mir_home_color_live_across(int instruction, int color);
+int mir_home_uses_iy(void);
+int mir_object_is_fully_promoted(int object);
+const char *mir_opcode_name(int opcode);
+int mir_phi_source_for_edge(const struct MirInsn *phi,
+                                   int predecessor_label, int edge_label,
+                                   int successor, int phi_instruction);
+int mir_probe_wide_colors_for_homed(void);
+void mir_resolve_deferred_metadata(void);
+int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
+                                      int *storage, int *offset);
+const char *mir_sink_name(int purpose);
+void mir_thread_jumps(void);
+int mir_try_emit_homed_scalar_cfg(FILE *out);
+int mir_try_emit_homed_scalar_dag(FILE *out);
+int mir_try_emit_scalar_dag(FILE *out);
+int mir_try_emit_spilled_scalar_cfg(FILE *out);
+int mir_value_has_use(int value);
+int mir_value_has_use_after(int value, int instruction);
+int mir_value_use_count(int value);
+int mir_verify_and_dump(void);
+const struct MirInsn *mir_definition(int value);
+struct MirInsn *mir_mutable_definition(int value);
+int mir_load_is_single_call_argument(int value, int size);
+void mir_emit_virtual_load(FILE *out, int value);
+int mir_value_is_wide(int value);
+int mir_value_is_selfstore_incdec(int value);
+extern long mir_spilled_scalar_cfg_elided_epilogue_bytes;
+
+#endif /* DCC_MIR_INTERNAL_H */
