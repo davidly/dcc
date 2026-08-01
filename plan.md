@@ -81,9 +81,14 @@ retired history; do not resume numbering from them.
   fixed-stride constant index no longer forces its own dead
   materialization; 0 coverage change, -23,622 bytes across 250
   functions, **145 apps with byte changes** - the broadest census
-  footprint of any item this session; also surveyed and deferred an
-  analogous gap in `dcc_mir_homed_cfg.c`'s `MIR_CONST` case as a
-  likely Item T19)
+  footprint of any item this session)
+  plus Item T19's port of that same predicate into
+  `dcc_mir_homed_cfg.c`'s own `MIR_CONST` case (confirming the same
+  dead-index-constant class exists in both selectors that implement
+  `MIR_INDEX_ADDRESS`'s constant-index fast path; 0 coverage change,
+  -171 bytes/19 instructions, only 1 app affected - homed-cfg's
+  smaller population and stricter surrounding acceptance rules make
+  this shape much rarer there)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
@@ -346,24 +351,31 @@ retired history; do not resume numbering from them.
   case has no dead-value check at all) - **deferred as a likely Item
   T19** (separate translation unit, smaller population, one-concept-
   per-commit discipline) rather than folded into this commit.
+- **Item T19**: ported Item T18's `mir_index_only_constant` predicate
+  into `dcc_mir_homed_cfg.c`'s own `MIR_CONST` case as a static
+  duplicate (separate translation unit - no shared symbol without a
+  header declaration, not worth it for one small predicate).
+  Confirms the dead-index-constant class is genuine and shared by
+  both selectors implementing `MIR_INDEX_ADDRESS`'s constant-index
+  fast path. **0 coverage change** (220/2022 held), 0 regressions,
+  **only 1 app affected** (`tc99init.main`: -171 bytes, -19
+  instructions, still fallback) - far narrower than T18's 145 apps,
+  since homed-cfg's stricter surrounding acceptance rules (no
+  aggregates, restricted indirect load/store shapes, etc.) mean far
+  fewer functions reach this shape to begin with. Focused
+  `runall.ps1 -Apps tc99init -Mode full`: PASS, 0 regressions, no
+  baseline changes needed. Wide `-Mode fast` safety net (323 apps):
+  314/314 clean, diagnostics/dccpeep clean. Milestone-tier full not
+  required given the narrow 1-app blast radius (no coverage jump, no
+  semantic gate removed, no shared ABI/runtime touched).
 
 ## Next session should
 
 1. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
-   - **Item T19 candidate is ready to pick up**: mirror Item T18's
-     `mir_index_only_constant` dead-constant-elision fix in
-     `dcc_mir_homed_cfg.c`'s `MIR_CONST` case (`mir_emit_constant_to_home`'s
-     caller currently has no dead-value check at all). Smaller
-     population (149 functions total use this selector) but a
-     confirmed, real, distinct gap - implement, validate, document as
-     its own item rather than piggybacking on T18's commit.
-   - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
-     in an earlier migration phase) - do not re-attempt it; Item T7
-     confirmed `check_s`'s boolean is already fully elided.
-   - **Re-sweep the worst-ratio/bucket list fresh post-T18** before
-     picking the next candidate. Census snapshot: `/tmp/census-post-t18.tsv`.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T19** before
+     picking the next candidate. Census snapshot: `/tmp/census-post-t19.tsv`.
      `MIR_BINARY`'s operand-adjacency forwarding now covers both
      src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
      (T16), **for both plain arithmetic and fusable comparisons**
@@ -371,6 +383,9 @@ retired history; do not resume numbering from them.
      non-constant/computed simultaneously (needs tracking two pending
      forwarded values at once - not attempted, revisit only with
      evidence it's material).
+   - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
+     in an earlier migration phase) - do not re-attempt it; Item T7
+     confirmed `check_s`'s boolean is already fully elided.
    - **`wumpus::pact` is now blocked solely by the `cfg-backedge`
      migration boundary** (a deliberate barrier, not a bug) - worth
      revisiting as its own future item once enough non-loop

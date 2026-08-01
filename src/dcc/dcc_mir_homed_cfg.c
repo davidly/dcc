@@ -13,6 +13,40 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+/* mir-text-size Item T19: this selector's own MIR_INDEX_ADDRESS acceptance
+ * (Item 22, below) already restricts to the fixed-stride, constant-index
+ * shape only (insn->base_name[0] == 0, index_definition->opcode ==
+ * MIR_CONST) - and emission (mir_emit_pointer_offset_address_to_home,
+ * dcc_mir_emit_common.c) folds the byte offset entirely at compile time,
+ * exactly like dcc_mir_spilled_cfg.c's own constant-index fast path, and
+ * likewise never reads the index constant's own runtime value. A
+ * MIR_CONST whose sole use is exactly this shape is therefore just as
+ * dead here as Item T18 found it to be in the spilled-scalar-cfg
+ * selector - this is the same predicate, ported to this file's own MIR
+ * instruction table (a static duplicate rather than a shared symbol,
+ * since dcc_mir_spilled_cfg.c and dcc_mir_homed_cfg.c are separate
+ * translation units - see dcc_mir_internal.h). */
+static int mir_index_only_constant(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int match_count = 0;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_CONST)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode == MIR_INDEX_ADDRESS && insn->src2 == value &&
+            insn->base_name[0] == 0) {
+            ++match_count;
+            continue;
+        }
+        if (insn->src1 == value || insn->src2 == value)
+            return 0;
+    }
+    return match_count == 1;
+}
+
 int mir_try_emit_homed_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -550,6 +584,14 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 goto done;
             break;
         case MIR_CONST:
+            /* mir-text-size Item T19: skip materializing a constant whose
+             * sole use is the dead index-address shape described above
+             * mir_index_only_constant's definition. Mirrors MIR_UNARY's
+             * own dead-result skip just below (Item T12) and
+             * dcc_mir_spilled_cfg.c's identical MIR_CONST check (Item
+             * T18). */
+            if (mir_index_only_constant(insn->dst))
+                break;
             /* Item 20d: dst may be wide (long) only if mir_probe_wide_
              * colors_for_homed accepted this function - dispatch on the
              * value's own type rather than a separate has_wide flag so
