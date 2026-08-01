@@ -17,6 +17,7 @@
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
+static int mir_value_is_selfstore_incdec_source(int value);
 
 static int mir_virtual_offset(int value)
 {
@@ -205,13 +206,29 @@ static int mir_can_forward_hl_to_next(int value)
              * other producer here needs: the value sits in HL right after
              * the call returns, and the store's own address computation
              * below is a fixed ix-relative offset unaffected by whatever
-             * else the call clobbered. */
+             * else the call clobbered.
+             *
+             * Item T37 (mir-text-size-plan.md): MIR_ADDRESS was missing
+             * from this same whitelist for the same reason - not a
+             * deliberate exclusion, just never added. A MIR_ADDRESS result
+             * (a local/global's own address, e.g. `int *p = &x;`) is a pure,
+             * side-effect-free computation exactly like MIR_CONST - its
+             * value sits in HL right after computing it, and nothing about
+             * the following store's own fixed ix-relative destination
+             * offset depends on how the stored value was produced. Found
+             * via a forced-accept diff on tmirfast.c's inc_observe (`int
+             * *p = &x;`), which crossed the text-size acceptance threshold
+             * as a side effect of Item T36 and exposed a real (not just
+             * static-metric) cycle-count regression from this exact dead
+             * round trip - store-to-temp-slot, reload, store-to-p's-real-
+             * slot - for &x's address. */
             if (mir_object_is_fully_promoted(next->object) ||
                 (producer_opcode != MIR_LOAD_INDIRECT &&
                  producer_opcode != MIR_BINARY &&
                  producer_opcode != MIR_UNARY &&
                  producer_opcode != MIR_CONST &&
-                 producer_opcode != MIR_CALL) ||
+                 producer_opcode != MIR_CALL &&
+                 producer_opcode != MIR_ADDRESS) ||
                 !mir_scalar_memory_location(next, &memory_type,
                                             &memory_storage, &memory_offset) ||
                 type_is_struct_object(memory_type) ||
@@ -1811,6 +1828,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_multiply_by_small_constant(value) ||
                                         (fused_away != NULL && fused_away[value]) ||
                                         mir_value_is_selfstore_incdec(value) ||
+                                        mir_value_is_selfstore_incdec_source(value) ||
                                         ((type_size(definition->type) == 2 ||
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
@@ -3067,13 +3085,27 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
  * out of scope for this item, left for a future extension since they
  * need their own byte-width-specific carry-chain shape).
  *
+ * Item T36 (mir-text-size-plan.md): emit_incdec_sym_direct also has a
+ * separate, simpler fast path for a non-pointer 16-bit *global* (or
+ * extern) - is_global_word_sym(s) - "ld hl,(name) / inc-or-dec hl /
+ * ld (name),hl", since inc/dec hl is an atomic 16-bit operation with no
+ * byte-pair carry chain to worry about (unlike the frame-relative form,
+ * which must ripple a carry from the low byte into a separate high-byte
+ * "inc (ix+n+1)"). Item 31 only ever mirrored the local/parameter half of
+ * emit_incdec_sym_direct - this extends the same predicate to recognize
+ * the global/extern case too, confirmed via forced-accept-diff on
+ * t2darr.c's check() (a `static int failures; ...; failures++;` pattern)
+ * that legacy already takes this fast path (3 instructions) while MIR
+ * fell back to a full load/push/pop/add/store round trip (7
+ * instructions) for the identical global increment.
+ *
  * Returns 1 and sets *store_index to the sole store instruction re-writing
  * the result back to the same frame slot iff every one of the following
  * holds: the operator is '+' or '-' against the exact constant 1; the
- * left operand's value is bound to a 16-bit non-pointer local/parameter
- * memory location; and the result value (insn->dst) has exactly one use
- * anywhere in the function, which is a plain MIR_STORE writing to that
- * identical memory location.
+ * left operand's value is bound to a 16-bit non-pointer local/parameter/
+ * global/extern memory location; and the result value (insn->dst) has
+ * exactly one use anywhere in the function, which is a plain MIR_STORE
+ * writing to that identical memory location.
  *
  * Note on scope: within a single basic block, or across a loop-carrying
  * PHI merge, any later reference to the same source variable reuses this
@@ -3113,7 +3145,8 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
     if (left_definition == NULL ||
         !mir_scalar_memory_location(left_definition, &memory_type,
                                     &memory_storage, &memory_offset) ||
-        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
+         memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN) ||
         type_ptr_depth(memory_type) > 0 || type_size(memory_type) != 2)
         return 0;
     for (scan = 0; scan < mir.count; ++scan) {
@@ -3149,6 +3182,49 @@ int mir_value_is_selfstore_incdec(int value)
                                           &store_index);
 }
 
+/* Item T36 (mir-text-size-plan.md): true iff `value`'s sole use anywhere
+ * in the function is as the left (src1) operand of a MIR_BINARY that
+ * itself qualifies as a fused selfstore increment/decrement
+ * (mir_binary_is_selfstore_incdec) - in that case the fused emission
+ * re-reads the operand's memory location directly (see
+ * mir_emit_selfstore_incdec/_global), making `value`'s own defining
+ * MIR_LOAD/MIR_PARAM entirely redundant: without this check, that load
+ * still ran its normal emission (materializing the value into hl and
+ * often staging it via a stack push anticipating the *ordinary* binary
+ * form the fusion now bypasses entirely), a load-then-discard exactly
+ * like the dead-unary case mir_value_only_used_by_dead_unary already
+ * covers for a different consumer shape. Found via a forced-accept
+ * diff on t2darr.c's check() after the global selfstore-incdec fusion
+ * above was added: `failures++` correctly fused into 3 instructions,
+ * but the preceding `ld hl,(_Z0001)` / `push hl` (the now-superseded
+ * ordinary load-and-forward for the same read) still ran undisturbed
+ * ahead of it. Mirrors the same one-and-only-one-use requirement
+ * mir_binary_is_selfstore_incdec already applies to the *result*
+ * side. */
+static int mir_value_is_selfstore_incdec_source(int value)
+{
+    int instruction;
+    int uses = 0;
+    int sole_user = -1;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value ||
+            mir_call_uses_value(insn, value)) {
+            if (insn->opcode != MIR_BINARY || insn->src1 != value)
+                return 0;
+            sole_user = instruction;
+            ++uses;
+        }
+    }
+    if (uses != 1)
+        return 0;
+    {
+        int store_index;
+        return mir_binary_is_selfstore_incdec(sole_user, &store_index);
+    }
+}
+
 /* Emits the Item 31 carry-checked byte-pair increment/decrement directly
  * against a frame slot, mirroring emit_incdec_sym_direct's 2-byte form
  * exactly: "inc (ix+n)" cannot ripple a carry into the high byte on its
@@ -3170,6 +3246,30 @@ static void mir_emit_selfstore_incdec(FILE *out, int offset, int is_inc)
         fprintf(out, "\tdec (ix%+d)\n", offset + 1);
     }
     fprintf(out, "L%d:\n", done);
+}
+
+/* Item T36 (mir-text-size-plan.md): the global/extern counterpart of
+ * mir_emit_selfstore_incdec, mirroring emit_incdec_sym_direct's own
+ * is_global_word_sym fast path (dcc_symbols.c) exactly - "ld hl,(name) /
+ * inc-or-dec hl / ld (name),hl". A 16-bit inc/dec is a single atomic
+ * instruction with no byte-pair carry chain to manage (unlike the frame-
+ * relative form above, which must ripple a carry from the low byte into
+ * a separate high-byte increment), so this is simpler than the local/
+ * parameter form rather than needing its own carry-checked label. */
+static void mir_emit_selfstore_incdec_global(FILE *out,
+                                              const struct MirInsn *definition,
+                                              int storage, int is_inc)
+{
+    struct Sym *global = find_global(definition->name);
+    const char *assembly_name = asm_name_for(
+        global != NULL ? sym_asm_name(global)
+                       : mir_declared_link_name(definition->name));
+
+    if (storage == SC_EXTERN)
+        fprintf(out, "\textrn %s\n", assembly_name);
+    fprintf(out, "\tld hl,(%s)\n", assembly_name);
+    fputs(is_inc ? "\tinc hl\n" : "\tdec hl\n", out);
+    fprintf(out, "\tld (%s),hl\n", assembly_name);
 }
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
@@ -3385,7 +3485,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (insn->dst >= 0 && mir.backend_slots != NULL &&
                 mir.backend_slots[insn->dst] < 0 &&
                 (!mir_value_has_use(insn->dst) ||
-                 mir_value_only_used_by_dead_unary(insn->dst)))
+                 mir_value_only_used_by_dead_unary(insn->dst) ||
+                 mir_value_is_selfstore_incdec_source(insn->dst)))
                 break;
             if ((type_size(insn->type) == 2 || type_size(insn->type) == 4) &&
                 mir_load_is_single_call_argument(insn->dst,
@@ -3959,8 +4060,14 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_scalar_memory_location(mir_definition(insn->src1),
                                             &memory_type, &memory_storage,
                                             &memory_offset);
-                mir_emit_selfstore_incdec(out, memory_offset,
-                                          insn->immediate == '+');
+                if (memory_storage == SC_GLOBAL ||
+                    memory_storage == SC_EXTERN)
+                    mir_emit_selfstore_incdec_global(
+                        out, mir_definition(insn->src1), memory_storage,
+                        insn->immediate == '+');
+                else
+                    mir_emit_selfstore_incdec(out, memory_offset,
+                                              insn->immediate == '+');
                 break;
             }
             }

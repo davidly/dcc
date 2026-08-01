@@ -11,8 +11,8 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 306/2022 runnable functions MIR-accepted (15.13%) as of
-  Item T35 (this session).
+- Coverage: 311/2022 runnable functions MIR-accepted (15.38%) as of
+  Items T36/T37 (this session).
 - `text-size` fallback is still the dominant reason (1,633/2022,
   ~80.8% of the corpus, ~93.8% of all fallback) - see SKILL.md's
   "Known root cause" section and `mir-text-size-plan.md` for the full
@@ -755,31 +755,79 @@ retired history; do not resume numbering from them.
   equivalent to the 16-bit `mir_can_forward_hl_to_next` family at all
   - `mir_emit_virtual_store_wide` still unconditionally spills any
   non-param wide value with an assigned slot. Tracked as a follow-on.
+- **Items T36+T37 landed together** (T37 was needed to fully validate
+  T36's own performance safety before either was committed): T36
+  extended `mir_binary_is_selfstore_incdec` (Item 31's `x++`/`x--`
+  fusion) to also cover global/extern scalars, mirroring
+  `emit_incdec_sym_direct`'s `is_global_word_sym` fast path
+  (`ld hl,(name)/inc-or-dec hl/ld (name),hl`) - previously only the
+  local/parameter half was ever mirrored. Also found and fixed a
+  second issue in the same investigation: the *preceding* load feeding
+  the fused binary's operand still ran its own now-redundant emission
+  (a load-then-discard) - added `mir_value_is_selfstore_incdec_source`
+  to elide it, mirroring the existing dead-unary elision pattern.
+  Whole-corpus census: 0 regressions, +5 newly-accepted functions
+  (306->311/2022, 15.13%->15.38%). Focused validation surfaced a real
+  (not noise) cycle-count regression in `tmirfast` (both peep and
+  nopeep modes) from `inc_observe`/`dec_observe` newly crossing
+  acceptance and exposing a **pre-existing, separate** MIR quality gap:
+  `int *p = &x;` stored the computed address to a temporary slot,
+  reloaded it, then stored it *again* to `p`'s real slot - root-caused
+  to `MIR_ADDRESS` never being added to `mir_can_forward_hl_to_next`'s
+  `MIR_STORE` producer whitelist (the exact same "never-reachable-at-
+  the-time, not deliberate" gap shape as Item T31's `MIR_CALL` fix).
+  **Item T37** added `MIR_ADDRESS` to that whitelist, fixing the root
+  cause directly rather than accepting/baselining the regression -
+  `tmirfast`'s nopeep flipped to a genuine improvement and the residual
+  peep-only delta shrank to a negligible +0.12% (the established
+  dccpeep-quality-gap noise signature). Whole-corpus census after T37:
+  0 regressions, coverage unchanged (byte reductions across 50 apps).
+  Focused `runall.ps1 -Mode full` on all 8 apps touched by T36+T37
+  combined: 8/8 correctness PASS, 9 genuine improvements, 1 negligible
+  peep-only residual; baselines updated for all 8. Wide safety net:
+  both `-Mode fast` and full-corpus `-Mode full` clean (314/323). This
+  is the first item this session where a real `runall` performance
+  regression was fixed at its root cause (a second producer-whitelist
+  gap) rather than diagnosed-and-accepted as noise.
 
 ## Next session should
 
-1. **Extend wide-value forwarding to computed values** (Item T35's
+1. **Fresh forced-accept diff on `t2darr.c`'s own `check`** (now 456 vs
+   394 bytes post-T36, down from 599) and the remaining `check`/
+   `check_int`-family functions still fallback: the residual is now a
+   smaller call-argument-caching inefficiency (`check`'s first
+   argument, `name`, gets cached into `bc` via `ld c,l/ld b,h` then
+   restored via `ld l,c/ld h,b` before its push, 4 extra bytes, where
+   legacy just re-reads `(ix+4)/(ix+5)` fresh right before pushing) -
+   worth its own small investigation into whether call-argument
+   evaluation order forces this caching even for direct/re-readable
+   parameters.
+2. **Extend wide-value forwarding to computed values** (Item T35's
    carried-forward finding): `mir_emit_virtual_store_wide` still
    unconditionally spills any non-param wide value with an assigned
    slot - the 16-bit `mir_can_forward_hl_to_next`/`_hl_to_call_
    argument`/`_stack_to_index` family (built across Items T1/T3/T4/
-   T30/T31/T32) has no wide (`HL:DE`) counterpart at all yet for
+   T30/T31/T32/T37) has no wide (`HL:DE`) counterpart at all yet for
    computed values (a wide binary/call result assigned to a local and
    used once). Stage narrowly per SKILL.md: start from the single
    simplest consumer shape (e.g. `MIR_RETURN`, mirroring the scalar
    predicate's own `MIR_RETURN` case and VLA guard), forced-accept-
    diff 2-3 representative functions before generalizing to `MIR_STORE`/
    `MIR_BINARY` consumers.
-2. **Fresh forced-accept diff on `t2darr.c`'s own `check`** (now 495 vs
-   394 bytes post-T34, down from 599) and a few of the ~41 remaining
-   `check`/`check_int`-family functions that didn't cross the
-   acceptance threshold from T34/T35 alone, to find what specific bytes
-   remain - likely one or two more small, reusable gaps stacked on top
-   of the now-fixed cache bug and wide-object-eligibility gap.
-3. **Size Item T33's population** (dead backend-slot reservation for
+3. **Do a final sweep of `mir_can_forward_hl_to_next`'s `MIR_STORE`
+   producer whitelist** (now `MIR_LOAD_INDIRECT`/`MIR_BINARY`/
+   `MIR_UNARY`/`MIR_CONST`/`MIR_CALL`/`MIR_ADDRESS` after Items T31/
+   T37) for any other pure, side-effect-free producer opcode that
+   might still be missing - the pattern has now repeated twice
+   (`MIR_CALL` in T31, `MIR_ADDRESS` in T37), both times found only
+   after a real function exposed the gap rather than by inspection
+   alone, so a deliberate audit of every `MIR_*` opcode against this
+   whitelist (not just reacting to the next exposed regression) may be
+   worthwhile.
+4. **Size Item T33's population** (dead backend-slot reservation for
    call-preserved-register values, `wumpus.rndix`) before choosing an
-   implementation approach - still open, unrelated to T34/T35.
-4. **Build the far-bucket root-cause classifier** once 1-2 above land:
+   implementation approach - still open, unrelated to T34/T35/T36/T37.
+5. **Build the far-bucket root-cause classifier** once 1-2 above land:
    sample ~20-30 `far`-bucket (gap>256 bytes) functions across
    different apps/shapes, force-accept-diff each, bucket by root-cause
    category. T34/T35 both demonstrated that even a function apparently
@@ -789,14 +837,14 @@ retired history; do not resume numbering from them.
    instrumented, evidence-first diagnosis (temporary env-var-gated
    traces, built/tested/reverted) over further static-reading-only
    guesses when sampling new candidates.
-5. Continue autonomously through the backlog (see the session
+6. Continue autonomously through the backlog (see the session
    workspace `plan.md`'s v2 plan and `mir-text-size-plan.md`'s Items
    T34/T35 entries for full detail) without stopping between items, per the
    standing user directive.
 
 ## Superseded "Next session should" entries (kept for history only, do not act on these - see the renumbered list above)
 
-1. **Size the Item T33 population first**: instrument how many corpus
+7. **Size the Item T33 population first**: instrument how many corpus
    functions have `frame_bytes > 0` purely from
    `mir_prepare_backend_slots()` (not `mir.local_bytes`) where the
    reserved slot(s) are never referenced by any emitted `(ix+N)`/
@@ -805,7 +853,7 @@ retired history; do not resume numbering from them.
    require reordering the existing interval-allocation pipeline) over
    reordering slot reservation to depend on register-homing decisions.
    See `mir-text-size-plan.md`'s Item T33 entry for full detail.
-2. **Re-sweep the census fresh post-T32** and look specifically for
+8. **Re-sweep the census fresh post-T32** and look specifically for
    more instances of the same "branch over a jump with no phi copies"
    family T32 just fixed - e.g. plain `MIR_JUMP`-only blocks that
    could similarly collapse, or other emission sites that hand-roll a
@@ -814,7 +862,7 @@ retired history; do not resume numbering from them.
    `new_label()` + `jp %s,L%d` + phi-copy call sequences in
    `dcc_mir_spilled_cfg.c`/`dcc_mir_homed_cfg.c` that could reuse the
    same helper.
-3. **Prioritize one of the two newly-confirmed architectural levers**
+9. **Prioritize one of the two newly-confirmed architectural levers**
    as a properly staged, multi-step project (not more one-off
    near-miss picking, which just hit the same wall 3 times in a row):
    (a) a way to preserve a live `hl` value across another
@@ -827,7 +875,7 @@ retired history; do not resume numbering from them.
    compare chain), which affects any `switch`-heavy function not
    already resolved by T32. Stage narrowly per SKILL.md: pin down the
    exact shape via 2-3 forced-accept diffs before generalizing.
-4. **Re-sweep the census fresh from the post-T31 snapshot** and
+10. **Re-sweep the census fresh from the post-T31 snapshot** and
    continue down the ranked near-miss list (population composition
    shifts after every landed item - do not reuse this session's
    rankings). **Items T30/T31 proved the near-miss vein is NOT dry**
@@ -843,7 +891,7 @@ retired history; do not resume numbering from them.
    (e.g. `mir_can_forward_stack_to_index`/`_binary_const`/`_rhs`, which
    still only skip a NOP/label the old way, not a transparent
    zero-RHS-comparison constant).
-5. Two exposed quality gaps from Item T28 are still concrete, fresh,
+11. Two exposed quality gaps from Item T28 are still concrete, fresh,
    actionable candidates rather than abstract priorities: (a) the
    systemic boolean/comparison-chain materialization overhead
    (`SKILL.md`'s "Known root cause", this plan's ranked item
@@ -854,7 +902,7 @@ retired history; do not resume numbering from them.
    a general compute-and-dereference path even when the element offset
    is well within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`
    /`m[i][j]` reads) - worth its own dedicated investigation.
-6. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
+12. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
    `MIR_LOAD`-of-same-object extension to `mir_param_value_is_direct`
    landed (safe, 6 other apps improved, 0 regressions), but
    `mir_object_eligible` unconditionally excludes pointer-typed
@@ -866,14 +914,14 @@ retired history; do not resume numbering from them.
    memory-location decisions broadly, not just this one predicate).
    Worth a dedicated, carefully-staged item; `tsnprtf`'s baseline has
    been updated in the meantime so this is no longer CI-blocking.
-7. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
+13. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
    +0.78% under Item T25 but not fully closed)** would need a
    predicate that follows the value through additional intervening
    definitions/uses beyond the single-load case Item T25 covers -
    worth a dedicated look if `tc89core` keeps recurring as a residual
    across future items, otherwise leave it as a documented, visible,
    un-baselined residual.
-8. Execute the dedicated `text-size` plan (drafted this session,
+14. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
    - **Re-sweep the worst-ratio/bucket list fresh post-T26** before
@@ -1041,7 +1089,7 @@ retired history; do not resume numbering from them.
      `tscanf::check_str`/`tstr3::check_s`/`tsyntax::check_s` are the
      next-ranked candidates from the last bucket sweep - re-derive a
      fresh sweep first since T12 changed 14 apps' byte counts.
-9. Now that the module is split, prefer editing the specific
+15. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to
    `dcc_mir_internal.h` (not the public `dcc_mir.h`) if a new helper
