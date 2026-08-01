@@ -361,6 +361,40 @@ static int mir_binary_only_constant(int value)
     return 1;
 }
 
+/* Item T18 (mir-text-size-plan.md): MIR_INDEX_ADDRESS's fixed-stride case
+ * (insn->base_name[0] == 0, i.e. not the runtime-variable-stride path)
+ * resolves a constant index entirely at compile time - byte_offset =
+ * index_definition->immediate * insn->immediate, materialized directly
+ * via `ld de,<byte_offset>` - and never reads the index MIR_CONST's own
+ * runtime value at all (mir_emit_virtual_load(out, insn->src2) is only
+ * called in the *other* two MIR_INDEX_ADDRESS shapes: the runtime-stride
+ * base_name case, and the non-constant-index case). A MIR_CONST whose
+ * sole use is exactly this shape is therefore genuinely dead: its own
+ * `ld hl,<const>` materialization (and any spill store) computes a value
+ * nothing ever reads, the same class of defect mir_binary_only_constant/
+ * mir_call_only_constant/mir_multiply_by_small_constant already prevent
+ * for their respective consumer shapes. */
+static int mir_index_only_constant(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int match_count = 0;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_CONST)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode == MIR_INDEX_ADDRESS && insn->src2 == value &&
+            insn->base_name[0] == 0) {
+            ++match_count;
+            continue;
+        }
+        if (insn->src1 == value || insn->src2 == value)
+            return 0;
+    }
+    return match_count == 1;
+}
+
 /* Caps how many Z80 instructions the shift/add decomposition below may
  * unroll to before falling back to __mulu. Mirrors MUL_CONST_MAX_OPS in
  * dcc_ops.c's emit_mul_hl_const, which this routine is a port of, so the
@@ -3078,7 +3112,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_binary_only_constant(insn->dst) ||
                 mir_multiply_by_small_constant(insn->dst) ||
                 mir_value_only_used_by_dead_stores(insn->dst) ||
-                mir_value_only_used_by_dead_unary(insn->dst))
+                mir_value_only_used_by_dead_unary(insn->dst) ||
+                mir_index_only_constant(insn->dst))
                 break;
             fprintf(out, "\tld hl,%ld\n", insn->immediate & 0xffffL);
             if (type_size(insn->type) == 4) {

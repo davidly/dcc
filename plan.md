@@ -76,6 +76,14 @@ retired history; do not resume numbering from them.
   would otherwise leave a forwarded push unpopped; +1 newly-accepted
   function, 219/2022 -> 220/2022, -18,900 bytes across 225 functions,
   the broadest byte-sum shrink since T15)
+  plus Item T18's new `mir_index_only_constant` predicate (a `MIR_CONST`
+  whose sole use is `MIR_INDEX_ADDRESS`'s compile-time-resolved,
+  fixed-stride constant index no longer forces its own dead
+  materialization; 0 coverage change, -23,622 bytes across 250
+  functions, **145 apps with byte changes** - the broadest census
+  footprint of any item this session; also surveyed and deferred an
+  analogous gap in `dcc_mir_homed_cfg.c`'s `MIR_CONST` case as a
+  likely Item T19)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
@@ -312,17 +320,50 @@ retired history; do not resume numbering from them.
   just noise): peep -285 cycles, nopeep -200 cycles. Milestone-tier
   full safety net (323 apps) run given the 67-app blast radius; clean
   (314/314, no recurrence of T16's unrelated `tkbd` flake).
+- **Item T18**: fresh post-T17 bucket sweep found `tinlnpar.main`
+  (gap=26) after the known `tinline.edge_outer_body` static-inline
+  artifact. `.mac` inspection of a force-accepted candidate showed a
+  clearly dead sequence: an array index constant materialized into hl
+  then immediately discarded by a `pop hl` (which restores the base
+  pointer instead) and rematerialized fresh into de for the add.
+  Root cause: `MIR_INDEX_ADDRESS`'s constant-index, fixed-stride case
+  resolves the byte offset entirely at compile time and never reads
+  the index constant's own runtime value at all - a dead-constant
+  shape none of the existing `mir_call_only_constant`/
+  `mir_binary_only_constant`/`mir_multiply_by_small_constant` guards
+  covered. Added `mir_index_only_constant`, wired into `MIR_CONST`'s
+  dead-value check chain. **0 coverage change** (a pure byte-shrink
+  item, 220/2022 held), 0 regressions, **-23,622 bytes across 250
+  functions - 145 apps with byte changes**, the broadest census
+  footprint of any item this session (constant array/struct indexing
+  is pervasive). 2 apps (`t2denum`, `tstruct`) needed runtime
+  validation: PASS, with 4 genuine cycle improvements. Milestone-tier
+  full safety net (323 apps) run given the 145-app blast radius; clean
+  (314/314). Also surveyed `dcc_mir_homed_cfg.c` (the smaller
+  homed-scalar-cfg selector, 149 functions): confirmed the identical
+  gap exists there (its own `MIR_INDEX_ADDRESS` acceptance is already
+  restricted to this exact constant-index shape, and its `MIR_CONST`
+  case has no dead-value check at all) - **deferred as a likely Item
+  T19** (separate translation unit, smaller population, one-concept-
+  per-commit discipline) rather than folded into this commit.
 
 ## Next session should
 
 1. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
+   - **Item T19 candidate is ready to pick up**: mirror Item T18's
+     `mir_index_only_constant` dead-constant-elision fix in
+     `dcc_mir_homed_cfg.c`'s `MIR_CONST` case (`mir_emit_constant_to_home`'s
+     caller currently has no dead-value check at all). Smaller
+     population (149 functions total use this selector) but a
+     confirmed, real, distinct gap - implement, validate, document as
+     its own item rather than piggybacking on T18's commit.
    - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
      in an earlier migration phase) - do not re-attempt it; Item T7
      confirmed `check_s`'s boolean is already fully elided.
-   - **Re-sweep the worst-ratio/bucket list fresh post-T17** before
-     picking the next candidate. Census snapshot: `/tmp/census-post-t17.tsv`.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T18** before
+     picking the next candidate. Census snapshot: `/tmp/census-post-t18.tsv`.
      `MIR_BINARY`'s operand-adjacency forwarding now covers both
      src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
      (T16), **for both plain arithmetic and fusable comparisons**
