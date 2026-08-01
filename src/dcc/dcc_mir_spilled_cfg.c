@@ -2301,7 +2301,19 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
 
 static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
-    int has_slot = value >= 0 && value < mir.next_value &&
+    int has_slot;
+    /* Item T35 (mir-text-size-plan.md): mirrors mir_emit_virtual_store's
+     * own first-line check, now that Item T35's mir_object_eligible
+     * relaxation lets a wide (4-byte) parameter actually have an object
+     * at all - nothing to store here, later reads simply re-load
+     * directly from the parameter's own stable home (see
+     * mir_emit_virtual_load_wide, which already checks this same
+     * predicate on the load side). Without this check a direct-eligible
+     * wide parameter would still pay a full spill even though nothing
+     * downstream would ever read the slot this store writes. */
+    if (mir_param_value_is_direct(value))
+        return;
+    has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
     if (!has_slot)
         return;

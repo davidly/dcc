@@ -196,7 +196,20 @@ static int mir_object_eligible(const struct Sym *sym)
         return 0;
     if (type_ptr_depth(sym->type) > 0)
         return 0;
-    if (type_size(sym->type) < 1 || type_size(sym->type) > 2)
+    /* Item T35 (mir-text-size-plan.md): this used to reject anything
+     * over 2 bytes, dating to the original mem2reg/object-promotion
+     * commit (0771448) which scoped itself to "1/2-byte locals and
+     * parameters" as a first milestone. mir_param_value_is_direct and
+     * mir_emit_virtual_load_wide (dcc_mir_spilled_cfg.c) both already
+     * contain fully-written support for a 4-byte ("wide": float/long)
+     * object - they explicitly test `type_size(...) == 4` alongside
+     * `== 2` - but could never actually reach that code, because no
+     * wide local or parameter was ever admitted to mir.objects[] in
+     * the first place. Pointers (type_size 2, but excluded above via
+     * type_ptr_depth) and structs (excluded above via
+     * type_is_struct_object) are unaffected by widening this to 4;
+     * only TYPE_LONG/TYPE_FLOAT scalars newly qualify. */
+    if (type_size(sym->type) < 1 || type_size(sym->type) > 4)
         return 0;
     if (local_name_address_taken_in_function(sym->name))
         return 0;

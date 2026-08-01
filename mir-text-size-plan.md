@@ -3478,3 +3478,84 @@ committing to an implementation plan based on static reading alone.
   smaller gaps on top of the cache bug - worth a fresh forced-accept
   diff on `t2darr.check` now that the cache bug is fixed, to see what
   specific bytes remain.
+
+## Item T35: `mir_object_eligible` unnecessarily excluded wide (4-byte) locals/parameters (2026-08-01)
+
+**Context**: Item T34's sibling finding - `tc89fadd.c`'s
+`float fid(float x) { return x; }` traced to `reason=no-object` when
+probed with the same temporary `mir_param_value_is_direct` trace used
+to diagnose Item T34, a distinct bug from T34's cache issue.
+
+**Root cause**: `mir_object_eligible` (`src/dcc/dcc_mir.c`) rejected
+any local or parameter with `type_size(sym->type) > 2`, dating to the
+original mem2reg/object-promotion commit (`0771448`), which explicitly
+scoped its first milestone to "1/2-byte locals and parameters." Since
+then, `mir_param_value_is_direct` and `mir_emit_virtual_load_wide`
+(`src/dcc/dcc_mir_spilled_cfg.c`) both grew fully-written support for a
+4-byte ("wide": `float`/`long`) object - both explicitly test
+`type_size(...) == 4` alongside `== 2` - but neither could ever reach
+that code, because no wide local or parameter was ever admitted to
+`mir.objects[]` in the first place. This is the same "correct at
+introduction, stale after the rest of the infrastructure grew around
+it" shape as Items T3/T4/T30's dead-gate findings. Verified via a
+grep-based audit of every `.object`/`->object` use across
+`dcc_mir.c`/`dcc_mir_spilled_cfg.c` (phi merges, dead-store liveness,
+fully-promoted checks) confirming none of the generic object/dataflow
+machinery has any embedded size assumption - only the eligibility gate
+itself did. Pointers (already excluded via `type_ptr_depth(sym->type)
+> 0`) and structs (already excluded via `type_is_struct_object`) are
+unaffected by widening the size check; only `TYPE_LONG`/`TYPE_FLOAT`
+scalars newly qualify.
+
+**Implementation**:
+- `src/dcc/dcc_mir.c`: relaxed `mir_object_eligible`'s
+  `type_size(sym->type) > 2` exclusion to `> 4`.
+- `src/dcc/dcc_mir_spilled_cfg.c`: added a `mir_param_value_is_direct`
+  check as the first line of `mir_emit_virtual_store_wide`, mirroring
+  the scalar `mir_emit_virtual_store`'s existing first-line check -
+  without this, a now-object-eligible direct wide parameter would
+  still pay a full spill on the store side even though nothing
+  downstream would ever read the slot (the load side,
+  `mir_emit_virtual_load_wide`, already had this check from when it
+  was originally written, unused until this item made it reachable).
+
+**Validation**:
+- `fid`: `fallback text-size (generated=268, captured=119, insns=21
+  vs 11)` -> **`mir accepted (generated=133, captured=119, insns=10 vs
+  11)`** - generated instruction count is now *below* legacy's own.
+- Whole-corpus census (`build/mir-t35.tsv` vs
+  `build/mir-t34-cache-fix.tsv`, `--fail-on-regression`): **0
+  regressions, +21 newly-accepted functions** (285->306/2022,
+  14.09%->15.13%) - the second-largest single-item jump this session
+  (matching T30's +21): `fact.main`, `tc89fadd.fid`, `tc89fcmp.fidf`,
+  `tc89fdiv.fidv`, `tc89flng.idf`, `tc89flta.f_id`, `tc89fptr.fid`,
+  `tc89fs.fidf`, `tcrcfix.check_l`, `tctxflt.truth_not`,
+  `tfloat4.identf`, `tlong.ident`, `tlong.uident`, `tlongopt.id32`,
+  `tlongreg.idsl`, `tlongreg.idul`, `tmuldiv.i32_test`,
+  `tmuldiv.ui32_test`, `triangle.main`, `tscanf.check_long`,
+  `tsyntax.check_l` - both the originally-motivating `fid`/`ident`
+  family *and* a `long`-typed sibling of the `check`/`check_int` family
+  (`check_l`/`check_long`) crossed the line together.
+- Focused `runall.ps1 -Mode full` on all 18 flagged apps (fact,
+  tc89fadd, tc89fcmp, tc89fdiv, tc89flng, tc89flta, tc89fptr, tc89fs,
+  tcrcfix, tctxflt, tfloat4, tlong, tlongopt, tlongreg, tmuldiv,
+  triangle, tscanf, tsyntax): **18/18 correctness PASS, 0 performance
+  regressions, 22 genuine improvements** (up to -1.79% bytes in
+  `tc89flng`) - another completely clean win, no trade-off needed.
+  Baselines updated via `-UpdatePerfBaseline` for all 18 apps.
+- Wide safety net (both required tiers): `-Mode fast` 314/323 clean;
+  full-corpus `-Mode full` also 314/323 clean, diagnostics/dccpeep/
+  performance all passed.
+
+**Remaining wide-value work carried forward** (refined in `plan.md`'s
+backlog): this item only closes the *parameter-direct-forwarding* path
+for wide values (mirroring what Items 26/27/T27 did for scalars). The
+general single-use HL:DE forwarding predicates T1/T3/T4/T7(deferred)/
+T30/T31/T32 built for 16-bit values (`mir_can_forward_hl_to_next` and
+friends) still have no wide counterpart at all for *computed* wide
+values (e.g. a wide binary/call result assigned to a local and used
+once) - `mir_emit_virtual_store_wide` still unconditionally spills any
+non-param wide value with an assigned slot. This remains open as a
+follow-on, now correctly scoped as "extend forwarding to computed wide
+values" rather than "wide values have no forwarding at all" (params
+are now covered).

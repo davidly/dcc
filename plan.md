@@ -11,8 +11,8 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 285/2022 runnable functions MIR-accepted (14.09%) as of
-  Item T34 (this session).
+- Coverage: 306/2022 runnable functions MIR-accepted (15.13%) as of
+  Item T35 (this session).
 - `text-size` fallback is still the dominant reason (1,633/2022,
   ~80.8% of the corpus, ~93.8% of all fallback) - see SKILL.md's
   "Known root cause" section and `mir-text-size-plan.md` for the full
@@ -726,43 +726,72 @@ retired history; do not resume numbering from them.
   `MirObject` at all, even though `mir_param_value_is_direct` and
   `mir_emit_virtual_load_wide` both already contain fully-written
   support for `type_size == 4`).
+- **Item T35 landed**: closed the `mir_object_eligible` gap T34
+  surfaced - relaxed its `type_size(sym->type) > 2` exclusion to `> 4`
+  (pointers/structs stay excluded via their own separate checks), and
+  added a `mir_param_value_is_direct` check to
+  `mir_emit_virtual_store_wide`'s first line (mirroring the scalar
+  store's existing check; the load side already had it, unused until
+  now). `fid` flipped from `fallback (268 vs 119 bytes, 21 insns)` to
+  **`mir accepted (133 vs 119 bytes, 10 insns - fewer than legacy's
+  11)`**. Whole-corpus census: **0 regressions, +21 newly-accepted
+  functions** (285->306/2022, 14.09%->15.13%) - the second-largest
+  single-item jump this session (matching T30): `fact.main`,
+  `tc89fadd.fid`, `tc89fcmp.fidf`, `tc89fdiv.fidv`, `tc89flng.idf`,
+  `tc89flta.f_id`, `tc89fptr.fid`, `tc89fs.fidf`, `tcrcfix.check_l`,
+  `tctxflt.truth_not`, `tfloat4.identf`, `tlong.ident`, `tlong.uident`,
+  `tlongopt.id32`, `tlongreg.idsl`, `tlongreg.idul`,
+  `tmuldiv.i32_test`, `tmuldiv.ui32_test`, `triangle.main`,
+  `tscanf.check_long`, `tsyntax.check_l` - both the `fid`/`ident`
+  family and a `long`-typed sibling of the `check` family
+  (`check_l`/`check_long`) crossed the line together. Focused
+  `runall.ps1 -Mode full` on all 18 flagged apps: **18/18 correctness
+  PASS, 0 regressions, 22 genuine improvements** (up to -1.79% bytes)
+  - another completely clean win. Baselines updated. Wide safety net:
+  both `-Mode fast` and full-corpus `-Mode full` clean (314/323).
+  **Remaining wide-value work**: this only closes the *parameter*-
+  direct-forwarding path; a computed wide value (e.g. a wide binary/
+  call result assigned to a local, used once) still has no forwarding
+  equivalent to the 16-bit `mir_can_forward_hl_to_next` family at all
+  - `mir_emit_virtual_store_wide` still unconditionally spills any
+  non-param wide value with an assigned slot. Tracked as a follow-on.
 
 ## Next session should
 
-1. **Close the `mir_object_eligible` wide-type gap** (Item T34's
-   sibling finding, `fid`'s actual blocker): relax
-   `mir_object_eligible`'s `type_size(sym->type) > 2` exclusion to also
-   allow `== 4`, letting wide (`float`/`long`) locals/params get a
-   `MirObject` so `mir_param_value_is_direct`'s and
-   `mir_emit_virtual_load_wide`'s already-written wide support can
-   actually activate. Note `mir_emit_virtual_store_wide` (unlike the
-   scalar `mir_emit_virtual_store`) does not call
-   `mir_param_value_is_direct` at all yet - it will need its own
-   explicit check added too, mirroring the scalar store's existing
-   first-line check, before a direct wide parameter's store is
-   actually skipped. Stage narrowly and check for any other code that
-   assumes "no `MirObject` implies not wide" before relaxing - search
-   all `mir_object_eligible`/`.object`/`object_count` call sites first.
+1. **Extend wide-value forwarding to computed values** (Item T35's
+   carried-forward finding): `mir_emit_virtual_store_wide` still
+   unconditionally spills any non-param wide value with an assigned
+   slot - the 16-bit `mir_can_forward_hl_to_next`/`_hl_to_call_
+   argument`/`_stack_to_index` family (built across Items T1/T3/T4/
+   T30/T31/T32) has no wide (`HL:DE`) counterpart at all yet for
+   computed values (a wide binary/call result assigned to a local and
+   used once). Stage narrowly per SKILL.md: start from the single
+   simplest consumer shape (e.g. `MIR_RETURN`, mirroring the scalar
+   predicate's own `MIR_RETURN` case and VLA guard), forced-accept-
+   diff 2-3 representative functions before generalizing to `MIR_STORE`/
+   `MIR_BINARY` consumers.
 2. **Fresh forced-accept diff on `t2darr.c`'s own `check`** (now 495 vs
    394 bytes post-T34, down from 599) and a few of the ~41 remaining
    `check`/`check_int`-family functions that didn't cross the
-   acceptance threshold from T34 alone, to find what specific bytes
+   acceptance threshold from T34/T35 alone, to find what specific bytes
    remain - likely one or two more small, reusable gaps stacked on top
-   of the now-fixed cache bug.
+   of the now-fixed cache bug and wide-object-eligibility gap.
 3. **Size Item T33's population** (dead backend-slot reservation for
    call-preserved-register values, `wumpus.rndix`) before choosing an
-   implementation approach - still open, unrelated to T34.
+   implementation approach - still open, unrelated to T34/T35.
 4. **Build the far-bucket root-cause classifier** once 1-2 above land:
    sample ~20-30 `far`-bucket (gap>256 bytes) functions across
    different apps/shapes, force-accept-diff each, bucket by root-cause
-   category. Given T34 just demonstrated that even a function
-   apparently satisfying every *documented* condition of an existing
-   predicate can still be silently blocked by an unrelated bug
-   elsewhere, prefer this kind of runtime-instrumented, evidence-first
-   diagnosis over further static-reading-only guesses when sampling.
+   category. T34/T35 both demonstrated that even a function apparently
+   satisfying every *documented* condition of an existing predicate can
+   still be silently blocked by an unrelated bug elsewhere (a stale
+   cache; a too-narrow eligibility gate) - prefer this kind of runtime-
+   instrumented, evidence-first diagnosis (temporary env-var-gated
+   traces, built/tested/reverted) over further static-reading-only
+   guesses when sampling new candidates.
 5. Continue autonomously through the backlog (see the session
-   workspace `plan.md`'s v2 plan and `mir-text-size-plan.md`'s Item
-   T34 entry for full detail) without stopping between items, per the
+   workspace `plan.md`'s v2 plan and `mir-text-size-plan.md`'s Items
+   T34/T35 entries for full detail) without stopping between items, per the
    standing user directive.
 
 ## Superseded "Next session should" entries (kept for history only, do not act on these - see the renumbered list above)
