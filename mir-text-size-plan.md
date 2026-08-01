@@ -4089,3 +4089,85 @@ comparison result or similar; not yet investigated). The ~141 other
 family members each have their own independent residual too. Worth a
 fresh forced-accept-diff on a few representative members next to find
 what's left before considering this family "done."
+
+## Item T43 (attempted, reverted): phi-copy self-store elimination for loop/branch-carried scalars (2026-08-01)
+
+**Context**: far-bucket sampling (v3 plan Priority 3) found `tbool.c`'s
+`count_true` (a pointer-indexed loop, gap=260 bytes) emitting a
+redundant round trip for its loop induction variable `i`: after
+`i++`'s own store writes the new value to `i`'s promoted object, the
+loop-back edge's phi copy (`mir_emit_spilled_phi_copies`, `copy_count
+== 1` fast path, Item T9) unconditionally reloads that same value from
+memory and stores it right back unchanged - a pure no-op, 12
+bytes/iteration.
+
+**Hypothesis**: when the last `MIR_STORE` to a promoted object within
+the exact predecessor block already wrote the same source value that
+a single-copy phi needs for this edge, the phi copy is a provable
+no-op and can be skipped, matched via comparing each instruction's
+`.object` field.
+
+**Implementation** (attempted): added
+`mir_phi_copy_is_redundant_self_store(source, destination,
+predecessor)` in `src/dcc/dcc_mir_spilled_cfg.c`, wired into
+`mir_emit_spilled_phi_copies`'s `copy_count == 1` fast path.
+
+**Bug found and reverted**: whole-corpus census showed 0 regressions
+and +3 newly-accepted functions (325→328/2023), and real `ntvcm`
+execution of the specific motivating case (`tbool`'s `count_true`,
+force-accepted) passed - but the mandatory focused `runall.ps1 -Mode
+full` on the two OTHER newly-accepted apps (`tc99scpe`, `tgoto`)
+caught a real correctness bug: `tgoto.c`'s `gt_forward` (a
+straight-line `if/goto` function with **no loop at all**) returned
+garbage values (6312/6319/... instead of 1/2) once naturally accepted
+by the updated census.
+
+**Root cause of the bug**: the `.object` field tag on a `MIR_STORE`
+does **not** guarantee the same *physical* memory location as another
+instruction (e.g. a `MIR_PHI`) carrying the identical `.object` index.
+Force-accept-diff of `gt_forward` showed three *different* `ix`-
+relative offsets for nominally "the same" object `r`: the `r=1` store
+went to `(ix-4)`, the `r=2` store went to `(ix-6)`, and the phi's own
+canonical read location was `(ix-8)` - three distinct backend slots
+for one promoted source variable, evidently because each SSA
+definition site of a promoted object can be assigned its own backend
+slot independently (unlike a true frame-resident object with one fixed
+offset for its whole lifetime). My check only compared `.object`
+index equality, not actual resolved storage location (via something
+like `mir_scalar_memory_location`), so it wrongly treated
+physically-distinct locations as "the same place" and skipped a copy
+that was still required to make the phi's own canonical location hold
+the right value - explaining the garbage return value (the phi's own
+slot, `(ix-8)`, was never written for that edge, so `return` read
+whatever uninitialized stack contents happened to sit there).
+
+**Disposition**: fully reverted (`git checkout --
+src/dcc/dcc_mir_spilled_cfg.c`) before any commit; no broken code was
+ever pushed. Re-verified clean: rebuilt, re-ran the focused
+`runall.ps1 -Mode full` on `tc99scpe`/`tgoto` - both pass again;
+`git status` confirmed a clean working tree at the T42 commit
+(`e43d293`).
+
+**Deferred, not lost - recommended next-session approach**: this
+optimization is still plausibly correct and worth reattempting, but
+needs a stronger predicate: instead of (or in addition to) comparing
+`.object` index equality, resolve and compare the actual *physical*
+storage location (storage class + offset + size) of the candidate
+store's target and the phi destination's own canonical location
+(mirroring `mir_scalar_memory_location`'s approach, already used
+elsewhere in this file for exactly this kind of location resolution).
+Only treat the copy as redundant when both the object index **and**
+the resolved physical offset match. Build a richer synthetic test
+battery (at minimum: a loop-carried counter like `count_true`'s `i`,
+*and* a straight-line multi-branch-merge case like `gt_forward`'s `r`)
+each verified via real `ntvcm` execution, not just the specific
+motivating case, before trusting census/inspection results alone - the
+same lesson Item T41 already established, now reconfirmed a third
+time in this exact neighborhood of the codebase (parameter/value
+direct-forwarding and phi/backend-slot machinery). This is the second
+consecutive session where a plausible, well-reasoned optimization in
+this specific area (phi copies / backend-slot physical addressing) was
+caught only by real execution testing across *multiple* representative
+shapes, not the one that motivated the change - reinforcing that any
+future attempt here must budget for a multi-shape battery test from
+the start, not just the originating example.

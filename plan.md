@@ -914,6 +914,38 @@ retired history; do not resume numbering from them.
   quality-gap signature, confirmed via nopeep improving in every
   case), 23 genuine improvements; baselines updated. Wide safety net:
   both `-Mode fast` and full-corpus `-Mode full` clean (314/323).
+- **Item T43 attempted, reverted (not lost)**: far-bucket sampling
+  found `tbool.c`'s `count_true` (a pointer-indexed loop) emitting a
+  redundant reload-then-store-back-unchanged round trip for its
+  loop-carried induction variable `i` at the loop-back edge's phi
+  copy (`mir_emit_spilled_phi_copies`'s `copy_count==1` fast path,
+  Item T9) - a pure no-op since `i`'s own increment store had just
+  written the same value moments earlier. Implemented a check
+  (`mir_phi_copy_is_redundant_self_store`) comparing each
+  instruction's `.object` field to detect this. Whole-corpus census
+  showed 0 regressions, +3 newly-accepted functions (325→328/2023);
+  the motivating case (`count_true`) verified correct via real
+  `ntvcm` execution - but the mandatory focused `runall.ps1 -Mode
+  full` on the census's *other* 2 newly-accepted apps caught a real
+  bug: `tgoto.c`'s `gt_forward` (straight-line `if/goto`, no loop)
+  returned garbage. Root cause: the `.object` tag does **not**
+  guarantee the same *physical* memory location - force-accept-diff
+  showed `gt_forward`'s `r=1`/`r=2` stores and its phi's own canonical
+  location were 3 *different* `ix`-relative offsets, since each SSA
+  definition site of a promoted object can get its own independent
+  backend slot. Comparing only the object index (not the resolved
+  physical storage location) wrongly treated these as interchangeable
+  and skipped a copy still needed to make the phi's own slot correct.
+  Fully reverted before any commit (`git checkout --`, working tree
+  and both apps re-verified clean/passing). Deferred with full
+  rationale in `mir-text-size-plan.md`'s Item T43 entry, including a
+  recommended fix (compare resolved physical storage location, not
+  just `.object` index, and test a multi-shape battery - both a loop
+  and a straight-line branch-merge case - before trusting one
+  motivating example again). This is the third time this exact
+  neighborhood (parameter/value forwarding, phi/backend-slot physical
+  addressing) has hidden a real bug caught only by execution testing,
+  following Item T41's two bugs earlier this session.
 
 ## Next session should
 
@@ -933,7 +965,37 @@ retired history; do not resume numbering from them.
    shapes - an `int`-only variant like `okb`, a `long` variant like
    `chkl`) to find what's left before considering this family "done";
    likely a smaller, distinct backend-slot or comparison-result issue,
-   not more call-argument caching.
+   not more call-argument caching. **Update from far-bucket sampling**:
+   confirmed via `t2darr.check`'s force-accept-diff - the residual 30
+   bytes is a *different*, already-known root cause (a `MIR_CONST`
+   second binary operand assigned `home=de` can never be
+   register-forwarded to its single next use, since
+   `mir_can_forward_hl_to_next`/`mir_backend_slot_forwardable` only
+   ever recognize HL-resident values - there is no DE equivalent). See
+   the new `v3-de-forwarding-gap-lead` SQL todo: a raw
+   `DCC_MIR_SLOT_REPORT` scan across all 323 test files shows 800
+   function-compile-passes needing exactly one backend slot, a
+   plausibly large population, but not yet filtered to isolate this
+   specific shape from other legitimate single-slot needs - size
+   properly before implementing a DE-forwarding twin of the HL
+   mechanism (which would itself need the same T41/T43-style
+   multi-shape `ntvcm` validation given how sensitive this exact
+   forwarding-mechanism neighborhood has proven to be this session).
+1c. **DEFERRED (Item T43 - see rationale above and full detail in
+   mir-text-size-plan.md)**: phi-copy self-store elimination for
+   loop/branch-carried scalars was implemented, showed 0 regressions
+   and +3 accepted functions on the census, but was caught by focused
+   `runall.ps1 -Mode full` corrupting `tgoto.c`'s `gt_forward` (a
+   straight-line, non-loop case) - reverted before commit. Root cause:
+   comparing `.object` index equality is not sufficient to prove two
+   instructions target the same *physical* memory location, since
+   each SSA definition site of a promoted object can get its own
+   independent backend slot. **Next attempt** (if picked up): compare
+   resolved physical storage location (offset+storage+size, via
+   something like `mir_scalar_memory_location`) in addition to object
+   index, and build a multi-shape `ntvcm`-verified test battery
+   (loop-carried *and* straight-line branch-merge cases) before
+   trusting one motivating example again.
 1b. **Priority 2 from the v3 plan, still pending, Item-6-level risk -
    stage carefully**: investigate extending "direct" (object-free)
    re-read eligibility to never-reassigned pointer *parameters*.
