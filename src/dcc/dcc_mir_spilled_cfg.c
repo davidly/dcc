@@ -1681,6 +1681,57 @@ static int mir_can_forward_stack_to_binary_const(int value)
     return 1;
 }
 
+/* Item T16 (mir-text-size-plan.md): mir_can_forward_hl_to_next's
+ * MIR_BINARY case only ever matches `value` against the binary's src1
+ * (left operand) - a value that is instead the very next MIR_BINARY's
+ * *right*-hand operand (src2) gets no forwarding at all, even when
+ * that binary's left operand is a plain constant (mir_binary_only_
+ * constant), a shape where the constant is loaded directly into HL
+ * clobbering whatever this value's own computation just left there.
+ * The fix is symmetric to mir_can_forward_stack_to_index/_binary_const
+ * above: push the value immediately after computing it and let the
+ * binary's emission pop it back - since the left operand is a
+ * constant, the combining sequence collapses to "load the constant
+ * into HL, then a single `pop de`", skipping the store/reload/ex-de-hl
+ * dance the general push/pop path would otherwise need. Restricted to
+ * the immediately-following instruction only (no intervening
+ * MIR_CONST skip - that shape is a distinct, not yet needed case) and
+ * excludes divmod pairing and fused-comparison branches, which use a
+ * different code path entirely. */
+static int mir_can_forward_stack_to_binary_rhs(int value)
+{
+    const struct MirInsn *binary;
+    int binary_instruction;
+    int instruction;
+
+    if (mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 1 >= mir.count)
+        return 0;
+    binary_instruction = mir_emit_instruction_index + 1;
+    binary = &mir.insns[binary_instruction];
+    if (binary->opcode != MIR_BINARY || binary->src2 != value)
+        return 0;
+    if (type_size(binary->secondary_offset) == 4)
+        return 0;
+    if (!mir_binary_only_constant(binary->src1))
+        return 0;
+    if (mir_divmod_partner(binary_instruction) >= 0)
+        return 0;
+    if (mir_binary_is_fusable_comparison(binary_instruction) > 0)
+        return 0;
+    for (instruction = binary_instruction + 1;
+         instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value)
+            return 0;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            mir_call_uses_value(insn, value))
+            return 0;
+    }
+    return 1;
+}
+
 static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot;
@@ -1717,7 +1768,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
         return;
     }
     if (mir_can_forward_stack_to_index(value) ||
-        mir_can_forward_stack_to_binary_const(value)) {
+        mir_can_forward_stack_to_binary_const(value) ||
+        mir_can_forward_stack_to_binary_rhs(value)) {
         fputs("\tpush hl\n", out);
         mir_forwarded_stack_value = value;
         mir_forwarded_stack_instruction = mir_emit_instruction_index;
@@ -3485,6 +3537,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int stack_forwarded_left =
                     mir_forwarded_stack_value == insn->src1 &&
                     mir_forwarded_stack_instruction + 2 == i;
+                /* Item T16: mir_can_forward_stack_to_binary_rhs already
+                 * pushed the right operand at its definition site (only
+                 * possible when the left operand is a plain constant -
+                 * see that predicate) - the constant load below leaves
+                 * HL exactly where it needs to be, so the right operand
+                 * only needs a single `pop de` once reached, no store/
+                 * reload/push/ex-de-hl dance at all. */
+                int stack_forwarded_right =
+                    mir_forwarded_stack_value == insn->src2 &&
+                    mir_forwarded_stack_instruction + 1 == i;
                 if (mir_binary_only_constant(insn->src1)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src1);
@@ -3544,7 +3606,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * from the legacy path to the MIR path can be a net cycle
                  * regression even though every individual instruction
                  * changed here is unambiguously cheaper in isolation. */
-                if (mir_binary_is_fusable_comparison(i) > 0 &&
+                if (stack_forwarded_right) {
+                    /* Item T16: the right operand is already on the
+                     * stack from its own definition site, and HL was
+                     * just loaded with the (plain-constant) left
+                     * operand above - a single pop retrieves the right
+                     * operand directly into DE, exactly where it needs
+                     * to be for the operation below. No push, reload,
+                     * or ex de,hl required at all. */
+                    fputs("\tpop de\n", out);
+                } else if (mir_binary_is_fusable_comparison(i) > 0 &&
                     mir_fused_compare_is_const_zero_rhs(i)) {
                     /* Item 25: this comparison will be fused directly into
                      * the following branch (mir_binary_is_fusable_comparison
@@ -3583,7 +3654,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         mir_emit_virtual_load(out, insn->src2);
                     fputs("\tex de,hl\n\tpop hl\n", out);
                 }
-                if (stack_forwarded_left) {
+                if (stack_forwarded_left || stack_forwarded_right) {
                     mir_forwarded_stack_value = -1;
                     mir_forwarded_stack_instruction = -1;
                 }

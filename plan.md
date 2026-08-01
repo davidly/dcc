@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 217/2022 runnable functions MIR-accepted (10.73%).
+- Coverage: 219/2022 runnable functions MIR-accepted (10.83%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -64,13 +64,18 @@ retired history; do not resume numbering from them.
   `computed_expr OP literal` shape; +5 newly-accepted functions,
   212/2022 -> 217/2022, the broadest single-item byte-sum shrink this
   session, -32,370 bytes across 576 functions)
+  plus Item T16's new `mir_can_forward_stack_to_binary_rhs` predicate
+  (the mirror-image gap: a computed value immediately followed by a
+  `MIR_BINARY` using it as `src2` with a plain-constant `src1` - the
+  `literal OP computed_expr` shape; +2 newly-accepted functions,
+  217/2022 -> 219/2022, -3,514 bytes across 37 functions)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15/T16 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -252,6 +257,31 @@ retired history; do not resume numbering from them.
   (+0.0003%/-0.003%). Milestone-tier full safety net (323 apps) run
   given the 199-app blast radius touching the core `MIR_BINARY` path;
   clean.
+- **Item T16**: fresh post-T15 bucket sweep found `vla_sizeof_op_mullhs`
+  (`3 * sizeof a`, gap=18) as the closest real candidate - the mirror
+  image of T15's gap: the constant comes *first* in program order
+  (`MIR_BINARY`'s `src1`) and the computed value is `src2`.
+  `mir_can_forward_hl_to_next`'s guard structurally can only ever match
+  a value against `src1`, never `src2` - a hard gap, not a tunable
+  threshold. HL-persistence can't fix it either: `src1`'s constant load
+  (`ld hl,<const>`) unconditionally clobbers whatever HL held from
+  `src2`'s prior computation, so the fix has to be stack-based. Added
+  `mir_can_forward_stack_to_binary_rhs` (mirrors T15's predicate for
+  the opposite operand position; same divmod/fused-comparison
+  exclusions), wired into `mir_emit_virtual_store` and `MIR_BINARY`'s
+  non-wide emission case: collapses the entire push/reload/`ex de,hl`/
+  pop dance into a single `pop de` when the right operand was
+  stack-forwarded. **+2 newly-accepted functions**
+  (`vla_sizeof_op_mullhs` plus bonus flip
+  `tdmfuse.test_first_stmt_reassigns_operand`; 217/2022 10.73% ->
+  219/2022 10.83%), 0 regressions, **-3,514 bytes across 37 functions**
+  (smaller blast radius than T15, as expected - literal-first shapes
+  are rarer). 2 apps (`tdmfuse`, `tvla`) needed runtime validation:
+  PASS, noise-level deltas (`tvla` +0.0014%/+0.0020%, `tdmfuse` tiny
+  improvements). Milestone-tier full safety net (323 apps): 313/314
+  passed; the 1 failure (`tkbd`) is a known-flaky, `perf_ignore`-marked
+  interactive stdin-timing test, confirmed unrelated via a clean
+  isolated re-run.
 
 ## Next session should
 
@@ -261,10 +291,14 @@ retired history; do not resume numbering from them.
    - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
      in an earlier migration phase) - do not re-attempt it; Item T7
      confirmed `check_s`'s boolean is already fully elided.
-   - **Re-sweep the worst-ratio/bucket list fresh post-T15** before
-     picking the next candidate - 576 functions changed byte counts
-     since T14, so a stale sweep from before T15 risks misdirecting
-     the next pick. Census snapshot: `/tmp/census-t15.tsv`.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T16** before
+     picking the next candidate. Census snapshot: `/tmp/census-post-t16.tsv`.
+     `MIR_BINARY`'s operand-adjacency forwarding now covers both
+     src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
+     (T16); the remaining gap in this family is both operands being
+     non-constant/computed simultaneously (needs tracking two pending
+     forwarded values at once - not attempted, revisit only with
+     evidence it's material).
    - **`wumpus::pact` is now blocked solely by the `cfg-backedge`
      migration boundary** (a deliberate barrier, not a bug) - worth
      revisiting as its own future item once enough non-loop
