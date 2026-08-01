@@ -225,6 +225,8 @@ extern int mir_virtual_iy_frame_bytes;
 extern int mir_emit_instruction_index;
 extern int mir_forwarded_hl_value;
 extern int mir_forwarded_hl_instruction;
+extern int mir_forwarded_wide_value;
+extern int mir_forwarded_wide_instruction;
 extern int mir_forwarded_stack_value;
 extern int mir_forwarded_stack_instruction;
 extern int mir_cached_call_value;

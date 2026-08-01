@@ -126,6 +126,52 @@ static int mir_forward_skip_target(int instruction)
     return mir_forward_skip_target_ex(instruction, NULL);
 }
 
+/* Item T40 (mir-text-size-plan.md): the wide (32-bit, HL:DE) analog of
+ * mir_can_forward_hl_to_next below. Items 1-32 built a rich forwarding
+ * predicate for 16-bit scalar values (this function plus its
+ * MIR_STORE/call-argument/stack-index siblings), but mir_emit_virtual_
+ * store_wide had no equivalent at all until this item - every wide value
+ * with an assigned backend slot was unconditionally spilled and reloaded,
+ * even when its single next use could consume it directly from HL:DE.
+ * Deliberately starts with only the single narrowest, most-certain
+ * consumer shape (MIR_RETURN, mirroring this function's own MIR_RETURN
+ * case and VLA guard exactly) rather than the full consumer switch below -
+ * per SKILL.md's staging discipline, generalize to MIR_STORE/MIR_BINARY
+ * consumers only after this narrow slice is validated end to end. */
+static int mir_can_forward_hl_de_to_next(int value)
+{
+    const struct MirInsn *next;
+    int next_instruction;
+    int instruction;
+    int skipped_label;
+
+    if (mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 1 >= mir.count)
+        return 0;
+    next_instruction = mir_forward_skip_target_ex(mir_emit_instruction_index,
+                                                   &skipped_label);
+    if (next_instruction >= mir.count)
+        return 0;
+    next = &mir.insns[next_instruction];
+    if (skipped_label && next->opcode != MIR_RETURN)
+        return 0;
+    if (next->opcode != MIR_RETURN || next->src1 != value)
+        return 0;
+    if (mir.has_vla)
+        return 0;
+    for (instruction = next_instruction + 1;
+         instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value)
+            return 0;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            mir_call_uses_value(insn, value))
+            return 0;
+    }
+    return 1;
+}
+
 static int mir_can_forward_hl_to_next(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -2280,6 +2326,20 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
     int offset;
     int iy_offset;
 
+    /* Item T40 (mir-text-size-plan.md): consume a value mir_emit_virtual_
+     * store_wide already forwarded straight from its producing
+     * instruction, exactly mirroring mir_emit_virtual_load's own
+     * mir_forwarded_hl_value check - the value is already resident in
+     * HL:DE from the immediately preceding instruction, so no reload is
+     * needed at all. Must precede every other case below (matching the
+     * scalar version's own ordering) since this applies regardless of
+     * whether the value is slot-based, param-direct, or anything else. */
+    if (mir_forwarded_wide_value == value &&
+        mir_forwarded_wide_instruction + 1 == mir_emit_instruction_index) {
+        mir_forwarded_wide_value = -1;
+        mir_forwarded_wide_instruction = -1;
+        return;
+    }
     if (!mir_definition_is_wide(definition)) {
         mir_emit_virtual_load(out, value);
         if (definition != NULL &&
@@ -2363,6 +2423,23 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
      * downstream would ever read the slot this store writes. */
     if (mir_param_value_is_direct(value))
         return;
+    /* Item T40 (mir-text-size-plan.md): forward a computed wide value
+     * straight to its sole next use (currently only a MIR_RETURN, see
+     * mir_can_forward_hl_de_to_next) instead of always spilling it to a
+     * backend slot first - mirrors mir_emit_virtual_store's own
+     * forwarding check, just for HL:DE instead of HL alone. The slot
+     * mir_prepare_backend_slots already assigned (it has no wide-
+     * forwarding awareness yet) is simply left unused in this case,
+     * the same acceptable tradeoff Item 13 documented for the scalar
+     * path before mir_prepare_backend_slots grew its own forwarding
+     * awareness. */
+    if (mir_can_forward_hl_de_to_next(value)) {
+        int forward_instruction =
+            mir_forward_skip_target(mir_emit_instruction_index);
+        mir_forwarded_wide_value = value;
+        mir_forwarded_wide_instruction = forward_instruction - 1;
+        return;
+    }
     has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
     if (!has_slot)
@@ -2378,6 +2455,8 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
     }
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
+    mir_forwarded_wide_value = -1;
+    mir_forwarded_wide_instruction = -1;
     if (mir_virtual_iy_base && iy_offset - 2 >= -128 &&
         iy_offset + 1 <= 127) {
         fprintf(out,
@@ -3455,6 +3534,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     }
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
+    mir_forwarded_wide_value = -1;
+    mir_forwarded_wide_instruction = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
     mir_cached_call_value = -1;
@@ -4930,6 +5011,8 @@ done:
     mir_emit_instruction_index = -1;
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
+    mir_forwarded_wide_value = -1;
+    mir_forwarded_wide_instruction = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
     mir_cached_call_value = -1;

@@ -3833,3 +3833,83 @@ backlog item, not a 16-bit whitelist gap) and `MIR_COMPOUND_ADDRESS`
 (no confirmed trigger found yet). This audit line is likely exhausted
 for the 16-bit path; further systemic gains now depend on the
 wide-value forwarding backlog item instead.
+
+## Item T40: wide (32-bit) HL:DE forwarding infrastructure, `MIR_RETURN` consumer only (2026-08-01)
+
+**Context**: the new text-size plan's ranked backlog item 1 (from the
+session's fresh re-analysis) - `mir_emit_virtual_store_wide` had no
+forwarding logic at all, unlike `mir_emit_virtual_store` which has
+grown a rich set of forwarding predicates (`mir_can_forward_hl_to_
+next` and its call-argument/stack-index siblings) across Items 1-39.
+Item T35 already closed the *parameter*-direct half of this gap
+(`mir_param_value_is_direct` now supports wide types); this item adds
+the first slice of forwarding for *computed* wide values (results of
+a wide binary/call/etc., not just re-read parameters).
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`,
+`src/dcc/dcc_mir.c`, `src/dcc/dcc_mir_internal.h`): staged narrowly
+per SKILL.md, starting with only the single simplest, most-certain
+consumer shape:
+- Added `mir_forwarded_wide_value`/`mir_forwarded_wide_instruction`
+  global state (mirroring `mir_forwarded_hl_value`/`_instruction`
+  exactly, declared in `dcc_mir_internal.h`, defined in `dcc_mir.c`),
+  reset at the same three points the scalar state already is
+  (function-entry initialization, end-of-function cleanup, and
+  defensively before a real wide store proceeds).
+- Added `mir_can_forward_hl_de_to_next(int value)`: the wide analog of
+  `mir_can_forward_hl_to_next`, restricted to the case already proven
+  safe for scalars - the value's sole next use (via the same
+  `mir_forward_skip_target_ex` skip-through-NOP/single-predecessor-
+  label logic) is a `MIR_RETURN` whose operand is exactly this value,
+  with the same VLA-hazard guard (`mir.has_vla`) and the same trailing
+  no-other-use scan the scalar version uses.
+- Wired into `mir_emit_virtual_store_wide`: checked right after the
+  Item T35 direct-parameter check: if forwardable, set the forwarded
+  state and skip storing entirely (the backend slot
+  `mir_prepare_backend_slots` already assigned - it has no wide-
+  forwarding awareness yet - is simply left unused, the same
+  acceptable tradeoff Item 13 documented for the scalar path's own
+  early evolution).
+- Wired into `mir_emit_virtual_load_wide`: added a first-line check
+  consuming the forwarded value directly (skip reload entirely) when
+  it matches the immediately-preceding instruction, mirroring
+  `mir_emit_virtual_load`'s own `mir_forwarded_hl_value` check exactly,
+  including its ordering (must precede every other case, including the
+  narrow-type promotion path and the param-direct path).
+
+**Validation**:
+- Synthetic tests: `long addlong(long a, long b) { long r = a + b;
+  return r; }` (result has two uses - store to `r`'s object *and*
+  return via direct SSA value reuse - correctly does NOT qualify for
+  this narrow single-use-only slice, confirmed unaffected) versus
+  `long addlong2(long a, long b) { return a + b; }` (single, adjacent
+  use) - confirmed via force-accept-diff that the store-to-temp-slot/
+  reload round trip is completely gone for the latter; the wide
+  addition's result flows directly from the arithmetic into the
+  epilogue with no intervening spill at all.
+- Whole-corpus census (`build/mir-t40.tsv` vs `build/mir-t39.tsv`,
+  `--fail-on-regression`): **0 regressions**, coverage unchanged at
+  314/2023 (15.52% - 37 apps had byte reductions in already-fallback
+  or already-accepted candidates, none crossing acceptance this
+  round; 0 apps flagged for runtime validation).
+- Wide safety net (both required tiers, run per SKILL.md's discipline
+  for any change touching the dominant selector): `-Mode fast`
+  314/323 clean; full-corpus `-Mode full` also 314/323 clean,
+  diagnostics/dccpeep/performance all passed. No baseline updates
+  needed (no performance deltas of any kind reported).
+
+**Why this item shows no coverage movement yet, and why it is still
+worth landing now**: restricting the first slice to the single
+narrowest consumer (`MIR_RETURN`) - deliberately mirroring how the
+scalar predicate itself started narrow (Item 1) before Items 6/7/8/
+T30/T31/T37/T38/T39 progressively added `MIR_STORE`/producer-opcode
+coverage - means this slice alone does not yet reach the more common
+"wide value stored to a named local, used again later" shape (like
+`addlong`'s `r`). The infrastructure (state variables, the predicate,
+both wiring points) is now in place and proven correct end to end;
+the next items (`MIR_STORE`, then `MIR_BINARY`/`MIR_ARG` consumers,
+already tracked in the backlog) can each extend
+`mir_can_forward_hl_de_to_next`'s consumer switch by one shape at a
+time, exactly as the scalar predicate's own history did, and should
+start showing coverage movement once the `MIR_STORE` consumer (the
+single most common shape, matching `addlong`'s pattern) lands.

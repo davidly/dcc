@@ -826,6 +826,29 @@ retired history; do not resume numbering from them.
   tracked backlog item), not a 16-bit whitelist gap; `MIR_COMPOUND_
   ADDRESS` had no confirmed trigger found. This audit line is likely
   exhausted for the 16-bit path.
+- **Item T40 landed**: built the first slice of wide (32-bit) HL:DE
+  forwarding infrastructure - `mir_emit_virtual_store_wide` had none
+  at all before this, unlike the scalar path's rich `mir_can_forward_
+  hl_to_next` family. Added `mir_forwarded_wide_value`/`_instruction`
+  state and `mir_can_forward_hl_de_to_next` (wide analog of the scalar
+  predicate), restricted to the single narrowest consumer - a value's
+  sole use being an immediately-following `MIR_RETURN` - mirroring the
+  scalar predicate's own `MIR_RETURN` case and VLA guard exactly.
+  Wired into both `mir_emit_virtual_store_wide` (skip storing when
+  forwardable) and `mir_emit_virtual_load_wide` (consume the forwarded
+  value directly, mirroring the scalar load's own check). Confirmed
+  via synthetic tests: `long addlong2(long a, long b) { return a + b;
+  }` (single use) now flows the wide addition's result directly into
+  the epilogue with zero spill; `long addlong(...) { long r = a + b;
+  return r; }` (two uses via SSA reuse) correctly does not qualify for
+  this narrow slice, as expected. Whole-corpus census: 0 regressions,
+  coverage unchanged (314/2023 - 37 apps had byte reductions, none
+  crossing acceptance yet; 0 apps flagged for runtime validation).
+  Wide safety net: both `-Mode fast` and full-corpus `-Mode full`
+  clean (314/323), no performance deltas. The infrastructure is now
+  proven correct end to end; extending the consumer switch to
+  `MIR_STORE` next (the single most common wide-value shape) should
+  start showing coverage movement.
 
 ## Next session should
 
@@ -850,18 +873,16 @@ retired history; do not resume numbering from them.
    forwarding gap (item 3 below), and `MIR_COMPOUND_ADDRESS` had no
    confirmed trigger. Do not keep chasing this specific whitelist
    without a fresh concrete motivating example.
-3. **Extend wide-value forwarding to computed values** (Item T35's
-   carried-forward finding): `mir_emit_virtual_store_wide` still
-   unconditionally spills any non-param wide value with an assigned
-   slot - the 16-bit `mir_can_forward_hl_to_next`/`_hl_to_call_
-   argument`/`_stack_to_index` family (built across Items T1/T3/T4/
-   T30/T31/T32/T37/T38) has no wide (`HL:DE`) counterpart at all yet
-   for computed values (a wide binary/call result assigned to a local
-   and used once). Stage narrowly per SKILL.md: start from the single
-   simplest consumer shape (e.g. `MIR_RETURN`, mirroring the scalar
-   predicate's own `MIR_RETURN` case and VLA guard), forced-accept-
-   diff 2-3 representative functions before generalizing to `MIR_STORE`/
-   `MIR_BINARY` consumers.
+3. **Extend wide-value forwarding to `MIR_STORE`, then `MIR_BINARY`/
+   `MIR_ARG` consumers** (Item T40's carried-forward next slice):
+   `mir_can_forward_hl_de_to_next` currently only recognizes the
+   `MIR_RETURN` consumer. Extend it to `MIR_STORE` next (the single
+   most common shape, matching `long r = a + b;` patterns where the
+   result is stored to a named local before being read again) - this
+   is expected to start showing real coverage movement, unlike T40's
+   `MIR_RETURN`-only slice. Stage one consumer shape per item, forced-
+   accept-diff 2-3 representative functions before generalizing
+   further, exactly as the scalar predicate's own history did.
 4. **Do a final sweep of `mir_can_forward_hl_to_next`'s `MIR_STORE`
    producer whitelist** (now `MIR_LOAD_INDIRECT`/`MIR_BINARY`/
    `MIR_UNARY`/`MIR_CONST`/`MIR_CALL`/`MIR_ADDRESS` after Items T31/

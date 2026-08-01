@@ -45,6 +45,8 @@ int mir_virtual_iy_frame_bytes;
 int mir_emit_instruction_index = -1;
 int mir_forwarded_hl_value = -1;
 int mir_forwarded_hl_instruction = -1;
+int mir_forwarded_wide_value = -1;
+int mir_forwarded_wide_instruction = -1;
 int mir_forwarded_stack_value = -1;
 int mir_forwarded_stack_instruction = -1;
 int mir_cached_call_value = -1;
