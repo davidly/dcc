@@ -11,19 +11,31 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 246/2022 runnable functions MIR-accepted (12.17%).
-- `text-size` fallback is still the dominant reason (1,735/2021, ~86%
-  of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
-  cause" section and `mir-text-size-plan.md` for the full analysis.
-  Fresh re-bucketing (post-T9) still shows the gap population
-  dominated by "far" (>256 bytes over legacy): near=1, close=31,
-  mid=287, far=1,423; the far bucket's ratio signature (previously
-  measured 66% at ≥1.6x generated/captured instruction-count ratio
-  post-T5) matches SKILL.md's
-  documented boolean-materialization/dead-store bloat signature in the
-  general `mir_try_emit_spilled_scalar_cfg` selector - this remains the
-  single biggest unaddressed lever (see `mir-text-size-plan.md`'s "Root
-  causes to close" list carried over from this session's plan).
+- Coverage: 285/2022 runnable functions MIR-accepted (14.09%) as of
+  Item T34 (this session).
+- `text-size` fallback is still the dominant reason (1,633/2022,
+  ~80.8% of the corpus, ~93.8% of all fallback) - see SKILL.md's
+  "Known root cause" section and `mir-text-size-plan.md` for the full
+  analysis. **A fresh, from-scratch re-analysis of the current
+  population (session workspace `plan.md`, not this file - the v2 plan
+  written before Item T34) supersedes the paragraph below**: the
+  near-miss picking vein (Items T7-T32) has now visibly exhausted the
+  easy `near`/`close` gap buckets (61/1,643 functions, 3.7%), and the
+  remaining 96% is dominated by the `mid`/`far` buckets (median gap
+  505 bytes, median generated/captured ratio 1.62x) - still the same
+  systemic "~2x more expensive" signature SKILL.md's original
+  diagnosis identified, just retreated to larger functions. Item T34
+  (a cross-function stale-cache bug in
+  `mir_capture_stream_uses_frame`) and the still-open `mir_object_
+  eligible` wide-type gap it surfaced alongside it (see Item T34's
+  entry in `mir-text-size-plan.md`) are the current highest-confidence
+  next levers - not the comparison-fusion/struct-copy items this
+  section originally described, which are already fully landed
+  history (see "Recently landed" below).
+- The paragraph below (mentioning T1-T9 fresh re-bucketing at
+  246/2022 coverage) is now historical context only, preserved for
+  the byte-sum totals it documents; do not treat its coverage/bucket
+  numbers as current - see the bullet above instead.
 - Combined byte-sum reduction from this vein's Items T1-T9:
 -1,542,587 bytes (~18.4%, T1-T4) plus Item T5's aggregate-return
   fix (which, uniquely among T1-T5, also moved coverage: +5 functions)
@@ -663,8 +675,97 @@ retired history; do not resume numbering from them.
   noise, not a real defect) and `tqsort`/`tbsearch`'s comparator
   functions (gap=14 x4, a different/larger "spaceship compare"
   restructuring question) - neither is a same-session-sized fix.
+- **New text-size plan v2 written** (session workspace `plan.md`,
+  before Item T34): a fresh, from-scratch re-analysis of the full
+  current fallback population (1,643 functions, 81.3% of corpus, 94%
+  of all fallback) found the near-miss vein (T7-T32) has exhausted the
+  easy `near`/`close` buckets (61 functions, 3.7% left) and the
+  remaining 96% is `mid`/`far` bucket (median gap 505 bytes, median
+  ratio 1.62x) - the same systemic ~2x-bloat signature as the original
+  SKILL.md diagnosis, just retreated to bigger functions. Identified
+  two fresh, evidence-backed candidate levers: (a) 32-bit (`float`/
+  `long`) values apparently having no forwarding infrastructure
+  (`tc89fadd.c`'s `fid`, a trivial identity function, costs ~2x
+  legacy), and (b) a 50-function `check`/`check_int`-family assertion
+  helper that looked like it should already qualify for
+  `mir_param_value_is_direct` but didn't, for a then-unexplained
+  reason.
+- **Item T34 landed**: diagnosed (b) above via a temporary env-var-
+  gated trace added to every `mir_param_value_is_direct` return-0
+  branch (built, tested, reverted before the real fix) - found
+  `mir_capture_stream_uses_frame()`'s cross-call cache was keyed only
+  on a raw `FILE*` pointer (`mir.capture_stream`), but
+  `mir_begin_function` calls `tmpfile()` fresh for *every* function and
+  the C library routinely hands back a freed file's address to the
+  next `tmpfile()` call - so this cache was silently returning an
+  **earlier, unrelated function's** frame/frameless verdict for any
+  function whose `tmpfile()` happened to reuse a stale address,
+  suppressing `mir_param_value_is_direct`'s entire optimization for an
+  unpredictable subset of the corpus since the day it was introduced.
+  Fixed by removing the (buggy) cross-call cache entirely - the
+  function now always rewinds and re-scans its own capture stream
+  fresh, which is cheap (bounded by one function's own captured-
+  assembly length) and was already being called repeatedly per
+  function even with the cache in place. Whole-corpus census: **0
+  regressions, +10 newly-accepted functions** (275->285/2022,
+  13.60%->14.09%) - 9 of the 10 are exactly the `check`/`check_int`
+  family this session's fresh analysis flagged (`tesc.check`,
+  `tmirfast.check`, `tmirfuse.check`, `tmirslot.check`,
+  `tphijoin.check`, `trtl2.check_i`, `tscanf.check_int`,
+  `tstdlib.check_int`, `tstr3.check_i`, plus `tc99varm.two`) - a fifth
+  of that 50-function family closed by one cache fix. Focused
+  `runall.ps1 -Mode full` on all 11 flagged apps: **11/11 correctness
+  PASS, 0 regressions, 18 genuine improvements** (up to -2.89% cycles /
+  -1.52% bytes in `tmirfast`) - a completely clean win, no trade-off.
+  Baselines updated via `-UpdatePerfBaseline`. Wide safety net: both
+  `-Mode fast` and full-corpus `-Mode full` clean (314/323). Note:
+  `tc89fadd.fid` (the wide-value motivating example) was confirmed
+  **unaffected** by this fix, as expected - its blocker is a separate,
+  still-open bug (`mir_object_eligible` in `dcc_mir.c` rejects any
+  local/param with `type_size > 2`, so wide values never get a
+  `MirObject` at all, even though `mir_param_value_is_direct` and
+  `mir_emit_virtual_load_wide` both already contain fully-written
+  support for `type_size == 4`).
 
 ## Next session should
+
+1. **Close the `mir_object_eligible` wide-type gap** (Item T34's
+   sibling finding, `fid`'s actual blocker): relax
+   `mir_object_eligible`'s `type_size(sym->type) > 2` exclusion to also
+   allow `== 4`, letting wide (`float`/`long`) locals/params get a
+   `MirObject` so `mir_param_value_is_direct`'s and
+   `mir_emit_virtual_load_wide`'s already-written wide support can
+   actually activate. Note `mir_emit_virtual_store_wide` (unlike the
+   scalar `mir_emit_virtual_store`) does not call
+   `mir_param_value_is_direct` at all yet - it will need its own
+   explicit check added too, mirroring the scalar store's existing
+   first-line check, before a direct wide parameter's store is
+   actually skipped. Stage narrowly and check for any other code that
+   assumes "no `MirObject` implies not wide" before relaxing - search
+   all `mir_object_eligible`/`.object`/`object_count` call sites first.
+2. **Fresh forced-accept diff on `t2darr.c`'s own `check`** (now 495 vs
+   394 bytes post-T34, down from 599) and a few of the ~41 remaining
+   `check`/`check_int`-family functions that didn't cross the
+   acceptance threshold from T34 alone, to find what specific bytes
+   remain - likely one or two more small, reusable gaps stacked on top
+   of the now-fixed cache bug.
+3. **Size Item T33's population** (dead backend-slot reservation for
+   call-preserved-register values, `wumpus.rndix`) before choosing an
+   implementation approach - still open, unrelated to T34.
+4. **Build the far-bucket root-cause classifier** once 1-2 above land:
+   sample ~20-30 `far`-bucket (gap>256 bytes) functions across
+   different apps/shapes, force-accept-diff each, bucket by root-cause
+   category. Given T34 just demonstrated that even a function
+   apparently satisfying every *documented* condition of an existing
+   predicate can still be silently blocked by an unrelated bug
+   elsewhere, prefer this kind of runtime-instrumented, evidence-first
+   diagnosis over further static-reading-only guesses when sampling.
+5. Continue autonomously through the backlog (see the session
+   workspace `plan.md`'s v2 plan and `mir-text-size-plan.md`'s Item
+   T34 entry for full detail) without stopping between items, per the
+   standing user directive.
+
+## Superseded "Next session should" entries (kept for history only, do not act on these - see the renumbered list above)
 
 1. **Size the Item T33 population first**: instrument how many corpus
    functions have `frame_bytes > 0` purely from

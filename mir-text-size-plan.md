@@ -3349,3 +3349,132 @@ it doesn't require reordering the existing allocator pipeline - it can
 run as a final, additive pass after slots are already assigned and
 addresses computed, similar in spirit to a dead-store-elimination
 peephole but operating on frame layout instead of instructions.
+
+## Item T34: `mir_capture_stream_uses_frame`'s cross-function stale cache (2026-08-01)
+
+**Context**: while investigating the new text-size plan's backlog item
+1 (32-bit "wide" value forwarding, motivated by `tc89fadd.c`'s
+`float fid(float x) { return x; }` costing exactly ~2x legacy), and
+backlog item 2 (the 50-function `check`/`check_int` assertion-helper
+family apparently satisfying every documented condition of
+`mir_param_value_is_direct` yet still not getting direct-parameter
+treatment), a temporary env-var-gated trace was added to every
+`return 0` branch of `mir_param_value_is_direct` to find the exact
+blocking condition empirically rather than guessing further from
+static reading alone.
+
+**Finding**: `fid`'s parameter `x` traced to `reason=no-object` (a
+separate, distinct bug - `mir_object_eligible` in `dcc_mir.c` rejects
+any local/param with `type_size(sym->type) > 2`, so wide `float`/`long`
+values never get a `MirObject` at all, even though
+`mir_param_value_is_direct` and `mir_emit_virtual_load_wide` both
+already contain fully-written support for `type_size == 4` - this
+specific gap is unresolved and left for a follow-up item, see below).
+
+`check`'s parameters `got`/`expected`, by contrast, traced to
+`reason=frameless` - meaning `mir_capture_stream_uses_frame()` reported
+the function as never using a stack frame, despite `check`'s own
+legacy-captured assembly clearly starting with `push ix`. Root-caused
+to the function's cross-call cache:
+
+```c
+static int cached_result = -1;
+static const FILE *cached_stream = NULL;
+...
+if (cached_stream == mir.capture_stream && cached_result >= 0)
+    return cached_result;
+```
+
+`mir_begin_function` (`dcc_mir.c`) calls `mir.capture_stream =
+tmpfile();` fresh for *every* function, closing the previous one first.
+Once a `FILE*` is closed, the C library is free to (and in practice
+routinely does) hand back the exact same address for the next
+`tmpfile()` call. The cache above is keyed purely on that raw pointer
+value with `static` (process-lifetime) storage - so whenever a later
+function's `tmpfile()` happened to reuse a now-freed address, this
+function silently returned some **earlier, unrelated function's**
+frame/frameless verdict instead of computing (or even inspecting) its
+own captured output at all. This was a genuine cross-function
+correctness bug in the cache (not a deliberate memoization tradeoff),
+present since `mir_capture_stream_uses_frame` was introduced
+(mir-migration-plan-next10, the same session as `mir_param_value_is_
+direct` itself) - it has silently suppressed the entire direct-
+parameter-forwarding optimization for an unpredictable, potentially
+large subset of the corpus (whichever functions happened to inherit a
+"frameless" verdict from an earlier, unrelated frameless function via
+address reuse) for as long as that optimization has existed.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): removed the two
+`static` cache variables entirely; the function now always rewinds and
+re-scans `mir.capture_stream` for `"push ix"` on every call, then
+restores the stream's prior read position exactly as before. The scan
+itself is bounded by one function's own captured-assembly length
+(typically a few hundred bytes to a few KB) and is not expensive
+enough to warrant caching at the cost of correctness - especially
+since `mir_param_value_is_direct` (and thus this function) had already
+been called repeatedly per function even with the cache in place, so
+removing it does not introduce a new O(n) inner loop that didn't
+already effectively exist. No API or signature change; purely internal
+to this one function.
+
+**Validation**:
+- `check` (`t2darr.c`): `generated-bytes=599` -> `495` (a real
+  reduction, though `check` itself in `t2darr.c` remains a fallback at
+  495 vs 394 captured bytes - other apps' identical-shaped `check`
+  functions crossed the acceptance threshold, see below).
+- `fid` (`tc89fadd.c`): unaffected, as expected (its blocker is the
+  separate `mir_object_eligible` wide-type gap, not this cache).
+- Whole-corpus census (`build/mir-t34-cache-fix.tsv` vs
+  `build/mir-current.tsv`, `--fail-on-regression`): **0 regressions,
+  +10 newly-accepted functions** (275->285/2022, 13.60%->14.09%):
+  `tc99varm.two`, `tesc.check`, `tmirfast.check`, `tmirfuse.check`,
+  `tmirslot.check`, `tphijoin.check`, `trtl2.check_i`,
+  `tscanf.check_int`, `tstdlib.check_int`, `tstr3.check_i` - 9 of the
+  10 are exactly the `check`/`check_int`-family functions the new plan
+  identified as a 50-function recurring signature; this one cache fix
+  alone closed a fifth of that family in a single item.
+- Focused `runall.ps1 -Mode full` on all 11 flagged apps (tc89core,
+  tc99varm, tesc, tmirfast, tmirfuse, tmirslot, tphijoin, trtl2,
+  tscanf, tstdlib, tstr3): **11/11 correctness PASS, 0 performance
+  regressions, 18 genuine improvements** (up to -2.89% cycles / -1.52%
+  bytes in `tmirfast`) - a completely clean win, no trade-off needed.
+  Baselines updated via `-UpdatePerfBaseline` for all 11 apps.
+- Wide safety net (both required tiers): `-Mode fast` 314/323 clean;
+  full-corpus `-Mode full` also 314/323 clean, diagnostics/dccpeep/
+  performance all passed.
+
+**Why this was found instead of the originally-planned "wide-value
+forwarding infrastructure" item**: the new plan (`plan.md`, written
+this session before implementation) hypothesized two separate levers -
+a missing wide-value forwarding predicate, and an unexplained
+`mir_param_value_is_direct` gap for the `check` family - and
+recommended runtime instrumentation to diagnose the latter rather than
+guessing further. Adding a temporary env-var-gated trace to every
+`mir_param_value_is_direct` return-0 branch (built, tested against
+both `fid` and `check`, then reverted before the real fix) immediately
+separated these into two genuinely distinct bugs, of which this
+cache bug turned out to be a real, load-bearing defect independent of
+wide-value support - exactly the kind of finding SKILL.md's
+diagnostics-first discipline (`DCC_MIR_REPORT`/force-accept-diff, and
+here, one narrowly-scoped temporary trace) is meant to surface before
+committing to an implementation plan based on static reading alone.
+
+**Remaining work carried forward** (both already tracked in
+`plan.md`'s backlog, refined with this session's findings):
+- The `mir_object_eligible` wide-type exclusion (`fid`'s blocker) is
+  unresolved - relaxing `type_size(sym->type) > 2` to also allow `== 4`
+  would let wide locals/params get objects, which should let
+  `mir_param_value_is_direct`'s and `mir_emit_virtual_load_wide`'s
+  already-written wide support actually activate. Note also that
+  `mir_emit_virtual_store_wide` (unlike the scalar
+  `mir_emit_virtual_store`) does not currently call
+  `mir_param_value_is_direct` at all - even after the object-
+  eligibility gap is closed, the store side will need its own explicit
+  check added to actually skip storing a direct wide parameter,
+  mirroring the scalar store's existing first-line check.
+- The remaining ~41 `check`/`check_int`-family functions that did not
+  cross the acceptance threshold from this fix alone (like `t2darr.c`'s
+  own `check`, now at 495 vs 394 bytes) likely have one or two further,
+  smaller gaps on top of the cache bug - worth a fresh forced-accept
+  diff on `t2darr.check` now that the cache bug is fixed, to see what
+  specific bytes remain.

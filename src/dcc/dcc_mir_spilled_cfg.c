@@ -1520,27 +1520,41 @@ static int mir_divmod_partner(int instruction);
  * via tc89fnty's mulb full-mode regression. */
 static int mir_capture_stream_uses_frame(void)
 {
-    static int cached_result = -1;
-    static const FILE *cached_stream = NULL;
+    /* Item T34 (mir-text-size-plan.md): this used to cache cached_result
+     * keyed only on `cached_stream == mir.capture_stream` (a raw FILE*
+     * pointer comparison). mir_begin_function calls tmpfile() fresh for
+     * every single function and closes the previous one, so the C
+     * library is free to (and in practice routinely does) hand back the
+     * exact same FILE* address for the next function's stream once the
+     * old one is closed - the two "static" cache variables then silently
+     * carried the *first* function's frame/frameless verdict forward and
+     * applied it to every later function that happened to reuse that
+     * address, regardless of that function's own captured output. This
+     * starved mir_param_value_is_direct of ever firing for any function
+     * unlucky enough to share a reused tmpfile() address with an earlier
+     * frameless one - a real, cross-function correctness bug in the
+     * cache, not a deliberate memoization tradeoff. Recomputing fresh on
+     * every call removes the whole bug class; the scan itself is bounded
+     * by one function's own captured-assembly length and already restores
+     * the stream's read position afterward, so there is no correctness
+     * or ordering hazard in dropping the cache. */
     static const char needle[] = "push ix";
     int character;
     int matched;
     long saved_position;
+    int result;
 
     if (mir.capture_stream == NULL)
         return 1;
-    if (cached_stream == mir.capture_stream && cached_result >= 0)
-        return cached_result;
-    cached_stream = mir.capture_stream;
     saved_position = ftell(mir.capture_stream);
     rewind(mir.capture_stream);
-    cached_result = 0;
+    result = 0;
     matched = 0;
     while ((character = fgetc(mir.capture_stream)) != EOF) {
         if (character == needle[matched]) {
             ++matched;
             if (needle[matched] == '\0') {
-                cached_result = 1;
+                result = 1;
                 break;
             }
         } else {
@@ -1549,7 +1563,7 @@ static int mir_capture_stream_uses_frame(void)
     }
     if (saved_position >= 0)
         fseek(mir.capture_stream, saved_position, SEEK_SET);
-    return cached_result;
+    return result;
 }
 
 /* mir-migration-plan-next10 (post Item 3): a function-parameter value never
