@@ -61,7 +61,7 @@ static int mir_label_predecessor_count(int label_instruction)
  * Skipping more than one label at a time is deliberately not supported: it
  * would require reasoning about a chain of merges instead of a single,
  * locally-verifiable non-merge point. */
-static int mir_forward_skip_target(int instruction)
+static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
 {
     int next_instruction = instruction + 1;
     int skipped_label = 0;
@@ -79,7 +79,14 @@ static int mir_forward_skip_target(int instruction)
         }
         break;
     }
+    if (out_skipped_label != NULL)
+        *out_skipped_label = skipped_label;
     return next_instruction;
+}
+
+static int mir_forward_skip_target(int instruction)
+{
+    return mir_forward_skip_target_ex(instruction, NULL);
 }
 
 static int mir_can_forward_hl_to_next(int value)
@@ -88,6 +95,7 @@ static int mir_can_forward_hl_to_next(int value)
     const struct MirInsn *next;
     int next_instruction;
     int instruction;
+    int skipped_label;
 
     if (mir_emit_instruction_index < 0 ||
         mir_emit_instruction_index + 1 >= mir.count)
@@ -96,12 +104,24 @@ static int mir_can_forward_hl_to_next(int value)
         (definition->opcode == MIR_CALL ||
          definition->opcode == MIR_CALL_AGGREGATE))
         return 0;
-    next_instruction = mir_forward_skip_target(mir_emit_instruction_index);
+    next_instruction = mir_forward_skip_target_ex(mir_emit_instruction_index,
+                                                   &skipped_label);
     if (next_instruction >= mir.count)
         return 0;
     next = &mir.insns[next_instruction];
-    if (next_instruction != mir_emit_instruction_index + 1 &&
-        next->opcode != MIR_RETURN)
+    /* A pure MIR_NOP skip (skipped_label == 0) never crosses a CFG edge -
+     * MIR_NOP is a same-block rename/metadata marker that emits no code and
+     * has no live-range implications, so it is safe to look through for
+     * every consuming opcode, not just MIR_RETURN. Only a skipped LABEL
+     * (a real block boundary) still needs the narrower MIR_RETURN-only
+     * carve-out below, since that is the one hazard actually analyzed
+     * (VLA frame reuse across a skipped-to return). Item T29
+     * (mir-text-size-plan.md): the old check required exact physical
+     * adjacency for every opcode except MIR_RETURN, so a single
+     * intervening MIR_NOP (e.g. a global/local rename marker emitted
+     * immediately before a MIR_STORE) defeated forwarding even though
+     * mir_forward_skip_target already looked straight through it. */
+    if (skipped_label && next->opcode != MIR_RETURN)
         return 0;
     /* MIR_RETURN may be reached via a non-adjacent skip (see
      * mir_forward_skip_target above), so the forwarded value's home must

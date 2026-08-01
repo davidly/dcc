@@ -2726,3 +2726,101 @@ address computation appears to reach for the general
 compute-and-dereference path even when the element offset is well
 within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`/`m[i][j]`
 reads), worth a dedicated investigation of its own.
+
+## Item T29: let `mir_can_forward_hl_to_next` look through an
+intervening `MIR_NOP` for every consuming opcode, not just
+`MIR_RETURN` (2026-08-02)
+
+**Found via**: a fresh post-T28 whole-corpus census re-sweep, ranked
+by smallest `text-size` byte gap. Top two candidates were
+`tc99scpe.pointer_for_init_sizeof` (gap=19) and
+`tinline.inline_read_order_check` (gap=20).
+
+**`pointer_for_init_sizeof` investigated and deferred**: its MIR dump
+showed a value defined with `home=de` being round-tripped through a
+backend slot purely to move it into `hl` for its next use (a genuine
+register re-home, not a dead store). Confirmed via
+`grep -n "ld h,d\|ld l,e" src/dcc/dcc_mir*.c` that this backend never
+emits a direct register-to-register transfer instruction anywhere -
+the store/reload-via-slot pattern is the *only* re-homing mechanism it
+has. Fixing this would mean adding a new instruction-selection
+capability (direct inter-register moves), not a narrow slot/adjacency
+fix - deferring, same "genuine design scope, not a one-line bug"
+rationale as Item 6.
+
+**`inline_read_order_check` investigated - led to the real fix**: its
+MIR dump showed `edge_rw_global = 3;` (and `= 4;`) lowering to a
+`MIR_CONST` immediately followed by a `MIR_NOP` (a pure rename/label
+marker for the global, emitting no code) and *then* the actual
+`MIR_STORE`. `mir_forward_skip_target` (used by
+`mir_can_forward_hl_to_next`) already looks straight through such
+`MIR_NOP`s to find the real next instruction - but the caller's own
+adjacency check, `next_instruction != mir_emit_instruction_index + 1
+&& next->opcode != MIR_RETURN`, only tolerated a non-physically-
+adjacent target when that target was `MIR_RETURN`; for every other
+consuming opcode (including this `MIR_STORE`) a single intervening
+`MIR_NOP` alone defeated forwarding, forcing a real backend slot and a
+pointless store-then-immediate-reload round trip (`ld (ix-N),l` / `ld
+(ix-N+1),h` / `ld l,(ix-N)` / `ld h,(ix-N+1)` - 12 bytes wasted, twice
+in this one function).
+
+**Hypothesis**: a `MIR_NOP` is a same-basic-block marker with no code
+and no live-range/CFG implications, so skipping over one (as opposed
+to skipping over a `MIR_LABEL`, a real block boundary) is safe for any
+consuming opcode, not just `MIR_RETURN` - the existing `MIR_RETURN`-
+only carve-out was written to cover the *label*-skip case (per its own
+comment, guarding VLA frame-reuse hazards across a skipped-to return)
+and never distinguished "skipped a harmless NOP" from "skipped a real
+label" when applying that restriction.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): split
+`mir_forward_skip_target` into `mir_forward_skip_target_ex(instruction,
+int *out_skipped_label)` (same skip loop, now also reports whether a
+`MIR_LABEL` was skipped) plus a thin `mir_forward_skip_target`
+wrapper for the one other, unrelated call site
+(`mir_emit_virtual_store`) that doesn't need the distinction.
+`mir_can_forward_hl_to_next` now calls the `_ex` form and replaces the
+adjacency check with `if (skipped_label && next->opcode != MIR_RETURN)
+return 0;` - a pure-`MIR_NOP` skip (`skipped_label == 0`) is now
+allowed through for every opcode, while a label-skip remains gated to
+`MIR_RETURN` only, exactly preserving the previously-analyzed VLA
+safety condition unchanged.
+
+**Validation**:
+- `inline_read_order_check` diagnostic: generated-bytes dropped
+  488 (was ~656, gap 20 -> now below captured 636) - stays fallback
+  only because of the separate, unrelated `inline-substitution` cost
+  gate, but the underlying slot/round-trip bug is proven fixed.
+  `pointer_for_init_sizeof` unchanged (1620 bytes), confirming the
+  deferral diagnosis was correct - this fix does not touch its
+  register-re-home pattern.
+- Whole-corpus census vs pre-change (post-T28 snapshot,
+  `/tmp/census-post-t28.tsv`), `--fail-on-regression`: **0
+  regressions**, **coverage 241 -> 246/2022 (11.92% -> 12.17%)**, 5
+  newly-emitted functions: `tc99scpe.mid_block_multiple`,
+  `tinline.edge_write_then_value`, `tkandr.default_int`,
+  `tqsort.cmp_byte`, `tsretmem.make_pair`. 148 apps show census-metric
+  changes (expected - this touches the core forwarding predicate every
+  scalar value can pass through), 6 apps flagged for runtime
+  validation: `tc89size,tc99scpe,tinline,tkandr,tqsort,tsretmem`.
+- Focused `runall.ps1 -Mode full` on those 6 apps: 6/6 PASS
+  correctness, **0 regressions**, **9 genuine performance
+  improvements** (`tsretmem` peep -1%/nopeep -1%, `tkandr`
+  peep -0.05%/nopeep -0.07%, `tc99scpe` nopeep -0.02%, `tqsort`
+  peep -0.1%/nopeep -0.02% cycles plus nopeep -1.25% bytes,
+  `tc89size` nopeep -0.06%). Baselines updated for all 6 apps via
+  `-UpdatePerfBaseline` (clean win, no trade-off needed this time).
+- Wide `-Mode fast` safety net (full 323-app corpus): 314/323 passed,
+  9 skipped, diagnostics (106/106) and dccpeep fixtures (17/17) and
+  performance all passed - no regressions anywhere else in the
+  corpus.
+
+**Outcome**: +5 newly-accepted functions (241 -> 246/2022, 11.92% ->
+12.17%), 0 correctness failures, 9 clean performance improvements, no
+baseline trade-offs required.
+
+**Next**: re-sweep the census fresh (population composition shifted
+again) and continue down the ranked near-miss list; also revisit
+whether other single-use-forwarding checks in this file have the same
+NOP-vs-label adjacency conflation now fixed here only for
+`mir_can_forward_hl_to_next`.

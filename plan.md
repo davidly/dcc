@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 241/2022 runnable functions MIR-accepted (11.92%).
+- Coverage: 246/2022 runnable functions MIR-accepted (12.17%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -499,13 +499,45 @@ retired history; do not resume numbering from them.
   as a deliberate, documented trade-off (same precedent as Item T27's
   CI-blocking correction). Wide `-Mode fast` safety net (323 apps)
   clean. See `mir-text-size-plan.md`'s Item T28 entry for full detail.
+- **Item T29**: `mir_can_forward_hl_to_next`'s adjacency check required
+  exact physical adjacency for every consuming opcode except
+  `MIR_RETURN`, even though `mir_forward_skip_target` already looked
+  straight through intervening `MIR_NOP`s (harmless same-block rename
+  markers, no CFG/live-range implications). Split the helper into
+  `mir_forward_skip_target_ex` (reports whether a `MIR_LABEL`, a real
+  block boundary, was skipped) and relaxed the check to
+  `if (skipped_label && next->opcode != MIR_RETURN) return 0;` - a
+  pure-NOP skip is now allowed for any opcode, while label-skips keep
+  the original `MIR_RETURN`-only safety gate unchanged. Found via
+  `tinline.inline_read_order_check` (`edge_rw_global = 3;` lowered to
+  `MIR_CONST` -> `MIR_NOP` -> `MIR_STORE`, defeating forwarding on the
+  intervening NOP alone). **+5 newly-accepted functions**
+  (241/2022 -> 246/2022, 11.92% -> 12.17%): `tc99scpe.mid_block_multiple`,
+  `tinline.edge_write_then_value`, `tkandr.default_int`,
+  `tqsort.cmp_byte`, `tsretmem.make_pair`. 0 correctness failures; 9
+  genuine perf improvements (no trade-off needed). Baselines updated
+  for all 6 focused apps. Wide `-Mode fast` safety net (323 apps)
+  clean. Also investigated and **deferred**
+  `tc99scpe.pointer_for_init_sizeof`: its gap traces to a DE->HL
+  register re-home routed through a backend slot, but this backend has
+  no direct register-to-register move instruction anywhere - fixing it
+  needs a new instruction-selection capability, out of scope for a
+  narrow item (same "genuine design scope" rationale as Item 6). See
+  `mir-text-size-plan.md`'s Item T29 entry for full detail.
 
 ## Next session should
 
-1. **DONE (Item T28) - continue from here**: two exposed quality gaps
-   are now concrete, fresh, actionable candidates rather than abstract
-   priorities: (a) the systemic boolean/comparison-chain materialization
-   overhead (`SKILL.md`'s "Known root cause", this plan's ranked item
+1. **Re-sweep the census fresh from the post-T29 snapshot** and
+   continue down the ranked near-miss list (population composition
+   shifts after every landed item - do not reuse this session's
+   rankings). Also check whether other single-use-forwarding
+   predicates in `dcc_mir_spilled_cfg.c` have the same NOP-vs-label
+   adjacency conflation Item T29 just fixed only for
+   `mir_can_forward_hl_to_next`.
+2. Two exposed quality gaps from Item T28 are still concrete, fresh,
+   actionable candidates rather than abstract priorities: (a) the
+   systemic boolean/comparison-chain materialization overhead
+   (`SKILL.md`'s "Known root cause", this plan's ranked item
    1) - `thoistbc.main`'s `n==6 && out[0]==3 && out[2]==5 && out[5]==7`
    chained-return-expression is a fresh forced-diff example alongside
    `check_s`/`and_expr`; (b) a newly-identified candidate: array/pointer
@@ -513,7 +545,7 @@ retired history; do not resume numbering from them.
    a general compute-and-dereference path even when the element offset
    is well within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`
    /`m[i][j]` reads) - worth its own dedicated investigation.
-2. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
+3. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
    `MIR_LOAD`-of-same-object extension to `mir_param_value_is_direct`
    landed (safe, 6 other apps improved, 0 regressions), but
    `mir_object_eligible` unconditionally excludes pointer-typed
@@ -525,7 +557,7 @@ retired history; do not resume numbering from them.
    memory-location decisions broadly, not just this one predicate).
    Worth a dedicated, carefully-staged item; `tsnprtf`'s baseline has
    been updated in the meantime so this is no longer CI-blocking.
-2. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
+4. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
    +0.78% under Item T25 but not fully closed)** would need a
    predicate that follows the value through additional intervening
    definitions/uses beyond the single-load case Item T25 covers -
