@@ -5026,3 +5026,125 @@ already-proven sibling predicate already relied upon at both relevant
 emission sites. The `mir_capture_stream_uses_frame()` cross-pass
 investigation thread is recorded above as a resolved dead end, so a
 future session does not need to re-investigate it for this family.
+
+## Item T52: investigated and reverted - value-forwarding cannot help
+the `okb`/`xmalloc`-class gaps; both converge on the already-flagged
+pointer-object-eligibility ambiguity (2026-08-06)
+
+**Hypothesis (attempted)**: a value that already has a backend slot
+(because it has other, later uses) still gets a fully redundant
+immediate reload for its own *first* textual use whenever that use is
+physically adjacent to the value's own store - mirroring
+`mir_can_forward_hl_to_next`'s existing sole-use-only forwarding
+mechanism, but without requiring the value to have no other uses
+(since a slot already exists to serve those). Motivated by a
+force-accept-diff on `too.c`'s `xmalloc`:
+
+```c
+static void *xmalloc(unsigned int n) {
+    void *p = malloc(n);
+    if (p == 0) { printf(...); exit(2); }
+    return p;
+}
+```
+
+**Implementation**: refactored `mir_can_forward_hl_to_next` into a
+shared `mir_can_forward_hl_to_next_ex(value, require_sole_use)` (the
+original name now a thin `require_sole_use=1` wrapper, behavior
+unchanged) plus a new `mir_can_forward_hl_to_first_use(value)`
+(`require_sole_use=0`) - identical consumer-shape/adjacency/VLA-return
+safety validation, minus the tail "value must never be used again"
+loop (which only exists to prove the slot-free case has nothing left
+to serve; irrelevant when a slot already exists for later uses).
+Wired into `mir_emit_virtual_store`'s `has_slot` branch: the real slot
+store is always still written (later uses need it), and the HL
+register-forward handoff (`mir_forwarded_hl_value`/
+`mir_forwarded_hl_instruction`) is additionally armed whenever the new
+predicate holds, so the immediately-following matching load skips its
+own reload exactly like the existing no-slot case.
+
+**Why it produced zero yield**: `DCC_MIR_REPORT=1` on `xmalloc` showed
+the real MIR shape is *not* "one value id read twice" at all:
+
+```
+call     v2 = malloc                  ; p = malloc(n)
+store    v2 p mem=2
+load     v3 = p                       ; a DIFFERENT value id!
+const    v4 = 0
+binary   v5 = v3,v4 op==
+brfalse  v5 L1
+...
+load     v11 = p                      ; yet another value id
+return   v11
+```
+
+`p`'s first read (`v3`) is a fresh `MIR_LOAD` of the *object*, not a
+second use of `v2` itself - the front end always re-derives a value id
+from its home for every subsequent read of a variable, rather than
+reusing the value id that just defined it. `mir_forwarded_hl_value`
+only ever matches on an exact value-id equality, so this mechanism
+structurally cannot help: there is no point at which the *same* value
+id is used a second time here for it to catch.
+
+Built and ran the full-corpus census with `--fail-on-regression`
+after implementing: **exit 0, zero regressions, but 0 newly-emitted
+functions and 0 already-accepted functions changed** ("apps with
+census changes: 75" were all still-fallback-only metric noise with no
+runtime effect, confirmed via "apps requiring runtime validation: 0").
+The change was safe but had no practical benefit anywhere in the
+corpus - the "same value id reused a second time, adjacent to its own
+store, with a slot needed only for a later third+ use" shape this
+targeted essentially does not occur, because the front end's
+load-from-object convention means a stored value's *next* read is
+always a fresh, separate value id.
+
+**Disposition**: reverted in full (`git checkout --
+src/dcc/dcc_mir_spilled_cfg.c`), confirmed clean working tree and
+rebuild. Not committed - per this plan's discipline, unused complexity
+in a correctness-sensitive area (backend-slot/HL-forwarding logic)
+is not worth keeping for zero yield, even though it introduced no
+regression.
+
+**The real root cause, confirmed independently a second time**: `p`
+in `xmalloc` is a pointer (`void *`), so `mir_object_eligible`
+(`dcc_mir.c` line 199, `if (type_ptr_depth(sym->type) > 0) return 0;`)
+never admits it to `mir.objects[]` at all - there is no promoted
+object for `p` for any store-to-load forwarding, mem2reg-style pass to
+even consider, regardless of how the emission-side value-forwarding
+logic is extended. This is the *exact same* root cause already
+identified from a different angle in plan v3's evidence #3
+(`too.c`'s `rect_perim`, a pointer *local*) and ranked as backlog item
+2 ("investigate extending direct/object-free re-read eligibility to
+never-reassigned pointer parameters"). `xmalloc`'s `p` is itself a
+never-reassigned pointer *local* (not a parameter) assigned exactly
+once from a call result and only ever dereferenced/compared/returned
+afterward - a second, independent real-corpus function converging on
+the identical hypothesis from evidence #3, reinforcing that this is
+very likely the single largest remaining lever, not a one-off.
+
+**Re-confirmed why this is not attempted this session**: traced
+`mir_param_value_is_direct` (`dcc_mir_spilled_cfg.c` line 1700) and
+confirmed it is structurally coupled to `mir.objects[]` (requires
+`definition->object` to reference a real registered object) - there is
+no way to make pointer parameters "direct" without first admitting
+them through `mir_object_eligible`, which feeds the *general*
+mem2reg/object-promotion/phi-merge machinery used by every object
+consumer across `dcc_mir.c`/`dcc_mir_spilled_cfg.c`/
+`dcc_mir_homed_cfg.c`, not just the direct-parameter-read mechanism.
+A `grep` audit of every `mir.objects[]`/`type_ptr_depth` interaction
+site in `dcc_mir.c` (40+ call sites) did not surface an obvious
+blocking assumption that objects are never pointers, but auditing
+each one thoroughly, plus validating with real `ntvcm`-executed
+synthetic tests per the Item T41 lesson (this exact neighborhood has
+hidden two real correctness bugs before, at a much narrower scope than
+"every pointer parameter/local"), is a multi-step effort disproportionate
+to safely land in the current session. Deferred, same style as Item 6,
+Item T33 (until sized), and the Item T41 wide-forwarding prerequisite -
+**not lost, staged as the top-priority item for the next session**,
+with the narrow parameter-only/dereference-only slice (plan v3's
+backlog item 2, step (b)) as the concrete starting point.
+
+**Temp files used and cleaned up**: `/tmp/too_forced_t52.mac`,
+`/tmp/too_report.mac`, `build/mir-t52-before.tsv`,
+`build/mir-t52-after.tsv`, `build/mir-t52-after2.tsv` (all census/mac
+scratch files, not committed per policy).
