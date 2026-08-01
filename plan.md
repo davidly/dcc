@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 204/2022 runnable functions MIR-accepted (10.09%).
+- Coverage: 212/2022 runnable functions MIR-accepted (10.48%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -46,13 +46,21 @@ retired history; do not resume numbering from them.
   whose only use is a dead `MIR_UNARY`, e.g. the `(void)param;`
   cast-to-void idiom, no longer forces its own load; +2 newly-accepted
   functions, 14 apps with byte changes, 2 genuine tiny cycle wins)
+  plus Item T13's relaxation of `mir_can_forward_hl_to_next`'s
+  `MIR_RETURN`-forwarding gate (dropped the overly-broad
+  `mir_function_has_any_call()` restriction, keeping only the genuine
+  `has_vla` hazard; resolves the previously-deferred Item T12b) plus a
+  pre-existing `MIR_INDEX_ADDRESS` constant-multiply-to-`__mulu` defect
+  it exposed and this item also fixed (+8 newly-accepted functions,
+  253 apps with byte changes - the largest blast radius of the
+  session - 9 genuine cycle/size wins across the 8 focused apps)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11/T12 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -172,6 +180,30 @@ retired history; do not resume numbering from them.
   design (not a stale flag like Items T1/T3's fixes), so relaxing it
   needs the same occupancy-safety design work already flagged as an
   open risk for Item T7 - left fully scoped for a future session.
+- **Item T13** (resolves the deferred "Item T12b" above): removed the
+  `mir_function_has_any_call()` half of `mir_can_forward_hl_to_next`'s
+  `MIR_RETURN`-forwarding gate, keeping only the genuine `has_vla`
+  hazard (a whole-function call-presence check had no adjacency link
+  to the specific value being forwarded - static reading of
+  `mir_emit_virtual_iy_epilogue`'s `exx` trick found no tied hazard,
+  and full validation found none either). This alone flipped
+  `t2denum.main` to accepted with a genuine nopeep regression
+  (+3.69%/+2.44% bytes); root-caused via
+  `DCC_MIR_FORCE_ACCEPT_FUNCTION=main` **on the pre-T13 tree** as a
+  wholly separate, pre-existing defect merely exposed by crossing the
+  acceptance threshold (Item T6's precedent class): `MIR_INDEX_ADDRESS`'s
+  dynamic-index stride multiply never routed through the existing
+  `mir_mul_const_fast_path_eligible`/`mir_emit_mul_hl_const` shift/add
+  fast path, always calling `__mulu` even for compile-time-constant
+  power-of-2 strides. Fixed both `MIR_INDEX_ADDRESS` call sites to use
+  the fast path when eligible. **+8 newly-accepted functions**
+  (`t2denum.main`, `tautolcs.main`, `tenumfsm.main`, `texlog.main`,
+  `tmirslot.forward_into_store`, `trw.fail`, `tsretmem.hi_in_return`,
+  `wumpus.prmt`; 204/2022 10.09% -> 212/2022 10.48%, the single largest
+  coverage jump and blast radius (253 apps) this session), 0
+  regressions, 9 genuine tiny-to-small performance wins (largest:
+  `texlog` peep -0.68% cycles/-1.89% bytes). Milestone-tier full safety
+  net (323 apps) run given the blast radius; clean.
 
 ## Next session should
 
@@ -181,6 +213,17 @@ retired history; do not resume numbering from them.
    - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
      in an earlier migration phase) - do not re-attempt it; Item T7
      confirmed `check_s`'s boolean is already fully elided.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T13** before
+     picking the next candidate - 253 apps changed, by far the
+     largest population shift of any item this session, so a stale
+     sweep from before T13 is very likely to misdirect the next pick.
+   - **Item T7 (call-result HL-forwarding) should be revisited now**:
+     `mir_can_forward_hl_to_next`'s gate is now better understood and
+     partially relaxed (Item T13) - re-examine whether the remaining
+     occupancy-safety concern Item T7 deferred on still fully applies,
+     or whether T13's finding (the `MIR_RETURN`-only carve-out's
+     `has_any_call` half was simply overcautious, not load-bearing)
+     changes the risk calculus for call-result forwarding too.
    - The single biggest remaining lever is now the **call-result
      HL-forwarding gap** (Item T7, deferred): `mir_can_forward_hl_to_next`
      unconditionally excludes `MIR_CALL`-defined values from the

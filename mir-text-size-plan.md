@@ -1387,3 +1387,111 @@ non-VLA, non-T12b-blocked candidate (e.g. `tenumfsm::main`,
 `pint::while_stmt`, `tstructv::assign_return_pair_ptr`,
 `tdmfuse::sdm_pair`/`sdm_pair_r`, `tesc::check_s`/`tscanf::check_str`/
 `tstr3::check_s`/`tsyntax::check_s`).
+
+**Update (next session): Item T12b was resolved and landed as Item
+T13 below** - the deferred rationale above turned out not to be a
+correctness hazard; static reading plus full empirical validation
+found the restriction was simply overly conservative, with no tied
+hazard in `mir_emit_virtual_iy_epilogue`. See Item T13's entry for the
+full investigation and validation record.
+
+### Item T13: relax `mir_can_forward_hl_to_next`'s `MIR_RETURN`-only
+call-restriction gate (resolves deferred Item T12b), plus fix a
+pre-existing `MIR_INDEX_ADDRESS` constant-multiply gap it exposed
+
+**Hypothesis**: the `mir.has_vla || mir_function_has_any_call()` gate
+on `MIR_RETURN`-target HL-forwarding (introduced whole, undocumented,
+in `fed34c9`) is broader than necessary - `mir_function_has_any_call()`
+is a whole-function predicate with no adjacency link to the specific
+value being forwarded, so it blocks the exact same safe,
+adjacent-single-use-into-return shape `mir_try_emit_comparison_branch`
+already exploits, for every function that happens to call anything
+*anywhere*, e.g. `tenumfsm::main`'s `return state != S3;` immediately
+after the comparison, blocked purely because the function also calls
+`scan()`/`printf()` elsewhere.
+
+**Investigation**: traced `mir_emit_virtual_iy_epilogue`'s
+`exx`-based register-bank-swap trick (the only mechanism plausibly
+tied to "does this function have calls") and found it is gated by
+`mir_virtual_iy_base` (a frame-size flag), not by call presence -
+no static-reading justification for the restriction was found.
+
+**Fix**: removed `mir_function_has_any_call()` from the one gate line
+in `mir_can_forward_hl_to_next` (`dcc_mir_spilled_cfg.c`), keeping
+`mir.has_vla` alone (VLA frames can still reuse/shrink stack space
+between a value's definition and a non-adjacent skipped-to return, so
+that half of the restriction remains a genuine hazard). Removed the
+now-fully-unused `mir_function_has_any_call()` helper and replaced the
+gate's terse comment with one documenting this finding for future
+readers. Added a comment at the gate itself.
+
+**A second, pre-existing bug this exposed and also fixed**: applying
+the change alone flipped `t2denum::main` to MIR-accepted but with a
+genuine nopeep regression (+3.69% cycles, +2.44% bytes) - confirmed via
+`DCC_MIR_FORCE_ACCEPT_FUNCTION=main` **on the pre-T13 tree** that this
+regression is a wholly separate, pre-existing defect merely exposed by
+crossing the acceptance threshold (same class as Item T6's precedent):
+`MIR_INDEX_ADDRESS`'s dynamic-index case
+(`dcc_mir_spilled_cfg.c`, the non-`MIR_CONST`-index branch and the
+`base_name`/VLA-row-stride branch's `secondary_offset` scaling)
+unconditionally emitted `ld de,<stride>` + `call __mulu` for the
+per-element stride multiply, never routing through the existing
+`mir_mul_const_fast_path_eligible`/`mir_emit_mul_hl_const` shift/add
+fast path that `MIR_BINARY '*'` already uses for the exact same
+compile-time-constant-multiplier shape (row/element byte strides are
+always compile-time constants here). Fixed both call sites to check
+`mir_mul_const_fast_path_eligible` and use `mir_emit_mul_hl_const` when
+eligible, falling back to `__mulu` only when the fast path itself
+declines (e.g. VLA-alloc-feeding values needing runtime division
+support). Verified this eliminates the `__mulu` call for
+`t2denum::main`'s `transitions[state][STOP]` (stride 4, a plain
+`add hl,hl` x2 shift chain) and resolved the nopeep regression to
++0.14% (13,821 -> 13,840 cycles, noise-level, matching the accepted
+class from other items this session).
+
+**Validation**:
+- Whole-corpus census (`--fail-on-regression`) vs. post-T12 baseline
+  (`/tmp/census-post-t12.tsv`): 0 regressions, **+8 newly-accepted
+  functions** (`t2denum.main`, `tautolcs.main`, `tenumfsm.main`,
+  `texlog.main`, `tmirslot.forward_into_store`, `trw.fail`,
+  `tsretmem.hi_in_return`, `wumpus.prmt`); coverage 204/2022 (10.09%)
+  -> **212/2022 (10.48%)**. 253 apps had census metric changes (by far
+  the largest blast radius of any item this session, as expected -
+  `mir_function_has_any_call()` was a whole-function gate), 8 apps
+  flagged as requiring runtime validation.
+- Focused `runall.ps1 -Apps t2denum,tautolcs,tenumfsm,texlog,tmirslot,
+  trw,tsretmem,wumpus -Mode full`: 8/8 correctness PASS (no
+  register-clobber bug from the relaxed forwarding). Before the
+  `__mulu` fast-path fix: 7 apps showed regressions, most <0.1%
+  (accepted MIR-vs-legacy frame-size noise, same class validated for
+  T5/T9/T11/T12) except `t2denum` (peep +1.38%, nopeep +3.69%/+2.44%
+  bytes - investigated and fixed as above). After the fast-path fix:
+  `t2denum` nopeep dropped to +0.14% (noise-level); `t2denum` peep
+  remains at +1.38%, traced via `git stash`/rebuild/`dccpeep -Ot`-diff
+  to the same accepted "MIR allocates an 8-byte/3-slot frame via
+  `ld hl,-8/add hl,sp` vs legacy's more compact 2-byte `dec sp` x2"
+  code-shape difference already validated for `tenumfsm`/T9/T11/T12
+  (MIR's generated-bytes for the function are still smaller than
+  legacy's: 684 vs 702). 9 genuine tiny improvements across the other
+  7 apps (largest: `texlog` peep -0.68% cycles/-1.89% bytes). Ran
+  `-UpdatePerfBaseline` for all 8 apps.
+- Wide `-Mode fast` safety net (323 apps): 314 passed, 0 failed, clean.
+- Given the 253-app blast radius (largest of the session), ran the
+  milestone-tier full `-Mode full` safety net (323 apps): 314 passed,
+  0 failed, diagnostics (106/106), dccpeep fixtures (17/17),
+  performance (both modes) all clean.
+
+**Outcome**: +8 newly-accepted functions (212/2022, 10.48%), 0
+unaccepted regressions, 9 genuine performance improvements, one
+pre-existing constant-multiply-to-`__mulu` defect found and fixed as a
+byproduct (broadly reusable - any `MIR_INDEX_ADDRESS` with a
+non-constant runtime index and a small/power-of-2 compile-time stride
+benefits, not just the 8 newly-flipped functions). This is the
+largest single-item coverage jump and blast radius of the session,
+resolving the deferred Item T12b cleanly.
+
+**Next**: re-sweep the worst-ratio list fresh post-T13 (253 apps
+changed - a much larger population shift than any prior item); the
+previously-deferred Item T7 (call-result HL-forwarding) flagged this
+same gate as a shared prerequisite risk and should be revisited now
+that the gate is better understood and partially relaxed.

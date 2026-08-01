@@ -29,17 +29,6 @@ static int mir_virtual_iy_offset(int value)
            mir.aggregate_temp_bytes;
 }
 
-static int mir_function_has_any_call(void)
-{
-    int i;
-
-    for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_CALL ||
-            mir.insns[i].opcode == MIR_CALL_AGGREGATE)
-            return 1;
-    return 0;
-}
-
 /* Item 15 (mir-migration-plan-100): count exact CFG predecessors of a label
  * instruction using the successors[]/successor_count arrays mir_verify_and_dump
  * already computes for every function (jump targets, branch-false
@@ -114,8 +103,17 @@ static int mir_can_forward_hl_to_next(int value)
     if (next_instruction != mir_emit_instruction_index + 1 &&
         next->opcode != MIR_RETURN)
         return 0;
-    if (next->opcode == MIR_RETURN &&
-        (mir.has_vla || mir_function_has_any_call()))
+    /* MIR_RETURN may be reached via a non-adjacent skip (see
+     * mir_forward_skip_target above), so the forwarded value's home must
+     * still be live at that point. VLA frames can reuse/shrink stack space
+     * between the definition and a skipped-to return, so forwarding across
+     * a VLA-bearing function is unsafe; that is the only known hazard.
+     * (Item T13 / mir-text-size-plan.md: this used to also require
+     * !mir_function_has_any_call(), a broad whole-function gate with no
+     * call-adjacency link to the forwarded value; removing it, validated
+     * against the whole corpus plus full-mode runs, uncovered no
+     * correctness issue and only unlocked more RETURN-adjacent forwards.) */
+    if (next->opcode == MIR_RETURN && mir.has_vla)
         return 0;
     if (next->opcode == MIR_INDEX_ADDRESS) {
         if (next->src2 != value)
@@ -3009,9 +3007,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (insn->secondary_offset == 2)
                     fputs("\tadd hl,hl\n", out);
                 else if (insn->secondary_offset > 2) {
-                    fprintf(out, "\tld de,%d\n\textrn __mulu\n"
-                                 "\tcall __mulu\n",
-                            insn->secondary_offset);
+                    unsigned long secondary_multiplier =
+                        (unsigned long)insn->secondary_offset & 0xffffUL;
+                    if (mir_mul_const_fast_path_eligible(
+                            secondary_multiplier, insn->dst))
+                        mir_emit_mul_hl_const(out, secondary_multiplier);
+                    else
+                        fprintf(out, "\tld de,%d\n\textrn __mulu\n"
+                                     "\tcall __mulu\n",
+                                insn->secondary_offset);
                 }
                 fputs("\tpush hl\n", out);
                 mir_emit_virtual_load(out, insn->src1);
@@ -3041,9 +3045,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             } else {
                 mir_emit_virtual_load(out, insn->src2);
                 if (insn->immediate != 1) {
-                    fprintf(out,
-                            "\tld de,%ld\n\textrn __mulu\n\tcall __mulu\n",
-                            insn->immediate);
+                    unsigned long index_multiplier =
+                        (unsigned long)insn->immediate & 0xffffUL;
+                    if (mir_mul_const_fast_path_eligible(
+                            index_multiplier, insn->dst))
+                        mir_emit_mul_hl_const(out, index_multiplier);
+                    else
+                        fprintf(out,
+                                "\tld de,%ld\n\textrn __mulu\n"
+                                "\tcall __mulu\n",
+                                insn->immediate);
                 }
                 if (mir_forwarded_stack_value == insn->src1 &&
                     mir_forwarded_stack_instruction + 2 == i) {
