@@ -191,9 +191,15 @@ static void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
  * no setup or per-iteration branch overhead at all. A shift by exactly
  * 8 is further special-cased as a single register move (plus zero/sign
  * extension of the vacated byte), mirroring legacy's recognition of
- * this exact shape. */
-static void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
-                                              int is_unsigned, long count)
+ * this exact shape. Not static: also called directly by Item T49's
+ * scalar unsigned div/mod-by-power-of-2 fast path (both in this file's
+ * mir_emit_scalar_value and dcc_mir_spilled_cfg.c's scalar binary-
+ * operation caller), which computes the shift count as log2 of the
+ * divisor rather than receiving a MIR value ID to inspect, so it calls
+ * this helper directly instead of going through mir_emit_scalar_shift's
+ * MIR_CONST-detection wrapper. */
+void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
+                                       int is_unsigned, long count)
 {
     long i;
 
@@ -356,11 +362,55 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
             fputs("\textrn __mulu\n\tcall __mulu\n", out);
             return 1;
         case '/':
+            {
+                /* Item T49 (mir-text-size-plan.md): unsigned `int_expr /
+                 * <compile-time power-of-2 constant>` mirrors legacy's
+                 * fast path in ast_gen_binary_ast (dcc_ast_gen_expr.c
+                 * ~1551) - `emit_logical_shift_right_hl_const` instead of
+                 * a __divu runtime call. Signed division is intentionally
+                 * left alone (matches legacy's exact scope): a plain
+                 * right-shift is not equivalent to signed division's
+                 * round-toward-zero for negative dividends. */
+                const struct MirInsn *right_definition =
+                    mir_definition(definition->src2);
+                if ((definition->type & TYPE_UNSIGNED) != 0 &&
+                    right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST) {
+                    int shift = mir_ulong_log2_pow2(
+                        (unsigned long)right_definition->immediate & 0xffffUL);
+                    if (shift >= 0) {
+                        mir_emit_scalar_shift_by_constant(out, TOK_SHR, 1,
+                                                          shift);
+                        return 1;
+                    }
+                }
+            }
             fprintf(out, "\textrn %s\n\tcall %s\n",
                     (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs",
                     (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs");
             return 1;
         case '%':
+            {
+                /* Item T49: unsigned `int_expr % <compile-time power-of-2
+                 * constant>` mirrors legacy's fast path in the same
+                 * function - `emit_and_hl_const(divisor - 1)` instead of
+                 * a __modu runtime call, reusing Item T47/T48's
+                 * mir_emit_word_and_constant helper. */
+                const struct MirInsn *right_definition =
+                    mir_definition(definition->src2);
+                if ((definition->type & TYPE_UNSIGNED) != 0 &&
+                    right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST) {
+                    unsigned long divisor =
+                        (unsigned long)right_definition->immediate & 0xffffUL;
+                    if (mir_ulong_log2_pow2(divisor) >= 0) {
+                        mir_emit_word_and_constant(
+                            out, 'h', 'l',
+                            (unsigned int)((divisor - 1) & 0xffffUL));
+                        return 1;
+                    }
+                }
+            }
             fprintf(out, "\textrn %s\n\tcall %s\n",
                     (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods",
                     (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods");

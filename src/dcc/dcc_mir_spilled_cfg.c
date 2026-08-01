@@ -2936,8 +2936,13 @@ static void mir_emit_wide_shift_by_constant(FILE *out, int is_left,
 }
 
 /* log2 of a power-of-two 32-bit unsigned value; returns -1 if v is 0 or
- * not an exact power of two. Ported from ulong_log2_pow2 (dcc_ops.c). */
-static int mir_ulong_log2_pow2(unsigned long v)
+ * not an exact power of two. Ported from ulong_log2_pow2 (dcc_ops.c). Not
+ * static: also used by Item T49's scalar (16-bit) unsigned div/mod-by-
+ * power-of-2 fast path, including the call site in
+ * dcc_mir_emit_common.c. A 16-bit divisor is simply passed through the
+ * same 32-bit-wide check unchanged - the power-of-two test and log2
+ * computation are correct for any width. */
+int mir_ulong_log2_pow2(unsigned long v)
 {
     int n;
 
@@ -4535,6 +4540,41 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                                 (unsigned int)multiplier);
                     mir_emit_virtual_store(out, insn->dst);
                     break;
+                }
+                /* Item T49 (mir-text-size-plan.md): unsigned `int_expr /
+                 * <compile-time power-of-2 constant>` -> a logical right
+                 * shift, and unsigned `int_expr % <compile-time
+                 * power-of-2 constant>` -> a mask of (divisor - 1),
+                 * mirroring legacy's fast path in ast_gen_binary_ast
+                 * (dcc_ast_gen_expr.c ~1551) instead of a __divu/__modu
+                 * runtime call. Only applies when there is no fused
+                 * divmod partner above (that existing optimization
+                 * already takes priority when both a div and a mod of
+                 * the same operands appear together) and only for
+                 * unsigned types, matching legacy's exact scope: signed
+                 * division's round-toward-zero semantics for negative
+                 * dividends are not equivalent to a plain arithmetic
+                 * shift, so legacy itself never special-cases the signed
+                 * case either. HL already holds src1's real value here,
+                 * same as the '&' fast path above, with the same
+                 * !stack_forwarded_left guard. */
+                if ((insn->immediate == '/' || insn->immediate == '%') &&
+                    !stack_forwarded_left &&
+                    (insn->type & TYPE_UNSIGNED) != 0 &&
+                    right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST) {
+                    int shift = mir_ulong_log2_pow2(multiplier);
+                    if (shift >= 0) {
+                        if (insn->immediate == '/')
+                            mir_emit_scalar_shift_by_constant(out, TOK_SHR,
+                                                              1, shift);
+                        else
+                            mir_emit_word_and_constant(
+                                out, 'h', 'l',
+                                (unsigned int)((multiplier - 1) & 0xffffUL));
+                        mir_emit_virtual_store(out, insn->dst);
+                        break;
+                    }
                 }
                 /* A constant right-hand operand needs no dividend/left-
                  * operand-preserving push/pop dance: the left operand is

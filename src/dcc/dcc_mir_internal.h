@@ -296,7 +296,10 @@ void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned);
 void mir_emit_signed_byte_extend(FILE *out);
 void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned,
                            int count_value);
+void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
+                                       int is_unsigned, long count);
 int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset);
+int mir_ulong_log2_pow2(unsigned long v);
 void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
                                  unsigned int word_mask);
 int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate);
