@@ -1101,6 +1101,8 @@ int mir_load_is_single_call_argument(int value, int size)
 }
 
 static int mir_binary_is_fusable_comparison(int i);
+static int mir_fused_compare_is_const_zero_rhs(int compare_index);
+static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 
 /* Item 9 (mir-migration-plan-100): DCC_MIR_FUSE_REPORT=1 prints, per function,
  * how many scalar comparisons the Item 1/4 fusion caught versus how many
@@ -1638,10 +1640,20 @@ void mir_emit_virtual_load(FILE *out, int value)
  * instead of an array index's constant stride.
  *
  * Deliberately excludes any shape that takes a different code path for
- * the constant: divmod pairing, the multiply-by-constant fast path, and
- * fused-comparison branches all bypass the plain "push left, evaluate
- * right, pop, combine" sequence this optimization targets, so forwarding
- * across them is out of scope here (a separate item, not folded in). */
+ * the constant: divmod pairing and the multiply-by-constant fast path
+ * bypass the plain "push left, evaluate right, pop, combine" sequence
+ * this optimization targets, so forwarding across them is out of scope
+ * here (a separate item, not folded in).
+ *
+ * Item T17 (mir-text-size-plan.md): originally also excluded fused-
+ * comparison branches, on the assumption they took a different code
+ * path entirely - investigation showed mir_emit_fused_comparison_branch
+ * only consumes HL/DE however they got there (the src1/src2-loading
+ * code above, including this forwarding mechanism, is shared with the
+ * fused-comparison case; only the final action after loading - branch
+ * directly vs. materialize+store - differs). The exclusion is removed:
+ * a fusable comparison's left operand can be forwarded exactly the same
+ * as any other binary operator's. */
 static int mir_can_forward_stack_to_binary_const(int value)
 {
     const struct MirInsn *middle;
@@ -1666,7 +1678,17 @@ static int mir_can_forward_stack_to_binary_const(int value)
         mir_mul_const_fast_path_eligible(
             (unsigned long)middle->immediate & 0xffffUL, binary->dst))
         return 0;
-    if (mir_binary_is_fusable_comparison(binary_instruction) > 0)
+    /* Item T17 (mir-text-size-plan.md): a fusable comparison whose
+     * constant right-hand operand is exactly 0 takes the Item 25/27
+     * shortcut, which skips materializing DE (and, critically, skips
+     * the pop that would otherwise retrieve this forwarded value) -
+     * forwarding here would leave an unbalanced push on the stack.
+     * Every other fusable comparison (non-zero-RHS) goes through the
+     * ordinary const-materialize-to-DE path below, which does perform
+     * the pop, so only this specific pair of shapes needs excluding. */
+    if (mir_binary_is_fusable_comparison(binary_instruction) > 0 &&
+        (mir_fused_compare_is_const_zero_rhs(binary_instruction) ||
+         mir_fused_compare_is_signed_zero_sign_test(binary_instruction)))
         return 0;
     for (instruction = binary_instruction + 1;
          instruction < mir.count; ++instruction) {
@@ -1696,8 +1718,13 @@ static int mir_can_forward_stack_to_binary_const(int value)
  * dance the general push/pop path would otherwise need. Restricted to
  * the immediately-following instruction only (no intervening
  * MIR_CONST skip - that shape is a distinct, not yet needed case) and
- * excludes divmod pairing and fused-comparison branches, which use a
- * different code path entirely. */
+ * excludes divmod pairing, which uses a different code path entirely.
+ *
+ * Item T17 (mir-text-size-plan.md): like
+ * mir_can_forward_stack_to_binary_const above, this originally also
+ * excluded fused-comparison branches - removed for the same reason:
+ * mir_emit_fused_comparison_branch only consumes whatever HL/DE already
+ * hold, regardless of how they got there. */
 static int mir_can_forward_stack_to_binary_rhs(int value)
 {
     const struct MirInsn *binary;
@@ -1717,7 +1744,14 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
         return 0;
     if (mir_divmod_partner(binary_instruction) >= 0)
         return 0;
-    if (mir_binary_is_fusable_comparison(binary_instruction) > 0)
+    /* Defensive: mirrors the same Item T17 zero-RHS guard as
+     * mir_can_forward_stack_to_binary_const above. src2 (the forwarded
+     * value here) is not expected to itself be a plain constant in
+     * practice, but if it ever were, the Item 25/27 shortcuts would
+     * skip the pop this predicate promises the caller will perform. */
+    if (mir_binary_is_fusable_comparison(binary_instruction) > 0 &&
+        (mir_fused_compare_is_const_zero_rhs(binary_instruction) ||
+         mir_fused_compare_is_signed_zero_sign_test(binary_instruction)))
         return 0;
     for (instruction = binary_instruction + 1;
          instruction < mir.count; ++instruction) {

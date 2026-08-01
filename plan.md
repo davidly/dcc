@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 219/2022 runnable functions MIR-accepted (10.83%).
+- Coverage: 220/2022 runnable functions MIR-accepted (10.88%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -69,13 +69,20 @@ retired history; do not resume numbering from them.
   `MIR_BINARY` using it as `src2` with a plain-constant `src1` - the
   `literal OP computed_expr` shape; +2 newly-accepted functions,
   217/2022 -> 219/2022, -3,514 bytes across 37 functions)
+  plus Item T17's removal of T15/T16's overly-conservative fusable-
+  comparison exclusion (both predicates now cover comparisons too,
+  since the operand-loading code is shared with plain arithmetic;
+  narrowed to keep excluding only the two zero-RHS shortcut shapes that
+  would otherwise leave a forwarded push unpopped; +1 newly-accepted
+  function, 219/2022 -> 220/2022, -18,900 bytes across 225 functions,
+  the broadest byte-sum shrink since T15)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15/T16 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15/T16/T17 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -282,6 +289,29 @@ retired history; do not resume numbering from them.
   passed; the 1 failure (`tkbd`) is a known-flaky, `perf_ignore`-marked
   interactive stdin-timing test, confirmed unrelated via a clean
   isolated re-run.
+- **Item T17**: fresh post-T16 bucket sweep found `bint.goto_line_op`
+  (`if (tok != 257) die(...)`, gap=22) - the exact T15 shape (`load;
+  const; binary`) but for a **fusable comparison**, which T15/T16 had
+  both blanket-excluded on the (untested) assumption they "bypass the
+  plain push/pop sequence". Tracing the emission code disproved this:
+  the operand-loading logic is shared between plain arithmetic and
+  fusable comparisons - only the final action (branch directly vs.
+  materialize+store) differs, and `mir_emit_fused_comparison_branch`
+  only consumes whatever HL/DE already hold. Removed the blanket
+  exclusion from both predicates. One genuine hazard did surface: the
+  Items 25/27 zero-RHS shortcuts skip materializing DE (and, with it,
+  the pop a stack-forwarded operand needs) - narrowed the exclusion to
+  just those two specific shapes instead of all comparisons (added a
+  matching defensive guard to T16's predicate too, though unreachable
+  there in practice). **+1 newly-accepted function** (`goto_line_op`;
+  219/2022 10.83% -> 220/2022 10.88%), 0 regressions, **-18,900 bytes
+  across 225 functions** - the broadest byte-sum shrink since T15,
+  given how pervasive fusable comparisons are (67 apps with census
+  changes, the widest blast radius since T13). 1 app (`bint`) needed
+  runtime validation: PASS, with 2 **genuine** cycle improvements (not
+  just noise): peep -285 cycles, nopeep -200 cycles. Milestone-tier
+  full safety net (323 apps) run given the 67-app blast radius; clean
+  (314/314, no recurrence of T16's unrelated `tkbd` flake).
 
 ## Next session should
 
@@ -291,11 +321,12 @@ retired history; do not resume numbering from them.
    - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
      in an earlier migration phase) - do not re-attempt it; Item T7
      confirmed `check_s`'s boolean is already fully elided.
-   - **Re-sweep the worst-ratio/bucket list fresh post-T16** before
-     picking the next candidate. Census snapshot: `/tmp/census-post-t16.tsv`.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T17** before
+     picking the next candidate. Census snapshot: `/tmp/census-post-t17.tsv`.
      `MIR_BINARY`'s operand-adjacency forwarding now covers both
      src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
-     (T16); the remaining gap in this family is both operands being
+     (T16), **for both plain arithmetic and fusable comparisons**
+     (T17); the remaining gap in this family is both operands being
      non-constant/computed simultaneously (needs tracking two pending
      forwarded values at once - not attempted, revisit only with
      evidence it's material).
