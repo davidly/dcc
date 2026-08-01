@@ -154,7 +154,7 @@ void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
             end_label, true_label, end_label);
 }
 
-static void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
+void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
 {
     int true_label = new_label();
     int end_label = new_label();

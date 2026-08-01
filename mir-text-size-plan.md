@@ -4767,3 +4767,134 @@ would require restructuring an already-working, separately-validated
 code path for a comparatively narrow additional yield (a function
 using both `/` and `%` by the same power-of-two constant on the same
 operand is a rarer shape than either operation alone).
+
+### Item T50: extend `biased_right_constant` signed-comparison optimization to the spilled-scalar-cfg selector, plus a pre-existing correctness bugfix discovered along the way
+
+**Hypothesis**: `mir_emit_homed_binary_instruction` (`dcc_mir_emit_common.c`)
+already had a `biased_right_constant` optimization: for a signed `<`/`>=`
+comparison against a compile-time constant, pre-XOR the constant's sign
+bit at compile time (`constant ^ 0x8000`) so only the left operand's
+sign bit needs the runtime xor-128 flip before the `sbc hl,de`, instead
+of flipping both operands' sign bits at runtime. This existed only in
+the homed-scalar-cfg selector - the dominant spilled-scalar-cfg
+selector's fused-comparison-branch emitter and non-fused materialize
+path both still did the full double-xor dance for every signed
+comparison against *any* constant, even though the exact same
+compile-time-constant-biasing reasoning applies unchanged. Both
+`mir_emit_fused_comparison_branch` and `mir_emit_scalar_operation`'s
+comparison case have exactly one call site each in
+`dcc_mir_spilled_cfg.c`, making it safe to add a parameter/bypass
+without touching any other consumer.
+
+**Implementation**:
+- Promoted `mir_emit_scalar_compare_biased_right`
+  (`dcc_mir_emit_common.c`) from `static` to external linkage,
+  declared in `dcc_mir_internal.h` - the same shared-helper-promotion
+  pattern used four times already this session (Items T44/T47-T49).
+- At the DE-constant-loading decision point in
+  `dcc_mir_spilled_cfg.c`'s scalar binary-operation caller (the
+  `else if` chain that already special-cases const-zero-RHS fusions
+  from Items 25/27), added a new branch: for a non-unsigned `<`/`>=`
+  comparison against a non-zero compile-time constant, load the
+  *biased* constant (`constant ^ 0x8000`) into DE instead of the raw
+  value, and set a new local flag `de_holds_biased_constant`.
+- Threaded that flag through to both consumers: added a parameter to
+  `mir_emit_fused_comparison_branch` (its sole call site updated) so
+  it emits only the left operand's sign-bit xor before the `sbc`
+  instead of the double-xor dance when the flag is set; and, for the
+  non-fused materialize path, bypassed `mir_emit_scalar_operation`'s
+  generic comparison case entirely when the flag is set, calling
+  `mir_emit_scalar_compare_biased_right` directly instead (mirroring
+  how Items T48/T49 added self-contained early-return fast paths
+  rather than threading state through the fully generic operator
+  dispatch).
+- Verified `mir_negate_comparison_operator` only ever swaps `'<'` with
+  `TOK_GE` (never introduces `'>'`/`TOK_LE` from either), so the
+  eligibility decision made before knowing whether a fused branch will
+  be negated remains valid regardless of negation - the bias value
+  itself doesn't depend on which of the two forms is ultimately
+  tested, only which flag condition (`c` vs `nc`) is checked.
+
+**A pre-existing correctness bug found via synthetic `ntvcm`-executed
+testing** (not introduced by this session's work - confirmed present
+by stashing all uncommitted changes and rebuilding at the prior
+commit, `159fce1`): a synthetic 8-function regression battery
+exercising this optimization with *negative* compile-time constants
+(`x < -50`, `x >= -50`, and a fused-branch equivalent) produced
+silently wrong results at baseline, before any T50 code was written.
+Tracing with `DCC_MIR_REPORT` showed the MIR stream for a function
+comparing against `-50` contained *two* `MIR_CONST` instructions - one
+correctly holding the folded value `-50` (65486 as an unsigned 16-bit
+pattern), and a second, entirely unreferenced one still holding `50`
+(the pre-negation magnitude), assigned its own home register (`hl`,
+colliding with the left operand's own home). Root cause: a
+finalization pass in `dcc_mir.c` (~line 3752) folds
+`MIR_UNARY('-'/'~'/'!'/'+', MIR_CONST)` into a plain `MIR_CONST`
+in-place, computing the correct folded bit pattern - but, unlike the
+analogous dual-constant fold in `mir_lower_expr` (which explicitly
+retires an operand to `MIR_NOP` once `mir_value_use_count` reaches
+zero), this pass never checked whether the now-clobbered `src1`
+operand had become orphaned. The spilled-scalar-cfg and homed-
+scalar-cfg selectors both materialize *every* `MIR_CONST` with an
+assigned home unconditionally (correctly assuming dead values never
+reach emission), so the orphaned constant's `ld hl,50` was emitted for
+real immediately before the comparison's `sbc hl,de`, discarding
+whatever value (here, the actual left operand `x`) the selector had
+just placed in `hl`. This silently produced wrong results for *any*
+signed comparison against a negative compile-time constant reaching
+either selector - a real, already-shipped bug, unrelated to and
+predating this session's biased-comparison work, that this session's
+extra T41-lesson-motivated synthetic correctness testing happened to
+catch before it could be mistaken for a new T50 regression. Fixed by
+retiring the orphaned operand to `MIR_NOP` (`dst = -1`) when its use
+count reaches zero after the fold, mirroring the existing
+`mir_lower_expr` precedent exactly.
+
+**Validation**:
+- Synthetic `ntvcm`-executed correctness battery
+  (`/tmp/t50test/tt50c.c`, 9 functions: positive/negative left-operand
+  signs, positive and negative right-hand constants, both `<` and
+  `>=`, both fused-branch and non-fused-materialize shapes, plus a
+  negated fused-branch shape) - all runs matched hand-computed
+  expected values only *after* the orphan-retirement fix; the same
+  battery reproducibly failed 3 of 9 comparisons at the pre-fix
+  baseline (`159fce1`, confirmed via `git stash`). A second synthetic
+  test (`/tmp/t50test/multi.c`) forced spilled-scalar-cfg routing (via
+  a multi-statement function with an intervening global store) to
+  confirm the new biased fast path fires correctly outside the
+  trivial-function homed-cfg selector too, and produces no redundant
+  double-DE-load (unlike the pre-existing homed-cfg path, which was
+  observed to still load the raw constant into DE before immediately
+  overwriting it with the biased value - a separate, harmless,
+  pre-existing byte-count inefficiency in `mir_emit_homed_binary_
+  instruction` left untouched, out of scope for this item).
+- Whole-corpus census (`build/mir-t50-full.tsv` vs.
+  `build/mir-t49-baseline.tsv`, both 327/2023) with
+  `--fail-on-regression`: clean, 0 regressions. 102 apps showed
+  census metric changes (byte-count deltas from both the bugfix and
+  the biasing optimization, spanning many still-fallback functions
+  whose *estimated* MIR byte count changed even though they don't
+  emit MIR-generated code yet); the census's own analysis narrowed
+  actual runtime-relevant validation to a single app, `tinline`.
+- Focused `runall.ps1 -Apps tinline -Mode full`: 1/1 passed, 0
+  regressions.
+- Wide safety net, full 323-app corpus: `-Mode fast` 314/314 passed
+  clean; `-Mode full` (peep+nopeep) 314/314 passed clean, 0
+  regressions.
+
+**Disposition**: landed. Both the T50 optimization and the pre-
+existing orphaned-constant correctness bugfix are bundled in one
+commit, since the fix was discovered *while* building T50's own
+mandatory synthetic-correctness test (the T41 lesson: validate any
+change touching comparison/constant-folding-adjacent code with a real
+`ntvcm`-executed test, not just census/force-accept-diff inspection) -
+splitting them would require re-deriving the same MIR trace
+investigation twice. This also resolves the concern raised while
+scoping T50 (see the prior session summary) about whether extending a
+previously MIR-only, not-legacy-derived technique was in-scope: the
+investigation that followed from pursuing it directly uncovered a
+genuine, high-value correctness fix, reinforcing that generalizing an
+already-proven MIR technique to a second selector remains a reasonable
+category of work under this plan's discipline, provided (per the T41
+lesson) it is always paired with real `ntvcm`-executed correctness
+testing rather than static/census inspection alone.

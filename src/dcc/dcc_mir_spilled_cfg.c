@@ -2746,7 +2746,8 @@ static int mir_fused_compare_is_signed_zero_sign_test(int compare_index)
 }
 
 static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
-                                             int compare_index, int negate)
+                                             int compare_index, int negate,
+                                             int de_holds_biased_constant)
 {
     const struct MirInsn *compare = &mir.insns[compare_index];
     const struct MirInsn *branch = &mir.insns[compare_index + 1 + negate];
@@ -2784,6 +2785,20 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
         return mir_emit_conditional_branch_with_phi_copies(
             out, labels, true_condition, compare_index + 1 + negate, target,
             branch->label);
+    } else if (de_holds_biased_constant &&
+               (operation == '<' || operation == TOK_GE)) {
+        /* Item T50 (mir-text-size-plan.md): the caller already loaded DE
+         * with the compile-time-biased constant (constant ^ 0x8000)
+         * instead of the raw value, mirroring
+         * mir_emit_homed_binary_instruction's biased_right_constant
+         * optimization - only HL's sign bit needs the runtime xor-128
+         * flip, not both HL and DE, and the xor's own side effect clears
+         * carry so the usual leading `or a` is also unneeded. negate
+         * cannot change this eligibility: mir_negate_comparison_operator
+         * only ever swaps '<' with TOK_GE (never introduces '>' or
+         * TOK_LE from one of these two), so the bias computed for the
+         * un-negated compare->immediate remains valid after negation. */
+        fputs("\tld a,h\n\txor 128\n\tld h,a\n\tsbc hl,de\n", out);
     } else {
         if (operation == '>' || operation == TOK_LE) {
             fputs("\tex de,hl\n", out);
@@ -4479,6 +4494,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int stack_forwarded_right =
                     mir_forwarded_stack_value == insn->src2 &&
                     mir_forwarded_stack_instruction + 1 == i;
+                /* Item T50: set when the constant-loading logic below
+                 * chose to pre-bias the RHS constant instead of loading
+                 * it raw - both comparison consumers further down (the
+                 * fused-branch emitter and the non-fused materialize
+                 * path) need to know this to skip DE's own runtime
+                 * xor-128 flip and only flip HL's sign bit. */
+                int de_holds_biased_constant = 0;
                 if (mir_binary_only_constant(insn->src1)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src1);
@@ -4623,6 +4645,32 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                      * directly with "bit 7,h" instead of loading 0 into DE
                      * for a 16-bit sbc. */
                 } else if (!mir.has_vla && !stack_forwarded_left &&
+                           (insn->immediate == '<' ||
+                            insn->immediate == TOK_GE) &&
+                           right_definition != NULL &&
+                           right_definition->opcode == MIR_CONST &&
+                           (right_definition->immediate & 0xffffL) != 0 &&
+                           (mir_definition(insn->src1) == NULL ||
+                            (mir_definition(insn->src1)->type &
+                             TYPE_UNSIGNED) == 0) &&
+                           (right_definition->type & TYPE_UNSIGNED) == 0) {
+                    /* Item T50 (mir-text-size-plan.md): a signed `<`/`>=`
+                     * comparison against a non-zero compile-time constant
+                     * mirrors mir_emit_homed_binary_instruction's
+                     * biased_right_constant optimization (previously
+                     * MIR-only in that one selector) - pre-bias the
+                     * constant at compile time (constant ^ 0x8000) so
+                     * only HL's sign bit needs the runtime xor-128 flip
+                     * below, not both HL and DE. The RHS==0 case is
+                     * already handled more cheaply by Items 25/27 (bit 7
+                     * test, no DE load at all) when fusable, or falls
+                     * through to the plain path otherwise - excluded here
+                     * to avoid overlapping logic. */
+                    de_holds_biased_constant = 1;
+                    fprintf(out, "\tld de,%ld\n",
+                            (right_definition->immediate ^ 0x8000L) &
+                                0xffffL);
+                } else if (!mir.has_vla && !stack_forwarded_left &&
                            mir_binary_only_constant(insn->src2)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src2);
@@ -4653,7 +4701,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     int fuse_skip = mir_binary_is_fusable_comparison(i);
                     if (fuse_skip > 0) {
                         if (!mir_emit_fused_comparison_branch(
-                                out, labels, i, fuse_skip - 1))
+                                out, labels, i, fuse_skip - 1,
+                                de_holds_biased_constant))
                             goto done;
                         ++mir_fuse_report_fused_count;
                         i += fuse_skip;
@@ -4668,7 +4717,14 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 default:
                     break;
                 }
-                if (!mir_emit_scalar_operation(out, insn))
+                if (de_holds_biased_constant) {
+                    /* Item T50: bypass mir_emit_scalar_operation's
+                     * generic comparison case (which assumes DE holds
+                     * the raw constant and would xor-128 both HL and
+                     * DE) - DE already holds the biased value. */
+                    mir_emit_scalar_compare_biased_right(
+                        out, (int)insn->immediate);
+                } else if (!mir_emit_scalar_operation(out, insn))
                     goto done;
                 mir_emit_virtual_store(out, insn->dst);
             }

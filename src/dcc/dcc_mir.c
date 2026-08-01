@@ -3768,10 +3768,43 @@ void mir_resolve_deferred_metadata(void)
             bits = bits == 0;
         else if (insn->immediate != 0 && insn->immediate != '+')
             continue;
-        insn->opcode = MIR_CONST;
-        insn->src1 = -1;
-        insn->src2 = -1;
-        insn->immediate = (long)bits;
+        {
+            /* Item T50 (mir-text-size-plan.md): folding this MIR_UNARY
+             * in place into a plain MIR_CONST orphans its operand
+             * (`source`, e.g. the un-negated magnitude of a negative
+             * literal like the 50 in `-50`) once insn->src1 below is
+             * cleared - unlike the other constant-fold site in
+             * mir_lower_expr (which explicitly retires an operand to
+             * MIR_NOP once its use count reaches zero), this loop left
+             * the orphan as a live-looking MIR_CONST with its own
+             * assigned home register. At least the spilled-scalar-cfg
+             * and homed-scalar-cfg selectors materialize *every*
+             * MIR_CONST unconditionally (they have no separate
+             * liveness check for constants, since one is normally
+             * unnecessary - dead values are supposed to never reach
+             * emission at all), so the orphan's "ld hl,<magnitude>"
+             * was emitted for real, momentarily clobbering whatever
+             * value the selector had just placed in that register (most
+             * visibly, HL right before mir_emit_homed_binary_instruction's
+             * biased_right_constant path or the spilled-cfg comparison
+             * path performed their sbc) - a genuine, already-shipped
+             * silent-wrong-result bug for any signed comparison against
+             * a negative compile-time constant reached through either
+             * selector, found via a synthetic ntvcm-executed regression
+             * test while investigating Item T50's biased-comparison
+             * extension. Retiring the orphan here, mirroring the
+             * existing mir_lower_expr precedent exactly, removes it
+             * from emission consideration entirely. */
+            int operand = insn->src1;
+            insn->opcode = MIR_CONST;
+            insn->src1 = -1;
+            insn->src2 = -1;
+            insn->immediate = (long)bits;
+            if (mir_value_use_count(operand) == 0) {
+                source->opcode = MIR_NOP;
+                source->dst = -1;
+            }
+        }
     }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_STORE_INDIRECT &&
