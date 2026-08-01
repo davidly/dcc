@@ -1363,21 +1363,29 @@ static int mir_slot_report_param_assigned_count;
  * immediately following instruction (no intervening label/call/aliasing
  * store) never needs a backend slot at all - mir_emit_virtual_store already
  * skips storing it via mir_can_forward_hl_to_next (kept in HL across the
- * one-instruction gap) whenever the forward target isn't itself a MIR_STORE;
- * mir_prepare_backend_slots was still handing out a slot number/frame byte
- * for it regardless. Reuse mir_can_forward_hl_to_next itself (rather than a
- * second copy of the same forwarding predicate) so the accounting pass and
+ * one-instruction gap). Reuse mir_can_forward_hl_to_next itself (rather than
+ * a second copy of the same forwarding predicate) so the accounting pass and
  * the real emission-time skip can never drift apart - the repo's own Item 19
  * caution. Only 1-unit (narrow, HL-sized) values ever reach
  * mir_emit_virtual_store/mir_can_forward_hl_to_next; wide values use the
- * separate _wide store path and must still get a slot. */
-static int mir_backend_slot_forward_target_is_store(int instruction)
-{
-    int next_instruction = mir_forward_skip_target(instruction);
-    return next_instruction < mir.count &&
-           mir.insns[next_instruction].opcode == MIR_STORE &&
-           next_instruction == instruction + 1;
-}
+ * separate _wide store path and must still get a slot.
+ *
+ * mir-text-size Item T28 (mir-text-size-plan.md): this elision used to be
+ * withheld whenever the forward target was itself a MIR_STORE (via a
+ * now-removed mir_backend_slot_forward_target_is_store helper), forcing
+ * mir_prepare_backend_slots to still hand out a real slot for such values.
+ * But mir_can_forward_hl_to_next's own MIR_STORE case (above) already fully
+ * validates that forwarding into a store is safe - resolvable non-struct
+ * <=2-byte memory location, no other use anywhere in the function - and
+ * mir_emit_virtual_store's has_slot branch already forwards the value via
+ * mir_forwarded_hl_value for exactly this case (see forward_to_store
+ * there). The only effect of the withheld elision was that the value's own
+ * slot got persisted (via an unconditional ld (ix+d),l/h pair, or
+ * (iy+d),l/h) and then never read back by anyone, since the real consuming
+ * MIR_STORE already takes the value straight from HL. Found via
+ * tests/tclit.c's pick_pair(), whose compound-literal field constants were
+ * each stored twice: once into this now-dead slot, once into the real
+ * per-field destination the closing ldir reads from. */
 
 /* mir-text-size Item T22 (mir-text-size-plan.md): when a value's sole use
  * is an immediately-following 1-byte MIR_STORE (mir_can_forward_hl_to_next's
@@ -1425,8 +1433,7 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
         return 0;
     saved_index = mir_emit_instruction_index;
     mir_emit_instruction_index = instruction;
-    forwardable = mir_can_forward_hl_to_next(value) &&
-                  !mir_backend_slot_forward_target_is_store(instruction);
+    forwardable = mir_can_forward_hl_to_next(value);
     mir_emit_instruction_index = saved_index;
     return forwardable;
 }

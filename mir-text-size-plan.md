@@ -2590,3 +2590,139 @@ that same kind of dedicated follow-on. (3) Going forward this session,
 any new residual must either be genuinely fixed or have its baseline
 explicitly updated with full documentation before moving on — never
 left permanently unbaselined, since that silently breaks CI.
+
+## Item T28: stop giving a real backend slot to a value whose sole use is a forwarded `MIR_STORE` (2026-08-02)
+
+**Found via**: a fresh whole-corpus census re-sweep after T27 (per
+SKILL.md's standing instruction to re-derive the near-miss ranking
+fresh rather than reuse a stale list), bucketed and ranked by smallest
+`text-size` byte gap. `tests/tclit.c`'s `pick_pair` (`return (struct
+Pair){8, 9};`, a 4-byte 2-int struct) was the top candidate: gap=26,
+27 generated vs 27 captured instructions — a clean near-miss shape.
+
+**Hypothesis**: `DCC_MIR_FORCE_ACCEPT_FUNCTION=pick_pair` plus
+`DCC_MIR_REPORT=1` showed each compound-literal field constant was
+stored *twice*: once into a "dead" backend slot (`ld (ix-6),l` / `ld
+(ix-5),h`, reused/overwritten by both fields since neither slot write
+is ever read back) and once into the real per-field destination slot
+the closing `ldir` reads from. Root cause, traced through
+`mir_prepare_backend_slots`/`mir_backend_slot_forwardable`/
+`mir_backend_slot_forward_target_is_store`
+(`dcc_mir_spilled_cfg.c`): `mir_backend_slot_forward_target_is_store`
+(added alongside Item 13 itself, commit `70a1540`) deliberately
+returned 1 - blocking Item 13's "no slot at all" fast path - whenever
+a value's single forwarded use was a `MIR_STORE`, forcing
+`mir_prepare_backend_slots` to still allocate a real slot for such
+values. But `mir_emit_virtual_store`'s own `forward_to_store` logic
+(further down the same file) already unconditionally writes the value
+into that allocated slot at its own definition site and *then* sets
+`mir_forwarded_hl_value`/`mir_forwarded_hl_instruction` so the
+following real `MIR_STORE` can skip reloading via
+`mir_emit_virtual_load`'s forwarding check - meaning the slot write is
+never subsequently read by anyone once the direct-forwarding path is
+taken. Confirmed the exclusion was unnecessarily conservative, not a
+real correctness hazard, by inspecting `mir_can_forward_hl_to_next`'s
+own dedicated `MIR_STORE` case (immediately above the exclusion in the
+same file): it already independently proves the forward is safe -
+resolvable non-struct <=2-byte memory location, and (via its trailing
+scan) *no other use of the value anywhere in the function* - which is
+the exact same safety condition `mir_emit_virtual_store`'s
+`forward_to_store` branch already relies on. The withheld elision
+therefore only ever caused a value that would forward correctly
+anyway to *also* get a real slot and a wasted persist-store nothing
+ever reads back.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): removed
+`mir_backend_slot_forward_target_is_store` and its use inside
+`mir_backend_slot_forwardable`, which now simply returns
+`mir_can_forward_hl_to_next(value)` (still gated on `units == 1` and
+not a `MIR_PHI` destination, both pre-existing safety conditions).
+This lets the store-consumed case take the exact same "no slot at
+all" fast path Item 13 already gives every other single-use-adjacent
+consumer; `mir_emit_virtual_store`'s existing `!has_slot` branch
+already sets up the HL forward correctly with no further change
+needed, since it uses the identical `mir_can_forward_hl_to_next`
+predicate. `mir_emit_virtual_store`'s `forward_to_store`-specific
+logic inside the `has_slot == true` branch is now dead for this exact
+single-use case (since `has_slot` can no longer be true when
+`mir_can_forward_hl_to_next` is true) but is left in place as
+harmless defensive code rather than pulled out in the same change.
+
+**Validation**:
+- `pick_pair` diagnostic: generated-bytes dropped 313 -> 261 (below
+  captured's 287) - MIR now correctly accepted, matching the
+  hypothesis exactly.
+- Whole-corpus census vs pre-change (post-T27 snapshot): **0
+  regressions**, **coverage 236 -> 241/2022 (11.67% -> 11.92%)**, 5
+  newly-emitted functions: `tarresc.main`, `tclit.pick_pair`,
+  `thoistbc.main`, `tinitreg.tauto`, `tvolopt.const_volatile_read`.
+  208 apps show census-metric changes (broad blast radius expected -
+  this touches the core slot-allocation pass every scalar value can
+  pass through), 8 apps flagged for runtime validation:
+  `tarresc,tbcgcol,tc89core,tclit,thoistbc,tinitreg,tstr2,tvolopt`.
+- Focused `runall.ps1 -Mode full` on those 8 apps: 8/8 PASS
+  correctness. 13 genuine performance improvements, including strong
+  wins in the newly-accepted `tarresc.main`
+  (peep -8.43% cycles/-6% bytes, nopeep -20.84% cycles/-14.55% bytes)
+  and small wins elsewhere (`tbcgcol`, `tc89core`, `tstr2`, `tvolopt`,
+  `tclit`, and `tinitreg` peep -0.79%). **3 small regressions**:
+  `thoistbc` peep +0.52%/nopeep +0.17%, `tinitreg` nopeep-only +0.06%.
+  Root-caused via forced-fallback A/B diffing of `thoistbc.main` (a
+  `sliding_max` static-inline substitution plus a chained `&&`
+  boolean-return expression) and reading `tinitreg.tauto`'s source
+  (a large straight-line, loop-free sequence of `cki`/`ckul` calls):
+  both regressing functions newly cross the byte-count acceptance
+  threshold *because of* this item's byte savings, but the actual
+  extra cycles trace to two separate, already-documented, unrelated
+  MIR-vs-legacy quality gaps that this item's fix merely exposed by
+  making these two large functions newly eligible: (1) the still-
+  deferred systemic boolean/comparison-chain materialization overhead
+  (this plan's "Root causes to close, ranked by expected yield" item
+  1, the same root cause named in `SKILL.md`'s "Known root cause"
+  section) visible in `thoistbc.main`'s chained `n==6 && out[0]==3 &&
+  ...` return expression; and (2) verbose array/pointer-element
+  address computation via `MIR_INDEX_ADDRESS` (a separate, not-yet-
+  investigated quality gap, unrelated to this item's dead-store fix -
+  the stack-forwarding `push hl`/`pop hl` pair visible in the diff is
+  `mir_can_forward_stack_to_index`'s existing, intentional mechanism,
+  not a new artifact). Neither regressing function's own MIR
+  correctness is in question (the elision's safety condition is
+  identical to Item 13's already-proven one); the cost is a pre-
+  existing, already-tracked MIR code-quality shortfall in two
+  unrelated areas, only now visible because these two large functions
+  crossed the static acceptance threshold for the first time.
+- Given (a) the fix itself is structurally sound and the regression
+  is fully diagnosed and attributed to separately-scoped, already-
+  planned future work rather than an unknown hazard, (b) reverting the
+  whole item would forfeit 3 clean wins (up to -20.84% cycles) and the
+  motivating `pick_pair` fix, and (c) excluding just these two specific
+  functions has no available structural predicate distinct from a
+  name-based carve-out (Rule 6) - unlike Item 6's whole-class VLA
+  deferral, there is no shape difference between the "safe" and
+  "regressing" newly-accepted functions other than which pre-existing
+  quality gap they happen to also contain - baselines for all 8
+  focused apps were updated via `runall.ps1 -UpdatePerfBaseline`
+  (all 8 PASS correctness first), following the same "diagnosed,
+  documented, deliberate trade-off, not a hidden regression" precedent
+  already established in Item T27's CI-blocking baseline correction.
+- Wide `-Mode fast` safety net (full 323-app corpus): 314/323 passed,
+  9 skipped, diagnostics/dccpeep/performance all passed - no
+  regressions anywhere else in the corpus.
+
+**Outcome**: +5 newly-accepted functions (236 -> 241/2022, 11.67% ->
+11.92%), 0 correctness failures, net strongly positive performance
+(13 improvements vs. 3 small, fully-diagnosed, already-tracked
+regressions accepted as a deliberate trade-off).
+
+**Next**: the two exposed quality gaps are both already on this
+plan's radar and should be prioritized directly rather than folded
+into a future opportunistic near-miss sweep: (1) the systemic
+boolean/comparison-chain materialization overhead (this plan's ranked
+item 1 / `SKILL.md`'s "Known root cause" section) - `thoistbc.main`'s
+`n==6 && out[0]==3 && out[2]==5 && out[5]==7` chain is now a fresh,
+concrete forced-diff example alongside `check_s`/`and_expr`; (2) a new
+candidate not previously tracked: `MIR_INDEX_ADDRESS`/array-element
+address computation appears to reach for the general
+compute-and-dereference path even when the element offset is well
+within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`/`m[i][j]`
+reads), worth a dedicated investigation of its own.

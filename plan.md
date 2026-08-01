@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 236/2022 runnable functions MIR-accepted (11.67%).
+- Coverage: 241/2022 runnable functions MIR-accepted (11.92%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -477,10 +477,43 @@ retired history; do not resume numbering from them.
   in `mir-text-size-plan.md`'s Item T27 entry) to unblock CI; this is
   a transparent, fully-documented finalization of an already-diagnosed
   trade-off, not a hidden regression.
+- **Item T28**: removed `mir_backend_slot_forward_target_is_store`,
+  a needlessly conservative exclusion in `mir_backend_slot_forwardable`
+  that forced a real backend slot onto any value whose sole use was a
+  forwarded `MIR_STORE`, even though `mir_can_forward_hl_to_next`'s own
+  `MIR_STORE` case already fully proves the forward safe and
+  `mir_emit_virtual_store` already forwards it via HL regardless -
+  the slot write was genuinely dead. Found via `tclit.pick_pair`
+  (compound-literal fields each stored twice). **+5 newly-accepted
+  functions** (236/2022 -> 241/2022, 11.67% -> 11.92%): `tarresc.main`,
+  `tclit.pick_pair`, `thoistbc.main`, `tinitreg.tauto`,
+  `tvolopt.const_volatile_read`. 0 correctness failures; 13 genuine
+  perf improvements (up to `tarresc` nopeep -20.84%) vs. 3 small,
+  fully-diagnosed regressions (`thoistbc` peep +0.52%/nopeep +0.17%,
+  `tinitreg` nopeep +0.06%) traced to two separate, already-tracked,
+  pre-existing MIR-vs-legacy quality gaps (the systemic boolean-chain
+  materialization overhead, and verbose `MIR_INDEX_ADDRESS` array-
+  element addressing) that these two large functions merely newly
+  expose by crossing the acceptance threshold - not a hazard in this
+  item's own transformation. Baselines updated for all 8 focused apps
+  as a deliberate, documented trade-off (same precedent as Item T27's
+  CI-blocking correction). Wide `-Mode fast` safety net (323 apps)
+  clean. See `mir-text-size-plan.md`'s Item T28 entry for full detail.
 
 ## Next session should
 
-1. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
+1. **DONE (Item T28) - continue from here**: two exposed quality gaps
+   are now concrete, fresh, actionable candidates rather than abstract
+   priorities: (a) the systemic boolean/comparison-chain materialization
+   overhead (`SKILL.md`'s "Known root cause", this plan's ranked item
+   1) - `thoistbc.main`'s `n==6 && out[0]==3 && out[2]==5 && out[5]==7`
+   chained-return-expression is a fresh forced-diff example alongside
+   `check_s`/`and_expr`; (b) a newly-identified candidate: array/pointer
+   -element address computation via `MIR_INDEX_ADDRESS` appears to use
+   a general compute-and-dereference path even when the element offset
+   is well within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`
+   /`m[i][j]` reads) - worth its own dedicated investigation.
+2. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
    `MIR_LOAD`-of-same-object extension to `mir_param_value_is_direct`
    landed (safe, 6 other apps improved, 0 regressions), but
    `mir_object_eligible` unconditionally excludes pointer-typed
