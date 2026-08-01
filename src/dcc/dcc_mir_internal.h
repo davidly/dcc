@@ -291,6 +291,7 @@ int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
                                                     int base, long offset);
 void mir_emit_prologue(FILE *out);
 void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned);
+void mir_emit_signed_byte_extend(FILE *out);
 void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned);
 int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset);
 int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate);

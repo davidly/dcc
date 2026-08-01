@@ -143,7 +143,8 @@ static int mir_can_forward_hl_to_next(int value)
             if (mir_object_is_fully_promoted(next->object) ||
                 (producer_opcode != MIR_LOAD_INDIRECT &&
                  producer_opcode != MIR_BINARY &&
-                 producer_opcode != MIR_UNARY) ||
+                 producer_opcode != MIR_UNARY &&
+                 producer_opcode != MIR_CONST) ||
                 !mir_scalar_memory_location(next, &memory_type,
                                             &memory_storage, &memory_offset) ||
                 type_is_struct_object(memory_type) ||
@@ -603,6 +604,8 @@ static void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
     }
 }
 
+static int mir_address_is_single_call_argument(int value);
+
 static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -621,6 +624,19 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
         if (size == 4)
             fprintf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
                     memory_offset + 2, memory_offset + 3);
+        return 1;
+    }
+
+    if (size == 2 && mir_address_is_single_call_argument(value)) {
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+        if (!mir_scalar_memory_location(definition, &memory_type,
+                                        &memory_storage, &memory_offset))
+            return 0;
+        fputs("\tpush ix\n\tpop hl\n", out);
+        if (memory_offset != 0)
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
         return 1;
     }
 
@@ -1022,6 +1038,60 @@ static int mir_value_only_used_by_dead_unary(int value)
     return found_use;
 }
 
+/* mir-text-size Item T20: when a value's own definition is immediately
+ * followed by its sole use as a MIR_ARG, and that ARG is in turn
+ * immediately followed by its own MIR_CALL/MIR_CALL_AGGREGATE (nothing
+ * at all in between - not even another argument's own value
+ * definition), this is provably the *last*-defined argument for that
+ * call in MIR-stream order. The generic MIR_CALL argument loop below
+ * always walks a call's own MIR_ARG instructions *backward* (matching
+ * strictly decreasing positional index starting from
+ * call_arg_count - 1), so the last-MIR-stream-order argument is always
+ * the *first* one physically processed/pushed - nothing can touch HL
+ * between this value's own computation and the moment it is pushed.
+ * mir_call_argument_cache_target's more general BC-cache mechanism
+ * (below) exists precisely to preserve a value across such a gap; when
+ * there is provably no gap at all, caching (store to bc, reload from
+ * bc) is pure overhead - the value can flow straight through HL via
+ * the same mir_forwarded_hl_value/_instruction mechanism
+ * mir_can_forward_hl_to_next already uses for its own recognized
+ * consumer opcodes, anchored to the ARG instruction's own index: since
+ * MIR_ARG's own emission case is a no-op (it contributes zero machine
+ * instructions), mir_emit_virtual_load's existing forwarded-hl check
+ * naturally fires when the emit loop later reaches the CALL
+ * instruction one position after the ARG, exactly the position this
+ * predicate requires be adjacent. Found via tests/pint.c's
+ * while_stmt: `patch(jz, cp)`'s second argument (a fresh global read of
+ * `cp`) was round-tripped through bc for no reason - nothing runs
+ * between the load and the call at all. */
+static int mir_can_forward_hl_to_call_argument(int value)
+{
+    const struct MirInsn *arg_insn;
+    const struct MirInsn *call_insn;
+    int instruction;
+
+    if (mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 2 >= mir.count)
+        return 0;
+    arg_insn = &mir.insns[mir_emit_instruction_index + 1];
+    call_insn = &mir.insns[mir_emit_instruction_index + 2];
+    if (arg_insn->opcode != MIR_ARG || arg_insn->src1 != value ||
+        type_size(arg_insn->type) > 2)
+        return 0;
+    if ((call_insn->opcode != MIR_CALL &&
+         call_insn->opcode != MIR_CALL_AGGREGATE) ||
+        call_insn->secondary_offset != arg_insn->secondary_offset)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (instruction == mir_emit_instruction_index + 1)
+            continue;
+        if (mir.insns[instruction].src1 == value ||
+            mir.insns[instruction].src2 == value)
+            return 0;
+    }
+    return 1;
+}
+
 static int mir_call_argument_cache_target(int value)
 {
     int argument_instruction = -1;
@@ -1134,6 +1204,54 @@ int mir_load_is_single_call_argument(int value, int size)
     return call_argument_count <= 3;
 }
 
+/* mir-text-size Item T20 (mir-text-size-plan.md): sibling to
+ * mir_load_is_single_call_argument above, but for a MIR_ADDRESS
+ * (address-of a local/parameter) whose sole use is exactly one
+ * MIR_ARG. Unlike a MIR_LOAD's memory *value*, a MIR_ADDRESS's own
+ * emission for the non-VLA, non-global local/param shape (this
+ * selector's own MIR_ADDRESS case, dcc_mir_spilled_cfg.c) is nothing
+ * but `push ix/pop hl` plus a fixed compile-time-constant offset add -
+ * a pure, side-effect-free function of ix (which never moves once the
+ * prologue runs) that is exactly as cheap to recompute again later as
+ * it was to compute the first time. When such a value can't be
+ * forwarded straight through HL (typically because another argument's
+ * own computation needs HL first), the generic store-to-slot-then-
+ * reload fallback wastes two `ld (ix+n),r` stores legacy's own emitter
+ * never needed - legacy simply recomputes the address fresh right at
+ * the point of use instead of ever storing it. Found via
+ * tests/tbcgcol.c's main(): the array-pointer argument to
+ * global_bc_across_pointer_loop was needlessly spilled and reloaded
+ * even though nothing about it needs preserving across the gap - it
+ * can just be recomputed for free. */
+static int mir_address_is_single_call_argument(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int argument_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_ADDRESS ||
+        mir_declared_is_vla_object(definition->name) ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        memory_offset < -128 || memory_offset > 127)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src2 == value)
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        if (insn->opcode != MIR_ARG || type_size(insn->type) != 2 ||
+            ++argument_count > 1)
+            return 0;
+    }
+    return argument_count == 1;
+}
+
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
@@ -1212,6 +1330,33 @@ static int mir_backend_slot_forward_target_is_store(int instruction)
     return next_instruction < mir.count &&
            mir.insns[next_instruction].opcode == MIR_STORE &&
            next_instruction == instruction + 1;
+}
+
+/* mir-text-size Item T22 (mir-text-size-plan.md): when a value's sole use
+ * is an immediately-following 1-byte MIR_STORE (mir_can_forward_hl_to_next's
+ * MIR_STORE case, e.g. an int/char constant initializing one element of a
+ * byte array), mir_emit_virtual_store still persists BOTH bytes of the
+ * value's own backend slot even though only L is ever read back for a
+ * 1-byte store - H's persisted byte is never read by anyone, proven by the
+ * same mir_can_forward_hl_to_next scan that already showed nothing
+ * references the value after the forwarded store. Skipping just that
+ * H-byte store (kept narrowly scoped to the forward-to-1-byte-store case,
+ * not the general slot-elision Item 13 left alone for stores) closes this
+ * gap safely. Found via tests/tc89core.c's main(): its `char msg[] =
+ * "core"` initializer stored a wasted high byte for every one of its five
+ * constant elements. */
+static int mir_forward_store_target_is_narrow(int forward_instruction)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (forward_instruction < 0 || forward_instruction >= mir.count)
+        return 0;
+    return mir_scalar_memory_location(&mir.insns[forward_instruction],
+                                      &memory_type, &memory_storage,
+                                      &memory_offset) &&
+           type_size(memory_type) == 1;
 }
 
 static int mir_backend_slot_forwardable(int value, int units, int instruction)
@@ -1835,6 +1980,11 @@ static void mir_emit_virtual_store(FILE *out, int value)
         mir_forwarded_hl_instruction = forward_instruction - 1;
         return;
     }
+    if (mir_can_forward_hl_to_call_argument(value)) {
+        mir_forwarded_hl_value = value;
+        mir_forwarded_hl_instruction = mir_emit_instruction_index + 1;
+        return;
+    }
     if (mir_can_forward_stack_to_index(value) ||
         mir_can_forward_stack_to_binary_const(value) ||
         mir_can_forward_stack_to_binary_rhs(value)) {
@@ -1854,9 +2004,13 @@ static void mir_emit_virtual_store(FILE *out, int value)
     }
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
+    {
+    int forward_to_narrow_store = forward_to_store &&
+        mir_forward_store_target_is_narrow(forward_instruction);
     if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 1 <= 127) {
-        fprintf(out, "\tld (iy%+d),l\n\tld (iy%+d),h\n",
-                iy_offset, iy_offset + 1);
+        fprintf(out, "\tld (iy%+d),l\n", iy_offset);
+        if (!forward_to_narrow_store)
+            fprintf(out, "\tld (iy%+d),h\n", iy_offset + 1);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
@@ -1864,13 +2018,15 @@ static void mir_emit_virtual_store(FILE *out, int value)
         return;
     }
     if (offset >= -128 && offset + 1 <= 127) {
-        fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                offset, offset + 1);
+        fprintf(out, "\tld (ix%+d),l\n", offset);
+        if (!forward_to_narrow_store)
+            fprintf(out, "\tld (ix%+d),h\n", offset + 1);
     } else {
         fputs("\tex de,hl\n\tpush ix\n\tpop hl\n", out);
         fprintf(out, "\tld bc,%d\n\tadd hl,bc\n"
                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
                 offset);
+    }
     }
     if (forward_to_store) {
         mir_forwarded_hl_value = value;
@@ -3039,10 +3195,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     } else if ((memory_type & TYPE_UNSIGNED) != 0)
                         fputs("\tld l,a\n\tld h,0\n", out);
                     else {
-                        int sign_label = new_label();
-                        fputs("\tld l,a\n\tld h,0\n\tbit 7,l\n", out);
-                        fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
-                                sign_label, sign_label);
+                        fputs("\tld l,a\n", out);
+                        mir_emit_signed_byte_extend(out);
                     }
                     mir_emit_virtual_store(out, insn->dst);
                 }
@@ -3094,10 +3248,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 } else if ((memory_type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
                 } else {
-                    end_label = new_label();
-                    fputs("\tld h,0\n\tbit 7,l\n", out);
-                    fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
-                            end_label, end_label);
+                    mir_emit_signed_byte_extend(out);
                 }
             } else if (memory_storage != SC_GLOBAL &&
                        memory_storage != SC_EXTERN) {
@@ -3139,6 +3290,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_ADDRESS:
+            if (mir_address_is_single_call_argument(insn->dst))
+                break;
             {
             int memory_type;
             int memory_storage;
@@ -3292,10 +3445,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 } else if ((insn->type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
                 } else {
-                    end_label = new_label();
-                    fputs("\tld h,0\n\tbit 7,l\n", out);
-                    fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
-                            end_label, end_label);
+                    mir_emit_signed_byte_extend(out);
                 }
             } else {
                 fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
@@ -3982,10 +4132,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if ((insn->memory_flags & 64) != 0)
                     fputs("\textrn __pfeoc\n\tcall __pfeoc\n", out);
                 if (is_indirect) {
-                    int return_label = new_label();
                     mir_emit_virtual_load(out, insn->src1);
-                    fprintf(out, "\tld de,L%d\n\tpush de\n\tjp (hl)\nL%d:\n",
-                        return_label, return_label);
+                    fputs("\textrn __call_hl\n\tcall __call_hl\n", out);
                 } else {
                     if (callee == NULL || callee->needs_extrn)
                         fprintf(out, "\textrn %s\n", assembly_name);

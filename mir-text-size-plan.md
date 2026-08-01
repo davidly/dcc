@@ -2035,3 +2035,225 @@ reusable class (present in both selectors that implement
 **Next**: re-sweep the worst-ratio/bucket list fresh post-T19 (no
 population shift expected beyond `tc99init`, but re-derive rather than
 assume) before picking the next candidate.
+
+## Item T20: rematerialize call-argument values instead of spilling them, plus four companion fixes surfaced mid-validation (2026-08-01)
+
+**Hypothesis**: fresh post-T19 gap re-bucketing (excluding
+`tinline.edge_outer_body`, the known static-inline artifact) surfaced
+`pint.while_stmt` (gap=32). Direct `.mac` inspection found a completely
+dead register round-trip: `ld hl,(_Z0007)` (loading global `cp`)
+followed immediately by a pointless `ld c,l/ld b,h/ld l,c/ld h,b`
+HL->BC->HL no-op, then `push hl`, as the second argument to
+`patch(jz, cp)`. Tracing the emission code to
+`mir_call_argument_cache_target` (the existing BC-cache helper) showed
+it unconditionally caches any value with exactly one later `MIR_ARG`
+use into BC via a store+reload dance, **without ever checking whether
+that use is truly adjacent** - i.e. whether the value's own definition
+is immediately followed by its `MIR_ARG` marker with the matching
+`MIR_CALL` immediately after *that*, a shape where caching is pure
+waste. Tracing the generic `MIR_CALL` argument-emission loop further
+established a key structural fact: **call arguments are always
+physically pushed in reverse of their MIR-instruction-stream definition
+order** (the last-MIR-defined argument is always pushed first) - which
+makes "definition immediately followed by ARG immediately followed by
+CALL" a provably safe condition for direct HL-forwarding with zero
+preservation needed, since nothing can execute between the value's
+computation and its push.
+
+**Fix (the core T20 concept)**: added `mir_can_forward_hl_to_call_argument
+(int value)` in `dcc_mir_spilled_cfg.c`, wired into `mir_emit_virtual_store`
+immediately ahead of the existing BC-cache branch (`mir_call_argument_
+cache_target`). When the adjacency holds, it reuses the *existing*
+`mir_forwarded_hl_value`/`mir_forwarded_hl_instruction` mechanism
+(anchored to the `MIR_ARG`'s own instruction index, since `MIR_ARG`'s
+emission is a no-op and `mir_emit_virtual_load`'s adjacency check
+naturally fires when the emit loop reaches the following `MIR_CALL`).
+
+**What validation uncovered**: the whole-corpus census for this one
+fix alone showed +3 newly-accepted functions (`pint.while_stmt`,
+`tbcgcol.main`, `tptrixld.main`), 0 census regressions - but the
+focused full-mode run found a genuine nopeep regression in `tbcgcol`
+(+0.22%). Diffing MIR's newly-flipped output against **actual replayed
+legacy** (via `git stash` + non-forced rebuild, not just the T20-stashed
+forced-accept diff) isolated the true cause: a *separate*, pre-existing
+gap (the plan's own catalogued "Root Cause C") - a `MIR_ADDRESS` value
+(a local array's address, passed as a call argument) was stored to a
+spill slot and immediately reloaded a few instructions later (because
+another argument's own evaluation needed HL first), whereas legacy
+simply recomputes the cheap, side-effect-free `ix`-relative address
+expression fresh at the point of use. Chasing this down surfaced four
+more companion gaps, each fixed in turn and each validated to be
+individually load-bearing for a clean overall result:
+
+- **T21 - rematerialize a single-call-argument `MIR_ADDRESS`.** Added
+  `mir_address_is_single_call_argument(int value)` (sibling to the
+  existing `mir_load_is_single_call_argument`, restricted the same way
+  to `SC_LOCAL`/`SC_PARAM` storage with an in-range `ix` offset,
+  additionally excluding VLA objects since those use a different,
+  slot-loaded address form). Wired into `mir_emit_rematerialized_
+  argument` (emits `push ix\npop hl` plus an optional `ld de,<off>\nadd
+  hl,de` instead of a reload) and, symmetrically, into `MIR_ADDRESS`'s
+  own emission case (`if (mir_address_is_single_call_argument(insn->dst))
+  break;`, skipping the now-pointless original computation and store
+  entirely, mirroring how `mir_call_only_constant` already gates
+  `MIR_CONST`). This alone fixed most, but not all, of `tbcgcol`'s
+  regression.
+- **T22a - recognize `MIR_CONST` as a valid store-forwarding producer.**
+  `mir_can_forward_hl_to_next`'s `MIR_STORE` case restricted the
+  producer to `MIR_LOAD_INDIRECT`/`MIR_BINARY`/`MIR_UNARY` (from a
+  2020-era item scoped to "forward binary/unary/divmod results to a
+  following store") - a plain constant immediately stored (e.g. each
+  element of `int values[4] = {1,2,3,4};` or `char msg[] = "core";`)
+  was never covered, going through a full spill+reload even though
+  nothing else in the function ever uses the constant besides that one
+  store. Added `MIR_CONST` to the allowed producer list. This is what
+  fully resolved `tbcgcol`'s nopeep regression (it flipped to a genuine
+  -0.24% improvement) and is what pulled two more, previously-uninvolved
+  functions across the census threshold: `tc89core.main` and
+  `tstr2.test_strcat`.
+- **T22b - skip the wasted high byte of a forwarded-to-narrow-store
+  value's own spill.** `mir_emit_virtual_store`'s `has_slot` path always
+  persists both bytes of a value's slot even when `forward_to_store` is
+  true and the eventual consumer is a 1-byte `MIR_STORE` (a `char`
+  array/struct-member element) - the high byte is provably never read
+  by anyone (the same `mir_can_forward_hl_to_next` scan that establishes
+  the forward already proves nothing else references the value).  Added
+  `mir_forward_store_target_is_narrow(int forward_instruction)` and used
+  it to skip the `ld (ix+off+1),h`/`ld (iy+off+1),h` half of the pair
+  whenever the forwarded consumer's memory type is 1 byte. Found via
+  `tc89core.main`'s `char msg[] = "core"` initializer, which wasted a
+  high-byte store for every one of its five constant elements even
+  after T22a.
+- **T23 - branchless signed-byte sign extension.** A 1-byte signed load's
+  sign extension into H was implemented identically at five call sites
+  across `dcc_mir_spilled_cfg.c` and `dcc_mir_emit_common.c` as a
+  conditional branch (`ld h,0 / bit 7,l / jp z,LN / dec h / LN:` - 8
+  bytes, two execution paths). Legacy instead uses the standard
+  branchless Z80 idiom: `ld a,l` (copy without disturbing L) / `rlca`
+  (bit 7 into carry) / `sbc a,a` (carry -> 0x00/0xFF) / `ld h,a` - 4
+  bytes, one straight-line path, no branch for downstream peephole
+  passes to reason about. Factored into a single shared helper,
+  `mir_emit_signed_byte_extend(FILE *out)` (declared in
+  `dcc_mir_internal.h`, defined once in `dcc_mir_emit_common.c`, the
+  file that already hosts this codebase's other shared emission
+  helpers), and called from all five sites. Found via `tatof.chk_end`,
+  which newly crossed the text-size threshold as a side effect of
+  T21/T22 and briefly showed a small regression until this replaced the
+  branchy sequence.
+- **T24 - match legacy's `__call_hl` calling convention for indirect
+  calls.** The MIR indirect-call emission site (`dcc_mir_spilled_cfg.c`,
+  `MIR_CALL`'s `is_indirect` branch) manually built a return address
+  and pushed it (`ld de,L<n>\npush de\njp (hl)\nL<n>:`) instead of using
+  the runtime's existing shared `__call_hl` helper
+  (`jp (hl)`, invoked via a plain `call __call_hl`, which is 4 T-states
+  cheaper per call site since the `call` instruction itself supplies the
+  return address the callee's own `ret` needs - no manual label/push
+  required). Replaced with `extrn __call_hl\n\tcall __call_hl\n`,
+  matching legacy exactly. Found via `tc89core.main`'s `fp(41)` call
+  (`fp` a function pointer local); also produced small genuine
+  improvements in two already-MIR-emitted functions using the same
+  indirect-call site (`tc89decl`, `too`) as an unplanned but welcome
+  side benefit.
+
+**Validation** (whole-corpus, run after all five sub-fixes above landed
+together, since each was individually necessary for the others' newly-
+unlocked functions to validate cleanly):
+- Whole-corpus census (`--fail-on-regression`) vs. post-T19 baseline:
+  0 regressions, **+7 newly-accepted functions** (220/2022 -> 227/2022,
+  10.88% -> 11.23%): `pint.while_stmt`, `tatof.chk_end`, `tbcgcol.main`,
+  `tc89core.main`, `tptrixld.main`, `tstr2.test_strcat`,
+  `wumpus.pshot`. 253 apps had census metric changes (T20's own
+  call-argument-adjacency and T22a's const-to-store forwarding both
+  reach very common shapes); 9 apps flagged for runtime validation
+  (7 directly affected + `tc89decl`/`too`, pulled in only by T24's
+  shared indirect-call-site change).
+- Focused `runall.ps1 -Apps pint,tatof,tbcgcol,tc89core,tc89decl,too,
+  tptrixld,tstr2,wumpus -Mode full`: correctness PASS for all 9.
+  Performance: **7 apps clean or genuinely improved**
+  (`pint` -0%, `tbcgcol` peep -0.24%/nopeep -0.24%, `tptrixld` peep
+  -0.14%/nopeep -0.26%, `tstr2` peep -0.31%/-1.92% bytes, nopeep
+  -0.19%/-1.85% bytes, `tc89decl` peep -0.1%/nopeep -0.01%, `too` -0%,
+  `wumpus` clean). **2 apps retained a small, well-understood residual
+  regression after exhausting the reusable fixes above**:
+  - `tatof` (peep +0.01%, 1,839,938 -> 1,840,169 cycles; nopeep +0%,
+    1,845,049 -> 1,845,067 cycles): `chk_end`'s sign-extension shape now
+    matches legacy exactly (T23), but its surrounding argument
+    evaluation/register-caching choices still differ slightly from
+    legacy's own hand-tuned order. Magnitude is at the edge of
+    measurement noise (18-231 cycles out of ~1.84M, i.e. <0.02%) but is
+    deterministic, not a timing flake, so it is reported honestly rather
+    than waved off.
+  - `tc89core` (peep +0.78%, 17,539 -> 17,675 cycles; nopeep +0.04%,
+    17,938 -> 17,946 cycles, i.e. effectively resolved for nopeep by
+    T22b/T24): `main`'s local function-pointer variable `fp` is
+    `MIR_LOAD`ed twice - once as the **target of an indirect call**
+    (`call v11 = v9 <indirect>`) and once as a plain call argument to
+    `callit`. T21's rematerialization predicate only recognizes a
+    value's sole use being a `MIR_ARG`; it has no equivalent for "sole
+    use is the callee position of an indirect `MIR_CALL`", so `fp`'s
+    first load still round-trips through a spill slot instead of
+    re-reading its cheap, side-effect-free `ix`-relative home directly
+    at the call site the way legacy does. This is a genuinely new
+    concept (rematerializing an indirect call's *own target expression*,
+    not just its arguments) rather than an extension of any fix above,
+    and is too large to build and validate safely within this item -
+    **deferred as a named follow-on candidate** (see below) rather than
+    attempted under time pressure, matching this plan's Item 6
+    precedent for design questions too large for one sitting.
+  Given both residuals are tiny in absolute cycles (on two of the
+  smallest functions in the corpus), fully traced to specific, already-
+  documented root causes, and every other affected app is clean or
+  improved, `tests/perf_baselines.csv` was updated via
+  `-UpdatePerfBaseline` **only for the 7 clean/improved apps**
+  (`pint`, `tbcgcol`, `tptrixld`, `tstr2`, `tc89decl`, `too`, `wumpus`);
+  `tatof` and `tc89core`'s baseline rows were deliberately left
+  untouched at their pre-T20 (legacy) values, so their small residual
+  regressions remain visible and flagged on every future `runall.ps1
+  -Mode full` run rather than being hidden by a baseline bump - per
+  SKILL.md's non-negotiable "never update baselines to hide a
+  regression" rule, an accepted-but-still-flagged residual is the
+  correct outcome, not a quietly-passing one.
+- Wide `-Mode fast` safety net (323 apps): 314 passed, 0 failed,
+  diagnostics (skipped in fast mode, already clean from the T19-era
+  milestone run) and dccpeep fixtures (17/17) both clean. Only the
+  same two known regressions (`tatof`, `tc89core`) reported, confirming
+  no other function anywhere in the corpus was affected beyond the 9
+  already investigated.
+- Given the broad 253-app blast radius (T20's call-argument forwarding
+  and T22a's const-to-store forwarding both touch very common shapes,
+  comparable to T17's 67-app footprint), a milestone-tier full run was
+  considered; the wide fast-mode net already covers correctness/
+  diagnostics/dccpeep breadth, and every metric-changed app outside the
+  9 directly investigated showed no runtime-relevant delta per the
+  census tool's own "apps requiring runtime validation" narrowing, so
+  the focused full-mode + wide fast-mode combination was judged
+  sufficient without re-running the entire corpus in full mode.
+
+**Outcome**: +7 newly-accepted functions (220/2022 -> 227/2022,
+11.23%), 0 census regressions, 5 reusable emitter/selector concepts
+landed together (call-argument-adjacency HL forwarding, address
+rematerialization for call arguments, constant-to-store forwarding,
+narrow-store high-byte elision, branchless sign extension, and a
+shared-runtime-helper calling convention fix), 7 of 9 affected apps
+clean or genuinely improved. Two tiny, fully-diagnosed residual
+regressions (`tatof.chk_end`, `tc89core.main`) remain and are left
+visible in `perf_baselines.csv` rather than hidden.
+
+**Deferred follow-on**: rematerializing a value whose sole use is the
+**target of an indirect `MIR_CALL`** (not just an `MIR_ARG`) would
+close `tc89core.main`'s remaining residual and likely a handful of
+other function-pointer-calling functions corpus-wide. This needs its
+own predicate (structurally: definition is `MIR_LOAD` from
+`SC_LOCAL`/`SC_PARAM` with an in-range `ix` offset, sole use is
+`src1` of an immediately-following `MIR_CALL` whose `name` is
+`"<indirect>"`) and its own emission-site change (the `is_indirect`
+branch in `MIR_CALL`'s handling), separate from every predicate this
+item added since none of them recognize "callee position" as a
+forwardable use. Left for a future item rather than rushed here.
+
+**Next**: re-sweep the worst-ratio/bucket list fresh post-T20 (253 apps
+had census changes - the broadest since T17). Candidates already on
+record but not yet pursued: `tvla.vla_sizeof_ternary`'s VLA/signed-
+comparison sign-flip shape (set aside earlier this session as too
+complex for its single-function yield); the indirect-call-target
+rematerialization follow-on noted above.

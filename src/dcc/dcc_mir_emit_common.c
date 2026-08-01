@@ -109,6 +109,26 @@ int mir_affine_value(int value, const struct MirInsn **parameter,
     return 1;
 }
 
+/* mir-text-size Item T21 (mir-text-size-plan.md): a signed 1-byte load's
+ * sign extension into H was previously always done with a conditional
+ * branch (`ld h,0 / bit 7,l / jp z,LN / dec h / LN:`, 8 bytes across a
+ * taken/not-taken split), duplicated identically across five call sites
+ * in dcc_mir_spilled_cfg.c and dcc_mir_emit_common.c. Legacy's own backend
+ * instead uses the standard branchless Z80 idiom for this: `rlca` rotates
+ * bit 7 into the carry flag (leaving L's own bits unmodified, since the
+ * rotated copy lives in A, not L), then `sbc a,a` turns that carry into a
+ * full 0x00/0xFF byte (A = A-A-carry = -carry) with no branch at all -
+ * both smaller (4 bytes) and free of a taken-or-not-taken execution-path
+ * split. Found via tests/tatof.c's chk_end(), which newly crossed the
+ * text-size threshold as a side effect of Item T20's call-argument
+ * rematerialization work and briefly regressed nopeep cycles by a few
+ * dozen until this shared helper replaced the branchy sequence at every
+ * call site. */
+void mir_emit_signed_byte_extend(FILE *out)
+{
+    fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+}
+
 void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
 {
     int true_label = new_label();
@@ -193,12 +213,8 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
                         end_label, end_label);
             } else if ((object->type & TYPE_UNSIGNED) != 0)
                 fputs("\tld h,0\n", out);
-            else {
-                end_label = new_label();
-                fputs("\tld h,0\n\tbit 7,l\n", out);
-                fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
-                        end_label, end_label);
-            }
+            else
+                mir_emit_signed_byte_extend(out);
         } else {
             fprintf(out, "\tld l,(ix%+d)\n", object->offset);
             fprintf(out, "\tld h,(ix%+d)\n", object->offset + 1);
@@ -1079,10 +1095,7 @@ int mir_try_emit_homed_scalar_dag(FILE *out)
                 } else if ((object->type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
                 } else {
-                    true_label = new_label();
-                    fputs("\tld h,0\n\tbit 7,l\n", out);
-                    fprintf(out, "\tjp z,L%d\n\tdec h\nL%d:\n",
-                            true_label, true_label);
+                    mir_emit_signed_byte_extend(out);
                 }
                 if (!mir_emit_hl_to_home(out, insn->dst))
                     return 0;

@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 220/2022 runnable functions MIR-accepted (10.88%).
+- Coverage: 227/2022 runnable functions MIR-accepted (11.23%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -89,13 +89,31 @@ retired history; do not resume numbering from them.
   -171 bytes/19 instructions, only 1 app affected - homed-cfg's
   smaller population and stricter surrounding acceptance rules make
   this shape much rarer there)
+  plus Item T20's five-fix bundle (call-argument-adjacency HL
+  forwarding for spilled values; `mir_address_is_single_call_argument`
+  rematerialization; `MIR_CONST` added as a valid store-forwarding
+  producer; wasted-high-byte elision for values forwarded into a
+  narrow store; a shared branchless-sign-extension helper replacing 5
+  duplicated branchy call sites; and matching legacy's `__call_hl`
+  calling convention for indirect calls - all landed together since
+  each was necessary for the others' newly-unlocked functions to
+  validate cleanly; +7 newly-accepted functions, 220/2022 -> 227/2022,
+  11.23%; 253 apps with census changes, the broadest since T17; 7 of 9
+  runtime-validated apps clean/improved, 2 tiny fully-diagnosed
+  residual regressions - `tatof.chk_end`, `tc89core.main` - left
+  un-baselined and visible rather than hidden; see `mir-text-size-
+  plan.md`'s Item T20 entry for the full cascading-discovery narrative
+  and the deferred indirect-call-target-rematerialization follow-on it
+  identified)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15/T16/T17 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15/T16/T17/T19 had 0
+  unaccepted regressions; T20 has 2 small, fully-diagnosed, documented
+  residual regressions - see above - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -368,14 +386,63 @@ retired history; do not resume numbering from them.
   314/314 clean, diagnostics/dccpeep clean. Milestone-tier full not
   required given the narrow 1-app blast radius (no coverage jump, no
   semantic gate removed, no shared ABI/runtime touched).
+- **Item T20**: fresh post-T19 sweep found `pint.while_stmt` (gap=32),
+  a dead HL->BC->HL no-op round-trip caused by
+  `mir_call_argument_cache_target` unconditionally caching any
+  single-use call-argument value into BC even when its definition is
+  immediately adjacent to its `MIR_ARG`/`MIR_CALL` use, a shape where
+  direct HL-forwarding needs no preservation at all (arguments are
+  always pushed in reverse of MIR definition order, so nothing can
+  execute between an adjacent definition and its push). Fixing this
+  (`mir_can_forward_hl_to_call_argument`) alone unlocked 3 functions
+  but exposed a genuine nopeep regression in `tbcgcol` that snowballed
+  into 4 more companion fixes, each individually load-bearing: (T21)
+  rematerializing a single-call-argument `MIR_ADDRESS` instead of
+  spilling it; (T22a) adding `MIR_CONST` as a valid store-forwarding
+  producer in `mir_can_forward_hl_to_next`; (T22b) skipping a forwarded
+  value's wasted high-byte store when the eventual consumer is a
+  narrow (1-byte) store; (T23) a shared branchless sign-extension
+  helper (`mir_emit_signed_byte_extend`) replacing 5 duplicated branchy
+  call sites; (T24) matching legacy's `__call_hl` shared-runtime-helper
+  calling convention for indirect calls instead of a manual
+  push-return-address sequence. **+7 newly-accepted functions**
+  (220/2022 -> 227/2022, 11.23%), 0 census regressions, 253 apps with
+  census changes (broadest since T17). Focused full-mode validation on
+  all 9 runtime-flagged apps: 7 clean/genuinely improved
+  (`pint`, `tbcgcol`, `tptrixld`, `tstr2`, `tc89decl`, `too`, `wumpus`;
+  baselines updated for these 7 only), **2 small, fully-diagnosed
+  residual regressions left un-baselined and visible**: `tatof.chk_end`
+  (peep +0.01%, essentially measurement-noise magnitude) and
+  `tc89core.main` (peep +0.78%, nopeep +0.04%/near-noise) - the latter
+  traced to a genuinely new, unimplemented concept (rematerializing a
+  value used as an *indirect call's own target*, not just its
+  argument) too large to build safely within this item; deferred as a
+  named follow-on. Wide `-Mode fast` safety net (323 apps): 314/314
+  clean, only the same 2 known residuals reported anywhere in the
+  corpus. See `mir-text-size-plan.md`'s Item T20 entry for the full
+  cascading-discovery narrative.
 
 ## Next session should
 
-1. Execute the dedicated `text-size` plan (drafted this session,
+1. **Pursue the indirect-call-target rematerialization follow-on**
+   identified by Item T20: a value whose sole use is the callee
+   position of an indirect `MIR_CALL` (not just an `MIR_ARG`) currently
+   has no rematerialization path and still round-trips through a spill
+   slot. Needs its own predicate (definition is `MIR_LOAD` from
+   `SC_LOCAL`/`SC_PARAM` with an in-range `ix` offset, sole use is
+   `src1` of an immediately-following `MIR_CALL` named `"<indirect>"`)
+   and its own emission-site change in `MIR_CALL`'s `is_indirect`
+   branch. Would close `tc89core.main`'s remaining residual and likely
+   unlock/clean up other function-pointer-calling functions
+   corpus-wide. Re-sweep the worst-ratio/bucket list fresh post-T20
+   first (253 apps changed - the broadest since T17) rather than
+   assuming this is the only remaining candidate.
+2. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
-   - **Re-sweep the worst-ratio/bucket list fresh post-T19** before
-     picking the next candidate. Census snapshot: `/tmp/census-post-t19.tsv`.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T20** before
+     picking the next candidate. Census snapshot: `/tmp/census-post-t20e.tsv`
+     (the final validated post-T20 state; treat as the new baseline).
      `MIR_BINARY`'s operand-adjacency forwarding now covers both
      src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
      (T16), **for both plain arithmetic and fusable comparisons**
