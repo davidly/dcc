@@ -221,9 +221,23 @@ static int mir_can_forward_hl_to_next(int value)
              * as a side effect of Item T36 and exposed a real (not just
              * static-metric) cycle-count regression from this exact dead
              * round trip - store-to-temp-slot, reload, store-to-p's-real-
-             * slot - for &x's address. */
+             * slot - for &x's address.
+             *
+             * Item T38 (mir-text-size-plan.md): MIR_LOAD (a plain,
+             * non-indirect load of a named object/global, e.g. `y = x;`)
+             * was missing too, even though MIR_LOAD_INDIRECT (`y = *p;`)
+             * was already whitelisted - an inconsistency with no safety
+             * rationale, since a plain load is if anything simpler than an
+             * indirect one (no pointer dereference at all). Found via a
+             * synthetic `g2 = g1;` (both plain globals) test after auditing
+             * every MIR_* opcode against this whitelist post-T37: the load
+             * still spilled to a temporary slot and reloaded before the
+             * following store, an identical dead round trip to the T31/T37
+             * cases. The value sits in HL right after the load completes,
+             * exactly like every other whitelisted producer here. */
             if (mir_object_is_fully_promoted(next->object) ||
                 (producer_opcode != MIR_LOAD_INDIRECT &&
+                 producer_opcode != MIR_LOAD &&
                  producer_opcode != MIR_BINARY &&
                  producer_opcode != MIR_UNARY &&
                  producer_opcode != MIR_CONST &&

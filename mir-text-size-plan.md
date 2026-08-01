@@ -3701,3 +3701,74 @@ was available immediately. Per SKILL.md's discipline, both items were
 validated together (T37's fix was required before T36's own
 performance profile could be considered acceptable) before either was
 committed.
+
+## Item T38: add `MIR_LOAD` to `mir_can_forward_hl_to_next`'s `MIR_STORE` producer whitelist (2026-08-01)
+
+**Context**: deliberate audit of every `MIR_*` opcode against the
+`MIR_STORE` producer whitelist (flagged as a follow-up after Items
+T31/T37 both found missing entries only reactively, after each caused
+a visible problem) - checked each remaining opcode for whether it is a
+pure, side-effect-free producer leaving its value in HL, the same
+shape already established for `MIR_CONST`/`MIR_CALL`/`MIR_ADDRESS`.
+
+**Finding**: `MIR_LOAD_INDIRECT` (`y = *p;`) was already whitelisted,
+but plain `MIR_LOAD` (`y = x;`, a simple non-indirect variable-to-
+variable copy) was not - an inconsistency with no safety rationale,
+since a direct load is if anything simpler than an indirect one (no
+pointer dereference at all). Confirmed via a synthetic test
+(`static int g1, g2; int copyit(void) { g2 = g1; return g2; }`): the
+load of `g1` still spilled to a temporary backend slot and reloaded
+before the store to `g2`, an identical dead round trip to the T31/T37
+cases - `ld hl,(g1) / ld (temp),hl / ld hl,(temp) / ld (g2),hl` where
+the direct form is simply `ld hl,(g1) / ld (g2),hl`.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): added `MIR_LOAD`
+to the `producer_opcode` whitelist in `mir_can_forward_hl_to_next`'s
+`MIR_STORE` case.
+
+**Validation**:
+- Synthetic `copyit`: confirmed via force-accept-diff - the temporary
+  slot and its store/reload round trip are both gone; the whole
+  function's frame allocation is eliminated entirely (0 backend slots
+  needed once the redundant round trip is removed).
+- Whole-corpus census (`build/mir-t38.tsv` vs `build/mir-t37.tsv`,
+  `--fail-on-regression`): **0 regressions, +3 newly-accepted
+  functions** (311->314/2023, 15.38%->15.52%): `forint.eval_str`,
+  `pint.init_run_storage`, `tpeepal.retain_escaped` - a smaller yield
+  than Items T34-T37, suggesting most `y = x;`-shaped copies in the
+  corpus already involve at least one object-eligible side (handled
+  by the existing mem2reg/object-promotion machinery instead), leaving
+  this gap to matter mainly for object-*ineligible* pairs (pointers,
+  as in `retain_escaped`'s `int *ptr` parameter; or plain globals, as
+  in the synthetic test).
+- Focused `runall.ps1 -Mode full` on the 3 flagged apps (forint, pint,
+  tpeepal): **3/3 correctness PASS**. One small, real (identical-
+  delta-in-both-modes) regression in `tpeepal` (+0.05%, 61 cycles) -
+  diagnosed via force-accept-diff on `retain_escaped` itself, whose
+  generated code is confirmed minimal/optimal (7 instructions: load
+  param, store to global, return - matching the expected shape
+  exactly, no residual inefficiency in the fix's own logic). The
+  both-mode-identical, deterministic, negligible-magnitude signature
+  matches SKILL.md's documented "code-placement sensitivity in
+  interpreter heaps" cause category (a different function's code
+  shifting by a couple of bytes can change loop/branch alignment
+  elsewhere in the same binary) rather than a defect in this item.
+  Baseline updated via `-UpdatePerfBaseline` for all 3 apps.
+- Wide safety net: `-Mode fast` showed one apparent failure
+  (`tkbd`) on the first pass, but `tkbd` is already flagged
+  `perf_ignore: true` in `tests/_test_overrides.json` (a known-
+  nondeterministic app due to keyboard-input-timing simulation);
+  re-running `-Mode fast` in isolation and then the full suite again
+  both passed cleanly (314/323), confirming a one-off flake unrelated
+  to this change, not a reproducible regression. Full-corpus `-Mode
+  full` also clean (314/323), diagnostics/dccpeep/performance all
+  passed.
+
+**Audit continues**: `MIR_FLOAT_CONST` (structurally identical to
+`MIR_CONST`, just for float literals) and `MIR_STRING_ADDRESS`/
+`MIR_COMPOUND_ADDRESS`/`MIR_INDEX_ADDRESS`/`MIR_MEMBER_ADDRESS`
+(structurally identical to `MIR_ADDRESS`, just for different address
+targets) look like further plausible candidates by the same reasoning,
+but were not yet forced-accept-diffed against a concrete motivating
+example this session - left for a follow-up continuation of this
+audit rather than added speculatively without a confirmed real gap.
