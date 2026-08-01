@@ -1620,6 +1620,67 @@ void mir_emit_virtual_load(FILE *out, int value)
     }
 }
 
+/* Item T15 (mir-text-size-plan.md): a value's definition immediately
+ * followed by a MIR_CONST that itself feeds the very next MIR_BINARY as
+ * that binary's right-hand operand (value; const; binary(value, const))
+ * currently loses mir_can_forward_hl_to_next's forwarding entirely,
+ * because the CONST sits between the value's definition and its one real
+ * use - mir_can_forward_hl_to_next only recognizes a handful of consumer
+ * opcodes as the literal next instruction, and MIR_CONST isn't one of
+ * them, so the value is unconditionally stored to its backend slot and
+ * immediately reloaded one "logical" instruction later even though
+ * nothing between the store and reload could have clobbered it (a
+ * MIR_CONST used only as an immediate operand emits no code of its own
+ * at that point - see mir_binary_only_constant's callers below). This
+ * mirrors mir_can_forward_stack_to_index's existing const-in-the-middle
+ * shape (push the value, let the consumer pop it back after evaluating
+ * the constant) but for a binary operator's constant right-hand operand
+ * instead of an array index's constant stride.
+ *
+ * Deliberately excludes any shape that takes a different code path for
+ * the constant: divmod pairing, the multiply-by-constant fast path, and
+ * fused-comparison branches all bypass the plain "push left, evaluate
+ * right, pop, combine" sequence this optimization targets, so forwarding
+ * across them is out of scope here (a separate item, not folded in). */
+static int mir_can_forward_stack_to_binary_const(int value)
+{
+    const struct MirInsn *middle;
+    const struct MirInsn *binary;
+    int binary_instruction;
+    int instruction;
+
+    if (mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 2 >= mir.count)
+        return 0;
+    middle = &mir.insns[mir_emit_instruction_index + 1];
+    binary_instruction = mir_emit_instruction_index + 2;
+    binary = &mir.insns[binary_instruction];
+    if (middle->opcode != MIR_CONST || binary->opcode != MIR_BINARY ||
+        binary->src1 != value || binary->src2 != middle->dst)
+        return 0;
+    if (type_size(binary->secondary_offset) == 4)
+        return 0;
+    if (mir_divmod_partner(binary_instruction) >= 0)
+        return 0;
+    if (binary->immediate == '*' &&
+        mir_mul_const_fast_path_eligible(
+            (unsigned long)middle->immediate & 0xffffUL, binary->dst))
+        return 0;
+    if (mir_binary_is_fusable_comparison(binary_instruction) > 0)
+        return 0;
+    for (instruction = binary_instruction + 1;
+         instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value)
+            return 0;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            mir_call_uses_value(insn, value))
+            return 0;
+    }
+    return 1;
+}
+
 static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot;
@@ -1655,7 +1716,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
         mir_forwarded_hl_instruction = forward_instruction - 1;
         return;
     }
-    if (mir_can_forward_stack_to_index(value)) {
+    if (mir_can_forward_stack_to_index(value) ||
+        mir_can_forward_stack_to_binary_const(value)) {
         fputs("\tpush hl\n", out);
         mir_forwarded_stack_value = value;
         mir_forwarded_stack_instruction = mir_emit_instruction_index;
@@ -3415,12 +3477,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 unsigned long multiplier = right_definition != NULL
                     ? (unsigned long)right_definition->immediate & 0xffffUL
                     : 0;
+                /* Item T15: mir_can_forward_stack_to_binary_const already
+                 * pushed the left operand at its definition site (the
+                 * push/pop dance is unavoidable here anyway - see below) -
+                 * skip the otherwise-redundant store/reload of that value
+                 * that mir_emit_virtual_load would perform. */
+                int stack_forwarded_left =
+                    mir_forwarded_stack_value == insn->src1 &&
+                    mir_forwarded_stack_instruction + 2 == i;
                 if (mir_binary_only_constant(insn->src1)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src1);
                     fprintf(out, "\tld hl,%ld\n",
                             constant->immediate & 0xffffL);
-                } else
+                } else if (!stack_forwarded_left)
                     mir_emit_virtual_load(out, insn->src1);
                 if (divmod_partner >= 0) {
                     const struct MirInsn *other = &mir.insns[divmod_partner];
@@ -3490,14 +3560,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                      * the fused branch emitter tests the sign bit of HL
                      * directly with "bit 7,h" instead of loading 0 into DE
                      * for a 16-bit sbc. */
-                } else if (!mir.has_vla &&
+                } else if (!mir.has_vla && !stack_forwarded_left &&
                            mir_binary_only_constant(insn->src2)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src2);
                     fprintf(out, "\tld de,%ld\n",
                             constant->immediate & 0xffffL);
                 } else {
-                    fputs("\tpush hl\n", out);
+                    /* Item T15: when stack_forwarded_left, the left
+                     * operand was already pushed at its definition site
+                     * (mir_can_forward_stack_to_binary_const) instead of
+                     * being loaded into HL just above - skip this
+                     * redundant push, but still pop it back below. */
+                    if (!stack_forwarded_left)
+                        fputs("\tpush hl\n", out);
                     if (mir_binary_only_constant(insn->src2)) {
                         const struct MirInsn *constant =
                             mir_definition(insn->src2);
@@ -3506,6 +3582,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     } else
                         mir_emit_virtual_load(out, insn->src2);
                     fputs("\tex de,hl\n\tpop hl\n", out);
+                }
+                if (stack_forwarded_left) {
+                    mir_forwarded_stack_value = -1;
+                    mir_forwarded_stack_instruction = -1;
                 }
                 {
                     int fuse_skip = mir_binary_is_fusable_comparison(i);

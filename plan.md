@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 212/2022 runnable functions MIR-accepted (10.48%).
+- Coverage: 217/2022 runnable functions MIR-accepted (10.73%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -58,13 +58,19 @@ retired history; do not resume numbering from them.
   no longer duplicates the full ix/iy/sp-restore epilogue at every
   early return - a `jp` to one shared copy now, mirroring legacy;
   0 coverage change, -7,188 bytes across 310 functions)
+  plus Item T15's new `mir_can_forward_stack_to_binary_const` predicate
+  (forwards a value across an intervening `MIR_CONST` into a binary
+  operator's constant-RHS push/pop dance - the common
+  `computed_expr OP literal` shape; +5 newly-accepted functions,
+  212/2022 -> 217/2022, the broadest single-item byte-sum shrink this
+  session, -32,370 bytes across 576 functions)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14/T15 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -222,6 +228,30 @@ retired history; do not resume numbering from them.
   +0.01%/+0.01% (10-11 cycles, the expected `jp`-overhead trade-off).
   Milestone-tier full safety net (323 apps) run given the 131-app
   blast radius; clean.
+- **Item T15**: fresh post-T14 bucket sweep found `check_s`'s gap is
+  the already-deferred Item T7 call-forwarding class (reconfirmed the
+  deferral stands - nothing this session changed), and a distinct,
+  novel gap in `tvla`'s `vla_sizeof_op_add`/`_sub`/`_and`
+  (`computed_expr OP literal` shapes): a value immediately followed by
+  a `MIR_CONST` (the literal), immediately followed by the consuming
+  `MIR_BINARY`, loses HL-forwarding entirely because
+  `mir_can_forward_hl_to_next` doesn't recognize `MIR_CONST` as a
+  valid "next" opcode - a redundant backend-slot store+reload results.
+  Added a new predicate, `mir_can_forward_stack_to_binary_const`
+  (mirrors the existing `mir_can_forward_stack_to_index` shape for
+  `MIR_BINARY` instead of `MIR_INDEX_ADDRESS`; excludes divmod/mul-
+  fast-path/fused-comparison shapes, which use a different code path),
+  wired into `mir_emit_virtual_store` and `MIR_BINARY`'s non-wide
+  emission case. **+5 newly-accepted functions**
+  (`vla_sizeof_op_add`/`_sub`/`_and`, plus bonus flips
+  `vla_sizeof_2d_rows`/`vla_sizeof_shadow_outer_after`; 212/2022 10.48%
+  -> 217/2022 10.73%), 0 regressions, **-32,370 bytes across 576
+  functions** - the broadest single-item byte-sum shrink this session,
+  since the shape is common well beyond VLA code. 1 app (`tvla`)
+  needed runtime validation: PASS, noise-level nopeep/peep deltas
+  (+0.0003%/-0.003%). Milestone-tier full safety net (323 apps) run
+  given the 199-app blast radius touching the core `MIR_BINARY` path;
+  clean.
 
 ## Next session should
 
@@ -231,14 +261,25 @@ retired history; do not resume numbering from them.
    - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
      in an earlier migration phase) - do not re-attempt it; Item T7
      confirmed `check_s`'s boolean is already fully elided.
-   - **Re-sweep the worst-ratio/bucket list fresh post-T14** before
-     picking the next candidate - 310 functions changed byte counts
-     since T13, so a stale sweep from before T14 risks misdirecting
-     the next pick.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T15** before
+     picking the next candidate - 576 functions changed byte counts
+     since T14, so a stale sweep from before T15 risks misdirecting
+     the next pick. Census snapshot: `/tmp/census-t15.tsv`.
    - **`wumpus::pact` is now blocked solely by the `cfg-backedge`
      migration boundary** (a deliberate barrier, not a bug) - worth
      revisiting as its own future item once enough non-loop
      `text-size` candidates are exhausted.
+   - **`check_s`'s Item T7 deferral was reconfirmed unchanged this
+     session** (nothing this session touched the flagged
+     `mir_forward_skip_target` equality-check risk) - do not
+     re-litigate without new evidence changing that gate's risk
+     calculus.
+   - **Consider extending Item T15's `mir_can_forward_stack_to_binary_const`
+     pattern** to other consumer opcodes `mir_can_forward_hl_to_next`
+     already recognizes for the literal-adjacent case (`MIR_UNARY`,
+     `MIR_STORE_INDIRECT`, `MIR_MEMBER_ADDRESS`, etc.), mirrored the
+     same way for the "one MIR_CONST in between" case, if a fresh
+     post-T15 sweep surfaces evidence for it.
    - **Item T7 (call-result HL-forwarding) should be revisited now**:
      `mir_can_forward_hl_to_next`'s gate is now better understood and
      partially relaxed (Item T13) - re-examine whether the remaining

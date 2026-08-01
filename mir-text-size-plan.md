@@ -1577,3 +1577,104 @@ changed); the `cfg-backedge` gate is now the sole blocker for at least
 one otherwise-ready function (`wumpus::pact`) and may be worth
 revisiting as its own future item once enough non-loop `text-size`
 candidates are exhausted.
+
+## Item T15: forward a value across an intervening MIR_CONST into a binary operator's constant-RHS push/pop dance (2026-08-01)
+
+**Hypothesis**: a fresh post-T14 whole-corpus census (`/tmp/census-post-t14.tsv`)
+re-bucketed the `text-size` gap population (near(<16): 0, close(16-64):
+30, mid(64-256): 328, far(>256): 1367) and found the smallest real
+(non-synthetic) gaps clustered in `tests/tvla.c`'s
+`vla_sizeof_op_add`/`_sub`/`_and`/`_mullhs` (gap 18-42 bytes) and
+`tesc`/`tscanf`/`tstr3`/`tsyntax`'s `check_s` (gap 34 bytes, 4 apps at
+once - SKILL.md's own flagged example). `check_s` turned out to be
+exactly the already-deferred Item T7 call-result-forwarding class (the
+`strcmp()` result gets store/reloaded because of the still-flagged
+`mir_forward_skip_target`/adjacency-equality-check risk T7 declined to
+loosen) - re-confirmed the deferral stands rather than re-litigating
+it, since nothing this session changed that gate's risk calculus.
+
+Direct MIR IR inspection of `vla_sizeof_op_add`
+(`int a[n]; return (int)(sizeof a + 1);`) showed a *different*, novel
+root cause: `v4 = vlasize a` is immediately followed by `v5 = const 1`,
+which is immediately followed by `v6 = v4 + v5`. `mir_can_forward_hl_to_next`
+only recognizes a fixed set of opcodes as the literal next consumer and
+`MIR_CONST` is not one of them, so v4 gets stored to its backend slot at
+its definition and immediately reloaded one instruction later purely to
+feed the following `MIR_BINARY`'s left operand - a redundant round trip
+via `(ix-8)/(ix-7)` with nothing in between that could have clobbered
+HL. This is unrelated to VLA specifically: any `computed_expr OP
+literal` shape where `computed_expr`'s own MIR construction happens to
+be immediately followed by the literal's `MIR_CONST` (the typical,
+source-order construction pattern) hits the identical gap.
+
+**Fix**: added a new predicate, `mir_can_forward_stack_to_binary_const`,
+mirroring the existing `mir_can_forward_stack_to_index` shape (`value`;
+`MIR_CONST`; consumer) but for `MIR_BINARY` instead of
+`MIR_INDEX_ADDRESS`. It requires the value be the binary's `src1`, the
+constant be the binary's `src2`, the binary's operand type not be wide
+(4 bytes, handled by a separate protocol), and explicitly excludes any
+shape with a different code path for the constant: divmod pairing
+(`mir_divmod_partner`), the multiply-by-constant fast path
+(`mir_mul_const_fast_path_eligible`), and fused-comparison branches
+(`mir_binary_is_fusable_comparison`) - all bypass the plain "push left,
+evaluate right, pop, combine" sequence this fix targets, so forwarding
+across them is out of scope here, not attempted.
+
+Wired into `mir_emit_virtual_store` (pushes `hl` immediately and
+records the forwarding, same as the existing stack-to-index case) and
+into `MIR_BINARY`'s non-wide emission path: skips the now-redundant
+`mir_emit_virtual_load(out, insn->src1)` when stack-forwarded, forces
+the `!mir.has_vla && mir_binary_only_constant(insn->src2)` direct-`ld
+de,const` fast path to fall through to the full push/pop branch when
+stack-forwarded (since HL doesn't hold the left operand at that point
+any more), and skips that branch's own now-redundant leading `push hl`
+(the value was already pushed at its definition site) - the trailing
+`pop hl` is unchanged and correctly retrieves the forwarded value,
+preserving stack balance in every case.
+
+**Validation**:
+- Focused check: `vla_sizeof_op_add`/`_sub`/`_and` all flipped from
+  `fallback text-size` to `mir accepted` (add: 606->554 generated
+  bytes vs. 588 captured; sub: 612->560 vs. 594; and: 641->589 vs.
+  599). `vla_sizeof_op_mullhs` (`3 * sizeof a`, constant on the left,
+  not the right) is a different shape not covered by this predicate
+  and remains fallback, as expected/unaffected.
+- Whole-corpus census (`--fail-on-regression`) vs. post-T14 baseline:
+  0 regressions, **+5 newly-accepted functions** (212/2022 -> 217/2022,
+  10.48% -> 10.73%): the 3 `vla_sizeof_op_*` functions above plus two
+  bonus flips found by the same fix, `vla_sizeof_2d_rows` and
+  `vla_sizeof_shadow_outer_after`. 199 apps had census metric changes;
+  1 app (`tvla`) flagged as requiring runtime validation. Corpus-wide
+  generated-bytes total dropped by 32,370 bytes across 576 functions -
+  the broadest single-item byte-sum shrink this session (T14's was
+  7,188 bytes/310 functions), consistent with this being a genuinely
+  common shape (`computed_expr OP literal`), not VLA-specific.
+- Focused `runall.ps1 -Apps tvla -Mode full`: correctness PASS; 1 tiny
+  nopeep regression (28,178,772 -> 28,178,846 cycles, +74 cycles /
+  +0.0003%) and 1 tiny peep improvement (25,428,092 -> 25,427,428,
+  -0.003%) - the same noise-level, MIR-vs-legacy frame-shape trade-off
+  class already characterized and accepted for T9/T11/T12/T13/T14's
+  comparable deltas this session, not a genuine regression. Accepted
+  via `-UpdatePerfBaseline`.
+- Wide `-Mode fast` safety net (323 apps): 314 passed, 0 failed, clean.
+- Given the 199-app blast radius touching the core `MIR_BINARY`
+  emission path (the single most heavily-used instruction case in the
+  dominant selector), ran the milestone-tier full `-Mode full` safety
+  net (323 apps): 314 passed, 0 failed, diagnostics (106/106), dccpeep
+  fixtures (17/17), performance (both modes) all clean.
+
+**Outcome**: +5 newly-accepted functions (212/2022 -> 217/2022,
+10.73%), 0 regressions, -32,370 bytes across 576 still-fallback
+candidates corpus-wide - the broadest byte-sum shrink of this
+session's items, since the underlying shape (`computed_expr OP
+literal`) is common well beyond VLA code. `check_s`'s Item T7
+deferral is reconfirmed unchanged (a structurally distinct call-result
+forwarding gap, not addressed by this fix).
+
+**Next**: re-sweep the worst-ratio list fresh post-T15 (576 functions
+changed - likely surfaces new near-miss candidates); consider whether
+an analogous predicate is worth adding for the `MIR_UNARY`/
+`MIR_STORE_INDIRECT`/etc. consumer opcodes `mir_can_forward_hl_to_next`
+already recognizes for the literal-adjacent case, mirrored the same
+way for the "one MIR_CONST in between" case, if evidence supports it
+after re-measuring.
