@@ -7247,11 +7247,8 @@ static int mir_can_forward_hl_to_next(int value)
     if (next_instruction >= mir.count)
         return 0;
     next = &mir.insns[next_instruction];
-    if (next_instruction != mir_emit_instruction_index + 1) {
-        if (next->opcode != MIR_RETURN)
-            return 0;
-    } else if (!mir_virtual_iy_base && next->opcode != MIR_RETURN &&
-               next->opcode != MIR_STORE)
+    if (next_instruction != mir_emit_instruction_index + 1 &&
+        next->opcode != MIR_RETURN)
         return 0;
     if (next->opcode == MIR_RETURN &&
         (mir.has_vla || mir_function_has_any_call()))
@@ -9783,7 +9780,7 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
      * access, never regress one. push iy here saves the caller's iy in
      * exactly the stack position mir_emit_virtual_iy_epilogue's own
      * "frame_bytes + 2" math already expects when restoring it. */
-    mir_virtual_iy_base = frame_bytes > 150;
+    mir_virtual_iy_base = frame_bytes > 140;
     mir_virtual_iy_frame_bytes = frame_bytes;
     if (mir_virtual_iy_base) {
         fputs("\tpush iy\n", out);
