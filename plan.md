@@ -590,6 +590,24 @@ retired history; do not resume numbering from them.
   precedent. Wide safety net: both `-Mode fast` (314/323 clean) AND a
   full-corpus `-Mode full` run (also 314/323 clean, matching CI's
   exact invocation) - both required per the T29 lesson.
+- **Item T31 landed** (`62a450a`'s follow-up): re-sweeping the census
+  fresh post-T30 surfaced `trtl2.test_putc_and_remove` (gap=9) still
+  paying a *second*, separate call-result round trip beyond what T30
+  fixed - `f = fopen(...)` stored the call result to its own temp slot,
+  reloaded it, then stored it *again* to `f`'s real home, reloading a
+  second time for the `f == 0` comparison. Root cause:
+  `mir_can_forward_hl_to_next`'s `MIR_STORE` case has its own narrower
+  `producer_opcode` whitelist (`MIR_LOAD_INDIRECT`/`MIR_BINARY`/
+  `MIR_UNARY`/`MIR_CONST`, added by the pre-existing Items 6/7/8) that
+  never included `MIR_CALL` - not a deliberate exclusion, just
+  unreachable code from before T30 removed the broader top-level call
+  exclusion. Added `MIR_CALL` to that whitelist. Whole-corpus census: 0
+  regressions, +1 newly-accepted function (267->268/2022, 13.20%->
+  13.25%). Focused `runall.ps1 -Mode full` on the 2 flagged apps
+  (`trtl2`, `tstr3`): 2/2 correctness PASS, **0 regressions, 4 genuine
+  improvements** (up to -0.73% cycles) - a clean win, no trade-off
+  needed this time; baselines updated. Wide safety net: both
+  `-Mode fast` and full-corpus `-Mode full` clean.
 
 ## Next session should
 
@@ -606,15 +624,21 @@ retired history; do not resume numbering from them.
    compare chain), which affects `swdefmid` and any `switch`-heavy
    function. Stage narrowly per SKILL.md: pin down the exact shape via
    2-3 forced-accept diffs before generalizing.
-2. **Re-sweep the census fresh from the post-T30 snapshot** and
+2. **Re-sweep the census fresh from the post-T31 snapshot** and
    continue down the ranked near-miss list (population composition
    shifts after every landed item - do not reuse this session's
-   rankings). **Item T30 proved the near-miss vein is NOT dry** despite
-   3 of 4 post-T29 candidates hitting the "no reg-reg move" wall -
-   `check_s` was a distinct, fixable forwarding-analysis gap
-   (`mir_forward_skip_target_ex` not recognizing a provably-no-code
-   `MIR_CONST`), unlocking +21 functions in one item. Also check
-   whether other single-use-forwarding predicates in
+   rankings). **Items T30/T31 proved the near-miss vein is NOT dry**
+   despite 3 of 4 post-T29 candidates hitting the "no reg-reg move"
+   wall - `check_s` (T30) and `test_putc_and_remove` (T31) were both
+   distinct, fixable gaps: a skip-target blind spot for a provably-
+   no-code `MIR_CONST`, and a stale `producer_opcode` whitelist that
+   was never updated after T30 made `MIR_CALL` results reachable at
+   all. **Do the final sweep flagged at the end of Item T31's entry
+   first**: check `mir_can_forward_stack_to_index`/`_binary_const`/
+   `_rhs` and `mir_can_forward_hl_to_call_argument` for the same kind
+   of stale producer-opcode restriction now that call results are more
+   broadly reachable, before picking a new candidate from the ranked
+   list. Also check whether other single-use-forwarding predicates in
    `dcc_mir_spilled_cfg.c` have the same NOP-vs-label adjacency
    conflation Item T29 fixed, or the same "no-code MIR_CONST is
    invisible to skip-target" gap Item T30 fixed, applied elsewhere

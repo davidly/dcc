@@ -194,11 +194,24 @@ static int mir_can_forward_hl_to_next(int value)
             int memory_storage;
             int memory_offset;
             int producer_opcode = mir.insns[mir_emit_instruction_index].opcode;
+            /* Item T31 (mir-text-size-plan.md): MIR_CALL was never in this
+             * whitelist because, until Item T30, mir_can_forward_hl_to_next
+             * unconditionally excluded every call result before reaching
+             * this switch at all - the omission was never reachable, not a
+             * deliberate safety exclusion (see Items 6/7/8, which added this
+             * whitelist for binary/unary/const producers only, the set that
+             * *was* reachable at the time). A call result forwarded directly
+             * into its destination's store needs nothing beyond what any
+             * other producer here needs: the value sits in HL right after
+             * the call returns, and the store's own address computation
+             * below is a fixed ix-relative offset unaffected by whatever
+             * else the call clobbered. */
             if (mir_object_is_fully_promoted(next->object) ||
                 (producer_opcode != MIR_LOAD_INDIRECT &&
                  producer_opcode != MIR_BINARY &&
                  producer_opcode != MIR_UNARY &&
-                 producer_opcode != MIR_CONST) ||
+                 producer_opcode != MIR_CONST &&
+                 producer_opcode != MIR_CALL) ||
                 !mir_scalar_memory_location(next, &memory_type,
                                             &memory_storage, &memory_offset) ||
                 type_is_struct_object(memory_type) ||

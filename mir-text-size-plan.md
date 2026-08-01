@@ -3116,3 +3116,69 @@ instruction-selection capability). The two are easy to conflate when a
 this specific constant's emission code path actually touch `hl`,
 checked directly against the emitter's own shortcut conditions" rather
 than assuming any intervening `MIR_CONST` is unavoidable.
+
+## Item T31: allow a call result to forward directly into its destination's `MIR_STORE` (2026-08-02)
+
+**Hypothesis**: Item T30 relaxed `mir_can_forward_hl_to_next`'s
+top-level exclusion so plain scalar `MIR_CALL` results are no longer
+categorically ineligible for HL-forwarding - but a re-sweep of the
+census's freshest `text-size` ranking surfaced `trtl2.test_putc_and_
+remove` (gap=9, the new #1 candidate) still paying a *second*, separate
+call-result round trip: `f = fopen(...)` stored the call result to its
+own temp backend slot, reloaded it immediately, *then* stored it again
+to `f`'s real home, reloading a second time for the following `f == 0`
+comparison. The `MIR_STORE` case inside `mir_can_forward_hl_to_next`
+has its own narrower whitelist (`producer_opcode` must be
+`MIR_LOAD_INDIRECT`, `MIR_BINARY`, `MIR_UNARY`, or `MIR_CONST` - added
+by the pre-existing Items 6/7/8 "forward binary/unary/divmod results to
+a following store"). `MIR_CALL` was never in that list. Confirmed via
+`git log -S` that Items 6/7/8 (commit `164ae0e`) only ever needed to
+cover producers that were reachable at the time - `MIR_CALL` results
+could never reach this switch at all before Item T30, since the
+top-level exclusion this session's Item T30 just relaxed rejected them
+unconditionally first. This is the same shape of finding as Item T29
+(a gate whose exclusion was correct history, now stale after an
+adjacent fix): **the omission was never a deliberate safety exclusion,
+just unreachable code that Item T30 made reachable.**
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): added `MIR_CALL`
+to the `producer_opcode` whitelist in `mir_can_forward_hl_to_next`'s
+`MIR_STORE` case. No new safety concern versus the existing whitelist
+members: the value sits in `hl` right after the call returns (same as
+after a binary/unary/const), and the store's own address computation
+is a fixed `ix`-relative offset, unaffected by anything else the call
+clobbered along the way.
+
+**Validation**:
+- `test_putc_and_remove`: `fallback text-size generated-bytes=1447
+  captured-bytes=1438` (a 9-byte overshoot despite already having
+  8 *fewer* instructions than legacy) -> `mir accepted generated-
+  bytes=1395 captured-bytes=1438` - both round trips around the
+  `fopen` result are gone.
+- Whole-corpus census (`build/mir-t31.tsv` vs `build/mir-t30.tsv`,
+  `--fail-on-regression`): **0 regressions**, coverage 267->268/2022
+  (13.20%->13.25%), 1 newly-accepted function (`test_putc_and_remove`
+  itself - a narrower, single-function fix this time, unlike T30's
+  21-function jump, since the `producer==MIR_CALL` + `store` shape is
+  rarer than the `producer==MIR_CALL` + `zero-rhs-compare` shape T30
+  targeted). 46 apps had census changes; 2 apps flagged for runtime
+  validation (`trtl2`, `tstr3`, both sharing `test_putc_and_remove`'s
+  compiled object via test infra).
+- Focused `runall.ps1 -Mode full` on both apps: **2/2 correctness
+  PASS, 0 performance regressions, 4 genuine improvements** (up to
+  -0.73% cycles) - a clean win, no trade-off needed this time. Updated
+  baselines via `-UpdatePerfBaseline`.
+- Wide safety net (both required tiers): `-Mode fast` 314/323 clean;
+  full-corpus `-Mode full` also 314/323 clean, diagnostics/dccpeep/
+  performance all passed.
+
+**Lesson reinforced**: after relaxing a broad, unconditional exclusion
+(like Item T30's call-result gate), always re-check any *narrower*
+producer/opcode whitelists nearby that were historically scoped only
+to what was reachable at the time - they are easy to miss since they
+look like deliberate, considered restrictions but may just be dead
+code inherited from before the broader gate was relaxed. Worth a final
+sweep of `mir_can_forward_stack_to_index`/`_binary_const`/`_rhs` and
+`mir_can_forward_hl_to_call_argument` for the same kind of stale
+producer-opcode restriction before moving on to a different fallback
+class.
