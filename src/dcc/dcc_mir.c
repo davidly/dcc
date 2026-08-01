@@ -6487,6 +6487,19 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 (insn->memory_size != 0 && insn->memory_size != 2))
                 return 0;
             break;
+        case MIR_STORE_INDIRECT:
+            /* Item 23 (mir-migration-plan-to-100pct.md): writing through
+             * an arbitrary already-homed pointer value (e.g. `*p = v`),
+             * the write-side mirror of Item 22's MIR_LOAD_INDIRECT.
+             * Restricted to the identical narrow slice for the same
+             * reason: a plain 2-byte scalar, no bitfield packing (that
+             * needs a read-modify-write sequence, real but separate
+             * scope), no 1-byte (char) store and no 4-byte (long) store
+             * (neither has a homed emission path here yet). */
+            if (insn->bit_width > 0 ||
+                (insn->memory_size != 0 && insn->memory_size != 2))
+                return 0;
+            break;
         case MIR_LOAD:
             {
                 /* Item 9 (mir-migration-plan-to-100pct.md): the "opcode-load"
@@ -6743,6 +6756,37 @@ static int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                     !mir_emit_hl_to_home(out, insn->dst))
                     goto done;
+                if (preserve_hl) fputs("\tpop hl\n", out);
+            }
+            break;
+        case MIR_STORE_INDIRECT:
+            {
+                /* Item 23: preserve any OTHER value still live in hl/de
+                 * across this instruction (src1/src2's own colors are
+                 * naturally excluded by mir_home_color_live_across, since
+                 * their own consumption here doesn't count as a "later"
+                 * use - see that helper's comment) - both registers are
+                 * used unconditionally as scratch below regardless of
+                 * src1/src2's actual home colors, mirroring the
+                 * spilled-scalar-cfg selector's own two-hl-loads-then-ex
+                 * dance for combining an address and a value that may
+                 * both be homed anywhere. */
+                int instruction = (int)(insn - mir.insns);
+                int preserve_hl =
+                    mir_home_color_live_across(instruction, MIR_COLOR_HL);
+                int preserve_de =
+                    mir_home_color_live_across(instruction, MIR_COLOR_DE);
+                if (preserve_hl) fputs("\tpush hl\n", out);
+                if (preserve_de) fputs("\tpush de\n", out);
+                if (!mir_emit_home_to_hl(out, insn->src1))
+                    goto done;
+                fputs("\tpush hl\n", out);
+                if (!mir_emit_home_to_hl(out, insn->src2))
+                    goto done;
+                fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n", out);
+                if (insn->memory_size != 1)
+                    fputs("\tinc hl\n\tld (hl),d\n", out);
+                if (preserve_de) fputs("\tpop de\n", out);
                 if (preserve_hl) fputs("\tpop hl\n", out);
             }
             break;

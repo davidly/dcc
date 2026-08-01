@@ -2436,3 +2436,56 @@ through an arbitrary homed pointer rather than read) and should reuse
 the same `mir_home_color_live_across`-protected-scratch-through-`HL`
 pattern, since Z80 can only `ld (hl),n`/`ld (hl),r` for indirect stores
 just as it can only `ld hl,(nn)` for indirect loads.
+
+### Item 23: MIR_STORE_INDIRECT (2026, this session)
+
+Added the narrow 2-byte, non-bitfield write-side mirror of Item 22's
+`MIR_LOAD_INDIRECT`: writing through an arbitrary already-homed pointer
+value (`*p = v`). Emission loads `src1` (the pointer) into `HL`, pushes
+it, loads `src2` (the value) into `HL` (reusing `HL` as scratch again,
+mirroring `mir_try_emit_spilled_scalar_cfg`'s own existing two-loads-
+then-`ex de,hl`-then-pop dance for combining an address and a value that
+may both be homed anywhere), then stores the low/high bytes through the
+popped pointer. Protected with `mir_home_color_live_across`-gated
+`preserve_hl`/`preserve_de` around the whole sequence (both registers
+are used unconditionally as scratch here, regardless of `src1`/`src2`'s
+actual home colors) - the same pattern Item 22 already established for
+`MIR_LOAD_INDIRECT`, applied proactively rather than discovered by a
+failure this time.
+
+**Result**: 0 newly-unlocked functions. A regression-gated census
+comparison showed 8 functions (across `adaint`, `cint`, `cobint`,
+`tinlinfb`) shifting from being rejected by `spilled-scalar-cfg` to
+being rejected slightly later by `homed-scalar-cfg` (a different
+fallback reason, e.g. `instruction-count` instead of `text-size`) - but
+all 8 remain on the legacy fallback path either way (`result=fallback`
+in both the before and after snapshot), so this is a purely internal
+selector-attempt-order change with zero generated-code difference and
+zero runtime risk. This confirms the opcode itself is correctly wired
+(no functions were incorrectly rejected or silently miscompiled), but
+also shows `MIR_STORE_INDIRECT` alone does not unlock any function in
+the current corpus - every real-world pointer-write site so far also
+depends on at least one other still-gated opcode or cost limit. This is
+expected, valuable groundwork (needed before the variable-index
+`MIR_INDEX_ADDRESS` and `MIR_COPY_AGGREGATE` work that will likely
+combine with it) rather than a standalone yield-producing item.
+
+**Validation**:
+- Regression-gated census (`--fail-on-regression` vs. the pre-item23
+  baseline): 0 newly MIR-emitted, 0 returned to fallback, 4 apps with
+  census changes, 0 apps flagged as requiring runtime validation
+  (confirmed by inspecting the raw diff: all 8 changed rows are
+  fallback-to-fallback selector-attempt-order changes only).
+- Wide `-Mode fast` safety net across the full runnable corpus (323
+  apps): 314/314 pass, 0 regressions. (No apps required `-Mode full`
+  validation since no function's generated output actually changed.)
+
+**Next recommended class**: `MIR_COPY_AGGREGATE` (struct/union
+assignment by value - needs a byte-range copy loop, not a single-
+instruction fold) and the variable-index subset of `MIR_INDEX_ADDRESS`
+(needs a `__mulu` runtime-call emission path). Given Item 23's result,
+prioritize whichever of these two is more likely to combine with
+`MIR_MEMBER_ADDRESS`/`MIR_LOAD_INDIRECT`/`MIR_STORE_INDIRECT` in the
+same real functions - re-run the disposable survey restricted to
+functions that already pass every currently-accepted opcode except one
+of these two, to measure real expected yield before implementing either.
