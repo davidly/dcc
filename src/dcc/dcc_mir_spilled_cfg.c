@@ -1896,6 +1896,27 @@ static int mir_prepare_backend_slots(void)
                 first[mir.insns[partner].dst] = i;
         }
     }
+    /* Item T51 (mir-text-size-plan.md): mir_binary_only_constant and
+     * mir_index_only_constant already make the MIR_CONST case (above,
+     * where the value is defined) and the MIR_BINARY/MIR_INDEX_ADDRESS
+     * consumer sites (below, in the emitter) both emit zero code for a
+     * constant whose sole use qualifies - the definition site skips its
+     * own "ld hl,<const>"/store entirely, and the consumer materializes
+     * the constant directly as an immediate (e.g. "ld de,<const>")
+     * instead of ever calling mir_emit_virtual_load/mir_emit_virtual_store
+     * for it. Despite this, mir_prepare_backend_slots never excluded
+     * these two predicates from slot assignment - unlike the structurally
+     * identical mir_call_only_constant (a sibling predicate for the
+     * MIR_CALL-argument case, already excluded here) - so such a value
+     * still got a live backend slot reserved for it: 2 bytes of dead
+     * frame space nothing ever stores to or reads from. Found via
+     * tests/t2darr.c's check() (`failures = failures + 1;`): the
+     * constant 1's sole use is the ADD's right-hand operand, qualifying
+     * for mir_binary_only_constant, yet a slot was still reserved. This
+     * pattern recurs across the whole `check`/`chk`/`okb`/`fail`
+     * assertion-helper family (50+ functions sharing the same shape) and
+     * is the same class of dead-slot waste as the already-known,
+     * narrower Item T33 (wumpus.c's rndix). */
     mir.backend_slot_count = 0;
     mir_slot_report_requested_count = 0;
     mir_slot_report_assigned_count = 0;
@@ -1910,6 +1931,8 @@ static int mir_prepare_backend_slots(void)
                 ++mir_slot_report_requested_count;
                 if (last[value] <= first[value] ||
                                         mir_call_only_constant(value) ||
+                                        mir_binary_only_constant(value) ||
+                                        mir_index_only_constant(value) ||
                                         mir_multiply_by_small_constant(value) ||
                                         (fused_away != NULL && fused_away[value]) ||
                                         mir_value_is_selfstore_incdec(value) ||

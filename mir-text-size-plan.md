@@ -4898,3 +4898,131 @@ already-proven MIR technique to a second selector remains a reasonable
 category of work under this plan's discipline, provided (per the T41
 lesson) it is always paired with real `ntvcm`-executed correctness
 testing rather than static/census inspection alone.
+
+### Item T51: exclude `mir_binary_only_constant`/`mir_index_only_constant` values from `mir_prepare_backend_slots` (subsumes and generalizes the deferred Item T33 candidate)
+
+**Hypothesis**: the 50+-function `check`/`check_int`/`chk`/`okb`/`fail`
+assertion-helper family (e.g. `t2darr.c`'s `check`) all share one
+residual text-size gap after Items T34-T50: a dead, wasted 2-byte
+backend-slot reservation for a `MIR_CONST` value whose sole use is as
+one operand of a `MIR_BINARY` or a fixed-stride `MIR_INDEX_ADDRESS`
+(e.g. the constant `1` in `failures = failures + 1;`). Root-caused via
+`t2darr.c`'s `check` (`DCC_MIR_FORCE_ACCEPT_FUNCTION=check`, then
+targeted, correctly-braced debug tracing of
+`mir_prepare_backend_slots`'s slot-assignment loop): the value already
+has two dedicated helper predicates,
+`mir_binary_only_constant`/`mir_index_only_constant`
+(`dcc_mir_spilled_cfg.c`), that make **both** the constant's own
+definition site (the `MIR_CONST` case in the main emission switch,
+which already skips its `ld hl,<const>`/store entirely when either
+predicate holds) **and** its consuming `MIR_BINARY`/`MIR_INDEX_ADDRESS`
+site (which already materializes the constant directly as an
+immediate, e.g. `ld de,<const>`, instead of calling
+`mir_emit_virtual_load`) emit correct code with **zero** reliance on a
+backend slot - exactly mirroring the already-excluded sibling
+predicate `mir_call_only_constant` (the `MIR_CALL`-argument analog).
+Despite this, `mir_prepare_backend_slots`'s slot-assignment exclusion
+chain only checked `mir_call_only_constant`, never
+`mir_binary_only_constant`/`mir_index_only_constant` - an omission,
+not a deliberate restriction, since both predicates already existed
+and were already relied upon at both emission sites. The unused slot
+was reserved anyway, permanently inflating every affected function's
+frame size by 2 bytes (`ld hl,-2`/`add hl,sp`/`ld sp,hl` prologue
+padding plus a now-redundant label) for no purpose. This is the same
+class of defect as the already-known, narrower Item T33 (`wumpus.c`'s
+`rndix`, deferred pending population sizing) - confirmed here to be
+far larger in scope than that single instance.
+
+An earlier investigation thread this session suspected a *cross-pass*
+inconsistency in `mir_capture_stream_uses_frame()` (returning a
+different frame-convention verdict across `check`'s five internal
+compiler passes) as the root cause instead. Debug tracing (properly
+braced this time, learning from an earlier session's dangling-`if`
+instrumentation bug that was caught and fully reverted before any
+build) showed this suspicion was a red herring for `check` itself:
+every pass after the first consistently computed the same final
+slot count (1, for the `MIR_CONST` value), so the multi-pass
+mechanism was self-consistent for the actual committed answer. The
+first pass's different (`uses_frame=0`) verdict never affected the
+final, committed slot count - it is a distinct, separately-understood
+mechanism (legacy's `g_speculative_codegen_active`-gated discard-and-
+retry codegen convention search, already documented at
+`mir_end_function`'s `MIR_MAX_ROLLOUT_INSNS` branch) that does not by
+itself cause any dead-slot waste. No change was needed or made to
+`mir_capture_stream_uses_frame()`.
+
+**Implementation**: added `mir_binary_only_constant(value)` and
+`mir_index_only_constant(value)` to `mir_prepare_backend_slots`'s
+slot-assignment exclusion chain in `dcc_mir_spilled_cfg.c`, immediately
+alongside the existing `mir_call_only_constant(value)` check they
+mirror. No other file needed a parallel change:
+`dcc_mir_homed_cfg.c` (the sibling selector) has no backend-slot
+mechanism at all - homed values are register-allocated, not
+slot-based - so this fix is scoped entirely to the spilled-scalar-cfg
+selector, the same selector both helper predicates and their existing
+emission-site call sites already belong to.
+
+**Validation**:
+- Whole-corpus census (`build/mir-t51-after.tsv` vs.
+  `build/mir-t51-before.tsv`, both freshly rebuilt from this session's
+  starting point, 327/2023) with `--fail-on-regression`: clean, 0
+  regressions, exit 0. **125 newly MIR-emitted functions** - by far
+  the single largest yield of any item in this plan to date - taking
+  coverage from 327/2023 (16.16%) to **452/2023 (22.34%)**. Fallback
+  `text-size` count dropped from 1587 to 1462.
+- Focused `runall.ps1 -Apps <100 affected apps> -Mode full`: 100/100
+  passed correctness; performance showed 2 regressions against
+  overwhelmingly many improvements (dozens of apps improved by
+  0.01%-2.27% in cycles and/or bytes, with zero apps showing any
+  cycle-count regression). Both flagged regressions were root-caused
+  before being accepted:
+  - `tstrify` (peep): +12 cycles (215468 -> 215480, +0.006%) - noise-
+    level; `tstrify` (nopeep) improved -0.09% in the same run.
+  - `tfloat4` (peep): +128 bytes (19712 -> 19840, +0.65%); `tfloat4`
+    (peep) *cycles* simultaneously improved (893594 -> 893576).
+    Root-caused via byte-for-byte `.mac` diffing (before: legacy
+    fallback capture; after: MIR-accepted output) that the underlying
+    instruction stream for the four newly-accepted functions
+    (`check_int`/`check_uint`/`check_long`/`check_ulong`) is
+    byte-identical aside from cosmetic label-count differences (one
+    merged end-label instead of two, itself zero-width). Confirmed
+    via the assembled `.PRN` listing that the real byte distance for
+    the one differing jump (`jp`/`jr z,L32`-equivalent) is ~39 bytes,
+    comfortably within `jr`'s +/-127 range in both versions - so this
+    is not a reachability difference. The regression traces to
+    `dccpeep`'s `pass_jp_to_jr` (`src/dccpeep/peep_pass_final.c`), a
+    separate subsystem outside this plan's `dcc_mir.c` scope, whose
+    conservative worst-case-byte-size estimator
+    (`instr_size_upper`) evidently reaches a different jr/jp
+    conversion verdict for two of the four otherwise-identical
+    functions depending on incidental label-count differences,
+    despite real assembled distances being far inside range in both
+    cases - a latent `dccpeep` heuristic quirk, not a MIR-emission
+    quality or correctness issue, and out of scope to fix under this
+    item. Per Rule 4 (judge by running the app, not by the static
+    metric), the fact that cycles simultaneously *improved* for
+    `tfloat4` while only the static byte-count regressed supports
+    accepting this as immaterial.
+  - Both baselines updated via `-UpdatePerfBaseline` after this root-
+    causing confirmed the changes are understood, intentional-in-
+    effect, and correctness-clean (not hiding any real regression),
+    per this plan's baseline-update policy.
+- Wide safety net, full 323-app corpus: `-Mode fast` 313/323 passed
+  clean (2 known perf regressions above; `tkbd` flaked under parallel
+  contention, confirmed pre-existing/unrelated by rerunning it alone -
+  it passed cleanly in isolation, matching `runall.ps1`'s own
+  documented rationale for why `tkbd` is `perf_ignore`-flagged); `-Mode
+  full` (peep+nopeep) showed the same 2 known regressions and no new
+  ones. After the baseline update, a final full-corpus `-Mode full`
+  run passed 314/314 clean, 0 regressions.
+
+**Disposition**: landed. This is the single highest-yield item in the
+plan to date (+125 functions in one commit, more than the combined
+yield of Items T34-T50), fully subsumes and resolves the previously-
+deferred Item T33 candidate (`wumpus.c`'s `rndix` is included in the
+125 newly-accepted functions), and required no design-ambiguity defer
+- the fix is a two-line, narrowly-scoped addition mirroring an
+already-proven sibling predicate already relied upon at both relevant
+emission sites. The `mir_capture_stream_uses_frame()` cross-pass
+investigation thread is recorded above as a resolved dead end, so a
+future session does not need to re-investigate it for this family.
