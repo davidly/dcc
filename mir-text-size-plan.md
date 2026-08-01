@@ -2257,3 +2257,132 @@ record but not yet pursued: `tvla.vla_sizeof_ternary`'s VLA/signed-
 comparison sign-flip shape (set aside earlier this session as too
 complex for its single-function yield); the indirect-call-target
 rematerialization follow-on noted above.
+
+## Item T25: rematerialize values used as an indirect call's own target (2026-08-01)
+
+**Hypothesis** (T20's own deferred follow-on): a value whose sole use
+is the *target* of an indirect `MIR_CALL` (`fp = target; ((void(*)(void))fp)();`)
+is never recognized as forwardable by any of T20's rematerialization
+predicates, because they all key on "value flows into an `MIR_ARG`" —
+none of them recognize "callee position" as a forwardable use. This
+forces the value into a wasted backend slot (store at definition,
+reload at the call site) even though, structurally, it is exactly the
+same single-definition/single-use shape T3/T4/T20 already handle for
+arguments.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`): added
+`mir_load_is_single_indirect_call_target(int value, int size)`, a
+sibling predicate to `mir_address_is_single_call_argument`: the
+value's definition must be `MIR_LOAD` from `SC_LOCAL`/`SC_PARAM` with
+a valid `ix`-relative offset, and its only use across the whole
+function must be as `src1` of exactly one `MIR_CALL` whose `name`
+field is `"<indirect>"`. Wired into four places, mirroring the
+existing `mir_load_is_single_call_argument` wiring exactly:
+
+1. `mir_emit_rematerialized_argument`'s first branch condition (OR'd
+   in, gated to `size == 2`, reusing the same `ld l,(ix+n)/ld
+   h,(ix+n+1)` emission `mir_load_is_single_call_argument` already
+   uses).
+2. `MIR_LOAD`'s emission case: skip the store when the value will be
+   rematerialized at its call site instead (mirrors the existing
+   `mir_load_is_single_call_argument` skip).
+3. `mir_prepare_backend_slots`'s slot-elision condition list: skip
+   allocating a wasted frame slot for these values.
+4. The indirect-call emission site (`MIR_CALL`'s `is_indirect`
+   branch): try `mir_emit_rematerialized_argument(out, insn->src1, 2)`
+   first, falling back to the existing `mir_emit_virtual_load` only if
+   that returns 0.
+
+The real win is almost entirely from (3): for a value whose home *is*
+its own `ix`-relative slot, "rematerializing" the load is byte-
+identical to a plain reload, but skipping the wasted separate spill
+slot (and the redundant store at definition time) is what actually
+shrinks generated code.
+
+**Validation**:
+- Whole-corpus census vs post-T20 (`9294288`): **+5 newly-accepted
+  functions** (227/2022 -> 232/2022, 11.47%), **0 census
+  regressions**: `tc89fnty.aply`, `tc99apar.call_callback`,
+  `tdecl.call2`, `tlocalfp.main`, `tsyntax.test_casted_function_pointer_call`.
+  16 apps with census changes, 7 apps flagged for runtime validation.
+- Focused `runall.ps1 -Apps tc89core,tc89decl,tc89fnty,tc99apar,tdecl,tlocalfp,tsyntax -Mode full`:
+  all 7 PASS correctness. Reproduced identically on a second run (ruling
+  out nondeterminism): 7 genuine performance improvements (`tc89core`
+  nopeep -0.38%, `tlocalfp` peep -0.35%/nopeep -0.49%, `tc89fnty` peep
+  -0.1%, `tc89decl` nopeep -0.17%, `tsyntax` peep -0.03%, `tc99apar`
+  peep -0.14%) and 5 regressions, investigated individually:
+  - `tc89fnty` nopeep +0.06% cycles, `tc99apar` nopeep +0.06% cycles,
+    `tsyntax` nopeep +0.01% cycles: noise-level (single-digit-percent
+    of a percent), each paired with a genuine peep-mode improvement in
+    the same app. Accepted; baselines updated.
+  - `tsyntax` nopeep **`.COM` size +1.75%** (7,296 -> 7,424 bytes):
+    investigated in depth since a raw byte-size change (not just a
+    cycle count) is a stronger regression signal than noise-level
+    cycles. Root-caused via a clean `git worktree add <path> 9294288
+    --detach` A/B build (avoiding the stash hazard below) plus direct
+    `.mac`/`.PRN`/`.SYM` inspection of the real `dccmake`-built
+    artifacts (not just the compiler's own candidate diagnostics):
+    the module's own linked code+data footprint (`__BSSB`/`__DATA`
+    symbol) grew by exactly **7 bytes** (0x1D7D -> 0x1D84) — the
+    genuinely new `test_casted_function_pointer_call` shape trades a
+    push/manual-stack-reload/pop dance (legacy's own preservation
+    idiom around the two indirect calls) for direct `ix`-relative
+    slot reuse plus an `exx` pair swap, netting a few bytes larger for
+    this specific instruction sequence even though the census's own
+    internal candidate-vs-captured accounting (536 vs 554 bytes)
+    predicted the opposite direction — a case of the "code-placement
+    sensitivity" class of static/actual metric divergence SKILL.md's
+    fast-loop step 9 already documents. Critically, **CP/M `.COM`
+    files are padded to 128-byte record boundaries**
+    (7,296 = 57 x 128; 7,424 = 58 x 128 exactly), so this genuine
+    7-byte real growth tipped the file over a padding-record boundary
+    and was reported as a full 128-byte (58x) jump — a measurement
+    quantization artifact of the file format, not evidence of a
+    128-byte code regression. Confirmed via `TSYNTAX.REL`/`RTLMIN.REL`/
+    `RTLMIN.MAC` being byte-identical between builds (the runtime
+    linkage itself is unaffected) and the `.mac` diff being localized
+    to exactly the one newly-accepted function (no other function's
+    output changed). Accepted as a real but negligible (+7 byte) and
+    fully understood change; baseline updated.
+  - `tc89core` peep +0.56% cycles (17,539 -> 17,637, improved from
+    Item T20's +0.78% residual but not fully closed): this item's
+    predicate only handles the *direct* single-load case: `tc89core.main`'s
+    `fp` still has additional intervening definitions/uses this
+    predicate's single-definition check doesn't cover. Left as a
+    continuing, documented residual — baseline for `tc89core`
+    deliberately **not** updated (matches Item T20's own precedent),
+    so this residual remains visible to future runs rather than
+    hidden.
+- Wide `-Mode fast` safety net (full 323-app corpus): 313/323 passed,
+  9 skipped, 1 failure (`tkbd`) confirmed to be a pre-existing,
+  already-`perf_ignore`-marked flaky app (passes cleanly when re-run
+  standalone), unrelated to this change. Only the same 2 known
+  residuals flagged as performance regressions (`tatof`, `tc89core`,
+  both left deliberately unbaselined per the above).
+- **Stale-stash hazard encountered and avoided mid-investigation**:
+  an initial attempt to use `git stash`/`git stash pop` for a quick
+  pre-T25 comparison instead popped a much older, unrelated stash
+  entry (predating this session's `dcc_mir.c` file split), causing a
+  spurious merge conflict; resolved via `git checkout HEAD --
+  src/dcc/dcc_mir.c` and redone correctly with a `git worktree add`
+  instead. Noted here so a future session doesn't repeat it: **use a
+  worktree, not `git stash`, for any A/B comparison against an older
+  commit in this repo** — the stash list carries stale entries from
+  much earlier work.
+
+**Outcome**: +5 newly-accepted functions (227/2022 -> 232/2022,
+11.47%), 0 census regressions, 1 reusable rematerialization predicate
+landed (indirect-call-target values), closing T20's own deferred
+follow-on. 6 of 7 affected apps clean, improved, or carrying only
+fully-diagnosed negligible noise; baselines updated for those 6.
+`tc89core`'s pre-existing peep residual continues, improved but not
+fully closed, and remains intentionally visible (baseline untouched).
+
+**Next**: re-sweep the worst-ratio/bucket list fresh post-T25 (16 apps
+had census changes this round). `tc89core.main`'s remaining residual
+would need a predicate that follows the value through its additional
+intervening uses, not just the single-definition case this item
+covers — worth a dedicated look if `tc89core` keeps recurring as a
+residual across future items. Otherwise, re-derive the next candidate
+from a fresh gap-bucket sweep rather than assuming the prior session's
+ranking still holds.

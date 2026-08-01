@@ -605,6 +605,7 @@ static void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
 }
 
 static int mir_address_is_single_call_argument(int value);
+static int mir_load_is_single_indirect_call_target(int value, int size);
 
 static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
@@ -612,7 +613,9 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
     unsigned long bits;
 
     if ((size == 2 || size == 4) &&
-        mir_load_is_single_call_argument(value, size)) {
+        (mir_load_is_single_call_argument(value, size) ||
+         (size == 2 &&
+          mir_load_is_single_indirect_call_target(value, size)))) {
         int memory_type;
         int memory_storage;
         int memory_offset;
@@ -1252,6 +1255,50 @@ static int mir_address_is_single_call_argument(int value)
     return argument_count == 1;
 }
 
+/* mir-text-size Item T25 (mir-text-size-plan.md): sibling to
+ * mir_load_is_single_call_argument above, but recognizing a completely
+ * different use position - a value whose sole use is the *callee*
+ * operand of an indirect MIR_CALL (`insn->src1` when the call's own
+ * `name` is the sentinel string "<indirect>"), not an ordinary
+ * MIR_ARG. Neither mir_load_is_single_call_argument nor
+ * mir_address_is_single_call_argument recognize this use at all - a
+ * function pointer read once and called through immediately still
+ * takes a full spill-and-reload round-trip through its backend slot
+ * even though nothing else in the function ever touches it, exactly
+ * the same wasted-slot-traffic shape those two predicates already
+ * fixed for the MIR_ARG position. Found via tests/tc89core.c's
+ * main(): `fp(41)` (fp a local function-pointer variable) reloads fp
+ * from its own backend slot instead of reading it fresh from its
+ * stable ix-relative home the way legacy does. */
+static int mir_load_is_single_indirect_call_target(int value, int size)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int use_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_LOAD ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        type_size(memory_type) != size ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        memory_offset < -128 || memory_offset + size - 1 > 127)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src2 == value)
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        if (insn->opcode != MIR_CALL ||
+            strcmp(insn->name, "<indirect>") != 0 || ++use_count > 1)
+            return 0;
+    }
+    return use_count == 1;
+}
+
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
@@ -1657,6 +1704,8 @@ static int mir_prepare_backend_slots(void)
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
                                                                                                             type_size(definition->type))) ||
+                                        (type_size(definition->type) == 2 &&
+                                         mir_load_is_single_indirect_call_target(value, 2)) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value) ||
@@ -3149,6 +3198,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_load_is_single_call_argument(insn->dst,
                                                   type_size(insn->type)))
                 break;
+            if (type_size(insn->type) == 2 &&
+                mir_load_is_single_indirect_call_target(insn->dst, 2))
+                break;
             if (!mir_scalar_memory_location(insn, &memory_type,
                                             &memory_storage, &memory_offset))
                 goto done;
@@ -4132,7 +4184,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if ((insn->memory_flags & 64) != 0)
                     fputs("\textrn __pfeoc\n\tcall __pfeoc\n", out);
                 if (is_indirect) {
-                    mir_emit_virtual_load(out, insn->src1);
+                    if (!mir_emit_rematerialized_argument(out, insn->src1, 2))
+                        mir_emit_virtual_load(out, insn->src1);
                     fputs("\textrn __call_hl\n\tcall __call_hl\n", out);
                 } else {
                     if (callee == NULL || callee->needs_extrn)

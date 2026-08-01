@@ -11,7 +11,7 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 227/2022 runnable functions MIR-accepted (11.23%).
+- Coverage: 232/2022 runnable functions MIR-accepted (11.47%).
 - `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
@@ -105,6 +105,20 @@ retired history; do not resume numbering from them.
   plan.md`'s Item T20 entry for the full cascading-discovery narrative
   and the deferred indirect-call-target-rematerialization follow-on it
   identified)
+  plus Item T25's `mir_load_is_single_indirect_call_target` predicate
+  (closes T20's own deferred follow-on: a value whose sole use is the
+  *target* of an indirect `MIR_CALL`, not just an `MIR_ARG`, is now
+  rematerializable/slot-elidable the same way T3/T4/T20's argument
+  values are; +5 newly-accepted functions, 227/2022 -> 232/2022,
+  11.47%; 6 of 7 runtime-validated apps clean/improved/negligible-noise,
+  1 continuing residual - `tc89core.main`, improved from T20's +0.78%
+  to +0.56% but not fully closed, left un-baselined and visible; a
+  `tsyntax` nopeep `.COM`-size-looking "+1.75%/+128 byte" regression was
+  root-caused to a genuine but tiny +7-byte real growth amplified by
+  CP/M's 128-byte `.COM` record-padding boundary - not real code bloat -
+  see `mir-text-size-plan.md`'s Item T25 entry for the full
+  investigation, including a stale-`git-stash` hazard hit and avoided
+  via a `git worktree add` A/B comparison instead)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
@@ -424,25 +438,19 @@ retired history; do not resume numbering from them.
 
 ## Next session should
 
-1. **Pursue the indirect-call-target rematerialization follow-on**
-   identified by Item T20: a value whose sole use is the callee
-   position of an indirect `MIR_CALL` (not just an `MIR_ARG`) currently
-   has no rematerialization path and still round-trips through a spill
-   slot. Needs its own predicate (definition is `MIR_LOAD` from
-   `SC_LOCAL`/`SC_PARAM` with an in-range `ix` offset, sole use is
-   `src1` of an immediately-following `MIR_CALL` named `"<indirect>"`)
-   and its own emission-site change in `MIR_CALL`'s `is_indirect`
-   branch. Would close `tc89core.main`'s remaining residual and likely
-   unlock/clean up other function-pointer-calling functions
-   corpus-wide. Re-sweep the worst-ratio/bucket list fresh post-T20
-   first (253 apps changed - the broadest since T17) rather than
-   assuming this is the only remaining candidate.
+1. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
+   +0.78% under Item T25 but not fully closed)** would need a
+   predicate that follows the value through additional intervening
+   definitions/uses beyond the single-load case Item T25 covers -
+   worth a dedicated look if `tc89core` keeps recurring as a residual
+   across future items, otherwise leave it as a documented, visible,
+   un-baselined residual.
 2. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
-   - **Re-sweep the worst-ratio/bucket list fresh post-T20** before
-     picking the next candidate. Census snapshot: `/tmp/census-post-t20e.tsv`
-     (the final validated post-T20 state; treat as the new baseline).
+   - **Re-sweep the worst-ratio/bucket list fresh post-T25** before
+     picking the next candidate. Census snapshot: `/tmp/census-post-t25-final.tsv`
+     (the final validated post-T25 state; treat as the new baseline).
      `MIR_BINARY`'s operand-adjacency forwarding now covers both
      src1-adjacent-to-const (T15) and src2-adjacent-with-const-src1
      (T16), **for both plain arithmetic and fusable comparisons**
