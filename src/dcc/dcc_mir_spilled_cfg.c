@@ -14,6 +14,10 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+static int mir_binary_is_fusable_comparison(int i);
+static int mir_fused_compare_is_const_zero_rhs(int compare_index);
+static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
+
 static int mir_virtual_offset(int value)
 {
     int slot = value;
@@ -61,6 +65,37 @@ static int mir_label_predecessor_count(int label_instruction)
  * Skipping more than one label at a time is deliberately not supported: it
  * would require reasoning about a chain of merges instead of a single,
  * locally-verifiable non-merge point. */
+
+/* Item T30 (mir-text-size-plan.md): a MIR_CONST whose only consumer is the
+ * immediately-following MIR_BINARY as a fusable const-zero-RHS (or
+ * signed-zero-sign-test) comparison emits no code of its own at all - the
+ * binary's own emission (see the "Item 25"/"Item 27" comments further down
+ * this file) skips materializing that 0 into DE entirely and tests HL
+ * directly. Such a MIR_CONST is therefore just as transparent for
+ * forwarding purposes as a MIR_NOP: nothing runs between the forwarded
+ * value's own definition and the comparison that actually consumes it. This
+ * was previously invisible to mir_forward_skip_target_ex, which only looked
+ * through MIR_NOP/single-predecessor MIR_LABEL, so a call result (or any
+ * other HL-forwarding candidate) immediately followed by "compare != 0"
+ * always fell back to a full backend-slot store/reload round trip even
+ * though the constant in between never touches HL. */
+static int mir_const_is_transparent_zero_rhs_operand(int instruction)
+{
+    const struct MirInsn *constant;
+    const struct MirInsn *binary;
+
+    if (instruction < 0 || instruction + 1 >= mir.count)
+        return 0;
+    constant = &mir.insns[instruction];
+    binary = &mir.insns[instruction + 1];
+    if (constant->opcode != MIR_CONST || binary->opcode != MIR_BINARY ||
+        binary->src2 != constant->dst)
+        return 0;
+    return mir_binary_is_fusable_comparison(instruction + 1) > 0 &&
+        (mir_fused_compare_is_const_zero_rhs(instruction + 1) ||
+         mir_fused_compare_is_signed_zero_sign_test(instruction + 1));
+}
+
 static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
 {
     int next_instruction = instruction + 1;
@@ -68,7 +103,8 @@ static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
 
     for (;;) {
         while (next_instruction < mir.count &&
-               mir.insns[next_instruction].opcode == MIR_NOP)
+               (mir.insns[next_instruction].opcode == MIR_NOP ||
+                mir_const_is_transparent_zero_rhs_operand(next_instruction)))
             ++next_instruction;
         if (!skipped_label && next_instruction < mir.count &&
             mir.insns[next_instruction].opcode == MIR_LABEL &&
@@ -100,9 +136,7 @@ static int mir_can_forward_hl_to_next(int value)
     if (mir_emit_instruction_index < 0 ||
         mir_emit_instruction_index + 1 >= mir.count)
         return 0;
-    if (definition != NULL &&
-        (definition->opcode == MIR_CALL ||
-         definition->opcode == MIR_CALL_AGGREGATE))
+    if (definition != NULL && definition->opcode == MIR_CALL_AGGREGATE)
         return 0;
     next_instruction = mir_forward_skip_target_ex(mir_emit_instruction_index,
                                                    &skipped_label);
@@ -1318,10 +1352,6 @@ static int mir_load_is_single_indirect_call_target(int value, int size)
     }
     return use_count == 1;
 }
-
-static int mir_binary_is_fusable_comparison(int i);
-static int mir_fused_compare_is_const_zero_rhs(int compare_index);
-static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 
 /* Item 9 (mir-migration-plan-100): DCC_MIR_FUSE_REPORT=1 prints, per function,
  * how many scalar comparisons the Item 1/4 fusion caught versus how many

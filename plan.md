@@ -554,6 +554,42 @@ retired history; do not resume numbering from them.
   vein is largely exhausted for the remaining near-miss population.
   See `mir-text-size-plan.md`'s "Post-T29 near-miss sweep" entry for
   full detail on all four.
+- **Item T30 landed** (`6137f86`'s follow-up, commit pending as of
+  this bullet): the 4th near-miss candidate (`tesc.check_s`, gap=34)
+  turned out NOT to hit the "no reg-reg move" wall - it was a distinct,
+  fixable forwarding-analysis gap. `check_s`'s MIR is `v5=call strcmp;
+  v6=const 0; v7=binary(v5,v6,!=); brfalse v7 L1` - `v6`'s own
+  `MIR_CONST` emits no code at all (fusable const-zero-RHS comparisons
+  skip materializing the 0 entirely and test `hl` directly), so nothing
+  should run between the call and the comparison that consumes its
+  result, but two bugs combined to block it: (1) `mir_can_forward_hl_
+  to_next` unconditionally excluded every `MIR_CALL` result from
+  forwarding with no documented reason, and (2) `mir_forward_skip_
+  target_ex` had no notion of "a MIR_CONST that itself emits no code",
+  so it stopped at the (irrelevant) constant instead of looking through
+  to the real consumer. Fixed both: added a narrow, positionally-scoped
+  `mir_const_is_transparent_zero_rhs_operand` predicate (mirrors the
+  emitter's own Item-25/27 shortcut condition exactly) that the skip-
+  target helper now treats like a `MIR_NOP`, and relaxed the call
+  exclusion to only `MIR_CALL_AGGREGATE` (aggregate calls keep their
+  own separate exclusion; plain scalar call results are now eligible).
+  **This was a much bigger win than the T1-T29 line of one-off
+  adjacency fixes**: whole-corpus census showed 0 regressions and
+  **+21 newly-accepted functions in one item** (246->267/2022, 12.17%
+  ->13.20% coverage) - `check_s`'s exact shape (`if (call(...) != 0)
+  ...`) recurs identically across `tesc.c`/`tstr3.c`/`tsyntax.c` plus
+  many similar call-then-zero-compare shapes elsewhere. Focused
+  `runall.ps1 -Mode full` on all 21 flagged apps: 21/21 correctness
+  PASS; performance was mostly clean/improved except `tcodegen.tchk1`
+  (a large 20-block function where this pattern recurs ~5+ times),
+  which showed peep +2.12% cycles/+1.79% bytes despite nopeep
+  correctly improving as predicted (-1.64% bytes) - diagnosed as the
+  same dccpeep "quality gap" category already named in T28/T29 (not a
+  hazard in T30's own transformation), so baselines were updated for
+  all 21 apps after confirming correctness, per the same established
+  precedent. Wide safety net: both `-Mode fast` (314/323 clean) AND a
+  full-corpus `-Mode full` run (also 314/323 clean, matching CI's
+  exact invocation) - both required per the T29 lesson.
 
 ## Next session should
 
@@ -570,13 +606,21 @@ retired history; do not resume numbering from them.
    compare chain), which affects `swdefmid` and any `switch`-heavy
    function. Stage narrowly per SKILL.md: pin down the exact shape via
    2-3 forced-accept diffs before generalizing.
-2. **Re-sweep the census fresh from the post-T29 snapshot** and
+2. **Re-sweep the census fresh from the post-T30 snapshot** and
    continue down the ranked near-miss list (population composition
    shifts after every landed item - do not reuse this session's
-   rankings). Also check whether other single-use-forwarding
-   predicates in `dcc_mir_spilled_cfg.c` have the same NOP-vs-label
-   adjacency conflation Item T29 just fixed only for
-   `mir_can_forward_hl_to_next`.
+   rankings). **Item T30 proved the near-miss vein is NOT dry** despite
+   3 of 4 post-T29 candidates hitting the "no reg-reg move" wall -
+   `check_s` was a distinct, fixable forwarding-analysis gap
+   (`mir_forward_skip_target_ex` not recognizing a provably-no-code
+   `MIR_CONST`), unlocking +21 functions in one item. Also check
+   whether other single-use-forwarding predicates in
+   `dcc_mir_spilled_cfg.c` have the same NOP-vs-label adjacency
+   conflation Item T29 fixed, or the same "no-code MIR_CONST is
+   invisible to skip-target" gap Item T30 fixed, applied elsewhere
+   (e.g. `mir_can_forward_stack_to_index`/`_binary_const`/`_rhs`, which
+   still only skip a NOP/label the old way, not a transparent
+   zero-RHS-comparison constant).
 3. Two exposed quality gaps from Item T28 are still concrete, fresh,
    actionable candidates rather than abstract priorities: (a) the
    systemic boolean/comparison-chain materialization overhead

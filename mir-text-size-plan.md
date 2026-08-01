@@ -2981,3 +2981,138 @@ in a row. Also worth prioritizing: the two quality gaps named in Item
 T28's "Next" section (boolean-chain materialization, verbose
 `MIR_INDEX_ADDRESS` addressing), which remain open and are of a
 similar scale of opportunity.
+
+## Item T30: let a call result forward through HL across an elided const-zero-RHS comparison constant (2026-08-02)
+
+**Hypothesis**: the post-T29 near-miss sweep's newly-confirmed
+architectural wall ("no register-to-register move, every value
+materializes through `hl` first") turned out to have one more angle
+not yet checked: `tesc.check_s`'s gap (34 bytes) traced not to that
+wall but to a distinct, narrower bug. Its MIR is
+`v5 = call strcmp; v6 = const 0; v7 = binary(v5, v6, !=); brfalse v7
+L1`. `v6`'s own `MIR_CONST` emits **no code at all** - it is a
+`mir_binary_only_constant` candidate, and the comparison is a fusable
+const-zero-RHS comparison, whose own emission (the pre-existing
+"Item 25" shortcut) skips materializing the 0 into DE entirely and
+tests `hl` directly with `ld a,h / or l / jp nz`. So nothing actually
+runs between `v5`'s definition (the call, result already in `hl`) and
+the comparison that consumes it - `v5` should be forwardable through
+`hl` with zero persistence, exactly like Item T29's NOP-skip case.
+Two separate defects combined to block this:
+1. `mir_can_forward_hl_to_next` unconditionally excluded any value
+   defined by `MIR_CALL` at its very first check, with no comment
+   explaining why - call results were never eligible for HL-forwarding
+   at all, regardless of shape.
+2. `mir_forward_skip_target_ex` (Item T29's split) only looked through
+   `MIR_NOP` and a single-predecessor `MIR_LABEL` when computing a
+   value's "next instruction" for forwarding purposes - it had no
+   notion of "a `MIR_CONST` that itself emits no code", so `v6` (the
+   const) was treated as the literal next instruction, its `src1`
+   field (unrelated to `v5`) failed the forwarding adjacency check,
+   and forwarding was rejected before even reaching the (also-broken)
+   call exclusion above.
+
+**Falsification check before editing**: confirmed via
+`DCC_MIR_FORCE_ACCEPT_FUNCTION=check_s` that the generated assembly
+had exactly the predicted round trip - `call __scmp` / `pop bc` x2 /
+`ld (ix-2),l` / `ld (ix-1),h` / `ld l,(ix-2)` / `ld h,(ix-1)` / `ld
+a,h` / `or l` / `jp nz,...` - a 12-byte store-then-immediate-reload of
+a value that is never touched by anything in between, with **no**
+`ld hl,0` anywhere nearby confirming the constant materialization was
+already fully elided as expected. This matched the hypothesis exactly,
+unlike the deferred near-miss candidates in the section above.
+
+**Implementation** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Added `mir_const_is_transparent_zero_rhs_operand(int instruction)`:
+  a narrow, purely structural predicate mirroring the exact shape the
+  binary-op emission code already special-cases (Items 25/27) -
+  `mir.insns[instruction]` is `MIR_CONST`, `mir.insns[instruction+1]`
+  is a `MIR_BINARY` whose `src2` is that constant's `dst`, and
+  `mir_binary_is_fusable_comparison(instruction+1) > 0` with either
+  `mir_fused_compare_is_const_zero_rhs` or
+  `mir_fused_compare_is_signed_zero_sign_test` true for it. Positional
+  adjacency (not a whole-function scan) keeps this self-contained and
+  directly tied to the one confirmed no-code shape, rather than
+  reusing the broader (whole-function) `mir_binary_only_constant`
+  predicate used by the emission switch's own dead-code decision for
+  MIR_CONST in general.
+- `mir_forward_skip_target_ex`'s inner skip loop now treats this
+  predicate exactly like `MIR_NOP` - unconditionally transparent for
+  any consuming opcode, not gated behind the `MIR_RETURN`-only
+  restriction reserved for skipped labels, since (like a NOP) it has
+  no live-range or CFG implications: nothing actually executes at that
+  position.
+- Relaxed `mir_can_forward_hl_to_next`'s definition-opcode exclusion
+  from `MIR_CALL || MIR_CALL_AGGREGATE` to `MIR_CALL_AGGREGATE` only -
+  aggregate-returning calls keep their own separate, structurally
+  distinct exclusion (their result is not a simple scalar `hl` value),
+  but plain scalar `MIR_CALL` results are now eligible for the same
+  HL-forwarding analysis as any other value, subject to the existing
+  shape checks in the rest of the function.
+- Moved the `mir_binary_is_fusable_comparison` /
+  `mir_fused_compare_is_const_zero_rhs` /
+  `mir_fused_compare_is_signed_zero_sign_test` forward declarations
+  from their old position (just before their first use, well past this
+  file's top) to immediately after the file's `#include`s, since the
+  new predicate above (used very early in the file) now needs them.
+
+**Validation**:
+- Local single-function check: `check_s` selection flipped from
+  `fallback text-size generated-bytes=443 captured-bytes=409` to
+  `mir accepted generated-bytes=391 captured-bytes=409` - the 12-byte
+  round trip is gone and the function is now genuinely smaller than
+  legacy, not just closer.
+- Whole-corpus census (`build/mir-t30.tsv` vs
+  `build/mir-post-t29-fixup.tsv`, `--fail-on-regression`): **0
+  regressions**, coverage jumped **246 -> 267/2022 (12.17% ->
+  13.20%)**, **21 newly-accepted functions** in one item - by far the
+  largest single-item coverage jump since the original Items 1-4,
+  confirming this exact shape (`if (call(...) != 0) ...` /
+  `if (call(...) == 0) ...`) recurs broadly across the corpus
+  (`check_s` alone is defined identically in `tesc.c`, `tstr3.c`, and
+  `tsyntax.c`). 148 apps had census metric changes; 21 apps flagged
+  for runtime validation (`attnc11, bint, forint, tallocx, tc89core,
+  tc89fnty, tc99apar, tcodegen, tdecl, tesc, too, tpeepal, tqsort,
+  trtl2, trwold, tscanf, tsprintf, tstr3, tsyntax, tvplain, wumpus`).
+- Focused `runall.ps1 -Mode full` on all 21 apps: **21/21 correctness
+  PASS**, 0 failures. Performance showed a mix of 13 tiny regressions
+  (mostly <0.2%, one per-app pattern already seen in Items T27-T29) and
+  23 improvements (up to -1.72% bytes / -0.68% cycles), **except
+  `tcodegen`'s `tchk1`**, which showed a real, non-trivial regression:
+  peep +2.12% cycles / +1.79% bytes, nopeep +0.58% cycles. Investigated
+  before accepting any baseline movement: `tcodegen`'s **nopeep bytes
+  improved** (-1.64%, matching the census's smaller raw generated-bytes
+  prediction exactly), but **peep bytes got worse** despite starting
+  from smaller nopeep input - i.e. `dccpeep` is measurably less
+  effective at reducing this function's new (T30-shaped) code than it
+  was at reducing its old (legacy-replay) code, even though the new
+  code starts smaller. This is the same "quality gap" category already
+  named in Items T28/T29 (dccpeep's own optimization outcome shifting
+  with a differently-shaped input), not a hazard in this item's own
+  transformation - `tchk1` is a large (20-block, ~30 comparison sites)
+  function where this fix's pattern recurs many times, so it is the
+  most exposed single function to this pre-existing gap, not a new bug
+  class. Per the same established precedent as Items T27-T29 (fully
+  diagnose, document transparently, update baselines only for the
+  diagnosed trade-off, never silently), updated baselines for all 21
+  apps via `-UpdatePerfBaseline` after confirming 21/21 correctness -
+  the net corpus effect (21 functions newly accepted, only 1 with a
+  measurable - and now-diagnosed - downside) is unambiguously positive.
+- Wide safety net (both required tiers, per the T29 lesson - **do not
+  skip the full-mode pass**): `-Mode fast` across 323 apps - 314
+  passed, 9 skipped, diagnostics (106/106) and dccpeep fixtures (17/17)
+  and performance all clean. Full-corpus `-Mode full` (CI's exact
+  invocation) - also 314/314 passed (9 skipped), diagnostics/dccpeep/
+  performance all clean.
+
+**Lesson**: the "no register-to-register move" architectural wall
+documented in the post-T29 sweep above is real and still blocks 3 of 4
+investigated candidates there, but it does not mean every remaining
+near-miss hits that wall - `check_s`'s bug was a *forwarding-analysis*
+gap (the skip-target helper not recognizing a provably-no-code
+`MIR_CONST`), not a *materialization* gap (needing a genuinely new
+instruction-selection capability). The two are easy to conflate when a
+`MIR_CONST` sits in the way; the deciding question is always "does
+this specific constant's emission code path actually touch `hl`,
+checked directly against the emitter's own shortcut conditions" rather
+than assuming any intervening `MIR_CONST` is unavoidable.
