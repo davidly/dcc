@@ -11,29 +11,33 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 195/2021 runnable functions MIR-accepted (9.65%).
-- `text-size` fallback is still the dominant reason (1,744/2021, ~86%
+- Coverage: 196/2021 runnable functions MIR-accepted (9.70%).
+- `text-size` fallback is still the dominant reason (1,742/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
-  Fresh re-bucketing (post-T5) still shows the gap population
-  dominated by "far" (>256 bytes over legacy): near=2, close=31,
-  mid=282, far=1,429; 941/1,429 (66%) of the far bucket shows a
-  ≥1.6x generated/captured instruction-count ratio, matching SKILL.md's
+  Fresh re-bucketing (post-T9) still shows the gap population
+  dominated by "far" (>256 bytes over legacy): near=1, close=31,
+  mid=287, far=1,423; the far bucket's ratio signature (previously
+  measured 66% at ≥1.6x generated/captured instruction-count ratio
+  post-T5) matches SKILL.md's
   documented boolean-materialization/dead-store bloat signature in the
   general `mir_try_emit_spilled_scalar_cfg` selector - this remains the
   single biggest unaddressed lever (see `mir-text-size-plan.md`'s "Root
   causes to close" list carried over from this session's plan).
-- Combined byte-sum reduction from this vein's Items T1-T8:
+- Combined byte-sum reduction from this vein's Items T1-T9:
 -1,542,587 bytes (~18.4%, T1-T4) plus Item T5's aggregate-return
   fix (which, uniquely among T1-T5, also moved coverage: +5 functions)
   plus Item T6's 3 landed struct-copy/assignment `ldir` fixes plus
   Item T8's jump-to-fallthrough elision (-2,582 bytes across 51
-  functions, 1 genuine real-cycle win on `tdead`) (0 coverage change
-  for T6/T8, byte reduction across the still-fallback
+  functions, 1 genuine real-cycle win on `tdead`) plus Item T9's
+  single-copy phi-merge push/pop elision (+1 newly-accepted function,
+  `tvla.fixed_cast_bounds`; 170 apps with byte changes; 3 genuine
+  cycle/size wins on `tvla`) (0 coverage change for T6/T8, byte
+  reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8 had 0 regressions outright). Item T6 also found and
+  diff; T4/T5/T6/T8/T9 had 0 regressions outright). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
   struct-argument-copy) that is provably beneficial in isolation but
   was withheld because it exposes a pre-existing, unrelated Root-Cause-C
@@ -180,13 +184,25 @@ retired history; do not resume numbering from them.
      to be covered by the existing Item 16/17 dead-store-elimination
      infrastructure; worth investigating why as its own item before
      assuming that infra is complete.
+   - **Item T9 landed** (`mir_emit_spilled_phi_copies` no longer
+     routes a single-copy phi merge through a needless push/pop stack
+     round-trip - direct load-then-store when `copy_count == 1`, since
+     the swap-safety concern the general push-all/pop-all-reverse
+     shape exists for is moot with only one copy pending): **+1
+     newly-accepted function** (`tvla.fixed_cast_bounds`, 195->196,
+     9.65%->9.70%), 0 regressions, 170 apps with byte changes, 3
+     genuine cycle/size wins on `tvla` (baseline updated).
+     `inline_fold_check` (the near-miss that surfaced this bug, 2-byte
+     gap) shrank further but is now blocked by `inline-substitution`
+     instead of `text-size` - worth a direct look as a possible next
+     near-miss once its actual blocker is understood.
    - Re-run the full census and re-bucket the `text-size` gap fresh
      before picking each next item; the population shifts as items
      land (this session already caught one stale-ranking trap this
      way - the prior top outlier dropped out of the list entirely
-     after Item T5 landed, and Item T8 shifted 51 more functions'
-     byte counts, e.g. `gt_block_label` and likely the `tvla` trio
-     `vla_sizeof_op_add/mullhs/sub`).
+     after Item T5 landed, Item T8 shifted 51 functions' byte counts,
+     and Item T9 shifted 170 more - re-derive the near-miss ranking
+     fresh rather than reusing any list from before T9).
 2. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to

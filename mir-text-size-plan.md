@@ -966,3 +966,78 @@ Item T7 call-forwarding class.
 (gap now ~5 bytes) and the `tvla` trio (`vla_sizeof_op_add/mullhs/sub`,
 each ~18-byte gaps before this item) are worth a direct look first, as
 the closest remaining non-Item-T7-class candidates.
+
+## Item T9: single-copy phi merges route through a needless push/pop stack round-trip (2026-08-01)
+
+**Hypothesis**: a fresh worst-ratio sweep post-Item-T8 surfaced
+`tinline::inline_fold_check` at a 2-byte gap (2139 generated vs. 2137
+captured) - by far the closest candidate seen this session. Force-
+accepting and reading its generated assembly directly showed 4
+occurrences of the literal, useless instruction pair `push hl` /
+`pop hl` (value goes onto the stack and immediately comes back into
+the identical register with nothing in between), each sandwiched
+between a load from one frame slot and a store to a different frame
+slot: `ld l,(ix-38) / ld h,(ix-37) / push hl / pop hl / ld (ix-40),l /
+ld (ix-39),h`.
+
+**Investigation**: traced this to `mir_emit_spilled_phi_copies`
+(`dcc_mir_spilled_cfg.c`). Its general shape - push every phi-copy
+source in order, then pop every destination in reverse order - exists
+to let several *simultaneous* phi copies swap through each other
+safely (so that writing an earlier destination can't clobber a value
+a later copy still needs to read). That safety concern is entirely
+moot when there is exactly one pending copy: with `copy_count == 1`
+there is no second copy to be clobbered by or clobber, so the push/
+pop pair does nothing but move the value through the stack and back
+into the same register. A direct load-then-store reaches the
+identical result with no stack traffic at all. (The parallel homed-cfg
+helper, `mir_emit_homed_phi_copies`, was checked too: it pushes a
+*source register* and pops into a *different destination register*
+whenever their allocated colors differ - a genuine cross-register move
+via the stack, not a same-register round-trip - so it does not have
+the same bug and was left unchanged.)
+
+**Fix**: in `mir_emit_spilled_phi_copies`, after building the
+`sources`/`destinations` arrays, added a `copy_count == 1` fast path
+that emits `mir_emit_virtual_load[_wide]` followed directly by
+`mir_emit_virtual_store[_wide]`, returning before the general push/pop
+loops. The `copy_count >= 2` path is untouched (its swap-safety
+requirement is real and unaffected).
+
+**Validation**:
+- Whole-corpus census before/after (`--fail-on-regression`): 0
+  regressions, **+1 newly-accepted function** (`tvla.fixed_cast_bounds`,
+  coverage 195/2021 (9.65%) -> 196/2021 (9.70%)). `inline_fold_check`
+  itself did not flip - its byte count dropped further (2139 -> 2105,
+  now under the 2137-byte legacy size) but it is now blocked by a
+  different, unrelated gate (`inline-substitution`), not `text-size`.
+  170 apps had census changes (this helper is used by every phi merge
+  in the dominant selector, so the blast radius is broad by design);
+  **1 app required runtime validation** (`tvla`, whose already-accepted
+  MIR output changed).
+- Focused `runall.ps1 -Apps tvla -Mode full`: passed, 0 regressions,
+  **3 genuine improvements** (peep: 25,428,158 -> 25,428,104 cycles
+  and 29,568 -> 29,440 bytes (-0.43%); nopeep: 28,179,081 ->
+  28,178,999 cycles) - accepted via `-UpdatePerfBaseline` for `tvla`
+  only.
+- Wide safety net `runall.ps1 -Mode fast`: 314/323 passed (9 skipped,
+  as usual), 0 failed, diagnostics/dccpeep/performance all passed.
+  Given the 170-app blast radius, also ran the full milestone-tier
+  `runall.ps1 -Mode full` across all 323 apps: 314/323 passed, 0
+  failed, diagnostics (106/106), dccpeep fixtures (17/17), and
+  performance all passed.
+
+**Outcome**: +1 function newly accepted (196/2021, 9.70%), 0
+regressions, 3 genuine real performance/size wins on `tvla`. This is
+a reusable, structural fix (any function with exactly one live phi
+merge on an edge benefits automatically, which is common - straight-
+line `if`/`for`/`while` joins with a single live variable are the
+majority shape), and is a clean complement to Item T8 (both remove
+dead stack/control-flow overhead from the same dominant selector
+without touching slot allocation or forwarding predicates).
+
+**Next**: re-sweep the worst-ratio list fresh again (byte counts
+shifted broadly, across 170 apps this time); check whether
+`inline_fold_check`'s new blocker (`inline-substitution`) is itself a
+tractable near-miss, and continue down the freshly-reranked list for
+the next `text-size` near-miss candidate.

@@ -2337,6 +2337,23 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
         ++copy_count;
         ++instruction;
     }
+    /* Item T9 (mir-text-size-plan.md): the general push-all-sources-then-
+     * pop-all-destinations-in-reverse shape below exists to let several
+     * simultaneous phi copies swap through each other safely (a later
+     * destination store must not clobber a still-unread source). With
+     * exactly one copy pending there is no other copy to clobber or be
+     * clobbered by, so the whole push/pop round-trip through the stack is
+     * dead weight - a direct load-then-store reaches the identical result. */
+    if (copy_count == 1) {
+        if (mir_value_is_wide(sources[0])) {
+            mir_emit_virtual_load_wide(out, sources[0]);
+            mir_emit_virtual_store_wide(out, destinations[0]);
+        } else {
+            mir_emit_virtual_load(out, sources[0]);
+            mir_emit_virtual_store(out, destinations[0]);
+        }
+        return 1;
+    }
     for (copy = 0; copy < copy_count; ++copy) {
         if (mir_value_is_wide(sources[copy])) {
             mir_emit_virtual_load_wide(out, sources[copy]);
