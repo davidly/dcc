@@ -336,3 +336,62 @@ population after T1+T2 to find the next dominant repeated pattern (the
 distribution is still mid/far-dominated, suggesting more per-access or
 per-call overhead classes remain to be found, not a single remaining
 outlier).
+
+## Root Cause C (discovered post-T2): general single-use immediate store/reload is not elided
+
+Investigating the next round of worst `text-size` ratio outliers (post
+T1+T2, non-`static inline` functions) surfaced a pattern much larger in
+scope than Root Cause A's comparison-specific fix: `tfarrsub::set_direct`
+(a single `ds.arr[ds.n] = (unsigned char)val; ds.n++;` statement) emits a
+raw MIR body dominated almost entirely by `ld (ix-N),l / ld (ix-N+1),h`
+immediately followed by `ld l,(ix-N) / ld h,(ix-N+1)` pairs - i.e. every
+computed address/value is stored to its "home" backend slot and then
+reloaded from that exact same slot for its one and only use, with zero
+intervening instructions that could have required spilling it in the
+first place.
+
+This is not unique to comparisons - `mir_try_emit_spilled_scalar_cfg`'s
+architecture gives every MIR value a fixed home slot and unconditionally
+stores to it after every definition (`mir_emit_virtual_store`, 34 call
+sites), then reloads from that home for every use, regardless of whether
+the value's one use immediately follows its definition with nothing in
+between. Root Cause A's Items 1/4/T2 fusion is really a narrow special
+case of this same waste, hand-solved only for comparison results feeding
+a branch.
+
+**Verified this is not just a diagnostic/force-accept artifact**: running
+`dccpeep -Ot` (the real production peephole pass) against the forced-accept
+`.mac` for `tfarrsub` reduced total file size by only 2.3% (16726 -> 16339
+bytes) - `dccpeep`'s existing passes (`fold_hl_base_const_offset`,
+`ix_pair_load_to_de`, etc.) catch a few specific shapes but do not
+generally eliminate this store-immediately-reload pattern. This means the
+waste substantially survives into whatever the real compiled output would
+be for any function using this selector, not just an artifact of the
+un-peepholed diagnostic dump.
+
+**Why this is a bigger, riskier lift than T1/T2** (not attempted this
+session): a general fix requires tracking, at the point of a value's
+single use, whether *no* intervening MIR instruction has been emitted
+since its definition (not just "next MIR instruction in program order" -
+any codegen-visible side effect, call, or control-flow point in between
+invalidates keeping it live in HL/DE without a real spill). This is
+effectively local value forwarding/copy-propagation across `mir_emit_*`
+call boundaries, touching most of the 34 `mir_emit_virtual_store` call
+sites and their paired loads - a fundamentally larger and more
+correctness-sensitive change than the narrow, single-opcode-scoped fusion
+work in Items 1/4/T2, and needs its own careful incremental design (most
+likely: extend the existing "last computed value" register-forwarding
+idea already proven safe for compare+branch to the general single-def/
+single-use-immediately-following case) rather than a same-session
+extension.
+
+**Recommended next step for a future session**: design and implement this
+as its own item, starting from the narrowest safe slice (e.g. a MIR_CONST
+or address computation whose dst has `mir_value_use_count == 1` and whose
+one use is the *literal next* MIR instruction with no MIR_CALL, MIR_LABEL,
+or branch between them - the same "no side effect could have happened"
+invariant Items 1/4/T2 already lean on) and validate with the same
+whole-corpus byte-sum-diff + census + full-mode discipline used for T1/T2.
+Given the file-wide 34-site touch surface, expect this to be the largest
+remaining `text-size` win available and to warrant its own dedicated,
+carefully-staged multi-item plan rather than a single commit.
