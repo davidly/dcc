@@ -54,13 +54,17 @@ retired history; do not resume numbering from them.
   it exposed and this item also fixed (+8 newly-accepted functions,
   253 apps with byte changes - the largest blast radius of the
   session - 9 genuine cycle/size wins across the 8 focused apps)
+  plus Item T14's shared-epilogue fix (a function with 2+ `MIR_RETURN`s
+  no longer duplicates the full ix/iy/sp-restore epilogue at every
+  early return - a `jp` to one shared copy now, mirroring legacy;
+  0 coverage change, -7,188 bytes across 310 functions)
   (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11/T12/T13/T14 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -204,6 +208,20 @@ retired history; do not resume numbering from them.
   regressions, 9 genuine tiny-to-small performance wins (largest:
   `texlog` peep -0.68% cycles/-1.89% bytes). Milestone-tier full safety
   net (323 apps) run given the blast radius; clean.
+- **Item T14**: `wumpus::pact` was 2 bytes over threshold; traced to
+  both MIR selectors duplicating the full ix/iy/sp-restore epilogue at
+  *every* `MIR_RETURN`, instead of emitting it once and having early
+  returns `jp` to it like legacy already does. Fixed in both
+  `dcc_mir_spilled_cfg.c` and `dcc_mir_homed_cfg.c`: only the "owner"
+  return (the function's true tail) keeps the inline epilogue; every
+  other return jumps to a lazily-allocated shared label. 0 coverage
+  change (`pact` itself crossed the `text-size` threshold but remains
+  separately blocked by the pre-existing `cfg-backedge` boundary - its
+  own loop), 0 regressions, **-7,188 bytes across 310 functions**
+  corpus-wide. 1 app (`tc89size`) needed runtime validation: PASS,
+  +0.01%/+0.01% (10-11 cycles, the expected `jp`-overhead trade-off).
+  Milestone-tier full safety net (323 apps) run given the 131-app
+  blast radius; clean.
 
 ## Next session should
 
@@ -213,10 +231,14 @@ retired history; do not resume numbering from them.
    - **Comparison-fusion is already done** (Items 1/2/4/25/27, landed
      in an earlier migration phase) - do not re-attempt it; Item T7
      confirmed `check_s`'s boolean is already fully elided.
-   - **Re-sweep the worst-ratio/bucket list fresh post-T13** before
-     picking the next candidate - 253 apps changed, by far the
-     largest population shift of any item this session, so a stale
-     sweep from before T13 is very likely to misdirect the next pick.
+   - **Re-sweep the worst-ratio/bucket list fresh post-T14** before
+     picking the next candidate - 310 functions changed byte counts
+     since T13, so a stale sweep from before T14 risks misdirecting
+     the next pick.
+   - **`wumpus::pact` is now blocked solely by the `cfg-backedge`
+     migration boundary** (a deliberate barrier, not a bug) - worth
+     revisiting as its own future item once enough non-loop
+     `text-size` candidates are exhausted.
    - **Item T7 (call-result HL-forwarding) should be revisited now**:
      `mir_can_forward_hl_to_next`'s gate is now better understood and
      partially relaxed (Item T13) - re-examine whether the remaining

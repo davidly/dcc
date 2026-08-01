@@ -2621,6 +2621,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int frame_bytes;
     int i;
     int accepted = 0;
+    int return_count = 0;
+    int last_insn_is_return;
+    int shared_epilogue_label = -1;
 
     mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
     for (i = 0; i < mir.count; ++i)
@@ -2746,6 +2749,25 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_cached_call_instruction = -1;
     mir_cached_wide_call_value = -1;
     mir_cached_wide_call_instruction = -1;
+    /* mir-text-size Item T14: a function with more than one MIR_RETURN
+     * currently duplicates the full epilogue (ix/iy/sp restore + ret,
+     * several instructions) at every return site, unlike legacy's own
+     * backend, which emits the epilogue once and has every early return
+     * jump forward to it (a single `jp` is smaller than a duplicated
+     * epilogue whenever there is more than one exit). Precompute whether
+     * that sharing applies: if the function's last MIR instruction is
+     * itself a MIR_RETURN, that occurrence keeps the real epilogue text
+     * (as today) and becomes the target every earlier return jumps to;
+     * otherwise the already-existing fall-off-the-end epilogue below
+     * becomes that target. The label is only allocated (further down,
+     * on first actual use) when return_count > 1, so a function with a
+     * single return - the common case - emits byte-for-byte identical
+     * code to before this change. */
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_RETURN)
+            ++return_count;
+    last_insn_is_return =
+        mir.count > 0 && mir.insns[mir.count - 1].opcode == MIR_RETURN;
     if (opt_stack_check)
         fputs("\textrn __stchk\n\tcall __stchk\n", out);
     for (i = 0; i < mir.count; ++i) {
@@ -4066,7 +4088,28 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 else
                     mir_emit_virtual_load(out, insn->src1);
             }
-            mir_emit_virtual_iy_epilogue(out);
+            /* mir-text-size Item T14: share one epilogue among every early
+             * return instead of duplicating it at each site (see the
+             * return_count/last_insn_is_return precomputation above). The
+             * owner - whichever return is the function's literal last MIR
+             * instruction, or the fall-off-the-end tail below if none is -
+             * always keeps the real epilogue text; every other return
+             * becomes a plain `jp`, which is both smaller and faster than a
+             * second copy of ix/iy/sp restore + ret whenever return_count
+             * exceeds one. HL/DE were already loaded with the return value
+             * just above, and `jp` does not disturb registers, so this is
+             * safe regardless of which return the value came from - the
+             * same guarantee legacy's own shared-epilogue `jp` relies on. */
+            if (return_count > 1 &&
+                !(last_insn_is_return && i == mir.count - 1)) {
+                if (shared_epilogue_label < 0)
+                    shared_epilogue_label = new_label();
+                fprintf(out, "\tjp L%d\n", shared_epilogue_label);
+            } else {
+                if (shared_epilogue_label >= 0)
+                    fprintf(out, "L%d:\n", shared_epilogue_label);
+                mir_emit_virtual_iy_epilogue(out);
+            }
             break;
         default:
             goto done;
@@ -4093,6 +4136,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
      * emit it here for the true fall-off-the-end case, i.e. when the last
      * instruction was something else (a label, a jump target, etc.). */
     if (mir.count == 0 || mir.insns[mir.count - 1].opcode != MIR_RETURN) {
+        /* Item T14: this fall-off-the-end tail is the shared-epilogue
+         * owner whenever the function's last MIR instruction isn't
+         * itself a MIR_RETURN (see the precomputation above) - define
+         * the label here if any earlier return needed it. */
+        if (shared_epilogue_label >= 0)
+            fprintf(out, "L%d:\n", shared_epilogue_label);
         mir_emit_virtual_iy_epilogue(out);
     } else {
         /* mir-migration-plan-next10 Item 3: the duplicate epilogue this

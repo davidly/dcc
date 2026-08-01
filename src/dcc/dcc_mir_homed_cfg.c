@@ -19,6 +19,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     int uses_iy;
     int frameless;
     int return_count = 0;
+    int last_insn_is_return;
+    int shared_epilogue_label = -1;
     int i;
     int accepted = 0;
     /* Item 20d (mir-migration-plan-to-100pct.md): whether this function
@@ -316,6 +318,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             free(labels);
             return 0;
         }
+    /* mir-text-size Item T14: mirror dcc_mir_spilled_cfg.c's shared-
+     * epilogue optimization - a function with more than one MIR_RETURN
+     * only needs the real epilogue text once; every other return can
+     * `jp` to it instead of duplicating ix/iy restore + ret. */
+    last_insn_is_return =
+        mir.count > 0 && mir.insns[mir.count - 1].opcode == MIR_RETURN;
     if (frameless) {
         if (opt_stack_check)
             fputs("\textrn __stchk\n\tcall __stchk\n", out);
@@ -809,10 +817,35 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     goto done;
                 }
             }
-            if (frameless)
+            /* mir-text-size Item T14: only share the epilogue when it is
+             * more than a bare `ret` (frameless emits just that, 1 byte -
+             * smaller than a `jp` to a shared copy, so sharing would
+             * regress it); otherwise mirror dcc_mir_spilled_cfg.c's
+             * shared-epilogue optimization for the real ix/iy-restoring
+             * epilogue. Only take the "early return" path when the
+             * shared label is guaranteed a definition: either this
+             * function's last MIR instruction is itself a MIR_RETURN
+             * (the owner, further down in program order, always defines
+             * it), or the function is void (the fall-off-the-end tail
+             * below defines it in that case). A non-void function whose
+             * last instruction isn't a MIR_RETURN has nowhere to home
+             * the label, so fall back to the original always-inline
+             * behavior for that (believed unreachable in practice for
+             * this acyclic selector, but not proven, so guarded here). */
+            if (frameless) {
                 fputs("\tret\n", out);
-            else
+            } else if (return_count > 1 &&
+                       (last_insn_is_return ||
+                        (mir.return_type & 15) == TYPE_VOID) &&
+                       !(last_insn_is_return && i == mir.count - 1)) {
+                if (shared_epilogue_label < 0)
+                    shared_epilogue_label = new_label();
+                fprintf(out, "\tjp L%d\n", shared_epilogue_label);
+            } else {
+                if (shared_epilogue_label >= 0)
+                    fprintf(out, "L%d:\n", shared_epilogue_label);
                 mir_emit_home_epilogue(out, uses_iy);
+            }
             break;
         default:
             goto done;
@@ -831,10 +864,13 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
      * already does inline. */
     if ((mir.return_type & 15) == TYPE_VOID &&
         (mir.count == 0 || mir.insns[mir.count - 1].opcode != MIR_RETURN)) {
-        if (frameless)
+        if (frameless) {
             fputs("\tret\n", out);
-        else
+        } else {
+            if (shared_epilogue_label >= 0)
+                fprintf(out, "L%d:\n", shared_epilogue_label);
             mir_emit_home_epilogue(out, uses_iy);
+        }
     }
     accepted = 1;
 done:
