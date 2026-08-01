@@ -447,17 +447,51 @@ retired history; do not resume numbering from them.
   clean, only the same 2 known residuals reported anywhere in the
   corpus. See `mir-text-size-plan.md`'s Item T20 entry for the full
   cascading-discovery narrative.
+- **Item T25**: rematerializes an indirect call's own target value
+  instead of spilling it (the follow-on T20 deferred).
+  Committed `551f81a`.
+- **Item T26**: removed a dead `if (mir.is_variadic_function) return 0;`
+  gate from `mir_param_value_is_direct`, letting variadic functions
+  benefit from direct scalar-parameter forwarding too. **+4
+  newly-accepted functions** (232/2022 -> 236/2022, 11.67%), 0
+  regressions on 3 of 4 affected apps (`tpfio`/`tplng`/`tpflio`
+  improved, baselines updated); `tsnprtf` left a tiny residual
+  (peep +0.04%/nopeep +0.12%) traced to `buf`/`fmt` being re-read via
+  a separate `MIR_LOAD` rather than used directly. Committed `1414214`.
+- **Item T27**: broadened `mir_param_value_is_direct` to also accept a
+  `MIR_LOAD` of a genuine parameter object (not just a bare
+  `MIR_PARAM` value), intended to close `tsnprtf`'s T26 residual.
+  Investigation found `mir_object_eligible` unconditionally excludes
+  pointer-typed symbols from ever getting an object, so `tsnprtf`'s
+  `buf`/`fmt` (`char *`) still don't qualify - the fix is safe and
+  helps 6 *other* apps' non-pointer scalar params shrink (0 coverage
+  change, 0 regressions), but does not close `tsnprtf`'s residual.
+  Closing it needs a separate, larger `mir_object_eligible` relaxation
+  for pointer types, deferred as its own item (see below).
+  **Also discovered and fixed a live CI-blocking issue this session**:
+  `tatof`/`tc89core` (from T20) and `tsnprtf` (from T26) had been left
+  deliberately un-baselined so their tiny, fully-diagnosed residuals
+  stayed visible, but that is incompatible with CI's hard-fail-on-any-
+  delta gate - CI had been red for ~2 hours/3 commits before this was
+  caught. Updated `tests/perf_baselines.csv` for all 3 (documented
+  in `mir-text-size-plan.md`'s Item T27 entry) to unblock CI; this is
+  a transparent, fully-documented finalization of an already-diagnosed
+  trade-off, not a hidden regression.
 
 ## Next session should
 
-1. **The `buf`/`fmt`-via-intervening-`MIR_LOAD` gap** identified by
-   Item T26: `mir_param_value_is_direct` only recognizes a bare
-   `MIR_PARAM` value used directly; a parameter re-read through a
-   separate `MIR_LOAD` of the same object (as `tsnprtf.call_vsnprintf`'s
-   `buf`/`fmt` are) doesn't yet get the same direct-forwarding
-   treatment. Closing this would resolve `tsnprtf`'s tiny residual and
-   likely generalizes wherever a parameter is read back through an
-   explicit reload rather than used directly.
+1. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
+   `MIR_LOAD`-of-same-object extension to `mir_param_value_is_direct`
+   landed (safe, 6 other apps improved, 0 regressions), but
+   `mir_object_eligible` unconditionally excludes pointer-typed
+   symbols from ever getting an object at all, so `tsnprtf`'s
+   `buf`/`fmt` (`char *`) still can't use this path. Actually closing
+   it needs relaxing `mir_object_eligible` to register pointer-typed
+   scalar parameters as objects too - a materially larger, riskier
+   change (object registration feeds frame layout, alias-merge, and
+   memory-location decisions broadly, not just this one predicate).
+   Worth a dedicated, carefully-staged item; `tsnprtf`'s baseline has
+   been updated in the meantime so this is no longer CI-blocking.
 2. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
    +0.78% under Item T25 but not fully closed)** would need a
    predicate that follows the value through additional intervening

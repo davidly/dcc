@@ -1493,7 +1493,24 @@ static int mir_capture_stream_uses_frame(void)
  * non-struct, non-aggregate) so the load/store emitters below can reuse the
  * exact same in-range/out-of-range addressing forms the original MIR_PARAM
  * binding already uses - this must stay purely additive: any value this
- * returns false for keeps its prior slot-based behavior unchanged. */
+ * returns false for keeps its prior slot-based behavior unchanged.
+ *
+ * Item T27: also recognizes a MIR_LOAD whose source object is itself a
+ * parameter satisfying every rule above (never stored to, plain scalar,
+ * not a divmod-fusion operand, etc.) - such a load always yields the
+ * exact same value the object's own MIR_PARAM binding already
+ * represents (nothing can have changed it), so it can share the same
+ * direct ix+N/iy+N home instead of getting a redundant copy-then-reload
+ * through its own backend slot. This only fires for a parameter that
+ * already has an object (mir_object_eligible excludes pointer-typed and
+ * >2-byte parameters from ever getting one), so it helps re-reads of
+ * plain scalar (non-pointer, 1-2 byte) parameters whose value is
+ * re-read via a MIR_LOAD after their initial MIR_PARAM home has already
+ * been broken by an intervening definition/call - it does not reach
+ * tsnprtf's call_vsnprintf residual (buf/fmt are char*, so ineligible
+ * for an object at all); closing that one needs a separate, larger
+ * change to mir_object_eligible itself and is deferred (see the
+ * Execution Log). */
 static int mir_param_value_is_direct(int value)
 {
     const struct MirInsn *definition;
@@ -1503,7 +1520,8 @@ static int mir_param_value_is_direct(int value)
     if (value < 0 || value >= mir.next_value)
         return 0;
     definition = mir_definition(value);
-    if (definition == NULL || definition->opcode != MIR_PARAM)
+    if (definition == NULL ||
+        (definition->opcode != MIR_PARAM && definition->opcode != MIR_LOAD))
         return 0;
     if (type_is_struct_object(definition->type) ||
         (type_size(definition->type) != 2 && type_size(definition->type) != 4))
@@ -1516,6 +1534,17 @@ static int mir_param_value_is_direct(int value)
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_STORE && mir.insns[i].object == object)
             return 0;
+    if (definition->opcode == MIR_LOAD) {
+        int has_param = 0;
+        for (i = 0; i < mir.count; ++i)
+            if (mir.insns[i].opcode == MIR_PARAM &&
+                mir.insns[i].object == object) {
+                has_param = 1;
+                break;
+            }
+        if (!has_param)
+            return 0;
+    }
     if (!mir_capture_stream_uses_frame())
         return 0;
     /* mir-migration-plan-next10 (divmod-fusion safety): a fused divmod pair
@@ -3177,15 +3206,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
-            if (insn->opcode == MIR_PARAM &&
+            if ((insn->opcode == MIR_PARAM || insn->opcode == MIR_LOAD) &&
                 mir_param_value_is_direct(insn->dst))
-                /* mir-migration-plan-next10: this parameter value never
-                 * gets a backend slot (see mir_param_value_is_direct) -
-                 * every real use reloads directly from the parameter's own
-                 * ix+N home (mir_emit_virtual_load[_wide]), so the load
-                 * this MIR_PARAM instruction would otherwise perform here
-                 * is dead work; skip it entirely rather than load-then-
-                 * discard. */
+                /* mir-migration-plan-next10 (extended by Item T27 to also
+                 * cover MIR_LOAD): this value never gets a backend slot
+                 * (see mir_param_value_is_direct) - every real use reloads
+                 * directly from the parameter's own ix+N home
+                 * (mir_emit_virtual_load[_wide]), so the load this
+                 * instruction would otherwise perform here is dead work;
+                 * skip it entirely rather than load-then-discard. */
                 break;
             if (insn->dst >= 0 && mir.backend_slots != NULL &&
                 mir.backend_slots[insn->dst] < 0 &&
