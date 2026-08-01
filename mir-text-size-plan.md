@@ -1175,3 +1175,90 @@ separate post-convergence pass rather than widened in place.
 slot-allocation and peephole changes shift the population broadly -
 170+ apps had census/text changes); continue down the freshly-reranked
 `text-size` near-miss candidates.
+
+### Item T11: generalize constant-RHS-to-DE materialization from div/mod to every binary operator (2026-08-02)
+
+**Hypothesis**: a fresh worst-ratio sweep post-T10 surfaced several
+near-miss `text-size` candidates (`tvla`'s `vla_sizeof_op_add`/
+`_mullhs`/`_sub`, 18-byte gaps) whose generated assembly, on direct
+inspection (`DCC_MIR_FORCE_ACCEPT_FUNCTION`), showed the exact wasteful
+idiom `ld l,(ix-N)/ld h,(ix-N+1) / push hl / ld hl,1 / ex de,hl / pop hl
+/ add hl,de` for a simple `+ 1` - i.e. the left operand is loaded into
+HL, pushed to the stack purely to free HL for loading the constant `1`,
+then swapped into DE via `ex de,hl`, then popped back. Item 16 (an
+earlier migration item) already recognized this exact waste for `/`/`%`
+and fixed it - by observing that a constant *load* can never clobber
+HL, so the divisor/modulus can go straight into DE with `ld de,<imm>`,
+skipping the push/ex/pop dance entirely - but its comment explicitly
+scoped the fix to `insn->immediate == '/' || insn->immediate == '%'`
+only, leaving every other binary operator (`+`, `-`, `*`,
+non-zero-constant comparisons, etc.) on the old, wasteful path in
+`dcc_mir_spilled_cfg.c`'s `MIR_BINARY` case.
+
+**Fix**: Item 16's reasoning ("a constant load cannot clobber HL") is
+not operator-specific at all - it holds identically for every operator.
+Removed the `insn->immediate == '/' || insn->immediate == '%'`
+restriction from the guard so the direct-into-DE shortcut fires for
+*any* binary operator whenever `src2` is a compile-time constant (not
+already handled by the even-more-specific Items 25/27 fusions, which
+skip materialization into DE entirely for const-zero comparisons and
+so must still be checked first). The pre-existing `!mir.has_vla`
+restriction (Item 16's own documented byte-size/accept-gate/VLA
+frame-cost-model safety margin) was kept unchanged and applies
+identically to the generalized case.
+
+**Validation**:
+- Whole-corpus census (`--fail-on-regression`) vs. post-T10 baseline: 0
+  regressions, **+5 newly-accepted functions**
+  (`tc99scpe.mid_block_simple`, `tinlinfb.local_helper`,
+  `tpostptr.bump_local_paren`, `tunused.aggregates`,
+  `tunused.scalars`) - coverage 197/2021 (9.75%) -> **202/2021
+  (10.00%)**, crossing the 10% milestone. 254 apps had census changes
+  (expected: this is the dominant `MIR_BINARY` arithmetic path, used
+  by nearly every function with a constant operand); 8 apps required
+  runtime validation.
+- Focused `runall.ps1 -Apps
+  tbug2,tc89size,tc99scpe,tinlinfb,tmirslot,tpostptr,tunused,tvla -Mode
+  full`: 8/8 correctness pass; 10 genuine improvements (incl. `tbug2`
+  nopeep -0.49%); 3 tiny (0.01%-0.07%) peep-mode "regressions"
+  (`tunused`, `tinlinfb`, `tpostptr`), each on one of the 5 *newly
+  MIR-accepted* functions from this item's own delta list (not a
+  previously-accepted function regressing). Traced via a before/after
+  `dccpeep -Ot`-optimized `.mac` diff for all three: each diff is fully
+  explained and small (18-47 lines) - the entire delta is the natural
+  difference between legacy's fallback code (which includes an
+  un-elided `jp Lxx / Lxx:` no-op jump the legacy backend never
+  optimizes away) and the new MIR-emitted code (which never emits that
+  jump at all, per Item T8, and uses the new direct-to-DE constant
+  load) for a function that is switching code-generation strategy
+  entirely, not a regression in previously-accepted output. `nopeep`
+  improved in every one of these three apps, confirming the underlying
+  semantic code is strictly better; the trivial peep-mode deltas (12,
+  12, and 70 cycles respectively, out of 69k-99k total) are the
+  expected legacy-vs-MIR code-shape noise this kind of coverage-flip
+  always carries, the same category validated for Items T5/T9's own
+  newly-accepted functions. Accepted and baselined via
+  `-UpdatePerfBaseline` for all 8 apps.
+- Wide `-Mode fast` safety net (323 apps): 314 passed, 0 failed, 9
+  skipped, diagnostics/dccpeep/performance all passed.
+- Given the 254-app blast radius, also ran the milestone-tier full
+  `-Mode full` safety net (323 apps): 314 passed, 0 failed,
+  diagnostics (106/106), dccpeep fixtures (17/17), performance (both
+  peep and nopeep) all passed cleanly.
+
+**Outcome**: +5 newly-accepted functions (202/2021, 10.00% - the
+biggest single-item coverage jump since Item T5, and the first time
+this migration effort has crossed 10%), 0 unaccepted regressions, 10
+genuine performance/size wins across the 8 focused apps. This is a
+clean, broad, structural generalization of an already-proven pattern
+(Item 16) with no new predicate invented - it simply removes an
+artificial operator-specific restriction whose own justification never
+applied to the excluded operators in the first place.
+
+**Next**: re-sweep the worst-ratio list fresh again post-T11 (254 apps
+changed, a broad shift); the VLA exclusion this item inherited from
+Item 16 still blocks the fix for VLA-bearing functions like `tvla`'s
+`vla_sizeof_op_*` family (confirmed: their byte counts were unchanged
+by this item) - revisit whether a narrower, VLA-safe version of the
+same fix is possible as a future item, now that the general case is
+proven safe.

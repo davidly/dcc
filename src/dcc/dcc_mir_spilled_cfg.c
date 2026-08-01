@@ -3381,14 +3381,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_emit_virtual_store(out, insn->dst);
                     break;
                 }
-                /* A constant divisor/modulus needs no dividend-preserving
-                 * push/pop dance: the dividend is already sitting in HL
-                 * from src1's evaluation above and a constant load cannot
-                 * clobber it, so the divisor can be materialized directly
-                 * into DE (Item 16). Every other operator keeps the
-                 * existing push/ex/pop sequence, since src2 there may be
-                 * evaluated via a call or memory access that does clobber
-                 * HL.
+                /* A constant right-hand operand needs no dividend/left-
+                 * operand-preserving push/pop dance: the left operand is
+                 * already sitting in HL from src1's evaluation above and
+                 * a constant *load* cannot clobber it (unlike src2 being
+                 * evaluated via a call or memory access, which can), so
+                 * the constant can be materialized directly into DE for
+                 * *any* operator (Item 16 proved this for '/' and '%'
+                 * only; Item T11 generalizes it to every operator, since
+                 * the "constant load never clobbers HL" reasoning is not
+                 * operator-specific).
                  *
                  * Skip this shortcut in functions with a VLA: shaving a
                  * few bytes off this one instruction can tip a borderline
@@ -3400,15 +3402,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * from the legacy path to the MIR path can be a net cycle
                  * regression even though every individual instruction
                  * changed here is unambiguously cheaper in isolation. */
-                if ((insn->immediate == '/' || insn->immediate == '%') &&
-                    !mir.has_vla &&
-                    mir_binary_only_constant(insn->src2)) {
-                    const struct MirInsn *constant =
-                        mir_definition(insn->src2);
-                    fprintf(out, "\tld de,%ld\n",
-                            constant->immediate & 0xffffL);
-                } else if (mir_binary_is_fusable_comparison(i) > 0 &&
-                           mir_fused_compare_is_const_zero_rhs(i)) {
+                if (mir_binary_is_fusable_comparison(i) > 0 &&
+                    mir_fused_compare_is_const_zero_rhs(i)) {
                     /* Item 25: this comparison will be fused directly into
                      * the following branch (mir_binary_is_fusable_comparison
                      * is the single source of truth for that) against the
@@ -3423,6 +3418,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                      * the fused branch emitter tests the sign bit of HL
                      * directly with "bit 7,h" instead of loading 0 into DE
                      * for a 16-bit sbc. */
+                } else if (!mir.has_vla &&
+                           mir_binary_only_constant(insn->src2)) {
+                    const struct MirInsn *constant =
+                        mir_definition(insn->src2);
+                    fprintf(out, "\tld de,%ld\n",
+                            constant->immediate & 0xffffL);
                 } else {
                     fputs("\tpush hl\n", out);
                     if (mir_binary_only_constant(insn->src2)) {

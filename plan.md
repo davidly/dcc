@@ -11,8 +11,8 @@ retired history; do not resume numbering from them.
 ## Where we are
 
 - Branch: `perf/unified-regalloc`.
-- Coverage: 197/2021 runnable functions MIR-accepted (9.75%).
-- `text-size` fallback is still the dominant reason (1,741/2021, ~86%
+- Coverage: 202/2021 runnable functions MIR-accepted (10.00%).
+- `text-size` fallback is still the dominant reason (1,735/2021, ~86%
   of the corpus, ~97% of all fallback) - see SKILL.md's "Known root
   cause" section and `mir-text-size-plan.md` for the full analysis.
   Fresh re-bucketing (post-T9) still shows the gap population
@@ -36,13 +36,19 @@ retired history; do not resume numbering from them.
   slot-allocation elision + dccpeep `local_alloc_wide` peephole (+1
   newly-accepted function, `tgoto.gt_block_label`; 8 genuine cycle/size
   wins on `tbug2`/`tdmfuse`/`tgoto`/`tmirslot`/`tvla`; a real, general
-  dccpeep peephole gap closed for 3-/4-byte stack-only frames) (0
+  dccpeep peephole gap closed for 3-/4-byte stack-only frames) plus
+  Item T11's generalization of the div/mod-only constant-RHS-to-DE
+  materialization (Item 16) to every binary operator (+5
+  newly-accepted functions, the biggest single-item coverage jump
+  since T5, crossing 10% coverage for the first time; 254 apps with
+  byte changes; 10 genuine cycle/size wins across the 8 focused apps)
+  (0
   coverage change for T6/T8, byte
   reduction across the still-fallback
   population) across the whole corpus vs. the pre-T1 baseline, with 0
   real regressions (only digit-width text-metric artifacts from T2/T3,
   each independently confirmed non-real via a label/offset-normalized
-  diff; T4/T5/T6/T8/T9/T10 had 0 unaccepted regressions - T10's tiny
+  diff; T4/T5/T6/T8/T9/T10/T11 had 0 unaccepted regressions - T10's tiny
   `cobint`/`tgoto` residuals were traced in full and match SKILL.md's
   documented "code-placement sensitivity" noise class). Item T6 also found and
   **deferred** a 2-site fix (`MIR_CALL`/`MIR_CALL_AGGREGATE`
@@ -229,15 +235,40 @@ retired history; do not resume numbering from them.
      present, add the widening as a new post-convergence
      `RUN_PASS(...)` call (after the fixed-point `do-while` loop
      exits) rather than editing the existing pass in place.
+   - **Item T11 landed** (generalized the div/mod-only constant-RHS-
+     to-DE materialization, Item 16, to *every* binary operator in
+     `dcc_mir_spilled_cfg.c`'s `MIR_BINARY` case - a constant load can
+     never clobber HL regardless of operator, so Item 16's own
+     restriction to `/`/`%` was an artificial scope limit, not a real
+     safety requirement): **+5 newly-accepted functions**
+     (`tc99scpe.mid_block_simple`, `tinlinfb.local_helper`,
+     `tpostptr.bump_local_paren`, `tunused.aggregates`,
+     `tunused.scalars`; 197->202, 9.75%->**10.00%**, the biggest
+     single-item coverage jump since T5 and the first time this effort
+     crossed 10%), 0 unaccepted regressions, 254 apps with byte
+     changes (broad blast radius, as expected for the dominant
+     arithmetic path), 10 genuine cycle/size wins across the 8 focused
+     apps (baselines updated); 3 tiny peep-mode deltas
+     (`tunused`/`tinlinfb`/`tpostptr`, 0.01%-0.07%) fully traced via
+     `.mac` diff to the expected legacy-vs-MIR code-shape noise of a
+     function flipping from fallback to accepted (not a regression in
+     previously-accepted output) - accepted, same noise category as
+     T5/T9's own newly-accepted functions. Milestone-tier full
+     `-Mode full` run (323 apps) passed cleanly given the broad blast
+     radius. The pre-existing `!mir.has_vla` restriction (from Item 16)
+     was kept, so `tvla`'s own `vla_sizeof_op_*` near-miss family is
+     still NOT fixed by this item - a narrower, VLA-safe variant of the
+     same idea is a plausible future item now that the general case is
+     proven safe.
    - Re-run the full census and re-bucket the `text-size` gap fresh
      before picking each next item; the population shifts as items
      land (this session already caught one stale-ranking trap this
      way - the prior top outlier dropped out of the list entirely
      after Item T5 landed, Item T8 shifted 51 functions' byte counts,
-     Item T9 shifted 170 more, and Item T10 shifted the population
-     again via both the slot-allocation and peephole changes -
-     re-derive the near-miss ranking fresh rather than reusing any
-     list from before T10).
+     Item T9 shifted 170 more, Item T10 shifted the population again
+     via both the slot-allocation and peephole changes, and Item T11
+     shifted 254 apps' byte counts - re-derive the near-miss ranking
+     fresh rather than reusing any list from before T11).
 2. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to
