@@ -9036,7 +9036,7 @@ static int mir_binary_is_fusable_comparison(int i)
     const struct MirInsn *insn = &mir.insns[i];
     const struct MirInsn *next;
 
-    if (insn->opcode != MIR_BINARY || type_size(insn->secondary_offset) == 4)
+    if (insn->opcode != MIR_BINARY || type_is_float(insn->secondary_offset))
         return 0;
     switch ((int)insn->immediate) {
     case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
@@ -9177,6 +9177,44 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
     case '<': true_condition = "c"; break;
     default: true_condition = "nc"; break; /* TOK_GE */
     }
+    fallthrough_label = new_label();
+    fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
+    if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate, target))
+        return 0;
+    fprintf(out, "\tjp L%d\nL%d:\n", labels[branch->label], fallthrough_label);
+    return 1;
+}
+
+/* Item T2 (mir-text-size-plan): the 32-bit ("wide") comparison operators
+ * previously took the same "materialize 0/1 boolean into HL, spill it to a
+ * backend slot, reload it, retest with ld a,h/or l" round trip as the 16-bit
+ * path did before Item 1 - mir_binary_is_fusable_comparison only recognized
+ * 16-bit operands. Every wide comparison shape (inline xor-compare for ==/!=,
+ * and the __ltu/__lts/__leu/__les/__lgu/__lgs/__lku/__lks runtime helpers for
+ * relational, and the float helpers) already leaves the boolean result as a
+ * concrete 0/1 in HL by construction - there is no flag-based short cut
+ * available (unlike the 16-bit path's `sbc hl,de`), but skipping the
+ * store/reload/retest is still a direct win, and is a strict superset of
+ * what the 16-bit fusion already exploits: HL is always tested with
+ * `ld a,h / or l` immediately once it is known to be 0 or 1, whether the
+ * branch consumes the comparison directly or through a single intervening
+ * logical-not (mir_binary_is_fusable_comparison's existing negate signal). */
+static int mir_emit_fused_wide_comparison_branch(FILE *out, const int *labels,
+                                                  int compare_index,
+                                                  int negate)
+{
+    const struct MirInsn *branch = &mir.insns[compare_index + 1 + negate];
+    int target;
+    int fallthrough_label;
+    const char *true_condition;
+
+    if (branch->label < 0 || branch->label >= mir.next_label)
+        return 0;
+    target = mir_find_label(branch->label);
+    if (target < 0)
+        return 0;
+    fputs("\tld a,h\n\tor l\n", out);
+    true_condition = negate ? "z" : "nz";
     fallthrough_label = new_label();
     fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
     if (!mir_emit_spilled_phi_copies(out, compare_index + 1 + negate, target))
@@ -10346,11 +10384,23 @@ static int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             }
             if (type_size(insn->secondary_offset) == 4) {
+                int fuse_skip = mir_binary_is_fusable_comparison(i);
                 mir_emit_virtual_load_wide(out, insn->src1);
                 fputs("\tpush de\n\tpush hl\n", out);
                 mir_emit_virtual_load_wide(out, insn->src2);
                 if (!mir_emit_wide_operation(out, insn))
                     goto done;
+                if (fuse_skip > 0) {
+                    /* Item T2: mir_emit_wide_operation already leaves the
+                     * comparison's 0/1 result in HL - skip the
+                     * store/reload/retest round trip entirely. */
+                    if (!mir_emit_fused_wide_comparison_branch(
+                            out, labels, i, fuse_skip - 1))
+                        goto done;
+                    ++mir_fuse_report_fused_count;
+                    i += fuse_skip;
+                    continue;
+                }
                 if (type_size(insn->type) == 4)
                     mir_emit_virtual_store_wide(out, insn->dst);
                 else

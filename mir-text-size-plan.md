@@ -254,3 +254,85 @@ Committed and pushed to `origin/perf/unified-regalloc`.
 **Next**: proceed to Root Cause A (the dead-store/boolean-materialization
 fix in `mir_emit_scalar_compare` / the comparison-branch fusion path),
 the other systemic multiplier identified in this investigation.
+
+### Item T2: extend compare+branch fusion (Root Cause A) to 32-bit ("wide"/`long`) comparisons
+
+**Finding**: a fresh full census after Item T1 (2018 functions, `text-size`
+population still 1756/1673-non-inline) showed the same bucketed shape as
+before (37 near, 194 close, 670 mid, 855 far), so Root Cause B's fix alone
+didn't shift the population much. Investigating the worst outliers (after
+excluding `static inline` functions, whose "captured" comparison is
+apples-to-oranges since legacy inlines them at call sites) found
+`tlimits::main` (6.07x ratio, 8541 vs 1408 bytes, frame only 22 bytes -
+not a Root Cause B case) is dominated by `LONG_MIN`/`LONG_MAX`/`ULONG_MAX`
+comparisons inside `if` conditions.
+
+Root cause: `mir_binary_is_fusable_comparison` (Item 1/4's compare+branch
+fusion, the actual fix for Root Cause A) unconditionally excluded any
+comparison with `type_size(insn->secondary_offset) == 4` (32-bit operands,
+i.e. `long`/`unsigned long`). Every wide comparison therefore paid the same
+materialize-0/1-into-HL, spill-to-backend-slot, reload, retest-with-`ld
+a,h/or l` round trip Item 1 eliminated for 16-bit operands - never fused,
+regardless of feeding a branch directly.
+
+**Fix**: removed the `type_size == 4` exclusion (keeping a `type_is_float`
+exclusion, added defensively since the float 4-byte comparison helpers'
+exact HL-return convention wasn't independently verified this session -
+narrower scope than necessary but zero-risk). Added
+`mir_emit_fused_wide_comparison_branch`: every wide comparison shape
+(inline xor-compare for `==`/`!=`, and the `__ltu`/`__lts`/`__leu`/`__les`/
+`__lgu`/`__lgs`/`__lku`/`__lks` runtime helpers for relational operators)
+already leaves a concrete 0/1 boolean in HL by construction - there's no
+flag-based shortcut available (unlike the 16-bit path's `sbc hl,de`), but
+skipping the store/reload/retest is still a direct, safe win. Unlike the
+16-bit fusion's `mir_negate_comparison_operator` (which re-derives which
+CPU flag corresponds to "true" for the negated operator), the wide path
+tests the *already-computed* boolean of the original (non-negated)
+operator directly: true-branch condition is `nz` when there's no
+intervening `!`, or `z` when there is (since `!x` inverts which boolean
+value means "branch taken").
+
+**Validation**:
+- Whole-corpus byte-sum diff: total `generated_bytes` 7,627,898 ->
+  7,611,255 (-16,643 bytes), 153 functions improved, 7 functions apparently
+  "regressed" by 1-53 bytes each.
+- Investigated the largest apparent regression (`tlongopt::test_shift_edges`,
+  +53 bytes) directly: `mir_stream_size()` (the source of the
+  `generated_bytes` metric) returns the raw *text* byte length of the
+  emitted `.mac` stream (`ftell`), not an assembled machine-code byte
+  count - this matches SKILL.md's caution that text/instruction-count size
+  is not proof of real code size. A label-number-normalized diff
+  (`sed 's/L[0-9]*/LBL/g'`) of the function's own emitted instructions
+  showed **zero actual differences** - the reported delta is solely from
+  this item's new `fallthrough_label` allocations shifting later label
+  numbers across a decimal-digit-width boundary (e.g. `L999` -> `L1000`)
+  elsewhere in the same translation unit, inflating raw text size by a
+  few characters with no real instruction change. Not a genuine
+  regression, and since none of the affected functions are
+  currently-accepted (`result=mir`), this proxy-metric noise has zero
+  effect on any actual compiled `.COM` output.
+- `mir-migration-census.py --compare --fail-on-regression`: 0 newly
+  MIR-emitted, 0 no-longer-emitted, 87 apps with census changes, 0 apps
+  requiring runtime validation - confirmed no `result=mir` function's
+  output changed.
+- Correctness of the new wide-fusion emission verified via
+  `DCC_MIR_FORCE_ACCEPT_FUNCTION=main` on `tlimits` (heaviest wide-compare
+  user) with `runall.ps1 -Mode full`: test passed; reported perf deltas
+  are the same expected force-accept-vs-legacy-baseline artifact seen in
+  Item T1's validation.
+- Wide safety net: `runall.ps1 -Mode fast`, 323 apps: 314 passed, 0
+  failed, 9 skipped, diagnostics/dccpeep/performance all passed.
+
+**Outcome**: closes the remaining `type_size == 4` gap in Root Cause A's
+fusion for integer comparisons; further narrows the `text-size` gap
+without touching any currently-accepted function. Committed and pushed to
+`origin/perf/unified-regalloc`.
+
+**Next**: float wide comparisons (`__feqf`/`__fnef`/etc.) were
+conservatively excluded from this fusion pending independent verification
+of their HL-return convention; a small follow-up could extend Item T2 to
+them once verified. Otherwise, continue re-bucketing the `text-size`
+population after T1+T2 to find the next dominant repeated pattern (the
+distribution is still mid/far-dominated, suggesting more per-access or
+per-call overhead classes remain to be found, not a single remaining
+outlier).
