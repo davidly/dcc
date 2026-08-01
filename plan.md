@@ -643,10 +643,39 @@ retired history; do not resume numbering from them.
   `-Mode full` clean (314/323). Highest-yield item since T30, and the
   first to touch the comparison-branch emission path itself rather
   than call-result forwarding.
+- **Item T33 candidate investigated, deferred (Item 6-level design
+  ambiguity)**: `wumpus.rndix` (gap=9) surfaced a dead 2-byte backend
+  slot - `mir_prepare_backend_slots()` reserves a slot for `n`
+  (defensively, since its live range spans a `call rnd16`), but the
+  register allocator separately homed `n` in `iy` for its whole
+  lifetime and never actually spills it, so the reserved slot is never
+  referenced by any emitted instruction - yet the frame still pays for
+  it (2 bytes of stack, ~9 bytes of dead prologue text, plus an
+  unreferenced entry label). Closing this safely needs either
+  reordering slot reservation to run after register-homing decisions,
+  or a post-emission "was this slot's offset ever referenced" pass
+  with frame-offset renumbering for every slot after it - both
+  multi-step projects riskier than a same-session edit. Deferred with
+  full rationale in `mir-text-size-plan.md`'s Item T33 entry, including
+  a recommended first step (measure the affected population size
+  before choosing an approach). Also checked `too.xmalloc` (gap closed
+  from 16->2 as a T32 side effect; remaining 2 bytes is text-length
+  noise, not a real defect) and `tqsort`/`tbsearch`'s comparator
+  functions (gap=14 x4, a different/larger "spaceship compare"
+  restructuring question) - neither is a same-session-sized fix.
 
 ## Next session should
 
-1. **Re-sweep the census fresh post-T32** and look specifically for
+1. **Size the Item T33 population first**: instrument how many corpus
+   functions have `frame_bytes > 0` purely from
+   `mir_prepare_backend_slots()` (not `mir.local_bytes`) where the
+   reserved slot(s) are never referenced by any emitted `(ix+N)`/
+   `(ix-N)` operand in the accepted or force-accepted output. If large,
+   prefer a post-emission dead-slot-detection-and-shrink pass (doesn't
+   require reordering the existing interval-allocation pipeline) over
+   reordering slot reservation to depend on register-homing decisions.
+   See `mir-text-size-plan.md`'s Item T33 entry for full detail.
+2. **Re-sweep the census fresh post-T32** and look specifically for
    more instances of the same "branch over a jump with no phi copies"
    family T32 just fixed - e.g. plain `MIR_JUMP`-only blocks that
    could similarly collapse, or other emission sites that hand-roll a
@@ -655,7 +684,7 @@ retired history; do not resume numbering from them.
    `new_label()` + `jp %s,L%d` + phi-copy call sequences in
    `dcc_mir_spilled_cfg.c`/`dcc_mir_homed_cfg.c` that could reuse the
    same helper.
-2. **Prioritize one of the two newly-confirmed architectural levers**
+3. **Prioritize one of the two newly-confirmed architectural levers**
    as a properly staged, multi-step project (not more one-off
    near-miss picking, which just hit the same wall 3 times in a row):
    (a) a way to preserve a live `hl` value across another
@@ -668,7 +697,7 @@ retired history; do not resume numbering from them.
    compare chain), which affects any `switch`-heavy function not
    already resolved by T32. Stage narrowly per SKILL.md: pin down the
    exact shape via 2-3 forced-accept diffs before generalizing.
-3. **Re-sweep the census fresh from the post-T31 snapshot** and
+4. **Re-sweep the census fresh from the post-T31 snapshot** and
    continue down the ranked near-miss list (population composition
    shifts after every landed item - do not reuse this session's
    rankings). **Items T30/T31 proved the near-miss vein is NOT dry**
@@ -684,7 +713,7 @@ retired history; do not resume numbering from them.
    (e.g. `mir_can_forward_stack_to_index`/`_binary_const`/`_rhs`, which
    still only skip a NOP/label the old way, not a transparent
    zero-RHS-comparison constant).
-4. Two exposed quality gaps from Item T28 are still concrete, fresh,
+5. Two exposed quality gaps from Item T28 are still concrete, fresh,
    actionable candidates rather than abstract priorities: (a) the
    systemic boolean/comparison-chain materialization overhead
    (`SKILL.md`'s "Known root cause", this plan's ranked item
@@ -695,7 +724,7 @@ retired history; do not resume numbering from them.
    a general compute-and-dereference path even when the element offset
    is well within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`
    /`m[i][j]` reads) - worth its own dedicated investigation.
-4. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
+6. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
    `MIR_LOAD`-of-same-object extension to `mir_param_value_is_direct`
    landed (safe, 6 other apps improved, 0 regressions), but
    `mir_object_eligible` unconditionally excludes pointer-typed
@@ -707,14 +736,14 @@ retired history; do not resume numbering from them.
    memory-location decisions broadly, not just this one predicate).
    Worth a dedicated, carefully-staged item; `tsnprtf`'s baseline has
    been updated in the meantime so this is no longer CI-blocking.
-5. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
+7. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
    +0.78% under Item T25 but not fully closed)** would need a
    predicate that follows the value through additional intervening
    definitions/uses beyond the single-load case Item T25 covers -
    worth a dedicated look if `tc89core` keeps recurring as a residual
    across future items, otherwise leave it as a documented, visible,
    un-baselined residual.
-6. Execute the dedicated `text-size` plan (drafted this session,
+8. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
    - **Re-sweep the worst-ratio/bucket list fresh post-T26** before
@@ -882,7 +911,7 @@ retired history; do not resume numbering from them.
      `tscanf::check_str`/`tstr3::check_s`/`tsyntax::check_s` are the
      next-ranked candidates from the last bucket sweep - re-derive a
      fresh sweep first since T12 changed 14 apps' byte counts.
-2. Now that the module is split, prefer editing the specific
+9. Now that the module is split, prefer editing the specific
    `dcc_mir_*.c` file that owns the relevant selector/helper rather
    than re-growing `dcc_mir.c` itself; add new cross-file prototypes to
    `dcc_mir_internal.h` (not the public `dcc_mir.h`) if a new helper

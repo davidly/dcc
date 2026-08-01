@@ -3282,3 +3282,70 @@ materialization/dead-store bloat) identified as the single biggest lever.
 Worth re-sweeping the census for further near-misses in this same
 family (e.g. unconditional `MIR_JUMP`-only blocks that could similarly
 collapse) before moving to a different fallback class.
+
+### Item T33 candidate (investigated, deferred - design ambiguity as significant as Item 6's)
+
+**Candidates investigated post-T32**: re-swept the census fresh
+(`build/mir-t32.tsv`) for the next near-miss. `too.xmalloc` (gap
+16->2 bytes, mostly closed as a side effect of T32) showed only
+formatting-level text-length noise on manual diff, not a real
+structural defect - not worth chasing further (not reusable, near-
+zero yield). `tqsort.cmp_int_asc`/`cmp_rec` and `tbsearch`'s identical
+comparators (gap=14, appearing 4x) trace to a fundamentally different,
+more invasive comparison-chain-restructuring question (a 3-way
+`<`/`>`/`else 0` "spaceship" compare emits as two fully independent
+fused branches rather than a single combined test) - a genuinely
+different, larger project, not staged or attempted this session.
+
+**`wumpus.rndix` (gap=9) surfaced a distinct, deeper architectural
+finding**: `rndix(int n) { if (n<=0) return 0; return rnd16()%n; }`
+compiles with a **dead 2-byte backend slot** - `mir_current_frame_
+bytes()` reports `frame_bytes=2` (from `mir_prepare_backend_slots()`,
+not `mir.local_bytes`, which is correctly 0 here, matching legacy),
+and the emitted prologue does `ld hl,-2 / add hl,sp / ld sp,hl` plus
+an unreferenced `L38:` entry label - but the MIR dump shows `n`'s
+value (`v0`, `home=iy`) is used directly at both its use sites (the
+`<=0` compare and the `%` operand) with no `MIR_LOAD`/`MIR_STORE`
+through its object anywhere in the function. The reserved slot is
+never actually touched by any emitted instruction.
+
+**Root cause**: `mir_prepare_backend_slots()` computes live intervals
+per SSA value and reserves a slot for any value whose live range spans
+a `MIR_CALL` (a defensive assumption that a call might clobber it if
+no register survives the call) - `n` is live across the `call rnd16`
+at insn 9, so it gets a reserved slot. But the *actual* register
+allocator separately decided to home `n` in `iy` (a register that
+survives the call) for its whole lifetime, making the reservation
+moot. The slot-reservation pass and the register-homing decision are
+computed somewhat independently, and the slot bookkeeping doesn't know
+the homing decision already avoided the spill it was defensively
+provisioning for.
+
+**Why this is deferred rather than fixed now (Item 6-level ambiguity)**:
+unlike T30-T32 (a single narrow predicate change with an obvious,
+provably-safe emission-level fix), closing this gap safely requires
+either (a) computing backend-slot reservations *after* register
+homing decisions are finalized (a significant reordering of the
+existing interval-allocation pipeline, risking correctness regressions
+in slot reuse elsewhere), or (b) a post-emission check ("did any
+instruction actually reference this slot's frame offset?") followed by
+frame-size shrinkage and renumbering every other slot's `(ix+N)`
+offset that comes after it in the frame - both are multi-step,
+higher-risk projects needing their own staged investigation (2-3
+forced-accept diffs, careful correctness proof for offset
+renumbering), not a same-session "smallest reusable edit". Given the
+architectural scope, this is deferred with this documented rationale,
+same discipline as Item 6, rather than attempted unstaged.
+
+**Recommendation for next session**: stage this as its own multi-step
+project separate from the near-miss backlog: (1) instrument how many
+corpus functions have `frame_bytes > 0` purely from
+`mir_prepare_backend_slots()` (not `mir.local_bytes`) where the
+reserved slot(s) are never referenced by any emitted `(ix+N)`/`(ix-N)`
+operand in the final accepted or force-accepted output, to size the
+population before investing in a fix; (2) if the population is large,
+prefer approach (b) (post-emission dead-slot detection + shrink) since
+it doesn't require reordering the existing allocator pipeline - it can
+run as a final, additive pass after slots are already assigned and
+addresses computed, similar in spirit to a dead-store-elimination
+peephole but operating on frame layout instead of instructions.
