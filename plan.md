@@ -515,26 +515,69 @@ retired history; do not resume numbering from them.
   (241/2022 -> 246/2022, 11.92% -> 12.17%): `tc99scpe.mid_block_multiple`,
   `tinline.edge_write_then_value`, `tkandr.default_int`,
   `tqsort.cmp_byte`, `tsretmem.make_pair`. 0 correctness failures; 9
-  genuine perf improvements (no trade-off needed). Baselines updated
-  for all 6 focused apps. Wide `-Mode fast` safety net (323 apps)
-  clean. Also investigated and **deferred**
-  `tc99scpe.pointer_for_init_sizeof`: its gap traces to a DE->HL
-  register re-home routed through a backend slot, but this backend has
-  no direct register-to-register move instruction anywhere - fixing it
-  needs a new instruction-selection capability, out of scope for a
-  narrow item (same "genuine design scope" rationale as Item 6). See
-  `mir-text-size-plan.md`'s Item T29 entry for full detail.
+  genuine perf improvements (no trade-off needed) plus **1
+  fully-diagnosed micro-regression CI caught that the local wide
+  `-Mode fast` safety net missed**: `tvla` nopeep +0.00066% (185
+  cycles), traced via an isolated `git worktree` pre/post binary diff
+  to 2 more genuine dead-round-trip eliminations in functions outside
+  the census's tracked set (`vla_sizeof_if_body`,
+  `vla_sizeof_first_after_second`); baselined via `-UpdatePerfBaseline`
+  after confirming correctness, then re-validated with both
+  `-Mode fast` and a full-corpus `-Mode full` run matching CI exactly
+  (both clean). **Lesson: always include one full-corpus `-Mode full`
+  run in the wide safety net, not just `-Mode fast`, since fast mode
+  skips cycle-count checks entirely.** Also investigated and
+  **deferred** `tc99scpe.pointer_for_init_sizeof`: its gap traces to a
+  DE->HL register re-home routed through a backend slot, but this
+  backend has no direct register-to-register move instruction
+  anywhere - fixing it needs a new instruction-selection capability,
+  out of scope for a narrow item (same "genuine design scope"
+  rationale as Item 6). See `mir-text-size-plan.md`'s Item T29 entry
+  for full detail.
+- **Post-T29 near-miss sweep (no new item landed, but a valuable
+  negative result)**: investigated `tc89swjt.swdefmid` (deferred - a
+  jump-table-vs-compare-chain switch lowering difference, a new
+  lowering class, not a narrow bug), `tstr.wcschr` and
+  `tstructv.assign_return_pair_ptr` (both deferred - **confirmed the
+  same "no register-to-register move" architectural wall found in
+  `pointer_for_init_sizeof`**: every `MIR_CONST`/`MIR_LOAD` always
+  materializes through `hl` first with no direct-to-other-register
+  path, so two values needing simultaneous residency always cost a
+  full backend-slot round trip, not just a cheap 2-byte reg-reg move),
+  and `tinline.inline_temp_collision_check` (an `instruction-count`
+  candidate that looked like a threshold-tuning opportunity since it's
+  already byte-smaller than legacy - **forced-accept profiling
+  revealed a real correctness bug**, not a conservative gate; do NOT
+  widen `mir_is_byte_profitable_single_block`'s thresholds based on
+  this candidate). 3 of 4 investigated candidates hit the same new
+  architectural wall - strong signal the narrow "one bug at a time"
+  vein is largely exhausted for the remaining near-miss population.
+  See `mir-text-size-plan.md`'s "Post-T29 near-miss sweep" entry for
+  full detail on all four.
 
 ## Next session should
 
-1. **Re-sweep the census fresh from the post-T29 snapshot** and
+1. **Prioritize one of the two newly-confirmed architectural levers**
+   as a properly staged, multi-step project (not more one-off
+   near-miss picking, which just hit the same wall 3 times in a row):
+   (a) a way to preserve a live `hl` value across another
+   `hl`-clobbering materialization more cheaply than a full backend
+   slot (e.g. push the real Z80 stack immediately, or a direct
+   register-to-register transfer where the destination is provably
+   free) - this affects `pointer_for_init_sizeof`, `wcschr`, and
+   `assign_return_pair_ptr` alike, likely many more; or (b) jump-table
+   `switch` lowering in the MIR selector (currently only a cascaded
+   compare chain), which affects `swdefmid` and any `switch`-heavy
+   function. Stage narrowly per SKILL.md: pin down the exact shape via
+   2-3 forced-accept diffs before generalizing.
+2. **Re-sweep the census fresh from the post-T29 snapshot** and
    continue down the ranked near-miss list (population composition
    shifts after every landed item - do not reuse this session's
    rankings). Also check whether other single-use-forwarding
    predicates in `dcc_mir_spilled_cfg.c` have the same NOP-vs-label
    adjacency conflation Item T29 just fixed only for
    `mir_can_forward_hl_to_next`.
-2. Two exposed quality gaps from Item T28 are still concrete, fresh,
+3. Two exposed quality gaps from Item T28 are still concrete, fresh,
    actionable candidates rather than abstract priorities: (a) the
    systemic boolean/comparison-chain materialization overhead
    (`SKILL.md`'s "Known root cause", this plan's ranked item
@@ -545,7 +588,7 @@ retired history; do not resume numbering from them.
    a general compute-and-dereference path even when the element offset
    is well within direct `ix`-relative range (`tinitreg.tauto`'s `a[N]`
    /`m[i][j]` reads) - worth its own dedicated investigation.
-3. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
+4. **DONE (Item T27), but `tsnprtf`'s residual is NOT closed**: the
    `MIR_LOAD`-of-same-object extension to `mir_param_value_is_direct`
    landed (safe, 6 other apps improved, 0 regressions), but
    `mir_object_eligible` unconditionally excludes pointer-typed
@@ -557,14 +600,14 @@ retired history; do not resume numbering from them.
    memory-location decisions broadly, not just this one predicate).
    Worth a dedicated, carefully-staged item; `tsnprtf`'s baseline has
    been updated in the meantime so this is no longer CI-blocking.
-4. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
+5. **`tc89core.main`'s peep residual (+0.56%, improved from T20's
    +0.78% under Item T25 but not fully closed)** would need a
    predicate that follows the value through additional intervening
    definitions/uses beyond the single-load case Item T25 covers -
    worth a dedicated look if `tc89core` keeps recurring as a residual
    across future items, otherwise leave it as a documented, visible,
    un-baselined residual.
-3. Execute the dedicated `text-size` plan (drafted this session,
+6. Execute the dedicated `text-size` plan (drafted this session,
    carried into `mir-text-size-plan.md`'s Execution Log after each
    item lands):
    - **Re-sweep the worst-ratio/bucket list fresh post-T26** before

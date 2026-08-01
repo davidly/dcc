@@ -2814,13 +2814,170 @@ safety condition unchanged.
   9 skipped, diagnostics (106/106) and dccpeep fixtures (17/17) and
   performance all passed - no regressions anywhere else in the
   corpus.
+- **CI caught a regression the local wide safety net missed**:
+  `-Mode fast` doesn't run cycle-accurate performance checks (only
+  `-Mode full` does), and this item's 6-app focused validation
+  correctly found no regression - but CI's full-corpus `-Mode full`
+  run flagged `tvla` (nopeep): 28,179,400 -> 28,179,585 cycles
+  (+0.00066%). Root-caused via a clean isolated worktree build of the
+  pre-T29 commit (`git worktree add`, avoiding the stale-binary hazard
+  from the T28 investigation) and a direct `.mac` diff against the
+  post-T29 binary for `tests/tvla.c`: the only differences were in
+  `vla_sizeof_if_body` and `vla_sizeof_first_after_second` - both
+  **not present in the census's tracked function set at all**
+  (confirmed via lookup in both pre/post census snapshots), so this
+  item's own `--fail-on-regression` census run had no way to flag
+  them. T29 correctly eliminated 2 more dead store/reload round trips
+  in these functions (the exact same class of win as the item's
+  intended fix) plus renumbered a third function's now-shorter slot
+  range - genuine, structurally sound improvements, not a hazard. The
+  net effect was peep **improved** (-343 cycles, -128 bytes) while
+  nopeep picked up this vanishingly small regression, most likely
+  because dccpeep's own optimization outcome for surrounding code
+  shifted slightly differently with fewer redundant round trips
+  present pre-peephole - the same "dccpeep interacts differently with
+  a shrunk redundant-store population" quality-gap category already
+  named in Item T28's `tinitreg`/`thoistbc` diagnosis, not a new
+  hazard in this item's own transformation. Given the fix is
+  structurally sound, the regression is fully diagnosed and
+  attributed at 0.00066% magnitude, and reverting would forfeit this
+  item's real wins, `tvla`'s baseline was updated via
+  `-UpdatePerfBaseline` (verified `tvla` PASS correctness first, and
+  then re-ran both the wide `-Mode fast` safety net and a full-corpus
+  `-Mode full` run matching CI's exact invocation - both 314/323
+  clean) - the same diagnosed/documented trade-off precedent as Items
+  T27/T28. **Lesson for future items**: the wide safety net must
+  include at least one full-corpus `-Mode full` pass (not just `-Mode
+  fast`) before considering an item's validation complete, since
+  `-Mode fast` does not exercise cycle-count performance checks at
+  all and this exact gap let a real (if tiny) regression through to
+  CI undetected locally.
 
 **Outcome**: +5 newly-accepted functions (241 -> 246/2022, 11.92% ->
-12.17%), 0 correctness failures, 9 clean performance improvements, no
-baseline trade-offs required.
+12.17%), 0 correctness failures, 9 clean performance improvements on
+the focused apps, 1 fully-diagnosed and baselined micro-regression
+(`tvla` nopeep, +0.00066%, in functions outside the census's tracked
+set) found only by CI's full-corpus run and resolved the same session.
 
 **Next**: re-sweep the census fresh (population composition shifted
 again) and continue down the ranked near-miss list; also revisit
 whether other single-use-forwarding checks in this file have the same
 NOP-vs-label adjacency conflation now fixed here only for
 `mir_can_forward_hl_to_next`.
+
+## Post-T29 near-miss sweep: negative results and a newly-confirmed
+architectural wall (2026-08-02)
+
+**Found via**: a fresh post-T29 whole-corpus census re-sweep, ranked
+by smallest `text-size` byte gap: `tc89swjt.swdefmid` (gap=13),
+`tc99scpe.pointer_for_init_sizeof` (gap=19, previously deferred),
+`tstr.wcschr` (gap=20), `tcodegen.tchk1` (gap=22),
+`tvla.vla_sizeof_saved_once` (gap=24),
+`tstructv.assign_return_pair_ptr` (gap=33).
+
+**`swdefmid` investigated and deferred**: its gap is not a narrow bug
+- legacy compiles this `switch` using a real jump-table dispatch
+  (`add hl,hl` / `add hl,de` / `jp (hl)` against a `dw` label table),
+  while the MIR selector lowers `switch` as a cascaded `if`/`else`
+  compare chain. These are two structurally different code-generation
+  strategies for the same construct, not a slot/forwarding defect -
+  closing this gap would mean adding jump-table switch lowering to the
+  MIR selector, a new, sizable lowering class of its own (SKILL.md
+  step 6 category "add a new semantic lowering/emission class"), out
+  of scope for a narrow item.
+
+**`wcschr` investigated and deferred - confirms a new systemic root
+cause**: its MIR dump showed a loaded value (`v4`, home=hl) needing to
+survive across an unrelated, immediately-following `MIR_CONST`
+materialization (home=bc) before its own consuming compare. Initial
+hypothesis ("the intervening CONST doesn't touch hl since its home is
+bc, so it should be skippable like T29's NOP case") was **falsified**
+by inspecting `MIR_CONST`'s own emission code
+(`dcc_mir_spilled_cfg.c` ~line 3366): every `MIR_CONST`, regardless of
+its assigned final home, unconditionally does `ld hl,%ld` first and
+only reaches its final home (if not `hl`) via `mir_emit_virtual_store`
+- there is no direct-to-register materialization path for any other
+register. So the round trip is not a bug; `v4` genuinely must be
+persisted somewhere before `v5`'s materialization clobbers `hl`.
+
+**`assign_return_pair_ptr` investigated and deferred - a second,
+concrete instance of the same wall**: `*dst = *src;` lowers to two
+sequential `MIR_LOAD`s (each producing an address, each necessarily
+routed through `hl` per `MIR_LOAD`'s own emission, matching
+`MIR_CONST`'s pattern) whose results (`dst`'s address, `src`'s
+address) must coexist simultaneously as the two operands of the
+following `MIR_COPYAGG`'s `ldir`. Since the second load's `hl`
+materialization clobbers the first load's still-live result, the first
+value is persisted to a slot rather than, e.g., pushed onto the real
+Z80 stack immediately after its own computation (which the function's
+*own* copy-setup code does do, just too late to avoid the slot -
+`push hl` / `pop de` appears right before the `ldir`, operating on
+values already reloaded from slots rather than on the original
+loads).
+
+**Confirmed root cause, common to all three deferred cases above**:
+this backend has **no direct register-to-register transfer
+instruction anywhere** (`grep -n "ld h,d\|ld l,e" src/dcc/dcc_mir*.c`
+- confirmed empty). Every value materializes into `hl` first
+(`MIR_CONST`, `MIR_LOAD`, `MIR_ADDRESS`, etc. all emit `ld hl,...` or
+equivalent as their first step) and can only reach a *different*
+register or be preserved across another `hl`-clobbering operation by
+round-tripping through a backend memory slot - there is no cheaper
+path (e.g. a 2-byte `ld d,h`/`ld e,l` pair, or pushing the value onto
+the real CPU stack immediately rather than a virtual slot). This is a
+**distinct, newly-confirmed systemic root cause** from the
+already-known boolean/comparison-chain materialization overhead
+(`SKILL.md`'s "Known root cause" section, also this plan's ranked
+item 1) - this one is about **any two values needing simultaneous
+register residency**, not specifically about boolean results. Given
+three of four investigated near-miss candidates this sweep hit this
+exact wall, and the top-ranked candidate before that (`T29`'s own
+motivating case) was the sole exception, this strongly suggests the
+narrow "one adjacency/exclusion bug at a time" vein that produced
+Items T1-T29 is now largely exhausted for the *remaining* near-miss
+population - most of what is left needs either this reg-reg-move (or
+push-based live-value-preservation) capability, or the jump-table
+switch lowering, both of which are new instruction-selection/lowering
+classes rather than narrow bug fixes.
+
+**`tcodegen.tchk1` and `tvla.vla_sizeof_saved_once`**: not fully
+traced line-by-line, but both show the same recurring shape (multiple
+sequential constant/load materializations feeding one final
+expression) and are very likely to hit the same wall; not confirmed
+further given the strength of the pattern already established by the
+other three.
+
+**`inline_temp_collision_check` (instruction-count fallback,
+gap=-17, i.e. *already byte-smaller* than legacy)**: investigated as a
+possible "just widen an existing numeric threshold" candidate since
+its generated bytes are already below captured's, missing
+`mir_is_byte_profitable_single_block`'s `-20`-byte margin by only 3
+bytes. **Forced-accept profiling (`DCC_MIR_FORCE_ACCEPT_FUNCTION`)
+revealed a genuine correctness failure** (`runall.ps1` reported
+`OUTPUT MISMATCH` / `DIFF- inline temp collision check: 5844`), not
+merely a conservative threshold - the `instruction-count` gate is
+correctly protecting against a real, unrelated MIR-emission bug for
+this specific function. **Do not widen the `-20`-byte or
+`+3`-instruction thresholds in `mir_is_byte_profitable_single_block`
+based on this candidate** - the gate is doing its job here; the actual
+defect is a separate, not-yet-diagnosed correctness bug in this
+function's MIR lowering, worth its own dedicated investigation later
+(distinct from any acceptance-threshold question) but explicitly not
+attempted this session per the "never widen a gate without
+identifying the exact affected functions" rule (SKILL.md rule 1) -
+identifying it here was the point; fixing the underlying emission bug
+is future work.
+
+**Recommendation for the next session**: prioritize one of the two
+newly-confirmed architectural levers above (register re-homing /
+live-value preservation without a backend slot, or jump-table switch
+lowering) as a properly staged, multi-step project - following
+SKILL.md's own guidance ("start from a single, structurally-provable
+adjacency predicate... verify via forced-accept diffs on 2-3
+representative functions before generalizing") - rather than
+continuing to hand-pick individual near-miss candidates from the
+ranked list, since that vein has now produced three same-wall results
+in a row. Also worth prioritizing: the two quality gaps named in Item
+T28's "Next" section (boolean-chain materialization, verbose
+`MIR_INDEX_ADDRESS` addressing), which remain open and are of a
+similar scale of opportunity.
