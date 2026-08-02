@@ -5902,3 +5902,133 @@ uncommitted changes.
 `/tmp/full_diff.patch`, `/tmp/dcc_mir_spilled_cfg_current.bak`,
 `/tmp/peep_pass_final.c.bak`, `/tmp/terrno_*`, `/tmp/tstrcmpi_*`,
 `/tmp/main_*`, `/tmp/x.mac` (all scratch, not committed per policy).
+
+### Item T61: elide dead (unreferenced) `MIR_LABEL` text, plus a follow-up VLA acceptance-gate safety margin discovered during validation
+
+**Motivation**: re-bucketing the 474/2023 (23.43%) checkpoint (after
+T59+T60) by exact-duplicate `(generated_bytes, captured_bytes,
+generated_insns, captured_insns, blocks)` signature surfaced a
+recurring small-gap pattern in the `chk`/`chki`/`chkl` assertion-helper
+family (`tbug.chk`, `treg.chk`, `taddr.chki`, `tcaslv.chk`,
+`tnegidx.chki/chkl`, `tpreinc.chki/chkl`, `tunaryp.chki/chkl`), all
+4-block functions with tiny 5-21 byte gaps.
+
+**Root cause**: forced-accept diff of `tbug.chk` against its legacy
+capture showed the MIR-generated assembly was structurally identical to
+legacy except for **two extra, provably-unreferenced labels** (one
+right after the prologue, one right after a conditional branch's
+fallthrough point) - confirmed via grep that these label ids are
+defined once and never targeted by any `jp`/`jr`. Legacy's own capture
+also had one similarly-dead epilogue label, but MIR emitted two,
+accounting almost exactly for the observed 5-byte gap (one extra
+`"Lxx:\n"` text line).
+
+**Fix**: added a new shared predicate `mir_label_is_jump_target(int
+label)` in `dcc_mir.c` (right after `mir_find_label`), which scans
+`mir.insns[]` for any `MIR_JUMP`/`MIR_BRANCH_FALSE` instruction whose
+`->label` matches the given id (deliberately excluding `MIR_PHI`'s
+`phi_pred1`/`phi_pred2`, which identify value-provenance edges only and
+never require a printed label - confirmed via code reading). Hooked
+this into the two real `MIR_LABEL` emission sites -
+`dcc_mir_spilled_cfg.c` and `dcc_mir_homed_cfg.c` - wrapping each
+`fprintf(out, "L%d:\n", ...)` in `if
+(mir_label_is_jump_target(insn->label))`. Verified other
+`fprintf(out, "L%d:\n", ...)` sites (`dcc_mir_select.c`'s hand-written
+selectors, and the `shared_epilogue_label` helper in both `_cfg.c`
+files) already have correct "only print if referenced" gating and are
+unaffected/out of scope.
+
+**Initial validation (no `-fstack-check`)**: 474 -> 482/2023 (23.83%),
+**+8 newly-emitted functions** (`tbios.main`, `tbug.chk`, `tbug.swft`,
+`too.xmalloc`, `treg.chk`, `tscanf.check_long`, `tstdlib.check_long`,
+`tsvbuf2.make_buf` - notably recovering the two functions T60's
+text-length quirk had cost), zero functions lost, census
+`--fail-on-regression` exit code 0. Focused `runall.ps1 -Mode full` on
+all 186 flagged apps: 186/186 correctness, but showed **2 unexpected
+regressions in `tvla` (nopeep only)**: cycles +367 (+0%), bytes +128
+(+0.4%) - despite label removal never being expected to change real
+machine bytes.
+
+**Investigating the `tvla` anomaly**: a plain-census run (the SKILL's
+default workflow) does **not** pass `-fstack-check`, but `runall.ps1`
+enables `-fstack-check` **by default** (matching CI). Re-ran the census
+with `--extra-args="-fstack-check"` and found the discrepancy: under
+stack-check, dead-label removal newly tips 4 additional `tvla.c`
+functions into MIR acceptance - `vla_sizeof_element`,
+`vla_sizeof_op_and`, `vla_sizeof_op_mulrhs`,
+`vla_sizeof_shadow_outer_after` - each showing `generated_size` only
+2-3 bytes under `captured_size` (a normally-safe auto-accept margin).
+
+Bisected with `DCC_MIR_FORCE_ACCEPT_FUNCTION` (one function at a time,
+against the pre-T61 binary) and measured the **real** assembled byte
+count via each build's `TVLA.PRN` `__bssb` (BSS-start) symbol address,
+which is immune to `.COM`'s 128-byte CP/M sector-padding (the
+`.COM`-size regression check had itself been *masking* the true
+picture: 32,128 and 32,256 are both exact multiples of 128, so the
+real, much smaller underlying growth was invisible until measured
+directly). Each of the 4 functions individually costs **16-23 real
+bytes more** than its legacy replacement (74 bytes combined, matching
+the `__bssb` delta between full before/after builds exactly) - an 8x+
+divergence from the 2-3 byte text-size proxy that nominally justified
+their acceptance. This is the assembly-text-vs-real-bytes proxy caveat
+(`mir_stream_size()`, documented throughout this plan) actively
+misleading the acceptance gate specifically for VLA-adjacent frames,
+where legacy's dynamic-stack-adjustment code apparently doesn't scale
+1:1 between text length and real bytes the way ordinary scalar code
+does - the same *class* of gap as Item T58's SP-relative-vs-IX-relative
+addressing tax, just manifesting through the size metric instead of
+cycle count.
+
+**Fix (`dcc_mir_select.c`, `mir_end_function`'s acceptance gate)**:
+required a real safety margin (`captured_size - generated_size >= 8`)
+before trusting the text-size auto-accept path specifically for
+`mir.has_vla` candidates, leaving every non-VLA candidate's behavior
+unchanged. This mirrors the codebase's own existing convention:
+`mir_is_profiled_near_cost_single_block` and
+`mir_is_byte_profitable_single_block` (the two "rescue" predicates
+consulted immediately afterward) already unconditionally exclude
+`mir.has_vla` for the same underlying measurement-reliability reason,
+so this is a structural predicate consistent with prior art, not a
+name-based exception (Rule 6).
+
+**Final validation (with the VLA safety-margin fix in place)**:
+- No-stack-check census: 482/2023 (23.83%), same +8 newly-emitted
+  functions as the initial (pre-fix) run, exit code 0 (this class of
+  regression only manifests under `-fstack-check`, so the plain census
+  was never wrong on its own terms - it simply doesn't exercise this
+  mode by default).
+- `-fstack-check` census: 481/2126 (22.62%), **+7 newly-emitted**
+  (the same 7 as before, minus the 4 `tvla` functions that now
+  correctly stay on fallback), exit code 0.
+- Focused `runall.ps1 -Mode full` on all 186 flagged apps: **186/186
+  correctness, 0 regressions**, 4 real improvements (`tlcont` peep
+  -0.03%/nopeep -0.05%, `too` nopeep -0.09%, `tsvbuf2` nopeep -0.02%).
+- Wide safety net: `-Mode fast` on all 323 apps (314/314 correctness,
+  106/106 diagnostics, 17/17 dccpeep fixtures) and `-Mode full` on all
+  323 apps (314/314 correctness, 106/106 diagnostics, 17/17 dccpeep,
+  zero performance regressions) both passed cleanly.
+- Per SKILL.md's baseline-update policy, ran `-UpdatePerfBaseline`
+  after the clean full-mode run (3 entries changed: `tlcont`, `too`,
+  `tsvbuf2`, all reflecting the real improvements above, no size or
+  peep-column increases) and re-ran `-Mode full` with zero flags:
+  `SUCCESS: All tests passed`.
+
+**Process lesson (not code)**: the SKILL's default census workflow
+does not enable `-fstack-check`, while `runall.ps1`/CI do by default -
+a change can look completely clean in the census yet still regress
+under the harness's actual default build mode. When a text-size-driven
+acceptance change is being validated, also run
+`mir-migration-census.py --extra-args="-fstack-check"` alongside the
+plain census, especially for any app exercising VLAs or other
+dynamic-stack-adjustment code, since this is exactly the class of
+candidate where the two modes can disagree.
+
+**Coverage**: 474 -> 482/2023 (23.43% -> 23.83%) under the default
+census mode; 474 -> 481/2126 (22.30% -> 22.62%) under `-fstack-check`.
+
+**Files changed**: `src/dcc/dcc_mir.c` (new
+`mir_label_is_jump_target`), `src/dcc/dcc_mir_internal.h` (its
+declaration), `src/dcc/dcc_mir_spilled_cfg.c` and
+`src/dcc/dcc_mir_homed_cfg.c` (gated `MIR_LABEL` emission),
+`src/dcc/dcc_mir_select.c` (VLA acceptance-gate safety margin),
+`tests/perf_baselines.csv` (3 entries).

@@ -1204,12 +1204,33 @@ void mir_end_function(void)
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
-                                                 generated_size > captured_size + 1 &&
-                                                 !(mir.local_bytes == 0 &&
-                                                     mir.aggregate_temp_bytes == 0 &&
-                                                     mir.backend_slot_count == 0 && !mir.has_vla &&
-                                                     mir_cfg_block_count() == 1 &&
-                                                     generated_instructions <= captured_instructions) &&
+                                                 ((generated_size > captured_size + 1 &&
+                                                     !(mir.local_bytes == 0 &&
+                                                         mir.aggregate_temp_bytes == 0 &&
+                                                         mir.backend_slot_count == 0 && !mir.has_vla &&
+                                                         mir_cfg_block_count() == 1 &&
+                                                         generated_instructions <= captured_instructions)) ||
+                                                     /* Item T61 follow-up: for VLA-bearing frames the
+                                                      * generated/captured "size" fields are assembly-
+                                                      * text byte lengths, not real assembled bytes (see
+                                                      * mir_stream_size()'s documented proxy caveat). A
+                                                      * dead-label-elision fix (Item T61) exposed a case
+                                                      * where this proxy actively misleads for VLA frames:
+                                                      * tvla.c's vla_sizeof_element/vla_sizeof_op_and/
+                                                      * vla_sizeof_op_mulrhs/vla_sizeof_shadow_outer_after
+                                                      * each showed generated_size 2-3 bytes UNDER
+                                                      * captured_size (a normally-safe auto-accept
+                                                      * margin), yet direct .PRN symbol-address
+                                                      * measurement under -fstack-check showed each one
+                                                      * actually costs 16-23 MORE real bytes than legacy
+                                                      * once truly assembled - an 8x+ divergence from the
+                                                      * text-size proxy. Require a real safety margin
+                                                      * before trusting the proxy for any has_vla
+                                                      * candidate, mirroring the codebase's existing
+                                                      * practice of excluding has_vla from the "profiled"
+                                                      * bypass predicates below. */
+                                                     (mir.has_vla &&
+                                                         captured_size - generated_size < 8)) &&
                                                  !mir_is_profiled_near_cost_single_block(
                                                      generated_size, captured_size,
                                                      generated_instructions,

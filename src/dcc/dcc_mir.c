@@ -3877,6 +3877,37 @@ int mir_find_label(int label)
     return -1;
 }
 
+/* Item T61 (mir-text-size-plan.md): every scalar-cfg backend emits one
+ * MIR_LABEL per basic-block boundary unconditionally, whether or not the
+ * block is ever entered by anything other than straight-line fallthrough
+ * from its predecessor. A block whose only "predecessor" is the previous
+ * instruction never needs a printed `Lnn:` line at all - nothing ever
+ * jumps to it - yet the label text ("Lnn:\n") still counts toward the
+ * generated-bytes text-size metric used to decide MIR acceptance
+ * (mir_stream_size measures the literal generated assembly-text stream
+ * length, not real assembled machine bytes; a label emits zero real
+ * bytes either way). Found via tests/tbug.c's chk(): the MIR-emitted
+ * form had two such labels (the function's very first block, entered
+ * only by falling out of the prologue, and the true-branch's entry
+ * block, entered only by falling through a MIR_BRANCH_FALSE that jumps
+ * away on the false path) versus legacy's single unavoidable one,
+ * accounting for the whole 5-byte generated/captured gap. Only
+ * MIR_JUMP and MIR_BRANCH_FALSE ever cause a textual jump to a label by
+ * name; MIR_PHI's phi_pred1/phi_pred2 fields only identify which
+ * predecessor's value to select at a merge point and never require the
+ * predecessor block itself to have a printed label. */
+int mir_label_is_jump_target(int label)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i)
+        if ((mir.insns[i].opcode == MIR_JUMP ||
+             mir.insns[i].opcode == MIR_BRANCH_FALSE) &&
+            mir.insns[i].label == label)
+            return 1;
+    return 0;
+}
+
 int mir_block_label_before(int instruction)
 {
     int i;

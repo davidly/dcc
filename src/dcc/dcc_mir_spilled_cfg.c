@@ -3926,7 +3926,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_LABEL:
             if (insn->label < 0 || insn->label >= mir.next_label)
                 goto done;
-            fprintf(out, "L%d:\n", labels[insn->label]);
+            /* Item T61 (mir-text-size-plan.md): skip printing a label
+             * nothing ever jumps to - see mir_label_is_jump_target's
+             * comment in dcc_mir.c for why this is always safe. */
+            if (mir_label_is_jump_target(insn->label))
+                fprintf(out, "L%d:\n", labels[insn->label]);
             break;
         case MIR_PHI:
             break;
