@@ -6543,3 +6543,78 @@ SKILL-mandated "large CFGs last" ordering, now with concrete evidence
 **No code changes.** `todos`: no new row needed (this is covered by the
 existing SKILL guidance, not a numbered plan item); noting the 3 confirmed
 bug candidates here is the durable record.
+
+## Item T64 (planning follow-up): independently re-confirms Item T55's double-negation finding via a different implementation - reverted, no new information beyond a more precise emission-site inventory
+
+**Context**: a fresh planning pass (this session, after the cfg-backedge
+audit above) ranked "fold chained `!!x` into a single boolify" as the
+smallest/safest next candidate, unaware at plan-writing time that this
+exact idea had already been attempted and reverted earlier in this
+session under **Item T55** (see entry above) - the plan was written from
+a fresh census + source read of `dcc_mir_emit_common.c`/
+`dcc_mir_spilled_cfg.c` rather than from the existing Execution Log, so
+the duplication was not caught until implementation.
+
+**Implementation (this attempt)**: a different strategy from T55's
+emission-time skip-and-merge approach - added a genuinely new synthetic
+MIR opcode immediate, `MIR_UNOP_BOOLIFY` (400, `dcc_mir_internal.h`),
+and a post-lowering fold pass in `mir_resolve_deferred_metadata`
+(`dcc_mir.c`, right after the existing MIR_UNARY constant-fold loop) that
+detects `MIR_UNARY('!')` whose `src1` is itself `MIR_UNARY('!')` with
+exactly one use, and collapses the pair into a single `MIR_UNARY`
+targeting the original operand with the new immediate. Updated every
+site that already special-cased `immediate == '!'` to add a sibling
+`MIR_UNOP_BOOLIFY` case using the inverted branch polarity: `mir_emit_
+scalar_value` and `mir_emit_homed_unary_instruction`
+(`dcc_mir_emit_common.c`), `mir_try_emit_homed_scalar_dag`'s eligibility
+switch and emission (`dcc_mir_emit_common.c`), `dcc_mir_homed_cfg.c`'s
+own eligibility switch, and `dcc_mir_spilled_cfg.c`'s main emission
+switch (5 sites total, one more than T55's single emission-site patch,
+since this session's audit of the codebase surfaced the additional
+`mir_try_emit_homed_scalar_dag` DAG-selector path T55's own write-up
+does not mention).
+
+**Validation**: built cleanly. Verified on a synthetic `return !!x;`
+function that the fold fires (MIR report showed `op=400` replacing the
+two chained `op=33` (`'!'`) instructions) and produces correct,
+semantically-verified assembly (`jp z,L/inc hl/L:` instead of two
+six-instruction sequences). True before/after census (`git stash`
+rebuild for an honest baseline): **+1 newly-emitted function
+(`tabort.chki`, 483->484/2023)**, 0 other census changes anywhere in the
+corpus (only 1 real `!!x` source occurrence exists outside ignored/
+comment/string contexts - confirmed via corpus-wide grep). Focused
+`runall.ps1 -Apps tabort -Mode full`: **correctness passed, but 3
+performance regressions** - peep +2.12% cycles, +1.49% bytes, nopeep
++1.33% cycles - matching Item T55's already-documented finding (+2.08%/
++1.49%/+1.33%) almost exactly (the tiny cycle-percentage difference is
+consistent with this attempt's slightly different instruction ordering
+around the fold, not a different root cause).
+
+**Disposition**: reverted immediately (`git checkout --` on all 5
+touched files), verified a clean tree and a fresh 483/2023 census
+matching the pre-attempt baseline exactly. This independently
+reconfirms Item T55's conclusion via a structurally different
+implementation path (MIR-level opcode fold vs. emission-time skip-and-
+merge) and a wider selector-site inventory, but does not add a new
+disposition - the underlying "materialize-0/1 unconditionally-zero-then-
+conditionally-increment" primitive (documented precisely in Item T55/T56
+above: MIR's true-path cost is 16 T-states vs. legacy's 10) is still the
+real, unaddressed root cause, and no fold that only removes the *double*
+negation redundancy can fix a regression that persists even at a
+*single* negation. **Do not re-attempt this exact fold a third time** -
+the next actionable step in this specific neighborhood is Item T56's own
+documented path forward: fix the materialize-0/1 primitive itself
+without changing the total `new_label()` call count anywhere in the
+translation unit (T56's own revert was caused by a global label-counter
+shift breaking unrelated legacy-fallback code elsewhere in the same
+compilation, not by the shape change being logically wrong) - a
+significantly harder and higher-risk item than this one, requiring the
+full-corpus-safety-net discipline T56's disposition spells out in detail.
+
+**Process note for future sessions**: before implementing any "smallest/
+safest next candidate" identified via a fresh source read, grep this
+document's own Execution Log for prior attempts on the same MIR
+construct first (e.g. `grep -n "!!x\|double.negation\|MIR_UNARY.*'!'"`)
+- a fresh plan derived purely from re-reading the codebase can rediscover
+already-rejected ideas, as happened here. This cost one implement-
+validate-revert cycle instead of a five-minute log search.
