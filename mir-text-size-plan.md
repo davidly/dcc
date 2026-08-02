@@ -6618,3 +6618,148 @@ construct first (e.g. `grep -n "!!x\|double.negation\|MIR_UNARY.*'!'"`)
 - a fresh plan derived purely from re-reading the codebase can rediscover
 already-rejected ideas, as happened here. This cost one implement-
 validate-revert cycle instead of a five-minute log search.
+
+## Item T65: fixed a confirmed real miscompilation - phi-copy insertion silently skipped when a merge point's phi is preceded by other instructions in the same block
+
+**Status: landed.** This fixes the correctness bug the earlier `cfg-
+backedge` audit found (`adaint.add_expr`, `adaint.var_or_const_decl`,
+`bint.sum` all miscompiled when forced) - see that audit's entry above.
+2 of the 3 confirmed miscompilations are fixed by this change;
+`var_or_const_decl` has a separate, still-open root cause (below).
+
+**Root cause**: every phi-copy-collection/detection site
+(`mir_collect_phi_copies_for_edge`, `mir_emit_homed_phi_copies`,
+`mir_edge_phi_names_predecessor`, `mir_phi_edge_uses_value`, and the
+liveness-extension pass in `mir_prepare_backend_slots`) located a merge
+block's phi node(s) via `mir_first_nonlabel_successor`, which only skips
+`MIR_LABEL`/`MIR_NOP` - implicitly assuming a phi is always the first
+"real" instruction of its block (the usual SSA-form placement). That
+assumption is violated by a real, common front-end lowering shape: a
+recursive-descent parser's `for (;;) { if (tok=='+') { op='+'; next(); }
+else if (tok=='-') { op='-'; next(); } else break; term(); emit(op, 0,
+0); }` (`bint.c`'s `sum()`, `adaint.c`'s `add_expr()` - both textbook
+operator-precedence parsing loops) lowers `term()`'s call to a plain
+`MIR_CALL` scheduled in program order **before** the phi merging `op`'s
+two branch values, since `term()`'s own result does not depend on which
+branch was taken. `mir_first_nonlabel_successor` stopped at that `MIR_CALL`
+instead of continuing to the phi, so every caller above silently treated
+the edge as phi-free - skipping phi-resolution copy insertion entirely
+and leaving the phi's destination value reading an **uninitialized
+backend slot** (confirmed via direct assembly diff: the two `store`
+sites wrote to `(ix-4)/(ix-3)` and `(ix-6)/(ix-5)` respectively, while
+the merge point read from `(ix-8)/(ix-7)` - a **third slot that was never
+written anywhere in the function**).
+
+**Fix**: added `mir_first_phi_or_block_end(successor)` (`dcc_mir.c`,
+next to the now-superseded-but-left-in-place `mir_first_nonlabel_
+successor`) - keeps scanning past ordinary non-branching instructions to
+find a phi if one exists anywhere before the block truly ends (a jump,
+branch, return, or the end of the instruction stream), instead of
+stopping at the first non-label/non-nop instruction. Replaced all 6
+call sites that were locating a block's leading phi(s) for copy-
+insertion or edge-use purposes: `mir_phi_edge_uses_value` (`dcc_mir.c`),
+`mir_emit_homed_phi_copies` and `mir_edge_phi_names_predecessor`
+(`dcc_mir_emit_common.c`), and the liveness-extension pass, `mir_collect_
+phi_copies_for_edge`, and the fallthrough-edge phi-copy gate
+(`dcc_mir_spilled_cfg.c`, 3 sites). `mir_first_nonlabel_successor` itself
+is left in place (no remaining callers, but removing an otherwise-correct,
+differently-named, still-documented public helper is out of scope for a
+bug-fix commit).
+
+**Validation**:
+- True before/after census (`git stash` rebuild for an honest baseline):
+  coverage moved from 483/2023 to **480/2023 (-3: `bint.isvarname`,
+  `thoistbc.main`, `tvla.fixed_cast_bounds` correctly returned to
+  fallback)**. This is the **expected and necessary** consequence of
+  properly costing in phi-copy instructions that were previously
+  wrongly skipped (undercounting their true cost let these 3 functions
+  cross the acceptance threshold on an artificially-cheap measurement) -
+  not a coverage loss to be recovered, since falling back to legacy is
+  always correctness-safe.
+- Direct assembly diff confirmed the fix: `bint.c`'s `sum()` now emits
+  `ld l,(ix-4) / ld h,(ix-3) / ld (ix-8),l / ld (ix-7),h` (the phi-
+  resolution copy) before each predecessor's jump to the merge point,
+  where previously nothing was emitted at all.
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION` + `runall -Mode fast` re-tested all 3
+  originally-miscompiling functions: **`bint.sum` and `adaint.add_expr`
+  now pass correctness** (previously failed with wrong program output);
+  `adaint.var_or_const_decl` still fails - confirmed via its own MIR
+  dump to be a **different, unrelated bug** (a genuine loop-carried
+  induction-variable phi - `nn`, a declaration-name counter incremented
+  once per loop iteration and used as an array index - whose merge phi
+  sits immediately after its label with no intervening instruction, so
+  it was already being found correctly by the old code; the wrong
+  output there must come from a different mechanism entirely). Not
+  fixed by this item - left open, flagged below.
+- Focused `runall -Apps bint,thoistbc,tvla -Mode full`: **all 3 apps
+  pass correctness**; only negligible (~0%, effectively noise-level)
+  cycle deltas from the 3 functions now correctly falling back to
+  legacy's own (already-verified-correct) code generation.
+- **Wide safety net** (`runall.ps1 -Mode fast` then `-Mode full`, full
+  323-app corpus, given the fix touches phi-copy detection shared by
+  every selector - 145 apps showed census metric changes from more
+  functions now correctly costing their phi-copies): **314/314 apps
+  pass correctness in both modes**. Found 4 tiny (all <0.001%, i.e.
+  effectively at the noise floor) cycle-count-only deltas: `bint`
+  (nopeep, +0.0002%), `fint` (peep, +0.0009%), `tvla` (peep +0.0002%,
+  nopeep +0.0008%) - no byte-size changes anywhere.
+  - 3 of these 4 (`bint`, `tvla`) are the **direct, expected**
+    consequence of the same functions noted above correctly falling
+    back to legacy.
+  - `fint`'s delta is different and notable: `fint.c`'s `add_prim`/
+    `init_prims` (its only 2 MIR-accepted functions) are **byte-
+    identical** before/after, and every fallback function's real,
+    captured legacy output should be identical too - yet direct
+    assembly comparison showed `op_has_local_target` (always fallback,
+    unrelated to this fix) chose a **different legacy register-
+    allocation strategy** (BC-parameter-caching vs. repeated frameless
+    SP-relative loads) after this change. Root-caused to the **same
+    global-counter-leak mechanism already documented in Item T56**:
+    every function's *speculative* MIR emission trial (used purely to
+    measure `generated_bytes` for the accept/reject decision, even for
+    functions that end up on fallback) calls the *shared* `new_label()`
+    counter used by legacy's own codegen - confirmed directly (highest
+    label number emitted for the whole `fint.c` file shifted from
+    `L6679` to `L6746`, +67, with zero net change to any MIR-accepted
+    function's own generated code). This is a **pre-existing,
+    architecture-wide characteristic** (every function's discarded
+    speculative trial already perturbs this shared counter for every
+    function compiled afterward in the same file), not something this
+    fix newly introduces - this fix simply changed the *magnitude* of
+    an already-existing perturbation for the (correctly) larger
+    speculative byte counts of the ~34 `fint.c` functions whose phi-copy
+    costing was previously wrong. Unlike T56 (a pure performance
+    optimization with zero cost to reverting), this item fixes 2
+    confirmed silent-miscompilation bugs - reverting to avoid a
+    0.0009% cycle noise in one unrelated already-fallback function
+    would not be a reasonable trade.
+- **Baselines updated** (`-UpdatePerfBaseline`, cycles only, no byte-size
+  changes) for exactly these 3 apps' 4 affected cycle-count cells,
+  per the baseline policy's explicit allowance ("update baselines only
+  after a complete full-mode run proves the new profile is intentional
+  and correctness-clean") - re-ran the full wide safety net afterward
+  and confirmed **314/314 apps pass, 0 regressions**.
+
+**Follow-up items opened by this investigation**:
+- `adaint.var_or_const_decl`'s remaining miscompilation is a **separate,
+  not-yet-diagnosed bug** involving a genuine loop-carried induction
+  variable (`nn`) used as an array index across loop iterations - the
+  phi itself is found correctly (immediately follows its label), so this
+  is not the same root cause as this item. Needs its own forced-accept
+  diff + MIR report investigation. Flagged as `t65b-var-or-const-decl-
+  loop-phi` in the todos table.
+- The `new_label()` global-counter-leak-from-discarded-speculative-
+  trials mechanism (confirmed again here, first documented in Item T56)
+  remains a standing architectural fragility that will make **any**
+  future correctness or cost-model fix to MIR's speculative emission
+  path risk small, real, cross-function performance ripples in
+  unrelated already-fallback functions elsewhere in the same
+  translation unit. A proper fix (snapshot/restore `label_id` around
+  each discarded candidate-emission trial in `mir_end_function`'s
+  selector-comparison logic, `dcc_mir_select.c`) would eliminate this
+  whole hazard class for all future work, including the higher-risk
+  Item T56/t68 materialize-boolean architecture fix this plan's ranking
+  already flags as needing extra care for exactly this reason. Not
+  attempted in this item (scope discipline - this item is a targeted
+  bug fix, not a new engineering project) but flagged as a high-value,
+  well-specified future task: `t66b-label-id-speculative-rollback`.

@@ -1881,7 +1881,7 @@ static int mir_prepare_backend_slots(void)
                 for (successor = 0;
                      successor < mir.insns[predecessor].successor_count;
                      ++successor) {
-                    int target = mir_first_nonlabel_successor(
+                    int target = mir_first_phi_or_block_end(
                         mir.insns[predecessor].successors[successor]);
                     if (target != phi_start)
                         continue;
@@ -3396,7 +3396,7 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
 {
     int predecessor_label = mir_block_label_before(predecessor);
     int edge_label = -1;
-    int instruction = mir_first_nonlabel_successor(successor);
+    int instruction = mir_first_phi_or_block_end(successor);
     int copy_count = 0;
 
     if (predecessor >= 0 && predecessor < mir.count &&
@@ -5411,7 +5411,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (insn->opcode != MIR_JUMP && insn->opcode != MIR_BRANCH_FALSE &&
             insn->opcode != MIR_RETURN && i + 1 < mir.count &&
             mir.insns[i + 1].opcode == MIR_LABEL) {
-            int first = mir_first_nonlabel_successor(i + 1);
+            int first = mir_first_phi_or_block_end(i + 1);
             int predecessor_label = mir_block_label_before(i);
             if (first >= 0 && first < mir.count &&
                 mir.insns[first].opcode == MIR_PHI &&

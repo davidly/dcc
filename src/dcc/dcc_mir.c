@@ -3985,9 +3985,44 @@ int mir_first_nonlabel_successor(int successor)
     return successor;
 }
 
+/* Item T65 (mir-migration): every phi-copy-collection site used to locate
+ * a merge block's phi node(s) via mir_first_nonlabel_successor, which
+ * only skips MIR_LABEL/MIR_NOP - implicitly assuming a phi is always the
+ * very first "real" instruction of its block (the usual SSA-form
+ * placement). That assumption does not hold for every shape this front
+ * end lowers: a statement whose own value does not depend on which
+ * predecessor edge was taken (e.g. an unrelated function call scheduled
+ * before a merged local's use - a recursive-descent parser's `term();
+ * emit(op, ...);`, where `op` was assigned differently in each branch of
+ * an earlier if/else chain) can be emitted before the phi in program
+ * order, even though the phi still logically belongs to the top of the
+ * merged block. Every caller that stopped at that leading instruction
+ * instead of the phi silently treated the edge as phi-free, skipping
+ * phi-resolution copy insertion entirely and leaving the phi's
+ * destination reading an uninitialized backend slot - a real, confirmed
+ * miscompilation (tests/bint.c's sum(), tests/adaint.c's add_expr(),
+ * both exactly this "for (;;) { if (...) op = A; else if (...) op = B;
+ * else break; ...; use(op); }" shape). This helper keeps scanning past
+ * ordinary non-branching instructions to find the phi if one exists
+ * anywhere before the block truly ends (a jump, branch, return, or the
+ * end of the instruction stream) - callers that only care whether a phi
+ * exists on this edge, or need its exact position to insert copies, both
+ * get the correct answer regardless of what was scheduled before it. */
+int mir_first_phi_or_block_end(int successor)
+{
+    while (successor >= 0 && successor < mir.count) {
+        int opcode = mir.insns[successor].opcode;
+        if (opcode == MIR_PHI || opcode == MIR_JUMP ||
+            opcode == MIR_BRANCH_FALSE || opcode == MIR_RETURN)
+            return successor;
+        ++successor;
+    }
+    return successor;
+}
+
 static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
 {
-    int first = mir_first_nonlabel_successor(successor);
+    int first = mir_first_phi_or_block_end(successor);
     int predecessor_label;
 
     if (first < 0 || first >= mir.count || mir.insns[first].opcode != MIR_PHI)

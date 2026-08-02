@@ -312,6 +312,7 @@ int mir_find_label(int label);
 int mir_label_is_jump_target(int label);
 int mir_insn_is_reachable(int i);
 int mir_first_nonlabel_successor(int successor);
+int mir_first_phi_or_block_end(int successor);
 int mir_fold_constant_binary(int op, long left, long right,
                                     int operand_type, long *result);
 int mir_fold_constant_compare(int op, long left, long right,

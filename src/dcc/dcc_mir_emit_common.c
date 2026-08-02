@@ -766,7 +766,7 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
     int count = 0;
     int predecessor_label = mir_block_label_before(predecessor);
     int edge_label = -1;
-    int instruction = mir_first_nonlabel_successor(successor);
+    int instruction = mir_first_phi_or_block_end(successor);
     int i;
 
     if (predecessor >= 0 && predecessor < mir.count &&
@@ -812,7 +812,7 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
 
 int mir_edge_phi_names_predecessor(int predecessor, int successor)
 {
-    int instruction = mir_first_nonlabel_successor(successor);
+    int instruction = mir_first_phi_or_block_end(successor);
     int predecessor_label = mir_block_label_before(predecessor);
     if (instruction < 0 || instruction >= mir.count ||
         mir.insns[instruction].opcode != MIR_PHI)
