@@ -223,6 +223,7 @@ param(
     [string]$Emulator = "ntvcm",
     [switch]$NoStackCheck,
     [switch]$UseEmulatedM80,
+    [switch]$UseEmulatedL80,
     [string]$BuildDir = "build",
     [string]$BaselineDir = "tests/baselines",
     [ValidateSet("fast", "nopeep", "full")]
@@ -559,6 +560,7 @@ function Invoke-DccMakeBuild {
         [object]$DccFloatio = $null,
         [object]$DccLongio = $null,
         [switch]$UseEmulatedM80,
+        [switch]$UseEmulatedL80,
         [switch]$Quiet,
         [ref]$TimingOut
     )
@@ -567,8 +569,8 @@ function Invoke-DccMakeBuild {
     if ($modeLower -eq "full") {
         $fastTiming = $null
         $nopeepTiming = $null
-        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimingOut ([ref]$fastTiming)
-        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet -TimingOut ([ref]$nopeepTiming)
+        $fastOk = Invoke-DccMakeBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet:$Quiet -TimingOut ([ref]$fastTiming)
+        $nopeepOk = Invoke-DccMakeBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet:$Quiet -TimingOut ([ref]$nopeepTiming)
         if ($TimingOut) { $TimingOut.Value = @{ peep = $fastTiming; nopeep = $nopeepTiming } }
         return ($fastOk -and $nopeepOk)
     }
@@ -631,6 +633,9 @@ function Invoke-DccMakeBuild {
     if ($UseEmulatedM80) {
         $args += "dcc-use-emulated-m80=true"
     }
+    if ($UseEmulatedL80) {
+        $args += "dcc-use-emulated-l80=true"
+    }
     if ($DccArgs) {
         $args += @($DccArgs -split '\s+' | Where-Object { $_ })
     }
@@ -641,7 +646,7 @@ function Invoke-DccMakeBuild {
     $exitCode = $LASTEXITCODE
     if ($TimingOut) {
         $timingLine = @($buildOut) | Where-Object { $_ -match '^dccmake: timing ' } | Select-Object -Last 1
-        if ($timingLine -match 'dcc=(\d+)ms peep=(\d+)ms asm=(\d+)ms\((\w+)\) rtlstrip=(\d+)ms link=(\d+)ms other=(\d+)ms total=(\d+)ms') {
+        if ($timingLine -match 'dcc=(\d+)ms peep=(\d+)ms asm=(\d+)ms\((\w+)\) rtlstrip=(\d+)ms link=(\d+)ms\((\w+)\) other=(\d+)ms total=(\d+)ms') {
             $TimingOut.Value = @{
                 dcc      = [int]$Matches[1]
                 peep     = [int]$Matches[2]
@@ -649,8 +654,9 @@ function Invoke-DccMakeBuild {
                 asmMode  = $Matches[4]
                 rtlstrip = [int]$Matches[5]
                 link     = [int]$Matches[6]
-                other    = [int]$Matches[7]
-                total    = [int]$Matches[8]
+                linkMode = $Matches[7]
+                other    = [int]$Matches[8]
+                total    = [int]$Matches[9]
                 psInvokeMs = $dccmakeSw.ElapsedMilliseconds
             }
         }
@@ -852,6 +858,7 @@ function Invoke-AppTest {
         [object]$DccFloatio,
         [object]$DccLongio,
         [switch]$UseEmulatedM80,
+        [switch]$UseEmulatedL80,
         [string[]]$EmulatorRunArgs,
         [object[]]$Fixtures,
         [bool]$StageFixtures = $true,
@@ -914,7 +921,7 @@ function Invoke-AppTest {
         $ok = $false
         $modeTiming = $null
         try {
-            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet -TimingOut ([ref]$modeTiming)
+            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet -TimingOut ([ref]$modeTiming)
         }
         catch { $ok = $false }
         if ($modeTiming) { $buildTimingByMode[$buildMode] = $modeTiming }
@@ -1004,6 +1011,7 @@ function Invoke-NarrowDiffTest {
         [object]$DccFloatio,
         [object]$DccLongio,
         [switch]$UseEmulatedM80,
+        [switch]$UseEmulatedL80,
         [string[]]$EmulatorRunArgs,
         [object[]]$Fixtures
     )
@@ -1029,11 +1037,11 @@ function Invoke-NarrowDiffTest {
     $okNoNarrow = $false
     try {
         $okNarrow = Invoke-DccMakeBuild -Name $AppName -Mode fast -BuildDir $narrowDir -Emulator $Emulator `
-            -StackSize $stackSizeInt -DccArgs $baseDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet
+            -StackSize $stackSizeInt -DccArgs $baseDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet
     } catch { $okNarrow = $false }
     try {
         $okNoNarrow = Invoke-DccMakeBuild -Name $AppName -Mode fast -BuildDir $noNarrowDir -Emulator $Emulator `
-            -StackSize $stackSizeInt -DccArgs $noNarrowDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -Quiet
+            -StackSize $stackSizeInt -DccArgs $noNarrowDccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet
     } catch { $okNoNarrow = $false }
 
     if (-not $okNarrow -or -not $okNoNarrow) {
@@ -1515,7 +1523,8 @@ function Invoke-ExtendedSuite {
         [bool]$StackCheck,
         [bool]$Serial,
         [int]$ThrottleLimit,
-        [bool]$UseEmulatedM80
+        [bool]$UseEmulatedM80,
+        [bool]$UseEmulatedL80
     )
 
     $extendedScript = Join-Path $PSScriptRoot "runall-extended.ps1"
@@ -1533,6 +1542,7 @@ function Invoke-ExtendedSuite {
     if (-not $StackCheck) { $extendedArgs += "-NoStackCheck" }
     if ($Serial) { $extendedArgs += "-Serial" }
     if ($UseEmulatedM80) { $extendedArgs += "-UseEmulatedM80" }
+    if ($UseEmulatedL80) { $extendedArgs += "-UseEmulatedL80" }
 
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -1586,7 +1596,7 @@ if ($Parallel) {
             -RunStdin $item.RunStdin `
             -StackSize $item.StackSize -DccArgs $item.DccArgs `
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
-            -UseEmulatedM80:$using:UseEmulatedM80 `
+            -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 `
             -EmulatorRunArgs $using:runArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
             -ExtraScenarios $item.ExtraScenarios
@@ -1627,7 +1637,7 @@ else {
             -RunArgs $item.RunArgs -RunStdin $item.RunStdin `
             -StackSize $item.StackSize -DccArgs $item.DccArgs `
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
-            -UseEmulatedM80:$UseEmulatedM80 `
+            -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 `
             -EmulatorRunArgs $emulatorRunArgs `
             -Fixtures $fixtureList -StageFixtures $false `
             -ExtraScenarios $item.ExtraScenarios
@@ -1772,7 +1782,7 @@ if ($NarrowDiff) {
             Invoke-NarrowDiffTest -AppName $item.App -BuildDir $appBuildDir -Emulator $using:Emulator `
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
-                -UseEmulatedM80:$using:UseEmulatedM80 `
+                -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 `
                 -EmulatorRunArgs $using:ndRunArgs -Fixtures $item.Fixtures
         } | ForEach-Object {
             $result = $_
@@ -1795,7 +1805,7 @@ if ($NarrowDiff) {
             $result = Invoke-NarrowDiffTest -AppName $item.App -BuildDir $appBuildDir -Emulator $Emulator `
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
-                -UseEmulatedM80:$UseEmulatedM80 `
+                -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 `
                 -EmulatorRunArgs $emulatorRunArgs -Fixtures $item.Fixtures
             $narrowResults += $result
             $narrowDone++
@@ -1830,7 +1840,7 @@ $extendedSw = [System.Diagnostics.Stopwatch]::StartNew()
 if ($Extended) {
     Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
         -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit `
-        -UseEmulatedM80 $UseEmulatedM80
+        -UseEmulatedM80 $UseEmulatedM80 -UseEmulatedL80 $UseEmulatedL80
     $extendedExitCode = $script:ExtendedSuiteExitCode
     $extendedPassed = ($extendedExitCode -eq 0)
     if (-not $extendedPassed) {
@@ -1901,6 +1911,7 @@ if ($TimingBreakdown) {
     $sumRunMs = 0.0; $sumAppElapsedMs = 0.0
     $sumDccmakeSelfTotal = 0.0; $sumDccmakePsInvoke = 0.0; $sumRunPs = 0.0
     $asmModes = @{}
+    $linkModes = @{}
     foreach ($r in $results) {
         $sumAppElapsedMs += $r.Elapsed.TotalMilliseconds
         foreach ($buildModeKey in @($r.Timing.Keys)) {
@@ -1909,6 +1920,7 @@ if ($TimingBreakdown) {
                 $sumDcc += $t.dcc; $sumPeep += $t.peep; $sumAsm += $t.asm
                 $sumRtlstrip += $t.rtlstrip; $sumLink += $t.link; $sumDccOther += $t.other
                 if ($t.asmMode) { $asmModes[$t.asmMode] = $true }
+                if ($t.linkMode) { $linkModes[$t.linkMode] = $true }
                 if ($t.total) { $sumDccmakeSelfTotal += $t.total }
                 if ($t.psInvokeMs) { $sumDccmakePsInvoke += $t.psInvokeMs }
             }
@@ -1922,6 +1934,7 @@ if ($TimingBreakdown) {
     $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink + $sumDccOther + $sumRunMs
     $scriptOverheadMs = [math]::Max($sumAppElapsedMs - $accountedMs, 0)
     $asmModeLabel = if ($asmModes.Count -eq 0) { "unknown" } elseif ($asmModes.Count -gt 1) { "MIXED: $($asmModes.Keys -join ', ')" } else { [string]$asmModes.Keys }
+    $linkModeLabel = if ($linkModes.Count -eq 0) { "unknown" } elseif ($linkModes.Count -gt 1) { "MIXED: $($linkModes.Keys -join ', ')" } else { [string]$linkModes.Keys }
     # dccmake/ntvcm's own SELF-reported timing (dcc/peep/.../total, and
     # ntvcm's own "elapsed milliseconds") is measured from inside those
     # processes - it excludes the actual OS process-create/exec cost and
@@ -1944,6 +1957,7 @@ if ($TimingBreakdown) {
     Write-Host ("    {0,-16} {1}" -f "  m80 mode:", $asmModeLabel) -ForegroundColor $(if ($asmModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
     Write-TimingRow "dccrtlstrip" $sumRtlstrip $sumAppElapsedMs
     Write-TimingRow "L80 link" $sumLink $sumAppElapsedMs
+    Write-Host ("    {0,-16} {1}" -f "  l80 mode:", $linkModeLabel) -ForegroundColor $(if ($linkModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
     Write-TimingRow "dccmake other" $sumDccOther $sumAppElapsedMs
     Write-TimingRow "ntvcm run" $sumRunMs $sumAppElapsedMs
     Write-TimingRow "dccmake spawn" $dccmakeInvokeOverheadMs $sumAppElapsedMs

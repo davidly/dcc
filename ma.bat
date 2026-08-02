@@ -12,11 +12,6 @@ set "name=%~n1"
 set "BUILDDIR=build"
 if not exist "%BUILDDIR%" mkdir "%BUILDDIR%"
 
-rem ntvcm resolves COM command files from the current working directory.
-rem Since we run ntvcm from build, stage m80/l80 there automatically.
-if exist "m80.com" copy /Y "m80.com" "%BUILDDIR%\m80.com" >nul
-if exist "l80.com" copy /Y "l80.com" "%BUILDDIR%\l80.com" >nul
-
 set "SOURCE_FILE="
 
 if exist "tests\%name%.c" set "SOURCE_FILE=tests\%name%.c"
@@ -91,9 +86,12 @@ if "%USE_PEEP%"=="1" (
 rem Ensure CRLF line endings so CP/M M80 doesn't split on embedded LF bytes.
 unix2dos "%BUILDDIR%\%name%.mac" >nul 2>nul
 
-rem Assemble app.
+rem Assemble app. m80c is the native, host-resident LINK-80-compatible
+rem assembler - no ntvcm/CP/M M80.COM involved. /C writes %name%.SYM with
+rem every symbol (public and local, each tagged with its segment), which
+rem l80c later picks up to enrich its own linked .SYM.
 pushd "%BUILDDIR%"
-ntvcm m80 =%name%.mac /X /O /Z /L
+m80c =%name%.mac /X /O /Z /L /C
 if errorlevel 1 (
     popd
     exit /b 1
@@ -110,7 +108,7 @@ if errorlevel 1 exit /b 1
 rem Assemble runtime.
 unix2dos "%BUILDDIR%\rtlmin.mac" >nul 2>nul
 pushd "%BUILDDIR%"
-ntvcm m80 =rtlmin.mac /X /O /Z
+m80c =rtlmin.mac /X /O /Z /C
 if errorlevel 1 (
     popd
     exit /b 1
@@ -118,9 +116,11 @@ if errorlevel 1 (
 popd
 if errorlevel 1 exit /b 1
 
-rem Link app + runtime.
+rem Link app + runtime. l80c is the native, host-resident LINK-80-compatible
+rem linker - no ntvcm/CP/M L80.COM involved, and no CP/M 64K linker-
+rem workspace ceiling to run into on large nopeep builds.
 pushd "%BUILDDIR%"
-ntvcm l80 /P:100,rtlmin,%name%,%name%/N/E/Y
+l80c /P:100,rtlmin,%name%,%name%/N/E/Y
 if errorlevel 1 (
     popd
     exit /b 1

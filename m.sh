@@ -1,12 +1,12 @@
 #!/bin/bash
-# Build dcc (C compiler), dccpeep, dccrtlstrip, dccmake, and m80c using gcc.
-# Equivalent of m.bat on Linux/macOS. Each tool is an independent build (its
-# own source, its own output binary), so all five run in parallel; only the
-# final reporting is serialized so output doesn't interleave.
+# Build dcc (C compiler), dccpeep, dccrtlstrip, dccmake, m80c, and l80c using
+# gcc. Equivalent of m.bat on Linux/macOS. Each tool is an independent build
+# (its own source, its own output binary), so all six run in parallel; only
+# the final reporting is serialized so output doesn't interleave.
 
 set -e
 
-rm -f dcc dccpeep dccrtlstrip dccmake m80c
+rm -f dcc dccpeep dccrtlstrip dccmake m80c l80c
 
 # These are host build tools, not the Z80 target, so link statically on
 # Linux by default: the binaries are then copyable/runnable on another Linux
@@ -26,7 +26,7 @@ export STATICFLAGS
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-echo "Building dcc, dccpeep, dccrtlstrip, dccmake, and m80c in parallel..."
+echo "Building dcc, dccpeep, dccrtlstrip, dccmake, m80c, and l80c in parallel..."
 
 src/dcc/build-dcc.sh                                                  > "$tmpdir/dcc.log"         2>&1 &
 pid_dcc=$!
@@ -45,8 +45,11 @@ pid_dccmake=$!
 gcc -std=c89 -O2 $STATICFLAGS -o m80c src/m80c/m80c.c                 > "$tmpdir/m80c.log"        2>&1 &
 pid_m80c=$!
 
+gcc -std=c89 -O2 $STATICFLAGS -o l80c src/l80c/l80c.c                 > "$tmpdir/l80c.log"        2>&1 &
+pid_l80c=$!
+
 failed=0
-for name in dcc dccpeep dccrtlstrip dccmake m80c; do
+for name in dcc dccpeep dccrtlstrip dccmake m80c l80c; do
     pid_var="pid_$name"
     echo ""
     if wait "${!pid_var}"; then

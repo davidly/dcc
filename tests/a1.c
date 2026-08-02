@@ -703,23 +703,16 @@ static void usage( err ) char * err;
 {
     if ( err )
         printf( "error: %s\n", err );
-    printf( "Apple 1: emulates a 6502 Apple 1" );
-    printf( "usage: a1 <arguments> [hexfile>]\n" );
-    printf( "  arguments:\n" );
-    printf( "   -a       address at which pc is set, e.g. /a:0x1000\n" );
-    printf( "            overrides default of 0xff00 or the first address in the hex file.\n" );
-    printf( "   -h       use hooks instead of woz monitor for console I/O\n" );
-    printf( "   -l:file  loads file as keyboard input. e.g.: -l:estdin.bas\n" );
-    printf( "   -x       exit when control transfers to the monitor (when the app is done)\n" );
-    printf( "   hexfile  file loaded before emulator starts\n" );
-    printf( "            .hex files must be in Apple 1 or Intel format.\n" );
-    printf( "   -- control keys\n" );
-    printf( "        ^c        gracefully exit the emulator\n" );
-    printf( "        ^l        load a file into the keyboard input stream. This is\n" );
-    printf( "                  likely an Apple 1 format .hex for monitor or .bas for BASIC\n" );
-    printf( "        ^q        quit the emulator at the next app keyboard read\n" );
-    printf( "        ^r        soft reset via the 6502's 0xfffc reset vector\n" );
-    printf( "        ^break    forcibly exit the app\n" );
+
+    printf( "Apple 1 6502 emulator\n"
+            "usage: a1 [args] [hexfile]\n"
+            "  -a:addr   set pc, default 0xff00 or hex file's first address\n"
+            "  -h        use hooks instead of woz monitor for I/O\n"
+            "  -l:file   load file as keyboard input\n"
+            "  -x        exit when control returns to the monitor\n"
+            "  hexfile   Apple 1 or Intel format hex file to load first\n"
+            "  keys: ^c exit, ^l load file, ^q quit on next read,\n"
+            "        ^r soft reset, ^break force exit\n" );
     exit( -1 );
 }
 
@@ -1204,27 +1197,15 @@ uint16_t hextoui( p ) char * p;
     return result;
 }
 
-static uint8_t read_byte( p ) char * p;
-{
-    uint8_t result;
-    char save;
-    save = p[ 2 ];
-    p[ 2 ] = 0;
-
-    result = (uint8_t) hextoui( p );
-    p[ 2 ] = save;
-    return result;
-}
-
-static uint16_t read_word( p ) char * p;
+static uint16_t read_hex( p, len ) char * p; uint8_t len;
 {
     uint16_t result;
     char save;
-    save = p[ 4 ];
-    p[ 4 ] = 0;
+    save = p[ len ];
+    p[ len ] = 0;
 
     result = hextoui( p );
-    p[ 4 ] = save;
+    p[ len ] = save;
     return result;
 }
 
@@ -1244,9 +1225,9 @@ static bool load_intel( fp ) FILE * fp;
             if ( ':' != buf[ 0 ] )
                 usage( "error: input Intel HEX file is malformed" );
 
-            reclen = read_byte( buf + 1 );
-            offset = read_word( buf + 3 );
-            rectyp = read_byte( buf + 7 );
+            reclen = (uint8_t) read_hex( buf + 1, 2 );
+            offset = read_hex( buf + 3, 4 );
+            rectyp = (uint8_t) read_hex( buf + 7, 2 );
 
             if ( 1 == rectyp ) 
                 break;
@@ -1259,7 +1240,7 @@ static bool load_intel( fp ) FILE * fp;
                 if ( feof( fp ) )
                     usage( "malformed input file" );
 
-                val = read_byte( buf + ( 2 * x ) + 9 );
+                val = (uint8_t) read_hex( buf + ( 2 * x ) + 9, 2 );
                 set_byte( offset + x, val );
             }
         }

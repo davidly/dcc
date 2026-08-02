@@ -43,6 +43,7 @@
 #define LOCAL_DCCPEEP ".\\dccpeep"
 #define LOCAL_DCCRTLSTRIP ".\\dccrtlstrip"
 #define LOCAL_M80C ".\\m80c"
+#define LOCAL_L80C ".\\l80c"
 #else
 #include <unistd.h>
 #define MKDIR(path) mkdir(path, 0777)
@@ -53,6 +54,7 @@
 #define LOCAL_DCCPEEP "./dccpeep"
 #define LOCAL_DCCRTLSTRIP "./dccrtlstrip"
 #define LOCAL_M80C "./m80c"
+#define LOCAL_L80C "./l80c"
 #endif
 
 #define MAX_ITEMS 128
@@ -97,6 +99,7 @@ struct Config {
     int debug;
     int stack_bytes;
     int use_emulated_m80;
+    int use_emulated_l80;
     char includes[MAX_ITEMS][MAX_PATH_LEN];
     int include_count;
     char dcc_args[MAX_ITEMS][MAX_PATH_LEN];
@@ -112,15 +115,25 @@ struct Config {
     char m80[MAX_PATH_LEN];
     char m80c[MAX_PATH_LEN];
     char l80[MAX_PATH_LEN];
+    char l80c[MAX_PATH_LEN];
     char runtime[MAX_PATH_LEN];
 };
 
 static void copy_text(char *dst, size_t dst_size, const char *src)
 {
+    size_t len;
     if (dst_size == 0)
         return;
-    strncpy(dst, src ? src : "", dst_size - 1);
-    dst[dst_size - 1] = 0;
+    if (!src) src = "";
+    /* memcpy + manual null terminator, rather than strncpy(dst,src,dst_size-1)
+     * (trips gcc's _FORTIFY_SOURCE -Wstringop-truncation) or
+     * snprintf(dst,dst_size,"%s",src) (same heuristic, -Wformat-truncation=
+     * instead) - gcc doesn't apply either check to a plain memcpy, so this is
+     * the same bounded, always-null-terminated copy without the noise. */
+    len = strlen(src);
+    if (len >= dst_size) len = dst_size - 1;
+    memcpy(dst, src, len);
+    dst[len] = 0;
 }
 
 static void trim(char *s)
@@ -600,6 +613,10 @@ static void init_config(struct Config *cfg)
      * DCC_USE_EMULATED_M80=1 to fall back to the real M80.COM under ntvcm,
      * e.g. to cross-check output or when m80c hasn't been built locally. */
     cfg->use_emulated_m80 = getenv("DCC_USE_EMULATED_M80") && !strcmp(getenv("DCC_USE_EMULATED_M80"), "1");
+    /* Native l80c is the default linker (no Z80 emulation needed, and no
+     * CP/M 64K linker-workspace ceiling on large nopeep builds); set
+     * DCC_USE_EMULATED_L80=1 to fall back to the real L80.COM under ntvcm. */
+    cfg->use_emulated_l80 = getenv("DCC_USE_EMULATED_L80") && !strcmp(getenv("DCC_USE_EMULATED_L80"), "1");
     copy_text(cfg->build_dir, sizeof(cfg->build_dir), "build");
     resolve_tool_path(cfg->dcc, sizeof(cfg->dcc), "DCC", LOCAL_DCC, "dcc");
     resolve_tool_path(cfg->dccpeep, sizeof(cfg->dccpeep), "DCCPEEP", LOCAL_DCCPEEP, "dccpeep");
@@ -609,6 +626,8 @@ static void init_config(struct Config *cfg)
     resolve_tool_path(cfg->m80c, sizeof(cfg->m80c), "M80C", LOCAL_M80C, "m80c");
     make_local_tool_path_absolute(cfg->m80c, sizeof(cfg->m80c));
     resolve_tool_path(cfg->l80, sizeof(cfg->l80), "L80", NULL, "l80");
+    resolve_tool_path(cfg->l80c, sizeof(cfg->l80c), "L80C", LOCAL_L80C, "l80c");
+    make_local_tool_path_absolute(cfg->l80c, sizeof(cfg->l80c));
     copy_text(cfg->runtime, sizeof(cfg->runtime), env_or_default("DCC_RUNTIME", "DCCRTL.MAC", "DCCRTL.MAC"));
     add_whitespace_args(cfg->dcc_args, &cfg->dcc_arg_count, getenv("DCC_ARGS"));
 }
@@ -880,6 +899,21 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         trim(cfg->l80);
         return cfg->l80[0] != 0;
     }
+    if (!strcmp(key, "l80c-tool")) {
+        copy_text(cfg->l80c, sizeof(cfg->l80c), value);
+        trim(cfg->l80c);
+        if (cfg->l80c[0])
+            make_local_tool_path_absolute(cfg->l80c, sizeof(cfg->l80c));
+        return cfg->l80c[0] != 0;
+    }
+    if (!strcmp(key, "dcc-use-emulated-l80")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->use_emulated_l80 = b;
+        return 1;
+    }
     if (!strcmp(key, "dcc-runtime")) {
         copy_text(cfg->runtime, sizeof(cfg->runtime), value);
         trim(cfg->runtime);
@@ -953,7 +987,8 @@ static void print_help(void)
     printf("  run dccrtlstrip with the first .MAC as the runtime root\n");
     printf("  assemble all .MAC files and RTLMIN.MAC with native m80c\n");
     printf("  (or ntvcm M80.COM if dcc-use-emulated-m80=true)\n");
-    printf("  link RTLMIN plus all app modules with ntvcm L80\n");
+    printf("  link RTLMIN plus all app modules with native l80c\n");
+    printf("  (or ntvcm L80.COM if dcc-use-emulated-l80=true)\n");
     printf("\n");
     printf("dccmake.txt format:\n");
     printf("  One key=value setting per line. Blank lines are ignored. Text after # is a\n");
@@ -1016,6 +1051,14 @@ static void print_help(void)
     printf("  dcc-use-emulated-m80=false|true|1|0\n");
     printf("                                 assemble with real M80.COM under ntvcm instead\n");
     printf("                                 of native m80c; default false\n");
+    printf("  dcc-use-emulated-l80=false|true|1|0\n");
+    printf("                                 link with real L80.COM under ntvcm instead\n");
+    printf("                                 of native l80c; default false. Real L80 runs\n");
+    printf("                                 inside ntvcm's emulated 64K CP/M address space,\n");
+    printf("                                 so its own symbol/relocation workspace can run\n");
+    printf("                                 out of memory on large nopeep builds well before\n");
+    printf("                                 the target program itself would not fit - l80c\n");
+    printf("                                 has no such ceiling\n");
     printf("\n");
     printf("dcc-style command options:\n");
     printf("  -f, -ffloatio                  same as dcc-floatio=true\n");
@@ -1031,6 +1074,7 @@ static void print_help(void)
     printf("  -fno-narrow                    same as dcc-no-narrow=true\n");
     printf("  -g                             same as dcc-debug=true\n");
     printf("  -femulated-m80                 same as dcc-use-emulated-m80=true\n");
+    printf("  -femulated-l80                 same as dcc-use-emulated-l80=true\n");
     printf("  -I <dir>, -Idir                add an include directory\n");
     printf("  -D <name>[=value], -Dname=val  pass a define to dcc\n");
     printf("  -U <name>, -Uname              pass an undefine to dcc\n");
@@ -1042,10 +1086,11 @@ static void print_help(void)
     printf("  dcc-tool=dcc                  dcc compiler command\n");
     printf("  dccpeep-tool=dccpeep          peephole optimizer command\n");
     printf("  dccrtlstrip-tool=dccrtlstrip  runtime stripper command\n");
-    printf("  ntvcm-tool=ntvcm              emulator command for M80 (if emulated)/L80\n");
+    printf("  ntvcm-tool=ntvcm              emulator command for M80/L80 (if either is emulated)\n");
     printf("  m80-command=m80               CP/M assembler command passed to ntvcm (emulated M80 only)\n");
     printf("  m80c-tool=m80c                native host assembler command (default, no ntvcm)\n");
-    printf("  l80-command=l80               CP/M linker command passed to ntvcm\n");
+    printf("  l80-command=l80               CP/M linker command passed to ntvcm (emulated L80 only)\n");
+    printf("  l80c-tool=l80c                native host linker command (default, no ntvcm)\n");
     printf("  dcc-runtime=DCCRTL.MAC        runtime source used by dccrtlstrip\n");
     printf("\n");
     printf("environment macro examples:\n");
@@ -1129,6 +1174,10 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         }
         if (!strcmp(arg, "-femulated-m80")) {
             cfg->use_emulated_m80 = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-femulated-l80")) {
+            cfg->use_emulated_l80 = 1;
             continue;
         }
         if (!strcmp(arg, "-s") || !strcmp(arg, "-stack")) {
@@ -1813,6 +1862,11 @@ static int build_m80_command(struct Config *cfg, const char *mac_arg,
     if (!cmd_arg(cmd, cmd_size, "/O")) return 0;
     if (!cmd_arg(cmd, cmd_size, "/Z")) return 0;
     if (!cmd_arg(cmd, cmd_size, "/L")) return 0;
+    /* /C: per-module <NAME>.SYM with every symbol, public and local, each
+     * tagged with its segment (m80c-only; real M80.COM doesn't get this).
+     * l80c picks these up opportunistically to enrich its own .SYM with
+     * local symbols, which never appear in the .REL at all. */
+    if (!cfg->use_emulated_m80 && !cmd_arg(cmd, cmd_size, "/C")) return 0;
     return 1;
 }
 
@@ -2068,8 +2122,12 @@ static int run_build(struct Config *cfg)
     if (!cmd_append_raw(link_arg, sizeof(link_arg), "/N/E/Y")) return 0;
 
     cmd_init(cmd, sizeof(cmd));
-    if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
-    if (!cmd_arg(cmd, sizeof(cmd), cfg->l80)) return 0;
+    if (cfg->use_emulated_l80) {
+        if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), cfg->l80)) return 0;
+    } else {
+        if (!cmd_arg(cmd, sizeof(cmd), cfg->l80c)) return 0;
+    }
     if (!cmd_arg(cmd, sizeof(cmd), link_arg)) return 0;
     t0 = now_ms();
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(app_com)) {
@@ -2089,9 +2147,9 @@ static int run_build(struct Config *cfg)
         long long total = now_ms() - t_start;
         long long other = total - (ms_dcc + ms_peep + ms_asm + ms_rtlstrip + ms_link);
         if (other < 0) other = 0;
-        printf("dccmake: timing dcc=%lldms peep=%lldms asm=%lldms(%s) rtlstrip=%lldms link=%lldms other=%lldms total=%lldms\n",
+        printf("dccmake: timing dcc=%lldms peep=%lldms asm=%lldms(%s) rtlstrip=%lldms link=%lldms(%s) other=%lldms total=%lldms\n",
                ms_dcc, ms_peep, ms_asm, cfg->use_emulated_m80 ? "emulated" : "native",
-               ms_rtlstrip, ms_link, other, total);
+               ms_rtlstrip, ms_link, cfg->use_emulated_l80 ? "emulated" : "native", other, total);
     }
     return 1;
 }

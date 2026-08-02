@@ -1739,10 +1739,6 @@ static int rel_entry_rank(const char *name) {
     for(i=0;ord[i];i++) if(strcmp(sig,ord[i])==0) return i;
     return 9999;
 }
-static int rel_def_rank(const char *name) {
-    (void)name;
-    return 0;
-}
 static int symptr_m80_cmp(const void *pa,const void *pb) {
     const Sym *a=*(const Sym * const *)pa;
     const Sym *b=*(const Sym * const *)pb;
@@ -1865,6 +1861,19 @@ static void write_rel(Asm *a) {
     rel_pad_128(&r);
     fclose(f);
 }
+static const char *debug_segment_name(int type) {
+    if(type==T_CODE || type==SEG_CODE) return "code";
+    if(type==T_DATA || type==SEG_DATA) return "data";
+    return "absolute";
+}
+/* RELFIX30: /C's per-module .SYM now carries each symbol's segment (code/
+ * data/absolute), not just its module-relative value. Local (non-PUBLIC,
+ * non-EXTRN) symbols have no address of their own in the linked .REL - the
+ * assembler resolves and inlines them at assembly time, so their names
+ * never reach the linker - but l80c's -C-enabled build can read this file
+ * alongside the .REL to relocate and merge them into its own .SYM, and the
+ * segment column is what makes that relocation (module base + value)
+ * possible without guessing. */
 static void write_sym(Asm *a) {
     FILE *f;
     int h;
@@ -1878,17 +1887,13 @@ static void write_sym(Asm *a) {
     for(h=0;h<SYMHASH;h++) {
         for(s=a->syms[h];s;s=s->next) {
             if(s->defined) {
-                fprintf(f,"%-8s %04lX %s%s\n",s->name,s->value&0xffff,
+                fprintf(f,"%-8s %04lX %-8s %s%s\n",s->name,s->value&0xffff,
+                    debug_segment_name(s->type),
                     s->is_public?"PUBLIC ":"",s->is_extern?"EXTRN":"");
             }
         }
     }
     fclose(f);
-}
-static const char *debug_segment_name(int type) {
-    if(type==T_CODE || type==SEG_CODE) return "code";
-    if(type==T_DATA || type==SEG_DATA) return "data";
-    return "absolute";
 }
 static void write_debug(Asm *a) {
     FILE *f;

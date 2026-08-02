@@ -1,13 +1,13 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Build dcc, dccpeep, dccrtlstrip, dccmake, and m80c on Windows, macOS, and Linux.
+Build dcc, dccpeep, dccrtlstrip, dccmake, m80c, and l80c on Windows, macOS, and Linux.
 
 .DESCRIPTION
 Compiles the host tools with the native compiler for the current platform:
 MSVC on Windows, clang on macOS, and gcc on Linux by default. Build artifacts
 are placed under build/; final commands are placed in the repository root.
-On Linux, the four tools are linked -static by default (see -NoStatic);
+On Linux, these tools are linked -static by default (see -NoStatic);
 macOS has no static libSystem to link against, so this never applies there.
 
 .PARAMETER OutputPath
@@ -261,7 +261,8 @@ function Build-WindowsMsvc {
         @{ Name = "dccpeep"; Sources = @(Get-ChildItem (Join-Path $repoRoot "src\dccpeep") -Filter "*.c" | Sort-Object Name | ForEach-Object FullName) },
         @{ Name = "dccrtlstrip"; Sources = @((Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c")) },
         @{ Name = "dccmake"; Sources = @((Join-Path $repoRoot "src\dccmake\dccmake.c")) },
-        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src\m80c\m80c.c")) }
+        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src\m80c\m80c.c")) },
+        @{ Name = "l80c"; Sources = @((Join-Path $repoRoot "src\l80c\l80c.c")) }
     )
 
     foreach ($tool in $tools) {
@@ -280,7 +281,7 @@ function Build-WindowsMsvc {
         Invoke-Checked "cl" $arguments "$($tool.Name) compilation"
     }
 
-    return @($dccOut, (Join-Path $repoRoot "dccpeep.exe"), (Join-Path $repoRoot "dccrtlstrip.exe"), (Join-Path $repoRoot "dccmake.exe"), (Join-Path $repoRoot "m80c.exe"))
+    return @($dccOut, (Join-Path $repoRoot "dccpeep.exe"), (Join-Path $repoRoot "dccrtlstrip.exe"), (Join-Path $repoRoot "dccmake.exe"), (Join-Path $repoRoot "m80c.exe"), (Join-Path $repoRoot "l80c.exe"))
 }
 
 function Get-UnixCompiler {
@@ -368,7 +369,8 @@ function Build-UnixNative {
         @{ Name = "dccpeep"; Sources = @(Get-ChildItem (Join-Path $repoRoot "src/dccpeep") -Filter "*.c" | Sort-Object Name | ForEach-Object FullName) },
         @{ Name = "dccrtlstrip"; Sources = @((Join-Path $repoRoot "src/dccrtlstrip/dccrtlstrip.c")) },
         @{ Name = "dccmake"; Sources = @((Join-Path $repoRoot "src/dccmake/dccmake.c")) },
-        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src/m80c/m80c.c")) }
+        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src/m80c/m80c.c")) },
+        @{ Name = "l80c"; Sources = @((Join-Path $repoRoot "src/l80c/l80c.c")) }
     )
 
     foreach ($tool in $tools) {
@@ -386,7 +388,7 @@ function Build-UnixNative {
         Invoke-Checked $compiler (@($baseCflags) + $toolObjects + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
     }
 
-    return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"))
+    return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"), (Join-Path $repoRoot "l80c"))
 }
 
 Write-Host "Build artifacts will go to: $outputPathDisplay"

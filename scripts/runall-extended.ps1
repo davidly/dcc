@@ -57,6 +57,7 @@ param(
     [string]$Emulator = "ntvcm",
     [switch]$NoStackCheck,
     [switch]$UseEmulatedM80,
+    [switch]$UseEmulatedL80,
     [string]$BuildDir = "build/extended-tests",
     [string]$SuiteDir = "tests/extended-tests/tests/single-exec",
     [ValidateSet("fast", "nopeep", "full")]
@@ -325,6 +326,7 @@ function Invoke-ExtendedTest {
         [string]$RepoRoot,
         [string]$Emulator,
         [switch]$UseEmulatedM80,
+        [switch]$UseEmulatedL80,
         [string[]]$EmulatorRunArgs,
         [int]$RunTimeout
     )
@@ -367,6 +369,9 @@ function Invoke-ExtendedTest {
         }
         if ($UseEmulatedM80) {
             $buildArgs += "dcc-use-emulated-m80=true"
+        }
+        if ($UseEmulatedL80) {
+            $buildArgs += "dcc-use-emulated-l80=true"
         }
         if ($Case.DccArgs) {
             $buildArgs += @($Case.DccArgs -split '\s+' | Where-Object { $_ })
@@ -644,7 +649,7 @@ if ($Parallel) {
         ${function:Invoke-ExtendedTest} = $using:invokeDef
         $caseBuildDir = Join-Path $using:BuildDir $case.Name
         Invoke-ExtendedTest -Case $case -Modes $using:modes -BuildDir $caseBuildDir -RepoRoot $using:repoRoot `
-            -Emulator $using:Emulator -UseEmulatedM80:$using:UseEmulatedM80 -EmulatorRunArgs $using:runArgs -RunTimeout $using:RunTimeout
+            -Emulator $using:Emulator -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 -EmulatorRunArgs $using:runArgs -RunTimeout $using:RunTimeout
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -657,7 +662,7 @@ else {
     foreach ($case in $allCases) {
         $done++
         $result = Invoke-ExtendedTest -Case $case -Modes $modes -BuildDir $BuildDir -RepoRoot $repoRoot `
-            -Emulator $Emulator -UseEmulatedM80:$UseEmulatedM80 -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
+            -Emulator $Emulator -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
         $results += $result
         Show-ExtendedResult -Result $result -Index $done -Total $totalToRun
     }
@@ -674,7 +679,7 @@ if ($Parallel) {
 
             $retryBuildDir = Join-Path $BuildDir $case[0].Name
             $retryResult = Invoke-ExtendedTest -Case $case[0] -Modes $modes -BuildDir $retryBuildDir -RepoRoot $repoRoot `
-                -Emulator $Emulator -UseEmulatedM80:$UseEmulatedM80 -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
+                -Emulator $Emulator -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
 
             $retryStatus = if ($retryResult.Passed) { "PASS" } else { "FAIL" }
             $retryColor = if ($retryResult.Passed) { "Green" } else { "Red" }

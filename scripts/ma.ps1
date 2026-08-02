@@ -47,6 +47,13 @@ parameters below are forwarded to Invoke-MaBuild.
     Assemble with the real M80.COM under ntvcm instead of native m80c
     (default). Same as setting DCC_USE_EMULATED_M80=1.
 
+.PARAMETER UseEmulatedL80
+    Link with the real L80.COM under ntvcm instead of native l80c
+    (default). Same as setting DCC_USE_EMULATED_L80=1. Real L80 runs inside
+    ntvcm's emulated 64K CP/M address space, so its own symbol/relocation
+    workspace can run out of memory on large nopeep builds well before the
+    target program itself would not fit - l80c has no such ceiling.
+
 .NOTES
   Environment Variables:
     DCC              dcc compiler (default: "dcc")
@@ -54,10 +61,11 @@ parameters below are forwarded to Invoke-MaBuild.
     DCCRTLSTRIP      runtime stripper (default: "dccrtlstrip")
     M80C             native assembler (default: "m80c"); used unless
                      -UseEmulatedM80/DCC_USE_EMULATED_M80=1 selects real M80.COM
-    NTVCM            emulator (default: "ntvcm"); only used for M80 when
-                     emulated, and always for L80
+    L80C             native linker (default: "l80c"); used unless
+                     -UseEmulatedL80/DCC_USE_EMULATED_L80=1 selects real L80.COM
+    NTVCM            emulator (default: "ntvcm"); only used for M80/L80 when emulated
     M80              assembler (default: "m80"); emulated-M80 path only
-    L80              linker (default: "l80")
+    L80              linker (default: "l80"); emulated-L80 path only
     DCC_HOME         dcc package/install root; used to find include/, lib/, and CP/M tools
     DCC_INCLUDE      additional dcc include directories, separated by the host path separator
     DCC_LIB          additional runtime/tool asset roots, separated by the host path separator
@@ -82,13 +90,14 @@ param(
     [string]$Emulator = "ntvcm",
         [string]$SourcePath = "",
         [switch]$UseEmulatedM80,
+        [switch]$UseEmulatedL80,
         [Alias("h")]
         [switch]$Help
 )
 
 function Show-MaHelp {
         @'
-usage: dcc-ma <name> [full|fast|nopeep] [-SourcePath FILE] [-BuildDir DIR] [-Emulator COMMAND] [-UseEmulatedM80]
+usage: dcc-ma <name> [full|fast|nopeep] [-SourcePath FILE] [-BuildDir DIR] [-Emulator COMMAND] [-UseEmulatedM80] [-UseEmulatedL80]
     dcc-ma -Help
 
 build modes:
@@ -103,11 +112,13 @@ script options:
     -Emulator <command> emulator command used for CP/M tools (default: ntvcm)
     -UseEmulatedM80      assemble with real M80.COM under ntvcm instead of
                          native m80c (default); same as DCC_USE_EMULATED_M80=1
+    -UseEmulatedL80      link with real L80.COM under ntvcm instead of
+                         native l80c (default); same as DCC_USE_EMULATED_L80=1
     -Help               show this help
 
 dcc pipeline:
-    dcc -> dccpeep (fast mode) -> m80c -> dccrtlstrip -> m80c -> ntvcm L80
-    (or ntvcm M80.COM in place of m80c, with -UseEmulatedM80)
+    dcc -> dccpeep (fast mode) -> m80c -> dccrtlstrip -> m80c -> l80c
+    (or ntvcm M80.COM/L80.COM in place of m80c/l80c, with -UseEmulatedM80/-UseEmulatedL80)
 
 dcc options controlled by this helper:
     dcc option                  how to set it
@@ -128,7 +139,9 @@ tool and asset overrides:
     DCC, DCCPEEP, DCCRTLSTRIP   host tool paths or command names
     M80C                        native assembler command (default: m80c); used unless
                                 -UseEmulatedM80/DCC_USE_EMULATED_M80=1 selects real M80.COM
-    NTVCM, M80, L80             emulator and CP/M tool command names (M80/emulator path only)
+    L80C                        native linker command (default: l80c); used unless
+                                -UseEmulatedL80/DCC_USE_EMULATED_L80=1 selects real L80.COM
+    NTVCM, M80, L80             emulator and CP/M tool command names (M80/L80 emulated-path only)
     DCC_HOME                    package/install root for bin/, include/, lib/, m80.com, l80.com
     DCC_LIB                     extra runtime/tool asset roots, path-separator separated
     DCC_RUNTIME                 explicit DCCRTL.MAC path
@@ -184,6 +197,7 @@ function Invoke-MaBuild {
         [string]$SourcePath = "",
         [int]$StackSize = 0,
         [switch]$UseEmulatedM80,
+        [switch]$UseEmulatedL80,
         [switch]$Quiet
     )
 
@@ -200,11 +214,12 @@ function Invoke-MaBuild {
     # Normalize mode
     $modeLower = $Mode.ToLower()
     if ($modeLower -eq "full") {
-        $fastOk = Invoke-MaBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet
-        $nopeepOk = Invoke-MaBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -UseEmulatedM80:$UseEmulatedM80 -Quiet:$Quiet
+        $fastOk = Invoke-MaBuild -Name $Name -Mode fast -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet:$Quiet
+        $nopeepOk = Invoke-MaBuild -Name $Name -Mode nopeep -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $StackSize -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet:$Quiet
         return ($fastOk -and $nopeepOk)
     }
     $useEmulatedM80Resolved = $UseEmulatedM80 -or ($env:DCC_USE_EMULATED_M80 -eq "1")
+    $useEmulatedL80Resolved = $UseEmulatedL80 -or ($env:DCC_USE_EMULATED_L80 -eq "1")
     $usePeep = @("fast", "peep", "opt", "optimized", "o", "1", "yes", "true") -contains $modeLower
 
     # Resolve app name
@@ -269,6 +284,13 @@ function Invoke-MaBuild {
     }
     $L80 = $env:L80 -replace '^\s+|\s+$', ''
     if (-not $L80) { $L80 = "l80" }
+    $L80C = $env:L80C -replace '^\s+|\s+$', ''
+    if (-not $L80C) { $L80C = "l80c" }
+    # Same anchoring reasoning as M80C above: l80c also runs inside the
+    # "Push-Location $BuildDir" below.
+    if (($L80C -match '[\\/]') -and -not [System.IO.Path]::IsPathRooted($L80C) -and (Test-Path -LiteralPath $L80C)) {
+        $L80C = (Resolve-Path -LiteralPath $L80C).ProviderPath
+    }
 
     function Add-UniquePath {
         param(
@@ -454,7 +476,7 @@ function Invoke-MaBuild {
     if ($useEmulatedM80Resolved) {
         $m80Out = & $NTVCM @ntvcmArgs "$M80" "=$upperBase.MAC" "/X" "/O" "/Z" "/L" 2>&1
     } else {
-        $m80Out = & $M80C "=$upperBase.MAC" "/X" "/O" "/Z" "/L" 2>&1
+        $m80Out = & $M80C "=$upperBase.MAC" "/X" "/O" "/Z" "/L" "/C" 2>&1
     }
     Pop-Location
     if (-not $Quiet) { $m80Out | Write-Host }
@@ -488,9 +510,13 @@ function Invoke-MaBuild {
     if ($useEmulatedM80Resolved) {
         $rtlOut = & $NTVCM @ntvcmArgs "$M80" "=RTLMIN.MAC" "/X" "/O" "/Z" 2>&1
     } else {
-        $rtlOut = & $M80C "=RTLMIN.MAC" "/X" "/O" "/Z" 2>&1
+        $rtlOut = & $M80C "=RTLMIN.MAC" "/X" "/O" "/Z" "/C" 2>&1
     }
-    $linkOut = & $NTVCM @ntvcmArgs "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E/Y" 2>&1
+    if ($useEmulatedL80Resolved) {
+        $linkOut = & $NTVCM @ntvcmArgs "$L80" "/P:100,RTLMIN,$upperBase,$upperBase/N/E/Y" 2>&1
+    } else {
+        $linkOut = & $L80C "/P:100,RTLMIN,$upperBase,$upperBase/N/E/Y" 2>&1
+    }
     Pop-Location
     if (-not $Quiet) { $rtlOut | Write-Host; $linkOut | Write-Host }
 
@@ -541,6 +567,6 @@ if ($MyInvocation.InvocationName -ne '.') {
         Write-Error "Name is required."
         exit 1
     }
-    $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -UseEmulatedM80:$UseEmulatedM80
+    $ok = Invoke-MaBuild -Name $Name -Mode $Mode -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80
     if (-not $ok) { exit 1 }
 }
