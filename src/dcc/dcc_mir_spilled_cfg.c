@@ -2688,7 +2688,7 @@ static int mir_binary_is_fusable_comparison(int i)
     const struct MirInsn *insn = &mir.insns[i];
     const struct MirInsn *next;
 
-    if (insn->opcode != MIR_BINARY || type_is_float(insn->secondary_offset))
+    if (insn->opcode != MIR_BINARY)
         return 0;
     switch ((int)insn->immediate) {
     case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
@@ -2856,7 +2856,17 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
  * what the 16-bit fusion already exploits: HL is always tested with
  * `ld a,h / or l` immediately once it is known to be 0 or 1, whether the
  * branch consumes the comparison directly or through a single intervening
- * logical-not (mir_binary_is_fusable_comparison's existing negate signal). */
+ * logical-not (mir_binary_is_fusable_comparison's existing negate signal).
+ *
+ * Item T53 (mir-text-size-plan.md): Item T2 initially kept a defensive
+ * `type_is_float` exclusion in mir_binary_is_fusable_comparison pending
+ * independent verification of the float comparison helpers' HL-return
+ * convention. Verified directly against DCCRTL.MAC: __feqf, __fnef, __fltf,
+ * __fgtf, __flef, and __fgef all end every code path with an explicit
+ * `ld hl,1` or `ld hl,0` immediately before `ret` - exactly the same
+ * concrete-0/1-in-HL contract this function already relies on for `long`.
+ * This function needed no changes at all; only the gate in
+ * mir_binary_is_fusable_comparison did. */
 static int mir_emit_fused_wide_comparison_branch(FILE *out, const int *labels,
                                                   int compare_index,
                                                   int negate)

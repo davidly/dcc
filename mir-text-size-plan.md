@@ -5148,3 +5148,173 @@ backlog item 2, step (b)) as the concrete starting point.
 `/tmp/too_report.mac`, `build/mir-t52-before.tsv`,
 `build/mir-t52-after.tsv`, `build/mir-t52-after2.tsv` (all census/mac
 scratch files, not committed per policy).
+
+## Item T53: extend Root Cause A/T2 compare+branch fusion to float comparisons (2026-08-02)
+
+**Hypothesis**: a fresh whole-corpus census (rebuilt plan, `plan.md` in
+session workspace) confirmed `text-size` still dominant at 1,462/2,023
+(72.3%). Grouping fallbacks by exact duplicate metric signature surfaced
+`okf` (13 apps) and most of `tctxflt`/`tctxops`'s ~87 fallback functions as
+float-comparison-in-`if`/`return` shapes. Traced `okf`'s (`tasinfsp.c`)
+`got != want` (both `float` parameters) MIR stream directly
+(`DCC_MIR_REPORT=1`): a `MIR_BINARY` immediately followed by
+`MIR_BRANCH_FALSE` on the same value - exactly Item T2's own fusion shape
+- except `mir_binary_is_fusable_comparison` (`dcc_mir_spilled_cfg.c`
+~line 2691) unconditionally excludes any `type_is_float(insn->
+secondary_offset)` operand. Item T2's own Execution Log entry
+(mir-text-size-plan.md) explicitly flagged this as deliberately deferred
+"pending independent verification of [the float helpers'] HL-return
+convention."
+
+**Verification**: read all six float comparison helpers in `DCCRTL.MAC`
+in full (`__feqf`, `__fnef`, `__fltf`, `__fgtf`, `__flef`, `__fgef`).
+Every one ends every code path with an explicit `ld hl,1` (true) or
+`ld hl,0` (false) immediately before `ret` - exactly the same concrete-
+0/1-boolean-in-HL contract `mir_emit_fused_wide_comparison_branch`
+already relies on for `long`'s `__ltu`/`__lts`/etc. and the inline `==`/
+`!=` xor-compare. Also audited every other call site of
+`mir_binary_is_fusable_comparison` (`mir_can_forward_stack_to_binary_
+const`/`_rhs` at lines ~2154/2217, `mir_prepare_backend_slots`'s fused-
+away tracking at ~1796, `mir_const_is_transparent_zero_rhs_operand` at
+~95, and the 2-byte-scalar-path-only call sites ~4654/4663/4724) to
+confirm none of them are reachable for a 4-byte (wide/float) operand
+independent of this gate, or - where they are type-agnostic (like the
+`fused_away` slot-exclusion tracking) - are already correct regardless
+of operand type. Confirmed the interaction between "transparent zero-
+RHS constant" skip-ahead and a 4-byte fusable comparison has already
+been exercised safely for `long` since Item T2 landed (which did not
+exclude 4-byte non-float operands), so extending it to float exercises
+no new code path, only a new operand *type* through the same one.
+
+**Fix**: removed the `type_is_float(insn->secondary_offset)` exclusion
+from `mir_binary_is_fusable_comparison`. `mir_emit_fused_wide_comparison_
+branch` itself needed zero changes - only the gate did. Updated its
+comment to record that the float helpers' HL-return convention is now
+verified, not just assumed (closing Item T2's own deferred follow-up).
+
+**Validation**:
+- Whole-corpus census (`--fail-on-regression`) vs. a clean pre-T53
+  baseline: **0 regressions, +11 newly-emitted functions** (452/2023,
+  22.34% -> 463/2023, 22.89%): `tasinfsp.okf`, `tc89fini.chkf`,
+  `tesc.check_f`, `texpfsp.okf`, `tfdf.okf`, `tfloorsp.okf`,
+  `tfmodfsp.okf`, `tfrexpsp.okf`, `tlogfsp.okf`, `tpowfsp.okf`,
+  `tsqrtsp.okf`. 31 apps had census metric changes; 11 required runtime
+  validation.
+- Focused `runall.ps1 -Mode full` on all 11 affected apps: **11/11
+  passed**, 0 regressions, 12 improvements (e.g. `tesc` nopeep -0.19%,
+  `tc89fini` peep -0.06%).
+- Wide safety net, full 323-app corpus: both `-Mode fast` and `-Mode
+  full` (peep+nopeep): **314/314 passed, 0 regressions, 0 failures**
+  in each run. No baseline updates needed (no regressions were flagged
+  at any tier).
+
+**Disposition**: landed. A clean, mechanical, low-risk gate removal
+(the fusion machinery itself was already fully general and pre-verified
+for the wide/`long` case) that closes a defer explicitly flagged two
+items ago. `okb`-family functions (a *different*, riskier shape - see
+Item T54 below) are unaffected by this change alone.
+
+## Item T54: investigated and reverted - relaxing stack-forward-rhs to non-constant left operands regresses okb/chki (2026-08-02)
+
+**Hypothesis (attempted)**: re-bucketing after T53 showed `okb` (15 apps)
+as the next-largest repeated-signature family. Traced `okb`'s
+(`tasinfsp.c`) `(got != 0) != (want != 0)` MIR stream: the second
+boolean (`want != 0`) is a `MIR_BINARY` immediately followed by another
+`MIR_BINARY` that consumes it as `src2` (the right-hand operand) of the
+final comparison. `mir_can_forward_hl_to_next`'s `MIR_BINARY` case only
+ever matches `value` against `src1`; `mir_can_forward_stack_to_binary_
+rhs` (Item T16) already has the exact push/pop mechanism needed for a
+`src2` match, but requires the binary's `src1` to satisfy
+`mir_binary_only_constant` - reasoned (correctly, per T16's own comment)
+that this restriction exists only because a non-constant `src1`'s own
+loading was assumed to disturb the stack, and confirmed by re-reading
+the consumer emission code that an ordinary slot reload (the non-
+constant case) never touches SP either, so the restriction looked like
+an incidental scoping choice rather than a hard safety requirement.
+
+**Implementation**: relaxed `mir_can_forward_stack_to_binary_rhs` to
+accept any `src1` except `value` itself (self-comparison guard added
+defensively), leaving every other exclusion (wide operands, divmod
+pairing, fused zero-RHS/sign-test shapes) unchanged. Separately found
+and fixed a genuine correctness bug this same predicate's existing
+sibling (`mir_backend_slot_forwardable`) never had: `mir_prepare_
+backend_slots` never checked `mir_can_forward_stack_to_index`/`_binary_
+const`/`_binary_rhs` before reserving a slot (T51's dead-slot bug had
+the same shape for a different predicate family) - added a
+`mir_backend_slot_stack_forwardable` mirroring `mir_backend_slot_
+forwardable`'s save/restore-`mir_emit_instruction_index`-and-MIR_PHI-
+guard pattern, and discovered mid-validation that `mir_emit_virtual_
+store`'s `!has_slot` branch only ever checked `mir_can_forward_hl_to_
+next` - a value newly excluded from slot allocation via the new stack-
+forwardable check would fall through with **no forwarding armed at all
+and no slot to fall back on**, reading a stale/reused frame offset.
+Fixed by also arming the stack-forward push/pop handoff in that branch.
+This intermediate bug was caught before validation (`okb`'s generated-
+bytes count went *up*, not down, a red flag investigated immediately)
+and fixed correctly, but is recorded here as a reminder that this
+exact code neighborhood keeps producing subtle two-sided (producer/
+consumer, or allocator/emitter) consistency bugs (see also Item T51).
+
+**Why it was reverted**: `okb` itself improved substantially (710/730->
+648 bytes) but still fell 4 bytes short of the fallback threshold in
+`tasinfsp` - however, the same fix newly admitted `okb` in other apps
+(`tatan2sp`, `tfdf`, `tfmaf`) and `chki` in `tabort` (a double-negation
+`!!got != !!expected` variant of the same assertion-helper idiom).
+Focused `runall.ps1 -Mode full` validation showed **real, non-noise
+regressions**, not hidden by the static byte-count gate:
+`tabort` (peep) +2.42% cycles, +1.49% bytes; `tabort` (nopeep) +1.19%
+cycles; `tatan2sp` (peep) +0.5%/(nopeep) +0.5% cycles despite an
+*exact* text-byte tie (659 vs 659) between the MIR and legacy versions
+for `okb` - direct evidence, per Rule 4, that matching or smaller static
+size is not proof of equal or better real cost here. Root-caused
+`chki`'s regression specifically: its `!!got`/`!!expected` operands are
+each a *chain of two* `MIR_UNARY '!'` operations (C's `!!x` idiom),
+each paying its own full test-and-materialize-0/1 sequence - a
+different, deeper, and likely broadly-applicable inefficiency (chained
+logical-not is never folded into a single boolify) that this item's
+fix does not address and that pre-dates it; T54 only shrank the
+function just enough to newly cross the size gate and expose the
+pre-existing cost. `tatan2sp`'s regression (byte-tied but slower) was
+not fully root-caused to instruction-mix level before deciding to
+revert, given time constraints and the standing preference to defer
+rather than force a fix under uncertainty in this exact historically
+bug-prone neighborhood (Item T41 precedent).
+
+**Disposition**: fully reverted (`git checkout -- src/dcc/dcc_mir_
+spilled_cfg.c` back to the T53-only state, then T53 re-applied cleanly;
+verified via `git diff` that only T53's two hunks remain). Not
+committed. This matches the original rebuilt plan's own risk
+assessment for the `okb` family (flagged as "moderate-to-higher risk"
+requiring careful staging) - the investigation this session, while it
+did not land a fix, **usefully narrowed the problem**: the real
+blocker is not simply "no src2-forwarding for non-constant src1" (that
+part is fixed-and-validated-safe in isolation, see below) but two
+separate, deeper issues that need their own dedicated investigation
+before any `okb`/`chki`-family function can safely be admitted:
+1. **Chained logical-not folding** (`!(!(x))` collapsed to a single
+   test-and-materialize on the original operand, skipping the
+   intermediate value entirely) - likely a meaningful, broadly
+   applicable win beyond just this assertion-helper family, since
+   `!!x` is an extremely common C idiom for boolean normalization.
+2. **Why `okb`'s byte-tied-but-slower regression happens** even once
+   the intermediate boolean's redundant reload is fixed - needs
+   instruction-mix-level profiling (`dccprof.ps1`), not just static
+   byte/cycle comparison, before any further attempt.
+
+The `mir_can_forward_stack_to_binary_rhs` relaxation itself (accept
+non-constant `src1`) and the `mir_backend_slot_stack_forwardable`
+slot-exclusion fix are **not known to be unsafe in isolation** - the
+regression traces to what they *newly admitted* (`okb`/`chki`), not to
+a flaw in the relaxation or slot-exclusion mechanics themselves (both
+were individually diff-verified to produce byte-identical output aside
+from the intended slot-size shrink). A future session revisiting the
+`okb`/`chki` family could reuse this exact relaxation once items 1-2
+above are separately resolved, rather than re-deriving it from
+scratch - but should re-validate the whole combination together again
+before landing, since the interaction between them is what actually
+regressed.
+
+**Temp files used and cleaned up**: `/tmp/t53_*.mac`, `/tmp/t54*.mac`,
+`/tmp/repro_chki*.mac`, `build/mir-t53-before.tsv`, `build/mir-t53-
+after.tsv`, `build/mir-t53-final.tsv`, `build/mir-t54-after.tsv` (all
+census/mac scratch files, not committed per policy).
