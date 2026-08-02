@@ -5318,3 +5318,93 @@ regressed.
 `/tmp/repro_chki*.mac`, `build/mir-t53-before.tsv`, `build/mir-t53-
 after.tsv`, `build/mir-t53-final.tsv`, `build/mir-t54-after.tsv` (all
 census/mac scratch files, not committed per policy).
+
+## Item T55: investigated and reverted - double-negation folding is semantically correct but does not resolve the underlying cycle regression (2026-08-02)
+
+**Hypothesis (attempted)**: Item T54's investigation identified chained
+`!(!(x))` (two adjacent `MIR_UNARY '!'` instructions, each paying its own
+full test-and-materialize-0/1 sequence) as a distinct, likely broadly-
+applicable inefficiency separate from the stack-forwarding gap T54 itself
+targeted. `!!x` is semantically identical to a single test of `x` with the
+branch sense inverted (`!!x` is 1 when `x` is nonzero, 0 when zero -
+exactly what one `!` already computes, just branching on `nz` instead of
+`z`), so the inner intermediate boolean should be foldable away entirely
+when it has exactly one use (the outer `!`) and the two instructions are
+physically adjacent.
+
+**Implementation**: added `mir_unary_not_is_redundant_double_negation_
+source(i)`, checked at the top of the `MIR_UNARY` emission case: when a
+`!` instruction's result is solely and immediately consumed by another
+`!`, skip the inner instruction's own emission entirely and instead have
+the (logically-merged) pair load the innermost operand directly, test it
+once, and materialize with an inverted branch condition, storing straight
+to the outer instruction's destination. Advanced the loop index by one
+extra position (`++i` then `continue`, mirroring the existing `i +=
+fuse_skip; continue;` idiom used by comparison fusion) to skip the now-
+fully-handled outer instruction on the next iteration, taking care to set
+`mir_emit_instruction_index` to the advanced position before the final
+store so any further forwarding decisions see the position consistently
+with normal (non-folded) emission.
+
+**Validation**:
+- Direct check on `tabort.c`'s `chki` (`!!got != !!expected`): flipped
+  from fallback to **mir accepted**, and its own generated-bytes metric
+  *improved past legacy's* (659 generated vs. 723 captured, 58 vs. 65
+  instructions) - confirming the fold itself is a real, substantial
+  static win, not just gate-crossing noise.
+- Diff-verified the emitted assembly directly: each `!!` now compiles to
+  a single test-and-materialize on the real parameter (`got`/`expected`)
+  with an inverted (`jp nz`) branch, matching hand-derived semantics
+  exactly - no correctness concern from manual inspection.
+- `runall.ps1 -Apps tabort -Mode full`: **correctness passed** (the test
+  itself still passes - `!!got != !!expected`'s truth table is preserved
+  end-to-end), but performance **still regressed by nearly the identical
+  margin as before this fix**: peep +2.08% cycles (vs. T54's +2.42%),
+  +1.49% bytes (unchanged), nopeep +1.33% cycles (vs. T54's +1.19%).
+
+**Root cause of the persisting regression**: diffed MIR's post-fold
+`chki` against true legacy byte-for-byte. Both now boolify each operand
+with the same *instruction count* (6 real instructions per boolify), but
+via different sequences: legacy branches directly to whichever constant
+load is needed (`jp z,Ltrue/ld hl,0/jp Lend/Ltrue:ld hl,1/Lend:` - the
+"true" path costs exactly one `ld hl,1`, 10 T-states), while MIR
+unconditionally writes `ld hl,0` *before* branching and then
+conditionally `inc hl`s on the true path (`ld hl,0/jp nz,Ltrue/jp Lend/
+Ltrue:inc hl/Lend:` - the "true" path pays for both the now-wasted
+`ld hl,0` *and* the `inc hl`, 16 T-states total, vs. legacy's 10). This
+"unconditionally zero, then conditionally increment" shape is not
+specific to `!` or to this item - the *general* scalar-comparison
+materialization helper (`mir_emit_scalar_compare` /
+`dcc_mir_emit_common.c`) uses the identical pattern (`or a\n\tsbc
+hl,de\n\tld hl,0\n` then `jp z,Ltrue/jp Lend/Ltrue:inc hl/Lend:`) and
+predates this item entirely. This item's fold correctly reduced *two*
+such sequences to *one* for `chki`, but the *one remaining* sequence is
+itself measurably slower than legacy's equivalent - a separate, more
+foundational inefficiency in how MIR materializes any 0/1 boolean, not
+introduced by this item and not fixed by it either.
+
+**Disposition**: fully reverted (`git checkout -- src/dcc/dcc_mir_
+spilled_cfg.c`; verified via a fresh `tabort`-scoped census that `chki`
+returned to `fallback text-size`, matching the state at commit `fcfec84`
+exactly). Not committed. The fold itself (`mir_unary_not_is_redundant_
+double_negation_source` and its emission-site handling) is believed
+correct and independently reusable - it was not the source of the
+regression - but landing it alone does not fix the underlying cost, so
+there is no net benefit to keeping it in isolation yet. **The real next
+step, identified concretely by this investigation**: fix the "materialize-
+0/1" primitive itself (both the general `mir_emit_scalar_compare` shape
+and the `!` unary shape share it) to branch directly to whichever
+constant the true/false case needs, matching legacy's cheaper `jp z,Lx/
+ld hl,0/jp Ly/Lx:ld hl,1/Ly:` shape, instead of unconditionally writing
+zero and conditionally incrementing. This is a broader-reach, higher-
+leverage, but also higher-risk change than either T54 or T55 alone,
+since it touches an emission primitive relied upon by every already-
+accepted function that materializes an explicit boolean anywhere in the
+corpus, not just the newly-exposed assertion-helper family - any session
+attempting it must validate the *entire* existing MIR-accepted corpus
+(not just newly-flipped functions) before landing, given how widely
+shared this primitive is.
+
+**Temp files used and cleaned up**: `/tmp/t55_*.mac`, `/tmp/verify_
+tabort.tsv`, `/tmp/t55_tabort_census.tsv` (all census/mac scratch files,
+not committed per policy).
