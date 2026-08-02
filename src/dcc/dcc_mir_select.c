@@ -814,6 +814,30 @@ static int mir_has_declared_pointer_array(void)
     return 0;
 }
 
+/* Item T63 (mir-text-size-plan.md): counts conditional tests in the
+ * function, used to flag a chained if/else-if shape (2+ separate
+ * MIR_BRANCH_FALSE instructions) as opposed to a single if/else (only
+ * one). tests/tgoto.c's gt_switch() reloads its one spilled `int`
+ * parameter from its stack slot separately for each of its two
+ * sequential comparisons rather than keeping it live in a register
+ * across the whole chain - a redundant-reload tax the byte-count
+ * acceptance proxy does not see. tests/tlcont.c's main(), by contrast,
+ * has only one MIR_BRANCH_FALSE (a single trailing if/else) and was
+ * verified regression-free by a focused runall -Mode full run, so this
+ * predicate must not trigger for it - a plain mir_cfg_block_count()
+ * threshold would have wrongly excluded it too (both produce more than
+ * 2 blocks once the branch's own blocks are counted). */
+static int mir_has_multiple_conditional_tests(void)
+{
+    int i;
+    int branch_falses = 0;
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_BRANCH_FALSE)
+            ++branch_falses;
+    return branch_falses >= 2;
+}
+
 static int mir_has_cfg_backedge(void)
 {
     int i;
@@ -1230,6 +1254,30 @@ void mir_end_function(void)
                                                       * practice of excluding has_vla from the "profiled"
                                                       * bypass predicates below. */
                                                      (mir.has_vla &&
+                                                         captured_size - generated_size < 8) ||
+                                                     /* Item T63 (mir-text-size-plan.md), the same class
+                                                      * of proxy failure as the has_vla margin above but a
+                                                      * different trigger: tests/tgoto.c's gt_switch(), a
+                                                      * 3-way if/else-if chain testing one spilled `int`
+                                                      * parameter twice, was exposed by Item T62's dead-
+                                                      * jump elision (6 fewer text bytes) with only a
+                                                      * 4-byte margin (419 vs 423). It passed both text-
+                                                      * size and instruction-count gates, yet a focused
+                                                      * runall -Mode full run showed a real cycle
+                                                      * regression in both peep (+0.14%) and nopeep
+                                                      * (+0.03%): each comparison in the chain reloads the
+                                                      * same spilled parameter from its stack slot rather
+                                                      * than keeping it live in a register across the
+                                                      * whole chain, a redundant-reload tax the byte-count
+                                                      * proxy does not see. Two or more MIR_BRANCH_FALSE
+                                                      * instructions (mir_has_multiple_conditional_tests())
+                                                      * is the structural signature of a chained if/else-if
+                                                      * (as opposed to a single if/else, which measured
+                                                      * regression-free); require the same real safety
+                                                      * margin used for has_vla whenever this shape is
+                                                      * present, rather than a name-based exception for
+                                                      * gt_switch alone. */
+                                                     (mir_has_multiple_conditional_tests() &&
                                                          captured_size - generated_size < 8)) &&
                                                  !mir_is_profiled_near_cost_single_block(
                                                      generated_size, captured_size,

@@ -310,6 +310,7 @@ int mir_emit_wide_home_to_hl_de(FILE *out, int value);
 int mir_emit_word_param_to_home(FILE *out, int value, int offset);
 int mir_find_label(int label);
 int mir_label_is_jump_target(int label);
+int mir_insn_is_reachable(int i);
 int mir_first_nonlabel_successor(int successor);
 int mir_fold_constant_binary(int op, long left, long right,
                                     int operand_type, long *result);

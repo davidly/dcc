@@ -3908,6 +3908,56 @@ int mir_label_is_jump_target(int label)
     return 0;
 }
 
+/* Item T62 (mir-text-size-plan.md), a direct follow-up to T61: a
+ * MIR_JUMP whose only "predecessor in program order" - after skipping
+ * over any immediately-preceding dead labels already elided by T61 -
+ * is itself an unconditional MIR_JUMP or MIR_RETURN, is unreachable:
+ * nothing can ever fall through to it (the prior unconditional
+ * transfer never falls through) and nothing branches to it directly
+ * (any label that could have been a branch target was already found
+ * live and would have stopped the backward scan). Found via
+ * tests/tbug.c's swdf() and tests/tc99scpe.c's switch_body_decl(): a
+ * sequential if-else-if chain's final comparison emits `jump
+ * <default-case-label>` immediately after its own true-branch's `jump
+ * <case-label>`, guarded only by a now-elided dead label - MIR's own
+ * liveness annotations already show `live in=0 out=0` for both the
+ * dead label and this jump, confirming zero value dependency crosses
+ * this point either way. Only used to gate MIR_JUMP emission for now;
+ * generalizing to every opcode is deferred until corpus evidence shows
+ * a non-jump instruction in this position.
+ *
+ * The backward scan also skips MIR_NOP, the same way (and for the same
+ * reason) mir_thread_jumps()'s Item 36 chain-walk already does: user-
+ * named goto labels get an MIR_NOP carrying the source name immediately
+ * after the MIR_LABEL for diagnostics, and MIR_NOP never emits any code
+ * (dcc_mir.c's emitter simply `break`s on it). Found via
+ * tests/tgoto.c's gt_switch(): a `switch` with an explicit `case: goto`
+ * and a fall-through `goto done` after the switch body lowers to three
+ * separate `label(dead)/nop("done")/jump L10` groups back to back: only
+ * the first jump is real, but without also skipping the intervening
+ * MIR_NOP the scan stopped one instruction short of the prior jump and
+ * treated the second and third copies as reachable. */
+int mir_insn_is_reachable(int i)
+{
+    int j = i - 1;
+
+    for (;;) {
+        if (j >= 0 && mir.insns[j].opcode == MIR_NOP) {
+            --j;
+            continue;
+        }
+        if (j >= 0 && mir.insns[j].opcode == MIR_LABEL &&
+            !mir_label_is_jump_target(mir.insns[j].label)) {
+            --j;
+            continue;
+        }
+        break;
+    }
+    if (j < 0)
+        return 1;
+    return mir.insns[j].opcode != MIR_JUMP && mir.insns[j].opcode != MIR_RETURN;
+}
+
 int mir_block_label_before(int instruction)
 {
     int i;

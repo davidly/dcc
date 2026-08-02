@@ -631,8 +631,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 goto done;
             /* mir-text-size Item T8: same fallthrough-jump elision as the
              * spilled-scalar-cfg selector - see dcc_mir_spilled_cfg.c's
-             * MIR_JUMP case for the full rationale. */
-            if (target != i + 1)
+             * MIR_JUMP case for the full rationale. Item T62: same
+             * unreachable-jump elision too. */
+            if (target != i + 1 && mir_insn_is_reachable(i))
                 fprintf(out, "\tjp L%d\n", labels[insn->label]);
             break;
         case MIR_BRANCH_FALSE:

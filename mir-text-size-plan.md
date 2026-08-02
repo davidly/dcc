@@ -6032,3 +6032,104 @@ declaration), `src/dcc/dcc_mir_spilled_cfg.c` and
 `src/dcc/dcc_mir_homed_cfg.c` (gated `MIR_LABEL` emission),
 `src/dcc/dcc_mir_select.c` (VLA acceptance-gate safety margin),
 `tests/perf_baselines.csv` (3 entries).
+
+### Item T62: elide unreachable `MIR_JUMP` text after an unconditional transfer, plus Item T63's follow-up safety margin for chained conditional tests
+
+**Motivation**: a direct follow-up to Item T61 (dead-label elision).
+Re-bucketing the corpus post-T61 by smallest byte gap surfaced
+`tests/tbug.c`'s `swdf()` and `tests/tc99scpe.c`'s `switch_body_decl()`:
+both show a sequential if-else-if chain whose final comparison emits
+`jump <default-case-label>` immediately after its own true-branch's
+`jump <case-label>`, with only a now-elided dead label in between. The
+second `jump` can never execute - the first `jump` is unconditional, so
+control never reaches the second one, and nothing branches directly to
+it either (any label that could have been a target would have been
+found live and stopped a backward scan). `DCC_MIR_REPORT=1` confirmed
+both the dead label and the redundant jump are annotated
+`live in=0 out=0`, corroborating zero real value dependency.
+
+**Fix (`src/dcc/dcc_mir.c`, `dcc_mir_internal.h`)**: added
+`mir_insn_is_reachable(int i)`, which scans backward from instruction
+`i`, skipping over both dead `MIR_LABEL`s (per Item T61's
+`mir_label_is_jump_target`) *and* `MIR_NOP` (which never emits any code
+- the same convention Item 36's `mir_thread_jumps()` chain-walk already
+follows for the same reason), and returns unreachable (0) only if the
+resulting prior real instruction is `MIR_JUMP` or `MIR_RETURN`. Hooked
+into the two `MIR_JUMP` emission sites (`dcc_mir_spilled_cfg.c` and
+`dcc_mir_homed_cfg.c`), added as `&& mir_insn_is_reachable(i)` alongside
+the existing "not a direct fallthrough" (`target != i + 1`) condition.
+Scoped to `MIR_JUMP` only, matching Item T61's narrow-first discipline.
+
+**A second instance found while validating (`tests/tgoto.c`'s
+`gt_switch()`, a `switch` with a `case: goto`, a `break`, and an
+explicit post-switch `goto done`)**: the initial version of
+`mir_insn_is_reachable` (before it also skipped `MIR_NOP`) missed a
+worse case in this function - *three* separate `jump L10` groups back
+to back, each preceded by `label(dead)/nop("<name>")`, where only the
+first jump is real. The scan stopped at the intervening `MIR_NOP`
+(mistaking it for a real, non-jump prior instruction) and treated the
+second and third copies as reachable. Extending the scan to also skip
+`MIR_NOP` (see above) fixed this too, confirmed by direct inspection of
+the forced-accept assembly (all three collapsed to one `jump`,
+`generated-bytes` 446 -> 419, `generated-insns` 38 -> 35).
+
+**Item T63 - a real regression this exposed, and its fix**: with the
+`MIR_NOP`-aware fix in place, `gt_switch()` newly crosses the text-size
+acceptance gate (419 vs 423 captured bytes, a 4-byte margin) and also
+the instruction-count gate (35 vs 37). A focused `runall.ps1 -Mode full`
+run showed a genuine cycle regression in **both** peep (+0.14%,
+45699 -> 45763) and nopeep (+0.03%, 49081 -> 49095) - confirmed via
+`DCC_MIR_FORCE_FALLBACK_FUNCTION=gt_switch` (regression disappears when
+this one function reverts to legacy). Root cause: `gt_switch()`'s
+if-else-if chain compares its single spilled `int` parameter twice,
+reloading it from its stack slot separately for each comparison instead
+of keeping it live in a register across the whole chain - a redundant-
+reload tax the byte-count acceptance proxy cannot see, the same class
+of proxy failure as Item T61's VLA margin but with a different trigger.
+This is unrelated to the dead-jump fix itself: it is a pre-existing
+`spilled-scalar-cfg` codegen inefficiency for chained conditional tests
+that was simply irrelevant while this function stayed on fallback, and
+became relevant only once T62's byte savings pushed it under the gate.
+
+Fixed in `src/dcc/dcc_mir_select.c`'s `mir_end_function` acceptance
+gate by adding `mir_has_multiple_conditional_tests()` (counts
+`MIR_BRANCH_FALSE` instructions in the function, returns true when
+there are 2 or more) and requiring the same `captured_size -
+generated_size >= 8` real safety margin already used for `has_vla`
+whenever this predicate is true. A coarser first attempt (requiring the
+margin whenever `mir_cfg_block_count() > 2`) was tried and rejected:
+it also excluded `tests/tlcont.c`'s `main()` (4 blocks from a single
+trailing `if`/`else`), which had *already* been verified regression-
+free by a focused `runall.ps1 -Mode full` run when accepted purely by
+T62's byte savings - `mir_has_multiple_conditional_tests()` correctly
+distinguishes "one if/else" (1 `MIR_BRANCH_FALSE`, safe, still crosses
+the gate) from "a chained if-else-if" (2+ `MIR_BRANCH_FALSE`, unsafe at
+a small margin, held back) without a block-count proxy's false
+positives.
+
+**Validation (combined T62 + T63)**:
+- No-stack-check census vs the post-T61 baseline: 483/2023 (23.88%),
+  **+1 newly-emitted** (`tlcont.main`; `tgoto.gt_switch` correctly
+  stays on fallback per T63), 0 lost, exit code 0.
+- `-fstack-check` census: 482/2126 (22.67%), consistent +1 vs the
+  post-T61 481/2126, exit code 0.
+- Focused `runall.ps1 -Mode full` on all 5 flagged apps (`tbug`,
+  `tc89swjt`, `tdead`, `tlcont`, `tstrify`): **5/5 correctness, 0
+  regressions**, 1 real improvement (`tdead` peep bytes -2.33%,
+  5504 -> 5376).
+- Wide safety net: `pwsh ./scripts/runall.ps1 -Mode full -Extended
+  -RunTimeout 20` on the full corpus: **314/314 correctness, extended
+  suite 196/196 passed, 106/106 diagnostics, 17/17 dccpeep fixtures,
+  performance passed** (~1m32s total).
+- Ran `-UpdatePerfBaseline` for `tdead` (1 entry, peep bytes only,
+  improvement) and re-verified.
+
+**Coverage**: 482 -> 483/2023 (23.83% -> 23.88%) under the default
+census mode; 481 -> 482/2126 (22.62% -> 22.67%) under `-fstack-check`.
+
+**Files changed**: `src/dcc/dcc_mir.c` (new `mir_insn_is_reachable`),
+`src/dcc/dcc_mir_internal.h` (its declaration),
+`src/dcc/dcc_mir_spilled_cfg.c` and `src/dcc/dcc_mir_homed_cfg.c`
+(gated `MIR_JUMP` emission), `src/dcc/dcc_mir_select.c` (new
+`mir_has_multiple_conditional_tests`, T63 acceptance-gate safety
+margin), `tests/perf_baselines.csv` (1 entry).

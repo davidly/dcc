@@ -5265,8 +5265,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * control already lands there once any phi copies above
                  * have executed, so the `jp` mnemonic itself is dead
                  * weight. This mirrors legacy, which never emits a jump
-                 * to the position immediately following it. */
-                if (target != i + 1)
+                 * to the position immediately following it.
+                 * Item T62: a jump that can never be reached at all
+                 * (only preceded, after any dead elided labels, by an
+                 * unconditional jump/return) is equally dead weight -
+                 * see mir_insn_is_reachable's comment for the full
+                 * rationale. */
+                if (target != i + 1 && mir_insn_is_reachable(i))
                     fprintf(out, "\tjp L%d\n", labels[insn->label]);
             }
             break;
