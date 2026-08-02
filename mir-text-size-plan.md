@@ -6763,3 +6763,124 @@ bug-fix commit).
   attempted in this item (scope discipline - this item is a targeted
   bug fix, not a new engineering project) but flagged as a high-value,
   well-specified future task: `t66b-label-id-speculative-rollback`.
+
+## Item T65c: fixed a second confirmed miscompilation - HL-forwarding handoff clobbered mid-marshaling by the strcpy/strstr/stricmp fastcall handler
+
+**Status: landed.** Found while continuing to root-cause `adaint.var_or_
+const_decl`'s remaining miscompilation (Item T65 fixed 2 of 3 confirmed
+bugs; this one is a distinct, unrelated bug that also affects that same
+function, discovered via a minimal from-scratch reproduction rather than
+the original large function).
+
+**Reproduction**: reduced to a 6-line repro with **no loop at all**:
+```c
+char names[8][16]; int nn = 0;
+strcpy(names[nn++], text);       /* text is a global char[] */
+printf("%s\n", names[0]);        /* prints empty, then garbage, not "abcde" */
+```
+
+**Root cause**: `mir_call_is_de_hl_fastcall`'s handler (`dcc_mir_spilled_
+cfg.c`, backing `strcpy`/`strstr`/`stricmp`'s `__scf`/`__ssf`/`__icf`
+fastcall convention: arg0 pushed then popped into DE, arg1 ends up
+directly in HL) evaluates its two arguments in a fixed order - arg0
+(dst) first, then arg1 (src). Separately, `mir_emit_virtual_store`
+already has a **general, legitimate** optimization
+(`mir_can_forward_hl_to_call_argument`) for a value whose sole use is a
+call argument and which was never given a real backend slot at all: it
+leaves the value sitting in HL at its own definition site and arms
+`mir_forwarded_hl_value`/`mir_forwarded_hl_instruction` so the
+value's actual (later) consumer can skip a redundant reload -
+`mir_emit_virtual_load` checks `mir_forwarded_hl_instruction + 1 ==
+mir_emit_instruction_index` to confirm the consumer is "immediately
+next". This "adjacency" check operates at **MIR-instruction
+granularity** (`mir_emit_instruction_index`, which stays fixed at the
+`MIR_CALL` instruction's own index for the entire multi-step argument
+marshaling any fastcall handler performs), so it cannot distinguish
+"immediately next" from "several HL-clobbering steps later, still
+processing the same call instruction". When `text`'s address (arg1/src,
+a global - eligible for this deferred-forwarding path, unlike a local/
+param address which has its own separate, narrower "single call
+argument" rematerialization path) is the forwarded value, the handler's
+own **first** step (evaluating arg0/dst) silently clobbers HL for real -
+but `mir_emit_virtual_load` only clears the stale forwarding state on a
+*match*, never when a *non-matching* reload clobbers HL instead. By the
+time the handler's second step calls `mir_emit_virtual_load` for arg1/
+src, the stale-but-still-"adjacent" flag incorrectly matches, and the
+reload is skipped entirely - `strcpy` ends up called with **both DE and
+HL pointing at the destination**, turning every copy into a no-op
+self-copy (or, once the destination's own memory happens to hold
+leftover data from a still-live intermediate slot value, a copy of
+garbage bytes - both symptoms were observed across two successively
+narrowed repros).
+
+**Fix**: in the `mir_call_is_de_hl_fastcall` handler specifically, check
+whether arg1 (s2, the value that must end up in HL) is the pending
+forwarded value *before* evaluating arg0. If so, use a preserve-then-
+restore shape instead of the naive order: `push hl` (save the forwarded
+s2 value), evaluate s1 normally (now free to clobber HL), `ex de,hl`
+(move s1 into DE), `pop hl` (restore s2 into HL) - reaching the identical
+end state (HL=s2, DE=s1) the naive order produces in the common case,
+without ever losing a value that was already resident in HL from an
+earlier, deferred definition. Scoped narrowly to this one handler (not a
+blanket invalidation at the top of `MIR_CALL` processing, which an
+initial attempt showed breaks the *legitimate* purpose of this same
+forwarding mechanism for values with no backend slot at all - reverted
+after confirming it made the bug worse, producing garbage-byte copies
+instead of empty ones).
+
+**Validation**:
+- Minimal repro (`strcpy(names[nn++], text)` with no loop) now correctly
+  prints `abcde` instead of an empty/garbage string, confirmed via
+  direct `ntvcm` execution of a force-accepted build.
+- The original `bint.sum`/`adaint.add_expr` (T65's fixes) and the
+  `nn++`-postfix + second-loop-consumer shape were all re-tested and
+  remain correct.
+- `adaint.var_or_const_decl` (the function that originally surfaced this
+  whole investigation) still fails when forced - confirmed via a
+  focused `ttt.ada` run that the *specific* strcpy-related corruption is
+  gone (no longer silently drops/corrupts collected names), but a
+  **separate, not-yet-diagnosed bug remains** in the function's
+  `constant` declaration branch (`if (acc_word("constant")) { val =
+  parse_const_expr(); for (i = 0; i < nn; i++) { si = add_sym(names[i],
+  K_CONST, sc); G->sym[si].val = val; } ... }` - real ADA source hitting
+  this exact branch, e.g. `ScoreWin : Constant := 6;`, produces `adaint:
+  14: sym full near ';'`, i.e. `G->nsym` overflows far earlier than it
+  should, strongly suggesting `nn`'s value read by *this* loop's own
+  bound check is wrong in a way none of the synthetic reproductions
+  built so far (including a faithful `for (i=0;i<nn;i++) add_thing(names
+  [i])` consumer, which works correctly) reproduce. Left open - see
+  `t65b` follow-up below.
+- True before/after whole-corpus census: **480/2023 unchanged (0 newly-
+  emitted, 0 no-longer-emitted)** - this fix only changes speculative
+  byte counts for still-fallback functions across 7 interpreter-shaped
+  apps (`adaint`, `bint`, `cint`, `cobint`, `fint`, `forint`, `pint` -
+  all share the lexer/parser `strcpy(buf[i++], token_text)` idiom),
+  `--fail-on-regression` clean (exit 0).
+- Focused `runall.ps1 -Apps adaint,bint,cint,cobint,fint,forint,pint
+  -Mode full`: all 7 pass, 0 regressions.
+- **Wide safety net** (`runall.ps1 -Mode full`, full 323-app corpus):
+  **314/314 apps pass, 0 regressions, performance passed cleanly** - no
+  baseline updates needed this time (unlike Item T65, no function's
+  accept/fallback status changed, so no `new_label()`-counter-shift
+  ripple into unrelated legacy codegen occurred).
+
+**Why this matters beyond the one function**: this is a genuine,
+previously-undiscovered miscompilation class in shared fastcall-argument-
+marshaling infrastructure, not specific to `var_or_const_decl` - any
+future function reaching MIR acceptance with a `strcpy`/`strstr`/
+`stricmp` call whose **second** argument is a deferred/rematerializable
+value (a global address, or in principle any value using the same
+`mir_can_forward_hl_to_call_argument` deferred path) while its **first**
+argument requires real HL-clobbering computation would have silently
+miscompiled. Confirmed via corpus-wide grep that no currently-*accepted*
+function happens to hit this exact shape today (hence zero census/
+runtime delta for already-accepted functions), but this was pure luck of
+the current 480-function population, not a property the old code
+enforced - worth being aware of as coverage grows.
+
+**Follow-up**: `t65b-var-or-const-decl-loop-phi`'s description updated -
+the loop-phi shape investigated under that id is fully fixed (by T65
+proper); the *remaining* `var_or_const_decl` failure is a **different**,
+still-open bug in the `constant`-declaration branch's `add_sym`/`G->sym[
+si].val` interaction, re-scoped as `t65d-var-or-const-decl-constant-
+branch`.

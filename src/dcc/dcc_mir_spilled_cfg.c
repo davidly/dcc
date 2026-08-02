@@ -4947,10 +4947,46 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (!is_indirect &&
                     mir_call_is_de_hl_fastcall(i, &rtl_name, &s1_value,
                                               &s2_value)) {
-                    mir_emit_spilled_arg_to_hl(out, s1_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, s2_value);
-                    fputs("\tpop de\n", out);
+                    /* Item T65c (mir-text-size-plan.md): s2 (the value
+                     * that must end up in HL for the call, "the last-
+                     * evaluated value needs no move") can already be
+                     * sitting there via an earlier forwarding handoff -
+                     * mir_emit_virtual_store's mir_can_forward_hl_to_
+                     * call_argument path defers a value with no backend
+                     * slot at all, leaving it in HL and arming
+                     * mir_forwarded_hl_value/mir_forwarded_hl_instruction
+                     * to match once this call instruction is reached.
+                     * The usual order below (evaluate s1 first, clobbering
+                     * HL, then s2) silently destroys that forwarded value
+                     * before mir_emit_spilled_arg_to_hl(s2_value) ever
+                     * gets to consume it - mir_emit_virtual_load only
+                     * clears the forwarding state on a match, not when a
+                     * non-matching reload (s1's) clobbers HL instead, so
+                     * the later, stale-but-still-"matching" check for s2
+                     * wrongly skips its own reload entirely. Confirmed via
+                     * tests/adaint.c's var_or_const_decl
+                     * (strcpy(names[nn++], G->text)): text's address (s2)
+                     * was left dangling in HL, names[nn++]'s address (s1)
+                     * silently overwrote it, and strcpy ran with both DE
+                     * and HL pointing at the destination - a no-op self-
+                     * copy. When s2 is the pending forwarded value, swap
+                     * to a preserve-then-restore shape (push it before
+                     * s1 is evaluated, then move s1 into DE and pop s2
+                     * back into HL) instead of the naive order. */
+                    if (mir_forwarded_hl_value == s2_value &&
+                        mir_forwarded_hl_instruction + 1 ==
+                            mir_emit_instruction_index) {
+                        mir_forwarded_hl_value = -1;
+                        mir_forwarded_hl_instruction = -1;
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s1_value);
+                        fputs("\tex de,hl\n\tpop hl\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, s1_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s2_value);
+                        fputs("\tpop de\n", out);
+                    }
                     fprintf(out, "\textrn %s\n\tcall %s\n", rtl_name,
                             rtl_name);
                     if (type_ptr_depth(insn->type) > 0 ||
