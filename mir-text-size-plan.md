@@ -6295,3 +6295,174 @@ commit was made for this attempt - the working tree is exactly at
 `tests/perf_baselines.csv` change. `todos` SQL table:
 `t55-pointer-object-eligibility` moved from `pending` to `blocked`
 with this rationale.
+
+## Post-T55 near-miss audit: `t-emit-lvalue`/`t-chk-large-cfg` scoped, instruction-count bucket re-audited (no code landed, all documented)
+
+**Status: investigated, no code changes.** After T55's revert (above), continued
+toward the "next 100 candidates" goal by investigating the two remaining
+pending todos (`t-emit-lvalue-investigate`, `t-chk-large-cfg-investigate`)
+and re-auditing the whole `instruction-count` fallback bucket (44 functions)
+for any remaining safe near-miss win. None of the three lines of
+investigation produced a safe, committable change this pass - each is
+written up below so a future session does not repeat the same ground.
+
+### `t-emit-lvalue-investigate`: real root cause found, needs a new CSE pass (not attempted)
+
+Forced-accept diff + `DCC_MIR_REPORT=1` on `adaint.c`'s `emit_load_lvalue`
+(`generated-bytes=1342` vs `captured-bytes=1032`, blocks=1) found the real
+cause: the single statement `emit(load_op(G->sym[si].scope,
+G->sym[si].esize, arr), G->sym[si].base, 0);` lowers to the exact same
+4-instruction address chain (`load G` / `memberaddr sym` / `loadind sym`
+/ `indexaddr sym[si]`, stride 36) **recomputed three separate times** -
+once for `.scope`, once for `.esize`, once for `.base` - even though
+`&G->sym[si]` is textually and semantically identical each time. Legacy
+computes this address once and reuses it for all three field accesses.
+`emit_store_lvalue` (same file) shows the identical shape.
+
+No common-subexpression-elimination (CSE) / local value-numbering pass
+exists anywhere in the MIR pipeline today (`grep -n "cse\|value_number
+\|common_subexpr"` across `dcc_mir*.c` returns nothing beyond the string
+"indexaddr" itself). Between the first two occurrences (`.scope`, then
+`.esize`) there is no intervening `MIR_CALL` or `MIR_STORE`, so reusing
+the first computation for the second would be provably safe; the third
+occurrence follows a `load_op(...)` call, which would need to be proven
+non-mutating (of `G` or anything reachable through it) before its address
+chain could also be folded - not attempted, conservative treatment only.
+
+**This is a real, plausibly high-yield lever** (`&global[i].field`-style
+repeated addressing is an extremely common C idiom), but implementing it
+safely requires a new whole-class capability - a same-block "available
+expressions" pass over `MIR_LOAD`/`MIR_MEMBERADDR`/`MIR_LOADIND`/
+`MIR_INDEX_ADDRESS` chains, invalidated by any intervening `MIR_CALL`/
+`MIR_STORE`/`MIR_STORE_INDIRECT`, that must correctly rewrite **every**
+operand field that can name a value id (`src1`, `src2`, `args[]`, phi
+operands, `mir_call_uses_value`'s own scan) once a redundant instruction
+is retired - not a small selector tweak like T61-T63. A dead-value-
+orphaning bug already documented for a much narrower case (Item T50's
+`mir_lower_expr` orphan-retirement fix, `dcc_mir.c` ~line 3760: "at least
+the spilled-scalar-cfg and homed-scalar-cfg selectors materialize *every*
+`MIR_CONST` unconditionally... dead values are supposed to never reach
+emission at all") shows how easily an incompletely-retired dead value can
+silently reappear in emitted code. Given this session's T55 experience
+(a much smaller, more narrowly-reasoned change still produced a real,
+unanticipated regression), a full CSE pass was judged too large and too
+risky to implement and validate to the standard this migration requires
+within one sitting - deferred as its own dedicated future project, not
+attempted. **Do not re-run this exact forced-accept diff expecting a
+different result; the finding is stable.** The next contributor should
+start from this write-up's exact algorithm sketch rather than
+re-discovering the pattern from scratch.
+
+### `t-chk-large-cfg-investigate`: confirmed to be the known systemic root cause, not a distinct bug
+
+Checked all 6 flagged `chk`/`chkf` functions (`tc89fadd.chk`,
+`tc89fcnv.chkf`, `tc89fdiv.chkf`, `tc89fmat.chkf`, `tc89fmul.chk`,
+`tc89fptr.chk`, all `blocks=23`, `spilled-scalar-cfg`, ratio ~1.6-2.05x
+bytes, ~1.6-1.9x instructions). Each function's body is
+`if (p[0]!=b0 || p[1]!=b1 || p[2]!=b2 || p[3]!=b3) { printf(...); fails
+++; }` - a 4-term `||` short-circuit chain over one spilled `unsigned
+char *p` parameter, each term re-indexing `p` and reloading `b0..b3`
+from their own spilled parameter slots. This is exactly the same root
+cause already identified at the top of this document under "Known root
+cause" and independently rediscovered for Item T63's chained-if
+(`tgoto.gt_switch`): a chained conditional reloads each spilled operand
+from its stack slot per comparison, rather than keeping it live in a
+register across the whole chain - the genuinely ~2x-more-expensive
+"systemic, not near-miss" `spilled-scalar-cfg` population this whole plan
+document opens with. `main()` in the same 6 apps (blocks=2, no branches at
+all, just dozens of straight-line `chk(...)` calls) shows the identical
+~1.6-2.4x ratio too, consistent with the same per-call argument-
+marshalling/spill-reload tax repeated dozens of times rather than any
+large-CFG-specific new bug. **No new information found; this remains
+exactly the deep architectural spill-reload problem the whole plan
+already describes as needing "a real selector-quality or architectural
+improvement, not a small nudge" - not a quick win, and not attempted
+further this pass**, consistent with SKILL.md's explicit large-CFG risk
+ordering (last prioritization tier).
+
+### Full re-audit of the `instruction-count` fallback bucket (44 functions): margins confirmed well-calibrated, with 3 unexplained-but-real exceptions
+
+Force-accepted and ran `runall.ps1 -Mode full` on every small-to-moderate
+instruction-count-gap candidate not already covered by an existing
+deferred item, across both `spilled-scalar-cfg` and `homed-scalar-cfg`
+selectors:
+
+**Confirmed correctly rejected (real regressions found by execution,
+matching the existing gate's judgement)**: `t.main` (gap 5, smaller bytes
+but +128 peep bytes/+0.59% in the real app - a clean demonstration of
+Rule 4, smaller MIR text is not smaller real code), `pint.statement`,
+`tbug2.main`, `adaint.acc`, `adaint.need`, `tstr3.test_strcspn`,
+`tstr3.test_strspn`, `cint.and_expr`/`band_expr`/`block`/`expr_stmt`/
+`or_expr`, `tdmfuse.main`, `tmirslot.immediate_use`, `tmirslot.main`,
+`tphijoin.main`, `tginitad.main`, `tdead.poison`, `cint.expr_stmt`,
+`adaint.parse_put_call`, `attnc11.process_sequence` - every one of these
+regressed cycles and/or bytes when forced, confirming the existing
+`generated_instructions > captured_instructions + margin` gates (and
+their `mir_is_profiled_near_cost_single_block`/
+`mir_is_byte_profitable_single_block` overrides) are correctly tuned for
+this population, not overly conservative. `tinline.inline_temp_collision_
+check` additionally failed outright on correctness when forced (expected
+- confirmed part of the `inline-substitution` correctness-gate class, not
+a cost-gate candidate).
+
+**Found 3 real, unexplained exceptions - functions that pass 0
+regressions (2 with 0 measurable change, 1 with a small genuine
+improvement) despite exceeding the `homed-scalar-cfg` instruction-count
+margin by 4x or more**:
+
+| function | gap (insns) | blocks | result when forced |
+| --- | --- | --- | --- |
+| `trw.fill_buf` | 8 (margin allows 2) | 1 | 0 regressions, 2 improvements (peep -0.02%, nopeep -0.02% cycles) |
+| `adaint.return_stmt` | 8 (margin allows 2) | 1 | 0 regressions, 0 improvements (cycle-neutral) |
+| `tchess.on_board` | 13 (margin allows 1, blocks=4) | 4 | 0 regressions, 0 improvements |
+
+Root-caused `fill_buf`'s case precisely: legacy's captured version uses a
+full `push ix/ld ix,0/add ix,sp/.../pop ix` frame; MIR's `homed-scalar-cfg`
+selector is **frameless for every function that doesn't need `IY`**
+(`frameless = !uses_iy`, `dcc_mir_homed_cfg.c` line 347) and addresses
+everything SP-relative instead - a fixed win that, for a short function
+making one call with several arguments, evidently outweighs the extra
+register-shuffling instructions needed to marshal those arguments without
+a stable frame pointer. This fixed IX-avoidance saving is **not specific
+to these 3 functions** - every `homed-scalar-cfg` function gets it, which
+is why it does not, by itself, explain why `tstr3.test_strcspn`/
+`test_strspn` (same selector, same `blocks=1`, gap only 3) still regress:
+those two make many more calls (5 independent `check_i(...
+strcspn(...))` statements each) whose cumulative extra marshalling cost
+evidently exceeds the same fixed saving. **No clean, generalizable
+structural predicate was found this pass that reliably separates the 3
+safe cases from the many unsafe ones purely from block count, call
+count, or byte/instruction ratio** - the real determinant is net Z80
+T-state cost (IX-relative access cost vs push/pop cost vs argument count),
+which a simple counting heuristic cannot safely approximate without
+risking silently admitting a genuinely-regressing peer case, exactly the
+failure mode Rule 6 warns against ("do not add app/function-name
+exceptions... derive a structural predicate"). Per that rule, **no
+change was made** - `fill_buf`/`return_stmt`/`on_board` remain on
+fallback, correctly outside every existing gate, even though 3 individual
+`DCC_MIR_FORCE_ACCEPT_FUNCTION` + `runall -Mode full` runs happen to be
+safe today. (`tchess.on_board` is additionally a `static inline` function
+- flagged elsewhere in this document as generally apples-to-oranges for
+comparison - but its own body clearly still gets a standalone emission
+attempted and compared on both sides here, so the result above is a
+genuine, not an artifactual, non-regression; not pursued further given
+the "no clean predicate" finding covers it too.)
+
+**Recommended next step for a future session**: instrument
+`dccprof`-based real T-state accounting (not the static byte/instruction
+proxy) specifically for the `homed-scalar-cfg` selector's frameless-vs-
+framed tradeoff, across a wider sample of near-miss candidates, to derive
+an actual cost-based acceptance formula (e.g. something like "IX frame
+setup/teardown cost saved (a roughly fixed ~40-60 T-states) must exceed
+the marshalling overhead of any additional calls/arguments admitted") -
+this is real, scoped, promising follow-on work, but is a measurement-
+and-modeling project, not a quick structural-predicate patch.
+
+**Files/state**: no source files changed in this section; `/tmp/*`
+scratch census/report files and forced-build artifacts cleaned up.
+`todos` table: `t-emit-lvalue-investigate` and `t-chk-large-cfg-
+investigate` both moved from `pending` to `blocked` with this rationale
+(see below); no new pending items opened this pass since the discovered
+follow-on work (CSE pass design, T-state cost modeling) is substantial
+enough to warrant its own fresh planning pass rather than an ad hoc todo
+row.
