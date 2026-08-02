@@ -79,7 +79,15 @@ void soft_reset() { g_State |= stateSoftReset; }
 
 uint8_t m_0000[ 0x4000 ];
 
-#define APPLE1_28K /* dcc built with nopeep only has space for 28K. With peep 32K fits */
+/* 32K now fits in both fast (peep) and nopeep builds: l80c (the native,
+   host-resident linker, default since dcc gained one) removed the ceiling
+   that used to force nopeep down to 28K. That ceiling was never really
+   about this 32K guest RAM footprint - it was real L80.COM's own
+   symbol/relocation workspace running out of memory, inside ntvcm's
+   emulated 64K CP/M address space, while linking the larger, un-peepholed
+   nopeep build. l80c runs as a normal host process with no such 64K
+   table, so both build modes fit 32K now. */
+#define APPLE1_32K
 
 #if defined( APPLE1_24K )
     uint8_t m_4000[ 0x2000 ];
