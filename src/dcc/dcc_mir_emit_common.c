@@ -174,13 +174,13 @@ void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
               "\tld a,d\n\txor 128\n\tld d,a\n", out);
     fputs("\tor a\n\tsbc hl,de\n\tld hl,0\n", out);
     if (operation == TOK_EQ)
-        fprintf(out, "\tjp z,L%d\n", true_label);
+        fprintf(out, "\tjp z, L%d\n", true_label);
     else if (operation == TOK_NE)
-        fprintf(out, "\tjp nz,L%d\n", true_label);
+        fprintf(out, "\tjp nz, L%d\n", true_label);
     else if (operation == '<')
-        fprintf(out, "\tjp c,L%d\n", true_label);
+        fprintf(out, "\tjp c, L%d\n", true_label);
     else
-        fprintf(out, "\tjp nc,L%d\n", true_label);
+        fprintf(out, "\tjp nc, L%d\n", true_label);
     fprintf(out, "\tjp L%d\nL%d:\n\tinc l\nL%d:\n",
             end_label, true_label, end_label);
 }
@@ -193,9 +193,9 @@ void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
     fputs("\tld a,h\n\txor 128\n\tld h,a\n"
           "\tsbc hl,de\n\tld hl,0\n", out);
     if (operation == '<')
-        fprintf(out, "\tjp c,L%d\n", true_label);
+        fprintf(out, "\tjp c, L%d\n", true_label);
     else
-        fprintf(out, "\tjp nc,L%d\n", true_label);
+        fprintf(out, "\tjp nc, L%d\n", true_label);
     fprintf(out, "\tjp L%d\nL%d:\n\tinc l\nL%d:\n",
             end_label, true_label, end_label);
 }
@@ -275,7 +275,7 @@ void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned,
     loop_label = new_label();
     end_label = new_label();
     fputs("\tld b,e\n\tld a,b\n\tor a\n", out);
-    fprintf(out, "\tjp z,L%d\nL%d:\n", end_label, loop_label);
+    fprintf(out, "\tjp z, L%d\nL%d:\n", end_label, loop_label);
     if (operation == TOK_SHL)
         fputs("\tadd hl,hl\n", out);
     else if (is_unsigned)
@@ -309,7 +309,7 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
             if (type_is_bool(object->type)) {
                 end_label = new_label();
                 fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-                fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                         end_label, end_label);
             } else if ((object->type & TYPE_UNSIGNED) != 0)
                 fputs("\tld h,0\n", out);
@@ -340,7 +340,7 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
             false_label = new_label();
             end_label = new_label();
             fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
-            fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n", false_label,
+            fprintf(out, "\tjp nz, L%d\n\tinc hl\nL%d:\n", false_label,
                     false_label);
             (void)end_label;
             return 1;
@@ -930,7 +930,7 @@ int mir_emit_homed_unary_instruction(FILE *out,
             !type_is_bool(source != NULL ? source->type : 0)) {
             label = new_label();
             fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
-            fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n", label, label);
+            fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n", label, label);
         }
     } else if (insn->immediate == '+') {
         /* Unary plus: no-op. */
@@ -941,7 +941,7 @@ int mir_emit_homed_unary_instruction(FILE *out,
     } else if (insn->immediate == '!') {
         label = new_label();
         fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
-        fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n", label, label);
+        fprintf(out, "\tjp nz, L%d\n\tinc hl\nL%d:\n", label, label);
     } else {
         return 0;
     }
@@ -1113,19 +1113,19 @@ int mir_emit_homed_compare_false(FILE *out,
         if (operation == '>') {
             if (is_unsigned) {
                 fputs("\tld a,h\n\tor l\n", out);
-                fprintf(out, "\tjp z,L%d\n", false_label);
+                fprintf(out, "\tjp z, L%d\n", false_label);
             } else {
                 fputs("\tld a,h\n\tor a\n", out);
-                fprintf(out, "\tjp m,L%d\n", false_label);
+                fprintf(out, "\tjp m, L%d\n", false_label);
                 fputs("\tor l\n", out);
-                fprintf(out, "\tjp z,L%d\n", false_label);
+                fprintf(out, "\tjp z, L%d\n", false_label);
             }
             return 1;
         }
         if (operation == TOK_GE) {
             if (!is_unsigned) {
                 fputs("\tbit 7,h\n", out);
-                fprintf(out, "\tjp nz,L%d\n", false_label);
+                fprintf(out, "\tjp nz, L%d\n", false_label);
             }
             return 1;
         }
@@ -1134,14 +1134,14 @@ int mir_emit_homed_compare_false(FILE *out,
                 fprintf(out, "\tjp L%d\n", false_label);
             } else {
                 fputs("\tbit 7,h\n", out);
-                fprintf(out, "\tjp z,L%d\n", false_label);
+                fprintf(out, "\tjp z, L%d\n", false_label);
             }
             return 1;
         }
         if (operation == TOK_EQ || operation == TOK_NE) {
             fputs("\tld a,h\n\tor l\n", out);
-            fprintf(out, operation == TOK_EQ ? "\tjp nz,L%d\n"
-                                             : "\tjp z,L%d\n",
+            fprintf(out, operation == TOK_EQ ? "\tjp nz, L%d\n"
+                                             : "\tjp z, L%d\n",
                     false_label);
             return 1;
         }
@@ -1171,13 +1171,13 @@ int mir_emit_homed_compare_false(FILE *out,
               "\tld a,d\n\txor 128\n\tld d,a\n", out);
     fputs("\tor a\n\tsbc hl,de\n\tpop de\n\tpop hl\n", out);
     if (operation == TOK_EQ)
-        fprintf(out, "\tjp nz,L%d\n", false_label);
+        fprintf(out, "\tjp nz, L%d\n", false_label);
     else if (operation == TOK_NE)
-        fprintf(out, "\tjp z,L%d\n", false_label);
+        fprintf(out, "\tjp z, L%d\n", false_label);
     else if (operation == '<')
-        fprintf(out, "\tjp nc,L%d\n", false_label);
+        fprintf(out, "\tjp nc, L%d\n", false_label);
     else
-        fprintf(out, "\tjp c,L%d\n", false_label);
+        fprintf(out, "\tjp c, L%d\n", false_label);
     return 1;
 }
 
@@ -1276,7 +1276,7 @@ int mir_try_emit_homed_scalar_dag(FILE *out)
                 if (type_is_bool(object->type)) {
                     true_label = new_label();
                     fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-                    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                    fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                             true_label, true_label);
                 } else if ((object->type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
@@ -1317,7 +1317,7 @@ int mir_try_emit_homed_scalar_dag(FILE *out)
             else if (insn->immediate == '!') {
                 true_label = new_label();
                 fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
-                fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n",
+                fprintf(out, "\tjp nz, L%d\n\tinc hl\nL%d:\n",
                         true_label, true_label);
             }
             if (!mir_emit_hl_to_home(out, insn->dst))

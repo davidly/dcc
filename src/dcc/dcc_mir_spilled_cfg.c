@@ -1603,6 +1603,44 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
     return forwardable;
 }
 
+/* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots' own
+ * reservation pass only recognized mir_load_is_single_call_argument (a
+ * MIR_LOAD whose sole use is exactly one call argument, restricted to
+ * SC_LOCAL/SC_PARAM memory so re-reading it at push time is a cheap
+ * ix-relative reload) as grounds to skip a slot for a would-be call
+ * argument. mir_emit_virtual_store's own emission-time logic is strictly
+ * more capable: mir_can_forward_hl_to_call_argument accepts *any*
+ * single-use, adjacent-to-call value regardless of how it was defined
+ * (a MIR_LOAD from a global, a MIR_BINARY result, etc.) and simply
+ * leaves it resident in HL/queues it for direct forwarding, so it is
+ * never actually stored to the slot mir_prepare_backend_slots reserved
+ * for it. This mismatch reserves genuinely dead frame space - 2 bytes
+ * nothing ever writes to or reads from - for any such value whose
+ * defining opcode is not itself a MIR_LOAD-from-local/param (e.g. a
+ * MIR_LOAD of a global like `errno`). Found via tests/terrno.c's
+ * expect_ok_fd (`printf(..., errno)` on its else-branch): the reserved
+ * slot forces an entire IX-relative frame lifecycle
+ * (push ix/ld ix,0/add ix,sp/... teardown) for a function whose actual
+ * emitted body never references any (ix-N) backend-slot offset at all.
+ * Reusing the exact same predicate the emitter already trusts to elide
+ * the store closes this gap with no new mechanism. */
+static int mir_call_argument_slot_forwardable(int value, int units,
+                                               int instruction)
+{
+    int saved_index;
+    int forwardable;
+
+    if (units != 1)
+        return 0;
+    if (mir.insns[instruction].opcode == MIR_PHI)
+        return 0;
+    saved_index = mir_emit_instruction_index;
+    mir_emit_instruction_index = instruction;
+    forwardable = mir_can_forward_hl_to_call_argument(value);
+    mir_emit_instruction_index = saved_index;
+    return forwardable;
+}
+
 static int mir_divmod_partner(int instruction);
 
 /* mir-migration-plan-next10 (leaf frame-convention safety): legacy sometimes
@@ -1944,6 +1982,7 @@ static int mir_prepare_backend_slots(void)
                                         (type_size(definition->type) == 2 &&
                                          mir_load_is_single_indirect_call_target(value, 2)) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
+                                        mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value) ||
                                         mir_param_value_is_direct(value))
@@ -2253,6 +2292,22 @@ static void mir_emit_virtual_store(FILE *out, int value)
         if (mir_can_forward_hl_to_next(value)) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
+        } else if (mir_can_forward_hl_to_call_argument(value)) {
+            /* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots'
+             * reservation pass now also skips allocating a slot for values
+             * mir_can_forward_hl_to_call_argument alone proves (the
+             * has_slot branch below already relied on this same predicate
+             * to avoid ever *writing* to an already-reserved slot; this
+             * mirrors that for the no-slot case). Without this branch the
+             * value has has_slot == 0, mir_can_forward_hl_to_next doesn't
+             * recognize an ARG+CALL consumer, no forwarding handoff is
+             * armed at all, and the later load falls through to reading
+             * mir.backend_slots[value] - an address that was never
+             * reserved for this value. Found via tests/tstrcmpi.c's main
+             * (nested `sgn(stricmp(...))` calls) once mir_prepare_backend_
+             * slots' own skip-list started recognizing this predicate. */
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction = mir_emit_instruction_index + 1;
         }
         return;
     }
@@ -2648,12 +2703,12 @@ static int mir_emit_conditional_branch_with_phi_copies(
     if (mir_phi_copies_are_empty(predecessor, target)) {
         inverse = mir_invert_z80_condition(true_condition);
         if (inverse != NULL) {
-            fprintf(out, "\tjp %s,L%d\n", inverse, labels[branch_label]);
+            fprintf(out, "\tjp %s, L%d\n", inverse, labels[branch_label]);
             return 1;
         }
     }
     fallthrough_label = new_label();
-    fprintf(out, "\tjp %s,L%d\n", true_condition, fallthrough_label);
+    fprintf(out, "\tjp %s, L%d\n", true_condition, fallthrough_label);
     if (!mir_emit_spilled_phi_copies(out, predecessor, target))
         return 0;
     fprintf(out, "\tjp L%d\nL%d:\n", labels[branch_label], fallthrough_label);
@@ -2921,7 +2976,7 @@ static void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
             fprintf(out, "\tbit %d,l\n", insn->bit_width - 1);
         else
             fprintf(out, "\tbit %d,h\n", insn->bit_width - 9);
-        fprintf(out, "\tjp z,L%d\n", sign_label);
+        fprintf(out, "\tjp z, L%d\n", sign_label);
         mir_emit_hl_or_const(out, (~value_mask) & 0xffffU);
         fprintf(out, "L%d:\n", sign_label);
     }
@@ -3107,7 +3162,7 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
               "\tld a,b\n\txor h\n\tor l\n\tld l,a\n"
               "\tpop bc\n\tld a,c\n\txor e\n\tor l\n\tld l,a\n"
               "\tld a,b\n\txor d\n\tor l\n", out);
-        fprintf(out, operation == TOK_EQ ? "\tjp z,L%d\n" : "\tjp nz,L%d\n",
+        fprintf(out, operation == TOK_EQ ? "\tjp z, L%d\n" : "\tjp nz, L%d\n",
                 true_label);
         fprintf(out, "\tld hl,0\n\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
                 end_label, true_label, end_label);
@@ -3195,7 +3250,7 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
                 int loop_label = new_label();
                 int done_label = new_label();
                 fputs("\tld a,l\n\tpop hl\n\tpop de\n\tld b,a\n", out);
-                fprintf(out, "L%d:\n\tld a,b\n\tor a\n\tjp z,L%d\n",
+                fprintf(out, "L%d:\n\tld a,b\n\tor a\n\tjp z, L%d\n",
                         loop_label, done_label);
                 if (insn->immediate == TOK_SHL)
                     fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
@@ -3279,7 +3334,7 @@ static int mir_emit_cast(FILE *out, int source_type, int target_type)
         else
             fputs("\tld a,h\n\tor l\n", out);
         fputs("\tld hl,0\n", out);
-        fprintf(out, "\tjp nz,L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
+        fprintf(out, "\tjp nz, L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
                 nonzero_label, end_label, nonzero_label, end_label);
         return 1;
     }
@@ -3643,13 +3698,13 @@ static void mir_emit_selfstore_incdec(FILE *out, int offset, int is_inc)
 
     if (is_inc) {
         fprintf(out, "\tinc (ix%+d)\n", offset);
-        fprintf(out, "\tjp nz,L%d\n", done);
+        fprintf(out, "\tjp nz, L%d\n", done);
         fprintf(out, "\tinc (ix%+d)\n", offset + 1);
     } else {
         fprintf(out, "\tld a,(ix%+d)\n", offset);
         fprintf(out, "\tdec (ix%+d)\n", offset);
         fputs("\tor a\n", out);
-        fprintf(out, "\tjp nz,L%d\n", done);
+        fprintf(out, "\tjp nz, L%d\n", done);
         fprintf(out, "\tdec (ix%+d)\n", offset + 1);
     }
     fprintf(out, "L%d:\n", done);
@@ -3945,7 +4000,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     else if (type_is_bool(memory_type)) {
                         int bool_label = new_label();
                         fputs("\tor a\n\tld hl,0\n", out);
-                        fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                        fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                                 bool_label, bool_label);
                     } else if ((memory_type & TYPE_UNSIGNED) != 0)
                         fputs("\tld l,a\n\tld h,0\n", out);
@@ -3998,7 +4053,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (type_is_bool(memory_type)) {
                     int bool_label = new_label();
                     fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-                    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                    fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                             bool_label, bool_label);
                 } else if ((memory_type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
@@ -4195,7 +4250,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (type_is_bool(insn->type)) {
                     end_label = new_label();
                     fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-                    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                    fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                             end_label, end_label);
                 } else if ((insn->type & TYPE_UNSIGNED) != 0) {
                     fputs("\tld h,0\n", out);
@@ -4435,7 +4490,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                           "\tld a,e\n\tcpl\n\tld e,a\n"
                           "\tld a,d\n\tcpl\n\tld d,a\n"
                           "\tinc hl\n\tld a,h\n\tor l\n", out);
-                      fprintf(out, "\tjp nz,L%d\n\tinc de\nL%d:\n",
+                      fprintf(out, "\tjp nz, L%d\n\tinc de\nL%d:\n",
                             carry_label, carry_label);
                     } else
                     fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
@@ -4451,7 +4506,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n\tld hl,0\n", out);
                 else
                     fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
-                fprintf(out, "\tjp z,L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
+                fprintf(out, "\tjp z, L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
                         true_label, end_label, true_label, end_label);
             } else {
                 goto done;
@@ -5267,12 +5322,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 if (phi_bytes == 0) {
                     fclose(phi_probe);
-                    fprintf(out, "\tjp z,L%d\n", labels[insn->label]);
+                    fprintf(out, "\tjp z, L%d\n", labels[insn->label]);
                 } else {
                     int fallthrough_label = new_label();
                     char buf[256];
                     int remaining = phi_bytes;
-                    fprintf(out, "\tjp nz,L%d\n", fallthrough_label);
+                    fprintf(out, "\tjp nz, L%d\n", fallthrough_label);
                     rewind(phi_probe);
                     while (remaining > 0) {
                         int chunk = remaining < (int)sizeof(buf)

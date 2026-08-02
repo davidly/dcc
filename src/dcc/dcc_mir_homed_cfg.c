@@ -677,7 +677,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             fputs("\tld a,h\n\tor l\n", out);
             if (preserve_hl)
                 fputs("\tpop hl\n", out);
-            fprintf(out, "\tjp nz,L%d\n", true_label);
+            fprintf(out, "\tjp nz, L%d\n", true_label);
             if (!mir_emit_homed_phi_copies(out, i, target))
                 goto done;
             fprintf(out, "\tjp L%d\nL%d:\n", labels[insn->label], true_label);

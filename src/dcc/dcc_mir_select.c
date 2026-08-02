@@ -149,12 +149,12 @@ static int mir_try_emit_countdown_loop(FILE *out)
     fprintf(out, "L%d:\n", top_label);
     if (unsigned_value) {
         fputs("\tld a,b\n\tor c\n", out);
-        fprintf(out, "\tjp z,L%d\n", end_label);
+        fprintf(out, "\tjp z, L%d\n", end_label);
     } else {
         fputs("\tld a,b\n\tor a\n", out);
-        fprintf(out, "\tjp m,L%d\n", end_label);
+        fprintf(out, "\tjp m, L%d\n", end_label);
         fputs("\tor c\n", out);
-        fprintf(out, "\tjp z,L%d\n", end_label);
+        fprintf(out, "\tjp z, L%d\n", end_label);
     }
     fputs("\tdec bc\n", out);
     fprintf(out, "\tjp L%d\n", top_label);
@@ -261,12 +261,12 @@ static int mir_try_emit_accumulator_loop(FILE *out)
     fprintf(out, "L%d:\n", top_label);
     if (unsigned_value) {
         fputs("\tld a,b\n\tor c\n", out);
-        fprintf(out, "\tjp z,L%d\n", end_label);
+        fprintf(out, "\tjp z, L%d\n", end_label);
     } else {
         fputs("\tld a,b\n\tor a\n", out);
-        fprintf(out, "\tjp m,L%d\n", end_label);
+        fprintf(out, "\tjp m, L%d\n", end_label);
         fputs("\tor c\n", out);
-        fprintf(out, "\tjp z,L%d\n", end_label);
+        fprintf(out, "\tjp z, L%d\n", end_label);
     }
     fputs("\tex de,hl\n\tadd hl,bc\n\tex de,hl\n\tdec bc\n", out);
     fprintf(out, "\tjp L%d\n", top_label);
@@ -389,7 +389,7 @@ static int mir_try_emit_unsigned_division_loop(FILE *out)
     fputs("\tld de,0\n", out);
     fprintf(out, "L%d:\n", top_label);
     fprintf(out, "\tld hl,%ld\n\tadd hl,bc\n", -divisor);
-    fprintf(out, "\tjp nc,L%d\n", end_label);
+    fprintf(out, "\tjp nc, L%d\n", end_label);
     fputs("\tld b,h\n\tld c,l\n\tinc de\n", out);
     fprintf(out, "\tjp L%d\n", top_label);
     fprintf(out, "L%d:\n", end_label);
@@ -542,7 +542,7 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
     fputs("\tld bc,0\n\tld de,0\n", out);
     fprintf(out, "L%d:\n", top_label);
     fprintf(out, "\tld hl,%ld\n\tadd hl,bc\n", -limit);
-    fprintf(out, "\tjp c,L%d\n", end_label);
+    fprintf(out, "\tjp c, L%d\n", end_label);
     fputs("\tpush iy\n\tpop hl\n\tadd hl,de\n\tex de,hl\n\tinc bc\n", out);
     fprintf(out, "\tjp L%d\n", top_label);
     fprintf(out, "L%d:\n", end_label);
@@ -645,7 +645,7 @@ static int mir_try_emit_comparison_branch(FILE *out)
         if (!mir_emit_wide_operation(out, compare))
             return 0;
         fputs("\tld a,h\n\tor l\n", out);
-        fprintf(out, "\tjp z,L%d\n", false_label);
+        fprintf(out, "\tjp z, L%d\n", false_label);
         {
             int epilogue_label = new_label();
             fprintf(out, "\tld hl,%ld\n", true_value->immediate);
@@ -686,13 +686,13 @@ static int mir_try_emit_comparison_branch(FILE *out)
     }
     fputs("\tor a\n\tsbc hl,de\n", out);
     if (operation == TOK_EQ)
-        fprintf(out, "\tjp nz,L%d\n", false_label);
+        fprintf(out, "\tjp nz, L%d\n", false_label);
     else if (operation == TOK_NE)
-        fprintf(out, "\tjp z,L%d\n", false_label);
+        fprintf(out, "\tjp z, L%d\n", false_label);
     else if (operation == '<')
-        fprintf(out, "\tjp nc,L%d\n", false_label);
+        fprintf(out, "\tjp nc, L%d\n", false_label);
     else
-        fprintf(out, "\tjp c,L%d\n", false_label);
+        fprintf(out, "\tjp c, L%d\n", false_label);
     /* Share one epilogue between both return paths instead of calling
      * mir_emit_return_constant twice (which would duplicate
      * "ld sp,ix / pop ix / ret" in full for each side). Legacy's own

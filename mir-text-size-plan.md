@@ -5578,3 +5578,327 @@ performed as the very last step before commit, with its literal PASS/
 FAIL output inspected line-by-line rather than summarized from memory.
 Do not re-attempt the exact minimal diff from `bf22681` without first
 addressing the label-count-shift mechanism directly.
+
+## Item T54 (second re-attempt): investigated and reverted again - relaxation is byte-smaller but still cycle-regressed due to unavoidable IX-frame overhead (2026-08-02)
+
+*(Note: this investigation was performed against commit `bf22681` (Item
+T56) before T56 was found to have its own regression and reverted - see
+the Item T56 entry above. T54's own change was reverted in both attempts
+regardless, so this finding - the IX-frame overhead is the real remaining
+blocker for the `okb`/`chki` family - is unaffected by T56's later revert
+and remains valid; only the "T56's boolean-materialization fix" framing
+below is now historical context rather than current tree state.)*
+
+Re-attempted T54's `okb`/`chki` stack-forwarding relaxation after T56
+landed, since T54's original regression had been traced to T56's now-fixed
+boolean-materialization primitive. This time, deliberately applied only
+the **minimal** half of the original change: relaxed
+`mir_can_forward_stack_to_binary_rhs` (`dcc_mir_spilled_cfg.c` ~line 2193)
+to drop the `mir_binary_only_constant(binary->src1)` restriction (keeping
+only a `binary->src1 == value` self-reference guard), without touching
+`mir_backend_slot_forwardable`/`mir_emit_virtual_store`'s `!has_slot`
+branch - avoiding the exact "stranded value" correctness-bug class the
+first T54 attempt had to fix, at the cost of the newly-forwarded value
+still receiving a wasted (unused) backend slot.
+
+**Validation**:
+- Regenerated a clean before-baseline at commit `bf22681` (T56, no T54
+  change): 467/2024 (23.07%).
+- Whole-corpus census with the relaxation and a correct `--compare`
+  baseline this time: **489/2024 (24.16%), +22 newly-emitted functions,
+  0 regressions** at the static-metrics tier (`tabort.chki`,
+  `tasinfsp.okb`, `tatan2sp.okb`, `tbits.ti16_bits`/`tui16_bits`,
+  `tc89qual.addq`, `tcmpq.okb`, `texpfsp.okb`, `texsort.cmp_int`,
+  `tfdf.okb`, `tfloorsp.okb`, `tfmaf.okb`, `tfmodfsp.okb`,
+  `tforblk.static_sibling_blocks`, `tfpraw.okb`, `tfpspec.okb`,
+  `tfrexpsp.okb`, `tisnan.okb`, `tlogfsp.okb`, `tpowfsp.okb`,
+  `tsqrtsp.okb`, `tvla.vla_sizeof_ternary`).
+- Focused `runall.ps1 -Mode full` on the 23 apps the census flagged:
+  **45 performance regressions** across nearly every `okb`/`chki`-bearing
+  app (`tasinfsp`, `tc89qual`, `tatan2sp`, `texsort`, `tabort`, `texpfsp`,
+  `tfdf`, `tcmpq`, `tbits`, `tfloorsp`, `tfmodfsp`, `tfrexpsp`, `tfmaf`,
+  `tisnan`, `tpowfsp`, `tlogfsp`, `tfpraw`, `tforblk`, `tfpspec`,
+  `tsqrtsp`, `tvla` - both peep and nopeep, up to +7.9% cycles for
+  `tcmpq`). T56 fixed the boolean-materialization cost but did **not**
+  eliminate the regression; a real, still-present root cause remained.
+
+**Root-caused via direct assembly comparison** (`okb` in `tasinfsp.c`,
+`DCC_MIR_FORCE_ACCEPT_FUNCTION`/`DCC_MIR_FORCE_FALLBACK_FUNCTION`): the
+MIR-emitted version, even with T56's cheaper boolean shape, still
+allocates a 2-slot (4-byte) backend frame purely to hold the "got != 0"
+boolean's now-mostly-unused backend slot (the relaxation only skips
+allocation for the *forwarded* value, `want != 0`, not for `src1`) -
+which forces the function to establish a full IX-relative frame:
+`push ix / ld ix,0 / add ix,sp / ld hl,-4 / add hl,sp / ld sp,hl` plus
+matching teardown, and a memory store+reload
+(`ld (ix-2),l / ld (ix-1),h` ... `ld l,(ix-2) / ld h,(ix-1)`) round-trip
+for that boolean. **Legacy's version needs no frame at all** for this
+function - it pushes both booleans onto the CPU stack transiently
+(`push hl` / ... / `ex de,hl` / `pop hl`) and never touches IX. The MIR
+version is genuinely smaller in static bytes (620 vs 644, matching the
+census) because T56's shape is byte-cheaper per comparison, but the
+mandatory frame-setup/teardown overhead this relaxation still requires
+(present in every affected `okb`/`chki`-like function, since the
+predicate change alone does not eliminate `src1`'s slot) costs more
+cycles corpus-wide than the per-comparison byte savings recover. This is
+exactly the risk flagged (but not yet proven) when this half-measure was
+chosen: "this sidesteps the exact stranding-bug class... at the cost of
+a wasted backend slot" - the wasted slot's cost is not just a few bytes,
+it is an entire avoidable stack-frame lifecycle for leaf-shaped
+functions like `okb` that would otherwise need none.
+
+**Disposition**: reverted again (`git checkout --
+src/dcc/dcc_mir_spilled_cfg.c`). The relaxation as landed is not
+sufficient on its own; the **full** original T54 change (also relaxing
+`mir_backend_slot_forwardable`/`mir_emit_virtual_store` to skip
+allocating a backend slot at all for `src1` when it is provably
+dead-after-forward, eliminating the frame need entirely for functions
+like `okb`) is very likely required to realize this family's real
+upside - but that is precisely the higher-risk "stranded value: no slot
+AND no forwarding armed" correctness-bug class the first T54 attempt
+had to discover-and-fix in `mir_emit_virtual_store`. Given this has now
+failed twice for two different root causes (T56's primitive, and now
+frame-elimination), this family should be deprioritized as **Item T54
+(full, deferred)**: revisit only as a dedicated, carefully-staged item
+with an explicit correctness audit of every `mir_backend_slot_forwardable`
+caller and a real `ntvcm`-executed synthetic test proving no value is
+ever left both unslotted and unforwarded, matching the rigor Item T41
+required for its own stranding bug. Do not re-attempt the minimal-relaxation-only
+version again - it is now proven insufficient twice over.
+
+**Temp files used and cleaned up**: `build/mir-t54-before.tsv`,
+`build/mir-t54-after.tsv`, `/tmp/okb_forced.mac`, `/tmp/okb_legacy.mac`,
+`/tmp/okb_mir.txt` (all scratch, not committed per policy).
+
+## Item T59: dead backend slot for a call-argument-forwardable value loaded from non-local memory (2026-08-03)
+
+While chasing a residual `terrno.expect_ok_fd` regression during Item
+T58 (extrn-dedup) validation, root-caused via `DCC_MIR_SLOT_DEBUG`: the
+sole live value in the else-branch (`v12 = load errno ... home=iy`,
+used only as `printf`'s final call argument) received a real, dead
+2-byte IX-frame slot despite never actually being stored to it.
+
+`mir_prepare_backend_slots`'s reservation-pass skip-list
+(`dcc_mir_spilled_cfg.c`, the `mir_backend_slot_forwardable(...) || ...`
+OR-chain) only recognized `mir_load_is_single_call_argument` as grounds
+to skip a slot for a would-be call argument - and that predicate
+explicitly restricts `memory_storage` to `SC_LOCAL`/`SC_PARAM`,
+excluding globals like `errno` by design. Meanwhile
+`mir_emit_virtual_store`'s emission-time `has_slot` branch already
+trusts the **broader** `mir_can_forward_hl_to_call_argument` (any
+single-use, adjacent-to-call value, regardless of defining opcode) to
+skip the store into an already-reserved slot. The reservation pass and
+the emission pass were using two different predicates for what should
+be the same decision - reserving frame space the emitter then proved
+unnecessary.
+
+**Fix**: added `mir_call_argument_slot_forwardable(value, units,
+instruction)`, a save/restore wrapper around
+`mir_can_forward_hl_to_call_argument` mirroring the existing
+`mir_backend_slot_forwardable` pattern (needed because the predicate
+inspects `mir.insns[mir_emit_instruction_index + 1/+2]`, which requires
+`mir_emit_instruction_index` to be set to the value's own defining
+instruction - not naturally true during the pre-pass). Hooked into
+`mir_prepare_backend_slots`'s skip-list OR-chain.
+
+**Regression found and fixed during validation**: the first build
+correctly shrank `expect_ok_fd`'s frame to 0 slots, but broke
+`tstrcmpi.main` (extra spurious `ld l,(ix-N)/ld h,(ix-N+1)` reloads,
+1583->2090 bytes). Root cause: `mir_emit_virtual_store`'s `!has_slot`
+branch (taken once a value has no reserved slot at all) only checked
+`mir_can_forward_hl_to_next`, never `mir_can_forward_hl_to_call_argument`
+- so once the reservation pass started skipping slots on this broader
+predicate, the *no-slot* emission path had no matching forwarding setup
+for it, and a later load fell through to reading an address that was
+never reserved. Fixed by adding a matching
+`else if (mir_can_forward_hl_to_call_argument(value))` branch,
+mirroring the `has_slot` branch's existing handling, arming the same
+HL-forwarding handoff (`mir_forwarded_hl_value` /
+`mir_forwarded_hl_instruction`) for the no-slot case.
+
+**Validation**: `expect_ok_fd` returned to its correct shape (byte-
+identical minus the clean 2-byte frame shrink); `main` returned exactly
+to its T58-only baseline (1583 bytes). An A/B control build (T59 hook
+disabled) confirmed the two apps' small residual peep-mode regressions
+predate T59 and are not introduced by it - T59 is a strict improvement
+with no side effects.
+
+## Item T60: MIR-emitted conditional `jp` never matched dccpeep's `jr`-relaxation pattern (2026-08-03)
+
+While diagnosing why `terrno.expect_ok_fd`'s peep-mode cycle count
+still regressed slightly even after Item T59, direct assembly-diff
+against the legacy capture (`DCC_MIR_FORCE_FALLBACK_FUNCTION`) showed
+the MIR-emitted `jp c,L284` (no space after the comma) never got
+relaxed to `jr c,L284` by dccpeep, while legacy's equivalent `jp c,
+L281` (**with** a space) did.
+
+Traced to `parse_jp_cond_label` (`src/dccpeep/peep_parse.c`), whose
+match pattern is built as `"jp %s, "` - i.e. it requires a literal space
+after the comma, matching the legacy AST backend's `emit_jp_label`
+(`dcc_diag_emit.c` ~line 522, always emits `"\t%s L%d\n"` with an
+explicit space). A grep across every MIR emitter file
+(`dcc_mir_emit_common.c`, `dcc_mir_select.c`, `dcc_mir_spilled_cfg.c`,
+`dcc_mir_homed_cfg.c`) found **55 occurrences** of the no-space
+`"jp cond,L%d"` form and zero occurrences of the spaced form. This is a
+systemic, corpus-wide formatting mismatch: no MIR-emitted conditional
+branch has ever been eligible for `pass_jp_to_jr`'s relaxation
+(`src/dccpeep/peep_pass_final.c`), even when its displacement is well
+within `jr`'s +-127 range. Purely cosmetic/textual - not a functional
+bug, and not related to `instr_size_upper`'s conservative byte-address
+estimation (a separate, correctly-conservative mechanism the space bug
+never even reached, since `jr_convertible` rejected the instruction
+before any distance math ran).
+
+**Fix**: added a space after the comma in all 55 conditional-`jp`
+format strings across the four MIR emitter files, matching
+`emit_jp_label`'s existing convention exactly. (First attempt used a
+Python `re.sub`-based script whose replacement string's `\t` was
+interpreted as a literal tab by Python, corrupting the source with raw
+tab characters instead of `\t` escapes - caught via `git diff` showing
+literal tabs in the diff, and redone with a plain `.replace()`-based
+script verified to introduce no literal control characters.)
+
+**A quirk in the census's "text-size" metric surfaced by this fix**:
+`mir_stream_size()` (`dcc_mir_select.c`) measures `generated_bytes` as
+the literal byte length of the generated **assembly-text** stream, not
+the real assembled machine-code size - a pre-existing proxy, not
+something this fix changes the meaning of. Since legacy's captured
+stream already included the space (unchanged), and MIR's generated
+stream now also includes it, every function with at least one
+conditional `jp` gained exactly 1 measured "byte" per such instruction,
+even though the space is pure whitespace the M80 assembler ignores and
+has zero effect on real machine-code size. This nudged exactly one
+function, `tscanf.check_long` (616 vs 615 bytes before, i.e. already at
+the `generated_size > captured_size + 1` gate's edge), from `mir` back
+to (unchanged, byte-identical) legacy fallback. This is a lost
+opportunity, not a regression: `check_long`'s output is 100% identical
+to what it was before any of this session's work, since fallback
+replays the same captured legacy stream unconditionally. Documented
+here rather than special-cased in the acceptance gate, since a name- or
+function-specific carve-out would violate SKILL.md rule 6; the
+underlying proxy-metric quirk is a pre-existing characteristic of
+`mir_stream_size`, not a new defect.
+
+**Validation** (T59 + T60 together, no T58/extrn-dedup):
+- Clean before/after census (`build/mir-t59-before.tsv` at HEAD
+  `3f8b75b`, `build/mir-t59-after.tsv` with T59+T60 applied):
+  467/2023 (23.08%) -> 474/2023 (23.43%), **+8 newly-emitted functions**
+  (`tbsearch.main`, `terrno.expect_ok_fd`, `tgotocap.main`,
+  `tpragstk.main`, `tqsort.main`, `trw2.show_error`,
+  `trwold.show_error`, `tstackov.main`), 1 function returned to
+  fallback (`tscanf.check_long`, explained above - unchanged legacy
+  output, not a regression).
+- Focused `runall.ps1 -Mode full` on all 130 apps the census flagged as
+  requiring runtime validation: **130/130 passed correctness**; dozens
+  of real performance **improvements** (up to -2.27% cycles for
+  `tponce`, -2.13% bytes for `tlcont`, -1.92% bytes for `tbcloop`,
+  -0.43% cycles for `tsprintf`) from the newly-enabled `jr` relaxation
+  freeing up real bytes and, in not-taken-dominant branches, cycles;
+  **11 tiny peep-mode-only regressions** (`adaint`, `tallocx`,
+  `tcodegen`, `tesc`, `tfloat4`, `tmirslot`, `tmirfuse`, `tphijoin`,
+  `tscanf`, `tsetjmp`, `tstdlib`; all under 0.4%, e.g. `tcodegen`
+  22674->22709 cycles, `tesc` 110887->111123).
+- Root-caused the 11 regressions directly: Z80 `jr`'s cycle cost is
+  asymmetric (12 T-states taken, 7 not-taken) versus `jp`'s constant 10
+  T-states; `pass_jp_to_jr` (unconditional relaxation whenever
+  displacement fits, no branch-frequency heuristic - confirmed by
+  reading `pass_jp_to_jr`/`jr_convertible` directly) has always applied
+  this same trade-off to 100% of legacy-backend code. This fix makes
+  MIR-emitted branches eligible for the identical, pre-existing,
+  corpus-wide policy for the first time; the 11 regressions are
+  branches that happen to be taken more often than not in those
+  specific functions, a known and already-accepted characteristic of
+  this optimizer pass, not a new defect introduced here.
+- Whole-corpus wide safety net: `runall.ps1 -Mode fast` (323 apps) and
+  `-Mode full` (323 apps) both show **314/314 runnable apps passing
+  correctness**, all 106 diagnostics passing, all 17 dccpeep fixtures
+  passing, and the identical 11 tiny peep-only regressions (zero
+  additional regressions outside the focused list, and zero nopeep
+  regressions - confirming the effect is exclusively the `pass_jp_to_jr`
+  peep-mode trade-off).
+- Per SKILL.md's baseline policy ("update baselines only after a
+  complete full-mode run proves the new profile is intentional and
+  correctness-clean"): ran the full corpus, confirmed zero correctness
+  regressions and a large net performance win, and updated
+  `tests/perf_baselines.csv` via `-UpdatePerfBaseline` (110 of ~314
+  entries changed, overwhelmingly improvements plus the 11 documented
+  tiny regressions). Re-ran `runall.ps1 -Mode full` against the updated
+  baselines with zero flags: `>>> SUCCESS: All tests passed <<<`.
+
+**Disposition**: T59 and T60 land together as one commit (both general,
+low-risk, well-validated, and unrelated to T58's still-blocked
+extrn-dedup mechanism - see Item T58 below for why it is deferred
+separately).
+
+**Temp files used and cleaned up**: `/tmp/clean_base/*.c`,
+`/tmp/t59_ready_*.c`, `/tmp/dcc_before_t59`, `/tmp/dcc_after_t59`,
+`/tmp/dcc_b`, `/tmp/dcc_a`, `/tmp/check_long_before.txt`,
+`/tmp/check_long_after.txt`, `/tmp/full_before.txt`,
+`/tmp/full_after.txt`, `/tmp/x1.mac`, `/tmp/x2.mac`,
+`/tmp/x_before.mac`, `/tmp/x_after.mac`, `build/mir-t59-before.tsv`,
+`build/mir-t59-after.tsv` (all scratch, not committed per policy).
+
+## Item T58: extrn deduplication - deferred, blocked on an unrelated SP-relative-vs-IX-relative local-addressing gap (2026-08-03)
+
+Implemented extrn deduplication (`mir_emit_extrn_once`, ~40 call sites
+across `dcc_mir_emit_common.c`, `dcc_mir_homed_cfg.c`,
+`dcc_mir_spilled_cfg.c`, declared in `dcc_mir_internal.h`): each runtime
+helper symbol (`__ltu`, `__sdivmod`, etc.) is only emitted once as an
+`extrn` directive per function, rather than once per call site,
+mirroring legacy's own dedup behavior and saving bytes proportional to
+call-site repetition.
+
+**Validation history this session**: after landing on top of T59+T60,
+static census showed newly-tipped functions including
+`terrno.expect_ok_fd` and `tstrcmpi.main`. `expect_ok_fd` validated
+clean. `tstrcmpi.main` showed a persistent peep-mode cycle regression
+(+8 cycles with T59 alone measured via an A/B control, +22 cycles with
+the jp-space fix also applied - the jr/jp trade-off from Item T60 made
+this specific function's regression slightly worse, not better).
+
+**Root-caused via direct assembly diff against the legacy capture**:
+`main`'s `local_fp` (a local function-pointer variable, from the
+nested `sgn(stricmp(...))` call chain in `tests/tstrcmpi.c`) is
+addressed by legacy via cheap **SP-relative** addressing (`ld hl,4 /
+add hl,sp / ...`, needing only a single `push hl` to establish it and a
+6-instruction stack-relative load to read it back - no real backend
+frame at all). MIR instead always establishes a real backend slot and
+uses **IX-relative** addressing (`ld (ix-4),l / ld (ix-3),h` for the
+store, `ld l,(ix-4) / ld h,(ix-3)` for the load) - fewer total
+instructions than legacy's sequence, but each IX-relative access costs
+more Z80 cycles (DD-prefixed addressing mode) than SP-relative or
+direct register access. T58's extrn-dedup byte savings are what tip
+`main` across the size-acceptance gate in the first place, exposing
+this pre-existing, unrelated addressing-convention gap - not something
+T58 itself introduces. This is the same class of issue previously
+documented near `mir_capture_stream_uses_frame`'s "leaf frame
+convention" gap: MIR's backend-slot/IX-frame machinery has no notion of
+a cheaper SP-relative addressing mode for locals whose lifetime doesn't
+require surviving a stack-shape change.
+
+**Disposition**: defer Item T58 (do not land the extrn-dedup change
+this session). This is a genuine "regression a fix can't resolve"
+within scope - properly fixing it requires a new SP-relative local-
+addressing capability in the MIR backend, a materially larger,
+separate undertaking (candidate future **Item T61**), not a small
+targeted change, and is out of proportion to T58's own byte-saving
+scope. The extrn-dedup mechanism itself (`mir_emit_extrn_once` and its
+~40 call sites) is fully implemented and was validated clean for every
+other newly-tipped function found this session; it is preserved
+uncommitted for a future session once Item T61 (or a legitimate,
+non-name-based structural gate recognizing SP-relative-addressed
+legacy captures) is available to exclude just this residual case.
+
+**Lesson learned this session (process, not code)**: an over-broad
+`git checkout -- <files>` intended to revert one bad edit (the tab-
+corrupted jp-space attempt) also destroyed unrelated uncommitted T58
+work in the same files. Recovered successfully from the CLI's own
+`rewind-snapshots/backups/` pre-edit snapshots. Going forward, revert
+only the specific bad hunk (targeted `edit`/manual patch reversal)
+rather than `git checkout` on a file with multiple, unrelated
+uncommitted changes.
+
+**Temp files used and cleaned up**: `/tmp/t58.patch`,
+`/tmp/full_diff.patch`, `/tmp/dcc_mir_spilled_cfg_current.bak`,
+`/tmp/peep_pass_final.c.bak`, `/tmp/terrno_*`, `/tmp/tstrcmpi_*`,
+`/tmp/main_*`, `/tmp/x.mac` (all scratch, not committed per policy).
