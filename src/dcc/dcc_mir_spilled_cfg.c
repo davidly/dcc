@@ -3075,7 +3075,7 @@ static int mir_emit_wide_and_constant_fastpath(FILE *out,
     return 0;
 }
 
-static int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
+int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
 {
     const char *helper = NULL;
     int operation = (int)insn->immediate;

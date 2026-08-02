@@ -289,9 +289,11 @@ int mir_emit_label_address_to_home(FILE *out, int value,
                                            const char *assembly_name);
 int mir_emit_load_param(FILE *out, const struct MirInsn *param);
 int mir_emit_load_param_de(FILE *out, const struct MirInsn *param);
+int mir_emit_load_param_wide(FILE *out, const struct MirInsn *param);
 int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
                                                     int base, long offset);
 void mir_emit_prologue(FILE *out);
+int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn);
 void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned);
 void mir_emit_scalar_compare_biased_right(FILE *out, int operation);
 void mir_emit_signed_byte_extend(FILE *out);

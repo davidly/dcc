@@ -57,6 +57,37 @@ int mir_emit_load_param_de(FILE *out, const struct MirInsn *param)
     return 1;
 }
 
+/* Item T57 (mir-text-size-plan.md): wide (4-byte, `long`) counterpart of
+ * mir_emit_load_param/_de for mir_try_emit_comparison_branch - that
+ * selector's whole-function shape only ever needs a parameter's value
+ * loaded straight from its own fixed ix-relative home (no slot, no
+ * general value-forwarding machinery), exactly like the narrow case,
+ * just twice as wide. Mirrors mir_param_value_is_direct's wide-load
+ * ascending offset convention (offset/offset+1 = low word into HL,
+ * offset+2/offset+3 = high word into DE) rather than the descending
+ * backend-slot convention used elsewhere. Returns 0 (declining to
+ * emit anything) when the fixed ix-relative offset does not fit in a
+ * single signed byte, so the caller can fall back cleanly instead of
+ * emitting a wrong or oversized load. */
+int mir_emit_load_param_wide(FILE *out, const struct MirInsn *param)
+{
+    const struct MirObject *object;
+
+    if (param == NULL || param->opcode != MIR_PARAM || param->object < 0 ||
+        param->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[param->object];
+    if (object->storage != SC_PARAM || type_size(object->type) != 4)
+        return 0;
+    if (object->offset < -128 || object->offset + 3 > 127)
+        return 0;
+    fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            object->offset, object->offset + 1);
+    fprintf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            object->offset + 2, object->offset + 3);
+    return 1;
+}
+
 /* Recognize VALUE as one parameter plus a constant. PARAM is NULL for a pure
  * constant. This is intentionally not a general expression selector; it is a
  * proof that promoted local temporaries can disappear end-to-end before the

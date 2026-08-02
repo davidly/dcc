@@ -5408,3 +5408,94 @@ shared this primitive is.
 **Temp files used and cleaned up**: `/tmp/t55_*.mac`, `/tmp/verify_
 tabort.tsv`, `/tmp/t55_tabort_census.tsv` (all census/mac scratch files,
 not committed per policy).
+
+## Item T57: extend mir_try_emit_comparison_branch to wide (long) parameters and to the text-size fallback reason (2026-08-02)
+
+**Hypothesis**: re-bucketing the post-T53 census for near-miss functions
+outside already-investigated families surfaced `tlongsub.c`'s
+`if_lt`/`if_gt`/`if_le`/`if_ge` (4 functions, 19-byte gaps each):
+
+```c
+static int if_lt(long a, long b) { if (a <  b) return 1; return 0; }
+static int if_gt(long a, long b) { if (a >  b) return 1; return 0; }
+static int if_le(long a, long b) { if (a <= b) return 1; return 0; }
+static int if_ge(long a, long b) { if (a >= b) return 1; return 0; }
+```
+
+This is exactly the whole-function shape `mir_try_emit_comparison_branch`
+(`dcc_mir_select.c`) already exists for - a narrow, dedicated, already-
+production-proven selector, structurally separate from the shared
+`mir_emit_scalar_compare`/`'!'`-unary materialization primitive that
+caused Items T54/T55's regressions. Two independent gaps were found:
+
+1. `mir_emit_load_param`/`mir_emit_load_param_de` (the selector's own
+   parameter loaders) unconditionally require `type_size(object->type)
+   == 2`, rejecting any 4-byte (`long`/`float`) parameter outright and
+   falling through to the general selector.
+2. Even with wide support added, the selector is **only ever invoked in
+   production** as a narrow rescue gated on `fallback_reason ==
+   "instruction-count"` (see the Phase 1 comment at `dcc_mir_select.c`
+   ~line 1315) - it is fully reachable from the diagnostic-only
+   `mir_try_emit_z80` dispatcher, but never from the real selection path
+   for any other fallback reason. `if_lt`/etc. fail with `"text-size"`,
+   never `"instruction-count"`, so the rescue was never even attempted
+   for them regardless of gap 1.
+
+**Fix**:
+- Added `mir_emit_load_param_wide` (`dcc_mir_emit_common.c`), the wide
+  counterpart of `mir_emit_load_param`/`_de`: loads a 4-byte parameter
+  directly from its fixed ix-relative home (ascending offset - low word
+  into HL, high word into DE - mirroring `mir_param_value_is_direct`'s
+  existing wide-load convention), declining (returning 0) if the offset
+  does not fit a signed byte.
+- Exposed `mir_emit_wide_operation` (previously `static` in
+  `dcc_mir_spilled_cfg.c`) via `dcc_mir_internal.h`, since it already
+  implements every wide comparison operator (inline xor-compare for
+  `==`/`!=`, `__ltu`/`__lts`/etc. runtime helpers for relational,
+  verified for float by Item T53) and leaves a concrete 0/1 in HL - no
+  new comparison logic needed, just reuse.
+- In `mir_try_emit_comparison_branch`, added a wide branch taken when
+  `type_size(compare->secondary_offset) == 4`: load left wide, push,
+  load right wide, call `mir_emit_wide_operation` directly on the
+  original (un-swapped) `compare` instruction (unlike the narrow path's
+  sign-bias-and-swap trick, which exists only to reuse a single
+  unsigned 16-bit `sbc` and is unnecessary here since
+  `mir_emit_wide_operation` already handles every operator distinctly),
+  then test-and-branch exactly like `mir_emit_fused_wide_comparison_
+  branch`'s already-verified `ld a,h/or l` idiom.
+- Widened the production rescue's trigger condition from `fallback_
+  reason == "instruction-count"` to `("instruction-count" ||
+  "text-size")` - the same "not worse than legacy" safety gate
+  (near-cost/byte-profitable check) already governs whether the
+  candidate is actually substituted in, regardless of which specific
+  cost margin the general selector missed by, so widening which
+  fallback reasons attempt this rescue cannot admit a function on
+  weaker grounds than before.
+
+**Validation**:
+- Whole-corpus census (`--fail-on-regression`) vs. a clean pre-T57
+  baseline: **0 regressions, +4 newly-emitted functions** (463/2023,
+  22.89% -> 467/2023, 23.08%): `tlongsub.if_ge`/`if_gt`/`if_le`/`if_lt`,
+  all now *smaller than legacy* (e.g. `if_lt` 329 vs. 338 bytes). Only 1
+  app (`tlongsub`) had any census change.
+- Focused `runall.ps1 -Apps tlongsub -Mode full`: **1/1 passed**, 0
+  regressions, 2 improvements (peep -0.08%, nopeep -0.02% cycles).
+- Wide safety net, full 323-app corpus, both `-Mode fast` and `-Mode
+  full` (peep+nopeep): **314/314 passed, 0 regressions, 0 failures** in
+  each run.
+
+**Disposition**: landed. A clean, small, well-isolated win - both
+changes (wide-operand support, and widening which fallback reasons
+attempt the rescue) are scoped to a single narrow, dedicated selector
+already proven safe in production, not the shared, higher-risk
+materialization primitive Items T54/T55/T56 are about. Modest yield (4
+functions) but zero blast radius beyond the one function shape this
+selector already targets, and the widened rescue-gate condition is
+structurally guarded by the same cost-safety check regardless of which
+reason triggered it, so it may also unlock other, not-yet-identified
+narrow-shape functions currently failing with `text-size` in future
+census sweeps without any further code change.
+
+**Temp files used and cleaned up**: `/tmp/t57*.mac`, `/tmp/mir-t57-
+before.tsv`, `/tmp/mir-t57-after.tsv`, `/tmp/t57_census.log` (all
+census/mac scratch files, not committed per policy).

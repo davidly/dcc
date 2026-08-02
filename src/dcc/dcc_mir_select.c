@@ -599,21 +599,6 @@ static int mir_try_emit_comparison_branch(FILE *out)
         return 0;
     if (left->object < 0 || left->object >= mir.object_count)
         return 0;
-    operation = (int)compare->immediate;
-    if (operation == '>') {
-        const struct MirInsn *temporary = left;
-        left = right;
-        right = temporary;
-        operation = '<';
-    } else if (operation == TOK_LE) {
-        const struct MirInsn *temporary = left;
-        left = right;
-        right = temporary;
-        operation = TOK_GE;
-    }
-    unsigned_compare =
-        (mir.objects[left->object].type & TYPE_UNSIGNED) != 0 ||
-        type_ptr_depth(mir.objects[left->object].type) > 0;
     for (i = branch_index + 1; i < target_index; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             true_return = &mir.insns[i];
@@ -638,6 +623,56 @@ static int mir_try_emit_comparison_branch(FILE *out)
             opcode != MIR_LABEL && opcode != MIR_RETURN)
             return 0;
     }
+
+    /* Item T57 (mir-text-size-plan.md): a wide (4-byte, `long`/`float`)
+     * comparison in this exact shape used to be rejected outright by
+     * mir_emit_load_param/_de's own `type_size == 2` requirement,
+     * falling through to the general spilled-scalar-cfg selector - a
+     * needless loss, since mir_emit_wide_operation (already relied on,
+     * and already verified for float by Item T53) handles every wide
+     * comparison operator directly, with no operand-order normalization
+     * needed (unlike the narrow path's sign-bias trick below, which
+     * only exists to reuse a single unsigned 16-bit `sbc`). Left/right
+     * are used exactly as `compare` originally defined them - no swap. */
+    if (type_size(compare->secondary_offset) == 4) {
+        false_label = new_label();
+        mir_emit_prologue(out);
+        if (!mir_emit_load_param_wide(out, left))
+            return 0;
+        fputs("\tpush de\n\tpush hl\n", out);
+        if (!mir_emit_load_param_wide(out, right))
+            return 0;
+        if (!mir_emit_wide_operation(out, compare))
+            return 0;
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp z,L%d\n", false_label);
+        {
+            int epilogue_label = new_label();
+            fprintf(out, "\tld hl,%ld\n", true_value->immediate);
+            fprintf(out, "\tjp L%d\n", epilogue_label);
+            fprintf(out, "L%d:\n", false_label);
+            fprintf(out, "\tld hl,%ld\n", false_value->immediate);
+            fprintf(out, "L%d:\n", epilogue_label);
+            fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+        }
+        return 1;
+    }
+
+    operation = (int)compare->immediate;
+    if (operation == '>') {
+        const struct MirInsn *temporary = left;
+        left = right;
+        right = temporary;
+        operation = '<';
+    } else if (operation == TOK_LE) {
+        const struct MirInsn *temporary = left;
+        left = right;
+        right = temporary;
+        operation = TOK_GE;
+    }
+    unsigned_compare =
+        (mir.objects[left->object].type & TYPE_UNSIGNED) != 0 ||
+        type_ptr_depth(mir.objects[left->object].type) > 0;
 
     false_label = new_label();
     mir_emit_prologue(out);
@@ -1297,9 +1332,31 @@ void mir_end_function(void)
                  * loop-family rescue above uses, can never affect any
                  * function homed/spilled-scalar-cfg would otherwise accept
                  * outright, and is only kept if it is not worse than
-                 * legacy's own captured cost. */
+                 * legacy's own captured cost.
+                 *
+                 * Item T57 (mir-text-size-plan.md): also retry on a
+                 * "text-size" fallback, not just "instruction-count" -
+                 * the original gate only covered the one failure reason
+                 * a census audit happened to find first. The exact same
+                 * safety property applies regardless of which specific
+                 * cost margin the general selector missed by: this
+                 * candidate is only ever substituted in when it is not
+                 * worse than legacy's own captured cost (the near-cost/
+                 * byte-profitable check just below), so widening which
+                 * fallback reasons attempt it cannot admit a function
+                 * this rescue would not otherwise have accepted on its
+                 * own merits. Found via tlongsub.c's if_lt/if_gt/if_le/
+                 * if_ge (`if (a OP b) return 1; return 0;` for `long`
+                 * a, b), which fail with "text-size", never "instruction-
+                 * count", and so never reached this rescue at all before
+                 * this change - independently of Item T57's other change
+                 * (wide-operand support in mir_try_emit_comparison_branch
+                 * itself, needed for these same functions since `long`
+                 * comparisons were rejected by mir_emit_load_param's own
+                 * 2-byte-only requirement). */
                 if (fallback_reason != NULL &&
-                    !strcmp(fallback_reason, "instruction-count") &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size")) &&
                     (mir.return_type & 15) == TYPE_INT) {
                     FILE *branch_candidate = tmpfile();
                     if (branch_candidate == NULL)
