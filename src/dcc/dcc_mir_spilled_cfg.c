@@ -3272,15 +3272,15 @@ static int mir_emit_cast(FILE *out, int source_type, int target_type)
 {
     const char *helper;
     if (type_is_bool(target_type) && !type_is_bool(source_type)) {
-        int nonzero_label = new_label();
+        /* mir-text-size Item T56 (mir-text-size-plan.md): one-label
+         * skip-on-false shape, see mir_emit_scalar_compare's comment. */
         int end_label = new_label();
         if (type_size(source_type) > 2)
             fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
         else
             fputs("\tld a,h\n\tor l\n", out);
         fputs("\tld hl,0\n", out);
-        fprintf(out, "\tjp nz,L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
-                nonzero_label, end_label, nonzero_label, end_label);
+        fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n", end_label, end_label);
         return 1;
     }
     if (source_type == 0 || target_type == 0 || source_type == target_type)
@@ -4445,14 +4445,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     fputs("\tld a,e\n\tcpl\n\tld e,a\n"
                           "\tld a,d\n\tcpl\n\tld d,a\n", out);
             } else if (insn->immediate == '!') {
-                int true_label = new_label();
+                /* mir-text-size Item T56 (mir-text-size-plan.md):
+                 * one-label skip-on-false shape, see
+                 * mir_emit_scalar_compare's comment. */
                 end_label = new_label();
                 if (mir_value_is_wide(insn->src1))
                     fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n\tld hl,0\n", out);
                 else
                     fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
-                fprintf(out, "\tjp z,L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
-                        true_label, end_label, true_label, end_label);
+                fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n",
+                        end_label, end_label);
             } else {
                 goto done;
             }

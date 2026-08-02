@@ -160,9 +160,21 @@ void mir_emit_signed_byte_extend(FILE *out)
     fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
 }
 
+/* mir-text-size Item T56 (mir-text-size-plan.md): materializing a 0/1
+ * boolean previously always used a two-label shape (`ld hl,0` / branch to
+ * a `true` label on the condition / unconditional `jp end` / `true: inc l`
+ * / `end:`), spending an always-executed 3-byte/10-T-state `jp end` on the
+ * false path in exchange for saving nothing on the true path (which still
+ * pays `ld hl,0` immediately before `inc l`). Branching directly to `end`
+ * on the *inverted* condition (skipping the increment entirely) needs only
+ * one label and drops the unconditional jump outright: 3 bytes/10 T-states
+ * smaller on every false-path execution, with the true path unchanged. This
+ * exact one-label shape was already used correctly elsewhere in this file
+ * and in dcc_mir_spilled_cfg.c for byte-load bool normalization; this
+ * item makes the comparison-to-bool and unary-`!`/bool-cast sites (which
+ * had kept the older two-label shape) consistent with it. */
 void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
 {
-    int true_label = new_label();
     int end_label = new_label();
 
     if (operation == '>' || operation == TOK_LE) {
@@ -174,30 +186,27 @@ void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
               "\tld a,d\n\txor 128\n\tld d,a\n", out);
     fputs("\tor a\n\tsbc hl,de\n\tld hl,0\n", out);
     if (operation == TOK_EQ)
-        fprintf(out, "\tjp z,L%d\n", true_label);
+        fprintf(out, "\tjp nz,L%d\n", end_label);
     else if (operation == TOK_NE)
-        fprintf(out, "\tjp nz,L%d\n", true_label);
+        fprintf(out, "\tjp z,L%d\n", end_label);
     else if (operation == '<')
-        fprintf(out, "\tjp c,L%d\n", true_label);
+        fprintf(out, "\tjp nc,L%d\n", end_label);
     else
-        fprintf(out, "\tjp nc,L%d\n", true_label);
-    fprintf(out, "\tjp L%d\nL%d:\n\tinc l\nL%d:\n",
-            end_label, true_label, end_label);
+        fprintf(out, "\tjp c,L%d\n", end_label);
+    fprintf(out, "\tinc l\nL%d:\n", end_label);
 }
 
 void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
 {
-    int true_label = new_label();
     int end_label = new_label();
 
     fputs("\tld a,h\n\txor 128\n\tld h,a\n"
           "\tsbc hl,de\n\tld hl,0\n", out);
     if (operation == '<')
-        fprintf(out, "\tjp c,L%d\n", true_label);
+        fprintf(out, "\tjp nc,L%d\n", end_label);
     else
-        fprintf(out, "\tjp nc,L%d\n", true_label);
-    fprintf(out, "\tjp L%d\nL%d:\n\tinc l\nL%d:\n",
-            end_label, true_label, end_label);
+        fprintf(out, "\tjp c,L%d\n", end_label);
+    fprintf(out, "\tinc l\nL%d:\n", end_label);
 }
 
 /* Item T44 (mir-text-size-plan.md): a shift whose amount operand is a
