@@ -6133,3 +6133,165 @@ census mode; 481 -> 482/2126 (22.62% -> 22.67%) under `-fstack-check`.
 (gated `MIR_JUMP` emission), `src/dcc/dcc_mir_select.c` (new
 `mir_has_multiple_conditional_tests`, T63 acceptance-gate safety
 margin), `tests/perf_baselines.csv` (1 entry).
+
+## Item T55 - pointer parameter object-eligibility (investigated, deferred, Item-6-level ambiguity)
+
+**Status: deferred, no code committed.** This is the `t55-pointer-
+object-eligibility` todo, flagged in its own description as "likely
+the single largest remaining lever" but also the riskiest item in the
+backlog. This entry documents a concrete attempt, its real coverage
+regression, and the specific follow-up design work needed before it
+can be attempted again - so the next contributor does not repeat the
+same experiment.
+
+**Hypothesis**: `mir_object_eligible` (`dcc_mir.c` ~line 199)
+unconditionally excludes every pointer-typed local/parameter
+(`type_ptr_depth(sym->type) > 0`) from `mir.objects[]` (mem2reg-style
+promotion), regardless of how simple its use pattern is. The narrowest
+possible slice - a never-reassigned pointer **parameter**, address
+never taken - should be safe to admit, mirroring
+`mir_param_value_is_direct` (`dcc_mir_spilled_cfg.c` ~line 1738),
+which already implements the exact "never-reassigned parameter reuses
+its incoming `ix+N` home directly" mechanism for scalar/wide
+parameters but explicitly documents it cannot reach pointer parameters
+today purely because `mir_object_eligible` blocks them from ever
+becoming objects.
+
+**Implementation attempted**: added a new public wrapper
+`local_name_written_in_function()` (`dcc_func.c`, over the existing
+static `ident_written_for()` - the same `g_ident_counts[].written`
+tracking data `find_bc_regalloc_candidate` already uses on the legacy
+backend to pick "never written" pointer parameters safe for BC-
+resident register allocation) and declared it in `dcc.h`. Relaxed
+`mir_object_eligible`'s pointer exclusion to:
+`type_ptr_depth(sym->type) > 0 && (sym->storage != SC_PARAM ||
+local_name_written_in_function(sym->name))` - i.e. still excludes
+every pointer local, and excludes any pointer parameter that is ever
+reassigned; only a never-written pointer parameter now qualifies. The
+existing `local_name_address_taken_in_function` check further down
+already enforces "address never taken" uniformly for every candidate,
+so no separate address check was needed.
+
+A quick audit of the ~30 non-mir.objects-specific `type_ptr_depth`
+call sites in `dcc_mir_select.c` (`mir_try_emit_countdown_loop`,
+its accumulator-loop counterpart, and the comparison-branch selector)
+found they were **already** defensively written to treat a would-be
+pointer object as unsigned (`(object->type & TYPE_UNSIGNED) != 0 ||
+type_ptr_depth(object->type) > 0`), and the byte-width promotion paths
+in `dcc_mir_emit_common.c` (sign-extension for 1-byte objects) only
+ever trigger for `type_size == 1`, never for a 2-byte pointer object -
+so no sign-extension or width-assumption bug was found in the parts of
+the emitter actually reachable by a 2-byte, never-written, address-
+free pointer parameter.
+
+**Build succeeded**; the change compiles cleanly with no new warnings.
+
+**Real regression found by the census itself** (not by runtime
+execution - caught before it got that far): comparing a true
+pre-change baseline (483/2023, matching the committed T62/T63 state)
+against the post-change census with `--fail-on-regression`:
+
+- **+15 newly MIR-emitted** (`a1.usage`, `adaint.acc_word`,
+  `adaint.mem_get_byte`, `adaint.need_word`, `cint.mem_get_byte`,
+  `cobint.keyword_code`, `pint.isword`, `tc89qual.addq`,
+  `tmulpow2.idx_int`, `too.list_push`, `tptrinit.list_prepend`,
+  `tstructv.assign_return_pair_ptr`, `tstructv.copy_pair_ptr`,
+  `tstructv.copy_wrap_ptr`, `tunion2.copy_through_pointer`).
+- **-20 no-longer-emitted** (regressed from `mir accepted` back to
+  fallback): `fint.add_prim`, `t.si16`, `t.sui16`,
+  `tc99apar.read_paren_const`, `tc99apar.read_paren_restrict`,
+  `tdecl.pick_same_node`, `tesc.check`, `tmirfast.check`,
+  `tmirfuse.check`, `tmirslot.check`, `too.scale_all_visitor`,
+  `tpeepal.retain_escaped`, `tphijoin.check`, `tqsort.cmp_r5`,
+  `trtl2.check_i`, `trw2.show_error`, `trwold.show_error`,
+  `tscanf.check_int`, `tstdlib.check_int`, `tstr3.check_i`.
+- **Net -5 functions** (478/2019 vs 483/2023 - the corpus function
+  count itself shifted slightly between runs, a known census-run
+  variance already documented elsewhere in this log; the coverage
+  *percentage* also dropped, 23.68% vs 23.88%). `--fail-on-regression`
+  correctly failed (exit code 1) on the 20 "no longer MIR-emitted"
+  functions - a real, unambiguous coverage regression, not noise.
+
+**Root-caused via `DCC_MIR_SELECT_REPORT=1`** on `tesc.c`'s `check`:
+
+```c
+static void check(name, got, expected)
+const char *name; int got; int expected;
+{
+    if (got != expected) fail(name, got, expected);
+}
+```
+
+Before this change, `check`'s `homed-scalar-cfg` selection reported
+`generated-insns=29` (accepted). After, the same function reports
+`generated-insns=32` (3 more) and falls back on `instruction-count`.
+`cmp_r5` (`tqsort.c`, `return memcmp(a, b, 5);`) and `si16`
+(`t.c`, forwards its `text` parameter straight into a `printf`-style
+call) show the identical shape: **every one of the 20 regressed
+functions uses its pointer parameter only as an opaque call argument
+- never dereferences, compares, or returns it directly.**
+
+**This is the real, generalizable finding**: making a pointer
+parameter an "object" (`mir.objects[]` entry) adds fixed tracking
+overhead (extra MIR instructions to bind/track its value) that only
+pays for itself when the parameter is actually **dereferenced,
+compared, or returned inside the function** - the exact three uses
+the todo's own narrow-slice wording already named
+("dereference/compare/return only"). My implementation, however, only
+checked whole-symbol "never written" and "address never taken" -
+**not** the per-use-site restriction to those three use kinds - so it
+also admitted (and then penalized) the extremely common "pointer
+parameter forwarded verbatim to another call" shape, which is at
+least as frequent in the corpus as genuine dereference/compare/return
+use, per this batch's own -20 regressions outnumbering its +15 gains.
+
+**Why this is deferred rather than fixed with a quick follow-up
+guard**: `mir_object_eligible` runs per-symbol at declaration/parameter
+processing time, with no visibility into how the parameter is
+*used* at each individual reference site later in the function body -
+it cannot cheaply distinguish "this specific reference is a bare
+call-argument forward" from "this specific reference is a
+dereference/compare/return" without a new per-use-site classification
+pass (walking every reference to the parameter and categorizing its
+syntactic context), which is a materially larger, separate static-
+analysis addition - not a one-line gate tweak. This is the same
+category of design ambiguity as Item 6 and warrants its own carefully
+staged follow-up, not a rushed fix bolted onto this attempt.
+
+**Reverted in full**: `src/dcc/dcc.h`, `src/dcc/dcc_func.c`,
+`src/dcc/dcc_mir.c` all restored via `git checkout --`; build
+re-verified clean (`sh src/dcc/build-dcc.sh`, no diffs remain). No
+commit was made for this attempt - the working tree is exactly at
+`8ec1d43` (the last committed checkpoint) again.
+
+**What a future attempt needs, in order**:
+1. A per-reference-site classifier for a candidate pointer parameter:
+   walk every occurrence in the function body and categorize each as
+   dereference (`*p`, `p[i]`, `p->field`), comparison (`p == x`,
+   `p != x`, `p == NULL`), return (`return p;`), address-of (already
+   excluded via `local_name_address_taken_in_function`), or "other"
+   (anything else, most commonly a bare call argument or an operand of
+   pointer arithmetic feeding a further expression).
+2. Only mark the parameter object-eligible when **every** reference
+   site is dereference/comparison/return (zero "other" references) -
+   matching the todo's original wording exactly, not just the
+   whole-symbol never-written/address-free bar this attempt used.
+3. Re-attempt the same before/after census comparison; if the
+   dereference/compare/return-only restriction eliminates the -20
+   regression class while still capturing some of the +15 gains
+   (`adaint.mem_get_byte`, `cint.mem_get_byte`, `tstructv.*` looked
+   like plausible genuine dereference/return cases from their names -
+   not independently re-verified line-by-line this pass, since the
+   whole change was reverted before going further), validate the
+   remainder with real `ntvcm`-executed synthetic tests per the
+   Item T41 lesson before considering it committable.
+4. Do not reuse this attempt's whole-symbol "never written" gate
+   alone; it is necessary but not sufficient.
+
+**Files touched then reverted**: `src/dcc/dcc.h` (new
+`local_name_written_in_function` declaration), `src/dcc/dcc_func.c`
+(new wrapper over the existing `ident_written_for`), `src/dcc/dcc_mir.c`
+(`mir_object_eligible`'s pointer exclusion, relaxed then reverted). No
+`tests/perf_baselines.csv` change. `todos` SQL table:
+`t55-pointer-object-eligibility` moved from `pending` to `blocked`
+with this rationale.
