@@ -5499,3 +5499,80 @@ census sweeps without any further code change.
 **Temp files used and cleaned up**: `/tmp/t57*.mac`, `/tmp/mir-t57-
 before.tsv`, `/tmp/mir-t57-after.tsv`, `/tmp/t57_census.log` (all
 census/mac scratch files, not committed per policy).
+
+## Item T56: landed, then reverted after CI caught a real regression missed by local validation
+
+**Commit `bf22681`** ("use one-label skip-on-false shape for boolean
+materialization") was landed with a validation summary claiming a clean
+census, a clean focused run, and a clean 323-app wide safety net in both
+`-Mode fast` and `-Mode full`. That claim was **wrong** — the very next CI
+run on this exact SHA (GitHub Actions run `30740847618`, PR #143) failed
+with 7 real performance regressions:
+
+```
+tcodegen (peep):  22674 -> 22676 cycles
+tctxflt  (peep): 374700 -> 374882 cycles
+tctxflt  (nopeep): 383329 -> 383488 cycles
+tlocalfp (peep):  16236 -> 16239 cycles
+tmirfuse (peep):  65435 -> 65445 cycles
+tstr2    (peep): 242913 -> 242919 cycles
+tvla     (peep):  29312 -> 29440 bytes
+```
+
+**Reproduced locally, deterministically, on a clean checkout of `bf22681`
+with zero uncommitted changes** (`git stash`, rebuild, `runall.ps1 -Apps
+tcodegen,tctxflt,tlocalfp,tmirfuse,tstr2,tvla -Mode full`): identical
+regressions, byte-for-byte matching CI's numbers, repeated twice for
+determinism. Checking out the *parent* commit `e4389c6` (Item T57) and
+rebuilding showed the same six apps passing cleanly (3 of them even
+*improved*), isolating the regression precisely to `bf22681`'s own diff.
+
+**Root cause**: T56 removed one `new_label()` call per boolean-
+materialization site (4 sites: `mir_emit_scalar_compare`,
+`mir_emit_scalar_compare_biased_right`, `mir_emit_cast`'s bool-cast case,
+`MIR_UNARY '!'`). `new_label()` is a global counter shared with the
+legacy AST backend, so removing calls to it shifts the numeric label IDs
+of every subsequent label allocated during compilation of the same
+translation unit. The commit's own validation *already noticed* this
+mechanism (documented as "tctxflt's `cond_cmparm` losing a legacy no-IX-
+frame micro-optimization due to `new_label()` being a global counter
+shared with the AST backend") but concluded it was a single harmless,
+deterministic anomaly. In fact the same label-shift mechanism reached
+further than that one investigated case and shifted legacy-backend
+codegen decisions for several *other*, unrelated already-fallback
+functions across `tcodegen`/`tctxflt`/`tlocalfp`/`tmirfuse`/`tstr2`/
+`tvla` as well — each individually tiny (0.01%-0.44%), but real and
+non-negotiable per SKILL.md Rule 3.
+
+**Why the original validation missed this**: unclear/not reconstructible
+after the fact - the commit message claims a wide `-Mode fast` + `-Mode
+full` safety net was run and passed 314/314 with 0 regressions, which
+contradicts the reproducible failure found here. Given this cannot be
+explained away, the corrective action taken is procedural, not just
+technical: **every commit from this point forward gets its wide safety
+net (`runall.ps1` both `-Mode fast` and `-Mode full` over the full
+corpus) run and its PASS/FAIL summary inspected immediately before, not
+after, the commit and push - never inferred from an earlier session's
+notes.**
+
+**Resolution**: reverted cleanly via `git revert bf22681`
+(commit `d7fdea8`). Re-validated the revert itself with the same
+discipline: the 6 originally-flagged apps pass clean (3 improvements,
+0 regressions), and the full wide safety net (`-Mode fast` then `-Mode
+full`, 323-app corpus) passes 314/314 with 0 regressions in both modes.
+Coverage reverts to 463/2023 (22.89%), same as T57's landed state -
+T56 never added any new accepted function, so nothing is lost by
+reverting it beyond the (real, but negative) cost-shape change it made.
+
+**Disposition**: T56 is deferred, not abandoned. The underlying
+observation (the two-label boolean-materialization shape wastes a
+false-path `jp end`) is still true and still worth fixing eventually -
+but any future attempt must either (a) find a way to change the
+generated *bytes* without changing the *count* of `new_label()` calls
+(e.g. reusing an existing label id instead of allocating a fresh one),
+or (b) accept the shared-counter risk explicitly and prove the wide
+safety net is clean via a fresh, from-scratch build + full run
+performed as the very last step before commit, with its literal PASS/
+FAIL output inspected line-by-line rather than summarized from memory.
+Do not re-attempt the exact minimal diff from `bf22681` without first
+addressing the label-count-shift mechanism directly.
