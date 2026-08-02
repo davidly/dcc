@@ -5560,9 +5560,11 @@ notes.**
 discipline: the 6 originally-flagged apps pass clean (3 improvements,
 0 regressions), and the full wide safety net (`-Mode fast` then `-Mode
 full`, 323-app corpus) passes 314/314 with 0 regressions in both modes.
-Coverage reverts to 463/2023 (22.89%), same as T57's landed state -
-T56 never added any new accepted function, so nothing is lost by
-reverting it beyond the (real, but negative) cost-shape change it made.
+Coverage reverts to 467/2023 (23.08%), same as T57's landed state (T56's
+own commit message already noted it added no new accepted function,
+"coverage unchanged at 467/2023" - confirmed unchanged in the other
+direction too now that it is reverted) - nothing is lost by reverting it
+beyond the (real, but negative) cost-shape change it made.
 
 **Disposition**: T56 is deferred, not abandoned. The underlying
 observation (the two-label boolean-materialization shape wastes a
