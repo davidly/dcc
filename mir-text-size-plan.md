@@ -6466,3 +6466,80 @@ investigate` both moved from `pending` to `blocked` with this rationale
 follow-on work (CSE pass design, T-state cost modeling) is substantial
 enough to warrant its own fresh planning pass rather than an ad hoc todo
 row.
+
+## `cfg-backedge` bucket audit: confirms SKILL's caution is load-bearing - real miscompilations found, not touched
+
+**Status: investigated only, no code changes - this bucket must NOT be widened.**
+Continuing the "next 100 candidates" sweep after the write-up above, force-
+accepted and ran `runall.ps1 -Mode full`/`-Mode fast` on all 16
+`cfg-backedge` fallback functions (every function whose MIR stream contains
+a `MIR_JUMP`/`MIR_BRANCH_FALSE` targeting a label at or before its own
+position - i.e. every currently-rejected loop). All 16 show
+`generated_bytes < captured_bytes` in the static census (MIR already looks
+smaller for every one of them), which could tempt a byte-based widening -
+**do not do this.** Real per-function `runall -Mode full` execution shows:
+
+| function | result when forced |
+| --- | --- |
+| `adaint.add_expr` | **real miscompilation** - wrong program output (`ttt`/`sieve` baselines mismatch, garbage/truncated values) |
+| `adaint.var_or_const_decl` | **real miscompilation** (execution failure) |
+| `bint.sum` | **real miscompilation** (execution failure) |
+| `adaint.block_until_end` | correctness OK, 1 perf regression |
+| `adaint.rel_expr` | correctness OK, 1 perf regression |
+| `bint.expr` | correctness OK, 1 perf regression |
+| `pint.block_stmt` | correctness OK, 1 perf regression |
+| `tstr.wcschr` | correctness OK, 1 perf regression |
+| `tc89c2.test_getenv_system` | correctness OK, 3 perf regressions |
+| `tc89c2.test_signal` | correctness OK, 3 perf regressions |
+| `tc99scpe.pointer_for_init_sizeof` | correctness OK, 3 perf regressions |
+| `tvlaparm.main` | correctness OK, 2 perf regressions |
+| `tptrinit.list_free` | correctness OK, 1 perf regression (despite 2 improvements) |
+| `adaint.and_expr` | **0 regressions, 1 improvement - individually safe** |
+| `adaint.parse_expr` | **0 regressions, 1 improvement - individually safe** |
+| `wumpus.pact` | **0 regressions - individually safe** |
+
+**This is the single most important finding of this investigation pass**:
+3 of 16 backedge candidates are genuine, confirmed **miscompilations** (not
+merely slower code) when the general selector is forced to emit a loop it
+currently rejects - concretely validating SKILL.md's explicit "Loop
+backedges are not a gate to widen speculatively... only after dynamic
+profiling" rule, which this session had been treating as a generic
+caution rather than a specifically load-bearing one. **Do not attempt to
+relax `mir_has_cfg_backedge`'s fallback trigger (`dcc_mir_select.c` line
+~1326) via any static byte/instruction threshold** - the failures are not
+correlated with byte gap, block count, or any other census column
+available; `add_expr`/`parse_expr` are both `blocks=4` with near-identical
+byte gaps (36 vs 36) and one miscompiles while the other is clean. Root-
+causing the 3 real bugs (why does the general spilled-scalar-cfg selector
+mishandle these specific loop shapes) is real, valuable future work -
+almost certainly a loop-carried value not being correctly re-homed/
+reloaded across the backedge in some shape the existing narrow
+`mir_is_profiled_constant_bound_loop_pair`/`mir_has_profiled_positive_loop`
+predicates don't share - but it is a **correctness bug hunt**, a different
+kind of task than this migration's coverage-expansion work, and was not
+pursued further this pass given the time already invested this session.
+Flagging here so a future contributor treats it as a bug-fix project (with
+its own dedicated test cases) rather than rediscovering it from a coverage
+angle.
+
+The 3 individually-safe candidates (`and_expr`, `parse_expr`, `wumpus.pact`)
+show the same shape as the `fill_buf`/`return_stmt`/`on_board` cluster
+above: safe in isolation, but with real miscompilations elsewhere in the
+same bucket for structurally similar candidates, there is **even less
+basis** for inferring a safe general predicate here than in the
+instruction-count bucket - not attempted.
+
+**`cfg-block-count` bucket (6 functions: the `run`/`prim`/`exec_range`
+bytecode-interpreter dispatch loops in adaint/bint/cint/cobint/fint/pint,
+95-132 blocks each) was reviewed but not force-tested this pass** - given
+the `cfg-backedge` bucket (a strict subset of what these giant functions
+also contain) just produced 3 confirmed miscompilations, forcing 100+
+block interpreter dispatch loops through the same not-yet-loop-hardened
+selector carries materially higher risk for no more evidence than already
+gathered; deferred alongside `t-chk-large-cfg-investigate` under the same
+SKILL-mandated "large CFGs last" ordering, now with concrete evidence
+(not just risk-ordering theory) for why.
+
+**No code changes.** `todos`: no new row needed (this is covered by the
+existing SKILL guidance, not a numbered plan item); noting the 3 confirmed
+bug candidates here is the durable record.
