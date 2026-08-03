@@ -6959,3 +6959,96 @@ unrelated legacy-emitted functions elsewhere in the same file.
 
 **Files changed**: `src/dcc/dcc_mir_select.c` only (no runtime, header, or
 test changes needed).
+
+## Item T67: investigated and deferred - real callee-body tracking is structurally sound but yields zero functions in the current corpus (2026-08-04)
+
+**Hypothesis**: `mir_has_inline_substitution_call` unconditionally falls back
+any function containing a MIR_CALL to a static-inline callee (Item A's
+blanket exception, justified because such a callee may have no standalone
+body once legacy's own AST-level inline substitution eliminates every real
+call site to it). `struct Sym.deferred_body_needed` is already set to 1 by
+`gen_call_ast` (`dcc_ast_gen_expr.c` ~4574) at the exact moment ANY caller's
+legacy codegen - anywhere earlier in the same single-pass translation
+unit, including earlier calls within the SAME function being decided -
+emits a real (non-substituted) call to that callee. Since legacy codegen
+and MIR lowering run interleaved over the same per-function AST traversal,
+both complete well before that function's own `mir_end_function` call, this
+flag should already be correctly set for any callee proven to need a real
+body by the time MIR's own accept/reject decision is made - a query that
+can only ever be a safe (if incomplete) under-approximation, never an
+unsound one: if `deferred_body_needed` is already 1, a real body is
+*guaranteed* to exist (set unconditionally by `emit_needed_deferred_bodies`
+at end-of-file); if not yet 1, falling back is exactly as conservative as
+today's blanket rule, never worse.
+
+**Implementation tried**: replaced the blanket `return 1` in
+`mir_has_inline_substitution_call` with a per-callee check: for each
+MIR_CALL flagged inline-substitutable, `find_global(mir.insns[i].name)`
+recovers the callee `struct Sym*` (the MIR_CALL's `name` field already
+holds the syntactic C-level identifier, not a mangled label, confirmed by
+tracing `dcc_mir.c`'s AST_CALL lowering: `call_name = syntactic_name`), and
+only forces fallback if that specific callee's `deferred_body_needed` is
+still 0. Verified this correctly re-derives Item A's own safety property:
+re-ran the exact original repro (`DCC_MIR_FORCE_ACCEPT_FUNCTION` bypasses
+this check entirely as a diagnostic override and is not informative here;
+without it, `tests/forint.c`'s `assign_pre`/`set_sym_val` pair still
+correctly falls back under normal, non-forced compilation with this new
+predicate in place - no regression of Item A's exact case).
+
+**Result: zero yield**. A true before/after whole-corpus census showed
+**0 newly-emitted, 0 no-longer-emitted, 0 apps with any census change** -
+every one of the 44 `inline-substitution` fallbacks was unaffected.
+Instrumented every callee lookup this predicate makes (`DCC_MIR_T67_DEBUG`,
+temporary, removed before finalizing) across all 9 apps containing the 44
+functions: only **one** callee (`attnc11.c`'s `q16_to_q8`, called from
+`matrix_vector_add`) was ever found with `deferred_body_needed` already 1
+at decision time - every other checked call (60+ across
+attnc11/cint/cobint/fint/forint/tchess/tinline/tinlinfb/tinlnpar) was 0.
+Even that one case did not flip its caller to MIR: `matrix_vector_add`
+makes a *second* inline-substitutable call, to `add_clamped`, whose
+`deferred_body_needed` was still 0 - and the predicate correctly requires
+*every* flagged call in a function to be individually proven safe, not
+just one of them.
+
+**Root cause of the zero yield (not a tooling gap - a corpus property)**:
+this is not primarily the single-pass "not yet known" ordering hazard the
+original hypothesis worried about (though that hazard is real and would
+still block some theoretically-safe cases even with a whole-file two-pass
+lookahead this item did not attempt). The dominant, observed reason is
+simpler: legacy's own inliner is effective enough that small, genuinely
+`static inline` helper functions in this corpus are overwhelmingly
+substituted at **every** call site, program-wide - `deferred_body_needed`
+essentially never becomes 1 for them at all, not just "not yet." And
+functions with more than one inline-substitutable call site (common: e.g.
+`for_stmt`/`if_stmt`/`while_stmt` in `cint.c`/`cobint.c`/`fint.c`/
+`forint.c` each call 2+ small `static inline` accessor/emitter helpers)
+need every one of those calls independently proven safe, which compounds
+the rarity further. The narrow, safe version of this predicate the plan
+called for is therefore **structurally correct but has essentially no
+applicable population in the current test corpus** - this is a genuine
+finding about the corpus, not a flaw in the check itself.
+
+**Decision: reverted the code change, kept the finding.** Landing a
+correct-but-zero-yield structural check adds a `find_global()` lookup to
+every function's `mir_end_function` for no measurable benefit - the same
+"near-zero yield, revert" call already applied to Items T54 (twice) and
+T55. `src/dcc/dcc_mir_select.c` is unchanged; `mir_has_inline_substitution_
+call`'s blanket rule remains exactly as it was. No census/runall
+validation was needed for the revert itself since the working tree was
+restored via `git checkout` to the last committed state.
+
+**What would actually move this number**: not a smarter local predicate on
+top of `deferred_body_needed` (that ceiling has now been measured and is
+essentially zero for this corpus) - either (a) a genuine two-pass
+compilation restructuring (pre-scan the whole translation unit's calls
+before committing any function's MIR accept/reject decision, so a callee
+whose real-call requirement is only established by a LATER function can
+still be credited retroactively) which is a materially bigger structural
+change than this item's original "moderate scope" framing assumed, or
+(b) accepting that this fallback reason's 44 functions are simply not
+profitably unlockable without that bigger investment and deprioritizing
+them relative to the `text-size` bucket's 1,435 functions, which dwarfs
+this one by more than 30x.
+
+**Follow-up**: `t67-inline-callee-body-tracking` marked blocked with this
+negative-repro rationale, mirroring `t54`/`t55`/`t65d`'s precedent.
