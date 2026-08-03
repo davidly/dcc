@@ -7185,3 +7185,132 @@ files). The two safe-vs-unsafe measured pairs (`fill_buf`/`test_strcspn`
 confirming prior classification, `return_stmt` correcting it) are
 preserved here as reference data points for any future revisit of Item 1
 or Item 2 in the next-phase plan.
+
+## Item T68 Stage 1: corpus-wide `brfalse` sizing pass - refutes "materialize-boolean is the uniform driver," finds a bigger, more mechanical candidate (2026-08-04)
+
+**Goal** (per the next-phase plan's staged approach to Item 1, "materialize-
+boolean/spilled-comparison architecture fix"): before touching
+`mir_emit_scalar_compare`/`MIR_BRANCH_FALSE` cooperation (a shared,
+high-blast-radius primitive already reverted twice - Items T56 x2), do a
+cheap, no-code-change corpus-wide sizing pass first, bucketing all 1,435
+`text-size` fallbacks by how many `brfalse` (MIR's conditional-branch
+opcode) instructions they contain, to check whether the "chained
+comparison sharing a spilled operand" shape the plan assumed is dominant
+is actually the majority case.
+
+**Method**: built a one-off script (`/tmp/t68sizing/sizing_pass.py`,
+scratch, not committed) that, for every one of the 289 apps containing at
+least one `text-size` fallback, runs `dcc` once with `DCC_MIR_REPORT=1`
+and greps the resulting dump for each target function's first MIR block,
+counting `brfalse` instructions. Ran across the full population (1,435
+functions, 100% matched, ~11 minutes wall time).
+
+**Result - the corpus-wide histogram**:
+
+| `brfalse` count | functions | % of text-size population |
+| ---: | ---: | ---: |
+| 0 | 510 | 35.5% |
+| 1 | 355 | 24.7% |
+| 2 | 169 | 11.8% |
+| 3+ | 401 | 28.0% |
+
+**Finding 1 - over a third of the population has NO comparison/branch at
+all.** 510 functions (35.5%) contain zero `brfalse` instructions - the
+materialize-boolean/spilled-comparison hypothesis cannot be their cost
+driver by construction, since there is no comparison to materialize.
+Spot-checked two representative examples: `tstr3.test_strcspn` (call-
+argument-marshalling-heavy: 5x `strcspn(...)` -> `check_i(...)` call
+pairs, no branches) and `a1.pop` (pure pointer/address arithmetic, no
+calls, no branches). This bucket's actual cost driver is heterogeneous
+and unrelated to comparisons - a materialize-boolean fix would have zero
+effect on over a third of the whole `text-size` population.
+
+**Finding 2 - even the single-comparison bucket's byte gap is dominated
+by a different, more mechanical pattern: repeated same-block re-
+derivation of an unchanged address expression, not the comparison
+itself.** Spot-checked five real `1-brfalse` functions from `adaint.c`
+(`init_state`, `add_sym`, `add_string`, `acc_word`, `need_word`) rather
+than relying on the plan's original `check_s` reference example (which,
+cross-checked against the current census, is now already MIR-accepted -
+Items T2/T53/T57/T62/T63 already closed most of the single-comparison-
+branch gap that motivated the original root-cause note back at the
+165/2319 checkpoint).
+
+- `init_state` (1,380 generated vs 861 captured bytes, a 60% gap) has
+  exactly one `brfalse` (a `NULL`-check guard: `if (!G) { fprintf(...);
+  exit(1); }`), then 20+ unconditional instructions that each **reload the
+  same global pointer `G` from memory from scratch** (`load v15 = G`,
+  `load v18 = G`, `load v22 = G`, `load v25 = G` - four separate,
+  identical reloads across four consecutive field-store statements
+  `G->line=1; G->curfunc=-1; G->frame_size=2; G->marks=xcalloc(...)`)
+  instead of computing `G` once and reusing the already-loaded pointer
+  across all four stores.
+- `add_sym` (2,846 vs 1,975 bytes, a 44% gap) is worse: it independently
+  re-derives the exact same address expression `&G->sym[i]` **five
+  separate times** (`load G / memberaddr sym / loadind sym / indexaddr
+  i`, repeated verbatim at MIR instructions 22-26, 35-39, 46-49, 54-58,
+  63-67) to store five different fields (`kind`, `scope`, `esize`, plus
+  feed two call arguments) of the same already-known struct element,
+  instead of computing the element's base address once and reusing it
+  for all five field accesses.
+
+Both are the same general bug class: **MIR's per-block lowering has no
+intra-block common-subexpression elimination (CSE) / available-expression
+tracking for repeated `load`/`memberaddr`/`indexaddr` chains against an
+invariant base pointer, global, and index** - every field access
+independently re-walks the same pointer chain from scratch even when nothing
+in between could have changed it. This produces far more bytes per
+occurrence (a full `load+memberaddr+loadind+indexaddr` chain, 4-5
+instructions) than the comparison-materialize pattern (roughly one
+redundant reload), and explains the bulk of the observed byte gaps in
+these two functions far better than "one spilled boolean got reloaded once
+more than necessary" would.
+
+**Conclusion - Item 1's original framing needs correcting, not just
+staging.** The "materialize-boolean, uniformly ~2x more expensive" root
+cause (documented earlier in this file from the 165/2319 checkpoint) was
+derived from two loop/comparison-heavy examples and does not describe the
+majority of the *current* `text-size` population's actual cost driver.
+Combined, findings 1 and 2 suggest the higher-yield, more mechanical, and
+likely lower-risk next hypothesis is **not** flag-forwarding/live-range
+extension for chained comparisons, but **intra-block address/value CSE for
+repeated `load`/`memberaddr`/`indexaddr` chains** - a classic, well-
+understood compiler technique (local value numbering / available-
+expressions within a basic block), narrower in scope than a full
+`mir_emit_scalar_compare` rework, and applicable to a much wider slice of
+the population (every function with 2+ field accesses off the same base
+pointer within one block, not just chained `||`/`&&` comparisons).
+
+**Caveat identified but not yet resolved**: `add_sym`'s repeated
+`&G->sym[i]` computation spans across two intervening `call`
+instructions (`memset`, `lower_copy`) - any CSE pass must either prove the
+callee cannot invalidate the cached address (no assignment to `G`, no
+reallocation of `G->sym`, no reassignment of `i`) or conservatively treat
+every `CALL` as an invalidating barrier, which would recover less of the
+observed gap than the ideal case. This aliasing question is exactly the
+kind of correctness trap SKILL Rule 5 warns about (keep semantic-risk
+gates separate from cost gates) and must be resolved with a real
+alias/purity analysis (or a deliberately conservative call-barrier rule as
+a safe first version) before any implementation, not assumed away.
+
+**Decision: no code change this session - Stage 1 (sizing + qualitative
+characterization) is complete and redirects Stage 2.** The plan's original
+Stage 2 ("extend `mir_try_emit_comparison_branch` to a slightly wider
+single-`if`-no-other-use shape") is now lower priority than "does
+`mir_try_emit_spilled_scalar_cfg`/`mir_try_emit_homed_scalar_cfg` already
+perform any redundant-address-reload elimination within a block, and if
+not, can a conservative (call-barrier) intra-block CSE pass be added
+safely" - a new, more concrete, better-evidenced hypothesis. Filed as a
+new todo (`t70-intra-block-address-cse`) rather than folding into `t68`,
+since it is a materially different fix location and falsifiable
+hypothesis than the original comparison/branch-fusion framing, even
+though it was discovered while investigating Item T68.
+
+**Follow-up**: `t68-materialize-bool-architecture` left `pending` (not
+`blocked` - this is a redirection with real forward progress, not a dead
+end) with this finding appended to its description, pointing at
+`t70-intra-block-address-cse` as the concretely-evidenced next hypothesis
+to pursue before attempting the original comparison/branch-fusion
+architecture work. The `brfalse` histogram and the two worked examples
+above are preserved here as reference data for whichever hypothesis is
+attempted next.
