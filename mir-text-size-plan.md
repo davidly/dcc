@@ -7460,3 +7460,110 @@ on `struct Sym`), `src/dcc/dcc_mir_internal.h` (declarations),
 dcc_mir_spilled_cfg.c`, `src/dcc/dcc_mir_homed_cfg.c`, `src/dcc/
 dcc_mir_emit_common.c` (call-site conversions), `tests/
 perf_baselines.csv` (the two documented, deliberate exceptions above).
+
+## Item T70: intra-block address/value CSE for repeated `load`/`memberaddr`/`indexaddr` chains — attempted and REVERTED, net regression (2026-08-05)
+
+**Hypothesis**: `init_state`/`add_sym` in `tests/adaint.c` (both `text-size`
+fallbacks) each reload the same global pointer (`load G`) or re-derive the
+same member/index address (`&G->sym[i]`) repeatedly across several
+sequential field stores/call arguments within one straight-line basic
+block. Since MIR values are SSA-like (`mir_new_value()` never reuses an
+id — a value's meaning is fixed forever once created),
+`MIR_MEMBER_ADDRESS`/`MIR_INDEX_ADDRESS` are pure arithmetic on an
+already-computed value and can always be safely reused regardless of
+intervening stores/calls; `MIR_LOAD` reads current memory content and
+needs real invalidation tracking, refined here to only invalidate a
+cached load when the loaded variable's address is provably taken
+somewhere in the program (`global_text_addr_taken_count`/
+`local_name_address_taken_in_function`, the same predicates
+`mir_object_eligible`/`dcc_loop_regalloc.c` already use for the identical
+alias argument) — a direct `MIR_STORE` to the exact same name always
+invalidates regardless.
+
+**Implementation**: added `mir_local_address_cse(void)` to `dcc_mir.c`,
+called once from the end of `mir_resolve_deferred_metadata()` (i.e. runs
+unconditionally for every function, before selector attempts). Three
+64-entry available-expression tables (`loads`/`members`/`indices`)
+scanned linearly per function; `MIR_LABEL` clears all tables (unrelated
+predecessor); `MIR_JUMP`/`MIR_BRANCH_FALSE` clear nothing (fall-through
+continuation stays on the same path — confirmed correct and necessary via
+a first pass that cleared on these too and saw zero effect); a direct
+`MIR_STORE` invalidates only the matching-name load entry; a
+`MIR_STORE_INDIRECT`/call-family instruction invalidates only load
+entries flagged "aliasable" at insertion time. Duplicate instructions are
+replaced with `mir_replace_value_uses()` + `MIR_NOP`, deliberately without
+retiring now-possibly-unused operands (an operand could itself be a still-
+cached table entry; retiring it risks a future hit referencing a
+definition-less instruction — a correctness hazard T50's orphan-retirement
+precedent doesn't have to worry about since it runs after all CSE
+opportunities in that neighborhood are already resolved).
+
+**Correctness of the mechanism itself**: confirmed sound in isolation. A
+`DCC_MIR_REPORT` diff of `die` (a different, unrelated function in the
+same file) showed a redundant `load G` correctly eliminated (replaced
+with `nop`, downstream `memberaddr` correctly rewired to the earlier
+value). `init_state`'s post-CSE dump showed exactly the intended effect:
+one `load v15 = G` survives, three subsequent redundant loads become
+`nop G`, with all four `memberaddr`/`storeind` chains correctly rewired
+to `v15`. The IR-level transformation is not buggy.
+
+**Why it was reverted anyway — a genuine architectural conflict, not a
+tooling gap**: `mir_try_emit_spilled_scalar_cfg`'s register allocator
+assigns "homes" using a fixed-register-per-opcode-type policy (e.g.
+constants often prefer `hl`, member addresses often prefer `de`), not a
+general graph-coloring allocator. Extending a load's live range across
+several intervening stores (exactly what CSE does — that is the whole
+point) forces the value to stay pinned in one home across code that also
+wants that same register class for unrelated operands, and the allocator
+responds by inserting *more* register-shuffling ("fixed-moves") to
+satisfy both demands — visible directly in `init_state`'s
+`MIR allocation` summary line: before CSE, `hl=26 bc=0 fixed-moves=1`;
+after CSE, `hl=23 bc=3 fixed-moves=4`. The net effect for `init_state`
+was **worse**, not better: `generated-bytes` 1380→1462, `generated-insns`
+120→127, `slots` 2→3 — despite the IR having objectively fewer redundant
+loads. `add_sym` showed the identical pattern (`generated-bytes`
+2846→2923, `slots` 3→4). Fewer IR-level instructions does not imply
+smaller generated code once a fixed-home register allocator has to work
+around the resulting longer live range — the same class of static-metric
+trap SKILL.md's "instruction count is not proof" rule and Item T56's
+history already warn about, just discovered from the opposite direction
+(a supposedly-pure simplification, not a selector nudge).
+
+**Whole-corpus confirmation this is not an isolated case**: full census
+(`mir-migration-census.py --compare <T71 baseline> --fail-on-regression`,
+exit code 1) showed only 6 newly-emitted functions
+(`forint.add_stmt`, `pint.add_sym`, `pint.for_stmt`, `tbug2.main`,
+`tmirslot.main`, `tphijoin.main`) against **23 functions that regressed
+out of MIR emission entirely** (previously accepted, now falling back to
+legacy `text-size`/other reasons): `adaint.find_sym`, `pint.find_sym`,
+`tallocx.t_realloc`, `tallocx.t_realloc_size_overflow`,
+`tbcloop.ck_str`, `tbsearch.main`, `tc89init.cs`, `tesc.check_s`,
+`tfpos.chkstr`, `too.check_s`, `too.main`, `too.shape_area`,
+`too.shape_perim`, `too.shape_scale`, `tqsort.main`, `trtl2.check_s`,
+`tscanf.check_str`, `tsprintf.check`, `tstr3.check_s`,
+`tsvbuf2.make_buf`, `tsyntax.check_s`, `tvplain.check_str`,
+`tzpad.eq` — a net coverage loss of 17 functions (493→476), confirming
+this is a systemic interaction with the spilled-scalar-cfg backend's
+register assignment strategy, not a one-function anomaly.
+
+**Disposition**: reverted in full (`git checkout -- src/dcc/dcc_mir.c`);
+no commit made; working tree restored to the T71 checkpoint (`410e980`).
+The idea is not abandoned outright — see "future direction" below — but
+this straightforward implementation is a confirmed net regression and
+must not be attempted again in this form.
+
+**Future direction, if revisited**: CSE-driven live-range extension is
+only safe to apply in *this* backend when the eliminated load's value
+either (a) has a short enough remaining live range that it doesn't
+compete with the same fixed-home register class as intervening code
+(would need a real cost model — ties into the still-pending
+`t66-tstate-cost-model` item), or (b) the backend used a real
+graph-coloring/priority allocator instead of fixed-homes-per-opcode-type
+(which is the deeper `t68-materialize-bool-architecture` rework's
+territory, not a narrow addition). Do not re-attempt this as a standalone
+item without first solving one of those two prerequisites; the mechanism
+itself (the CSE tables, the address-taken alias refinement) is correct
+and can be resurrected once either prerequisite exists.
+
+**Files touched then reverted**: `src/dcc/dcc_mir.c` only (no other files
+modified for this attempt; no baseline changes; no commit).
