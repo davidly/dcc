@@ -1089,10 +1089,17 @@ void mir_end_function(void)
         getenv("DCC_MIR_CANDIDATES") != NULL) {
         FILE *candidate = tmpfile();
         int accepted;
+        int label_id_save = label_id;
         if (candidate == NULL)
             fatal("cannot create MIR candidate stream");
         accepted = mir_try_emit_z80(candidate);
         fclose(candidate);
+        /* Item T66b: this candidate's output is a diagnostic probe only -
+         * it never reaches any real .mac output, so any labels it
+         * allocated via new_label() must not shift subsequent legacy/MIR
+         * label numbering for unrelated functions later in the same
+         * translation unit. */
+        label_id = label_id_save;
         if (accepted)
             fprintf(stderr, "; MIR candidate function=%s sink=%s\n",
                     mir.name, mir_sink_name(mir.sink_purpose));
@@ -1101,10 +1108,13 @@ void mir_end_function(void)
         getenv("DCC_MIR_GENERAL_CANDIDATES") != NULL) {
         FILE *candidate = tmpfile();
         int accepted;
+        int label_id_save = label_id;
         if (candidate == NULL)
             fatal("cannot create MIR general candidate stream");
         accepted = mir_try_emit_general_rollout(candidate);
         fclose(candidate);
+        /* Item T66b: same rationale as the candidate probe above. */
+        label_id = label_id_save;
         if (accepted)
             fprintf(stderr, "; MIR general candidate function=%s sink=%s "
                             "slots=%d\n",
@@ -1126,28 +1136,57 @@ void mir_end_function(void)
         if (verified) {
             const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
             const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
+            /* Item T66b (mir-text-size-plan.md): every speculative candidate
+             * trial below shares the SAME global new_label() counter also
+             * used by legacy AST-backend codegen. Discarded candidates (a
+             * losing size comparison, a rejected rescue attempt, or the
+             * whole function eventually falling back to legacy) still
+             * called new_label() while building their own throwaway
+             * .mac text, silently burning label numbers that never reach
+             * any real output. This let unrelated LATER functions in the
+             * same translation unit receive different label numbers than
+             * they would have without the wasted trial, causing tiny but
+             * real code-placement-sensitive cycle/byte deltas (confirmed
+             * twice: Item T56's CI failure, Item T65's fint.c register-
+             * allocation shift). Fix: reset label_id to the same base
+             * before every independent trial (so trials never compound
+             * off each other's waste), track which candidate's ending
+             * label_id corresponds to the content actually kept in
+             * `generated`, and restore exactly that value (or the base,
+             * on full fallback) once the final accept/reject decision is
+             * known, right before any output is copied to `destination`. */
+            int mir_label_base = label_id;
+            int generated_label_id_after = mir_label_base;
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
             if (emit_filter != NULL && emit_filter[0] != 0 &&
                 strcmp(emit_filter, mir.name) == 0) {
                 selector_name = "specialized";
+                label_id = mir_label_base;
                 emitted = mir_try_emit_z80(generated);
+                generated_label_id_after = label_id;
             } else if (general_filter != NULL && general_filter[0] != 0 &&
                        (strcmp(general_filter, "*") == 0 ||
                         strcmp(general_filter, mir.name) == 0)) {
                 selector_name = "homed-scalar-cfg";
+                label_id = mir_label_base;
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_homed_scalar_cfg);
+                generated_label_id_after = label_id;
                 if (!emitted) {
                     selector_name = "spilled-scalar-cfg";
+                    label_id = mir_label_base;
                     emitted = mir_try_selector(generated,
                                                mir_try_emit_spilled_scalar_cfg);
+                    generated_label_id_after = label_id;
                 }
             } else if (getenv("DCC_MIR_EMIT_GENERAL") != NULL) {
                 selector_name = "general-rollout";
+                label_id = mir_label_base;
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_general_rollout);
+                generated_label_id_after = label_id;
             } else {
                 /* Phase 8 Item 78/79: mir_try_emit_general_rollout (backed
                  * by mir_try_emit_homed_scalar_dag) was previously
@@ -1166,15 +1205,20 @@ void mir_end_function(void)
                  * replaced when the alternative is strictly smaller. */
                 FILE *general_candidate = tmpfile();
                 int general_emitted = 0;
+                int general_label_id_after;
 
                 if (general_candidate == NULL)
                     fatal("cannot create MIR general-rollout candidate "
                           "stream");
+                label_id = mir_label_base;
                 general_emitted = mir_try_selector(general_candidate,
                                                     mir_try_emit_general_rollout);
+                general_label_id_after = label_id;
                 selector_name = "homed-scalar-cfg";
+                label_id = mir_label_base;
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_homed_scalar_cfg);
+                generated_label_id_after = label_id;
                 if (general_emitted &&
                     (!emitted ||
                      mir_stream_size(general_candidate) <
@@ -1184,6 +1228,7 @@ void mir_end_function(void)
                     general_candidate = NULL;
                     selector_name = "general-rollout";
                     emitted = 1;
+                    generated_label_id_after = general_label_id_after;
                 }
                 if (general_candidate != NULL)
                     fclose(general_candidate);
@@ -1191,8 +1236,10 @@ void mir_end_function(void)
             if (!emitted && (general_filter == NULL ||
                              general_filter[0] == 0)) {
                 selector_name = "spilled-scalar-cfg";
+                label_id = mir_label_base;
                 emitted = mir_try_selector(generated,
                                            mir_try_emit_spilled_scalar_cfg);
+                generated_label_id_after = label_id;
             }
             if (emitted) {
                 generated_size = mir_stream_size(generated);
@@ -1348,15 +1395,24 @@ void mir_end_function(void)
                     if (loop_candidate == NULL)
                         fatal("cannot create MIR loop-selector candidate "
                               "stream");
-                    if (mir_try_selector(loop_candidate,
-                                         mir_try_emit_accumulator_loop) ||
-                        mir_try_selector(loop_candidate,
-                                         mir_try_emit_unsigned_division_loop) ||
-                        mir_try_selector(
+                    /* Item T66b: reset label_id before each independent
+                     * sub-attempt in this OR chain so a rejected earlier
+                     * attempt's wasted labels never compound into the
+                     * next one's numbering; only the one that ultimately
+                     * wins (see generated_label_id_after below) is kept. */
+                    if ((label_id = mir_label_base,
+                         mir_try_selector(loop_candidate,
+                                         mir_try_emit_accumulator_loop)) ||
+                        (label_id = mir_label_base,
+                         mir_try_selector(loop_candidate,
+                                         mir_try_emit_unsigned_division_loop)) ||
+                        (label_id = mir_label_base,
+                         mir_try_selector(
                             loop_candidate,
-                            mir_try_emit_repeated_invariant_add_loop) ||
-                        mir_try_selector(loop_candidate,
-                                         mir_try_emit_countdown_loop)) {
+                            mir_try_emit_repeated_invariant_add_loop)) ||
+                        (label_id = mir_label_base,
+                         mir_try_selector(loop_candidate,
+                                         mir_try_emit_countdown_loop))) {
                         long loop_size = mir_stream_size(loop_candidate);
                         int loop_instructions =
                             mir_stream_instruction_count(loop_candidate);
@@ -1375,6 +1431,7 @@ void mir_end_function(void)
                             selector_name = "loop-family";
                             generated_size = loop_size;
                             generated_instructions = loop_instructions;
+                            generated_label_id_after = label_id;
                             fallback_reason = NULL;
                         }
                     }
@@ -1431,6 +1488,7 @@ void mir_end_function(void)
                     if (branch_candidate == NULL)
                         fatal("cannot create MIR comparison-branch "
                               "candidate stream");
+                    label_id = mir_label_base;
                     if (mir_try_selector(branch_candidate,
                                          mir_try_emit_comparison_branch)) {
                         long branch_size = mir_stream_size(branch_candidate);
@@ -1451,6 +1509,7 @@ void mir_end_function(void)
                             selector_name = "comparison-branch";
                             generated_size = branch_size;
                             generated_instructions = branch_instructions;
+                            generated_label_id_after = label_id;
                             fallback_reason = NULL;
                         }
                     }
@@ -1466,6 +1525,14 @@ void mir_end_function(void)
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;
+                /* Item T66b: this is the single point where the accept/
+                 * reject decision for this function is now final. Restore
+                 * label_id to reflect exactly the labels actually kept -
+                 * the winning candidate's own consumption on accept, or
+                 * the pre-trial base (discarding every trial's waste
+                 * entirely) on fallback - so no discarded candidate can
+                 * ever shift a later function's label numbering. */
+                label_id = emitted ? generated_label_id_after : mir_label_base;
             }
         }
         if (emitted) {

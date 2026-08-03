@@ -6884,3 +6884,78 @@ proper); the *remaining* `var_or_const_decl` failure is a **different**,
 still-open bug in the `constant`-declaration branch's `add_sym`/`G->sym[
 si].val` interaction, re-scoped as `t65d-var-or-const-decl-constant-
 branch`.
+
+## Item T66b: `label_id` speculative-trial leakage into legacy codegen (2026-08-04)
+
+**Hypothesis**: every speculative candidate-emission trial in
+`mir_end_function` (`dcc_mir_select.c`) - the homed-scalar-cfg vs
+general-rollout size comparison, the spilled-scalar-cfg fallback, the
+loop-family and comparison-branch "last chance" rescues, and the whole-
+function legacy-fallback path itself - shares the one global
+`new_label()` counter (`dcc_diag_emit.c`) also used by legacy AST-backend
+codegen. Every trial that is ultimately discarded (a losing size
+comparison, a rejected rescue, or the entire function falling back to
+legacy) still calls `new_label()` while building its own throwaway `.mac`
+text, permanently burning label numbers that never reach any real
+output. This was the confirmed root cause behind two prior incidents
+(Item T56's CI failure, Item T65's `fint.c` register-allocation-strategy
+shift): a change to MIR's *speculative* instruction count - even for a
+function that ends up on fallback - can shift subsequent legacy-emitted
+label numbers for unrelated, later functions in the same translation
+unit, producing tiny but real code-placement-sensitive cycle/byte deltas
+that have nothing to do with the actual semantic change being validated.
+
+**Fix**: added a `mir_label_base`/`generated_label_id_after` pair local to
+`mir_end_function`'s candidate-generation region. `mir_label_base` snapshots
+`label_id` once, before the first candidate trial. Before every
+independent trial (each `mir_try_selector`/`mir_try_emit_z80`/
+`mir_try_emit_general_rollout` call site, including each leg of the
+loop-family OR-chain), `label_id` is reset to `mir_label_base` so no
+trial's wasted labels ever compound onto a sibling trial's numbering.
+Whenever a trial's output becomes (or replaces) the content of `generated`
+(the candidate that might end up as the real output), the resulting
+`label_id` is captured into `generated_label_id_after`. At the single
+point where the accept/reject decision is finalized (immediately before
+either `generated` or `mir.capture_stream` is copied to `destination`),
+`label_id` is set to `generated_label_id_after` on accept, or back to
+`mir_label_base` on fallback - discarding every trial's waste unconditionally.
+The two diagnostic-only candidate probes gated behind
+`DCC_MIR_CANDIDATES`/`DCC_MIR_GENERAL_CANDIDATES` (always discarded,
+regardless of outcome) got the same unconditional save/restore treatment.
+
+**Validation**:
+- True before/after whole-corpus census (`build/mir-t66b-before.tsv` vs
+  `build/mir-t66b-after.tsv`): **0 newly-emitted, 0 no-longer-emitted**,
+  coverage unchanged at 480/2023 (23.73%) - confirms this is a pure
+  label-renumbering change with no effect on any accept/reject decision,
+  as expected for a fix that only touches bookkeeping around a counter,
+  never selection logic itself.
+- 135 apps showed census metric changes (label-number text-length shifts
+  ripple through many already-*accepted* MIR functions' byte counts,
+  since fewer wasted labels means smaller/different label numbers
+  downstream) and 40 apps were flagged for runtime validation.
+  `--fail-on-regression` clean (exit 0).
+- Focused `runall.ps1 -Apps <40 affected apps> -Mode full`: **40/40 pass,
+  0 regressions**.
+- **Wide safety net** (`runall.ps1 -Mode full -Extended -RunTimeout 20`):
+  313/314 apps passed, one failure (`tptrlhs`). Re-ran `tptrlhs` alone
+  (`-Mode full`, no contention): passed in 36.75s, close to the 20s
+  parallel-run timeout - a parallel-load timeout flake, not a real
+  regression. Re-ran the full wide safety net with a longer timeout
+  (`-RunTimeout 30`): **314/314 pass, 0 regressions, performance passed
+  cleanly, no baseline updates needed** (as expected: renumbering labels
+  does not change actual assembled byte counts or cycle counts for any
+  function, only which numeric label text each one happens to use).
+
+**Why this matters beyond cosmetic hygiene**: this closes a whole hazard
+class that has directly caused two prior investigation detours (T56, T65)
+where a real, correct semantic fix's validation was muddied by unrelated
+cycle/byte deltas in functions the fix never touched. Every future MIR
+migration item that changes speculative candidate-trial behavior (most
+directly, Item T68's materialize-boolean architecture work, which
+explicitly needs this fix as a prerequisite per its own description) can
+now trust that a fallback-bound trial's cost can never leak into
+unrelated legacy-emitted functions elsewhere in the same file.
+
+**Files changed**: `src/dcc/dcc_mir_select.c` only (no runtime, header, or
+test changes needed).
