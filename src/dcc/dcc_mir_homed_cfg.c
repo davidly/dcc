@@ -360,7 +360,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         mir.count > 0 && mir.insns[mir.count - 1].opcode == MIR_RETURN;
     if (frameless) {
         if (opt_stack_check)
-            fputs("\textrn __stchk\n\tcall __stchk\n", out);
+            mir_emit_runtime_call(out, "__stchk");
     } else {
         mir_emit_home_prologue(out, uses_iy);
     }
@@ -407,9 +407,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     const char *assembly_name = asm_name_for(
                         global != NULL ? sym_asm_name(global)
                                        : mir_declared_link_name(insn->name));
-                    if (memory_storage == SC_EXTERN ||
-                        (memory_storage == SC_FUNC && global != NULL &&
-                         global->needs_extrn))
+                    if ((memory_storage == SC_EXTERN ||
+                         (memory_storage == SC_FUNC && global != NULL &&
+                          global->needs_extrn)) &&
+                        mir_extrn_should_emit(global))
                         fprintf(out, "\textrn %s\n", assembly_name);
                     fprintf(out, "\tld hl,(%s)\n", assembly_name);
                 }
@@ -444,9 +445,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     const char *assembly_name = asm_name_for(
                         global != NULL ? sym_asm_name(global)
                                        : mir_declared_link_name(insn->name));
-                    if (memory_storage == SC_EXTERN ||
-                        (global != NULL && global->storage == SC_FUNC &&
-                         global->needs_extrn))
+                    if ((memory_storage == SC_EXTERN ||
+                         (global != NULL && global->storage == SC_FUNC &&
+                          global->needs_extrn)) &&
+                        mir_extrn_should_emit(global))
                         fprintf(out, "\textrn %s\n", assembly_name);
                     if (!mir_emit_label_address_to_home(out, insn->dst,
                                                         assembly_name))
@@ -713,8 +715,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, fill_value) ||
                         !mir_emit_home_push(out, count_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop de\n\tpop hl\n"
-                          "\textrn __msf\n\tcall __msf\n", out);
+                    fputs("\tpop bc\n\tpop de\n\tpop hl\n", out);
+                    mir_emit_runtime_call(out, "__msf");
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
                         if (!mir_emit_hl_to_home(out, insn->dst))
@@ -725,7 +727,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if (mir_call_is_strlen_fastcall(i, &s_value)) {
                     if (!mir_emit_home_to_hl(out, s_value))
                         goto done;
-                    fputs("\textrn __slf\n\tcall __slf\n", out);
+                    mir_emit_runtime_call(out, "__slf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -734,8 +736,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, s_value) ||
                         !mir_emit_home_push(out, c_value))
                         goto done;
-                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n"
-                          "\textrn __chf\n\tcall __chf\n", out);
+                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n", out);
+                    mir_emit_runtime_call(out, "__chf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -744,8 +746,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, s_value) ||
                         !mir_emit_home_push(out, c_value))
                         goto done;
-                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n"
-                          "\textrn __rcf\n\tcall __rcf\n", out);
+                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n", out);
+                    mir_emit_runtime_call(out, "__rcf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -756,8 +758,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, c_value) ||
                         !mir_emit_home_push(out, n_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop de\n\tpop hl\n"
-                          "\textrn __mhf\n\tcall __mhf\n", out);
+                    fputs("\tpop bc\n\tpop de\n\tpop hl\n", out);
+                    mir_emit_runtime_call(out, "__mhf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -768,8 +770,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, s2_value) ||
                         !mir_emit_home_push(out, n_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop hl\n\tpop de\n"
-                          "\textrn __cmpf\n\tcall __cmpf\n", out);
+                    fputs("\tpop bc\n\tpop hl\n\tpop de\n", out);
+                    mir_emit_runtime_call(out, "__cmpf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -780,8 +782,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, fill_value) ||
                         !mir_emit_home_push(out, n_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop hl\n\tpop de\n"
-                          "\textrn __mcf\n\tcall __mcf\n", out);
+                    fputs("\tpop bc\n\tpop hl\n\tpop de\n", out);
+                    mir_emit_runtime_call(out, "__mcf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -792,8 +794,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, s2_value))
                         goto done;
                     fputs("\tpop hl\n\tpop de\n", out);
-                    fprintf(out, "\textrn %s\n\tcall %s\n", rtl_name,
-                            rtl_name);
+                    mir_emit_runtime_call(out, rtl_name);
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
@@ -803,8 +804,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, fn_value) ||
                         !mir_emit_home_push(out, dearg_value))
                         goto done;
-                    fprintf(out, "\tpop de\n\tpop hl\n\tld c,l\n"
-                            "\textrn %s\n\tcall %s\n", rtl_name, rtl_name);
+                    fputs("\tpop de\n\tpop hl\n\tld c,l\n", out);
+                    mir_emit_runtime_call(out, rtl_name);
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
                         if (!mir_emit_hl_to_home(out, insn->dst))
@@ -836,7 +837,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 }
                 if (argument != -1)
                     goto done;
-                if (callee->needs_extrn)
+                if (callee->needs_extrn && mir_extrn_should_emit(callee))
                     fprintf(out, "\textrn %s\n", assembly_name);
                 fprintf(out, "\tcall %s\n", assembly_name);
                 for (argument = 0; argument < argument_bytes / 2; ++argument)

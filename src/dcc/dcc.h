@@ -372,6 +372,12 @@ struct Sym {
     int dims[MAX_ARRAY_DIMS];   /* dims[0] may be 0 until inferred for a[][N] */
     char runtime_stride_name[64]; /* parameter name for a runtime inner VLA bound */
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
+    int mir_extrn_attempt_stamp; /* last mir_extrn_begin_attempt() generation
+                                  * this symbol already had its EXTRN written
+                                  * for; see mir_extrn_should_emit() (dcc_mir_select.c).
+                                  * Zero-initialized with the rest of struct Sym,
+                                  * and generation numbers start at 1, so a
+                                  * fresh symbol never spuriously matches. */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
     int is_volatile; /* object declared with the volatile qualifier: access-

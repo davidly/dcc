@@ -714,6 +714,92 @@ static int mir_try_emit_comparison_branch(FILE *out)
     return 1;
 }
 
+/* Item T71 (mir-text-size-plan.md): unlike legacy's emit_runtime_extrn_if_needed
+ * (dcc_symbols.c), which dedups a runtime/external symbol's EXTRN line against
+ * a cache that persists for the whole compilation, the spilled-scalar-cfg call/
+ * global-load emitters (dcc_mir_spilled_cfg.c) re-check only the symbol's
+ * static `needs_extrn` property at every reference site, so a function that
+ * calls (or reads) the same still-undefined external symbol more than once -
+ * e.g. two `printf` calls in one if/else, found via tests/taddr.c's chki() -
+ * re-emits an identical `extrn NAME` line per call, purely inflating the
+ * generated-assembly-text byte count `mir_stream_size` uses for the text-size
+ * acceptance gate (that gate has no correlation to real Z80 machine bytes; an
+ * EXTRN is an assembler-time-only declaration). A whole-compilation cache
+ * (mirroring legacy exactly) is unsafe here: a rejected/discarded selector
+ * attempt (mir_select_and_emit tries several selectors per function in
+ * sequence) writes its own EXTRN lines into a throwaway tmpfile before its
+ * acceptance is known, so marking a symbol "done" during a discarded attempt
+ * would wrongly suppress a needed EXTRN in a later, actually-accepted stream -
+ * the same class of hazard the g_inline_body_buffering epoch comment
+ * (dcc_symbols.c) already documents for legacy's own buffering path. Instead,
+ * mir_extrn_begin_attempt() bumps a generation counter once per
+ * mir_try_selector() call (i.e. once per independent candidate stream build,
+ * whether or not it is ultimately accepted), and mir_extrn_should_emit()
+ * stamps a symbol with that generation the first time it is asked about
+ * within the current attempt only - safe because every accepted stream is
+ * itself one complete, self-contained mir_try_selector() call, and never
+ * spans two attempts. This only dedupes within one candidate's own text, not
+ * across the whole file the way legacy does, so a function is not penalized
+ * for a sibling function's earlier EXTRN of the same symbol - a smaller but
+ * strictly safe subset of legacy's optimization. */
+static int mir_extrn_attempt_generation = 1;
+#define MIR_EXTRN_NAME_CAPACITY 64
+static const char *mir_extrn_emitted_names[MIR_EXTRN_NAME_CAPACITY];
+static int mir_extrn_emitted_name_count;
+
+void mir_extrn_begin_attempt(void)
+{
+    ++mir_extrn_attempt_generation;
+    mir_extrn_emitted_name_count = 0;
+}
+
+int mir_extrn_should_emit(struct Sym *sym)
+{
+    if (sym == NULL)
+        return 1;
+    if (sym->mir_extrn_attempt_stamp == mir_extrn_attempt_generation)
+        return 0;
+    sym->mir_extrn_attempt_stamp = mir_extrn_attempt_generation;
+    return 1;
+}
+
+/* DCCRTL runtime helpers (__mulu, __sdivmod, __icf, __call_hl, and the
+ * float support entry points) have no struct Sym at all - they are plain
+ * string literals threaded straight from each fastcall/instruction-
+ * selection site to an "extrn NAME\ncall NAME\n" pair, unconditionally,
+ * every time that site fires. tests/tstrcmpi.c's main() (6 direct calls
+ * to stricmp, each lowered to the __icf fastcall) showed this is the same
+ * duplicate-EXTRN text-size padding mir_extrn_should_emit() above already
+ * fixed for struct-Sym-backed callees/globals, just keyed by name instead
+ * of by symbol - confirmed via legacy's captured output, which emits
+ * "extrn __icf" exactly once for the whole function (legacy routes every
+ * runtime-helper reference through emit_runtime_extrn_if_needed's
+ * (dcc_symbols.c) persistent per-name cache). This table is reset by
+ * mir_extrn_begin_attempt() every mir_try_selector() attempt, for the
+ * identical reason mir_extrn_attempt_generation is (see the comment
+ * above) - a discarded candidate attempt must never suppress a needed
+ * EXTRN in a later, actually-accepted stream. */
+int mir_extrn_should_emit_name(const char *name)
+{
+    int i;
+
+    if (name == NULL)
+        return 1;
+    for (i = 0; i < mir_extrn_emitted_name_count; ++i)
+        if (!strcmp(mir_extrn_emitted_names[i], name))
+            return 0;
+    if (mir_extrn_emitted_name_count < MIR_EXTRN_NAME_CAPACITY)
+        mir_extrn_emitted_names[mir_extrn_emitted_name_count++] = name;
+    return 1;
+}
+
+void mir_emit_runtime_call(FILE *out, const char *name)
+{
+    if (mir_extrn_should_emit_name(name))
+        fprintf(out, "\textrn %s\n", name);
+    fprintf(out, "\tcall %s\n", name);
+}
+
 /* First emitted subset: one straight-line return of a word parameter,
  * constant, or parameter +/- constant. This intentionally proves the
  * transactional backend path before attempting general instruction
@@ -727,6 +813,7 @@ static int mir_try_selector(FILE *out, int (*selector)(FILE *))
 
     if (candidate == NULL)
         fatal("cannot create MIR selector stream");
+    mir_extrn_begin_attempt();
     accepted = selector(candidate);
     if (accepted) {
         rewind(candidate);
@@ -779,6 +866,33 @@ static int mir_stream_instruction_count(FILE *stream)
         return -1;
     return count;
 }
+
+/* Item T71 addendum (mir-text-size-plan.md): an attempted follow-up
+ * predicate ("indexed-homing-cost") to also gate tests/tstrcmpi.c's
+ * main() - a function newly admitted by this fix's genuine byte win
+ * (1578 generated vs 1665 captured) that still showed a tiny real
+ * peep-mode cycle regression (+0.06%, 32 cycles) rooted in its two
+ * indirect (function-pointer) calls each homing their callee value to
+ * two ix-relative bytes across their own argument-evaluation sequence,
+ * rather than legacy's cheaper push/SP-relative-reconstruct idiom - was
+ * designed and measured, then reverted. A blanket "more (ix+d) operands
+ * than legacy" check cost 60 functions of coverage (483 -> 432) for this
+ * one fix; scoping it to "contains an indirect call" narrowed the loss to
+ * 5 functions, but 2 of those (tc89core.main, tsyntax's
+ * test_casted_function_pointer_call) were pre-existing, already-baselined
+ * real wins that this guard wrongly reverted to fallback, causing worse
+ * regressions (+1.36%, +0.03%) than the one it fixed. No static
+ * byte/instruction-count-derived predicate found this session reliably
+ * separates tstrcmpi.main's true regression from these true wins - all
+ * three have large, real byte savings and more indexed operands than
+ * legacy. This is exactly the gap mir-migration-plan-100.md's "Item 2:
+ * real T-state cost model" already identifies: a genuine dynamic/
+ * instruction-mix cost model (via scripts/dccprof.ps1) is needed to
+ * discriminate this class, not another static text-shape heuristic.
+ * Deferred, same as Item 6's precedent: tstrcmpi.main is left accepted
+ * with its known, tiny (32-cycle, 0.06%) peep-mode regression until that
+ * infrastructure exists; do not attempt another static predicate for it
+ * without new discriminating evidence. */
 
 static int mir_cfg_block_count(void)
 {

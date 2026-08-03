@@ -7314,3 +7314,149 @@ to pursue before attempting the original comparison/branch-fusion
 architecture work. The `brfalse` histogram and the two worked examples
 above are preserved here as reference data for whichever hypothesis is
 attempted next.
+
+## Item T71: deduplicate redundant `extrn NAME` assembler-external-declaration lines within one emission attempt (2026-08-05)
+
+**Hypothesis**: MIR's emitters (`dcc_mir_spilled_cfg.c`,
+`dcc_mir_homed_cfg.c`, `dcc_mir_emit_common.c`) re-emit an `extrn NAME`
+directive every time a symbol/callee/runtime helper is referenced within a
+function, whereas legacy's own codegen (`dcc_symbols.c`) deduplicates each
+external declaration to a single occurrence per compilation unit. Since
+`mir_stream_size()` (the acceptance gate's cost proxy) is a raw
+assembly-*text* byte count, not real assembled Z80 machine bytes (a
+caveat this file has documented since Item T61), every duplicate `extrn`
+line inflates `generated-bytes` with **zero real machine-code cost** -
+this is pure noise in the size-comparison gate, purely working against
+already-marginal candidates.
+
+**Fix**: added `mir_extrn_begin_attempt()` (reset at the top of every
+`mir_try_selector()` call), `mir_extrn_should_emit(struct Sym*)` /
+`mir_extrn_should_emit_name(const char*)` (dedup predicates keyed by a
+per-attempt generation stamp on `struct Sym` plus a small name table for
+unstamped runtime-helper strings), and `mir_emit_runtime_call(FILE*,
+const char*)` (a single call-site wrapper used everywhere a runtime
+helper is invoked). Deliberately scoped the dedup cache to **one
+`mir_try_selector()` attempt**, not whole-compilation like legacy - MIR
+tries multiple independent selectors per function, each via its own
+`tmpfile()`-backed candidate stream, and a whole-compilation-persistent
+cache would risk suppressing a needed `extrn` in a later, actually-
+accepted stream after an earlier *discarded* candidate attempt already
+"claimed" it. Converted every unguarded `extrn`-emission site across all
+three emitter files (float/string fastcall helpers, `rtl_name`-based
+fastcall sites, and the general `callee->needs_extrn` call-site check) to
+route through these primitives.
+
+**Validation**:
+- Whole-corpus census (`--compare` against the pre-T71 baseline,
+  `--fail-on-regression`): **493/2023 (24.37%)**, up from 483 baseline,
+  **13 newly-emitted functions, 0 functions lost**.
+- Focused `runall.ps1 -Apps <54 affected apps> -Mode full`: 54/54 pass,
+  0 regressions (after one deferred/accepted exception below).
+- Wide safety net (`runall.ps1 -Mode full -Extended -RunTimeout 60`):
+  **314/314 apps pass, extended suite 196/196, diagnostics/dccpeep/
+  performance all pass, 0 regressions** (final, clean run - see the two
+  investigation detours below for what the *first* extended run found
+  and how each was resolved).
+
+**Deferred exception 1 - `tstrcmpi.main`'s new tiny peep regression (49,908
+-> 49,940 cycles, +0.06%)**: byte-count-driven acceptance now lets `main`
+through on a *solid* margin, but its two indirect (function-pointer)
+calls each home the callee-target value across the following argument-
+push sequence via 2 IX-relative stores + 2 IX-relative loads, where
+legacy uses a cheaper `push`/SP-relative-reconstruct idiom. Both
+`generated_size` and `generated_instructions` favor MIR (fewer bytes
+*and* fewer instructions) - this is not a near-miss byte-margin problem
+(T61/T63's class), it is a real, uncaptured T-state cost axis: each
+`(ix+d)`-addressed Z80 instruction costs a fixed ~19 T-states vs.
+`push`/`pop`'s 11/10. Two static structural fixes were attempted and
+reverted this session:
+  1. A blanket "generated indexed-op count > captured indexed-op count"
+     acceptance-gate check cost **51 net functions of coverage** (60
+     reverted to fix one 0.06% regression) - unacceptable trade.
+  2. Narrowing the same check to "only when the function also contains an
+     indirect call" reduced the blast radius to 5 functions, but 2 of
+     those (`tc89core.main`, `tsyntax.test_casted_function_pointer_call`)
+     were **already-accepted, already-baselined, genuine performance wins
+     from before this session** - reverting them introduced *new*, larger
+     regressions (+1.36%, +0.03%) than the one being fixed. Confirmed via
+     `git log -- tests/perf_baselines.csv`.
+  - Conclusion: no static byte/instruction/indexed-op-count predicate
+    found this session reliably separates the true regression from the
+    true wins in this small sample - this needs the real dynamic T-state
+    cost model Item T66 already identified as still-missing, not another
+    static heuristic. Both attempts were fully reverted; only a
+    documentation comment remains in `dcc_mir_select.c` (immediately
+    before `mir_cfg_block_count()`) recording this negative result.
+    **Accepted via a documented `-UpdatePerfBaseline` update** for
+    `tstrcmpi` only (peep 49908->49940, nopeep 50055->49989; byte sizes
+    unchanged), matching Item 6's "document defer/skip rationale and move
+    on" precedent - this is not hiding a selector regression (SKILL Rule
+    2); it is accepting a specific, understood, tiny, already-investigated
+    regression that a general fix cannot yet resolve without a larger
+    coverage cost, exactly analogous to how T61/T63 already accept small
+    documented VLA margins.
+
+**Deferred exception 2 / new tooling-gap discovery - `tvla`'s nopeep-only
+regression, and `g_speculative_codegen_active`-suppressed report
+visibility**: the mandatory wide safety net's first run found `tvla`
+(nopeep) regressed +0.02% cycles and **+3.19% bytes**. The census, `DCC_
+MIR_SELECT_REPORT`, and `DCC_MIR_REPORT` diagnostics all showed **zero**
+difference for every `tvla.c` function between the pre-T71 and post-T71
+builds - yet the actual compiled `.mac` differed by ~4,884 lines. Direct
+per-function bisection (`DCC_MIR_REPORT`, comparing `/tmp/dcc_head` vs.
+`/tmp/dcc_t71` binaries built from the same source) traced the entire
+divergence to one function, `fixed_sizeof_bounds`: its own MIR
+verify-stage analysis (`sink=verify`) is byte-identical between builds,
+but its **actual emitted code differs completely** (legacy push/pop-style
+in the pre-T71 build vs. MIR homed-scalar-cfg-style materialize-boolean
+code in the post-T71 build) - i.e. T71 legitimately shrank its
+generated-bytes enough to newly cross the MIR acceptance gate, exactly as
+intended.
+
+The reason this was invisible to every diagnostic: `fixed_sizeof_bounds`
+is compiled twice under `g_speculative_codegen_active > 0`
+(`dcc_regalloc.c`'s own speculative register-allocation-strategy retry,
+unrelated to Item T66b's MIR-internal trial leakage, which this
+resembles but is not) - and `dcc_mir_select.c`'s `MIR selection
+function=...`/`MIR emit function=...` report lines are both
+unconditionally suppressed whenever `g_speculative_codegen_active` is set
+(`!g_speculative_codegen_active` guard, `dcc_mir_select.c` ~line 1665,
+1672), by design, because a discarded speculative trial's metrics must
+not pollute the census/report output. The gap: legacy's speculative
+retry mechanism picks a winning *variant* by its own cost comparison
+across trials, and each trial independently runs MIR's own accept/reject
+logic - so the winning variant's MIR outcome can differ from what a
+single non-speculative pass would have decided, and this real, load-
+bearing outcome is never reported to any tool that watches for
+`!g_speculative_codegen_active`-suppressed lines. **This is a genuine,
+newly-discovered tooling blind spot**, distinct from and in addition to
+Item T66b's label-counter leakage, and should be kept in mind by any
+future contributor debugging a census/report/actual-output mismatch:
+first check whether the affected function is ever compiled under
+`g_speculative_codegen_active` before assuming the diagnostics are lying
+about a real change.
+
+Given `fixed_sizeof_bounds`'s new MIR acceptance is a legitimate,
+byte-count-driven acceptance (correctness confirmed via `runall`'s
+passing test output; only a performance metric regressed, and only in
+nopeep), and given `runall -Apps tvla -Mode full` showed **peep strictly
+improves** (25,427,486 -> 25,424,966 cycles, -0.01%; 29,312 -> 29,184
+bytes, -0.44%) while only nopeep has a trivial regression (+0.02%
+cycles, +3.19% bytes) - the same "MIR's raw pre-peephole form costs more
+before `dccpeep` cleans it up, but production (peep) output is a net win"
+pattern as `tstrcmpi.main` above - this was accepted via a documented
+`-UpdatePerfBaseline` update for `tvla` (peep 25427486/29312 ->
+25424966/29184; nopeep 28179798/32128 -> 28184270/33152), consistent with
+the same precedent.
+
+**`tptrlhs`'s extended-run build "failure"** was confirmed to be a pure
+30s parallel-run timeout flake (identical to the one already documented
+in Item T66b) - re-run alone with `-RunTimeout 60` passed in 37.28s with
+0 regressions. Not a real issue, no baseline change needed.
+
+**Files changed**: `src/dcc/dcc.h` (new `mir_extrn_attempt_stamp` field
+on `struct Sym`), `src/dcc/dcc_mir_internal.h` (declarations),
+`src/dcc/dcc_mir_select.c` (the dedup mechanism itself), `src/dcc/
+dcc_mir_spilled_cfg.c`, `src/dcc/dcc_mir_homed_cfg.c`, `src/dcc/
+dcc_mir_emit_common.c` (call-site conversions), `tests/
+perf_baselines.csv` (the two documented, deliberate exceptions above).

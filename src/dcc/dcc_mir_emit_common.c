@@ -18,7 +18,7 @@ void mir_emit_prologue(FILE *out)
 {
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
     if (opt_stack_check)
-        fputs("\textrn __stchk\n\tcall __stchk\n", out);
+        mir_emit_runtime_call(out, "__stchk");
 }
 
 void mir_emit_iy_prologue(FILE *out)
@@ -390,7 +390,7 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
             fputs("\tld a,h\n\txor d\n\tld h,a\n\tld a,l\n\txor e\n\tld l,a\n", out);
             return 1;
         case '*':
-            fputs("\textrn __mulu\n\tcall __mulu\n", out);
+            mir_emit_runtime_call(out, "__mulu");
             return 1;
         case '/':
             {
@@ -416,9 +416,8 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
                     }
                 }
             }
-            fprintf(out, "\textrn %s\n\tcall %s\n",
-                    (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs",
-                    (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs");
+            mir_emit_runtime_call(
+                out, (definition->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs");
             return 1;
         case '%':
             {
@@ -442,9 +441,8 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
                     }
                 }
             }
-            fprintf(out, "\textrn %s\n\tcall %s\n",
-                    (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods",
-                    (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods");
+            mir_emit_runtime_call(
+                out, (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods");
             return 1;
         case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
             {
@@ -1250,7 +1248,7 @@ int mir_try_emit_homed_scalar_dag(FILE *out)
     }
     if (frameless) {
         if (opt_stack_check)
-            fputs("\textrn __stchk\n\tcall __stchk\n", out);
+            mir_emit_runtime_call(out, "__stchk");
     } else {
         mir_emit_home_prologue(out, uses_iy);
     }
