@@ -1100,9 +1100,10 @@ uint8_t m_load( address ) uint16_t address;
             }
         }
 
-        ch = (char) kbhit();
-        if ( 0 != ch )
+        if ( kbhit() )
         {
+            ch = (char) getch();
+
             if ( 0xa == ch )
                 ch = 0xd;
 
@@ -1140,7 +1141,12 @@ uint8_t m_load( address ) uint16_t address;
             ch = kbd_char;
         }
         else
-            ch = (char) kbhit();
+        {
+            if ( kbhit() )
+                ch = (char) getch();
+            else
+                ch = 0;
+        }
 
         if ( 0 != ch )
         {
