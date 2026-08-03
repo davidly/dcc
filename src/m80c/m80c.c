@@ -58,6 +58,7 @@ struct Expr {
 typedef struct Sym Sym;
 struct Sym {
     char *name;
+    char *orig_name; /* pre-mangling C spelling, for static functions only - see record_static_name() */
     long value;
     int type;
     int defined;
@@ -108,6 +109,7 @@ struct ByteVec {
 typedef struct Asm Asm;
 struct Asm {
     char src[MAXNAME], rel[MAXNAME], prn[MAXNAME], symfile[MAXNAME], dbgfile[MAXNAME], linkfile[MAXNAME];
+    char pending_static_name[MAXNAME]; /* set by record_static_name(), consumed by the next define_label() */
     int want_rel, want_prn, want_sym, z80, list_hex, init_ds;
     int pass, errors, warnings;
     FILE *fp, *lst;
@@ -1204,6 +1206,29 @@ static int assemble_op(Asm *a,char *op,char *args) {
 #undef O2
     return 0;
 }
+/* dcc always emits "; static function <name>" immediately before a static
+ * function's (mangled, e.g. _Z0001) label - see emit_function_prologue() in
+ * dcc_func.c. Capture <name> here so the next define_label() can attach it
+ * to that symbol; write_sym() then prefers it over the mangled name. This
+ * only ever fires for that exact dcc-emitted comment, not arbitrary user
+ * comments, so it can't misfire on hand-written .MAC input. */
+static void record_static_name(Asm *a,const char *orig) {
+    static const char prefix[]="; static function";
+    const char *p=orig;
+    const char *name;
+    size_t n;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if(strncmp(p,prefix,sizeof(prefix)-1)!=0 || !isspace((unsigned char)p[sizeof(prefix)-1]))
+        return;
+    p+=sizeof(prefix)-1;
+    while(*p && isspace((unsigned char)*p)) p++;
+    name=p;
+    n=0;
+    while(name[n] && !isspace((unsigned char)name[n]) && n+1<sizeof(a->pending_static_name)) n++;
+    if(0==n) return;
+    memcpy(a->pending_static_name,name,n);
+    a->pending_static_name[n]=0;
+}
 static void define_label(Asm *a,const char *name,int pub) {
     Sym *s=sym_find(a,name,1);
     if(a->pass==1 || s->is_set) {
@@ -1212,6 +1237,11 @@ static void define_label(Asm *a,const char *name,int pub) {
         s->defined=1;
     }
     if(pub) s->is_public=1;
+    if(a->pending_static_name[0]) {
+        free(s->orig_name);
+        s->orig_name=xstrdup(a->pending_static_name);
+        a->pending_static_name[0]=0;
+    }
 }
 static void record_debug_line(Asm *a,const char *orig) {
     const char *p=orig;
@@ -1499,6 +1529,7 @@ static void parse_line(Asm *a,char *line,char *orig) {
     if(a->pass==2) {
         record_debug_line(a,orig);
         record_debug_info(a,orig);
+        record_static_name(a,orig);
     }
     p=line;
     bol_label=(*p && !isspace((unsigned char)*p));
@@ -1887,7 +1918,7 @@ static void write_sym(Asm *a) {
     for(h=0;h<SYMHASH;h++) {
         for(s=a->syms[h];s;s=s->next) {
             if(s->defined) {
-                fprintf(f,"%-8s %04lX %-8s %s%s\n",s->name,s->value&0xffff,
+                fprintf(f,"%-8s %04lX %-8s %s%s\n",s->orig_name?s->orig_name:s->name,s->value&0xffff,
                     debug_segment_name(s->type),
                     s->is_public?"PUBLIC ":"",s->is_extern?"EXTRN":"");
             }
