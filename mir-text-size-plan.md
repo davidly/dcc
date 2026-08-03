@@ -7052,3 +7052,136 @@ this one by more than 30x.
 
 **Follow-up**: `t67-inline-callee-body-tracking` marked blocked with this
 negative-repro rationale, mirroring `t54`/`t55`/`t65d`'s precedent.
+
+## Item T66: real T-state cost model via `dccprof` - refutes the "fixed IX-frame-avoidance formula" hypothesis; no general predicate found, per-candidate profiling remains required (2026-08-04)
+
+**Hypothesis** (from the ranked next-phase plan): the three `homed-scalar-
+cfg` near-miss candidates found in a prior session's audit (`trw.fill_buf`,
+`adaint.return_stmt`, `tchess.on_board`) all exceed the current static
+instruction-count margin but were believed individually safe (real
+speedups) because MIR's frameless (no-IX-frame) SP-relative addressing
+outweighs its extra push/pop marshalling - and a real dynamic cost model,
+built with the existing `scripts/dccprof.ps1`/`dccprof.py` tooling, could
+turn that belief into a general reusable formula (e.g. "IX-frame avoidance
+saves a fixed N T-states; each extra marshalled argument costs M") and
+then a genuine structural acceptance predicate, rather than one-off
+`runall -Mode full` spot checks.
+
+**Method**: for each candidate, built the app twice with `dccprof.ps1` -
+once normally (legacy/fallback path) and once with
+`DCC_MIR_FORCE_ACCEPT_FUNCTION=<name>` (diagnostic-only forced MIR path,
+per SKILL step 9) - and diffed both the function's own attributed dynamic
+cycles (from `dccprof`'s per-PC correlated summary) and the whole-run
+total cycles, to get a real, not estimated, T-state delta. Call counts
+were recovered from the `call _<callee>` line's own hit count divided by
+17 (the T-state cost of a Z80 `call` instruction).
+
+**Results (real measured deltas, not static estimates):**
+
+| function | scenario | legacy cycles | MIR-forced cycles | calls | delta/call |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `trw.fill_buf` | full `trw` run | 1,356,480 | 1,200,960 | 4,320 | **-36.0** (faster) |
+| `adaint.return_stmt` | `ttt.ada` scenario | 8,855 | 11,480 | 35 | **+75.0** (slower) |
+| `tchess.on_board` | `tchess -c -p:1` | not present in either profile | not present in either profile | 0 | n/a - dead code, see below |
+| `tstr3.test_strcspn` | full `tstr3` run | 905 | 1,046 | 1 | **+141** (slower, matches prior classification) |
+
+`fill_buf`'s whole-app total-cycle delta (-155,520) matched its own
+attributed per-function delta exactly (-36.0 x 4,320 = -155,520),
+confirming a cleanly isolated A/B with no cross-function interference.
+`test_strcspn`'s whole-app delta (+141) likewise matched exactly (single
+call site). `return_stmt`'s whole-app delta (+3,615 across the whole
+`ttt.ada` run) was in the same direction as, but not exactly equal to, its
+own attributed delta (+2,625 = 75 x 35) - the ~990-cycle difference is
+consistent with the same kind of incidental `new_label()`-driven text-
+length ripple Item T66b root-caused elsewhere in the same session, not a
+second real effect on `return_stmt` itself.
+
+**Finding 1 - the fixed-cost hypothesis does not hold**: `fill_buf` is a
+genuine, confirmed win (-36 T-states/call) exactly as hypothesized. But
+`adaint.return_stmt` - previously classified as one of three "individually
+safe" near-miss candidates on exactly the same "avoids IX frame" static
+reasoning - is a confirmed, real **loss** (+75 T-states/call) when
+actually profiled. Both functions have a similar-looking static
+instruction-count gap (`fill_buf`: 31 vs 23 generated/captured
+instructions; `return_stmt`: 36 vs 28), yet the dynamic sign is opposite.
+This means the static "generated more instructions but avoids an IX
+frame" shape is not sufficient by itself to predict whether the net
+dynamic effect is positive or negative - other per-function differences
+(spill count, which registers get reloaded how often inside the
+function's own body, marshalling-argument count and type) evidently
+dominate in `return_stmt`'s case, and no simple linear formula recovered
+from `fill_buf` alone would have predicted `return_stmt`'s sign flip.
+**This is a direct correction of the prior session's classification** -
+`return_stmt` should not have been on the "known-safe" list; it is now
+re-confirmed as a genuine regression risk, consistent with the sibling
+`tstr3.test_strcspn`/`test_strspn` "unsafe" pair, not the `fill_buf`
+"safe" pair.
+
+**Finding 2 - a distinct methodological trap: dead-code static-inline
+bodies produce a phantom candidate**: `tchess.on_board` never appears in
+either profile at all - grepping both `dccprof` correlated listings for
+its label finds zero hits, at any call site, in either build. Cross-
+checked `tests/tchess.c:116`: `on_board` is declared `static inline`, and
+every one of its 7 call sites (`gen_slide`, `gen_pseudo`, etc.) is
+substituted inline by legacy's own AST-level inliner before MIR lowering
+ever runs (the same substitution mechanism Item T67 investigated) - so
+the standalone out-of-line body the MIR/legacy `instruction-count` gate is
+comparing (`generated-bytes=420` vs `captured-bytes=165`) is **dead code
+in both builds**, never executed as a standalone function at runtime
+under this app's real workload. Forcing MIR to accept it would add pure
+static byte weight (420-165=255 bytes) to the final `.COM` for **zero**
+T-state effect either way, since neither version's out-of-line body ever
+runs. This means `on_board` was never actually a "near-miss real
+function" candidate at all - it is a static-inline helper whose
+`instruction-count` fallback measurement is comparing two unreachable
+bodies, a case the existing gate has no way to distinguish from a genuine
+hot near-miss. Filed as a new methodological caveat, not fixed: any
+future near-miss audit must first confirm (via a real profile, not just
+"not `static inline`" reasoning) that a candidate's standalone body is
+actually reachable before treating its static byte/instruction gap as
+meaningful.
+
+**Finding 3 - no general formula was derived, and none is safely
+derivable from this data**: two safe and two unsafe measured points is
+not enough to fit a reliable per-instruction-category cost model (the
+original ask - "IX-frame avoidance saves ~40-60 T-states fixed; each
+additional marshalled call argument costs ~N T-states"), and the
+`return_stmt` counter-example shows the simple version of that formula is
+already falsified by real data, not just under-supported. Building a
+larger enough sample to fit a trustworthy model would require profiling
+many more candidates across more shapes - a materially bigger investment
+than this item's "self-contained infrastructure, moderate scope" framing
+assumed, and the payoff (a structural predicate that still has to be
+validated per-function before trusting it, per SKILL Rule 4) would save
+little over the already-established direct technique below.
+
+**Decision: no code change. The existing forced-A/B-profile technique
+(SKILL step 9, already in routine use this whole session for items like
+T54/T56/T63) is confirmed to remain the correct and sufficient tool for
+any individual near-miss candidate** - this item's own measurements were
+produced with exactly that technique, just formalized into a repeatable
+before/after `dccprof.ps1` recipe (documented above: build twice, once
+plain and once with `DCC_MIR_FORCE_ACCEPT_FUNCTION`, diff the candidate's
+own attributed cycles in each summary, and cross-check the whole-run
+total for consistency). No new structural predicate was added to
+`dcc_mir_select.c` since no reliable general rule was found - encoding a
+false "IX-frame avoidance is always a win" predicate would have caused a
+real regression (`return_stmt`'s case) had it been landed as originally
+proposed.
+
+**What would actually move this number**: not a general formula, but
+either (a) profiling every individual near-miss candidate this way before
+ever proposing it for a gate widening (already the correct process; this
+item just re-validates it), or (b) the deeper architectural fix (materialize-
+boolean/spilled-comparison rework, ranked Item 1 in the next-phase plan)
+that would change the *generated code itself* for the dominant `text-size`
+population rather than trying to selectively admit individual near-miss
+survivors of the current (worse) code shape.
+
+**Follow-up**: `t66-tstate-cost-model` marked blocked/documented - no
+`src/dcc/dcc_mir_select.c` change was made (nothing to revert; this was a
+pure measurement exercise, no trial code was ever written into production
+files). The two safe-vs-unsafe measured pairs (`fill_buf`/`test_strcspn`
+confirming prior classification, `return_stmt` correcting it) are
+preserved here as reference data points for any future revisit of Item 1
+or Item 2 in the next-phase plan.
