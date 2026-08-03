@@ -587,16 +587,29 @@ static int mir_try_emit_comparison_branch(FILE *out)
     if (target_index <= branch_index)
         return 0;
     compare = mir_definition(branch->src1);
-    if (compare == NULL || compare->opcode != MIR_BINARY ||
-        (compare->immediate != TOK_EQ && compare->immediate != TOK_NE &&
-         compare->immediate != '<' && compare->immediate != TOK_GE &&
-         compare->immediate != '>' && compare->immediate != TOK_LE))
+    if (compare == NULL)
         return 0;
-    left = mir_definition(compare->src1);
-    right = mir_definition(compare->src2);
-    if (left == NULL || right == NULL || left->opcode != MIR_PARAM ||
-        right->opcode != MIR_PARAM)
+    if (compare->opcode == MIR_PARAM) {
+        /* Item T72 (mir-text-size-plan.md): `if (param) return A;
+         * return B;` - a bare truthiness test with no explicit
+         * comparison instruction at all (the branch tests the
+         * parameter's value directly), found via tests/tctxflt.c's
+         * `truth_if(float f) { if (f) return 1; return 0; }`. `right`
+         * has no counterpart in this shape. */
+        left = compare;
+        right = NULL;
+    } else if (compare->opcode == MIR_BINARY &&
+               (compare->immediate == TOK_EQ || compare->immediate == TOK_NE ||
+                compare->immediate == '<' || compare->immediate == TOK_GE ||
+                compare->immediate == '>' || compare->immediate == TOK_LE)) {
+        left = mir_definition(compare->src1);
+        right = mir_definition(compare->src2);
+        if (left == NULL || right == NULL || left->opcode != MIR_PARAM ||
+            right->opcode != MIR_PARAM)
+            return 0;
+    } else {
         return 0;
+    }
     if (left->object < 0 || left->object >= mir.object_count)
         return 0;
     for (i = branch_index + 1; i < target_index; ++i)
@@ -622,6 +635,51 @@ static int mir_try_emit_comparison_branch(FILE *out)
             opcode != MIR_BINARY && opcode != MIR_BRANCH_FALSE &&
             opcode != MIR_LABEL && opcode != MIR_RETURN)
             return 0;
+    }
+
+    /* Item T72 (mir-text-size-plan.md): the bare-truthiness shape
+     * identified above (`compare->opcode == MIR_PARAM`) tests the
+     * parameter's own value for nonzero, exactly mirroring the
+     * MIR_BRANCH_FALSE zero-test the general spilled-scalar-cfg
+     * selector already emits (dcc_mir_spilled_cfg.c) - including its
+     * float handling, which masks off the sign bit before the OR chain
+     * so `-0.0` is correctly treated as false, not true. Declines
+     * (returns 0) for any parameter width other than 2 bytes (scalar/
+     * pointer) or 4 bytes (`long`/`float`), matching
+     * mir_emit_load_param/_wide's own exact width requirements, so an
+     * unexpected width falls back to the general selector instead of
+     * emitting nothing. */
+    if (compare->opcode == MIR_PARAM) {
+        int width = type_size(mir.objects[left->object].type);
+        int is_float = type_is_float(mir.objects[left->object].type);
+
+        if (width != 2 && width != 4)
+            return 0;
+        false_label = new_label();
+        mir_emit_prologue(out);
+        if (width == 4) {
+            if (!mir_emit_load_param_wide(out, left))
+                return 0;
+            if (is_float)
+                fputs("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n", out);
+            else
+                fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
+        } else {
+            if (!mir_emit_load_param(out, left))
+                return 0;
+            fputs("\tld a,h\n\tor l\n", out);
+        }
+        fprintf(out, "\tjp z, L%d\n", false_label);
+        {
+            int epilogue_label = new_label();
+            fprintf(out, "\tld hl,%ld\n", true_value->immediate);
+            fprintf(out, "\tjp L%d\n", epilogue_label);
+            fprintf(out, "L%d:\n", false_label);
+            fprintf(out, "\tld hl,%ld\n", false_value->immediate);
+            fprintf(out, "L%d:\n", epilogue_label);
+            fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+        }
+        return 1;
     }
 
     /* Item T57 (mir-text-size-plan.md): a wide (4-byte, `long`/`float`)

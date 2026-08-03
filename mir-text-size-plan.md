@@ -7567,3 +7567,76 @@ and can be resurrected once either prerequisite exists.
 
 **Files touched then reverted**: `src/dcc/dcc_mir.c` only (no other files
 modified for this attempt; no baseline changes; no commit).
+
+## Item T72: fuse bare-truthiness branch (`if (param) return A; return B;`) into `mir_try_emit_comparison_branch` (2026-08-05)
+
+**Context**: after Item T70's revert, ran the "sizing pass" step 1 of the
+materialize-boolean architecture plan (see this session's planning
+addendum) as a cheap, no-code-change evidence-gathering exercise: bucketed
+the 1,420 `text-size` fallbacks by `blocks` count from a fresh census.
+Found `blocks=1` (straight-line, no branches at all - 504 functions,
+avg gap 884 bytes) is the single largest sub-bucket, and `blocks=2`
+(212 functions, avg gap 842 bytes) the next largest - both far too wide
+on average for a narrow selector nudge to explain, confirming the plan's
+own assessment that the *general* population needs the deep
+materialize-boolean/register-allocator rework (`t68`), not a quick
+selector fix. However, inspecting the smallest-gap outliers within
+`blocks=2` (the "near-miss" tail, not the bulk) surfaced one concrete,
+narrow, mechanical gap worth fixing on its own: `tctxflt.c`'s
+`truth_if(float f) { if (f) return 1; return 0; }` (gap=14 bytes).
+
+**Root cause**: `mir_try_emit_comparison_branch` (the selector that
+already fuses `if (param OP param) return A; return B;` into a single
+compare+branch) only recognizes a `MIR_BRANCH_FALSE` whose condition is
+defined by an explicit `MIR_BINARY` comparison. `truth_if`'s branch tests
+the parameter's own value directly (`brfalse v0 L1` where `v0` is
+literally the `MIR_PARAM` definition, no comparison instruction exists at
+all) - a strict subset of the already-handled shape, just missing the
+comparison step entirely. This fell through to the general
+`spilled-scalar-cfg` selector, paying its full per-value slot/spill
+machinery for what is, structurally, an even simpler case than the one
+already fused.
+
+**Fix**: extended `mir_try_emit_comparison_branch` to also accept
+`compare->opcode == MIR_PARAM` (no `MIR_BINARY` at all), treating it as a
+direct nonzero test of that one parameter. Reuses the general selector's
+own exact truthiness-test instruction sequences for correctness parity
+(`dcc_mir_spilled_cfg.c`'s `MIR_BRANCH_FALSE` case): narrow (2-byte)
+`ld a,h / or l`; wide (4-byte) non-float `ld a,d / or e / or h / or l`;
+wide float `ld a,d / and 127 / or e / or h / or l` (masking the sign bit
+first so `-0.0f` - all-zero mantissa/exponent, sign bit set - is
+correctly treated as false, matching `tctxflt.c`'s own
+`truth_if(-0.0f)` expectation). Declines (returns 0, safe fallback) for
+any width other than 2 or 4 bytes, mirroring `mir_emit_load_param`/
+`mir_emit_load_param_wide`'s own width requirements exactly - no new
+width-handling code invented, just reuse of already-verified helpers.
+
+**Validation**:
+- `runall -Apps tctxflt -Mode full`: 1/1 pass, 0 regressions, 1 trivial
+  nopeep improvement (383,329 -> 383,309 cycles, -0.01%, not accepted as
+  a baseline change since it's noise-level and not the point of the fix).
+- Whole-corpus census (`--compare` against the T71 checkpoint,
+  `--fail-on-regression`): passed (exit 0). 493 -> 494/2023 (24.42%),
+  exactly 1 newly-emitted function (`tctxflt.truth_if`), 0 lost - the
+  cleanest possible result for a selector-shape widening.
+- Full safety net (`runall -Mode full -Extended -RunTimeout 60`, given
+  this touches a shared selector attempted for every function in the
+  corpus): 314/314 apps pass, extended 196/196, diagnostics/dccpeep/
+  performance all pass, 0 regressions.
+
+**Why this stayed narrow rather than growing into Item 1's general
+fix**: this is deliberately the *smallest* provably-safe widening of an
+already-existing, already-narrow selector - a single missing case
+(bare-parameter condition) within a shape that was already whole-
+function-restricted (opcode allowlist unchanged: `PARAM`/`NOP`/`CONST`/
+`BINARY`/`BRANCH_FALSE`/`LABEL`/`RETURN`, two constant returns only, one
+branch only). It does not touch `mir_emit_scalar_compare` or the general
+`spilled-scalar-cfg` backend at all, so it carries none of the
+register-pressure risk that made Item T70 a net regression. The sizing-
+pass evidence above confirms this narrow shape is real but rare (one
+function found this session); the bulk of the 1,420-function `text-size`
+population remains gated behind the harder, still-pending
+`t68-materialize-bool-architecture` item.
+
+**Files touched**: `src/dcc/dcc_mir_select.c` (the selector extension
+only); `mir-text-size-plan.md` (this entry). No baseline changes needed.
