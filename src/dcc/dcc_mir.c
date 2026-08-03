@@ -3753,17 +3753,56 @@ void mir_resolve_deferred_metadata(void)
         struct MirInsn *insn = &mir.insns[i];
         struct MirInsn *source;
         unsigned long bits;
+        unsigned long mask;
+        int operand_bytes = type_size(insn->type);
+        /* Item T75 (mir-text-size-plan.md): widened from 2-byte-only to
+         * also fold 4-byte (long/wide) unary constant operations, using
+         * the same in-place-to-MIR_CONST rewrite and orphan-retirement
+         * as the narrow case immediately below. Before this, a wide
+         * negative literal such as `-80000L` lowered as a MIR_CONST of
+         * the positive magnitude (80000) followed by a MIR_UNARY '-',
+         * which never got folded here (the size check rejected every
+         * 4-byte type) and so reached emission as a genuine runtime
+         * 32-bit two's-complement negation (four `cpl` + a 32-bit
+         * increment) instead of the pre-folded constant legacy always
+         * emits directly. Floats are explicitly excluded even though
+         * they are also 4 bytes on this target: sign negation of an
+         * IEEE-754-style representation is not the same operation as
+         * two's-complement bit negation, and this fold's bit-mask
+         * arithmetic below is only valid for integer representations.
+         * Found via tests/tlngfptr.c's main (`(*table_call)(-80000L,
+         * 7)`), newly MIR-reachable once Item T74's base-address
+         * forwarding fix unlocked the whole function. */
         if (insn->opcode != MIR_UNARY || insn->src1 < 0 ||
-            type_size(insn->type) != 2)
+            (operand_bytes != 2 && operand_bytes != 4) ||
+            type_is_float(insn->type))
             continue;
         source = mir_mutable_definition(insn->src1);
-        if (source == NULL || source->opcode != MIR_CONST)
+        if (source == NULL || source->opcode != MIR_CONST ||
+            type_is_float(source->type))
             continue;
-        bits = (unsigned long)source->immediate & 0xffffUL;
+        if (operand_bytes == 4 && type_size(source->type) != 4)
+            /* A 4-byte destination fed by a narrower-typed CONST is a
+             * widening conversion (immediate == 0/'+'), not a same-width
+             * operation: the narrower CONST's stored bit pattern must be
+             * sign- or zero-extended per its own type before it is a
+             * valid 32-bit value, which this fold's plain mask-and-copy
+             * arithmetic below does not do. Restricting the new 4-byte
+             * path to same-width source/destination pairs (the actual
+             * `-80000L`-shaped case this item targets: a 4-byte CONST
+             * negated in place by a 4-byte MIR_UNARY, with no conversion
+             * in between) avoids this; found via tests/t.c's `int32_t
+             * i32min = -12;` (an int literal negated at 2 bytes, then
+             * widened to long by a second MIR_UNARY) producing a silently
+             * wrong, non-sign-extended high word once the 4-byte branch
+             * was added without this guard. */
+            continue;
+        mask = operand_bytes == 4 ? 0xffffffffUL : 0xffffUL;
+        bits = (unsigned long)source->immediate & mask;
         if (insn->immediate == '-')
-            bits = (0UL - bits) & 0xffffUL;
+            bits = (0UL - bits) & mask;
         else if (insn->immediate == '~')
-            bits = (~bits) & 0xffffUL;
+            bits = (~bits) & mask;
         else if (insn->immediate == '!')
             bits = bits == 0;
         else if (insn->immediate != 0 && insn->immediate != '+')

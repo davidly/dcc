@@ -7693,3 +7693,166 @@ future session.
 **No code changed for this entry** - investigation and documentation
 only, per the same discipline as Item T66/T68-Stage-1's "investigated,
 documented, no code change" entries.
+
+## Item T74: wide call-argument forwarding gap, dead `exx`, and `MIR_INDEX_ADDRESS` base forwarding (2026-08-06)
+
+**Context**: investigating `mir_call_argument_cache_target`/
+`mir_emit_cached_wide_call_argument`'s `exx` handling using
+`tests/tlongreg.c`'s `use_after_long_return`, three related bugs were
+found and fixed together as one reusable forwarding-mechanism batch.
+
+**Bug A**: `mir_can_forward_hl_de_to_next` (`dcc_mir_spilled_cfg.c`) only
+recognized `MIR_RETURN` as a valid immediate-next-consumer for wide-value
+forwarding, never `MIR_UNARY` (an implicit identity-cast) - even though
+the narrow sibling `mir_can_forward_hl_to_next` already whitelists
+`MIR_UNARY`. **Fix**: extended the wide predicate to also accept
+`MIR_UNARY`.
+
+**Bug B**: both the `MIR_CALL` and `MIR_CALL_AGGREGATE` argument-emission
+loops emitted a dead, no-op trailing `exx` after every cached wide call
+argument. **Fix**: removed both dead `exx` emissions.
+
+**Bug C**: fixing Bug A newly unlocked `tests/tlngfptr.c`'s `main` for MIR
+acceptance, which exposed a separate pre-existing gap: a
+`MIR_ADDRESS`->`MIR_CONST`->`MIR_INDEX_ADDRESS` sequence (a function-
+pointer-table lookup with a constant byte offset) always took a
+push-then-pop round trip because `mir_can_forward_hl_to_next`'s
+`MIR_INDEX_ADDRESS` case only ever forwarded the *index* operand
+(`next->src2 == value`), never the *base* operand (`next->src1 ==
+value`). **Fix**: extended the gate to also accept `next->src1 == value`
+when `next->base_name[0] == 0` (fixed-stride shape) and the index
+(`next->src2`) is defined by a `MIR_CONST` - the const-index emission
+branch always loads the base into HL first and then optionally adds a
+byte offset afterward, so this is correct for any byte offset, not only
+zero.
+
+Also removed a leftover `DCC_MIR_TRACE_EMIT` debug-tracing `fprintf` in
+the main per-instruction emit loop, left over from an earlier
+investigation this session and no longer needed.
+
+**Validation**: focused `runall -Apps tlongreg -Mode full` (Bugs A+B
+alone) passed with 0 regressions, 2 improvements. After Bug C, focused
+`runall -Apps fileops,t,tc89ffio,tfaedge,tfdedge,tfmadd,tfmedge,tinitreg,
+tlngfptr,tlongreg,tmod3216,tmuldiv -Mode full` passed with 0 regressions,
+32 improvements (see Item T75 below - `tlngfptr`'s regression was not
+resolved by Bug C alone; the dominant cost driver turned out to be a
+separate bug, T75).
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (`mir_can_forward_
+hl_de_to_next`, the two `MIR_CALL`/`MIR_CALL_AGGREGATE` argument loops,
+`mir_can_forward_hl_to_next`'s `MIR_INDEX_ADDRESS` case, debug-trace
+removal).
+
+## Item T75: wide (32-bit) constant negation never folded at compile time (2026-08-06)
+
+**Context**: after Item T74 unlocked `tests/tlngfptr.c`'s `main` for MIR
+acceptance, focused validation showed a real (if small) regression:
+`tlngfptr` (peep) 99503->99525 cycles, 6016->6144 bytes. A forced-accept-
+vs-legacy `.mac` diff of the whole function found the true dominant cost
+driver: `long b = (*table_call)(-80000L, 7);` lowers as
+`CONST(80000, type=4)` -> `UNARY('-', type=4)`, and MIR emitted this as a
+genuine *runtime* 32-bit two's-complement negation (four `cpl`
+instructions plus a 32-bit increment, ~14+ instructions) instead of
+folding it into a single pre-computed constant the way legacy does
+(`ld hl,51072` / `ld de,65534`) - the existing unary-constant-fold loop in
+`dcc_mir.c` (~line 3756) only ever handled `type_size(insn->type) == 2`
+(16-bit), never 4-byte types.
+
+**Fix**: extended the fold loop to accept `operand_bytes` of 2 or 4, with
+a `mask` sized accordingly (`0xffffUL` vs `0xffffffffUL`), and added
+`type_is_float()` exclusions on both the instruction and its source type
+(IEEE-754 float negation is not two's-complement bit negation).
+
+**Miscompilation found and fixed during validation**: the first version
+of the 4-byte fold branch did not distinguish a same-width negation
+(`CONST(80000,4)` -> `UNARY('-',4)`, safe) from a *widening conversion*
+(`CONST(12,2)` -> `UNARY('-',2)` -> `UNARY(convert,4,immediate=0)`), where
+the conversion node's fold incorrectly zero-extended the already-folded
+16-bit bit pattern instead of sign-extending it - `tests/t.c`'s
+`int32_t i32min = -12;` produced a high word of `0` instead of `0xFFFF`,
+a real wrong-answer bug (`result: 24` expected vs `10` actual in
+`t`'s focused run). **Fix**: added a same-width guard,
+`if (operand_bytes == 4 && type_size(source->type) != 4) continue;`,
+restricting the new 4-byte fold path to same-width source/destination
+pairs only; the widening-conversion case now correctly falls through to
+the pre-existing runtime sign-extension sequence, unchanged.
+
+**Validation**: after the guard, focused `runall -Apps fileops,t,
+tc89ffio,tfaedge,tfdedge,tfmadd,tfmedge,tinitreg,tlngfptr,tlongreg,
+tmod3216,tmuldiv -Mode full -RunTimeout 30`: 12/12 pass, 0 regressions, 32
+improvements, including `tlngfptr` (peep) 99503->99299 (nopeep
+100354->100046) - the T74-exposed regression fully resolved.
+
+Whole-corpus census (`--fail-on-regression` vs the prior clean baseline):
+passed. Coverage 511/2023 (25.26%), +17 newly-MIR-emitted functions
+(`fileops.portable_filelen`, `t.main`, `tc89ffio.main`, `tdmfuse.
+test_signed_negative`, `tfaedge.main`, `tfdedge.main`, `tfldparr.
+compile_2d_member_array`, `tfmadd.main`, `tfmedge.main`, `tlngfptr.main`,
+`tlongreg.test_args`, `tlongreg.use_after_long_return`, `tmod3216.main`,
+`tpostptr.test_32`, `tpostptr.test_i8`, `tptrlhs.main`, `wumpus.movto`),
+0 lost.
+
+The census's own recommended focused-validation set (21 apps) passed
+correctness on all 21 with 43 improvements, but surfaced one further tiny
+regression - `tptrlhs` (peep) +9 cycles - root-caused and fixed
+separately as Item T76 below, since it was an unrelated pre-existing gap
+(small-offset address-of-local computation), not a T74/T75 defect.
+
+**Files touched**: `src/dcc/dcc_mir.c` (the unary-constant-fold loop,
+~line 3756).
+
+## Item T76: small-offset `ix`-relative address computation uses `inc`/`dec` chain instead of `ld de,X`/`add hl,de` (2026-08-06)
+
+**Context**: Item T75's 21-app focused validation found one remaining
+regression: `tests/tptrlhs.c`'s `main` (peep) 969,976->969,985 cycles
+(+9 cycles, +0.00%) even though its nopeep variant improved in both
+cycles and bytes. Per `runall.ps1`'s zero-tolerance regression check
+(any `value > baseline` fails, no percentage/noise threshold - confirmed
+by reading the check itself, ~line 1622-1662), this is a hard CI-failing
+regression regardless of magnitude, not acceptable noise.
+
+**Root cause**, found via forced-accept/fallback `.mac` diff: an
+address-of-local computation for a small, negative constant offset (-2)
+emitted `push ix` / `pop hl` / `ld de,-2` / `add hl,de` (4 bytes, ~21
+T-states for the offset step) where legacy emits `push ix` / `pop hl` /
+`dec hl` / `dec hl` (2 bytes, ~12 T-states) instead. Legacy already has
+this exact convention: `dcc_symbols.c`'s `emit_load_sym_addr` (~line 845)
+special-cases `|offset| <= 3` with a straight `inc hl`/`dec hl` chain
+instead of the general `ld de,X`/`add hl,de` sequence, for both byte-size
+and T-state savings - MIR's `dcc_mir_spilled_cfg.c` had no equivalent
+special case anywhere it computed `ix`-relative addresses into `HL` via
+an intermediate `push ix`/`pop hl`.
+
+**Fix**: added a shared helper, `mir_emit_hl_offset_from_ix(FILE *out,
+int offset)`, in `dcc_mir_spilled_cfg.c`, mirroring legacy's exact
+`|offset| <= 3` threshold (rather than inventing a new one), and
+replaced every `push ix\n\tpop hl\n` call site whose subsequent offset
+step was *not* already gated behind a "value confirmed out of ix-direct
+range" check (i.e. every site reachable with a small offset) to call the
+new helper instead of inlining `ld de,%d\n\tadd hl,de\n` directly. Sites
+already only reachable for `|offset| > 127` (an explicit prior range
+check already failed) were deliberately left untouched, since
+`|offset| <= 3` can never apply there. One `ld bc`-based site (`dcc_mir_
+spilled_cfg.c`, MIR_COMPOUND-copy path) was also left untouched: it
+deliberately avoids `DE` because `DE` already holds a live value at that
+point (per its own comment), and reusing the shared `DE`-based helper
+there would be an unrelated, riskier register-allocation change out of
+this item's scope.
+
+**Validation**: rebuilt; forced-accept diff of `tptrlhs.main` confirmed
+the `dec hl`/`dec hl` shape now matches legacy exactly. The 21-app
+focused validation (`fact,fileops,t,t2denum,tatof,tc89ffio,tdmfuse,
+texscan,tfaedge,tfdedge,tfldparr,tfmadd,tfmedge,tinitreg,tlngfptr,
+tlongreg,tmod3216,tmuldiv,tpeepal,tpostptr,tptrlhs,triangle,tsyntax,
+wumpus -Mode full -RunTimeout 45`) passed 24/24 (census's own recommended
+set, slightly wider than the prior 21) with **0 regressions**, including
+`tptrlhs` itself now showing an improvement (nopeep 1,015,266->1,015,220
+cycles, 25,472->25,344 bytes; peep unchanged at baseline). Whole-corpus
+census (`--fail-on-regression`) passed cleanly with the same +17/-0
+delta as Item T75 (this item only changed emitted bytes for already-
+accepted functions' small-offset address computations, not acceptance
+decisions). A full+extended `runall.ps1 -Mode full -Extended` safety net
+was run before committing, per this session's standing corrective rule.
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (new `mir_emit_hl_
+offset_from_ix` helper; ~9 call sites converted to use it).

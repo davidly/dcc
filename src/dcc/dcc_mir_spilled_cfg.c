@@ -97,6 +97,42 @@ static int mir_const_is_transparent_zero_rhs_operand(int instruction)
          mir_fused_compare_is_signed_zero_sign_test(instruction + 1));
 }
 
+/* Item T74 (mir-text-size-plan.md): a MIR_CONST whose only consumer is the
+ * immediately-following MIR_INDEX_ADDRESS, where the constant is the index
+ * operand (src2) and folds to a zero byte offset (index value * element
+ * stride == 0, i.e. a compile-time-constant `arr[0]`-shaped access), is
+ * just as transparent for forwarding purposes as the const-zero-rhs-
+ * comparison case above: mir_can_forward_stack_to_index's own const-index
+ * emission branch (see the MIR_INDEX_ADDRESS case further down this file)
+ * already special-cases this exact shape to skip the `add hl,de` entirely
+ * when byte_offset is 0, so the base address's value is never touched by
+ * anything between its own definition and the index-address instruction
+ * that reuses it unchanged. Before this item, mir_forward_skip_target_ex
+ * did not know this, so mir_can_forward_hl_to_next always declined (the
+ * intervening real MIR_CONST instruction was never skipped), leaving
+ * mir_can_forward_stack_to_index (a strictly more expensive push-then-pop
+ * round trip, needed only when a real `add hl,de` follows) to win by
+ * default even for this zero-offset case where no register value is ever
+ * disturbed at all. Found via tlngfptr.c's main (`operations[0]`, a
+ * function-pointer table lookup), newly MIR-reachable once Item T74's own
+ * MIR_UNARY forwarding widened mir_can_forward_hl_de_to_next - which
+ * exposed this pre-existing, unrelated gap as a real (not just static-
+ * metric) regression once the function actually reached MIR emission. */
+static int mir_const_is_transparent_zero_index_operand(int instruction)
+{
+    const struct MirInsn *constant;
+    const struct MirInsn *index;
+
+    if (instruction < 0 || instruction + 1 >= mir.count)
+        return 0;
+    constant = &mir.insns[instruction];
+    index = &mir.insns[instruction + 1];
+    if (constant->opcode != MIR_CONST || index->opcode != MIR_INDEX_ADDRESS ||
+        index->src2 != constant->dst || index->base_name[0] != 0)
+        return 0;
+    return constant->immediate * index->immediate == 0;
+}
+
 static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
 {
     int next_instruction = instruction + 1;
@@ -105,7 +141,9 @@ static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
     for (;;) {
         while (next_instruction < mir.count &&
                (mir.insns[next_instruction].opcode == MIR_NOP ||
-                mir_const_is_transparent_zero_rhs_operand(next_instruction)))
+                mir_const_is_transparent_zero_rhs_operand(next_instruction) ||
+                mir_const_is_transparent_zero_index_operand(
+                    next_instruction)))
             ++next_instruction;
         if (!skipped_label && next_instruction < mir.count &&
             mir.insns[next_instruction].opcode == MIR_LABEL &&
@@ -133,11 +171,29 @@ static int mir_forward_skip_target(int instruction)
  * store_wide had no equivalent at all until this item - every wide value
  * with an assigned backend slot was unconditionally spilled and reloaded,
  * even when its single next use could consume it directly from HL:DE.
- * Deliberately starts with only the single narrowest, most-certain
+ * Deliberately started with only the single narrowest, most-certain
  * consumer shape (MIR_RETURN, mirroring this function's own MIR_RETURN
  * case and VLA guard exactly) rather than the full consumer switch below -
  * per SKILL.md's staging discipline, generalize to MIR_STORE/MIR_BINARY
- * consumers only after this narrow slice is validated end to end. */
+ * consumers only after this narrow slice is validated end to end.
+ *
+ * Item T74 (mir-text-size-plan.md): add MIR_UNARY as a second recognized
+ * immediate consumer, mirroring mir_can_forward_hl_to_next's own
+ * already-proven-safe MIR_UNARY whitelist entry for the narrow (16-bit)
+ * case (see the `case MIR_INDEX_ADDRESS: case MIR_MEMBER_ADDRESS: case
+ * MIR_LOAD_INDIRECT: case MIR_UNARY: break;` group below). Found via a
+ * forced-accept diff on tlongreg.c's use_after_long_return: a wide call
+ * result (`x = ret_high_only();`) whose sole use is an immediately
+ * following identity-cast MIR_UNARY (the implicit assignment-conversion
+ * dcc inserts even when the declared and source types already match) was
+ * always spilled to its own backend slot and reloaded one instruction
+ * later, purely because this predicate only recognized MIR_RETURN -
+ * duplicating work mir_emit_virtual_store_wide's own MIR_CALL result
+ * homing had already covered. Kept to a plain adjacency shape identical
+ * to MIR_RETURN's own (no additional skipped-label allowance - the
+ * existing `skipped_label && next->opcode != MIR_RETURN` guard just
+ * below already rejects a label-crossed MIR_UNARY, so this stays exactly
+ * as conservative as the existing VLA-guarded MIR_RETURN path). */
 static int mir_can_forward_hl_de_to_next(int value)
 {
     const struct MirInsn *next;
@@ -155,10 +211,17 @@ static int mir_can_forward_hl_de_to_next(int value)
     next = &mir.insns[next_instruction];
     if (skipped_label && next->opcode != MIR_RETURN)
         return 0;
-    if (next->opcode != MIR_RETURN || next->src1 != value)
+    if (next->opcode == MIR_RETURN) {
+        if (next->src1 != value)
+            return 0;
+        if (mir.has_vla)
+            return 0;
+    } else if (next->opcode == MIR_UNARY) {
+        if (next->src1 != value)
+            return 0;
+    } else {
         return 0;
-    if (mir.has_vla)
-        return 0;
+    }
     for (instruction = next_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -217,8 +280,33 @@ static int mir_can_forward_hl_to_next(int value)
     if (next->opcode == MIR_RETURN && mir.has_vla)
         return 0;
     if (next->opcode == MIR_INDEX_ADDRESS) {
-        if (next->src2 != value)
+        if (next->src2 == value) {
+            /* Existing case: forward the index operand. */
+        } else if (next->src1 == value && next->base_name[0] == 0) {
+            /* Item T74 (mir-text-size-plan.md): forward the base operand
+             * too, but only for the fixed-stride (base_name[0] == 0)
+             * const-index shape, where mir_emit_virtual_load(out,
+             * insn->src1) runs first (loading the base, consuming this
+             * exact forward) and any byte-offset add is a separate,
+             * independent step afterward - see the const-index emission
+             * branch further down this file. The runtime-stride/non-const-
+             * index shapes both load the index operand into HL first (to
+             * multiply/combine it with the base), which would clobber a
+             * forwarded base value before it is ever used, so this branch
+             * must not accept those. Restricting to a MIR_CONST index
+             * definition mirrors mir_const_is_transparent_zero_index_
+             * operand's own scope (found via tlngfptr.c's main,
+             * `operations[0]`, a function-pointer table lookup newly
+             * MIR-reachable once this item's own MIR_UNARY wide-forwarding
+             * fix widened coverage elsewhere in the same function). */
+            const struct MirInsn *index_definition =
+                mir_definition(next->src2);
+            if (index_definition == NULL ||
+                index_definition->opcode != MIR_CONST)
+                return 0;
+        } else {
             return 0;
+        }
     } else if (next->src1 != value)
             return 0;
     switch (next->opcode) {
@@ -769,6 +857,35 @@ static void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
 static int mir_address_is_single_call_argument(int value);
 static int mir_load_is_single_indirect_call_target(int value, int size);
 
+/* Item T76 (mir-text-size-plan.md): every "push ix\n\tpop hl\n" address-of-
+ * local/param computation below unconditionally follows with "ld de,<off>/
+ * add hl,de" for a non-zero offset, even for a magnitude of 1-3 - legacy's
+ * own emit_load_sym_addr (dcc_symbols.c, ~line 845) special-cases exactly
+ * this range with a straight-line inc/dec chain instead (cheaper in both
+ * bytes and T-states: two `dec hl`s is 2 bytes/12 T-states vs. `ld de,-2`
+ * + `add hl,de` at 4 bytes/21 T-states). This was invisible until a MIR-
+ * accepted function actually contained a small-offset local whose address
+ * is taken this way - found via tests/tptrlhs.c's main once an unrelated
+ * fix (Item T74/T75) pushed it over the acceptance threshold and exposed
+ * this pre-existing, unrelated gap as a genuine (if tiny) cycle-count
+ * regression. Mirrors legacy's exact threshold (|offset| <= 3) rather
+ * than inventing a new one. */
+static void mir_emit_hl_offset_from_ix(FILE *out, int offset)
+{
+    int n;
+    if (offset == 0)
+        return;
+    if (offset > 0 && offset <= 3) {
+        for (n = 0; n < offset; ++n)
+            fputs("\tinc hl\n", out);
+    } else if (offset < 0 && offset >= -3) {
+        for (n = 0; n < -offset; ++n)
+            fputs("\tdec hl\n", out);
+    } else {
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+    }
+}
+
 static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -800,8 +917,7 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
                                         &memory_storage, &memory_offset))
             return 0;
         fputs("\tpush ix\n\tpop hl\n", out);
-        if (memory_offset != 0)
-            fprintf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
+        mir_emit_hl_offset_from_ix(out, memory_offset);
         return 1;
     }
 
@@ -3979,9 +4095,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     fprintf(out, "\tld hl,%s\n", assembly_name);
                 } else {
                     fputs("\tpush ix\n\tpop hl\n", out);
-                    if (memory_offset != 0)
-                        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
-                                memory_offset);
+                    mir_emit_hl_offset_from_ix(out, memory_offset);
                 }
                 mir_emit_virtual_store(out, insn->dst);
                 break;
@@ -4131,16 +4245,14 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         memory_offset, memory_offset + 1);
             } else {
                 fputs("\tpush ix\n\tpop hl\n", out);
-                if (memory_offset != 0)
-                    fprintf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
+                mir_emit_hl_offset_from_ix(out, memory_offset);
             }
             mir_emit_virtual_store(out, insn->dst);
             break;
             }
         case MIR_COMPOUND_ADDRESS:
             fputs("\tpush ix\n\tpop hl\n", out);
-            if (insn->immediate != 0)
-                fprintf(out, "\tld de,%ld\n\tadd hl,de\n", insn->immediate);
+            mir_emit_hl_offset_from_ix(out, (int)insn->immediate);
             mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_VLA_SIZE:
@@ -5070,8 +5182,6 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                 out, arg->src1, size))
                             mir_emit_virtual_load_wide(out, arg->src1);
                         fputs("\tpush de\n\tpush hl\n", out);
-                        if (cached)
-                            fputs("\texx\n", out);
                         argument_bytes += 4;
                     } else {
                         if (!mir_emit_cached_call_argument(out, arg->src1) &&
@@ -5188,8 +5298,6 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                 out, arg->src1, size))
                             mir_emit_virtual_load_wide(out, arg->src1);
                         fputs("\tpush de\n\tpush hl\n", out);
-                        if (cached)
-                            fputs("\texx\n", out);
                         argument_bytes += 4;
                     } else {
                         if (!mir_emit_cached_call_argument(out, arg->src1) &&
@@ -5222,8 +5330,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     insn->immediate != MIR_AGGREGATE_FORWARD_OFFSET &&
                     insn->immediate != MIR_AGGREGATE_VALUE_DEST_OFFSET &&
                     insn->immediate != MIR_AGGREGATE_GLOBAL_DEST_OFFSET)
-                    fprintf(out, "\tld de,%ld\n\tadd hl,de\n",
-                            insn->immediate);
+                    mir_emit_hl_offset_from_ix(out, (int)insn->immediate);
                 fputs("\tpush hl\n", out);
                 if ((callee == NULL || callee->needs_extrn) &&
                     mir_extrn_should_emit(callee))
@@ -5248,8 +5355,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     insn->immediate != MIR_AGGREGATE_FORWARD_OFFSET &&
                     insn->immediate != MIR_AGGREGATE_VALUE_DEST_OFFSET &&
                     insn->immediate != MIR_AGGREGATE_GLOBAL_DEST_OFFSET)
-                    fprintf(out, "\tld de,%ld\n\tadd hl,de\n",
-                            insn->immediate);
+                    mir_emit_hl_offset_from_ix(out, (int)insn->immediate);
                 mir_emit_virtual_store(out, insn->dst);
             }
             break;
@@ -5257,9 +5363,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (insn->immediate < -128 || insn->immediate + 1 > 127)
                 goto done;
             fputs("\tpush ix\n\tpop hl\n", out);
-            if (insn->secondary_offset != 0)
-                fprintf(out, "\tld de,%d\n\tadd hl,de\n",
-                        insn->secondary_offset);
+            mir_emit_hl_offset_from_ix(out, insn->secondary_offset);
             fprintf(out, "\tld (ix%+ld),l\n\tld (ix%+ld),h\n",
                     insn->immediate, insn->immediate + 1);
             fputs("\tld hl,0\n", out);
