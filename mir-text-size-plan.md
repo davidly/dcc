@@ -7856,3 +7856,30 @@ was run before committing, per this session's standing corrective rule.
 
 **Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (new `mir_emit_hl_
 offset_from_ix` helper; ~9 call sites converted to use it).
+
+## Item T77 (planning follow-up): `!!x` double-negation fold sized, deferred - real yield is negligible (2026-08-06)
+
+**Context**: continuing the next-phase plan's recommended sequencing
+(smallest/safest item first), sized the "chained `!!x` logical-not is
+never folded into a single boolify" candidate before implementing it,
+per the plan's own stated approach ("Validate first ... then the full
+census", and generally: confirm real yield before touching shared
+lowering code).
+
+**Sizing result**: `grep -rlE '!![a-zA-Z_(]' tests/*.c` across the entire
+test corpus finds only 2 files containing the literal `!!` token
+sequence at all: `tests/tabort.c` (one real use, `if (!!got !=
+!!expected)`) and `tests/tgnuexpr.c` (inside a `__builtin_expect` macro
+definition that is not itself implemented by dcc, so never actually
+lowered). This is a single real occurrence in the whole runnable corpus,
+not the "common ... assertion/boolean-normalization idiom" the plan
+document hypothesized - the yield is negligible, not merely small.
+
+**Decision**: defer/skip. Implementing a dedicated fold pass (with its
+required orphan-retirement bookkeeping and full-corpus safety-net
+validation, since it touches the same shared constant-fold loop
+neighborhood as Items T50/T75) is not justified for a single call site
+in one test file. This does not preclude the fold from being revisited
+if a future corpus addition or real-world program exercises the pattern
+more often; re-run the same sizing grep before any future attempt rather
+than assuming the original hypothesis. No code changed for this entry.
