@@ -7640,3 +7640,56 @@ population remains gated behind the harder, still-pending
 
 **Files touched**: `src/dcc/dcc_mir_select.c` (the selector extension
 only); `mir-text-size-plan.md` (this entry). No baseline changes needed.
+
+## Item T73 (planning follow-up): cross-function `extrn` dedup gap found, deferred (2026-08-05)
+
+**Context**: continuing the near-miss tail investigation after Item T72,
+looked at the next-smallest `blocks=2` `text-size` gap: `tests/trw.c`'s
+`must_seek` (gap=9 bytes, `generated-insns` == `captured-insns` == 87 -
+identical instruction count, so the gap is purely encoding/declaration
+overhead, not extra work).
+
+**Root cause, found via direct `.mac` diff** (`DCC_MIR_FORCE_ACCEPT_FUNCTION`
+vs `DCC_MIR_FORCE_FALLBACK_FUNCTION`, `difflib.unified_diff` on the two
+function bodies): the *only* textual difference in the whole function
+body is one extra line, `extrn _lseek`, present in the MIR-generated
+version and absent from legacy's captured version. Item T71's dedup
+(`mir_extrn_should_emit`/`_name`) is deliberately scoped to *within one
+function's own selector-attempt* (see T71's Execution Log entry for the
+exact hazard this protects against: a discarded trial attempt must never
+suppress a needed EXTRN in a later, actually-accepted stream for the
+*same* function). Legacy instead uses a single cache that persists for
+the *whole compilation unit* - the first function anywhere in the file
+that references `_lseek` gets the `extrn` line; every later function's
+call to the same external symbol is silently extrn-free. T71's fix does
+not attempt this cross-function scope at all, so every MIR-accepted (or
+even MIR-attempted) function that is the first *in its own body* to
+reference a shared external symbol re-declares it, even when an earlier,
+already-committed function in the same file already declared it.
+
+**Why this is deferred rather than extended immediately**: doing this
+correctly requires locating the *true* final commit point - not
+`mir_try_selector()` (which only decides a winner among selectors tried
+for *one* function; per its own report lines, a function can pass one
+selector's internal `accepted` check and *still* be discarded later by
+the outer `text-size`/`instruction-count` gates in favor of legacy
+fallback) - but the point, further up the call chain, where a function's
+attempted MIR stream is irrevocably chosen as what actually goes into the
+program. Only at that point can this function's own newly-emitted extrn
+names be safely merged into a truly whole-compilation-persistent table
+without risking the exact "discarded attempt poisons a later real
+one" hazard T71 already had to solve once, just one scope level higher.
+This is a legitimate, mechanical, plan-worthy follow-up (the existing
+probe-then-commit pattern already used for phi-copy emission in
+`dcc_mir_spilled_cfg.c`'s `MIR_BRANCH_FALSE` case is a directly
+applicable precedent), but it is a cross-cutting, whole-compilation-
+ordering-sensitive change - a correctness bug here (under-declaring an
+`extrn` that is genuinely needed) would be a build failure, not merely a
+size regression, so it deserves its own dedicated investigation of the
+commit path rather than a rushed addition motivated by one 9-byte
+function. Filed as `t73-cross-function-extrn-dedup` (blocked) for a
+future session.
+
+**No code changed for this entry** - investigation and documentation
+only, per the same discipline as Item T66/T68-Stage-1's "investigated,
+documented, no code change" entries.
