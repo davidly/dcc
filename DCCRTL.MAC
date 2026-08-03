@@ -53,8 +53,14 @@ start:
         ; The first subtraction already produces __hlimit, so it is stored
         ; here and NOT recomputed below - keeping this wrap-safe check within
         ; a couple of cycles of the old single-compare version.
-        ld      hl,0
-        add     hl,sp           ; HL = entry SP
+
+        ; The default stack is in the ccp (or wherever an emulator wants it).
+        ; Set the stack to the bdos vector. The first push will decrement sp then write.
+        ; don't reserve a return address because start will warm boot, not return.
+
+        ld      hl, (0006h)     ; HL now holds the raw BDOS entry address
+        ld      sp, hl          ; Custom stack is now active at top of TPA
+       
         ld      de,__stack_size
         or      a
         sbc     hl,de           ; HL = SP - __stack_size (candidate __hlimit)
