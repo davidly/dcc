@@ -196,8 +196,26 @@ add_path_list() {
 
 resolve_command() {
     local command_value="$1"
-    if command -v "$command_value" >/dev/null 2>&1; then
-        command -v "$command_value"
+    local found
+    if found="$(command -v "$command_value" 2>/dev/null)"; then
+        case "$found" in
+            /*)
+                # already absolute
+                printf '%s' "$found"
+                ;;
+            *)
+                # command -v can return a path relative to the CURRENT
+                # directory (e.g. "./m80c", when "." is on $PATH). Some
+                # callers cache that string and invoke it later from a
+                # different cwd (e.g. after `cd "$build_dir"`), where the
+                # same relative path can resolve to something else entirely
+                # - such as build/m80c/, m80c's own leftover object-file
+                # directory, giving a baffling "is a directory" error.
+                # Canonicalize to absolute here so the result stays valid
+                # regardless of any later `cd`.
+                printf '%s' "$(cd "$(dirname "$found")" && pwd)/$(basename "$found")"
+                ;;
+        esac
     else
         printf '%s' "$command_value"
     fi
@@ -264,8 +282,13 @@ run_one() {
     local M80C="${M80C:-m80c}"
     local L80="${L80:-l80}"
     local L80C="${L80C:-l80c}"
-    # Resolved once, outside the "cd $build_dir" subshell used for the
-    # assembly/link steps below, same as DCC/DCCPEEP/DCCRTLSTRIP above.
+    # Resolved once here, then invoked later from inside the "cd $build_dir"
+    # subshells used for the assembly/link steps below - unlike
+    # DCC/DCCPEEP/DCCRTLSTRIP above, which resolve_command resolves right
+    # at their own call site, before any cd. That's only safe because
+    # resolve_command always returns an absolute path now; it used to be
+    # able to return a cwd-relative one (e.g. "./m80c", when "." is on
+    # $PATH), which broke here once the cwd changed underneath it.
     local m80c_resolved l80c_resolved
     m80c_resolved="$(resolve_command "$M80C")"
     l80c_resolved="$(resolve_command "$L80C")"
