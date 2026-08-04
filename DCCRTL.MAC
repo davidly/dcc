@@ -864,25 +864,69 @@ gchr_eof:
 
         public  __kbht
 __kbht:
-        ; int kbhit(void) - BDOS 11: console status
-        ; returns 0xFF if a key is ready, 0 otherwise
-        ld      c,11
+        ; int kbhit(void) - kbhit()/getch() both go through BDOS function 6
+        ; (Direct Console I/O) exclusively, never function 1 or 11. CP/M's
+        ; documentation warns against mixing direct console I/O (fn 6) with
+        ; the buffered/"cooked" console primitives (fn 1, fn 10, and fn 11's
+        ; status), since they go through a different path in some BIOS/
+        ; emulator implementations and can disagree about console state -
+        ; some emulators end up with kbhit() reporting a key ready via fn 11
+        ; while a subsequent fn 6 read blocks or returns something else.
+        ;
+        ; Function 6 with E=FFh is itself both a poll AND a destructive
+        ; read: if a key is ready it returns it in A immediately, consuming
+        ; it. So kbhit() has nowhere to "put back" a character it finds -
+        ; it stashes it in __kbpc (with __kbpf marking it valid) instead,
+        ; and getch() below drains that pending byte first before polling
+        ; fn 6 itself. This makes kbhit() non-destructive from the caller's
+        ; point of view: a character it already fetched stays visible here
+        ; (and to getch()) until getch() actually consumes it.
+        ld      a,(__kbpf)
+        or      a
+        jr      nz,__kbht_yes
+        ld      c,6
+        ld      e,0ffh
         call    5
-        ld      l,a
-        ld      h,0
+        or      a
+        jr      z,__kbht_no
+        ld      (__kbpc),a
+        ld      a,1
+        ld      (__kbpf),a
+__kbht_yes:
+        ld      hl,0ffffh
         ret
+__kbht_no:
+        ld      hl,0
+        ret
+
+; Shared with __gtch (getch) below - kept inside __kbht's own block (rather
+; than before "public __kbht", which would instead bundle it into whatever
+; unrelated function precedes __kbht here) so that using kbhit() alone never
+; pulls in getch(), and using getch() alone only pulls in this small shared
+; block, not some unrelated third function.
+__kbpf: db      0               ; 1 if __kbpc holds a character kbhit() already consumed from BDOS
+__kbpc: db      0               ; the pending character, valid only when __kbpf is 1
 
         public  __gtch
 __gtch:
-        ; int getch(void) - BDOS 6: direct console input without echo
-        ; BDOS 6 with E=FFh returns 0 when no key ready; poll until non-zero
+        ; int getch(void) - direct console input without echo, via BDOS fn 6
+        ; only (see __kbht above). Serves a pending character a prior
+        ; kbhit() already fetched, if any; otherwise polls fn 6 itself.
         call    __cflush        ; show any pending prompt before blocking
+        ld      a,(__kbpf)
+        or      a
+        jr      z,__gtch_poll
+        xor     a
+        ld      (__kbpf),a
+        ld      a,(__kbpc)
+        jr      __gtch_ret
 __gtch_poll:
         ld      c,6
         ld      e,0ffh
         call    5
         or      a
         jr      z,__gtch_poll
+__gtch_ret:
         ld      l,a
         ld      h,0
         ret
