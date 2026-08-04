@@ -107,6 +107,21 @@ int main( int argc, char *argv[] )
     len = cpm_filelen( fp );
     printf( "empty file length: %ld\n", len );
 
+    /* explicitly zero-fill bytes 0..8191 rather than relying on a seek
+       past end-of-file to leave a zero-filled gap: C89 makes no promise
+       about the contents of such a gap, and POSIX's zero-fill-on-hole
+       guarantee doesn't apply here since this isn't a POSIX filesystem */
+    memset( bigacbuf, 0, sizeof( bigacbuf ) );
+    for ( offset = 0; offset < 8192; offset += sizeof( bigacbuf ) )
+    {
+        result = fwrite( bigacbuf, sizeof( bigacbuf ), 1, fp );
+        if ( 1 != result )
+        {
+            printf( "zero-fill fwrite failed at offset %ld\n", offset );
+            exit( 1 );
+        }
+    }
+
     offset = 8192;
     result = fseek( fp, offset, SEEK_SET );
     printf( "result of fseek: %d\n", result );
