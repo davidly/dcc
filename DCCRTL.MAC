@@ -6582,6 +6582,18 @@ opslot:
         inc     hl
         ld      (hl),a
 
+        ; Default __fdlen[__slot] to 0 (correct for O_CREAT/O_TRUNC); the
+        ; "open existing" path below overwrites this with the real size.
+        call    __lenp
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+
         ld      a,(__slot)
         call    __fcbp
         push    hl
@@ -6616,6 +6628,8 @@ opclr:
         call    5
         cp      0ffh
         jr      z,opfail_noent
+        call    __rdsz          ; directory is authoritative right after
+                                 ; open: capture the real length now
         jr      opok
 
 opmake:
@@ -6874,7 +6888,7 @@ wrloop:
         ld      hl,(__rwrem)
         ld      a,h
         or      l
-        jp      z,wrdone
+        jp      z,wrfdone
         call    __setrr
         call    __chunk
 
@@ -6942,6 +6956,11 @@ wrcopy:
         call    __advio
         jp      wrloop
 
+wrfdone:
+        ; A real file write completed: __offp may now be past the length
+        ; recorded in __fdlen (BDOS fn 35 can't be trusted for this - see
+        ; the comment at _lseek's SEEK_END handling), so extend it here.
+        call    __extln
 wrdone:
         ld      hl,(__rwcnt)
         pop     ix
@@ -7067,56 +7086,39 @@ lsret:
         ret
 
 lsend:
-        ; SEEK_END: use BDOS fn 35 to get size in 128-byte records,
-        ; then convert to byte offset and add full 32-bit delta.
-        ld      a,(__slot)
-        call    __fcbp
-        ex      de,hl
-        ld      c,35
-        call    5
-
-        ld      a,(__slot)
-        call    __fcbp
-        ld      de,33
-        add     hl,de
+        ; SEEK_END: base off __fdlen (kept accurate by __extln on every
+        ; write, and initialized via __rdsz at open time) rather than
+        ; querying BDOS fn 35 here directly - fn 35 only reflects the
+        ; on-disk directory as of the file's last close, which is stale
+        ; for a file that has been written to since it was opened.
+        call    __lenp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
         ld      c,(hl)
         inc     hl
-        ld      b,(hl)          ; BC = 16-bit record count
-
-        ; BC * 128 -> A:HL, where A is byte 2 and byte 3 is zero.
-        ld      l,c
-        ld      h,b
-        xor     a
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
+        ld      b,(hl)          ; DE = length low word, BC = length high word
 
         ; Add offset low word.
+        ex      de,hl           ; HL = length low word
         ld      e,(ix+6)
         ld      d,(ix+7)
-        add     hl,de
+        add     hl,de           ; HL = result low word, carry set as needed
+        ex      de,hl           ; DE = result low word
 
-        ; Add offset high bytes plus carry from low word.
-        adc     a,(ix+8)
-        ld      b,a             ; result byte 2
-
-        ld      a,0
-        adc     a,(ix+9)
-        ld      c,a             ; result byte 3
+        ; Add offset high word plus carry from the low word.
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      a,c
+        adc     a,l
+        ld      c,a             ; result byte 2
+        ld      a,b
+        adc     a,h
+        ld      b,a             ; result byte 3
 
         push    bc
-        push    hl
+        push    de
 
         call    __offp
 
@@ -7126,9 +7128,9 @@ lsend:
         ld      (hl),d
         inc     hl
         pop     bc
-        ld      (hl),b
-        inc     hl
         ld      (hl),c
+        inc     hl
+        ld      (hl),b
         jr      lsret
 
 lsbadfd:
@@ -7229,6 +7231,71 @@ __offp:
         add     hl,hl           ; *4 bytes per offset
         ld      de,__fdoff
         add     hl,de
+        ret
+
+; __slot -> HL = 32-bit tracked-length dword (see __fdlen)
+__lenp:
+        ld      a,(__slot)
+        ld      h,0
+        ld      l,a
+        add     hl,hl
+        add     hl,hl           ; *4 bytes per length entry
+        ld      de,__fdlen
+        add     hl,de
+        ret
+
+; Query BDOS fn 35 (compute file size) for __slot's FCB, convert the
+; record count to a byte length, and store it in __fdlen[__slot]. Only
+; accurate for a file whose directory entry is up to date - i.e. right
+; after opening an existing (previously closed) file, which is the only
+; place this is called from.
+__rdsz:
+        ld      a,(__slot)
+        call    __fcbp
+        ex      de,hl
+        ld      c,35
+        call    5
+
+        ld      a,(__slot)
+        call    __fcbp
+        ld      de,33
+        add     hl,de
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = 16-bit record count
+
+        ; BC * 128 -> A:HL, where A is byte 2 and byte 3 is zero (max
+        ; record count 0FFFFh * 128 fits comfortably in 23 bits).
+        ld      l,c
+        ld      h,b
+        xor     a
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+
+        push    af
+        push    hl
+        call    __lenp
+        pop     de              ; DE = low word
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        pop     af
+        ld      (hl),a
+        inc     hl
+        ld      (hl),0
         ret
 
 ; A = slot 0..3, returns HL = FCB
@@ -7378,6 +7445,54 @@ __advio:
         ld      a,(hl)
         adc     a,0
         ld      (hl),a
+        ret
+
+; Extend __fdlen[__slot] to __offp[__slot] if a write has moved the
+; current offset past the previously tracked length. Unsigned 32-bit
+; compare, most-significant byte first; only a strictly-greater offset
+; updates the length, so writes that overwrite existing data in place
+; never touch it. IX/IY are saved/restored so this is safe to call from
+; inside _write's ix-based stack frame.
+__extln:
+        push    ix
+        push    iy
+        call    __offp
+        push    hl
+        pop     ix              ; IX = &__offp[__slot][0]
+        call    __lenp
+        push    hl
+        pop     iy              ; IY = &__fdlen[__slot][0]
+
+        ld      a,(ix+3)
+        cp      (iy+3)
+        jr      nz,extln_diff
+        ld      a,(ix+2)
+        cp      (iy+2)
+        jr      nz,extln_diff
+        ld      a,(ix+1)
+        cp      (iy+1)
+        jr      nz,extln_diff
+        ld      a,(ix+0)
+        cp      (iy+0)
+        jr      nz,extln_diff
+        jr      extln_done      ; equal: nothing to extend
+
+extln_diff:
+        jr      c,extln_done    ; offset byte < length byte at the first
+                                 ; (most significant) difference: offset
+                                 ; is less than length, nothing to extend
+        ld      a,(ix+0)
+        ld      (iy+0),a
+        ld      a,(ix+1)
+        ld      (iy+1),a
+        ld      a,(ix+2)
+        ld      (iy+2),a
+        ld      a,(ix+3)
+        ld      (iy+3),a
+
+extln_done:
+        pop     iy
+        pop     ix
         ret
 
 __zerdm:
@@ -7566,7 +7681,7 @@ __rnfcb:        ds      32
 ; that so much as opened a file, even when rename() itself was never
 ; called. Confirmed via tests/tfio.c, tests/texfile.c, tests/wumpus.c -
 ; none call rename(), all three linked _rename's body anyway.
-        public  __rdcv,__rdck,__fdeof,__fderr,__fduse,__fdoff
+        public  __rdcv,__rdck,__fdeof,__fderr,__fduse,__fdoff,__fdlen
 ; Read sector cache: records which 128-byte file record currently resides in
 ; the shared __dma buffer, so consecutive small reads of the same record
 ; (e.g. fgets reading one byte at a time) skip the BDOS random read entirely.
@@ -7578,6 +7693,14 @@ __fderr:        ds      NFILES  ; error flag per slot
 __fduse:
         ds      NFILES
 __fdoff:
+        ds      NFILES*4
+
+; Length dcc tracks for each open file, independent of BDOS fn 35 (which
+; only reflects the on-disk directory as of the file's last close, and is
+; stale for a file being written to in the current session). Initialized
+; from fn 35 at open time (the directory *is* authoritative then - see
+; __rdsz) and kept current by __extln on every write.
+__fdlen:
         ds      NFILES*4
 
         public  __fcbs
