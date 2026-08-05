@@ -8070,3 +8070,94 @@ between the (generic, symbol-table-driven) named-local-object frame
 layout and the (SSA-liveness-driven) backend-slot allocator, worth a
 dedicated, carefully-designed item as the next architectural investment
 after Batch 1's remaining quick, low-risk fixes are exhausted.
+
+### Item T82: skip the redundant slot reload for a value's own immediately-following call-argument use, even when it also has a later use
+
+**Context**: continuing the Batch 1 close-bucket sweep (single-block
+`text-size` fallback candidates), `tests/tmirfast.c`'s `dec_dead`/
+`inc_dead` (`int r = side_effect(x); x--; return r;`) showed a 34-36
+byte gap driven by a genuinely redundant store/reload pair: `x`'s
+`MIR_PARAM` value is spilled to its own backend slot immediately after
+being loaded (because it is read again later by `x--`, so it must
+survive past the `side_effect(x)` call), and then the very next
+instruction reloads it from that same slot to push it as the call
+argument - with nothing at all between the store and the reload.
+
+**Two separate, independent gaps found via direct IR/assembly inspection**
+(`DCC_MIR_REPORT=1`/`DCC_MIR_FORCE_ACCEPT_FUNCTION=dec_dead`, forced-accept
+diff against legacy):
+
+1. `mir_can_forward_hl_to_call_argument` (and its `mir_prepare_backend_
+   slots` no-slot sibling usage) checked strict index adjacency
+   (`mir_emit_instruction_index + 1`/`+ 2`) between a value's definition,
+   its `MIR_ARG` use, and the following `MIR_CALL` - with no tolerance
+   for an intervening `MIR_NOP` (a same-block rename/metadata marker
+   that emits no code), unlike `mir_can_forward_hl_to_next`, which
+   already looks through these via `mir_forward_skip_target` (Item T29).
+   `dec_dead`'s own `x` has exactly one such `MIR_NOP` between its
+   `MIR_PARAM` definition and its `MIR_ARG` use, so the existing
+   predicate never even considered it a candidate, regardless of how
+   many other uses `x` had.
+2. Even with (1) fixed, `mir_can_forward_hl_to_call_argument` still
+   requires the value to have *no other use anywhere in the function* -
+   correct for its existing job (skip storing to a slot at all, since
+   nothing later needs it), but overly strict for a value like `x` that
+   *does* have a later use (the `x--`) and therefore still needs a real
+   slot: the existing predicate can never help such a value, even though
+   its specific *first* use (immediately following its own definition,
+   with nothing intervening) is exactly the same safe, provably-
+   redundant-round-trip shape.
+
+**Fix** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Added `mir_call_argument_after_nops`, a small helper that walks past
+  any run of `MIR_NOP` instructions (never a `MIR_LABEL` - an ARG/CALL
+  pair can never legitimately cross a block boundary) - used to make
+  `mir_can_forward_hl_to_call_argument`'s existing adjacency check
+  NOP-tolerant, matching Item T29's precedent for the sibling predicate.
+  Updated both existing call sites (`mir_emit_virtual_store`'s no-slot
+  and has-slot branches) to compute the forwarded instruction index the
+  same NOP-tolerant way.
+- Added a new sibling predicate,
+  `mir_can_forward_hl_to_call_argument_first_use`, identical to the
+  above except it does **not** require the value to have no other use -
+  it only proves the *first* consumer (immediately following the
+  definition, through any intervening `MIR_NOP`) is this exact ARG+CALL
+  adjacency. Wired into `mir_emit_virtual_store`'s has-slot branch: the
+  ordinary slot store still runs unchanged (so every later reload keeps
+  working), but if this predicate holds, the immediately-following
+  reload for the call argument reuses HL directly instead of an
+  otherwise-guaranteed-redundant round trip through the slot just
+  written. Deliberately restricted to the in-range IX-relative store
+  form and the IY-relative form only - explicitly excluded from the
+  out-of-range (>127 byte offset) store form, which moves the value out
+  of HL (`ex de,hl`) to compute the store address before writing it, so
+  HL no longer holds the value afterward and forwarding there would be
+  unsafe.
+
+**Validation**:
+- Forced-accept diff of `dec_dead` (`DCC_MIR_FORCE_ACCEPT_FUNCTION=dec_dead`):
+  the `ld (ix-4),l` / `ld (ix-3),h` / `ld l,(ix-4)` / `ld h,(ix-3)`
+  round trip collapsed to just the store (the reload before `push hl`
+  disappeared) - 2 fewer instructions/4 fewer bytes, confirmed via
+  `DCC_MIR_SELECT_REPORT=1` (`dec_dead` generated-bytes 306→302,
+  `inc_dead` symmetric). Neither function alone crossed the acceptance
+  gate yet (still `fallback text-size`, ~34 bytes over), but the dead
+  round trip these two functions surfaced is a general emission-level
+  fix, not specific to them.
+- Whole-corpus census (`--compare --fail-on-regression`): **0
+  regressions**, coverage 516/2025 (25.48%) -> 517/2025 (25.53%), one
+  newly MIR-emitted function: `pint.free_compile_storage`. 28 apps
+  showed census metric changes; only `pint` required runtime validation
+  (the rest were fallback-only metric churn on functions never crossing
+  the acceptance gate, per the tool's own filtering).
+- Batch-tier validation (`runall.ps1 -Apps pint -Mode full`): **PASS**,
+  stack-check enabled, 0 regressions, and a real, substantial
+  performance win: `pint` peep -26.36% cycles, nopeep -25.81% cycles.
+  This is the kind of case Rule 4 exists for in reverse - a static-byte
+  win that also produced a *measured*, large real speedup, not just an
+  assumption.
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (`mir_call_argument_
+after_nops` added; `mir_can_forward_hl_to_call_argument` made NOP-
+tolerant; `mir_can_forward_hl_to_call_argument_first_use` added and
+wired into `mir_emit_virtual_store`'s has-slot IX/IY branches).

@@ -1359,17 +1359,40 @@ static int mir_value_only_used_by_dead_unary(int value)
  * while_stmt: `patch(jz, cp)`'s second argument (a fresh global read of
  * `cp`) was round-tripped through bc for no reason - nothing runs
  * between the load and the call at all. */
+/* Item T82 (mir-text-size-plan.md): the value's own MIR_ARG use can be
+ * separated from its definition by an intervening MIR_NOP (a same-block
+ * rename/metadata marker that emits no code - see mir_forward_skip_target's
+ * own comment on why these are always safe to look through), the same gap
+ * Item T29 already closed for mir_can_forward_hl_to_next. This predicate
+ * used a raw "+1" index instead, so a value like tests/tmirfast.c's
+ * dec_dead/inc_dead `x` parameter (whose MIR_PARAM definition is followed
+ * by one such NOP before its ARG use) never matched at all, regardless of
+ * how many other uses it had. Skipping only plain MIR_NOP (never a LABEL -
+ * an ARG/CALL pair can never legitimately cross a block boundary) keeps
+ * this exactly as safe as the original adjacent-index check. */
+static int mir_call_argument_after_nops(int instruction)
+{
+    int index = instruction + 1;
+
+    while (index < mir.count && mir.insns[index].opcode == MIR_NOP)
+        ++index;
+    return index;
+}
+
 static int mir_can_forward_hl_to_call_argument(int value)
 {
     const struct MirInsn *arg_insn;
     const struct MirInsn *call_insn;
     int instruction;
+    int arg_instruction;
 
-    if (mir_emit_instruction_index < 0 ||
-        mir_emit_instruction_index + 2 >= mir.count)
+    if (mir_emit_instruction_index < 0)
         return 0;
-    arg_insn = &mir.insns[mir_emit_instruction_index + 1];
-    call_insn = &mir.insns[mir_emit_instruction_index + 2];
+    arg_instruction = mir_call_argument_after_nops(mir_emit_instruction_index);
+    if (arg_instruction + 1 >= mir.count)
+        return 0;
+    arg_insn = &mir.insns[arg_instruction];
+    call_insn = &mir.insns[arg_instruction + 1];
     if (arg_insn->opcode != MIR_ARG || arg_insn->src1 != value ||
         type_size(arg_insn->type) > 2)
         return 0;
@@ -1378,12 +1401,49 @@ static int mir_can_forward_hl_to_call_argument(int value)
         call_insn->secondary_offset != arg_insn->secondary_offset)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
-        if (instruction == mir_emit_instruction_index + 1)
+        if (instruction == arg_instruction)
             continue;
         if (mir.insns[instruction].src1 == value ||
             mir.insns[instruction].src2 == value)
             return 0;
     }
+    return 1;
+}
+
+/* Item T82 (mir-text-size-plan.md): sibling to mir_can_forward_hl_to_call_
+ * argument above, but for a value that also has a *later* use elsewhere
+ * (so it still genuinely needs a real backend slot - the sole-use
+ * predicate above correctly declines it). The store into that slot still
+ * runs unchanged so every later reload keeps working; this only proves
+ * that the value's very first consumer, immediately following its own
+ * definition (through any intervening MIR_NOP), is this exact ARG+CALL
+ * adjacency with nothing at all between the store and that first use -
+ * so the immediately-following reload of the bytes just written is pure,
+ * provably redundant round-tripping and can reuse HL directly instead.
+ * Found via tests/tmirfast.c's dec_dead/inc_dead: `x` is used once as
+ * side_effect's sole call argument and again afterward by `x--`/`x++`,
+ * so it needs a slot, but its first use directly follows its own
+ * MIR_PARAM definition (through one MIR_NOP) with nothing in between. */
+static int mir_can_forward_hl_to_call_argument_first_use(int value)
+{
+    const struct MirInsn *arg_insn;
+    const struct MirInsn *call_insn;
+    int arg_instruction;
+
+    if (mir_emit_instruction_index < 0)
+        return 0;
+    arg_instruction = mir_call_argument_after_nops(mir_emit_instruction_index);
+    if (arg_instruction + 1 >= mir.count)
+        return 0;
+    arg_insn = &mir.insns[arg_instruction];
+    call_insn = &mir.insns[arg_instruction + 1];
+    if (arg_insn->opcode != MIR_ARG || arg_insn->src1 != value ||
+        type_size(arg_insn->type) > 2)
+        return 0;
+    if ((call_insn->opcode != MIR_CALL &&
+         call_insn->opcode != MIR_CALL_AGGREGATE) ||
+        call_insn->secondary_offset != arg_insn->secondary_offset)
+        return 0;
     return 1;
 }
 
@@ -2475,7 +2535,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
              * (nested `sgn(stricmp(...))` calls) once mir_prepare_backend_
              * slots' own skip-list started recognizing this predicate. */
             mir_forwarded_hl_value = value;
-            mir_forwarded_hl_instruction = mir_emit_instruction_index + 1;
+            mir_forwarded_hl_instruction =
+                mir_call_argument_after_nops(mir_emit_instruction_index);
         }
         return;
     }
@@ -2491,7 +2552,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
     }
     if (mir_can_forward_hl_to_call_argument(value)) {
         mir_forwarded_hl_value = value;
-        mir_forwarded_hl_instruction = mir_emit_instruction_index + 1;
+        mir_forwarded_hl_instruction =
+            mir_call_argument_after_nops(mir_emit_instruction_index);
         return;
     }
     if (mir_can_forward_stack_to_index(value) ||
@@ -2523,6 +2585,10 @@ static void mir_emit_virtual_store(FILE *out, int value)
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
+        } else if (mir_can_forward_hl_to_call_argument_first_use(value)) {
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction =
+                mir_call_argument_after_nops(mir_emit_instruction_index);
         }
         return;
     }
@@ -2530,16 +2596,28 @@ static void mir_emit_virtual_store(FILE *out, int value)
         fprintf(out, "\tld (ix%+d),l\n", offset);
         if (!forward_to_narrow_store)
             fprintf(out, "\tld (ix%+d),h\n", offset + 1);
+        if (forward_to_store) {
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction = forward_instruction - 1;
+        } else if (mir_can_forward_hl_to_call_argument_first_use(value)) {
+            /* Item T82 (mir-text-size-plan.md): safe only for this
+             * in-range form - the out-of-range branch below moves the
+             * value out of HL (into DE via `ex de,hl`) to compute the
+             * store address, so HL no longer holds it afterward. */
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction =
+                mir_call_argument_after_nops(mir_emit_instruction_index);
+        }
     } else {
         fputs("\tex de,hl\n\tpush ix\n\tpop hl\n", out);
         fprintf(out, "\tld bc,%d\n\tadd hl,bc\n"
                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
                 offset);
+        if (forward_to_store) {
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction = forward_instruction - 1;
+        }
     }
-    }
-    if (forward_to_store) {
-        mir_forwarded_hl_value = value;
-        mir_forwarded_hl_instruction = forward_instruction - 1;
     }
 }
 
