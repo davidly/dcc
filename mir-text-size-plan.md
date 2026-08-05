@@ -9401,3 +9401,50 @@ The refreshed ordinary rejection population is led by 1,034 `text-size`, 77
 actual spilled-emitter frame traffic; the call-cache approximation, broad
 text-proxy admission, phi slot removal, and generic backedge admission remain
 measured-invalid approaches.
+
+## Items T156-T158: exact call-cache slot planning (2026-08-07)
+
+T156 extends `DCC_MIR_UNUSED_SLOT_REPORT` with the first consumer opcode, use
+count, and textual definition-to-consumer distance. Deduplicating speculative
+selector attempts reports 4,722 assigned slots that actual emission never
+accesses. The dominant narrow patterns and most wide call-argument patterns
+are values retained by the existing emission-time call caches; the previous
+slot-preparation approximation failed because it modeled cache competition
+without reproducing actual definition order and forwarding decisions.
+
+T157 factors `mir_call_argument_cache_target_for_state()` from the existing
+emission predicate and runs it only after every earlier no-slot predicate in
+`mir_prepare_backend_slots()`. Planning walks definitions in emission order,
+tracks the pending call target, and marks a cache-only value with a distinct
+negative backend-slot state. Emission must reproduce that decision or fail
+loudly. `MIR_PHI` destinations, entry parameters, fused divmod results, and
+call results requiring odd aggregate-argument SP cleanup are excluded because
+their values are stored from predecessor, pre-loop, paired, or double-store
+paths rather than one ordinary linear definition.
+
+T158 applies the same exact plan to the narrow BC cache and the wide alternate
+register set. The target predicate permits only NOPs, argument markers,
+rematerialized constants, and promoted stores between definition and call, so
+no second value-producing instruction can create an overlapping narrow/wide
+cache lifetime. The refreshed diagnostic contains no unused narrow slots and
+only 1,238 remaining wide records, down from 4,722 total. The remaining wide
+unary/return classes are the measured-unprofitable forwarding population from
+T86 and are not widened again.
+
+**Census and focused validation**:
+
+- ordinary: **621/2021 (30.73%)**, +4 names and zero removals;
+- ordinary additions: `tptrlhs.check_char`, `tptrrhs.check_char`,
+  `tunary.shi32`, and `tunary.shui32`;
+- stack-check: **628/2123 (29.58%)**, +3 names and zero removals;
+- stack-check additions: `tptrlhs.check_char`, `tptrrhs.check_char`, and
+  `tunary.shi32`;
+- all 19 affected apps pass full peep/nopeep focused validation against
+  upstream ntvcm `e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`, with zero regressions
+  and 42 checked improvements.
+
+The refreshed ordinary rejection population is led by 1,032 `text-size`, 77
+`instruction-count`, 75 `absolute-address-cost`, 58 `absolute-index-cost`, and
+47 `inline-substitution` functions. Continue exact emission/reservation
+unification; do not revive independent cache simulation, generic wide-unary
+slot elision, or the backedge gate as coverage shortcuts.

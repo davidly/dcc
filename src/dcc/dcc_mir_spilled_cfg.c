@@ -34,6 +34,7 @@ static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
+static int mir_divmod_partner(int instruction);
 static int mir_can_forward_via_stack(int value);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
@@ -44,6 +45,7 @@ static int mir_spilled_cfg_used_constant_index_absolute;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
 static unsigned char *mir_backend_slot_accessed;
+#define MIR_BACKEND_SLOT_CALL_CACHE (-2)
 
 static int mir_virtual_offset(int value)
 {
@@ -1676,17 +1678,45 @@ static int mir_can_forward_hl_to_call_argument_first_use(int value)
     return mir_forward_note_success();
 }
 
-static int mir_call_argument_cache_target(int value)
+static int mir_call_argument_cache_target_for_state(
+    int value, int definition_instruction,
+    int narrow_cache_occupied, int wide_cache_occupied)
 {
     int argument_instruction = -1;
     int call_id = -1;
     int call_instruction = -1;
     int instruction;
 
-    if ((mir_value_is_wide(value) && mir_cached_wide_call_value >= 0) ||
-        (!mir_value_is_wide(value) && mir_cached_call_value >= 0))
+    if ((mir_value_is_wide(value) && wide_cache_occupied) ||
+        (!mir_value_is_wide(value) && narrow_cache_occupied))
         return -1;
-    for (instruction = mir_emit_instruction_index + 1;
+    {
+        const struct MirInsn *definition = mir_definition(value);
+        int argument_bytes = 0;
+        if (definition == NULL || definition->opcode == MIR_PHI ||
+            definition->opcode == MIR_PARAM ||
+            mir_divmod_partner((int)(definition - mir.insns)) >= 0)
+            return -1;
+        if (definition->opcode == MIR_CALL)
+            for (instruction = 0; instruction < mir.count; ++instruction) {
+                const struct MirInsn *arg = &mir.insns[instruction];
+                int size;
+                if (arg->opcode != MIR_ARG ||
+                    arg->secondary_offset != definition->secondary_offset)
+                    continue;
+                size = type_size(arg->type);
+                argument_bytes += type_is_struct_object(arg->type)
+                    ? size : (size == 4 ? 4 : 2);
+            }
+        /*
+         * Generic calls with an odd aggregate-argument byte count store a
+         * scalar result once around SP cleanup and again afterward. Such a
+         * result cannot be cache-only because its second store is real.
+         */
+        if ((argument_bytes & 1) != 0)
+            return -1;
+    }
+    for (instruction = definition_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->opcode == MIR_ARG && insn->src1 == value) {
@@ -1715,7 +1745,7 @@ static int mir_call_argument_cache_target(int value)
         }
     if (call_instruction < 0)
         return -1;
-    for (instruction = mir_emit_instruction_index + 1;
+    for (instruction = definition_instruction + 1;
          instruction < call_instruction; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->opcode == MIR_NOP || insn->opcode == MIR_ARG)
@@ -1729,6 +1759,34 @@ static int mir_call_argument_cache_target(int value)
             mir_object_is_fully_promoted(insn->object))
             continue;
         return -1;
+    }
+    return call_instruction;
+}
+
+static int mir_call_argument_cache_target(int value)
+{
+    return mir_call_argument_cache_target_for_state(
+        value, mir_emit_instruction_index,
+        mir_cached_call_value >= 0,
+        mir_cached_wide_call_value >= 0);
+}
+
+static int mir_planned_call_argument_cache_target(int value, int wide)
+{
+    int call_instruction = mir_call_argument_cache_target(value);
+
+    if (call_instruction < 0) {
+        char message[256];
+        const struct MirInsn *definition = mir_definition(value);
+        snprintf(message, sizeof(message),
+                 "planned %sMIR call-argument cache unavailable in %s "
+                 "for value %d (%s) at instruction %d (cached value %d)",
+                 wide ? "wide " : "", mir.name, value,
+                 definition != NULL
+                    ? mir_opcode_name(definition->opcode) : "none",
+                 mir_emit_instruction_index,
+                 wide ? mir_cached_wide_call_value : mir_cached_call_value);
+        fatal(message);
     }
     return call_instruction;
 }
@@ -2192,8 +2250,6 @@ static int mir_call_argument_slot_forwardable(int value, int units,
     return forwardable;
 }
 
-static int mir_divmod_partner(int instruction);
-
 /* mir-migration-plan-next10 (leaf frame-convention safety): legacy sometimes
  * emits a function with no `ix` frame at all - reading parameters directly
  * off `sp` with a leading `add hl,sp` - for sufficiently trivial leaf
@@ -2358,6 +2414,8 @@ static int mir_prepare_backend_slots(void)
     int *last;
     int *slot_end;
     char *fused_away = NULL;
+    int planned_narrow_cache_call = -1;
+    int planned_wide_cache_call = -1;
     int value;
     int i;
 
@@ -2519,9 +2577,14 @@ static int mir_prepare_backend_slots(void)
     mir_slot_report_requested_count = 0;
     mir_slot_report_assigned_count = 0;
     mir_slot_report_param_assigned_count = 0;
-    for (i = 0; i < mir.count; ++i)
+    for (i = 0; i < mir.count; ++i) {
+        if (planned_narrow_cache_call == i)
+            planned_narrow_cache_call = -1;
+        if (planned_wide_cache_call == i)
+            planned_wide_cache_call = -1;
         for (value = 0; value < mir.next_value; ++value)
             if (first[value] == i) {
+                int cache_target;
                 int slot;
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
@@ -2554,6 +2617,26 @@ static int mir_prepare_backend_slots(void)
                                         mir_value_only_used_by_dead_unary(value) ||
                                         mir_param_value_is_direct(value))
                     continue;
+                /*
+                 * The emitters can retain one pending call argument in BC
+                 * or the alternate register set instead of touching its
+                 * assigned slot. Plan that choice in the same definition
+                 * order as emission so cache occupancy is exact. A
+                 * cacheable definition-to-call span
+                 * permits no other value-producing instruction, so narrow
+                 * and wide cache lifetimes cannot overlap.
+                 */
+                cache_target = mir_call_argument_cache_target_for_state(
+                    value, i, planned_narrow_cache_call >= 0,
+                    planned_wide_cache_call >= 0);
+                if (cache_target >= 0) {
+                    mir.backend_slots[value] = MIR_BACKEND_SLOT_CALL_CACHE;
+                    if (units == 2)
+                        planned_wide_cache_call = cache_target;
+                    else
+                        planned_narrow_cache_call = cache_target;
+                    continue;
+                }
                 ++mir_slot_report_assigned_count;
                 if (definition != NULL && definition->opcode == MIR_PARAM)
                     ++mir_slot_report_param_assigned_count;
@@ -2616,6 +2699,7 @@ static int mir_prepare_backend_slots(void)
                         slot_end[slot + unit] = last[value];
                 }
             }
+    }
     if (getenv("DCC_MIR_WIDE_HELPER_REPORT") != NULL)
         for (value = 0; value < mir.next_value; ++value) {
             const struct MirInsn *definition = mir_definition(value);
@@ -2922,6 +3006,16 @@ static void mir_emit_virtual_store(FILE *out, int value)
          * value re-read it directly from its stable parameter home (see
          * mir_emit_virtual_load); the loaded HL is simply not persisted. */
         return;
+    if (value >= 0 && value < mir.next_value &&
+        mir.backend_slots != NULL &&
+        mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE) {
+        int call_instruction =
+            mir_planned_call_argument_cache_target(value, 0);
+        fputs("\tld c,l\n\tld b,h\n", out);
+        mir_cached_call_value = value;
+        mir_cached_call_instruction = call_instruction;
+        return;
+    }
     has_slot = value >= 0 && value < mir.next_value &&
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
     forward_instruction = mir_forward_skip_target(mir_emit_instruction_index);
@@ -3174,6 +3268,16 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
      * downstream would ever read the slot this store writes. */
     if (mir_param_value_is_direct(value))
         return;
+    if (value >= 0 && value < mir.next_value &&
+        mir.backend_slots != NULL &&
+        mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE) {
+        int call_instruction =
+            mir_planned_call_argument_cache_target(value, 1);
+        fputs("\texx\n", out);
+        mir_cached_wide_call_value = value;
+        mir_cached_wide_call_instruction = call_instruction;
+        return;
+    }
     if (mir_wide_helper_lhs_consumer(
             value, mir_emit_instruction_index, &helper_consumer) &&
         mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
@@ -6403,14 +6507,33 @@ done:
             if (mir.backend_slots[i] >= 0 &&
                 !mir_backend_slot_accessed[i]) {
                 const struct MirInsn *definition = mir_definition(i);
+                const struct MirInsn *consumer = NULL;
+                int consumer_index;
+                int definition_index = definition != NULL
+                    ? (int)(definition - mir.insns) : -1;
+
+                for (consumer_index = 0;
+                     consumer_index < mir.count; ++consumer_index)
+                    if (mir.insns[consumer_index].src1 == i ||
+                        mir.insns[consumer_index].src2 == i ||
+                        mir_call_uses_value(&mir.insns[consumer_index], i)) {
+                        consumer = &mir.insns[consumer_index];
+                        break;
+                    }
                 fprintf(stderr,
                         "; MIR unused-slot function=%s value=%d slot=%d "
-                        "definition=%s type-size=%d\n",
+                        "definition=%s type-size=%d uses=%d "
+                        "consumer=%s distance=%d\n",
                         mir.name, i, mir.backend_slots[i],
                         definition != NULL
                             ? mir_opcode_name(definition->opcode) : "none",
                         definition != NULL
-                            ? type_size(definition->type) : 0);
+                            ? type_size(definition->type) : 0,
+                        mir_value_use_count(i),
+                        consumer != NULL
+                            ? mir_opcode_name(consumer->opcode) : "none",
+                        consumer != NULL && definition_index >= 0
+                            ? consumer_index - definition_index : -1);
             }
     free(mir_backend_slot_accessed);
     mir_backend_slot_accessed = NULL;

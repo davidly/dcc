@@ -335,6 +335,33 @@ The stack-check census is **625/2123 (29.44%)**, +4 names and zero removals:
 The ten affected apps pass focused full-mode validation with zero regressions
 and 20 checked cycle/size improvements.
 
+## Batch 13
+
+1. T156: enrich the opt-in actual slot-access diagnostic with use count, first
+   consumer, and definition-to-consumer distance. The refreshed report showed
+   4,722 genuinely unused assigned slots; call-argument caching dominated.
+2. T157: factor call-cache target discovery into a state-parameterized shared
+   predicate and plan its choice in the same definition order as emission.
+   Cache-only values use a distinct backend-slot state instead of consuming
+   frame space. PHI, entry-parameter, fused divmod, and odd aggregate-argument
+   call-result shapes retain storage because their emission is not a single
+   linear store.
+3. T158: apply the exact plan to both the narrow BC cache and wide alternate
+   register cache. A cacheable span permits no intervening value-producing
+   instruction, so the two cache lifetimes cannot overlap. The post-change
+   diagnostic has no unused narrow slots and reduces total unused assigned
+   slots from 4,722 to 1,238.
+
+The ordinary census is **621/2021 (30.73%)**, +4 names and zero removals:
+`tptrlhs.check_char`, `tptrrhs.check_char`, `tunary.shi32`, and
+`tunary.shui32`.
+
+The stack-check census is **628/2123 (29.58%)**, +3 names and zero removals:
+`tptrlhs.check_char`, `tptrrhs.check_char`, and `tunary.shi32`.
+
+The 19 affected apps pass focused full-mode validation with zero regressions
+and 42 checked cycle/size improvements.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -380,13 +407,14 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T155 census is led by
-   1,034 `text-size`, 77 `instruction-count`, 75 `absolute-address-cost`,
+3. **Next structural priorities by impact:** the post-T158 census is led by
+   1,032 `text-size`, 77 `instruction-count`, 75 `absolute-address-cost`,
    58 `absolute-index-cost`, and 47 `inline-substitution` fallbacks. The stale
    `selector` bucket is gone. Continue using the actual slot-access diagnostic
-   to find reservation/emission mismatches, but do not simulate register-cache
-   competition in slot preparation. Float unary/conversion returns remain a
-   measured unprofitable class.
+   to find reservation/emission mismatches. The cache plan must remain exact;
+   the former approximation that modeled cache competition independently of
+   emission remains invalid. Float unary/conversion returns remain a measured
+   unprofitable class.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and
