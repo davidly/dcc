@@ -799,11 +799,7 @@ static int mir_index_stride(const struct AstNode *node)
         base = base->a;
     if (base != NULL && base->kind == AST_MEMBER)
         field = mir_member_field(base);
-    if (root != NULL && root->is_array)
-        stride = sym_array_index_elem_size(root, depth - 1);
-    else if (root != NULL)
-        stride = sym_pointer_array_index_elem_size(root, root->type, depth - 1);
-    else if (field != NULL && field->is_array) {
+    if (field != NULL && field->is_array) {
         stride = field->elem_size > 0 ? field->elem_size
                                       : type_size(field->elem_type);
         if (stride <= 0)
@@ -811,7 +807,12 @@ static int mir_index_stride(const struct AstNode *node)
         for (dimension = depth; dimension < field->dim_count; ++dimension)
             if (field->dims[dimension] > 0)
                 stride *= field->dims[dimension];
-    }
+    } else if (field != NULL && type_ptr_depth(field->type) > 0) {
+        stride = type_index_elem_size(field->type);
+    } else if (root != NULL && root->is_array)
+        stride = sym_array_index_elem_size(root, depth - 1);
+    else if (root != NULL)
+        stride = sym_pointer_array_index_elem_size(root, root->type, depth - 1);
     else {
         struct Sym *pointer_array = mir_pointer_array_root(
             node != NULL ? node->a : NULL, &dereference_depth);
@@ -3907,6 +3908,16 @@ void mir_resolve_deferred_metadata(void)
             continue;
         pointee_type = type_decay_ptr(address->type);
         if (type_size(pointee_type) <= 0)
+            continue;
+        /* TYPE_PTR2 is the deepest representable pointer type, so taking
+         * the address of a pointer-to-pointer saturates instead of creating
+         * a third pointer level.  Do not let repair infer a shallower load
+         * type from that saturated address and lose the original pointee
+         * depth; later index scaling needs the preserved pointer-to-pointer
+         * type to select a two-byte pointer-element stride. */
+        if (type_ptr_depth(address->type) == 2 &&
+            type_ptr_depth(insn->type) >
+                type_ptr_depth(pointee_type))
             continue;
         if (insn->opcode == MIR_LOAD_INDIRECT &&
             type_ptr_depth(pointee_type) == 0 &&

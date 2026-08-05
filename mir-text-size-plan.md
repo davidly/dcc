@@ -9764,3 +9764,62 @@ The refreshed ordinary rejection population is led by 804 `text-size`, 140
 `unary-not-cost`, 69 `wide-constant-cost`, 62 `instruction-count`, 54
 `absolute-address-cost`, 50 `absolute-index-cost`, and 46
 `inline-substitution` functions.
+
+## Items T181-T183: dynamic fixed-stride index-base forwarding (2026-08-08)
+
+T181 audits the 804 remaining `text-size` fallbacks for an address-producing
+value followed only by MIR no-ops and then consumed as the base of a dynamic,
+fixed-stride `MIR_INDEX_ADDRESS`. The pattern occurs in 157 functions. The
+spilled selector already forwards the equivalent constant-index base through
+the physical Z80 stack, but assumed a consumer exactly two instructions later.
+
+The implementation generalizes that established mechanism rather than adding
+a second emitter path. One shared predicate returns the exact consumer
+instruction to both backend-slot planning and emission. It accepts only a
+fixed compile-time stride, a nonconstant index, the forwarded value in `src1`,
+MIR no-ops between producer and consumer, and no later explicit or hidden call
+use of the base. Constant-index forwarding retains its original later-use
+safety scan. At the dynamic consumer, the scaled index remains in HL, the
+forwarded base is popped into DE, and `add hl,de` completes the address.
+
+The first census admitted 14 functions. Full-mode validation found
+miscompilation in `cint` and `cobint` and a peep-cycle regression in `forint`.
+The stack handoff was balanced; forced baseline reproduction instead exposed a
+pre-existing lowering defect in `Gst.strs[i]`, where `strs` is `char **`.
+
+T182 fixes that semantic defect. Dcc represents at most two pointer levels, so
+taking the address of a pointer-to-pointer saturates at `TYPE_PTR2`. Deferred
+metadata repair previously interpreted that saturated address as one level
+shallower and rewrote the loaded `char **` value to `char *`. Index stride
+selection also preferred the enclosing struct symbol before its
+pointer-valued field. Repair now preserves the deeper original load type when
+the address has saturated, and stride selection prefers the member field.
+`Gst.strs[i]` consequently records the required stride of two rather than one.
+
+T183 profiles the complete newly exposed population rather than trusting
+static size metrics. Call-containing candidates with fewer than 15 saved MIR
+instructions can regress after dccpeep even though forwarding removes a
+backend slot. The selector records whether dynamic index-base forwarding was
+actually used, and the transactional cost gate requires the measured
+15-instruction margin only when the function contains a call.
+`cint.add_func` sits exactly at the retained boundary. This structural gate
+rejects 117 candidates as `dynamic-index-base-cost`, including the measured
+small `emit_*`, `eemit`, and `compile_stmt` regressors, without naming any
+application or function.
+
+**Census and focused validation**:
+
+- ordinary: **704/2022 (34.82%)**, +8 names and zero removals;
+- stack-check: **713/2124 (33.57%)**, +10 names and zero removals;
+- ordinary additions: `adaint.patch`, `cint.add_func`, `cint.patch`,
+  `cobint.patch`, `cobint.var_get`, `pint.patch`, `tnestfor.nz_ptr`, and
+  `too.tile_at`;
+- stack-check additionally adds `tvla.vla_leading_const_bound` and
+  `tvla.vla_parenthesized_bound`;
+- all seven affected apps pass focused full peep/nopeep validation with zero
+  regressions and 16 checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 690 `text-size`, 138
+`unary-not-cost`, 117 `dynamic-index-base-cost`, 69 `wide-constant-cost`, 62
+`instruction-count`, 49 `absolute-index-cost`, 47 `absolute-address-cost`,
+and 46 `inline-substitution` functions.

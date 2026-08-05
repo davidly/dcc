@@ -33,19 +33,20 @@ static int mir_value_is_nested_truth_comparison_input(int value);
 static int mir_float_madd_match(int add_index, int *multiply_index,
                                 int *addend_value);
 static int mir_unary_is_fusable_not_branch(int i);
+static int mir_forwarded_stack_target_instruction = -1;
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
-static int mir_can_forward_via_stack(int value);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
+static int mir_spilled_cfg_used_dynamic_index_base_forwarding;
 static int mir_spilled_cfg_used_wide_constant_rematerialization;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_forwarded_wide_stack_value = -1;
@@ -501,11 +502,47 @@ static int mir_can_forward_hl_to_next(int value)
     return mir_forward_note_success();
 }
 
-static int mir_can_forward_stack_to_index(int value)
+static int mir_dynamic_index_base_forward_target(int value)
+{
+    const struct MirInsn *index;
+    const struct MirInsn *index_definition;
+    int target;
+    int instruction;
+
+    if (mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 1 >= mir.count)
+        return -1;
+    target = mir_emit_instruction_index + 1;
+    while (target < mir.count && mir.insns[target].opcode == MIR_NOP)
+        ++target;
+    if (target >= mir.count)
+        return -1;
+    index = &mir.insns[target];
+    index_definition = mir_definition(index->src2);
+    if (index->opcode != MIR_INDEX_ADDRESS ||
+        index->base_name[0] != 0 || index->src1 != value ||
+        (index_definition != NULL &&
+         index_definition->opcode == MIR_CONST))
+        return -1;
+    for (instruction = target + 1;
+         instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value)
+            return -1;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            mir_call_uses_value(insn, value))
+            return -1;
+    }
+    return target;
+}
+
+static int mir_stack_index_forward_target(int value)
 {
     const struct MirInsn *middle;
     const struct MirInsn *index;
     int instruction;
+    int target;
 
     /* Item T4 (mir-text-size-plan.md): mir_virtual_iy_base was a constant
      * 0 (dead scaffolding) when this helper and its gate were introduced
@@ -517,25 +554,28 @@ static int mir_can_forward_stack_to_index(int value)
      * eventual store destination would use ix- or iy-relative addressing,
      * so the gate is removed the same way Item T3 removed the analogous
      * dead gate from mir_can_forward_hl_to_next. */
-    if (mir_emit_instruction_index < 0 ||
-        mir_emit_instruction_index + 2 >= mir.count)
-        return 0;
-    middle = &mir.insns[mir_emit_instruction_index + 1];
-    index = &mir.insns[mir_emit_instruction_index + 2];
-    if (middle->opcode != MIR_CONST || index->opcode != MIR_INDEX_ADDRESS ||
-        index->src1 != value || index->src2 != middle->dst)
-        return 0;
-    for (instruction = mir_emit_instruction_index + 3;
-         instruction < mir.count; ++instruction) {
-        const struct MirInsn *insn = &mir.insns[instruction];
-        if (insn->src1 == value || insn->src2 == value)
-            return 0;
-        if ((insn->opcode == MIR_CALL ||
-             insn->opcode == MIR_CALL_AGGREGATE) &&
-            mir_call_uses_value(insn, value))
-            return 0;
+    if (mir_emit_instruction_index >= 0 &&
+        mir_emit_instruction_index + 2 < mir.count) {
+        middle = &mir.insns[mir_emit_instruction_index + 1];
+        index = &mir.insns[mir_emit_instruction_index + 2];
+        if (middle->opcode == MIR_CONST &&
+            index->opcode == MIR_INDEX_ADDRESS &&
+            index->base_name[0] == 0 &&
+            index->src1 == value && index->src2 == middle->dst) {
+            target = mir_emit_instruction_index + 2;
+            for (instruction = target + 1;
+                 instruction < mir.count; ++instruction) {
+                const struct MirInsn *insn = &mir.insns[instruction];
+                if (insn->src1 == value || insn->src2 == value ||
+                    ((insn->opcode == MIR_CALL ||
+                      insn->opcode == MIR_CALL_AGGREGATE) &&
+                     mir_call_uses_value(insn, value)))
+                    return -1;
+            }
+            return target;
+        }
     }
-    return 1;
+    return mir_dynamic_index_base_forward_target(value);
 }
 
 static int mir_call_only_constant(int value)
@@ -3077,15 +3117,30 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
     return 1;
 }
 
-static int mir_can_forward_via_stack(int value)
+static int mir_stack_forward_target(int value, int *dynamic_index)
 {
+    int target;
+
+    if (dynamic_index != NULL)
+        *dynamic_index = 0;
     if (mir_emit_instruction_index >= 0 &&
         mir_emit_instruction_index < mir.count &&
         mir.insns[mir_emit_instruction_index].opcode == MIR_PHI)
-        return 0;
-    return mir_can_forward_stack_to_index(value) ||
-           mir_can_forward_stack_to_binary_const(value) ||
-           mir_can_forward_stack_to_binary_rhs(value);
+        return -1;
+    target = mir_dynamic_index_base_forward_target(value);
+    if (target >= 0) {
+        if (dynamic_index != NULL)
+            *dynamic_index = 1;
+        return target;
+    }
+    target = mir_stack_index_forward_target(value);
+    if (target >= 0)
+        return target;
+    if (mir_can_forward_stack_to_binary_const(value))
+        return mir_emit_instruction_index + 2;
+    if (mir_can_forward_stack_to_binary_rhs(value))
+        return mir_emit_instruction_index + 1;
+    return -1;
 }
 
 static int mir_stack_backend_slot_forwardable(
@@ -3098,13 +3153,14 @@ static int mir_stack_backend_slot_forwardable(
         return 0;
     saved_index = mir_emit_instruction_index;
     mir_emit_instruction_index = instruction;
-    forwardable = mir_can_forward_via_stack(value);
+    forwardable = mir_stack_forward_target(value, NULL) >= 0;
     mir_emit_instruction_index = saved_index;
     return forwardable;
 }
 
 static void mir_emit_virtual_store(FILE *out, int value)
 {
+    int dynamic_index_forward;
     int has_slot;
     int forward_instruction;
     int offset;
@@ -3154,10 +3210,15 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction =
                 mir_call_argument_after_nops(mir_emit_instruction_index);
-        } else if (mir_can_forward_via_stack(value)) {
+        } else if ((forward_instruction =
+                    mir_stack_forward_target(
+                        value, &dynamic_index_forward)) >= 0) {
             fputs("\tpush hl\n", out);
             mir_forwarded_stack_value = value;
             mir_forwarded_stack_instruction = mir_emit_instruction_index;
+            mir_forwarded_stack_target_instruction = forward_instruction;
+            if (dynamic_index_forward)
+                mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         }
         return;
     }
@@ -3175,10 +3236,14 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_call_argument_after_nops(mir_emit_instruction_index);
         return;
     }
-    if (mir_can_forward_via_stack(value)) {
+    if ((forward_instruction = mir_stack_forward_target(
+             value, &dynamic_index_forward)) >= 0) {
         fputs("\tpush hl\n", out);
         mir_forwarded_stack_value = value;
         mir_forwarded_stack_instruction = mir_emit_instruction_index;
+        mir_forwarded_stack_target_instruction = forward_instruction;
+        if (dynamic_index_forward)
+            mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         return;
     }
     {
@@ -4917,6 +4982,11 @@ int mir_spilled_cfg_depends_on_constant_absolute(void)
     return mir_spilled_cfg_used_constant_absolute;
 }
 
+int mir_spilled_cfg_depends_on_dynamic_index_base_forwarding(void)
+{
+    return mir_spilled_cfg_used_dynamic_index_base_forwarding;
+}
+
 int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void)
 {
     return mir_spilled_cfg_used_wide_constant_rematerialization;
@@ -4941,6 +5011,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_dead_store_forwarding = 0;
     mir_spilled_cfg_used_constant_absolute = 0;
     mir_spilled_cfg_used_constant_index_absolute = 0;
+    mir_spilled_cfg_used_dynamic_index_base_forwarding = 0;
     mir_spilled_cfg_used_wide_constant_rematerialization = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     for (i = 0; i < mir.count; ++i)
@@ -5076,6 +5147,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_forwarded_wide_instruction = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
+    mir_forwarded_stack_target_instruction = -1;
     mir_forwarded_wide_stack_value = -1;
     mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;
@@ -5420,10 +5492,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_forwarded_hl_instruction = -1;
                 }
                 if (mir_forwarded_stack_value == insn->src1 &&
-                    mir_forwarded_stack_instruction + 2 == i) {
+                    mir_forwarded_stack_target_instruction == i) {
                     fputs("\tpop hl\n", out);
                     mir_forwarded_stack_value = -1;
                     mir_forwarded_stack_instruction = -1;
+                    mir_forwarded_stack_target_instruction = -1;
                 } else
                     mir_emit_virtual_load(out, insn->src1);
                 if (byte_offset != 0)
@@ -5443,10 +5516,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     }
                 }
                 if (mir_forwarded_stack_value == insn->src1 &&
-                    mir_forwarded_stack_instruction + 2 == i) {
+                    mir_forwarded_stack_target_instruction == i) {
                     fputs("\tpop de\n\tadd hl,de\n", out);
                     mir_forwarded_stack_value = -1;
                     mir_forwarded_stack_instruction = -1;
+                    mir_forwarded_stack_target_instruction = -1;
                 } else {
                     fputs("\tpush hl\n", out);
                     mir_emit_virtual_load(out, insn->src1);
@@ -5946,7 +6020,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * that mir_emit_virtual_load would perform. */
                 int stack_forwarded_left =
                     mir_forwarded_stack_value == insn->src1 &&
-                    mir_forwarded_stack_instruction + 2 == i;
+                    mir_forwarded_stack_target_instruction == i;
                 /* Item T16: mir_can_forward_stack_to_binary_rhs already
                  * pushed the right operand at its definition site (only
                  * possible when the left operand is a plain constant -
@@ -5956,7 +6030,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * reload/push/ex-de-hl dance at all. */
                 int stack_forwarded_right =
                     mir_forwarded_stack_value == insn->src2 &&
-                    mir_forwarded_stack_instruction + 1 == i;
+                    mir_forwarded_stack_target_instruction == i;
                 /* Item T50: set when the constant-loading logic below
                  * chose to pre-bias the RHS constant instead of loading
                  * it raw - both comparison consumers further down (the
@@ -6167,6 +6241,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (stack_forwarded_left || stack_forwarded_right) {
                     mir_forwarded_stack_value = -1;
                     mir_forwarded_stack_instruction = -1;
+                    mir_forwarded_stack_target_instruction = -1;
                 }
                 {
                     int fuse_skip = mir_binary_is_fusable_comparison(i);
@@ -6919,6 +6994,7 @@ done:
     mir_forwarded_wide_instruction = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
+    mir_forwarded_stack_target_instruction = -1;
     mir_forwarded_wide_stack_value = -1;
     mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;

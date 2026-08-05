@@ -7,17 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `a653617` (Items T177-T178)
-- Published ordinary coverage: **679/2022 functions (33.58%)**
-- Published stack-check coverage: **686/2124 functions (32.30%)**
+- Published baseline: `69675cb` (Items T179-T180)
+- Published ordinary coverage: **696/2022 functions (34.42%)**
+- Published stack-check coverage: **703/2124 functions (33.10%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
-- Batch 19 candidate ordinary coverage: **696/2022 functions (34.42%)**
-- Batch 19 candidate stack-check coverage: **703/2124 functions (33.10%)**
+- Batch 20 candidate ordinary coverage: **704/2022 functions (34.82%)**
+- Batch 20 candidate stack-check coverage: **713/2124 functions (33.57%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -546,6 +546,39 @@ population is led by 804 `text-size`, 140 `unary-not-cost`, 69
 `wide-constant-cost`, 62 `instruction-count`, 54 `absolute-address-cost`, 50
 `absolute-index-cost`, and 46 `inline-substitution` functions.
 
+## Batch 20
+
+1. T181: audit the 804 remaining `text-size` fallbacks for values produced,
+   followed only by MIR no-ops, and then consumed as dynamic fixed-stride
+   index bases. The pattern occurs in 157 functions. Generalize the existing
+   physical-stack handoff so slot planning and emission use one target
+   predicate and track the exact consumer instruction.
+2. T182: fix the pointer-depth bug exposed by forced validation of the wider
+   population. Deferred repair must preserve an original pointer-to-pointer
+   load when its address type has saturated at `TYPE_PTR2`; index stride
+   selection must prefer a pointer-valued struct field over its enclosing
+   struct symbol. This changes `Gst.strs[i]` from the incorrect byte stride to
+   the required two-byte pointer stride.
+3. T183: profile the 14 initially admitted functions in full peep/nopeep mode.
+   Retain dynamic index-base forwarding for call-free functions and require a
+   measured 15-instruction saving for call-containing functions. This rejects
+   117 correct-but-unprofitable candidates without app/function-name
+   exceptions and retains the eight non-regressing functions.
+
+The candidate ordinary census is **704/2022 (34.82%)**, +8 names and zero
+removals. The candidate stack-check census is **713/2124 (33.57%)**, +10 names
+and zero removals. Ordinary additions are `adaint.patch`, `cint.add_func`,
+`cint.patch`, `cobint.patch`, `cobint.var_get`, `pint.patch`,
+`tnestfor.nz_ptr`, and `too.tile_at`; stack-check additionally adds
+`tvla.vla_leading_const_bound` and `tvla.vla_parenthesized_bound`.
+
+The seven affected apps pass focused full-mode validation with zero regressions
+and 16 checked cycle/size improvements. The refreshed ordinary rejection
+population is led by 690 `text-size`, 138 `unary-not-cost`, 117
+`dynamic-index-base-cost`, 69 `wide-constant-cost`, 62 `instruction-count`,
+49 `absolute-index-cost`, 47 `absolute-address-cost`, and 46
+`inline-substitution` functions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -591,13 +624,14 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T180 ordinary census is
-   led by 804 `text-size`, 140 `unary-not-cost`, 62 `instruction-count`,
-   69 `wide-constant-cost`, 54 `absolute-address-cost`,
-   50 `absolute-index-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
+3. **Next structural priorities by impact:** the post-T183 ordinary census is
+   led by 690 `text-size`, 138 `unary-not-cost`, 117
+   `dynamic-index-base-cost`, 69 `wide-constant-cost`, 62
+   `instruction-count`, 49 `absolute-index-cost`, 47
+   `absolute-address-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared
-   improvement. The `unary-not-cost` and `wide-constant-cost` populations are
-   deliberately measured fallback, not gate-removal headroom.
+   improvement. The cost populations are deliberately measured fallback, not
+   gate-removal headroom.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and

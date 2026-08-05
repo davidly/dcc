@@ -386,6 +386,7 @@ int mir_stream_instruction_count(FILE *stream);
 int mir_try_emit_homed_scalar_dag(FILE *out);
 int mir_try_emit_scalar_dag(FILE *out);
 int mir_spilled_cfg_depends_on_constant_absolute(void);
+int mir_spilled_cfg_depends_on_dynamic_index_base_forwarding(void);
 int mir_spilled_cfg_depends_on_direct_byte_param(void);
 int mir_spilled_cfg_depends_on_constant_index_absolute(void);
 int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void);

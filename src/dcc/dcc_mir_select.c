@@ -1065,6 +1065,17 @@ static int mir_has_format_runtime_call(void)
     return 0;
 }
 
+static int mir_has_any_call(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL ||
+            mir.insns[instruction].opcode == MIR_CALL_AGGREGATE)
+            return 1;
+    return 0;
+}
+
 static int mir_is_call_heavy_general_compare(void)
 {
     int branches = 0;
@@ -1888,6 +1899,19 @@ void mir_end_function(void)
                      * populations retain their own structural profitability
                      * rules above. */
                     fallback_reason = "absolute-address-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_dynamic_index_base_forwarding() &&
+                         mir_has_any_call() &&
+                         generated_instructions >
+                             captured_instructions - 15)
+                    /* Dynamic index-base forwarding can remove a complete
+                     * spill slot while still exposing a call-containing
+                     * candidate whose legacy register/layout choices win
+                     * after dccpeep. Full-mode A/B found that the affected
+                     * functions with fewer than fifteen saved instructions
+                     * regress peep cycles; cint.add_func reaches the measured
+                     * non-regressing boundary exactly. */
+                    fallback_reason = "dynamic-index-base-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
