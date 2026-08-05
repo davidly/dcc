@@ -1053,6 +1053,17 @@ static int mir_has_wide_values(void)
     return 0;
 }
 
+static int mir_has_variadic_call(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL &&
+            (mir.insns[instruction].memory_flags & (32 | 64)) != 0)
+            return 1;
+    return 0;
+}
+
 static int mir_is_call_heavy_general_compare(void)
 {
     int branches = 0;
@@ -1817,6 +1828,11 @@ void mir_end_function(void)
                      * overlapping homes are coalesced, require enough margin
                      * to pay that unmodelled prologue/frame cost. */
                     fallback_reason = "dead-store-forwarding-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_wide_constant_rematerialization() &&
+                         (mir_has_variadic_call() ||
+                          generated_size >= captured_size))
+                    fallback_reason = "wide-constant-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_constant_index_absolute() &&
                          generated_instructions * 25L >

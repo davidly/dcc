@@ -871,6 +871,9 @@ int mir_emit_ix_offset_address_to_home(FILE *out, int value,
                                                int offset)
 {
     int color = mir.allocation_colors[value];
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction = definition != NULL
+        ? (int)(definition - mir.insns) : -1;
     int spill_offset;
     if (offset == 0) {
         switch (color) {
@@ -893,8 +896,18 @@ int mir_emit_ix_offset_address_to_home(FILE *out, int value,
         !mir_home_spill_offset(value, NULL))
         return 0;
     {
-        int preserve_hl = color != MIR_COLOR_HL;
-        int preserve_de = color != MIR_COLOR_DE;
+        /* Keep the measured straight-line selection stable; CFG liveness
+         * matters here when mutually exclusive paths share a color. */
+        int use_cfg_liveness = mir_cfg_block_count() > 1;
+        int preserve_hl_de = use_cfg_liveness &&
+            mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+        int preserve_hl = !preserve_hl_de && color != MIR_COLOR_HL &&
+            (!use_cfg_liveness ||
+             mir_home_color_live_across(instruction, MIR_COLOR_HL));
+        int preserve_de = !preserve_hl_de && color != MIR_COLOR_DE &&
+            (!use_cfg_liveness ||
+             mir_home_color_live_across(instruction, MIR_COLOR_DE));
+        if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
         if (preserve_hl) fputs("\tpush hl\n", out);
         if (preserve_de) fputs("\tpush de\n", out);
         fputs("\tpush ix\n\tpop hl\n", out);
@@ -903,6 +916,7 @@ int mir_emit_ix_offset_address_to_home(FILE *out, int value,
             return 0;
         if (preserve_de) fputs("\tpop de\n", out);
         if (preserve_hl) fputs("\tpop hl\n", out);
+        if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
     }
     return 1;
 }
@@ -923,12 +937,21 @@ int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
                                                     int base, long offset)
 {
     int dst_color = mir.allocation_colors[dst];
-    int preserve_hl = dst_color != MIR_COLOR_HL;
-    int preserve_de = dst_color != MIR_COLOR_DE;
+    const struct MirInsn *definition = mir_definition(dst);
+    int instruction = definition != NULL
+        ? (int)(definition - mir.insns) : -1;
+    int preserve_hl_de =
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    int preserve_hl = !preserve_hl_de && dst_color != MIR_COLOR_HL &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+    int preserve_de = !preserve_hl_de && offset != 0 &&
+        dst_color != MIR_COLOR_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
     if (offset == 0 &&
         dst_color == mir.allocation_colors[base])
         return 1;
+    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
     if (preserve_hl) fputs("\tpush hl\n", out);
     if (preserve_de) fputs("\tpush de\n", out);
     if (!mir_emit_home_to_hl(out, base))
@@ -939,6 +962,7 @@ int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
         return 0;
     if (preserve_de) fputs("\tpop de\n", out);
     if (preserve_hl) fputs("\tpop hl\n", out);
+    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1416,19 +1440,17 @@ int mir_emit_homed_unary_instruction(FILE *out,
     int source_wide = type_size(source_type) == 4;
     int target_wide = type_size(insn->type) == 4;
     int instruction = (int)(insn - mir.insns);
-    /* preserve_hl must also cover the case where src1's home register IS hl
-     * (so mir_emit_home_to_hl below is a no-op) but src1 is still live
-     * after this instruction, and the result is stored to a different home
-     * (e.g. mir_emit_hl_to_home's DE case uses "ex de,hl", which swaps hl's
-     * contents rather than just moving into de - clobbering src1's still-
-     * live value if it isn't saved and restored around the computation). */
+    /* Preserve any HL-homed value that is live on both sides of this
+     * instruction, including a still-live src1 whose own load is a no-op.
+     * Use retained CFG liveness rather than a textual future-use scan so
+     * mutually exclusive branch values do not manufacture saves. */
     int preserve_hl_de =
         !source_wide && !target_wide &&
         mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
     int preserve_hl = !preserve_hl_de &&
                       mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
-                      (mir.allocation_colors[insn->src1] != MIR_COLOR_HL ||
-                       mir_value_has_use_after(insn->src1, instruction));
+                      mir_home_color_live_across(
+                          instruction, MIR_COLOR_HL);
     int label;
 
     if (source_wide || target_wide) {
@@ -1568,13 +1590,13 @@ int mir_emit_homed_binary_instruction(FILE *out,
         preserve_hl_de =
             mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
         preserve_hl = !preserve_hl_de &&
-                                    mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
-                                    !(mir.allocation_colors[left] == MIR_COLOR_HL &&
-                                        !mir_value_has_use_after(left, instruction));
+            mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+            !(mir.allocation_colors[left] == MIR_COLOR_HL &&
+              !mir_value_has_use_after(left, instruction));
         preserve_de = !preserve_hl_de &&
-                                    mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
-                                    !(mir.allocation_colors[right] == MIR_COLOR_DE &&
-                                        !mir_value_has_use_after(right, instruction));
+            mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
+            !(mir.allocation_colors[right] == MIR_COLOR_DE &&
+              !mir_value_has_use_after(right, instruction));
         left_definition = mir_definition(left);
         right_definition = mir_definition(right);
         comparison_unsigned =
@@ -1665,8 +1687,7 @@ int mir_emit_homed_constant_binary_instruction(FILE *out,
     int preserve_hl =
         !preserve_hl_de &&
         mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
-        (mir.allocation_colors[insn->src1] != MIR_COLOR_HL ||
-         mir_value_has_use_after(insn->src1, instruction));
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
     int preserve_de =
         !preserve_hl_de &&
         uses_de && mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&

@@ -378,6 +378,7 @@ int mir_try_emit_scalar_dag(FILE *out);
 int mir_spilled_cfg_depends_on_constant_absolute(void);
 int mir_spilled_cfg_depends_on_direct_byte_param(void);
 int mir_spilled_cfg_depends_on_constant_index_absolute(void);
+int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void);
 int mir_try_emit_spilled_scalar_cfg(FILE *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);

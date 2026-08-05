@@ -7,14 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `1bcfe85` (Items T137-T140)
-- Published ordinary coverage: **593/2021 functions (29.34%)**
+- Published baseline: `29363ca` (Items T156-T158)
+- Published ordinary coverage: **621/2021 functions (30.73%)**
+- Published stack-check coverage: **628/2123 functions (29.58%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
+- Batch 14 candidate ordinary coverage: **638/2021 functions (31.57%)**
+- Batch 14 candidate stack-check coverage: **645/2123 functions (30.38%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -362,6 +365,45 @@ The stack-check census is **628/2123 (29.58%)**, +3 names and zero removals:
 The 19 affected apps pass focused full-mode validation with zero regressions
 and 42 checked cycle/size improvements.
 
+## Batch 14
+
+1. T159: use retained CFG liveness for unary and constant-binary home
+   preservation. Applying the same rule to general binary emission admitted
+   `tasmcoll.main` but regressed peep cycles, so that broader experiment was
+   removed.
+2. T160: use retained liveness for pointer-offset addressing and for IX-offset
+   addressing in multi-block CFGs. Straight-line IX emission remains stable
+   after broader liveness admitted a slower `tstr2.test_strcat`. The retained
+   slice adds `pint.factor`.
+3. T161: support up to four narrow homed spill slots under the existing
+   at-most-four-block, smaller-text, no-more-instructions gate. This improves
+   `tdecinit`; widening to sixteen changed nothing further.
+4. T162: rematerialize scalar constants in single-block and VLA functions and
+   immutable string labels generally. The scalar slice adds four functions;
+   broad multi-block scalar rematerialization was rejected after multiple
+   runtime/size regressions.
+5. T163: rematerialize single-block 32-bit integer and float constants directly
+   into DE:HL. Candidates that depend on this optimization reject variadic
+   calls and require strictly smaller generated text. Precise dependency
+   tracking covers multiply consumers as well as ordinary wide loads.
+
+The candidate ordinary census is **638/2021 (31.57%)**, +17 names and zero
+removals. The candidate stack-check census is **645/2123 (30.38%)**, also +17
+with zero removals. The common additions are `pint.factor`,
+`tc89comp.cai1`, `tforblk.static_shadows_auto`, `tlong.tasgn`,
+`tlong.tbasic`, `tlong.tcomp`, `tlong.tglob`, `tlong.tneg`,
+`tlongreg.test_compound`, `tlongreg.test_postfix`,
+`tlongreg.test_shifts`, `tpfinf.main`, `tpflio.main`, `tplng.main`,
+`tpromo.test_function_arguments_and_returns`,
+`tpromo.test_usual_arithmetic_conversions`, and
+`tvla.vla_sizeof_ternary`.
+
+Rejected wide experiments include ungated rematerialization, which exposed a
+variadic correctness failure and slower tiny long helpers, and multi-block
+rematerialization, whose three additions regressed `mm` and `tlongopt`.
+Focused full-mode validation of the retained slices passes with zero
+regressions and substantial peep/nopeep improvements.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -407,14 +449,13 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T158 census is led by
-   1,032 `text-size`, 77 `instruction-count`, 75 `absolute-address-cost`,
-   58 `absolute-index-cost`, and 47 `inline-substitution` fallbacks. The stale
-   `selector` bucket is gone. Continue using the actual slot-access diagnostic
-   to find reservation/emission mismatches. The cache plan must remain exact;
-   the former approximation that modeled cache competition independently of
-   emission remains invalid. Float unary/conversion returns remain a measured
-   unprofitable class.
+3. **Next structural priorities by impact:** the post-T163 ordinary census is
+   led by 956 `text-size`, 75 `instruction-count`,
+   74 `absolute-address-cost`, 70 `wide-constant-cost`,
+   54 `absolute-index-cost`, and 47 `inline-substitution` fallbacks. Re-bucket
+   `text-size` by repeated emitted pattern before choosing the next shared
+   improvement. The new `wide-constant-cost` bucket is deliberately measured
+   fallback, not gate-removal headroom.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and

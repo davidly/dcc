@@ -9448,3 +9448,73 @@ The refreshed ordinary rejection population is led by 1,032 `text-size`, 77
 47 `inline-substitution` functions. Continue exact emission/reservation
 unification; do not revive independent cache simulation, generic wide-unary
 slot elision, or the backedge gate as coverage shortcuts.
+
+## Items T159-T163: retained-home liveness and constant rematerialization (2026-08-08)
+
+T159 replaces textual future-use preservation with retained CFG liveness for
+unary and constant-binary home transfers. The general binary path was tested
+separately: it admitted `tasmcoll.main`, but the containing app's peep cycles
+regressed by 0.5%, so that extension was removed. The retained narrow change
+improves `tc99scpe` and `tmirslot` without changing coverage.
+
+T160 applies retained liveness to pointer-offset address formation and to
+IX-offset address formation in multi-block CFGs. Broad IX liveness admitted
+the straight-line `tstr2.test_strcat`, whose smaller static stream was slower
+after peep. Keeping the established straight-line policy while using CFG
+liveness for multi-block functions adds `pint.factor` without regressions.
+
+T161 raises the homed backend's narrow spill capacity from one to four slots.
+Its existing strict gate still requires no more than four blocks, smaller
+generated text, and no instruction growth. The change improves the
+already-MIR `tdecinit`; raising the cap to sixteen produced no additional
+change and was rejected.
+
+T162 makes slot reservation, definition emission, and virtual loading share
+the same rematerialization contract. Scalar constants rematerialize only in
+single-block or VLA functions, adding `tc89comp.cai1`,
+`tforblk.static_shadows_auto`,
+`tpromo.test_function_arguments_and_returns`, and
+`tvla.vla_sizeof_ternary`. Immutable string addresses can rematerialize
+generally but currently add no accepted name. Broad multi-block scalar
+rematerialization added twelve functions but regressed `tasm`, `tc89ini2`,
+`trowptr`, `a1`, `tbsearch`, and `tcrcfix`; it was removed.
+
+T163 extends the same contract to single-block 32-bit integer and float
+constants, loading DE:HL directly instead of reserving two frame units and
+storing the definition. Ungated measurement added 23 functions, but
+`tpfauto.main` failed correctness in a variadic call-heavy shape and several
+tiny `tlongopt` helpers regressed despite fewer raw instructions. Production
+therefore rejects rematerialization-dependent candidates containing variadic
+calls and requires generated text to be strictly smaller than legacy.
+Dependency tracking excludes only values whose existing forwarding/dead-use
+path already removed the slot; a bug-focused review corrected wide multiply
+consumers so they cannot bypass this gate.
+
+Allowing wide rematerialization in acyclic multi-block functions was also
+measured. It added only `mm.main`, `tlongopt.clamp_int_min`, and
+`ttrig.check_same_f`; `mm` regressed both runtime modes and nopeep linked size,
+while `tlongopt` regressed both runtime modes. The experiment was removed and
+the single-block boundary retained.
+
+**Census and focused validation**:
+
+- ordinary: **638/2021 (31.57%)**, +17 names and zero removals;
+- stack-check: **645/2123 (30.38%)**, +17 names and zero removals;
+- common additions: `pint.factor`, `tc89comp.cai1`,
+  `tforblk.static_shadows_auto`, `tlong.tasgn`, `tlong.tbasic`,
+  `tlong.tcomp`, `tlong.tglob`, `tlong.tneg`,
+  `tlongreg.test_compound`, `tlongreg.test_postfix`,
+  `tlongreg.test_shifts`, `tpfinf.main`, `tpflio.main`, `tplng.main`,
+  `tpromo.test_function_arguments_and_returns`,
+  `tpromo.test_usual_arithmetic_conversions`, and
+  `tvla.vla_sizeof_ternary`;
+- focused full-mode validation passes in both peep and nopeep modes with zero
+  regressions and substantial checked runtime/size improvements.
+
+The refreshed ordinary rejection population is led by 956 `text-size`, 75
+`instruction-count`, 74 `absolute-address-cost`, 70 `wide-constant-cost`,
+54 `absolute-index-cost`, and 47 `inline-substitution` functions. Re-bucket
+the remaining text-size population by repeated emitted pattern before the next
+batch. The new wide-cost population is measured fallback, not safe gate
+headroom; broad multi-block rematerialization and the backedge gate remain
+invalid coverage shortcuts.

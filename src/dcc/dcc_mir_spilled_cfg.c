@@ -42,6 +42,7 @@ static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
+static int mir_spilled_cfg_used_wide_constant_rematerialization;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
 static unsigned char *mir_backend_slot_accessed;
@@ -549,10 +550,39 @@ static int mir_call_only_constant(int value)
             ++argument_count;
             continue;
         }
+
         if (insn->src1 == value || insn->src2 == value)
             return 0;
     }
     return argument_count == 1;
+}
+
+static int mir_scalar_constant_is_rematerializable(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL && definition->opcode == MIR_CONST &&
+           type_size(definition->type) <= 2 &&
+           (mir_cfg_block_count() == 1 || mir.has_vla);
+}
+
+static int mir_string_address_is_rematerializable(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           definition->opcode == MIR_STRING_ADDRESS;
+}
+
+static int mir_wide_constant_is_rematerializable(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           (definition->opcode == MIR_CONST ||
+            definition->opcode == MIR_FLOAT_CONST) &&
+           type_size(definition->type) == 4 &&
+           mir_cfg_block_count() == 1;
 }
 
 /* Evaluates a scalar binary arithmetic/bitwise/shift operation over two
@@ -2593,6 +2623,12 @@ static int mir_prepare_backend_slots(void)
                 if (last[value] <= first[value] ||
                                         (definition != NULL &&
                                          definition->opcode == MIR_NOP) ||
+                                        mir_scalar_constant_is_rematerializable(
+                                            value) ||
+                                        mir_string_address_is_rematerializable(
+                                            value) ||
+                                        mir_wide_constant_is_rematerializable(
+                                            value) ||
                                         mir_call_only_constant(value) ||
                                         mir_binary_only_constant(value) ||
                                         mir_index_only_constant(value) ||
@@ -2744,6 +2780,7 @@ static int mir_prepare_backend_slots(void)
 
 void mir_emit_virtual_load(FILE *out, int value)
 {
+    const struct MirInsn *definition = mir_definition(value);
     int offset;
     int iy_offset;
     if (mir_forwarded_hl_value == value &&
@@ -2758,6 +2795,14 @@ void mir_emit_virtual_load(FILE *out, int value)
          * instead of reusing HL when available. */
         mir_forwarded_hl_value = -1;
         mir_forwarded_hl_instruction = -1;
+        return;
+    }
+    if (mir_scalar_constant_is_rematerializable(value)) {
+        fprintf(out, "\tld hl,%ld\n", definition->immediate & 0xffffL);
+        return;
+    }
+    if (mir_string_address_is_rematerializable(value)) {
+        fprintf(out, "\tld hl,S%ld\n", definition->immediate);
         return;
     }
     if (mir_param_value_is_direct(value)) {
@@ -3137,6 +3182,25 @@ int mir_value_is_wide(int value)
     return mir_definition_is_wide(mir_definition(value));
 }
 
+static int mir_wide_constant_uses_new_rematerialization(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction = definition != NULL
+        ? (int)(definition - mir.insns) : -1;
+
+    return mir_wide_constant_is_rematerializable(value) &&
+           !mir_call_only_constant(value) &&
+           !mir_binary_only_constant(value) &&
+           !mir_index_only_constant(value) &&
+           !mir_backend_slot_forwardable(value, 2, instruction) &&
+           !mir_wide_backend_slot_forwardable(value, 2, instruction) &&
+           !mir_wide_helper_lhs_slot_forwardable(value, 2, instruction) &&
+           !mir_call_argument_slot_forwardable(value, 2, instruction) &&
+           !mir_stack_backend_slot_forwardable(value, 2, instruction) &&
+           !mir_value_only_used_by_dead_stores(value) &&
+           !mir_value_only_used_by_dead_unary(value);
+}
+
 static int mir_divmod_partner(int instruction)
 {
     const struct MirInsn *candidate;
@@ -3180,6 +3244,15 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
         mir_forwarded_wide_instruction + 1 == mir_emit_instruction_index) {
         mir_forwarded_wide_value = -1;
         mir_forwarded_wide_instruction = -1;
+        return;
+    }
+    if (mir_wide_constant_is_rematerializable(value)) {
+        if (mir_wide_constant_uses_new_rematerialization(value)) {
+            mir_spilled_cfg_used_wide_constant_rematerialization = 1;
+        }
+        fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
+                (unsigned long)definition->immediate & 0xffffUL,
+                ((unsigned long)definition->immediate >> 16) & 0xffffUL);
         return;
     }
     if (!mir_definition_is_wide(definition)) {
@@ -4607,6 +4680,11 @@ int mir_spilled_cfg_depends_on_constant_absolute(void)
     return mir_spilled_cfg_used_constant_absolute;
 }
 
+int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void)
+{
+    return mir_spilled_cfg_used_wide_constant_rematerialization;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -4621,6 +4699,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_dead_store_forwarding = 0;
     mir_spilled_cfg_used_constant_absolute = 0;
     mir_spilled_cfg_used_constant_index_absolute = 0;
+    mir_spilled_cfg_used_wide_constant_rematerialization = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
@@ -4956,6 +5035,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
         case MIR_CONST:
             if (!mir_value_has_use(insn->dst) ||
+                mir_scalar_constant_is_rematerializable(insn->dst) ||
+                mir_wide_constant_is_rematerializable(insn->dst) ||
                 mir_call_only_constant(insn->dst) ||
                 mir_binary_only_constant(insn->dst) ||
                 mir_multiply_by_small_constant(insn->dst) ||
@@ -4973,7 +5054,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_FLOAT_CONST:
-            if (mir_call_only_constant(insn->dst))
+            if (mir_call_only_constant(insn->dst) ||
+                mir_wide_constant_is_rematerializable(insn->dst))
                 break;
             fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
                     (unsigned long)insn->immediate & 0xffffUL,
@@ -4981,7 +5063,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             mir_emit_virtual_store_wide(out, insn->dst);
             break;
         case MIR_STRING_ADDRESS:
-            if (mir_call_only_constant(insn->dst))
+            if (mir_call_only_constant(insn->dst) ||
+                mir_string_address_is_rematerializable(insn->dst))
                 break;
             fprintf(out, "\tld hl,S%ld\n", insn->immediate);
             mir_emit_virtual_store(out, insn->dst);

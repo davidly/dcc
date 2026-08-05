@@ -524,7 +524,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir.name, mir.return_type, type_size(mir.return_type));
         return mir_homed_reject("return-type");
     }
-    if (mir.allocation_spill_count > 1)
+    if (mir.allocation_spill_count > 4)
         return mir_homed_reject("spill");
     for (value = 0; value < mir.next_value; ++value)
         if (mir_home_spill_offset(value, NULL)) {
