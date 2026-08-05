@@ -6,6 +6,20 @@
  *
  * Part of the dcc_mir.c MIR backend split; see dcc_mir_internal.h.
  */
+
+/* fmemopen() (used below for elided-epilogue byte accounting) is a POSIX
+ * extension: under strict ISO C mode, glibc's <stdio.h> doesn't declare it
+ * unless a feature-test macro asks for it (_POSIX_C_SOURCE 200809L is
+ * enough for fmemopen specifically). Without a prototype in scope, the
+ * implicit-int rule assumes it returns int, silently truncating the real
+ * FILE* pointer it returns - the same undefined-behavior bug class already
+ * documented and fixed for realpath()/similar POSIX calls in dcc.c and
+ * dcc_func.c. Must be defined before any system header is first included
+ * in this translation unit. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
