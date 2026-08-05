@@ -144,6 +144,7 @@ struct MirFunction {
     int report_mode;
     int return_type;
     int local_bytes;
+    int dead_local_suffix_bytes;
     int aggregate_temp_bytes;
     int opaque_count;
     int *allocation_colors;
@@ -259,7 +260,10 @@ int mir_call_is_strrchr_fastcall(int call_index, int *s_value,
                                        int *c_value);
 int mir_call_uses_value(const struct MirInsn *call, int value);
 int mir_compare_definition_for_branch(int instruction);
+void mir_compute_dead_local_suffix(void);
 int mir_current_frame_bytes(void);
+int mir_effective_local_bytes(void);
+void mir_report_dead_local_suffix(void);
 int mir_declared_is_vla_object(const char *name);
 const char *mir_declared_link_name(const char *name);
 int mir_declared_location(const char *name, int *type, int *storage,

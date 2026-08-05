@@ -10,10 +10,9 @@ remaining fallback - unchanged in proportion by any opcode-admission work,
 because it is not an opcode-recognition problem at all. It is a **code
 quality problem in the one selector every non-MIR function goes through**.
 
-It supersedes nothing else in `mir-migration-plan-to-100pct.md` (that
-document's single-opcode-admission vein for `homed-scalar-cfg` is
-separately closed out as of Item 25) - this is a new, narrower, deeper
-document for one specific, much higher-leverage body of work.
+The earlier single-opcode-admission plan for `homed-scalar-cfg` closed at
+Item 25 and is preserved in git history. This file is the authoritative,
+narrower log for the higher-leverage text-size work.
 
 ## Method: re-derive root causes from evidence, do not assume the old finding still fully explains it
 
@@ -8462,3 +8461,233 @@ gate failed.
 **Process correction**: all future performance validation must use the same
 `davidly/ntvcm` revision CI will build, not merely whichever `ntvcm` executable
 is first on the local `PATH`.
+
+### Item T87: retire superseded planning documents and refresh the handoff
+
+The architecture review found that root `plan.md` still described Item T38 at
+314/2023 coverage (15.52%), while the actual checkpoint after T86 is 524/2023
+(25.90%). Five earlier plans also remained beside the active log even though
+their own closing sections declared them complete and instructed future work
+not to resume their numbering.
+
+Removed the five completed plans from the working tree and replaced `plan.md`
+with a short current-state handoff. Git history preserves the retired plans.
+Updated the MIR migration skill and this log's introduction so no active
+documentation points at removed files.
+
+**Behavioral impact**: none; documentation only.
+
+### Item T88: consolidate forwarding-success accounting
+
+Four sibling forwarding predicates independently repeated the same
+dead-store-forwarding dependency update immediately before returning success.
+Factored that two-line update into `mir_forward_note_success()` and routed all
+four success paths through it. This keeps the T86 profitability signal in one
+place and prevents later forwarding predicates from silently omitting it.
+
+**Validation**:
+- Host compiler build: PASS; only the same three pre-existing warnings.
+- Whole-corpus census comparison: byte-identical selection outcome, zero apps
+  changed, zero newly/removed MIR functions, coverage remains 524/2023
+  (25.90%).
+- `git diff --check`: PASS.
+
+### Item T89: audit and instrument dead local-frame suffixes
+
+Audited the interaction between named object offsets and liveness-driven
+backend slots before changing frame layout. Named locals retain absolute
+negative IX offsets from the legacy frame, while backend slots are allocated
+below `mir.local_bytes`; subtracting an arbitrary dead object's size would
+therefore shift live offsets incorrectly. The safe first step is narrower:
+trim only a contiguous dead suffix at the deepest negative offsets, which
+requires no offset rewriting.
+
+Added the diagnostic-only `DCC_MIR_DEAD_LOCAL_REPORT=1` detector. It reports a
+suffix object only when all of the following hold:
+
+- it is a 2- or 4-byte scalar local;
+- exactly one full-object `MIR_STORE` writes it and that store is dead;
+- no other named/range memory operation overlaps it;
+- the stored SSA value has a real backend slot;
+- debug, VLA, variadic, aggregate, opaque, and address-taken cases are absent;
+- the object extends the contiguous deepest dead suffix.
+
+The report includes function/object name, offset, size, store/value IDs,
+original/effective local bytes, and total reclaimable suffix bytes. Reporting
+runs immediately after classification, before selector dispatch, so it also
+covers candidates accepted by an earlier homed selector. It changes no
+selection or emission behavior.
+
+**Measured opportunity**:
+- 402 unique function/object reports across 88 test apps (749 raw reports
+  including speculative compiler attempts).
+- Expected examples confirmed: `tqsort`'s `cmp_int_asc`, `cmp_int_desc`,
+  `cmp_rec`, and `cmp_byte`; `tbsearch`'s comparator copies; and
+  `tfloat4.check_float`.
+- The detector also exposed broader repeated cases, including complete
+  16-byte suffix reclamation in `tfloat4.test_math`.
+
+**Validation**:
+- Host compiler build: PASS; only the same three pre-existing warnings.
+- Whole-corpus census comparison: zero selection changes and coverage remains
+  524/2023 (25.90%), as required for a diagnostic-only item.
+
+### Item T90: trim the proven dead local-frame suffix
+
+Added `mir.dead_local_suffix_bytes` while preserving `mir.local_bytes` as the
+immutable legacy/symbol layout. `mir_compute_dead_local_suffix()` runs after
+MIR verification and promotion but before selector dispatch. The generated
+frame's effective local depth is the original depth minus only the contiguous,
+uniquely-owned deepest suffix proven to have no remaining MIR loads or address
+observer.
+
+Every generated-frame calculation now uses the effective depth: backend slot
+offsets, IY-relative offsets and restoration, frame allocation, and the homed
+and DAG frameless gates. Original object/declaration offsets remain unchanged,
+and fallback still replays the captured legacy stream with its original frame.
+The whole backend-slot pool moves upward into the reclaimed bytes; no object or
+individual slot is relocated independently.
+
+**Coverage and validation**:
+- Coverage: 524/2023 (25.90%) -> 531/2024 (26.24%).
+- Newly MIR-emitted: `tasmcoll.main`, `tdead.dd_decl`,
+  `tfo.portable_filelen`, `tmirfast.dec_dead`, `tmirfast.inc_dead`,
+  `tmirslot.cross_call`, and `tpreproc.main`.
+- Census identified 69 apps with generated metric changes and exactly 20
+  requiring runtime validation.
+- Focused `runall -Mode full` on all 20 apps: 20/20 PASS, zero regressions,
+  45 peep/nopeep cycle/size improvements.
+- Tightening the proof from repeated CFG store-liveness allocation to the
+  post-promotion no-remaining-load invariant produced a byte-identical census.
+- UBSan compiler runs on `tqsort`, `tfloat4`, `tmirslot`, and `tasmcoll`:
+  PASS. ASan reaches a pre-existing unrelated `strncpy` self-overlap in
+  `dcc_func.c:2967` before these MIR paths and therefore cannot be used as an
+  additional T90 signal without fixing that separate issue.
+
+The focused performance result above used the then-current local emulator and
+was superseded by the CI-equivalent milestone run in Item T97. The frame proof
+remains valid; T97 narrows only the profitability policy.
+
+### Item T91: sweep the remaining dead-store profitability population
+
+Re-correlated all 34 remaining `dead-store-forwarding-cost` fallbacks with the
+new effective-frame report before considering any gate relaxation:
+
+- only 9/34 reclaim any local suffix;
+- only `pihex.fun` and `tlngcond.choose_sum` reclaim their entire local frame,
+  and both MIR streams remain roughly twice the legacy byte/instruction cost;
+- `tforblk.param_shadow`, the T86 regression sentinel, reclaims only half its
+  local frame and remains correctly protected by the original-frame gate;
+- the previously regressing `tmirslot.cross_call` now clears the existing gate
+  naturally because the actual overlapping frame cost was removed, and its
+  app improves in both modes.
+
+Therefore the semantic fix does **not** justify mechanically replacing the
+T86 gate's original-local check with effective locals. Keeping that gate
+conservative preserves the separation between frame correctness and measured
+profitability; no further function is admitted by policy alone.
+
+### Item T92: profile the post-trimming near-miss population
+
+Re-profiled the strongest remaining near misses instead of widening a static
+gate from code-size intuition:
+
+- `tqsort`/`tbsearch` comparator helpers remained mixed or slightly slower in
+  peep mode despite nopeep improvements;
+- `tqsort.oracle_sort` and `tfloat4.check_float` produced real cycle and/or
+  size regressions;
+- `tallocx.t_calloc` was 72 cycles slower in peep mode and 72 cycles faster in
+  nopeep mode;
+- `trw.must_seek`, `tunaryp.chku`, and `a1.m_hook` were runtime-neutral;
+- `tbug.swdf` improved slightly, but no reusable structural predicate separated
+  it from the regressing population.
+
+The pending homed-CFG cost-model task was also closed as a duplicate of Item
+T66, which had already measured `trw.fill_buf` (-36 T-states/call),
+`adaint.return_stmt` (+75 T-states/call), and `tchess.on_board` (dead
+standalone body). No acceptance gate changed.
+
+### Item T93: fingerprint selected assembly in census snapshots
+
+T90 changed active MIR assembly without always changing the existing byte and
+instruction metrics, so metric-only snapshot comparison could omit affected
+apps from focused runtime validation. Added a deterministic 32-bit FNV-1a
+`selected-hash` to each compiler selection report and census row.
+
+New-format snapshots compare this hash in addition to selector metrics.
+Snapshots written before the field existed remain readable and retain their
+metric-only behavior. Repeated whole-corpus censuses produced identical hashes,
+and a synthetic hash-only mutation correctly scheduled its app for focused
+validation.
+
+### Item T94: reject EXTRN-neutral text-size accounting
+
+Tested excluding `extrn` directives from generated-stream byte accounting
+because they contribute no machine bytes. The experiment admitted
+`a1.m_hook`, `tallocx.t_calloc`, `trw.must_seek`, and `tunaryp.chku`.
+`tallocx.t_calloc` then regressed peep execution by 72 cycles while improving
+nopeep by 72 cycles. The source change was reverted and the existing accounting
+retained; a zero-byte assembler directive is not sufficient evidence that the
+resulting selector choice is profitable in both backend modes.
+
+### Item T95: admit a dead-suffix instruction-count win
+
+Added one structural acceptance rule for the T90 frame-reuse population. It
+requires a proven reclaimed dead-local suffix, no VLA, at most two CFG blocks,
+at least four fewer generated instructions, and generated text no more than 24
+bytes larger than legacy. The 24-byte allowance covers the stack-check
+configuration's prologue accounting; the ordinary census gap for the same
+candidate is only five bytes.
+
+The rule admits exactly `tcnstfld.main` in the ordinary corpus census, moving
+coverage from 531/2024 (26.24%) to 532/2024 (26.28%). The stack-check census
+also selects it. Focused stack-check `runall -Mode full` passes in peep and
+nopeep modes with no performance regression. The rule is tied to proven frame
+reuse plus a substantial instruction win, not a function name or a broad
+near-cost threshold.
+
+### Item T96: validate selected legacy changes and stack-check selection
+
+Completed the hash-aware comparison policy: a fallback-to-fallback row whose
+`selected-hash` changes now schedules runtime validation, because selected
+legacy assembly changed even though neither row is MIR-emitted. A synthetic
+comparison verifies that the generated focused command includes such an app.
+
+Added a second whole-corpus checkpoint using
+`--extra-args=-fstack-check`, matching the configuration used by `runall`.
+Its repeated snapshot is deterministic with zero changed apps and reports
+536/2125 selected functions (25.22%). The ordinary configuration remains the
+historical coverage series at 532/2024 (26.28%). Future batches must compare
+both configurations before the final full+extended gate because stack-check
+can alter selector cost accounting.
+
+### Item T97: narrow dead-suffix rollout after the CI-equivalent gate
+
+The mandatory full+extended run under the current upstream `davidly/ntvcm`
+revision passed all correctness and extended tests but exposed four checked
+performance regressions:
+
+- `fileops` peep: +16 cycles;
+- `tasmcoll` peep/nopeep: +175/+54 cycles;
+- `tmirfast` peep: +42 cycles.
+
+Forced-fallback A/B isolated `tasmcoll.main`, `tmirfast.dec_dead`,
+`tmirfast.inc_dead`, and stack-check `fileops.portable_filelen`. The first
+three were newly frameless homed candidates that generated one or two more
+instructions than legacy. `portable_filelen` reclaimed a 14-byte frame but
+was still text-larger and saved only one instruction in the stack-check
+configuration.
+
+Added `mir_dead_suffix_layout_is_profitable()` as one structural policy:
+
+- a dead-suffix homed candidate may not add instructions;
+- a spilled candidate reclaiming at least eight bytes, still text-larger than
+  legacy, must save at least two instructions.
+
+This returns only the measured weak-margin regressions to fallback while
+retaining `tdead.dd_decl`, `tfo.portable_filelen`, `tmirslot.cross_call`,
+`tpreproc.main`, and T95's `tcnstfld.main`. The final ordinary census is
+529/2024 (26.14%), five promotions over the pre-T90 snapshot with zero
+removals. The final stack-check census is deterministic at 532/2125 (25.04%).
+All 19 apps selected by the hash-aware comparison pass focused full mode with
+zero regressions and 33 improvements.

@@ -1238,7 +1238,7 @@ int mir_try_emit_homed_scalar_dag(FILE *out)
         return 0;
 
     uses_iy = mir_home_uses_iy();
-    frameless = !uses_iy && mir.local_bytes == 0;
+    frameless = !uses_iy && mir_effective_local_bytes() == 0;
     if (frameless) {
         for (i = 0; i < mir.count; ++i)
             if (mir.insns[i].opcode == MIR_PARAM &&
@@ -1369,4 +1369,3 @@ int mir_try_emit_homed_scalar_dag(FILE *out)
     }
     return 1;
 }
-

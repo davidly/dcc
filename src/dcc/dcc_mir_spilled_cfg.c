@@ -42,12 +42,13 @@ static int mir_virtual_offset(int value)
     if (value >= 0 && value < mir.next_value && mir.backend_slots != NULL &&
         mir.backend_slots[value] >= 0)
         slot = mir.backend_slots[value];
-    return -mir.local_bytes - mir.aggregate_temp_bytes - 2 * (slot + 1);
+    return -mir_effective_local_bytes() - mir.aggregate_temp_bytes -
+           2 * (slot + 1);
 }
 
 static int mir_virtual_iy_offset(int value)
 {
-    return mir_virtual_offset(value) + mir.local_bytes +
+    return mir_virtual_offset(value) + mir_effective_local_bytes() +
            mir.aggregate_temp_bytes;
 }
 
@@ -213,6 +214,13 @@ static int mir_forward_skip_target(int instruction)
     return mir_forward_skip_target_ex(instruction, NULL);
 }
 
+static int mir_forward_note_success(void)
+{
+    if (mir_forward_skip_last_skipped_dead_store)
+        mir_spilled_cfg_used_dead_store_forwarding = 1;
+    return 1;
+}
+
 /* Item T40 (mir-text-size-plan.md): the wide (32-bit, HL:DE) analog of
  * mir_can_forward_hl_to_next below. Items 1-32 built a rich forwarding
  * predicate for 16-bit scalar values (this function plus its
@@ -281,9 +289,7 @@ static int mir_can_forward_hl_de_to_next(int value)
             mir_call_uses_value(insn, value))
             return 0;
     }
-    if (mir_forward_skip_last_skipped_dead_store)
-        mir_spilled_cfg_used_dead_store_forwarding = 1;
-    return 1;
+    return mir_forward_note_success();
 }
 
 static int mir_can_forward_hl_to_next(int value)
@@ -466,9 +472,7 @@ static int mir_can_forward_hl_to_next(int value)
             mir_call_uses_value(insn, value))
             return 0;
     }
-    if (mir_forward_skip_last_skipped_dead_store)
-        mir_spilled_cfg_used_dead_store_forwarding = 1;
-    return 1;
+    return mir_forward_note_success();
 }
 
 static int mir_can_forward_stack_to_index(int value)
@@ -1311,6 +1315,171 @@ static int mir_store_is_dead(int instruction)
     return dead;
 }
 
+static int mir_ranges_overlap(int offset1, int size1, int offset2, int size2)
+{
+    return offset1 < offset2 + size2 && offset2 < offset1 + size1;
+}
+
+static int mir_dead_local_candidate(int object, int *store_instruction,
+                                    int *source_value)
+{
+    const struct MirObject *candidate = &mir.objects[object];
+    int size = type_size(candidate->type);
+    int store = -1;
+    int instruction;
+
+    if (candidate->storage != SC_LOCAL || (size != 2 && size != 4) ||
+        candidate->offset >= 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_STORE && insn->object == object) {
+            if (store >= 0)
+                return 0;
+            store = instruction;
+        }
+    }
+    if (store < 0 || type_size(mir.insns[store].type) != size ||
+        !mir_object_is_fully_promoted(object))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+        int memory_size;
+
+        if (insn->opcode != MIR_PARAM && insn->opcode != MIR_LOAD &&
+            insn->opcode != MIR_STORE && insn->opcode != MIR_ADDRESS)
+            continue;
+        if (!mir_scalar_memory_location(insn, &memory_type, &memory_storage,
+                                        &memory_offset))
+            return 0;
+        memory_size = type_size(memory_type);
+        if (memory_storage == SC_LOCAL && memory_size > 0 &&
+            mir_ranges_overlap(candidate->offset, size, memory_offset,
+                               memory_size) &&
+            instruction != store)
+            return 0;
+    }
+    *source_value = mir.insns[store].src1;
+    if (*source_value < 0)
+        return 0;
+    *store_instruction = store;
+    return 1;
+}
+
+static int mir_dead_local_suffix_allowed(void)
+{
+    int instruction;
+
+    if (opt_debug || mir.has_vla || mir.aggregate_temp_bytes != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        switch (mir.insns[instruction].opcode) {
+        case MIR_ADDRESS:
+        case MIR_COMPOUND_ADDRESS:
+        case MIR_COPY_AGGREGATE:
+        case MIR_VLA_SIZE:
+        case MIR_VLA_SAVE:
+        case MIR_VLA_ALLOC:
+        case MIR_VLA_RESTORE:
+        case MIR_CALL_AGGREGATE:
+        case MIR_VA_START:
+        case MIR_VA_END:
+        case MIR_VA_ARG:
+        case MIR_OPAQUE:
+            return 0;
+        default:
+            break;
+        }
+    }
+    return 1;
+}
+
+static int mir_dead_local_range_is_unique(int candidate)
+{
+    int candidate_size = type_size(mir.objects[candidate].type);
+    int object;
+
+    for (object = 0; object < mir.object_count; ++object) {
+        int size;
+
+        if (object == candidate || mir.objects[object].storage != SC_LOCAL)
+            continue;
+        size = type_size(mir.objects[object].type);
+        if (size > 0 &&
+            mir_ranges_overlap(mir.objects[candidate].offset, candidate_size,
+                               mir.objects[object].offset, size))
+            return 0;
+    }
+    return 1;
+}
+
+void mir_compute_dead_local_suffix(void)
+{
+    int reclaimed = 0;
+
+    mir.dead_local_suffix_bytes = 0;
+    if (!mir_dead_local_suffix_allowed())
+        return;
+    for (;;) {
+        int boundary = -mir.local_bytes + reclaimed;
+        int found = -1;
+        int store;
+        int value;
+        int object;
+
+        for (object = 0; object < mir.object_count; ++object)
+            if (mir.objects[object].offset == boundary &&
+                mir_dead_local_candidate(object, &store, &value) &&
+                mir_dead_local_range_is_unique(object)) {
+                if (found >= 0)
+                    return;
+                found = object;
+            }
+        if (found < 0)
+            break;
+        reclaimed += type_size(mir.objects[found].type);
+    }
+    mir.dead_local_suffix_bytes = reclaimed;
+}
+
+int mir_effective_local_bytes(void)
+{
+    return mir.local_bytes - mir.dead_local_suffix_bytes;
+}
+
+void mir_report_dead_local_suffix(void)
+{
+    int effective = mir_effective_local_bytes();
+    int object;
+
+    if (getenv("DCC_MIR_DEAD_LOCAL_REPORT") == NULL ||
+        mir.dead_local_suffix_bytes == 0)
+        return;
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *candidate = &mir.objects[object];
+        int size = type_size(candidate->type);
+        int store;
+        int value;
+
+        if (candidate->storage != SC_LOCAL ||
+            candidate->offset < -mir.local_bytes ||
+            candidate->offset + size > -effective ||
+            !mir_dead_local_candidate(object, &store, &value))
+            continue;
+        fprintf(stderr,
+                "; MIR dead-local function=%s object=%s offset=%d size=%d"
+                " store=%d value=%d locals=%d effective=%d"
+                " reclaimable=%d\n",
+                mir.name, candidate->name, candidate->offset,
+                size, store, value, mir.local_bytes, effective,
+                mir.dead_local_suffix_bytes);
+    }
+}
+
 /* Item T10 (mir-text-size-plan.md): a value-defining instruction (const,
  * float const, address materialisation, ...) unconditionally checks
  * mir_value_has_use(dst) before deciding whether it needs to write its
@@ -1449,9 +1618,7 @@ static int mir_can_forward_hl_to_call_argument(int value)
             mir.insns[instruction].src2 == value)
             return 0;
     }
-    if (mir_forward_skip_last_skipped_dead_store)
-        mir_spilled_cfg_used_dead_store_forwarding = 1;
-    return 1;
+    return mir_forward_note_success();
 }
 
 /* Item T82 (mir-text-size-plan.md): sibling to mir_can_forward_hl_to_call_
@@ -1488,9 +1655,7 @@ static int mir_can_forward_hl_to_call_argument_first_use(int value)
          call_insn->opcode != MIR_CALL_AGGREGATE) ||
         call_insn->secondary_offset != arg_insn->secondary_offset)
         return 0;
-    if (mir_forward_skip_last_skipped_dead_store)
-        mir_spilled_cfg_used_dead_store_forwarding = 1;
-    return 1;
+    return mir_forward_note_success();
 }
 
 static int mir_call_argument_cache_target(int value)
@@ -2382,7 +2547,7 @@ void mir_emit_virtual_load(FILE *out, int value)
          * hot loops rely on (skipping it caused a measurable, if tiny,
          * cycle regression in tsnprtf's call_vsnprintf). */
         int object_offset = mir.objects[mir_definition(value)->object].offset;
-        int object_iy_offset = object_offset + mir.local_bytes +
+        int object_iy_offset = object_offset + mir_effective_local_bytes() +
                                 mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && object_iy_offset >= -128 &&
             object_iy_offset + 1 <= 127) {
@@ -2754,7 +2919,7 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
          * site's load form exactly rather than reusing mir_virtual_offset.
          * Also mirrors the IY-relative fast path hot loops rely on. */
         int object_offset = mir.objects[definition->object].offset;
-        int object_iy_offset = object_offset + mir.local_bytes +
+        int object_iy_offset = object_offset + mir_effective_local_bytes() +
                                 mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && object_iy_offset >= -128 &&
             object_iy_offset + 3 <= 127) {
@@ -2890,9 +3055,9 @@ static void mir_emit_restore_virtual_iy(FILE *out)
     if (!mir_virtual_iy_base)
         return;
     fputs("\tpush ix\n\tpop iy\n", out);
-    if (mir.local_bytes + mir.aggregate_temp_bytes != 0)
+    if (mir_effective_local_bytes() + mir.aggregate_temp_bytes != 0)
         fprintf(out, "\tld bc,-%d\n\tadd iy,bc\n",
-                mir.local_bytes + mir.aggregate_temp_bytes);
+                mir_effective_local_bytes() + mir.aggregate_temp_bytes);
 }
 
 static void mir_emit_frame_word_store(FILE *out, int offset)
@@ -4091,7 +4256,7 @@ static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
  */
 int mir_current_frame_bytes(void)
 {
-    return mir.local_bytes + mir.aggregate_temp_bytes +
+    return mir_effective_local_bytes() + mir.aggregate_temp_bytes +
            2 * mir_prepare_backend_slots();
 }
 
@@ -4131,8 +4296,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_backend_slots_skip_fused_comparisons = 0;
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
-                "; MIR scalar-cfg frame function=%s locals=%d slots=%d bytes=%d\n",
-                mir.name, mir.local_bytes + mir.aggregate_temp_bytes,
+                "; MIR scalar-cfg frame function=%s locals=%d original-locals=%d"
+                " slots=%d bytes=%d\n",
+                mir.name,
+                mir_effective_local_bytes() + mir.aggregate_temp_bytes,
+                mir.local_bytes + mir.aggregate_temp_bytes,
                 mir.backend_slot_count, frame_bytes);
     if (frame_bytes < 0 || frame_bytes > 30000)
         return mir_scalar_cfg_preflight_reject("frame-size", -1);

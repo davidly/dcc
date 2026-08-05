@@ -91,7 +91,7 @@ forced-accept inspection of `tests/tmirfuse.c`'s `nseq`/`nsne`/`nult`/`nuge`
 whole-function-compare shapes. Do not re-investigate this as if it were
 unfixed.
 
-What re-investigation in mir-migration-plan-next10 actually found in
+What the historical next-10 plan (preserved in git history) actually found in
 `mir_try_emit_spilled_scalar_cfg` (now fixed, commit `b2a7aab`): the
 selector unconditionally re-emitted a second, dead, unreachable function
 epilogue after its main instruction loop even when the last instruction was
@@ -109,25 +109,19 @@ from there, rather than being read directly from its stable incoming
 requires changing the shared `mir_prepare_backend_slots` interval logic
 that every selector's slot decisions depend on, so it is higher risk than
 a single-selector fix and deserves a dedicated forced-accept A/B campaign
-across a representative population sample before any code change — see
-`mir-migration-plan-next10.md`'s closing Execution Log entry.
+across a representative population sample before any code change.
 
 Before proposing new fallback-reduction work, re-run the census and re-bucket
-the gap (see `mir-migration-plan-100.md`'s "current measured state" section
-for the exact commands) rather than assuming the old "near-cost real
-functions" priority still applies — at this checkpoint it barely did (3
-functions total).
+the gap rather than assuming the old "near-cost real functions" priority still
+applies — at that checkpoint it barely did (3 functions total).
 
-A fresh, evidence-grounded 100-item continuation plan reflecting this finding
-lives at `mir-migration-plan-100.md` (repo root). It supersedes any earlier
-plan document of the same or similar name: two prior documents reused
-overlapping item numbers across separate files and had started producing
-"verified already satisfied" no-ops, a sign that vein of small, independent
-pattern folds (constant materialization, alias folding, divmod fusion, etc.)
-was running dry. When resuming multi-session MIR work, re-derive the plan from
-a fresh census and direct assembly inspection rather than continuing stale
-item numbering, and retire the old plan document once its content is folded
-into the new one.
+`mir-text-size-plan.md` is the authoritative chronological migration log and
+root `plan.md` is the short current-state handoff. Older completed planning
+documents are preserved in git history rather than kept beside the active
+plans: overlapping item numbers had started producing "verified already
+satisfied" no-ops. When resuming multi-session MIR work, re-derive priorities
+from a fresh census and direct assembly inspection instead of continuing stale
+item numbering.
 
 ## Known pattern: selectors reachable only via a diagnostic env var (2026-08-02)
 
@@ -202,6 +196,9 @@ For the whole runnable corpus:
 ```sh
 python3 scripts/mir-migration-census.py \
   --output build/mir-before.tsv
+python3 scripts/mir-migration-census.py \
+  --extra-args=-fstack-check \
+  --output build/mir-before-stackcheck.tsv
 ```
 
 For a local hypothesis:
@@ -275,6 +272,7 @@ Useful environment controls:
 | `DCC_MIR_FORCE_ACCEPT_FUNCTION=name` | Diagnostic only: generate one normally rejected candidate |
 | `DCC_MIR_FORCE_FALLBACK_FUNCTION=name` | A/B one active MIR function against legacy output |
 | `DCC_MIR_FORCE_FALLBACK=1` | Diagnostic only: replay all legacy output |
+| `DCC_MIR_DEAD_LOCAL_REPORT=1` | Report safely reclaimable deepest local-frame suffixes |
 
 Force controls must never be used as the production fix. They exist to measure
 one candidate and derive a structural acceptance or emitter change.
@@ -311,6 +309,11 @@ python3 scripts/mir-migration-census.py \
   --output build/mir-after.tsv \
   --compare build/mir-before.tsv \
   --fail-on-regression
+python3 scripts/mir-migration-census.py \
+  --extra-args=-fstack-check \
+  --output build/mir-after-stackcheck.tsv \
+  --compare build/mir-before-stackcheck.tsv \
+  --fail-on-regression
 ```
 
 The report distinguishes:
@@ -321,8 +324,9 @@ The report distinguishes:
 - apps whose runtime output may change.
 
 Run the generated focused command. It includes newly/removed MIR functions and
-already-active MIR functions whose generated metrics changed; fallback-only
-metric churn is excluded.
+already-active MIR functions whose generated metrics changed. Hash changes in
+selected fallback output are also included; fallback-only metric churn with
+byte-identical selected output is excluded.
 
 ### 9. Profile when static metrics disagree
 

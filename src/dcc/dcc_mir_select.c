@@ -895,6 +895,20 @@ static long mir_stream_size(FILE *stream)
     return size;
 }
 
+static unsigned long mir_copy_selected_stream(FILE *source, FILE *destination)
+{
+    unsigned long hash = 2166136261UL;
+    int character;
+
+    rewind(source);
+    while ((character = fgetc(source)) != EOF) {
+        hash ^= (unsigned long)(unsigned char)character;
+        hash = (hash * 16777619UL) & 0xffffffffUL;
+        fputc(character, destination);
+    }
+    return hash;
+}
+
 static int mir_stream_instruction_count(FILE *stream)
 {
     char line[512];
@@ -1047,6 +1061,32 @@ static int mir_is_byte_profitable_single_block(long generated_size,
     return !mir.has_vla && mir_cfg_block_count() == 1 &&
            generated_size <= captured_size - 20 &&
            generated_instructions <= captured_instructions + 3;
+}
+
+static int mir_is_profiled_dead_suffix_instruction_win(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    return mir.dead_local_suffix_bytes > 0 && !mir.has_vla &&
+           mir_cfg_block_count() <= 2 &&
+           generated_size <= captured_size + 24 &&
+           generated_instructions <= captured_instructions - 4;
+}
+
+static int mir_dead_suffix_layout_is_profitable(
+    const char *selector_name, long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    if (mir.dead_local_suffix_bytes == 0)
+        return 1;
+    if (!strcmp(selector_name, "homed-scalar-cfg"))
+        return generated_instructions <= captured_instructions;
+    if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+        mir.dead_local_suffix_bytes >= 8 &&
+        generated_size > captured_size &&
+        generated_instructions > captured_instructions - 2)
+        return 0;
+    return 1;
 }
 
 static int mir_is_profiled_constant_bound_loop_pair(
@@ -1252,6 +1292,10 @@ void mir_end_function(void)
     mir_thread_jumps();
     mir_resolve_deferred_metadata();
     verified = mir_verify_and_dump();
+    if (verified) {
+        mir_compute_dead_local_suffix();
+        mir_report_dead_local_suffix();
+    }
     if (mir.opaque_count != 0 &&
         getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL) {
         fprintf(stderr, "MIR completeness failed for function %s\n", mir.name);
@@ -1297,6 +1341,7 @@ void mir_end_function(void)
         FILE *destination = mir.saved_sink.stream;
         FILE *generated = NULL;
         int emitted = 0;
+        unsigned long selected_hash;
         const char *selector_name = "none";
         const char *fallback_reason = verified ? "selector" : "verify";
         long generated_size = -1;
@@ -1446,6 +1491,16 @@ void mir_end_function(void)
                 else if (generated_size < 0 || captured_size < 0 ||
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
+                else if (!mir_dead_suffix_layout_is_profitable(
+                             selector_name, generated_size, captured_size,
+                             generated_instructions, captured_instructions))
+                    /* Reclaiming frame bytes is semantically safe, but it can
+                     * expose a slower selector or disturb profitable peep
+                     * shapes. Require homed emission not to add instructions;
+                     * for a large spilled-frame rewrite that is still
+                     * text-larger, require at least two instructions of
+                     * margin. */
+                    fallback_reason = "dead-local-suffix-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_dead_store_forwarding() &&
                          mir.local_bytes + mir.aggregate_temp_bytes > 0 &&
@@ -1516,6 +1571,10 @@ void mir_end_function(void)
                                                      generated_instructions,
                                                      captured_instructions) &&
                                                  !mir_is_byte_profitable_single_block(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
+                                                 !mir_is_profiled_dead_suffix_instruction_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
                                                      captured_instructions))
@@ -1720,17 +1779,8 @@ void mir_end_function(void)
                 label_id = emitted ? generated_label_id_after : mir_label_base;
             }
         }
-        if (emitted) {
-            int character;
-            rewind(generated);
-            while ((character = fgetc(generated)) != EOF)
-                fputc(character, destination);
-        } else {
-            int character;
-            rewind(mir.capture_stream);
-            while ((character = fgetc(mir.capture_stream)) != EOF)
-                fputc(character, destination);
-        }
+        selected_hash = mir_copy_selected_stream(
+            emitted ? generated : mir.capture_stream, destination);
         if (generated != NULL)
             fclose(generated);
         if (mir.report_mode && !g_speculative_codegen_active)
@@ -1744,11 +1794,13 @@ void mir_end_function(void)
             fprintf(stderr,
                     "; MIR selection function=%s selector=%s result=%s "
                     "reason=%s generated-bytes=%ld captured-bytes=%ld "
-                    "generated-insns=%d captured-insns=%d blocks=%d\n",
+                    "generated-insns=%d captured-insns=%d blocks=%d "
+                    "selected-hash=%08lx\n",
                     mir.name, selector_name, emitted ? "mir" : "fallback",
                     fallback_reason != NULL ? fallback_reason : "accepted",
                     generated_size, captured_size, generated_instructions,
-                    captured_instructions, mir_cfg_block_count());
+                    captured_instructions, mir_cfg_block_count(),
+                    selected_hash);
         fclose(mir.capture_stream);
         mir.capture_stream = NULL;
         mir.emit_mode = 0;

@@ -2253,6 +2253,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.return_type = current_return_type != 0 ? current_return_type
         : function_symbol != NULL ? function_symbol->type : TYPE_INT;
     mir.local_bytes = local_bytes;
+    mir.dead_local_suffix_bytes = 0;
     mir.aggregate_temp_bytes = 0;
     mir.opaque_count = 0;
     mir.capture_stream = NULL;
@@ -5153,4 +5154,3 @@ const struct MirInsn *mir_definition(int value)
             return &mir.insns[i];
     return NULL;
 }
-

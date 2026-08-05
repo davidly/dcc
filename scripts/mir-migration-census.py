@@ -22,7 +22,8 @@ SELECTION_RE = re.compile(
     r"reason=(?P<reason>\S+) generated-bytes=(?P<generated_bytes>-?\d+) "
     r"captured-bytes=(?P<captured_bytes>-?\d+) "
     r"generated-insns=(?P<generated_insns>-?\d+) "
-    r"captured-insns=(?P<captured_insns>-?\d+) blocks=(?P<blocks>\d+)"
+    r"captured-insns=(?P<captured_insns>-?\d+) blocks=(?P<blocks>\d+) "
+    r"selected-hash=(?P<selected_hash>[0-9a-fA-F]{8})"
 )
 FIELDS = [
     "app",
@@ -35,6 +36,7 @@ FIELDS = [
     "generated_insns",
     "captured_insns",
     "blocks",
+    "selected_hash",
 ]
 
 
@@ -204,12 +206,23 @@ def compare_rows(
     runtime_apps: set[str] = set()
     compared_apps = {app for app, _ in new}
 
+    def rows_equal(
+        before: dict[str, str] | None, after: dict[str, str] | None
+    ) -> bool:
+        if before is None or after is None:
+            return before is after
+        # Snapshots written before selected_hash was added remain comparable:
+        # they retain metric-based behavior, while two new-format snapshots
+        # additionally catch byte/instruction-count-neutral assembly changes.
+        fields = FIELDS if before.get("selected_hash") else FIELDS[:-1]
+        return all(before.get(field) == after.get(field) for field in fields)
+
     for key in sorted(
         key for key in old.keys() | new.keys() if key[0] in compared_apps
     ):
         before = old.get(key)
         after = new.get(key)
-        if before == after:
+        if rows_equal(before, after):
             continue
         changed_apps.add(key[0])
         before_result = before["result"] if before else "missing"
@@ -221,6 +234,14 @@ def compare_rows(
             regressed.append(key)
             runtime_apps.add(key[0])
         elif before_result == "mir" and after_result == "mir":
+            runtime_apps.add(key[0])
+        elif (
+            before
+            and after
+            and before.get("selected_hash")
+            and after.get("selected_hash")
+            and before["selected_hash"] != after["selected_hash"]
+        ):
             runtime_apps.add(key[0])
 
     print("\nSnapshot delta")

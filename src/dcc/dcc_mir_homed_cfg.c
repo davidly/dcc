@@ -98,10 +98,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
      * tests/tptrixld.c's `main` (a local `char buf[32]` passed to two
      * callees) silently corrupting its contents. Reject outright until
      * this selector grows real frame-space reservation/restore support -
-     * mir.local_bytes is always 0 for pure scalar-only frames (the
-     * previously-exercised population), so this only newly excludes the
-     * unsafe aggregate-local shape, not the existing scalar coverage. */
-    if (mir.local_bytes != 0)
+     * A scalar-only frame may have a nonzero original local depth whose
+     * deepest suffix was proven unobservable after MIR promotion. The
+     * effective depth preserves this safety gate for every retained local
+     * while allowing that dead suffix to share storage with register/slot
+     * homes. */
+    if (mir_effective_local_bytes() != 0)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
