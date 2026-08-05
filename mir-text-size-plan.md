@@ -7976,3 +7976,77 @@ instructions on every call), not merely a smaller static byte count
 
 **Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (new
 `mir_wide_backend_slot_forwardable` predicate + one disjunction entry).
+
+## Item T80 (investigated, deferred - zero measured yield): fusable-comparison values still reserved a backend slot (2026-08-06)
+
+**Context**: continuing Batch 1's repeated-helper-cluster lead
+(`tests/tqsort.c`'s `cmp_int_asc`, shared verbatim with `cmp_int_desc`,
+`cmp_rec`, and `tests/tbsearch.c`'s copies - 5 occurrences, 11-byte gap
+each). A forced-accept diff showed the emitted body never references
+either of 2 reserved backend slots (4 dead bytes) - both belong to the
+results of the function's two internal signed comparisons, each of which
+`mir_binary_is_fusable_comparison` already recognizes as fully fused into
+its immediately-following `MIR_BRANCH_FALSE` (never materialized into HL,
+so nothing is ever stored to or reloaded from a slot).
+
+**Fix attempted**: added `mir_fusable_comparison_slot_skippable(value,
+instruction)` - checks whether `value`'s defining instruction (or, for
+the one-`!`-intervening variant, the instruction immediately before it)
+is a fusable comparison per `mir_binary_is_fusable_comparison` - and
+wired it into `mir_prepare_backend_slots`' reservation-skip disjunction,
+following the exact T59/T79 template.
+
+**Result**: builds clean, and a debug trace confirmed the predicate
+correctly identifies and skips both fusable comparison values in
+`cmp_int_asc` (and its siblings). However, a whole-corpus census
+(`--compare --fail-on-regression` against the T79 baseline) showed
+**0 apps with any census change** - `cmp_int_asc`'s own reservation
+count and frame bytes were completely unchanged (`slots=2 bytes=8`
+before and after). Root cause: skipping the 2 fusable-comparison values
+does not reduce `backend_slot_count` at all in this corpus, because 2
+*other* values in the very same functions - the dereferenced `int`s
+themselves (`x = *(const int*)a; y = *(const int*)b;`), which are each
+stored into a named local object **and** separately referenced by their
+original SSA value id from a later block (crossing the `if`/`else-if`
+chain's block boundary) - already require their own real backend slots
+for an unrelated reason (cross-block liveness), and the reservation
+loop's slot-reuse logic (`reusable_source` matching) does not chain a
+freed-up slot number back to reduce the tracked `mir.backend_slot_count`
+peak when a *different*, still-live value needs a slot at the same or a
+later point. Skipping 2 values that were never the *binding* constraint
+on frame size cannot shrink it.
+
+**Decision**: reverted the code (kept zero net diff) rather than commit
+speculative work with no measured benefit anywhere in the current test
+corpus, per this project's standing discipline of preferring proven yield
+over broad, unexercised correctness generalizations (mirrors Item T77's
+decision to defer negligible-yield work rather than merge it). The
+underlying asymmetry (`mir_prepare_backend_slots` not consulting
+`mir_binary_is_fusable_comparison`) is real and could matter for a
+future function shape where a fusable comparison's value is the sole
+slot-count driver, but no such case exists in the runnable corpus today
+- revisit only if a concrete motivating function is found, re-verifying
+via the same whole-corpus `--compare` method rather than assuming this
+write-up's absence of yield still holds.
+
+**Actual root cause of `cmp_int_asc`'s remaining gap** (not yet fixed,
+promising next lead): `x`/`y`'s dead-weight is not the comparison values
+at all - it is that a local object's dedicated storage (`mir.local_bytes`,
+reserved once per named local/temporary) and the *same value*'s own
+liveness-driven backend slot (`mir.backend_slot_count`, reserved because
+the value is read again from a later block by its original SSA id rather
+than via a fresh `MIR_LOAD` of the object) can both be reserved for
+what is, on the wire, the exact same piece of data - one written once via
+`MIR_STORE` to the object and never read back through it again. If a
+value is (a) stored to a named object exactly once, (b) never re-read via
+any `MIR_LOAD` of that object afterward, and (c) still needs a backend
+slot purely for its own cross-block liveness, the object's own
+`local_bytes` reservation for it is provably dead and could be folded
+away (either by giving the value's backend slot the object's address
+directly, or by excluding such objects from `mir.local_bytes` outright).
+This needs a careful audit of how `mir.objects[].offset` and
+`mir.backend_slots[]` addressing interact before attempting a fix - flagged
+as the next concrete candidate for this cluster (T81), not yet
+implemented.
+
+**Files touched**: none (net zero diff after revert).
