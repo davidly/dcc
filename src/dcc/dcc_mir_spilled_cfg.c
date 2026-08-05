@@ -4213,6 +4213,22 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            if (mir_forwarded_hl_value == insn->dst &&
+                mir_forwarded_hl_instruction + 1 == mir_emit_instruction_index) {
+                /* Item T84 (mir-text-size-plan.md): the preceding real
+                 * MIR_STORE case armed this handoff after writing this
+                 * exact object's value to memory - HL still holds it, so
+                 * this fresh MIR_LOAD of the same object (e.g. `global +=
+                 * rhs; return global;`) is a provably redundant re-fetch.
+                 * Skip the memory read entirely and just re-persist
+                 * whatever this value needs (a slot, or a further
+                 * forwarding handoff), exactly like any other HL-resident
+                 * value. */
+                mir_forwarded_hl_value = -1;
+                mir_forwarded_hl_instruction = -1;
+                mir_emit_virtual_store(out, insn->dst);
+                break;
+            }
             if ((insn->opcode == MIR_PARAM || insn->opcode == MIR_LOAD) &&
                 mir_param_value_is_direct(insn->dst))
                 /* mir-migration-plan-next10 (extended by Item T27 to also
@@ -4620,6 +4636,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             }
             mir_emit_virtual_load(out, insn->src1);
+            {
+            int narrow_hl_preserving_store = 0;
             if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {
                 struct Sym *global = find_global(insn->name);
                 const char *assembly_name = asm_name_for(
@@ -4642,8 +4660,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                 assembly_name, assembly_name);
                 } else if (type_size(memory_type) == 1)
                     fprintf(out, "\tld a,l\n\tld (%s),a\n", assembly_name);
-                else
+                else {
                     fprintf(out, "\tld (%s),hl\n", assembly_name);
+                    /* Item T84 (mir-text-size-plan.md): this global/extern
+                     * 2-byte store form reads HL out to memory without
+                     * disturbing it - the same "narrow store, HL still
+                     * resident" property Item T83 already relies on for
+                     * the local/param in-range form below. */
+                    narrow_hl_preserving_store = (type_size(memory_type) ==
+                                                   2);
+                }
             } else {
                 if (type_size(memory_type) == 4) {
                     mir_emit_virtual_load_wide(out, insn->src1);
@@ -4657,42 +4683,85 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 if (type_size(memory_type) == 2) {
                     fprintf(out, "\tld (ix%+d),h\n", memory_offset + 1);
-                    /* Item T83 (mir-text-size-plan.md): this in-range,
-                     * narrow local/param store never disturbs HL (it only
-                     * reads L/H out into memory), so if insn->src1's very
-                     * next consumer (immediately following this store,
-                     * through any intervening MIR_NOP - the same skip
-                     * mir_emit_virtual_store's own store-forwarding
-                     * already relies on) is one of mir_can_forward_hl_to_
-                     * next's recognized single-operand shapes, re-arm the
-                     * one-shot HL forwarding handoff for it instead of
-                     * forcing a slot reload. Closes a second-hop gap this
-                     * store's own forwarded-into-it value could not reach
-                     * on its own: mir_emit_virtual_store already skips
-                     * *this* store's own separate write when insn->src1
-                     * forwards straight into it (forward_to_store), but
-                     * once that forwarding is consumed here, nothing
-                     * previously re-armed it for whatever reads insn->src1
-                     * again right after - typically the same object's own
-                     * value being returned or passed as a call argument
-                     * immediately after its assignment (`c = a + b; return
-                     * c;`, `saved = a + b; return f(saved) - saved;`).
-                     * Found via tests/tc89decl.c's timpreg and
-                     * tests/tmirslot.c's cross_call. */
-                    if (mir_can_forward_hl_to_next(insn->src1)) {
-                        mir_forwarded_hl_value = insn->src1;
-                        mir_forwarded_hl_instruction = i;
-                    } else if (mir_can_forward_hl_to_call_argument_first_use(
-                                   insn->src1)) {
-                        /* Same reasoning, but the next consumer is an
-                         * ARG+CALL pair (tests/tmirslot.c's cross_call:
-                         * `saved = a + b; return scale(saved) - saved;`)
-                         * rather than a single-operand opcode. */
-                        mir_forwarded_hl_value = insn->src1;
-                        mir_forwarded_hl_instruction =
-                            mir_call_argument_after_nops(i);
+                    narrow_hl_preserving_store = 1;
+                }
+            }
+            if (narrow_hl_preserving_store) {
+                /* Item T83 (mir-text-size-plan.md): this in-range,
+                 * narrow store never disturbs HL (it only reads L/H out
+                 * into memory), so if insn->src1's very next consumer
+                 * (immediately following this store, through any
+                 * intervening MIR_NOP - the same skip
+                 * mir_emit_virtual_store's own store-forwarding already
+                 * relies on) is one of mir_can_forward_hl_to_next's
+                 * recognized single-operand shapes, re-arm the one-shot
+                 * HL forwarding handoff for it instead of forcing a slot
+                 * reload. Closes a second-hop gap this store's own
+                 * forwarded-into-it value could not reach on its own:
+                 * mir_emit_virtual_store already skips *this* store's
+                 * own separate write when insn->src1 forwards straight
+                 * into it (forward_to_store), but once that forwarding
+                 * is consumed here, nothing previously re-armed it for
+                 * whatever reads insn->src1 again right after - typically
+                 * the same object's own value being returned or passed
+                 * as a call argument immediately after its assignment
+                 * (`c = a + b; return c;`, `saved = a + b; return
+                 * f(saved) - saved;`). Found via tests/tc89decl.c's
+                 * timpreg and tests/tmirslot.c's cross_call. */
+                if (mir_can_forward_hl_to_next(insn->src1)) {
+                    mir_forwarded_hl_value = insn->src1;
+                    mir_forwarded_hl_instruction = i;
+                } else if (mir_can_forward_hl_to_call_argument_first_use(
+                               insn->src1)) {
+                    /* Same reasoning, but the next consumer is an
+                     * ARG+CALL pair (tests/tmirslot.c's cross_call:
+                     * `saved = a + b; return scale(saved) - saved;`)
+                     * rather than a single-operand opcode. */
+                    mir_forwarded_hl_value = insn->src1;
+                    mir_forwarded_hl_instruction =
+                        mir_call_argument_after_nops(i);
+                } else {
+                    /* Item T84 (mir-text-size-plan.md): distinct from the
+                     * two re-arm checks above (which forward insn->src1,
+                     * the value just written, into its *own* next SSA
+                     * use) - this instead looks at whether the very next
+                     * real instruction is a fresh MIR_LOAD of the *exact
+                     * same memory location* this store just wrote
+                     * (tests/tcaslv.c's apply_global_compound_param:
+                     * `global_lhs += rhs; return global_lhs;` - the
+                     * return reads global_lhs via a brand-new MIR_LOAD,
+                     * not via src1's SSA id, since the object was
+                     * genuinely reassigned). Globals/externs have no
+                     * backend object id (insn->object == -1 for them -
+                     * mir_scalar_memory_location falls back to resolving
+                     * their location by declared name instead), so this
+                     * re-resolves the candidate load's own location via
+                     * the same helper used for the store itself and
+                     * compares storage class + offset directly, rather
+                     * than comparing insn->object (which only locals/
+                     * params populate). A narrow HL-preserving store
+                     * makes that reload provably redundant; arm
+                     * forwarding keyed on the load's own dst value (case
+                     * MIR_LOAD's own check consumes this). */
+                    int forward_after_store = mir_forward_skip_target(i);
+                    if (forward_after_store < mir.count &&
+                        mir.insns[forward_after_store].opcode == MIR_LOAD) {
+                        int load_type;
+                        int load_storage;
+                        int load_offset;
+                        if (mir_scalar_memory_location(
+                                &mir.insns[forward_after_store], &load_type,
+                                &load_storage, &load_offset) &&
+                            load_storage == memory_storage &&
+                            load_offset == memory_offset) {
+                            mir_forwarded_hl_value =
+                                mir.insns[forward_after_store].dst;
+                            mir_forwarded_hl_instruction =
+                                forward_after_store - 1;
+                        }
                     }
                 }
+            }
             }
             break;
             }

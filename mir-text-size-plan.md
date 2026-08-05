@@ -8256,3 +8256,75 @@ existing `MIR_NOP` skip already establishes.
 declaration for `mir_store_is_dead`; `mir_forward_skip_target_ex` and
 `mir_call_argument_after_nops` both extended to skip past provably-dead
 `MIR_STORE` instructions).
+
+### Item T84: forward HL into an immediately-following redundant load of the same memory location
+
+**Context**: while re-sorting the post-T83 census, `tcaslv.apply_global_
+compound_param` (37B gap, `global_lhs += rhs; return global_lhs;`) still
+showed a redundant round trip even after T83. Unlike T82/T83's shape (one
+SSA value stored then reloaded via the *same* SSA id), this one is
+`v3 = v1,v0 (binary); store v3 global_lhs; v4 = load global_lhs; return
+v4` - a genuinely fresh `MIR_LOAD` re-reads the same memory location right
+after the store, because the object was reassigned and the later read
+(the `return`) goes through this new value, not `v3`'s own SSA identity.
+
+**Root cause**: this is the store-then-immediate-reload-of-the-same-
+location pattern rather than the value-forwarding pattern T82/T83 close.
+The store's own narrow, in-range emission form (whether a global/extern
+2-byte `ld (name),hl` or a local/param in-range `ld (ix+n),l`/`ld
+(ix+n),h`) never disturbs HL, so a `MIR_LOAD` of that exact same location
+immediately afterward is provably redundant - but nothing tracked "this
+location's current value is still resident in HL" across an object
+identity change (a fresh SSA value replacing the old one at the same
+memory address).
+
+**Fix** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Refactored the `MIR_STORE` case's global/extern-vs-local/param branches
+  to compute a shared `narrow_hl_preserving_store` flag (true for the
+  global/extern 2-byte form and the local/param in-range 2-byte form -
+  the same two forms T83's re-arm logic already covered), instead of
+  embedding the re-arm logic only inside the local/param branch.
+- After emitting the narrow store, if neither of T82/T83's existing
+  re-arm checks (`mir_can_forward_hl_to_next(insn->src1)` /
+  `mir_can_forward_hl_to_call_argument_first_use(insn->src1)`) applied,
+  check whether the immediately-following real instruction (via
+  `mir_forward_skip_target`) is a `MIR_LOAD`, and if so, re-resolve *that*
+  load's own memory location via `mir_scalar_memory_location` (the same
+  helper the store itself already called) and compare its
+  `storage`/`offset` against the store's own. Globals/externs have no
+  backend object id (`insn->object == -1` for them -
+  `mir_scalar_memory_location` falls back to resolving their location by
+  declared name), so comparing the *resolved* storage/offset - rather than
+  `insn->object` - is what makes this work uniformly for both globals and
+  locals/params. On a match, arm `mir_forwarded_hl_value`/`_instruction`
+  keyed on the *load's own dst value*, not the store's src1 - a different
+  value identity than T82/T83's forwarding, consumed by a new check added
+  at the very top of the `MIR_LOAD` case: if this load's dst matches the
+  pending forwarding handoff, skip the memory fetch entirely and just
+  call `mir_emit_virtual_store` on its dst (identical to how any other
+  HL-resident value gets persisted).
+
+**Validation**:
+- Forced-accept diff of `apply_global_compound_param`: the `ld
+  (_Z0004),hl` / `ld hl,(_Z0004)` round trip collapsed to just the store;
+  `DCC_MIR_SELECT_REPORT=1` confirmed it now clears the acceptance gate
+  unforced (generated-bytes 187->171, insns 15->14).
+- Whole-corpus census (`--compare` against the post-T83 baseline,
+  `--fail-on-regression`): **0 regressions**, coverage 526/2025 (25.98%)
+  -> 528/2025 (26.07%), **2 newly MIR-emitted functions**:
+  `tcaslv.apply_global_compound_param`, `tscanf.test_fscanf_file`. 68 apps
+  showed census metric changes; 11 required runtime validation.
+- Batch-tier validation (`runall.ps1 -Apps pint,tallocx,tcaslv,tfldparr,
+  too,trtl2,tscanf,tstr3,tsvbuf2,tunused,tvolopt -Mode full`): **PASS**,
+  all 11 apps, 0 regressions, **24 real performance improvements**, no
+  baseline updated. Several very large wins: `tallocx` -40.91%/-37.93%
+  cycles, `tsvbuf2` -32.54%/-26.29%, `pint` -26.36%/-25.81%, `too`
+  -23.67%/-22.76% - this general location-identity forwarding class
+  reached far more call sites than the two functions that surfaced it,
+  continuing T82/T83's precedent.
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (`MIR_STORE` case
+refactored to compute a shared `narrow_hl_preserving_store` flag and a new
+same-location-forwarding branch; `MIR_LOAD` case given a new forwarded-
+value fast path at its top, mirroring `mir_emit_virtual_load`'s own
+existing check).
