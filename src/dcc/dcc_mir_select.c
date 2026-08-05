@@ -1259,6 +1259,25 @@ static int mir_is_profiled_slotless_two_block_win(
            generated_instructions < captured_instructions;
 }
 
+static int mir_is_profiled_constant_absolute_no_worse(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    /*
+     * Forced full-mode A/B covered every constant-absolute candidate that
+     * is already no worse by both static measures. This gate adds
+     * a1.m_hook (12 blocks) and cint.init_compile_storage (one block);
+     * cint.mul_expr/rel_expr remain behind the independent backedge safety
+     * gate. The only two-block candidate, cobint.emit_tok, regresses both
+     * modes despite better static counts. Keep that legacy two-block
+     * peephole boundary, which is also treated separately by the slotless
+     * profitability rule above.
+     */
+    return !mir.has_vla && mir_cfg_block_count() != 2 &&
+           generated_size <= captured_size &&
+           generated_instructions <= captured_instructions;
+}
+
 static int mir_is_profiled_dead_suffix_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -1817,6 +1836,9 @@ void mir_end_function(void)
                          mir_spilled_cfg_depends_on_constant_absolute() &&
                          !mir_spilled_cfg_depends_on_constant_index_absolute() &&
                          !mir_is_profiled_slotless_two_block_win(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_constant_absolute_no_worse(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          (generated_size * 50L > captured_size * 47L ||

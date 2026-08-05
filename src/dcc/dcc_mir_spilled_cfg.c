@@ -34,6 +34,9 @@ static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
+static int mir_can_forward_via_stack(int value);
+static int mir_stack_backend_slot_forwardable(
+    int value, int units, int instruction);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
@@ -2546,6 +2549,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_wide_backend_slot_forwardable(value, units, i) ||
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
+                                        mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value) ||
                                         mir_param_value_is_direct(value))
@@ -2881,6 +2885,32 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
     return 1;
 }
 
+static int mir_can_forward_via_stack(int value)
+{
+    if (mir_emit_instruction_index >= 0 &&
+        mir_emit_instruction_index < mir.count &&
+        mir.insns[mir_emit_instruction_index].opcode == MIR_PHI)
+        return 0;
+    return mir_can_forward_stack_to_index(value) ||
+           mir_can_forward_stack_to_binary_const(value) ||
+           mir_can_forward_stack_to_binary_rhs(value);
+}
+
+static int mir_stack_backend_slot_forwardable(
+    int value, int units, int instruction)
+{
+    int saved_index;
+    int forwardable;
+
+    if (units != 1)
+        return 0;
+    saved_index = mir_emit_instruction_index;
+    mir_emit_instruction_index = instruction;
+    forwardable = mir_can_forward_via_stack(value);
+    mir_emit_instruction_index = saved_index;
+    return forwardable;
+}
+
 static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot;
@@ -2922,6 +2952,10 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction =
                 mir_call_argument_after_nops(mir_emit_instruction_index);
+        } else if (mir_can_forward_via_stack(value)) {
+            fputs("\tpush hl\n", out);
+            mir_forwarded_stack_value = value;
+            mir_forwarded_stack_instruction = mir_emit_instruction_index;
         }
         return;
     }
@@ -2939,9 +2973,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_call_argument_after_nops(mir_emit_instruction_index);
         return;
     }
-    if (mir_can_forward_stack_to_index(value) ||
-        mir_can_forward_stack_to_binary_const(value) ||
-        mir_can_forward_stack_to_binary_rhs(value)) {
+    if (mir_can_forward_via_stack(value)) {
         fputs("\tpush hl\n", out);
         mir_forwarded_stack_value = value;
         mir_forwarded_stack_instruction = mir_emit_instruction_index;
