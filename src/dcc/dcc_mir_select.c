@@ -1258,17 +1258,29 @@ static int mir_is_profiled_slotless_two_block_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
 {
-    /* The refreshed post-Phase-2 census found exactly three two-block
-     * candidates within this margin. The two add_string instances still
-     * require three backend slots and miscompile under forced acceptance;
-     * global_escape_store has no backend slots and is non-regressing in
-     * both modes (10 nopeep cycles faster, peep neutral). Slotlessness is
-     * the structural discriminator: the selector is not hiding unmodelled
-     * frame traffic behind a small assembly-text delta. */
+    /* The original ten-byte margin admitted global_escape_store.  The
+     * post-T178 forced campaign found 00040b.main as the only additional
+     * slotless, at-most-two-block candidate within twenty bytes; it also
+     * improves both static measures and passes both runtime modes.
+     * Slotlessness keeps the selector from hiding unmodelled frame traffic
+     * behind the assembly-text delta. */
     return !mir.has_vla && mir_cfg_block_count() <= 2 &&
            mir.backend_slot_count == 0 &&
-           generated_size <= captured_size + 10 &&
+           generated_size <= captured_size + 20 &&
            generated_instructions < captured_instructions;
+}
+
+static int mir_is_profiled_vla_single_block_instruction_win(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    /* vla_sizeof_saved_once is the only profiled one-block VLA candidate
+     * with this eight-instruction win and twenty-byte ceiling.  Full-mode
+     * validation confirms that the real frame-size adjustment remains a
+     * peep/nopeep size and cycle improvement. */
+    return mir.has_vla && mir_cfg_block_count() == 1 &&
+           generated_size <= captured_size + 20 &&
+           generated_instructions <= captured_instructions - 8;
 }
 
 static int mir_is_profiled_constant_absolute_no_worse(
@@ -1940,6 +1952,10 @@ void mir_end_function(void)
                                                      generated_size, captured_size,
                                                      generated_instructions,
                                                      captured_instructions) &&
+                                                 !mir_is_profiled_vla_single_block_instruction_win(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
                                                  !mir_is_profiled_dead_suffix_instruction_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
@@ -1964,6 +1980,9 @@ void mir_end_function(void)
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_indirect_rmw_single_block(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_vla_single_block_instruction_win(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_pointer_member_picker(

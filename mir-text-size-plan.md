@@ -9710,3 +9710,57 @@ The refreshed ordinary rejection population is led by 821 `text-size`, 140
 `unary-not-cost`, 69 `wide-constant-cost`, 62 `instruction-count`, 54
 `absolute-address-cost`, 50 `absolute-index-cost`, and 46
 `inline-substitution` functions.
+
+## Items T179-T180: measured near-cost gates and nested truth fusion (2026-08-08)
+
+T179 force-profiles 18 remaining `text-size` candidates selected for MIR
+instruction-count wins of 2-29 instructions and text deficits no greater than
+178 bytes. Sixteen candidates fail correctness or regress at least one
+peep/nopeep performance measure, including `tbsearch.t_bsearch_edges`,
+`attnc11.vector_dot_product`, `mm.main`, `tdmfuse`'s three candidates,
+`forint.ensure_sym`, `forint.starts`, `tallocx.t_calloc`, `tasm.main`,
+`texec.main`, `tdecl.sum_row`, and `nqueens.main`. This reconfirms that a
+smaller MIR instruction count is not a runtime-profitability proof.
+
+Only two candidates pass forced full-mode A/B:
+
+- `00040b.main` has no backend slots, at most two blocks, two fewer
+  instructions, and a 20-byte text deficit. Widening the existing slotless
+  gate from ten to twenty bytes admits exactly this additional function.
+- `tvla.vla_sizeof_saved_once` is a one-block VLA with ten fewer instructions
+  and an 18-byte text deficit. A dedicated VLA predicate requires at least
+  eight fewer instructions and at most a 20-byte deficit; full-mode validation
+  confirms improvements after the real frame-size adjustment.
+
+T180 addresses the repeated 15-function `okb` cluster structurally. Each
+function computes two one-use `param != 0` booleans, compares those booleans
+with `!=`, and immediately branches false. The previous spilled emitter
+allocated and wrote backend slots for both inner booleans before reloading
+them for the outer comparison.
+
+The retained fusion recognizes only narrow `MIR_PARAM != MIR_CONST(0)` inner
+comparisons, narrow outer `TOK_NE`, one use per inner result, an immediately
+following `MIR_BRANCH_FALSE`, and a function with no phi instructions. Slot
+planning and emission share the same recognizer: the inner results receive no
+backend slots or standalone emission, while the outer instruction tests the
+two stable incoming parameter values and branches directly. The restriction
+avoids app/function-name exceptions, wide-value ambiguity, and phi-edge copy
+handling. For `tasinfsp.okb`, generated output falls from 708 bytes/63
+instructions to 491 bytes/44 instructions, versus legacy's 644 bytes/58
+instructions.
+
+**Census and focused validation**:
+
+- ordinary: **696/2022 (34.42%)**, +17 names and zero removals;
+- stack-check: **703/2124 (33.10%)**, +17 names and zero removals;
+- common additions: `00040b.main`, `tvla.vla_sizeof_saved_once`, and `okb`
+  in `tasinfsp`, `tatan2sp`, `tcmpq`, `texpfsp`, `tfdf`, `tfloorsp`, `tfmaf`,
+  `tfmodfsp`, `tfpraw`, `tfpspec`, `tfrexpsp`, `tisnan`, `tlogfsp`,
+  `tpowfsp`, and `tsqrtsp`;
+- all 19 affected apps pass focused full peep/nopeep validation with zero
+  regressions and 42 checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 804 `text-size`, 140
+`unary-not-cost`, 69 `wide-constant-cost`, 62 `instruction-count`, 54
+`absolute-address-cost`, 50 `absolute-index-cost`, and 46
+`inline-substitution` functions.

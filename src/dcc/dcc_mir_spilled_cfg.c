@@ -29,6 +29,7 @@
 #include "dcc_mir_internal.h"
 
 static int mir_binary_is_fusable_comparison(int i);
+static int mir_value_is_nested_truth_comparison_input(int value);
 static int mir_float_madd_match(int add_index, int *multiply_index,
                                 int *addend_value);
 static int mir_unary_is_fusable_not_branch(int i);
@@ -2707,6 +2708,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
+                                        mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value) ||
                                         mir_param_value_is_direct(value))
@@ -3678,6 +3680,72 @@ static int mir_binary_is_fusable_comparison(int i)
     return 0;
 }
 
+static int mir_truth_parameter_comparison(const struct MirInsn *compare,
+                                          int *parameter_value)
+{
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+
+    if (compare == NULL || compare->opcode != MIR_BINARY ||
+        compare->immediate != TOK_NE ||
+        type_size(compare->secondary_offset) > 2 ||
+        mir_value_use_count(compare->dst) != 1)
+        return 0;
+    left = mir_definition(compare->src1);
+    right = mir_definition(compare->src2);
+    if (left == NULL || left->opcode != MIR_PARAM ||
+        type_size(left->type) > 2 ||
+        right == NULL || right->opcode != MIR_CONST ||
+        (right->immediate & 0xffffL) != 0)
+        return 0;
+    *parameter_value = compare->src1;
+    return 1;
+}
+
+static int mir_nested_truth_comparison(int instruction,
+                                       int *left_parameter,
+                                       int *right_parameter)
+{
+    const struct MirInsn *outer;
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+
+    if (instruction < 0 || instruction >= mir.count ||
+        mir_has_phi_instruction())
+        return 0;
+    outer = &mir.insns[instruction];
+    if (outer->opcode != MIR_BINARY || outer->immediate != TOK_NE ||
+        type_size(outer->secondary_offset) > 2 ||
+        mir_binary_is_fusable_comparison(instruction) != 1)
+        return 0;
+    left = mir_definition(outer->src1);
+    right = mir_definition(outer->src2);
+    return mir_truth_parameter_comparison(left, left_parameter) &&
+           mir_truth_parameter_comparison(right, right_parameter);
+}
+
+/* A pair of one-use `param != 0` booleans consumed by `(left != right)` and
+ * an immediate branch can compare the original parameter truth values
+ * directly.  Do not allocate backend slots or materialize either inner
+ * boolean; mir_emit_nested_truth_comparison_branch emits the complete branch
+ * at the outer comparison. */
+static int mir_value_is_nested_truth_comparison_input(int value)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int left_parameter;
+        int right_parameter;
+        const struct MirInsn *outer = &mir.insns[instruction];
+
+        if ((outer->src1 == value || outer->src2 == value) &&
+            mir_nested_truth_comparison(instruction, &left_parameter,
+                                        &right_parameter))
+            return 1;
+    }
+    return 0;
+}
+
 static int mir_float_madd_match(int add_index, int *multiply_index,
                                 int *addend_value)
 {
@@ -4050,6 +4118,38 @@ static void mir_emit_wide_and_constant(FILE *out, unsigned long mask)
     mir_emit_word_and_constant(out, 'h', 'l', (unsigned int)(mask & 0xffffUL));
 }
 
+static int mir_emit_nested_truth_comparison_branch(FILE *out,
+                                                    const int *labels,
+                                                    int instruction)
+{
+    int left_parameter;
+    int right_parameter;
+    int left_zero_label;
+    int done_label;
+    const struct MirInsn *branch;
+
+    if (!mir_nested_truth_comparison(instruction, &left_parameter,
+                                     &right_parameter))
+        return 0;
+    branch = &mir.insns[instruction + 1];
+    if (branch->label < 0 || branch->label >= mir.next_label)
+        return 0;
+    left_zero_label = new_label();
+    done_label = new_label();
+    mir_emit_virtual_load(out, left_parameter);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", left_zero_label);
+    mir_emit_virtual_load(out, right_parameter);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tjp L%d\nL%d:\n",
+            labels[branch->label], done_label, left_zero_label);
+    mir_emit_virtual_load(out, right_parameter);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\nL%d:\n",
+            labels[branch->label], done_label);
+    return 1;
+}
+
 /* Checks whether insn (a wide '&') has a MIR_CONST operand and, if so,
  * emits the byte-wise mask-AND fast path and returns 1. Checks src2
  * first (the common `x & CONST` shape - DE:HL already holds src2's
@@ -4071,6 +4171,7 @@ static int mir_emit_wide_and_constant_fastpath(FILE *out,
         mir_emit_wide_and_constant(out, (unsigned long)src2_definition->immediate);
         return 1;
     }
+
     if (src1_definition != NULL && src1_definition->opcode == MIR_CONST) {
         fputs("\tpop bc\n\tpop bc\n", out);
         mir_emit_wide_and_constant(out, (unsigned long)src1_definition->immediate);
@@ -5863,6 +5964,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * path) need to know this to skip DE's own runtime
                  * xor-128 flip and only flip HL's sign bit. */
                 int de_holds_biased_constant = 0;
+                if (mir_value_is_nested_truth_comparison_input(insn->dst))
+                    break;
+                if (mir_emit_nested_truth_comparison_branch(out, labels, i)) {
+                    ++mir_fuse_report_fused_count;
+                    ++i;
+                    continue;
+                }
                 if (mir_binary_only_constant(insn->src1)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src1);

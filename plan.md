@@ -7,17 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `5f32294` (Items T172-T176)
-- Published ordinary coverage: **674/2022 functions (33.33%)**
-- Published stack-check coverage: **681/2124 functions (32.06%)**
+- Published baseline: `a653617` (Items T177-T178)
+- Published ordinary coverage: **679/2022 functions (33.58%)**
+- Published stack-check coverage: **686/2124 functions (32.30%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
-- Batch 18 candidate ordinary coverage: **679/2022 functions (33.58%)**
-- Batch 18 candidate stack-check coverage: **686/2124 functions (32.30%)**
+- Batch 19 candidate ordinary coverage: **696/2022 functions (34.42%)**
+- Batch 19 candidate stack-check coverage: **703/2124 functions (33.10%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -517,6 +517,35 @@ with zero removals. Both add `tstructv.assign_return_pair_ptr`,
 `tstructv.fill_big_ptr`, and `tunion2.copy_through_pointer`. Focused
 peep/nopeep validation passes with four checked cycle improvements.
 
+## Batch 19
+
+1. T179: force-profile 18 `text-size` fallbacks with strong MIR instruction
+   wins and small text deficits. Static instruction count is not a reliable
+   runtime proxy: 16 candidates fail correctness or peep/nopeep performance.
+   Retain only two structural gates proven by full-mode A/B: slotless,
+   at-most-two-block candidates within 20 text bytes, and one-block VLA
+   candidates that save at least eight instructions within 20 text bytes.
+2. T180: fuse the repeated assertion-helper shape
+   `(param != 0) != (param != 0)` when its result is consumed by the
+   immediately following false branch. The two inner booleans receive no
+   backend slots or standalone code; the outer comparison branches directly
+   on the stable narrow parameter values. One-use, zero-RHS, narrow-type,
+   immediate-branch, and no-phi proofs keep the optimization structural and
+   local.
+
+The candidate ordinary census is **696/2022 (34.42%)**, +17 names and zero
+removals. The candidate stack-check census is **703/2124 (33.10%)**, also +17
+with zero removals. Both add `00040b.main`, `tvla.vla_sizeof_saved_once`, and
+the 15 `okb` helpers in `tasinfsp`, `tatan2sp`, `tcmpq`, `texpfsp`, `tfdf`,
+`tfloorsp`, `tfmaf`, `tfmodfsp`, `tfpraw`, `tfpspec`, `tfrexpsp`, `tisnan`,
+`tlogfsp`, `tpowfsp`, and `tsqrtsp`.
+
+The 19 affected apps pass focused full-mode validation with zero regressions
+and 42 checked cycle/size improvements. The refreshed ordinary rejection
+population is led by 804 `text-size`, 140 `unary-not-cost`, 69
+`wide-constant-cost`, 62 `instruction-count`, 54 `absolute-address-cost`, 50
+`absolute-index-cost`, and 46 `inline-substitution` functions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -562,8 +591,8 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T176 ordinary census is
-   led by 826 `text-size`, 140 `unary-not-cost`, 62 `instruction-count`,
+3. **Next structural priorities by impact:** the post-T180 ordinary census is
+   led by 804 `text-size`, 140 `unary-not-cost`, 62 `instruction-count`,
    69 `wide-constant-cost`, 54 `absolute-address-cost`,
    50 `absolute-index-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared
