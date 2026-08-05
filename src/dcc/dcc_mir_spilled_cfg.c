@@ -31,6 +31,7 @@
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
+static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
 static int mir_constant_absolute_access_supported(const struct MirInsn *insn);
@@ -39,6 +40,8 @@ static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
+static int mir_forwarded_wide_stack_value = -1;
+static int mir_forwarded_wide_stack_consumer = -1;
 
 static int mir_virtual_offset(int value)
 {
@@ -618,7 +621,7 @@ int mir_fold_constant_compare(int op, long left, long right,
                                      int operand_type, long *result)
 {
     int type_bytes = type_size(operand_type);
-    int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+    int is_unsigned = mir_type_uses_unsigned_comparison(operand_type);
     int cmp;
 
     if (is_unsigned) {
@@ -817,7 +820,7 @@ static int mir_has_integer_division(void)
  * Both the frame slot-count accounting (mir_multiply_by_small_constant)
  * and the actual emission site in mir_try_emit_spilled_scalar_cfg call
  * this, so they cannot fall out of sync the way they once did. */
-static int mir_mul_const_fast_path_eligible(unsigned long multiplier, int dst)
+int mir_mul_const_fast_path_eligible(unsigned long multiplier, int dst)
 {
     return multiplier == 0 ||
            (multiplier & (multiplier - 1)) == 0 ||
@@ -903,7 +906,7 @@ static void mir_emit_mul_hl_const_general(FILE *out, unsigned long uv)
  * become plain shifts, other constants that stay within the instruction
  * budget use the general shift/add decomposition above, and anything else
  * still falls back to a runtime __mulu call. */
-static void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
+void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
 {
     if (multiplier == 0) {
         fputs("\tld hl,0\n", out);
@@ -2068,6 +2071,80 @@ static int mir_wide_backend_slot_forwardable(int value, int units,
     return forwardable;
 }
 
+static int mir_wide_helper_lhs_consumer(int value, int instruction,
+                                        int *consumer_out)
+{
+    const struct MirInsn *definition;
+    int consumer_index;
+
+    if (value < 0 || instruction < 0 || instruction >= mir.count ||
+        mir_value_use_count(value) != 1)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL || definition->opcode == MIR_PHI ||
+        !mir_definition_is_wide(definition))
+        return 0;
+    for (consumer_index = instruction + 1;
+         consumer_index < mir.count; ++consumer_index) {
+        const struct MirInsn *consumer = &mir.insns[consumer_index];
+        if (consumer->src1 != value && consumer->src2 != value &&
+            !mir_call_uses_value(consumer, value))
+            continue;
+        if (consumer->opcode != MIR_BINARY || consumer->src1 != value ||
+            type_size(consumer->secondary_offset) != 4 ||
+            mir_wide_runtime_helper(consumer) == NULL)
+            return 0;
+        break;
+    }
+    if (consumer_index >= mir.count)
+        return 0;
+    if (consumer_out != NULL)
+        *consumer_out = consumer_index;
+    return 1;
+}
+
+static int mir_wide_helper_lhs_span_is_safe(int producer, int consumer)
+{
+    int instruction;
+
+    for (instruction = producer + 1;
+         instruction < consumer; ++instruction)
+        switch (mir.insns[instruction].opcode) {
+        case MIR_NOP:
+        case MIR_CONST:
+        case MIR_LOAD:
+        case MIR_UNARY:
+            break;
+        default:
+            return 0;
+        }
+    return 1;
+}
+
+static int mir_wide_helper_handoff_supported(const struct MirInsn *consumer)
+{
+    int operation;
+
+    if (consumer == NULL || consumer->opcode != MIR_BINARY)
+        return 0;
+    operation = (int)consumer->immediate;
+    if (type_is_float(consumer->secondary_offset))
+        return operation == '+' || operation == '-' ||
+               operation == '*' || operation == '/';
+    return operation == '*' || operation == '/' || operation == '%';
+}
+
+static int mir_wide_helper_lhs_slot_forwardable(int value, int units,
+                                                 int instruction)
+{
+    int consumer;
+
+    return units == 2 &&
+        mir_wide_helper_lhs_consumer(value, instruction, &consumer) &&
+        mir_wide_helper_handoff_supported(&mir.insns[consumer]) &&
+        mir_wide_helper_lhs_span_is_safe(instruction, consumer);
+}
+
 /* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots' own
  * reservation pass only recognized mir_load_is_single_call_argument (a
  * MIR_LOAD whose sole use is exactly one call argument, restricted to
@@ -2449,6 +2526,7 @@ static int mir_prepare_backend_slots(void)
                                          mir_load_is_single_indirect_call_target(value, 2)) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
                                         mir_wide_backend_slot_forwardable(value, units, i) ||
+                                        mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value) ||
@@ -2516,6 +2594,33 @@ static int mir_prepare_backend_slots(void)
                         slot_end[slot + unit] = last[value];
                 }
             }
+    if (getenv("DCC_MIR_WIDE_HELPER_REPORT") != NULL)
+        for (value = 0; value < mir.next_value; ++value) {
+            const struct MirInsn *definition = mir_definition(value);
+            int definition_index;
+            int consumer;
+            const char *helper;
+
+            if (definition == NULL)
+                continue;
+            definition_index = (int)(definition - mir.insns);
+            if (!mir_wide_helper_lhs_consumer(
+                    value, definition_index, &consumer))
+                continue;
+            helper = mir_wide_runtime_helper(&mir.insns[consumer]);
+            fprintf(stderr,
+                    "; MIR wide-helper function=%s value=%d producer=%s "
+                    "consumer=%d helper=%s distance=%d safe=%d "
+                    "handoff=%d slot=%d slots=%d\n",
+                    mir.name, value, mir_opcode_name(definition->opcode),
+                    consumer, helper != NULL ? helper : "none",
+                    consumer - definition_index,
+                    mir_wide_helper_lhs_span_is_safe(
+                        definition_index, consumer),
+                    mir_wide_helper_handoff_supported(
+                        &mir.insns[consumer]),
+                    mir.backend_slots[value], mir.backend_slot_count);
+        }
     free(fused_away);
     free(slot_end);
     free(last);
@@ -2982,6 +3087,7 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
 static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
     int has_slot;
+    int helper_consumer;
     /* Item T35 (mir-text-size-plan.md): mirrors mir_emit_virtual_store's
      * own first-line check, now that Item T35's mir_object_eligible
      * relaxation lets a wide (4-byte) parameter actually have an object
@@ -2993,6 +3099,16 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
      * downstream would ever read the slot this store writes. */
     if (mir_param_value_is_direct(value))
         return;
+    if (mir_wide_helper_lhs_consumer(
+            value, mir_emit_instruction_index, &helper_consumer) &&
+        mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
+        mir_wide_helper_lhs_span_is_safe(
+            mir_emit_instruction_index, helper_consumer)) {
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_forwarded_wide_stack_value = value;
+        mir_forwarded_wide_stack_consumer = helper_consumer;
+        return;
+    }
     /* Item T40 (mir-text-size-plan.md): forward a computed wide value
      * straight to its sole next use (currently only a MIR_RETURN, see
      * mir_can_forward_hl_de_to_next) instead of always spilling it to a
@@ -3124,10 +3240,11 @@ static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
         {
             const struct MirInsn *left = mir_definition(insn->src1);
             const struct MirInsn *right = mir_definition(insn->src2);
-            int is_unsigned = (left != NULL &&
-                               (left->type & TYPE_UNSIGNED) != 0) ||
-                              (right != NULL &&
-                               (right->type & TYPE_UNSIGNED) != 0);
+            int is_unsigned =
+                (left != NULL &&
+                 mir_type_uses_unsigned_comparison(left->type)) ||
+                (right != NULL &&
+                 mir_type_uses_unsigned_comparison(right->type));
             mir_emit_scalar_compare(out, (int)insn->immediate, is_unsigned);
         }
         return 1;
@@ -3297,8 +3414,8 @@ static int mir_fused_compare_is_signed_zero_sign_test(int compare_index)
         return 0;
     left = mir_definition(compare->src1);
     right = mir_definition(compare->src2);
-    if ((left != NULL && (left->type & TYPE_UNSIGNED) != 0) ||
-        (right != NULL && (right->type & TYPE_UNSIGNED) != 0))
+    if ((left != NULL && mir_type_uses_unsigned_comparison(left->type)) ||
+        (right != NULL && mir_type_uses_unsigned_comparison(right->type)))
         return 0;
     if (right == NULL || right->opcode != MIR_CONST ||
         (right->immediate & 0xffffL) != 0)
@@ -3314,8 +3431,9 @@ static int mir_emit_fused_comparison_branch(FILE *out, const int *labels,
     const struct MirInsn *branch = &mir.insns[compare_index + 1 + negate];
     const struct MirInsn *left = mir_definition(compare->src1);
     const struct MirInsn *right = mir_definition(compare->src2);
-    int is_unsigned = (left != NULL && (left->type & TYPE_UNSIGNED) != 0) ||
-                       (right != NULL && (right->type & TYPE_UNSIGNED) != 0);
+    int is_unsigned =
+        (left != NULL && mir_type_uses_unsigned_comparison(left->type)) ||
+        (right != NULL && mir_type_uses_unsigned_comparison(right->type));
     int operation = negate ? mir_negate_comparison_operator(
                                  (int)compare->immediate)
                            : (int)compare->immediate;
@@ -3613,27 +3731,68 @@ static int mir_emit_wide_and_constant_fastpath(FILE *out,
     return 0;
 }
 
+static const char *mir_wide_runtime_helper(const struct MirInsn *insn)
+{
+    int operation = (int)insn->immediate;
+    int operand_type = insn->secondary_offset;
+
+    if (type_is_float(operand_type)) {
+        if (operation == '+' || operation == '-' || operation == '*' ||
+            operation == '/')
+            return operation == '+' ? "__faf" : operation == '-' ? "__fsf" :
+                   operation == '*' ? "__fmf" : "__fdf";
+        if (operation == TOK_EQ || operation == TOK_NE ||
+            operation == '<' || operation == '>' ||
+            operation == TOK_LE || operation == TOK_GE)
+            return operation == TOK_EQ ? "__feqf" :
+                   operation == TOK_NE ? "__fnef" :
+                   operation == '<' ? "__fgtf" :
+                   operation == '>' ? "__fltf" :
+                   operation == TOK_LE ? "__fgef" : "__flef";
+        return NULL;
+    }
+    if (operation == '<' || operation == '>' || operation == TOK_LE ||
+        operation == TOK_GE) {
+        int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+        return operation == '<' ? (is_unsigned ? "__ltu" : "__lts") :
+               operation == TOK_LE ? (is_unsigned ? "__leu" : "__les") :
+               operation == '>' ? (is_unsigned ? "__lgu" : "__lgs") :
+               (is_unsigned ? "__lku" : "__lks");
+    }
+    if (operation == '*') {
+        const struct MirInsn *src2_definition =
+            mir_definition(insn->src2);
+        const struct MirInsn *src1_definition =
+            mir_definition(insn->src1);
+
+        if (src2_definition != NULL &&
+            src2_definition->opcode == MIR_CONST &&
+            mir_ulong_log2_pow2(
+                (unsigned long)src2_definition->immediate) > 0)
+            return NULL;
+        if (src1_definition != NULL &&
+            src1_definition->opcode == MIR_CONST &&
+            mir_ulong_log2_pow2(
+                (unsigned long)src1_definition->immediate) > 0)
+            return NULL;
+        return "__lmul";
+    }
+    if (operation == '/')
+        return (insn->type & TYPE_UNSIGNED) != 0 ? "__ldu" : "__lds";
+    if (operation == '%')
+        return (insn->type & TYPE_UNSIGNED) != 0 ? "__lmu" : "__lms";
+    return NULL;
+}
+
 int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
 {
     const char *helper = NULL;
     int operation = (int)insn->immediate;
     int operand_type = insn->secondary_offset;
     if (type_is_float(operand_type)) {
-        if (operation == '+' || operation == '-' || operation == '*' ||
-            operation == '/') {
-            helper = operation == '+' ? "__faf" : operation == '-' ? "__fsf" :
-                     operation == '*' ? "__fmf" : "__fdf";
-        } else if (operation == TOK_EQ || operation == TOK_NE ||
-                   operation == '<' || operation == '>' ||
-                   operation == TOK_LE || operation == TOK_GE) {
-            helper = operation == TOK_EQ ? "__feqf" :
-                     operation == TOK_NE ? "__fnef" :
-                     operation == '<' ? "__fgtf" :
-                     operation == '>' ? "__fltf" :
-                     operation == TOK_LE ? "__fgef" : "__flef";
-        } else {
+        helper = mir_wide_runtime_helper(insn);
+        if (helper == NULL)
             return 0;
-        }
         mir_emit_runtime_call(out, helper);
         fputs("\tpop bc\n\tpop bc\n", out);
         return 1;
@@ -3653,11 +3812,7 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
     }
     if (operation == '<' || operation == '>' || operation == TOK_LE ||
         operation == TOK_GE) {
-        int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
-        helper = operation == '<' ? (is_unsigned ? "__ltu" : "__lts") :
-                 operation == TOK_LE ? (is_unsigned ? "__leu" : "__les") :
-                 operation == '>' ? (is_unsigned ? "__lgu" : "__lgs") :
-                 (is_unsigned ? "__lku" : "__lks");
+        helper = mir_wide_runtime_helper(insn);
         fputs("\tpush de\n\tpush hl\n", out);
         mir_emit_runtime_call(out, helper);
         fputs("\tex de,hl\n\tld hl,8\n\tadd hl,sp\n"
@@ -3796,9 +3951,8 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
                 }
             }
         }
-        helper = "__lmul"; break;
-    case '/': helper = (insn->type & TYPE_UNSIGNED) != 0 ? "__ldu" : "__lds"; break;
-    case '%': helper = (insn->type & TYPE_UNSIGNED) != 0 ? "__lmu" : "__lms"; break;
+        helper = mir_wide_runtime_helper(insn); break;
+    case '/': case '%': helper = mir_wide_runtime_helper(insn); break;
     default: return 0;
     }
     mir_emit_runtime_call(out, helper);
@@ -4636,6 +4790,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_forwarded_wide_instruction = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
+    mir_forwarded_wide_stack_value = -1;
+    mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;
     mir_cached_call_instruction = -1;
     mir_cached_wide_call_value = -1;
@@ -5424,11 +5580,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             if (type_size(insn->secondary_offset) == 4) {
                 int fuse_skip = mir_binary_is_fusable_comparison(i);
-                mir_emit_virtual_load_wide(out, insn->src1);
-                fputs("\tpush de\n\tpush hl\n", out);
+                int stack_forwarded_left =
+                    mir_forwarded_wide_stack_value == insn->src1 &&
+                    mir_forwarded_wide_stack_consumer == i;
+                if (!stack_forwarded_left) {
+                    mir_emit_virtual_load_wide(out, insn->src1);
+                    fputs("\tpush de\n\tpush hl\n", out);
+                }
                 mir_emit_virtual_load_wide(out, insn->src2);
                 if (!mir_emit_wide_operation(out, insn))
                     goto done;
+                if (stack_forwarded_left) {
+                    mir_forwarded_wide_stack_value = -1;
+                    mir_forwarded_wide_stack_consumer = -1;
+                }
                 if (fuse_skip > 0) {
                     /* Item T2: mir_emit_wide_operation already leaves the
                      * comparison's 0/1 result in HL - skip the
@@ -5626,9 +5791,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                            right_definition->opcode == MIR_CONST &&
                            (right_definition->immediate & 0xffffL) != 0 &&
                            (mir_definition(insn->src1) == NULL ||
-                            (mir_definition(insn->src1)->type &
-                             TYPE_UNSIGNED) == 0) &&
-                           (right_definition->type & TYPE_UNSIGNED) == 0) {
+                            !mir_type_uses_unsigned_comparison(
+                                mir_definition(insn->src1)->type)) &&
+                           !mir_type_uses_unsigned_comparison(
+                               right_definition->type)) {
                     /* Item T50 (mir-text-size-plan.md): a signed `<`/`>=`
                      * comparison against a non-zero compile-time constant
                      * mirrors mir_emit_homed_binary_instruction's
@@ -6183,7 +6349,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * unconditional jump/return) is equally dead weight -
                  * see mir_insn_is_reachable's comment for the full
                  * rationale. */
-                if (target != i + 1 && mir_insn_is_reachable(i))
+                if (!mir_target_is_noop_fallthrough(i, target) &&
+                    mir_insn_is_reachable(i))
                     fprintf(out, "\tjp L%d\n", labels[insn->label]);
             }
             break;
@@ -6387,6 +6554,8 @@ done:
     mir_forwarded_wide_instruction = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
+    mir_forwarded_wide_stack_value = -1;
+    mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;
     mir_cached_call_instruction = -1;
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)

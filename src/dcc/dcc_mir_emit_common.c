@@ -185,6 +185,11 @@ void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned)
             end_label, true_label, end_label);
 }
 
+int mir_type_uses_unsigned_comparison(int type)
+{
+    return (type & TYPE_UNSIGNED) != 0 || type_ptr_depth(type) > 0;
+}
+
 void mir_emit_scalar_compare_biased_right(FILE *out, int operation)
 {
     int true_label = new_label();
@@ -448,10 +453,11 @@ static int mir_emit_scalar_value(FILE *out, int value, int depth)
             {
                 const struct MirInsn *left = mir_definition(definition->src1);
                 const struct MirInsn *right = mir_definition(definition->src2);
-                int is_unsigned = (left != NULL &&
-                                   (left->type & TYPE_UNSIGNED) != 0) ||
-                                  (right != NULL &&
-                                   (right->type & TYPE_UNSIGNED) != 0);
+                int is_unsigned =
+                    (left != NULL &&
+                     mir_type_uses_unsigned_comparison(left->type)) ||
+                    (right != NULL &&
+                     mir_type_uses_unsigned_comparison(right->type));
                 mir_emit_scalar_compare(out, (int)definition->immediate,
                                         is_unsigned);
             }
@@ -713,6 +719,69 @@ int mir_emit_word_param_to_home(FILE *out, int value, int offset)
     }
 }
 
+static void mir_emit_byte_extension(FILE *out, int color, int type)
+{
+    int end_label;
+
+    if (type_is_bool(type)) {
+        end_label = new_label();
+        switch (color) {
+        case MIR_COLOR_HL:
+            fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+            fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                    end_label, end_label);
+            return;
+        case MIR_COLOR_DE:
+            fputs("\tld a,e\n\tor a\n\tld de,0\n", out);
+            fprintf(out, "\tjp z, L%d\n\tinc de\nL%d:\n",
+                    end_label, end_label);
+            return;
+        case MIR_COLOR_BC:
+            fputs("\tld a,c\n\tor a\n\tld bc,0\n", out);
+            fprintf(out, "\tjp z, L%d\n\tinc bc\nL%d:\n",
+                    end_label, end_label);
+            return;
+        }
+    }
+    if ((type & TYPE_UNSIGNED) != 0) {
+        if (color == MIR_COLOR_HL) fputs("\tld h,0\n", out);
+        else if (color == MIR_COLOR_DE) fputs("\tld d,0\n", out);
+        else fputs("\tld b,0\n", out);
+    } else if (color == MIR_COLOR_HL) {
+        mir_emit_signed_byte_extend(out);
+    } else if (color == MIR_COLOR_DE) {
+        fputs("\tld a,e\n\tadd a,a\n\tsbc a,a\n\tld d,a\n", out);
+    } else {
+        fputs("\tld a,c\n\tadd a,a\n\tsbc a,a\n\tld b,a\n", out);
+    }
+}
+
+int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL:
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+        mir_emit_byte_extension(out, MIR_COLOR_HL, type);
+        return 1;
+    case MIR_COLOR_DE:
+        fprintf(out, "\tld e,(ix%+d)\n", offset);
+        mir_emit_byte_extension(out, MIR_COLOR_DE, type);
+        return 1;
+    case MIR_COLOR_BC:
+        fprintf(out, "\tld c,(ix%+d)\n", offset);
+        mir_emit_byte_extension(out, MIR_COLOR_BC, type);
+        return 1;
+    case MIR_COLOR_IY:
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+        mir_emit_byte_extension(out, MIR_COLOR_HL, type);
+        fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int mir_emit_push_home(FILE *out, int value)
 {
     switch (mir.allocation_colors[value]) {
@@ -883,11 +952,50 @@ int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset)
     }
 }
 
+int mir_emit_stack_byte_param_to_home(FILE *out, int value, int offset,
+                                      int type)
+{
+    int stack_offset = offset - 2;
+
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL:
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld l,(hl)\n",
+                stack_offset);
+        mir_emit_byte_extension(out, MIR_COLOR_HL, type);
+        return 1;
+    case MIR_COLOR_DE:
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld e,(hl)\n",
+                stack_offset + 2);
+        mir_emit_byte_extension(out, MIR_COLOR_DE, type);
+        fputs("\tpop hl\n", out);
+        return 1;
+    case MIR_COLOR_BC:
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n",
+                stack_offset + 2);
+        mir_emit_byte_extension(out, MIR_COLOR_BC, type);
+        fputs("\tpop hl\n", out);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 void mir_emit_home_prologue(FILE *out, int uses_iy)
 {
+    int frame_bytes = mir_effective_local_bytes();
+
     if (uses_iy)
         fputs("\tpush iy\n", out);
-    mir_emit_prologue(out);
+    if (frame_bytes == 0) {
+        mir_emit_prologue(out);
+        return;
+    }
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n", frame_bytes);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
 }
 
 void mir_emit_home_epilogue(FILE *out, int uses_iy)
@@ -951,8 +1059,8 @@ int mir_emit_homed_unary_instruction(FILE *out,
 }
 
 int mir_emit_homed_binary_instruction(FILE *out,
-                                             const struct MirInsn *insn,
-                                             int allow_comparison)
+                                      const struct MirInsn *insn,
+                                      int allow_comparison)
 {
     int instruction = (int)(insn - mir.insns);
     int left = insn->src1;
@@ -983,10 +1091,11 @@ int mir_emit_homed_binary_instruction(FILE *out,
                                         !mir_value_has_use_after(right, instruction));
         left_definition = mir_definition(left);
         right_definition = mir_definition(right);
-        comparison_unsigned = (left_definition != NULL &&
-                               (left_definition->type & TYPE_UNSIGNED) != 0) ||
-                              (right_definition != NULL &&
-                               (right_definition->type & TYPE_UNSIGNED) != 0);
+        comparison_unsigned =
+            (left_definition != NULL &&
+             mir_type_uses_unsigned_comparison(left_definition->type)) ||
+            (right_definition != NULL &&
+             mir_type_uses_unsigned_comparison(right_definition->type));
         biased_right_constant = allow_comparison && !comparison_unsigned &&
                                 (insn->immediate == '<' ||
                                  insn->immediate == TOK_GE) &&
@@ -1052,6 +1161,44 @@ int mir_emit_homed_binary_instruction(FILE *out,
     return 1;
 }
 
+int mir_emit_homed_constant_binary_instruction(FILE *out,
+                                                const struct MirInsn *insn,
+                                                int operation, long value)
+{
+    int instruction = (int)(insn - mir.insns);
+    const struct MirInsn *source = mir_definition(insn->src1);
+    unsigned long multiplier = (unsigned long)value & 0xffffUL;
+    int uses_de = operation == '*' && multiplier != 0 &&
+                  (multiplier & (multiplier - 1)) != 0;
+    int preserve_hl =
+        mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+        (mir.allocation_colors[insn->src1] != MIR_COLOR_HL ||
+         mir_value_has_use_after(insn->src1, instruction));
+    int preserve_de =
+        uses_de && mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
+
+    if (preserve_hl)
+        fputs("\tpush hl\n", out);
+    if (preserve_de)
+        fputs("\tpush de\n", out);
+    if (!mir_emit_home_to_hl(out, insn->src1))
+        return 0;
+    if (operation == '*')
+        mir_emit_mul_hl_const(out, multiplier);
+    else
+        mir_emit_scalar_shift_by_constant(
+            out, operation,
+            source != NULL && (source->type & TYPE_UNSIGNED) != 0, value);
+    if (!mir_emit_hl_to_home(out, insn->dst))
+        return 0;
+    if (preserve_de)
+        fputs("\tpop de\n", out);
+    if (preserve_hl)
+        fputs("\tpop hl\n", out);
+    return 1;
+}
+
 /* Item 9 (mir-migration-plan-to-100pct.md): mir_emit_homed_compare_false's
  * fast path (compare against literal 0 with the left operand already
  * homed in HL) is cheap; its general two-operand path pays an
@@ -1089,7 +1236,21 @@ int mir_general_comparison_count(void)
         if (compare_index >= 0 && mir_compare_is_general_form(compare_index))
             ++count;
     }
+
     return count;
+}
+
+int mir_target_is_noop_fallthrough(int instruction, int target)
+{
+    int scan;
+
+    if (target <= instruction)
+        return 0;
+    for (scan = instruction + 1; scan < target; ++scan)
+        if (mir.insns[scan].opcode != MIR_NOP &&
+            mir.insns[scan].opcode != MIR_LABEL)
+            return 0;
+    return 1;
 }
 
 int mir_emit_homed_compare_false(FILE *out,
@@ -1106,8 +1267,9 @@ int mir_emit_homed_compare_false(FILE *out,
     if (right_definition != NULL && right_definition->opcode == MIR_CONST &&
         right_definition->immediate == 0 &&
         mir.allocation_colors[left] == MIR_COLOR_HL) {
-        is_unsigned = left_definition != NULL &&
-                      (left_definition->type & TYPE_UNSIGNED) != 0;
+        is_unsigned =
+            left_definition != NULL &&
+            mir_type_uses_unsigned_comparison(left_definition->type);
         if (operation == '>') {
             if (is_unsigned) {
                 fputs("\tld a,h\n\tor l\n", out);
@@ -1153,10 +1315,11 @@ int mir_emit_homed_compare_false(FILE *out,
     }
     left_definition = mir_definition(left);
     right_definition = mir_definition(right);
-    is_unsigned = (left_definition != NULL &&
-                   (left_definition->type & TYPE_UNSIGNED) != 0) ||
-                  (right_definition != NULL &&
-                   (right_definition->type & TYPE_UNSIGNED) != 0);
+    is_unsigned =
+        (left_definition != NULL &&
+         mir_type_uses_unsigned_comparison(left_definition->type)) ||
+        (right_definition != NULL &&
+         mir_type_uses_unsigned_comparison(right_definition->type));
 
     /* Preserve the lifetime homes while using HL/DE as comparison operands. */
     fputs("\tpush hl\n\tpush de\n", out);

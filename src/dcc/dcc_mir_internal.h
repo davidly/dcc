@@ -283,6 +283,10 @@ int mir_emit_home_to_hl(FILE *out, int value);
 int mir_emit_homed_binary_instruction(FILE *out,
                                              const struct MirInsn *insn,
                                              int allow_comparison);
+int mir_type_uses_unsigned_comparison(int type);
+int mir_emit_homed_constant_binary_instruction(FILE *out,
+                                                       const struct MirInsn *insn,
+                                                       int operation, long value);
 int mir_emit_homed_compare_false(FILE *out,
                                         const struct MirInsn *compare,
                                         int false_label);
@@ -310,15 +314,21 @@ void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned,
 void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
                                        int is_unsigned, long count);
 int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset);
+int mir_emit_stack_byte_param_to_home(FILE *out, int value, int offset,
+                                      int type);
 int mir_ulong_log2_pow2(unsigned long v);
+int mir_mul_const_fast_path_eligible(unsigned long multiplier, int dst);
+void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier);
 void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
                                  unsigned int word_mask);
 int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate);
 int mir_emit_wide_home_to_hl_de(FILE *out, int value);
 int mir_emit_word_param_to_home(FILE *out, int value, int offset);
+int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type);
 int mir_find_label(int label);
 int mir_label_is_jump_target(int label);
 int mir_insn_is_reachable(int i);
+int mir_target_is_noop_fallthrough(int instruction, int target);
 int mir_first_nonlabel_successor(int successor);
 int mir_first_phi_or_block_end(int successor);
 int mir_fold_constant_binary(int op, long left, long right,
@@ -340,6 +350,9 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
+int mir_homed_cfg_depends_on_word_store(void);
+long mir_stream_size(FILE *stream);
+int mir_stream_instruction_count(FILE *stream);
 int mir_try_emit_homed_scalar_dag(FILE *out);
 int mir_try_emit_scalar_dag(FILE *out);
 int mir_spilled_cfg_depends_on_constant_absolute(void);

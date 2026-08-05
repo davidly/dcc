@@ -196,7 +196,7 @@ static int mir_object_eligible(const struct Sym *sym)
         return 0;
     if (type_is_struct_object(sym->type))
         return 0;
-    if (type_ptr_depth(sym->type) > 0)
+    if (type_ptr_depth(sym->type) > 0 && sym->storage != SC_PARAM)
         return 0;
     /* Item T35 (mir-text-size-plan.md): this used to reject anything
      * over 2 bytes, dating to the original mem2reg/object-promotion
@@ -227,6 +227,215 @@ static int mir_object_eligible(const struct Sym *sym)
             return 0;
     }
     return 1;
+}
+
+#define MIR_POINTER_USE_DEREFERENCE 0x01U
+#define MIR_POINTER_USE_INDEX 0x02U
+#define MIR_POINTER_USE_MEMBER 0x04U
+#define MIR_POINTER_USE_COMPARE 0x08U
+#define MIR_POINTER_USE_RETURN 0x10U
+
+static int mir_pointer_value_uses_are_eligible(int value,
+                                                unsigned char *visiting,
+                                                int *use_count,
+                                                unsigned int *use_kinds,
+                                                const char **reason)
+{
+    int instruction;
+
+    if (value < 0 || value >= mir.next_value || visiting[value]) {
+        *reason = "alias-cycle";
+        return 0;
+    }
+    visiting[value] = 1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int uses_src1 = insn->src1 == value;
+        int uses_src2 = insn->src2 == value;
+
+        if (mir_call_uses_value(insn, value)) {
+            *reason = "call-argument";
+            visiting[value] = 0;
+            return 0;
+        }
+        if (!uses_src1 && !uses_src2)
+            continue;
+        ++*use_count;
+        if (insn->opcode == MIR_UNARY && uses_src1 &&
+            insn->immediate == 0 && insn->dst >= 0 &&
+            type_ptr_depth(insn->type) > 0) {
+            if (!mir_pointer_value_uses_are_eligible(
+                    insn->dst, visiting, use_count, use_kinds, reason)) {
+                visiting[value] = 0;
+                return 0;
+            }
+            continue;
+        }
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_INDEX_LOAD) && uses_src1) {
+            *use_kinds |= MIR_POINTER_USE_DEREFERENCE;
+            continue;
+        }
+        if (insn->opcode == MIR_INDEX_ADDRESS && uses_src1) {
+            *use_kinds |= MIR_POINTER_USE_INDEX;
+            continue;
+        }
+        if (insn->opcode == MIR_MEMBER_ADDRESS && uses_src1) {
+            *use_kinds |= MIR_POINTER_USE_MEMBER;
+            continue;
+        }
+        if (insn->opcode == MIR_STORE_INDIRECT && uses_src1) {
+            *use_kinds |= MIR_POINTER_USE_DEREFERENCE;
+            continue;
+        }
+        if (insn->opcode == MIR_BINARY &&
+            (insn->immediate == TOK_EQ || insn->immediate == TOK_NE ||
+             insn->immediate == '<' || insn->immediate == '>' ||
+             insn->immediate == TOK_LE || insn->immediate == TOK_GE)) {
+            *use_kinds |= MIR_POINTER_USE_COMPARE;
+            continue;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE && uses_src1) {
+            *use_kinds |= MIR_POINTER_USE_COMPARE;
+            continue;
+        }
+        if (insn->opcode == MIR_RETURN && uses_src1) {
+            *use_kinds |= MIR_POINTER_USE_RETURN;
+            continue;
+        }
+        if (insn->opcode == MIR_UNARY && uses_src1 &&
+            insn->immediate == '!') {
+            *use_kinds |= MIR_POINTER_USE_COMPARE;
+            continue;
+        }
+        *reason = mir_opcode_name(insn->opcode);
+        visiting[value] = 0;
+        return 0;
+    }
+    visiting[value] = 0;
+    return 1;
+}
+
+static int mir_pointer_parameter_references_eligible(
+    const char *name, int *use_count, unsigned int *use_kinds,
+    const char **reason)
+{
+    unsigned char *visiting;
+    int instruction;
+    int found_definition = 0;
+
+    *use_count = 0;
+    *use_kinds = 0;
+    *reason = "no-use";
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode == MIR_STORE && strcmp(insn->name, name) == 0) {
+            *reason = "written";
+            return 0;
+        }
+    }
+    visiting = (unsigned char *)calloc((size_t)mir.next_value, 1);
+    if (mir.next_value > 0 && visiting == NULL)
+        fatal("out of memory classifying MIR pointer parameter uses");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if ((insn->opcode != MIR_PARAM && insn->opcode != MIR_LOAD) ||
+            insn->dst < 0 || strcmp(insn->name, name) != 0)
+            continue;
+        found_definition = 1;
+        if (!mir_pointer_value_uses_are_eligible(
+                insn->dst, visiting, use_count, use_kinds, reason)) {
+            free(visiting);
+            return 0;
+        }
+    }
+    free(visiting);
+    if (!found_definition || *use_count == 0)
+        return 0;
+    *reason = "eligible";
+    return 1;
+}
+
+static void mir_report_pointer_parameter_eligibility(void)
+{
+    int instruction;
+
+    if (getenv("DCC_MIR_POINTER_PARAM_REPORT") == NULL)
+        return;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const char *reason;
+        int uses;
+        unsigned int use_kinds;
+        int eligible;
+
+        if (insn->opcode != MIR_PARAM || insn->dst < 0 ||
+            type_ptr_depth(insn->type) == 0)
+            continue;
+        eligible = mir_pointer_parameter_references_eligible(
+            insn->name, &uses, &use_kinds, &reason);
+        fprintf(stderr,
+                "; MIR pointer-param function=%s name=%s eligible=%d "
+                "uses=%d kinds=%u reason=%s\n",
+                mir.name, insn->name, eligible, uses, use_kinds, reason);
+    }
+}
+
+static int mir_eligible_pointer_parameter_count(void)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const char *reason;
+        int uses;
+        unsigned int use_kinds;
+
+        if (insn->opcode == MIR_PARAM && insn->dst >= 0 &&
+            type_ptr_depth(insn->type) > 0 &&
+            mir_pointer_parameter_references_eligible(
+                insn->name, &uses, &use_kinds, &reason))
+            ++count;
+    }
+    return count;
+}
+
+static void mir_filter_pointer_parameter_objects(void)
+{
+    int eligible_parameter_count = mir_eligible_pointer_parameter_count();
+    int object;
+
+    for (object = mir.object_count - 1; object >= 0; --object) {
+        struct MirObject *candidate = &mir.objects[object];
+        const char *reason;
+        int instruction;
+        int uses;
+        unsigned int use_kinds;
+        int eligible;
+
+        if (candidate->storage != SC_PARAM ||
+            type_ptr_depth(candidate->type) == 0)
+            continue;
+        eligible = mir_pointer_parameter_references_eligible(
+            candidate->name, &uses, &use_kinds, &reason);
+        if (eligible &&
+            (uses > 1 || eligible_parameter_count > 1 ||
+             (use_kinds &
+              (MIR_POINTER_USE_INDEX | MIR_POINTER_USE_MEMBER)) != 0))
+            continue;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            if (mir.insns[instruction].object == object)
+                mir.insns[instruction].object = -1;
+            else if (mir.insns[instruction].object > object)
+                --mir.insns[instruction].object;
+        }
+        if (object + 1 < mir.object_count)
+            memmove(&mir.objects[object], &mir.objects[object + 1],
+                    (size_t)(mir.object_count - object - 1) *
+                        sizeof(mir.objects[0]));
+        --mir.object_count;
+    }
 }
 
 static int mir_find_object(const char *name)
@@ -4936,6 +5145,8 @@ int mir_verify_and_dump(void)
     }
 
     memset(opaque_kinds, 0, sizeof(opaque_kinds));
+    mir_report_pointer_parameter_eligibility();
+    mir_filter_pointer_parameter_objects();
     promoted_objects = 0;
     for (;;) {
         int promoted_pass = mir_promote_objects();
@@ -5022,6 +5233,19 @@ int mir_verify_and_dump(void)
 
     mir_allocate_registers(live_in, live_out, &allocation, 0);
 
+    if (getenv("DCC_MIR_ALLOCATION_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR allocation function=%s spills=%d "
+                "hl=%d de=%d bc=%d iy=%d moves=%d phi-moves=%d "
+                "return-base=%d return-size=%d locals=%d\n",
+                mir.name, allocation.spills,
+                allocation.colors[MIR_COLOR_HL],
+                allocation.colors[MIR_COLOR_DE],
+                allocation.colors[MIR_COLOR_BC],
+                allocation.colors[MIR_COLOR_IY],
+                allocation.operand_moves + allocation.fixed_moves,
+                allocation.phi_moves, mir.return_type & 15,
+                type_size(mir.return_type), mir_effective_local_bytes());
     if (mir.report_mode)
         fprintf(stderr,
                 "; MIR function=%s sink=%s insns=%d values=%d errors=%d\n",

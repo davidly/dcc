@@ -882,7 +882,7 @@ static int mir_try_selector(FILE *out, int (*selector)(FILE *))
     return accepted;
 }
 
-static long mir_stream_size(FILE *stream)
+long mir_stream_size(FILE *stream)
 {
     long position = ftell(stream);
     long size;
@@ -909,7 +909,7 @@ static unsigned long mir_copy_selected_stream(FILE *source, FILE *destination)
     return hash;
 }
 
-static int mir_stream_instruction_count(FILE *stream)
+int mir_stream_instruction_count(FILE *stream)
 {
     char line[512];
     long position = ftell(stream);
@@ -1466,6 +1466,33 @@ void mir_end_function(void)
                 }
                 if (general_candidate != NULL)
                     fclose(general_candidate);
+            }
+            if (emitted && !strcmp(selector_name, "homed-scalar-cfg") &&
+                (mir_effective_local_bytes() != 0 ||
+                 mir_homed_cfg_depends_on_word_store()) &&
+                (general_filter == NULL || general_filter[0] == 0) &&
+                (emit_filter == NULL || emit_filter[0] == 0)) {
+                FILE *spilled_candidate = tmpfile();
+                int spilled_emitted;
+                int spilled_label_id_after;
+
+                if (spilled_candidate == NULL)
+                    fatal("cannot create MIR spilled candidate stream");
+                label_id = mir_label_base;
+                spilled_emitted = mir_try_selector(
+                    spilled_candidate, mir_try_emit_spilled_scalar_cfg);
+                spilled_label_id_after = label_id;
+                if (spilled_emitted &&
+                    mir_stream_size(spilled_candidate) <
+                        mir_stream_size(generated)) {
+                    fclose(generated);
+                    generated = spilled_candidate;
+                    spilled_candidate = NULL;
+                    selector_name = "spilled-scalar-cfg";
+                    generated_label_id_after = spilled_label_id_after;
+                }
+                if (spilled_candidate != NULL)
+                    fclose(spilled_candidate);
             }
             if (!emitted && (general_filter == NULL ||
                              general_filter[0] == 0)) {

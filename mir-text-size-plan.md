@@ -8815,3 +8815,83 @@ checking and admits no previously emitted regression.
 - mandatory `runall.ps1 -Mode full -Extended` against ntvcm `e47c9cd`: PASS,
   314 standard apps and 196 applicable extended tests, diagnostics and
   dccpeep fixtures, with zero checked performance regressions.
+
+## Items T104-T112: structural homed-CFG expansion (2026-08-13)
+
+The post-T103 architecture survey found that 659/1063 text-size fallbacks had
+zero allocator spills. That falsified mixed home/slot emission as the immediate
+next step: the lower-risk, higher-population lever was to make the existing
+homed backend consume more of the allocation results it could already emit
+without spilling.
+
+The retained structural work is:
+
+- direct DE:HL-to-stack handoff for arithmetic wide-helper operands; comparison
+  handoff was removed after a measured nopeep regression;
+- a per-reference pointer-parameter classifier that admits only dereference,
+  index/member, comparison, and direct-return uses, rejecting calls,
+  forwarding, arithmetic, stores, and address-taking. Scalar MIR comparisons
+  now share pointer-aware unsigned-order classification;
+- real local-frame reservation in the homed prologue, with parameter offsets
+  adjusted by two for both direct and named accesses only when IY is actually
+  saved, and IX required only for reachable frame accesses;
+- conservative unpromoted local/global/extern stores, with parameter stores
+  excluded after they changed inline retention unprofitably;
+- signed, unsigned, and `_Bool`-correct byte parameters and named loads/stores;
+  the byte-indirect slice was removed after it regressed `tpeepal`, while the
+  existing word-indirect slice remains;
+- single-wide-value long parameters in HL:DE;
+- constant multiplication and shifts in homed emission. The bounded
+  shift/add policy and emitter are shared with the spilled backend rather than
+  duplicated, and live DE is preserved when a non-power-of-two decomposition
+  uses it as scratch.
+
+Every widened structural class is either rejected inside the homed selector on
+its own measured profitability floor or arbitrated against the spilled
+candidate before the global acceptance gate. This is load-bearing: late
+rejection can still perturb static-inline retention, and unarbitrated
+byte-return/dynamic-index experiments temporarily displaced already accepted
+spilled functions. The exact-CI gate also removed byte-return support after it
+added no accepted names and regressed `ts`.
+
+Measured negative experiments were removed:
+
+- homed wide identity casts changed no corpus selection;
+- word-sized non-`int` returns changed only a fallback classification;
+- byte returns added no accepted names and changed `ts` code generation
+  unprofitably;
+- byte-indirect homing admitted `tpeepal.interior_escape_store` but regressed
+  the application, so it remains on the spilled/legacy path;
+- stride-one dynamic indexes retained no changes after correct arbitration.
+  Its first prototype also passed a copied `MirInsn` to a helper that derives
+  liveness position by pointer subtraction, causing an invalid instruction
+  index and a `tecreg` compiler crash. The prototype and its refactor were
+  removed rather than carrying zero-impact machinery.
+
+Fresh population measurements guide the next batch. Among 1,157 current
+text/instruction fallbacks, spill counts are: 736 zero-spill, 94 one-spill, 66
+two-spill, and 52 three-spill. The zero-spill first-rejection population is
+dominated by wide values (234), homed candidates that emit but still lose the
+profitability race (204), return types (86, mainly float), repeated general
+comparisons (57), dynamic indexes (54), and binary operations (42). Constant
+scaling consumed the profitable part of the last bucket; helper-based
+division/remainder and variable multiplication remain excluded.
+
+**Census and validation**:
+
+- ordinary: **559/2022 (27.65%)**, +25 accepted names from T103 and zero
+  removals;
+- stack-check: **564/2123 (26.57%)**, +27 accepted names and zero removals;
+- `a1.end_emulation` and `a1.soft_reset` account for the two-function
+  denominator reduction: both were fallback-only and are now eliminated by
+  inline retention;
+- exact-CI focused validation of `tpeepal`, `tlongopt`, and `ts` passes with
+  zero correctness or checked-performance regressions. The final frame rule
+  preserves frameless constant-wide returns while requiring IX for used wide
+  parameters, and both CFG emitters share one safe NOP/label-only fallthrough
+  predicate.
+
+The next architectural stage should remain zero-spill-first: add helper-clobber
+aware wide homes (including a safe second pair) and reduce the 204 already
+emittable homed candidates before building mixed home/slot emission. Same-block
+address CSE remains deferred by T70's measured live-range/slot regression.
