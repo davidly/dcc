@@ -7,10 +7,10 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `245aa92` (Items T123-T132)
-- Published ordinary coverage: **573/2022 functions (28.34%)**
-- Batch 7 ordinary coverage: **583/2021 functions (28.85%)**
-- Batch 7 stack-check coverage: **589/2123 functions (27.74%)**
+- Published baseline: `9b4a7c5` (Items T133-T136)
+- Published ordinary coverage: **583/2021 functions (28.85%)**
+- Batch 8 ordinary coverage: **593/2021 functions (29.34%)**
+- Batch 8 stack-check coverage: **598/2123 functions (28.17%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -181,6 +181,31 @@ The mandatory full+extended gate passed against upstream ntvcm
 dccpeep fixtures, extended tests, and both performance modes passed with zero
 regressions.
 
+## Batch 8
+
+1. T137: include constant-absolute-dependent homed output in the existing
+   homed-versus-spilled arbitration; the guard is behavior-neutral today and
+   prevents future absolute-address extensions from bypassing comparison.
+2. T138: extend stable incoming-parameter forwarding to signed, unsigned, and
+   `_Bool` bytes, including correct IX/IY and out-of-range normalization.
+3. T139: retain fallback for multi-block byte-parameter candidates unless
+   direct forwarding produces a real instruction win; exact-upstream A/B
+   rejected `tptrlhs.check_char` and `tptrrhs.check_char`.
+4. T140: admit the measured strong instruction-win text-proxy and compact
+   homed shapes with structural thresholds narrowed for VLA and chained-CFG
+   hazards.
+
+The ordinary census is **593/2021 (29.34%)**, +10 names and zero removals.
+The stack-check census is **598/2123 (28.17%)**, +9 names and zero removals;
+`tbug.swdf` remains below the stack-check profitability threshold. Ordinary
+additions are `attnc11.transfer_weight_group`, `t.si8`, `t.sui8`,
+`tbug.swdf`, `tc89swjt.swsp`, `tcrcfix.call_cleanup_callee`, `ts.shi8`,
+`ts.shui8`, `tvla.unused_vla_prune_same_decl`, and
+`tvla.unused_vla_prune_sp_alias`.
+
+The mandatory full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f` with zero regressions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -225,8 +250,8 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T136 census is led by
-   997 `text-size`, 84 `instruction-count`, 81 `selector`, 68
+3. **Next structural priorities by impact:** the post-T140 census is led by
+   986 `text-size`, 81 `selector`, 78 `instruction-count`, 73
    `absolute-address-cost`, and 56 `absolute-index-cost` fallbacks. Profile
    the largest zero-spill homed candidates that already emit but lose to
    spilled output, then attack one repeated instruction pattern rather than

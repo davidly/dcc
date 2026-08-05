@@ -9010,7 +9010,7 @@ splitting and the remaining high-impact spill/return/opcode classes. Do not
 retry broad repeated-comparison admission until speculative selector state is
 fully transactional.
 
-## Items T133-T136: shared absolute addressing for homed emission (2026-08-15)
+## Items T133-T136: shared absolute addressing for homed emission (2026-08-06)
 
 A fresh ordinary census started at **573/2022 (28.34%)**. The leading
 rejections were 997 `text-size`, 94 `instruction-count`, 81 `selector`, 75
@@ -9077,3 +9077,73 @@ ordinary fallbacks are led by 997 `text-size`, 84 `instruction-count`, 81
 `selector`, 68 `absolute-address-cost`, and 56 `absolute-index-cost`
 functions. Helper-crossing wide splitting is not currently evidence-backed:
 all 23 inspected `wide-color` rejects report `cross-call=0`.
+
+## Items T137-T140: byte parameter forwarding and profiled cost wins (2026-08-06)
+
+Constant-absolute-dependent homed candidates now participate in the same
+homed-versus-spilled arbitration already required for local frames, named word
+stores, dynamic indexes, and wide values. The current census is byte-identical;
+the change closes a policy gap so later absolute-address extensions cannot
+silently bypass the established alternative-selector comparison.
+
+`mir_param_value_is_direct` was documented for one- and two-byte scalar
+parameters but implemented only two- and four-byte reloads. It now recognizes
+signed, unsigned, and `_Bool` byte parameters, skips their redundant backend
+slots and binding loads, and reloads directly from the stable incoming IX/IY
+home with the same normalization as ordinary byte loads. Out-of-range
+parameters retain the address-computation form.
+
+The first census added eight functions. Exact-upstream focused validation
+found peep regressions in `tptrlhs.check_char` and `tptrrhs.check_char`; both
+were multi-block candidates whose saved byte slot exposed a MIR frame without
+reducing raw instructions. A selector-visible dependency query now requires a
+real instruction win for that shape. The six retained byte-parameter
+additions are `attnc11.transfer_weight_group`, `t.si8`, `t.sui8`,
+`tcrcfix.call_cleanup_callee`, `ts.shi8`, and `ts.shui8`.
+
+Forced A/B then measured the strongest text-size and instruction-count
+near-misses. Four cost wins complete the ordinary batch:
+
+- `tbug.swdf`, whose generated text and instruction count both decrease;
+- `tvla.unused_vla_prune_same_decl` and
+  `tvla.unused_vla_prune_sp_alias`, both single-block VLA functions with more
+  than a 15% instruction reduction;
+- `tc89swjt.swsp`, whose homed text is more than 10% smaller while adding at
+  most four raw instructions and improving both runtime modes.
+
+The cost predicates are structural and deliberately tighter for historically
+unsafe shapes: VLA candidates must be single-block with at least a 15%
+instruction win, and multiple-conditional candidates need at least a 7.5%
+win. Broader experiments were rejected:
+
+- byte loads used only as call arguments changed no census row and were
+  removed;
+- `tvla.vla_sizeof_ternary`, `forint.ensure_sym`, `mm.main`,
+  `tvla.vla_longjmp`, `pint.case_stmt`, `tbsearch.t_bsearch_edges`,
+  `tvariad.check_wide_and_ptr`, `tdecl.sum_row`,
+  `tstructv.assign_return_pair_ptr`, `tlong.tglob`, and
+  `tlongreg.test_postfix` each regressed at least one checked mode or linked
+  size;
+- `tvla.vla_sizeof_saved_once` passed alone but regressed in combination with
+  the two retained VLA functions, so it remains fallback;
+- `cobint.decode_stmts`, `trw.main`, and `tinline.main` failed focused
+  validation; `wumpus.rmove` was neutral but did not define a sufficiently
+  narrow profitable class.
+
+**Census and focused validation**:
+
+- ordinary: **593/2021 (29.34%)**, +10 names and zero removals;
+- stack-check: **598/2123 (28.17%)**, +9 names and zero removals;
+- `tbug.swdf` remains fallback under stack checking;
+- the combined seven-app full-mode run passes correctness and both performance
+  modes with zero regressions;
+- a bug-focused review found and closed future VLA/chained-CFG gate overreach
+  without changing the measured census;
+- the mandatory full+extended gate passed against upstream ntvcm
+  `e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f` with zero regressions.
+
+The next ordinary rejection population is led by 986 `text-size`, 81
+`selector`, 78 `instruction-count`, 73 `absolute-address-cost`, and 56
+`absolute-index-cost` functions. Continue with reusable emitter/slot causes;
+do not broaden either new profiled predicate without enumerating and running
+the exact affected functions.

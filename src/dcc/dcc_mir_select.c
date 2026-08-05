@@ -1344,6 +1344,30 @@ static int mir_has_profiled_positive_loop(void)
     return has_positive_condition && mir_has_cfg_backedge();
 }
 
+static int mir_is_profiled_text_proxy_instruction_win(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    if (generated_size > captured_size)
+        return 0;
+    if (mir.has_vla)
+        return mir_cfg_block_count() == 1 &&
+            generated_instructions * 20L <= captured_instructions * 17L;
+    if (mir_has_multiple_conditional_tests())
+        return generated_instructions * 40L <=
+            captured_instructions * 37L;
+    return generated_instructions * 100L <=
+        captured_instructions * 93L;
+}
+
+static int mir_is_profiled_compact_homed_cfg(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return generated_size * 10L <= captured_size * 9L &&
+        generated_instructions <= captured_instructions + 4;
+}
+
 static int mir_try_emit_z80(FILE *out)
 {
     const struct MirInsn *return_insn = NULL;
@@ -1649,6 +1673,7 @@ void mir_end_function(void)
             if (emitted && !strcmp(selector_name, "homed-scalar-cfg") &&
                 (mir_effective_local_bytes() != 0 ||
                  mir_homed_cfg_depends_on_word_store() ||
+                 mir_homed_cfg_depends_on_constant_absolute() ||
                  mir_homed_cfg_depends_on_dynamic_index() ||
                  mir_has_wide_values()) &&
                 (general_filter == NULL || general_filter[0] == 0) &&
@@ -1840,7 +1865,14 @@ void mir_end_function(void)
                                                  !mir_is_profiled_dead_suffix_instruction_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
-                                                     captured_instructions))
+                                                     captured_instructions) &&
+                                                 !(!strcmp(selector_name,
+                                                           "spilled-scalar-cfg") &&
+                                                   mir_is_profiled_text_proxy_instruction_win(
+                                                       generated_size,
+                                                       captured_size,
+                                                       generated_instructions,
+                                                       captured_instructions)))
                     fallback_reason = "text-size";
                 else if (generated_instructions > captured_instructions +
                         (!strcmp(selector_name, "homed-scalar-cfg")
@@ -1864,8 +1896,25 @@ void mir_end_function(void)
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_constant_bound_loop_pair(
                              generated_size, captured_size,
-                             generated_instructions, captured_instructions))
+                             generated_instructions, captured_instructions) &&
+                         !(!strcmp(selector_name, "homed-scalar-cfg") &&
+                              mir_is_profiled_compact_homed_cfg(
+                                  generated_size, captured_size,
+                                  generated_instructions,
+                                  captured_instructions)))
                     fallback_reason = "instruction-count";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_direct_byte_param() &&
+                         mir_cfg_block_count() > 1 &&
+                         generated_instructions >= captured_instructions)
+                    /* Reloading an unmodified byte parameter directly from
+                     * its incoming home is semantically safe, but exact-CI
+                     * profiling found that it can expose a multi-block MIR
+                     * candidate whose frame setup outweighs the saved slot.
+                     * Require a real instruction win for that shape; simple
+                     * single-block byte forwarding retains the ordinary cost
+                     * policy. */
+                    fallback_reason = "direct-byte-param-cost";
                 else if (!strcmp(selector_name, "homed-scalar-cfg") &&
                          mir_homed_cfg_depends_on_dynamic_index() &&
                          generated_instructions >= captured_instructions)

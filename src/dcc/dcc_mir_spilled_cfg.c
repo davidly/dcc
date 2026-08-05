@@ -2288,7 +2288,9 @@ static int mir_param_value_is_direct(int value)
         (definition->opcode != MIR_PARAM && definition->opcode != MIR_LOAD))
         return 0;
     if (type_is_struct_object(definition->type) ||
-        (type_size(definition->type) != 2 && type_size(definition->type) != 4))
+        (type_size(definition->type) != 1 &&
+         type_size(definition->type) != 2 &&
+         type_size(definition->type) != 4))
         return 0;
     object = definition->object;
     if (object < 0 || object >= mir.object_count)
@@ -2660,21 +2662,42 @@ void mir_emit_virtual_load(FILE *out, int value)
          * uses for a narrow scalar, including the IY-relative fast path
          * hot loops rely on (skipping it caused a measurable, if tiny,
          * cycle regression in tsnprtf's call_vsnprintf). */
-        int object_offset = mir.objects[mir_definition(value)->object].offset;
+        const struct MirInsn *definition = mir_definition(value);
+        int value_type = definition->type;
+        int value_size = type_size(value_type);
+        int object_offset = mir.objects[definition->object].offset;
         int object_iy_offset = object_offset + mir_effective_local_bytes() +
                                 mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && object_iy_offset >= -128 &&
-            object_iy_offset + 1 <= 127) {
-            fprintf(out, "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
-                    object_iy_offset, object_iy_offset + 1);
-        } else if (object_offset >= -128 && object_offset + 1 <= 127) {
-            fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                    object_offset, object_offset + 1);
+            object_iy_offset + value_size - 1 <= 127) {
+            fprintf(out, "\tld l,(iy%+d)\n", object_iy_offset);
+            if (value_size == 2)
+                fprintf(out, "\tld h,(iy%+d)\n", object_iy_offset + 1);
+        } else if (object_offset >= -128 &&
+                   object_offset + value_size - 1 <= 127) {
+            fprintf(out, "\tld l,(ix%+d)\n", object_offset);
+            if (value_size == 2)
+                fprintf(out, "\tld h,(ix%+d)\n", object_offset + 1);
         } else {
             fputs("\tpush ix\n\tpop hl\n", out);
-            fprintf(out, "\tld de,%d\n\tadd hl,de\n"
-                         "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n\tld a,(hl)\n",
                     object_offset);
+            if (value_size == 2)
+                fputs("\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+            else
+                fputs("\tld l,a\n", out);
+        }
+        if (value_size == 1) {
+            if (type_is_bool(value_type)) {
+                int bool_label = new_label();
+                fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                        bool_label, bool_label);
+            } else if ((value_type & TYPE_UNSIGNED) != 0) {
+                fputs("\tld h,0\n", out);
+            } else {
+                mir_emit_signed_byte_extend(out);
+            }
         }
         return;
     }
@@ -4400,6 +4423,20 @@ int mir_current_frame_bytes(void)
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void)
 {
     return mir_spilled_cfg_used_dead_store_forwarding;
+}
+
+int mir_spilled_cfg_depends_on_direct_byte_param(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->dst >= 0 && type_size(insn->type) == 1 &&
+            mir_value_has_use(insn->dst) &&
+            mir_param_value_is_direct(insn->dst))
+            return 1;
+    }
+    return 0;
 }
 
 int mir_spilled_cfg_depends_on_constant_index_absolute(void)
