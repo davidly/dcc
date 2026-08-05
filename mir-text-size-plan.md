@@ -7920,3 +7920,59 @@ with any census change. Coverage unchanged at 511/2023 (25.26%).
 
 **Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (feature-test-macro
 guard only).
+
+## Item T79: reserve no backend slot for hl:de-forwardable wide values (2026-08-06)
+
+**Context**: opened Batch 1 of the next-phase plan (`plan.md`, session
+workspace) by re-checking the smallest absolute-gap "close" bucket
+candidates from a fresh census. `tests/tlong.c`'s `lsum` (`long lsum(long
+a, long b) { return a + b; }`, a 41-byte gap) was the smallest well-scoped
+candidate that also matched a known bug template.
+
+**Hypothesis**: `DCC_MIR_FORCE_ACCEPT_FUNCTION=lsum` diff against legacy
+showed the forced MIR body already matched legacy instruction-for-
+instruction (same push/pop-based wide-add sequence, same positive
+`(ix+N)` parameter offsets, zero negative-offset references anywhere in
+the body) - except for one unused `ld hl,-4 / add hl,sp / ld sp,hl`
+prologue/epilogue pair reserving 4 dead frame bytes that the body never
+touches. This is a pure reservation-vs-emission mismatch, not a missing
+instruction-selection form.
+
+**Root cause**: `mir_prepare_backend_slots`' reservation-skip disjunction
+already special-cases narrow (16-bit, units==1) values that emission will
+forward directly via `mir_can_forward_hl_to_next`
+(`mir_backend_slot_forwardable`, explicitly gated `units != 1 -> 0`), and
+already special-cases call-argument-forwardable values (Item T59's
+`mir_call_argument_slot_forwardable`) - but never gained the wide (32-bit
+HL:DE, units==2) equivalent. Item T40 built `mir_can_forward_hl_de_to_next`
+and wired it into `mir_emit_virtual_store_wide`'s emission-time skip
+decision, but the reservation pass was never updated to match, so any wide
+value forwarded straight into an immediately-following `MIR_RETURN` or
+`MIR_UNARY` (the plain `return a + b;` shape, or any wide value used
+exactly once by the very next instruction) still got a real, dead 4-byte
+slot reserved - inflating `mir_current_frame_bytes()` and, for functions
+near the text-size accept/reject boundary, tipping the gate against them
+for no real reason.
+
+**Fix**: added `mir_wide_backend_slot_forwardable(value, units,
+instruction)` - the units==2 mirror of `mir_backend_slot_forwardable`,
+wrapping `mir_can_forward_hl_de_to_next` the same save/restore-
+`mir_emit_instruction_index` way - and added it to the reservation-skip
+disjunction in `mir_prepare_backend_slots`.
+
+**Validation**: rebuild clean (only the 2 pre-existing `calloc` false-
+positive warnings remain). Whole-corpus census (`--compare --fail-on-
+regression` against the pre-batch baseline): **+5 newly MIR-emitted, 0
+no-longer-emitted, 0 apps regressed** - `tctxflt.tf_ret`, `tlngfptr.add`,
+`tlngfptr.subtract`, `tlong.lsum`, `tvlax.addr_of`. Coverage 511/2023
+(25.26%) -> 516/2025 (25.48%). Batch-tier validation (`runall.ps1 -Apps
+tctxflt,tlngfptr,tlong,tvlax -Mode full -RunTimeout 20`): **4/4 pass, 0
+performance regressions, 8 improvements** - 20-31% cycle-count reductions
+on every newly-accepted function's app (e.g. `tvlax` peep 41.38M->28.57M
+cycles, -30.97%), confirming the eliminated dead frame allocation was a
+real runtime cost (extra stack-check-instrumented prologue/epilogue
+instructions on every call), not merely a smaller static byte count
+(skill rule 4).
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (new
+`mir_wide_backend_slot_forwardable` predicate + one disjunction entry).
