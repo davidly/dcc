@@ -32,6 +32,7 @@ static int mir_binary_is_fusable_comparison(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static int mir_value_is_selfstore_incdec_source(int value);
+static int mir_store_is_dead(int instruction);
 
 static int mir_virtual_offset(int value)
 {
@@ -147,6 +148,31 @@ static int mir_const_is_transparent_zero_index_operand(int instruction)
     return constant->immediate * index->immediate == 0;
 }
 
+/* Item T83 (mir-text-size-plan.md): a MIR_STORE this selector itself
+ * proves dead (mir_store_is_dead, or a fully-promoted object needing no
+ * physical storage at all) emits zero machine instructions - exactly
+ * the same "safe to look through, nothing here" property MIR_NOP
+ * already has for forwarding-adjacency purposes. Without this, a value
+ * whose immediately-following use (through the intervening dead store)
+ * is a single-operand consumer (return, the next binary/unary operand,
+ * a call argument, ...) never gets to forward at all: the dead store
+ * still occupies a real instruction slot in mir.insns, so every existing
+ * adjacency check anchored on it saw a non-NOP, non-transparent
+ * instruction and gave up, forcing a genuinely redundant slot reload
+ * even though nothing at all executes between the value's own
+ * definition and this later read. Found via tests/tc89decl.c's timpreg
+ * (`register c; c = a + b; return c;` - "c"'s own store is dead since
+ * nothing ever loads "c" as an object again, every later use reads the
+ * binary's own SSA value directly) and tests/tmirslot.c's cross_call
+ * (`saved = a + b; return scale(saved) - saved;`, the same shape with an
+ * intervening call). */
+static int mir_instruction_is_transparent_dead_store(int instruction)
+{
+    return mir.insns[instruction].opcode == MIR_STORE &&
+           (mir_object_is_fully_promoted(mir.insns[instruction].object) ||
+            mir_store_is_dead(instruction));
+}
+
 static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
 {
     int next_instruction = instruction + 1;
@@ -157,7 +183,8 @@ static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
                (mir.insns[next_instruction].opcode == MIR_NOP ||
                 mir_const_is_transparent_zero_rhs_operand(next_instruction) ||
                 mir_const_is_transparent_zero_index_operand(
-                    next_instruction)))
+                    next_instruction) ||
+                mir_instruction_is_transparent_dead_store(next_instruction)))
             ++next_instruction;
         if (!skipped_label && next_instruction < mir.count &&
             mir.insns[next_instruction].opcode == MIR_LABEL &&
@@ -1374,7 +1401,9 @@ static int mir_call_argument_after_nops(int instruction)
 {
     int index = instruction + 1;
 
-    while (index < mir.count && mir.insns[index].opcode == MIR_NOP)
+    while (index < mir.count &&
+           (mir.insns[index].opcode == MIR_NOP ||
+            mir_instruction_is_transparent_dead_store(index)))
         ++index;
     return index;
 }
@@ -4626,8 +4655,44 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 } else {
                     fprintf(out, "\tld (ix%+d),l\n", memory_offset);
                 }
-                if (type_size(memory_type) == 2)
+                if (type_size(memory_type) == 2) {
                     fprintf(out, "\tld (ix%+d),h\n", memory_offset + 1);
+                    /* Item T83 (mir-text-size-plan.md): this in-range,
+                     * narrow local/param store never disturbs HL (it only
+                     * reads L/H out into memory), so if insn->src1's very
+                     * next consumer (immediately following this store,
+                     * through any intervening MIR_NOP - the same skip
+                     * mir_emit_virtual_store's own store-forwarding
+                     * already relies on) is one of mir_can_forward_hl_to_
+                     * next's recognized single-operand shapes, re-arm the
+                     * one-shot HL forwarding handoff for it instead of
+                     * forcing a slot reload. Closes a second-hop gap this
+                     * store's own forwarded-into-it value could not reach
+                     * on its own: mir_emit_virtual_store already skips
+                     * *this* store's own separate write when insn->src1
+                     * forwards straight into it (forward_to_store), but
+                     * once that forwarding is consumed here, nothing
+                     * previously re-armed it for whatever reads insn->src1
+                     * again right after - typically the same object's own
+                     * value being returned or passed as a call argument
+                     * immediately after its assignment (`c = a + b; return
+                     * c;`, `saved = a + b; return f(saved) - saved;`).
+                     * Found via tests/tc89decl.c's timpreg and
+                     * tests/tmirslot.c's cross_call. */
+                    if (mir_can_forward_hl_to_next(insn->src1)) {
+                        mir_forwarded_hl_value = insn->src1;
+                        mir_forwarded_hl_instruction = i;
+                    } else if (mir_can_forward_hl_to_call_argument_first_use(
+                                   insn->src1)) {
+                        /* Same reasoning, but the next consumer is an
+                         * ARG+CALL pair (tests/tmirslot.c's cross_call:
+                         * `saved = a + b; return scale(saved) - saved;`)
+                         * rather than a single-operand opcode. */
+                        mir_forwarded_hl_value = insn->src1;
+                        mir_forwarded_hl_instruction =
+                            mir_call_argument_after_nops(i);
+                    }
+                }
             }
             break;
             }

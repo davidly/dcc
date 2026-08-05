@@ -8161,3 +8161,98 @@ diff against legacy):
 after_nops` added; `mir_can_forward_hl_to_call_argument` made NOP-
 tolerant; `mir_can_forward_hl_to_call_argument_first_use` added and
 wired into `mir_emit_virtual_store`'s has-slot IX/IY branches).
+
+### Item T83: skip provably-dead `MIR_STORE`s when checking forwarding adjacency
+
+**Context**: after T82 landed, re-sorted the post-T82 census's single-block
+`text-size` gaps and found `tc89decl.timpreg` (37B gap,
+`register int c; c = a + b; return c;`) and `tmirslot.cross_call` (37B gap,
+`saved = a + b; return scale(saved) - saved;`) share T82's exact redundant
+slot-store-then-immediate-reload shape, but with a real `MIR_STORE`
+instruction (not a `MIR_NOP`) sitting between the value's definition and its
+consuming use - a named local (`c`/`saved`) being persisted.
+
+**Root cause**: that intervening `MIR_STORE` is itself provably dead -
+`mir_store_is_dead` (an existing backward liveness check the `MIR_STORE`
+emission case already calls) proves neither `c` nor `saved` is ever re-read
+as an *object* via a fresh `MIR_LOAD`; every later read (`return c`,
+`scale(saved)`/`- saved`) consumes the binary operation's own SSA value
+directly. This makes the `MIR_STORE` case `break` immediately and emit zero
+bytes for that store - but every existing forwarding-adjacency helper
+(`mir_forward_skip_target_ex`, and T82's `mir_call_argument_after_nops`)
+only knew how to look through a plain `MIR_NOP`, so they saw this
+dead-but-present `MIR_STORE` as a real intervening instruction and refused
+to treat the definition and the later `RETURN`/`ARG` as adjacent, forcing
+an unnecessary reload even though nothing is actually emitted in between -
+architecturally the same "safe to look through, emits no code" category the
+existing `MIR_NOP` skip already establishes.
+
+**Fix** (`src/dcc/dcc_mir_spilled_cfg.c`):
+- Added `mir_instruction_is_transparent_dead_store(instruction)`: true only
+  when the instruction is a `MIR_STORE` whose object is either fully
+  promoted (needs no physical storage) or proven dead by
+  `mir_store_is_dead` - the same condition the `MIR_STORE` emission case
+  itself already uses to decide it emits zero bytes. Added a forward
+  declaration for the file-local `mir_store_is_dead` (defined later in the
+  file than this new helper's use site); `mir_object_is_fully_promoted` was
+  already declared in `dcc_mir_internal.h`.
+- Extended both `mir_forward_skip_target_ex`'s skip-condition and T82's
+  `mir_call_argument_after_nops`'s skip loop to also step over any
+  instruction satisfying this predicate, alongside the existing
+  `MIR_NOP`/transparent-zero-operand cases. `mir_store_is_dead` runs a full
+  O(count) backward dataflow pass, but is only invoked when a `MIR_STORE`
+  opcode is actually encountered mid-walk (the `&&` short-circuits on the
+  cheap opcode check first), so this does not add unconditional per-
+  iteration cost to either skip helper.
+- A second, complementary gap surfaced while tracing this: the real
+  (non-dead) `MIR_STORE` emission case itself only re-armed HL forwarding
+  for its own producer value (`forward_to_store`, from T82); nothing
+  re-armed forwarding for the *stored value itself* (`insn->src1`) once its
+  own narrow in-range store completed, even though a narrow local/param
+  store (`ld (ix+n),l` / `ld (ix+n),h`) never disturbs HL. Added the same
+  re-arm check used elsewhere - `mir_can_forward_hl_to_next(insn->src1)`
+  or `mir_can_forward_hl_to_call_argument_first_use(insn->src1)` - right
+  after that store's own bytes are emitted, so a value that must be
+  physically persisted (because it has a genuine, separate later use)
+  can still skip the reload for whatever reads it *immediately* after
+  this store, the same way T82 did for the definition-to-store hop.
+
+**Validation**:
+- Forced-accept diff of both target functions: `timpreg`'s redundant
+  `ld (ix-2),l`/`ld (ix-1),h` then `ld l,(ix-2)`/`ld h,(ix-1)` round trip
+  before `return c` collapsed to just the store; `DCC_MIR_SELECT_REPORT=1`
+  showed it now clears the acceptance gate *unforced*
+  (generated-bytes=196 < captured-bytes=211, slots 1->0). `cross_call`
+  similarly now clears unforced (generated-bytes 322 vs captured-bytes 311,
+  insns tied 29/29); its call-argument-side reload (the one T82's
+  `_first_use` predicate targets) is now correctly forwarded once the skip
+  helper sees through the dead `saved`-store to the real `MIR_ARG` use -
+  confirmed via direct assembly inspection that the `push hl` argument to
+  `scale()` immediately follows the slot store with no reload in between,
+  while the unavoidable post-call reload (HL is clobbered by the call
+  itself) correctly remains.
+- Whole-corpus census (`--compare` against the post-T82 baseline,
+  `--fail-on-regression`): **0 regressions**, coverage 517/2025 (25.53%) ->
+  526/2025 (25.98%), **9 newly MIR-emitted functions**: `tc89comp.cal3`,
+  `tc89decl.timpreg`, `tc99scpe.switch_body_decl`,
+  `tcaslv.apply_local_compound_repeated_param`, `tcmt99.main`,
+  `tctxops.ca_init`, `tforblk.param_shadow`, `tmirslot.cross_call`,
+  `tpromo.test_assignment_conversions`. 54 apps showed census metric
+  changes; 14 required runtime validation per the tool's own filtering.
+- Batch-tier validation (`runall.ps1 -Apps tc89comp,tc89decl,tc89size,
+  tc99scpe,tcaslv,tcmt99,tctxops,tforblk,tgoto,tinlinfb,tmirslot,tpromo,
+  trtl2,tunused -Mode full`): **PASS**, all 14 apps, 0 regressions, **33
+  real performance improvements**, no baseline updated (not run with
+  `-UpdatePerfBaseline`). Improvements ranged from -14.4% to -27.8%
+  cycles across the affected apps (e.g. `tctxops` -25.2%/-24.8%,
+  `trtl2` -23.0%/-22.9%, `tc99scpe` -22.9%/-22.4%, `tforblk` -27.8%/
+  -26.8% peep/nopeep) - this shared root cause reached far more call
+  sites across the corpus than the two functions that first surfaced it,
+  consistent with Item T82's own precedent that this class of fix
+  multiplies well beyond its originating example.
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c`
+(`mir_instruction_is_transparent_dead_store` added with a forward
+declaration for `mir_store_is_dead`; `mir_forward_skip_target_ex` and
+`mir_call_argument_after_nops` both extended to skip past provably-dead
+`MIR_STORE` instructions).
