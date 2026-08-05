@@ -11,6 +11,8 @@ history preserves them.
 - Published ordinary coverage: **593/2021 functions (29.34%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
+- Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
+- Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -241,6 +243,35 @@ The mandatory full+extended gate passed against upstream ntvcm
 dccpeep fixtures, extended tests, and both performance modes passed with zero
 regressions.
 
+## Batch 10
+
+1. T145: convert deferred `MIR_OBJECT_MERGE` placeholders to named loads when
+   pointer-parameter filtering removes their object metadata. This eliminates
+   the stale `selector` rejection bucket without changing selected output.
+2. T146: make boundary-register preservation use the verifier's retained
+   edge-aware liveness instead of a textual future-use approximation. Values
+   from mutually exclusive branches no longer cause redundant stack saves.
+3. T147: admit the measured no-phi, at-most-18-block repeated-comparison slice
+   after the liveness fix; phi-bearing and larger loaded CFGs remain excluded.
+4. T148: compare both homed and spilled output for that repeated-comparison
+   slice and retain spilled output when the homed call-heavy profitability gate
+   would otherwise discard an already-profitable migration.
+
+The ordinary census is **608/2021 (30.08%)**, +3 names and zero removals.
+The stack-check census is **614/2123 (28.92%)**, +4 names and zero removals.
+Ordinary additions are `attnc11.process_sequence`, `bint.relation`, and
+`pint.parse_expr`; stack checking also adds `fint.op_has_local_target`.
+
+The five-app focused full-mode run passes with zero regressions. Edge-aware
+liveness also fixes two of the three historical forced backedge
+miscompilations, but the gate remains intact: `adaint.var_or_const_decl`
+still miscompiles and `bint.sum` still grows linked peep size.
+
+The mandatory full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps, diagnostics,
+dccpeep fixtures, extended tests, and both performance modes passed with zero
+regressions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -264,8 +295,9 @@ regressions.
 
 ## Deferred work
 
-- `cfg-backedge`: separate correctness project; three forced candidates are
-  confirmed miscompilations.
+- `cfg-backedge`: separate correctness project. Edge-aware liveness fixed two
+  historical forced miscompilations, but `adaint.var_or_const_decl` remains a
+  confirmed miscompile and broad admission still causes performance losses.
 - Same-block address/value CSE: blocked/deferred by Item T70's negative
   experiment; it lengthened live ranges, increased fixed moves/slots, and lost
   net coverage. Revisit only with a materially different liveness/cost model.
@@ -285,14 +317,12 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T140 census is led by
-   986 `text-size`, 81 `selector`, 78 `instruction-count`, 73
-   `absolute-address-cost`, and 56 `absolute-index-cost` fallbacks. Profile
-   the largest zero-spill homed candidates that already emit but lose to
-   spilled output, then attack one repeated instruction pattern rather than
-   widening a final cost gate. Float/non-scalar returns remain a known class.
-   Do not remove the repeated-load/comparison gate until speculative selector
-   state is fully transactional.
+3. **Next structural priorities by impact:** the post-T148 census is led by
+   1,040 `text-size`, 81 `absolute-address-cost`, 76 `instruction-count`,
+   58 `absolute-index-cost`, and 47 `inline-substitution` fallbacks. The stale
+   `selector` bucket is gone. Profile repeated spilled-emitter patterns in the
+   enlarged text-size population rather than widening a final cost gate.
+   Float/non-scalar returns remain a known class.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and

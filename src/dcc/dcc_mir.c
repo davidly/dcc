@@ -425,10 +425,15 @@ static void mir_filter_pointer_parameter_objects(void)
               (MIR_POINTER_USE_INDEX | MIR_POINTER_USE_MEMBER)) != 0))
             continue;
         for (instruction = 0; instruction < mir.count; ++instruction) {
-            if (mir.insns[instruction].object == object)
+            if (mir.insns[instruction].object == object) {
+                /* Deferred loop-header merges have already been resolved.
+                 * Preserve the named load when this object is filtered. */
+                if (mir.insns[instruction].opcode == MIR_OBJECT_MERGE)
+                    mir.insns[instruction].opcode = MIR_LOAD;
                 mir.insns[instruction].object = -1;
-            else if (mir.insns[instruction].object > object)
+            } else if (mir.insns[instruction].object > object) {
                 --mir.insns[instruction].object;
+            }
         }
         if (object + 1 < mir.object_count)
             memmove(&mir.objects[object], &mir.objects[object + 1],
@@ -4347,19 +4352,25 @@ int mir_value_has_use_after(int value, int instruction)
     return 0;
 }
 
-/* True if some OTHER value already occupies home color `color` at
- * `instruction` (defined strictly before it) and is still needed
- * strictly after it. A homed-scalar-cfg emission case that must
- * temporarily route a fresh load/computation through a specific
- * physical register before moving it to its own home (e.g. MIR_LOAD's
- * "ld hl,(name)" scratch step) has to push/pop-protect that register
- * first when this returns true, or it silently clobbers the other
- * value - exactly the bug MIR_STRING_ADDRESS support exposed for
- * MIR_LOAD's unconditional HL scratch use once homed-scalar-cfg started
- * accepting functions with multiple simultaneously-live homed values. */
+/* True if a value occupies `color` on both sides of this instruction.
+ * Prefer the verifier's CFG-aware liveness so mutually exclusive branch
+ * values do not cause unnecessary saves; the textual scan is retained for
+ * callers that run before verification has persisted those matrices. */
 int mir_home_color_live_across(int instruction, int color)
 {
     int value;
+
+    if (instruction >= 0 && instruction < mir.count &&
+        mir.live_in != NULL && mir.live_out != NULL) {
+        size_t row = (size_t)instruction * mir.next_value;
+
+        for (value = 0; value < mir.next_value; ++value)
+            if (mir.allocation_colors[value] == color &&
+                mir.live_in[row + value] != 0 &&
+                mir.live_out[row + value] != 0)
+                return 1;
+        return 0;
+    }
 
     for (value = 0; value < mir.next_value; ++value) {
         const struct MirInsn *definition;

@@ -1676,6 +1676,11 @@ void mir_end_function(void)
                  mir_homed_cfg_depends_on_word_store() ||
                  mir_homed_cfg_depends_on_constant_absolute() ||
                  mir_homed_cfg_depends_on_dynamic_index() ||
+                 /* Repeated general comparisons are sensitive to boundary
+                  * moves, so compare both complete selector outputs. */
+                 (mir_general_comparison_count() > 1 &&
+                  !mir_has_phi_instruction() &&
+                  mir_cfg_block_count() <= 18) ||
                  mir_has_wide_values()) &&
                 (general_filter == NULL || general_filter[0] == 0) &&
                 (emit_filter == NULL || emit_filter[0] == 0)) {
@@ -1690,7 +1695,13 @@ void mir_end_function(void)
                     spilled_candidate, mir_try_emit_spilled_scalar_cfg);
                 spilled_label_id_after = label_id;
                 if (spilled_emitted &&
-                    (mir_stream_size(spilled_candidate) <
+                    /* The homed profitability gate rejects this call-heavy
+                     * shape; retain an available spilled implementation
+                     * rather than losing an already-profitable migration. */
+                    ((mir_is_call_heavy_general_compare() &&
+                      !(mir_homed_cfg_depends_on_constant_absolute() &&
+                        mir_cfg_block_count() <= 4)) ||
+                     mir_stream_size(spilled_candidate) <
                          mir_stream_size(generated) ||
                      (mir.allocation_spill_count != 0 &&
                       mir_stream_instruction_count(spilled_candidate) <

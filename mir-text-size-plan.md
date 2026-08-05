@@ -9218,3 +9218,70 @@ The next impact-ranked batch should start from the refreshed 973-function
 new shape exception. The cfg-backedge gate remains a correctness boundary for
 three confirmed loop miscompilations and must not be treated as coverage
 headroom.
+
+## Items T145-T148: edge-aware homed comparisons (2026-08-07)
+
+Pointer-parameter object filtering runs after deferred loop-header metadata has
+already been resolved. Removing an object previously cleared the object index
+from its `MIR_OBJECT_MERGE` instructions but left that analysis-only opcode in
+the final stream. The filter now converts each such placeholder to the named
+`MIR_LOAD` it represents before dropping the object index. This removes all 81
+stale `selector` fallbacks and redistributes them to real correctness and
+profitability gates; selected output and coverage are unchanged by this
+lifecycle fix alone.
+
+The homed emitter's boundary-save helper used a textual "defined before and
+used later" approximation even though verifier liveness is retained for the
+allocator. At CFG joins this treated values from mutually exclusive paths as
+live across an instruction, manufacturing push/pop traffic. The helper now
+uses the same edge-aware live-in/live-out matrices as allocation, with the old
+scan retained only for pre-verification callers.
+
+That fix makes a bounded repeated-general-comparison slice safe to admit.
+Functions with named loads remain excluded when they contain a phi or exceed
+18 blocks. Eligible repeated-comparison functions arbitrate complete homed and
+spilled streams. The spilled stream is retained when the existing call-heavy
+homed gate would otherwise discard a profitable implementation; the
+direct-absolute exception keeps its established homed behavior.
+
+`a1.getc_load_file` exposed why the liveness change is semantic infrastructure,
+not merely a size optimization. False cross-edge preservation emitted a
+redundant stack sequence around the third comparison which dccpeep reduced
+incorrectly; the optimized program terminated immediately. Edge-aware
+liveness removes the false save and restores correct peep output, but the
+exact-upstream performance gate still measured a small peep regression, so the
+phi-bearing function remains fallback.
+
+**Census and focused validation**:
+
+- ordinary: **608/2021 (30.08%)**, +3 names and zero removals;
+- ordinary additions: `attnc11.process_sequence`, `bint.relation`, and
+  `pint.parse_expr`;
+- stack-check: **614/2123 (28.92%)**, +4 names and zero removals;
+- the stack-check-only addition is `fint.op_has_local_target`;
+- the five affected apps pass full peep/nopeep focused validation with zero
+  regressions.
+
+The exact-upstream gate rejected the broader eight-function ordinary slice.
+`a1.getc_load_file`, `tasm.main`, `tallocx.t_nosplit`, and
+`forint.write_pre` each caused a peep regression; the two stack-only
+`cint.load_op`/`store_op` additions regressed when selected together. The final
+phi/CFG guard removes all five regressions without a function-name exception.
+
+The edge-aware fix was also retested against the three historical forced
+backedge miscompilations. `adaint.add_expr` is now correctness-clean but
+slightly slower than the current selected build; `bint.sum` is
+correctness-clean but grows the linked peep image by 128 bytes;
+`adaint.var_or_const_decl` still produces wrong output. The `cfg-backedge` gate
+therefore remains load-bearing and unchanged.
+
+The mandatory unthrottled full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps, diagnostics,
+dccpeep fixtures, extended tests, and both performance modes passed with zero
+regressions.
+
+The refreshed ordinary rejection population is led by 1,040 `text-size`, 81
+`absolute-address-cost`, 76 `instruction-count`, 58 `absolute-index-cost`, and
+47 `inline-substitution` functions. The next batch should mine repeated
+spilled-emitter instruction patterns in that population; the former
+analysis-only `selector` bucket is no longer hiding real causes.

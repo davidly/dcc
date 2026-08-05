@@ -753,8 +753,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                      type_size(memory_type) != 2) ||
                     type_size(insn->type) != type_size(memory_type))
                     return mir_homed_reject("load-width");
-                if (mir_general_comparison_count() > 1)
-                    return mir_homed_reject("load-comparison-count");
+                if (mir_general_comparison_count() > 1 &&
+                    (mir_has_phi_instruction() ||
+                     mir_cfg_block_count() > 18))
+                    return mir_homed_reject("load-comparison-cfg");
             }
             break;
         case MIR_UNARY:

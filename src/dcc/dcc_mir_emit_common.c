@@ -1697,20 +1697,9 @@ int mir_emit_homed_constant_binary_instruction(FILE *out,
     return 1;
 }
 
-/* Item 9 (mir-migration-plan-to-100pct.md): mir_emit_homed_compare_false's
- * fast path (compare against literal 0 with the left operand already
- * homed in HL) is cheap; its general two-operand path pays an
- * unconditional push/pop preserve dance for both live homes. Measured via
- * A/B (DCC_MIR_FORCE_FALLBACK_FUNCTION) that a1's getc_load_file - unlocked
- * by this item's new MIR_LOAD support - has three such general-path
- * compares in a row (a value repeatedly checked against three different
- * small constants) and that this, not the load itself, was the real
- * source of a1's measured (not peephole-only) app-level cycle regression:
- * forcing just that one function back to fallback restored the baseline
- * exactly. This predicate is used to keep this item's MIR_LOAD-driven
- * expansion from newly admitting that repeated-general-compare shape,
- * without touching any function this selector already accepted before
- * this item (spill_count/return-type/etc. gates are unchanged for those). */
+/* Count comparisons that require the general two-operand path rather than
+ * the direct zero-test form. The selector uses this structural signal when
+ * arbitrating homed and spilled candidates. */
 static int mir_compare_is_general_form(int compare_index)
 {
     const struct MirInsn *compare = &mir.insns[compare_index];
@@ -1720,6 +1709,16 @@ static int mir_compare_is_general_form(int compare_index)
         mir.allocation_colors[compare->src1] == MIR_COLOR_HL)
         return 0;
     return 1;
+}
+
+int mir_has_phi_instruction(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_PHI)
+            return 1;
+    return 0;
 }
 
 int mir_general_comparison_count(void)
