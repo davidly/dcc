@@ -8050,3 +8050,23 @@ as the next concrete candidate for this cluster (T81), not yet
 implemented.
 
 **Files touched**: none (net zero diff after revert).
+
+**Update**: a second, independent check on `tests/tfloat4.c`'s `check_float`
+(11-byte-class close-bucket candidate, unrelated to the `cmp_int_asc`
+cluster) found the *exact same* object/backend-slot double-booking
+shape: a single wide (`float`, 4-byte) value (`diff = absf(got - exp)`)
+is stored once to its named local object and never re-read via a fresh
+load of that object (all later uses reference the original SSA value id
+directly), yet gets both its own real backend slot (used, holding the
+real data at `ix-8..ix-5`) *and* a separate, entirely dead 4-byte
+`mir.local_bytes` reservation for the same logical variable that the
+emitted body never once touches - plus a spurious dead `exx`/`exx`
+round trip in the prologue. This corroborates that the double-booking
+found in `cmp_int_asc` is not an isolated one-off; it recurs across
+unrelated functions/selectors and is likely the dominant remaining
+structural cost in the close bucket. This raises `future-object-slot-
+mem2reg`'s priority: it is not a rare edge case but a systemic gap
+between the (generic, symbol-table-driven) named-local-object frame
+layout and the (SSA-liveness-driven) backend-slot allocator, worth a
+dedicated, carefully-designed item as the next architectural investment
+after Batch 1's remaining quick, low-risk fixes are exhausted.
