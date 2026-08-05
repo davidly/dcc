@@ -7,10 +7,10 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `9b4a7c5` (Items T133-T136)
-- Published ordinary coverage: **583/2021 functions (28.85%)**
-- Batch 8 ordinary coverage: **593/2021 functions (29.34%)**
-- Batch 8 stack-check coverage: **598/2123 functions (28.17%)**
+- Published baseline: `1bcfe85` (Items T137-T140)
+- Published ordinary coverage: **593/2021 functions (29.34%)**
+- Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
+- Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -205,6 +205,41 @@ additions are `attnc11.transfer_weight_group`, `t.si8`, `t.sui8`,
 
 The mandatory full+extended gate passed against upstream ntvcm
 `e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f` with zero regressions.
+
+## Batch 9
+
+1. T141: parameterize constant-absolute chain-use traversal by the current
+   emitter's final-access policy; the spilled backend's broader byte policy
+   must not remove addresses still required by homed emission.
+2. T142: add one reusable narrow scalar spill slot to homed emission, including
+   frame allocation and shared load/store/push/constant/address/parameter
+   helpers. Reject wide and phi-connected spills and require a smaller,
+   no-more-instructions candidate with at most four blocks.
+3. T143: admit ABI-compatible pointer returns, including `void *` value
+   returns. Character, `_Bool`, float, and struct-object returns remain
+   excluded until their full normalization contracts are represented.
+4. T144: remove zero-offset same-home pointer shuffles and avoid preserving
+   dead HL while loading a frameless pointer parameter into DE/BC. Scalar
+   parameter output remains stable because broad save elision changed
+   speculative inline-retention reporting.
+
+The ordinary census is **605/2021 (29.94%)**, +12 names and zero removals.
+The stack-check census is **610/2123 (28.73%)**, also +12 with zero removals.
+Both add `pint.if_stmt`, `tbsearch.cmp_rec`, `texstrct.by_name`, `too.op_set`,
+`tptrcnd.pickcp`, `tptrcnd.pickl`, `tptrcnd.picklp`, `tptrrhs.pickcp`,
+`tptrrhs.pickl`, `tptrrhs.picklp`, `tqsort.cmp_rec`, and `wumpus.rmove`.
+
+Rejected experiments include constrained-order recoloring (zero coverage
+change and severe compile-time cost), wide call arguments (zero coverage
+change), generic byte-indirect loads (one peep regression), and character
+returns (incomplete byte-arithmetic normalization). A bug-focused review
+corrected `void *` return semantics and tightened byte-conversion proofs. The
+affected full-mode set passes with zero regressions.
+
+The mandatory full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps, diagnostics,
+dccpeep fixtures, extended tests, and both performance modes passed with zero
+regressions.
 
 ## Required process
 

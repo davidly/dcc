@@ -272,6 +272,7 @@ int mir_direct_branch_for_comparison(int instruction);
 int mir_edge_phi_names_predecessor(int predecessor, int successor);
 int mir_emit_constant_to_home(FILE *out, int value, long immediate);
 int mir_emit_hl_to_home(FILE *out, int value);
+int mir_home_spill_offset(int value, int *offset);
 void mir_extrn_begin_attempt(void);
 int mir_extrn_should_emit(struct Sym *sym);
 int mir_extrn_should_emit_name(const char *name);
@@ -349,6 +350,8 @@ int mir_home_uses_iy(void);
 int mir_constant_absolute_access_supported(const struct MirInsn *insn);
 int mir_constant_absolute_address_has_index(int value);
 int mir_value_only_used_by_constant_absolute_address(int value);
+int mir_value_only_used_by_absolute_access(
+    int value, int (*access_supported)(const struct MirInsn *));
 int mir_prepare_constant_absolute_operand(
     FILE *out, int value, char *operand, size_t operand_size);
 int mir_object_is_fully_promoted(int object);

@@ -9147,3 +9147,74 @@ The next ordinary rejection population is led by 986 `text-size`, 81
 `absolute-index-cost` functions. Continue with reusable emitter/slot causes;
 do not broaden either new profiled predicate without enumerating and running
 the exact affected functions.
+
+## Items T141-T144: bounded homed spills and pointer arithmetic (2026-08-06)
+
+The next allocation census showed that shallow homed spills are common: 113
+unique functions had one spill, 76 had two, and 59 had three. A transactional
+constrained-order recoloring experiment changed no census row and made `a1`
+exceed the ordinary census timeout, so it was removed rather than adding
+allocator complexity without yield.
+
+Homed emission now supports exactly one narrow scalar spill through the shared
+home-transfer layer. The frame reserves one two-byte IX-relative slot below
+effective local storage; constants, addresses, parameters, loads, stores, and
+pushes use that same slot contract. Wide spills and phi-connected spills remain
+excluded. A one-spill candidate always participates in homed-versus-spilled
+arbitration and is accepted only with at most four blocks, smaller generated
+text, and no instruction-count increase. Broader validation rejected
+`tforfrm`, `tforpred`, and `too.bst_height`; the final gate retains only
+`pint.if_stmt`.
+
+Pointer return types now use the existing HL ABI. `_Bool`
+remains excluded because enabling it removed the already-MIR
+`tbool.bool_identity` row through inline retention, defeating monotonic
+coverage accounting. Character, float, and struct-object returns remain
+excluded. Review found that `void *` returns must load their value into HL
+rather than being mistaken for non-value `void` returns. It also found that
+character results require truncation and sign- or zero-extension; the shared
+conversion path now does so, but return admission remains closed because byte
+arithmetic does not yet normalize every intermediate result.
+
+The remaining pointer picker near misses exposed two general address-emission
+costs. A zero-offset member address whose source and destination share one home
+is now a true no-op. Frameless pointer-parameter loads into DE/BC also avoid
+saving HL when no earlier HL value spans the parameter definition. This is
+deliberately pointer-scoped: broad scalar save elision changed speculative
+inline-retention reporting, while the measured pointer arithmetic class
+clears the cost gate and remains monotonic. The changes admit both `pickl`
+variants plus repeated comparator and pointer-manipulation shapes.
+
+Constant-absolute address-chain removal now takes the current emitter's
+final-access eligibility predicate. This fixes a real policy mismatch: the
+spilled emitter accepts a broader direct-byte class than homed emission, so
+using its policy globally could omit an address still needed by a generic
+homed byte access. Generic byte-indirect loads were then measured separately;
+their sole addition, `tpeepal.interior_escape_store`, regressed peep cycles and
+the admission was removed. A wide-call-argument experiment also changed no
+accepted function and was removed.
+
+**Census and focused validation**:
+
+- ordinary: **605/2021 (29.94%)**, +12 names and zero removals;
+- stack-check: **610/2123 (28.73%)**, +12 names and zero removals;
+- additions in both configurations: `pint.if_stmt`, `tbsearch.cmp_rec`,
+  `texstrct.by_name`, `too.op_set`, `tptrcnd.pickcp`, `tptrcnd.pickl`,
+  `tptrcnd.picklp`, `tptrrhs.pickcp`, `tptrrhs.pickl`, `tptrrhs.picklp`,
+  `tqsort.cmp_rec`, and `wumpus.rmove`;
+- all 11 affected apps pass full peep/nopeep correctness and performance
+  validation with zero regressions;
+- bug-focused review closed `void *` return handling, restricted
+  byte-normalization proofs to constants/phis, and kept character returns
+  outside the production gate.
+
+The mandatory unthrottled full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps, diagnostics,
+dccpeep fixtures, extended tests, and both performance modes passed with zero
+regressions.
+
+The next impact-ranked batch should start from the refreshed 973-function
+`text-size` population and prefer another shared emission improvement over a
+new shape exception. The cfg-backedge gate remains a correctness boundary for
+three confirmed loop miscompilations and must not be treated as coverage
+headroom.

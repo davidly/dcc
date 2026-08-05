@@ -1672,6 +1672,7 @@ void mir_end_function(void)
             }
             if (emitted && !strcmp(selector_name, "homed-scalar-cfg") &&
                 (mir_effective_local_bytes() != 0 ||
+                 mir.allocation_spill_count != 0 ||
                  mir_homed_cfg_depends_on_word_store() ||
                  mir_homed_cfg_depends_on_constant_absolute() ||
                  mir_homed_cfg_depends_on_dynamic_index() ||
@@ -1689,8 +1690,11 @@ void mir_end_function(void)
                     spilled_candidate, mir_try_emit_spilled_scalar_cfg);
                 spilled_label_id_after = label_id;
                 if (spilled_emitted &&
-                    mir_stream_size(spilled_candidate) <
-                        mir_stream_size(generated)) {
+                    (mir_stream_size(spilled_candidate) <
+                         mir_stream_size(generated) ||
+                     (mir.allocation_spill_count != 0 &&
+                      mir_stream_instruction_count(spilled_candidate) <
+                          mir_stream_instruction_count(generated)))) {
                     fclose(generated);
                     generated = spilled_candidate;
                     spilled_candidate = NULL;

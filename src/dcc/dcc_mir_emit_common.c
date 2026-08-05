@@ -139,7 +139,8 @@ int mir_constant_absolute_address_has_index(int value)
  * step or a supported direct absolute load/store. This lets slot preparation
  * and emission remove the complete dead address chain, not just optimize the
  * final dereference while retaining its frame traffic. */
-int mir_value_only_used_by_constant_absolute_address(int value)
+int mir_value_only_used_by_absolute_access(
+    int value, int (*access_supported)(const struct MirInsn *))
 {
     int instruction;
     int found_use = 0;
@@ -154,13 +155,20 @@ int mir_value_only_used_by_constant_absolute_address(int value)
         found_use = 1;
         if ((insn->opcode == MIR_MEMBER_ADDRESS ||
              insn->opcode == MIR_INDEX_ADDRESS) &&
-            mir_value_only_used_by_constant_absolute_address(insn->dst))
+            mir_value_only_used_by_absolute_access(
+                insn->dst, access_supported))
             continue;
-        if (mir_constant_absolute_access_supported(insn))
+        if (access_supported(insn))
             continue;
         return 0;
     }
     return found_use;
+}
+
+int mir_value_only_used_by_constant_absolute_address(int value)
+{
+    return mir_value_only_used_by_absolute_access(
+        value, mir_constant_absolute_access_supported);
 }
 
 int mir_prepare_constant_absolute_operand(
@@ -692,35 +700,73 @@ int mir_home_uses_iy(void)
     return 0;
 }
 
+int mir_home_spill_offset(int value, int *offset)
+{
+    int spill;
+
+    if (value < 0 || value >= mir.next_value ||
+        mir.allocation_spills == NULL)
+        return 0;
+    spill = mir.allocation_spills[value];
+    if (spill < 0)
+        return 0;
+    if (offset != NULL)
+        *offset = -mir_effective_local_bytes() - 2 * (spill + 1);
+    return 1;
+}
+
 int mir_emit_home_to_hl(FILE *out, int value)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: return 1;
     case MIR_COLOR_DE: fputs("\tpush de\n\tpop hl\n", out); return 1;
     case MIR_COLOR_BC: fputs("\tld h,b\n\tld l,c\n", out); return 1;
     case MIR_COLOR_IY: fputs("\tpush iy\n\tpop hl\n", out); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                offset, offset + 1);
+        return 1;
     }
 }
 
 static int mir_emit_home_to_de(FILE *out, int value)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_DE: return 1;
     case MIR_COLOR_BC: fputs("\tld d,b\n\tld e,c\n", out); return 1;
     case MIR_COLOR_IY: fputs("\tpush iy\n\tpop de\n", out); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                offset, offset + 1);
+        fputs("\tex de,hl\n\tpop hl\n", out);
+        return 1;
     }
 }
 
 int mir_emit_hl_to_home(FILE *out, int value)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: return 1;
     case MIR_COLOR_DE: fputs("\tex de,hl\n", out); return 1;
     case MIR_COLOR_BC: fputs("\tld b,h\n\tld c,l\n", out); return 1;
     case MIR_COLOR_IY: fputs("\tpush hl\n\tpop iy\n", out); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                offset, offset + 1);
+        return 1;
     }
 }
 
@@ -767,12 +813,21 @@ int mir_emit_wide_home_to_stack(FILE *out, int value)
  * are all directly pushable, so no intermediate move is needed. */
 int mir_emit_home_push(FILE *out, int value)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: fputs("\tpush hl\n", out); return 1;
     case MIR_COLOR_DE: fputs("\tpush de\n", out); return 1;
     case MIR_COLOR_BC: fputs("\tpush bc\n", out); return 1;
     case MIR_COLOR_IY: fputs("\tpush iy\n", out); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                offset, offset + 1);
+        fputs("\tex (sp),hl\n", out);
+        return 1;
     }
 }
 
@@ -785,12 +840,21 @@ int mir_emit_home_push(FILE *out, int value)
 int mir_emit_label_address_to_home(FILE *out, int value,
                                            const char *assembly_name)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: fprintf(out, "\tld hl,%s\n", assembly_name); return 1;
     case MIR_COLOR_DE: fprintf(out, "\tld de,%s\n", assembly_name); return 1;
     case MIR_COLOR_BC: fprintf(out, "\tld bc,%s\n", assembly_name); return 1;
     case MIR_COLOR_IY: fprintf(out, "\tld iy,%s\n", assembly_name); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%s\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                assembly_name, offset, offset + 1);
+        fputs("\tpop hl\n", out);
+        return 1;
     }
 }
 
@@ -807,17 +871,26 @@ int mir_emit_ix_offset_address_to_home(FILE *out, int value,
                                                int offset)
 {
     int color = mir.allocation_colors[value];
+    int spill_offset;
     if (offset == 0) {
         switch (color) {
         case MIR_COLOR_HL: fputs("\tpush ix\n\tpop hl\n", out); return 1;
         case MIR_COLOR_DE: fputs("\tpush ix\n\tpop de\n", out); return 1;
         case MIR_COLOR_BC: fputs("\tpush ix\n\tpop bc\n", out); return 1;
         case MIR_COLOR_IY: fputs("\tpush ix\n\tpop iy\n", out); return 1;
-        default: return 0;
+        default:
+            if (!mir_home_spill_offset(value, &spill_offset))
+                return 0;
+            fputs("\tpush hl\n\tpush ix\n\tpop hl\n", out);
+            fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                    spill_offset, spill_offset + 1);
+            fputs("\tpop hl\n", out);
+            return 1;
         }
     }
     if (color != MIR_COLOR_HL && color != MIR_COLOR_DE &&
-        color != MIR_COLOR_BC && color != MIR_COLOR_IY)
+        color != MIR_COLOR_BC && color != MIR_COLOR_IY &&
+        !mir_home_spill_offset(value, NULL))
         return 0;
     {
         int preserve_hl = color != MIR_COLOR_HL;
@@ -852,6 +925,10 @@ int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
     int dst_color = mir.allocation_colors[dst];
     int preserve_hl = dst_color != MIR_COLOR_HL;
     int preserve_de = dst_color != MIR_COLOR_DE;
+
+    if (offset == 0 &&
+        dst_color == mir.allocation_colors[base])
+        return 1;
     if (preserve_hl) fputs("\tpush hl\n", out);
     if (preserve_de) fputs("\tpush de\n", out);
     if (!mir_emit_home_to_hl(out, base))
@@ -867,12 +944,22 @@ int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
 
 int mir_emit_constant_to_home(FILE *out, int value, long immediate)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: fprintf(out, "\tld hl,%ld\n", immediate & 0xffffL); return 1;
     case MIR_COLOR_DE: fprintf(out, "\tld de,%ld\n", immediate & 0xffffL); return 1;
     case MIR_COLOR_BC: fprintf(out, "\tld bc,%ld\n", immediate & 0xffffL); return 1;
     case MIR_COLOR_IY: fprintf(out, "\tld iy,%ld\n", immediate & 0xffffL); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\tpush hl\n", out);
+        fprintf(out,
+                "\tld hl,%ld\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                immediate & 0xffffL, offset, offset + 1);
+        fputs("\tpop hl\n", out);
+        return 1;
     }
 }
 
@@ -953,6 +1040,8 @@ int mir_emit_cast(FILE *out, int source_type, int target_type)
 
 int mir_emit_word_param_to_home(FILE *out, int value, int offset)
 {
+    int spill_offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL:
         fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n", offset, offset + 1);
@@ -969,7 +1058,15 @@ int mir_emit_word_param_to_home(FILE *out, int value, int offset)
         fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
         return 1;
     default:
-        return 0;
+        if (!mir_home_spill_offset(value, &spill_offset))
+            return 0;
+        fputs("\tpush hl\n", out);
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                offset, offset + 1, spill_offset, spill_offset + 1);
+        fputs("\tpop hl\n", out);
+        return 1;
     }
 }
 
@@ -1012,6 +1109,8 @@ static void mir_emit_byte_extension(FILE *out, int color, int type)
 
 int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type)
 {
+    int spill_offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL:
         fprintf(out, "\tld l,(ix%+d)\n", offset);
@@ -1032,7 +1131,15 @@ int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type)
         fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
         return 1;
     default:
-        return 0;
+        if (!mir_home_spill_offset(value, &spill_offset))
+            return 0;
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+        mir_emit_byte_extension(out, MIR_COLOR_HL, type);
+        fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                spill_offset, spill_offset + 1);
+        fputs("\tpop hl\n", out);
+        return 1;
     }
 }
 
@@ -1185,6 +1292,13 @@ int mir_compare_definition_for_branch(int instruction)
 
 int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset)
 {
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction = definition != NULL ? (int)(definition - mir.insns) : -1;
+    /* Keep scalar parameter output stable; pointer arithmetic is the
+     * measured case where avoiding this save clears the rollout cost gate. */
+    int preserve_hl =
+        instruction < 0 || type_ptr_depth(definition->type) == 0 ||
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
     int stack_offset = offset - 2;
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL:
@@ -1192,14 +1306,22 @@ int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset)
         fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
         return 1;
     case MIR_COLOR_DE:
-        fputs("\tpush hl\n", out);
-        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n", stack_offset + 2);
-        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpop hl\n", out);
+        if (preserve_hl)
+            fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n",
+                stack_offset + (preserve_hl ? 2 : 0));
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+        if (preserve_hl)
+            fputs("\tpop hl\n", out);
         return 1;
     case MIR_COLOR_BC:
-        fputs("\tpush hl\n", out);
-        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n", stack_offset + 2);
-        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tpop hl\n", out);
+        if (preserve_hl)
+            fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n",
+                stack_offset + (preserve_hl ? 2 : 0));
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n", out);
+        if (preserve_hl)
+            fputs("\tpop hl\n", out);
         return 1;
     default:
         return 0;
@@ -1238,7 +1360,8 @@ int mir_emit_stack_byte_param_to_home(FILE *out, int value, int offset,
 
 void mir_emit_home_prologue(FILE *out, int uses_iy)
 {
-    int frame_bytes = mir_effective_local_bytes();
+    int frame_bytes = mir_effective_local_bytes() +
+        2 * mir.allocation_spill_count;
 
     if (uses_iy)
         fputs("\tpush iy\n", out);
@@ -1258,6 +1381,31 @@ void mir_emit_home_epilogue(FILE *out, int uses_iy)
     if (uses_iy)
         fputs("\tpop iy\n", out);
     fputs("\tret\n", out);
+}
+
+static int mir_value_is_normalized_byte(int value, int type, int depth)
+{
+    const struct MirInsn *definition;
+    unsigned long bits;
+
+    if (depth > 16)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_CONST) {
+        bits = (unsigned long)definition->immediate & 0xffffUL;
+        if ((type & TYPE_UNSIGNED) != 0)
+            return (bits & 0xff00UL) == 0;
+        return (bits & 0xff80UL) == 0 ||
+               (bits & 0xff80UL) == 0xff80UL;
+    }
+    if (definition->opcode == MIR_PHI)
+        return mir_value_is_normalized_byte(
+                   definition->src1, type, depth + 1) &&
+               mir_value_is_normalized_byte(
+                   definition->src2, type, depth + 1);
+    return 0;
 }
 
 int mir_emit_homed_unary_instruction(FILE *out,
@@ -1365,6 +1513,9 @@ int mir_emit_homed_unary_instruction(FILE *out,
             label = new_label();
             fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
             fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n", label, label);
+        } else if (type_size(insn->type) == 1 &&
+                   !mir_value_is_normalized_byte(insn->src1, insn->type, 0)) {
+            mir_emit_byte_extension(out, MIR_COLOR_HL, insn->type);
         }
     } else if (insn->immediate == '+') {
         /* Unary plus: no-op. */

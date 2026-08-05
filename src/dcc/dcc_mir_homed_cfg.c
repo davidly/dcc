@@ -138,8 +138,8 @@ static int mir_homed_wide_binary_only_constant(int value)
 static int mir_homed_reject(const char *reason)
 {
     if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
-        fprintf(stderr, "; MIR homed function=%s reject=%s\n",
-                mir.name, reason);
+        fprintf(stderr, "; MIR homed function=%s reject=%s spills=%d\n",
+                mir.name, reason, mir.allocation_spill_count);
     return 0;
 }
 
@@ -497,6 +497,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     int last_insn_is_return;
     int shared_epilogue_label = -1;
     int i;
+    int value;
     int accepted = 0;
     /* Wide integer values are retained only when the pair allocator finds a
      * zero-spill assignment. This first two-pair slice remains single-block
@@ -513,23 +514,29 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
      * return-value register to track, and MIR_CALL's own void handling
      * below (skip storing a result to home when the callee's type is
      * void) already establishes the pattern MIR_RETURN reuses. */
-    if (((mir.return_type & 15) != TYPE_INT &&
-         (mir.return_type & 15) != TYPE_VOID &&
-         !wide_return) ||
-        (!wide_return && type_size(mir.return_type) > 2)) {
+    if (type_ptr_depth(mir.return_type) == 0 &&
+        (mir.return_type & 15) != TYPE_VOID &&
+        (mir.return_type & 15) != TYPE_INT &&
+        !wide_return) {
         if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
             fprintf(stderr,
                     "; MIR homed-return-type function=%s type=%d size=%d\n",
                     mir.name, mir.return_type, type_size(mir.return_type));
         return mir_homed_reject("return-type");
     }
-    if (mir.allocation_spill_count != 0)
+    if (mir.allocation_spill_count > 1)
         return mir_homed_reject("spill");
-    /* Homed values need no virtual spill frame, but address-taken locals
-     * still require their original IX-relative storage. Keep the first
-     * rollout within the selector's signed-byte addressing range; the shared
-     * home prologue reserves this exact effective local depth. */
-    if (mir_effective_local_bytes() > 120)
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir_home_spill_offset(value, NULL)) {
+            const struct MirInsn *definition = mir_definition(value);
+            if (definition == NULL || type_size(definition->type) > 2)
+                return mir_homed_reject("spill-type");
+        }
+    /* Address-taken locals and the bounded scalar spill slot share the
+     * IX-relative frame. Keep both within the selector's signed-byte
+     * addressing range. */
+    if (mir_effective_local_bytes() +
+            2 * mir.allocation_spill_count > 120)
         return mir_homed_reject("frame-size");
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -565,7 +572,13 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 return mir_homed_reject("wide-binary");
             has_wide = 1;
         }
-        if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
+        if (insn->opcode == MIR_PHI &&
+            (mir_home_spill_offset(insn->dst, NULL) ||
+             mir_home_spill_offset(insn->src1, NULL) ||
+             mir_home_spill_offset(insn->src2, NULL)))
+            return mir_homed_reject("spill-phi");
+        if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0 &&
+            !mir_home_spill_offset(insn->dst, NULL))
             return mir_homed_reject("uncolored-value");
         switch (insn->opcode) {
         case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
@@ -602,7 +615,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_ADDRESS:
-            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+            if (mir_value_only_used_by_absolute_access(
+                    insn->dst,
+                    mir_homed_constant_absolute_access_supported))
                 break;
             {
                 /* Item 16 (mir-migration-plan-to-100pct.md): address-of a
@@ -874,6 +889,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
 
     uses_iy = mir_home_uses_iy();
     frameless = !uses_iy && mir_effective_local_bytes() == 0 &&
+                mir.allocation_spill_count == 0 &&
                 !mir_homed_requires_ix_frame();
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_PARAM &&
@@ -1081,7 +1097,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_MEMBER_ADDRESS:
-            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+            if (mir_value_only_used_by_absolute_access(
+                    insn->dst,
+                    mir_homed_constant_absolute_access_supported))
                 break;
             if (!mir_emit_pointer_offset_address_to_home(
                     out, insn->dst, insn->src1, insn->immediate))
@@ -1092,8 +1110,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 const struct MirInsn *index_definition =
                     mir_definition(insn->src2);
                 long byte_offset;
-                if (mir_value_only_used_by_constant_absolute_address(
-                        insn->dst))
+                if (mir_value_only_used_by_absolute_access(
+                        insn->dst,
+                        mir_homed_constant_absolute_access_supported))
                     break;
                 if (index_definition != NULL &&
                     index_definition->opcode == MIR_CONST) {
@@ -1666,7 +1685,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * loads HL:DE instead of just HL, matching the calling
              * convention mir_emit_virtual_load_wide already establishes
              * for the spilled-scalar-cfg selector. */
-            if ((mir.return_type & 15) != TYPE_VOID) {
+            if (type_ptr_depth(mir.return_type) > 0 ||
+                (mir.return_type & 15) != TYPE_VOID) {
                 if (type_is_long(mir.return_type) &&
                     type_size(mir.return_type) == 4) {
                     if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
@@ -1735,6 +1755,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             mir_stream_instruction_count(mir.capture_stream) - 2 &&
         mir_stream_size(out) * 50L >
             mir_stream_size(mir.capture_stream) * 47L)
+        goto done;
+    if (mir.allocation_spill_count != 0 &&
+        (mir_cfg_block_count() > 4 ||
+         mir_stream_size(out) >= mir_stream_size(mir.capture_stream) ||
+         mir_stream_instruction_count(out) >
+             mir_stream_instruction_count(mir.capture_stream)))
         goto done;
     accepted = 1;
 done:
