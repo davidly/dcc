@@ -33,8 +33,11 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
+static int mir_constant_absolute_access_supported(const struct MirInsn *insn);
+static int mir_value_only_used_by_constant_absolute_address(int value);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
+static int mir_spilled_cfg_used_constant_index_absolute;
 
 static int mir_virtual_offset(int value)
 {
@@ -364,6 +367,12 @@ static int mir_can_forward_hl_to_next(int value)
         } else {
             return 0;
         }
+    } else if (next->opcode == MIR_STORE_INDIRECT &&
+               next->src2 == value &&
+               mir_constant_absolute_access_supported(next)) {
+        /* A direct absolute store consumes its value without first loading
+         * the address into HL, so an immediately preceding producer can
+         * forward HL exactly like it can for MIR_STORE. */
     } else if (next->src1 != value)
             return 0;
     switch (next->opcode) {
@@ -2426,6 +2435,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_call_only_constant(value) ||
                                         mir_binary_only_constant(value) ||
                                         mir_index_only_constant(value) ||
+                                        mir_value_only_used_by_constant_absolute_address(value) ||
                                         mir_multiply_by_small_constant(value) ||
                                         (fused_away != NULL && fused_away[value]) ||
                                         mir_value_is_selfstore_incdec(value) ||
@@ -4003,6 +4013,214 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     return 0;
 }
 
+/* Resolve the narrow absolute-addressing shape already optimized by the
+ * legacy AST backend: a global/extern object's address followed by constant
+ * member offsets and/or fixed-stride constant indexes. Genuine external
+ * references with a nonzero addend are excluded because Link-80 mis-relocates
+ * EXTRN+offset. */
+static int mir_resolve_constant_absolute_address(
+    int value, const struct MirInsn **base_out, int *storage_out,
+    long *offset_out)
+{
+    const struct MirInsn *definition;
+    struct Sym *global;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long member_offset = 0;
+
+    definition = mir_definition(value);
+    while (definition != NULL) {
+        if (definition->opcode == MIR_MEMBER_ADDRESS) {
+            member_offset += definition->immediate;
+            definition = mir_definition(definition->src1);
+            continue;
+        }
+        if (definition->opcode == MIR_INDEX_ADDRESS &&
+            definition->base_name[0] == 0) {
+            const struct MirInsn *index =
+                mir_definition(definition->src2);
+            if (index == NULL || index->opcode != MIR_CONST)
+                return 0;
+            member_offset += index->immediate * definition->immediate;
+            definition = mir_definition(definition->src1);
+            continue;
+        }
+        break;
+    }
+    if (definition == NULL || definition->opcode != MIR_ADDRESS ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        (memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN))
+        return 0;
+
+    member_offset += memory_offset;
+    global = find_global(definition->name);
+    if (memory_storage == SC_EXTERN && member_offset != 0 &&
+        (global == NULL || (global->needs_extrn && !global->is_defined)))
+        return 0;
+
+    *base_out = definition;
+    *storage_out = memory_storage;
+    *offset_out = member_offset;
+    return 1;
+}
+
+static int mir_constant_absolute_access_supported(const struct MirInsn *insn)
+{
+    const struct MirInsn *base;
+    int storage;
+    long offset;
+
+    return insn != NULL &&
+        (insn->opcode == MIR_LOAD_INDIRECT ||
+         insn->opcode == MIR_STORE_INDIRECT) &&
+        insn->bit_width == 0 &&
+        (insn->memory_size == 1 || insn->memory_size == 2) &&
+        mir_resolve_constant_absolute_address(
+            insn->src1, &base, &storage, &offset);
+}
+
+static int mir_constant_absolute_address_has_index(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    while (definition != NULL) {
+        if (definition->opcode == MIR_INDEX_ADDRESS)
+            return 1;
+        if (definition->opcode != MIR_MEMBER_ADDRESS)
+            return 0;
+        definition = mir_definition(definition->src1);
+    }
+    return 0;
+}
+
+/* True only when every use of an address value is another constant member
+ * step or a supported direct absolute load/store. This lets slot preparation
+ * and emission remove the complete dead address chain, not just optimize the
+ * final dereference while retaining its frame traffic. */
+static int mir_value_only_used_by_constant_absolute_address(int value)
+{
+    int instruction;
+    int found_use = 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src2 == value || mir_call_uses_value(insn, value))
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        found_use = 1;
+        if ((insn->opcode == MIR_MEMBER_ADDRESS ||
+             insn->opcode == MIR_INDEX_ADDRESS) &&
+            mir_value_only_used_by_constant_absolute_address(insn->dst))
+            continue;
+        if (mir_constant_absolute_access_supported(insn))
+            continue;
+        return 0;
+    }
+    return found_use;
+}
+
+static int mir_prepare_constant_absolute_operand(
+    FILE *out, int value, char *operand, size_t operand_size)
+{
+    const struct MirInsn *base;
+    struct Sym *global;
+    const char *assembly_name;
+    int storage;
+    long offset;
+    int written;
+
+    if (!mir_resolve_constant_absolute_address(
+            value, &base, &storage, &offset))
+        return 0;
+    global = find_global(base->name);
+    assembly_name = asm_name_for(
+        global != NULL ? sym_asm_name(global)
+                       : mir_declared_link_name(base->name));
+    if (storage == SC_EXTERN && mir_extrn_should_emit(global))
+        fprintf(out, "\textrn %s\n", assembly_name);
+    written = offset == 0
+        ? snprintf(operand, operand_size, "%s", assembly_name)
+        : snprintf(operand, operand_size, "%s%+ld", assembly_name, offset);
+    return written >= 0 && (size_t)written < operand_size;
+}
+
+static int mir_emit_constant_absolute_load(
+    FILE *out, const struct MirInsn *insn)
+{
+    char operand[160];
+
+    if (!mir_constant_absolute_access_supported(insn) ||
+        !mir_prepare_constant_absolute_operand(
+            out, insn->src1, operand, sizeof(operand)))
+        return 0;
+    if (mir_constant_absolute_address_has_index(insn->src1))
+        mir_spilled_cfg_used_constant_index_absolute = 1;
+    if (insn->memory_size == 1) {
+        fprintf(out, "\tld a,(%s)\n\tld l,a\n", operand);
+        if (type_is_bool(insn->type)) {
+            int end_label = new_label();
+            fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+            fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                    end_label, end_label);
+        } else if ((insn->type & TYPE_UNSIGNED) != 0) {
+            fputs("\tld h,0\n", out);
+        } else {
+            mir_emit_signed_byte_extend(out);
+        }
+    } else {
+        fprintf(out, "\tld hl,(%s)\n", operand);
+    }
+    mir_emit_virtual_store(out, insn->dst);
+    return 1;
+}
+
+static int mir_emit_constant_absolute_store(
+    FILE *out, const struct MirInsn *insn)
+{
+    char operand[160];
+
+    if (!mir_constant_absolute_access_supported(insn) ||
+        !mir_prepare_constant_absolute_operand(
+            out, insn->src1, operand, sizeof(operand)))
+        return 0;
+    if (mir_constant_absolute_address_has_index(insn->src1))
+        mir_spilled_cfg_used_constant_index_absolute = 1;
+    mir_emit_virtual_load(out, insn->src2);
+    if (insn->memory_size == 1)
+        fprintf(out, "\tld a,l\n\tld (%s),a\n", operand);
+    else
+        fprintf(out, "\tld (%s),hl\n", operand);
+    return 1;
+}
+
+static void mir_report_constant_absolute_addresses(void)
+{
+    int instruction;
+    int loads = 0;
+    int stores = 0;
+
+    if (getenv("DCC_MIR_ABSOLUTE_ADDRESS_REPORT") == NULL)
+        return;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (!mir_constant_absolute_access_supported(insn))
+            continue;
+        if (insn->opcode == MIR_LOAD_INDIRECT)
+            ++loads;
+        else
+            ++stores;
+    }
+    if (loads != 0 || stores != 0)
+        fprintf(stderr,
+                "; MIR absolute-address function=%s loads=%d stores=%d\n",
+                mir.name, loads, stores);
+}
+
 /* Item T85 (mir-text-size-plan.md): storage class + offset alone do not
  * uniquely identify a scalar memory location - two distinct top-level
  * (non-aggregate-field) globals both resolve to storage=SC_GLOBAL,
@@ -4265,6 +4483,11 @@ int mir_spilled_cfg_depends_on_dead_store_forwarding(void)
     return mir_spilled_cfg_used_dead_store_forwarding;
 }
 
+int mir_spilled_cfg_depends_on_constant_index_absolute(void)
+{
+    return mir_spilled_cfg_used_constant_index_absolute;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -4277,6 +4500,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
 
     mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
     mir_spilled_cfg_used_dead_store_forwarding = 0;
+    mir_spilled_cfg_used_constant_index_absolute = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
@@ -4294,6 +4518,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_backend_slots_skip_fused_comparisons = 1;
     frame_bytes = mir_current_frame_bytes();
     mir_backend_slots_skip_fused_comparisons = 0;
+    mir_report_constant_absolute_addresses();
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR scalar-cfg frame function=%s locals=%d original-locals=%d"
@@ -4635,6 +4860,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_ADDRESS:
             if (mir_address_is_single_call_argument(insn->dst))
                 break;
+            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
             {
             int memory_type;
             int memory_storage;
@@ -4678,6 +4905,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_MEMBER_ADDRESS:
+            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
             mir_emit_virtual_load(out, insn->src1);
             if (insn->immediate != 0)
                 fprintf(out, "\tld de,%ld\n\tadd hl,de\n", insn->immediate);
@@ -4687,6 +4916,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             {
             const struct MirInsn *index_definition =
                 mir_definition(insn->src2);
+            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
             if (insn->base_name[0] != 0) {
                 int stride_type;
                 int stride_storage;
@@ -4771,6 +5002,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_LOAD_INDIRECT:
+            if (mir_emit_constant_absolute_load(out, insn))
+                break;
             mir_emit_virtual_load(out, insn->src1);
             if (insn->memory_size == 4) {
                 fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
@@ -4999,6 +5232,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
             }
         case MIR_STORE_INDIRECT:
+            if (mir_emit_constant_absolute_store(out, insn))
+                break;
             if (insn->bit_width > 0) {
                 int shift;
                 mir_emit_virtual_load(out, insn->src2);

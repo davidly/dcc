@@ -1063,6 +1063,23 @@ static int mir_is_byte_profitable_single_block(long generated_size,
            generated_instructions <= captured_instructions + 3;
 }
 
+static int mir_is_profiled_slotless_two_block_win(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    /* The refreshed post-Phase-2 census found exactly three two-block
+     * candidates within this margin. The two add_string instances still
+     * require three backend slots and miscompile under forced acceptance;
+     * global_escape_store has no backend slots and is non-regressing in
+     * both modes (10 nopeep cycles faster, peep neutral). Slotlessness is
+     * the structural discriminator: the selector is not hiding unmodelled
+     * frame traffic behind a small assembly-text delta. */
+    return !mir.has_vla && mir_cfg_block_count() <= 2 &&
+           mir.backend_slot_count == 0 &&
+           generated_size <= captured_size + 10 &&
+           generated_instructions < captured_instructions;
+}
+
 static int mir_is_profiled_dead_suffix_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -1515,6 +1532,21 @@ void mir_end_function(void)
                      * to pay that unmodelled prologue/frame cost. */
                     fallback_reason = "dead-store-forwarding-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_constant_index_absolute() &&
+                         generated_instructions * 25L >
+                             captured_instructions * 24L)
+                    /* Constant-index absolute addressing can make the raw
+                     * MIR stream text-smaller while still leaving too much
+                     * generic scalar-CFG setup for dccpeep to recover.
+                     * Forced full-mode A/B of the exact newly admitted set
+                     * found two such near-cost cases: tc89init.main linked
+                     * 128 bytes larger, and too.test_dispatch_table was 50
+                     * peep cycles slower. Every non-regressing candidate
+                     * reduced raw instructions by at least 4.6%; require a
+                     * conservative 4% margin for this structurally distinct
+                     * class instead of naming either function. */
+                    fallback_reason = "absolute-index-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
                                                          mir.aggregate_temp_bytes == 0 &&
@@ -1571,6 +1603,10 @@ void mir_end_function(void)
                                                      generated_instructions,
                                                      captured_instructions) &&
                                                  !mir_is_byte_profitable_single_block(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
+                                                 !mir_is_profiled_slotless_two_block_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
                                                      captured_instructions) &&

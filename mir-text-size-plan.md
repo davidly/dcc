@@ -8691,3 +8691,95 @@ retaining `tdead.dd_decl`, `tfo.portable_filelen`, `tmirslot.cross_call`,
 removals. The final stack-check census is deterministic at 532/2125 (25.04%).
 All 19 apps selected by the hash-aware comparison pass focused full mode with
 zero regressions and 33 improvements.
+
+### Item T98: audit constant absolute-address chains
+
+Instrumented the spilled CFG backend with the diagnostic-only
+`DCC_MIR_ABSOLUTE_ADDRESS_REPORT` audit before changing emission. The audit
+recognizes global/extern address bases followed by constant member offsets and
+counts eligible one- and two-byte indirect accesses.
+
+Across the corpus it found 143 functions and 1,188 eligible accesses. Of
+those, 99 current text-size fallbacks account for 784 accesses. This confirmed
+that direct absolute addressing is a meaningful structural lever rather than a
+single-function special case.
+
+### Item T99: emit direct byte/word absolute accesses
+
+Added one shared absolute-chain resolver and reused it for indirect loads,
+stores, intermediate-address elimination, and backend-slot ownership. Eligible
+one- and two-byte operations now emit direct `SYMBOL+offset` accesses rather
+than materializing and spilling an address. Immediately preceding values may
+also forward directly from HL into an absolute store.
+
+The resolver removes every address-chain instruction only after proving all
+uses belong to the same resolved absolute chain. Global and extern symbols
+retain normal `EXTRN` handling. Nonzero addends on genuine extern definitions
+remain fallback because Link-80 does not preserve those relocations safely.
+Dead address-chain bookkeeping and the corresponding backend slots were
+removed rather than bypassed.
+
+This first slice added nine ordinary and nine stack-check selections.
+
+### Item T100: generalize to fixed-stride constant indexes
+
+Extended the same resolver to `MIR_INDEX_ADDRESS` only when the index is a
+constant and the byte stride is fixed. No second load/store implementation was
+introduced: member and index chains share one resolver and one use proof.
+
+The initial five-function rollout exposed two profitability failures:
+`tc89init.main` increased the linked peep image by 128 bytes and
+`too.test_dispatch_table` was 50 peep cycles slower. Added a structural cost
+gate for index-dependent candidates requiring at least a four-percent
+instruction reduction:
+
+`generated_instructions * 25 <= captured_instructions * 24`
+
+The safe slice retains `tcptrarr.main`, `tpostfld.main`, and
+`tsyntax.test_nested_static_initializers`.
+
+### Item T101: reject direct wide absolute accesses
+
+Implemented and measured direct 32-bit absolute accesses as a separate
+experiment. Although static instruction counts improved, each newly admitted
+function regressed a shipping metric:
+
+- `tc89flta.f_gv`
+- `tc89init.main`
+- `tcrcfix.init_crc_tbl`
+- `tinitreg.tglob`
+
+The wide implementation was reverted completely. Production direct absolute
+access remains restricted to one- and two-byte non-bitfield operations.
+
+### Item T102: sweep refreshed near misses
+
+Forced and measured the strongest refreshed near misses rather than relaxing
+the text-size gate generally:
+
+- `cint.add_string` and `cobint.add_string` miscompiled;
+- `attnc11.transposed_multiply_8x16` miscompiled;
+- `attnc11.attention_score_16` increased the linked peep image by 128 bytes;
+- `tforblk.param_shadow`, `tmirfast.dec_dead`, and `tmirfast.inc_dead` were
+  correct but slower than legacy;
+- `tpeepal.global_escape_store` was peep-neutral and ten nopeep cycles faster.
+
+Added one structural rule for the final case: no VLA, at most two CFG blocks,
+zero backend slots, generated text no more than ten bytes larger, and fewer
+generated instructions. It admits only `tpeepal.global_escape_store`.
+
+The previously proposed same-block address/value CSE is not an untried lever:
+Item T70 already showed that it lengthens live ranges, creates fixed moves and
+slots, and loses net coverage. It remains deferred until a different liveness
+model can avoid that failure mode.
+
+**Final validation**:
+
+- ordinary coverage: 542/2024 (26.78%), up 13 with zero removals from T97;
+- stack-check coverage: 545/2125 (25.65%), also up 13 with zero removals;
+- affected-app UBSan census: PASS for
+  `a1,cint,cobint,tcodegen,t2denum,tcptrarr,tlngfptr,tpostfld,tsyntax,tpeepal`;
+- focused full-mode runtime checks: PASS with no retained regression;
+- mandatory `runall.ps1 -Mode full -Extended`: PASS, 314 standard apps and
+  196 applicable extended tests, diagnostics and dccpeep fixtures, with zero
+  checked performance regressions.

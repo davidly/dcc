@@ -7,9 +7,10 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Batch 2 base: `07b7e71` (Item T86)
-- Ordinary-census coverage: **529/2024 functions (26.14%)**
-- Stack-check census coverage: **532/2125 functions (25.04%)**
+- Batch 3 base: `fae8e72` (Item T97)
+- Last committed ordinary coverage: **529/2024 functions (26.14%)**
+- Current ordinary coverage: **542/2024 functions (26.78%)**
+- Current stack-check coverage: **545/2125 functions (25.65%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -34,9 +35,24 @@ history preserves them.
 10. T97: add a measured dead-suffix profitability floor after the
     CI-equivalent gate exposed four weak-margin regressions.
 
-Batch 2 now contains eleven evidence-backed items, T87-T97. The next migration
-batch should start from a fresh impact-ranked census after this batch is
-published.
+Batch 2 contains eleven evidence-backed items, T87-T97.
+
+## Batch 3
+
+1. T98: audit constant absolute-address chains: 143 functions and 1,188
+   eligible accesses, including 99 text-size fallbacks.
+2. T99: add one shared resolver and direct one-/two-byte absolute loads and
+   stores, including safe intermediate-chain removal and HL forwarding.
+3. T100: extend the resolver to fixed-stride constant indexes, with a
+   four-percent instruction-margin gate after two measured regressions.
+4. T101: implement, measure, and fully revert 32-bit absolute accesses after
+   every newly admitted function regressed peep speed or linked size.
+5. T102: sweep refreshed near misses and admit only
+   `tpeepal.global_escape_store` under a slotless two-block structural gate.
+
+The exact-source ordinary census is 542/2024 and stack-check census is
+545/2125, both +13 with zero removals. The mandatory full+extended gate passes
+with zero checked regressions.
 
 ## Required process
 
@@ -60,5 +76,6 @@ published.
 - `cfg-backedge`: separate correctness project; three forced candidates are
   confirmed miscompilations.
 - Pointer-parameter eligibility: requires a per-reference-site classifier.
-- Same-block address/value CSE: high potential, but higher risk than the
-  object/backend-slot work.
+- Same-block address/value CSE: blocked/deferred by Item T70's negative
+  experiment; it lengthened live ranges, increased fixed moves/slots, and lost
+  net coverage. Revisit only with a materially different liveness/cost model.
