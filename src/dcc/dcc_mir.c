@@ -3419,6 +3419,25 @@ void mir_thread_jumps(void)
 }
 #undef MIR_THREAD_JUMPS_MAX_CHAIN
 
+static int mir_unary_is_representation_identity(
+    const struct MirInsn *insn, const struct MirInsn *source)
+{
+    int source_size;
+    int target_size;
+
+    if (insn == NULL || source == NULL ||
+        insn->opcode != MIR_UNARY || insn->immediate != 0 ||
+        type_is_struct_object(source->type) ||
+        type_is_struct_object(insn->type))
+        return 0;
+    source_size = type_size(source->type);
+    target_size = type_size(insn->type);
+    if (source->type == insn->type)
+        return source_size == 1 || source_size == 2 || source_size == 4;
+    return source_size == 2 && target_size == 2 &&
+           !type_is_float(source->type) && !type_is_float(insn->type);
+}
+
 void mir_resolve_deferred_metadata(void)
 {
 
@@ -3967,10 +3986,7 @@ void mir_resolve_deferred_metadata(void)
             !(insn->memory_flags == 512 && source != NULL &&
               source->type == insn->type))
             continue;
-        if (source == NULL || type_size(source->type) != 2 ||
-            type_size(insn->type) != 2 || type_is_float(source->type) ||
-            type_is_float(insn->type) || type_is_struct_object(source->type) ||
-            type_is_struct_object(insn->type))
+        if (!mir_unary_is_representation_identity(insn, source))
             continue;
         mir_replace_value_uses(insn->dst, insn->src1);
         insn->opcode = MIR_NOP;

@@ -18,6 +18,8 @@ history preserves them.
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
 - Batch 20 candidate ordinary coverage: **704/2022 functions (34.82%)**
 - Batch 20 candidate stack-check coverage: **713/2124 functions (33.57%)**
+- Batch 21 candidate ordinary coverage: **711/2022 functions (35.16%)**
+- Batch 21 candidate stack-check coverage: **720/2124 functions (33.90%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -579,6 +581,29 @@ population is led by 690 `text-size`, 138 `unary-not-cost`, 117
 49 `absolute-index-cost`, 47 `absolute-address-cost`, and 46
 `inline-substitution` functions.
 
+## Batch 21
+
+1. T184: canonicalize exact-type byte, long, unsigned-long, and float
+   conversion nodes before liveness and allocation. This extends the existing
+   word representation-identity repair without conflating signed and unsigned
+   wide types: exact 1/2/4-byte identities alias directly to their source,
+   while the established representation-compatible 16-bit rule remains
+   unchanged.
+
+The candidate ordinary census is **711/2022 (35.16%)**, +7 names and zero
+removals. The candidate stack-check census is **720/2124 (33.90%)**, also +7
+names and zero removals. Ordinary additions are `tfloat4.test_basic`,
+`tfloat4.test_long_float_mix`, `tfmadd.global_case`, `tpfio.main`,
+`tpostptr.check_i32`, `tpostptr.check_u32`, and `tret.main`; stack-check
+replaces `tfmadd.global_case` with `tunary.shui32`.
+
+The 16 affected apps pass focused full-mode validation with zero regressions
+and 56 checked cycle/size improvements. The refreshed ordinary rejection
+population is led by 688 `text-size`, 138 `unary-not-cost`, 117
+`dynamic-index-base-cost`, 65 `wide-constant-cost`, 62 `instruction-count`,
+49 `absolute-index-cost`, 47 `absolute-address-cost`, and 46
+`inline-substitution` functions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -624,9 +649,9 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T183 ordinary census is
-   led by 690 `text-size`, 138 `unary-not-cost`, 117
-   `dynamic-index-base-cost`, 69 `wide-constant-cost`, 62
+3. **Next structural priorities by impact:** the post-T184 ordinary census is
+   led by 688 `text-size`, 138 `unary-not-cost`, 117
+   `dynamic-index-base-cost`, 65 `wide-constant-cost`, 62
    `instruction-count`, 49 `absolute-index-cost`, 47
    `absolute-address-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared

@@ -9823,3 +9823,41 @@ The refreshed ordinary rejection population is led by 690 `text-size`, 138
 `unary-not-cost`, 117 `dynamic-index-base-cost`, 69 `wide-constant-cost`, 62
 `instruction-count`, 49 `absolute-index-cost`, 47 `absolute-address-cost`,
 and 46 `inline-substitution` functions.
+
+## Item T184: canonicalize exact-type non-word conversions (2026-08-06)
+
+A refreshed audit of all 690 remaining `text-size` fallbacks finds 312
+exact-type byte, long, unsigned-long, or float `MIR_UNARY op=0` conversions in
+74 functions across 52 apps. Deferred metadata repair already removes the
+equivalent 16-bit representation identity, but leaves these values live until
+allocation and emission. They consequently receive avoidable moves, stores,
+reloads, and backend slots.
+
+T184 centralizes the repair decision in one representation-identity predicate.
+Exact source and target types of size one, two, or four alias directly to the
+source value. The existing compatible 16-bit rule remains available for
+non-float word types, but wider signed/unsigned conversions require exact type
+equality so the source definition cannot erase the converted type used by
+later wide operations. The repair runs before liveness and allocation; no
+selector-specific exception or profitability gate is needed.
+
+For `tpostptr.check_i32`, removing two exact long identities reduces generated
+output from 832 bytes/79 instructions to 687 bytes/66 instructions, versus
+legacy's 692 bytes/66 instructions, and cuts allocator moves from nine to
+five.
+
+**Census and focused validation**:
+
+- ordinary: **711/2022 (35.16%)**, +7 names and zero removals;
+- stack-check: **720/2124 (33.90%)**, +7 names and zero removals;
+- ordinary additions: `tfloat4.test_basic`, `tfloat4.test_long_float_mix`,
+  `tfmadd.global_case`, `tpfio.main`, `tpostptr.check_i32`,
+  `tpostptr.check_u32`, and `tret.main`;
+- stack-check substitutes `tunary.shui32` for `tfmadd.global_case`;
+- all 16 affected apps pass focused full peep/nopeep validation with zero
+  regressions and 56 checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 688 `text-size`, 138
+`unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 62
+`instruction-count`, 49 `absolute-index-cost`, 47 `absolute-address-cost`,
+and 46 `inline-substitution` functions.
