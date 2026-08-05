@@ -7,10 +7,10 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `cfb17da` (Item T122)
-- Published ordinary coverage: **570/2022 functions (28.19%)**
-- Current ordinary coverage: **573/2022 functions (28.34%)**
-- Current stack-check coverage: **579/2124 functions (27.26%)**
+- Published baseline: `245aa92` (Items T123-T132)
+- Published ordinary coverage: **573/2022 functions (28.34%)**
+- Batch 7 ordinary coverage: **583/2021 functions (28.85%)**
+- Batch 7 stack-check coverage: **589/2123 functions (27.74%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -151,6 +151,36 @@ indexing also replaces the existing spilled selection for `t2denum.main` with
 faster homed output. The 11-app peep/nopeep focused run passes with zero
 regressions.
 
+## Batch 7
+
+1. T133: measure and revert rematerializable-wide-constant coloring after it
+   moves two functions past the selector gate but leaves both roughly twice
+   the legacy instruction count.
+2. T134: move constant absolute-address resolution, chain validation, and
+   operand formatting from the spilled backend into the shared emitter module;
+   reuse it to fold homed global/member/constant-index word accesses and omit
+   their now-dead address chains.
+3. T135: retain the call-heavy comparison gate generally, but allow the
+   measured direct-absolute-dependent, at-most-four-block shape. Broader
+   candidates either miscompile, regress, or reach the separate backedge gate.
+4. T136: add direct byte absolute stores only for single-block functions.
+   Exact-upstream validation rejected byte loads and larger byte-access CFGs
+   after `tbool` and `tlongidx` showed three cycle regressions.
+
+The ordinary census is **583/2021 (28.85%)**, +10 accepted names and zero
+accepted removals. The stack-check census is **589/2123 (27.74%)**, also +10
+with zero accepted removals. The one-row denominator reduction is the legacy
+fallback `tcodegen.scnt`, which is no longer reported after the surrounding
+speculative-codegen choice changes; it is not a lost MIR function. Additions
+in both configurations are `cint.acc`, `cint.expr_stmt`, `cint.need`,
+`cint.return_stmt`, `cint.statement`, `cobint.stmt_for_para_i`,
+`cobint.tpeek`, `tc99init.main`, `tcodegen.scod`, and `tcodegen.srdy`.
+
+The mandatory full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps, diagnostics,
+dccpeep fixtures, extended tests, and both performance modes passed with zero
+regressions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -188,16 +218,19 @@ regressions.
 Continue the approved phased roadmap rather than restarting prioritization:
 
 1. **Phase 3 - expanded:** two-pair wide allocation, non-helper operations,
-   constants, and wide homed-vs-spilled arbitration are complete. The next
-   wide slice is values crossing helper calls, which requires explicit
-   clobber-aware splitting or spill/reload rather than wider coloring.
+   constants, and wide homed-vs-spilled arbitration are complete.
+   Rematerializable-wide-constant coloring was measured and rejected at T133.
+   Revisit helper-crossing wide values only when diagnostics identify a real
+   `cross-call` population; the current 23 `wide-color` rejects all report
+   `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** remeasure the post-T122 rejection
-   population, then prioritize helper-call wide splits and the largest
-   zero-spill selector/profitability classes. Float/non-scalar returns and
-   repeated general comparisons remain known classes. Dynamic constant-stride
-   indexing is now active, while runtime VLA strides remain deferred.
+3. **Next structural priorities by impact:** the post-T136 census is led by
+   997 `text-size`, 84 `instruction-count`, 81 `selector`, 68
+   `absolute-address-cost`, and 56 `absolute-index-cost` fallbacks. Profile
+   the largest zero-spill homed candidates that already emit but lose to
+   spilled output, then attack one repeated instruction pattern rather than
+   widening a final cost gate. Float/non-scalar returns remain a known class.
    Do not remove the repeated-load/comparison gate until speculative selector
    state is fully transactional.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's

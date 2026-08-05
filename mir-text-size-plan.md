@@ -9009,3 +9009,71 @@ The next batch should investigate helper-clobber-aware wide live-range
 splitting and the remaining high-impact spill/return/opcode classes. Do not
 retry broad repeated-comparison admission until speculative selector state is
 fully transactional.
+
+## Items T133-T136: shared absolute addressing for homed emission (2026-08-15)
+
+A fresh ordinary census started at **573/2022 (28.34%)**. The leading
+rejections were 997 `text-size`, 94 `instruction-count`, 81 `selector`, 75
+`absolute-address-cost`, and 56 `absolute-index-cost` functions. Direct
+assembly inspection found that the spilled backend already folded constant
+global/member/index address chains, while the homed backend duplicated the
+address construction and used an indirect access.
+
+The spilled backend's private absolute resolver, chain-use checks, constant
+index detection, and operand formatter now live in the shared emitter module.
+Both backends use that one implementation. The homed backend omits eligible
+dead `MIR_ADDRESS`/`MIR_MEMBER_ADDRESS`/`MIR_INDEX_ADDRESS` chains and emits
+direct absolute word loads and stores with physical-overlap-aware preservation.
+External symbols with unsafe nonzero Link-80 relocation offsets remain
+excluded.
+
+The fold exposed call-heavy comparison candidates. Forced full-mode A/B showed
+that a broad relaxation is unsound: `cint.add_expr` miscompiled,
+`cint.eq_expr` regressed, and pre-existing candidates in `00040b`, `tallocx`,
+and `tqsort` were mixed or slower. Production therefore retains the gate
+except for the measured structural class that depends on the homed constant-
+absolute fold and has at most four CFG blocks. This admits `cint.expr_stmt`
+and `cint.return_stmt`. Four other correctness-clean candidates proceed to the
+separate `cfg-backedge` gate and remain fallback; that gate still masks three
+confirmed loop miscompilations and was not weakened.
+
+Direct byte absolute access was then measured separately. The first version
+admitted four more functions, but exact-upstream validation found regressions
+in `tbool.check_globals` and `tlongidx.main`: +100 peep cycles for `tbool` and
++166 peep/+11 nopeep cycles for `tlongidx`. The final structural policy admits
+only single-block direct byte stores. This retains `tcodegen.scod` and
+`tcodegen.srdy`, whose containing app improves 1.71% peep and 2.06% nopeep,
+while byte loads, larger CFGs, and generic byte-indirect access remain
+fallback.
+
+Two negative experiments were fully reverted:
+
+- excluding rematerializable wide constants from the coloring probe moved
+  `pre_bump_i32` and `pre_drop_i32` to homed candidates but left them at 69
+  instructions versus 36 for legacy;
+- broad call-heavy comparison admission either miscompiled, regressed, or
+  merely exposed the independent backedge gate.
+
+**Census and validation**:
+
+- ordinary: **583/2021 (28.85%)**, +10 accepted names and zero accepted
+  removals;
+- stack-check: **589/2123 (27.74%)**, +10 accepted names and zero accepted
+  removals;
+- both configurations add `cint.acc`, `cint.expr_stmt`, `cint.need`,
+  `cint.return_stmt`, `cint.statement`, `cobint.stmt_for_para_i`,
+  `cobint.tpeek`, `tc99init.main`, `tcodegen.scod`, and `tcodegen.srdy`;
+- the one-row denominator reduction is fallback-only `tcodegen.scnt`, omitted
+  by the census after the surrounding speculative-codegen choice changes;
+- a final bug-focused review found no correctness defects;
+- the mandatory unthrottled full+extended gate passed against upstream ntvcm
+  `e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps,
+  diagnostics, dccpeep fixtures, extended tests, and both performance modes
+  passed with zero regressions.
+
+The next impact-ranked slice should profile the largest zero-spill homed
+candidates that already emit but lose to spilled or legacy output. Current
+ordinary fallbacks are led by 997 `text-size`, 84 `instruction-count`, 81
+`selector`, 68 `absolute-address-cost`, and 56 `absolute-index-cost`
+functions. Helper-crossing wide splitting is not currently evidence-backed:
+all 23 inspected `wide-color` rejects report `cross-call=0`.

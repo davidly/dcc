@@ -346,6 +346,11 @@ int mir_fold_constant_compare(int op, long left, long right,
 int mir_general_comparison_count(void);
 int mir_home_color_live_across(int instruction, int color);
 int mir_home_uses_iy(void);
+int mir_constant_absolute_access_supported(const struct MirInsn *insn);
+int mir_constant_absolute_address_has_index(int value);
+int mir_value_only_used_by_constant_absolute_address(int value);
+int mir_prepare_constant_absolute_operand(
+    FILE *out, int value, char *operand, size_t operand_size);
 int mir_object_is_fully_promoted(int object);
 const char *mir_opcode_name(int opcode);
 int mir_phi_source_for_edge(const struct MirInsn *phi,
@@ -361,6 +366,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out);
 int mir_cfg_block_count(void);
 int mir_homed_cfg_depends_on_word_store(void);
 int mir_homed_cfg_depends_on_dynamic_index(void);
+int mir_homed_cfg_depends_on_constant_absolute(void);
 long mir_stream_size(FILE *stream);
 int mir_stream_instruction_count(FILE *stream);
 int mir_try_emit_homed_scalar_dag(FILE *out);

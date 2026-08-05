@@ -171,6 +171,28 @@ int mir_homed_cfg_depends_on_dynamic_index(void)
     return 0;
 }
 
+static int mir_homed_constant_absolute_access_supported(
+    const struct MirInsn *insn)
+{
+    if (!mir_constant_absolute_access_supported(insn))
+        return 0;
+    if (insn->memory_size != 1)
+        return 1;
+    return insn->opcode == MIR_STORE_INDIRECT &&
+        mir_cfg_block_count() == 1;
+}
+
+int mir_homed_cfg_depends_on_constant_absolute(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_homed_constant_absolute_access_supported(
+                &mir.insns[instruction]))
+            return 1;
+    return 0;
+}
+
 static int mir_homed_requires_ix_frame(void)
 {
     int instruction;
@@ -361,6 +383,80 @@ static int mir_emit_homed_wide_indirect_store(FILE *out,
     return 1;
 }
 
+static int mir_emit_homed_constant_absolute_load(
+    FILE *out, const struct MirInsn *insn)
+{
+    char operand[160];
+    int instruction = (int)(insn - mir.insns);
+    int preserve_hl_de = mir_home_color_live_across(
+        instruction, MIR_COLOR_HL_DE);
+    int preserve_hl = !preserve_hl_de &&
+        mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+
+    if (!mir_prepare_constant_absolute_operand(
+            out, insn->src1, operand, sizeof(operand)))
+        return 0;
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_hl)
+        fputs("\tpush hl\n", out);
+    if (insn->memory_size == 1) {
+        fprintf(out, "\tld a,(%s)\n\tld l,a\n", operand);
+        if (type_is_bool(insn->type)) {
+            int end_label = new_label();
+            fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+            fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                    end_label, end_label);
+        } else if ((insn->type & TYPE_UNSIGNED) != 0) {
+            fputs("\tld h,0\n", out);
+        } else {
+            mir_emit_signed_byte_extend(out);
+        }
+    } else {
+        fprintf(out, "\tld hl,(%s)\n", operand);
+    }
+    if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+        !mir_emit_hl_to_home(out, insn->dst))
+        return 0;
+    if (preserve_hl)
+        fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
+static int mir_emit_homed_constant_absolute_store(
+    FILE *out, const struct MirInsn *insn)
+{
+    char operand[160];
+    int instruction = (int)(insn - mir.insns);
+    int preserve_hl_de = mir_home_color_live_across(
+        instruction, MIR_COLOR_HL_DE);
+    int preserve_hl = !preserve_hl_de &&
+        mir.allocation_colors[insn->src2] != MIR_COLOR_HL &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+
+    if (!mir_prepare_constant_absolute_operand(
+            out, insn->src1, operand, sizeof(operand)))
+        return 0;
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_hl)
+        fputs("\tpush hl\n", out);
+    if (!mir_emit_home_to_hl(out, insn->src2))
+        return 0;
+    if (insn->memory_size == 1)
+        fprintf(out, "\tld a,l\n\tld (%s),a\n", operand);
+    else
+        fprintf(out, "\tld (%s),hl\n", operand);
+    if (preserve_hl)
+        fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
 static int mir_homed_is_single_call_boolean_phi(void)
 {
     int calls = 0;
@@ -506,6 +602,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_ADDRESS:
+            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
             {
                 /* Item 16 (mir-migration-plan-to-100pct.md): address-of a
                  * scalar object, mirroring mir_scalar_memory_location's
@@ -573,24 +671,26 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_LOAD_INDIRECT:
             /* Dereference an arbitrary homed pointer. Word, bitfield, and
              * wide loads share the spilled emitter's width rules. */
-            if (type_is_struct_object(insn->type) ||
+            if (!mir_homed_constant_absolute_access_supported(insn) &&
+                (type_is_struct_object(insn->type) ||
                 (insn->bit_width > 0 && insn->memory_size != 2) ||
                 !((type_size(insn->type) == 2 &&
                    (insn->memory_size == 0 || insn->memory_size == 2)) ||
                   (type_is_long(insn->type) &&
                    type_size(insn->type) == 4 &&
-                   insn->memory_size == 4)))
+                   insn->memory_size == 4))))
                 return mir_homed_reject("indirect-load-type");
             break;
         case MIR_STORE_INDIRECT:
             /* Write through an arbitrary homed pointer. Word, bitfield, and
              * wide stores mirror the spilled backend's width rules. */
-            if ((insn->bit_width > 0 && insn->memory_size != 2) ||
+            if (!mir_homed_constant_absolute_access_supported(insn) &&
+                ((insn->bit_width > 0 && insn->memory_size != 2) ||
                 !((insn->memory_size == 0 || insn->memory_size == 2) ||
                   (insn->memory_size == 4 &&
                    mir_definition(insn->src2) != NULL &&
                    type_is_long(mir_definition(insn->src2)->type) &&
-                   type_size(mir_definition(insn->src2)->type) == 4)))
+                   type_size(mir_definition(insn->src2)->type) == 4))))
                 return mir_homed_reject("indirect-store-type");
             break;
         case MIR_COPY_AGGREGATE:
@@ -981,6 +1081,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_MEMBER_ADDRESS:
+            if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
             if (!mir_emit_pointer_offset_address_to_home(
                     out, insn->dst, insn->src1, insn->immediate))
                 goto done;
@@ -990,6 +1092,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 const struct MirInsn *index_definition =
                     mir_definition(insn->src2);
                 long byte_offset;
+                if (mir_value_only_used_by_constant_absolute_address(
+                        insn->dst))
+                    break;
                 if (index_definition != NULL &&
                     index_definition->opcode == MIR_CONST) {
                     byte_offset =
@@ -1040,6 +1145,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int instruction;
                 int preserve_hl_de;
                 int preserve_hl;
+                if ((insn->memory_size == 1 || insn->memory_size == 2) &&
+                    mir_homed_constant_absolute_access_supported(insn)) {
+                    if (!mir_emit_homed_constant_absolute_load(out, insn))
+                        goto done;
+                    break;
+                }
                 if (insn->memory_size == 4) {
                     if (!mir_emit_homed_wide_indirect_load(out, insn))
                         goto done;
@@ -1076,6 +1187,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int preserve_hl_de;
                 int preserve_hl;
                 int preserve_de;
+                if ((insn->memory_size == 1 || insn->memory_size == 2) &&
+                    mir_homed_constant_absolute_access_supported(insn)) {
+                    if (!mir_emit_homed_constant_absolute_store(out, insn))
+                        goto done;
+                    break;
+                }
                 if (insn->memory_size == 4) {
                     if (!mir_emit_homed_wide_indirect_store(out, insn))
                         goto done;

@@ -1878,7 +1878,9 @@ void mir_end_function(void)
                      * for this structurally distinct class. */
                     fallback_reason = "dynamic-index-cost";
                 else if (!strcmp(selector_name, "homed-scalar-cfg") &&
-                         mir_is_call_heavy_general_compare())
+                         mir_is_call_heavy_general_compare() &&
+                         !(mir_homed_cfg_depends_on_constant_absolute() &&
+                           mir_cfg_block_count() <= 4))
                     fallback_reason = "call-heavy-general-compare";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
