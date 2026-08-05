@@ -9,8 +9,8 @@ history preserves them.
 - Branch: `perf/unified-regalloc`
 - Batch 3 base: `fae8e72` (Item T97)
 - Last committed ordinary coverage: **529/2024 functions (26.14%)**
-- Current ordinary coverage: **542/2024 functions (26.78%)**
-- Current stack-check coverage: **545/2125 functions (25.65%)**
+- Current ordinary coverage: **534/2024 functions (26.38%)**
+- Current stack-check coverage: **537/2125 functions (25.27%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -49,10 +49,13 @@ Batch 2 contains eleven evidence-backed items, T87-T97.
    every newly admitted function regressed peep speed or linked size.
 5. T102: sweep refreshed near misses and admit only
    `tpeepal.global_escape_store` under a slotless two-block structural gate.
+6. T103: reproduce five CI-only performance regressions with the exact
+   upstream ntvcm revision and add a 6% byte-and-instruction margin for
+   member-only absolute addressing.
 
-The exact-source ordinary census is 542/2024 and stack-check census is
-545/2125, both +13 with zero removals. The mandatory full+extended gate passes
-with zero checked regressions.
+The exact-source ordinary census is 534/2024 and stack-check census is
+537/2125, both +5 with zero removals. The focused and mandatory full+extended
+CI-equivalent gates pass with zero checked regressions.
 
 ## Required process
 
@@ -68,6 +71,8 @@ with zero checked regressions.
   ```
 
 - Validate with the current `davidly/ntvcm` `main` revision used by CI.
+- Confirm the resolved local `ntvcm` revision matches upstream before treating
+  a performance run as the pre-commit gate.
 - Push published batches to `origin` (`davidly/dcc`), not the fork.
 - Leave unrelated `.vscode/settings.json` changes untouched.
 

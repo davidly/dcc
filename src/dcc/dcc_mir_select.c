@@ -1547,6 +1547,25 @@ void mir_end_function(void)
                      * class instead of naming either function. */
                     fallback_reason = "absolute-index-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_constant_absolute() &&
+                         !mir_spilled_cfg_depends_on_constant_index_absolute() &&
+                         !mir_is_profiled_slotless_two_block_win(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         (generated_size * 50L > captured_size * 47L ||
+                          generated_instructions * 50L >
+                              captured_instructions * 47L))
+                    /* CI-equivalent ntvcm profiling found that the weak
+                     * member-only absolute-address additions could improve
+                     * static text while regressing one shipping mode. Require
+                     * at least a 6% reduction in both the assembly-text proxy
+                     * and instructions. This also keeps the same functions
+                     * selected with and without stack checking. The separately
+                     * measured constant-index and slotless two-block
+                     * populations retain their own structural profitability
+                     * rules above. */
+                    fallback_reason = "absolute-address-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
                                                          mir.aggregate_temp_bytes == 0 &&

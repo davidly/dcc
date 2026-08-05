@@ -37,6 +37,7 @@ static int mir_constant_absolute_access_supported(const struct MirInsn *insn);
 static int mir_value_only_used_by_constant_absolute_address(int value);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
+static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
 
 static int mir_virtual_offset(int value)
@@ -4157,6 +4158,7 @@ static int mir_emit_constant_absolute_load(
         !mir_prepare_constant_absolute_operand(
             out, insn->src1, operand, sizeof(operand)))
         return 0;
+    mir_spilled_cfg_used_constant_absolute = 1;
     if (mir_constant_absolute_address_has_index(insn->src1))
         mir_spilled_cfg_used_constant_index_absolute = 1;
     if (insn->memory_size == 1) {
@@ -4187,6 +4189,7 @@ static int mir_emit_constant_absolute_store(
         !mir_prepare_constant_absolute_operand(
             out, insn->src1, operand, sizeof(operand)))
         return 0;
+    mir_spilled_cfg_used_constant_absolute = 1;
     if (mir_constant_absolute_address_has_index(insn->src1))
         mir_spilled_cfg_used_constant_index_absolute = 1;
     mir_emit_virtual_load(out, insn->src2);
@@ -4488,6 +4491,11 @@ int mir_spilled_cfg_depends_on_constant_index_absolute(void)
     return mir_spilled_cfg_used_constant_index_absolute;
 }
 
+int mir_spilled_cfg_depends_on_constant_absolute(void)
+{
+    return mir_spilled_cfg_used_constant_absolute;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -4500,6 +4508,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
 
     mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
     mir_spilled_cfg_used_dead_store_forwarding = 0;
+    mir_spilled_cfg_used_constant_absolute = 0;
     mir_spilled_cfg_used_constant_index_absolute = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)

@@ -8773,13 +8773,45 @@ Item T70 already showed that it lengthens live ranges, creates fixed moves and
 slots, and loses net coverage. It remains deferred until a different liveness
 model can avoid that failure mode.
 
-**Final validation**:
+**Initial local result, superseded by Item T103**:
 
 - ordinary coverage: 542/2024 (26.78%), up 13 with zero removals from T97;
 - stack-check coverage: 545/2125 (25.65%), also up 13 with zero removals;
 - affected-app UBSan census: PASS for
   `a1,cint,cobint,tcodegen,t2denum,tcptrarr,tlngfptr,tpostfld,tsyntax,tpeepal`;
-- focused full-mode runtime checks: PASS with no retained regression;
-- mandatory `runall.ps1 -Mode full -Extended`: PASS, 314 standard apps and
-  196 applicable extended tests, diagnostics and dccpeep fixtures, with zero
-  checked performance regressions.
+- focused full-mode runtime checks and the mandatory full+extended suite passed
+  against local ntvcm `92ff088`, but that emulator was stale and did not match
+  CI's upstream revision.
+
+### Item T103: narrow member-only rollout under CI-equivalent ntvcm
+
+The first published T98-T102 commit exposed five checked performance
+regressions in GitHub Actions because the local validation accidentally used
+stale ntvcm `92ff088`; CI built current upstream ntvcm `e47c9cd`. Rebuilt that
+exact revision locally and reproduced all five:
+
+- `cint` peep: +297 cycles;
+- `a1` peep: +31 cycles;
+- `cobint` nopeep: +17,003 cycles;
+- `tcodegen` peep/nopeep: +148/+115 cycles.
+
+Forced-fallback A/B implicated weak-margin member-only absolute-address
+promotions. Added a separate structural dependency signal and profitability
+gate requiring at least a 6% reduction in both assembly-text proxy bytes and
+instructions. Constant-index candidates retain their measured 4% instruction
+gate, and the slotless two-block candidate retains its independent predicate.
+The threshold selects the same member population with and without stack
+checking and admits no previously emitted regression.
+
+**Final exact-source census**:
+
+- ordinary coverage: 534/2024 (26.38%), up 5 with zero removals from T97;
+- stack-check coverage: 537/2125 (25.27%), also up 5 with zero removals;
+- newly emitted in both configurations: `cint.alloc_global`,
+  `tcptrarr.main`, `tpeepal.global_escape_store`, `tpostfld.main`, and
+  `tsyntax.test_nested_static_initializers`;
+- focused full-mode validation against ntvcm `e47c9cd`: PASS with zero
+  regressions and 14 improvements;
+- mandatory `runall.ps1 -Mode full -Extended` against ntvcm `e47c9cd`: PASS,
+  314 standard apps and 196 applicable extended tests, diagnostics and
+  dccpeep fixtures, with zero checked performance regressions.
