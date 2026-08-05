@@ -7,17 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `7c8529c` (Items T159-T163)
-- Published ordinary coverage: **638/2021 functions (31.57%)**
-- Published stack-check coverage: **645/2123 functions (30.38%)**
+- Published baseline: `fa1021d` (Items T164-T166)
+- Published ordinary coverage: **654/2021 functions (32.36%)**
+- Published stack-check coverage: **661/2123 functions (31.14%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
-- Batch 15 candidate ordinary coverage: **654/2021 functions (32.36%)**
-- Batch 15 candidate stack-check coverage: **661/2123 functions (31.14%)**
+- Batch 16 candidate ordinary coverage: **659/2022 functions (32.59%)**
+- Batch 16 candidate stack-check coverage: **666/2124 functions (31.36%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -435,6 +435,36 @@ removals. Both configurations add `adaint.need_word`, `adaint.xcalloc`,
 The affected-app full peep/nopeep run passes with zero regressions and 30
 checked improvements.
 
+## Batch 16
+
+1. T167: extend zero-spill homed 4-byte values to conservative single-block
+   float arithmetic, float constants, and representation-preserving float
+   unary identity. The implementation reuses the established wide-pair and
+   runtime-helper contracts rather than adding a parallel float emitter.
+2. T168: add direct global/extern 4-byte named loads and stores for both long
+   and float values, plus 4-byte float indirect loads and stores. Named memory
+   uses the existing resolved type and pair-home preservation machinery.
+3. T169: fuse the exact adjacent `c + a*b` float shape to `__fmaf` when the
+   multiply is the addition's right operand and has one use. The spilled
+   backend elides the intermediate multiply slot and emits one runtime call.
+4. T170: measure broader FMA fusion and retain only the legacy-compatible
+   orientation and adjacency. Symmetric `(a*b)+c` newly linked the sizeable
+   `__fmaf` runtime block and regressed `tfloat4`; nonadjacent interval
+   extension added no accepted functions.
+5. T171: measure and remove zero-yield 16-to-32-bit multiply fusion, homed
+   float comparisons, and float unary negation. Minimal float identity remains
+   because it is required by `tc89flta.f_st`.
+
+The ordinary census is **659/2022 (32.59%)**, +5 names and zero removals.
+The stack-check census is **666/2124 (31.36%)**, also +5 names and zero
+removals. Both configurations add `tc89flta.f_gv`, `tc89flta.f_st`,
+`tfmadd.local_case`, `tfpspec.madd`, and
+`tlongopt.ret_global_live_add`. The denominator increase is a reporting
+consequence of `tc89flta.f_gv` becoming reportable, not a lost MIR function.
+
+The affected-app full peep/nopeep run passes with zero regressions and 13
+checked improvements.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -480,9 +510,9 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T166 ordinary census is
-   led by 829 `text-size`, 140 `unary-not-cost`, 74 `instruction-count`,
-   70 `wide-constant-cost`, 54 `absolute-address-cost`,
+3. **Next structural priorities by impact:** the post-T171 ordinary census is
+   led by 827 `text-size`, 140 `unary-not-cost`, 74 `instruction-count`,
+   69 `wide-constant-cost`, 54 `absolute-address-cost`,
    50 `absolute-index-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared
    improvement. The `unary-not-cost` and `wide-constant-cost` populations are

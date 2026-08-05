@@ -9563,3 +9563,55 @@ The refreshed ordinary rejection population is led by 829 `text-size`, 140
 `inline-substitution` functions. Continue shared emitter improvements from
 the `text-size` population; the rejected paired forwarding, zero-yield wide
 truth test, and measured cost buckets are not safe coverage shortcuts.
+
+## Items T167-T171: zero-spill wide homes and float multiply-add fusion (2026-08-08)
+
+T167 extends zero-spill homed 4-byte values to conservative single-block float
+arithmetic. Float constants load through the existing wide-pair constant
+emitter, and representation-preserving unary identity reuses one shared
+predicate in the common emitter. The implementation deliberately does not
+duplicate the wide move, preservation, or runtime-helper contracts.
+
+T168 adds direct global/extern 4-byte named loads and stores for both long and
+float values. Loads use `ld hl,(name)` / `ld de,(name+2)` and stores use the
+corresponding direct pair writes while preserving live pair homes. The same
+preflight admits 4-byte float indirect loads and stores; local wide frame
+memory remains outside this slice.
+
+T169 fuses an adjacent float multiply-add to `__fmaf` for the exact
+legacy-compatible `c + a*b` shape. The multiply must immediately precede the
+addition, be its right operand, and have one use. Slot planning marks the
+intermediate multiply result as fused away; emission pushes the addend and
+first multiplicand, leaves the second multiplicand in DE:HL, calls `__fmaf`,
+and stores only the final result.
+
+T170 measures broader FMA scope. Symmetric `(a*b)+c` fusion is semantically
+valid but newly links the sizeable `__fmaf` runtime block and regresses
+`tfloat4`; nonadjacent interval extension changes no accepted function.
+Both experiments were removed, retaining only the orientation and adjacency
+already used by legacy code generation.
+
+T171 measures three other wide extensions. Consecutive 16-to-32-bit
+cast/multiply fusion to `__m1s`/`__m1u`, homed float comparisons, and float
+unary negation change no accepted corpus output and were removed. Minimal
+float identity support remains because `tc89flta.f_st` depends on it.
+
+**Census and focused validation**:
+
+- ordinary: **659/2022 (32.59%)**, +5 names and zero removals;
+- stack-check: **666/2124 (31.36%)**, +5 names and zero removals;
+- common additions: `tc89flta.f_gv`, `tc89flta.f_st`,
+  `tfmadd.local_case`, `tfpspec.madd`, and
+  `tlongopt.ret_global_live_add`;
+- the denominator increase is a reporting consequence of
+  `tc89flta.f_gv` becoming reportable, not an accepted-function removal;
+- the affected-app full peep/nopeep run passes with zero regressions and 13
+  checked improvements.
+
+The refreshed ordinary rejection population is led by 827 `text-size`, 140
+`unary-not-cost`, 74 `instruction-count`, 69 `wide-constant-cost`, 54
+`absolute-address-cost`, 50 `absolute-index-cost`, and 46
+`inline-substitution` functions. Continue zero-spill-first shared-emitter
+work from the remaining `text-size` population; the rejected broad FMA,
+widened multiply, float comparison, and float-negation experiments are not
+coverage shortcuts.

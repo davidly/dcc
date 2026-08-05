@@ -1432,6 +1432,19 @@ static int mir_value_is_normalized_byte(int value, int type, int depth)
     return 0;
 }
 
+int mir_float_identity_unary(const struct MirInsn *insn)
+{
+    const struct MirInsn *source;
+
+    if (insn == NULL || insn->opcode != MIR_UNARY ||
+        (insn->immediate != 0 && insn->immediate != '+'))
+        return 0;
+    source = mir_definition(insn->src1);
+    return source != NULL && type_is_float(source->type) &&
+           type_is_float(insn->type) && type_size(source->type) == 4 &&
+           type_size(insn->type) == 4;
+}
+
 int mir_emit_homed_unary_instruction(FILE *out,
                                             const struct MirInsn *insn)
 {
@@ -1468,7 +1481,8 @@ int mir_emit_homed_unary_instruction(FILE *out,
             dst_color != MIR_COLOR_HL_DE &&
             mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
-        if (type_is_float(source_type) || type_is_float(insn->type))
+        if ((type_is_float(source_type) || type_is_float(insn->type)) &&
+            !mir_float_identity_unary(insn))
             return 0;
         if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
         if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
@@ -1480,7 +1494,9 @@ int mir_emit_homed_unary_instruction(FILE *out,
         } else if (!mir_emit_home_to_hl(out, insn->src1)) {
             return 0;
         }
-        if (insn->immediate == 0) {
+        if (mir_float_identity_unary(insn)) {
+            /* The value already has the target representation. */
+        } else if (insn->immediate == 0) {
             if (!mir_emit_cast(out, source_type, insn->type))
                 return 0;
         } else if (insn->immediate == '+') {

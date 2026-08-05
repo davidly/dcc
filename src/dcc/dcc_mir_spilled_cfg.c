@@ -29,6 +29,8 @@
 #include "dcc_mir_internal.h"
 
 static int mir_binary_is_fusable_comparison(int i);
+static int mir_float_madd_match(int add_index, int *multiply_index,
+                                int *addend_value);
 static int mir_unary_is_fusable_not_branch(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
@@ -2481,6 +2483,11 @@ static int mir_prepare_backend_slots(void)
                 fused_away[mir.insns[i + 1].dst] = 1;
             if (mir_unary_is_fusable_not_branch(i))
                 fused_away[mir.insns[i].dst] = 1;
+            {
+                int multiply_index;
+                if (mir_float_madd_match(i, &multiply_index, NULL))
+                    fused_away[mir.insns[multiply_index].dst] = 1;
+            }
         }
     }
     for (value = 0; value < mir.next_value; ++value) {
@@ -3619,6 +3626,48 @@ static int mir_binary_is_fusable_comparison(int i)
         mir.insns[i + 2].src1 == next->dst)
         return 2;
     return 0;
+}
+
+static int mir_float_madd_match(int add_index, int *multiply_index,
+                                int *addend_value)
+{
+    const struct MirInsn *add;
+    const struct MirInsn *multiply;
+    int candidate;
+    int addend;
+
+    if (add_index <= 0 || add_index >= mir.count)
+        return 0;
+    add = &mir.insns[add_index];
+    if (add->opcode != MIR_BINARY || add->immediate != '+' ||
+        !type_is_float(add->type) ||
+        !type_is_float(add->secondary_offset) ||
+        type_size(add->secondary_offset) != 4)
+        return 0;
+    candidate = add_index - 1;
+    multiply = &mir.insns[candidate];
+    addend = add->src1;
+    if (multiply->opcode != MIR_BINARY || multiply->immediate != '*' ||
+        !type_is_float(multiply->type) ||
+        !type_is_float(multiply->secondary_offset) ||
+        type_size(multiply->secondary_offset) != 4 ||
+        mir_value_use_count(multiply->dst) != 1 ||
+        add->src2 != multiply->dst)
+        return 0;
+    if (multiply_index != NULL)
+        *multiply_index = candidate;
+    if (addend_value != NULL)
+        *addend_value = addend;
+    return 1;
+}
+
+static int mir_float_multiply_is_fused(int multiply_index)
+{
+    int matched_multiply;
+
+    return multiply_index + 1 < mir.count &&
+           mir_float_madd_match(multiply_index + 1, &matched_multiply, NULL) &&
+           matched_multiply == multiply_index;
 }
 
 static int mir_unary_is_fusable_not_branch(int i)
@@ -5642,6 +5691,22 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_BINARY:
             {
             int selfstore_store_index;
+            int multiply_index;
+            int addend_value;
+            if (mir_float_multiply_is_fused(i))
+                break;
+            if (mir_float_madd_match(i, &multiply_index, &addend_value)) {
+                const struct MirInsn *multiply = &mir.insns[multiply_index];
+                mir_emit_virtual_load_wide(out, addend_value);
+                fputs("\tpush de\n\tpush hl\n", out);
+                mir_emit_virtual_load_wide(out, multiply->src1);
+                fputs("\tpush de\n\tpush hl\n", out);
+                mir_emit_virtual_load_wide(out, multiply->src2);
+                mir_emit_runtime_call(out, "__fmaf");
+                fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+                mir_emit_virtual_store_wide(out, insn->dst);
+                break;
+            }
             if (mir_binary_is_selfstore_incdec(i, &selfstore_store_index)) {
                 int memory_type, memory_storage, memory_offset;
                 mir_scalar_memory_location(mir_definition(insn->src1),
