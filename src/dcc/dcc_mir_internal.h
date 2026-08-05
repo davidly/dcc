@@ -339,6 +339,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out);
 int mir_try_emit_homed_scalar_dag(FILE *out);
 int mir_try_emit_scalar_dag(FILE *out);
 int mir_try_emit_spilled_scalar_cfg(FILE *out);
+int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
 int mir_value_use_count(int value);

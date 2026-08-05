@@ -33,6 +33,8 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
+static int mir_forward_skip_last_skipped_dead_store;
+static int mir_spilled_cfg_used_dead_store_forwarding;
 
 static int mir_virtual_offset(int value)
 {
@@ -168,9 +170,14 @@ static int mir_const_is_transparent_zero_index_operand(int instruction)
  * intervening call). */
 static int mir_instruction_is_transparent_dead_store(int instruction)
 {
-    return mir.insns[instruction].opcode == MIR_STORE &&
-           (mir_object_is_fully_promoted(mir.insns[instruction].object) ||
-            mir_store_is_dead(instruction));
+    int transparent =
+        mir.insns[instruction].opcode == MIR_STORE &&
+        (mir_object_is_fully_promoted(mir.insns[instruction].object) ||
+         mir_store_is_dead(instruction));
+
+    if (transparent)
+        mir_forward_skip_last_skipped_dead_store = 1;
+    return transparent;
 }
 
 static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
@@ -178,6 +185,7 @@ static int mir_forward_skip_target_ex(int instruction, int *out_skipped_label)
     int next_instruction = instruction + 1;
     int skipped_label = 0;
 
+    mir_forward_skip_last_skipped_dead_store = 0;
     for (;;) {
         while (next_instruction < mir.count &&
                (mir.insns[next_instruction].opcode == MIR_NOP ||
@@ -273,6 +281,8 @@ static int mir_can_forward_hl_de_to_next(int value)
             mir_call_uses_value(insn, value))
             return 0;
     }
+    if (mir_forward_skip_last_skipped_dead_store)
+        mir_spilled_cfg_used_dead_store_forwarding = 1;
     return 1;
 }
 
@@ -456,6 +466,8 @@ static int mir_can_forward_hl_to_next(int value)
             mir_call_uses_value(insn, value))
             return 0;
     }
+    if (mir_forward_skip_last_skipped_dead_store)
+        mir_spilled_cfg_used_dead_store_forwarding = 1;
     return 1;
 }
 
@@ -1401,6 +1413,7 @@ static int mir_call_argument_after_nops(int instruction)
 {
     int index = instruction + 1;
 
+    mir_forward_skip_last_skipped_dead_store = 0;
     while (index < mir.count &&
            (mir.insns[index].opcode == MIR_NOP ||
             mir_instruction_is_transparent_dead_store(index)))
@@ -1436,6 +1449,8 @@ static int mir_can_forward_hl_to_call_argument(int value)
             mir.insns[instruction].src2 == value)
             return 0;
     }
+    if (mir_forward_skip_last_skipped_dead_store)
+        mir_spilled_cfg_used_dead_store_forwarding = 1;
     return 1;
 }
 
@@ -1473,6 +1488,8 @@ static int mir_can_forward_hl_to_call_argument_first_use(int value)
          call_insn->opcode != MIR_CALL_AGGREGATE) ||
         call_insn->secondary_offset != arg_insn->secondary_offset)
         return 0;
+    if (mir_forward_skip_last_skipped_dead_store)
+        mir_spilled_cfg_used_dead_store_forwarding = 1;
     return 1;
 }
 
@@ -1841,16 +1858,33 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
  * wide operand across evaluating the second, matching legacy instruction-
  * for-instruction) already matches legacy byte-for-byte. This is the
  * exact same reservation/emission mismatch class as Item T59's
- * mir_call_argument_slot_forwardable fix, one level up for wide values. */
+ * mir_call_argument_slot_forwardable fix, one level up for wide values.
+ *
+ * Item T86 narrows the reservation skip to the measured-profitable
+ * integer-long direct-return shape. Float conversions and wide
+ * intermediates consumed by MIR_UNARY were correct but slower under the
+ * CI emulator, so they retain a slot and stay behind the cost gate. */
 static int mir_wide_backend_slot_forwardable(int value, int units,
                                               int instruction)
 {
+    const struct MirInsn *definition;
+    const struct MirInsn *next;
+    int next_instruction;
     int saved_index;
     int forwardable;
 
     if (units != 2)
         return 0;
     if (mir.insns[instruction].opcode == MIR_PHI)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL || !type_is_long(definition->type))
+        return 0;
+    next_instruction = mir_forward_skip_target(instruction);
+    if (next_instruction >= mir.count)
+        return 0;
+    next = &mir.insns[next_instruction];
+    if (next->opcode != MIR_RETURN || next->src1 != value)
         return 0;
     saved_index = mir_emit_instruction_index;
     mir_emit_instruction_index = instruction;
@@ -4061,6 +4095,11 @@ int mir_current_frame_bytes(void)
            2 * mir_prepare_backend_slots();
 }
 
+int mir_spilled_cfg_depends_on_dead_store_forwarding(void)
+{
+    return mir_spilled_cfg_used_dead_store_forwarding;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -4072,6 +4111,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int shared_epilogue_label = -1;
 
     mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
+    mir_spilled_cfg_used_dead_store_forwarding = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
@@ -4119,6 +4159,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         default:
             return mir_scalar_cfg_preflight_reject("opcode", i);
         }
+
         if (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE ||
             insn->opcode == MIR_PARAM || insn->opcode == MIR_ADDRESS) {
             int memory_type;

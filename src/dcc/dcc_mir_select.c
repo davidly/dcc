@@ -1447,6 +1447,19 @@ void mir_end_function(void)
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_dead_store_forwarding() &&
+                         mir.local_bytes + mir.aggregate_temp_bytes > 0 &&
+                         mir.backend_slot_count > 0 &&
+                         (generated_size > captured_size ||
+                          generated_instructions >
+                              captured_instructions - 4))
+                    /* Dead-store forwarding can expose a smaller instruction
+                     * stream while leaving both promoted-object frame bytes
+                     * and a separate backend slot allocated. Until those
+                     * overlapping homes are coalesced, require enough margin
+                     * to pay that unmodelled prologue/frame cost. */
+                    fallback_reason = "dead-store-forwarding-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
                                                          mir.aggregate_temp_bytes == 0 &&

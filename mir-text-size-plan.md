@@ -8407,3 +8407,58 @@ instead of a bare storage/offset comparison.
 `MIR_STORE` case's T84 re-arm branch and `MIR_BINARY`'s new selfstore-
 incdec-global re-arm branch both now call the shared helper instead of a
 bare storage/offset comparison).
+
+### Item T86: restore the profitability gate under the CI emulator (2026-08-05)
+
+**Context**: the Batch-1 milestone run was initially performed with a stale
+local `ntvcm` checkout (`92ff088`), while CI always checks out the current
+`davidly/ntvcm` `main` (`e47c9cd` for run 30990085760). The older emulator's
+cycle totals made every affected app appear 16-31% faster. Reproducing the
+workflow with CI's exact emulator revision exposed six real checked-baseline
+regressions: `tctxflt` peep/nopeep and `tvlax` peep/nopeep from T79, plus
+`tmirslot` peep and `tforblk` peep from T83. Correctness, diagnostics,
+dccpeep fixtures, and the extended suite had all passed; only the performance
+gate failed.
+
+**Root causes / fix**:
+- T79's reservation-time wide forwarding admitted every two-unit value that
+  `mir_can_forward_hl_de_to_next` could carry, but its measured profitable
+  population was only integer `long` results returned directly. The broader
+  predicate also promoted `tctxflt.tf_ret` (integer-to-float conversion) and
+  `tvlax.addr_of` (pointer-to-long intermediary before narrowing); those hot
+  functions regressed both output modes. `mir_wide_backend_slot_forwardable`
+  now requires a non-float `long` definition whose immediate real consumer is
+  its matching `MIR_RETURN`. This retains the measured wins
+  (`tlngfptr.add`, `tlngfptr.subtract`, `tlong.lsum`) and returns the two
+  slower shapes to transactional fallback.
+- T83's dead-store forwarding let `tmirslot.cross_call` and
+  `tforblk.param_shadow` pass broad near-cost/byte-profitable exceptions even
+  though both still allocate legacy local-object bytes *and* separate MIR
+  backend slots. `cross_call` pays for a four-byte frame where legacy needs
+  two; `param_shadow` pays the 27-cycle large-frame prologue for eight bytes
+  where legacy's four `dec sp` instructions cost 24 cycles. Until promoted
+  object homes and backend slots can be coalesced, the selector records only
+  successful forwarding decisions that actually crossed a dead `MIR_STORE`;
+  candidates in that class with both local bytes and backend slots now require
+  generated output no larger than captured output and at least a four-
+  instruction margin. The other seven T83 promotions retain sufficient
+  margin and remain active.
+
+**Validation**:
+- Per-commit replay under `ntvcm e47c9cd` isolated T79 as the source of the
+  four `tctxflt`/`tvlax` regressions and T83 as the source of the two
+  `tmirslot`/`tforblk` regressions.
+- Focused CI-equivalent full-mode validation on
+  `tforblk,tctxflt,tmirslot,tvlax,tlngfptr,tlong`: **PASS**, zero regressions;
+  the retained long-return population improves `tlngfptr` in both modes and
+  `tlong` nopeep, while the remaining T83 population improves `tmirslot` in
+  both modes.
+- Whole-corpus census: only the four proven-slower functions return to
+  fallback (`tctxflt.tf_ret`, `tvlax.addr_of`, `tmirslot.cross_call`,
+  `tforblk.param_shadow`); coverage is 524/2023 (25.90%). This is intentional:
+  correct-but-slower output remains fallback until its overlapping frame homes
+  are coalesced.
+
+**Process correction**: all future performance validation must use the same
+`davidly/ntvcm` revision CI will build, not merely whichever `ntvcm` executable
+is first on the local `PATH`.
