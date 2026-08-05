@@ -40,10 +40,14 @@ static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
+static unsigned char *mir_backend_slot_accessed;
 
 static int mir_virtual_offset(int value)
 {
     int slot = value;
+    if (mir_backend_slot_accessed != NULL &&
+        value >= 0 && value < mir.next_value)
+        mir_backend_slot_accessed[value] = 1;
     if (value >= 0 && value < mir.next_value && mir.backend_slots != NULL &&
         mir.backend_slots[value] >= 0)
         slot = mir.backend_slots[value];
@@ -2036,10 +2040,11 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
  * exact same reservation/emission mismatch class as Item T59's
  * mir_call_argument_slot_forwardable fix, one level up for wide values.
  *
- * Item T86 narrows the reservation skip to the measured-profitable
- * integer-long direct-return shape. Float conversions and wide
- * intermediates consumed by MIR_UNARY were correct but slower under the
- * CI emulator, so they retain a slot and stay behind the cost gate. */
+ * Item T86 narrows the reservation skip to measured-profitable direct
+ * returns: every integer-long producer, plus float MIR_BINARY results.
+ * Float conversions and wide intermediates consumed by MIR_UNARY were
+ * correct but slower under the checked emulator, so they retain a slot
+ * and stay behind the cost gate. */
 static int mir_wide_backend_slot_forwardable(int value, int units,
                                               int instruction)
 {
@@ -2054,7 +2059,10 @@ static int mir_wide_backend_slot_forwardable(int value, int units,
     if (mir.insns[instruction].opcode == MIR_PHI)
         return 0;
     definition = mir_definition(value);
-    if (definition == NULL || !type_is_long(definition->type))
+    if (definition == NULL ||
+        (!type_is_long(definition->type) &&
+         !(type_is_float(definition->type) &&
+           definition->opcode == MIR_BINARY)))
         return 0;
     next_instruction = mir_forward_skip_target(instruction);
     if (next_instruction >= mir.count)
@@ -2497,6 +2505,13 @@ static int mir_prepare_backend_slots(void)
      * assertion-helper family (50+ functions sharing the same shape) and
      * is the same class of dead-slot waste as the already-known,
      * narrower Item T33 (wumpus.c's rndix). */
+    /* Batch 11 extends the same one-predicate discipline to two more
+     * emission/reservation mismatches. Deferred metadata can leave values
+     * defined by analysis-only MIR_NOP instructions, which emit no access,
+     * and mir_address_is_single_call_argument makes both the MIR_ADDRESS
+     * definition and its MIR_ARG consumer rematerialize without a slot.
+     * Reuse those existing structural facts here rather than reserving
+     * frame space that neither emission path can reference. */
     mir.backend_slot_count = 0;
     mir_slot_report_requested_count = 0;
     mir_slot_report_assigned_count = 0;
@@ -2510,6 +2525,8 @@ static int mir_prepare_backend_slots(void)
                 int reusable_source = -1;
                 ++mir_slot_report_requested_count;
                 if (last[value] <= first[value] ||
+                                        (definition != NULL &&
+                                         definition->opcode == MIR_NOP) ||
                                         mir_call_only_constant(value) ||
                                         mir_binary_only_constant(value) ||
                                         mir_index_only_constant(value) ||
@@ -2524,6 +2541,7 @@ static int mir_prepare_backend_slots(void)
                                                                                                             type_size(definition->type))) ||
                                         (type_size(definition->type) == 2 &&
                                          mir_load_is_single_indirect_call_target(value, 2)) ||
+                                        mir_address_is_single_call_argument(value) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
                                         mir_wide_backend_slot_forwardable(value, units, i) ||
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
@@ -2867,6 +2885,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
 {
     int has_slot;
     int forward_instruction;
+    int offset;
+    int iy_offset;
     if (mir_param_value_is_direct(value))
         /* mir-migration-plan-next10: nothing to store - later uses of this
          * value re-read it directly from its stable parameter home (see
@@ -2905,8 +2925,6 @@ static void mir_emit_virtual_store(FILE *out, int value)
         }
         return;
     }
-    int offset = mir_virtual_offset(value);
-    int iy_offset = mir_virtual_iy_offset(value);
     int forward_to_store = mir_can_forward_hl_to_next(value) &&
         forward_instruction < mir.count &&
         mir.insns[forward_instruction].opcode == MIR_STORE;
@@ -2938,6 +2956,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
             return;
         }
     }
+    offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
     {
@@ -3109,6 +3129,8 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
     int has_slot;
     int helper_consumer;
+    int offset;
+    int iy_offset;
     /* Item T35 (mir-text-size-plan.md): mirrors mir_emit_virtual_store's
      * own first-line check, now that Item T35's mir_object_eligible
      * relaxation lets a wide (4-byte) parameter actually have an object
@@ -3151,8 +3173,6 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
                    mir.backend_slots != NULL && mir.backend_slots[value] >= 0;
     if (!has_slot)
         return;
-    int offset = mir_virtual_offset(value);
-    int iy_offset = mir_virtual_iy_offset(value);
     int call_instruction = mir_call_argument_cache_target(value);
     if (call_instruction >= 0) {
         fputs("\texx\n", out);
@@ -3160,6 +3180,8 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         mir_cached_wide_call_instruction = call_instruction;
         return;
     }
+    offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
     mir_forwarded_wide_value = -1;
@@ -4552,6 +4574,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             (insn->immediate < -128 || insn->immediate + 1 > 127 ||
              (insn->secondary_offset != 2 && insn->secondary_offset != 4)))
             return mir_scalar_cfg_preflight_reject("va-arg", i);
+    }
+    if (getenv("DCC_MIR_UNUSED_SLOT_REPORT") != NULL &&
+        mir.next_value > 0) {
+        mir_backend_slot_accessed =
+            (unsigned char *)calloc((size_t)mir.next_value, 1);
+        if (mir_backend_slot_accessed == NULL)
+            fatal("out of memory allocating MIR slot access report");
     }
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
     if (labels == NULL)
@@ -6337,6 +6366,22 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     }
     accepted = 1;
 done:
+    if (accepted && mir_backend_slot_accessed != NULL)
+        for (i = 0; i < mir.next_value; ++i)
+            if (mir.backend_slots[i] >= 0 &&
+                !mir_backend_slot_accessed[i]) {
+                const struct MirInsn *definition = mir_definition(i);
+                fprintf(stderr,
+                        "; MIR unused-slot function=%s value=%d slot=%d "
+                        "definition=%s type-size=%d\n",
+                        mir.name, i, mir.backend_slots[i],
+                        definition != NULL
+                            ? mir_opcode_name(definition->opcode) : "none",
+                        definition != NULL
+                            ? type_size(definition->type) : 0);
+            }
+    free(mir_backend_slot_accessed);
+    mir_backend_slot_accessed = NULL;
     if (getenv("DCC_MIR_FUSE_REPORT") != NULL &&
         (mir_fuse_report_fused_count > 0 ||
          mir_fuse_report_materialized_count > 0))

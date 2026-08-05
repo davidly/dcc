@@ -1285,6 +1285,28 @@ static int mir_dead_suffix_layout_is_profitable(
     return 1;
 }
 
+/* The duplicate trailing epilogue was removed before its temporary size
+ * compensation could be retired safely. Forced full-app A/B now admits the
+ * no-PHI, multi-block slice only when real emitted bytes and instructions
+ * both beat legacy. The constant-absolute and eight-byte near margins are
+ * the measured boundary that adds cint.find_sym, tchess.ch_bk_move,
+ * tcodegen.tchk2, and tgoto.gt_switch while retaining compensation for the
+ * slower PHI, one-block wide, and comparison-branch alternatives. */
+static int mir_is_profiled_elided_epilogue_win(
+    const char *selector_name, long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return !strcmp(selector_name, "spilled-scalar-cfg") &&
+           !mir_has_phi_instruction() &&
+           mir_cfg_block_count() > 2 &&
+           generated_size <= captured_size &&
+           generated_instructions <= captured_instructions &&
+           (mir_spilled_cfg_depends_on_constant_absolute() ||
+            generated_size +
+                    mir_spilled_scalar_cfg_elided_epilogue_bytes >
+                captured_size - 8);
+}
+
 static int mir_is_profiled_constant_bound_loop_pair(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -1725,22 +1747,19 @@ void mir_end_function(void)
             }
             if (emitted) {
                 generated_size = mir_stream_size(generated);
-                if (!strcmp(selector_name, "spilled-scalar-cfg") &&
-                    mir_spilled_scalar_cfg_elided_epilogue_bytes > 0 &&
-                    generated_size >= 0)
-                    /* mir-migration-plan-next10 Item 3: restore the byte
-                     * count the acceptance gate would have seen before the
-                     * dead trailing epilogue was deduplicated, so this
-                     * unrelated dead-code removal cannot newly promote a
-                     * function that only cleared the gate because of its
-                     * savings (skill rule 1). The real emitted stream
-                     * `generated` is left untouched and still
-                     * deduplicated. */
-                    generated_size += mir_spilled_scalar_cfg_elided_epilogue_bytes;
                 captured_size = mir_stream_size(mir.capture_stream);
-                generated_instructions = mir_stream_instruction_count(generated);
+                generated_instructions =
+                    mir_stream_instruction_count(generated);
                 captured_instructions =
                     mir_stream_instruction_count(mir.capture_stream);
+                if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                    mir_spilled_scalar_cfg_elided_epilogue_bytes > 0 &&
+                    generated_size >= 0 &&
+                    !mir_is_profiled_elided_epilogue_win(
+                        selector_name, generated_size, captured_size,
+                        generated_instructions, captured_instructions))
+                    generated_size +=
+                        mir_spilled_scalar_cfg_elided_epilogue_bytes;
                 fallback_reason = NULL;
                 {
                     const char *forced_function =

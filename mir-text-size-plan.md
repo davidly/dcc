@@ -9285,3 +9285,68 @@ The refreshed ordinary rejection population is led by 1,040 `text-size`, 81
 47 `inline-substitution` functions. The next batch should mine repeated
 spilled-emitter instruction patterns in that population; the former
 analysis-only `selector` bucket is no longer hiding real causes.
+
+## Items T149-T152: measured backend-slot and epilogue costs (2026-08-07)
+
+An audit of `mir_prepare_backend_slots()` against actual spilled-emitter
+accesses found three reservation/emission mismatches. A new opt-in
+`DCC_MIR_UNUSED_SLOT_REPORT` diagnostic records assigned values whose slot is
+never referenced by the completed selector stream. Offset accounting occurs
+only after forwarding and register-cache decisions, so speculative offset
+calculations do not hide dead slots.
+
+First, the wide direct-return path already forwards DE:HL without touching its
+reserved frame home. Extending the existing reservation predicate to float
+`MIR_BINARY` results admits `pihex.eps`, `tfloat4.add3`, and
+`tfloat4.muladd`. Broad float admission was rejected: the unary/conversion
+result in `tctxflt.tf_ret` regressed both peep and nopeep. Float constants and
+call results added no census row.
+
+Second, deferred analysis leaves some value definitions as `MIR_NOP`, and
+local/parameter `MIR_ADDRESS` values used as one call argument are
+rematerialized by an existing shared predicate. Neither path emits a slot
+access, but both previously reserved frame space. Slot preparation now skips
+the NOP definitions and reuses `mir_address_is_single_call_argument()`.
+These changes add no accepted names directly, but improve already-MIR output;
+the focused NOP-slot run produced seven checked improvements and no
+regressions.
+
+The historical duplicate-epilogue cleanup still added the removed epilogue's
+size back into selector cost so that the cleanup could not itself widen
+coverage. Removing that compensation globally admitted 14 functions but
+caused 13 checked app/mode regressions, including one-block wide, PHI, and
+comparison-retry changes. Forced full-app A/B identified a monotonic slice:
+no phi, more than two blocks, real emitted bytes and instructions no worse
+than legacy, plus either constant-absolute dependency or an eight-byte near
+margin. Only that class retires the compensation. It adds `cint.find_sym`,
+`tchess.ch_bk_move`, `tcodegen.tchk2`, and `tgoto.gt_switch`; all affected
+apps improve or remain neutral in both modes.
+
+A simulated call-argument register-cache reservation pass was also rejected.
+Cache competition depends on which earlier definitions actually reach their
+store path; the approximation displaced 18 existing MIR functions. The
+emission-time cache remains unchanged.
+
+**Census and focused validation**:
+
+- ordinary: **615/2021 (30.43%)**, +7 names and zero removals;
+- ordinary additions: `cint.find_sym`, `pihex.eps`,
+  `tchess.ch_bk_move`, `tcodegen.tchk2`, `tfloat4.add3`,
+  `tfloat4.muladd`, and `tgoto.gt_switch`;
+- stack-check: **621/2123 (29.25%)**, +7 names and zero removals;
+- stack-check additions: `pihex.eps`, `tbug.swdf`, `tbug.swft`,
+  `tchess.ch_bk_move`, `tfloat4.add3`, `tfloat4.muladd`, and
+  `tgoto.gt_switch`;
+- focused full-mode validation against upstream ntvcm
+  `e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f` passes with zero regressions.
+
+The mandatory unthrottled full+extended gate passed against that same upstream
+revision: 314 runnable apps, diagnostics, dccpeep fixtures, extended tests,
+and both performance modes passed with zero regressions.
+
+The refreshed ordinary rejection population is led by 1,035 `text-size`, 79
+`absolute-address-cost`, 76 `instruction-count`, 58 `absolute-index-cost`, and
+47 `inline-substitution` functions. Continue mining actual unused-slot and
+repeated-emission patterns; do not widen float unary/conversion forwarding,
+simulate call-cache competition, or treat the three-function
+`cfg-backedge` correctness boundary as coverage headroom.

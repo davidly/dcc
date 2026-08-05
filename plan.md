@@ -13,6 +13,8 @@ history preserves them.
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
+- Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
+- Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -272,6 +274,41 @@ The mandatory full+extended gate passed against upstream ntvcm
 dccpeep fixtures, extended tests, and both performance modes passed with zero
 regressions.
 
+## Batch 11
+
+1. T149: omit dead backend slots for float `MIR_BINARY` results forwarded
+   directly to `MIR_RETURN`; float unary/conversion results remain excluded
+   after `tctxflt.tf_ret` regressed both modes.
+2. T150: add actual slot-access diagnostics and stop reserving slots for
+   values defined by `MIR_NOP`. This changes no coverage row but materially
+   improves several already-MIR apps.
+3. T151: reuse `mir_address_is_single_call_argument()` in slot preparation so
+   rematerialized local/parameter addresses no longer reserve unreachable
+   frame space.
+4. T152: retire duplicate-epilogue size compensation only for the measured
+   no-phi, multi-block, non-worse byte/instruction class. Broader removal
+   admitted 14 functions but regressed 13 app/mode measurements; the retained
+   slice adds four clean functions.
+
+The ordinary census is **615/2021 (30.43%)**, +7 names and zero removals:
+`cint.find_sym`, `pihex.eps`, `tchess.ch_bk_move`, `tcodegen.tchk2`,
+`tfloat4.add3`, `tfloat4.muladd`, and `tgoto.gt_switch`.
+
+The stack-check census is **621/2123 (29.25%)**, also +7 names and zero
+removals: `pihex.eps`, `tbug.swdf`, `tbug.swft`, `tchess.ch_bk_move`,
+`tfloat4.add3`, `tfloat4.muladd`, and `tgoto.gt_switch`.
+
+Rejected experiments include broad float unary/conversion slot elision,
+float constant/call return expansion (zero yield), simulated call-cache slot
+elision (18 accepted removals), and broad epilogue-compensation retirement
+(13 checked regressions). The exact affected full-mode sets pass with zero
+regressions.
+
+The mandatory full+extended gate passed against upstream ntvcm
+`e47c9cd34b7d309b7a1d8e7c4329e7672c0e9c9f`: 314 runnable apps, diagnostics,
+dccpeep fixtures, extended tests, and both performance modes passed with zero
+regressions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -317,12 +354,13 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T148 census is led by
-   1,040 `text-size`, 81 `absolute-address-cost`, 76 `instruction-count`,
+3. **Next structural priorities by impact:** the post-T152 census is led by
+   1,035 `text-size`, 79 `absolute-address-cost`, 76 `instruction-count`,
    58 `absolute-index-cost`, and 47 `inline-substitution` fallbacks. The stale
-   `selector` bucket is gone. Profile repeated spilled-emitter patterns in the
-   enlarged text-size population rather than widening a final cost gate.
-   Float/non-scalar returns remain a known class.
+   `selector` bucket is gone. Continue using the actual slot-access diagnostic
+   to find reservation/emission mismatches, but do not simulate register-cache
+   competition in slot preparation. Float unary/conversion returns remain a
+   measured unprofitable class.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and
