@@ -7,17 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `29363ca` (Items T156-T158)
-- Published ordinary coverage: **621/2021 functions (30.73%)**
-- Published stack-check coverage: **628/2123 functions (29.58%)**
+- Published baseline: `7c8529c` (Items T159-T163)
+- Published ordinary coverage: **638/2021 functions (31.57%)**
+- Published stack-check coverage: **645/2123 functions (30.38%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
-- Batch 14 candidate ordinary coverage: **638/2021 functions (31.57%)**
-- Batch 14 candidate stack-check coverage: **645/2123 functions (30.38%)**
+- Batch 15 candidate ordinary coverage: **654/2021 functions (32.36%)**
+- Batch 15 candidate stack-check coverage: **661/2123 functions (31.14%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -383,9 +383,10 @@ and 42 checked cycle/size improvements.
    broad multi-block scalar rematerialization was rejected after multiple
    runtime/size regressions.
 5. T163: rematerialize single-block 32-bit integer and float constants directly
-   into DE:HL. Candidates that depend on this optimization reject variadic
-   calls and require strictly smaller generated text. Precise dependency
-   tracking covers multiply consumers as well as ordinary wide loads.
+   into DE:HL. Candidates that depend on this optimization reject calls that
+   require hexadecimal or octal formatter runtime helpers and require strictly
+   smaller generated text. Precise dependency tracking covers multiply
+   consumers as well as ordinary wide loads.
 
 The candidate ordinary census is **638/2021 (31.57%)**, +17 names and zero
 removals. The candidate stack-check census is **645/2123 (30.38%)**, also +17
@@ -399,10 +400,40 @@ with zero removals. The common additions are `pint.factor`,
 `tvla.vla_sizeof_ternary`.
 
 Rejected wide experiments include ungated rematerialization, which exposed a
-variadic correctness failure and slower tiny long helpers, and multi-block
-rematerialization, whose three additions regressed `mm` and `tlongopt`.
-Focused full-mode validation of the retained slices passes with zero
-regressions and substantial peep/nopeep improvements.
+formatter-runtime correctness failure and slower tiny long helpers, and
+multi-block rematerialization, whose three additions regressed `mm` and
+`tlongopt`. Focused full-mode validation of the retained slices passes with
+zero regressions and substantial peep/nopeep improvements.
+
+## Batch 15
+
+1. T164: test paired boolean-result stack forwarding on the complete 15-function
+   `okb` population. Every function was correctness-clean and improved nopeep,
+   but every peep build regressed. The implementation and fixture were removed.
+2. T165: fuse a narrow logical-not used once by an immediately following
+   false branch. The spilled backend tests the source truth value directly,
+   elides the boolean result slot, and reuses the existing conditional
+   branch/phi-copy emitter. Production excludes a directly consumed variadic
+   call result, nested unary sources, candidates over 18 blocks, and candidates
+   without a ten-byte generated-size margin. Broad admission exposed 27
+   functions but regressed `tvariad`, `ttrig`, `cobint`, and `forint`; the
+   measured retained class adds 16 with zero removals. Wide-source fusion
+   changed no accepted function and was removed.
+3. T166: record actual variadic prototypes on MIR calls with dedicated flag
+   4096. Existing flags 32 and 64 mean that hexadecimal or octal formatter
+   runtime helpers are required; homed rejection and the established
+   wide-rematerialization gate now use formatter-runtime terminology.
+
+The ordinary census is **654/2021 (32.36%)**, +16 names and zero removals.
+The stack-check census is **661/2123 (31.14%)**, also +16 names and zero
+removals. Both configurations add `adaint.need_word`, `adaint.xcalloc`,
+`bint.need`, `bint.xcalloc`, `cint.init_state`, `cint.xcalloc`,
+`cobint.xcalloc`, `cpmenumd.main`, `fint.xcalloc`, `forint.xcalloc`,
+`pint.xcalloc`, `tc89flng.chk`, `tc89ini2.ck`, `tcodegen.tchk3`,
+`tctype.chk_int`, and `tvlax.ok`.
+
+The affected-app full peep/nopeep run passes with zero regressions and 30
+checked improvements.
 
 ## Required process
 
@@ -449,13 +480,13 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T163 ordinary census is
-   led by 956 `text-size`, 75 `instruction-count`,
-   74 `absolute-address-cost`, 70 `wide-constant-cost`,
-   54 `absolute-index-cost`, and 47 `inline-substitution` fallbacks. Re-bucket
+3. **Next structural priorities by impact:** the post-T166 ordinary census is
+   led by 829 `text-size`, 140 `unary-not-cost`, 74 `instruction-count`,
+   70 `wide-constant-cost`, 54 `absolute-address-cost`,
+   50 `absolute-index-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared
-   improvement. The new `wide-constant-cost` bucket is deliberately measured
-   fallback, not gate-removal headroom.
+   improvement. The `unary-not-cost` and `wide-constant-cost` populations are
+   deliberately measured fallback, not gate-removal headroom.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and

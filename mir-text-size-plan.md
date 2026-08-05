@@ -9484,8 +9484,9 @@ constants, loading DE:HL directly instead of reserving two frame units and
 storing the definition. Ungated measurement added 23 functions, but
 `tpfauto.main` failed correctness in a variadic call-heavy shape and several
 tiny `tlongopt` helpers regressed despite fewer raw instructions. Production
-therefore rejects rematerialization-dependent candidates containing variadic
-calls and requires generated text to be strictly smaller than legacy.
+therefore rejects rematerialization-dependent candidates containing calls that
+require hexadecimal or octal formatter runtime helpers and requires generated
+text to be strictly smaller than legacy.
 Dependency tracking excludes only values whose existing forwarding/dead-use
 path already removed the slot; a bug-focused review corrected wide multiply
 consumers so they cannot bypass this gate.
@@ -9518,3 +9519,47 @@ the remaining text-size population by repeated emitted pattern before the next
 batch. The new wide-cost population is measured fallback, not safe gate
 headroom; broad multi-block rematerialization and the backedge gate remain
 invalid coverage shortcuts.
+
+## Items T164-T166: logical-not branch fusion (2026-08-08)
+
+T164 tests paired boolean-result stack forwarding on the complete 15-function
+`okb` population. All functions are correctness-clean and improve nopeep, but
+all peep builds regress because the changed shape defeats established
+optimization. The implementation and temporary fixture were removed.
+
+T165 fuses a narrow `MIR_UNARY '!'` used once by an immediately following
+`MIR_BRANCH_FALSE`. Slot preparation marks the boolean result as fused away;
+emission loads and tests the source truth value directly, then uses the shared
+conditional-branch/phi-copy helper. The first unrestricted census added 27
+functions but full-mode validation regressed `tvariad`, `ttrig`, `cobint`, and
+`forint`. Forced fallback A/B isolated `cobint.keyword_code` and
+`forint.xstrdup2`, while the `xcalloc` additions remained clean. The retained
+structural policy excludes a directly consumed variadic-call result, nested
+unary sources, candidates over 18 blocks, and candidates without a ten-byte
+generated-size margin. Enabling wide source truth tests changed no accepted
+function and was removed rather than carrying zero-yield scope.
+
+T166 assigns MIR call flag 4096 to actual variadic prototypes. Existing flags
+32 and 64 do not mean variadic: they request hexadecimal or octal formatter
+runtime helpers. The homed rejection reason is now `format-runtime`, and the
+established wide-rematerialization profitability gate retains its measured
+formatter-runtime condition.
+
+**Census and focused validation**:
+
+- ordinary: **654/2021 (32.36%)**, +16 names and zero removals;
+- stack-check: **661/2123 (31.14%)**, +16 names and zero removals;
+- common additions: `adaint.need_word`, `adaint.xcalloc`, `bint.need`,
+  `bint.xcalloc`, `cint.init_state`, `cint.xcalloc`, `cobint.xcalloc`,
+  `cpmenumd.main`, `fint.xcalloc`, `forint.xcalloc`, `pint.xcalloc`,
+  `tc89flng.chk`, `tc89ini2.ck`, `tcodegen.tchk3`, `tctype.chk_int`, and
+  `tvlax.ok`;
+- the affected-app full peep/nopeep run passes with zero regressions and 30
+  checked improvements.
+
+The refreshed ordinary rejection population is led by 829 `text-size`, 140
+`unary-not-cost`, 74 `instruction-count`, 70 `wide-constant-cost`, 54
+`absolute-address-cost`, 50 `absolute-index-cost`, and 46
+`inline-substitution` functions. Continue shared emitter improvements from
+the `text-size` population; the rejected paired forwarding, zero-yield wide
+truth test, and measured cost buckets are not safe coverage shortcuts.

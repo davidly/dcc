@@ -845,8 +845,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                  * part of DCCRTL/BDOS) remains excluded here. */
                 if (is_indirect || callee == NULL)
                     return mir_homed_reject("call-target");
-                if ((insn->memory_flags & (32 | 64)) != 0)
-                    return mir_homed_reject("variadic-call");
+                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+                    return mir_homed_reject("format-runtime");
             }
             break;
         default:

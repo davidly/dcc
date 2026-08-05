@@ -29,6 +29,7 @@
 #include "dcc_mir_internal.h"
 
 static int mir_binary_is_fusable_comparison(int i);
+static int mir_unary_is_fusable_not_branch(int i);
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
@@ -43,6 +44,7 @@ static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
 static int mir_spilled_cfg_used_wide_constant_rematerialization;
+static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
 static unsigned char *mir_backend_slot_accessed;
@@ -2477,6 +2479,8 @@ static int mir_prepare_backend_slots(void)
                 fused_away[mir.insns[i].dst] = 1;
             if (skip == 2)
                 fused_away[mir.insns[i + 1].dst] = 1;
+            if (mir_unary_is_fusable_not_branch(i))
+                fused_away[mir.insns[i].dst] = 1;
         }
     }
     for (value = 0; value < mir.next_value; ++value) {
@@ -3617,6 +3621,39 @@ static int mir_binary_is_fusable_comparison(int i)
     return 0;
 }
 
+static int mir_unary_is_fusable_not_branch(int i)
+{
+    const struct MirInsn *candidate;
+    const struct MirInsn *candidate_source;
+    const struct MirInsn *insn;
+    const struct MirInsn *next;
+    int instruction;
+
+    if (i < 0 || i + 1 >= mir.count)
+        return 0;
+    for (instruction = 0; instruction + 1 < mir.count; ++instruction) {
+        candidate = &mir.insns[instruction];
+        if (candidate->opcode != MIR_UNARY ||
+            candidate->immediate != '!' ||
+            mir.insns[instruction + 1].opcode != MIR_BRANCH_FALSE ||
+            mir.insns[instruction + 1].src1 != candidate->dst)
+            continue;
+        candidate_source = mir_definition(candidate->src1);
+        if (candidate_source != NULL &&
+            candidate_source->opcode == MIR_CALL &&
+            (candidate_source->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0)
+            return 0;
+    }
+    insn = &mir.insns[i];
+    next = &mir.insns[i + 1];
+    return insn->opcode == MIR_UNARY && insn->immediate == '!' &&
+           !mir_value_is_wide(insn->src1) &&
+           (mir_definition(insn->src1) == NULL ||
+            mir_definition(insn->src1)->opcode != MIR_UNARY) &&
+           mir_value_use_count(insn->dst) == 1 &&
+           next->opcode == MIR_BRANCH_FALSE && next->src1 == insn->dst;
+}
+
 /* Item 25 (mir-migration-plan-100): an `==`/`!=` comparison against the
  * constant 0 needs neither operand materialized into DE nor a 16-bit
  * `sbc hl,de` - HL already holds the left operand (loaded unconditionally
@@ -4685,6 +4722,11 @@ int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void)
     return mir_spilled_cfg_used_wide_constant_rematerialization;
 }
 
+int mir_spilled_cfg_depends_on_unary_not_branch_fusion(void)
+{
+    return mir_spilled_cfg_used_unary_not_branch_fusion;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -4700,6 +4742,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_constant_absolute = 0;
     mir_spilled_cfg_used_constant_index_absolute = 0;
     mir_spilled_cfg_used_wide_constant_rematerialization = 0;
+    mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
@@ -5532,6 +5575,23 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
              * src1 into hl only to immediately discard it. */
             if (!mir_value_has_use(insn->dst))
                 break;
+            if (mir_unary_is_fusable_not_branch(i)) {
+                const struct MirInsn *branch = &mir.insns[i + 1];
+                int target;
+                if (branch->label < 0 || branch->label >= mir.next_label)
+                    goto done;
+                target = mir_find_label(branch->label);
+                if (target < 0)
+                    goto done;
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tld a,h\n\tor l\n", out);
+                mir_spilled_cfg_used_unary_not_branch_fusion = 1;
+                if (!mir_emit_conditional_branch_with_phi_copies(
+                        out, labels, "z", i + 1, target, branch->label))
+                    goto done;
+                ++i;
+                continue;
+            }
             if (mir_value_is_wide(insn->src1))
                 mir_emit_virtual_load_wide(out, insn->src1);
             else
@@ -6175,9 +6235,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 if (argument != -1)
                     goto done;
-                if ((insn->memory_flags & 32) != 0)
+                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_HEX) != 0)
                     mir_emit_runtime_call(out, "__pfehx");
-                if ((insn->memory_flags & 64) != 0)
+                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_OCTAL) != 0)
                     mir_emit_runtime_call(out, "__pfeoc");
                 if (is_indirect) {
                     if (!mir_emit_rematerialized_argument(out, insn->src1, 2))

@@ -2096,6 +2096,9 @@ static int mir_lower_expr(const struct AstNode *node)
             : node->type;
         mir_copy_name(insn->name, call_name);
         insn->secondary_offset = call_id;
+        if ((function_symbol != NULL && function_symbol->proto_variadic) ||
+            (call_prototype != NULL && call_prototype->proto_variadic))
+            insn->memory_flags |= MIR_CALL_FLAG_VARIADIC;
         if (function_symbol != NULL) {
             if (mir_inline_substitutable(function_symbol))
                 insn->memory_flags |= 2048;
@@ -2124,9 +2127,9 @@ static int mir_lower_expr(const struct AstNode *node)
                               asm_name_for_pf_call(call_name, needs_float,
                                                    needs_long));
                 if (needs_hex)
-                    insn->memory_flags |= 32;
+                    insn->memory_flags |= MIR_CALL_FLAG_FORMAT_HEX;
                 if (needs_octal)
-                    insn->memory_flags |= 64;
+                    insn->memory_flags |= MIR_CALL_FLAG_FORMAT_OCTAL;
             }
         }
         return value;

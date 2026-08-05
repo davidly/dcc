@@ -1053,13 +1053,14 @@ static int mir_has_wide_values(void)
     return 0;
 }
 
-static int mir_has_variadic_call(void)
+static int mir_has_format_runtime_call(void)
 {
     int instruction;
 
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode == MIR_CALL &&
-            (mir.insns[instruction].memory_flags & (32 | 64)) != 0)
+            (mir.insns[instruction].memory_flags &
+             MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
             return 1;
     return 0;
 }
@@ -1830,9 +1831,14 @@ void mir_end_function(void)
                     fallback_reason = "dead-store-forwarding-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_wide_constant_rematerialization() &&
-                         (mir_has_variadic_call() ||
+                         (mir_has_format_runtime_call() ||
                           generated_size >= captured_size))
                     fallback_reason = "wide-constant-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                         (mir_cfg_block_count() > 18 ||
+                          generated_size + 10 > captured_size))
+                    fallback_reason = "unary-not-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_constant_index_absolute() &&
                          generated_instructions * 25L >

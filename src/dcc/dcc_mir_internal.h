@@ -57,6 +57,14 @@ enum MirOpcode {
     MIR_OPAQUE
 };
 
+enum MirCallFlag {
+    MIR_CALL_FLAG_FORMAT_HEX = 32,
+    MIR_CALL_FLAG_FORMAT_OCTAL = 64,
+    MIR_CALL_FLAG_FORMAT_RUNTIME =
+        MIR_CALL_FLAG_FORMAT_HEX | MIR_CALL_FLAG_FORMAT_OCTAL,
+    MIR_CALL_FLAG_VARIADIC = 4096
+};
+
 struct MirInsn {
     int opcode;
     int dst;
@@ -379,6 +387,7 @@ int mir_spilled_cfg_depends_on_constant_absolute(void);
 int mir_spilled_cfg_depends_on_direct_byte_param(void);
 int mir_spilled_cfg_depends_on_constant_index_absolute(void);
 int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void);
+int mir_spilled_cfg_depends_on_unary_not_branch_fusion(void);
 int mir_try_emit_spilled_scalar_cfg(FILE *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);
