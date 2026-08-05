@@ -1733,6 +1733,43 @@ static int mir_backend_slot_forwardable(int value, int units, int instruction)
     return forwardable;
 }
 
+/* Item T79 (mir-text-size-plan.md): mir_prepare_backend_slots' reservation
+ * pass only ever consulted mir_can_forward_hl_to_next (via
+ * mir_backend_slot_forwardable above, which explicitly requires
+ * units == 1, i.e. narrow/16-bit values only) to decide whether a value
+ * can skip a real slot. Item T40 built the wide (32-bit HL:DE) equivalent,
+ * mir_can_forward_hl_de_to_next, and wired it into mir_emit_virtual_
+ * store_wide's emission-time decision - but never added a matching
+ * reservation-time check, so a wide value that emission will always
+ * forward directly (e.g. a wide binary result whose sole use is the very
+ * next MIR_RETURN, the plain `return a + b;` shape) still gets a real,
+ * dead backend slot reserved for it: 2 units/4 bytes of frame space that
+ * the emitted body never once references. Found via tests/tlong.c's
+ * lsum (`long lsum(long a, long b) { return a + b; }`): its only gap vs.
+ * legacy is exactly this unused `ld hl,-4/add hl,sp/ld sp,hl` prologue
+ * pair - once it is skipped, the rest of the body (already using
+ * mir_can_forward_hl_de_to_next's push/pop handoff to carry the first
+ * wide operand across evaluating the second, matching legacy instruction-
+ * for-instruction) already matches legacy byte-for-byte. This is the
+ * exact same reservation/emission mismatch class as Item T59's
+ * mir_call_argument_slot_forwardable fix, one level up for wide values. */
+static int mir_wide_backend_slot_forwardable(int value, int units,
+                                              int instruction)
+{
+    int saved_index;
+    int forwardable;
+
+    if (units != 2)
+        return 0;
+    if (mir.insns[instruction].opcode == MIR_PHI)
+        return 0;
+    saved_index = mir_emit_instruction_index;
+    mir_emit_instruction_index = instruction;
+    forwardable = mir_can_forward_hl_de_to_next(value);
+    mir_emit_instruction_index = saved_index;
+    return forwardable;
+}
+
 /* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots' own
  * reservation pass only recognized mir_load_is_single_call_argument (a
  * MIR_LOAD whose sole use is exactly one call argument, restricted to
@@ -2112,6 +2149,7 @@ static int mir_prepare_backend_slots(void)
                                         (type_size(definition->type) == 2 &&
                                          mir_load_is_single_indirect_call_target(value, 2)) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
+                                        mir_wide_backend_slot_forwardable(value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value) ||
