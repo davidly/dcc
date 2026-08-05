@@ -3804,6 +3804,37 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     return 0;
 }
 
+/* Item T85 (mir-text-size-plan.md): storage class + offset alone do not
+ * uniquely identify a scalar memory location - two distinct top-level
+ * (non-aggregate-field) globals both resolve to storage=SC_GLOBAL,
+ * offset=0 (mir_scalar_memory_location's `global->offset` term is only
+ * ever nonzero for a struct/array member, not for a whole scalar object),
+ * so comparing storage/offset alone can wrongly treat two different
+ * globals as "the same location". This wrapper adds the missing identity
+ * check: locals/params carry a real per-object index (insn->object >= 0)
+ * that already disambiguates them uniquely, so compare that directly;
+ * globals/externs (object == -1) fall back to comparing their resolved
+ * declared name instead. Callers that key HL-forwarding re-arms on "is
+ * this a fresh load of the exact same location a preceding store/fused
+ * inc-dec just wrote" must use this instead of a bare storage/offset
+ * compare (see the MIR_STORE and MIR_BINARY selfstore-incdec re-arm
+ * sites) - found via a synthetic two-global regression test
+ * (`ga = 5; return gb;` wrongly forwarding ga's value as gb's). */
+static int mir_same_scalar_memory_location(const struct MirInsn *a,
+                                            const struct MirInsn *b)
+{
+    int type_a, storage_a, offset_a;
+    int type_b, storage_b, offset_b;
+    if (!mir_scalar_memory_location(a, &type_a, &storage_a, &offset_a) ||
+        !mir_scalar_memory_location(b, &type_b, &storage_b, &offset_b))
+        return 0;
+    if (storage_a != storage_b || offset_a != offset_b)
+        return 0;
+    if (a->object >= 0 || b->object >= 0)
+        return a->object == b->object;
+    return strcmp(a->name, b->name) == 0;
+}
+
 /* Item 31 (mir-migration-plan-100): a bare "x++;"/"x--;" statement on a
  * frame-local scalar lowers (mir_lower_incdec) to load-x / add-or-sub-1 /
  * store-x, going through the general spilled-scalar-cfg load/store path
@@ -4745,20 +4776,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                      * MIR_LOAD's own check consumes this). */
                     int forward_after_store = mir_forward_skip_target(i);
                     if (forward_after_store < mir.count &&
-                        mir.insns[forward_after_store].opcode == MIR_LOAD) {
-                        int load_type;
-                        int load_storage;
-                        int load_offset;
-                        if (mir_scalar_memory_location(
-                                &mir.insns[forward_after_store], &load_type,
-                                &load_storage, &load_offset) &&
-                            load_storage == memory_storage &&
-                            load_offset == memory_offset) {
-                            mir_forwarded_hl_value =
-                                mir.insns[forward_after_store].dst;
-                            mir_forwarded_hl_instruction =
-                                forward_after_store - 1;
-                        }
+                        mir.insns[forward_after_store].opcode == MIR_LOAD &&
+                        mir_same_scalar_memory_location(
+                            insn, &mir.insns[forward_after_store])) {
+                        mir_forwarded_hl_value =
+                            mir.insns[forward_after_store].dst;
+                        mir_forwarded_hl_instruction =
+                            forward_after_store - 1;
                     }
                 }
             }
@@ -4908,11 +4932,38 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                             &memory_type, &memory_storage,
                                             &memory_offset);
                 if (memory_storage == SC_GLOBAL ||
-                    memory_storage == SC_EXTERN)
+                    memory_storage == SC_EXTERN) {
                     mir_emit_selfstore_incdec_global(
                         out, mir_definition(insn->src1), memory_storage,
                         insn->immediate == '+');
-                else
+                    /* Item T85 (mir-text-size-plan.md): the global/extern
+                     * fused inc/dec form above ends with "ld (name),hl" -
+                     * HL still holds the freshly incremented/decremented
+                     * value, exactly like T84's narrow global store. A
+                     * following fresh MIR_LOAD of the same location
+                     * (a static local's storage class is SC_GLOBAL, so
+                     * `static int x; ...; x++; total += x;` produces a
+                     * brand-new SSA load rather than reusing this
+                     * MIR_BINARY's own dst - tests/tforblk.c's
+                     * static_sibling_blocks) is provably redundant.
+                     * Reuse the exact same forward-skip-and-match-
+                     * location logic T84 uses after a narrow store. */
+                    {
+                        int forward_after_incdec =
+                            mir_forward_skip_target(selfstore_store_index);
+                        if (forward_after_incdec < mir.count &&
+                            mir.insns[forward_after_incdec].opcode ==
+                                MIR_LOAD &&
+                            mir_same_scalar_memory_location(
+                                mir_definition(insn->src1),
+                                &mir.insns[forward_after_incdec])) {
+                            mir_forwarded_hl_value =
+                                mir.insns[forward_after_incdec].dst;
+                            mir_forwarded_hl_instruction =
+                                forward_after_incdec - 1;
+                        }
+                    }
+                } else
                     mir_emit_selfstore_incdec(out, memory_offset,
                                               insn->immediate == '+');
                 break;
