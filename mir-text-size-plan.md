@@ -7883,3 +7883,40 @@ in one test file. This does not preclude the fold from being revisited
 if a future corpus addition or real-world program exercises the pattern
 more often; re-run the same sizing grep before any future attempt rather
 than assuming the original hypothesis. No code changed for this entry.
+
+## Item T78: fix `fmemopen` implicit-declaration/pointer-truncation bug (2026-08-05)
+
+**Context**: a fresh architecture review pass (rebuilding with
+`sh src/dcc/build-dcc.sh` before planning the next batch) found 3
+warnings, all in `dcc_mir_spilled_cfg.c`. Two (`-Walloc-size-larger-than=`
+on `mir_store_is_dead`'s `calloc((size_t)mir.count, 1)`) are GCC's
+over-conservative range analysis treating `mir.count` (an `int`, never
+negative in practice) as possibly negative once cast to `size_t` - a
+false positive, not fixed. The third was real: `mir_try_emit_spilled_
+scalar_cfg`'s elided-epilogue byte accounting (Item T61) calls
+`fmemopen()` with no POSIX feature-test macro in scope. Under this
+build's `-std=c11`, glibc does not declare `fmemopen` in `<stdio.h>`
+without `_POSIX_C_SOURCE >= 200809L`/`_DEFAULT_SOURCE`, so it was
+implicitly declared as returning `int`, and the result silently
+truncated when assigned to `FILE *` (`-Wint-conversion` fired). This is
+the exact bug class `dcc.c` and `dcc_func.c` already carry an explicit
+comment about for `realpath()`/other POSIX calls used elsewhere in the
+compiler ("undefined behavior that happened not to crash under gcc's
+luck but is a real SEGV under clang") - same fix pattern applies
+directly, just missed in this newer file.
+
+**Fix**: added the same `#define _POSIX_C_SOURCE 200809L` guard already
+used in `dcc_func.c`/`dcc_regalloc.c`, before any system header, to the
+top of `dcc_mir_spilled_cfg.c`.
+
+**Validation**: rebuild shows the `-Wint-conversion` warning gone (only
+the 2 pre-existing, unrelated `calloc` false positives remain). This
+code path is diagnostic/measurement-only (elided-epilogue byte
+accounting feeding the existing cost gate, not a selection or emission
+decision itself), so no behavioral change was expected - confirmed with
+a whole-corpus census (`--compare` against the pre-fix baseline,
+`--fail-on-regression`): 0 newly-emitted, 0 no-longer-emitted, 0 apps
+with any census change. Coverage unchanged at 511/2023 (25.26%).
+
+**Files touched**: `src/dcc/dcc_mir_spilled_cfg.c` (feature-test-macro
+guard only).
