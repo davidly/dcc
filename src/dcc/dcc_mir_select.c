@@ -1053,6 +1053,26 @@ static int mir_has_wide_values(void)
     return 0;
 }
 
+static int mir_is_call_heavy_general_compare(void)
+{
+    int branches = 0;
+    int calls = 0;
+    int comparison_branches = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++calls;
+        else if (mir.insns[instruction].opcode == MIR_BRANCH_FALSE) {
+            ++branches;
+            if (mir_compare_definition_for_branch(instruction) >= 0)
+                ++comparison_branches;
+        }
+    }
+    return calls >= 3 && branches == comparison_branches &&
+           mir_general_comparison_count() != 0;
+}
+
 static int mir_is_profiled_near_cost_single_block(long generated_size,
                                                    long captured_size,
                                                    int generated_instructions,
@@ -1629,6 +1649,7 @@ void mir_end_function(void)
             if (emitted && !strcmp(selector_name, "homed-scalar-cfg") &&
                 (mir_effective_local_bytes() != 0 ||
                  mir_homed_cfg_depends_on_word_store() ||
+                 mir_homed_cfg_depends_on_dynamic_index() ||
                  mir_has_wide_values()) &&
                 (general_filter == NULL || general_filter[0] == 0) &&
                 (emit_filter == NULL || emit_filter[0] == 0)) {
@@ -1845,6 +1866,20 @@ void mir_end_function(void)
                              generated_size, captured_size,
                              generated_instructions, captured_instructions))
                     fallback_reason = "instruction-count";
+                else if (!strcmp(selector_name, "homed-scalar-cfg") &&
+                         mir_homed_cfg_depends_on_dynamic_index() &&
+                         generated_instructions >= captured_instructions)
+                    /* Dynamic constant-stride addressing can be text-smaller
+                     * without being faster after peephole optimization.
+                     * Exact-CI A/B found the equal-instruction two-block
+                     * pointer-null check regressed peep cycles, while the
+                     * retained single-block transition-table candidate saves
+                     * thirteen instructions. Require a real instruction win
+                     * for this structurally distinct class. */
+                    fallback_reason = "dynamic-index-cost";
+                else if (!strcmp(selector_name, "homed-scalar-cfg") &&
+                         mir_is_call_heavy_general_compare())
+                    fallback_reason = "call-heavy-general-compare";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
                 /* Item A (mir-migration-plan-forward.md): the previous

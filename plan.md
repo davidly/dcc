@@ -7,10 +7,10 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `70f66ed` (Item T112)
-- Published ordinary coverage: **559/2022 functions (27.65%)**
-- Current ordinary coverage: **570/2022 functions (28.19%)**
-- Current stack-check coverage: **576/2124 functions (27.12%)**
+- Published baseline: `cfb17da` (Item T122)
+- Published ordinary coverage: **570/2022 functions (28.19%)**
+- Current ordinary coverage: **573/2022 functions (28.34%)**
+- Current stack-check coverage: **579/2124 functions (27.26%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -123,6 +123,34 @@ removals. Newly emitted ordinary functions are `tgoto.gt_forward`,
 `tinlinfb.store_add`, `tptrcnd.pickip`, `tptrrhs.pickip`, and `trw.fill_buf`.
 The final affected-app full-mode check has zero regressions.
 
+## Batch 6
+
+1. T123: preserve only scalar comparison homes that are live across the
+   comparison, including overlapping `HL:DE` homes; retain a structural
+   call-heavy profitability gate for the three measured regressions.
+2. T124: measure and reject representation-only float parameters, constants,
+   and returns after they add no names and change eight apps without benefit.
+3. T125: measure and reject broad repeated-comparison admission after one
+   miscompile, five regressions, and fallback-only hash changes expose
+   non-transactional speculative selector state.
+4. T126-T127: add 32-bit indirect loads and stores using the shared wide-pair
+   contract and physical-register-overlap-aware preservation.
+5. T128-T129: measure and remove byte indirect loads/stores after exact-CI A/B
+   confirms the newly admitted function regresses peep cycles.
+6. T130-T131: centralize bitfield mask/extraction helpers and reuse them for
+   homed indirect bitfield loads and read-modify-write stores.
+7. T132: add bounded constant-stride dynamic indexing, save the base before
+   scaling, preserve overlapping scalar and `HL:DE` homes, always arbitrate
+   this class against the spilled selector, and require an instruction-count
+   win after exact-CI A/B rejects the equal-count two-block candidate.
+
+The ordinary census is **573/2022 (28.34%)**, +3 names from T122 with zero
+removals. The stack-check census is **579/2124 (27.26%)**, also +3 with zero
+removals. Both add `adaint.acc`, `adaint.need`, and `pint.statement`. Dynamic
+indexing also replaces the existing spilled selection for `t2denum.main` with
+faster homed output. The 11-app peep/nopeep focused run passes with zero
+regressions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -136,6 +164,8 @@ The final affected-app full-mode check has zero regressions.
   pwsh ./scripts/runall.ps1 -Mode full -Extended
   ```
 
+- `runall.ps1` now defaults to failures-only output; no explicit
+  `-FailuresOnly` flag is needed.
 - Validate with the current `davidly/ntvcm` `main` revision used by CI.
 - Confirm the resolved local `ntvcm` revision matches upstream before treating
   a performance run as the pre-commit gate.
@@ -165,10 +195,11 @@ Continue the approved phased roadmap rather than restarting prioritization:
    active with zero removals.
 3. **Next structural priorities by impact:** remeasure the post-T122 rejection
    population, then prioritize helper-call wide splits and the largest
-   zero-spill selector/profitability classes. Float/non-scalar returns,
-   repeated general comparisons, and dynamic indexes remain known classes.
-   Do not retry stride-1 dynamic indexing without a smaller address-add
-   contract; the first correctly arbitrated version retained zero changes.
+   zero-spill selector/profitability classes. Float/non-scalar returns and
+   repeated general comparisons remain known classes. Dynamic constant-stride
+   indexing is now active, while runtime VLA strides remain deferred.
+   Do not remove the repeated-load/comparison gate until speculative selector
+   state is fully transactional.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and

@@ -14,6 +14,46 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+void mir_emit_hl_and_const(FILE *out, unsigned int mask)
+{
+    fprintf(out,
+            "\tld a,l\n\tand %u\n\tld l,a\n"
+            "\tld a,h\n\tand %u\n\tld h,a\n",
+            mask & 0xffU, (mask >> 8) & 0xffU);
+}
+
+void mir_emit_hl_or_const(FILE *out, unsigned int mask)
+{
+    fprintf(out,
+            "\tld a,l\n\tor %u\n\tld l,a\n"
+            "\tld a,h\n\tor %u\n\tld h,a\n",
+            mask & 0xffU, (mask >> 8) & 0xffU);
+}
+
+void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
+{
+    int shift;
+    int sign_label;
+    unsigned int value_mask;
+
+    for (shift = 0; shift < insn->bit_shift; ++shift)
+        fputs("\tsrl h\n\trr l\n", out);
+    value_mask = insn->bit_width >= 16
+        ? 0xffffU : (1U << insn->bit_width) - 1U;
+    mir_emit_hl_and_const(out, value_mask);
+    if ((insn->type & TYPE_UNSIGNED) == 0 && insn->bit_width > 0 &&
+        insn->bit_width < 16) {
+        sign_label = new_label();
+        if (insn->bit_width <= 8)
+            fprintf(out, "\tbit %d,l\n", insn->bit_width - 1);
+        else
+            fprintf(out, "\tbit %d,h\n", insn->bit_width - 9);
+        fprintf(out, "\tjp z, L%d\n", sign_label);
+        mir_emit_hl_or_const(out, (~value_mask) & 0xffffU);
+        fprintf(out, "L%d:\n", sign_label);
+    }
+}
+
 void mir_emit_prologue(FILE *out)
 {
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
@@ -1100,7 +1140,11 @@ int mir_emit_homed_unary_instruction(FILE *out,
      * (e.g. mir_emit_hl_to_home's DE case uses "ex de,hl", which swaps hl's
      * contents rather than just moving into de - clobbering src1's still-
      * live value if it isn't saved and restored around the computation). */
-    int preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+    int preserve_hl_de =
+        !source_wide && !target_wide &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    int preserve_hl = !preserve_hl_de &&
+                      mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                       (mir.allocation_colors[insn->src1] != MIR_COLOR_HL ||
                        mir_value_has_use_after(insn->src1, instruction));
     int label;
@@ -1170,6 +1214,8 @@ int mir_emit_homed_unary_instruction(FILE *out,
         return 1;
     }
 
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
         fputs("\tpush hl\n", out);
     if (!mir_emit_home_to_hl(out, insn->src1))
@@ -1203,6 +1249,8 @@ int mir_emit_homed_unary_instruction(FILE *out,
         return 0;
     if (preserve_hl)
         fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1216,6 +1264,7 @@ int mir_emit_homed_binary_instruction(FILE *out,
     int commutative = insn->immediate == '+' || insn->immediate == '&' ||
                       insn->immediate == '|' || insn->immediate == '^' ||
                       insn->immediate == TOK_EQ || insn->immediate == TOK_NE;
+    int preserve_hl_de;
     int preserve_hl;
     int preserve_de;
     const struct MirInsn *left_definition;
@@ -1231,10 +1280,14 @@ int mir_emit_homed_binary_instruction(FILE *out,
         left = right;
         right = temporary;
     }
-        preserve_hl = mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
+        preserve_hl_de =
+            mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+        preserve_hl = !preserve_hl_de &&
+                                    mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                                     !(mir.allocation_colors[left] == MIR_COLOR_HL &&
                                         !mir_value_has_use_after(left, instruction));
-        preserve_de = mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
+        preserve_de = !preserve_hl_de &&
+                                    mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
                                     !(mir.allocation_colors[right] == MIR_COLOR_DE &&
                                         !mir_value_has_use_after(right, instruction));
         left_definition = mir_definition(left);
@@ -1249,6 +1302,8 @@ int mir_emit_homed_binary_instruction(FILE *out,
                                  insn->immediate == TOK_GE) &&
                                 right_definition != NULL &&
                                 right_definition->opcode == MIR_CONST;
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
         fputs("\tpush hl\n", out);
     if (preserve_de)
@@ -1306,6 +1361,8 @@ int mir_emit_homed_binary_instruction(FILE *out,
         fputs("\tpop de\n", out);
     if (preserve_hl)
         fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1318,14 +1375,20 @@ int mir_emit_homed_constant_binary_instruction(FILE *out,
     unsigned long multiplier = (unsigned long)value & 0xffffUL;
     int uses_de = operation == '*' && multiplier != 0 &&
                   (multiplier & (multiplier - 1)) != 0;
+    int preserve_hl_de =
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
     int preserve_hl =
+        !preserve_hl_de &&
         mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
         (mir.allocation_colors[insn->src1] != MIR_COLOR_HL ||
          mir_value_has_use_after(insn->src1, instruction));
     int preserve_de =
+        !preserve_hl_de &&
         uses_de && mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
         mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
         fputs("\tpush hl\n", out);
     if (preserve_de)
@@ -1344,6 +1407,8 @@ int mir_emit_homed_constant_binary_instruction(FILE *out,
         fputs("\tpop de\n", out);
     if (preserve_hl)
         fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1405,9 +1470,13 @@ int mir_emit_homed_compare_false(FILE *out,
                                         const struct MirInsn *compare,
                                         int false_label)
 {    int left = compare->src1;    int right = compare->src2;
+    int instruction = (int)(compare - mir.insns);
     int operation = (int)compare->immediate;
     const struct MirInsn *left_definition;
     const struct MirInsn *right_definition;
+    int preserve_hl_de;
+    int preserve_hl;
+    int preserve_de;
     int is_unsigned;
 
     right_definition = mir_definition(right);
@@ -1469,8 +1538,20 @@ int mir_emit_homed_compare_false(FILE *out,
         (right_definition != NULL &&
          mir_type_uses_unsigned_comparison(right_definition->type));
 
-    /* Preserve the lifetime homes while using HL/DE as comparison operands. */
-    fputs("\tpush hl\n\tpush de\n", out);
+    /* Preserve only values that actually span this comparison. The operands
+     * themselves may be clobbered when this is their final use. */
+    preserve_hl_de =
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    preserve_hl = !preserve_hl_de &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+    preserve_de = !preserve_hl_de &&
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_hl)
+        fputs("\tpush hl\n", out);
+    if (preserve_de)
+        fputs("\tpush de\n", out);
     if (!mir_emit_push_home(out, right) ||
         !mir_emit_home_to_hl(out, left))
         return 0;
@@ -1478,7 +1559,13 @@ int mir_emit_homed_compare_false(FILE *out,
     if (!is_unsigned && operation != TOK_EQ && operation != TOK_NE)
         fputs("\tld a,h\n\txor 128\n\tld h,a\n"
               "\tld a,d\n\txor 128\n\tld d,a\n", out);
-    fputs("\tor a\n\tsbc hl,de\n\tpop de\n\tpop hl\n", out);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    if (preserve_de)
+        fputs("\tpop de\n", out);
+    if (preserve_hl)
+        fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
     if (operation == TOK_EQ)
         fprintf(out, "\tjp nz, L%d\n", false_label);
     else if (operation == TOK_NE)

@@ -8949,3 +8949,63 @@ choosing another structural class. The leading architectural gap is wide
 values crossing runtime-helper calls: both available pairs are caller-clobbered
 as complete 32-bit homes, so progress requires explicit live-range splitting
 or spill/reload at helper boundaries, not simply more colors.
+
+## Items T123-T132: liveness-aware comparisons and indirect homed access (2026-08-15)
+
+General homed comparisons previously saved and restored HL and DE
+unconditionally. They now preserve only homes whose values genuinely span the
+comparison, while also treating `HL:DE` as overlapping both scalar scratch
+registers. A selector-scoped structural gate retains legacy output for the
+three call-heavy comparison functions that measured worse. This safely admits
+`adaint.acc`, `adaint.need`, and `pint.statement`.
+
+Two broad experiments were measured and removed. Representation-only float
+parameters/constants/returns added no accepted names and changed eight apps
+without benefit. Removing the repeated-load/comparison gate exposed an
+`a1.getc_load_file` miscompile, five performance regressions, and changed
+selected hashes for fallback-only functions. The latter proves speculative
+selector attempts still mutate compiler state beyond the already-transactional
+label counter; broad repeated-comparison admission remains blocked until that
+state is identified and restored.
+
+The homed backend now supports wider indirect access and shared bitfield
+handling:
+
+- four-byte integer loads and stores use the shared `HL:DE`/`BC:IY`
+  representation;
+- bitfield mask and sign-extension helpers moved from the spilled backend into
+  the shared emitter module, then became the single implementation used by
+  both homed bitfield loads and read-modify-write stores.
+
+Every scratch path preserves physical register overlaps, not just exact scalar
+colors, so a live `HL:DE` or `BC:IY` home cannot be silently corrupted by a
+narrow access. The byte-indirect experiment was removed: exact-upstream ntvcm
+A/B confirmed `tpeepal.interior_escape_store` regresses peep cycles, repeating
+T108's earlier negative result.
+
+Bounded constant-stride dynamic indexes now reuse the shared constant-multiply
+policy. The base pointer is pushed directly from its allocated home before the
+index is loaded and scaled, which is required when the base and index occupy DE
+and HL respectively. Address formation preserves live scalar HL/DE homes and
+an overlapping wide `HL:DE` home. Dynamic-index homed candidates are always
+compared with the spilled candidate before final selection. Exact-CI A/B found an
+equal-instruction two-block pointer-null candidate regressed peep cycles, so
+dynamic-index homing additionally requires a real instruction-count win. This
+preserves established spilled wins while allowing `t2denum.main` to switch to
+smaller/faster homed output. Runtime VLA strides remain excluded.
+
+**Census and validation**:
+
+- ordinary: **573/2022 (28.34%)**, +3 names from T122 and zero removals;
+- stack-check: **579/2124 (27.26%)**, +3 names and zero removals;
+- additions in both configurations: `adaint.acc`, `adaint.need`, and
+  `pint.statement`;
+- the combined 11-app full-mode peep/nopeep run passes with zero checked
+  regressions;
+- forced homed validation of `adaint.emit_load_lvalue` passes correctness in
+  both modes but remains fallback because its nopeep image is larger.
+
+The next batch should investigate helper-clobber-aware wide live-range
+splitting and the remaining high-impact spill/return/opcode classes. Do not
+retry broad repeated-comparison admission until speculative selector state is
+fully transactional.

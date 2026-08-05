@@ -309,6 +309,9 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn);
 void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned);
 void mir_emit_scalar_compare_biased_right(FILE *out, int operation);
 void mir_emit_signed_byte_extend(FILE *out);
+void mir_emit_hl_and_const(FILE *out, unsigned int mask);
+void mir_emit_hl_or_const(FILE *out, unsigned int mask);
+void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn);
 void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned,
                            int count_value);
 void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
@@ -357,6 +360,7 @@ void mir_thread_jumps(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
 int mir_cfg_block_count(void);
 int mir_homed_cfg_depends_on_word_store(void);
+int mir_homed_cfg_depends_on_dynamic_index(void);
 long mir_stream_size(FILE *stream);
 int mir_stream_instruction_count(FILE *stream);
 int mir_try_emit_homed_scalar_dag(FILE *out);

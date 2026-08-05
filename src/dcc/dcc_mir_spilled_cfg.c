@@ -3543,46 +3543,6 @@ static int mir_emit_fused_wide_comparison_branch(FILE *out, const int *labels,
         branch->label);
 }
 
-static void mir_emit_hl_and_const(FILE *out, unsigned int mask)
-{
-    fprintf(out,
-            "\tld a,l\n\tand %u\n\tld l,a\n"
-            "\tld a,h\n\tand %u\n\tld h,a\n",
-            mask & 0xffU, (mask >> 8) & 0xffU);
-}
-
-static void mir_emit_hl_or_const(FILE *out, unsigned int mask)
-{
-    fprintf(out,
-            "\tld a,l\n\tor %u\n\tld l,a\n"
-            "\tld a,h\n\tor %u\n\tld h,a\n",
-            mask & 0xffU, (mask >> 8) & 0xffU);
-}
-
-static void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
-{
-    int shift;
-    int sign_label;
-    unsigned int value_mask;
-
-    for (shift = 0; shift < insn->bit_shift; ++shift)
-        fputs("\tsrl h\n\trr l\n", out);
-    value_mask = insn->bit_width >= 16
-        ? 0xffffU : (1U << insn->bit_width) - 1U;
-    mir_emit_hl_and_const(out, value_mask);
-    if ((insn->type & TYPE_UNSIGNED) == 0 && insn->bit_width > 0 &&
-        insn->bit_width < 16) {
-        sign_label = new_label();
-        if (insn->bit_width <= 8)
-            fprintf(out, "\tbit %d,l\n", insn->bit_width - 1);
-        else
-            fprintf(out, "\tbit %d,h\n", insn->bit_width - 9);
-        fprintf(out, "\tjp z, L%d\n", sign_label);
-        mir_emit_hl_or_const(out, (~value_mask) & 0xffffU);
-        fprintf(out, "L%d:\n", sign_label);
-    }
-}
-
 /* Item T45 (mir-text-size-plan.md): ported directly from
  * emit_shift_const_long (dcc_ops.c, the legacy AST backend) - any wide
  * shift count 1..31 decomposes into a whole-byte register-move (0-3
