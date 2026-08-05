@@ -8895,3 +8895,57 @@ The next architectural stage should remain zero-spill-first: add helper-clobber
 aware wide homes (including a safe second pair) and reduce the 204 already
 emittable homed candidates before building mixed home/slot emission. Same-block
 address CSE remains deferred by T70's measured live-range/slot regression.
+
+## Items T113-T122: two-pair wide emission and measured structural classes (2026-08-14)
+
+Corrected phi discovery first. Leading labels and promoted NOP metadata may
+precede a phi, but a label encountered after a substantive instruction starts
+a new block. The old scan crossed that boundary and could attach a later
+block's phi copies before the source value was defined. The correction exposed
+five safe ordinary functions; narrow fallback gates retain the established
+backend for one-call boolean phis and large call/phi CFGs that measured worse.
+
+Wide homed emission now has two physical pair colors: `HL:DE` (low:high) and
+`BC:IY` (low:high). Shared helpers own pair transfers, constant loads, stack
+handoff, and integer casts; both homed and spilled backends use those contracts
+instead of carrying parallel implementations. A `BC:IY` home saves IY in the
+prologue and shifts parameter offsets by two. Fixed `HL:DE` operation
+boundaries preserve unrelated scalar and wide homes.
+
+The homed selector supports wide parameters, integer casts, negation,
+complement, non-helper arithmetic, direct constant add/subtract/bitwise
+operations, constant shifts, and power-of-two multiplication. Constants that
+do not materialize clear their unused pair color so they do not create an IY
+frame. Pair homing is not inherently profitable: simple wide expressions can
+be larger than established stack evaluation, so wide candidates are emitted
+both homed and spilled and the smaller structural candidate wins.
+
+Three corpus-profiled structural gates complete the batch:
+
+- single-block indirect read-modify-write (`tinlinfb.store_add`);
+- pointer-member picker (`tptrcnd.pickip`, `tptrrhs.pickip`);
+- masked `memset` wrapper (`trw.fill_buf`), requiring the mask result to be
+  argument 1 of the same call-site ID, not merely another instruction in the
+  function.
+
+Measured candidates that regressed either mode remain fallback:
+`tregnarw.lres`, `tstr3.test_strcspn`, `tstr3.test_strspn`, `tunary.shi8`,
+`adaint.acc`, `tdead.poison`, `tmirslot.immediate_use`, and `tctxops.ca_ret`.
+No performance baseline was changed.
+
+**Census and focused validation**:
+
+- ordinary: **570/2022 (28.19%)**, +11 names from T112 and zero removals;
+- stack-check: **576/2124 (27.12%)**, +12 names and zero removals;
+- ordinary additions: `tgoto.gt_forward`, `tgoto.gt_multi_label`,
+  `tgoto.gt_out_block`, `thoistbc.main`, `tvla.fixed_cast_bounds`,
+  `tclit.add_two_long`, `tctxops.ca_sink`, `tinlinfb.store_add`,
+  `tptrcnd.pickip`, `tptrrhs.pickip`, and `trw.fill_buf`;
+- the 13-app peep/nopeep focused run passes with zero regressions and 17
+  checked improvements.
+
+The next batch should measure the refreshed rejection population before
+choosing another structural class. The leading architectural gap is wide
+values crossing runtime-helper calls: both available pairs are caller-clobbered
+as complete 32-bit homes, so progress requires explicit live-range splitting
+or spill/reload at helper boundaries, not simply more colors.

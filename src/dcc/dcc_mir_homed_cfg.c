@@ -94,6 +94,47 @@ static int mir_homed_binary_only_constant(int value)
     return uses == 1;
 }
 
+static int mir_homed_wide_constant_binary(const struct MirInsn *insn,
+                                           long *value)
+{
+    const struct MirInsn *right;
+
+    if (insn->opcode != MIR_BINARY ||
+        type_size(insn->secondary_offset) != 4)
+        return 0;
+    right = mir_definition(insn->src2);
+    if (right == NULL || right->opcode != MIR_CONST ||
+        type_size(right->type) != 4)
+        return 0;
+    if (insn->immediate != '+' && insn->immediate != '-' &&
+        insn->immediate != '&' && insn->immediate != '|' &&
+        insn->immediate != '^' &&
+        !((insn->immediate == TOK_SHL || insn->immediate == TOK_SHR) &&
+          right->immediate >= 0 && right->immediate < 32) &&
+        !(insn->immediate == '*' &&
+          mir_ulong_log2_pow2((unsigned long)right->immediate) > 0))
+        return 0;
+    *value = right->immediate;
+    return 1;
+}
+
+static int mir_homed_wide_binary_only_constant(int value)
+{
+    int instruction;
+    int uses = 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        long constant;
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src2 == value &&
+            mir_homed_wide_constant_binary(insn, &constant))
+            ++uses;
+        else if (insn->src1 == value || insn->src2 == value)
+            return 0;
+    }
+    return uses == 1;
+}
+
 static int mir_homed_reject(const char *reason)
 {
     if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
@@ -144,6 +185,123 @@ static int mir_homed_frame_offset(int storage, int offset, int uses_iy)
     return storage == SC_PARAM && uses_iy ? offset + 2 : offset;
 }
 
+static int mir_emit_homed_wide_binary_instruction(
+    FILE *out, const struct MirInsn *insn)
+{
+    int instruction = (int)(insn - mir.insns);
+    int dst_color = mir.allocation_colors[insn->dst];
+    int preserve_hl_de =
+        dst_color != MIR_COLOR_HL_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    int preserve_bc_iy =
+        dst_color != MIR_COLOR_BC_IY &&
+        mir_home_color_live_across(instruction, MIR_COLOR_BC_IY);
+    int preserve_hl =
+        dst_color != MIR_COLOR_HL_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+    int preserve_de =
+        dst_color != MIR_COLOR_HL_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
+    int preserve_bc =
+        dst_color != MIR_COLOR_BC_IY &&
+        mir_home_color_live_across(instruction, MIR_COLOR_BC);
+    long constant;
+
+    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) fputs("\tpush hl\n", out);
+    if (preserve_de) fputs("\tpush de\n", out);
+    if (preserve_bc) fputs("\tpush bc\n", out);
+    if (mir_homed_wide_constant_binary(insn, &constant)) {
+        unsigned long bits = (unsigned long)constant;
+        unsigned int low = (unsigned int)(bits & 0xffffUL);
+        unsigned int high = (unsigned int)((bits >> 16) & 0xffffUL);
+        if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
+            return 0;
+        if (insn->immediate == '+' && bits == 1) {
+            int no_carry = new_label();
+            fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
+            fprintf(out, "\tjp nz, L%d\n\tinc de\nL%d:\n",
+                    no_carry, no_carry);
+        } else if (insn->immediate == '-' && bits == 1) {
+            int no_borrow = new_label();
+            fputs("\tld a,h\n\tor l\n", out);
+            fprintf(out, "\tjp nz, L%d\n\tdec de\nL%d:\n\tdec hl\n",
+                    no_borrow, no_borrow);
+        } else if (insn->immediate == '+' || insn->immediate == '-') {
+            fprintf(out, "\tld bc,%u\n\t%s\n\tex de,hl\n\tld bc,%u\n\t%s\n"
+                         "\tex de,hl\n",
+                    low, insn->immediate == '+' ? "add hl,bc"
+                                                : "or a\n\tsbc hl,bc",
+                    high, insn->immediate == '+' ? "adc hl,bc"
+                                                 : "sbc hl,bc");
+        } else if (insn->immediate == '*' ||
+                   insn->immediate == TOK_SHL ||
+                   insn->immediate == TOK_SHR) {
+            long shift = insn->immediate == '*'
+                ? mir_ulong_log2_pow2(bits)
+                : constant;
+            mir_emit_wide_shift_by_constant(
+                out, insn->immediate != TOK_SHR,
+                (insn->secondary_offset & TYPE_UNSIGNED) != 0, shift);
+        } else {
+            const char *operation = insn->immediate == '&' ? "and" :
+                                    insn->immediate == '|' ? "or" : "xor";
+            fprintf(out,
+                    "\tld a,l\n\t%s %u\n\tld l,a\n"
+                    "\tld a,h\n\t%s %u\n\tld h,a\n"
+                    "\tld a,e\n\t%s %u\n\tld e,a\n"
+                    "\tld a,d\n\t%s %u\n\tld d,a\n",
+                    operation, low & 255, operation, low >> 8,
+                    operation, high & 255, operation, high >> 8);
+        }
+        if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
+            return 0;
+    } else if (!mir_emit_wide_home_to_stack(out, insn->src1) ||
+               !mir_emit_wide_home_to_hl_de(out, insn->src2) ||
+               !mir_emit_wide_operation(out, insn) ||
+               !mir_emit_hl_de_to_wide_home(out, insn->dst)) {
+        return 0;
+    }
+    if (preserve_bc) fputs("\tpop bc\n", out);
+    if (preserve_de) fputs("\tpop de\n", out);
+    if (preserve_hl) fputs("\tpop hl\n", out);
+    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
+static int mir_homed_is_single_call_boolean_phi(void)
+{
+    int calls = 0;
+    int branches = 0;
+    int phis = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++calls;
+        else if (mir.insns[instruction].opcode == MIR_BRANCH_FALSE)
+            ++branches;
+        else if (mir.insns[instruction].opcode == MIR_PHI)
+            ++phis;
+    }
+    return calls == 1 && branches == 2 && phis != 0;
+}
+
+static int mir_homed_is_large_call_phi_cfg(void)
+{
+    int has_call = 0;
+    int has_phi = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        has_call |= mir.insns[instruction].opcode == MIR_CALL;
+        has_phi |= mir.insns[instruction].opcode == MIR_PHI;
+    }
+    return has_call && has_phi && mir_cfg_block_count() >= 16;
+}
+
 int mir_try_emit_homed_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -154,14 +312,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     int shared_epilogue_label = -1;
     int i;
     int accepted = 0;
-    /* Item 20d (mir-migration-plan-to-100pct.md): whether this function
-     * contains any wide (4-byte long) value, restricted below to only
-     * MIR_CONST dst and a wide long return. If set, acceptance is
-     * conditional on mir_probe_wide_colors_for_homed() succeeding
-     * (single wide value fits in HL:DE with zero spills) - see that
-     * function's comment for why MIR_COLOR_BC_IY is excluded from this
-     * first slice, and why MIR_PARAM/MIR_BINARY wide operands remain
-     * deferred (no wide move/frame-offset helpers exist for them yet). */
+    /* Wide integer values are retained only when the pair allocator finds a
+     * zero-spill assignment. This first two-pair slice remains single-block
+     * and helper-free; call clobbers and wide CFG copies are separate work. */
     int has_wide = 0;
     int wide_return = type_is_long(mir.return_type) &&
                       type_size(mir.return_type) == 4;
@@ -196,7 +349,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->dst >= 0 && type_size(insn->type) > 2) {
             if ((insn->opcode == MIR_CONST ||
-                 insn->opcode == MIR_PARAM) &&
+                 insn->opcode == MIR_PARAM ||
+                 insn->opcode == MIR_UNARY ||
+                 insn->opcode == MIR_BINARY) &&
                 type_is_long(insn->type) && type_size(insn->type) == 4)
                 has_wide = 1;
             else {
@@ -210,8 +365,19 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
         }
         if (insn->opcode == MIR_BINARY &&
-            type_size(insn->secondary_offset) > 2)
-            return mir_homed_reject("wide-binary");
+            type_size(insn->secondary_offset) > 2) {
+            long constant;
+            if (mir_cfg_block_count() != 1 ||
+                !type_is_long(insn->type) || type_size(insn->type) != 4 ||
+                !type_is_long(insn->secondary_offset) ||
+                type_size(insn->secondary_offset) != 4 ||
+                ((insn->immediate != '+' && insn->immediate != '-' &&
+                  insn->immediate != '&' && insn->immediate != '|' &&
+                  insn->immediate != '^') &&
+                 !mir_homed_wide_constant_binary(insn, &constant)))
+                return mir_homed_reject("wide-binary");
+            has_wide = 1;
+        }
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0)
             return mir_homed_reject("uncolored-value");
         switch (insn->opcode) {
@@ -396,6 +562,26 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_UNARY:
+            {
+                const struct MirInsn *source = mir_definition(insn->src1);
+                int source_type = source != NULL ? source->type : 0;
+                int source_wide = type_size(source_type) == 4;
+                int target_wide = type_size(insn->type) == 4;
+                if ((source_wide || target_wide) &&
+                    (mir_cfg_block_count() != 1 ||
+                     type_is_float(source_type) ||
+                     type_is_float(insn->type) ||
+                     (insn->immediate != 0 &&
+                      !(source_wide && target_wide &&
+                        (insn->immediate == '+' ||
+                         insn->immediate == '-' ||
+                         insn->immediate == '~')) &&
+                      !(source_wide && !target_wide &&
+                        insn->immediate == '!'))))
+                    return mir_homed_reject("wide-unary");
+                if (source_wide || target_wide)
+                    has_wide = 1;
+            }
             if (insn->immediate != 0 && insn->immediate != '+' &&
                 insn->immediate != '-' && insn->immediate != '~' &&
                 insn->immediate != '!')
@@ -476,11 +662,28 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
      * one MIR_RETURN unconditionally. */
     if (return_count == 0 && (mir.return_type & 15) != TYPE_VOID)
         return mir_homed_reject("missing-return");
+    /* A one-call short-circuit boolean that merges through a phi measured
+     * slower after peephole optimization even though MIR removed six
+     * instructions. Keep this distinct call/branch/merge class on the
+     * established backend; call-heavier boolean phis have separate measured
+     * wins and are intentionally unaffected. */
+    if (mir_homed_is_single_call_boolean_phi())
+        return mir_homed_reject("single-call-boolean-phi");
+    /* Large call/phi CFGs exposed by the corrected block-boundary scan saved
+     * instructions before peephole optimization but increased shipping code
+     * size and cycles. Keep that high-interaction class on the established
+     * backend; smaller call/phi CFGs retain their existing measured wins. */
+    if (mir_homed_is_large_call_phi_cfg())
+        return mir_homed_reject("large-call-phi-cfg");
     /* Item 20d: a wide long return with no wide value at all (e.g. an
      * implicit-int-promoted narrow expression) still needs the probe, so
      * gate on wide_return too, not just has_wide. */
     if ((has_wide || wide_return) && !mir_probe_wide_colors_for_homed())
         return mir_homed_reject("wide-color");
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_CONST &&
+            mir_homed_wide_binary_only_constant(mir.insns[i].dst))
+            mir.allocation_colors[mir.insns[i].dst] = -1;
 
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
     if (labels == NULL)
@@ -796,12 +999,22 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             object = &mir.objects[insn->object];
             if (type_size(object->type) == 4) {
                 int offset = object->offset + (uses_iy ? 2 : 0);
-                if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL_DE)
+                if (mir.allocation_colors[insn->dst] == MIR_COLOR_HL_DE)
+                    fprintf(out,
+                            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+                            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                            offset, offset + 1, offset + 2, offset + 3);
+                else if (mir.allocation_colors[insn->dst] ==
+                         MIR_COLOR_BC_IY) {
+                    fputs("\tpush hl\n", out);
+                    fprintf(out,
+                            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+                            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                            offset, offset + 1, offset + 2, offset + 3);
+                    fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
+                } else {
                     goto done;
-                fprintf(out,
-                        "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
-                        "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
-                        offset, offset + 1, offset + 2, offset + 3);
+                }
             } else if (!(type_size(object->type) == 1
                   ? (frameless
                      ? mir_emit_stack_byte_param_to_home(
@@ -825,7 +1038,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * dcc_mir_spilled_cfg.c's identical MIR_CONST check (Item
              * T18). */
             if (mir_index_only_constant(insn->dst) ||
-                mir_homed_binary_only_constant(insn->dst))
+                mir_homed_binary_only_constant(insn->dst) ||
+                mir_homed_wide_binary_only_constant(insn->dst))
                 break;
             /* Item 20d: dst may be wide (long) only if mir_probe_wide_
              * colors_for_homed accepted this function - dispatch on the
@@ -855,6 +1069,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             {
                 int operation;
                 long count;
+                if (type_size(insn->secondary_offset) == 4) {
+                    if (!mir_emit_homed_wide_binary_instruction(out, insn))
+                        goto done;
+                    break;
+                }
                 if (mir_direct_branch_for_comparison(i) >= 0)
                     break;
                 if (mir_homed_constant_binary(insn, &operation, &count)) {

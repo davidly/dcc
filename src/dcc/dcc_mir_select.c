@@ -966,7 +966,7 @@ int mir_stream_instruction_count(FILE *stream)
  * infrastructure exists; do not attempt another static predicate for it
  * without new discriminating evidence. */
 
-static int mir_cfg_block_count(void)
+int mir_cfg_block_count(void)
 {
     int blocks = 0;
     int i;
@@ -1043,6 +1043,16 @@ static int mir_has_cfg_backedge(void)
     return 0;
 }
 
+static int mir_has_wide_values(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (type_size(mir.insns[instruction].type) == 4)
+            return 1;
+    return 0;
+}
+
 static int mir_is_profiled_near_cost_single_block(long generated_size,
                                                    long captured_size,
                                                    int generated_instructions,
@@ -1061,6 +1071,155 @@ static int mir_is_byte_profitable_single_block(long generated_size,
     return !mir.has_vla && mir_cfg_block_count() == 1 &&
            generated_size <= captured_size - 20 &&
            generated_instructions <= captured_instructions + 3;
+}
+
+static int mir_is_profiled_indirect_rmw_single_block(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    const struct MirInsn *load = NULL;
+    const struct MirInsn *binary = NULL;
+    const struct MirInsn *store = NULL;
+    int i;
+
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        mir.allocation_spill_count != 0 ||
+        generated_size > captured_size + 16 ||
+        generated_instructions > captured_instructions + 4)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_LOAD_INDIRECT) {
+            if (load != NULL)
+                return 0;
+            load = insn;
+        } else if (insn->opcode == MIR_BINARY) {
+            if (binary != NULL)
+                return 0;
+            binary = insn;
+        } else if (insn->opcode == MIR_STORE_INDIRECT) {
+            if (store != NULL)
+                return 0;
+            store = insn;
+        } else if (insn->opcode == MIR_CALL ||
+                   insn->opcode == MIR_CALL_AGGREGATE ||
+                   insn->opcode == MIR_BRANCH_FALSE ||
+                   insn->opcode == MIR_JUMP ||
+                   insn->opcode == MIR_PHI)
+            return 0;
+    }
+    if (load == NULL || binary == NULL || store == NULL ||
+        store->src1 != load->src1 || store->src2 != binary->dst)
+        return 0;
+    return binary->src1 == load->dst || binary->src2 == load->dst;
+}
+
+static int mir_is_profiled_pointer_member_picker(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    const struct MirInsn *member = NULL;
+    const struct MirInsn *scale = NULL;
+    const struct MirInsn *add = NULL;
+    const struct MirInsn *load = NULL;
+    const struct MirInsn *ret = NULL;
+    int i;
+
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        mir.allocation_spill_count != 0 ||
+        type_ptr_depth(mir.return_type) == 0 ||
+        generated_size > captured_size + 32 ||
+        generated_instructions > captured_instructions + 5)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_MEMBER_ADDRESS) {
+            if (member != NULL)
+                return 0;
+            member = insn;
+        }
+        else if (insn->opcode == MIR_BINARY) {
+            const struct MirInsn *right = mir_definition(insn->src2);
+            if (insn->immediate == '*' && right != NULL &&
+                right->opcode == MIR_CONST && right->immediate == 2) {
+                if (scale != NULL)
+                    return 0;
+                scale = insn;
+            } else if (insn->immediate == '+') {
+                if (add != NULL)
+                    return 0;
+                add = insn;
+            } else
+                return 0;
+        } else if (insn->opcode == MIR_LOAD_INDIRECT) {
+            if (load != NULL)
+                return 0;
+            load = insn;
+        } else if (insn->opcode == MIR_RETURN) {
+            if (ret != NULL)
+                return 0;
+            ret = insn;
+        }
+        else if (insn->opcode == MIR_CALL ||
+                 insn->opcode == MIR_CALL_AGGREGATE ||
+                 insn->opcode == MIR_BRANCH_FALSE ||
+                 insn->opcode == MIR_JUMP ||
+                 insn->opcode == MIR_PHI)
+            return 0;
+    }
+    if (member == NULL || scale == NULL || add == NULL || load == NULL ||
+        ret == NULL || ret->src1 != load->dst || load->src1 != add->dst)
+        return 0;
+    return ((add->src1 == member->dst && add->src2 == scale->dst) ||
+            (add->src2 == member->dst && add->src1 == scale->dst));
+}
+
+static int mir_is_profiled_masked_memset_wrapper(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    const struct MirInsn *call = NULL;
+    const struct MirInsn *mask = NULL;
+    int calls = 0;
+    int masks = 0;
+    int matching_args = 0;
+    int i;
+
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        mir.allocation_spill_count != 0 ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        generated_size > captured_size + 48 ||
+        generated_instructions > captured_instructions + 8)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_CALL) {
+            if (strcmp(insn->name, "memset") != 0)
+                return 0;
+            call = insn;
+            ++calls;
+        } else if (insn->opcode == MIR_BINARY && insn->immediate == '&') {
+            const struct MirInsn *right = mir_definition(insn->src2);
+            if (right == NULL || right->opcode != MIR_CONST ||
+                right->immediate != 255)
+                return 0;
+            mask = insn;
+            ++masks;
+        } else if (insn->opcode == MIR_CALL_AGGREGATE ||
+                   insn->opcode == MIR_BRANCH_FALSE ||
+                   insn->opcode == MIR_JUMP ||
+                   insn->opcode == MIR_PHI)
+            return 0;
+    }
+    if (calls != 1 || masks != 1)
+        return 0;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_ARG &&
+            mir.insns[i].secondary_offset == call->secondary_offset &&
+            mir.insns[i].immediate == 1 &&
+            mir.insns[i].src1 == mask->dst)
+            ++matching_args;
+    return matching_args == 1;
 }
 
 static int mir_is_profiled_slotless_two_block_win(
@@ -1469,7 +1628,8 @@ void mir_end_function(void)
             }
             if (emitted && !strcmp(selector_name, "homed-scalar-cfg") &&
                 (mir_effective_local_bytes() != 0 ||
-                 mir_homed_cfg_depends_on_word_store()) &&
+                 mir_homed_cfg_depends_on_word_store() ||
+                 mir_has_wide_values()) &&
                 (general_filter == NULL || general_filter[0] == 0) &&
                 (emit_filter == NULL || emit_filter[0] == 0)) {
                 FILE *spilled_candidate = tmpfile();
@@ -1670,6 +1830,15 @@ void mir_end_function(void)
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_byte_profitable_single_block(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_indirect_rmw_single_block(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_pointer_member_picker(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_masked_memset_wrapper(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_constant_bound_loop_pair(

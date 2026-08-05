@@ -45,6 +45,11 @@ speed:
 .PARAMETER BuildDir
   Working directory for build artifacts (default: "build").
 
+.PARAMETER NoRamDisk
+    Linux only: disable automatic use of /dev/shm/dcc-runall for build artifacts.
+    By default on Linux, the suite uses /dev/shm when writable and falls back to
+    BuildDir when unavailable.
+
 .PARAMETER BaselineDir
   Directory of per-app baseline files for verification (default: "tests/baselines").
   Each file is named <app>.txt and holds that app's exact expected stdout.
@@ -239,6 +244,7 @@ param(
     [switch]$NoStackCheck,
     [switch]$UseEmulatedM80,
     [string]$BuildDir = "build",
+    [switch]$NoRamDisk,
     [string]$BaselineDir = "tests/baselines",
     [ValidateSet("fast", "nopeep", "full")]
     [string]$Mode = "fast",
@@ -283,6 +289,29 @@ if ($Help) {
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 Set-Location $script:RepoRoot
+
+# On Linux, default build artifacts to tmpfs for lower I/O latency.
+# If /dev/shm is unavailable or opt-out is requested, keep the normal BuildDir.
+if ($IsLinux -and -not $NoRamDisk) {
+    $ramRoot = "/dev/shm"
+    if (Test-Path $ramRoot -PathType Container) {
+        $candidate = Join-Path $ramRoot "dcc-runall"
+        try {
+            New-Item -ItemType Directory -Path $candidate -Force -ErrorAction Stop | Out-Null
+            $probe = Join-Path $candidate ".rw-probe-$PID.tmp"
+            Set-Content -LiteralPath $probe -Value "ok" -NoNewline -ErrorAction Stop
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+            $BuildDir = $candidate
+            Write-Host "--- build root: using Linux tmpfs at $BuildDir (pass -NoRamDisk to disable) ---" -ForegroundColor Cyan
+        }
+        catch {
+            Write-Host "--- build root: /dev/shm unavailable or not writable, using '$BuildDir' ---" -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "--- build root: /dev/shm not present, using '$BuildDir' ---" -ForegroundColor DarkGray
+    }
+}
 
 # Parallel is the default; -Serial forces the sequential fallback. -Report no
 # longer needs to force serial: its "ms" figure is computed from ntvcm's own

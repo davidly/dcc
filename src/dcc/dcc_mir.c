@@ -4256,14 +4256,29 @@ int mir_first_nonlabel_successor(int successor)
  * anywhere before the block truly ends (a jump, branch, return, or the
  * end of the instruction stream) - callers that only care whether a phi
  * exists on this edge, or need its exact position to insert copies, both
- * get the correct answer regardless of what was scheduled before it. */
+ * get the correct answer regardless of what was scheduled before it.
+ *
+ * A later label after a substantive instruction starts another basic block
+ * and must stop the scan. Without that boundary, an edge entering an
+ * intermediate labeled block can incorrectly inherit a phi from a later
+ * block and copy that phi's source before the intermediate block defines it.
+ * Leading/consecutive labels and NOP metadata still belong to the same entry
+ * position and may be skipped safely. */
 int mir_first_phi_or_block_end(int successor)
 {
+    int saw_instruction = 0;
+
     while (successor >= 0 && successor < mir.count) {
         int opcode = mir.insns[successor].opcode;
         if (opcode == MIR_PHI || opcode == MIR_JUMP ||
             opcode == MIR_BRANCH_FALSE || opcode == MIR_RETURN)
             return successor;
+        if (opcode == MIR_LABEL) {
+            if (saw_instruction)
+                return successor;
+        } else if (opcode != MIR_NOP) {
+            saw_instruction = 1;
+        }
         ++successor;
     }
     return successor;
@@ -5034,12 +5049,10 @@ static void mir_allocate_registers(const unsigned char *live_in,
  * wide-coloring probe for mir_try_emit_homed_scalar_cfg. Re-runs the
  * shared allocator with allow_wide_colors=1 using the persisted
  * mir.live_in/mir.live_out (Item 20d part 1) and reports whether every
- * wide (4-byte long) value fits in a single wide pair-color (HL:DE) with
- * zero spills. MIR_COLOR_BC_IY is deliberately rejected here too: moving
- * a value between BC:IY and HL:DE needs its own emission helpers, which
- * do not exist yet, so this first slice only accepts functions whose
- * wide-coloring solution needs at most one simultaneously-live wide
- * value (BC:IY support is separate follow-up scope).
+ * wide (4-byte long) value fits in one of the two pair colors with zero
+ * spills. The homed emitter supports transfers between HL:DE and BC:IY;
+ * wide values crossing calls still spill because neither pair is wholly
+ * callee-saved.
  *
  * mir.allocation_colors/allocation_spills/allocation_spill_count are
  * shared, per-function state that other selectors later in the same
@@ -5074,7 +5087,7 @@ int mir_probe_wide_colors_for_homed(void)
 
     mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1);
 
-    ok = summary.spills == 0 && summary.colors[MIR_COLOR_BC_IY] == 0;
+    ok = summary.spills == 0;
     if (!ok) {
         memcpy(mir.allocation_colors, saved_colors,
                (size_t)value_count * sizeof(*saved_colors));

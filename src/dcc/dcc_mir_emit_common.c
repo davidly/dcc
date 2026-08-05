@@ -512,7 +512,8 @@ int mir_home_uses_iy(void)
 {
     int value;
     for (value = 0; value < mir.next_value; ++value)
-        if (mir.allocation_colors[value] == MIR_COLOR_IY)
+        if (mir.allocation_colors[value] == MIR_COLOR_IY ||
+            mir.allocation_colors[value] == MIR_COLOR_BC_IY)
             return 1;
     return 0;
 }
@@ -549,17 +550,40 @@ int mir_emit_hl_to_home(FILE *out, int value)
     }
 }
 
-/* Item 20d (mir-migration-plan-to-100pct.md): move a wide (4-byte long)
- * homed value into HL:DE, the same convention mir_emit_virtual_load_wide
- * already uses for the spilled-scalar-cfg selector's MIR_RETURN case (L=
- * byte0, H=byte1, E=byte2, D=byte3). Only MIR_COLOR_HL_DE is supported -
- * mir_probe_wide_colors_for_homed() only ever accepts a function whose
- * wide values all fit in this single pair, so MIR_COLOR_BC_IY never
- * reaches here (its move would need its own helper, not yet written). */
+/* Wide values use low-word:first ordering: HL:DE or BC:IY. Keep all pair
+ * transfers here so constants, parameters, operations, and returns share
+ * one representation and cannot drift independently. */
 int mir_emit_wide_home_to_hl_de(FILE *out, int value)
 {
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL_DE: return 1;
+    case MIR_COLOR_BC_IY:
+        fputs("\tld l,c\n\tld h,b\n\tpush iy\n\tpop de\n", out);
+        return 1;
+    default: return 0;
+    }
+}
+
+int mir_emit_hl_de_to_wide_home(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL_DE: return 1;
+    case MIR_COLOR_BC_IY:
+        fputs("\tld c,l\n\tld b,h\n\tpush de\n\tpop iy\n", out);
+        return 1;
+    default: return 0;
+    }
+}
+
+int mir_emit_wide_home_to_stack(FILE *out, int value)
+{
+    switch (mir.allocation_colors[value]) {
+    case MIR_COLOR_HL_DE:
+        fputs("\tpush de\n\tpush hl\n", out);
+        return 1;
+    case MIR_COLOR_BC_IY:
+        fputs("\tpush iy\n\tpush bc\n", out);
+        return 1;
     default: return 0;
     }
 }
@@ -678,12 +702,7 @@ int mir_emit_constant_to_home(FILE *out, int value, long immediate)
     }
 }
 
-/* Item 20d: materialize a wide (4-byte long) constant directly into a
- * value's homed pair color. Only MIR_COLOR_HL_DE is reachable (see
- * mir_emit_wide_home_to_hl_de's comment) since the accept-time probe
- * rejects any function needing MIR_COLOR_BC_IY. Low word (bytes 0-1) goes
- * to HL, high word (bytes 2-3) to DE, matching mir_emit_virtual_load_wide's
- * established wide value representation. */
+/* Materialize both words directly in the allocated pair home. */
 int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate)
 {
     long lo = immediate & 0xffffL;
@@ -692,9 +711,70 @@ int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate)
     case MIR_COLOR_HL_DE:
         fprintf(out, "\tld hl,%ld\n\tld de,%ld\n", lo, hi);
         return 1;
+    case MIR_COLOR_BC_IY:
+        fprintf(out, "\tld bc,%ld\n\tld iy,%ld\n", lo, hi);
+        return 1;
     default:
         return 0;
     }
+}
+
+int mir_emit_cast(FILE *out, int source_type, int target_type)
+{
+    const char *helper;
+    if (type_is_bool(target_type) && !type_is_bool(source_type)) {
+        int nonzero_label = new_label();
+        int end_label = new_label();
+        if (type_size(source_type) > 2)
+            fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
+        else
+            fputs("\tld a,h\n\tor l\n", out);
+        fputs("\tld hl,0\n", out);
+        fprintf(out, "\tjp nz, L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
+                nonzero_label, end_label, nonzero_label, end_label);
+        return 1;
+    }
+    if (source_type == 0 || target_type == 0 || source_type == target_type)
+        return 1;
+    if (type_is_float(target_type) && !type_is_float(source_type)) {
+        if (type_is_long(source_type))
+            helper = (source_type & TYPE_UNSIGNED) != 0 ? "__fulf" : "__flf";
+        else
+            helper = ((source_type & TYPE_UNSIGNED) != 0 ||
+                      type_ptr_depth(source_type) > 0) ? "__fuf" : "__fif";
+        mir_emit_runtime_call(out, helper);
+        return 1;
+    }
+    if (type_is_float(source_type) && !type_is_float(target_type)) {
+        if (type_is_long(target_type))
+            helper = (target_type & TYPE_UNSIGNED) != 0 ? "__fful" : "__ffl";
+        else
+            helper = ((target_type & TYPE_UNSIGNED) != 0 ||
+                      type_ptr_depth(target_type) > 0) ? "__ffu" : "__ffi";
+        mir_emit_runtime_call(out, helper);
+        if (type_size(target_type) == 1) {
+            if ((target_type & TYPE_UNSIGNED) != 0)
+                fputs("\tld h,0\n", out);
+            else
+                fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+        }
+        return 1;
+    }
+    if (type_size(target_type) == 4 && type_size(source_type) <= 2) {
+        if ((source_type & TYPE_UNSIGNED) != 0 ||
+            type_ptr_depth(source_type) > 0)
+            fputs("\tld de,0\n", out);
+        else
+            fputs("\tld a,h\n\trlca\n\tsbc a,a\n\tld d,a\n\tld e,a\n", out);
+        return 1;
+    }
+    if (type_size(target_type) == 1) {
+        if ((target_type & TYPE_UNSIGNED) != 0)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    }
+    return 1;
 }
 
 int mir_emit_word_param_to_home(FILE *out, int value, int offset)
@@ -1009,6 +1089,10 @@ void mir_emit_home_epilogue(FILE *out, int uses_iy)
 int mir_emit_homed_unary_instruction(FILE *out,
                                             const struct MirInsn *insn)
 {
+    const struct MirInsn *source = mir_definition(insn->src1);
+    int source_type = source != NULL ? source->type : 0;
+    int source_wide = type_size(source_type) == 4;
+    int target_wide = type_size(insn->type) == 4;
     int instruction = (int)(insn - mir.insns);
     /* preserve_hl must also cover the case where src1's home register IS hl
      * (so mir_emit_home_to_hl below is a no-op) but src1 is still live
@@ -1021,6 +1105,71 @@ int mir_emit_homed_unary_instruction(FILE *out,
                        mir_value_has_use_after(insn->src1, instruction));
     int label;
 
+    if (source_wide || target_wide) {
+        int dst_color = mir.allocation_colors[insn->dst];
+        int preserve_hl_de =
+            dst_color != MIR_COLOR_HL_DE &&
+            mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+        int preserve_bc_iy =
+            dst_color != MIR_COLOR_BC_IY &&
+            mir_home_color_live_across(instruction, MIR_COLOR_BC_IY);
+        int preserve_hl =
+            dst_color != MIR_COLOR_HL_DE &&
+            mir_home_color_live_across(instruction, MIR_COLOR_HL);
+        int preserve_de =
+            dst_color != MIR_COLOR_HL_DE &&
+            mir_home_color_live_across(instruction, MIR_COLOR_DE);
+
+        if (type_is_float(source_type) || type_is_float(insn->type))
+            return 0;
+        if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
+        if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
+        if (preserve_hl) fputs("\tpush hl\n", out);
+        if (preserve_de) fputs("\tpush de\n", out);
+        if (source_wide) {
+            if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
+                return 0;
+        } else if (!mir_emit_home_to_hl(out, insn->src1)) {
+            return 0;
+        }
+        if (insn->immediate == 0) {
+            if (!mir_emit_cast(out, source_type, insn->type))
+                return 0;
+        } else if (insn->immediate == '+') {
+            if (!source_wide || !target_wide)
+                return 0;
+        } else if (insn->immediate == '-' && source_wide && target_wide) {
+            int carry_label = new_label();
+            fputs("\tld a,l\n\tcpl\n\tld l,a\n"
+                  "\tld a,h\n\tcpl\n\tld h,a\n"
+                  "\tld a,e\n\tcpl\n\tld e,a\n"
+                  "\tld a,d\n\tcpl\n\tld d,a\n"
+                  "\tinc hl\n\tld a,h\n\tor l\n", out);
+            fprintf(out, "\tjp nz, L%d\n\tinc de\nL%d:\n",
+                    carry_label, carry_label);
+        } else if (insn->immediate == '~' && source_wide && target_wide) {
+            fputs("\tld a,l\n\tcpl\n\tld l,a\n"
+                  "\tld a,h\n\tcpl\n\tld h,a\n"
+                  "\tld a,e\n\tcpl\n\tld e,a\n"
+                  "\tld a,d\n\tcpl\n\tld d,a\n", out);
+        } else if (insn->immediate == '!' && source_wide && !target_wide) {
+            label = new_label();
+            fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n\tld hl,0\n", out);
+            fprintf(out, "\tjp nz, L%d\n\tinc hl\nL%d:\n", label, label);
+        } else {
+            return 0;
+        }
+        if (!(target_wide
+              ? mir_emit_hl_de_to_wide_home(out, insn->dst)
+              : mir_emit_hl_to_home(out, insn->dst)))
+            return 0;
+        if (preserve_de) fputs("\tpop de\n", out);
+        if (preserve_hl) fputs("\tpop hl\n", out);
+        if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
+        if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+        return 1;
+    }
+
     if (preserve_hl)
         fputs("\tpush hl\n", out);
     if (!mir_emit_home_to_hl(out, insn->src1))
@@ -1031,7 +1180,6 @@ int mir_emit_homed_unary_instruction(FILE *out,
          * every _Bool object to hold only 0 or 1). Matches mir_emit_cast's
          * spilled-scalar-cfg handling of the same case (MIR_UNARY op=0
          * with a bool destination and non-bool source). */
-        const struct MirInsn *source = mir_definition(insn->src1);
         if (type_is_bool(insn->type) &&
             !type_is_bool(source != NULL ? source->type : 0)) {
             label = new_label();

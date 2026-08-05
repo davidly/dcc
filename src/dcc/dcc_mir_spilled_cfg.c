@@ -3595,8 +3595,8 @@ static void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
  * the range this decomposition was validated for. Shared with Item T46's
  * multiply-by-power-of-two-constant fast path below, which is always an
  * `is_left` shift regardless of the multiplicand's signedness. */
-static void mir_emit_wide_shift_by_constant(FILE *out, int is_left,
-                                            int is_unsigned, long count)
+void mir_emit_wide_shift_by_constant(FILE *out, int is_left,
+                                     int is_unsigned, long count)
 {
     int bytes;
     int bits;
@@ -3957,67 +3957,6 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
     }
     mir_emit_runtime_call(out, helper);
     fputs("\tpop bc\n\tpop bc\n", out);
-    return 1;
-}
-
-static int mir_emit_cast(FILE *out, int source_type, int target_type)
-{
-    const char *helper;
-    if (type_is_bool(target_type) && !type_is_bool(source_type)) {
-        int nonzero_label = new_label();
-        int end_label = new_label();
-        if (type_size(source_type) > 2)
-            fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
-        else
-            fputs("\tld a,h\n\tor l\n", out);
-        fputs("\tld hl,0\n", out);
-        fprintf(out, "\tjp nz, L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
-                nonzero_label, end_label, nonzero_label, end_label);
-        return 1;
-    }
-    if (source_type == 0 || target_type == 0 || source_type == target_type)
-        return 1;
-    if (type_is_float(target_type) && !type_is_float(source_type)) {
-        if (type_is_long(source_type))
-            helper = (source_type & TYPE_UNSIGNED) != 0 ? "__fulf" : "__flf";
-        else
-            helper = ((source_type & TYPE_UNSIGNED) != 0 ||
-                      type_ptr_depth(source_type) > 0) ? "__fuf" : "__fif";
-        mir_emit_runtime_call(out, helper);
-        return 1;
-    }
-    if (type_is_float(source_type) && !type_is_float(target_type)) {
-        if (type_is_long(target_type))
-            helper = (target_type & TYPE_UNSIGNED) != 0 ? "__fful" : "__ffl";
-        else
-            helper = ((target_type & TYPE_UNSIGNED) != 0 ||
-                      type_ptr_depth(target_type) > 0) ? "__ffu" : "__ffi";
-        mir_emit_runtime_call(out, helper);
-        if (type_size(target_type) == 1) {
-            if ((target_type & TYPE_UNSIGNED) != 0)
-                fputs("\tld h,0\n", out);
-            else
-                fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
-        }
-        return 1;
-    }
-    if (type_size(target_type) == 4 && type_size(source_type) <= 2) {
-        if ((source_type & TYPE_UNSIGNED) != 0 ||
-            type_ptr_depth(source_type) > 0)
-            fputs("\tld de,0\n", out);
-        else
-            fputs("\tld a,h\n\trlca\n\tsbc a,a\n\tld d,a\n\tld e,a\n", out);
-        return 1;
-    }
-    if (type_size(target_type) == 1) {
-        if ((target_type & TYPE_UNSIGNED) != 0)
-            fputs("\tld h,0\n", out);
-        else
-            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
-        return 1;
-    }
-    if (type_size(target_type) <= 2 && type_size(source_type) == 4)
-        return 1;
     return 1;
 }
 

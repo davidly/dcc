@@ -319,10 +319,15 @@ int mir_emit_stack_byte_param_to_home(FILE *out, int value, int offset,
 int mir_ulong_log2_pow2(unsigned long v);
 int mir_mul_const_fast_path_eligible(unsigned long multiplier, int dst);
 void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier);
+void mir_emit_wide_shift_by_constant(FILE *out, int is_left,
+                                     int is_unsigned, long count);
 void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
                                  unsigned int word_mask);
 int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate);
 int mir_emit_wide_home_to_hl_de(FILE *out, int value);
+int mir_emit_hl_de_to_wide_home(FILE *out, int value);
+int mir_emit_wide_home_to_stack(FILE *out, int value);
+int mir_emit_cast(FILE *out, int source_type, int target_type);
 int mir_emit_word_param_to_home(FILE *out, int value, int offset);
 int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type);
 int mir_find_label(int label);
@@ -350,6 +355,7 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
+int mir_cfg_block_count(void);
 int mir_homed_cfg_depends_on_word_store(void);
 long mir_stream_size(FILE *stream);
 int mir_stream_instruction_count(FILE *stream);

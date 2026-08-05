@@ -7,10 +7,10 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `48a9152` (Item T103)
-- Published ordinary coverage: **534/2024 functions (26.38%)**
-- Current ordinary coverage: **559/2022 functions (27.65%)**
-- Current stack-check coverage: **564/2123 functions (26.57%)**
+- Published baseline: `70f66ed` (Item T112)
+- Published ordinary coverage: **559/2022 functions (27.65%)**
+- Current ordinary coverage: **570/2022 functions (28.19%)**
+- Current stack-check coverage: **576/2124 functions (27.12%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -95,6 +95,34 @@ zero removals. The denominator fell by two because `a1.end_emulation` and
 retention; no accepted function disappeared. Exact-CI focused validation of
 `tpeepal`, `tlongopt`, and `ts` passes after the final tightening.
 
+## Batch 5
+
+1. T113: correct phi discovery so labels terminate a block after substantive
+   instructions, preventing copies from being attached to a later block.
+2. T114: retain measured fallback gates for one-call boolean phis and large
+   call/phi CFGs.
+3. T115: allocate two independent wide homes, `HL:DE` and `BC:IY`, while
+   preserving the IY callee-save and parameter-offset ABI.
+4. T116: centralize wide pair moves, constants, stack handoff, and cast
+   emission for reuse by homed and spilled backends.
+5. T117: support wide parameters and integer casts, negation, and complement.
+6. T118: support non-helper wide arithmetic and direct constant
+   add/subtract/bitwise/shift/power-of-two multiplication.
+7. T119: arbitrate wide homed output against spilled output; simple pair-homed
+   functions that lose to stack evaluation remain fallback.
+8. T120: admit the measured single-block indirect read-modify-write class.
+9. T121: admit the measured pointer-member picker class.
+10. T122: admit the masked-`memset` wrapper class only when the `& 255` result
+    is the matching call site's fill-byte argument.
+
+The ordinary census is **570/2022 (28.19%)**, +11 names from T112 with zero
+removals. The stack-check census is **576/2124 (27.12%)**, +12 names with zero
+removals. Newly emitted ordinary functions are `tgoto.gt_forward`,
+`tgoto.gt_multi_label`, `tgoto.gt_out_block`, `thoistbc.main`,
+`tvla.fixed_cast_bounds`, `tclit.add_two_long`, `tctxops.ca_sink`,
+`tinlinfb.store_add`, `tptrcnd.pickip`, `tptrrhs.pickip`, and `trw.fill_buf`.
+The final affected-app full-mode check has zero regressions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -129,17 +157,18 @@ retention; no accepted function disappeared. Exact-CI focused validation of
 
 Continue the approved phased roadmap rather than restarting prioritization:
 
-1. **Phase 3 - complete for the safe slice:** arithmetic wide-helper handoff is
-   retained; comparison handoff is measured-unprofitable. Full wide homing now
-   requires two-pair allocation and helper-clobber-aware boundaries.
+1. **Phase 3 - expanded:** two-pair wide allocation, non-helper operations,
+   constants, and wide homed-vs-spilled arbitration are complete. The next
+   wide slice is values crossing helper calls, which requires explicit
+   clobber-aware splitting or spill/reload rather than wider coloring.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by zero-spill impact:** wide values (234
-   text/instruction fallbacks), already-emittable but unprofitable homed CFGs
-   (204), float/non-scalar returns (86), repeated general comparisons (57),
-   and dynamic indexes (54). Do not retry stride-1 dynamic indexing without a
-   smaller address-add contract; the first correctly arbitrated version
-   retained zero corpus changes.
+3. **Next structural priorities by impact:** remeasure the post-T122 rejection
+   population, then prioritize helper-call wide splits and the largest
+   zero-spill selector/profitability classes. Float/non-scalar returns,
+   repeated general comparisons, and dynamic indexes remain known classes.
+   Do not retry stride-1 dynamic indexing without a smaller address-add
+   contract; the first correctly arbitrated version retained zero changes.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and
