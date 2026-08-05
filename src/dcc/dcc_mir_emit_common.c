@@ -700,6 +700,31 @@ int mir_home_uses_iy(void)
     return 0;
 }
 
+int mir_homed_string_call_argument(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int uses = 0;
+    int instruction;
+
+    /* Argument zero is pushed last, so loading its label into HL cannot
+     * clobber another argument waiting in an HL home. Larger CFGs remain
+     * excluded after their newly admitted candidates regressed full-mode
+     * performance despite improving the assembly-text proxy. */
+    if (definition == NULL || definition->opcode != MIR_STRING_ADDRESS ||
+        mir_cfg_block_count() >= 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 != value && insn->src2 != value)
+            continue;
+        if (insn->opcode != MIR_ARG || insn->src1 != value ||
+            insn->immediate != 0)
+            return 0;
+        ++uses;
+    }
+    return uses == 1;
+}
+
 int mir_home_spill_offset(int value, int *offset)
 {
     int spill;
@@ -813,8 +838,13 @@ int mir_emit_wide_home_to_stack(FILE *out, int value)
  * are all directly pushable, so no intermediate move is needed. */
 int mir_emit_home_push(FILE *out, int value)
 {
+    const struct MirInsn *definition = mir_definition(value);
     int offset;
 
+    if (mir_homed_string_call_argument(value)) {
+        fprintf(out, "\tld hl,S%ld\n\tpush hl\n", definition->immediate);
+        return 1;
+    }
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: fputs("\tpush hl\n", out); return 1;
     case MIR_COLOR_DE: fputs("\tpush de\n", out); return 1;

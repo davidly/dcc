@@ -584,6 +584,17 @@ static int mir_homed_is_large_call_phi_cfg(void)
     return has_call && has_phi && mir_cfg_block_count() >= 16;
 }
 
+static int mir_homed_cfg_rematerializes_string_argument(void)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_STRING_ADDRESS &&
+            mir_homed_string_call_argument(mir.insns[i].dst))
+            return 1;
+    return 0;
+}
+
 int mir_try_emit_homed_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -989,6 +1000,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         if (mir.insns[i].opcode == MIR_CONST &&
             mir_homed_wide_binary_only_constant(mir.insns[i].dst))
             mir.allocation_colors[mir.insns[i].dst] = -1;
+        else if (mir.insns[i].opcode == MIR_STRING_ADDRESS &&
+                 mir_homed_string_call_argument(mir.insns[i].dst))
+            mir.allocation_colors[mir.insns[i].dst] = -1;
 
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));
     if (labels == NULL)
@@ -1228,6 +1242,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_STRING_ADDRESS:
             {
                 char label[32];
+                if (mir_homed_string_call_argument(insn->dst))
+                    break;
                 sprintf(label, "S%ld", insn->immediate);
                 if (!mir_emit_label_address_to_home(out, insn->dst, label))
                     goto done;
@@ -1896,6 +1912,13 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             mir_stream_instruction_count(mir.capture_stream) - 2 &&
         mir_stream_size(out) * 50L >
             mir_stream_size(mir.capture_stream) * 47L)
+        goto done;
+    /* A two-instruction deficit regressed the narrow-shift candidates.
+     * A one-instruction deficit remains allowed because the measured
+     * tmirfast/tmirfuse candidates improve in both peep modes. */
+    if (mir_homed_cfg_rematerializes_string_argument() &&
+        mir_stream_instruction_count(out) >
+            mir_stream_instruction_count(mir.capture_stream) + 1)
         goto done;
     if (mir.allocation_spill_count != 0 &&
         (mir_cfg_block_count() > 4 ||

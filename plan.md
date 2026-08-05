@@ -7,17 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `fa1021d` (Items T164-T166)
-- Published ordinary coverage: **654/2021 functions (32.36%)**
-- Published stack-check coverage: **661/2123 functions (31.14%)**
+- Published baseline: `7af886e` (Items T167-T171)
+- Published ordinary coverage: **659/2022 functions (32.59%)**
+- Published stack-check coverage: **666/2124 functions (31.36%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
-- Batch 16 candidate ordinary coverage: **659/2022 functions (32.59%)**
-- Batch 16 candidate stack-check coverage: **666/2124 functions (31.36%)**
+- Batch 17 candidate ordinary coverage: **674/2022 functions (33.33%)**
+- Batch 17 candidate stack-check coverage: **681/2124 functions (32.06%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -465,6 +465,38 @@ consequence of `tc89flta.f_gv` becoming reportable, not a lost MIR function.
 The affected-app full peep/nopeep run passes with zero regressions and 13
 checked improvements.
 
+## Batch 17
+
+1. T172: profile the refreshed `text-size` population and reject multi-block
+   wide binary/unary support, retained-home spill coalescing, and CFG-aware
+   spilled-slot reuse after they add no corpus coverage.
+2. T173: reject broad low-slot admission after it adds five functions but
+   regresses stack-check apps; comparison-branch arbitration changes no
+   selected function.
+3. T174: revalidate near-cost forced acceptance sequentially. Concurrent
+   outer `runall` processes produced misleading results; the sequential
+   campaign confirms that broad text-proxy widening remains unsafe.
+4. T175: rematerialize a one-use string literal directly at its final
+   argument push, sharing one predicate across coloring, definition emission,
+   and argument emission. Restrict the slice to argument zero and at most
+   three CFG blocks so loading the label cannot clobber a pending HL argument
+   and measured larger-CFG regressions remain fallback.
+5. T176: require string-rematerializing homed candidates to stay within one
+   instruction of legacy. The measured two-instruction-deficit narrow shifts
+   regress peep speed; rejecting that homed output lets the profitable spilled
+   alternative win instead.
+
+The candidate ordinary census is **674/2022 (33.33%)**, +15 names and zero
+removals. The candidate stack-check census is **681/2124 (32.06%)**, also +15
+with zero removals. Both add `tbug.main`, `tbug2.main`, `tc89decl.main`,
+`tc89swjt.main`, `tdead.poison`, `tmirfast.main`, `tmirfuse.main`,
+`tmirslot.main`, `tphijoin.main`, `tponce.main`,
+`tstr3.test_strcspn`, `tstr3.test_strspn`, `tunary.shi8`,
+`tunary.shui8`, and `tvlax.main`.
+
+The 49 affected apps pass focused full-mode validation with zero regressions
+and 98 checked cycle/size improvements.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -510,8 +542,8 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T171 ordinary census is
-   led by 827 `text-size`, 140 `unary-not-cost`, 74 `instruction-count`,
+3. **Next structural priorities by impact:** the post-T176 ordinary census is
+   led by 826 `text-size`, 140 `unary-not-cost`, 62 `instruction-count`,
    69 `wide-constant-cost`, 54 `absolute-address-cost`,
    50 `absolute-index-cost`, and 46 `inline-substitution` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared

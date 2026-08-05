@@ -9615,3 +9615,60 @@ The refreshed ordinary rejection population is led by 827 `text-size`, 140
 work from the remaining `text-size` population; the rejected broad FMA,
 widened multiply, float comparison, and float-negation experiments are not
 coverage shortcuts.
+
+## Items T172-T176: final-argument string rematerialization (2026-08-08)
+
+T172 profiles the refreshed `text-size` population and tests several
+structural hypotheses. Multi-block wide binary and unary support add no
+functions. Retained-home spill-slot coalescing finds genuine interference,
+and CFG-aware spilled-slot reuse changes existing output but unlocks no
+coverage. All four experiments were removed rather than retaining
+zero-yield complexity.
+
+T173 tests low-slot instruction-margin admission and comparison-branch
+arbitration. Broad low-slot admission adds five functions but regresses
+stack-check performance. Trying comparison-branch output for already accepted
+generic candidates changes no selected output. Both experiments were removed.
+
+T174 repeats the near-cost forced-accept campaign sequentially. Running
+multiple outer `runall` processes concurrently had produced inconsistent
+performance results; sequential validation reproduces correctness, linked
+size, and runtime regressions and confirms that broad text-proxy widening is
+unsafe.
+
+T175 rematerializes a one-use `MIR_STRING_ADDRESS` at its call argument push
+instead of retaining it in IY. One shared predicate removes the value from
+coloring, skips its definition-site label load, and emits `ld hl,S<n>; push
+hl` at the use. The predicate requires argument index zero because arguments
+are pushed in reverse order: index zero is last, so the label load cannot
+clobber another pending HL-homed argument. It also limits the retained slice
+to at most three CFG blocks after broader admission regressed `tdivmod`,
+`tdmfuse`, `tforfrm`, and `tforpred`. Preserving HL with `push hl; ld
+hl,S<n>; ex (sp),hl` was correctness-safe but erased the profitability win
+and removed 20 previously selected functions, so it was rejected.
+
+T176 adds the measured cost boundary for rematerializing homed candidates.
+A candidate may exceed legacy by at most one instruction: the one-instruction
+deficit in `tmirfast.main` and `tmirfuse.main` improves both peep modes, while
+the two-instruction deficit in `tunary.shi8` and `tunary.shui8` regresses
+peep speed. Rejecting the latter homed output allows the smaller spilled
+alternative to win, adding those functions plus `tdead.poison`.
+
+**Census and focused validation**:
+
+- ordinary: **674/2022 (33.33%)**, +15 names and zero removals;
+- stack-check: **681/2124 (32.06%)**, +15 names and zero removals;
+- common additions: `tbug.main`, `tbug2.main`, `tc89decl.main`,
+  `tc89swjt.main`, `tdead.poison`, `tmirfast.main`, `tmirfuse.main`,
+  `tmirslot.main`, `tphijoin.main`, `tponce.main`,
+  `tstr3.test_strcspn`, `tstr3.test_strspn`, `tunary.shi8`,
+  `tunary.shui8`, and `tvlax.main`;
+- the 49 affected apps pass focused full peep/nopeep validation with zero
+  regressions and 98 checked improvements.
+
+The refreshed ordinary rejection population is led by 826 `text-size`, 140
+`unary-not-cost`, 62 `instruction-count`, 69 `wide-constant-cost`, 54
+`absolute-address-cost`, 50 `absolute-index-cost`, and 46
+`inline-substitution` functions. Continue impact-ranked shared-emitter work;
+the rejected spill-reuse, broad cost-gate, and larger-CFG rematerialization
+experiments are measured non-solutions.

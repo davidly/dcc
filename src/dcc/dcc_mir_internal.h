@@ -353,6 +353,7 @@ int mir_fold_constant_binary(int op, long left, long right,
 int mir_fold_constant_compare(int op, long left, long right,
                                      int operand_type, long *result);
 int mir_float_identity_unary(const struct MirInsn *insn);
+int mir_homed_string_call_argument(int value);
 int mir_has_phi_instruction(void);
 int mir_general_comparison_count(void);
 int mir_home_color_live_across(int instruction, int color);
