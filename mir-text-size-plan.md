@@ -9672,3 +9672,41 @@ The refreshed ordinary rejection population is led by 826 `text-size`, 140
 `inline-substitution` functions. Continue impact-ranked shared-emitter work;
 the rejected spill-reuse, broad cost-gate, and larger-CFG rematerialization
 experiments are measured non-solutions.
+
+## Items T177-T178: direct aggregate pointer parameter homes (2026-08-08)
+
+T177 cross-profiles all 826 remaining `text-size` fallbacks against homed
+rejection classes. Removing a duplicated-looking wide binary whitelist and
+enabling single-block wide call results each change zero corpus rows. General
+homed scalar multiplication adds only `tmulpow2.umul_lhs` and regresses peep
+by 2.46% and nopeep by 2.25%. All three experiments were removed.
+
+T178 extends the existing direct-parameter-home proof to objectless pointer
+loads used as aggregate copy or aggregate-call destinations. Pointer
+parameters are intentionally excluded from MIR object promotion, but their
+stable incoming `SC_PARAM` offsets remain available through
+`mir_scalar_memory_location`. One shared offset helper is used by slot
+planning and emission. The proof rejects direct reuse when the parameter is
+reassigned, address-taken, or otherwise lacks an exact incoming location.
+
+The unrestricted pointer form adds six functions, but
+`tptrdiff.long_dist` regresses peep cycles by 0.5%, nopeep cycles by 1.8%,
+and nopeep linked size by 4.44%. Restricting objectless direct homes to
+values consumed as `MIR_COPY_AGGREGATE` or `MIR_CALL_AGGREGATE` addresses
+retains the five improving aggregate functions and leaves pointer arithmetic
+on the established slot path.
+
+**Census and focused validation**:
+
+- ordinary: **679/2022 (33.58%)**, +5 names and zero removals;
+- stack-check: **686/2124 (32.30%)**, +5 names and zero removals;
+- common additions: `tstructv.assign_return_pair_ptr`,
+  `tstructv.copy_pair_ptr`, `tstructv.copy_wrap_ptr`,
+  `tstructv.fill_big_ptr`, and `tunion2.copy_through_pointer`;
+- focused `tstructv,tunion2` full peep/nopeep validation passes with zero
+  regressions and four checked cycle improvements.
+
+The refreshed ordinary rejection population is led by 821 `text-size`, 140
+`unary-not-cost`, 69 `wide-constant-cost`, 62 `instruction-count`, 54
+`absolute-address-cost`, 50 `absolute-index-cost`, and 46
+`inline-substitution` functions.

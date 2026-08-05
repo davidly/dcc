@@ -2347,39 +2347,56 @@ static int mir_capture_stream_uses_frame(void)
     return result;
 }
 
-/* mir-migration-plan-next10 (post Item 3): a function-parameter value never
- * needs its own dedicated backend slot when the underlying parameter object
- * is never reassigned anywhere in the function (no MIR_STORE targets it) -
- * every later use can simply re-read the same stable incoming ix+N slot the
- * parameter already lives in, instead of copying it into a fresh local slot
- * at the MIR_PARAM definition site and reloading from there. This removes
- * both the copy (store) instructions and the frame-byte growth for every
- * multi-use scalar parameter. Restricted to plain scalars (2 or 4 byte,
- * non-struct, non-aggregate) so the load/store emitters below can reuse the
- * exact same in-range/out-of-range addressing forms the original MIR_PARAM
- * binding already uses - this must stay purely additive: any value this
- * returns false for keeps its prior slot-based behavior unchanged.
- *
- * Item T27: also recognizes a MIR_LOAD whose source object is itself a
- * parameter satisfying every rule above (never stored to, plain scalar,
- * not a divmod-fusion operand, etc.) - such a load always yields the
- * exact same value the object's own MIR_PARAM binding already
- * represents (nothing can have changed it), so it can share the same
- * direct ix+N/iy+N home instead of getting a redundant copy-then-reload
- * through its own backend slot. This only fires for a parameter that
- * already has an object (mir_object_eligible excludes pointer-typed and
- * >2-byte parameters from ever getting one), so it helps re-reads of
- * plain scalar (non-pointer, 1-2 byte) parameters whose value is
- * re-read via a MIR_LOAD after their initial MIR_PARAM home has already
- * been broken by an intervening definition/call - it does not reach
- * tsnprtf's call_vsnprintf residual (buf/fmt are char*, so ineligible
- * for an object at all); closing that one needs a separate, larger
- * change to mir_object_eligible itself and is deferred (see the
- * Execution Log). */
+static int mir_direct_parameter_offset(const struct MirInsn *definition,
+                                       int *offset)
+{
+    int memory_type;
+    int memory_storage;
+
+    if (definition == NULL)
+        return 0;
+    if (definition->object >= 0 && definition->object < mir.object_count) {
+        *offset = mir.objects[definition->object].offset;
+        return 1;
+    }
+    return (definition->opcode == MIR_PARAM ||
+            definition->opcode == MIR_LOAD) &&
+        type_ptr_depth(definition->type) > 0 &&
+        !local_name_address_taken_in_function(definition->name) &&
+        mir_scalar_memory_location(definition, &memory_type,
+                                   &memory_storage, offset) &&
+        memory_storage == SC_PARAM &&
+        type_size(memory_type) == type_size(definition->type);
+}
+
+static int mir_pointer_value_is_aggregate_address(int value)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_COPY_AGGREGATE &&
+            (insn->src1 == value || insn->src2 == value))
+            return 1;
+        if (insn->opcode == MIR_CALL_AGGREGATE && insn->src1 == value)
+            return 1;
+    }
+    return 0;
+}
+
+/* A parameter value does not need a backend slot while its incoming ix+N
+ * location remains unchanged.  Most parameters prove that location through
+ * a promoted MIR object.  Aggregate-address pointer loads are intentionally
+ * objectless, so resolve their declared SC_PARAM location and apply the same
+ * no-reassignment proof.  Other objectless pointer uses remain slot-based:
+ * direct pointer arithmetic measured slower in both output modes. */
 static int mir_param_value_is_direct(int value)
 {
     const struct MirInsn *definition;
+    int has_object;
     int object;
+    int parameter_offset;
     int i;
 
     if (value < 0 || value >= mir.next_value)
@@ -2394,21 +2411,51 @@ static int mir_param_value_is_direct(int value)
          type_size(definition->type) != 4))
         return 0;
     object = definition->object;
-    if (object < 0 || object >= mir.object_count)
+    has_object = object >= 0 && object < mir.object_count;
+    if (!mir_direct_parameter_offset(definition, &parameter_offset))
+        return 0;
+    if (!has_object && !mir_pointer_value_is_aggregate_address(value))
         return 0;
     if (mir.has_vla)
         return 0;
-    for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_STORE && mir.insns[i].object == object)
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (insn->opcode != MIR_STORE)
+            continue;
+        if (has_object && insn->object == object)
             return 0;
+        if (!has_object &&
+            mir_scalar_memory_location(insn, &memory_type,
+                                       &memory_storage, &memory_offset) &&
+            memory_storage == SC_PARAM &&
+            memory_offset == parameter_offset)
+            return 0;
+    }
     if (definition->opcode == MIR_LOAD) {
         int has_param = 0;
-        for (i = 0; i < mir.count; ++i)
-            if (mir.insns[i].opcode == MIR_PARAM &&
-                mir.insns[i].object == object) {
+        for (i = 0; i < mir.count; ++i) {
+            const struct MirInsn *insn = &mir.insns[i];
+            int memory_type;
+            int memory_storage;
+            int memory_offset;
+
+            if (insn->opcode != MIR_PARAM)
+                continue;
+            if ((has_object && insn->object == object) ||
+                (!has_object &&
+                 mir_scalar_memory_location(insn, &memory_type,
+                                            &memory_storage,
+                                            &memory_offset) &&
+                 memory_storage == SC_PARAM &&
+                 memory_offset == parameter_offset)) {
                 has_param = 1;
                 break;
             }
+        }
         if (!has_param)
             return 0;
     }
@@ -2827,9 +2874,12 @@ void mir_emit_virtual_load(FILE *out, int value)
         const struct MirInsn *definition = mir_definition(value);
         int value_type = definition->type;
         int value_size = type_size(value_type);
-        int object_offset = mir.objects[definition->object].offset;
-        int object_iy_offset = object_offset + mir_effective_local_bytes() +
-                                mir.aggregate_temp_bytes;
+        int object_offset;
+        int object_iy_offset;
+        if (!mir_direct_parameter_offset(definition, &object_offset))
+            fatal("missing direct MIR parameter offset");
+        object_iy_offset = object_offset + mir_effective_local_bytes() +
+                           mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && object_iy_offset >= -128 &&
             object_iy_offset + value_size - 1 <= 127) {
             fprintf(out, "\tld l,(iy%+d)\n", object_iy_offset);

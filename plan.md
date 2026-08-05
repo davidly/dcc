@@ -7,17 +7,17 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `7af886e` (Items T167-T171)
-- Published ordinary coverage: **659/2022 functions (32.59%)**
-- Published stack-check coverage: **666/2124 functions (31.36%)**
+- Published baseline: `5f32294` (Items T172-T176)
+- Published ordinary coverage: **674/2022 functions (33.33%)**
+- Published stack-check coverage: **681/2124 functions (32.06%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
 - Batch 10 stack-check coverage: **614/2123 functions (28.92%)**
 - Batch 11 ordinary coverage: **615/2021 functions (30.43%)**
 - Batch 11 stack-check coverage: **621/2123 functions (29.25%)**
-- Batch 17 candidate ordinary coverage: **674/2022 functions (33.33%)**
-- Batch 17 candidate stack-check coverage: **681/2124 functions (32.06%)**
+- Batch 18 candidate ordinary coverage: **679/2022 functions (33.58%)**
+- Batch 18 candidate stack-check coverage: **686/2124 functions (32.30%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -486,8 +486,8 @@ checked improvements.
    regress peep speed; rejecting that homed output lets the profitable spilled
    alternative win instead.
 
-The candidate ordinary census is **674/2022 (33.33%)**, +15 names and zero
-removals. The candidate stack-check census is **681/2124 (32.06%)**, also +15
+The published ordinary census is **674/2022 (33.33%)**, +15 names and zero
+removals. The published stack-check census is **681/2124 (32.06%)**, also +15
 with zero removals. Both add `tbug.main`, `tbug2.main`, `tc89decl.main`,
 `tc89swjt.main`, `tdead.poison`, `tmirfast.main`, `tmirfuse.main`,
 `tmirslot.main`, `tphijoin.main`, `tponce.main`,
@@ -496,6 +496,26 @@ with zero removals. Both add `tbug.main`, `tbug2.main`, `tc89decl.main`,
 
 The 49 affected apps pass focused full-mode validation with zero regressions
 and 98 checked cycle/size improvements.
+
+## Batch 18
+
+1. T177: cross-profile all 826 remaining `text-size` fallbacks against homed
+   rejection classes. Reject zero-yield wide-whitelist and wide-call-result
+   experiments, and reject general homed multiply after its only new function
+   regresses both output modes by more than two percent.
+2. T178: reuse stable incoming parameter homes for objectless pointer loads
+   used as aggregate copy/call destinations. Resolve the declared `SC_PARAM`
+   offset through one shared helper, reject reassigned or address-taken
+   parameters, and retain the existing slot path for other pointer arithmetic.
+   The broader form added `tptrdiff.long_dist` but regressed peep/nopeep, so it
+   was narrowed to the measured aggregate-address class.
+
+The candidate ordinary census is **679/2022 (33.58%)**, +5 names and zero
+removals. The candidate stack-check census is **686/2124 (32.30%)**, also +5
+with zero removals. Both add `tstructv.assign_return_pair_ptr`,
+`tstructv.copy_pair_ptr`, `tstructv.copy_wrap_ptr`,
+`tstructv.fill_big_ptr`, and `tunion2.copy_through_pointer`. Focused
+peep/nopeep validation passes with four checked cycle improvements.
 
 ## Required process
 
