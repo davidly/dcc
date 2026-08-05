@@ -40,6 +40,15 @@ extern uint8_t * get_mem();
 
 #define set_byte( addr, value ) * (uint8_t *) get_mem( addr ) = value
 
+/* Real 6502 hardware fetches a pointer's low byte from addr and its high byte from
+   (addr with only the low 8 bits incremented, no carry into the high byte) -- it never
+   crosses a page boundary. Required for zero-page indirect modes ((a8,x) and (a8),y
+   wrap within page 0 when the pointer address is $xxFF) and is also the source of the
+   famous JMP ($xxFF) indirect bug. get_word() must not be used for these pointer
+   fetches; this replicates the hardware quirk instead. */
+#define get_word_pagewrap( addr ) ( (uint16_t) get_byte( addr ) | \
+    ( (uint16_t) get_byte( ( (addr) & 0xff00 ) | ( ( (addr) + 1 ) & 0xff ) ) << 8 ) )
+
 struct MOS_6502
 {
     uint8_t a, x, y, sp;
@@ -493,7 +502,7 @@ void emulate()
             }
             case 0x01: case 0x21: case 0x41: case 0x61: case 0xc1: case 0xe1:          /* ora/and/eor/adc/cmp/sbc (a8, x) */
             {
-                op_math( op, get_byte( get_word( get_byte( cpu.pc + 1 ) + cpu.x ) ) );
+                op_math( op, get_byte( get_word_pagewrap( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ) ) );
                 break;
             }
             case 0x05: case 0x25: case 0x45: case 0x65: case 0xc5: case 0xe5:          /* ora/and/eor/adc/cmp/sbc a8 */
@@ -513,7 +522,7 @@ void emulate()
             }
             case 0x11: case 0x31: case 0x51: case 0x71: case 0xd1: case 0xf1:          /* ora/and/eor/adc/cmp/sbc (a8), y */
             {
-                op_math( op, get_byte( cpu.y + get_word( get_byte( cpu.pc + 1 ) ) ) );
+                op_math( op, get_byte( cpu.y + get_word_pagewrap( get_byte( cpu.pc + 1 ) ) ) );
                 break;
             }
             case 0x15: case 0x35: case 0x55: case 0x75: case 0xd5: case 0xf5:          /* ora/and/eor/adc/cmp/sbc a8, x */  
@@ -533,7 +542,7 @@ void emulate()
             }
             case 0x06: case 0x26: case 0x46: case 0x66: { address = get_byte( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a8 */
             case 0x0e: case 0x2e: case 0x4e: case 0x6e: { address = get_word( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a16 */
-            case 0x16: case 0x36: case 0x56: case 0x76: { address = ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete; } /* asl/rol/lsr/ror a8, x */
+            case 0x16: case 0x36: case 0x56: case 0x76: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete; } /* asl/rol/lsr/ror a8, x */
             case 0x1e: case 0x3e: case 0x5e: case 0x7e:                                                                       /* asl/rol/lsr/ror a16, x */
             {
                 address = cpu.x + get_word( cpu.pc + 1 );
@@ -596,12 +605,12 @@ _op_rts:
             }
             case 0x68: { cpu.a = pop(); set_nz( cpu.a ); break; }                                  /* pla NZ */
             case 0x6a: case 0x4a: case 0x2a: case 0x0a: { cpu.a = op_rotate( op, cpu.a ); break; } /* asl, rol, lsr, ror */
-            case 0x6c: { cpu.pc = get_word( get_word( cpu.pc + 1 ) ); continue; }                  /* jmp (a16) */
+            case 0x6c: { cpu.pc = get_word_pagewrap( get_word( cpu.pc + 1 ) ); continue; }         /* jmp (a16) */
             case 0x78: { cpu.fInterruptDisable = true; break; }                                    /* sei */
-            case 0x81: { address = get_word( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* stx (a8, x) */
+            case 0x81: { address = get_word_pagewrap( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* sta (a8, x) */
             case 0x84: case 0x85: case 0x86: { address = get_byte( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a8 */
             case 0x8c: case 0x8d: case 0x8e: { address = get_word( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a16 */
-            case 0x91: { address = cpu.y + get_word( get_byte( cpu.pc + 1 ) ); goto _st_complete; }               /* sta (a8), y */
+            case 0x91: { address = cpu.y + get_word_pagewrap( get_byte( cpu.pc + 1 ) ); goto _st_complete; }      /* sta (a8), y */
             case 0x94: case 0x95: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _st_complete; }  /* sta/sty a8, x */
             case 0x96: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _st_complete; }             /* stx a8, y */
             case 0x99: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _st_complete; }                           /* sta a16, y */
@@ -619,10 +628,10 @@ _st_complete:
             case 0x98: { cpu.a = cpu.y; set_nz( cpu.a ); break; }                      /* tya */
             case 0x9a: { cpu.sp = cpu.x; break; }                                      /* txs no flags set */
             case 0xa0: case 0xa2: case 0xa9: { address = cpu.pc + 1; goto _ld_complete; }                         /* ldy/ldx/lda #d8 */
-            case 0xa1: { address = get_word( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
+            case 0xa1: { address = get_word_pagewrap( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
             case 0xa4 : case 0xa5: case  0xa6: { address = get_byte( cpu.pc + 1 ); goto _ld0_complete; }          /* ldy/lda/ldx a8 */
             case 0xac: case 0xad: case 0xae:{ address = get_word( cpu.pc + 1 ); goto _ld_complete; }              /* ldy/lda/ldx a16 */
-            case 0xb1: { address = cpu.y + get_word( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
+            case 0xb1: { address = cpu.y + get_word_pagewrap( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
             case 0xb4: case 0xb5: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _ld0_complete; } /* ldy/lda a8, x */
             case 0xb6: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _ld0_complete; }            /* ldx a8, y */
             case 0xb9 : case 0xbe: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _ld_complete; }               /* lda/ldx a16, y */
