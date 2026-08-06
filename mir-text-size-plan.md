@@ -10249,6 +10249,85 @@ mistaken for a safe global rollout. The difficult long-tail classes remain in
 scope for the 100% target; the immediate priority remains high-impact emitter
 overhead in the dominant spilled path.
 
+## Items T224-T234: call staging, local-slot reuse, and wide homed CFG (2026-08-07)
+
+T224 extends `DCC_MIR_CALL_CACHE_REPORT` with the consuming argument index,
+argument count, and the number of later arguments that are call-only
+constants. Among 527 remaining text/instruction fallbacks, the dominant
+structural population is 4,819 arguments and 2,141 calls. Only five narrow
+cache sites are the first physical push, so narrow early-stack caching is
+rejected. A broader prepacking design is also rejected: 473 cached values have
+only rematerializable later arguments, but moving those pushes earlier emits
+the exact same loads, moves, and pushes as the existing BC/alternate-register
+cache.
+
+T225 handles the material wide case. When a cacheable four-byte value is the
+highest source argument index, its DE:HL result is pushed once at definition.
+The later generic call counts the same four cleanup bytes but suppresses its
+reload and duplicate push. T226 similarly replaces a generic narrow cache's
+`ld l,c / ld h,b / push hl` with `push bc`; specialized fastcalls keep the
+existing HL materialization contract.
+
+T227 profiles the remaining text/instruction fallback MIR stream: 4,819
+arguments, 2,244 binaries, 2,141 calls, 1,854 unary operations, 1,703 stores,
+and 1,622 loads. It also audits physical frame storage for promoted locals.
+T228 lets fully promoted, non-address-taken two- and four-byte locals provide
+holes for backend virtual slots. A separate explicit logical-slot-to-IX-offset
+map preserves logical identities while `mir_backend_frame_slot_count` counts
+only newly allocated frame words. Eligible holes must lie in the effective
+non-reclaimed local frame and have no remaining observable named-memory
+operation. The feature runs only in a fresh fallback retry.
+
+T229 tests global reverse-order MIR argument lowering. Coverage collapses from
+761 to 299 ordinary selections, removing 463 incumbents because selectors and
+validation deliberately consume source-ordered `MIR_ARG` records. The
+experiment is removed. Future argument deferral must preserve MIR construction
+order and remain selector-scoped.
+
+T230 profiles why the retained-home selector declines current near-cost
+fallbacks. Leading causes are spills, unsupported wide values/operations, and
+the historical `load-comparison-cfg` guard. Relaxing that guard admits
+`a1.getc_load_file` and `tallocx.t_nosplit`, but focused full-mode validation
+regresses the peep path by 730 and 25 cycles respectively despite raw
+instruction reductions; the guard remains. Raising the homed spill ceiling
+from four to sixteen changes no selection and is also removed.
+
+T231 completes generic homed call arguments for four-byte long/float values.
+Each argument is pushed directly from its allocated pair with
+`mir_emit_wide_home_to_stack`. An initial conversion through DE:HL is rejected
+after it clobbers a still-live sibling argument homed in DE:HL; using the
+existing pair-stack abstraction fixes the root cause without duplicating move
+logic. T232 admits four-byte call results and moves returned DE:HL through the
+existing pair-home helper.
+
+T233 admits representation-changing homed float casts. The shared unary
+emitter calls the same conversion helpers as the spilled backend and now saves
+an unrelated live BC value across those helper calls. Review also finds and
+fixes a shared float-to-`_Bool` bug: mask the sign bit before the zero test so
+`-0.0f` remains false. T234 admits long/float
+comparisons by pushing the first allocated pair, loading the second into
+DE:HL, and reusing `mir_emit_wide_operation` for all six comparison operators.
+The result returns to its narrow allocated home. Disposable wide-phi and broad
+wide-CFG arithmetic extensions each change no selection and are removed.
+
+**Census and focused validation**:
+
+- ordinary: **764/2023 (37.77%)**, eight selections above the published
+  baseline and zero removals;
+- stack-check: **781/2125 (36.75%)**, ten selections above the published
+  baseline and zero removals;
+- ordinary additions over Batch 33:
+  `tlog.main`, `tlong.tcall`, `tlongreg.test_compares`,
+  `tscanf.test_sscanf_failures`, `tcrcfix.crc_update_byte_probe`,
+  `tctxflt.cond_arr_ptr`, `tctxflt.use_fptr`, and `tctxops.cf_addp1`;
+- stack-check additionally selects `fact.main` and `triangle.main`;
+- the denominator grows by one because selecting `tctxflt.cond_arr_ptr`
+  materializes its formerly inline-only helper `use_fptr`, which is itself
+  MIR-selected;
+- focused full peep/nopeep validation passes with no regressions, including
+  measurable improvements in `t`, `tctxflt`, `tctxops`, `tfloat4`, `tlong`,
+  and `tlongopt`.
+
 ## Items T206-T208: transactional indirect-store value forwarding (2026-08-06)
 
 T206 continues the impact-ranked backend-slot audit rather than returning to

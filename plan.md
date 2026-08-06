@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `27f929c` (Items T212-T214)
-- Published ordinary coverage: **745/2022 functions (36.84%)**
-- Published stack-check coverage: **760/2124 functions (35.78%)**
+- Published baseline: `232a992` (Items T221-T223)
+- Published ordinary coverage: **756/2022 functions (37.39%)**
+- Published stack-check coverage: **771/2124 functions (36.30%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -44,6 +44,8 @@ history preserves them.
 - Batch 32 candidate stack-check coverage: **769/2124 functions (36.21%)**
 - Batch 33 candidate ordinary coverage: **756/2022 functions (37.39%)**
 - Batch 33 candidate stack-check coverage: **771/2124 functions (36.30%)**
+- Batch 34 candidate ordinary coverage: **764/2023 functions (37.77%)**
+- Batch 34 candidate stack-check coverage: **781/2125 functions (36.75%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -217,6 +219,45 @@ The stack-check census is **771/2124 (36.30%)**, also +2 and zero removals.
 Both add `pint.die` and `tcaslv.check_global_compound_param`; focused full
 peep/nopeep validation passes with zero regressions and six checked
 improvements.
+
+## Batch 34
+
+1. T224: enrich the call-cache audit with argument position and later-constant
+   counts. Reject narrow early-stack handoff and generic prepacking: the former
+   has only five sites, while the latter reproduces the current cache's exact
+   instruction sequence.
+2. T225: retain a cacheable wide highest-index argument directly on the
+   physical argument stack from its definition through its generic call.
+3. T226: push a cached narrow generic-call argument directly from BC, while
+   preserving the established BC-to-HL path for specialized fastcalls.
+4. T227-T228: profile remaining fallback opcodes and audit promoted local
+   storage. Reuse fully promoted, non-address-taken two- and four-byte local
+   holes for explicit backend-slot offsets, with a fallback-only retry and
+   unchanged logical slot identities.
+5. T229: reject global reverse-order argument lowering after it removes 463
+   incumbent selections. MIR construction remains source-ordered; any future
+   deferral must be selector-scoped.
+6. T230: profile homed-selector rejection causes and reject broad
+   `load-comparison-cfg` and spill-limit relaxation. The former regresses the
+   peep path in both newly selected apps despite raw instruction wins; the
+   latter changes no selection.
+7. T231-T232: complete the homed generic-call ABI for four-byte scalar
+   arguments and results. Push pair homes directly, avoiding a destructive
+   BC:IY-to-DE:HL conversion, and store DE:HL results through the shared pair
+   home helper.
+8. T233: support homed integer/long-to-float and float-to-integer/long casts,
+   preserving live BC around conversion helpers. Correct shared float-to-bool
+   normalization so `-0.0f` remains false.
+9. T234: emit homed long/float comparisons through the shared wide operation
+   helper. Reject wide-phi copies and broad wide-CFG arithmetic after each
+   changes no selection.
+
+The ordinary census is **764/2023 (37.77%)**, eight selections above the
+published baseline with no removals. The stack-check census is **781/2125
+(36.75%)**, ten selections above the published baseline with no removals.
+The denominator grows by one because selecting `tctxflt.cond_arr_ptr`
+materializes its formerly inline-only helper `use_fptr`, which is also selected
+by MIR. Focused full peep/nopeep validation passes with no regressions.
 
 ## Batch 2
 

@@ -1078,10 +1078,15 @@ int mir_emit_cast(FILE *out, int source_type, int target_type)
     if (type_is_bool(target_type) && !type_is_bool(source_type)) {
         int nonzero_label = new_label();
         int end_label = new_label();
-        if (type_size(source_type) > 2)
-            fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
-        else
+        if (type_size(source_type) > 2) {
+            if (type_is_float(source_type))
+                fputs("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n",
+                      out);
+            else
+                fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
+        } else {
             fputs("\tld a,h\n\tor l\n", out);
+        }
         fputs("\tld hl,0\n", out);
         fprintf(out, "\tjp nz, L%d\n\tjp L%d\nL%d:\n\tinc hl\nL%d:\n",
                 nonzero_label, end_label, nonzero_label, end_label);
@@ -1597,14 +1602,19 @@ int mir_emit_homed_unary_instruction(FILE *out,
         int preserve_de =
             dst_color != MIR_COLOR_HL_DE &&
             mir_home_color_live_across(instruction, MIR_COLOR_DE);
+        int preserve_bc =
+            dst_color != MIR_COLOR_BC_IY &&
+            mir_home_color_live_across(instruction, MIR_COLOR_BC);
 
         if ((type_is_float(source_type) || type_is_float(insn->type)) &&
-            !mir_float_identity_unary(insn))
+            !mir_float_identity_unary(insn) &&
+            insn->immediate != 0)
             return 0;
         if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
         if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
         if (preserve_hl) fputs("\tpush hl\n", out);
         if (preserve_de) fputs("\tpush de\n", out);
+        if (preserve_bc) fputs("\tpush bc\n", out);
         if (source_wide) {
             if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
                 return 0;
@@ -1644,6 +1654,7 @@ int mir_emit_homed_unary_instruction(FILE *out,
               ? mir_emit_hl_de_to_wide_home(out, insn->dst)
               : mir_emit_hl_to_home(out, insn->dst)))
             return 0;
+        if (preserve_bc) fputs("\tpop bc\n", out);
         if (preserve_de) fputs("\tpop de\n", out);
         if (preserve_hl) fputs("\tpop hl\n", out);
         if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);

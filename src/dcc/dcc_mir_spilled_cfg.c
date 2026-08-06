@@ -68,13 +68,24 @@ static int mir_indirect_store_address_forwarding_enabled;
 static int mir_wide_binary_lhs_forwarding_enabled;
 static int mir_stable_pointer_argument_rematerialization_enabled;
 static int mir_global_argument_rematerialization_enabled;
+static int mir_wide_first_argument_stack_cache_enabled;
+static int mir_narrow_argument_direct_push_enabled;
+static int mir_promoted_local_slot_reuse_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
 static unsigned char *mir_backend_slot_accessed;
+static int *mir_backend_slot_offsets;
+static int mir_backend_slot_offset_capacity;
+static int mir_backend_slot_pool_count;
+static int mir_backend_frame_slot_count;
+static int mir_backend_local_slot_count;
+static int mir_spilled_cfg_used_promoted_local_slot;
 #define MIR_BACKEND_SLOT_CALL_CACHE (-2)
+#define MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE (-3)
+#define MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH (-4)
 
 static int mir_virtual_offset(int value)
 {
@@ -85,6 +96,9 @@ static int mir_virtual_offset(int value)
     if (value >= 0 && value < mir.next_value && mir.backend_slots != NULL &&
         mir.backend_slots[value] >= 0)
         slot = mir.backend_slots[value];
+    if (slot >= 0 && slot < mir_backend_slot_pool_count &&
+        mir_backend_slot_offsets != NULL)
+        return mir_backend_slot_offsets[slot];
     return -mir_effective_local_bytes() - mir.aggregate_temp_bytes -
            2 * (slot + 1);
 }
@@ -1218,24 +1232,76 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
     return 1;
 }
 
+static void mir_report_call_cache(int value, int width)
+{
+    const struct MirInsn *call;
+    const struct MirInsn *definition;
+    int argument_count = 0;
+    int argument_index = -1;
+    int later_constant_arguments = 0;
+    int later_arguments = 0;
+    int instruction;
+
+    if (getenv("DCC_MIR_CALL_CACHE_REPORT") == NULL)
+        return;
+    call = &mir.insns[mir_emit_instruction_index];
+    definition = mir_definition(value);
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode != MIR_ARG ||
+            insn->secondary_offset != call->secondary_offset)
+            continue;
+        ++argument_count;
+        if (insn->src1 == value)
+            argument_index = (int)insn->immediate;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode != MIR_ARG ||
+            insn->secondary_offset != call->secondary_offset ||
+            insn->immediate <= argument_index)
+            continue;
+        ++later_arguments;
+        if (mir_call_only_constant(insn->src1))
+            ++later_constant_arguments;
+    }
+    fprintf(stderr,
+            "; MIR call-cache function=%s value=%d width=%d "
+            "definition=%s type=%d call-insn=%d call=%s "
+            "arg-index=%d arg-count=%d later-const=%d later-count=%d\n",
+            mir.name, value, width,
+            definition != NULL
+                ? mir_opcode_name(definition->opcode) : "none",
+            definition != NULL ? definition->type : 0,
+            mir_emit_instruction_index, call->name,
+            argument_index, argument_count,
+            later_constant_arguments, later_arguments);
+}
+
 static int mir_emit_cached_call_argument(FILE *out, int value)
 {
-    const struct MirInsn *definition;
-
     if (mir_cached_call_value != value ||
         mir_cached_call_instruction != mir_emit_instruction_index)
         return 0;
-    definition = mir_definition(value);
-    if (getenv("DCC_MIR_CALL_CACHE_REPORT") != NULL)
-        fprintf(stderr,
-                "; MIR call-cache function=%s value=%d width=2 "
-                "definition=%s type=%d call-insn=%d\n",
-                mir.name, value,
-                definition != NULL
-                    ? mir_opcode_name(definition->opcode) : "none",
-                definition != NULL ? definition->type : 0,
-                mir_emit_instruction_index);
+    mir_report_call_cache(value, 2);
     fputs("\tld l,c\n\tld h,b\n", out);
+    mir_cached_call_value = -1;
+    mir_cached_call_instruction = -1;
+    mir_cached_wide_call_value = -1;
+    mir_cached_wide_call_instruction = -1;
+    return 1;
+}
+
+static int mir_emit_cached_call_argument_to_stack(FILE *out, int value)
+{
+    if (mir_cached_call_value != value ||
+        mir_cached_call_instruction != mir_emit_instruction_index ||
+        mir.backend_slots == NULL ||
+        mir.backend_slots[value] !=
+            MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH)
+        return 0;
+    mir_report_call_cache(value, 2);
+    fputs("\tpush bc\n", out);
     mir_cached_call_value = -1;
     mir_cached_call_instruction = -1;
     mir_cached_wide_call_value = -1;
@@ -1258,25 +1324,20 @@ static void mir_emit_spilled_arg_to_hl(FILE *out, int value)
 
 static int mir_emit_cached_wide_call_argument(FILE *out, int value)
 {
-    const struct MirInsn *definition;
+    int stack_cached;
 
     if (mir_cached_wide_call_value != value ||
         mir_cached_wide_call_instruction != mir_emit_instruction_index)
         return 0;
-    definition = mir_definition(value);
-    if (getenv("DCC_MIR_CALL_CACHE_REPORT") != NULL)
-        fprintf(stderr,
-                "; MIR call-cache function=%s value=%d width=4 "
-                "definition=%s type=%d call-insn=%d\n",
-                mir.name, value,
-                definition != NULL
-                    ? mir_opcode_name(definition->opcode) : "none",
-                definition != NULL ? definition->type : 0,
-                mir_emit_instruction_index);
-    fputs("\texx\n", out);
+    mir_report_call_cache(value, 4);
+    stack_cached = mir.backend_slots != NULL &&
+        mir.backend_slots[value] ==
+            MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE;
+    if (!stack_cached)
+        fputs("\texx\n", out);
     mir_cached_wide_call_value = -1;
     mir_cached_wide_call_instruction = -1;
-    return 1;
+    return stack_cached ? 2 : 1;
 }
 
 /* Item 15 (mir-migration-plan-to-100pct.md): mirrors dcc_ast_gen_expr.c's
@@ -2006,6 +2067,35 @@ static int mir_call_argument_cache_target(int value)
         value, mir_emit_instruction_index,
         mir_cached_call_value >= 0,
         mir_cached_wide_call_value >= 0);
+}
+
+static int mir_wide_call_argument_is_first_pushed(
+    int value, int call_instruction)
+{
+    const struct MirInsn *call;
+    int argument_count = 0;
+    int argument_index = -1;
+    int instruction;
+
+    if (!mir_wide_first_argument_stack_cache_enabled ||
+        !mir_value_is_wide(value) || call_instruction < 0 ||
+        call_instruction >= mir.count)
+        return 0;
+    call = &mir.insns[call_instruction];
+    if (call->opcode != MIR_CALL &&
+        call->opcode != MIR_CALL_AGGREGATE)
+        return 0;
+    for (instruction = 0; instruction < call_instruction; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        ++argument_count;
+        if (arg->src1 == value)
+            argument_index = (int)arg->immediate;
+    }
+    return argument_count > 0 &&
+           argument_index == argument_count - 1;
 }
 
 static int mir_planned_call_argument_cache_target(int value, int wide)
@@ -2903,6 +2993,36 @@ void mir_end_global_argument_rematerialization(void)
     mir_global_argument_rematerialization_enabled = 0;
 }
 
+void mir_begin_wide_first_argument_stack_cache(void)
+{
+    mir_wide_first_argument_stack_cache_enabled = 1;
+}
+
+void mir_end_wide_first_argument_stack_cache(void)
+{
+    mir_wide_first_argument_stack_cache_enabled = 0;
+}
+
+void mir_begin_narrow_argument_direct_push(void)
+{
+    mir_narrow_argument_direct_push_enabled = 1;
+}
+
+void mir_end_narrow_argument_direct_push(void)
+{
+    mir_narrow_argument_direct_push_enabled = 0;
+}
+
+void mir_begin_promoted_local_slot_reuse(void)
+{
+    mir_promoted_local_slot_reuse_enabled = 1;
+}
+
+void mir_end_promoted_local_slot_reuse(void)
+{
+    mir_promoted_local_slot_reuse_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -3036,6 +3156,93 @@ static void mir_verify_planned_stack_handoffs(void)
     }
 }
 
+static int mir_promoted_local_slot_hole(int object, int *offset, int *size)
+{
+    const struct MirObject *candidate;
+    int effective_local_bytes;
+    int instruction;
+
+    if (object < 0 || object >= mir.object_count)
+        return 0;
+    candidate = &mir.objects[object];
+    *size = type_size(candidate->type);
+    *offset = candidate->offset;
+    effective_local_bytes = mir_effective_local_bytes();
+    if (candidate->storage != SC_LOCAL ||
+        (*size != 2 && *size != 4) ||
+        *offset < -effective_local_bytes || *offset + *size > 0 ||
+        !mir_object_is_fully_promoted(object) ||
+        mir_object_address_taken(object))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+        int memory_size;
+
+        if (insn->opcode != MIR_PARAM && insn->opcode != MIR_LOAD &&
+            insn->opcode != MIR_STORE && insn->opcode != MIR_ADDRESS)
+            continue;
+        if (!mir_scalar_memory_location(insn, &memory_type, &memory_storage,
+                                        &memory_offset))
+            return 0;
+        memory_size = type_size(memory_type);
+        if (memory_storage != SC_LOCAL || memory_size <= 0 ||
+            !mir_ranges_overlap(*offset, *size, memory_offset, memory_size))
+            continue;
+        if (insn->object == object && insn->opcode == MIR_STORE)
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int mir_seed_promoted_local_slots(int *slot_end, int slot_capacity)
+{
+    int object;
+    int slot_count = 0;
+
+    if (!mir_promoted_local_slot_reuse_enabled)
+        return 0;
+    for (object = 0; object < mir.object_count; ++object) {
+        int offset;
+        int size;
+        int candidate_unit;
+        int overlaps = 0;
+        int slot;
+
+        if (!mir_promoted_local_slot_hole(object, &offset, &size))
+            continue;
+        for (candidate_unit = 0; candidate_unit < size / 2;
+             ++candidate_unit) {
+            int candidate_offset = offset + 2 * candidate_unit;
+            for (slot = 0; slot < slot_count; ++slot)
+                if (mir_ranges_overlap(candidate_offset, 2,
+                                       mir_backend_slot_offsets[slot], 2)) {
+                    overlaps = 1;
+                    break;
+                }
+            if (overlaps)
+                break;
+        }
+        if (overlaps || slot_count + size / 2 > slot_capacity)
+            continue;
+        if (size == 4) {
+            mir_backend_slot_offsets[slot_count] = offset + 2;
+            mir_backend_slot_offsets[slot_count + 1] = offset;
+            slot_end[slot_count] = -1;
+            slot_end[slot_count + 1] = -1;
+            slot_count += 2;
+        } else {
+            mir_backend_slot_offsets[slot_count] = offset;
+            slot_end[slot_count] = -1;
+            ++slot_count;
+        }
+    }
+    return slot_count;
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
@@ -3045,6 +3252,7 @@ static int mir_prepare_backend_slots(void)
     unsigned char *stack_interval_occupied = NULL;
     int planned_narrow_cache_call = -1;
     int planned_wide_cache_call = -1;
+    int slot_capacity;
     int value;
     int i;
 
@@ -3096,9 +3304,19 @@ static int mir_prepare_backend_slots(void)
         mir.planned_stack_values[i] = -1;
     first = (int *)malloc((size_t)mir.next_value * sizeof(*first));
     last = (int *)malloc((size_t)mir.next_value * sizeof(*last));
-    slot_end = (int *)malloc((size_t)mir.next_value * 2 * sizeof(*slot_end));
+    slot_capacity = mir.next_value * 2 + mir.object_count * 2;
+    slot_end = (int *)malloc((size_t)slot_capacity * sizeof(*slot_end));
     if (first == NULL || last == NULL || slot_end == NULL)
         fatal("out of memory computing MIR backend intervals");
+    if (mir_backend_slot_offset_capacity < slot_capacity) {
+        int *new_offsets = (int *)realloc(
+            mir_backend_slot_offsets,
+            (size_t)slot_capacity * sizeof(*new_offsets));
+        if (new_offsets == NULL)
+            fatal("out of memory computing MIR backend slot offsets");
+        mir_backend_slot_offsets = new_offsets;
+        mir_backend_slot_offset_capacity = slot_capacity;
+    }
     if (mir_planned_stack_handoffs_enabled) {
         stack_interval_occupied =
             (unsigned char *)calloc((size_t)mir.count, 1);
@@ -3128,9 +3346,9 @@ static int mir_prepare_backend_slots(void)
         first[value] = mir.count;
         last[value] = -1;
         mir.backend_slots[value] = -1;
-        slot_end[value] = -1;
-        slot_end[mir.next_value + value] = -1;
     }
+    for (value = 0; value < slot_capacity; ++value)
+        slot_end[value] = -1;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->dst >= 0) {
@@ -3248,7 +3466,11 @@ static int mir_prepare_backend_slots(void)
      * definition and its MIR_ARG consumer rematerialize without a slot.
      * Reuse those existing structural facts here rather than reserving
      * frame space that neither emission path can reference. */
-    mir.backend_slot_count = 0;
+    mir.backend_slot_count =
+        mir_seed_promoted_local_slots(slot_end, slot_capacity);
+    mir_backend_local_slot_count = mir.backend_slot_count;
+    mir_backend_slot_pool_count = mir.backend_slot_count;
+    mir_backend_frame_slot_count = 0;
     mir_slot_report_requested_count = 0;
     mir_slot_report_assigned_count = 0;
     mir_slot_report_param_assigned_count = 0;
@@ -3343,7 +3565,18 @@ static int mir_prepare_backend_slots(void)
                     value, i, planned_narrow_cache_call >= 0,
                     planned_wide_cache_call >= 0);
                 if (cache_target >= 0) {
-                    mir.backend_slots[value] = MIR_BACKEND_SLOT_CALL_CACHE;
+                    if (units == 2 &&
+                        mir_wide_call_argument_is_first_pushed(
+                            value, cache_target))
+                        mir.backend_slots[value] =
+                            MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE;
+                    else if (units == 1 &&
+                             mir_narrow_argument_direct_push_enabled)
+                        mir.backend_slots[value] =
+                            MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH;
+                    else
+                        mir.backend_slots[value] =
+                            MIR_BACKEND_SLOT_CALL_CACHE;
                     if (units == 2)
                         planned_wide_cache_call = cache_target;
                     else
@@ -3386,6 +3619,8 @@ static int mir_prepare_backend_slots(void)
                     int unit;
                     slot = mir.backend_slots[reusable_source];
                     mir.backend_slots[value] = slot;
+                    if (slot < mir_backend_local_slot_count)
+                        mir_spilled_cfg_used_promoted_local_slot = 1;
                     for (unit = 0; unit < units; ++unit)
                         slot_end[slot + unit] = last[value];
                     continue;
@@ -3393,6 +3628,10 @@ static int mir_prepare_backend_slots(void)
                 for (slot = 0; slot + units <= mir.backend_slot_count; ++slot) {
                     int unit;
                     int available = 1;
+                    if (units == 2 &&
+                        mir_backend_slot_offsets[slot + 1] !=
+                            mir_backend_slot_offsets[slot] - 2)
+                        continue;
                     for (unit = 0; unit < units; ++unit)
                         if (slot_end[slot + unit] >= i) {
                             available = 0;
@@ -3402,10 +3641,20 @@ static int mir_prepare_backend_slots(void)
                         break;
                 }
                 if (slot + units > mir.backend_slot_count) {
+                    int unit;
                     slot = mir.backend_slot_count;
+                    for (unit = 0; unit < units; ++unit)
+                        mir_backend_slot_offsets[slot + unit] =
+                            -mir_effective_local_bytes() -
+                            mir.aggregate_temp_bytes -
+                            2 * (mir_backend_frame_slot_count + unit + 1);
                     mir.backend_slot_count += units;
+                    mir_backend_frame_slot_count += units;
+                    mir_backend_slot_pool_count = mir.backend_slot_count;
                 }
                 mir.backend_slots[value] = slot;
+                if (slot < mir_backend_local_slot_count)
+                    mir_spilled_cfg_used_promoted_local_slot = 1;
                 {
                     int unit;
                     for (unit = 0; unit < units; ++unit)
@@ -3454,7 +3703,7 @@ static int mir_prepare_backend_slots(void)
                 mir.name, mir_slot_report_requested_count,
                 mir_slot_report_assigned_count,
                 mir_slot_report_param_assigned_count);
-    return mir.backend_slot_count;
+    return mir_backend_frame_slot_count;
 }
 
 void mir_emit_virtual_load(FILE *out, int value)
@@ -3833,7 +4082,9 @@ static void mir_emit_virtual_store(FILE *out, int value)
         return;
     if (value >= 0 && value < mir.next_value &&
         mir.backend_slots != NULL &&
-        mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE) {
+        (mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE ||
+         mir.backend_slots[value] ==
+             MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH)) {
         int call_instruction =
             mir_planned_call_argument_cache_target(value, 0);
         fputs("\tld c,l\n\tld b,h\n", out);
@@ -4191,10 +4442,16 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         return;
     if (value >= 0 && value < mir.next_value &&
         mir.backend_slots != NULL &&
-        mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE) {
+        (mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE ||
+         mir.backend_slots[value] ==
+             MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE)) {
         int call_instruction =
             mir_planned_call_argument_cache_target(value, 1);
-        fputs("\texx\n", out);
+        if (mir.backend_slots[value] ==
+            MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE)
+            fputs("\tpush de\n\tpush hl\n", out);
+        else
+            fputs("\texx\n", out);
         mir_cached_wide_call_value = value;
         mir_cached_wide_call_instruction = call_instruction;
         return;
@@ -5770,6 +6027,11 @@ int mir_spilled_cfg_depends_on_indirect_store_address_forwarding(void)
     return mir_spilled_cfg_indirect_store_address_forwarding_count != 0;
 }
 
+int mir_spilled_cfg_depends_on_promoted_local_slot_reuse(void)
+{
+    return mir_spilled_cfg_used_promoted_local_slot;
+}
+
 int mir_spilled_cfg_indirect_store_address_forwarding_uses(void)
 {
     return mir_spilled_cfg_indirect_store_address_forwarding_count;
@@ -5800,6 +6062,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
     mir_spilled_cfg_indirect_store_address_forwarding_count = 0;
+    mir_spilled_cfg_used_promoted_local_slot = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -7403,14 +7666,19 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         if (!cached && !mir_emit_rematerialized_argument(
                                 out, arg->src1, size))
                             mir_emit_virtual_load_wide(out, arg->src1);
-                        fputs("\tpush de\n\tpush hl\n", out);
+                        if (cached != 2)
+                            fputs("\tpush de\n\tpush hl\n", out);
                         argument_bytes += 4;
                     } else {
-                        if (!mir_emit_cached_call_argument(out, arg->src1) &&
-                            !mir_emit_rematerialized_argument(
-                                out, arg->src1, size))
-                            mir_emit_virtual_load(out, arg->src1);
-                        fputs("\tpush hl\n", out);
+                        if (!mir_emit_cached_call_argument_to_stack(
+                                out, arg->src1)) {
+                            if (!mir_emit_cached_call_argument(
+                                    out, arg->src1) &&
+                                !mir_emit_rematerialized_argument(
+                                    out, arg->src1, size))
+                                mir_emit_virtual_load(out, arg->src1);
+                            fputs("\tpush hl\n", out);
+                        }
                         argument_bytes += 2;
                     }
                 }
@@ -7519,14 +7787,19 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         if (!cached && !mir_emit_rematerialized_argument(
                                 out, arg->src1, size))
                             mir_emit_virtual_load_wide(out, arg->src1);
-                        fputs("\tpush de\n\tpush hl\n", out);
+                        if (cached != 2)
+                            fputs("\tpush de\n\tpush hl\n", out);
                         argument_bytes += 4;
                     } else {
-                        if (!mir_emit_cached_call_argument(out, arg->src1) &&
-                            !mir_emit_rematerialized_argument(
-                                out, arg->src1, size))
-                            mir_emit_virtual_load(out, arg->src1);
-                        fputs("\tpush hl\n", out);
+                        if (!mir_emit_cached_call_argument_to_stack(
+                                out, arg->src1)) {
+                            if (!mir_emit_cached_call_argument(
+                                    out, arg->src1) &&
+                                !mir_emit_rematerialized_argument(
+                                    out, arg->src1, size))
+                                mir_emit_virtual_load(out, arg->src1);
+                            fputs("\tpush hl\n", out);
+                        }
                         argument_bytes += 2;
                     }
                 }
