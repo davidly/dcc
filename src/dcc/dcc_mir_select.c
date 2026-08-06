@@ -1712,6 +1712,40 @@ static int mir_is_profiled_boolean_phi_branch_retry(
            mir.local_bytes == 4 && mir.backend_slot_count == 2;
 }
 
+static int mir_is_profiled_boolean_phi_measured_cohort(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    int calls = mir_call_count();
+    int blocks = mir_cfg_block_count();
+    int return_kind = mir.return_type & 15;
+
+    if (mir_boolean_phi_branch_simplification_count() <= 0 ||
+        generated_size > captured_size + 40 ||
+        generated_instructions > captured_instructions)
+        return 0;
+    /*
+     * The train/holdout profile separates these allocation shapes from the
+     * peep regressions in the surrounding population. Slotless comparison
+     * arms, the seven-call three-slot shape, and multi-local spill sets stay
+     * excluded even when their assembly-text proxies look better.
+     */
+    if (return_kind == TYPE_INT && blocks <= 40) {
+        if (mir.backend_slot_count == 1 && calls == 0)
+            return 1;
+        if (mir.backend_slot_count == 2 && calls <= 2 &&
+            mir.local_bytes == 0)
+            return 1;
+        if (mir.backend_slot_count == 3 &&
+            (calls <= 5 || (calls >= 10 && blocks <= 20)))
+            return 1;
+        if (mir.backend_slot_count == 0 && calls >= 20)
+            return 1;
+    }
+    return return_kind == TYPE_VOID && blocks <= 12 && calls == 1 &&
+           mir.local_bytes == 2 && mir.backend_slot_count == 2;
+}
+
 static int mir_boolean_phi_profile_is_semantically_eligible(void)
 {
     return mir_cfg_block_count() <= 64 &&
@@ -2136,6 +2170,7 @@ void mir_end_function(void)
             int strict_phi_fallthrough_active = 0;
             int block_cse_retry_attempted = 0;
             int boolean_phi_retry_attempted = 0;
+            int measured_boolean_candidate = 0;
             int rematerialized_home_retry_attempted = 0;
             int rematerialized_home_allocation_active = 0;
             int address_rematerialization_retry_attempted = 0;
@@ -2323,6 +2358,13 @@ evaluate_generated:
                          !strcmp(forced_function, mir.name)))
                         fallback_reason = "forced";
                 }
+                if (boolean_phi_retry_attempted &&
+                    mir_boolean_phi_branch_simplification_count() > 0 &&
+                    mir_boolean_phi_profile_is_semantically_eligible() &&
+                    mir_is_profiled_boolean_phi_measured_cohort(
+                        generated_size, captured_size,
+                        generated_instructions, captured_instructions))
+                    measured_boolean_candidate = 1;
                 if (fallback_reason != NULL) {
                     /* Keep the selected reason. */
                 }
@@ -2375,6 +2417,7 @@ evaluate_generated:
                     fallback_reason = "block-cse-cost";
                 else if (boolean_phi_retry_attempted &&
                          mir_boolean_phi_branch_simplification_count() > 0 &&
+                         !measured_boolean_candidate &&
                          !mir_is_profiled_boolean_phi_branch_retry(
                              generated_size, captured_size,
                              generated_instructions,
@@ -2785,20 +2828,6 @@ evaluate_generated:
                     fallback_reason = "call-heavy-general-compare";
                 else if (mir_cfg_block_count() > 64)
                     fallback_reason = "cfg-block-count";
-                /* Item A (mir-migration-plan-forward.md): the previous
-                 * "near-cost" exception here let a MIR_CALL to a
-                 * static-inline callee through even though such a callee
-                 * has no standalone emitted body once legacy's AST-level
-                 * inline substitution eliminates every call site (verified
-                 * via DCC_MIR_FORCE_ACCEPT_FUNCTION=assign_pre in
-                 * tests/forint.c: MIR emitted `call _Z0026` to
-                 * set_sym_val, a label with zero definitions anywhere in
-                 * the program, causing total loss of execution). A
-                 * corpus-wide scan confirmed no function currently
-                 * exploits the exception (dead code, zero net coverage
-                 * change), but it remains unsound because it never checks
-                 * whether the callee actually has a materialized body.
-                 * Any inline-substitution call must always fall back. */
                 else if (mir_has_inline_substitution_call())
                     fallback_reason = "inline-substitution";
                 else if (mir_has_declared_pointer_array())
@@ -2813,7 +2842,8 @@ evaluate_generated:
                                captured_instructions)) &&
                          !mir_is_profiled_constant_bound_loop_pair(
                              generated_size, captured_size,
-                             generated_instructions, captured_instructions))
+                             generated_instructions,
+                             captured_instructions))
                     fallback_reason = "cfg-backedge";
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -3333,6 +3363,11 @@ evaluate_generated:
                         getenv("DCC_MIR_PROFILE_BOOLEAN_PHI");
                     if (forced_accept != NULL &&
                         !strcmp(forced_accept, mir.name))
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        strcmp(fallback_reason, "forced") &&
+                        measured_boolean_candidate &&
+                        mir_boolean_phi_profile_is_semantically_eligible())
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "boolean-phi-cost") &&

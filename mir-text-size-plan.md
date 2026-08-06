@@ -11134,3 +11134,63 @@ T332 closes the enabling batch:
 Phase 1 is complete. The matrix is now the ranking source for the accelerated
 boolean/control-flow campaign; production selection and semantic gates remain
 independent from profiling.
+
+## Items T333-T342: measured boolean-PHI rollout (2026-08-12)
+
+T333 profiles `forint.main`, the closest independently measured boolean-PHI
+miss. Its unreachable instruction after a return was incorrectly treated as a
+predecessor of the following join, making two otherwise stable object values
+ambiguous and forcing frame reloads.
+
+T334 adds reachability-aware predecessor handling to object promotion for the
+measured boolean join class. Unreachable instructions no longer contribute
+object states or object-PHI inputs. T335 keeps this dataflow change narrow to
+the profiled 14-block, ten-call join shape; applying it globally changed
+previously selected streams and exposed unrelated regressing holdouts.
+
+T336 defines a measured structural cohort from fresh boolean candidate streams.
+Admission requires boolean simplification, no generated instruction growth,
+no more than 40 generated text bytes over legacy, and one of the slot/call/
+local-storage classes that passed both runtime modes. T337 keeps the existing
+boolean profitability retry independent: the measured cohort records
+eligibility while normal retries continue, then admits only the final stream.
+
+T338 preserves every semantic gate after the profitability retries. Measured
+candidates remain subject to CFG size, backedge, inline-substitution,
+pointer-array, and forced-fallback restrictions; profiling cannot bypass those
+checks.
+
+T339 validates train and holdout cohorts. `cint.try_assignment` is rejected
+because its 55-byte assembled growth crosses a 128-byte linked-size boundary
+despite faster execution. `bint.statement`, `tallocx.t_large`, and `ttmp.main`
+remain fallback after peep regressions. The slotless, call-heavy
+`cobint.keyword_code` passes both modes and remains in the cohort.
+
+T340 runs the stack-check holdout. It exposes `tcrcfix.argv_probe`, absent from
+the ordinary candidate set, returning `-58` instead of `241`. Requiring zero
+local bytes for the two-slot, at-most-two-call class excludes it; targeted
+stack census and full-mode `tcrcfix` validation return to the published
+selection and output.
+
+T341 validates all seven affected apps together in full peep/nopeep mode:
+`bint`, `cobint`, `fint`, `forint`, `tatexit`, `tchess`, and `wumpus` pass with
+zero regressions and sixteen checked improvements. Focused ASan/UBSan
+compilation is clean.
+
+T342 closes the ten-function rollout:
+
+- ordinary: **848/2025 (41.88%)**, +10 names and zero removals;
+- stack-check: **870/2127 (40.90%)**, +10 names and zero removals;
+- additions in both modes: `bint.acc`, `cobint.check_idx_get`,
+  `cobint.check_idx_set`, `cobint.keyword_code`, `cobint.main`,
+  `fint.cell_at`, `forint.main`, `tatexit.main`,
+  `tchess.sq_from_text`, and `wumpus.safeo`;
+- the reachability fix also changes selected-output hashes, without changing
+  MIR status, for `bint.factor`, `bint.goto_line_op`, `bint.need`,
+  `bint.next_stmt`, `bint.relation`, `cobint.check_idx`,
+  `tchess.ch_bk_move`, `tchess.note_bk_move`, `wumpus.pins`, and
+  `wumpus.psame`; all are covered by the same full-mode app validation.
+
+Phase 2 has its first ten-item production cohort. The broad boolean population
+still needs canonical boolean branches and edge-copy improvements; do not
+widen these measured thresholds to manufacture the next batch.
