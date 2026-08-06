@@ -11450,3 +11450,80 @@ T382 closes the cohort with these additions in both modes:
 population falls from 30 to 16. The next batch returns to the 319-function
 `text-size` and 158-function boolean-PHI populations; the sixteen rejected
 loops remain measured performance work, not gate headroom.
+
+T383 investigates the 101-function `dynamic-index-base-cost` and 89-function
+`block-cse-cost` populations per Campaign 2's revised priority. Both admission
+thresholds (call-containing functions need >=15 saved instructions;
+single-block CSE retry needs >=5 net instructions after requiring three
+eliminations) are confirmed load-bearing measured boundaries from T183 and
+T271/T272, not quick-tune targets; the closest current candidates
+(`tfldparr.main` at margin 10, and the CSE population's own prior widening
+regressions on `tdivmod.main`/`trtl2`/`tsnprtf`/`tstr2`) do not justify
+relaxing either gate.
+
+Direct MIR inspection of `tfldparr.main` (a dynamic-index-base-cost near-miss)
+exposed a genuinely new emitter gap instead: `mir_constant_absolute_access_-
+supported`/`mir_prepare_constant_absolute_operand`/`mir_resolve_constant_-
+absolute_address` (`dcc_mir_emit_common.c`) already fold a chain of constant
+global/extern `MIR_ADDRESS` -> constant `MIR_MEMBER_ADDRESS` offsets ->
+constant-index `MIR_INDEX_ADDRESS` steps into one absolute symbol+offset
+operand, but only when the final consumer is a direct `MIR_LOAD_INDIRECT`/
+`MIR_STORE_INDIRECT` dereference. The same fully-constant chain used instead
+as a *value* (`p = &nodes[k];`, passed as an argument, stored into a field)
+still recomputed the whole base-load-plus-add sequence at runtime.
+
+The fix has two parts, both required together or the base computation stays
+alive as dead code alongside the new fast path:
+
+1. `mir_emit_constant_absolute_address_value()` (new, `dcc_mir_spilled_cfg.c`)
+   reuses `mir_prepare_constant_absolute_operand()` against a resolving
+   `MIR_MEMBER_ADDRESS`/`MIR_INDEX_ADDRESS` instruction's own `dst` and emits
+   `ld hl,<label>+<offset>` directly, wired in after the existing
+   `mir_value_only_used_by_constant_absolute_address` skip check at both
+   emission sites.
+2. `mir_value_is_constant_absolute_address()` (new, `dcc_mir_emit_common.c`,
+   a thin wrapper around the existing static resolver) is OR'd into the
+   recursive-acceptance branch of `mir_value_only_used_by_absolute_access()`,
+   so a chain's base value is recognized as provably dead when its sole
+   consumer resolves this way itself, regardless of how that consumer's own
+   result is later used. Without this, `tfldparr.main` only improved from 144
+   to 142 generated instructions (the base stayed live); with it, 136.
+
+No new semantic gate was added: `mir_resolve_constant_absolute_address()`
+already excludes unsafe cases (nonzero-offset `SC_EXTERN` symbols, given
+Link-80 EXTRN+offset relocation limits; runtime-variable-stride or
+non-constant-index `MIR_INDEX_ADDRESS`), so the fast path is inherently gated
+to already-proven-safe constant chains.
+
+A fresh 24-way ordinary census (`scripts/mir-migration-census.py`) shows zero
+census-count change (**888/2026**, zero newly emitted, zero regressed) because
+no function crosses an acceptance threshold from this alone, but real
+per-function improvement across thirty apps: `dynamic-index-base-cost` falls
+319->317 in the unrelated text-size bucket (rounding: actually 101->96),
+`phi-fallthrough-cost` 46->44, `wide-store-cost` 38->36, `cfg-backedge` 16->17
+(reclassifying `tfldparr.main`, now blocked on its loop instead), and
+`absolute-index-cost` 19->30 (functions that previously fell into a
+larger-margin bucket like generic `text-size` now use constant-index-absolute
+addressing for their address values too and are caught by that gate's tighter
+4% ratio instead -- two of them, `tptrlhs.touch_ptr_to_array_deref` and
+`tc89init.main`, are within four instructions of that threshold, a lead for a
+future item). Of the thirty apps with changed census rows, only `tstruct` had
+an already-`mir`-accepted function change its selected hash (its constant
+struct-member-address chain is now used as a value); focused full-mode
+validation of `tstruct` passes with zero regressions and small measured
+improvements (peep -0.01%, nopeep -0.03% cycles, nopeep -1.96% bytes).
+
+The mandatory full extended gate (`runall.ps1 -Mode full -Extended
+-RunTimeout 30`) passes completely: 314/323 apps (9 skipped per existing
+overrides), extended c-testsuite, diagnostics, and dccpeep fixtures all clean,
+zero performance regressions, and cycle/byte improvements in twelve apps
+(`wumpus`, `tstructv`, `fint`, `cobint`, `tstr`, `forint`, `tctxflt`, `tvla`,
+`a1`, `tptrcnd`, `tptrlhs`) beyond `tstruct`. This is committed as Phase 3
+item 3 architectural progress (centralizing absolute-address resolution
+across both dereference and value consumers) even though it does not itself
+change ordinary/stack-check coverage; it reduces several populations' margins
+toward their existing thresholds and must not be re-measured as a coverage
+regression by future batches. Coverage remains **888/2026 (43.83%) ordinary**;
+stack-check census still needs to be regenerated and compared before the next
+batch's commit, and the near-miss absolute-index-cost pair above is the
+immediate next lead.

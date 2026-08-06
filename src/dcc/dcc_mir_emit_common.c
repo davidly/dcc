@@ -135,10 +135,33 @@ int mir_constant_absolute_address_has_index(int value)
     return 0;
 }
 
+/* T383 (mir-text-size-plan.md): true only when this value's own chain of
+ * constant MEMBER_ADDRESS/INDEX_ADDRESS steps rooted at a global/extern
+ * resolves to one compile-time absolute address, exposed for
+ * mir_value_only_used_by_absolute_access's recursive base-liveness check
+ * below and for direct emission-time materialization
+ * (mir_emit_constant_absolute_address_value in dcc_mir_spilled_cfg.c). */
+int mir_value_is_constant_absolute_address(int value)
+{
+    const struct MirInsn *base;
+    int storage;
+    long offset;
+
+    return mir_resolve_constant_absolute_address(
+        value, &base, &storage, &offset);
+}
+
 /* True only when every use of an address value is another constant member
  * step or a supported direct absolute load/store. This lets slot preparation
  * and emission remove the complete dead address chain, not just optimize the
- * final dereference while retaining its frame traffic. */
+ * final dereference while retaining its frame traffic.
+ *
+ * A MEMBER_ADDRESS/INDEX_ADDRESS consumer whose own value is itself a
+ * resolved constant absolute address is accepted unconditionally, not only
+ * when its further uses recursively qualify: mir_emit_constant_absolute_-
+ * address_value fires for such a consumer regardless of how its result is
+ * later used (dereferenced, stored as data, or passed as an argument), so
+ * this value's base is provably never read at emission time either way. */
 int mir_value_only_used_by_absolute_access(
     int value, int (*access_supported)(const struct MirInsn *))
 {
@@ -155,8 +178,9 @@ int mir_value_only_used_by_absolute_access(
         found_use = 1;
         if ((insn->opcode == MIR_MEMBER_ADDRESS ||
              insn->opcode == MIR_INDEX_ADDRESS) &&
-            mir_value_only_used_by_absolute_access(
-                insn->dst, access_supported))
+            (mir_value_is_constant_absolute_address(insn->dst) ||
+             mir_value_only_used_by_absolute_access(
+                 insn->dst, access_supported)))
             continue;
         if (access_supported(insn))
             continue;

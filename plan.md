@@ -12,13 +12,17 @@ The long-term goal is 100% MIR-required coverage and removal of legacy
 capture/replay only after the runnable and extended corpora pass.
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `b5d0b04`
-- Published ordinary coverage: **872/2026 (43.04%)**
-- Published stack-check coverage: **894/2128 (42.01%)**
+- Published baseline: `b875d0e`
+- Published ordinary coverage: **888/2026 (43.83%)**
+- Published stack-check coverage: **910/2128 (42.76%)**
 - Current ordinary coverage: **888/2026 (43.83%)**
 - Current stack-check coverage: **910/2128 (42.76%)**
-- Current production cohort: 16 allocator-backed backedge additions, zero
-  removals, focused full-mode and sanitizer gates clean.
+- Latest production cohort: 16 allocator-backed backedge additions, zero
+  removals, focused full-mode, sanitizer, and full extended gates clean.
+- Latest architectural item (T383, not yet published): constant-absolute-
+  address resolution now covers value consumers, not only dereferences.
+  Zero coverage change, zero regressions, full extended gate clean; narrows
+  several fallback populations toward their existing thresholds.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
@@ -30,7 +34,7 @@ capture/replay only after the runnable and extended corpora pass.
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
 
-## Current production cohort
+## Latest production cohort
 
 The current cohort promotes three measured allocator-backed loop strata after
 all specialized loop selectors decline: call-containing homed CFG, minimally
@@ -60,6 +64,13 @@ regressed both runtime modes by more than 20%.
 7. Static-body placement is part of correctness. A selector change can alter
    legacy inline decisions even when its Z80 is valid; selected hashes and
    census denominators must remain stable unless that change is deliberate.
+8. Residual unused wide slots are not new headroom. The 319-function
+   text-size census reproduces the previously rejected one-use wide
+   binary-to-unary population.
+9. Broad boolean-PHI work is no longer the next batch. All 158 residual
+   candidates already simplify at least one valid PHI tree; only seven
+   functions have extra-use blockers and seven have nontransparent constant
+   edges, below the ten-function campaign threshold.
 
 ## Current impact ranking
 
@@ -67,17 +78,27 @@ The current ordinary fallback population is:
 
 | priority | fallback reason | functions |
 | --- | --- | ---: |
-| 1 | text-size | 319 |
+| 1 | text-size | 317 |
 | 2 | boolean-phi-cost | 158 |
-| 3 | dynamic-index-base-cost | 101 |
+| 3 | dynamic-index-base-cost | 96 |
 | 4 | block-cse-cost | 89 |
 | 5 | unary-not-cost | 55 |
 | 6 | wide-constant-cost | 48 |
 | 7 | inline-substitution | 47 |
-| 8 | phi-fallthrough-cost | 46 |
-| 9 | cfg-backedge | 16 |
-| 10 | wide-store-cost | 38 |
-| 11 | planned-index-base-cost | 37 |
+| 8 | phi-fallthrough-cost | 44 |
+| 9 | absolute-index-cost | 30 |
+| 10 | absolute-address-cost | 25 |
+| 11 | cfg-backedge | 17 |
+| 12 | wide-store-cost | 36 |
+| 13 | planned-index-base-cost | 37 |
+
+(As of T383/Batch 45's constant-absolute-address-value fast path: 888/2026
+unchanged, zero regressions, but real per-function margin improvement in the
+populations above. `absolute-index-cost` rose from 19 to 30 because several
+functions now use constant-index-absolute addressing for address *values*
+too and are caught by that gate's tighter 4% ratio instead of a larger-margin
+bucket; two of them, `tptrlhs.touch_ptr_to_array_deref` and `tc89init.main`,
+are within four instructions of admission and are the next lead.)
 
 Reasons are the last rejected candidate and overlap conceptually. Campaign
 budgets therefore use net census gains, never sums of reason counts.
@@ -111,9 +132,9 @@ affected-function manifest, census comparison, and focused runtime cohort.
 ## Campaign 1: boolean and acyclic control flow
 
 Target cumulative coverage of at least 46%, then continue while this remains
-the highest-yield matrix class. Planned remaining gain: **+57**.
+the highest-yield matrix class. Planned remaining gain: **+55**.
 
-1. Reclassify the 159 boolean-PHI, 57 unary-not, and 46 phi-fallthrough
+1. Reclassify the 158 boolean-PHI, 55 unary-not, and 46 phi-fallthrough
    fallbacks by MIR shape and actual selected retry.
 2. Add a MIR canonicalization pass that replaces boolean-value PHIs consumed
    only by a branch with predecessor-edge branches. Preserve PHIs with any
@@ -131,29 +152,43 @@ the highest-yield matrix class. Planned remaining gain: **+57**.
 Stop after two coherent implementations if net gain remains below ten, and
 move to Campaign 2 rather than tuning byte/block thresholds.
 
+The first Batch 45 classification reached that stop condition: the residual
+boolean-PHI blockers split into sub-ten-function classes, while the dominant
+`non-phi` report consists of ordinary branch conditions rather than missed PHI
+trees. Pause this campaign and execute Campaign 2. Return only when a fresh
+matrix identifies a reusable ten-function boolean cause.
+
 ## Campaign 2: slots, addresses, CSE, and indexes
 
-Target cumulative coverage of at least 52%. Planned gain: **+122**.
+Target cumulative coverage of at least 52%. Planned gain: **+115**.
 
-1. Replace whole-value backend-slot lifetimes with use-position intervals and
+1. Start with the 101 `dynamic-index-base-cost` and 89 `block-cse-cost`
+   candidates. Classify dynamic indexes by base lifetime, stride, calls,
+   slots, and repeated use; classify CSE by eliminated opcode and residual
+   frame/register cost.
+2. Do not repeat the adjacent-DE dynamic-index handoff, which changed 83 app
+   streams and promoted zero functions, or widen the single-block homed CSE
+   five-instruction gate, whose rejected population includes measured peep
+   regressors.
+3. Replace whole-value backend-slot lifetimes with use-position intervals and
    safe splitting around calls.
-2. Keep incoming parameters and rematerializable constants/addresses out of
+4. Keep incoming parameters and rematerializable constants/addresses out of
    frame slots until a real clobber interval requires storage.
-3. Coalesce representation-identical aliases, PHI copies, and one-definition
+5. Coalesce representation-identical aliases, PHI copies, and one-definition
    forwards through one shared interference predicate.
-4. Centralize symbol-plus-offset resolution across members and index chains.
+6. Centralize symbol-plus-offset resolution across members and index chains.
    Loads, stores, address planning, CSE, and extern emission must use the same
    resolver.
-5. Replace speculative block CSE with scoped value numbering that records
+7. Replace speculative block CSE with scoped value numbering that records
    alias class, kills, calls, and use count.
-6. Build one index plan choosing retained, rematerialized, absolute, or stack
+8. Build one index plan choosing retained, rematerialized, absolute, or stack
    bases from liveness and clobber data; retire parallel index heuristics.
-7. Validate straight-line, acyclic CFG, call-containing, and aggregate-address
+9. Validate straight-line, acyclic CFG, call-containing, and aggregate-address
    cohorts independently before broad promotion.
 
 ## Campaign 3: calls, wide values, and systemic text size
 
-Target cumulative coverage of at least 57%. Planned gain: **+105**.
+Target cumulative coverage of at least 57%. Planned gain: **+100**.
 
 1. Replace one-sequence nested-call staging with a call plan containing
    argument evaluation order, prepacked constants, nested results, cleanup
@@ -170,7 +205,7 @@ Target cumulative coverage of at least 57%. Planned gain: **+105**.
 
 ## Campaign 4: allocator-backed loops, inline substitution, and the semantic tail
 
-Cross **1,216/2,026 (60.02%)**. Planned remaining gain: **+60**.
+Cross **1,216/2,026 (60.02%)**. Planned remaining gain: **+58**.
 
 1. Fix backedge correctness through edge-aware liveness, PHI initialization,
    and loop-carried copies. Add forced-MIR focused coverage for every
@@ -241,7 +276,7 @@ third as a holdout. Split by app, not function.
 
 ## 60% completion criteria
 
-1. Ordinary production MIR coverage is at least **1,215/2,025**.
+1. Ordinary production MIR coverage is at least **1,216/2,026**.
 2. Stack-check coverage has no removal from the current published baseline.
 3. Every new or changed active function passes affected-app full mode.
 4. The exact final revision passes the full extended pre-commit gate.

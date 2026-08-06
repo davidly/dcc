@@ -5996,6 +5996,37 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     return 0;
 }
 
+/* T383 (mir-text-size-plan.md): mir_emit_constant_absolute_load/store already
+ * collapse a global/extern base plus constant MEMBER_ADDRESS/INDEX_ADDRESS
+ * offsets into one absolute operand, but only for the instruction that
+ * *dereferences* the resulting address (a scalar load/store). When the same
+ * fully-constant chain is instead consumed as plain data - stored as a
+ * pointer value, passed as a call argument, or returned - the address is
+ * still recomputed at runtime through the whole base-load-and-add sequence.
+ * mir_prepare_constant_absolute_operand already proves and formats the exact
+ * same operand from insn->dst directly (mir_resolve_constant_absolute_address
+ * walks from the instruction defining the value, which is this instruction
+ * itself when called against its own dst); reuse it here to materialize the
+ * value in one `ld hl,<label>+<offset>` instead. Ordered after each site's
+ * existing "only used by a supported load/store" skip so the dereferencing
+ * consumer keeps folding the address into its own single instruction rather
+ * than this value being materialized and then immediately redereferenced. */
+static int mir_emit_constant_absolute_address_value(
+    FILE *out, const struct MirInsn *insn)
+{
+    char operand[160];
+
+    if (!mir_prepare_constant_absolute_operand(
+            out, insn->dst, operand, sizeof(operand)))
+        return 0;
+    mir_spilled_cfg_used_constant_absolute = 1;
+    if (mir_constant_absolute_address_has_index(insn->dst))
+        mir_spilled_cfg_used_constant_index_absolute = 1;
+    fprintf(out, "\tld hl,%s\n", operand);
+    mir_emit_virtual_store(out, insn->dst);
+    return 1;
+}
+
 static int mir_emit_constant_absolute_load(
     FILE *out, const struct MirInsn *insn)
 {
@@ -6887,6 +6918,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             if (mir_value_only_used_by_stable_pointer_argument(insn->dst))
                 break;
+            if (mir_emit_constant_absolute_address_value(out, insn))
+                break;
             mir_emit_virtual_load(out, insn->src1);
             if (insn->immediate != 0)
                 fprintf(out, "\tld de,%ld\n\tadd hl,de\n", insn->immediate);
@@ -6897,6 +6930,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             const struct MirInsn *index_definition =
                 mir_definition(insn->src2);
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
+            if (mir_emit_constant_absolute_address_value(out, insn))
                 break;
             if (insn->base_name[0] != 0) {
                 int stride_type;

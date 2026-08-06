@@ -377,6 +377,7 @@ int mir_home_color_live_across(int instruction, int color);
 int mir_home_uses_iy(void);
 int mir_constant_absolute_access_supported(const struct MirInsn *insn);
 int mir_constant_absolute_address_has_index(int value);
+int mir_value_is_constant_absolute_address(int value);
 int mir_value_only_used_by_constant_absolute_address(int value);
 int mir_value_only_used_by_absolute_access(
     int value, int (*access_supported)(const struct MirInsn *));
