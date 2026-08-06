@@ -9861,3 +9861,48 @@ The refreshed ordinary rejection population is led by 688 `text-size`, 138
 `unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 62
 `instruction-count`, 49 `absolute-index-cost`, 47 `absolute-address-cost`,
 and 46 `inline-substitution` functions.
+
+## Items T185-T186: planned narrow expression stackification (2026-08-06)
+
+A backend-slot audit of the 688 remaining `text-size` fallbacks finds 6,006
+single-use slots in 606 functions. The first conservative slice contains 260
+nonadjacent, same-block byte/word values in 87 functions whose only use is a
+later `MIR_BINARY.src1`. The spilled selector's existing forwarding machinery
+handles several adjacent singleton shapes, but cannot plan a value across
+multiple balanced MIR instructions.
+
+T185 adds one producer/consumer plan beside backend-slot assignment. A planned
+value receives no backend slot; its definition pushes HL and its exact binary
+consumer uses the established load-RHS/pop-LHS path. Initial intervals must
+be one-use, nonadjacent, nonoverlapping and nonnested, and contain only an
+explicit allowlist of stack-neutral or internally balanced opcodes. Labels,
+branches, returns, arguments, calls, variadic operations, VLA operations,
+parameters, phis, aggregate calls, and odd-argument generic-call results are
+excluded. Wide values remain excluded after the prototype miscompiled
+`tfloat4.longmix4` and `tfmadd`. Slot planning and emission share the stored
+plan, and final transactional validation requires every emitted push to have
+exactly one matching consume.
+
+T186 profiles the newly admitted functions with the exact upstream ntvcm
+revision. The broad narrow plan admits ten functions, but
+`tstr2.test_memchr` regresses peep execution by 50 cycles despite saving seven
+MIR instructions; forced fallback restores the baseline. A dependency flag
+records actual planned emission. Functions containing at least eight calls
+must save at least eight instructions, rejecting this and twelve other
+unproven call-heavy candidates as `planned-stack-cost` without naming an app
+or function. The eight retained additions all improve or remain neutral.
+
+**Census and focused validation**:
+
+- ordinary: **719/2022 (35.56%)**, +8 names and zero removals;
+- stack-check: **728/2124 (34.27%)**, +8 names and zero removals;
+- additions in both configurations: `adaint.xstrdup2`, `bint.xstrdup`,
+  `cint.xstrdup2`, `cobint.xstrdup2`, `fint.patch`, `fint.xstrdup2`,
+  `forint.xstrdup2`, and `pint.xstrdup`;
+- the 13-app focused full peep/nopeep run passes with zero regressions and 29
+  checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 671 `text-size`, 131
+`unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 61
+`instruction-count`, 48 each `absolute-address-cost`, `absolute-index-cost`,
+and `inline-substitution`, and 13 `planned-stack-cost` functions.

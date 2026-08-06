@@ -1065,15 +1065,16 @@ static int mir_has_format_runtime_call(void)
     return 0;
 }
 
-static int mir_has_any_call(void)
+static int mir_call_count(void)
 {
+    int count = 0;
     int instruction;
 
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode == MIR_CALL ||
             mir.insns[instruction].opcode == MIR_CALL_AGGREGATE)
-            return 1;
-    return 0;
+            ++count;
+    return count;
 }
 
 static int mir_is_call_heavy_general_compare(void)
@@ -1901,7 +1902,7 @@ void mir_end_function(void)
                     fallback_reason = "absolute-address-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_dynamic_index_base_forwarding() &&
-                         mir_has_any_call() &&
+                         mir_call_count() > 0 &&
                          generated_instructions >
                              captured_instructions - 15)
                     /* Dynamic index-base forwarding can remove a complete
@@ -1912,6 +1913,18 @@ void mir_end_function(void)
                      * regress peep cycles; cint.add_func reaches the measured
                      * non-regressing boundary exactly. */
                     fallback_reason = "dynamic-index-base-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_planned_stack_handoff() &&
+                         mir_call_count() >= 8 &&
+                         generated_instructions >
+                             captured_instructions - 8)
+                    /* Planned stack handoff can move a call-heavy function
+                     * just under the text gate without a reliable runtime
+                     * win. Exact-upstream full-mode A/B found a seven-
+                     * instruction win still regressed peep cycles; require
+                     * at least eight when eight or more calls amplify
+                     * layout and optimizer sensitivity. */
+                    fallback_reason = "planned-stack-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&

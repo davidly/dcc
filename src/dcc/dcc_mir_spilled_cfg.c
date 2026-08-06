@@ -40,6 +40,7 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
+static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
 static int mir_forward_skip_last_skipped_dead_store;
@@ -49,6 +50,11 @@ static int mir_spilled_cfg_used_constant_index_absolute;
 static int mir_spilled_cfg_used_dynamic_index_base_forwarding;
 static int mir_spilled_cfg_used_wide_constant_rematerialization;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
+static int mir_spilled_cfg_used_planned_stack_handoff;
+static int mir_planned_stack_handoffs_enabled;
+static int mir_planned_stack_emit_count;
+static int mir_planned_stack_consume_count;
+static int mir_planned_stack_invalid;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
 static unsigned char *mir_backend_slot_accessed;
@@ -1753,6 +1759,26 @@ static int mir_can_forward_hl_to_call_argument_first_use(int value)
     return mir_forward_note_success();
 }
 
+static int mir_call_has_odd_argument_bytes(const struct MirInsn *call)
+{
+    int argument_bytes = 0;
+    int instruction;
+
+    if (call == NULL || call->opcode != MIR_CALL)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int size;
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        size = type_size(arg->type);
+        argument_bytes += type_is_struct_object(arg->type)
+            ? size : (size == 4 ? 4 : 2);
+    }
+    return (argument_bytes & 1) != 0;
+}
+
 static int mir_call_argument_cache_target_for_state(
     int value, int definition_instruction,
     int narrow_cache_occupied, int wide_cache_occupied)
@@ -1767,28 +1793,16 @@ static int mir_call_argument_cache_target_for_state(
         return -1;
     {
         const struct MirInsn *definition = mir_definition(value);
-        int argument_bytes = 0;
         if (definition == NULL || definition->opcode == MIR_PHI ||
             definition->opcode == MIR_PARAM ||
             mir_divmod_partner((int)(definition - mir.insns)) >= 0)
             return -1;
-        if (definition->opcode == MIR_CALL)
-            for (instruction = 0; instruction < mir.count; ++instruction) {
-                const struct MirInsn *arg = &mir.insns[instruction];
-                int size;
-                if (arg->opcode != MIR_ARG ||
-                    arg->secondary_offset != definition->secondary_offset)
-                    continue;
-                size = type_size(arg->type);
-                argument_bytes += type_is_struct_object(arg->type)
-                    ? size : (size == 4 ? 4 : 2);
-            }
         /*
          * Generic calls with an odd aggregate-argument byte count store a
          * scalar result once around SP cleanup and again afterward. Such a
          * result cannot be cache-only because its second store is real.
          */
-        if ((argument_bytes & 1) != 0)
+        if (mir_call_has_odd_argument_bytes(definition))
             return -1;
     }
     for (instruction = definition_instruction + 1;
@@ -2530,12 +2544,126 @@ static int mir_param_value_is_direct(int value)
     return 1;
 }
 
+static int mir_planned_stack_interval_opcode_safe(int opcode)
+{
+    switch (opcode) {
+    case MIR_NOP:
+    case MIR_PARAM:
+    case MIR_CONST:
+    case MIR_FLOAT_CONST:
+    case MIR_STRING_ADDRESS:
+    case MIR_ADDRESS:
+    case MIR_COMPOUND_ADDRESS:
+    case MIR_INDEX_ADDRESS:
+    case MIR_MEMBER_ADDRESS:
+    case MIR_LOAD:
+    case MIR_LOAD_INDIRECT:
+    case MIR_INDEX_LOAD:
+    case MIR_STORE:
+    case MIR_STORE_INDIRECT:
+    case MIR_COPY_AGGREGATE:
+    case MIR_UNARY:
+    case MIR_BINARY:
+    case MIR_DECL_PLACEHOLDER:
+    case MIR_OBJECT_MERGE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int mir_planned_stack_consumer(int value, int producer,
+                                      const unsigned char *occupied)
+{
+    const struct MirInsn *definition;
+    int consumer;
+    int instruction;
+
+    if (!mir_planned_stack_handoffs_enabled || mir.has_vla ||
+        value < 0 || producer < 0 || producer >= mir.count ||
+        mir_value_use_count(value) != 1)
+        return -1;
+    definition = mir_definition(value);
+    if (definition == NULL || definition->opcode == MIR_PARAM ||
+        definition->opcode == MIR_PHI ||
+        definition->opcode == MIR_CALL_AGGREGATE ||
+        mir_call_has_odd_argument_bytes(definition) ||
+        (type_size(definition->type) != 1 &&
+         type_size(definition->type) != 2))
+        return -1;
+    consumer = -1;
+    for (instruction = producer + 1;
+         instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value ||
+            mir_call_uses_value(insn, value)) {
+            consumer = instruction;
+            break;
+        }
+    }
+    if (consumer < 0 || consumer - producer <= 2 ||
+        mir.insns[consumer].opcode != MIR_BINARY ||
+        mir.insns[consumer].src1 != value ||
+        type_size(mir.insns[consumer].secondary_offset) > 2)
+        return -1;
+    for (instruction = producer + 1;
+         instruction < consumer; ++instruction)
+        if (!mir_planned_stack_interval_opcode_safe(
+                mir.insns[instruction].opcode))
+            return -1;
+    for (instruction = producer; instruction <= consumer; ++instruction)
+        if (occupied[instruction])
+            return -1;
+    return consumer;
+}
+
+static void mir_verify_planned_stack_handoffs(void)
+{
+    int last_consumer = -1;
+    int instruction;
+    int value;
+
+    if (!mir_planned_stack_handoffs_enabled)
+        return;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *definition;
+        int producer;
+
+        value = mir.planned_stack_values[instruction];
+        if (value < 0)
+            continue;
+        if (value >= mir.next_value ||
+            mir.planned_stack_consumers[value] != instruction)
+            fatal("inconsistent MIR planned stack handoff");
+        definition = mir_definition(value);
+        if (definition == NULL)
+            fatal("missing MIR planned stack producer");
+        producer = (int)(definition - mir.insns);
+        /* Batch 22 deliberately selects a stricter-than-laminar policy:
+         * planned intervals may neither cross nor nest nor share an
+         * endpoint. This keeps the existing singleton forwarded-stack
+         * state authoritative and guarantees at most one planned value is
+         * pending at any instruction. */
+        if (producer <= last_consumer || producer >= instruction)
+            fatal("overlapping MIR planned stack handoffs");
+        last_consumer = instruction;
+    }
+    for (value = 0; value < mir.next_value; ++value) {
+        instruction = mir.planned_stack_consumers[value];
+        if (instruction >= 0 &&
+            (instruction >= mir.count ||
+             mir.planned_stack_values[instruction] != value))
+            fatal("inconsistent MIR planned stack consumer");
+    }
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
     int *last;
     int *slot_end;
     char *fused_away = NULL;
+    unsigned char *stack_interval_occupied = NULL;
     int planned_narrow_cache_call = -1;
     int planned_wide_cache_call = -1;
     int value;
@@ -2554,11 +2682,50 @@ static int mir_prepare_backend_slots(void)
         mir.backend_slots = new_slots;
         mir.backend_slot_capacity = mir.next_value;
     }
+    if (mir.planned_stack_consumer_capacity < mir.next_value) {
+        int *new_consumers = (int *)realloc(
+            mir.planned_stack_consumers,
+            (size_t)mir.next_value * sizeof(*new_consumers));
+        if (new_consumers == NULL)
+            fatal("out of memory allocating MIR planned stack consumers");
+        mir.planned_stack_consumers = new_consumers;
+        mir.planned_stack_consumer_capacity = mir.next_value;
+    }
+    if (mir.planned_stack_value_capacity < mir.count) {
+        int *new_values = (int *)realloc(
+            mir.planned_stack_values,
+            (size_t)mir.count * sizeof(*new_values));
+        if (new_values == NULL)
+            fatal("out of memory allocating MIR planned stack values");
+        mir.planned_stack_values = new_values;
+        mir.planned_stack_value_capacity = mir.count;
+    }
+    if (mir.planned_stack_emitted_capacity < mir.next_value) {
+        unsigned char *new_emitted = (unsigned char *)realloc(
+            mir.planned_stack_emitted,
+            (size_t)mir.next_value * sizeof(*new_emitted));
+        if (new_emitted == NULL)
+            fatal("out of memory allocating MIR planned stack state");
+        mir.planned_stack_emitted = new_emitted;
+        mir.planned_stack_emitted_capacity = mir.next_value;
+    }
+    for (value = 0; value < mir.next_value; ++value)
+        mir.planned_stack_consumers[value] = -1;
+    memset(mir.planned_stack_emitted, 0,
+           (size_t)mir.next_value * sizeof(*mir.planned_stack_emitted));
+    for (i = 0; i < mir.count; ++i)
+        mir.planned_stack_values[i] = -1;
     first = (int *)malloc((size_t)mir.next_value * sizeof(*first));
     last = (int *)malloc((size_t)mir.next_value * sizeof(*last));
     slot_end = (int *)malloc((size_t)mir.next_value * 2 * sizeof(*slot_end));
     if (first == NULL || last == NULL || slot_end == NULL)
         fatal("out of memory computing MIR backend intervals");
+    if (mir_planned_stack_handoffs_enabled) {
+        stack_interval_occupied =
+            (unsigned char *)calloc((size_t)mir.count, 1);
+        if (stack_interval_occupied == NULL)
+            fatal("out of memory planning MIR stack handoffs");
+    }
     if (mir_backend_slots_skip_fused_comparisons) {
         fused_away = (char *)calloc((size_t)mir.next_value, 1);
         if (fused_away == NULL)
@@ -2714,6 +2881,7 @@ static int mir_prepare_backend_slots(void)
         for (value = 0; value < mir.next_value; ++value)
             if (first[value] == i) {
                 int cache_target;
+                int stack_consumer;
                 int slot;
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
@@ -2753,6 +2921,18 @@ static int mir_prepare_backend_slots(void)
                                         mir_value_only_used_by_dead_unary(value) ||
                                         mir_param_value_is_direct(value))
                     continue;
+                stack_consumer = mir_planned_stack_consumer(
+                    value, i, stack_interval_occupied);
+                if (stack_consumer >= 0) {
+                    int instruction;
+
+                    mir.planned_stack_consumers[value] = stack_consumer;
+                    mir.planned_stack_values[stack_consumer] = value;
+                    for (instruction = i;
+                         instruction <= stack_consumer; ++instruction)
+                        stack_interval_occupied[instruction] = 1;
+                    continue;
+                }
                 /*
                  * The emitters can retain one pending call argument in BC
                  * or the alternate register set instead of touching its
@@ -2836,6 +3016,7 @@ static int mir_prepare_backend_slots(void)
                 }
             }
     }
+    mir_verify_planned_stack_handoffs();
     if (getenv("DCC_MIR_WIDE_HELPER_REPORT") != NULL)
         for (value = 0; value < mir.next_value; ++value) {
             const struct MirInsn *definition = mir_definition(value);
@@ -2864,6 +3045,7 @@ static int mir_prepare_backend_slots(void)
                     mir.backend_slots[value], mir.backend_slot_count);
         }
     free(fused_away);
+    free(stack_interval_occupied);
     free(slot_end);
     free(last);
     free(first);
@@ -3158,13 +3340,48 @@ static int mir_stack_backend_slot_forwardable(
     return forwardable;
 }
 
+static int mir_planned_stack_target(int value)
+{
+    if (value < 0 || value >= mir.next_value ||
+        mir.planned_stack_consumers == NULL)
+        return -1;
+    return mir.planned_stack_consumers[value];
+}
+
+static int mir_planned_stack_matches_consumer(int value, int instruction)
+{
+    return mir_planned_stack_target(value) == instruction &&
+           instruction >= 0 && instruction < mir.count &&
+           mir.planned_stack_values != NULL &&
+           mir.planned_stack_values[instruction] == value;
+}
+
+static int mir_planned_stack_is_emitted(int value)
+{
+    return value >= 0 && value < mir.next_value &&
+           mir.planned_stack_emitted != NULL &&
+           mir.planned_stack_emitted[value] != 0;
+}
+
+static int mir_pending_planned_stack_consumer(void)
+{
+    int value;
+
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir_planned_stack_is_emitted(value))
+            return mir_planned_stack_target(value);
+    return -1;
+}
+
 static void mir_emit_virtual_store(FILE *out, int value)
 {
     int dynamic_index_forward;
+    int forward_to_store;
     int has_slot;
     int forward_instruction;
     int offset;
     int iy_offset;
+    int pending_planned_consumer;
     if (mir_param_value_is_direct(value))
         /* mir-migration-plan-next10: nothing to store - later uses of this
          * value re-read it directly from its stable parameter home (see
@@ -3178,6 +3395,39 @@ static void mir_emit_virtual_store(FILE *out, int value)
         fputs("\tld c,l\n\tld b,h\n", out);
         mir_cached_call_value = value;
         mir_cached_call_instruction = call_instruction;
+        return;
+    }
+    forward_instruction = mir_planned_stack_target(value);
+    if (forward_instruction >= 0) {
+        if (mir_forwarded_stack_value >= 0 &&
+            mir_forwarded_stack_target_instruction <
+                mir_emit_instruction_index) {
+            mir_forwarded_stack_value = -1;
+            mir_forwarded_stack_instruction = -1;
+            mir_forwarded_stack_target_instruction = -1;
+        }
+        if (mir_forwarded_stack_value >= 0) {
+            if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR planned-stack overlap function=%s "
+                        "existing-value=%d existing-consumer=%d "
+                        "value=%d producer=%d consumer=%d\n",
+                        mir.name, mir_forwarded_stack_value,
+                        mir_forwarded_stack_target_instruction,
+                        value, mir_emit_instruction_index,
+                        forward_instruction);
+            mir_planned_stack_invalid = 1;
+        }
+        if (mir_forwarded_wide_stack_value >= 0 &&
+            forward_instruction >= mir_forwarded_wide_stack_consumer)
+            mir_planned_stack_invalid = 1;
+        fputs("\tpush hl\n", out);
+        mir_forwarded_stack_value = value;
+        mir_forwarded_stack_instruction = mir_emit_instruction_index;
+        mir_forwarded_stack_target_instruction = forward_instruction;
+        mir_spilled_cfg_used_planned_stack_handoff = 1;
+        mir.planned_stack_emitted[value] = 1;
+        ++mir_planned_stack_emit_count;
         return;
     }
     has_slot = value >= 0 && value < mir.next_value &&
@@ -3213,6 +3463,11 @@ static void mir_emit_virtual_store(FILE *out, int value)
         } else if ((forward_instruction =
                     mir_stack_forward_target(
                         value, &dynamic_index_forward)) >= 0) {
+            pending_planned_consumer =
+                mir_pending_planned_stack_consumer();
+            if (pending_planned_consumer >= 0 &&
+                forward_instruction >= pending_planned_consumer)
+                mir_planned_stack_invalid = 1;
             fputs("\tpush hl\n", out);
             mir_forwarded_stack_value = value;
             mir_forwarded_stack_instruction = mir_emit_instruction_index;
@@ -3222,7 +3477,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
         }
         return;
     }
-    int forward_to_store = mir_can_forward_hl_to_next(value) &&
+    forward_to_store = mir_can_forward_hl_to_next(value) &&
         forward_instruction < mir.count &&
         mir.insns[forward_instruction].opcode == MIR_STORE;
     if (!forward_to_store && mir_can_forward_hl_to_next(value)) {
@@ -3238,6 +3493,10 @@ static void mir_emit_virtual_store(FILE *out, int value)
     }
     if ((forward_instruction = mir_stack_forward_target(
              value, &dynamic_index_forward)) >= 0) {
+        pending_planned_consumer = mir_pending_planned_stack_consumer();
+        if (pending_planned_consumer >= 0 &&
+            forward_instruction >= pending_planned_consumer)
+            mir_planned_stack_invalid = 1;
         fputs("\tpush hl\n", out);
         mir_forwarded_stack_value = value;
         mir_forwarded_stack_instruction = mir_emit_instruction_index;
@@ -3484,6 +3743,9 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
         mir_wide_helper_lhs_span_is_safe(
             mir_emit_instruction_index, helper_consumer)) {
+        int pending_consumer = mir_pending_planned_stack_consumer();
+        if (pending_consumer >= 0 && helper_consumer >= pending_consumer)
+            mir_planned_stack_invalid = 1;
         fputs("\tpush de\n\tpush hl\n", out);
         mir_forwarded_wide_stack_value = value;
         mir_forwarded_wide_stack_consumer = helper_consumer;
@@ -4997,6 +5259,11 @@ int mir_spilled_cfg_depends_on_unary_not_branch_fusion(void)
     return mir_spilled_cfg_used_unary_not_branch_fusion;
 }
 
+int mir_spilled_cfg_depends_on_planned_stack_handoff(void)
+{
+    return mir_spilled_cfg_used_planned_stack_handoff;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -5014,6 +5281,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_dynamic_index_base_forwarding = 0;
     mir_spilled_cfg_used_wide_constant_rematerialization = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
+    mir_spilled_cfg_used_planned_stack_handoff = 0;
+    mir_planned_stack_handoffs_enabled = 0;
+    mir_planned_stack_emit_count = 0;
+    mir_planned_stack_consume_count = 0;
+    mir_planned_stack_invalid = 0;
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_RETURN)
             break;
@@ -5029,7 +5301,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_fuse_report_fused_count = 0;
     mir_fuse_report_materialized_count = 0;
     mir_backend_slots_skip_fused_comparisons = 1;
+    mir_planned_stack_handoffs_enabled = 1;
     frame_bytes = mir_current_frame_bytes();
+    mir_planned_stack_handoffs_enabled = 0;
     mir_backend_slots_skip_fused_comparisons = 0;
     mir_report_constant_absolute_addresses();
     if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
@@ -6018,9 +6292,14 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * push/pop dance is unavoidable here anyway - see below) -
                  * skip the otherwise-redundant store/reload of that value
                  * that mir_emit_virtual_load would perform. */
+                int planned_stack_forwarded_left =
+                    mir_planned_stack_matches_consumer(insn->src1, i) &&
+                    mir_planned_stack_is_emitted(insn->src1);
                 int stack_forwarded_left =
-                    mir_forwarded_stack_value == insn->src1 &&
-                    mir_forwarded_stack_target_instruction == i;
+                    (mir_forwarded_stack_value == insn->src1 &&
+                     mir_forwarded_stack_target_instruction == i) ||
+                    planned_stack_forwarded_left;
+                int planned_stack_left_in_hl = 0;
                 /* Item T16: mir_can_forward_stack_to_binary_rhs already
                  * pushed the right operand at its definition site (only
                  * possible when the left operand is a plain constant -
@@ -6038,6 +6317,31 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * path) need to know this to skip DE's own runtime
                  * xor-128 flip and only flip HL's sign bit. */
                 int de_holds_biased_constant = 0;
+                if (planned_stack_forwarded_left &&
+                    (divmod_partner >= 0 ||
+                     (insn->immediate == '*' &&
+                      right_definition != NULL &&
+                      right_definition->opcode == MIR_CONST &&
+                      mir_mul_const_fast_path_eligible(
+                          multiplier, insn->dst)) ||
+                     (mir_binary_is_fusable_comparison(i) > 0 &&
+                      (mir_fused_compare_is_const_zero_rhs(i) ||
+                       mir_fused_compare_is_signed_zero_sign_test(i))))) {
+                    /* Most binary instructions consume a forwarded lhs
+                     * through their existing "load rhs / pop lhs" path.
+                     * These direct-HL special cases need the lhs before
+                     * that path, so pop the same planned value at this
+                     * exact consumer and then continue as though it had
+                     * been loaded normally. */
+                    fputs("\tpop hl\n", out);
+                    mir_forwarded_stack_value = -1;
+                    mir_forwarded_stack_instruction = -1;
+                    mir_forwarded_stack_target_instruction = -1;
+                    mir.planned_stack_emitted[insn->src1] = 0;
+                    ++mir_planned_stack_consume_count;
+                    stack_forwarded_left = 0;
+                    planned_stack_left_in_hl = 1;
+                }
                 if (mir_value_is_nested_truth_comparison_input(insn->dst))
                     break;
                 if (mir_emit_nested_truth_comparison_branch(out, labels, i)) {
@@ -6050,7 +6354,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         mir_definition(insn->src1);
                     fprintf(out, "\tld hl,%ld\n",
                             constant->immediate & 0xffffL);
-                } else if (!stack_forwarded_left)
+                } else if (!stack_forwarded_left &&
+                           !planned_stack_left_in_hl)
                     mir_emit_virtual_load(out, insn->src1);
                 if (divmod_partner >= 0) {
                     const struct MirInsn *other = &mir.insns[divmod_partner];
@@ -6239,6 +6544,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     fputs("\tex de,hl\n\tpop hl\n", out);
                 }
                 if (stack_forwarded_left || stack_forwarded_right) {
+                    if (stack_forwarded_left &&
+                        mir_planned_stack_matches_consumer(insn->src1, i)) {
+                        mir.planned_stack_emitted[insn->src1] = 0;
+                        ++mir_planned_stack_consume_count;
+                    }
                     mir_forwarded_stack_value = -1;
                     mir_forwarded_stack_instruction = -1;
                     mir_forwarded_stack_target_instruction = -1;
@@ -6905,6 +7215,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 goto done;
         }
     }
+    if (mir_planned_stack_invalid ||
+        mir_planned_stack_emit_count != mir_planned_stack_consume_count) {
+        if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR planned-stack mismatch function=%s invalid=%d "
+                    "emitted=%d consumed=%d pending-value=%d "
+                    "pending-consumer=%d\n",
+                    mir.name, mir_planned_stack_invalid,
+                    mir_planned_stack_emit_count,
+                    mir_planned_stack_consume_count,
+                    mir_forwarded_stack_value,
+                    mir_forwarded_stack_target_instruction);
+        goto done;
+    }
     /* mir-migration-plan-next10 Item 3: MIR_RETURN's own case (above) already
      * emits the function epilogue before its `break`. If the function's very
      * last IR instruction was a MIR_RETURN, that epilogue was already
@@ -6999,6 +7323,10 @@ done:
     mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;
     mir_cached_call_instruction = -1;
+    mir_planned_stack_handoffs_enabled = 0;
+    mir_planned_stack_emit_count = 0;
+    mir_planned_stack_consume_count = 0;
+    mir_planned_stack_invalid = 0;
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr, "; MIR scalar-cfg reject function=%s insn=%d opcode=%s\n",
                 mir.name, i,
