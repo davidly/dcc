@@ -25,6 +25,16 @@ SELECTION_RE = re.compile(
     r"captured-insns=(?P<captured_insns>-?\d+) blocks=(?P<blocks>\d+) "
     r"selected-hash=(?P<selected_hash>[0-9a-fA-F]{8})"
 )
+MATRIX_RE = re.compile(
+    r"MIR candidate-matrix\tfunction=(?P<function>\S+)"
+    r"\tcandidate=(?P<candidate>\S+)\tmask=(?P<mask>[0-9a-fA-F]{8})"
+    r"\temitted=(?P<emitted>[01])\treason=(?P<reason>\S+)"
+    r"\tbytes=(?P<bytes>-?\d+)\tinsns=(?P<insns>-?\d+)"
+    r"\tblocks=(?P<blocks>\d+)\tslots=(?P<slots>\d+)"
+    r"\tcalls=(?P<calls>\d+)\tlocals=(?P<locals>\d+)"
+    r"\treturn-kind=(?P<return_kind>\d+)\tvla=(?P<vla>[01])"
+    r"\thash=(?P<hash>[0-9a-fA-F]{8})"
+)
 FIELDS = [
     "app",
     "function",
@@ -38,6 +48,23 @@ FIELDS = [
     "blocks",
     "selected_hash",
 ]
+MATRIX_FIELDS = [
+    "app",
+    "function",
+    "candidate",
+    "mask",
+    "emitted",
+    "reason",
+    "bytes",
+    "insns",
+    "blocks",
+    "slots",
+    "calls",
+    "locals",
+    "return_kind",
+    "vla",
+    "hash",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +75,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compiler", default="./dcc")
     parser.add_argument("--tests-dir", default="tests")
     parser.add_argument("--output", default="build/mir-migration-census.tsv")
+    parser.add_argument(
+        "--candidate-matrix-output",
+        metavar="TSV",
+        help="also evaluate isolated spilled-selector feature sets and write "
+        "their metrics and output hashes to this TSV",
+    )
     parser.add_argument("--compare", metavar="OLD_TSV")
     parser.add_argument("--apps", help="comma-separated app names")
     parser.add_argument(
@@ -119,9 +152,12 @@ def compile_source(
     stack: int,
     timeout: int,
     extra_args: list[str],
-) -> tuple[list[dict[str, str]], str | None]:
+    candidate_matrix: bool,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], str | None]:
     env = os.environ.copy()
     env["DCC_MIR_SELECT_REPORT"] = "1"
+    if candidate_matrix:
+        env["DCC_MIR_CANDIDATE_MATRIX"] = "1"
     command = [
         compiler,
         "-stack",
@@ -144,14 +180,23 @@ def compile_source(
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return [], f"timed out after {timeout}s"
+        return [], [], f"timed out after {timeout}s"
     if completed.returncode != 0:
         detail = completed.stderr.strip().splitlines()
-        return [], detail[-1] if detail else f"compiler exited {completed.returncode}"
+        return (
+            [],
+            [],
+            detail[-1] if detail else f"compiler exited {completed.returncode}",
+        )
 
     rows: list[dict[str, str]] = []
+    matrix_rows: list[dict[str, str]] = []
     seen: set[str] = set()
     for line in completed.stderr.splitlines():
+        matrix_match = MATRIX_RE.search(line)
+        if matrix_match:
+            matrix_rows.append({"app": source.stem, **matrix_match.groupdict()})
+            continue
         match = SELECTION_RE.search(line)
         if not match:
             continue
@@ -163,7 +208,7 @@ def compile_source(
             continue
         seen.add(function)
         rows.append({"app": source.stem, **values})
-    return rows, None
+    return rows, matrix_rows, None
 
 
 def write_rows(path: Path, rows: list[dict[str, str]]) -> None:
@@ -172,6 +217,23 @@ def write_rows(path: Path, rows: list[dict[str, str]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=FIELDS, delimiter="\t")
         writer.writeheader()
         writer.writerows(sorted(rows, key=lambda row: (row["app"], row["function"])))
+
+
+def write_matrix_rows(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=MATRIX_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(
+            sorted(
+                rows,
+                key=lambda row: (
+                    row["app"],
+                    row["function"],
+                    int(row["mask"], 16),
+                ),
+            )
+        )
 
 
 def read_rows(path: Path) -> dict[tuple[str, str], dict[str, str]]:
@@ -277,18 +339,27 @@ def main() -> int:
         return 2
 
     rows: list[dict[str, str]] = []
+    matrix_rows: list[dict[str, str]] = []
     failures: list[tuple[str, str]] = []
     with tempfile.TemporaryDirectory(prefix="dcc-mir-census-") as directory:
         directory_path = Path(directory)
 
-        def run_one(index: int, source: Path) -> tuple[int, Path, list[dict[str, str]], str | None]:
+        def run_one(
+            index: int, source: Path
+        ) -> tuple[
+            int,
+            Path,
+            list[dict[str, str]],
+            list[dict[str, str]],
+            str | None,
+        ]:
             # Each worker writes to its own assembly file: compiles run
             # concurrently (subprocess.run releases the GIL while the child
             # process runs, so a thread pool scales across cores same as
             # runall.ps1's parallel app suite), and a shared output path
             # would let two in-flight compiles clobber each other's .mac.
             worker_assembly = directory_path / f"census-{index}.mac"
-            app_rows, error = compile_source(
+            app_rows, app_matrix_rows, error = compile_source(
                 args.compiler,
                 source,
                 worker_assembly,
@@ -296,8 +367,9 @@ def main() -> int:
                 args.timeout,
                 shlex.split(str(overrides.get(source.stem, {}).get("dcc_args", "")))
                 + shlex.split(args.extra_args),
+                args.candidate_matrix_output is not None,
             )
-            return index, source, app_rows, error
+            return index, source, app_rows, app_matrix_rows, error
 
         done = 0
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as executor:
@@ -306,12 +378,13 @@ def main() -> int:
                 for index, source in enumerate(sources, 1)
             ]
             for future in as_completed(futures):
-                index, source, app_rows, error = future.result()
+                index, source, app_rows, app_matrix_rows, error = future.result()
                 done += 1
                 if error:
                     failures.append((source.stem, error))
                 else:
                     rows.extend(app_rows)
+                    matrix_rows.extend(app_matrix_rows)
                 # Completion order (not dispatch order) with -j>1, matching
                 # runall.ps1's own parallel status-line convention.
                 print(f"\r[{done:3d}/{len(sources)}] {source.stem:12s}", end="", flush=True)
@@ -324,6 +397,10 @@ def main() -> int:
 
     write_rows(output_path, rows)
     print(f"Wrote {output_path}")
+    if args.candidate_matrix_output:
+        matrix_path = Path(args.candidate_matrix_output)
+        write_matrix_rows(matrix_path, matrix_rows)
+        print(f"Wrote {matrix_path} ({len(matrix_rows)} candidates)")
     print_summary(rows)
 
     regressions = 0

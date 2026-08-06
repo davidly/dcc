@@ -57,6 +57,7 @@ static int mir_spilled_cfg_used_planned_index_base_handoff;
 static int mir_spilled_cfg_used_stable_pointer_local_home;
 static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
+static int mir_spilled_cfg_used_binary_load_pair_forwarding;
 static int mir_address_rematerialization_enabled;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
 static int mir_spilled_cfg_branch_condition_forwarding_count;
@@ -554,6 +555,13 @@ static int mir_can_forward_hl_to_next(int value)
         /* A direct absolute store consumes its value without first loading
          * the address into HL, so an immediately preceding producer can
          * forward HL exactly like it can for MIR_STORE. */
+    } else if (next->opcode == MIR_BINARY && next->src2 == value &&
+               mir_forwarded_stack_value == next->src1 &&
+               mir_forwarded_stack_target_instruction ==
+                   next_instruction) {
+        /* The binary's left operand is already below SP. Keep this
+         * adjacent right operand in HL; the binary emitter moves it to DE
+         * before popping the left operand back into HL. */
     } else if (next->src1 != value)
             return 0;
     switch (next->opcode) {
@@ -4217,6 +4225,32 @@ static int mir_can_forward_stack_to_binary_const(int value)
     return 1;
 }
 
+static int mir_can_forward_stack_to_binary_lhs(int value)
+{
+    const struct MirInsn *middle;
+    const struct MirInsn *binary;
+    int binary_instruction;
+
+    if (!mir_general_rhs_stack_forwarding_enabled ||
+        mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 2 >= mir.count ||
+        mir_value_use_count(value) != 1)
+        return 0;
+    middle = &mir.insns[mir_emit_instruction_index + 1];
+    binary_instruction = mir_emit_instruction_index + 2;
+    binary = &mir.insns[binary_instruction];
+    if ((middle->opcode != MIR_LOAD && middle->opcode != MIR_PARAM) ||
+        type_size(middle->type) > 2 ||
+        binary->opcode != MIR_BINARY || binary->src1 != value ||
+        binary->src2 != middle->dst ||
+        type_size(binary->secondary_offset) == 4 ||
+        mir_value_use_count(middle->dst) != 1 ||
+        mir_divmod_partner(binary_instruction) >= 0)
+        return 0;
+    mir_spilled_cfg_used_binary_load_pair_forwarding = 1;
+    return 1;
+}
+
 /* Item T16 (mir-text-size-plan.md): mir_can_forward_hl_to_next's
  * MIR_BINARY case only ever matches `value` against the binary's src1
  * (left operand) - a value that is instead the very next MIR_BINARY's
@@ -4320,6 +4354,8 @@ static int mir_stack_forward_target(int value, int *dynamic_index)
         return target;
     if (mir_can_forward_stack_to_indirect_store_value(value))
         return mir_emit_instruction_index + 1;
+    if (mir_can_forward_stack_to_binary_lhs(value))
+        return mir_emit_instruction_index + 2;
     if (mir_can_forward_stack_to_binary_const(value))
         return mir_emit_instruction_index + 2;
     if (mir_can_forward_stack_to_binary_rhs(value))
@@ -6361,6 +6397,11 @@ int mir_spilled_cfg_depends_on_rhs_stack_forwarding(void)
     return mir_spilled_cfg_used_general_rhs_stack_forwarding;
 }
 
+int mir_spilled_cfg_depends_on_binary_load_pair_forwarding(void)
+{
+    return mir_spilled_cfg_used_binary_load_pair_forwarding;
+}
+
 int mir_spilled_cfg_depends_on_indirect_store_value_forwarding(void)
 {
     return mir_spilled_cfg_indirect_store_value_forwarding_count != 0;
@@ -6423,6 +6464,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_stable_pointer_local_home = 0;
     mir_spilled_cfg_used_stable_pointer_local_slot = 0;
     mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
+    mir_spilled_cfg_used_binary_load_pair_forwarding = 0;
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
     mir_spilled_cfg_indirect_store_address_forwarding_count = 0;

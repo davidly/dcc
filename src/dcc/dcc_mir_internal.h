@@ -431,6 +431,7 @@ int mir_spilled_cfg_depends_on_stable_pointer_local_slot(void);
 void mir_begin_stable_pointer_local_homes(void);
 void mir_end_stable_pointer_local_homes(void);
 int mir_spilled_cfg_depends_on_rhs_stack_forwarding(void);
+int mir_spilled_cfg_depends_on_binary_load_pair_forwarding(void);
 void mir_begin_general_rhs_stack_forwarding(void);
 void mir_end_general_rhs_stack_forwarding(void);
 int mir_spilled_cfg_depends_on_indirect_store_value_forwarding(void);

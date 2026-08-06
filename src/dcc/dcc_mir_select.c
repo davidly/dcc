@@ -14,38 +14,153 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+#define MIR_SPILLED_FEATURE_RHS_STACK             (1UL << 0)
+#define MIR_SPILLED_FEATURE_STORE_VALUE           (1UL << 1)
+#define MIR_SPILLED_FEATURE_BRANCH_CONDITION      (1UL << 2)
+#define MIR_SPILLED_FEATURE_STORE_ADDRESS         (1UL << 3)
+#define MIR_SPILLED_FEATURE_WIDE_BINARY_LHS       (1UL << 4)
+#define MIR_SPILLED_FEATURE_STABLE_POINTER_ARG    (1UL << 5)
+#define MIR_SPILLED_FEATURE_GLOBAL_ARG            (1UL << 6)
+#define MIR_SPILLED_FEATURE_WIDE_FIRST_ARG        (1UL << 7)
+#define MIR_SPILLED_FEATURE_NARROW_DIRECT_PUSH    (1UL << 8)
+#define MIR_SPILLED_FEATURE_CONSTANT_PREPACK      (1UL << 9)
+#define MIR_SPILLED_FEATURE_PROMOTED_LOCAL_SLOT   (1UL << 10)
+#define MIR_SPILLED_FEATURE_WIDE_BINARY_RHS       (1UL << 11)
+#define MIR_SPILLED_FEATURE_WIDE_STORE            (1UL << 12)
+
+#define MIR_SPILLED_FEATURES_RHS \
+    (MIR_SPILLED_FEATURE_RHS_STACK | MIR_SPILLED_FEATURE_STORE_VALUE | \
+     MIR_SPILLED_FEATURE_BRANCH_CONDITION)
+#define MIR_SPILLED_FEATURES_STORE_ADDRESS \
+    (MIR_SPILLED_FEATURES_RHS | MIR_SPILLED_FEATURE_STORE_ADDRESS)
+#define MIR_SPILLED_FEATURES_WIDE_LHS \
+    (MIR_SPILLED_FEATURES_STORE_ADDRESS | MIR_SPILLED_FEATURE_WIDE_BINARY_LHS)
+#define MIR_SPILLED_FEATURES_STABLE_ARG \
+    (MIR_SPILLED_FEATURES_WIDE_LHS | \
+     MIR_SPILLED_FEATURE_STABLE_POINTER_ARG)
+#define MIR_SPILLED_FEATURES_GLOBAL_ARG \
+    (MIR_SPILLED_FEATURES_STABLE_ARG | MIR_SPILLED_FEATURE_GLOBAL_ARG)
+#define MIR_SPILLED_FEATURES_CALL_STACK \
+    (MIR_SPILLED_FEATURES_GLOBAL_ARG | MIR_SPILLED_FEATURE_WIDE_FIRST_ARG | \
+     MIR_SPILLED_FEATURE_NARROW_DIRECT_PUSH | \
+     MIR_SPILLED_FEATURE_CONSTANT_PREPACK)
+#define MIR_SPILLED_FEATURES_PROMOTED_LOCAL \
+    (MIR_SPILLED_FEATURES_CALL_STACK | \
+     MIR_SPILLED_FEATURE_PROMOTED_LOCAL_SLOT)
+#define MIR_SPILLED_FEATURES_ALL \
+    (MIR_SPILLED_FEATURES_PROMOTED_LOCAL | \
+     MIR_SPILLED_FEATURE_WIDE_BINARY_RHS | MIR_SPILLED_FEATURE_WIDE_STORE)
+
+struct MirCandidateDescriptor {
+    const char *name;
+    const char *stream_error;
+    int (*selector)(FILE *);
+    unsigned long spilled_features;
+};
+
+struct MirCandidateResult {
+    const struct MirCandidateDescriptor *descriptor;
+    FILE *stream;
+    int emitted;
+    int label_id_after;
+    long generated_size;
+    int generated_instructions;
+    const char *reason;
+};
+
+static int mir_call_count(void);
+
+static void mir_configure_spilled_fallback_features(
+    unsigned long features, int enabled)
+{
+    if ((features & MIR_SPILLED_FEATURE_RHS_STACK) != 0) {
+        if (enabled)
+            mir_begin_general_rhs_stack_forwarding();
+        else
+            mir_end_general_rhs_stack_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_STORE_VALUE) != 0) {
+        if (enabled)
+            mir_begin_indirect_store_value_forwarding();
+        else
+            mir_end_indirect_store_value_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_BRANCH_CONDITION) != 0) {
+        if (enabled)
+            mir_begin_branch_condition_forwarding();
+        else
+            mir_end_branch_condition_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_STORE_ADDRESS) != 0) {
+        if (enabled)
+            mir_begin_indirect_store_address_forwarding();
+        else
+            mir_end_indirect_store_address_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_WIDE_BINARY_LHS) != 0) {
+        if (enabled)
+            mir_begin_wide_binary_lhs_forwarding();
+        else
+            mir_end_wide_binary_lhs_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_STABLE_POINTER_ARG) != 0) {
+        if (enabled)
+            mir_begin_stable_pointer_argument_rematerialization();
+        else
+            mir_end_stable_pointer_argument_rematerialization();
+    }
+    if ((features & MIR_SPILLED_FEATURE_GLOBAL_ARG) != 0) {
+        if (enabled)
+            mir_begin_global_argument_rematerialization();
+        else
+            mir_end_global_argument_rematerialization();
+    }
+    if ((features & MIR_SPILLED_FEATURE_WIDE_FIRST_ARG) != 0) {
+        if (enabled)
+            mir_begin_wide_first_argument_stack_cache();
+        else
+            mir_end_wide_first_argument_stack_cache();
+    }
+    if ((features & MIR_SPILLED_FEATURE_NARROW_DIRECT_PUSH) != 0) {
+        if (enabled)
+            mir_begin_narrow_argument_direct_push();
+        else
+            mir_end_narrow_argument_direct_push();
+    }
+    if ((features & MIR_SPILLED_FEATURE_CONSTANT_PREPACK) != 0) {
+        if (enabled)
+            mir_begin_constant_argument_prepacking();
+        else
+            mir_end_constant_argument_prepacking();
+    }
+    if ((features & MIR_SPILLED_FEATURE_PROMOTED_LOCAL_SLOT) != 0) {
+        if (enabled)
+            mir_begin_promoted_local_slot_reuse();
+        else
+            mir_end_promoted_local_slot_reuse();
+    }
+    if ((features & MIR_SPILLED_FEATURE_WIDE_BINARY_RHS) != 0) {
+        if (enabled)
+            mir_begin_wide_binary_rhs_forwarding();
+        else
+            mir_end_wide_binary_rhs_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_WIDE_STORE) != 0) {
+        if (enabled)
+            mir_begin_wide_store_forwarding();
+        else
+            mir_end_wide_store_forwarding();
+    }
+}
+
 static void mir_begin_all_spilled_fallback_optimizations(void)
 {
-    mir_begin_general_rhs_stack_forwarding();
-    mir_begin_indirect_store_value_forwarding();
-    mir_begin_branch_condition_forwarding();
-    mir_begin_indirect_store_address_forwarding();
-    mir_begin_wide_binary_lhs_forwarding();
-    mir_begin_stable_pointer_argument_rematerialization();
-    mir_begin_global_argument_rematerialization();
-    mir_begin_wide_first_argument_stack_cache();
-    mir_begin_narrow_argument_direct_push();
-    mir_begin_constant_argument_prepacking();
-    mir_begin_promoted_local_slot_reuse();
-    mir_begin_wide_binary_rhs_forwarding();
-    mir_begin_wide_store_forwarding();
+    mir_configure_spilled_fallback_features(MIR_SPILLED_FEATURES_ALL, 1);
 }
 
 static void mir_end_all_spilled_fallback_optimizations(void)
 {
-    mir_end_general_rhs_stack_forwarding();
-    mir_end_indirect_store_value_forwarding();
-    mir_end_branch_condition_forwarding();
-    mir_end_indirect_store_address_forwarding();
-    mir_end_wide_binary_lhs_forwarding();
-    mir_end_stable_pointer_argument_rematerialization();
-    mir_end_global_argument_rematerialization();
-    mir_end_wide_first_argument_stack_cache();
-    mir_end_narrow_argument_direct_push();
-    mir_end_constant_argument_prepacking();
-    mir_end_promoted_local_slot_reuse();
-    mir_end_wide_binary_rhs_forwarding();
-    mir_end_wide_store_forwarding();
+    mir_configure_spilled_fallback_features(MIR_SPILLED_FEATURES_ALL, 0);
 }
 
 static int mir_try_emit_general_rollout(FILE *out)
@@ -916,6 +1031,68 @@ static int mir_try_selector(FILE *out, int (*selector)(FILE *))
     return accepted;
 }
 
+static void mir_init_spilled_candidate(
+    struct MirCandidateDescriptor *candidate, const char *name,
+    const char *stream_error, unsigned long features)
+{
+    candidate->name = name;
+    candidate->stream_error = stream_error;
+    candidate->selector = mir_try_emit_spilled_scalar_cfg;
+    candidate->spilled_features = features;
+}
+
+static void mir_build_spilled_candidate(
+    const struct MirCandidateDescriptor *candidate,
+    struct MirCandidateResult *result, int label_base)
+{
+    result->descriptor = candidate;
+    result->stream = tmpfile();
+    result->emitted = 0;
+    result->label_id_after = label_base;
+    result->generated_size = -1;
+    result->generated_instructions = -1;
+    result->reason = "selector";
+    if (result->stream == NULL)
+        fatal(candidate->stream_error);
+
+    /*
+     * Every feature set owns one fresh stream and one balanced state scope.
+     * A declined candidate therefore cannot leak text, labels, or feature
+     * state into the next attempt.
+     */
+    mir_configure_spilled_fallback_features(
+        candidate->spilled_features, 1);
+    label_id = label_base;
+    result->emitted = mir_try_selector(result->stream, candidate->selector);
+    result->label_id_after = label_id;
+    mir_configure_spilled_fallback_features(
+        candidate->spilled_features, 0);
+    if (result->emitted) {
+        result->generated_size = mir_stream_size(result->stream);
+        result->generated_instructions =
+            mir_stream_instruction_count(result->stream);
+        result->reason = "emitted";
+    }
+}
+
+static void mir_close_candidate_result(struct MirCandidateResult *result)
+{
+    if (result->stream != NULL)
+        fclose(result->stream);
+    result->stream = NULL;
+}
+
+static int mir_adopt_candidate_result(
+    FILE **generated, struct MirCandidateResult *result)
+{
+    if (!result->emitted)
+        return 0;
+    fclose(*generated);
+    *generated = result->stream;
+    result->stream = NULL;
+    return 1;
+}
+
 long mir_stream_size(FILE *stream)
 {
     long position = ftell(stream);
@@ -971,6 +1148,88 @@ int mir_stream_instruction_count(FILE *stream)
     if (fseek(stream, position, SEEK_SET) != 0)
         return -1;
     return count;
+}
+
+static unsigned long mir_stream_hash(FILE *stream)
+{
+    unsigned long hash = 2166136261UL;
+    long position = ftell(stream);
+    int character;
+
+    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+        return 0;
+    while ((character = fgetc(stream)) != EOF) {
+        hash ^= (unsigned long)(unsigned char)character;
+        hash = (hash * 16777619UL) & 0xffffffffUL;
+    }
+    if (fseek(stream, position, SEEK_SET) != 0)
+        return 0;
+    return hash;
+}
+
+static void mir_report_spilled_candidate_matrix(int label_base)
+{
+    static const struct {
+        const char *name;
+        unsigned long features;
+    } candidates[] = {
+        {"baseline", 0},
+        {"rhs-forward", MIR_SPILLED_FEATURES_RHS},
+        {"store-address", MIR_SPILLED_FEATURES_STORE_ADDRESS},
+        {"wide-binary-lhs", MIR_SPILLED_FEATURES_WIDE_LHS},
+        {"stable-pointer-argument", MIR_SPILLED_FEATURES_STABLE_ARG},
+        {"global-argument", MIR_SPILLED_FEATURES_GLOBAL_ARG},
+        {"stack-argument", MIR_SPILLED_FEATURES_CALL_STACK},
+        {"promoted-local-slot", MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
+        {"all", MIR_SPILLED_FEATURES_ALL}
+    };
+    int label_id_save = label_id;
+    int mir_count_save = mir.count;
+    struct MirInsn *insns_save;
+    int i;
+
+    insns_save = (struct MirInsn *)malloc(
+        (size_t)mir_count_save * sizeof(*insns_save));
+    if (insns_save == NULL)
+        fatal("cannot save MIR candidate-matrix instructions");
+    memcpy(insns_save, mir.insns,
+           (size_t)mir_count_save * sizeof(*insns_save));
+    for (i = 0;
+         i < (int)(sizeof(candidates) / sizeof(candidates[0])); ++i) {
+        struct MirCandidateDescriptor candidate;
+        struct MirCandidateResult result;
+        unsigned long hash = 0;
+
+        if (mir.count != mir_count_save)
+            fatal("MIR candidate-matrix changed instruction count");
+        memcpy(mir.insns, insns_save,
+               (size_t)mir_count_save * sizeof(*insns_save));
+        mir_init_spilled_candidate(
+            &candidate, candidates[i].name,
+            "cannot create MIR candidate-matrix stream",
+            candidates[i].features);
+        mir_build_spilled_candidate(&candidate, &result, label_base);
+        if (result.emitted)
+            hash = mir_stream_hash(result.stream);
+        fprintf(stderr,
+                "; MIR candidate-matrix\tfunction=%s\tcandidate=%s"
+                "\tmask=%08lx\temitted=%d\treason=%s\tbytes=%ld"
+                "\tinsns=%d\tblocks=%d\tslots=%d\tcalls=%d"
+                "\tlocals=%d\treturn-kind=%d\tvla=%d\thash=%08lx\n",
+                mir.name, result.descriptor->name,
+                result.descriptor->spilled_features, result.emitted,
+                result.reason, result.generated_size,
+                result.generated_instructions, mir_cfg_block_count(),
+                mir.backend_slot_count, mir_call_count(), mir.local_bytes,
+                mir.return_type & 15, mir.has_vla, hash);
+        mir_close_candidate_result(&result);
+    }
+    if (mir.count != mir_count_save)
+        fatal("MIR candidate-matrix changed instruction count");
+    memcpy(mir.insns, insns_save,
+           (size_t)mir_count_save * sizeof(*insns_save));
+    free(insns_save);
+    label_id = label_id_save;
 }
 
 /* Item T71 addendum (mir-text-size-plan.md): an attempted follow-up
@@ -1439,6 +1698,9 @@ static int mir_is_profiled_boolean_phi_branch_retry(
         generated_size > captured_size + 40 ||
         generated_instructions > captured_instructions)
         return 0;
+    if (mir_spilled_cfg_depends_on_binary_load_pair_forwarding() &&
+        mir.backend_slot_count == 0)
+        return 1;
     /* The fallback-only sweep exposed these reusable populations without a
      * regression in either peep mode. Keep the retry narrow until general
      * CFG instruction selection can price the remaining candidates. */
@@ -1448,6 +1710,14 @@ static int mir_is_profiled_boolean_phi_branch_retry(
         return 1;
     return return_kind == TYPE_VOID && blocks <= 9 && calls == 2 &&
            mir.local_bytes == 4 && mir.backend_slot_count == 2;
+}
+
+static int mir_boolean_phi_profile_is_semantically_eligible(void)
+{
+    return mir_cfg_block_count() <= 64 &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_cfg_backedge();
 }
 
 static int mir_is_profiled_vla_single_block_instruction_win(
@@ -1823,6 +2093,7 @@ void mir_end_function(void)
         long captured_size = -1;
         int generated_instructions = -1;
         int captured_instructions = -1;
+        int candidate_matrix_label_base = label_id;
 
         emit_sink_restore(&mir.saved_sink);
         if (verified) {
@@ -2279,6 +2550,15 @@ evaluate_generated:
                      * instruction win regressed at least one runtime mode. */
                     fallback_reason = "phi-fallthrough-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_binary_load_pair_forwarding() &&
+                         generated_size > captured_size)
+                    /* The load-pair handoff removes a real spill, but it
+                     * cannot justify the generic slotless single-block size
+                     * exception by itself. Require the candidate stream to
+                     * remain text-profitable before considering its measured
+                     * boolean-PHI cohort. */
+                    fallback_reason = "binary-load-pair-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          !(mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
                            mir_is_profiled_small_unary_not_near_cost(
                                generated_size, captured_size,
@@ -2440,6 +2720,7 @@ evaluate_generated:
                     fallback_reason = "direct-byte-param-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_rhs_stack_forwarding() &&
+                         !mir_spilled_cfg_depends_on_binary_load_pair_forwarding() &&
                          !(mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
                            mir_is_profiled_small_unary_not_near_cost(
                                generated_size, captured_size,
@@ -2751,36 +3032,28 @@ evaluate_generated:
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
-                     !strcmp(fallback_reason, "text-size")) &&
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "boolean-phi-cost")) &&
                     !rhs_forward_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *rhs_candidate = tmpfile();
-                    int rhs_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     rhs_forward_retry_attempted = 1;
-                    if (rhs_candidate == NULL)
-                        fatal("cannot create MIR RHS-forward candidate "
-                              "stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    label_id = mir_label_base;
-                    rhs_emitted = mir_try_selector(
-                        rhs_candidate, mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    if (rhs_emitted) {
-                        fclose(generated);
-                        generated = rhs_candidate;
-                        rhs_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "rhs-forward",
+                        "cannot create MIR RHS-forward candidate stream",
+                        MIR_SPILLED_FEATURES_RHS);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(rhs_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -2788,35 +3061,24 @@ evaluate_generated:
                      !strcmp(fallback_reason, "planned-stack-cost")) &&
                     !store_address_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *address_candidate = tmpfile();
-                    int address_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     store_address_retry_attempted = 1;
-                    if (address_candidate == NULL)
-                        fatal("cannot create MIR store-address candidate "
-                              "stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    label_id = mir_label_base;
-                    address_emitted = mir_try_selector(
-                        address_candidate, mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    if (address_emitted) {
-                        fclose(generated);
-                        generated = address_candidate;
-                        address_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "store-address",
+                        "cannot create MIR store-address candidate stream",
+                        MIR_SPILLED_FEATURES_STORE_ADDRESS);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(address_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -2826,37 +3088,24 @@ evaluate_generated:
                              "indirect-store-address-cost")) &&
                     !wide_binary_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *wide_candidate = tmpfile();
-                    int wide_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     wide_binary_retry_attempted = 1;
-                    if (wide_candidate == NULL)
-                        fatal("cannot create MIR wide-binary candidate "
-                              "stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    mir_begin_wide_binary_lhs_forwarding();
-                    label_id = mir_label_base;
-                    wide_emitted = mir_try_selector(
-                        wide_candidate, mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    mir_end_wide_binary_lhs_forwarding();
-                    if (wide_emitted) {
-                        fclose(generated);
-                        generated = wide_candidate;
-                        wide_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "wide-binary-lhs",
+                        "cannot create MIR wide-binary candidate stream",
+                        MIR_SPILLED_FEATURES_WIDE_LHS);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(wide_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -2866,39 +3115,24 @@ evaluate_generated:
                              "indirect-store-address-cost")) &&
                     !stable_pointer_argument_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *argument_candidate = tmpfile();
-                    int argument_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     stable_pointer_argument_retry_attempted = 1;
-                    if (argument_candidate == NULL)
-                        fatal("cannot create MIR pointer-argument candidate "
-                              "stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    mir_begin_wide_binary_lhs_forwarding();
-                    mir_begin_stable_pointer_argument_rematerialization();
-                    label_id = mir_label_base;
-                    argument_emitted = mir_try_selector(
-                        argument_candidate, mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    mir_end_wide_binary_lhs_forwarding();
-                    mir_end_stable_pointer_argument_rematerialization();
-                    if (argument_emitted) {
-                        fclose(generated);
-                        generated = argument_candidate;
-                        argument_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "stable-pointer-argument",
+                        "cannot create MIR pointer-argument candidate stream",
+                        MIR_SPILLED_FEATURES_STABLE_ARG);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(argument_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -2908,42 +3142,24 @@ evaluate_generated:
                              "indirect-store-address-cost")) &&
                     !global_argument_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *global_argument_candidate = tmpfile();
-                    int global_argument_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     global_argument_retry_attempted = 1;
-                    if (global_argument_candidate == NULL)
-                        fatal("cannot create MIR global-argument candidate "
-                              "stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    mir_begin_wide_binary_lhs_forwarding();
-                    mir_begin_stable_pointer_argument_rematerialization();
-                    mir_begin_global_argument_rematerialization();
-                    label_id = mir_label_base;
-                    global_argument_emitted = mir_try_selector(
-                        global_argument_candidate,
-                        mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    mir_end_wide_binary_lhs_forwarding();
-                    mir_end_stable_pointer_argument_rematerialization();
-                    mir_end_global_argument_rematerialization();
-                    if (global_argument_emitted) {
-                        fclose(generated);
-                        generated = global_argument_candidate;
-                        global_argument_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "global-argument",
+                        "cannot create MIR global-argument candidate stream",
+                        MIR_SPILLED_FEATURES_GLOBAL_ARG);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(global_argument_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -2953,48 +3169,25 @@ evaluate_generated:
                              "indirect-store-address-cost")) &&
                     !wide_argument_stack_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *stack_argument_candidate = tmpfile();
-                    int stack_argument_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     wide_argument_stack_retry_attempted = 1;
-                    if (stack_argument_candidate == NULL)
-                        fatal("cannot create MIR wide stack-argument "
-                              "candidate stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    mir_begin_wide_binary_lhs_forwarding();
-                    mir_begin_stable_pointer_argument_rematerialization();
-                    mir_begin_global_argument_rematerialization();
-                    mir_begin_wide_first_argument_stack_cache();
-                    mir_begin_narrow_argument_direct_push();
-                    mir_begin_constant_argument_prepacking();
-                    label_id = mir_label_base;
-                    stack_argument_emitted = mir_try_selector(
-                        stack_argument_candidate,
-                        mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    mir_end_wide_binary_lhs_forwarding();
-                    mir_end_stable_pointer_argument_rematerialization();
-                    mir_end_global_argument_rematerialization();
-                    mir_end_wide_first_argument_stack_cache();
-                    mir_end_narrow_argument_direct_push();
-                    mir_end_constant_argument_prepacking();
-                    if (stack_argument_emitted) {
-                        fclose(generated);
-                        generated = stack_argument_candidate;
-                        stack_argument_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "stack-argument",
+                        "cannot create MIR wide stack-argument candidate "
+                        "stream",
+                        MIR_SPILLED_FEATURES_CALL_STACK);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(stack_argument_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -3006,50 +3199,25 @@ evaluate_generated:
                              "indirect-store-address-cost")) &&
                     !promoted_local_slot_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *local_slot_candidate = tmpfile();
-                    int local_slot_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     promoted_local_slot_retry_attempted = 1;
-                    if (local_slot_candidate == NULL)
-                        fatal("cannot create MIR promoted-local-slot "
-                              "candidate stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    mir_begin_wide_binary_lhs_forwarding();
-                    mir_begin_stable_pointer_argument_rematerialization();
-                    mir_begin_global_argument_rematerialization();
-                    mir_begin_wide_first_argument_stack_cache();
-                    mir_begin_narrow_argument_direct_push();
-                    mir_begin_constant_argument_prepacking();
-                    mir_begin_promoted_local_slot_reuse();
-                    label_id = mir_label_base;
-                    local_slot_emitted = mir_try_selector(
-                        local_slot_candidate,
-                        mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    mir_end_wide_binary_lhs_forwarding();
-                    mir_end_stable_pointer_argument_rematerialization();
-                    mir_end_global_argument_rematerialization();
-                    mir_end_wide_first_argument_stack_cache();
-                    mir_end_narrow_argument_direct_push();
-                    mir_end_constant_argument_prepacking();
-                    mir_end_promoted_local_slot_reuse();
-                    if (local_slot_emitted) {
-                        fclose(generated);
-                        generated = local_slot_candidate;
-                        local_slot_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "promoted-local-slot",
+                        "cannot create MIR promoted-local-slot candidate "
+                        "stream",
+                        MIR_SPILLED_FEATURES_PROMOTED_LOCAL);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(local_slot_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -3061,28 +3229,24 @@ evaluate_generated:
                              "indirect-store-address-cost")) &&
                     !wide_binary_rhs_retry_attempted &&
                     !g_speculative_codegen_active) {
-                    FILE *wide_rhs_candidate = tmpfile();
-                    int wide_rhs_emitted;
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
 
                     wide_binary_rhs_retry_attempted = 1;
-                    if (wide_rhs_candidate == NULL)
-                        fatal("cannot create MIR wide-RHS candidate stream");
-                    mir_begin_all_spilled_fallback_optimizations();
-                    label_id = mir_label_base;
-                    wide_rhs_emitted = mir_try_selector(
-                        wide_rhs_candidate, mir_try_emit_spilled_scalar_cfg);
-                    mir_end_all_spilled_fallback_optimizations();
-                    if (wide_rhs_emitted) {
-                        fclose(generated);
-                        generated = wide_rhs_candidate;
-                        wide_rhs_candidate = NULL;
+                    mir_init_spilled_candidate(
+                        &candidate, "wide-rhs",
+                        "cannot create MIR wide-RHS candidate stream",
+                        MIR_SPILLED_FEATURES_ALL);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
                         selector_name = "spilled-scalar-cfg";
                         emitted = 1;
-                        generated_label_id_after = label_id;
+                        generated_label_id_after = result.label_id_after;
                         fallback_reason = NULL;
                         goto evaluate_generated;
                     }
-                    fclose(wide_rhs_candidate);
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
@@ -3165,8 +3329,19 @@ evaluate_generated:
                 {
                     const char *forced_accept =
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
+                    const char *profile_boolean =
+                        getenv("DCC_MIR_PROFILE_BOOLEAN_PHI");
                     if (forced_accept != NULL &&
                         !strcmp(forced_accept, mir.name))
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "boolean-phi-cost") &&
+                        profile_boolean != NULL &&
+                        (!strcmp(profile_boolean, "*") ||
+                         !strcmp(profile_boolean, mir.name)) &&
+                        mir_boolean_phi_profile_is_semantically_eligible() &&
+                        generated_size <= captured_size + 1 &&
+                        generated_instructions <= captured_instructions)
                         fallback_reason = NULL;
                 }
                 if (rematerialized_home_allocation_active) {
@@ -3298,6 +3473,9 @@ evaluate_generated:
                     generated_size, captured_size, generated_instructions,
                     captured_instructions, mir_cfg_block_count(),
                     selected_hash);
+        if (verified && !g_speculative_codegen_active &&
+            getenv("DCC_MIR_CANDIDATE_MATRIX") != NULL)
+            mir_report_spilled_candidate_matrix(candidate_matrix_label_base);
         fclose(mir.capture_stream);
         mir.capture_stream = NULL;
         mir.emit_mode = 0;

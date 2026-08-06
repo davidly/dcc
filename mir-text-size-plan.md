@@ -11077,3 +11077,60 @@ isolates selector attempts through a shared transactional candidate engine,
 then targets the large boolean/PHI, slot/index/CSE, call/wide, and
 loop/inline populations. Future structural hypotheses need a ten-function
 minimum yield or must enable one of those campaigns.
+
+## Items T323-T332: transactional candidate engine and boolean profiling (2026-08-12)
+
+T323 introduces one candidate descriptor/result lifecycle for selector,
+feature-mask, stream, metrics, and label ownership. T324 moves the eight
+spilled fallback retries onto that lifecycle. Each attempt owns a fresh stream,
+starts at the function's original label base, and either transfers or closes
+its result explicitly.
+
+T325 centralizes the cumulative spilled feature masks and balances every
+feature scope in one configuration helper. T326 adds the development-only
+`DCC_MIR_CANDIDATE_MATRIX` report. It evaluates baseline and cumulative
+feature sets independently and reports exact masks, byte/instruction/block/
+slot counts, structural function metrics, and generated hashes.
+
+T327 extends `mir-migration-census.py` to capture matrix TSVs and ordinary
+selected-output hashes. T328 snapshots and restores the MIR instruction array
+before each matrix attempt because boolean simplification and related selector
+passes mutate the stream. Matrix mode therefore measures each feature set from
+identical MIR.
+
+T329 fixes boolean profiling so `DCC_MIR_PROFILE_BOOLEAN_PHI` accepts one exact
+function name or `*`; previously any nonempty value enabled every boolean
+candidate in an app. Profiling can no longer bypass semantic limits for CFG
+size, backedges, inline substitution, or pointer arrays.
+
+T330 profiles all 55 boolean-PHI candidates independently with 24 compiler
+processes. Twenty-six are semantically ineligible. All 29 eligible acyclic
+candidates are correctness-clean; eight pass both performance modes and the
+remaining 21 fail only a performance gate. No broad boolean exception is
+promoted because the passing population is below the roadmap's ten-function
+minimum.
+
+T331 removes the repeated spill exposed by adjacent object loads feeding a
+binary comparison. The first value remains on the machine stack while the
+second is loaded into HL and transferred to DE. Dependency tracking keeps the
+optimization fallback-only. A transactional RHS retry admits only
+text-profitable, slotless boolean candidates; the one residual-slot candidate
+regresses peep execution by 118 cycles and remains on legacy codegen.
+
+T332 closes the enabling batch:
+
+- ordinary: **838/2025 (41.38%)**, +8 names and zero removals;
+- stack-check: **860/2127 (40.43%)**, +8 names and zero removals;
+- additions: `adaint.block_until_end`, `tscanin.main`,
+  `tallocx.t_bridge`, `tallocx.t_forward`, `tallocx.t_grow_next_free`,
+  `tallocx.t_nosplit`, `tallocx.t_reverse`, and
+  `tallocx.t_rezero_coalesce`;
+- the three affected apps pass focused full peep/nopeep validation with zero
+  regressions and seven checked improvements;
+- focused ASan/UBSan compilation is clean;
+- review found and fixed a matrix-only label-base dependency: candidate hashes
+  are now invariant when production selection is forced to fallback.
+
+Phase 1 is complete. The matrix is now the ranking source for the accelerated
+boolean/control-flow campaign; production selection and semantic gates remain
+independent from profiling.
