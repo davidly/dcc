@@ -1785,9 +1785,27 @@ static int mir_is_profiled_boolean_phi_measured_cohort(
 static int mir_profile_matches_function(const char *variable)
 {
     const char *profile = getenv(variable);
+    const char *name;
+    size_t function_length;
 
-    return profile != NULL &&
-           (!strcmp(profile, "*") || !strcmp(profile, mir.name));
+    if (profile == NULL)
+        return 0;
+    if (!strcmp(profile, "*"))
+        return 1;
+    function_length = strlen(mir.name);
+    name = profile;
+    while (*name != 0) {
+        const char *end = strchr(name, ',');
+        size_t length = end != NULL
+            ? (size_t)(end - name) : strlen(name);
+        if (length == function_length &&
+            !strncmp(name, mir.name, length))
+            return 1;
+        if (end == NULL)
+            break;
+        name = end + 1;
+    }
+    return 0;
 }
 
 static int mir_boolean_phi_profile_is_semantically_eligible(void)
@@ -1935,6 +1953,18 @@ static int mir_has_profiled_positive_loop(void)
         }
     }
     return has_positive_condition && mir_has_cfg_backedge();
+}
+
+static int mir_is_profiled_frameless_backedge(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return mir_has_cfg_backedge() && !mir.has_vla &&
+           mir.local_bytes == 0 && mir.aggregate_temp_bytes == 0 &&
+           mir.backend_slot_count == 0 &&
+           mir.allocation_spill_count == 0 &&
+           generated_size <= captured_size &&
+           generated_instructions < captured_instructions;
 }
 
 static int mir_is_profiled_text_proxy_instruction_win(
@@ -2452,6 +2482,15 @@ evaluate_generated:
                      * instructions plus the callee-save frame lost to
                      * dccpeep's existing constant-extension fold. */
                     fallback_reason = "constant-conversion-home-cost";
+                else if (!strcmp(selector_name, "homed-scalar-cfg") &&
+                         mir_homed_cfg_depends_on_unary_not_branch() &&
+                         generated_instructions >
+                             captured_instructions - 5)
+                    /* Direct `!value` branches remove real materialization,
+                     * but the measured three-instruction loop candidates
+                     * still lose after dccpeep. Every candidate saving at
+                     * least five instructions passes both runtime modes. */
+                    fallback_reason = "unary-not-cost";
                 else if (block_cse_retry_attempted &&
                          mir_common_block_expression_elimination_count() > 0 &&
                          (mir_cfg_block_count() != 1 ||
@@ -2895,6 +2934,8 @@ evaluate_generated:
                 else if (mir_has_declared_pointer_array())
                     fallback_reason = "pointer-array";
                 else if (mir_has_cfg_backedge() &&
+                         !mir_profile_matches_function(
+                             "DCC_MIR_PROFILE_CFG_BACKEDGE") &&
                          !mir_has_profiled_positive_loop() &&
                          !(!strcmp(selector_name, "spilled-scalar-cfg") &&
                            mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
@@ -3044,6 +3085,12 @@ evaluate_generated:
                     if (loop_candidate != NULL)
                         fclose(loop_candidate);
                 }
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "cfg-backedge") &&
+                    mir_is_profiled_frameless_backedge(
+                        generated_size, captured_size,
+                        generated_instructions, captured_instructions))
+                    fallback_reason = NULL;
                 /* Phase 1 (mir-migration-plan-to-100pct.md): homed/spilled-
                  * scalar-cfg already passed every other cost gate above -
                  * the only reason this candidate is about to fall back is

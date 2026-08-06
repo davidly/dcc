@@ -11266,3 +11266,121 @@ base cost (101), block-CSE cost (89), unary-not cost (57), and wide constants
 (48). The accelerated roadmap prioritizes canonical boolean control flow,
 use-position slot allocation, and one shared address/index plan; narrow
 cost-gate exceptions are no longer the primary migration mechanism.
+
+## Items T353-T362: reject expanded boolean control-flow holdout (2026-08-13)
+
+T353 rebuilds the ordinary and stack-check candidate matrices from published
+commit `11ae21f`. The ordinary population is led by 158 boolean-PHI,
+57 unary-not, and 46 phi-fallthrough cost fallbacks.
+
+T354 profiles every semantically eligible final boolean-PHI retry with the
+exact diagnostic control. Twenty-two ordinary and twenty-three stack-check
+functions clear a no-growth final-stream gate, with zero removals.
+
+T355 initially validates the complete profile cohort with the default emulator.
+All functions are correctness-clean, but this is not the pinned ntvcm revision
+used by the publication gate and its performance results are not comparable.
+
+T356 isolates candidate functions and derives a tentative structural holdout.
+This experiment is retained only as evidence about candidate-stream identity;
+its performance classification is discarded after the emulator mismatch is
+found.
+
+T357 confirms that final-stream identity matters. A first production
+implementation admits a different retry for `tallocx.t_large`, a historically
+known peep regression, even though exact diagnostic profiling did not select
+that stream.
+
+T358 removes that first implementation, which reused the existing
+`measured_boolean_candidate` flag. That flag can be set by an earlier retry and
+then admit a different final candidate; the census exposes this immediately as
+`tallocx.t_large`.
+
+T359 tests a corrected predicate only at the final admission point. It matches
+the exact diagnostic profile: 17 ordinary and 18 stack-check additions with
+zero removals.
+
+T360 runs the mandatory full extended gate with the pinned
+`/dev/shm/ntvcm-batch7` emulator. It rejects the candidate with twelve
+performance regressions across `a1`, `pint`, `tallocx`, `taninit`, `tatof`,
+`tc89fadd`, `tenum`, `terrno`, and `tvariad`. The earlier default-emulator
+measurements were false positives.
+
+T361 re-profiles every multi-candidate regressing app with the pinned emulator.
+All three `a1` candidates, both `tallocx` candidates, and both `pint`
+candidates reproduce a peep or nopeep regression individually. The single
+candidates in the other regressing apps are also rejected.
+
+T362 removes the complete production predicate. Only four ordinary candidates
+and one stack-only candidate remain non-regressing, below the roadmap's
+ten-function minimum. Coverage returns exactly to **859/2025 ordinary** and
+**881/2127 stack-check**. The next campaign moves to slot/index architecture;
+the remaining boolean population needs better emitted code, not wider
+admission.
+
+## Items T363-T372: direct unary branches and frameless backedges (2026-08-13)
+
+T363 rejects multi-use lazy parameters. Read-only non-pointer parameters are
+semantically safe to keep lazy, but the complete ordinary profile adds only
+`tmuldiv.i16_test` and `tmuldiv.ui16_test`; stack-check adds four functions
+while removing four incumbent `pint` selections. The diagnostic relaxation is
+removed.
+
+T364 profiles a lower-cost dynamic-index base handoff. Keeping an adjacent
+base in DE across power-of-two index scaling removes one instruction in 83
+apps, but promotes no function: the 101 `dynamic-index-base-cost` candidates
+are typically tens or hundreds of instructions behind legacy. The experiment
+is removed and the campaign is re-ranked.
+
+T365 profiles all 41 ordinary `cfg-backedge` fallbacks. Forty already beat
+legacy instruction count and all 41 become MIR candidates with zero removals.
+The broad profile is correctness-clean, but it also bypasses specialized loop
+rescues and produces unrelated incumbent regressions.
+
+T366 extends exact diagnostic profiles to accept comma-separated manifests.
+This isolates the 41 new backedge functions without changing production
+selection. Per-function full-mode runs execute at 24-way parallelism under the
+pinned emulator.
+
+T367 validates each candidate independently. Twenty-three functions pass both
+runtime modes; eighteen regress peep, nopeep, or linked size. The failures are
+performance defects rather than CFG correctness defects.
+
+T368 diagnoses the common hot-loop loss in `forint.cand`: homed CFG emits
+`!call_result` as a concrete 0/1 value and immediately tests it, while legacy
+branches directly on the call result. Shared MIR branch analysis now recognizes
+a single-use unary `!` consumed only by `MIR_BRANCH_FALSE`.
+
+T369 teaches homed CFG to skip that unary materialization and branch directly
+on its source. False and true PHI edges retain the same conditional copy
+semantics through dedicated stubs when required. `forint.cand`, `cexpr`, and
+`crel` move from peep regressions to non-regressing improvements.
+
+T370 records actual homed unary-branch use and applies the measured
+profitability boundary. Candidates saving fewer than five instructions remain
+`unary-not-cost`; this rejects `tforfrm.main` and `tforpred.main`, whose
+three-instruction savings regress both runtime modes, while retaining the
+larger measured wins.
+
+T371 admits general backedges only after all specialized loop selectors have
+declined, and only when the candidate is frameless, backend-slotless,
+spill-free, VLA-free, text-non-growing, and instruction-reducing. Requiring
+zero source locals excludes the hidden `wcsrchr` sibling that otherwise loses
+its profitable legacy BC loop registerization.
+
+T372 closes the cohort:
+
+- ordinary: **872/2026 (43.04%)**, +13 names and zero removals;
+- stack-check: **894/2128 (42.01%)**, +13 names and zero removals;
+- additions in both modes: `adaint.and_expr`, `adaint.parse_expr`,
+  `cint.and_expr`, `cint.band_expr`, `cint.block`, `cint.or_expr`,
+  `cint.skip_typedef`, `forint.cand`, `forint.cexpr`, `forint.crel`,
+  `tcodegen.main`, `tnestfor.gp_null`, and `tstr.wcschr`;
+- all nine affected apps pass focused full peep/nopeep validation with zero
+  regressions and twenty-eight checked improvements.
+
+The census denominator grows by one because the improved candidate makes
+`tnestfor.gp_null` a retained static body; this is deliberate and covered by
+the affected-app gate. The remaining ordinary `cfg-backedge` population drops
+from 41 to 30. Allocator-backed loops remain profiled but are not admitted
+until their frame/register costs improve.

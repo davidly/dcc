@@ -277,6 +277,8 @@ int mir_call_is_strrchr_fastcall(int call_index, int *s_value,
                                        int *c_value);
 int mir_call_uses_value(const struct MirInsn *call, int value);
 int mir_compare_definition_for_branch(int instruction);
+int mir_direct_branch_for_unary_not(int instruction);
+int mir_unary_not_definition_for_branch(int instruction);
 void mir_compute_dead_local_suffix(void);
 int mir_current_frame_bytes(void);
 int mir_effective_local_bytes(void);
@@ -410,6 +412,7 @@ void mir_simplify_boolean_phi_branches(void);
 int mir_boolean_phi_branch_simplification_count(void);
 void mir_reset_boolean_phi_branch_simplification_count(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
+int mir_homed_cfg_depends_on_unary_not_branch(void);
 int mir_cfg_block_count(void);
 int mir_homed_cfg_depends_on_word_store(void);
 int mir_homed_cfg_depends_on_dynamic_index(void);

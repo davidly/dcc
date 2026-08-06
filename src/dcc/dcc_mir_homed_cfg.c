@@ -15,6 +15,12 @@
 
 static int mir_homed_constant_absolute_access_supported(
     const struct MirInsn *insn);
+static int mir_homed_cfg_used_unary_not_branch;
+
+int mir_homed_cfg_depends_on_unary_not_branch(void)
+{
+    return mir_homed_cfg_used_unary_not_branch;
+}
 
 /* mir-text-size Item T19: this selector's own MIR_INDEX_ADDRESS acceptance
  * (Item 22, below) already restricts to the fixed-stride, constant-index
@@ -773,6 +779,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     int has_wide = 0;
     int wide_return = mir_homed_wide_type_supported(mir.return_type);
 
+    mir_homed_cfg_used_unary_not_branch = 0;
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
      * is by far the single largest homed-scalar-cfg rejection cause
@@ -1835,6 +1842,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * dcc_mir_spilled_cfg.c for the full rationale. */
             if (!mir_value_has_use(insn->dst))
                 break;
+            if (mir_direct_branch_for_unary_not(i) >= 0)
+                break;
             if (!mir_emit_homed_unary_instruction(out, insn)) {
                 goto done;
             }
@@ -1905,6 +1914,35 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                             goto done;
                         fprintf(out, "\tjp L%d\nL%d:\n",
                                 continue_label, false_stub);
+                        if (!mir_emit_homed_phi_copies(out, i, target))
+                            goto done;
+                        fprintf(out, "\tjp L%d\nL%d:\n",
+                                labels[insn->label], continue_label);
+                    }
+                    break;
+                }
+            }
+            {
+                int not_index = mir_unary_not_definition_for_branch(i);
+                if (not_index >= 0) {
+                    int false_has_phi =
+                        mir_edge_phi_names_predecessor(i, target);
+                    int true_has_phi = i + 1 < mir.count &&
+                        mir_edge_phi_names_predecessor(i, i + 1);
+                    int false_label = false_has_phi
+                        ? new_label() : labels[insn->label];
+                    int continue_label = false_has_phi ? new_label() : -1;
+
+                    mir_homed_cfg_used_unary_not_branch = 1;
+                    if (!mir_emit_homed_truth_jump(
+                            out, mir.insns[not_index].src1, i, false_label))
+                        goto done;
+                    if (true_has_phi &&
+                        !mir_emit_homed_phi_copies(out, i, i + 1))
+                        goto done;
+                    if (false_has_phi) {
+                        fprintf(out, "\tjp L%d\nL%d:\n",
+                                continue_label, false_label);
                         if (!mir_emit_homed_phi_copies(out, i, target))
                             goto done;
                         fprintf(out, "\tjp L%d\nL%d:\n",

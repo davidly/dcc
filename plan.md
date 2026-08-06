@@ -5,7 +5,7 @@ current execution plan and handoff.
 
 ## Goal and current state
 
-The immediate target is **1,215/2,025 ordinary functions (60.00%)** in
+The immediate target is **1,216/2,026 ordinary functions (60.02%)** in
 production MIR emission, without ordinary or stack-check removals and without
 peep/nopeep regressions. Mixed-mode transactional fallback remains in place.
 The long-term goal is 100% MIR-required coverage and removal of legacy
@@ -15,33 +15,28 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `67d9255`
 - Published ordinary coverage: **848/2025 (41.88%)**
 - Published stack-check coverage: **870/2127 (40.90%)**
-- Current candidate ordinary coverage: **859/2025 (42.42%)**
-- Current candidate stack-check coverage: **881/2127 (41.42%)**
-- Current cohort: 11 additions, zero removals
+- Current ordinary coverage: **872/2026 (43.04%)**
+- Current stack-check coverage: **894/2128 (42.01%)**
+- Current production cohort: 13 frameless backedge/unary-branch additions,
+  zero removals, focused full-mode gate clean.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
-| 45% | 912 | +53 |
-| 50% | 1,013 | +154 |
-| 55% | 1,114 | +255 |
-| 60% | 1,215 | +356 |
+| 45% | 912 | +40 |
+| 50% | 1,013 | +141 |
+| 55% | 1,115 | +243 |
+| 60% | 1,216 | +344 |
 
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
 
 ## Current production cohort
 
-The current batch adds:
-
-`cobint.get_occurs`, `fint.inline_word`, `fint.print_stats`,
-`forint.parse_goto_label`, `forint.print_stats`, `pint.print_stats`,
-`tctxflt.truth_elem`, `tforblk.static_pointer_initializer`,
-`tforblk.static_sibling_blocks`, `tmulpow2.idx_long`, and
-`tmulpow2.idx_pair`.
-
-The exact seven-app full-mode cohort passes with zero regressions. Ordinary and
-stack-check censuses each show 11 additions and zero removals. The batch still
-requires the mandatory full extended pre-commit gate and publication.
+The current cohort adds shared direct unary-not branches in homed CFG and
+promotes only frameless, backend-slotless, spill-free backedges after
+specialized loop selectors decline. It adds 13 functions in both modes.
+Allocator-backed loops remain fallback after individual profiling exposed
+frame/registerization regressions.
 
 ## Evidence and lessons
 
@@ -51,9 +46,9 @@ requires the mandatory full extended pre-commit gate and publication.
 2. Smaller raw streams are not proof of improvement. `ttype32.main` removed 59
    instructions but regressed peep cycles and linked size. Every promoted class
    needs affected-app full-mode measurement.
-3. Broad profiling changes incumbent streams. Diagnostic controls must accept
-   one exact function or `*`; production admission must be structural and
-   cannot contain app/function names.
+3. Broad profiling changes incumbent streams. Diagnostic controls accept exact
+   comma-separated manifests or `*`; production admission remains structural
+   and cannot contain app/function names.
 4. Failed experiments are removed. The parallel PHI-copy scheduler produced
    zero coverage and has no residual production code.
 5. Emitter improvements outrank gate widening. The dynamic-index wide-load fix
@@ -71,14 +66,14 @@ The current ordinary fallback population is:
 | priority | fallback reason | functions |
 | --- | --- | ---: |
 | 1 | text-size | 319 |
-| 2 | boolean-phi-cost | 159 |
+| 2 | boolean-phi-cost | 158 |
 | 3 | dynamic-index-base-cost | 101 |
 | 4 | block-cse-cost | 89 |
-| 5 | unary-not-cost | 57 |
+| 5 | unary-not-cost | 55 |
 | 6 | wide-constant-cost | 48 |
 | 7 | inline-substitution | 47 |
 | 8 | phi-fallthrough-cost | 46 |
-| 9 | cfg-backedge | 40 |
+| 9 | cfg-backedge | 30 |
 | 10 | wide-store-cost | 38 |
 | 11 | planned-index-base-cost | 37 |
 
@@ -87,11 +82,11 @@ budgets therefore use net census gains, never sums of reason counts.
 
 | campaign | planned net gain |
 | --- | ---: |
-| Boolean and acyclic control flow | +70 |
-| Slots, addresses, CSE, and indexes | +135 |
+| Boolean and acyclic control flow | +57 |
+| Slots, addresses, CSE, and indexes | +122 |
 | Calls, wide values, and systemic text size | +105 |
-| Loops, inline substitution, and semantic tail | +46 |
-| **Total** | **+356** |
+| Allocator-backed loops, inline substitution, and semantic tail | +60 |
+| **Total** | **+344** |
 
 If a campaign exceeds its budget, later risky work shrinks. If it misses, rerun
 and re-rank the matrix immediately; do not compensate with function-name
@@ -114,7 +109,7 @@ affected-function manifest, census comparison, and focused runtime cohort.
 ## Campaign 1: boolean and acyclic control flow
 
 Target cumulative coverage of at least 46%, then continue while this remains
-the highest-yield matrix class. Planned gain: **+70**.
+the highest-yield matrix class. Planned remaining gain: **+57**.
 
 1. Reclassify the 159 boolean-PHI, 57 unary-not, and 46 phi-fallthrough
    fallbacks by MIR shape and actual selected retry.
@@ -136,7 +131,7 @@ move to Campaign 2 rather than tuning byte/block thresholds.
 
 ## Campaign 2: slots, addresses, CSE, and indexes
 
-Target cumulative coverage of at least 52%. Planned gain: **+135**.
+Target cumulative coverage of at least 52%. Planned gain: **+122**.
 
 1. Replace whole-value backend-slot lifetimes with use-position intervals and
    safe splitting around calls.
@@ -171,9 +166,9 @@ Target cumulative coverage of at least 57%. Planned gain: **+105**.
    only repeated patterns affecting at least ten ordinary functions.
 6. Dynamically profile helper-heavy or loop-hot cohorts before promotion.
 
-## Campaign 4: loops, inline substitution, and the semantic tail
+## Campaign 4: allocator-backed loops, inline substitution, and the semantic tail
 
-Cross **1,215/2,025 (60%)**. Planned gain: **+46**.
+Cross **1,216/2,026 (60.02%)**. Planned remaining gain: **+60**.
 
 1. Fix backedge correctness through edge-aware liveness, PHI initialization,
    and loop-carried copies. Add forced-MIR focused coverage for every

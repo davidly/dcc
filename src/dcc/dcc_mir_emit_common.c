@@ -1476,6 +1476,45 @@ int mir_compare_definition_for_branch(int instruction)
     return mir_direct_branch_for_comparison(index) == instruction ? index : -1;
 }
 
+int mir_direct_branch_for_unary_not(int instruction)
+{
+    const struct MirInsn *unary;
+    int use_count = 0;
+    int branch = -1;
+    int i;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return -1;
+    unary = &mir.insns[instruction];
+    if (unary->opcode != MIR_UNARY || unary->immediate != '!')
+        return -1;
+    for (i = 0; i < mir.count; ++i) {
+        if (mir.insns[i].src1 == unary->dst ||
+            mir.insns[i].src2 == unary->dst) {
+            ++use_count;
+            if (mir.insns[i].opcode == MIR_BRANCH_FALSE &&
+                mir.insns[i].src1 == unary->dst)
+                branch = i;
+        }
+    }
+    return use_count == 1 ? branch : -1;
+}
+
+int mir_unary_not_definition_for_branch(int instruction)
+{
+    const struct MirInsn *definition;
+    int index;
+
+    if (instruction < 0 || instruction >= mir.count ||
+        mir.insns[instruction].opcode != MIR_BRANCH_FALSE)
+        return -1;
+    definition = mir_definition(mir.insns[instruction].src1);
+    if (definition == NULL)
+        return -1;
+    index = (int)(definition - mir.insns);
+    return mir_direct_branch_for_unary_not(index) == instruction ? index : -1;
+}
+
 int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset)
 {
     const struct MirInsn *definition = mir_definition(value);
