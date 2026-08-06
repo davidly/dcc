@@ -11194,3 +11194,75 @@ T342 closes the ten-function rollout:
 Phase 2 has its first ten-item production cohort. The broad boolean population
 still needs canonical boolean branches and edge-copy improvements; do not
 widen these measured thresholds to manufacture the next batch.
+
+## Items T343-T352: profiled high-activity fallback cohort (2026-08-13)
+
+T343 implements and profiles an edge-aware parallel PHI-copy scheduler. It
+produces zero coverage gain and is removed completely rather than retained as
+unused migration machinery.
+
+T344 adds exact-function or `*` diagnostic profiling for the three most active
+small cost barriers: unary-not, branch-condition, and RHS-stack forwarding.
+These controls affect only fresh transactional candidate streams and produce
+no default output.
+
+T345 profiles unary-not independently. Four functions pass both runtime modes:
+`fint.inline_word`, `fint.print_stats`, `forint.print_stats`, and
+`pint.print_stats`. Wildcard profiling changes 94 selected hashes and regresses
+`cobint`, so production uses the measured structural call/block classes rather
+than broad gate removal or function names.
+
+T346 profiles six branch-condition candidates. `cobint.get_occurs` and
+`forint.parse_goto_label` pass both modes. `a1.m_load`, `bint.statement`,
+`tasm.main`, and `ttrig.check_same_f` regress real cycle or size measurements
+and remain on legacy emission.
+
+T347 profiles ten ordinary and eleven stack-check RHS-stack candidates. Most
+produce smaller raw MIR streams but regress after dccpeep.
+`tforblk.static_pointer_initializer` and
+`tforblk.static_sibling_blocks` are the only candidates retained in both
+modes.
+
+T348 profiles dynamic-index and adjacent small barriers.
+`tctxflt.truth_elem` passes. `tmulpow2.idx_long` and `tmulpow2.idx_pair`
+initially regress because four-byte indirect loads assigned to HL:DE use a
+stack exchange even when their dynamic-index address can be consumed directly.
+
+T349 rejects two misleading static wins. `ttype32.main` removes 59 raw
+instructions but regresses peep cycles and linked size. Ordinary lazy-parameter
+candidates in `tarray6` and `tkandr` also regress; stack-only `tvla` additions
+do not advance the primary ordinary-coverage metric.
+
+T350 emits dynamic-index wide indirect loads directly into HL:DE, avoiding the
+temporary stack exchange. The first broad implementation also changes two
+already-active constant-index static bodies enough to alter legacy inline-body
+placement. The final form is constrained to the dynamic-index class it fixes;
+`tc89flta.f_gv` and `tctxflt.use_fptr` regain their exact published hashes,
+while both `tmulpow2` functions improve by 23 raw bytes and two instructions.
+
+T351 converts the measured profiles into production structural predicates.
+Unary admission uses return kind, block count, local layout, backend slots, and
+call count; branch and RHS admission use their independently measured
+structural and cost classes. Production code contains no app or function-name
+exceptions.
+
+T352 closes the cohort:
+
+- ordinary: **859/2025 (42.42%)**, +11 names and zero removals;
+- stack-check: **881/2127 (41.42%)**, +11 names and zero removals;
+- additions in both modes: `cobint.get_occurs`, `fint.inline_word`,
+  `fint.print_stats`, `forint.parse_goto_label`, `forint.print_stats`,
+  `pint.print_stats`, `tctxflt.truth_elem`,
+  `tforblk.static_pointer_initializer`,
+  `tforblk.static_sibling_blocks`, `tmulpow2.idx_long`, and
+  `tmulpow2.idx_pair`;
+- all seven affected apps pass focused full peep/nopeep validation with zero
+  regressions and twenty checked improvements;
+- focused ASan/UBSan compilation is clean.
+
+The next campaign returns to population-scale work. The ordinary fallback
+ranking is now led by text-size (319), boolean-PHI cost (159), dynamic-index
+base cost (101), block-CSE cost (89), unary-not cost (57), and wide constants
+(48). The accelerated roadmap prioritizes canonical boolean control flow,
+use-position slot allocation, and one shared address/index plan; narrow
+cost-gate exceptions are no longer the primary migration mechanism.

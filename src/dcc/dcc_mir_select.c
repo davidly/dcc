@@ -1686,6 +1686,42 @@ static int mir_is_profiled_small_unary_not_near_cost(
                  captured_instructions * 9L));
 }
 
+static int mir_is_profiled_unary_not_rollout(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    int calls = mir_call_count();
+    int blocks = mir_cfg_block_count();
+    int return_kind = mir.return_type & 15;
+
+    if (return_kind == TYPE_VOID && blocks == 2 &&
+        mir.local_bytes == 0 && mir.backend_slot_count == 1 &&
+        calls >= 7 && calls <= 11)
+        return 1;
+    return return_kind == TYPE_INT && blocks == 5 &&
+           mir.local_bytes == 6 && mir.backend_slot_count == 5 &&
+           calls == 2 && generated_size <= captured_size + 272 &&
+           generated_instructions <= captured_instructions + 18;
+}
+
+static int mir_is_profiled_rhs_stack_rollout(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return mir_cfg_block_count() == 1 &&
+           generated_size <= captured_size - 37 &&
+           generated_instructions <= captured_instructions - 4;
+}
+
+static int mir_is_profiled_branch_condition_rollout(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return mir_cfg_block_count() <= 8 &&
+           generated_size <= captured_size - 100 &&
+           generated_instructions <= captured_instructions - 20;
+}
+
 static int mir_is_profiled_boolean_phi_branch_retry(
     long generated_size, long captured_size,
     int generated_instructions, int captured_instructions)
@@ -1744,6 +1780,14 @@ static int mir_is_profiled_boolean_phi_measured_cohort(
     }
     return return_kind == TYPE_VOID && blocks <= 12 && calls == 1 &&
            mir.local_bytes == 2 && mir.backend_slot_count == 2;
+}
+
+static int mir_profile_matches_function(const char *variable)
+{
+    const char *profile = getenv(variable);
+
+    return profile != NULL &&
+           (!strcmp(profile, "*") || !strcmp(profile, mir.name));
 }
 
 static int mir_boolean_phi_profile_is_semantically_eligible(void)
@@ -2457,6 +2501,12 @@ evaluate_generated:
                          !mir_is_profiled_small_unary_not_near_cost(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_unary_not_rollout(
+                             generated_size, captured_size,
+                             generated_instructions,
+                             captured_instructions) &&
+                         !mir_profile_matches_function(
+                             "DCC_MIR_PROFILE_UNARY_NOT") &&
                          (mir_cfg_block_count() > 18 ||
                           generated_size + 10 > captured_size))
                     fallback_reason = "unary-not-cost";
@@ -2764,6 +2814,12 @@ evaluate_generated:
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_rhs_stack_forwarding() &&
                          !mir_spilled_cfg_depends_on_binary_load_pair_forwarding() &&
+                         !mir_is_profiled_rhs_stack_rollout(
+                             generated_size, captured_size,
+                             generated_instructions,
+                             captured_instructions) &&
+                         !mir_profile_matches_function(
+                             "DCC_MIR_PROFILE_RHS_STACK") &&
                          !(mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
                            mir_is_profiled_small_unary_not_near_cost(
                                generated_size, captured_size,
@@ -2796,6 +2852,12 @@ evaluate_generated:
                     fallback_reason = "indirect-store-stack-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_branch_condition_forwarding() &&
+                         !mir_is_profiled_branch_condition_rollout(
+                             generated_size, captured_size,
+                             generated_instructions,
+                             captured_instructions) &&
+                         !mir_profile_matches_function(
+                             "DCC_MIR_PROFILE_BRANCH_CONDITION") &&
                          (mir_cfg_block_count() > 2 ||
                           captured_instructions > 100 ||
                           mir_spilled_cfg_branch_condition_forwarding_uses()
@@ -3359,8 +3421,6 @@ evaluate_generated:
                 {
                     const char *forced_accept =
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
-                    const char *profile_boolean =
-                        getenv("DCC_MIR_PROFILE_BOOLEAN_PHI");
                     if (forced_accept != NULL &&
                         !strcmp(forced_accept, mir.name))
                         fallback_reason = NULL;
@@ -3371,9 +3431,8 @@ evaluate_generated:
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "boolean-phi-cost") &&
-                        profile_boolean != NULL &&
-                        (!strcmp(profile_boolean, "*") ||
-                         !strcmp(profile_boolean, mir.name)) &&
+                        mir_profile_matches_function(
+                            "DCC_MIR_PROFILE_BOOLEAN_PHI") &&
                         mir_boolean_phi_profile_is_semantically_eligible() &&
                         generated_size <= captured_size + 1 &&
                         generated_instructions <= captured_instructions)

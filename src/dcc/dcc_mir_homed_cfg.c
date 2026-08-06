@@ -515,10 +515,19 @@ static int mir_emit_homed_wide_indirect_load(FILE *out,
     if (preserve_de) fputs("\tpush de\n", out);
     if (!mir_emit_home_to_hl(out, insn->src1))
         return 0;
-    fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
-          "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
-          "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
-          "\tld d,(hl)\n\tpop hl\n", out);
+    if (dst_color == MIR_COLOR_HL_DE &&
+        mir_homed_cfg_depends_on_dynamic_index() &&
+        mir.allocation_colors[insn->src1] != MIR_COLOR_DE &&
+        mir.allocation_colors[insn->src1] != MIR_COLOR_HL_DE) {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+              "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+              "\tex de,hl\n", out);
+    } else {
+        fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+              "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
+              "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
+              "\tld d,(hl)\n\tpop hl\n", out);
+    }
     if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
         return 0;
     if (preserve_de) fputs("\tpop de\n", out);
