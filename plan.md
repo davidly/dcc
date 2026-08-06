@@ -40,6 +40,8 @@ history preserves them.
 - Batch 30 candidate stack-check coverage: **760/2124 functions (35.78%)**
 - Batch 31 candidate ordinary coverage: **752/2022 functions (37.19%)**
 - Batch 31 candidate stack-check coverage: **767/2124 functions (36.11%)**
+- Batch 32 candidate ordinary coverage: **754/2022 functions (37.29%)**
+- Batch 32 candidate stack-check coverage: **769/2124 functions (36.21%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -169,6 +171,29 @@ Both add `tctxops.ca_callarg`, `tctxops.ca_ret`, `tlongopt.cb_ge`,
 `tlongopt.cb_lt`, `tlongopt.cc_eq`, `tlongopt.cc_gt`, and
 `tlongopt.cc_lt`; focused full peep/nopeep validation passes with zero
 regressions and four checked cycle improvements.
+
+## Batch 32
+
+1. T218: refresh the actual-emission unused-slot audit. The 534 current
+   `text-size` fallbacks contain 164 unused assigned slots across 59
+   functions; all are adjacent, one-use wide values. Extend the diagnostic
+   with definition/consumer immediates and types so the remaining classes can
+   be separated without MIR-dump guesswork.
+2. T219: reject the two strongest wide-slot hypotheses. Selector-scoped float
+   constant negation covers 75 records and direct float indirect-load returns
+   cover nine, but neither admits a function. Also reject the numerically
+   closest text-proxy fallback after forced emission miscompiles
+   `attnc11.transposed_multiply_8x16`.
+3. T220: rematerialize a one-use 16-bit call argument whose exact chain is a
+   global/extern pointer load, zero or more constant member offsets, and an
+   indirect word load. Skip the complete chain and its slots at definition,
+   then reproduce it at the reverse-ABI argument push. Require exactly one use
+   at every chain link and keep the feature in a later fresh fallback retry.
+
+The ordinary census is **754/2022 (37.29%)**, +2 names and zero removals.
+The stack-check census is **769/2124 (36.21%)**, also +2 and zero removals.
+Both add `adaint.return_stmt` and `fint.die`; focused full peep/nopeep
+validation passes with zero regressions and six checked improvements.
 
 ## Batch 2
 

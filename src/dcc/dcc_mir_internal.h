@@ -436,6 +436,8 @@ void mir_begin_indirect_store_address_forwarding(void);
 void mir_end_indirect_store_address_forwarding(void);
 void mir_begin_wide_binary_lhs_forwarding(void);
 void mir_end_wide_binary_lhs_forwarding(void);
+void mir_begin_stable_pointer_argument_rematerialization(void);
+void mir_end_stable_pointer_argument_rematerialization(void);
 int mir_try_emit_spilled_scalar_cfg(FILE *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);

@@ -1757,6 +1757,7 @@ void mir_end_function(void)
             int rhs_forward_retry_attempted = 0;
             int store_address_retry_attempted = 0;
             int wide_binary_retry_attempted = 0;
+            int stable_pointer_argument_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
             mir_end_general_rhs_stack_forwarding();
@@ -1764,6 +1765,7 @@ void mir_end_function(void)
             mir_end_branch_condition_forwarding();
             mir_end_indirect_store_address_forwarding();
             mir_end_wide_binary_lhs_forwarding();
+            mir_end_stable_pointer_argument_rematerialization();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
@@ -2635,6 +2637,48 @@ evaluate_generated:
                         goto evaluate_generated;
                     }
                     fclose(wide_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "planned-stack-cost") ||
+                     !strcmp(fallback_reason,
+                             "indirect-store-address-cost")) &&
+                    !stable_pointer_argument_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *argument_candidate = tmpfile();
+                    int argument_emitted;
+
+                    stable_pointer_argument_retry_attempted = 1;
+                    if (argument_candidate == NULL)
+                        fatal("cannot create MIR pointer-argument candidate "
+                              "stream");
+                    mir_begin_general_rhs_stack_forwarding();
+                    mir_begin_indirect_store_value_forwarding();
+                    mir_begin_branch_condition_forwarding();
+                    mir_begin_indirect_store_address_forwarding();
+                    mir_begin_wide_binary_lhs_forwarding();
+                    mir_begin_stable_pointer_argument_rematerialization();
+                    label_id = mir_label_base;
+                    argument_emitted = mir_try_selector(
+                        argument_candidate, mir_try_emit_spilled_scalar_cfg);
+                    mir_end_general_rhs_stack_forwarding();
+                    mir_end_indirect_store_value_forwarding();
+                    mir_end_branch_condition_forwarding();
+                    mir_end_indirect_store_address_forwarding();
+                    mir_end_wide_binary_lhs_forwarding();
+                    mir_end_stable_pointer_argument_rematerialization();
+                    if (argument_emitted) {
+                        fclose(generated);
+                        generated = argument_candidate;
+                        argument_candidate = NULL;
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    fclose(argument_candidate);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||

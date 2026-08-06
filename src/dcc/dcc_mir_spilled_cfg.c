@@ -66,6 +66,7 @@ static int mir_indirect_store_value_forwarding_enabled;
 static int mir_branch_condition_forwarding_enabled;
 static int mir_indirect_store_address_forwarding_enabled;
 static int mir_wide_binary_lhs_forwarding_enabled;
+static int mir_stable_pointer_argument_rematerialization_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -1082,6 +1083,12 @@ void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
 
 static int mir_address_is_single_call_argument(int value);
 static int mir_load_is_single_indirect_call_target(int value, int size);
+static int mir_stable_pointer_argument_address(
+    int value, const struct MirInsn **root_out, int *storage_out,
+    long *member_offset_out);
+static int mir_indirect_load_is_single_stable_pointer_call_argument(
+    int value, int size);
+static int mir_value_only_used_by_stable_pointer_argument(int value);
 
 /* Item T76 (mir-text-size-plan.md): every "push ix\n\tpop hl\n" address-of-
  * local/param computation below unconditionally follows with "ld de,<off>/
@@ -1116,6 +1123,29 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
     unsigned long bits;
+
+    if (mir_indirect_load_is_single_stable_pointer_call_argument(
+            value, size)) {
+        const struct MirInsn *root;
+        struct Sym *global;
+        const char *assembly_name;
+        int memory_storage;
+        long member_offset;
+
+        if (!mir_stable_pointer_argument_address(
+                definition->src1, &root, &memory_storage, &member_offset))
+            return 0;
+        global = find_global(root->name);
+        assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(root->name));
+        if (memory_storage == SC_EXTERN && mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        fprintf(out, "\tld hl,(%s)\n", assembly_name);
+        mir_emit_hl_offset_from_ix(out, (int)member_offset);
+        fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+        return 1;
+    }
 
     if ((size == 2 || size == 4) &&
         (mir_load_is_single_call_argument(value, size) ||
@@ -2010,6 +2040,90 @@ int mir_load_is_single_call_argument(int value, int size)
     return argument_count == 1;
 }
 
+static int mir_stable_pointer_argument_address(
+    int value, const struct MirInsn **root_out, int *storage_out,
+    long *member_offset_out)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long member_offset = 0;
+
+    while (definition != NULL &&
+           definition->opcode == MIR_MEMBER_ADDRESS) {
+        member_offset += definition->immediate;
+        definition = mir_definition(definition->src1);
+    }
+    if (definition == NULL || definition->opcode != MIR_LOAD ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        (memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN) ||
+        type_size(memory_type) != 2 || type_ptr_depth(memory_type) == 0)
+        return 0;
+    if (root_out != NULL)
+        *root_out = definition;
+    if (storage_out != NULL)
+        *storage_out = memory_storage;
+    if (member_offset_out != NULL)
+        *member_offset_out = member_offset;
+    return 1;
+}
+
+static int mir_indirect_load_is_single_stable_pointer_call_argument(
+    int value, int size)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int argument_count = 0;
+    int instruction;
+
+    if (!mir_stable_pointer_argument_rematerialization_enabled ||
+        size != 2 || definition == NULL ||
+        definition->opcode != MIR_LOAD_INDIRECT ||
+        definition->memory_size != 2 || definition->bit_width != 0 ||
+        !mir_stable_pointer_argument_address(
+            definition->src1, NULL, NULL, NULL))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src2 == value)
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        if (insn->opcode != MIR_ARG || type_size(insn->type) != size ||
+            ++argument_count > 1)
+            return 0;
+    }
+    return argument_count == 1;
+}
+
+static int mir_value_only_used_by_stable_pointer_argument(int value)
+{
+    int uses = 0;
+    int instruction;
+
+    if (!mir_stable_pointer_argument_rematerialization_enabled)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src2 == value || mir_call_uses_value(insn, value))
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        if (++uses > 1)
+            return 0;
+        if (insn->opcode == MIR_MEMBER_ADDRESS &&
+            mir_value_only_used_by_stable_pointer_argument(insn->dst))
+            continue;
+        if (insn->opcode == MIR_LOAD_INDIRECT &&
+            mir_indirect_load_is_single_stable_pointer_call_argument(
+                insn->dst, 2))
+            continue;
+        return 0;
+    }
+    return uses == 1;
+}
+
 /* mir-text-size Item T20 (mir-text-size-plan.md): sibling to
  * mir_load_is_single_call_argument above, but for a MIR_ADDRESS
  * (address-of a local/parameter) whose sole use is exactly one
@@ -2696,6 +2810,16 @@ void mir_end_wide_binary_lhs_forwarding(void)
     mir_wide_binary_lhs_forwarding_enabled = 0;
 }
 
+void mir_begin_stable_pointer_argument_rematerialization(void)
+{
+    mir_stable_pointer_argument_rematerialization_enabled = 1;
+}
+
+void mir_end_stable_pointer_argument_rematerialization(void)
+{
+    mir_stable_pointer_argument_rematerialization_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -3080,6 +3204,11 @@ static int mir_prepare_backend_slots(void)
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
                                                                                                             type_size(definition->type))) ||
+                                        mir_value_only_used_by_stable_pointer_argument(
+                                            value) ||
+                                        (type_size(definition->type) == 2 &&
+                                         mir_indirect_load_is_single_stable_pointer_call_argument(
+                                             value, 2)) ||
                                         (type_size(definition->type) == 2 &&
                                          mir_load_is_single_indirect_call_target(value, 2)) ||
                                         mir_address_is_single_call_argument(value) ||
@@ -5814,6 +5943,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_load_is_single_call_argument(insn->dst,
                                                   type_size(insn->type)))
                 break;
+            if (mir_value_only_used_by_stable_pointer_argument(insn->dst))
+                break;
             if (type_size(insn->type) == 2 &&
                 mir_load_is_single_indirect_call_target(insn->dst, 2))
                 break;
@@ -6011,6 +6142,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_MEMBER_ADDRESS:
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
                 break;
+            if (mir_value_only_used_by_stable_pointer_argument(insn->dst))
+                break;
             mir_emit_virtual_load(out, insn->src1);
             if (insn->immediate != 0)
                 fprintf(out, "\tld de,%ld\n\tadd hl,de\n", insn->immediate);
@@ -6114,6 +6247,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_LOAD_INDIRECT:
+            if (mir_indirect_load_is_single_stable_pointer_call_argument(
+                    insn->dst, 2))
+                break;
             if (mir_emit_constant_absolute_load(out, insn))
                 break;
             mir_emit_virtual_load(out, insn->src1);
@@ -7630,7 +7766,9 @@ done:
                 fprintf(stderr,
                         "; MIR unused-slot function=%s value=%d slot=%d "
                         "definition=%s type-size=%d uses=%d "
-                        "consumer=%s distance=%d\n",
+                        "consumer=%s distance=%d definition-immediate=%ld "
+                        "consumer-immediate=%ld definition-type=%d "
+                        "consumer-type=%d\n",
                         mir.name, i, mir.backend_slots[i],
                         definition != NULL
                             ? mir_opcode_name(definition->opcode) : "none",
@@ -7640,7 +7778,11 @@ done:
                         consumer != NULL
                             ? mir_opcode_name(consumer->opcode) : "none",
                         consumer != NULL && definition_index >= 0
-                            ? consumer_index - definition_index : -1);
+                            ? consumer_index - definition_index : -1,
+                        definition != NULL ? definition->immediate : 0L,
+                        consumer != NULL ? consumer->immediate : 0L,
+                        definition != NULL ? definition->type : 0,
+                        consumer != NULL ? consumer->type : 0);
             }
     free(mir_backend_slot_accessed);
     mir_backend_slot_accessed = NULL;

@@ -10383,3 +10383,57 @@ is required.
   `tlongopt.cc_lt`;
 - focused full peep/nopeep validation of `tctxops` and `tlongopt` passes with
   zero regressions and four checked cycle improvements.
+
+## Items T218-T220: stable pointer call-argument rematerialization (2026-08-06)
+
+T218 refreshes `DCC_MIR_UNUSED_SLOT_REPORT` against the 536 post-Batch-31
+`text-size` fallbacks. There are 164 unique assigned-but-unread slots across
+59 functions. Every record is an adjacent, one-use, four-byte value: 139 feed
+`MIR_UNARY` and 25 feed `MIR_RETURN`. The diagnostic now includes definition
+and consumer immediates and types, allowing exact residual classes to be
+measured without correlating full MIR dumps manually.
+
+T219 tests the two largest safe-looking residual classes transactionally.
+Allowing slot reservation to recognize the 75 float-constant negations changes
+no selection. Recognizing nine direct float indirect-load returns also changes
+no selection. Both prototypes are removed; the remaining unused wide slots
+are not the current acceptance bottleneck, and the generic wide-unary rollout
+rejected by T86 remains closed. Separately, forced emission of the closest
+numeric text-size fallback, `attnc11.transposed_multiply_8x16`, changes program
+output despite saving seven static instructions. That result rejects a broad
+"instruction win despite text growth" gate.
+
+T220 instead follows a direct legacy/MIR assembly comparison of
+`adaint.return_stmt`. The spilled emitter already rematerializes constants,
+strings, and stable local loads at a call's reverse-ABI push, but a word loaded
+through a global pointer and constant member offset was computed early, copied
+through BC, then restored solely for the push.
+
+One shared chain proof now recognizes exactly:
+
+- a word-sized global or extern pointer `MIR_LOAD`;
+- zero or more constant `MIR_MEMBER_ADDRESS` steps;
+- a non-bitfield two-byte `MIR_LOAD_INDIRECT`;
+- exactly one use at every link, terminating in exactly one two-byte
+  `MIR_ARG`.
+
+While the selector-scoped feature is active, slot planning and definition-site
+emission both omit the complete chain. The ordinary call-argument emitter then
+loads the pointer symbol, reapplies the accumulated offset, performs the word
+load, and immediately pushes HL. The shared resolver returns the already
+validated root, storage class, and offset; extern declaration handling follows
+the existing named-load path. Deferring the single read only changes the
+permitted order among sibling argument evaluations and never duplicates a
+volatile access.
+
+The feature runs in a fresh retry after the established adjacent-wide retry,
+with symmetric begin/end state and the common trial label base. Existing
+selections and earlier retry winners remain unchanged.
+
+**Census and focused validation**:
+
+- ordinary: **754/2022 (37.29%)**, +2 names and zero removals;
+- stack-check: **769/2124 (36.21%)**, +2 names and zero removals;
+- additions in both configurations: `adaint.return_stmt` and `fint.die`;
+- focused full peep/nopeep validation passes with zero regressions and six
+  checked cycle/size improvements.
