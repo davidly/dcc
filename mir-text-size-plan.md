@@ -10617,3 +10617,68 @@ selections and earlier retry winners remain unchanged.
 - additions in both configurations: `adaint.return_stmt` and `fint.die`;
 - focused full peep/nopeep validation passes with zero regressions and six
   checked cycle/size improvements.
+
+## Items T245-T254: population-first slot and homed arithmetic expansion (2026-08-09)
+
+T245 extends backend-slot diagnostics with the consumer operand position.
+Across 19,673 unique slot events in 1,176 fallback functions, repeated
+populations include 228 adjacent unary-to-binary-RHS slots, 196
+phi-to-false-branch slots, 176 adjacent unary-to-indirect-store-value slots,
+161 adjacent binary-to-binary-RHS slots, and 225 index-address-to-store-address
+slots. Existing specialized handoffs already cover much of this population,
+so each extension remains a separate fallback-only transaction.
+
+T246 adds an adjacent wide-RHS physical-stack handoff. A one-use `MIR_UNARY`
+producer pushes DE:HL instead of reserving a two-unit backend slot. The
+following binary loads its left operand and consumes the pushed right operand
+through the existing wide stack/current-register convention. T247 rejects
+broader producer classes after they regress `tctxops`. T248 retains integer
+addition, OR, XOR, equality, inequality, and nonconstant-left AND/multiply
+forms; constant-sensitive operations remain excluded. This adds
+`tkandr.ladd` in both configurations.
+
+T249 force-profiles the closest branch-condition candidates. Three improve
+when forced, but relaxing their cost gate only reaches the independent
+`cfg-backedge` semantic boundary and adds no production selection. T250
+profiles twelve `rhs-stack-cost` candidates; only two are non-regressing and
+do not define a sufficiently isolated reusable class. T251 tests broad
+multi-block scalar-constant rematerialization. It adds three functions, all
+regressing, and also perturbs incumbent boolean-PHI output. T252 tests
+nonadjacent indirect-store address handoffs; 31 apps change but no function is
+admitted. All four experiments are removed.
+
+T253 audits homed-selector rejections in 24 parallel corpus compiler
+processes. The largest classes are 176 spill, 141 comparison CFG, 89 wide
+unary, 70 indirect-store type, 68 indirect-load type, 64 binary operation,
+and 55 wide-color rejects. The binary population identifies narrow runtime
+arithmetic as the next reusable opcode class. Homed scalar CFG now emits
+narrow multiply, signed/unsigned divide, and signed/unsigned remainder using
+`__mulu`, `__divs`, `__divu`, `__mods`, and `__modu`.
+
+T254 fixes a latent homed indirect-store ordering bug exposed by the new
+arithmetic population. When the value is homed in HL, loading the address into
+HL first destroys the value; the corrected path preserves the value before
+materializing the address and then arranges address/value in HL/DE. Runtime
+helper inspection also proves BC preservation is part of every admitted
+helper contract, so redundant caller push/pop pairs are removed. Constant-left
+multiplication is deliberately excluded: its sole additional candidate,
+`tmulpow2.umul_lhs`, regresses peep and nopeep execution even after
+constant-strength reduction.
+
+**Census and focused validation**:
+
+- ordinary: **779/2023 (38.51%)**, +3 names over Batch 35 and zero removals;
+- stack-check: **798/2125 (37.55%)**, +5 names and zero removals;
+- ordinary additions: `tkandr.ladd`,
+  `tc99ctl.test_constant_expression_arrays`, and `wumpus.rndrm`;
+- stack-check additionally adds `tptrcnd.pickn` and `tptrrhs.pickn`;
+- eleven affected apps pass full peep/nopeep validation with zero regressions
+  and 29 checked cycle/size improvements, including roughly 2.8% fewer cycles
+  for `tc89comp` and 4-5% fewer cycles for `tqsort`;
+- ASan/UBSan compilation of all eleven affected apps is clean.
+
+The next population-first target is a bounded subset of the 89 homed
+`wide-unary` rejects, followed by the remaining binary and indirect-memory
+type classes. Repeated-comparison admission and `cfg-backedge` remain semantic
+boundaries with known miscompilations and must not be treated as coverage
+shortcuts.

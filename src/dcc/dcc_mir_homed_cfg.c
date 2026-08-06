@@ -992,6 +992,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 insn->immediate != TOK_NE && insn->immediate != '<' &&
                 insn->immediate != '>' && insn->immediate != TOK_LE &&
                 insn->immediate != TOK_GE &&
+                !(type_size(insn->secondary_offset) <= 2 &&
+                  ((insn->immediate == '*' &&
+                    (mir_definition(insn->src1) == NULL ||
+                     mir_definition(insn->src1)->opcode != MIR_CONST)) ||
+                   insn->immediate == '/' || insn->immediate == '%')) &&
                 !mir_homed_constant_binary(insn, &operation, &count)) {
                 if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
                 {
@@ -1524,12 +1529,24 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     fputs("\tpush de\n\tpush hl\n", out);
                 if (preserve_hl) fputs("\tpush hl\n", out);
                 if (preserve_de) fputs("\tpush de\n", out);
-                if (!mir_emit_home_to_hl(out, insn->src1))
-                    goto done;
-                fputs("\tpush hl\n", out);
-                if (!mir_emit_home_to_hl(out, insn->src2))
-                    goto done;
-                fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n", out);
+                if (mir.allocation_colors[insn->src2] == MIR_COLOR_HL) {
+                    /* Loading the address into HL first would destroy a
+                     * value already homed there. Preserve the value before
+                     * materializing the address, then arrange address/value
+                     * in HL/DE without rereading either home. */
+                    fputs("\tpush hl\n", out);
+                    if (!mir_emit_home_to_hl(out, insn->src1))
+                        goto done;
+                    fputs("\tex de,hl\n\tpop hl\n\tex de,hl\n", out);
+                } else {
+                    if (!mir_emit_home_to_hl(out, insn->src1))
+                        goto done;
+                    fputs("\tpush hl\n", out);
+                    if (!mir_emit_home_to_hl(out, insn->src2))
+                        goto done;
+                    fputs("\tex de,hl\n\tpop hl\n", out);
+                }
+                fputs("\tld (hl),e\n", out);
                 fputs("\tinc hl\n\tld (hl),d\n", out);
                 if (preserve_de) fputs("\tpop de\n", out);
                 if (preserve_hl) fputs("\tpop hl\n", out);

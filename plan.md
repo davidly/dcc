@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `e53ef93` (Items T224-T234)
-- Published ordinary coverage: **764/2023 functions (37.77%)**
-- Published stack-check coverage: **781/2125 functions (36.75%)**
+- Published baseline: `27a4549` (Items T235-T244)
+- Published ordinary coverage: **776/2023 functions (38.36%)**
+- Published stack-check coverage: **793/2125 functions (37.32%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -48,6 +48,8 @@ history preserves them.
 - Batch 34 candidate stack-check coverage: **781/2125 functions (36.75%)**
 - Batch 35 candidate ordinary coverage: **776/2023 functions (38.36%)**
 - Batch 35 candidate stack-check coverage: **793/2125 functions (37.32%)**
+- Batch 36 candidate ordinary coverage: **779/2023 functions (38.51%)**
+- Batch 36 candidate stack-check coverage: **798/2125 functions (37.55%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -1009,6 +1011,35 @@ boolean-PHI additions plus the two unary-not additions and zero removals.
 Focused full peep/nopeep validation for the affected apps passes with zero
 regressions and 21 checked improvements for the PHI subset. ASan/UBSan
 compilation of all eight PHI apps is clean.
+
+## Batch 36
+
+1. T245-T248: classify backend-slot consumers by operand, then add a
+   fallback-only adjacent wide-RHS handoff. Restrict producers to `MIR_UNARY`
+   and operations to safe commutative integer forms after broader producers
+   regress `tctxops`. This adds `tkandr.ladd`.
+2. T249-T252: measure and reject branch-condition gate relaxation,
+   `rhs-stack-cost` exceptions, broad scalar-constant rematerialization, and
+   nonadjacent indirect-store address handoffs. Each either reaches a separate
+   semantic gate, regresses measured output, or changes no selection.
+3. T253: audit homed-selector rejection classes across the corpus. The leading
+   opcode gaps are 89 wide unary, 70 indirect-store type, 68 indirect-load
+   type, and 64 binary operation rejects. Add narrow `*`, `/`, and `%` through
+   their established runtime helpers.
+4. T254: fix homed indirect stores when the stored value already occupies HL;
+   preserve it before materializing the address. Remove redundant caller
+   preservation of BC because every admitted arithmetic helper preserves BC
+   by contract. Constant-left multiply remains excluded after its sole new
+   candidate regresses both checked modes.
+
+The candidate ordinary census is **779/2023 (38.51%)**, +3 names over Batch
+35 and zero removals: `tkandr.ladd`,
+`tc99ctl.test_constant_expression_arrays`, and `wumpus.rndrm`.
+
+The candidate stack-check census is **798/2125 (37.55%)**, +5 names and zero
+removals; it additionally adds `tptrcnd.pickn` and `tptrrhs.pickn`. Eleven
+affected apps pass full peep/nopeep validation with zero regressions and 29
+checked improvements. ASan/UBSan compilation of all affected apps is clean.
 
 ## Required process
 

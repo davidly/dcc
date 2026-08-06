@@ -66,6 +66,8 @@ static int mir_indirect_store_value_forwarding_enabled;
 static int mir_branch_condition_forwarding_enabled;
 static int mir_indirect_store_address_forwarding_enabled;
 static int mir_wide_binary_lhs_forwarding_enabled;
+static int mir_wide_binary_rhs_forwarding_enabled;
+static int mir_wide_binary_rhs_forwarding_uses;
 static int mir_stable_pointer_argument_rematerialization_enabled;
 static int mir_global_argument_rematerialization_enabled;
 static int mir_wide_first_argument_stack_cache_enabled;
@@ -338,6 +340,30 @@ static int mir_is_branch_condition_forward(int value, int consumer)
  * existing `skipped_label && next->opcode != MIR_RETURN` guard just
  * below already rejects a label-crossed MIR_UNARY, so this stays exactly
  * as conservative as the existing VLA-guarded MIR_RETURN path). */
+static int mir_wide_binary_rhs_is_commutative(
+    const struct MirInsn *binary)
+{
+    const struct MirInsn *left;
+
+    if (binary == NULL || binary->opcode != MIR_BINARY ||
+        type_size(binary->secondary_offset) != 4 ||
+        type_is_float(binary->secondary_offset))
+        return 0;
+    switch ((int)binary->immediate) {
+    case '+':
+    case '|':
+    case '^':
+    case TOK_EQ:
+    case TOK_NE:
+        return 1;
+    case '&':
+    case '*':
+        left = mir_definition(binary->src1);
+        return left == NULL || left->opcode != MIR_CONST;
+    }
+    return 0;
+}
+
 static int mir_can_forward_hl_de_to_next(int value)
 {
     const struct MirInsn *next;
@@ -370,6 +396,14 @@ static int mir_can_forward_hl_de_to_next(int value)
         /* The wide binary emitter consumes src1 first and immediately
          * pushes DE:HL before materializing src2, so an adjacent producer
          * can remain resident exactly as it can for MIR_UNARY/RETURN. */
+    } else if (mir_wide_binary_rhs_forwarding_enabled &&
+               next_instruction == mir_emit_instruction_index + 1 &&
+               mir.insns[mir_emit_instruction_index].opcode == MIR_UNARY &&
+               next->src2 == value &&
+               mir_wide_binary_rhs_is_commutative(next)) {
+        /* The producer pushes src2 once. The binary then loads src1 into
+         * DE:HL and uses the same stack/current-register convention with
+         * physically swapped operands. */
     } else {
         return 0;
     }
@@ -2560,9 +2594,13 @@ static int mir_wide_backend_slot_forwardable(int value, int units,
     definition = mir_definition(value);
     if (definition == NULL)
         return 0;
-    if (!(mir_wide_binary_lhs_forwarding_enabled &&
-          next->opcode == MIR_BINARY && next->src1 == value &&
-          type_size(next->secondary_offset) == 4)) {
+    if (!((mir_wide_binary_lhs_forwarding_enabled &&
+           next->opcode == MIR_BINARY && next->src1 == value &&
+           type_size(next->secondary_offset) == 4) ||
+          (mir_wide_binary_rhs_forwarding_enabled &&
+           definition->opcode == MIR_UNARY &&
+           next->src2 == value &&
+           mir_wide_binary_rhs_is_commutative(next)))) {
         if ((!type_is_long(definition->type) &&
              !(type_is_float(definition->type) &&
                definition->opcode == MIR_BINARY)) ||
@@ -2971,6 +3009,22 @@ void mir_begin_wide_binary_lhs_forwarding(void)
 void mir_end_wide_binary_lhs_forwarding(void)
 {
     mir_wide_binary_lhs_forwarding_enabled = 0;
+}
+
+void mir_begin_wide_binary_rhs_forwarding(void)
+{
+    mir_wide_binary_rhs_forwarding_enabled = 1;
+    mir_wide_binary_rhs_forwarding_uses = 0;
+}
+
+void mir_end_wide_binary_rhs_forwarding(void)
+{
+    mir_wide_binary_rhs_forwarding_enabled = 0;
+}
+
+int mir_wide_binary_rhs_forwarding_use_count(void)
+{
+    return mir_wide_binary_rhs_forwarding_uses;
 }
 
 void mir_begin_stable_pointer_argument_rematerialization(void)
@@ -4467,6 +4521,24 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         fputs("\tpush de\n\tpush hl\n", out);
         mir_forwarded_wide_stack_value = value;
         mir_forwarded_wide_stack_consumer = helper_consumer;
+        return;
+    }
+    if (mir_wide_binary_rhs_forwarding_enabled &&
+        mir_emit_instruction_index + 1 < mir.count &&
+        mir.insns[mir_emit_instruction_index].opcode == MIR_UNARY &&
+        mir.insns[mir_emit_instruction_index + 1].src2 == value &&
+        mir_wide_binary_rhs_is_commutative(
+            &mir.insns[mir_emit_instruction_index + 1]) &&
+        mir_value_use_count(value) == 1) {
+        if (mir_pending_planned_stack_consumer() >= 0 ||
+            mir_forwarded_wide_stack_value >= 0) {
+            mir_planned_stack_invalid = 1;
+            return;
+        }
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_forwarded_wide_stack_value = value;
+        mir_forwarded_wide_stack_consumer = mir_emit_instruction_index + 1;
+        ++mir_wide_binary_rhs_forwarding_uses;
         return;
     }
     /* Item T40 (mir-text-size-plan.md): forward a computed wide value
@@ -7081,14 +7153,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int stack_forwarded_left =
                     mir_forwarded_wide_stack_value == insn->src1 &&
                     mir_forwarded_wide_stack_consumer == i;
-                if (!stack_forwarded_left) {
+                int stack_forwarded_right =
+                    mir_forwarded_wide_stack_value == insn->src2 &&
+                    mir_forwarded_wide_stack_consumer == i;
+                if (stack_forwarded_right) {
+                    mir_emit_virtual_load_wide(out, insn->src1);
+                } else if (!stack_forwarded_left) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                     fputs("\tpush de\n\tpush hl\n", out);
                 }
-                mir_emit_virtual_load_wide(out, insn->src2);
+                if (!stack_forwarded_right)
+                    mir_emit_virtual_load_wide(out, insn->src2);
                 if (!mir_emit_wide_operation(out, insn))
                     goto done;
-                if (stack_forwarded_left) {
+                if (stack_forwarded_left || stack_forwarded_right) {
                     mir_forwarded_wide_stack_value = -1;
                     mir_forwarded_wide_stack_consumer = -1;
                 }
@@ -8115,6 +8193,7 @@ done:
                  !mir_backend_slot_accessed[i])) {
                 const struct MirInsn *definition = mir_definition(i);
                 const struct MirInsn *consumer = NULL;
+                const char *consumer_operand = "none";
                 int consumer_index;
                 int definition_index = definition != NULL
                     ? (int)(definition - mir.insns) : -1;
@@ -8127,10 +8206,15 @@ done:
                         consumer = &mir.insns[consumer_index];
                         break;
                     }
+                if (consumer != NULL)
+                    consumer_operand = consumer->src1 == i ? "src1" :
+                        consumer->src2 == i ? "src2" :
+                        mir_call_uses_value(consumer, i) ? "call" : "other";
                 fprintf(stderr,
                         "; MIR %s function=%s value=%d slot=%d accessed=%d "
                         "definition=%s type-size=%d uses=%d "
-                        "consumer=%s distance=%d definition-immediate=%ld "
+                        "consumer=%s operand=%s distance=%d "
+                        "definition-immediate=%ld "
                         "consumer-immediate=%ld definition-type=%d "
                         "consumer-type=%d\n",
                         getenv("DCC_MIR_SLOT_ACCESS_REPORT") != NULL
@@ -8144,6 +8228,7 @@ done:
                         mir_value_use_count(i),
                         consumer != NULL
                             ? mir_opcode_name(consumer->opcode) : "none",
+                        consumer_operand,
                         consumer != NULL && definition_index >= 0
                             ? consumer_index - definition_index : -1,
                         definition != NULL ? definition->immediate : 0L,

@@ -1714,7 +1714,14 @@ int mir_emit_homed_binary_instruction(FILE *out,
     int right = insn->src2;
     int commutative = insn->immediate == '+' || insn->immediate == '&' ||
                       insn->immediate == '|' || insn->immediate == '^' ||
-                      insn->immediate == TOK_EQ || insn->immediate == TOK_NE;
+                      insn->immediate == TOK_EQ || insn->immediate == TOK_NE ||
+                      insn->immediate == '*';
+    const char *runtime_helper =
+        insn->immediate == '*' ? "__mulu" :
+        insn->immediate == '/' ?
+            ((insn->type & TYPE_UNSIGNED) != 0 ? "__divu" : "__divs") :
+        insn->immediate == '%' ?
+            ((insn->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods") : NULL;
     int preserve_hl_de;
     int preserve_hl;
     int preserve_de;
@@ -1725,11 +1732,13 @@ int mir_emit_homed_binary_instruction(FILE *out,
 
     if (mir.allocation_colors[right] == MIR_COLOR_HL) {
         int temporary;
-        if (!commutative)
+        if (!commutative && runtime_helper == NULL)
             return 0;
-        temporary = left;
-        left = right;
-        right = temporary;
+        if (commutative) {
+            temporary = left;
+            left = right;
+            right = temporary;
+        }
     }
         preserve_hl_de =
             mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
@@ -1759,14 +1768,24 @@ int mir_emit_homed_binary_instruction(FILE *out,
         fputs("\tpush hl\n", out);
     if (preserve_de)
         fputs("\tpush de\n", out);
-    if (!mir_emit_home_to_hl(out, left))
+    if (runtime_helper != NULL &&
+        mir.allocation_colors[right] == MIR_COLOR_HL &&
+        !commutative) {
+        if (!mir_emit_home_push(out, right) ||
+            !mir_emit_home_to_hl(out, left))
+            return 0;
+        fputs("\tpop de\n", out);
+    } else if (!mir_emit_home_to_hl(out, left)) {
         return 0;
-    if (biased_right_constant)
+    } else if (biased_right_constant) {
         fprintf(out, "\tld de,%ld\n",
                 (right_definition->immediate ^ 0x8000L) & 0xffffL);
-    else if (!mir_emit_home_to_de(out, right))
+    } else if (!mir_emit_home_to_de(out, right)) {
         return 0;
-    if (insn->immediate == '+')
+    }
+    if (runtime_helper != NULL)
+        mir_emit_runtime_call(out, runtime_helper);
+    else if (insn->immediate == '+')
         fputs("\tadd hl,de\n", out);
     else if (insn->immediate == '-')
         fputs("\tor a\n\tsbc hl,de\n", out);

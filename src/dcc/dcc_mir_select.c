@@ -1799,6 +1799,7 @@ void mir_end_function(void)
             int rhs_forward_retry_attempted = 0;
             int store_address_retry_attempted = 0;
             int wide_binary_retry_attempted = 0;
+            int wide_binary_rhs_retry_attempted = 0;
             int stable_pointer_argument_retry_attempted = 0;
             int global_argument_retry_attempted = 0;
             int wide_argument_stack_retry_attempted = 0;
@@ -1815,6 +1816,7 @@ retry_selection:
             rhs_forward_retry_attempted = 0;
             store_address_retry_attempted = 0;
             wide_binary_retry_attempted = 0;
+            wide_binary_rhs_retry_attempted = 0;
             stable_pointer_argument_retry_attempted = 0;
             global_argument_retry_attempted = 0;
             wide_argument_stack_retry_attempted = 0;
@@ -1826,6 +1828,7 @@ retry_selection:
             mir_end_branch_condition_forwarding();
             mir_end_indirect_store_address_forwarding();
             mir_end_wide_binary_lhs_forwarding();
+            mir_end_wide_binary_rhs_forwarding();
             mir_end_stable_pointer_argument_rematerialization();
             mir_end_global_argument_rematerialization();
             mir_end_wide_first_argument_stack_cache();
@@ -2929,6 +2932,59 @@ evaluate_generated:
                         goto evaluate_generated;
                     }
                     fclose(local_slot_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "planned-stack-cost") ||
+                     !strcmp(fallback_reason,
+                             "dead-store-forwarding-cost") ||
+                     !strcmp(fallback_reason,
+                             "indirect-store-address-cost")) &&
+                    !wide_binary_rhs_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *wide_rhs_candidate = tmpfile();
+                    int wide_rhs_emitted;
+
+                    wide_binary_rhs_retry_attempted = 1;
+                    if (wide_rhs_candidate == NULL)
+                        fatal("cannot create MIR wide-RHS candidate stream");
+                    mir_begin_general_rhs_stack_forwarding();
+                    mir_begin_indirect_store_value_forwarding();
+                    mir_begin_branch_condition_forwarding();
+                    mir_begin_indirect_store_address_forwarding();
+                    mir_begin_wide_binary_lhs_forwarding();
+                    mir_begin_stable_pointer_argument_rematerialization();
+                    mir_begin_global_argument_rematerialization();
+                    mir_begin_wide_first_argument_stack_cache();
+                    mir_begin_narrow_argument_direct_push();
+                    mir_begin_promoted_local_slot_reuse();
+                    mir_begin_wide_binary_rhs_forwarding();
+                    label_id = mir_label_base;
+                    wide_rhs_emitted = mir_try_selector(
+                        wide_rhs_candidate, mir_try_emit_spilled_scalar_cfg);
+                    mir_end_general_rhs_stack_forwarding();
+                    mir_end_indirect_store_value_forwarding();
+                    mir_end_branch_condition_forwarding();
+                    mir_end_indirect_store_address_forwarding();
+                    mir_end_wide_binary_lhs_forwarding();
+                    mir_end_stable_pointer_argument_rematerialization();
+                    mir_end_global_argument_rematerialization();
+                    mir_end_wide_first_argument_stack_cache();
+                    mir_end_narrow_argument_direct_push();
+                    mir_end_promoted_local_slot_reuse();
+                    mir_end_wide_binary_rhs_forwarding();
+                    if (wide_rhs_emitted) {
+                        fclose(generated);
+                        generated = wide_rhs_candidate;
+                        wide_rhs_candidate = NULL;
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    fclose(wide_rhs_candidate);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
