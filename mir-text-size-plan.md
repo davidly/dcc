@@ -10861,3 +10861,55 @@ generic spilling: repeated indirect loads with two uses, one-use binary results
 not covered by planned stack handoff, and stable two-use call results. Generic
 wide spills, broader CSE, and gate relaxation remain rejected by measured
 peep regressions.
+
+## Items T285-T294: wide fallback forwarding and constant conversions (2026-08-09)
+
+T285 measures constant-derived unary values used as call arguments. The
+prototype removes 120 raw instructions from `tmuldiv.main` but adds no MIR
+function, so it is removed rather than retained as zero-yield complexity.
+
+T286 extends adjacent wide RHS forwarding from unary producers to binary
+producers. The broad commutative form adds four `tctxops` functions but
+regresses peep execution. T287 restricts binary producers to multiplication
+consumers, retaining only `tctxops.ca_muleq`, which improves both modes. T288
+tests indirect-load producers through the same path; the census is unchanged,
+so that extension is removed.
+
+T289 identifies a wide named-store defect: the emitter first performed a
+narrow low-word reload and then immediately replaced it with the complete
+wide reload. T290 removes that duplicate load and forwards an adjacent wide
+producer directly into the store during the cumulative fallback retry. The
+ungated form adds `mm.main` and `tscanf.test_sscanf_numbers`; `mm.main`
+regresses both modes despite shrinking by 48 raw instructions. T291 therefore
+requires a single-block CFG and retains only the measured `tscanf` win.
+
+T292 completes integer constant-conversion folding. Narrow integer constants
+are sign- or zero-extended before a four-byte conversion, while byte targets
+retain their target representation. T293 handles `_Bool` separately by
+normalizing every nonzero integer constant to one. Folding byte casts turns
+the resulting values into ordinary MIR constants, allowing the existing
+call-argument rematerializer to eliminate `tbits.main`'s spill frame.
+
+T294 records whether the new byte/wide conversion cases fired. The
+profitability gate rejects a spilled candidate when MIR alone creates a frame
+for backend slots, and rejects a multi-block homed candidate when folded
+constant high words consume IY. These are the two measured shapes where
+dccpeep already removes legacy sign extension, making the raw text saving a
+false proxy; both `ttype32.main` regressions are rejected without a
+function-name exception.
+
+**Census and focused validation**:
+
+- ordinary: **820/2025 (40.49%)**, +17 accepted functions over Batch 39 and
+  zero removals; two newly reported `tret` functions increase the denominator;
+- stack-check: **841/2127 (39.54%)**, +18 and zero removals;
+- all fifteen affected apps pass focused full peep/nopeep validation with zero
+  regressions and 51 checked cycle/size improvements;
+- ASan/UBSan compilation of all affected apps is clean with the compiler's
+  known process-lifetime leak reporting disabled.
+
+The remaining `text-size` population should be refreshed from this compiler
+before Batch 41. Highest-impact slot classes remain one/two-use unary and
+binary values, two-use indirect loads, and stable call results; preserve the
+new multiplication-only and single-block structural gates unless exact
+profiling proves a wider class.

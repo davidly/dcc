@@ -27,6 +27,7 @@ static void mir_begin_all_spilled_fallback_optimizations(void)
     mir_begin_narrow_argument_direct_push();
     mir_begin_promoted_local_slot_reuse();
     mir_begin_wide_binary_rhs_forwarding();
+    mir_begin_wide_store_forwarding();
 }
 
 static void mir_end_all_spilled_fallback_optimizations(void)
@@ -42,6 +43,7 @@ static void mir_end_all_spilled_fallback_optimizations(void)
     mir_end_narrow_argument_direct_push();
     mir_end_promoted_local_slot_reuse();
     mir_end_wide_binary_rhs_forwarding();
+    mir_end_wide_store_forwarding();
 }
 
 static int mir_try_emit_general_rollout(FILE *out)
@@ -2040,6 +2042,34 @@ evaluate_generated:
                      * execution. Every measured eight-or-more-instruction
                      * candidate improved both shipping modes. */
                     fallback_reason = "rematerialized-home-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_wide_store_forwarding() &&
+                         mir_cfg_block_count() != 1)
+                    /* The four-block mm.main candidate is much smaller
+                     * statically but regresses both measured modes; the
+                     * single-block candidates improve both. */
+                    fallback_reason = "wide-store-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_extended_integer_constant_conversion_folds() > 0 &&
+                         mir.local_bytes == 0 &&
+                         mir.aggregate_temp_bytes == 0 &&
+                         mir.backend_slot_count > 0)
+                    /* Folding integer constant conversions removes real raw
+                     * instructions, but dccpeep already folds the equivalent
+                     * legacy sign-extension sequences. If MIR alone creates
+                     * a spill frame, that frame is therefore an unpriced
+                     * runtime cost; the measured candidate regressed peep
+                     * execution despite a large pre-peep instruction win. */
+                    fallback_reason = "constant-conversion-frame-cost";
+                else if (!strcmp(selector_name, "homed-scalar-cfg") &&
+                         mir_extended_integer_constant_conversion_folds() > 0 &&
+                         mir_cfg_block_count() > 1 &&
+                         mir_home_uses_iy())
+                    /* The same text proxy can prefer IY homes for folded
+                     * constant high words. Repeated four-byte `ld iy,N`
+                     * instructions plus the callee-save frame lost to
+                     * dccpeep's existing constant-extension fold. */
+                    fallback_reason = "constant-conversion-home-cost";
                 else if (block_cse_retry_attempted &&
                          mir_common_block_expression_elimination_count() > 0 &&
                          (mir_cfg_block_count() != 1 ||

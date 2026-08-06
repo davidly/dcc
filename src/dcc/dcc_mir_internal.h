@@ -399,6 +399,7 @@ int mir_probe_wide_colors_for_homed(
     const unsigned char *rematerializable);
 int mir_homed_rematerializable_wide_candidate_count(void);
 void mir_resolve_deferred_metadata(void);
+int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 const char *mir_sink_name(int purpose);
@@ -452,6 +453,8 @@ void mir_end_wide_binary_lhs_forwarding(void);
 void mir_begin_wide_binary_rhs_forwarding(void);
 void mir_end_wide_binary_rhs_forwarding(void);
 int mir_wide_binary_rhs_forwarding_use_count(void);
+void mir_begin_wide_store_forwarding(void);
+void mir_end_wide_store_forwarding(void);
 void mir_begin_stable_pointer_argument_rematerialization(void);
 void mir_end_stable_pointer_argument_rematerialization(void);
 void mir_begin_global_argument_rematerialization(void);
@@ -463,6 +466,7 @@ void mir_end_narrow_argument_direct_push(void);
 void mir_begin_promoted_local_slot_reuse(void);
 void mir_end_promoted_local_slot_reuse(void);
 int mir_spilled_cfg_depends_on_promoted_local_slot_reuse(void);
+int mir_spilled_cfg_depends_on_wide_store_forwarding(void);
 int mir_try_emit_spilled_scalar_cfg(FILE *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);

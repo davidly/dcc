@@ -1137,6 +1137,38 @@ regressions. The wide-home group produces eight checked improvements; the
 address-rematerialization group produces seven. ASan/UBSan compilation of all
 five affected apps is clean.
 
+## Batch 40
+
+1. T285: classify remaining backend-slot unary consumers and reject
+   constant-derived call-argument rematerialization after it removes 120 raw
+   instructions from `tmuldiv.main` but adds no MIR function.
+2. T286-T288: generalize wide RHS forwarding to binary producers, then retain
+   only multiplication consumers. Broad commutative rollout regresses peep;
+   multiplication adds `tctxops.ca_muleq` with wins in both modes. Extending
+   the path to indirect-load producers adds nothing and is removed.
+3. T289-T291: remove the redundant narrow reload before a named wide store and
+   forward an adjacent wide producer into that store. The multi-block
+   `mm.main` candidate regresses both modes despite a large static reduction,
+   so the final fallback-only retry is single-block and retains
+   `tscanf.test_sscanf_numbers`.
+4. T292-T293: fold constant integer conversions to byte, word, and wide types,
+   including correct sign/zero extension and `_Bool` normalization. Folding
+   byte casts exposes call constants to existing rematerialization, replacing
+   `tbits.main`'s spill frame with direct arguments.
+5. T294: record extended conversion folds and reject candidates where
+   pre-peephole text savings hide a new spill-only frame or multi-block IY
+   homes. This structurally rejects the measured `ttype32.main` regressions
+   without function-name exceptions.
+
+The final ordinary census is **820/2025 (40.49%)**, +17 accepted functions
+over Batch 39 and zero removals. Two newly reported `tret` functions account
+for the denominator increase from 2023. The stack-check census is
+**841/2127 (39.54%)**, +18 and zero removals.
+
+All fifteen affected apps pass focused full peep/nopeep validation with zero
+regressions and 51 checked improvements. ASan/UBSan compilation is clean with
+the compiler's pre-existing process-lifetime leak reporting disabled.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.

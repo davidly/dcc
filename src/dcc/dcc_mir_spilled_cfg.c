@@ -70,6 +70,8 @@ static int mir_indirect_store_address_forwarding_enabled;
 static int mir_wide_binary_lhs_forwarding_enabled;
 static int mir_wide_binary_rhs_forwarding_enabled;
 static int mir_wide_binary_rhs_forwarding_uses;
+static int mir_wide_store_forwarding_enabled;
+static int mir_spilled_cfg_used_wide_store_forwarding;
 static int mir_stable_pointer_argument_rematerialization_enabled;
 static int mir_global_argument_rematerialization_enabled;
 static int mir_wide_first_argument_stack_cache_enabled;
@@ -398,6 +400,18 @@ static int mir_wide_binary_rhs_is_commutative(
     return 0;
 }
 
+static int mir_wide_binary_rhs_pair_supported(
+    int value, const struct MirInsn *binary)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition == NULL || !mir_wide_binary_rhs_is_commutative(binary))
+        return 0;
+    if (definition->opcode == MIR_UNARY)
+        return 1;
+    return definition->opcode == MIR_BINARY && binary->immediate == '*';
+}
+
 static int mir_can_forward_hl_de_to_next(int value)
 {
     const struct MirInsn *next;
@@ -430,11 +444,14 @@ static int mir_can_forward_hl_de_to_next(int value)
         /* The wide binary emitter consumes src1 first and immediately
          * pushes DE:HL before materializing src2, so an adjacent producer
          * can remain resident exactly as it can for MIR_UNARY/RETURN. */
+    } else if (mir_wide_store_forwarding_enabled &&
+               next->opcode == MIR_STORE && next->src1 == value &&
+               (next->memory_size == 4 || type_size(next->type) == 4)) {
+        /* The named store consumes DE:HL before any other value is formed. */
     } else if (mir_wide_binary_rhs_forwarding_enabled &&
                next_instruction == mir_emit_instruction_index + 1 &&
-               mir.insns[mir_emit_instruction_index].opcode == MIR_UNARY &&
-               next->src2 == value &&
-               mir_wide_binary_rhs_is_commutative(next)) {
+               mir_wide_binary_rhs_pair_supported(value, next) &&
+               next->src2 == value) {
         /* The producer pushes src2 once. The binary then loads src1 into
          * DE:HL and uses the same stack/current-register convention with
          * physically swapped operands. */
@@ -2675,10 +2692,12 @@ static int mir_wide_backend_slot_forwardable(int value, int units,
     if (!((mir_wide_binary_lhs_forwarding_enabled &&
            next->opcode == MIR_BINARY && next->src1 == value &&
            type_size(next->secondary_offset) == 4) ||
+          (mir_wide_store_forwarding_enabled &&
+           next->opcode == MIR_STORE && next->src1 == value &&
+           (next->memory_size == 4 || type_size(next->type) == 4)) ||
           (mir_wide_binary_rhs_forwarding_enabled &&
-           definition->opcode == MIR_UNARY &&
-           next->src2 == value &&
-           mir_wide_binary_rhs_is_commutative(next)))) {
+           mir_wide_binary_rhs_pair_supported(value, next) &&
+           next->src2 == value))) {
         if ((!type_is_long(definition->type) &&
              !(type_is_float(definition->type) &&
                definition->opcode == MIR_BINARY)) ||
@@ -3103,6 +3122,16 @@ void mir_end_wide_binary_rhs_forwarding(void)
 int mir_wide_binary_rhs_forwarding_use_count(void)
 {
     return mir_wide_binary_rhs_forwarding_uses;
+}
+
+void mir_begin_wide_store_forwarding(void)
+{
+    mir_wide_store_forwarding_enabled = 1;
+}
+
+void mir_end_wide_store_forwarding(void)
+{
+    mir_wide_store_forwarding_enabled = 0;
 }
 
 void mir_begin_stable_pointer_argument_rematerialization(void)
@@ -4624,10 +4653,9 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
     }
     if (mir_wide_binary_rhs_forwarding_enabled &&
         mir_emit_instruction_index + 1 < mir.count &&
-        mir.insns[mir_emit_instruction_index].opcode == MIR_UNARY &&
+        mir_wide_binary_rhs_pair_supported(
+            value, &mir.insns[mir_emit_instruction_index + 1]) &&
         mir.insns[mir_emit_instruction_index + 1].src2 == value &&
-        mir_wide_binary_rhs_is_commutative(
-            &mir.insns[mir_emit_instruction_index + 1]) &&
         mir_value_use_count(value) == 1) {
         if (mir_pending_planned_stack_consumer() >= 0 ||
             mir_forwarded_wide_stack_value >= 0) {
@@ -6203,6 +6231,11 @@ int mir_spilled_cfg_depends_on_promoted_local_slot_reuse(void)
     return mir_spilled_cfg_used_promoted_local_slot;
 }
 
+int mir_spilled_cfg_depends_on_wide_store_forwarding(void)
+{
+    return mir_spilled_cfg_used_wide_store_forwarding;
+}
+
 int mir_spilled_cfg_indirect_store_address_forwarding_uses(void)
 {
     return mir_spilled_cfg_indirect_store_address_forwarding_count;
@@ -6234,6 +6267,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
     mir_spilled_cfg_indirect_store_address_forwarding_count = 0;
     mir_spilled_cfg_used_promoted_local_slot = 0;
+    mir_spilled_cfg_used_wide_store_forwarding = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -6858,7 +6892,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 break;
             }
-            mir_emit_virtual_load(out, insn->src1);
+            if (mir_wide_store_forwarding_enabled &&
+                type_size(memory_type) == 4)
+                mir_spilled_cfg_used_wide_store_forwarding = 1;
+            else
+                mir_emit_virtual_load(out, insn->src1);
             {
             int narrow_hl_preserving_store = 0;
             if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) {

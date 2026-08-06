@@ -62,6 +62,7 @@ static int *mir_rematerialized_saved_spills;
 static int mir_rematerialized_saved_spill_count;
 static int mir_rematerialized_home_allocation_active;
 static int mir_lazy_allocation_active;
+static int mir_extended_integer_constant_conversion_fold_count;
 
 static int mir_inline_substitutable(const struct Sym *symbol)
 {
@@ -2485,6 +2486,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.dead_local_suffix_bytes = 0;
     mir.aggregate_temp_bytes = 0;
     mir.opaque_count = 0;
+    mir_extended_integer_constant_conversion_fold_count = 0;
     mir.capture_stream = NULL;
     mir_copy_name(mir.name, name);
     mir.active = 1;
@@ -4274,39 +4276,57 @@ void mir_resolve_deferred_metadata(void)
          * 7)`), newly MIR-reachable once Item T74's base-address
          * forwarding fix unlocked the whole function. */
         if (insn->opcode != MIR_UNARY || insn->src1 < 0 ||
-            (operand_bytes != 2 && operand_bytes != 4) ||
+            (operand_bytes != 1 && operand_bytes != 2 &&
+             operand_bytes != 4) ||
             type_is_float(insn->type))
             continue;
         source = mir_mutable_definition(insn->src1);
         if (source == NULL || source->opcode != MIR_CONST ||
             type_is_float(source->type))
             continue;
-        if (operand_bytes == 4 && type_size(source->type) != 4)
-            /* A 4-byte destination fed by a narrower-typed CONST is a
-             * widening conversion (immediate == 0/'+'), not a same-width
-             * operation: the narrower CONST's stored bit pattern must be
-             * sign- or zero-extended per its own type before it is a
-             * valid 32-bit value, which this fold's plain mask-and-copy
-             * arithmetic below does not do. Restricting the new 4-byte
-             * path to same-width source/destination pairs (the actual
-             * `-80000L`-shaped case this item targets: a 4-byte CONST
-             * negated in place by a 4-byte MIR_UNARY, with no conversion
-             * in between) avoids this; found via tests/t.c's `int32_t
-             * i32min = -12;` (an int literal negated at 2 bytes, then
-             * widened to long by a second MIR_UNARY) producing a silently
-             * wrong, non-sign-extended high word once the 4-byte branch
-             * was added without this guard. */
-            continue;
-        mask = operand_bytes == 4 ? 0xffffffffUL : 0xffffUL;
-        bits = (unsigned long)source->immediate & mask;
-        if (insn->immediate == '-')
-            bits = (0UL - bits) & mask;
-        else if (insn->immediate == '~')
-            bits = (~bits) & mask;
-        else if (insn->immediate == '!')
-            bits = bits == 0;
-        else if (insn->immediate != 0 && insn->immediate != '+')
-            continue;
+        if (type_is_bool(insn->type)) {
+            if (insn->immediate != 0)
+                continue;
+            bits = source->immediate != 0;
+        } else {
+            mask = operand_bytes == 4 ? 0xffffffffUL :
+                   operand_bytes == 2 ? 0xffffUL : 0xffUL;
+            if (operand_bytes == 4 && type_size(source->type) != 4) {
+                int source_bytes = type_size(source->type);
+                unsigned long source_mask;
+                unsigned long sign_bit;
+
+                if (insn->immediate != 0 ||
+                    (source_bytes != 1 && source_bytes != 2))
+                    continue;
+                source_mask = source_bytes == 1 ? 0xffUL : 0xffffUL;
+                sign_bit = source_bytes == 1 ? 0x80UL : 0x8000UL;
+                bits = (unsigned long)source->immediate & source_mask;
+                if ((source->type & TYPE_UNSIGNED) == 0 &&
+                    type_ptr_depth(source->type) == 0 &&
+                    (bits & sign_bit) != 0)
+                    bits |= ~source_mask;
+                bits &= mask;
+            } else {
+                bits = (unsigned long)source->immediate & mask;
+            }
+            if (insn->immediate == '-')
+                bits = (0UL - bits) & mask;
+            else if (insn->immediate == '~')
+                bits = (~bits) & mask;
+            else if (insn->immediate == '!')
+                bits = bits == 0;
+            else if (insn->immediate != 0 && insn->immediate != '+')
+                continue;
+            if (operand_bytes == 1 &&
+                (insn->type & TYPE_UNSIGNED) == 0 &&
+                type_ptr_depth(insn->type) == 0 &&
+                (bits & 0x80UL) != 0)
+                bits |= ~0xffUL;
+        }
+        if (operand_bytes == 1 ||
+            (operand_bytes == 4 && type_size(source->type) != 4))
+            ++mir_extended_integer_constant_conversion_fold_count;
         {
             /* Item T50 (mir-text-size-plan.md): folding this MIR_UNARY
              * in place into a plain MIR_CONST orphans its operand
@@ -4404,6 +4424,11 @@ void mir_resolve_deferred_metadata(void)
             mir.insns[i].src1 = -1;
             mir.insns[i].src2 = -1;
         }
+}
+
+int mir_extended_integer_constant_conversion_folds(void)
+{
+    return mir_extended_integer_constant_conversion_fold_count;
 }
 
 int mir_find_label(int label)
