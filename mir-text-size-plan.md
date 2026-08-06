@@ -10207,3 +10207,49 @@ recorded to prevent this high-frequency but low-admission mechanism from being
 mistaken for a safe global rollout. The difficult long-tail classes remain in
 scope for the 100% target; the immediate priority remains high-impact emitter
 overhead in the dominant spilled path.
+
+## Items T206-T208: transactional indirect-store value forwarding (2026-08-06)
+
+T206 continues the impact-ranked backend-slot audit rather than returning to
+individual near misses. Among current `text-size` fallbacks, 395 one-use
+narrow values feed the immediately following `MIR_STORE_INDIRECT.src2`,
+covering 155 functions. Producers include constants, unary and binary values,
+calls, indirect loads, addresses, and named loads.
+
+T207 reuses the physical-stack forwarding mechanism rather than adding another
+slot or store implementation. For a one- or two-byte non-bitfield store whose
+value is produced immediately before the store, the producer pushes HL. The
+store then loads its address into HL, pops the value into DE, and writes E/D.
+Wide and bitfield stores retain their existing specialized sequences, while a
+constant-absolute store remains on its already-cheaper direct path. The
+backend-slot planner and emitter use the same forward-target predicate, and
+the transaction records a dependency only when this new path actually emits.
+
+The feature is selector-scoped and enabled only alongside the existing
+fallback-only adjacent-RHS retry. It is disabled before candidate evaluation,
+on every retry exit, and at the start of each function. Existing accepted
+selections and hashes are therefore unchanged.
+
+T208 measures the first three admitted functions. `tbfinit.check` is neutral
+at app level, while `tnarrow.narwchain` improves peep and nopeep execution.
+`tpostinc.test_char_simple`, the only newly admitted candidate with two
+indirect-store handoffs, regresses both modes despite reducing static
+instructions. A structural `indirect-store-stack-cost` gate therefore limits
+this rollout to one handoff per candidate instead of using a function-name
+exception. `tchess.m_to_text` also has multiple handoffs but remains blocked by
+its independent inline-substitution gate.
+
+**Census and focused validation**:
+
+- ordinary: **741/2022 (36.65%)**, +2 names and zero removals;
+- stack-check: **756/2124 (35.59%)**, +2 names and zero removals;
+- additions in both configurations: `tbfinit.check` and
+  `tnarrow.narwchain`;
+- focused full peep/nopeep validation passes with zero regressions and two
+  checked cycle improvements.
+
+The next impact-ranked slot class remains indirect-store addressing (`src1`)
+and nonadjacent store operands. Any prototype must first prove stack ordering
+against the value-side handoff and planned-stack consumers, then remain
+fallback-only until whole-corpus profiling demonstrates that incumbent output
+is not perturbed.

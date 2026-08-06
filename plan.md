@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `96f3355` (Items T197-T202)
-- Published ordinary coverage: **737/2022 functions (36.45%)**
-- Published stack-check coverage: **752/2124 functions (35.40%)**
+- Published baseline: `0b0cfd5` (Items T203-T205)
+- Published ordinary coverage: **739/2022 functions (36.55%)**
+- Published stack-check coverage: **754/2124 functions (35.50%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -32,6 +32,8 @@ history preserves them.
 - Batch 26 candidate stack-check coverage: **752/2124 functions (35.40%)**
 - Batch 27 candidate ordinary coverage: **739/2022 functions (36.55%)**
 - Batch 27 candidate stack-check coverage: **754/2124 functions (35.50%)**
+- Batch 28 candidate ordinary coverage: **741/2022 functions (36.65%)**
+- Batch 28 candidate stack-check coverage: **756/2124 functions (35.59%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -82,6 +84,25 @@ The ordinary census is **739/2022 (36.55%)**, +2 names and zero removals.
 The stack-check census is **754/2124 (35.50%)**, also +2 and zero removals.
 Both add `tptrcnd.pickw` and `tptrrhs.pickw`; focused full peep/nopeep
 validation passes with zero regressions and six checked improvements.
+
+## Batch 28
+
+1. T206: audit the next highest-frequency active slot class. The current
+   `text-size` population has 395 one-use narrow values consumed as the
+   immediately following `MIR_STORE_INDIRECT.src2`, across 155 functions.
+2. T207: add selector-scoped physical-stack forwarding for narrow non-bitfield
+   indirect-store values. Push the value at its definition, materialize the
+   stored-to address in HL, pop the value into DE, and emit the byte/word
+   store. Wide and constant-absolute stores retain their existing paths.
+3. T208: retain the optimization only in the existing fallback-only fresh
+   spilled retry. The first rollout adds three functions, but the function
+   with two handoffs regresses both peep and nopeep execution. A structural
+   cost gate therefore limits rollout to one handoff per candidate.
+
+The ordinary census is **741/2022 (36.65%)**, +2 names and zero removals.
+The stack-check census is **756/2124 (35.59%)**, also +2 and zero removals.
+Both add `tbfinit.check` and `tnarrow.narwchain`; focused full peep/nopeep
+validation passes with zero regressions and two checked improvements.
 
 ## Batch 2
 

@@ -56,9 +56,11 @@ static int mir_spilled_cfg_used_planned_index_base_handoff;
 static int mir_spilled_cfg_used_stable_pointer_local_home;
 static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
+static int mir_spilled_cfg_indirect_store_value_forwarding_count;
 static int mir_planned_stack_handoffs_enabled;
 static int mir_stable_pointer_local_homes_enabled;
 static int mir_general_rhs_stack_forwarding_enabled;
+static int mir_indirect_store_value_forwarding_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -264,6 +266,18 @@ static int mir_is_general_rhs_stack_forward(int value, int consumer)
     binary = &mir.insns[consumer];
     return binary->opcode == MIR_BINARY && binary->src2 == value &&
            !mir_binary_only_constant(binary->src1);
+}
+
+static int mir_is_indirect_store_value_stack_forward(int value, int consumer)
+{
+    const struct MirInsn *store;
+
+    if (consumer < 0 || consumer >= mir.count)
+        return 0;
+    store = &mir.insns[consumer];
+    return store->opcode == MIR_STORE_INDIRECT && store->src2 == value &&
+           store->bit_width == 0 && store->memory_size > 0 &&
+           store->memory_size <= 2;
 }
 
 /* Item T40 (mir-text-size-plan.md): the wide (32-bit, HL:DE) analog of
@@ -2602,6 +2616,16 @@ void mir_end_general_rhs_stack_forwarding(void)
     mir_general_rhs_stack_forwarding_enabled = 0;
 }
 
+void mir_begin_indirect_store_value_forwarding(void)
+{
+    mir_indirect_store_value_forwarding_enabled = 1;
+}
+
+void mir_end_indirect_store_value_forwarding(void)
+{
+    mir_indirect_store_value_forwarding_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -3379,6 +3403,22 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
     return 1;
 }
 
+static int mir_can_forward_stack_to_indirect_store_value(int value)
+{
+    const struct MirInsn *store;
+
+    if (!mir_indirect_store_value_forwarding_enabled ||
+        mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 1 >= mir.count ||
+        mir_value_use_count(value) != 1)
+        return 0;
+    store = &mir.insns[mir_emit_instruction_index + 1];
+    return store->opcode == MIR_STORE_INDIRECT &&
+           store->src2 == value && store->bit_width == 0 &&
+           store->memory_size > 0 && store->memory_size <= 2 &&
+           !mir_constant_absolute_access_supported(store);
+}
+
 static int mir_stack_forward_target(int value, int *dynamic_index)
 {
     int target;
@@ -3398,6 +3438,8 @@ static int mir_stack_forward_target(int value, int *dynamic_index)
     target = mir_stack_index_forward_target(value);
     if (target >= 0)
         return target;
+    if (mir_can_forward_stack_to_indirect_store_value(value))
+        return mir_emit_instruction_index + 1;
     if (mir_can_forward_stack_to_binary_const(value))
         return mir_emit_instruction_index + 2;
     if (mir_can_forward_stack_to_binary_rhs(value))
@@ -3578,6 +3620,9 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_forwarded_stack_target_instruction = forward_instruction;
             if (mir_is_general_rhs_stack_forward(value, forward_instruction))
                 mir_spilled_cfg_used_general_rhs_stack_forwarding = 1;
+            if (mir_is_indirect_store_value_stack_forward(
+                    value, forward_instruction))
+                ++mir_spilled_cfg_indirect_store_value_forwarding_count;
             if (dynamic_index_forward)
                 mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         }
@@ -3611,6 +3656,9 @@ static void mir_emit_virtual_store(FILE *out, int value)
         mir_forwarded_stack_target_instruction = forward_instruction;
         if (mir_is_general_rhs_stack_forward(value, forward_instruction))
             mir_spilled_cfg_used_general_rhs_stack_forwarding = 1;
+        if (mir_is_indirect_store_value_stack_forward(
+                value, forward_instruction))
+            ++mir_spilled_cfg_indirect_store_value_forwarding_count;
         if (dynamic_index_forward)
             mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         return;
@@ -5394,6 +5442,16 @@ int mir_spilled_cfg_depends_on_rhs_stack_forwarding(void)
     return mir_spilled_cfg_used_general_rhs_stack_forwarding;
 }
 
+int mir_spilled_cfg_depends_on_indirect_store_value_forwarding(void)
+{
+    return mir_spilled_cfg_indirect_store_value_forwarding_count != 0;
+}
+
+int mir_spilled_cfg_indirect_store_value_forwarding_uses(void)
+{
+    return mir_spilled_cfg_indirect_store_value_forwarding_count;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -5416,6 +5474,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_stable_pointer_local_home = 0;
     mir_spilled_cfg_used_stable_pointer_local_slot = 0;
     mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
+    mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -6206,6 +6265,17 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                       "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n"
                       "\tld (hl),d\n\tinc hl\n\tpop de\n"
                       "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+                break;
+            }
+            if (mir_forwarded_stack_value == insn->src2 &&
+                mir_forwarded_stack_target_instruction == i) {
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tpop de\n\tld (hl),e\n", out);
+                if (insn->memory_size > 1)
+                    fputs("\tinc hl\n\tld (hl),d\n", out);
+                mir_forwarded_stack_value = -1;
+                mir_forwarded_stack_instruction = -1;
+                mir_forwarded_stack_target_instruction = -1;
                 break;
             }
             mir_emit_virtual_load(out, insn->src1);

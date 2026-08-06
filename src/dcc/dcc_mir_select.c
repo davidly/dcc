@@ -1758,6 +1758,7 @@ void mir_end_function(void)
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
             mir_end_general_rhs_stack_forwarding();
+            mir_end_indirect_store_value_forwarding();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
@@ -2228,6 +2229,17 @@ evaluate_generated:
                      * and improve both modes; retain only that structural
                      * class until instruction selection improves further. */
                     fallback_reason = "rhs-stack-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_indirect_store_value_forwarding_uses()
+                             > 1)
+                    /* The first fallback-only rollout admitted one helper
+                     * with two such handoffs, but both peep and nopeep
+                     * execution regressed despite a static instruction
+                     * reduction. Keep the independently profitable
+                     * single-handoff shapes while instruction selection
+                     * still cannot price interactions across a larger
+                     * indirect-update body. */
+                    fallback_reason = "indirect-store-stack-cost";
                 else if (!strcmp(selector_name, "homed-scalar-cfg") &&
                          mir_homed_cfg_depends_on_dynamic_index() &&
                          generated_instructions >= captured_instructions)
@@ -2498,10 +2510,12 @@ evaluate_generated:
                         fatal("cannot create MIR RHS-forward candidate "
                               "stream");
                     mir_begin_general_rhs_stack_forwarding();
+                    mir_begin_indirect_store_value_forwarding();
                     label_id = mir_label_base;
                     rhs_emitted = mir_try_selector(
                         rhs_candidate, mir_try_emit_spilled_scalar_cfg);
                     mir_end_general_rhs_stack_forwarding();
+                    mir_end_indirect_store_value_forwarding();
                     if (rhs_emitted) {
                         fclose(generated);
                         generated = rhs_candidate;
