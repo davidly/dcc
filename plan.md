@@ -12,31 +12,33 @@ The long-term goal is 100% MIR-required coverage and removal of legacy
 capture/replay only after the runnable and extended corpora pass.
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `67d9255`
-- Published ordinary coverage: **848/2025 (41.88%)**
-- Published stack-check coverage: **870/2127 (40.90%)**
-- Current ordinary coverage: **872/2026 (43.04%)**
-- Current stack-check coverage: **894/2128 (42.01%)**
-- Current production cohort: 13 frameless backedge/unary-branch additions,
-  zero removals, focused full-mode gate clean.
+- Published baseline: `b5d0b04`
+- Published ordinary coverage: **872/2026 (43.04%)**
+- Published stack-check coverage: **894/2128 (42.01%)**
+- Current ordinary coverage: **888/2026 (43.83%)**
+- Current stack-check coverage: **910/2128 (42.76%)**
+- Current production cohort: 16 allocator-backed backedge additions, zero
+  removals, focused full-mode and sanitizer gates clean.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
-| 45% | 912 | +40 |
-| 50% | 1,013 | +141 |
-| 55% | 1,115 | +243 |
-| 60% | 1,216 | +344 |
+| 45% | 912 | +24 |
+| 50% | 1,013 | +125 |
+| 55% | 1,115 | +227 |
+| 60% | 1,216 | +328 |
 
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
 
 ## Current production cohort
 
-The current cohort adds shared direct unary-not branches in homed CFG and
-promotes only frameless, backend-slotless, spill-free backedges after
-specialized loop selectors decline. It adds 13 functions in both modes.
-Allocator-backed loops remain fallback after individual profiling exposed
-frame/registerization regressions.
+The current cohort promotes three measured allocator-backed loop strata after
+all specialized loop selectors decline: call-containing homed CFG, minimally
+framed slotless spilled CFG, and bounded small-frame spilled CFG. Homed
+selection publishes its actual frameless decision instead of relying on stale
+spilled-selector slot state. The source-local-free leaf-loop invariant remains
+load-bearing after a broader prototype re-enabled hidden `tstr.wcsrchr` and
+regressed both runtime modes by more than 20%.
 
 ## Evidence and lessons
 
@@ -73,7 +75,7 @@ The current ordinary fallback population is:
 | 6 | wide-constant-cost | 48 |
 | 7 | inline-substitution | 47 |
 | 8 | phi-fallthrough-cost | 46 |
-| 9 | cfg-backedge | 30 |
+| 9 | cfg-backedge | 16 |
 | 10 | wide-store-cost | 38 |
 | 11 | planned-index-base-cost | 37 |
 
@@ -82,11 +84,11 @@ budgets therefore use net census gains, never sums of reason counts.
 
 | campaign | planned net gain |
 | --- | ---: |
-| Boolean and acyclic control flow | +57 |
-| Slots, addresses, CSE, and indexes | +122 |
-| Calls, wide values, and systemic text size | +105 |
-| Allocator-backed loops, inline substitution, and semantic tail | +60 |
-| **Total** | **+344** |
+| Boolean and acyclic control flow | +55 |
+| Slots, addresses, CSE, and indexes | +115 |
+| Calls, wide values, and systemic text size | +100 |
+| Allocator-backed loops, inline substitution, and semantic tail | +58 |
+| **Total** | **+328** |
 
 If a campaign exceeds its budget, later risky work shrinks. If it misses, rerun
 and re-rank the matrix immediately; do not compensate with function-name

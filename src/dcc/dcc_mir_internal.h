@@ -413,6 +413,7 @@ int mir_boolean_phi_branch_simplification_count(void);
 void mir_reset_boolean_phi_branch_simplification_count(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
 int mir_homed_cfg_depends_on_unary_not_branch(void);
+int mir_homed_cfg_was_frameless(void);
 int mir_cfg_block_count(void);
 int mir_homed_cfg_depends_on_word_store(void);
 int mir_homed_cfg_depends_on_dynamic_index(void);

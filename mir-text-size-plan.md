@@ -11384,3 +11384,69 @@ The census denominator grows by one because the improved candidate makes
 the affected-app gate. The remaining ordinary `cfg-backedge` population drops
 from 41 to 30. Allocator-backed loops remain profiled but are not admitted
 until their frame/register costs improve.
+
+## Items T373-T382: allocator-backed backedge strata (2026-08-13)
+
+T373 starts from published commit `b5d0b04` and refreshes both censuses:
+**872/2026 ordinary** and **894/2128 stack-check**. The remaining ordinary
+`cfg-backedge` population is 30 functions. A 24-way candidate matrix records
+slots, calls, locals, VLA state, block count, and static cost for every member
+rather than inferring frame quality from the final census columns.
+
+T374 cross-references the matrix with the prior 41-function pinned full-mode
+profile. Fourteen of the remaining functions are already non-regressing in
+both modes, while sixteen retain measured runtime or linked-size regressions.
+The candidates divide into homed call-containing loops, slotless functions
+with a minimal named frame, and bounded spilled frames; generic slot count
+alone does not separate them.
+
+T375 adds opt-in `DCC_MIR_BACKEDGE_REPORT` diagnostics at the admission point.
+This exposes a state-ownership defect in the old predicate:
+`mir.backend_slot_count` belongs to spilled emission and can describe an
+earlier candidate when the selected stream came from homed CFG. Homed CFG now
+publishes its actual frameless decision through
+`mir_homed_cfg_was_frameless()`, reset for every selector attempt.
+
+T376 profiles the newly exposed `tdirent.main` holdout independently under the
+pinned emulator. Both peep and nopeep pass with zero regressions, completing
+the runtime classification of all ordinary backedge candidates.
+
+T377 replaces the single generic frameless cost predicate with
+selector-owned, spill-free, VLA-free allocator strata. Homed candidates require
+either a genuinely frameless source-local-free body or at least one call.
+Spilled candidates admit a source-local-free zero-slot body, a two-byte
+slotless frame with calls, or a bounded at-most-three-slot/thirteen-block frame
+with calls or a measured nine-instruction margin. Every stratum still requires
+non-growing text and a strict instruction reduction. Semantic backedge
+verification remains separate and specialized loop selectors retain priority.
+
+T378 measures the first rollout at **888/2026 ordinary**, adding sixteen
+functions with zero removals. `bint.expr` and `pint.consts` join the fourteen
+profiled members because they satisfy the same structural contract after an
+earlier retry, without any function-name selection.
+
+T379 rejects an over-broad effective-frameless interpretation. It silently
+retained hidden static `tstr.wcsrchr`, changed the captured callers, and
+regressed `tstr` by 29.53% peep and 22.97% nopeep. Requiring raw zero locals for
+leaf loops, or a real call for a minimal named frame, removes that admission
+and restores byte-identical `tstr` selected hashes.
+
+T380 reruns the ordinary census after restoring the source-local invariant.
+Coverage remains **888/2026 (43.83%)**, the changed-app set falls from thirteen
+to twelve, and no selected fallback hashes change outside the intended cohort.
+
+T381 confirms the same sixteen additions in stack-check mode:
+**910/2128 (42.76%)**, with zero removals. All twelve affected apps pass
+together in full peep/nopeep mode with zero regressions and twenty-eight
+checked cycle/size improvements. ASan/UBSan compilation of the complete
+affected set is clean with process-lifetime leak reporting disabled.
+
+T382 closes the cohort with these additions in both modes:
+`adaint.mul_expr`, `adaint.rel_expr`, `adaint.simple_call_or_assign`,
+`bint.expr`, `cint.mul_expr`, `cint.rel_expr`, `pint.block_stmt`,
+`pint.consts`, `pint.repeat_stmt`, `tc99scpe.pointer_for_init_sizeof`,
+`tdirent.main`, `tgoto.main`, `tkbd.main`, `tptrinit.list_free`,
+`tqsort.t_qsort_str`, and `wumpus.pact`. The ordinary `cfg-backedge`
+population falls from 30 to 16. The next batch returns to the 319-function
+`text-size` and 158-function boolean-PHI populations; the sixteen rejected
+loops remain measured performance work, not gate headroom.

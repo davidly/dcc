@@ -16,10 +16,16 @@
 static int mir_homed_constant_absolute_access_supported(
     const struct MirInsn *insn);
 static int mir_homed_cfg_used_unary_not_branch;
+static int mir_homed_cfg_frameless;
 
 int mir_homed_cfg_depends_on_unary_not_branch(void)
 {
     return mir_homed_cfg_used_unary_not_branch;
+}
+
+int mir_homed_cfg_was_frameless(void)
+{
+    return mir_homed_cfg_frameless;
 }
 
 /* mir-text-size Item T19: this selector's own MIR_INDEX_ADDRESS acceptance
@@ -779,6 +785,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     int has_wide = 0;
     int wide_return = mir_homed_wide_type_supported(mir.return_type);
 
+    mir_homed_cfg_frameless = 0;
     mir_homed_cfg_used_unary_not_branch = 0;
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
@@ -2219,6 +2226,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
          mir_stream_instruction_count(out) >
              mir_stream_instruction_count(mir.capture_stream)))
         goto done;
+    mir_homed_cfg_frameless = frameless;
     accepted = 1;
 done:
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)

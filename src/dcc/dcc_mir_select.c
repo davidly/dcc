@@ -1955,16 +1955,50 @@ static int mir_has_profiled_positive_loop(void)
     return has_positive_condition && mir_has_cfg_backedge();
 }
 
-static int mir_is_profiled_frameless_backedge(
-    long generated_size, long captured_size,
+static int mir_is_profiled_allocator_backedge(
+    const char *selector_name, long generated_size, long captured_size,
     int generated_instructions, int captured_instructions)
 {
-    return mir_has_cfg_backedge() && !mir.has_vla &&
-           mir.local_bytes == 0 && mir.aggregate_temp_bytes == 0 &&
-           mir.backend_slot_count == 0 &&
-           mir.allocation_spill_count == 0 &&
-           generated_size <= captured_size &&
-           generated_instructions < captured_instructions;
+    int calls = mir_call_count();
+    int blocks = mir_cfg_block_count();
+    int homed = !strcmp(selector_name, "homed-scalar-cfg");
+    int spilled = !strcmp(selector_name, "spilled-scalar-cfg");
+
+    if (getenv("DCC_MIR_BACKEDGE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR backedge-profile function=%s selector=%s vla=%d "
+                "locals=%d aggregate=%d slots=%d spills=%d frameless=%d "
+                "calls=%d blocks=%d generated-bytes=%ld captured-bytes=%ld "
+                "generated-insns=%d captured-insns=%d\n",
+                mir.name, selector_name, mir.has_vla, mir.local_bytes,
+                mir.aggregate_temp_bytes, mir.backend_slot_count,
+                mir.allocation_spill_count,
+                homed && mir_homed_cfg_was_frameless(), calls, blocks,
+                generated_size, captured_size, generated_instructions,
+                captured_instructions);
+    if (!mir_has_cfg_backedge() || mir.has_vla ||
+        mir.aggregate_temp_bytes != 0 || mir.allocation_spill_count != 0 ||
+        generated_size > captured_size ||
+        generated_instructions >= captured_instructions)
+        return 0;
+    if (homed)
+        /* Homed emission owns its frame decision. backend_slot_count is
+         * spilled-selector state and may describe an earlier candidate.
+         * Retain the source-local-free rule for leaf loops: an effectively
+         * frameless promoted local can still displace profitable legacy BC
+         * loop registerization. */
+        return (mir.local_bytes == 0 && mir_homed_cfg_was_frameless()) ||
+               calls > 0;
+    if (!spilled)
+        return 0;
+    if (mir.backend_slot_count == 0 &&
+        (mir.local_bytes == 0 ||
+         (mir.local_bytes <= 2 && calls > 0)))
+        return 1;
+    return mir.local_bytes > 0 && mir.backend_slot_count <= 3 &&
+           blocks <= 13 &&
+           (calls > 0 ||
+            generated_instructions <= captured_instructions - 9);
 }
 
 static int mir_is_profiled_text_proxy_instruction_win(
@@ -3087,8 +3121,8 @@ evaluate_generated:
                 }
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "cfg-backedge") &&
-                    mir_is_profiled_frameless_backedge(
-                        generated_size, captured_size,
+                    mir_is_profiled_allocator_backedge(
+                        selector_name, generated_size, captured_size,
                         generated_instructions, captured_instructions))
                     fallback_reason = NULL;
                 /* Phase 1 (mir-migration-plan-to-100pct.md): homed/spilled-
