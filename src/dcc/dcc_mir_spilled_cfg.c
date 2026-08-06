@@ -58,11 +58,13 @@ static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
 static int mir_spilled_cfg_branch_condition_forwarding_count;
+static int mir_spilled_cfg_indirect_store_address_forwarding_count;
 static int mir_planned_stack_handoffs_enabled;
 static int mir_stable_pointer_local_homes_enabled;
 static int mir_general_rhs_stack_forwarding_enabled;
 static int mir_indirect_store_value_forwarding_enabled;
 static int mir_branch_condition_forwarding_enabled;
+static int mir_indirect_store_address_forwarding_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -2662,6 +2664,16 @@ void mir_end_branch_condition_forwarding(void)
     mir_branch_condition_forwarding_enabled = 0;
 }
 
+void mir_begin_indirect_store_address_forwarding(void)
+{
+    mir_indirect_store_address_forwarding_enabled = 1;
+}
+
+void mir_end_indirect_store_address_forwarding(void)
+{
+    mir_indirect_store_address_forwarding_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -2720,7 +2732,7 @@ static int mir_planned_stack_consumer(int value, int producer,
             break;
         }
     }
-    if (consumer < 0 || consumer - producer <= 2)
+    if (consumer < 0 || consumer - producer < 2)
         return -1;
     consumer_insn = &mir.insns[consumer];
     if (!((consumer_insn->opcode == MIR_BINARY &&
@@ -2730,7 +2742,19 @@ static int mir_planned_stack_consumer(int value, int producer,
            consumer_insn->src1 == value &&
            consumer_insn->base_name[0] == 0 &&
            !mir_value_only_used_by_constant_absolute_address(
-               consumer_insn->dst))))
+               consumer_insn->dst)) ||
+          (mir_indirect_store_address_forwarding_enabled &&
+           consumer - producer == 2 &&
+           consumer_insn->opcode == MIR_STORE_INDIRECT &&
+           consumer_insn->src1 == value &&
+           consumer_insn->bit_width == 0 &&
+           consumer_insn->memory_size > 0 &&
+           consumer_insn->memory_size <= 2 &&
+           mir.insns[consumer - 1].dst == consumer_insn->src2 &&
+           mir_value_use_count(consumer_insn->src2) == 1)))
+        return -1;
+    if (consumer - producer <= 2 &&
+        consumer_insn->opcode != MIR_STORE_INDIRECT)
         return -1;
     for (instruction = producer + 1;
          instruction < consumer; ++instruction)
@@ -3531,16 +3555,18 @@ static int mir_pending_planned_stack_consumer(void)
     return -1;
 }
 
-static int mir_rhs_stack_forward_nests_with_planned_left(
+static int mir_stack_forward_nests_with_planned_left(
     int value, int consumer)
 {
-    const struct MirInsn *binary;
+    const struct MirInsn *insn;
 
     if (consumer < 0 || consumer >= mir.count)
         return 0;
-    binary = &mir.insns[consumer];
-    return mir_is_general_rhs_stack_forward(value, consumer) &&
-           mir_planned_stack_matches_consumer(binary->src1, consumer);
+    insn = &mir.insns[consumer];
+    if (!mir_planned_stack_matches_consumer(insn->src1, consumer))
+        return 0;
+    return mir_is_general_rhs_stack_forward(value, consumer) ||
+           mir_is_indirect_store_value_stack_forward(value, consumer);
 }
 
 static int mir_consume_planned_stack(FILE *out, int value, int instruction,
@@ -3649,7 +3675,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
                 mir_pending_planned_stack_consumer();
             if (pending_planned_consumer >= 0 &&
                 forward_instruction >= pending_planned_consumer &&
-                !mir_rhs_stack_forward_nests_with_planned_left(
+                !mir_stack_forward_nests_with_planned_left(
                     value, forward_instruction))
                 mir_planned_stack_invalid = 1;
             fputs("\tpush hl\n", out);
@@ -3687,7 +3713,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
         pending_planned_consumer = mir_pending_planned_stack_consumer();
         if (pending_planned_consumer >= 0 &&
             forward_instruction >= pending_planned_consumer &&
-            !mir_rhs_stack_forward_nests_with_planned_left(
+            !mir_stack_forward_nests_with_planned_left(
                 value, forward_instruction))
             mir_planned_stack_invalid = 1;
         fputs("\tpush hl\n", out);
@@ -5502,6 +5528,16 @@ int mir_spilled_cfg_branch_condition_forwarding_uses(void)
     return mir_spilled_cfg_branch_condition_forwarding_count;
 }
 
+int mir_spilled_cfg_depends_on_indirect_store_address_forwarding(void)
+{
+    return mir_spilled_cfg_indirect_store_address_forwarding_count != 0;
+}
+
+int mir_spilled_cfg_indirect_store_address_forwarding_uses(void)
+{
+    return mir_spilled_cfg_indirect_store_address_forwarding_count;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -5526,6 +5562,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
+    mir_spilled_cfg_indirect_store_address_forwarding_count = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -6320,13 +6357,31 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             if (mir_forwarded_stack_value == insn->src2 &&
                 mir_forwarded_stack_target_instruction == i) {
-                mir_emit_virtual_load(out, insn->src1);
-                fputs("\tpop de\n\tld (hl),e\n", out);
+                fputs("\tpop de\n", out);
+                if (mir_consume_planned_stack(
+                        out, insn->src1, i, "hl"))
+                    ++mir_spilled_cfg_indirect_store_address_forwarding_count;
+                else
+                    mir_emit_virtual_load(out, insn->src1);
+                fputs("\tld (hl),e\n", out);
                 if (insn->memory_size > 1)
                     fputs("\tinc hl\n\tld (hl),d\n", out);
                 mir_forwarded_stack_value = -1;
                 mir_forwarded_stack_instruction = -1;
                 mir_forwarded_stack_target_instruction = -1;
+                break;
+            }
+            if (mir_planned_stack_matches_consumer(insn->src1, i) &&
+                mir_planned_stack_is_emitted(insn->src1)) {
+                mir_emit_virtual_load(out, insn->src2);
+                fputs("\tex de,hl\n", out);
+                if (!mir_consume_planned_stack(
+                        out, insn->src1, i, "hl"))
+                    mir_planned_stack_invalid = 1;
+                ++mir_spilled_cfg_indirect_store_address_forwarding_count;
+                fputs("\tld (hl),e\n", out);
+                if (insn->memory_size > 1)
+                    fputs("\tinc hl\n\tld (hl),d\n", out);
                 break;
             }
             mir_emit_virtual_load(out, insn->src1);

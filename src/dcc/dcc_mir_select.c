@@ -1755,11 +1755,13 @@ void mir_end_function(void)
             int stable_local_retry_attempted = 0;
             int stable_local_homes_active = 0;
             int rhs_forward_retry_attempted = 0;
+            int store_address_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
             mir_end_general_rhs_stack_forwarding();
             mir_end_indirect_store_value_forwarding();
             mir_end_branch_condition_forwarding();
+            mir_end_indirect_store_address_forwarding();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
@@ -2004,6 +2006,15 @@ evaluate_generated:
                      * regress peep cycles; cint.add_func reaches the measured
                      * non-regressing boundary exactly. */
                     fallback_reason = "dynamic-index-base-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_indirect_store_address_forwarding() &&
+                         mir_spilled_cfg_indirect_store_address_forwarding_uses()
+                             < 2)
+                    /* One address/value pair removes two real slots but did
+                     * not amortize the selector displacement in the first
+                     * measured list helpers: both regressed peep execution.
+                     * The two-handoff candidate improves both modes. */
+                    fallback_reason = "indirect-store-address-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_planned_stack_handoff() &&
                          mir_call_count() >= 8 &&
@@ -2546,6 +2557,42 @@ evaluate_generated:
                         goto evaluate_generated;
                     }
                     fclose(rhs_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "planned-stack-cost")) &&
+                    !store_address_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *address_candidate = tmpfile();
+                    int address_emitted;
+
+                    store_address_retry_attempted = 1;
+                    if (address_candidate == NULL)
+                        fatal("cannot create MIR store-address candidate "
+                              "stream");
+                    mir_begin_general_rhs_stack_forwarding();
+                    mir_begin_indirect_store_value_forwarding();
+                    mir_begin_branch_condition_forwarding();
+                    mir_begin_indirect_store_address_forwarding();
+                    label_id = mir_label_base;
+                    address_emitted = mir_try_selector(
+                        address_candidate, mir_try_emit_spilled_scalar_cfg);
+                    mir_end_general_rhs_stack_forwarding();
+                    mir_end_indirect_store_value_forwarding();
+                    mir_end_branch_condition_forwarding();
+                    mir_end_indirect_store_address_forwarding();
+                    if (address_emitted) {
+                        fclose(generated);
+                        generated = address_candidate;
+                        address_candidate = NULL;
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    fclose(address_candidate);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||

@@ -10304,3 +10304,45 @@ removed before this item landed.
   `bint.die`;
 - focused full peep/nopeep validation passes with zero regressions and nine
   checked cycle/size improvements.
+
+## Items T212-T214: nested indirect-store address/value handoffs (2026-08-06)
+
+T212 audits the address side of the same active store class. Current
+`text-size` fallbacks contain 394 one-use `MIR_STORE_INDIRECT.src1` slots
+across 132 functions: 256 index addresses, 125 member addresses, seven named
+loads, four binary values, and two call results. The strongest exact sequence
+is address definition, value definition, store: 204 addresses have this
+distance, and 104 narrow stores across 29 functions also have a one-use narrow
+value in the middle.
+
+T213 extends the existing planned-stack mechanism for only that exact
+three-instruction sequence. The address producer pushes HL as a planned
+handoff. The adjacent value producer may then use T207's ad-hoc handoff,
+pushing its value above the address. At the store, the newer value is popped
+into DE first and the older address into HL second, preserving LIFO order.
+When the value does not use its handoff, it is loaded into DE before consuming
+the planned address. Bitfields, wide stores, phi/call-aggregate producers,
+multiply-used values, and longer spans remain excluded.
+
+The extension is selector-scoped and runs in a new fresh spilled retry after
+the established RHS/value/branch retry has had an opportunity to win. It
+therefore cannot replace the already measured T205, T208, or T211 candidate
+with a newly combined address variant. The planner's existing nonoverlapping
+interval proof remains authoritative; only the deliberate nested adjacent
+value is permitted above the planned address.
+
+T214 profiles the first three additions. `too.list_push` and
+`tptrinit.list_prepend` each use one address handoff and regress peep execution
+despite static instruction reductions. `tunused.main` uses two handoffs and
+improves peep and nopeep execution. A structural
+`indirect-store-address-cost` gate therefore requires at least two actual
+address handoffs, retaining the measured amortized class without function-name
+exceptions.
+
+**Census and focused validation**:
+
+- ordinary: **745/2022 (36.84%)**, +1 name and zero removals;
+- stack-check: **760/2124 (35.78%)**, +1 name and zero removals;
+- addition in both configurations: `tunused.main`;
+- focused full peep/nopeep validation of `tbfinit`, `tnarrow`, and `tunused`
+  passes with zero regressions and four checked cycle improvements.

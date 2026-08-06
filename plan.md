@@ -36,6 +36,8 @@ history preserves them.
 - Batch 28 candidate stack-check coverage: **756/2124 functions (35.59%)**
 - Batch 29 candidate ordinary coverage: **744/2022 functions (36.80%)**
 - Batch 29 candidate stack-check coverage: **759/2124 functions (35.73%)**
+- Batch 30 candidate ordinary coverage: **745/2022 functions (36.84%)**
+- Batch 30 candidate stack-check coverage: **760/2124 functions (35.78%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -126,6 +128,25 @@ The stack-check census is **759/2124 (35.73%)**, also +3 and zero removals.
 Both add `a1.usage`, `adaint.acc_word`, and `bint.die`; focused full
 peep/nopeep validation passes with zero regressions and nine checked
 improvements.
+
+## Batch 30
+
+1. T212: audit 394 one-use indirect-store address slots across 132 functions.
+   Of these, 204 are produced two instructions before their store; 104 narrow
+   stores also have a one-use value produced in between.
+2. T213: extend the planned-stack contract for that exact address/value/store
+   sequence. The address is pushed first, the value is pushed above it, and
+   the store pops value into DE then address into HL. A dedicated fresh retry
+   keeps earlier adjacent-forward selections intact.
+3. T214: profile the first three additions. Single-handoff list helpers
+   regress peep execution despite static wins; the two-handoff candidate
+   improves both modes. A structural minimum of two address handoffs retains
+   only the measured amortized class.
+
+The ordinary census is **745/2022 (36.84%)**, +1 name and zero removals.
+The stack-check census is **760/2124 (35.78%)**, also +1 and zero removals.
+Both add `tunused.main`; focused full peep/nopeep validation passes with zero
+regressions and four checked improvements across the affected apps.
 
 ## Batch 2
 
