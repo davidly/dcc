@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `0b0cfd5` (Items T203-T205)
-- Published ordinary coverage: **739/2022 functions (36.55%)**
-- Published stack-check coverage: **754/2124 functions (35.50%)**
+- Published baseline: `27f929c` (Items T212-T214)
+- Published ordinary coverage: **745/2022 functions (36.84%)**
+- Published stack-check coverage: **760/2124 functions (35.78%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -38,6 +38,8 @@ history preserves them.
 - Batch 29 candidate stack-check coverage: **759/2124 functions (35.73%)**
 - Batch 30 candidate ordinary coverage: **745/2022 functions (36.84%)**
 - Batch 30 candidate stack-check coverage: **760/2124 functions (35.78%)**
+- Batch 31 candidate ordinary coverage: **752/2022 functions (37.19%)**
+- Batch 31 candidate stack-check coverage: **767/2124 functions (36.11%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -147,6 +149,26 @@ The ordinary census is **745/2022 (36.84%)**, +1 name and zero removals.
 The stack-check census is **760/2124 (35.78%)**, also +1 and zero removals.
 Both add `tunused.main`; focused full peep/nopeep validation passes with zero
 regressions and four checked improvements across the affected apps.
+
+## Batch 31
+
+1. T215: audit wide one-use backend slots. Seventy-five adjacent two-unit
+   values are consumed as the left operand of a wide binary; all are produced
+   by `MIR_UNARY`.
+2. T216: extend the shared DE:HL forwarding predicate and backend-slot planner
+   to this exact consumer. The binary emitter consumes its left operand first
+   and immediately pushes DE:HL before loading the right operand, so the
+   producer can remain resident without a four-byte slot.
+3. T217: keep the feature selector-scoped in a later fallback-only retry,
+   preserving every incumbent and earlier retry winner. The seven newly
+   admitted functions improve both affected apps in peep and nopeep modes.
+
+The ordinary census is **752/2022 (37.19%)**, +7 names and zero removals.
+The stack-check census is **767/2124 (36.11%)**, also +7 and zero removals.
+Both add `tctxops.ca_callarg`, `tctxops.ca_ret`, `tlongopt.cb_ge`,
+`tlongopt.cb_lt`, `tlongopt.cc_eq`, `tlongopt.cc_gt`, and
+`tlongopt.cc_lt`; focused full peep/nopeep validation passes with zero
+regressions and four checked cycle improvements.
 
 ## Batch 2
 

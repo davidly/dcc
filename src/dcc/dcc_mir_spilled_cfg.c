@@ -65,6 +65,7 @@ static int mir_general_rhs_stack_forwarding_enabled;
 static int mir_indirect_store_value_forwarding_enabled;
 static int mir_branch_condition_forwarding_enabled;
 static int mir_indirect_store_address_forwarding_enabled;
+static int mir_wide_binary_lhs_forwarding_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -346,6 +347,13 @@ static int mir_can_forward_hl_de_to_next(int value)
     } else if (next->opcode == MIR_UNARY) {
         if (next->src1 != value)
             return 0;
+    } else if (mir_wide_binary_lhs_forwarding_enabled &&
+               next->opcode == MIR_BINARY &&
+               next->src1 == value &&
+               type_size(next->secondary_offset) == 4) {
+        /* The wide binary emitter consumes src1 first and immediately
+         * pushes DE:HL before materializing src2, so an adjacent producer
+         * can remain resident exactly as it can for MIR_UNARY/RETURN. */
     } else {
         return 0;
     }
@@ -2268,18 +2276,22 @@ static int mir_wide_backend_slot_forwardable(int value, int units,
         return 0;
     if (mir.insns[instruction].opcode == MIR_PHI)
         return 0;
-    definition = mir_definition(value);
-    if (definition == NULL ||
-        (!type_is_long(definition->type) &&
-         !(type_is_float(definition->type) &&
-           definition->opcode == MIR_BINARY)))
-        return 0;
     next_instruction = mir_forward_skip_target(instruction);
     if (next_instruction >= mir.count)
         return 0;
     next = &mir.insns[next_instruction];
-    if (next->opcode != MIR_RETURN || next->src1 != value)
+    definition = mir_definition(value);
+    if (definition == NULL)
         return 0;
+    if (!(mir_wide_binary_lhs_forwarding_enabled &&
+          next->opcode == MIR_BINARY && next->src1 == value &&
+          type_size(next->secondary_offset) == 4)) {
+        if ((!type_is_long(definition->type) &&
+             !(type_is_float(definition->type) &&
+               definition->opcode == MIR_BINARY)) ||
+            next->opcode != MIR_RETURN || next->src1 != value)
+            return 0;
+    }
     saved_index = mir_emit_instruction_index;
     mir_emit_instruction_index = instruction;
     forwardable = mir_can_forward_hl_de_to_next(value);
@@ -2672,6 +2684,16 @@ void mir_begin_indirect_store_address_forwarding(void)
 void mir_end_indirect_store_address_forwarding(void)
 {
     mir_indirect_store_address_forwarding_enabled = 0;
+}
+
+void mir_begin_wide_binary_lhs_forwarding(void)
+{
+    mir_wide_binary_lhs_forwarding_enabled = 1;
+}
+
+void mir_end_wide_binary_lhs_forwarding(void)
+{
+    mir_wide_binary_lhs_forwarding_enabled = 0;
 }
 
 static int mir_planned_stack_interval_opcode_safe(int opcode)

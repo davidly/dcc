@@ -10346,3 +10346,40 @@ exceptions.
 - addition in both configurations: `tunused.main`;
 - focused full peep/nopeep validation of `tbfinit`, `tnarrow`, and `tunused`
   passes with zero regressions and four checked cycle improvements.
+
+## Items T215-T217: adjacent wide-binary left-operand forwarding (2026-08-06)
+
+T215 audits wide one-use backend slots after the higher-frequency narrow
+classes. Seventy-five adjacent two-unit values feed `MIR_BINARY.src1`; every
+producer is `MIR_UNARY`. These values currently round-trip through a four-byte
+backend slot even though the wide binary emitter consumes its left operand
+before doing any other work.
+
+T216 extends the existing `mir_can_forward_hl_de_to_next` contract to this
+exact consumer while the feature is enabled. The producer leaves its result
+in DE:HL, the binary's first load consumes that resident value, and the binary
+immediately pushes DE then HL before materializing `src2`. The backend-slot
+planner consults the same predicate, so the unused two-unit slot is not
+reserved. Existing helper-specific nonadjacent stack handoffs retain priority;
+wide helpers, fused multiply-add, phi values, multiply-used values, and
+nonadjacent consumers keep their established paths.
+
+T217 enables the extension only in a fresh fallback retry after the earlier
+adjacent and indirect-store retries. Every feature is disabled before
+candidate evaluation and at function entry, and the retry resets `label_id`
+to the common trial base. Existing selected hashes and earlier retry winners
+therefore remain unchanged.
+
+Seven functions pass the standard selector profitability gates. The affected
+apps improve in both checked modes, so no additional shape-specific cost gate
+is required.
+
+**Census and focused validation**:
+
+- ordinary: **752/2022 (37.19%)**, +7 names and zero removals;
+- stack-check: **767/2124 (36.11%)**, +7 names and zero removals;
+- additions in both configurations: `tctxops.ca_callarg`, `tctxops.ca_ret`,
+  `tlongopt.cb_ge`, `tlongopt.cb_lt`, `tlongopt.cc_eq`, `tlongopt.cc_gt`, and
+  `tlongopt.cc_lt`;
+- focused full peep/nopeep validation of `tctxops` and `tlongopt` passes with
+  zero regressions and four checked cycle improvements.
