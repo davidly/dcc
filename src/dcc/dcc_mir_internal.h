@@ -463,6 +463,8 @@ void mir_begin_wide_first_argument_stack_cache(void);
 void mir_end_wide_first_argument_stack_cache(void);
 void mir_begin_narrow_argument_direct_push(void);
 void mir_end_narrow_argument_direct_push(void);
+void mir_begin_constant_argument_prepacking(void);
+void mir_end_constant_argument_prepacking(void);
 void mir_begin_promoted_local_slot_reuse(void);
 void mir_end_promoted_local_slot_reuse(void);
 int mir_spilled_cfg_depends_on_promoted_local_slot_reuse(void);

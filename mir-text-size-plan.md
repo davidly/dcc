@@ -11016,3 +11016,64 @@ measured cost gates. Constant outer-call argument prepacking is visible in
 the earlier global argument-order experiment remains invalid. Continue with a
 transactional design or the next repeated slot class rather than changing MIR
 argument order.
+
+## Items T313-T322: nested-call argument prepacking and profiled CFG proxies (2026-08-11)
+
+T313 audits cached nested-call arguments. A corpus diagnostic finds 2,934 sites
+across 338 app/functions where the later outer-call arguments are constants.
+The profitable shape can preserve source MIR order: immediately before
+evaluating a nested call used as outer argument `k`, push rematerializable
+arguments `n-1..k+1`, evaluate the nested call normally, push its result, then
+let the outer call push only `k-1..0`. This is identical to the ABI's ordinary
+descending-index push order.
+
+T314 adds selector-scoped constant suffix prepacking. It excludes VLA
+functions, aggregate and specialized-fastcall outer calls, first arguments,
+nonconstant suffixes, and overlapping pending sequences. The outer call still
+accounts for every prepacked byte during caller cleanup.
+
+The first trigger placement runs after inner argument evaluation and clobbers a
+forwarded inner value. T315 moves it before those arguments. The inner call
+restores SP after its own cleanup, leaving the staged outer suffix intact.
+Runtime review confirms the ABI ordering, stack balance, narrow/wide pushes,
+and C89 portability.
+
+The ungated transform adds `tfloat4.test_conversions` and
+`too.test_dispatch_table`. The latter has only two prepack sites and regresses
+peep execution. T316 requires at least three sites in the speculative stream,
+retaining the former. This gate remains census-guarded because rejecting the
+stream can also reject other enabled fallback optimizations. T317 confirms
+zero ordinary or stack-check removals.
+
+T318 tests direct branches from spilled zero/sign values. It adds
+`forint.ensure_sym` but regresses peep execution, so the complete prototype is
+removed.
+
+T319 force-profiles the closest multiblock text-proxy candidates in full mode.
+`cobint.find_para`, `cobint.find_var`, and `pint.parse_const_value` improve in
+both peep and nopeep. `tgoto.gt_basic` also improves but remains behind the
+semantic `cfg-backedge` gate. `trowptr.main` regresses both modes and linked
+size.
+
+T320 adds measured structural predicates for the complete current populations:
+two blocks, one backend slot, three calls, equal instruction count, and at most
+44 text bytes over legacy; or four blocks, at most 53 text bytes over and at
+most two extra instructions. T321 removes a broader six-block predicate after
+it admits and miscompiles `too.bst_height` (`3` instead of `4`). Block count
+and text distance remain profitability evidence, never semantic proof.
+
+T322 closes the batch:
+
+- ordinary: **830/2025 (40.99%)**, +4 names and zero removals;
+- stack-check: **852/2127 (40.06%)**, +5 names and zero removals;
+- ordinary additions: `cobint.find_para`, `cobint.find_var`,
+  `pint.parse_const_value`, and `tfloat4.test_conversions`;
+- stack-check additionally adds `tunaryp.chku`;
+- focused full peep/nopeep validation passes all five affected apps with zero
+  regressions and eleven checked improvements.
+
+This is the last narrow low-yield batch. The accelerated 60% roadmap first
+isolates selector attempts through a shared transactional candidate engine,
+then targets the large boolean/PHI, slot/index/CSE, call/wide, and
+loop/inline populations. Future structural hypotheses need a ten-function
+minimum yield or must enable one of those campaigns.

@@ -76,6 +76,11 @@ static int mir_stable_pointer_argument_rematerialization_enabled;
 static int mir_global_argument_rematerialization_enabled;
 static int mir_wide_first_argument_stack_cache_enabled;
 static int mir_narrow_argument_direct_push_enabled;
+static int mir_constant_argument_prepacking_enabled;
+static int mir_prepacked_call_instruction = -1;
+static int mir_prepacked_after_argument = -1;
+static int mir_prepacked_result_value = -1;
+static int mir_constant_argument_prepack_count;
 static int mir_promoted_local_slot_reuse_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
@@ -2247,6 +2252,143 @@ static int mir_planned_call_argument_cache_target(int value, int wide)
     return call_instruction;
 }
 
+static int mir_call_uses_generic_stack_arguments(int instruction)
+{
+    const char *rtl_name;
+    int a, b, c;
+
+    return !mir_call_is_memset_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_strlen_fastcall(instruction, &a) &&
+           !mir_call_is_strchr_fastcall(instruction, &a, &b) &&
+           !mir_call_is_strrchr_fastcall(instruction, &a, &b) &&
+           !mir_call_is_memchr_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_memcmp_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_memcpy_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_de_hl_fastcall(instruction, &rtl_name, &a, &b) &&
+           !mir_call_is_bdos_family_fastcall(
+               instruction, &rtl_name, &a, &b);
+}
+
+static void mir_emit_prepacked_constant_arguments(
+    FILE *out, int trigger_instruction)
+{
+    const struct MirInsn *outer_call = NULL;
+    int argument_count = 0;
+    int cached_argument = -1;
+    int definition_instruction;
+    int outer_instruction = -1;
+    int argument;
+    int instruction;
+    int value = -1;
+
+    if (!mir_constant_argument_prepacking_enabled || mir.has_vla ||
+        mir.backend_slots == NULL || mir_prepacked_call_instruction >= 0)
+        return;
+    for (definition_instruction = trigger_instruction;
+         definition_instruction < mir.count; ++definition_instruction) {
+        const struct MirInsn *definition =
+            &mir.insns[definition_instruction];
+        int previous_argument_instruction = -1;
+
+        value = definition->dst;
+        if (definition->opcode != MIR_CALL || value < 0 ||
+            value >= mir.next_value ||
+            (mir.backend_slots[value] != MIR_BACKEND_SLOT_CALL_CACHE &&
+             mir.backend_slots[value] !=
+                 MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH))
+            continue;
+        outer_instruction = mir_call_argument_cache_target_for_state(
+            value, definition_instruction, 0, 0);
+        if (outer_instruction < 0 ||
+            !mir_call_uses_generic_stack_arguments(outer_instruction))
+            continue;
+        outer_call = &mir.insns[outer_instruction];
+        if (outer_call->opcode != MIR_CALL)
+            continue;
+        argument_count = 0;
+        cached_argument = -1;
+        for (instruction = 0;
+             instruction < outer_instruction; ++instruction) {
+            const struct MirInsn *arg = &mir.insns[instruction];
+            if (arg->opcode != MIR_ARG ||
+                arg->secondary_offset != outer_call->secondary_offset)
+                continue;
+            ++argument_count;
+            if (arg->src1 == value)
+                cached_argument = (int)arg->immediate;
+        }
+        if (cached_argument <= 0 ||
+            cached_argument + 1 >= argument_count)
+            continue;
+        for (instruction = 0;
+             instruction < definition_instruction; ++instruction) {
+            const struct MirInsn *arg = &mir.insns[instruction];
+            if (arg->opcode == MIR_ARG &&
+                arg->secondary_offset == outer_call->secondary_offset &&
+                arg->immediate == cached_argument - 1)
+                previous_argument_instruction = instruction;
+        }
+        if (previous_argument_instruction + 1 != trigger_instruction)
+            continue;
+        break;
+    }
+    if (definition_instruction >= mir.count || outer_call == NULL ||
+        outer_instruction < 0)
+        return;
+    for (argument = cached_argument + 1;
+         argument < argument_count; ++argument) {
+        int found = 0;
+        for (instruction = 0;
+             instruction < outer_instruction; ++instruction) {
+            const struct MirInsn *arg = &mir.insns[instruction];
+            if (arg->opcode != MIR_ARG ||
+                arg->secondary_offset != outer_call->secondary_offset ||
+                arg->immediate != argument)
+                continue;
+            if (!mir_call_only_constant(arg->src1))
+                return;
+            found = 1;
+            break;
+        }
+        if (!found)
+            return;
+    }
+    /*
+     * The ABI pushes arguments in descending source-index order. Emit the
+     * constant suffix before evaluating the nested call, then push that
+     * call's result. The outer call later emits only the lower-index prefix,
+     * producing exactly the same stack order as its ordinary reverse scan.
+     * Triggering before the nested call's own arguments is essential: they
+     * may use the same forwarding state, but their call restores SP before
+     * the staged outer arguments are consumed.
+     */
+    for (argument = argument_count - 1;
+         argument > cached_argument; --argument) {
+        for (instruction = outer_instruction - 1;
+             instruction >= 0; --instruction) {
+            const struct MirInsn *arg = &mir.insns[instruction];
+            int size;
+            if (arg->opcode != MIR_ARG ||
+                arg->secondary_offset != outer_call->secondary_offset ||
+                arg->immediate != argument)
+                continue;
+            size = type_size(arg->type);
+            if (!mir_emit_rematerialized_argument(
+                    out, arg->src1, size))
+                fatal("cannot prepack constant MIR call argument");
+            if (size == 4)
+                fputs("\tpush de\n\tpush hl\n", out);
+            else
+                fputs("\tpush hl\n", out);
+            break;
+        }
+    }
+    mir_prepacked_call_instruction = outer_instruction;
+    mir_prepacked_after_argument = cached_argument;
+    mir_prepacked_result_value = value;
+    ++mir_constant_argument_prepack_count;
+}
+
 static int mir_definition_is_wide(const struct MirInsn *definition)
 {
     if (definition == NULL)
@@ -3172,6 +3314,16 @@ void mir_begin_narrow_argument_direct_push(void)
 void mir_end_narrow_argument_direct_push(void)
 {
     mir_narrow_argument_direct_push_enabled = 0;
+}
+
+void mir_begin_constant_argument_prepacking(void)
+{
+    mir_constant_argument_prepacking_enabled = 1;
+}
+
+void mir_end_constant_argument_prepacking(void)
+{
+    mir_constant_argument_prepacking_enabled = 0;
 }
 
 void mir_begin_promoted_local_slot_reuse(void)
@@ -4262,6 +4414,10 @@ static void mir_emit_virtual_store(FILE *out, int value)
         /* Nothing to store: later uses re-read the stable named home (see
          * mir_emit_virtual_load); the loaded HL is simply not persisted. */
         return;
+    if (value == mir_prepacked_result_value) {
+        fputs("\tpush hl\n", out);
+        return;
+    }
     if (value >= 0 && value < mir.next_value &&
         mir.backend_slots != NULL &&
         (mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE ||
@@ -4622,6 +4778,10 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
      * downstream would ever read the slot this store writes. */
     if (mir_value_has_direct_named_home(value))
         return;
+    if (value == mir_prepacked_result_value) {
+        fputs("\tpush de\n\tpush hl\n", out);
+        return;
+    }
     if (value >= 0 && value < mir.next_value &&
         mir.backend_slots != NULL &&
         (mir.backend_slots[value] == MIR_BACKEND_SLOT_CALL_CACHE ||
@@ -6415,6 +6575,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_cached_call_instruction = -1;
     mir_cached_wide_call_value = -1;
     mir_cached_wide_call_instruction = -1;
+    mir_prepacked_call_instruction = -1;
+    mir_prepacked_after_argument = -1;
+    mir_prepacked_result_value = -1;
+    mir_constant_argument_prepack_count = 0;
     /* mir-text-size Item T14: a function with more than one MIR_RETURN
      * currently duplicates the full epilogue (ix/iy/sp restore + ret,
      * several instructions) at every return site, unlike legacy's own
@@ -6441,6 +6605,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         int end_label;
 
         mir_emit_instruction_index = i;
+        mir_emit_prepacked_constant_arguments(out, i);
 
         switch (insn->opcode) {
         case MIR_NOP:
@@ -7828,6 +7993,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     if (arg->immediate != argument--)
                         goto done;
                     size = type_size(arg->type);
+                    if (mir_prepacked_call_instruction == i &&
+                        (arg->immediate >
+                             mir_prepacked_after_argument ||
+                         arg->src1 == mir_prepacked_result_value)) {
+                        /* Already present below SP in normal reverse-ABI
+                         * order; retain its bytes for caller cleanup. */
+                        argument_bytes += size == 4 ? 4 : 2;
+                        continue;
+                    }
                     if (type_is_struct_object(arg->type)) {
                         int byte;
                         if (!mir_emit_cached_call_argument(out, arg->src1) &&
@@ -7922,6 +8096,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         mir_emit_virtual_store_wide(out, insn->dst);
                     else
                         mir_emit_virtual_store(out, insn->dst);
+                }
+                if (mir_prepacked_call_instruction == i) {
+                    mir_prepacked_call_instruction = -1;
+                    mir_prepacked_after_argument = -1;
+                    mir_prepacked_result_value = -1;
                 }
             }
             break;
@@ -8299,6 +8478,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             fclose(elided_scratch);
         }
     }
+    if (getenv("DCC_MIR_PREPACK_REPORT") != NULL &&
+        mir_constant_argument_prepack_count != 0)
+        fprintf(stderr,
+                "; MIR constant-prepack function=%s count=%d\n",
+                mir.name, mir_constant_argument_prepack_count);
+    if (mir_constant_argument_prepacking_enabled &&
+        mir_constant_argument_prepack_count > 0 &&
+        mir_constant_argument_prepack_count < 3)
+        goto done;
     accepted = 1;
 done:
     if (accepted && mir_backend_slot_accessed != NULL)

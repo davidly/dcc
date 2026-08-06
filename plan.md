@@ -7,9 +7,11 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `cff0d16` (Items T285-T294)
-- Published ordinary coverage: **820/2025 functions (40.49%)**
-- Published stack-check coverage: **841/2127 functions (39.54%)**
+- Published baseline: `3f6a58d` (Items T303-T312)
+- Published ordinary coverage: **826/2025 functions (40.79%)**
+- Published stack-check coverage: **847/2127 functions (39.82%)**
+- Batch 43 candidate ordinary coverage: **830/2025 functions (40.99%)**
+- Batch 43 candidate stack-check coverage: **852/2127 functions (40.06%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -1230,6 +1232,37 @@ removals. Both add `tcrcfix.test_non_ix_compound_shift_store`, `tfpraw.okl`,
 and `tlong.tbitw`. Nine affected apps pass focused full peep/nopeep validation
 with zero regressions and 30 checked improvements.
 
+## Batch 43
+
+1. T313-T315: audit nested-call argument caching and add selector-scoped
+   constant suffix prepacking. Preserve MIR evaluation order: push a
+   rematerializable outer-call suffix immediately before evaluating the nested
+   argument call, push that result directly, and let the outer call emit only
+   the lower-index prefix while retaining complete cleanup accounting.
+2. T316-T317: reject the first placement after it clobbers a forwarded inner
+   argument, then move the trigger before inner argument evaluation. A global
+   rollout adds two functions, but `too.test_dispatch_table` regresses peep
+   execution. Require at least three prepack sites in the final candidate,
+   retaining only `tfloat4.test_conversions`.
+3. T318: review ABI order, stack balance, VLA/aggregate/fastcall exclusions,
+   and C89 portability. Retain one pending prepack sequence at a time and keep
+   the transform transactional.
+4. T319: test direct spilled zero/sign branches. It adds
+   `forint.ensure_sym` but regresses peep execution, so the implementation is
+   fully removed.
+5. T320-T322: force-profile the complete closest two-/four-block text-proxy
+   cohorts. The two-block lookup wrappers and four-block constant parser
+   improve both modes. A six-block predicate exposes a `too.bst_height`
+   miscompile and is removed; `tgoto.gt_basic` remains behind the semantic
+   backedge gate despite a dynamic win.
+
+The candidate ordinary census is **830/2025 (40.99%)**, +4 names and zero
+removals. It adds `cobint.find_para`, `cobint.find_var`,
+`pint.parse_const_value`, and `tfloat4.test_conversions`. The stack-check
+census is **852/2127 (40.06%)**, +5 and zero removals, additionally adding
+`tunaryp.chku`. All five affected apps pass focused full peep/nopeep
+validation with zero regressions and eleven checked improvements.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -1263,28 +1296,27 @@ with zero regressions and 30 checked improvements.
   safe second pair), then reduce the 204 homed candidates that already emit but
   lose the profitability comparison.
 
-## Roadmap to 50%
+## Accelerated roadmap to 60%
 
-Continue the approved phased roadmap rather than restarting prioritization:
+The target is **1215/2025 ordinary functions**, a gain of 385 over Batch 43.
+Retire one-function near-miss tuning after this in-flight batch. Future work is
+organized around four high-yield structural campaigns:
 
-1. **Phase 3 - expanded:** two-pair wide allocation, non-helper operations,
-   constants, and wide homed-vs-spilled arbitration are complete.
-   Rematerializable-wide-constant coloring was measured and rejected at T133.
-   Revisit helper-crossing wide values only when diagnostics identify a real
-   `cross-call` population; the current 23 `wide-color` rejects all report
-   `cross-call=0`.
-2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
-   active with zero removals.
-3. **Next structural priorities by impact:** the post-T311 ordinary census is
-   led by 333 `text-size`, 182 `boolean-phi-cost`, 101
-   `dynamic-index-base-cost`, 91 `block-cse-cost`, 61 `unary-not-cost`, 48
-   `wide-constant-cost`, 47 `inline-substitution`, and 46
-   `phi-fallthrough-cost` fallbacks. Continue mining repeated emitted patterns
-   in `text-size`; the named cost populations are measured rejected rollouts,
-   not gate-removal headroom.
-4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
-   measured slot/move regression.
-5. Re-run ordinary and stack-check censuses after each structural batch and
-   sweep the newly exposed near-miss layer.
-6. Repeat evidence-backed structural batches until ordinary coverage reaches
-   at least **50%**, preserving zero correctness and peep/nopeep regressions.
+1. Build a byte-identical transactional candidate engine with fresh streams,
+   scoped feature masks, shared cost calculations, output hashes, and a
+   development-only 24-way candidate matrix.
+2. Canonicalize boolean PHIs, unary-not, and fallthrough copies before slot
+   assignment. Target +120 net ordinary functions.
+3. Improve use-position intervals, safe slot coalescing, absolute-address
+   resolution, scoped liveness-aware CSE, and shared index planning. Target
+   +250 cumulative functions.
+4. Generalize call planning and wide-value forwarding/rematerialization, then
+   fix loop-backedge semantics and MIR-level inline substitution for the final
+   tail. Target +385 cumulative functions.
+
+Review and re-rank from fresh matrix evidence at 45%, 50%, and 55%. A structural
+campaign may take allocator/PHI/call risk, but it may not bypass semantic gates,
+add function-name exceptions, conceal a peep/nopeep regression, or share mutable
+state between candidate attempts. Use app-level train/holdout cohorts and stop
+a hypothesis after two coherent implementations if it gains fewer than ten
+ordinary functions.

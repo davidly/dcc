@@ -25,6 +25,7 @@ static void mir_begin_all_spilled_fallback_optimizations(void)
     mir_begin_global_argument_rematerialization();
     mir_begin_wide_first_argument_stack_cache();
     mir_begin_narrow_argument_direct_push();
+    mir_begin_constant_argument_prepacking();
     mir_begin_promoted_local_slot_reuse();
     mir_begin_wide_binary_rhs_forwarding();
     mir_begin_wide_store_forwarding();
@@ -41,6 +42,7 @@ static void mir_end_all_spilled_fallback_optimizations(void)
     mir_end_global_argument_rematerialization();
     mir_end_wide_first_argument_stack_cache();
     mir_end_narrow_argument_direct_push();
+    mir_end_constant_argument_prepacking();
     mir_end_promoted_local_slot_reuse();
     mir_end_wide_binary_rhs_forwarding();
     mir_end_wide_store_forwarding();
@@ -1384,6 +1386,29 @@ static int mir_is_profiled_slotless_format_cfg(
            generated_instructions <= captured_instructions;
 }
 
+static int mir_is_profiled_multiblock_text_proxy_win(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    if (mir.has_vla || generated_size <= captured_size)
+        return 0;
+    /*
+     * Forced full-mode profiling covers the complete current populations
+     * inside these block/size/instruction boundaries. The two-block lookup
+     * wrappers and four-block constant parser improve both peep and nopeep
+     * execution. The next four-block candidate is 62 text bytes over legacy
+     * and regresses both modes and linked size.
+     */
+    if (mir_cfg_block_count() == 2)
+        return mir.backend_slot_count == 1 && mir_call_count() == 3 &&
+               generated_size <= captured_size + 44 &&
+               generated_instructions == captured_instructions;
+    if (mir_cfg_block_count() == 4)
+        return generated_size <= captured_size + 53 &&
+               generated_instructions <= captured_instructions + 2;
+    return 0;
+}
+
 static int mir_is_profiled_small_unary_not_near_cost(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -2330,6 +2355,10 @@ evaluate_generated:
                                                      generated_size, captured_size,
                                                      generated_instructions,
                                                      captured_instructions) &&
+                                                 !mir_is_profiled_multiblock_text_proxy_win(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
                                                  !mir_is_profiled_vla_single_block_instruction_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
@@ -2374,6 +2403,9 @@ evaluate_generated:
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_slotless_format_cfg(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_multiblock_text_proxy_win(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_vla_single_block_instruction_win(
@@ -2937,6 +2969,7 @@ evaluate_generated:
                     mir_begin_global_argument_rematerialization();
                     mir_begin_wide_first_argument_stack_cache();
                     mir_begin_narrow_argument_direct_push();
+                    mir_begin_constant_argument_prepacking();
                     label_id = mir_label_base;
                     stack_argument_emitted = mir_try_selector(
                         stack_argument_candidate,
@@ -2950,6 +2983,7 @@ evaluate_generated:
                     mir_end_global_argument_rematerialization();
                     mir_end_wide_first_argument_stack_cache();
                     mir_end_narrow_argument_direct_push();
+                    mir_end_constant_argument_prepacking();
                     if (stack_argument_emitted) {
                         fclose(generated);
                         generated = stack_argument_candidate;
@@ -2988,6 +3022,7 @@ evaluate_generated:
                     mir_begin_global_argument_rematerialization();
                     mir_begin_wide_first_argument_stack_cache();
                     mir_begin_narrow_argument_direct_push();
+                    mir_begin_constant_argument_prepacking();
                     mir_begin_promoted_local_slot_reuse();
                     label_id = mir_label_base;
                     local_slot_emitted = mir_try_selector(
@@ -3002,6 +3037,7 @@ evaluate_generated:
                     mir_end_global_argument_rematerialization();
                     mir_end_wide_first_argument_stack_cache();
                     mir_end_narrow_argument_direct_push();
+                    mir_end_constant_argument_prepacking();
                     mir_end_promoted_local_slot_reuse();
                     if (local_slot_emitted) {
                         fclose(generated);
