@@ -10202,6 +10202,47 @@ class.
 - focused full peep/nopeep validation passes with zero regressions and six
   checked cycle/size improvements.
 
+## Items T221-T223: direct global call-argument rematerialization (2026-08-06)
+
+T221 instruments the actual call-argument caches rather than inferring their
+population from assigned slots. `DCC_MIR_CALL_CACHE_REPORT=1` records the
+function, value, width, definition opcode/type, and consuming call instruction
+whenever the spilled emitter restores a narrow BC cache or wide alternate-set
+cache. Among current `text-size` fallbacks, 688 unique cache uses occur in 118
+functions. Wide unary/call results dominate overall, but direct two-byte named
+loads are the largest low-risk class not already handled by local/parameter
+rematerialization.
+
+T222 factors the use scan from `mir_load_is_single_call_argument` into one
+shared predicate, then applies the same proof to global/extern loads. The new
+path requires:
+
+- a two-byte scalar or pointer `MIR_LOAD`;
+- global or extern storage, with no unsafe extern addend;
+- exactly one use, as one matching two-byte `MIR_ARG`.
+
+The slot planner and `MIR_LOAD` emitter consult the same selector-scoped
+predicate, so the value receives no frame slot and its early load is omitted.
+At the reverse-ABI argument push, the existing rematerialization dispatcher
+uses the established symbol naming and `extrn` helpers, loads the word directly
+into HL, and immediately pushes it. This replaces the earlier `ld c,l / ld b,h`
+plus `ld l,c / ld h,b` cache round trip.
+
+T223 tests the identical four-byte extension. It changes one fallback metric
+but admits no function, so the wide path is removed rather than retaining
+zero-yield machinery. The measured two-byte feature remains in a new fresh
+retry after stable-pointer argument rematerialization; all earlier winners
+retain priority and every feature scope is ended before candidate evaluation.
+
+**Census and focused validation**:
+
+- ordinary: **756/2022 (37.39%)**, +2 names and zero removals;
+- stack-check: **771/2124 (36.30%)**, +2 names and zero removals;
+- additions in both configurations: `pint.die` and
+  `tcaslv.check_global_compound_param`;
+- focused full peep/nopeep validation passes with zero regressions and six
+  checked cycle/size improvements.
+
 The broad active-output experiment and the five rejected candidates are
 recorded to prevent this high-frequency but low-admission mechanism from being
 mistaken for a safe global rollout. The difficult long-tail classes remain in

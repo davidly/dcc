@@ -42,6 +42,8 @@ history preserves them.
 - Batch 31 candidate stack-check coverage: **767/2124 functions (36.11%)**
 - Batch 32 candidate ordinary coverage: **754/2022 functions (37.29%)**
 - Batch 32 candidate stack-check coverage: **769/2124 functions (36.21%)**
+- Batch 33 candidate ordinary coverage: **756/2022 functions (37.39%)**
+- Batch 33 candidate stack-check coverage: **771/2124 functions (36.30%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -194,6 +196,27 @@ The ordinary census is **754/2022 (37.29%)**, +2 names and zero removals.
 The stack-check census is **769/2124 (36.21%)**, also +2 and zero removals.
 Both add `adaint.return_stmt` and `fint.die`; focused full peep/nopeep
 validation passes with zero regressions and six checked improvements.
+
+## Batch 33
+
+1. T221: add a cache-use diagnostic and audit the actual BC/alternate-register
+   call-argument handoffs. The current `text-size` population executes 688
+   caches across 118 functions; direct narrow named loads are the strongest
+   low-risk rematerializable class.
+2. T222: factor the one-use call-argument scan shared by local and global
+   loads. Rematerialize a one-use two-byte global/extern scalar or pointer at
+   its argument push, skipping both its definition-site load and backend slot.
+   Preserve the Link-80 extern+offset restriction and use the established
+   symbol/extrn helpers.
+3. T223: measure and remove four-byte global rematerialization after it changes
+   one fallback metric but admits no function. Keep only the measured word
+   path in a later fresh retry so Batch 32 winners remain unchanged.
+
+The ordinary census is **756/2022 (37.39%)**, +2 names and zero removals.
+The stack-check census is **771/2124 (36.30%)**, also +2 and zero removals.
+Both add `pint.die` and `tcaslv.check_global_compound_param`; focused full
+peep/nopeep validation passes with zero regressions and six checked
+improvements.
 
 ## Batch 2
 

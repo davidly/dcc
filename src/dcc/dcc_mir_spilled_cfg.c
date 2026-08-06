@@ -67,6 +67,7 @@ static int mir_branch_condition_forwarding_enabled;
 static int mir_indirect_store_address_forwarding_enabled;
 static int mir_wide_binary_lhs_forwarding_enabled;
 static int mir_stable_pointer_argument_rematerialization_enabled;
+static int mir_global_argument_rematerialization_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -1083,6 +1084,7 @@ void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
 
 static int mir_address_is_single_call_argument(int value);
 static int mir_load_is_single_indirect_call_target(int value, int size);
+static int mir_global_load_is_single_call_argument(int value, int size);
 static int mir_stable_pointer_argument_address(
     int value, const struct MirInsn **root_out, int *storage_out,
     long *member_offset_out);
@@ -1123,6 +1125,30 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
     unsigned long bits;
+
+    if (mir_global_load_is_single_call_argument(value, size)) {
+        struct Sym *global;
+        const char *assembly_name;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (!mir_scalar_memory_location(definition, &memory_type,
+                                        &memory_storage, &memory_offset))
+            return 0;
+        global = find_global(definition->name);
+        assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(definition->name));
+        if (memory_storage == SC_EXTERN && mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        if (memory_offset == 0)
+            fprintf(out, "\tld hl,(%s)\n", assembly_name);
+        else
+            fprintf(out, "\tld hl,(%s%+d)\n",
+                    assembly_name, memory_offset);
+        return 1;
+    }
 
     if (mir_indirect_load_is_single_stable_pointer_call_argument(
             value, size)) {
@@ -1194,9 +1220,21 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 
 static int mir_emit_cached_call_argument(FILE *out, int value)
 {
+    const struct MirInsn *definition;
+
     if (mir_cached_call_value != value ||
         mir_cached_call_instruction != mir_emit_instruction_index)
         return 0;
+    definition = mir_definition(value);
+    if (getenv("DCC_MIR_CALL_CACHE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR call-cache function=%s value=%d width=2 "
+                "definition=%s type=%d call-insn=%d\n",
+                mir.name, value,
+                definition != NULL
+                    ? mir_opcode_name(definition->opcode) : "none",
+                definition != NULL ? definition->type : 0,
+                mir_emit_instruction_index);
     fputs("\tld l,c\n\tld h,b\n", out);
     mir_cached_call_value = -1;
     mir_cached_call_instruction = -1;
@@ -1220,9 +1258,21 @@ static void mir_emit_spilled_arg_to_hl(FILE *out, int value)
 
 static int mir_emit_cached_wide_call_argument(FILE *out, int value)
 {
+    const struct MirInsn *definition;
+
     if (mir_cached_wide_call_value != value ||
         mir_cached_wide_call_instruction != mir_emit_instruction_index)
         return 0;
+    definition = mir_definition(value);
+    if (getenv("DCC_MIR_CALL_CACHE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR call-cache function=%s value=%d width=4 "
+                "definition=%s type=%d call-insn=%d\n",
+                mir.name, value,
+                definition != NULL
+                    ? mir_opcode_name(definition->opcode) : "none",
+                definition != NULL ? definition->type : 0,
+                mir_emit_instruction_index);
     fputs("\texx\n", out);
     mir_cached_wide_call_value = -1;
     mir_cached_wide_call_instruction = -1;
@@ -1995,22 +2045,11 @@ static int mir_definition_is_wide(const struct MirInsn *definition)
     return type_size(definition->type) > 2;
 }
 
-int mir_load_is_single_call_argument(int value, int size)
+static int mir_value_is_single_call_argument(int value, int size)
 {
-    const struct MirInsn *definition = mir_definition(value);
     int argument_count = 0;
-    int memory_type;
-    int memory_storage;
-    int memory_offset;
     int instruction;
 
-    if (definition == NULL || definition->opcode != MIR_LOAD ||
-        !mir_scalar_memory_location(definition, &memory_type,
-                                    &memory_storage, &memory_offset) ||
-        type_size(memory_type) != size ||
-        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
-        memory_offset < -128 || memory_offset + size - 1 > 127)
-        return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->src2 == value)
@@ -2038,6 +2077,40 @@ int mir_load_is_single_call_argument(int value, int size)
      * round trip purely because the call had one argument more than
      * this arbitrary cap allowed. */
     return argument_count == 1;
+}
+
+int mir_load_is_single_call_argument(int value, int size)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    return definition != NULL && definition->opcode == MIR_LOAD &&
+        mir_scalar_memory_location(definition, &memory_type,
+                                   &memory_storage, &memory_offset) &&
+        type_size(memory_type) == size &&
+        (memory_storage == SC_LOCAL || memory_storage == SC_PARAM) &&
+        memory_offset >= -128 && memory_offset + size - 1 <= 127 &&
+        mir_value_is_single_call_argument(value, size);
+}
+
+static int mir_global_load_is_single_call_argument(int value, int size)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    return mir_global_argument_rematerialization_enabled &&
+        size == 2 && definition != NULL &&
+        definition->opcode == MIR_LOAD &&
+        mir_scalar_memory_location(definition, &memory_type,
+                                   &memory_storage, &memory_offset) &&
+        type_size(memory_type) == size &&
+        (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) &&
+        (memory_storage != SC_EXTERN || memory_offset == 0) &&
+        mir_value_is_single_call_argument(value, size);
 }
 
 static int mir_stable_pointer_argument_address(
@@ -2820,6 +2893,16 @@ void mir_end_stable_pointer_argument_rematerialization(void)
     mir_stable_pointer_argument_rematerialization_enabled = 0;
 }
 
+void mir_begin_global_argument_rematerialization(void)
+{
+    mir_global_argument_rematerialization_enabled = 1;
+}
+
+void mir_end_global_argument_rematerialization(void)
+{
+    mir_global_argument_rematerialization_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -3208,6 +3291,9 @@ static int mir_prepare_backend_slots(void)
                                             value) ||
                                         (type_size(definition->type) == 2 &&
                                          mir_indirect_load_is_single_stable_pointer_call_argument(
+                                             value, 2)) ||
+                                        (type_size(definition->type) == 2 &&
+                                         mir_global_load_is_single_call_argument(
                                              value, 2)) ||
                                         (type_size(definition->type) == 2 &&
                                          mir_load_is_single_indirect_call_target(value, 2)) ||
@@ -5944,6 +6030,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                                   type_size(insn->type)))
                 break;
             if (mir_value_only_used_by_stable_pointer_argument(insn->dst))
+                break;
+            if (type_size(insn->type) == 2 &&
+                mir_global_load_is_single_call_argument(insn->dst, 2))
                 break;
             if (type_size(insn->type) == 2 &&
                 mir_load_is_single_indirect_call_target(insn->dst, 2))
