@@ -1671,6 +1671,8 @@ void mir_end_function(void)
              * known, right before any output is copied to `destination`. */
             int mir_label_base = label_id;
             int generated_label_id_after = mir_label_base;
+            int lazy_retry_attempted = 0;
+            int lazy_allocation_active = 0;
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
@@ -1801,6 +1803,7 @@ void mir_end_function(void)
                 generated_label_id_after = label_id;
             }
             if (emitted) {
+evaluate_generated:
                 generated_size = mir_stream_size(generated);
                 captured_size = mir_stream_size(mir.capture_stream);
                 generated_instructions =
@@ -1939,6 +1942,27 @@ void mir_end_function(void)
                      * saved instructions per call, with a two-instruction
                      * floor for call-free functions. */
                     fallback_reason = "planned-index-base-cost";
+                else if (!strcmp(selector_name, "homed-scalar-cfg") &&
+                         mir_has_lazy_parameters() &&
+                         ((mir_lazy_parameter_count() > 4 &&
+                           generated_instructions >
+                               captured_instructions - 5) ||
+                          (mir_lazy_byte_parameter_count() > 0 &&
+                           generated_instructions >
+                               captured_instructions - 3) ||
+                          (mir_has_phi_instruction() &&
+                           mir_cfg_block_count() <= 5 &&
+                           generated_instructions >
+                               captured_instructions - 2)))
+                    /* Lazy parameter binding removes artificial entry
+                     * lifetimes, but exact full-mode A/B found three
+                     * shallow static wins whose extra IX-relative loads
+                     * still lose after dccpeep: a six-parameter arithmetic
+                     * chain, a mixed byte-parameter expression, and a
+                     * one-instruction phi-CFG win. Require measured margins
+                     * for those structural classes; other lazy retries keep
+                     * the ordinary homed profitability policy. */
+                    fallback_reason = "lazy-parameter-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
@@ -2105,6 +2129,44 @@ void mir_end_function(void)
                              generated_size, captured_size,
                              generated_instructions, captured_instructions))
                     fallback_reason = "cfg-backedge";
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size")) &&
+                    !lazy_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *lazy_candidate = tmpfile();
+                    int lazy_emitted = 0;
+
+                    lazy_retry_attempted = 1;
+                    if (lazy_candidate == NULL)
+                        fatal("cannot create MIR lazy-parameter candidate "
+                              "stream");
+                    if (mir_begin_lazy_parameter_allocation()) {
+                        lazy_allocation_active = 1;
+                        label_id = mir_label_base;
+                        lazy_emitted = mir_try_selector(
+                            lazy_candidate, mir_try_emit_homed_scalar_cfg);
+                    }
+                    if (lazy_emitted) {
+                        fclose(generated);
+                        generated = lazy_candidate;
+                        lazy_candidate = NULL;
+                        selector_name = "homed-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    if (lazy_allocation_active) {
+                        mir_end_lazy_parameter_allocation();
+                        lazy_allocation_active = 0;
+                    }
+                    fclose(lazy_candidate);
+                }
+                if (fallback_reason != NULL && lazy_allocation_active) {
+                    mir_end_lazy_parameter_allocation();
+                    lazy_allocation_active = 0;
+                }
                 /* Phase 5 Item 46: homed/spilled-scalar-cfg already passed
                  * every other cost gate above - the *only* reason this
                  * candidate is about to fall back is the generic backedge
@@ -2251,6 +2313,10 @@ void mir_end_function(void)
                     if (forced_accept != NULL &&
                         !strcmp(forced_accept, mir.name))
                         fallback_reason = NULL;
+                }
+                if (lazy_allocation_active) {
+                    mir_end_lazy_parameter_allocation();
+                    lazy_allocation_active = 0;
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;

@@ -9949,3 +9949,73 @@ The refreshed ordinary rejection population is led by 627 `text-size`, 130
 `instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`, 45
 `absolute-address-cost`, 44 `planned-index-base-cost`, and 15
 `planned-stack-cost` functions.
+
+## Items T189-T192: transactional lazy one-use parameter homes (2026-08-06)
+
+T189 audits the post-T188 allocator and fallback population. Homed CFG emission
+binds every `MIR_PARAM` at function entry, making all parameters interfere from
+entry even when first used much later. Stable one-use narrow parameters occur
+in 301 fallback functions across 84 apps. They can consume colors or spills,
+force IY save/restore, and add fixed/operand moves even though their incoming
+IX-relative ABI slots remain stable for the function lifetime.
+
+A disposable broad prototype proves the opportunity but also proves that it
+cannot replace normal allocation globally. It exposes nine durable ordinary
+promotions, but removes eight existing selections and causes six linked-size
+regressions. Extending eligibility to two-use parameters adds only one more
+function and another removal. Pointer/objectless, aggregate, wide, reassigned,
+and VLA parameters are therefore excluded from this first production slice.
+
+T190 implements a selector-scoped allocation transaction. An eligible
+`MIR_PARAM` must have a real parameter `MirObject`, size one or two, exactly
+one semantic use, no store to its object, no pointer or aggregate type, and no
+VLA. The retry re-runs the shared allocator with those values excluded from
+interference, colors, and spills. Homed emission skips their entry binding and
+loads them at the sole operand boundary from the existing IX parameter offset.
+The shared byte extension routine preserves signed-char, unsigned-char, and
+`_Bool` normalization. IX framing is mandatory for the slice; an IY save uses
+the existing two-byte parameter-offset adjustment. Home-to-HL, home-to-DE,
+comparison-stack, and call-argument push paths all reuse this one direct-load
+contract.
+
+Every baseline allocation color, spill assignment, spill count, and lazy flag
+is saved before the trial and restored afterward, whether the homed selector
+accepts or rejects. The lazy candidate is emitted to a fresh stream and then
+re-enters the existing complete semantic/profitability acceptance chain rather
+than duplicating cost policy.
+
+T191 makes the retry fallback-only. It runs only after the incumbent candidate
+has reached `text-size` or `instruction-count`; an already selected MIR body is
+never replaced. The first census unexpectedly grew from 2022 to 2023 rows and
+materialized `tctxflt.cond_cmparm`. Direct output comparison proved the retry
+was running inside speculative inline-codegen attempts, where changing a
+discarded selector result can alter whether a static body is retained.
+Excluding `g_speculative_codegen_active` attempts restores the exact 2022-row
+ordinary and 2124-row stack-check populations and removes the state leak.
+
+T192 profiles the newly selected durable population with exact upstream ntvcm.
+The broad retry is correctness-clean, but `tarray6.v6`, `tkandr.uchar_mix`,
+and `tctxflt.cond_cmparm` regress shipping performance; forcing each function
+back to legacy removes the regression. A measured `lazy-parameter-cost` gate
+requires stronger instruction margins for more than four lazy parameters,
+byte-parameter expressions, and small phi CFGs. These are structural classes,
+not name exceptions. `cobint.check_idx` remains eligible because its larger
+CFG is outside the measured small-phi hazard.
+
+**Census and focused validation**:
+
+- ordinary: **729/2022 (36.05%)**, +6 names and zero removals;
+- stack-check: **743/2124 (34.98%)**, +11 names and zero removals;
+- ordinary additions: `cobint.check_idx`, `forint.resolve_idx`,
+  `tbool.bool_param_sum`, `tlongopt.co_sub`, `tmirslot.immediate_use`, and
+  `wumpus.hwum`;
+- stack-check additionally adds `pint.load_op_e`, `pint.loada_op_e`,
+  `pint.store_op_e`, `pint.storea_op_e`, and `trw.fill_buf`;
+- the nine-app stack-check focused full peep/nopeep run passes with zero
+  regressions and 18 checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 616 `text-size`, 130
+`unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 56
+`instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`, 45
+`absolute-address-cost`, 44 `planned-index-base-cost`, 37
+`dead-local-suffix-cost`, and 8 `lazy-parameter-cost` functions.

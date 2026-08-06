@@ -224,6 +224,8 @@ static int mir_homed_requires_ix_frame(void)
 {
     int instruction;
 
+    if (mir_has_lazy_parameters())
+        return 1;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         int memory_type, memory_storage, memory_offset;
@@ -682,7 +684,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              mir_home_spill_offset(insn->src2, NULL)))
             return mir_homed_reject("spill-phi");
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0 &&
-            !mir_home_spill_offset(insn->dst, NULL))
+            !mir_home_spill_offset(insn->dst, NULL) &&
+            !mir_is_lazy_parameter(insn->dst))
             return mir_homed_reject("uncolored-value");
         switch (insn->opcode) {
         case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
@@ -1517,6 +1520,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             break;
         case MIR_PARAM:
             if (!mir_value_has_use(insn->dst))
+                break;
+            if (mir_is_lazy_parameter(insn->dst))
                 break;
             object = &mir.objects[insn->object];
             if (type_size(object->type) == 4) {

@@ -54,6 +54,11 @@ int mir_cached_call_instruction = -1;
 int mir_cached_wide_call_value = -1;
 int mir_cached_wide_call_instruction = -1;
 
+static int *mir_lazy_saved_colors;
+static int *mir_lazy_saved_spills;
+static int mir_lazy_saved_spill_count;
+static int mir_lazy_allocation_active;
+
 static int mir_inline_substitutable(const struct Sym *symbol)
 {
     return symbol != NULL && symbol->is_static && symbol->is_inline &&
@@ -4770,6 +4775,9 @@ static int mir_fixed_color_for_definition(const struct MirInsn *insn)
 static int mir_values_interfere(const unsigned char *interference,
                                 int value_count, int left, int right)
 {
+    if (mir_lazy_allocation_active &&
+        (mir_is_lazy_parameter(left) || mir_is_lazy_parameter(right)))
+        return 0;
     return interference[(size_t)left * value_count + right] != 0;
 }
 
@@ -4964,6 +4972,8 @@ static void mir_allocate_registers(const unsigned char *live_in,
         int last_color;
         int chosen;
 
+        if (mir_is_lazy_parameter(value))
+            continue;
         if (allow_wide_colors) {
             const struct MirInsn *definition = mir_definition(value);
             is_wide = definition != NULL && type_size(definition->type) == 4;
@@ -5084,6 +5094,172 @@ static void mir_allocate_registers(const unsigned char *live_in,
     free(cross_opaque);
     free(cross_call);
     free(interference);
+}
+
+static int mir_lazy_parameter_semantic_use_count(int value)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 == value && insn->opcode != MIR_ARG)
+            ++count;
+        if (insn->src2 == value)
+            ++count;
+        if (mir_call_uses_value(insn, value))
+            ++count;
+    }
+    return count;
+}
+
+static int mir_lazy_parameter_eligible(const struct MirInsn *parameter)
+{
+    const struct MirObject *object;
+    int instruction;
+
+    if (parameter->opcode != MIR_PARAM || parameter->dst < 0 ||
+        parameter->object < 0 || parameter->object >= mir.object_count ||
+        mir.has_vla || type_ptr_depth(parameter->type) != 0 ||
+        type_size(parameter->type) < 1 || type_size(parameter->type) > 2 ||
+        type_is_struct_object(parameter->type) ||
+        mir_lazy_parameter_semantic_use_count(parameter->dst) != 1)
+        return 0;
+    object = &mir.objects[parameter->object];
+    if (object->storage != SC_PARAM || type_ptr_depth(object->type) != 0 ||
+        type_size(object->type) < 1 || type_size(object->type) > 2 ||
+        type_is_struct_object(object->type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir.insns[instruction].object == parameter->object)
+            return 0;
+    return 1;
+}
+
+int mir_is_lazy_parameter(int value)
+{
+    return mir_lazy_allocation_active && value >= 0 &&
+        value < mir.next_value && mir.lazy_parameter_values != NULL &&
+        mir.lazy_parameter_values[value] != 0;
+}
+
+int mir_has_lazy_parameters(void)
+{
+    return mir_lazy_parameter_count() != 0;
+}
+
+int mir_lazy_parameter_count(void)
+{
+    int count = 0;
+    int value;
+
+    if (!mir_lazy_allocation_active)
+        return 0;
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir_is_lazy_parameter(value))
+            ++count;
+    return count;
+}
+
+int mir_lazy_byte_parameter_count(void)
+{
+    int count = 0;
+    int value;
+
+    if (!mir_lazy_allocation_active)
+        return 0;
+    for (value = 0; value < mir.next_value; ++value) {
+        int type;
+        if (mir_lazy_parameter_offset(value, NULL, &type) &&
+            type_size(type) == 1)
+            ++count;
+    }
+    return count;
+}
+
+int mir_lazy_parameter_offset(int value, int *offset, int *type)
+{
+    const struct MirInsn *parameter;
+    const struct MirObject *object;
+
+    if (!mir_is_lazy_parameter(value))
+        return 0;
+    parameter = mir_definition(value);
+    if (parameter == NULL || parameter->opcode != MIR_PARAM ||
+        parameter->object < 0 || parameter->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[parameter->object];
+    if (offset != NULL)
+        *offset = object->offset;
+    if (type != NULL)
+        *type = object->type;
+    return 1;
+}
+
+int mir_begin_lazy_parameter_allocation(void)
+{
+    int value_count = mir.next_value;
+    int instruction;
+    int eligible_count = 0;
+    struct MirAllocationSummary summary;
+
+    if (mir_lazy_allocation_active || mir.live_in == NULL ||
+        mir.live_out == NULL || value_count == 0)
+        return 0;
+    if (mir.lazy_parameter_capacity < value_count) {
+        unsigned char *new_values = (unsigned char *)realloc(
+            mir.lazy_parameter_values, (size_t)value_count);
+        if (new_values == NULL)
+            fatal("out of memory planning lazy MIR parameters");
+        mir.lazy_parameter_values = new_values;
+        mir.lazy_parameter_capacity = value_count;
+    }
+    memset(mir.lazy_parameter_values, 0, (size_t)value_count);
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (mir_lazy_parameter_eligible(insn)) {
+            mir.lazy_parameter_values[insn->dst] = 1;
+            ++eligible_count;
+        }
+    }
+    if (eligible_count == 0)
+        return 0;
+
+    mir_lazy_saved_colors =
+        (int *)malloc((size_t)value_count * sizeof(*mir_lazy_saved_colors));
+    mir_lazy_saved_spills =
+        (int *)malloc((size_t)value_count * sizeof(*mir_lazy_saved_spills));
+    if (mir_lazy_saved_colors == NULL || mir_lazy_saved_spills == NULL)
+        fatal("out of memory saving MIR allocation");
+    memcpy(mir_lazy_saved_colors, mir.allocation_colors,
+           (size_t)value_count * sizeof(*mir_lazy_saved_colors));
+    memcpy(mir_lazy_saved_spills, mir.allocation_spills,
+           (size_t)value_count * sizeof(*mir_lazy_saved_spills));
+    mir_lazy_saved_spill_count = mir.allocation_spill_count;
+    mir_lazy_allocation_active = 1;
+    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 0);
+    return 1;
+}
+
+void mir_end_lazy_parameter_allocation(void)
+{
+    int value_count = mir.next_value;
+
+    if (!mir_lazy_allocation_active)
+        return;
+    memcpy(mir.allocation_colors, mir_lazy_saved_colors,
+           (size_t)value_count * sizeof(*mir_lazy_saved_colors));
+    memcpy(mir.allocation_spills, mir_lazy_saved_spills,
+           (size_t)value_count * sizeof(*mir_lazy_saved_spills));
+    mir.allocation_spill_count = mir_lazy_saved_spill_count;
+    memset(mir.lazy_parameter_values, 0, (size_t)value_count);
+    mir_lazy_allocation_active = 0;
+    free(mir_lazy_saved_colors);
+    free(mir_lazy_saved_spills);
+    mir_lazy_saved_colors = NULL;
+    mir_lazy_saved_spills = NULL;
 }
 
 /* Item 20d (mir-migration-plan-to-100pct.md): permanent (non-disposable)

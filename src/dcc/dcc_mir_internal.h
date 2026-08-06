@@ -159,6 +159,8 @@ struct MirFunction {
     int *allocation_spills;
     int allocation_capacity;
     int allocation_spill_count;
+    unsigned char *lazy_parameter_values;
+    int lazy_parameter_capacity;
     /* Retained past mir_verify_and_dump()'s own scope (Item 20d,
      * mir-migration-plan-to-100pct.md) so a selector's acceptance probe
      * (e.g. mir_try_emit_homed_scalar_cfg's wide-value re-coloring check)
@@ -376,6 +378,13 @@ const char *mir_opcode_name(int opcode);
 int mir_phi_source_for_edge(const struct MirInsn *phi,
                                    int predecessor_label, int edge_label,
                                    int successor, int phi_instruction);
+int mir_begin_lazy_parameter_allocation(void);
+void mir_end_lazy_parameter_allocation(void);
+int mir_has_lazy_parameters(void);
+int mir_is_lazy_parameter(int value);
+int mir_lazy_parameter_count(void);
+int mir_lazy_byte_parameter_count(void);
+int mir_lazy_parameter_offset(int value, int *offset, int *type);
 int mir_probe_wide_colors_for_homed(void);
 void mir_resolve_deferred_metadata(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,

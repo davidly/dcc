@@ -740,10 +740,39 @@ int mir_home_spill_offset(int value, int *offset)
     return 1;
 }
 
+static void mir_emit_byte_extension(FILE *out, int color, int type);
+
+static int mir_emit_lazy_parameter_to_color(FILE *out, int value, int color)
+{
+    int offset;
+    int type;
+
+    if (!mir_lazy_parameter_offset(value, &offset, &type))
+        return 0;
+    if (mir_home_uses_iy())
+        offset += 2;
+    if (color == MIR_COLOR_HL) {
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+        if (type_size(type) == 2)
+            fprintf(out, "\tld h,(ix%+d)\n", offset + 1);
+    } else if (color == MIR_COLOR_DE) {
+        fprintf(out, "\tld e,(ix%+d)\n", offset);
+        if (type_size(type) == 2)
+            fprintf(out, "\tld d,(ix%+d)\n", offset + 1);
+    } else {
+        return 0;
+    }
+    if (type_size(type) == 1)
+        mir_emit_byte_extension(out, color, type);
+    return 1;
+}
+
 int mir_emit_home_to_hl(FILE *out, int value)
 {
     int offset;
 
+    if (mir_is_lazy_parameter(value))
+        return mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_HL);
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: return 1;
     case MIR_COLOR_DE: fputs("\tpush de\n\tpop hl\n", out); return 1;
@@ -762,6 +791,8 @@ static int mir_emit_home_to_de(FILE *out, int value)
 {
     int offset;
 
+    if (mir_is_lazy_parameter(value))
+        return mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_DE);
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_DE: return 1;
     case MIR_COLOR_BC: fputs("\tld d,b\n\tld e,c\n", out); return 1;
@@ -843,6 +874,13 @@ int mir_emit_home_push(FILE *out, int value)
 
     if (mir_homed_string_call_argument(value)) {
         fprintf(out, "\tld hl,S%ld\n\tpush hl\n", definition->immediate);
+        return 1;
+    }
+    if (mir_is_lazy_parameter(value)) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_HL))
+            return 0;
+        fputs("\tex (sp),hl\n", out);
         return 1;
     }
     switch (mir.allocation_colors[value]) {
@@ -1199,6 +1237,13 @@ int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type)
 
 static int mir_emit_push_home(FILE *out, int value)
 {
+    if (mir_is_lazy_parameter(value)) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_HL))
+            return 0;
+        fputs("\tex (sp),hl\n", out);
+        return 1;
+    }
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: fputs("\tpush hl\n", out); return 1;
     case MIR_COLOR_DE: fputs("\tpush de\n", out); return 1;

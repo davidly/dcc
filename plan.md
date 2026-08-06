@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `69675cb` (Items T179-T180)
-- Published ordinary coverage: **696/2022 functions (34.42%)**
-- Published stack-check coverage: **703/2124 functions (33.10%)**
+- Published baseline: `18fa44c` (Items T187-T188)
+- Published ordinary coverage: **723/2022 functions (35.76%)**
+- Published stack-check coverage: **732/2124 functions (34.46%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -24,6 +24,8 @@ history preserves them.
 - Batch 22 candidate stack-check coverage: **728/2124 functions (34.27%)**
 - Batch 23 candidate ordinary coverage: **723/2022 functions (35.76%)**
 - Batch 23 candidate stack-check coverage: **732/2124 functions (34.46%)**
+- Batch 24 candidate ordinary coverage: **729/2022 functions (36.05%)**
+- Batch 24 candidate stack-check coverage: **743/2124 functions (34.98%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -662,6 +664,50 @@ population is led by 627 `text-size`, 130 `unary-not-cost`, 117
 48 `absolute-index-cost`, 47 `inline-substitution`, 45
 `absolute-address-cost`, 44 `planned-index-base-cost`, and 15
 `planned-stack-cost` functions.
+
+## Batch 24
+
+1. T189: audit the refreshed fallback population and identify eager homed
+   parameter binding as the largest reusable allocator defect. Stable one-use
+   narrow parameters occur in 301 fallback functions across 84 apps; loading
+   every parameter at entry artificially extends all lifetimes, consumes
+   colors/spills, and can force IY framing.
+2. T190: add a selector-scoped lazy-parameter allocation probe. Eligible
+   values are real-object, one-use, one-/two-byte nonpointer parameters with
+   no reassignment and no VLA. The probe excludes them from interference and
+   allocation, emits their sole use directly from the stable IX ABI offset,
+   reuses exact signed/unsigned/`_Bool` normalization, forces IX framing, and
+   restores every color, spill, and probe flag after the fresh-stream trial.
+3. T191: retry only durable, non-speculative functions whose incumbent
+   candidate already failed `text-size` or `instruction-count`, then
+   re-evaluate the lazy candidate through the unchanged acceptance chain.
+   Running the retry inside speculative inline-codegen attempts was explicitly
+   rejected: it materialized otherwise-elided static bodies and changed the
+   corpus denominator. Excluding speculative sinks restores the exact baseline
+   population and prevents inline-selection state leakage.
+4. T192: retain measured profitability margins for the three structural
+   classes rejected by exact-upstream A/B: more than four lazy parameters,
+   byte-parameter expressions, and small phi CFGs. This rejects
+   `tarray6.v6`, `tkandr.uchar_mix`, and `tctxflt.cond_cmparm` without
+   function-name exceptions; forced fallback removes each measured peep/nopeep
+   regression.
+
+The candidate ordinary census is **729/2022 (36.05%)**, +6 names and zero
+removals. Additions are `cobint.check_idx`, `forint.resolve_idx`,
+`tbool.bool_param_sum`, `tlongopt.co_sub`, `tmirslot.immediate_use`, and
+`wumpus.hwum`.
+
+The candidate stack-check census is **743/2124 (34.98%)**, +11 names and zero
+removals. It additionally adds `pint.load_op_e`, `pint.loada_op_e`,
+`pint.store_op_e`, `pint.storea_op_e`, and `trw.fill_buf`. The nine-app
+stack-check focused full-mode run passes with zero regressions and 18 checked
+cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 616 `text-size`, 130
+`unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 56
+`instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`, 45
+`absolute-address-cost`, 44 `planned-index-base-cost`, 37
+`dead-local-suffix-cost`, and 8 `lazy-parameter-cost` functions.
 
 ## Required process
 
