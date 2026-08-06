@@ -9906,3 +9906,46 @@ The refreshed ordinary rejection population is led by 671 `text-size`, 131
 `unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 61
 `instruction-count`, 48 each `absolute-address-cost`, `absolute-index-cost`,
 and `inline-substitution`, and 13 `planned-stack-cost` functions.
+
+## Items T187-T188: planned fixed-stride index bases (2026-08-06)
+
+T187 profiles six safe planner extensions. Binary `src2`, store, and return
+consumers have no eligible intervals. Unary consumers, nested LIFO intervals,
+and balanced regular-call spans reduce fallback metrics but add no coverage.
+Fixed-stride `MIR_INDEX_ADDRESS.src1` has the largest reusable population:
+571 intervals in 172 functions across 54 apps.
+
+The retained extension applies Batch 22's one-use, nonadjacent, same-block,
+narrow, nonoverlapping proof to fixed compile-time strides. Runtime strides
+remain excluded. Index results used only by constant-absolute access are also
+excluded because those index instructions emit no code. Planned emitted state
+is independent of the legacy singleton stack-forwarding state, preventing an
+intervening ad-hoc handoff from overwriting the planned value. One exact
+consume helper validates the value/instruction pair: constant indexes pop the
+base into HL; dynamic indexes compute the scaled offset in HL, pop the base
+into DE, and add it.
+
+T188 narrows the initial six-function result after exact-upstream full-mode
+A/B. `tfarrsub.set_intvec` regresses both modes while saving only one MIR
+instruction. `cobint.emit` improves peep but regresses nopeep and saves 20
+instructions across a function containing three calls. Forced fallback of
+each restores the checked baseline. A separate index-plan dependency cost
+gate therefore requires two saved instructions in call-free functions and
+seven saved instructions per call otherwise. This rejects 44 measured or
+unproven candidates as `planned-index-base-cost` and keeps the four
+non-regressing additions.
+
+**Census and focused validation**:
+
+- ordinary: **723/2022 (35.76%)**, +4 names and zero removals;
+- stack-check: **732/2124 (34.46%)**, +4 names and zero removals;
+- additions in both configurations: `cint.alloc_local`, `cobint.emit_tok`,
+  `fint.peek`, and `tpeepal.interior_escape_store`;
+- the five-app exact-upstream focused full peep/nopeep run passes with zero
+  regressions and nine checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 627 `text-size`, 130
+`unary-not-cost`, 117 `dynamic-index-base-cost`, 65 `wide-constant-cost`, 61
+`instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`, 45
+`absolute-address-cost`, 44 `planned-index-base-cost`, and 15
+`planned-stack-cost` functions.

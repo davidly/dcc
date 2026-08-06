@@ -1926,6 +1926,20 @@ void mir_end_function(void)
                      * layout and optimizer sensitivity. */
                     fallback_reason = "planned-stack-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_planned_index_base_handoff() &&
+                         generated_instructions >
+                             captured_instructions -
+                                 (mir_call_count() > 0
+                                      ? 7 * mir_call_count() : 2))
+                    /* Nonadjacent index-base handoffs are semantically
+                     * proven by the stack plan, but exact-upstream A/B
+                     * rejects a one-instruction call-free margin and a
+                     * twenty-instruction margin across three calls.
+                     * Preserve the stronger measured wins by charging seven
+                     * saved instructions per call, with a two-instruction
+                     * floor for call-free functions. */
+                    fallback_reason = "planned-index-base-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
                                                          mir.aggregate_temp_bytes == 0 &&

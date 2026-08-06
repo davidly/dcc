@@ -22,6 +22,8 @@ history preserves them.
 - Batch 21 candidate stack-check coverage: **720/2124 functions (33.90%)**
 - Batch 22 candidate ordinary coverage: **719/2022 functions (35.56%)**
 - Batch 22 candidate stack-check coverage: **728/2124 functions (34.27%)**
+- Batch 23 candidate ordinary coverage: **723/2022 functions (35.76%)**
+- Batch 23 candidate stack-check coverage: **732/2124 functions (34.46%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -635,6 +637,32 @@ by 671 `text-size`, 131 `unary-not-cost`, 117 `dynamic-index-base-cost`, 65
 `absolute-address-cost`, `absolute-index-cost`, and `inline-substitution`, and
 13 `planned-stack-cost` functions.
 
+## Batch 23
+
+1. T187: extend the planned narrow handoff to nonadjacent, one-use,
+   fixed-stride `MIR_INDEX_ADDRESS.src1` bases. Planned state is independent
+   of legacy singleton forwarding, and one shared exact-consume helper handles
+   constant-index `pop hl` and dynamic-index `pop de`/`add hl,de` paths.
+   Runtime strides and address results eliminated by absolute-access folding
+   remain excluded.
+2. T188: add a measured index-plan cost gate after exact-upstream A/B rejects
+   `tfarrsub.set_intvec` at a one-instruction saving and `cobint.emit` at a
+   20-instruction saving across three calls. Call-free candidates must save
+   two instructions; call-containing candidates must save seven per call.
+
+The candidate ordinary census is **723/2022 (35.76%)**, +4 names and zero
+removals. The candidate stack-check census is **732/2124 (34.46%)**, also +4
+names and zero removals. Both add `cint.alloc_local`, `cobint.emit_tok`,
+`fint.peek`, and `tpeepal.interior_escape_store`.
+
+The five-app exact-upstream focused full-mode run passes with zero regressions
+and nine checked cycle/size improvements. The refreshed ordinary rejection
+population is led by 627 `text-size`, 130 `unary-not-cost`, 117
+`dynamic-index-base-cost`, 65 `wide-constant-cost`, 61 `instruction-count`,
+48 `absolute-index-cost`, 47 `inline-substitution`, 45
+`absolute-address-cost`, 44 `planned-index-base-cost`, and 15
+`planned-stack-cost` functions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -680,11 +708,11 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T186 ordinary census is
-   led by 671 `text-size`, 131 `unary-not-cost`, 117
+3. **Next structural priorities by impact:** the post-T188 ordinary census is
+   led by 627 `text-size`, 130 `unary-not-cost`, 117
    `dynamic-index-base-cost`, 65 `wide-constant-cost`, 61
-   `instruction-count`, 48 each `absolute-address-cost`,
-   `absolute-index-cost`, and `inline-substitution`, and 13
+   `instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`,
+   45 `absolute-address-cost`, 44 `planned-index-base-cost`, and 15
    `planned-stack-cost` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared
    improvement. The cost populations are deliberately measured fallback, not
