@@ -10963,3 +10963,56 @@ relaxing measured cost gates. The refreshed homed rejects identify spill,
 wide-color, and unsupported-opcode/type classes as the largest structural
 barriers; new work should start with detailed population diagnostics rather
 than broad admission.
+
+## Items T303-T312: opcode audits and wide identity conversions (2026-08-10)
+
+T303 extends `DCC_MIR_HOMED_REPORT` so an opcode rejection names its first
+unsupported MIR instruction. The resulting population is 52 VLA-save, 23
+variadic-start, three compound-literal-address, and three aggregate-call
+functions. T304 prototypes homed VLA size/save/allocate/restore through the
+alternate Z80 register bank. T305 removes the complete prototype: after
+correctness repair it changes existing VLA output, slightly regresses peep
+execution, and adds no MIR function. A parallel homed variadic prototype is
+also removed after it only exposes the existing CFG-backedge gate.
+
+T306 retains the correctness fix discovered by that experiment. Dccpeep's
+IX-store/reload pass incorrectly treated `exx` as preserving visible HL and
+could delete a required reload after alternate-bank writes. `exx` now
+terminates forwarding, with `exx-store-reload` covering the failure.
+
+T307 profiles the closest signed div/mod pair functions. Although combining
+the operations shrinks static output, `sdm_pair` and `sdm_pair_r` are
+4.6-5.5% slower. T308 profiles three more close paired-divmod functions:
+all improve nopeep output but regress peep execution by 0.38-0.57%, so no
+cost exception is retained.
+
+T309 audits normalized byte loads followed by integer promotion. There are 522
+one-use indirect-load sites in 129 functions, including 463 separated only by
+one NOP. T310 tests the representation alias globally and then as a final
+fallback-only retry. The broad form removes incumbents; the transactional form
+preserves them but adds no function, so all implementation code is removed.
+
+T311 generalizes the existing representation-identity fold from two-byte
+signedness changes to same-width two- or four-byte non-floating integers. A
+wide call result no longer needs a new value and frame spill merely to change
+signedness before becoming an argument. T312 tests a smaller shared scalar
+comparison materializer. It removes one unconditional jump and improves many
+incumbents, but the three newly admitted functions each regress one peep or
+nopeep execution mode. The prototype is removed rather than masking those
+regressions.
+
+**Census and focused validation**:
+
+- ordinary: **826/2025 (40.79%)**, +3 names and zero removals;
+- stack-check: **847/2127 (39.82%)**, +3 names and zero removals;
+- both add `tcrcfix.test_non_ix_compound_shift_store`, `tfpraw.okl`, and
+  `tlong.tbitw`;
+- all nine affected apps pass focused full peep/nopeep validation with zero
+  regressions and 30 checked improvements.
+
+The remaining 333 ordinary `text-size` functions still take priority over
+measured cost gates. Constant outer-call argument prepacking is visible in
+`adaint.parse_put_call`, but it requires selector-scoped nested-call staging;
+the earlier global argument-order experiment remains invalid. Continue with a
+transactional design or the next repeated slot class rather than changing MIR
+argument order.

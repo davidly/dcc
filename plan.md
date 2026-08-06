@@ -1202,6 +1202,34 @@ removals. Both add `tinitreg.tglob`, `treg.test_call_around`, and
 with zero regressions and 13 checked improvements. Focused ASan/UBSan
 compilation is clean with leak reporting disabled.
 
+## Batch 42
+
+1. T303-T305: identify 52 VLA, 23 variadic, three compound-literal-address,
+   and three aggregate-call homed opcode rejects. Alternate-bank VLA and
+   variadic prototypes preserve semantics but add no MIR functions, so both
+   are fully removed.
+2. T306: fix a dccpeep correctness defect exposed by the VLA prototype.
+   `exx` changes the visible HL pair and must terminate IX-store/reload
+   forwarding. Add a focused regression fixture.
+3. T307-T308: profile the closest paired signed-divmod candidates and reject
+   admission because peep execution regresses despite fewer calls or
+   instructions.
+4. T309-T310: audit 522 one-use byte-load promotion slots and test a
+   fallback-only representation fold. It changes fallback metrics but adds no
+   MIR functions, so the retry is fully removed.
+5. T311: complete representation-identical conversion folding for signed/
+   unsigned four-byte integers. This removes redundant wide call-result
+   spills and adds three functions.
+6. T312: test compact scalar comparison materialization. It improves existing
+   MIR output but newly admits three functions that each regress one execution
+   mode, so the rollout is fully removed.
+
+The candidate ordinary census is **826/2025 (40.79%)**, +3 names and zero
+removals. The stack-check census is **847/2127 (39.82%)**, also +3 and zero
+removals. Both add `tcrcfix.test_non_ix_compound_shift_store`, `tfpraw.okl`,
+and `tlong.tbitw`. Nine affected apps pass focused full peep/nopeep validation
+with zero regressions and 30 checked improvements.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -1247,15 +1275,13 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T196 ordinary census is
-   led by 653 `text-size`, 131 `unary-not-cost`, 118
-   `dynamic-index-base-cost`, 72 `wide-constant-cost`, 48
-   `absolute-index-cost`, 47 `inline-substitution`, 46
-   `absolute-address-cost`, 44 `planned-index-base-cost`, and 37
-   `dead-local-suffix-cost` fallbacks. Re-bucket
-   `text-size` by repeated emitted pattern before choosing the next shared
-   improvement. The cost populations are deliberately measured fallback, not
-   gate-removal headroom.
+3. **Next structural priorities by impact:** the post-T311 ordinary census is
+   led by 333 `text-size`, 182 `boolean-phi-cost`, 101
+   `dynamic-index-base-cost`, 91 `block-cse-cost`, 61 `unary-not-cost`, 48
+   `wide-constant-cost`, 47 `inline-substitution`, and 46
+   `phi-fallthrough-cost` fallbacks. Continue mining repeated emitted patterns
+   in `text-size`; the named cost populations are measured rejected rollouts,
+   not gate-removal headroom.
 4. Keep same-block CSE deferred unless a new liveness model removes Item T70's
    measured slot/move regression.
 5. Re-run ordinary and stack-check censuses after each structural batch and

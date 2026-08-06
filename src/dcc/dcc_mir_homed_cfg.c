@@ -1157,6 +1157,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         default:
+            if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR homed-opcode function=%s instruction=%d "
+                        "opcode=%s\n",
+                        mir.name, i,
+                        mir_opcode_name(insn->opcode));
             return mir_homed_reject("opcode");
         }
     }

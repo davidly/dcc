@@ -3691,7 +3691,8 @@ static int mir_unary_is_representation_identity(
     target_size = type_size(insn->type);
     if (source->type == insn->type)
         return source_size == 1 || source_size == 2 || source_size == 4;
-    return source_size == 2 && target_size == 2 &&
+    return source_size == target_size &&
+           (source_size == 2 || source_size == 4) &&
            !type_is_float(source->type) && !type_is_float(insn->type);
 }
 

@@ -3381,6 +3381,7 @@ static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_h
     if (strcmp (tmp, "pop hl")      == 0) return 0;
     if (strcmp (tmp, "ex de,hl")    == 0) return 0;
     if (strcmp (tmp, "ex (sp),hl")  == 0) return 0;
+    if (strcmp (tmp, "exx")         == 0) return 0;
     /* Jumps/calls: would need dataflow analysis */
     if (strncmp(tmp, "jp ",   3) == 0) return 0;
     if (strncmp(tmp, "jr ",   3) == 0) return 0;
