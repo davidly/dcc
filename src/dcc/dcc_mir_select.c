@@ -1806,6 +1806,7 @@ void mir_end_function(void)
             int promoted_local_slot_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
+            int block_cse_retry_attempted = 0;
             int boolean_phi_retry_attempted = 0;
 
 retry_selection:
@@ -1995,6 +1996,13 @@ evaluate_generated:
                 else if (generated_size < 0 || captured_size < 0 ||
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
+                else if (block_cse_retry_attempted &&
+                         mir_common_block_expression_elimination_count() > 0 &&
+                         (mir_cfg_block_count() != 1 ||
+                          strcmp(selector_name, "homed-scalar-cfg") != 0 ||
+                          generated_instructions >
+                              captured_instructions - 5))
+                    fallback_reason = "block-cse-cost";
                 else if (boolean_phi_retry_attempted &&
                          mir_boolean_phi_branch_simplification_count() > 0 &&
                          !mir_is_profiled_boolean_phi_branch_retry(
@@ -3053,6 +3061,24 @@ evaluate_generated:
                     boolean_phi_retry_attempted = 1;
                     mir_simplify_boolean_phi_branches();
                     if (mir_boolean_phi_branch_simplification_count() > 0) {
+                        fclose(generated);
+                        generated = NULL;
+                        verified = mir_verify_and_dump();
+                        if (verified) {
+                            mir_compute_dead_local_suffix();
+                            mir_report_dead_local_suffix();
+                            goto retry_selection;
+                        }
+                    }
+                }
+                if (fallback_reason != NULL &&
+                    !block_cse_retry_attempted &&
+                    mir_cfg_block_count() == 1 &&
+                    !g_speculative_codegen_active) {
+                    /* Keep incumbent MIR byte-identical and avoid repeating
+                     * the selector pipeline for immaterial CSE populations. */
+                    block_cse_retry_attempted = 1;
+                    if (mir_eliminate_common_block_expressions() >= 3) {
                         fclose(generated);
                         generated = NULL;
                         verified = mir_verify_and_dump();

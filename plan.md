@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `ca05f5a` (Items T245-T254)
-- Published ordinary coverage: **779/2023 functions (38.51%)**
-- Published stack-check coverage: **798/2125 functions (37.55%)**
+- Published baseline: `58d5b69` (Items T255-T264)
+- Published ordinary coverage: **795/2023 functions (39.30%)**
+- Published stack-check coverage: **815/2125 functions (38.35%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -52,6 +52,8 @@ history preserves them.
 - Batch 36 candidate stack-check coverage: **798/2125 functions (37.55%)**
 - Batch 37 candidate ordinary coverage: **795/2023 functions (39.30%)**
 - Batch 37 candidate stack-check coverage: **815/2125 functions (38.35%)**
+- Batch 38 candidate ordinary coverage: **797/2023 functions (39.40%)**
+- Batch 38 candidate stack-check coverage: **817/2125 functions (38.45%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -1071,6 +1073,33 @@ The candidate ordinary census is **795/2023 (39.30%)**, +16 names over Batch
 Nine affected apps pass focused full peep/nopeep validation with zero
 regressions and 19 checked improvements. ASan/UBSan compilation of all
 affected apps is clean.
+
+## Batch 38
+
+1. T265-T266: diagnose upstream action `31086903509`. `tctxflt` timed out
+   while building fast mode at the workflow's 20-second limit; the preceding
+   successful revision already needed 35.2 seconds for both modes. Raise the
+   per-build CI timeout to 30 seconds.
+2. T267: measure one-byte homed returns. The broad admission adds no function
+   and displaces `tbool.bool_identity`, so remove it.
+3. T268-T269: implement and audit one bounded four-byte homed spill. Sixty-six
+   one-wide-spill functions reach the prototype, but the closest candidates
+   still add two instructions and all others add 12-67. Remove the zero-yield
+   spill representation.
+4. T270-T272: eliminate repeated pure expressions within one basic block as a
+   final fallback-only retry. Preserve incumbent MIR, require at least three
+   eliminations, and retain only single-block homed output with a five-
+   instruction win after broader output regresses peep execution.
+5. T273-T274: extend CSE beyond addresses only when the original value is
+   already live past the duplicate, preventing additional register pressure.
+   Scope the retry to single-block functions, restoring `tctxflt` compile time
+   from 11.83 seconds to 8.48 seconds.
+
+The candidate ordinary census is **797/2023 (39.40%)**, +2 names and zero
+removals. The stack-check census is **817/2125 (38.45%)**, also +2 and zero
+removals. Both add `tesc.test_chained_assign` and
+`tptrinit.array_pointer_offsets`; focused full peep/nopeep validation passes
+with zero regressions and six checked improvements.
 
 ## Required process
 

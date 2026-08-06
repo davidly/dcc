@@ -398,6 +398,8 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
+int mir_eliminate_common_block_expressions(void);
+int mir_common_block_expression_elimination_count(void);
 void mir_simplify_boolean_phi_branches(void);
 int mir_boolean_phi_branch_simplification_count(void);
 void mir_reset_boolean_phi_branch_simplification_count(void);

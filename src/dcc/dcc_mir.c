@@ -3124,6 +3124,101 @@ static void mir_replace_value_uses(int old_value, int new_value)
     }
 }
 
+static int mir_block_cse_count;
+
+static int mir_expression_is_address(const struct MirInsn *insn)
+{
+    return insn->opcode == MIR_ADDRESS ||
+           insn->opcode == MIR_MEMBER_ADDRESS ||
+           insn->opcode == MIR_INDEX_ADDRESS;
+}
+
+static int mir_common_expressions_equal(const struct MirInsn *left,
+                                        const struct MirInsn *right)
+{
+    if (left->opcode != right->opcode)
+        return 0;
+    switch (left->opcode) {
+    case MIR_ADDRESS:
+    case MIR_MEMBER_ADDRESS:
+    case MIR_INDEX_ADDRESS:
+    case MIR_CONST:
+    case MIR_FLOAT_CONST:
+    case MIR_STRING_ADDRESS:
+    case MIR_BINARY:
+        break;
+    case MIR_UNARY:
+        if (left->memory_flags != 0 || right->memory_flags != 0)
+            return 0;
+        break;
+    default:
+        return 0;
+    }
+    return left->src1 == right->src1 &&
+           left->src2 == right->src2 &&
+           left->immediate == right->immediate &&
+           left->object == right->object &&
+           left->type == right->type &&
+           left->secondary_offset == right->secondary_offset &&
+           left->memory_size == right->memory_size &&
+           left->memory_flags == right->memory_flags &&
+           left->bit_width == right->bit_width &&
+           left->bit_shift == right->bit_shift &&
+           left->bit_mask == right->bit_mask &&
+           strcmp(left->name, right->name) == 0 &&
+           strcmp(left->base_name, right->base_name) == 0;
+}
+
+/* Reuse equivalent pure SSA values within one block. Addresses may safely
+ * remain live longer; other expressions are reused only when the earlier
+ * value is already live beyond the duplicate, so allocation pressure cannot
+ * increase. */
+int mir_eliminate_common_block_expressions(void)
+{
+    int block_start = 0;
+    int eliminated = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+        int previous;
+
+        if (insn->opcode == MIR_LABEL)
+            block_start = instruction;
+        for (previous = instruction - 1;
+             previous >= block_start; --previous) {
+            struct MirInsn *candidate = &mir.insns[previous];
+            if (!mir_common_expressions_equal(candidate, insn) ||
+                (!mir_expression_is_address(insn) &&
+                 !mir_value_has_use_after(candidate->dst, instruction)))
+                continue;
+            mir_replace_value_uses(insn->dst, candidate->dst);
+            insn->opcode = MIR_NOP;
+            insn->dst = -1;
+            insn->src1 = -1;
+            insn->src2 = -1;
+            ++eliminated;
+            break;
+        }
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE ||
+            insn->opcode == MIR_RETURN ||
+            insn->opcode == MIR_VLA_ALLOC ||
+            insn->opcode == MIR_VLA_RESTORE)
+            block_start = instruction + 1;
+    }
+    if (eliminated != 0 && getenv("DCC_MIR_CSE_REPORT") != NULL)
+        fprintf(stderr, "; MIR block-cse function=%s eliminated=%d\n",
+                mir.name, eliminated);
+    mir_block_cse_count = eliminated;
+    return eliminated;
+}
+
+int mir_common_block_expression_elimination_count(void)
+{
+    return mir_block_cse_count;
+}
+
 static int mir_named_type(const char *name)
 {
     struct Sym *global;
@@ -5467,7 +5562,7 @@ int mir_probe_wide_colors_for_homed(void)
                 ++wide_spills;
         }
     ok = summary.spills == 0;
-    if (!ok && getenv("DCC_MIR_HOMED_REPORT") != NULL)
+    if (summary.spills != 0 && getenv("DCC_MIR_HOMED_REPORT") != NULL)
     {
         fprintf(stderr,
                 "; MIR homed-wide-color function=%s narrow-spills=%d "

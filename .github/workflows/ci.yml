@@ -49,4 +49,4 @@ jobs:
 
       - name: Run unit tests and extended suite
         shell: pwsh
-        run: ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 20
+        run: ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30

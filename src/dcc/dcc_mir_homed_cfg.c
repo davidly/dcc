@@ -2082,10 +2082,16 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     accepted = 1;
 done:
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
-        fprintf(stderr, "; MIR home-cfg reject function=%s insn=%d opcode=%s\n",
+        fprintf(stderr,
+                "; MIR home-cfg reject function=%s insn=%d opcode=%s "
+                "generated-bytes=%ld captured-bytes=%ld "
+                "generated-insns=%d captured-insns=%d\n",
                 mir.name, i,
                 i >= 0 && i < mir.count
-                    ? mir_opcode_name(mir.insns[i].opcode) : "preflight");
+                    ? mir_opcode_name(mir.insns[i].opcode) : "preflight",
+                mir_stream_size(out), mir_stream_size(mir.capture_stream),
+                mir_stream_instruction_count(out),
+                mir_stream_instruction_count(mir.capture_stream));
     free(labels);
     return accepted;
 }

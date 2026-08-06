@@ -10745,3 +10745,59 @@ cost gates. The 184 `boolean-phi-cost` and 106 `dynamic-index-base-cost`
 populations contain measured peep regressors; they require emitter improvement,
 not broader admission. Generic wide spills also remain deferred until the
 four-byte slot representation and use costs are modeled explicitly.
+
+## Items T265-T274: fallback-only block CSE and CI timeout (2026-08-09)
+
+T265 diagnoses upstream action `31086903509`. The only failure is
+`tctxflt`: its fast build reaches the workflow's 20-second per-build timeout.
+The immediately preceding successful revision already took 35.2 seconds for
+both modes, so this is a narrow timeout margin rather than a correctness or
+performance-baseline failure. T266 raises the CI per-build timeout to 30
+seconds; the mandatory local command remains full plus extended.
+
+T267 tests one-byte scalar returns in the homed selector. Although byte values
+use the normalized HL ABI, broad admission adds no function and displaces
+`tbool.bool_identity` through an inline-materialization interaction. The
+prototype is removed.
+
+T268 implements the deferred four-byte spill representation: two consecutive
+frame words, DE:HL loads/stores, alternate-BC stack pushes and constant/parameter
+materialization. T269 audits 66 one-wide-spill functions. The closest
+`fact.main` and `triangle.main` candidates are byte-equal to legacy but add two
+instructions; all remaining measured candidates add 12-67 instructions. The
+complete zero-yield prototype is removed, while final-allocation spill and
+homed-output metric diagnostics are retained.
+
+T270 introduces same-block CSE for repeated pure address chains. Applying it
+globally adds six functions but displaces four incumbents, so T271 moves the
+transformation behind every established selector and retry. The fallback-only
+form preserves all incumbent hashes and adds six candidates.
+
+T272 profiles those six candidates. `trtl2`, `tsnprtf`, and `tstr2` regress
+peep execution despite improving nopeep output; `tdivmod.main` similarly
+regresses by 22 peep cycles when multi-block CSE is generalized. The production
+predicate therefore requires single-block homed emission and at least five
+saved instructions. This retains the two candidates that improve both modes.
+
+T273 generalizes the same pass to constants and side-effect-free unary/binary
+expressions only when the earlier equivalent SSA value is already live after
+the duplicate. The proof prevents CSE from extending non-address lifetimes and
+increasing allocation pressure. Volatile/memory unary forms remain excluded.
+T274 requires at least three eliminations before re-running verification and
+selection, and runs the retry only for single-block functions. This reduces a
+direct `tctxflt` compiler measurement from 11.83 seconds to 8.48 seconds,
+close to the 8.04-second pre-CSE baseline.
+
+**Census and focused validation**:
+
+- ordinary: **797/2023 (39.40%)**, +2 names and zero removals;
+- stack-check: **817/2125 (38.45%)**, +2 names and zero removals;
+- both add `tesc.test_chained_assign` and
+  `tptrinit.array_pointer_offsets`;
+- focused full peep/nopeep validation passes with zero regressions and six
+  checked improvements.
+
+The CSE retry affects 49 ordinary-census apps but keeps every non-winning
+selection unchanged. The remaining 90 `block-cse-cost` functions do not meet
+the measured single-block homed margin; broad spilled or multi-block admission
+is explicitly rejected by the profiled peep regressions.
