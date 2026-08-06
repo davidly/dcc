@@ -6672,6 +6672,41 @@ _close:
         jr      c,clok
         cp      MAXFD
         jr      nc,clbad
+
+        ; If this fd belongs to a still-registered tmpfile() (see _tmpfile /
+        ; __tmpf_cleanup below), clear its __tmpf_fd[] slot now so
+        ; __tmpf_cleanup doesn't try to close (and unlink) it again at exit.
+        ; Closing an already-closed fd a second time is harmless on most
+        ; CP/M BDOS implementations, but not guaranteed - at least one
+        ; emulator treats a double BDOS close as a hard error.
+        ; __tmpf_hook is 0 unless _tmpfile was ever called (same idiom as
+        ; _exit's tmpfile-cleanup check above), so this costs ~8 bytes in
+        ; programs that never call tmpfile and only scans __tmpf_fd in ones
+        ; that do. LD r,r' doesn't touch flags, so the zero check survives
+        ; the round trip through D while A (the fd) is borrowed.
+        ld      d,a                     ; stash fd - about to reuse A
+        ld      hl,(__tmpf_hook)
+        ld      a,h
+        or      l
+        ld      a,d                     ; restore fd; flags unaffected by LD
+        jr      z,tmpf_cl_done
+        push    bc
+        push    hl
+        ld      hl,__tmpf_fd
+        ld      b,NTMP
+tmpf_cl_scan:
+        cp      (hl)
+        jr      z,tmpf_cl_clear
+        inc     hl
+        djnz    tmpf_cl_scan
+        jr      tmpf_cl_pop
+tmpf_cl_clear:
+        ld      (hl),0
+tmpf_cl_pop:
+        pop     hl
+        pop     bc
+tmpf_cl_done:
+
         sub     FIRSTFD
         ld      (__slot),a
         call    __fcbp
