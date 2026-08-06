@@ -137,6 +137,37 @@ static int mir_homed_wide_binary_only_constant(int value)
     return uses == 1;
 }
 
+static int mir_homed_value_is_rematerializable(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           ((definition->opcode == MIR_CONST &&
+             mir_homed_wide_binary_only_constant(value)) ||
+            (definition->opcode == MIR_STRING_ADDRESS &&
+             mir_homed_string_call_argument(value)));
+}
+
+int mir_homed_rematerializable_wide_candidate_count(void)
+{
+    int has_wide = type_size(mir.return_type) == 4;
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if ((insn->dst >= 0 && type_size(insn->type) == 4) ||
+            (insn->opcode == MIR_BINARY &&
+             type_size(insn->secondary_offset) == 4))
+            has_wide = 1;
+        if (insn->dst >= 0 &&
+            mir_homed_value_is_rematerializable(insn->dst))
+            ++count;
+    }
+    return has_wide ? count : 0;
+}
+
 static int mir_homed_wide_type_supported(int type)
 {
     return type_size(type) == 4 &&
@@ -1125,14 +1156,28 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     /* Item 20d: a wide long return with no wide value at all (e.g. an
      * implicit-int-promoted narrow expression) still needs the probe, so
      * gate on wide_return too, not just has_wide. */
-    if ((has_wide || wide_return) && !mir_probe_wide_colors_for_homed())
-        return mir_homed_reject("wide-color");
+    if (has_wide || wide_return) {
+        unsigned char *rematerializable = NULL;
+        int wide_colors_ok;
+
+        if (mir_rematerialized_home_allocation_is_active()) {
+            rematerializable = (unsigned char *)calloc(
+                (size_t)mir.next_value, 1);
+            if (rematerializable == NULL)
+                fatal("out of memory planning rematerializable MIR homes");
+            for (value = 0; value < mir.next_value; ++value)
+                rematerializable[value] =
+                    (unsigned char)mir_homed_value_is_rematerializable(value);
+        }
+        wide_colors_ok =
+            mir_probe_wide_colors_for_homed(rematerializable);
+        free(rematerializable);
+        if (!wide_colors_ok)
+            return mir_homed_reject("wide-color");
+    }
     for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_CONST &&
-            mir_homed_wide_binary_only_constant(mir.insns[i].dst))
-            mir.allocation_colors[mir.insns[i].dst] = -1;
-        else if (mir.insns[i].opcode == MIR_STRING_ADDRESS &&
-                 mir_homed_string_call_argument(mir.insns[i].dst))
+        if (mir.insns[i].dst >= 0 &&
+            mir_homed_value_is_rematerializable(mir.insns[i].dst))
             mir.allocation_colors[mir.insns[i].dst] = -1;
 
     labels = (int *)malloc((size_t)mir.next_label * sizeof(*labels));

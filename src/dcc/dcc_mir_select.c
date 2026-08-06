@@ -14,6 +14,36 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+static void mir_begin_all_spilled_fallback_optimizations(void)
+{
+    mir_begin_general_rhs_stack_forwarding();
+    mir_begin_indirect_store_value_forwarding();
+    mir_begin_branch_condition_forwarding();
+    mir_begin_indirect_store_address_forwarding();
+    mir_begin_wide_binary_lhs_forwarding();
+    mir_begin_stable_pointer_argument_rematerialization();
+    mir_begin_global_argument_rematerialization();
+    mir_begin_wide_first_argument_stack_cache();
+    mir_begin_narrow_argument_direct_push();
+    mir_begin_promoted_local_slot_reuse();
+    mir_begin_wide_binary_rhs_forwarding();
+}
+
+static void mir_end_all_spilled_fallback_optimizations(void)
+{
+    mir_end_general_rhs_stack_forwarding();
+    mir_end_indirect_store_value_forwarding();
+    mir_end_branch_condition_forwarding();
+    mir_end_indirect_store_address_forwarding();
+    mir_end_wide_binary_lhs_forwarding();
+    mir_end_stable_pointer_argument_rematerialization();
+    mir_end_global_argument_rematerialization();
+    mir_end_wide_first_argument_stack_cache();
+    mir_end_narrow_argument_direct_push();
+    mir_end_promoted_local_slot_reuse();
+    mir_end_wide_binary_rhs_forwarding();
+}
+
 static int mir_try_emit_general_rollout(FILE *out)
 {
     int i;
@@ -1808,8 +1838,23 @@ void mir_end_function(void)
             int strict_phi_fallthrough_active = 0;
             int block_cse_retry_attempted = 0;
             int boolean_phi_retry_attempted = 0;
+            int rematerialized_home_retry_attempted = 0;
+            int rematerialized_home_allocation_active = 0;
+            int address_rematerialization_retry_attempted = 0;
+            int address_rematerialization_active = 0;
 
 retry_selection:
+            if (address_rematerialization_active) {
+                mir_end_address_rematerialization();
+                mir_end_all_spilled_fallback_optimizations();
+                address_rematerialization_active = 0;
+            }
+            if (rematerialized_home_allocation_active) {
+                mir_end_rematerialized_home_allocation();
+                rematerialized_home_allocation_active = 0;
+            }
+            rematerialized_home_retry_attempted = 0;
+            address_rematerialization_retry_attempted = 0;
             lazy_retry_attempted = 0;
             lazy_allocation_active = 0;
             stable_local_retry_attempted = 0;
@@ -1824,17 +1869,7 @@ retry_selection:
             promoted_local_slot_retry_attempted = 0;
             strict_phi_retry_attempted = 0;
             strict_phi_fallthrough_active = 0;
-            mir_end_general_rhs_stack_forwarding();
-            mir_end_indirect_store_value_forwarding();
-            mir_end_branch_condition_forwarding();
-            mir_end_indirect_store_address_forwarding();
-            mir_end_wide_binary_lhs_forwarding();
-            mir_end_wide_binary_rhs_forwarding();
-            mir_end_stable_pointer_argument_rematerialization();
-            mir_end_global_argument_rematerialization();
-            mir_end_wide_first_argument_stack_cache();
-            mir_end_narrow_argument_direct_push();
-            mir_end_promoted_local_slot_reuse();
+            mir_end_all_spilled_fallback_optimizations();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
@@ -1996,6 +2031,15 @@ evaluate_generated:
                 else if (generated_size < 0 || captured_size < 0 ||
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
+                else if (rematerialized_home_allocation_active &&
+                         generated_instructions >
+                             captured_instructions - 8)
+                    /* Excluding one-use constants from pair coloring exposes
+                     * real homed wins, but the two candidates saving only
+                     * two and seven raw instructions both regressed peep
+                     * execution. Every measured eight-or-more-instruction
+                     * candidate improved both shipping modes. */
+                    fallback_reason = "rematerialized-home-cost";
                 else if (block_cse_retry_attempted &&
                          mir_common_block_expression_elimination_count() > 0 &&
                          (mir_cfg_block_count() != 1 ||
@@ -2957,31 +3001,11 @@ evaluate_generated:
                     wide_binary_rhs_retry_attempted = 1;
                     if (wide_rhs_candidate == NULL)
                         fatal("cannot create MIR wide-RHS candidate stream");
-                    mir_begin_general_rhs_stack_forwarding();
-                    mir_begin_indirect_store_value_forwarding();
-                    mir_begin_branch_condition_forwarding();
-                    mir_begin_indirect_store_address_forwarding();
-                    mir_begin_wide_binary_lhs_forwarding();
-                    mir_begin_stable_pointer_argument_rematerialization();
-                    mir_begin_global_argument_rematerialization();
-                    mir_begin_wide_first_argument_stack_cache();
-                    mir_begin_narrow_argument_direct_push();
-                    mir_begin_promoted_local_slot_reuse();
-                    mir_begin_wide_binary_rhs_forwarding();
+                    mir_begin_all_spilled_fallback_optimizations();
                     label_id = mir_label_base;
                     wide_rhs_emitted = mir_try_selector(
                         wide_rhs_candidate, mir_try_emit_spilled_scalar_cfg);
-                    mir_end_general_rhs_stack_forwarding();
-                    mir_end_indirect_store_value_forwarding();
-                    mir_end_branch_condition_forwarding();
-                    mir_end_indirect_store_address_forwarding();
-                    mir_end_wide_binary_lhs_forwarding();
-                    mir_end_stable_pointer_argument_rematerialization();
-                    mir_end_global_argument_rematerialization();
-                    mir_end_wide_first_argument_stack_cache();
-                    mir_end_narrow_argument_direct_push();
-                    mir_end_promoted_local_slot_reuse();
-                    mir_end_wide_binary_rhs_forwarding();
+                    mir_end_all_spilled_fallback_optimizations();
                     if (wide_rhs_emitted) {
                         fclose(generated);
                         generated = wide_rhs_candidate;
@@ -3033,12 +3057,60 @@ evaluate_generated:
                     mir_end_strict_phi_fallthrough();
                     strict_phi_fallthrough_active = 0;
                 }
+                if (fallback_reason != NULL &&
+                    !rematerialized_home_retry_attempted &&
+                    mir_homed_rematerializable_wide_candidate_count() > 0 &&
+                    !g_speculative_codegen_active) {
+                    FILE *rematerialized_candidate = tmpfile();
+                    int rematerialized_emitted = 0;
+
+                    rematerialized_home_retry_attempted = 1;
+                    if (rematerialized_candidate == NULL)
+                        fatal("cannot create MIR rematerialized-home "
+                              "candidate stream");
+                    if (mir_begin_rematerialized_home_allocation()) {
+                        rematerialized_home_allocation_active = 1;
+                        label_id = mir_label_base;
+                        rematerialized_emitted = mir_try_selector(
+                            rematerialized_candidate,
+                            mir_try_emit_homed_scalar_cfg);
+                    }
+                    if (rematerialized_emitted) {
+                        fclose(generated);
+                        generated = rematerialized_candidate;
+                        rematerialized_candidate = NULL;
+                        selector_name = "homed-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    if (rematerialized_home_allocation_active) {
+                        mir_end_rematerialized_home_allocation();
+                        rematerialized_home_allocation_active = 0;
+                    }
+                    fclose(rematerialized_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    rematerialized_home_allocation_active) {
+                    mir_end_rematerialized_home_allocation();
+                    rematerialized_home_allocation_active = 0;
+                }
                 {
                     const char *forced_accept =
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
                     if (forced_accept != NULL &&
                         !strcmp(forced_accept, mir.name))
                         fallback_reason = NULL;
+                }
+                if (rematerialized_home_allocation_active) {
+                    mir_end_rematerialized_home_allocation();
+                    rematerialized_home_allocation_active = 0;
+                }
+                if (address_rematerialization_active) {
+                    mir_end_address_rematerialization();
+                    mir_end_all_spilled_fallback_optimizations();
+                    address_rematerialization_active = 0;
                 }
                 if (lazy_allocation_active) {
                     mir_end_lazy_parameter_allocation();
@@ -3088,6 +3160,43 @@ evaluate_generated:
                             goto retry_selection;
                         }
                     }
+                }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size")) &&
+                    !address_rematerialization_retry_attempted &&
+                    mir_address_rematerialization_candidate_count() > 0 &&
+                    !g_speculative_codegen_active) {
+                    FILE *address_rematerialized_candidate = tmpfile();
+                    int address_rematerialized_emitted;
+
+                    address_rematerialization_retry_attempted = 1;
+                    if (address_rematerialized_candidate == NULL)
+                        fatal("cannot create MIR address-rematerialized "
+                              "candidate stream");
+                    mir_begin_all_spilled_fallback_optimizations();
+                    mir_begin_address_rematerialization();
+                    address_rematerialization_active = 1;
+                    label_id = mir_label_base;
+                    address_rematerialized_emitted = mir_try_selector(
+                        address_rematerialized_candidate,
+                        mir_try_emit_spilled_scalar_cfg);
+                    if (address_rematerialized_emitted) {
+                        fclose(generated);
+                        generated = address_rematerialized_candidate;
+                        address_rematerialized_candidate = NULL;
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    fclose(address_rematerialized_candidate);
+                }
+                if (address_rematerialization_active) {
+                    mir_end_address_rematerialization();
+                    mir_end_all_spilled_fallback_optimizations();
+                    address_rematerialization_active = 0;
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;

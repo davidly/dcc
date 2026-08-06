@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `58d5b69` (Items T255-T264)
-- Published ordinary coverage: **795/2023 functions (39.30%)**
-- Published stack-check coverage: **815/2125 functions (38.35%)**
+- Published baseline: `e4ac9fe` (Items T265-T274)
+- Published ordinary coverage: **797/2023 functions (39.40%)**
+- Published stack-check coverage: **817/2125 functions (38.45%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -54,6 +54,8 @@ history preserves them.
 - Batch 37 candidate stack-check coverage: **815/2125 functions (38.35%)**
 - Batch 38 candidate ordinary coverage: **797/2023 functions (39.40%)**
 - Batch 38 candidate stack-check coverage: **817/2125 functions (38.45%)**
+- Batch 39 candidate ordinary coverage: **803/2023 functions (39.69%)**
+- Batch 39 candidate stack-check coverage: **823/2125 functions (38.73%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -1100,6 +1102,40 @@ removals. The stack-check census is **817/2125 (38.45%)**, also +2 and zero
 removals. Both add `tesc.test_chained_assign` and
 `tptrinit.array_pointer_offsets`; focused full peep/nopeep validation passes
 with zero regressions and six checked improvements.
+
+## Batch 39
+
+1. T275-T276: audit the final homed-selector population and reject two
+   zero-yield wide-CFG experiments. Pair-aware PHI copies and relaxed
+   multi-block wide-unary selection do not admit any function.
+2. T277-T278: exclude one-use wide constants and string addresses from pair
+   coloring only during a final transactional fallback retry. Existing
+   selected output stays byte-identical. An eight-instruction saving threshold
+   rejects the two measured peep regressors and retains three functions that
+   improve both modes.
+3. T279-T281: reject three allocator variants after measurement: combining
+   lazy parameters with constant rematerialization, rematerializing multi-use
+   wide constants, and coloring constrained wide values first. The first two
+   add nothing; the last removes incumbents and perturbs the census.
+4. T282: classify the 412 remaining `text-size` fallbacks by exact backend
+   slot population and add opt-in occupant diagnostics. One-slot functions
+   repeatedly expose short-lived fixed local/global addresses.
+5. T283-T284: factor fixed-address materialization into one shared emitter,
+   omit one/two-use non-VLA `MIR_ADDRESS` values from backend slots, and
+   rematerialize them at each use. Run this only after every established retry
+   and MIR transformation has selected legacy fallback, preventing the
+   incumbent size regression seen with the earlier ordering.
+
+The candidate ordinary census is **803/2023 (39.69%)**, +6 names over Batch
+38 and zero removals. The stack-check census is **823/2125 (38.73%)**, also +6
+and zero removals. Both add `tpostptr.test_16`, `tpostptr.test_u8`,
+`tpromo.test_demotions_after_operations`, `attnc11.zero_gradients`,
+`tcrcfix.call_cleanup_caller`, and `tginitad.main`.
+
+All five affected apps pass focused full peep/nopeep validation with zero
+regressions. The wide-home group produces eight checked improvements; the
+address-rematerialization group produces seven. ASan/UBSan compilation of all
+five affected apps is clean.
 
 ## Required process
 

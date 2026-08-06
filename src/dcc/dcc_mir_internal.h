@@ -387,12 +387,17 @@ int mir_phi_source_for_edge(const struct MirInsn *phi,
                                    int successor, int phi_instruction);
 int mir_begin_lazy_parameter_allocation(void);
 void mir_end_lazy_parameter_allocation(void);
+int mir_begin_rematerialized_home_allocation(void);
+void mir_end_rematerialized_home_allocation(void);
+int mir_rematerialized_home_allocation_is_active(void);
 int mir_has_lazy_parameters(void);
 int mir_is_lazy_parameter(int value);
 int mir_lazy_parameter_count(void);
 int mir_lazy_byte_parameter_count(void);
 int mir_lazy_parameter_offset(int value, int *offset, int *type);
-int mir_probe_wide_colors_for_homed(void);
+int mir_probe_wide_colors_for_homed(
+    const unsigned char *rematerializable);
+int mir_homed_rematerializable_wide_candidate_count(void);
 void mir_resolve_deferred_metadata(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
@@ -435,6 +440,9 @@ int mir_spilled_cfg_depends_on_branch_condition_forwarding(void);
 int mir_spilled_cfg_branch_condition_forwarding_uses(void);
 void mir_begin_branch_condition_forwarding(void);
 void mir_end_branch_condition_forwarding(void);
+void mir_begin_address_rematerialization(void);
+void mir_end_address_rematerialization(void);
+int mir_address_rematerialization_candidate_count(void);
 int mir_spilled_cfg_depends_on_indirect_store_address_forwarding(void);
 int mir_spilled_cfg_indirect_store_address_forwarding_uses(void);
 void mir_begin_indirect_store_address_forwarding(void);

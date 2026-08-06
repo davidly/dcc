@@ -57,6 +57,10 @@ int mir_cached_wide_call_instruction = -1;
 static int *mir_lazy_saved_colors;
 static int *mir_lazy_saved_spills;
 static int mir_lazy_saved_spill_count;
+static int *mir_rematerialized_saved_colors;
+static int *mir_rematerialized_saved_spills;
+static int mir_rematerialized_saved_spill_count;
+static int mir_rematerialized_home_allocation_active;
 static int mir_lazy_allocation_active;
 
 static int mir_inline_substitutable(const struct Sym *symbol)
@@ -5082,7 +5086,8 @@ static int mir_color_shares_slot(int left, int right)
 static void mir_allocate_registers(const unsigned char *live_in,
                                    const unsigned char *live_out,
                                    struct MirAllocationSummary *summary,
-                                   int allow_wide_colors)
+                                   int allow_wide_colors,
+                                   const unsigned char *rematerializable)
 {
     int value_count = mir.next_value;
     unsigned char *interference;
@@ -5218,7 +5223,8 @@ static void mir_allocate_registers(const unsigned char *live_in,
         int last_color;
         int chosen;
 
-        if (mir_is_lazy_parameter(value))
+        if (mir_is_lazy_parameter(value) ||
+            (rematerializable != NULL && rematerializable[value]))
             continue;
         if (allow_wide_colors) {
             const struct MirInsn *definition = mir_definition(value);
@@ -5485,7 +5491,7 @@ int mir_begin_lazy_parameter_allocation(void)
            (size_t)value_count * sizeof(*mir_lazy_saved_spills));
     mir_lazy_saved_spill_count = mir.allocation_spill_count;
     mir_lazy_allocation_active = 1;
-    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 0);
+    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 0, NULL);
     return 1;
 }
 
@@ -5508,6 +5514,51 @@ void mir_end_lazy_parameter_allocation(void)
     mir_lazy_saved_spills = NULL;
 }
 
+int mir_begin_rematerialized_home_allocation(void)
+{
+    int value_count = mir.next_value;
+
+    if (mir_rematerialized_home_allocation_active || value_count == 0)
+        return 0;
+    mir_rematerialized_saved_colors = (int *)malloc(
+        (size_t)value_count * sizeof(*mir_rematerialized_saved_colors));
+    mir_rematerialized_saved_spills = (int *)malloc(
+        (size_t)value_count * sizeof(*mir_rematerialized_saved_spills));
+    if (mir_rematerialized_saved_colors == NULL ||
+        mir_rematerialized_saved_spills == NULL)
+        fatal("out of memory saving rematerialized MIR allocation");
+    memcpy(mir_rematerialized_saved_colors, mir.allocation_colors,
+           (size_t)value_count * sizeof(*mir_rematerialized_saved_colors));
+    memcpy(mir_rematerialized_saved_spills, mir.allocation_spills,
+           (size_t)value_count * sizeof(*mir_rematerialized_saved_spills));
+    mir_rematerialized_saved_spill_count = mir.allocation_spill_count;
+    mir_rematerialized_home_allocation_active = 1;
+    return 1;
+}
+
+void mir_end_rematerialized_home_allocation(void)
+{
+    int value_count = mir.next_value;
+
+    if (!mir_rematerialized_home_allocation_active)
+        return;
+    memcpy(mir.allocation_colors, mir_rematerialized_saved_colors,
+           (size_t)value_count * sizeof(*mir_rematerialized_saved_colors));
+    memcpy(mir.allocation_spills, mir_rematerialized_saved_spills,
+           (size_t)value_count * sizeof(*mir_rematerialized_saved_spills));
+    mir.allocation_spill_count = mir_rematerialized_saved_spill_count;
+    mir_rematerialized_home_allocation_active = 0;
+    free(mir_rematerialized_saved_colors);
+    free(mir_rematerialized_saved_spills);
+    mir_rematerialized_saved_colors = NULL;
+    mir_rematerialized_saved_spills = NULL;
+}
+
+int mir_rematerialized_home_allocation_is_active(void)
+{
+    return mir_rematerialized_home_allocation_active;
+}
+
 /* Item 20d (mir-migration-plan-to-100pct.md): permanent (non-disposable)
  * wide-coloring probe for mir_try_emit_homed_scalar_cfg. Re-runs the
  * shared allocator with allow_wide_colors=1 using the persisted
@@ -5524,7 +5575,8 @@ void mir_end_lazy_parameter_allocation(void)
  * dispatch order) - so a failed or unused probe must restore the
  * original width-blind coloring exactly, not leave the wide attempt's
  * side effects behind. */
-int mir_probe_wide_colors_for_homed(void)
+int mir_probe_wide_colors_for_homed(
+    const unsigned char *rematerializable)
 {
     int value_count = mir.next_value;
     int *saved_colors;
@@ -5551,7 +5603,8 @@ int mir_probe_wide_colors_for_homed(void)
            (size_t)value_count * sizeof(*saved_spills));
     saved_spill_count = mir.allocation_spill_count;
 
-    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1);
+    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1,
+                           rematerializable);
 
     for (value = 0; value < value_count; ++value)
         if (mir.allocation_spills[value] >= 0) {
@@ -5737,7 +5790,7 @@ int mir_verify_and_dump(void)
         }
     } while (changed);
 
-    mir_allocate_registers(live_in, live_out, &allocation, 0);
+    mir_allocate_registers(live_in, live_out, &allocation, 0, NULL);
 
     if (getenv("DCC_MIR_ALLOCATION_REPORT") != NULL)
         fprintf(stderr,

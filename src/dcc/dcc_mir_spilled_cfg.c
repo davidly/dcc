@@ -44,6 +44,7 @@ static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
+static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
@@ -56,6 +57,7 @@ static int mir_spilled_cfg_used_planned_index_base_handoff;
 static int mir_spilled_cfg_used_stable_pointer_local_home;
 static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
+static int mir_address_rematerialization_enabled;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
 static int mir_spilled_cfg_branch_condition_forwarding_count;
 static int mir_spilled_cfg_indirect_store_address_forwarding_count;
@@ -103,6 +105,38 @@ static int mir_virtual_offset(int value)
         return mir_backend_slot_offsets[slot];
     return -mir_effective_local_bytes() - mir.aggregate_temp_bytes -
            2 * (slot + 1);
+}
+
+static int mir_emit_address_to_hl(FILE *out, const struct MirInsn *insn)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    struct Sym *global = find_global(insn->name);
+
+    if (!mir_scalar_memory_location(insn, &memory_type,
+                                    &memory_storage, &memory_offset))
+        return 0;
+    if ((global != NULL && global->storage == SC_FUNC) ||
+        memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
+        memory_storage == SC_FUNC) {
+        const char *assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(insn->name));
+        if ((memory_storage == SC_EXTERN ||
+             (global != NULL && global->storage == SC_FUNC &&
+              global->needs_extrn)) &&
+            mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        fprintf(out, "\tld hl,%s\n", assembly_name);
+    } else if (mir_declared_is_vla_object(insn->name)) {
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                memory_offset, memory_offset + 1);
+    } else {
+        fputs("\tpush ix\n\tpop hl\n", out);
+        mir_emit_hl_offset_from_ix(out, memory_offset);
+    }
+    return 1;
 }
 
 static int mir_virtual_iy_offset(int value)
@@ -752,6 +786,50 @@ static int mir_wide_constant_is_rematerializable(int value)
             definition->opcode == MIR_FLOAT_CONST) &&
            type_size(definition->type) == 4 &&
            mir_cfg_block_count() == 1;
+}
+
+void mir_begin_address_rematerialization(void)
+{
+    mir_address_rematerialization_enabled = 1;
+}
+
+void mir_end_address_rematerialization(void)
+{
+    mir_address_rematerialization_enabled = 0;
+}
+
+static int mir_address_is_rematerializable_candidate(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int uses;
+
+    if (definition == NULL || definition->opcode != MIR_ADDRESS ||
+        mir_declared_is_vla_object(definition->name) ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset))
+        return 0;
+    uses = mir_value_use_count(value);
+    return uses > 0 && uses <= 2;
+}
+
+static int mir_address_is_rematerializable(int value)
+{
+    return mir_address_rematerialization_enabled &&
+           mir_address_is_rematerializable_candidate(value);
+}
+
+int mir_address_rematerialization_candidate_count(void)
+{
+    int count = 0;
+    int value;
+
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir_address_is_rematerializable_candidate(value))
+            ++count;
+    return count;
 }
 
 /* Evaluates a scalar binary arithmetic/bitwise/shift operation over two
@@ -3551,6 +3629,7 @@ static int mir_prepare_backend_slots(void)
                                             value) ||
                                         mir_wide_constant_is_rematerializable(
                                             value) ||
+                                        mir_address_is_rematerializable(value) ||
                                         mir_call_only_constant(value) ||
                                         mir_binary_only_constant(value) ||
                                         mir_index_only_constant(value) ||
@@ -3744,6 +3823,21 @@ static int mir_prepare_backend_slots(void)
                         &mir.insns[consumer]),
                     mir.backend_slots[value], mir.backend_slot_count);
         }
+    if (getenv("DCC_MIR_BACKEND_SLOT_REPORT") != NULL)
+        for (value = 0; value < mir.next_value; ++value)
+            if (mir.backend_slots[value] >= mir_backend_local_slot_count) {
+                const struct MirInsn *definition = mir_definition(value);
+
+                fprintf(stderr,
+                        "; MIR backend-slot function=%s value=%d opcode=%s "
+                        "type=%d first=%d last=%d slot=%d uses=%d\n",
+                        mir.name, value,
+                        definition != NULL
+                            ? mir_opcode_name(definition->opcode) : "none",
+                        definition != NULL ? definition->type : 0,
+                        first[value], last[value], mir.backend_slots[value],
+                        mir_value_use_count(value));
+            }
     free(fused_away);
     free(stack_interval_occupied);
     free(slot_end);
@@ -3785,6 +3879,11 @@ void mir_emit_virtual_load(FILE *out, int value)
     }
     if (mir_string_address_is_rematerializable(value)) {
         fprintf(out, "\tld hl,S%ld\n", definition->immediate);
+        return;
+    }
+    if (mir_address_is_rematerializable(value)) {
+        if (!mir_emit_address_to_hl(out, definition))
+            fatal("cannot rematerialize MIR address");
         return;
     }
     if (mir_value_has_direct_named_home(value)) {
@@ -6522,33 +6621,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
                 break;
+            if (mir_address_is_rematerializable(insn->dst))
+                break;
             {
-            int memory_type;
-            int memory_storage;
-            int memory_offset;
-            struct Sym *global = find_global(insn->name);
-            if (!mir_scalar_memory_location(insn, &memory_type,
-                                            &memory_storage, &memory_offset))
+            if (!mir_emit_address_to_hl(out, insn))
                 goto done;
-            if ((global != NULL && global->storage == SC_FUNC) ||
-                memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
-                memory_storage == SC_FUNC) {
-                const char *assembly_name = asm_name_for(
-                    global != NULL ? sym_asm_name(global)
-                                   : mir_declared_link_name(insn->name));
-                if ((memory_storage == SC_EXTERN ||
-                     (global != NULL && global->storage == SC_FUNC &&
-                      global->needs_extrn)) &&
-                    mir_extrn_should_emit(global))
-                    fprintf(out, "\textrn %s\n", assembly_name);
-                fprintf(out, "\tld hl,%s\n", assembly_name);
-            } else if (mir_declared_is_vla_object(insn->name)) {
-                fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                        memory_offset, memory_offset + 1);
-            } else {
-                fputs("\tpush ix\n\tpop hl\n", out);
-                mir_emit_hl_offset_from_ix(out, memory_offset);
-            }
             mir_emit_virtual_store(out, insn->dst);
             break;
             }
