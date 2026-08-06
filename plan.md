@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `27a4549` (Items T235-T244)
-- Published ordinary coverage: **776/2023 functions (38.36%)**
-- Published stack-check coverage: **793/2125 functions (37.32%)**
+- Published baseline: `ca05f5a` (Items T245-T254)
+- Published ordinary coverage: **779/2023 functions (38.51%)**
+- Published stack-check coverage: **798/2125 functions (37.55%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -50,6 +50,8 @@ history preserves them.
 - Batch 35 candidate stack-check coverage: **793/2125 functions (37.32%)**
 - Batch 36 candidate ordinary coverage: **779/2023 functions (38.51%)**
 - Batch 36 candidate stack-check coverage: **798/2125 functions (37.55%)**
+- Batch 37 candidate ordinary coverage: **795/2023 functions (39.30%)**
+- Batch 37 candidate stack-check coverage: **815/2125 functions (38.35%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -1040,6 +1042,35 @@ The candidate stack-check census is **798/2125 (37.55%)**, +5 names and zero
 removals; it additionally adds `tptrcnd.pickn` and `tptrrhs.pickn`. Eleven
 affected apps pass full peep/nopeep validation with zero regressions and 29
 checked improvements. ASan/UBSan compilation of all affected apps is clean.
+
+## Batch 37
+
+1. T255-T258: improve wide rejection diagnostics, remove duplicated narrow
+   validation after a wide binary is already approved, and reject two
+   zero-yield or regressing prototypes: multiblock integer casts and ordinary
+   byte indirect access.
+2. T259-T260: classify wide-color failures by narrow/wide spill count and
+   spilled definition opcode. Allowing bounded narrow spills alongside wide
+   pair colors changes no selection and is removed. One-wide-spill failures
+   are dominated by parameters, constants, unary results, and indirect loads.
+3. T261-T263: extend the existing read-only, one-use lazy-parameter proof to
+   four-byte long and float parameters. Load wide values from stable IX
+   offsets only at their consumer. Push stack operands directly through the
+   alternate BC set so materializing a lazy left operand cannot overwrite a
+   live right operand in DE:HL.
+4. T264: make direct truth branches type-driven for lazy four-byte values.
+   Long truth tests OR all four bytes; float tests mask the sign bit first so
+   both positive and negative zero are false. Share the narrow/wide truth-jump
+   helper and retain one PHI/edge-copy sequence.
+
+The candidate ordinary census is **795/2023 (39.30%)**, +16 names over Batch
+36 and zero removals. The candidate stack-check census is **815/2125
+(38.35%)**, +17 names and zero removals; it additionally adds
+`tfmadd.global_case`.
+
+Nine affected apps pass focused full peep/nopeep validation with zero
+regressions and 19 checked improvements. ASan/UBSan compilation of all
+affected apps is clean.
 
 ## Required process
 

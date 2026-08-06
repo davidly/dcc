@@ -767,6 +767,42 @@ static int mir_emit_lazy_parameter_to_color(FILE *out, int value, int color)
     return 1;
 }
 
+static int mir_emit_lazy_wide_parameter_to_hl_de(FILE *out, int value)
+{
+    int offset;
+    int type;
+
+    if (!mir_lazy_parameter_offset(value, &offset, &type) ||
+        type_size(type) != 4)
+        return 0;
+    if (mir_home_uses_iy())
+        offset += 2;
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+    return 1;
+}
+
+static int mir_emit_lazy_wide_parameter_to_stack(FILE *out, int value)
+{
+    int offset;
+    int type;
+
+    if (!mir_lazy_parameter_offset(value, &offset, &type) ||
+        type_size(type) != 4)
+        return 0;
+    if (mir_home_uses_iy())
+        offset += 2;
+    fputs("\texx\n", out);
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n\tpush bc\n"
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n\tpush bc\n",
+            offset + 2, offset + 3, offset, offset + 1);
+    fputs("\texx\n", out);
+    return 1;
+}
+
 int mir_emit_home_to_hl(FILE *out, int value)
 {
     int offset;
@@ -831,6 +867,8 @@ int mir_emit_hl_to_home(FILE *out, int value)
  * one representation and cannot drift independently. */
 int mir_emit_wide_home_to_hl_de(FILE *out, int value)
 {
+    if (mir_is_lazy_parameter(value))
+        return mir_emit_lazy_wide_parameter_to_hl_de(out, value);
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL_DE: return 1;
     case MIR_COLOR_BC_IY:
@@ -853,6 +891,8 @@ int mir_emit_hl_de_to_wide_home(FILE *out, int value)
 
 int mir_emit_wide_home_to_stack(FILE *out, int value)
 {
+    if (mir_is_lazy_parameter(value))
+        return mir_emit_lazy_wide_parameter_to_stack(out, value);
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL_DE:
         fputs("\tpush de\n\tpush hl\n", out);

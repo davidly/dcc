@@ -228,6 +228,38 @@ static int mir_emit_homed_wide_comparison_instruction(
     return 1;
 }
 
+static int mir_emit_homed_truth_jump(FILE *out, int value, int instruction,
+                                     int true_label)
+{
+    const struct MirInsn *condition = mir_definition(value);
+
+    if (condition != NULL && type_size(condition->type) == 4) {
+        int preserve_hl_de = mir_home_color_live_across(
+            instruction, MIR_COLOR_HL_DE);
+        if (preserve_hl_de)
+            fputs("\tpush de\n\tpush hl\n", out);
+        if (!mir_emit_wide_home_to_hl_de(out, value))
+            return 0;
+        fputs("\tld a,d\n", out);
+        if (type_is_float(condition->type))
+            fputs("\tand 7fh\n", out);
+        fputs("\tor e\n\tor h\n\tor l\n", out);
+        if (preserve_hl_de)
+            fputs("\tpop hl\n\tpop de\n", out);
+    } else {
+        int preserve_hl = mir.allocation_colors[value] != MIR_COLOR_HL;
+        if (preserve_hl)
+            fputs("\tpush hl\n", out);
+        if (!mir_emit_home_to_hl(out, value))
+            return 0;
+        fputs("\tld a,h\n\tor l\n", out);
+        if (preserve_hl)
+            fputs("\tpop hl\n", out);
+    }
+    fprintf(out, "\tjp nz, L%d\n", true_label);
+    return 1;
+}
+
 static int mir_homed_reject(const char *reason)
 {
     if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
@@ -972,8 +1004,15 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                          insn->immediate == '-' ||
                          insn->immediate == '~')) &&
                       !(source_wide && !target_wide &&
-                        insn->immediate == '!'))))
+                        insn->immediate == '!')))) {
+                    if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
+                        fprintf(stderr,
+                                "; MIR homed-wide-unary function=%s op=%ld "
+                                "source-type=%d target-type=%d blocks=%d\n",
+                                mir.name, insn->immediate, source_type,
+                                insn->type, mir_cfg_block_count());
                     return mir_homed_reject("wide-unary");
+                }
                 if (source_wide || target_wide)
                     has_wide = 1;
             }
@@ -986,6 +1025,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             {
                 int operation;
                 long count;
+            /* Wide operations were fully validated by
+             * mir_homed_wide_binary_supported() in the value pass above.
+             * The remaining whitelist and constant-strength checks describe
+             * only the narrow emitter. */
+            if (type_size(insn->secondary_offset) > 2)
+                break;
             if (insn->immediate != '+' && insn->immediate != '-' &&
                 insn->immediate != '&' && insn->immediate != '|' &&
                 insn->immediate != '^' && insn->immediate != TOK_EQ &&
@@ -1767,15 +1812,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 }
             }
             true_label = new_label();
-            preserve_hl = mir.allocation_colors[insn->src1] != MIR_COLOR_HL;
-            if (preserve_hl)
-                fputs("\tpush hl\n", out);
-            if (!mir_emit_home_to_hl(out, insn->src1))
+            if (!mir_emit_homed_truth_jump(
+                    out, insn->src1, i, true_label))
                 goto done;
-            fputs("\tld a,h\n\tor l\n", out);
-            if (preserve_hl)
-                fputs("\tpop hl\n", out);
-            fprintf(out, "\tjp nz, L%d\n", true_label);
             if (!mir_emit_homed_phi_copies(out, i, target))
                 goto done;
             fprintf(out, "\tjp L%d\nL%d:\n", labels[insn->label], true_label);

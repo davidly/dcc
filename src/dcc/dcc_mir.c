@@ -5273,13 +5273,13 @@ static int mir_lazy_parameter_eligible(const struct MirInsn *parameter)
     if (parameter->opcode != MIR_PARAM || parameter->dst < 0 ||
         parameter->object < 0 || parameter->object >= mir.object_count ||
         mir.has_vla || type_ptr_depth(parameter->type) != 0 ||
-        type_size(parameter->type) < 1 || type_size(parameter->type) > 2 ||
+        type_size(parameter->type) < 1 || type_size(parameter->type) > 4 ||
         type_is_struct_object(parameter->type) ||
         mir_lazy_parameter_semantic_use_count(parameter->dst) != 1)
         return 0;
     object = &mir.objects[parameter->object];
     if (object->storage != SC_PARAM || type_ptr_depth(object->type) != 0 ||
-        type_size(object->type) < 1 || type_size(object->type) > 2 ||
+        type_size(object->type) < 1 || type_size(object->type) > 4 ||
         type_is_struct_object(object->type))
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction)
@@ -5436,7 +5436,10 @@ int mir_probe_wide_colors_for_homed(void)
     int *saved_spills;
     int saved_spill_count;
     struct MirAllocationSummary summary;
+    int narrow_spills = 0;
+    int wide_spills = 0;
     int ok;
+    int value;
 
     if (mir.live_in == NULL || mir.live_out == NULL || value_count == 0)
         return 0;
@@ -5455,7 +5458,34 @@ int mir_probe_wide_colors_for_homed(void)
 
     mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1);
 
+    for (value = 0; value < value_count; ++value)
+        if (mir.allocation_spills[value] >= 0) {
+            const struct MirInsn *definition = mir_definition(value);
+            if (definition != NULL && type_size(definition->type) <= 2)
+                ++narrow_spills;
+            else
+                ++wide_spills;
+        }
     ok = summary.spills == 0;
+    if (!ok && getenv("DCC_MIR_HOMED_REPORT") != NULL)
+    {
+        fprintf(stderr,
+                "; MIR homed-wide-color function=%s narrow-spills=%d "
+                "wide-spills=%d\n",
+                mir.name, narrow_spills, wide_spills);
+        for (value = 0; value < value_count; ++value)
+            if (mir.allocation_spills[value] >= 0) {
+                const struct MirInsn *definition = mir_definition(value);
+                fprintf(stderr,
+                        "; MIR homed-wide-color-spill function=%s value=%d "
+                        "opcode=%s type=%d spill=%d\n",
+                        mir.name, value,
+                        definition != NULL
+                            ? mir_opcode_name(definition->opcode) : "none",
+                        definition != NULL ? definition->type : 0,
+                        mir.allocation_spills[value]);
+            }
+    }
     if (!ok) {
         memcpy(mir.allocation_colors, saved_colors,
                (size_t)value_count * sizeof(*saved_colors));

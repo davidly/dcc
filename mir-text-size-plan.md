@@ -10682,3 +10682,66 @@ The next population-first target is a bounded subset of the 89 homed
 type classes. Repeated-comparison admission and `cfg-backedge` remain semantic
 boundaries with known miscompilations and must not be treated as coverage
 shortcuts.
+
+## Items T255-T264: lazy one-use wide parameters (2026-08-09)
+
+T255 adds detailed wide-unary rejection reporting and audits the homed
+selector's wide operation policy. Wide binaries were approved once by
+`mir_homed_wide_binary_supported()` and then incorrectly passed through the
+narrow opcode whitelist. Removing that duplicated policy changes no selected
+output, but reduces direct-audit `binary-op` rejects from 45 to 10 and exposes
+the actual later blockers.
+
+T256-T258 profile the resulting wide population and reject two broad
+experiments. Relaxing the single-block rule for integer casts changes no
+selection. Homed signed, unsigned, and boolean byte indirect access changes 12
+selector paths but admits no function and regresses `tpeepal` peep execution
+by nine cycles, so the complete prototype is removed.
+
+T259 records the final wide allocator's narrow/wide spill counts and the
+opcode and type of each spilled value. Of 126 direct-audit wide-color
+failures, 64 have exactly one wide spill and no narrow spill. Parameters,
+constants, unary results, and indirect loads dominate this one-spill
+population. T260 allows bounded narrow spills alongside wide colors, measures
+zero selection changes, and removes the prototype.
+
+T261 extends the established lazy-parameter proof from one/two-byte values to
+four-byte long and float parameters. Eligibility remains read-only, one-use,
+non-VLA, non-pointer, and non-aggregate; wide values simply avoid consuming a
+long-lived pair home. T262 adds shared loaders from stable IX-relative
+parameter storage into DE:HL and directly onto the expression stack.
+
+T263 fixes an ordering defect exposed by the first implementation. Loading a
+lazy wide left operand through DE:HL can overwrite a live right operand
+already homed there. Wide stack operands now push their high and low words
+directly from IX-relative storage through alternate BC under `exx`, preserving
+both active pair homes.
+
+T264 fixes a latent direct-branch defect exposed by uncolored lazy values.
+Allocation color cannot determine width because lazy values deliberately have
+no home. Truth testing now uses the definition type: long conditions OR all
+four bytes, while float conditions mask the sign bit before ORing so `+0.0f`
+and `-0.0f` are both false. One shared helper emits narrow and wide truth
+jumps; PHI and edge copies remain in one common sequence.
+
+**Census and focused validation**:
+
+- ordinary: **795/2023 (39.30%)**, +16 names and zero removals;
+- stack-check: **815/2125 (38.35%)**, +17 names and zero removals;
+- ordinary additions: `tctxflt.truth_call`, `tctxflt.truth_tern`,
+  `tctxops.sh_shl`, `tctxops.sh_shr`, `tctxops.sh_ushr`, `tfloat4.add_if`,
+  `tfloat4.add_lf`, `tfloat4.add_uf`, `tfloat4.add_ul_f`,
+  `tinlinfb.add_long`, `tlngcond.choose_int`, `tlngcond.choose_void`,
+  `tlngfptr.mixed`, `tlongopt.co_add`, `tlongopt.co_or`, and
+  `tlongopt.co_xor`;
+- stack-check additionally adds `tfmadd.global_case`;
+- all nine affected apps pass focused full peep/nopeep validation with zero
+  regressions and 19 checked improvements;
+- ASan/UBSan compilation of all nine affected apps is clean.
+
+The next impact-ranked work should optimize the dominant 452
+`spilled-scalar-cfg` text-size fallbacks rather than relaxing already-profiled
+cost gates. The 184 `boolean-phi-cost` and 106 `dynamic-index-base-cost`
+populations contain measured peep regressors; they require emitter improvement,
+not broader admission. Generic wide spills also remain deferred until the
+four-byte slot representation and use costs are modeled explicitly.
