@@ -1759,6 +1759,7 @@ void mir_end_function(void)
             int strict_phi_fallthrough_active = 0;
             mir_end_general_rhs_stack_forwarding();
             mir_end_indirect_store_value_forwarding();
+            mir_end_branch_condition_forwarding();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
@@ -2240,6 +2241,22 @@ evaluate_generated:
                      * still cannot price interactions across a larger
                      * indirect-update body. */
                     fallback_reason = "indirect-store-stack-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_branch_condition_forwarding() &&
+                         (mir_cfg_block_count() > 2 ||
+                          captured_instructions > 100 ||
+                          mir_spilled_cfg_branch_condition_forwarding_uses()
+                              > 1))
+                    /* Direct condition forwarding is consistently
+                     * profitable for the measured two-block if/exit
+                     * helpers. The first larger-CFG candidate regressed
+                     * peep execution despite an eleven-instruction win. A
+                     * second full-corpus gate exposed the same problem in
+                     * a 490-instruction two-block body. Keep the measured
+                     * one-handoff helpers at no more than 100 legacy
+                     * instructions while this local saving cannot price
+                     * either larger interaction. */
+                    fallback_reason = "branch-condition-cost";
                 else if (!strcmp(selector_name, "homed-scalar-cfg") &&
                          mir_homed_cfg_depends_on_dynamic_index() &&
                          generated_instructions >= captured_instructions)
@@ -2511,11 +2528,13 @@ evaluate_generated:
                               "stream");
                     mir_begin_general_rhs_stack_forwarding();
                     mir_begin_indirect_store_value_forwarding();
+                    mir_begin_branch_condition_forwarding();
                     label_id = mir_label_base;
                     rhs_emitted = mir_try_selector(
                         rhs_candidate, mir_try_emit_spilled_scalar_cfg);
                     mir_end_general_rhs_stack_forwarding();
                     mir_end_indirect_store_value_forwarding();
+                    mir_end_branch_condition_forwarding();
                     if (rhs_emitted) {
                         fclose(generated);
                         generated = rhs_candidate;

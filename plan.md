@@ -34,6 +34,8 @@ history preserves them.
 - Batch 27 candidate stack-check coverage: **754/2124 functions (35.50%)**
 - Batch 28 candidate ordinary coverage: **741/2022 functions (36.65%)**
 - Batch 28 candidate stack-check coverage: **756/2124 functions (35.59%)**
+- Batch 29 candidate ordinary coverage: **744/2022 functions (36.80%)**
+- Batch 29 candidate stack-check coverage: **759/2124 functions (35.73%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -103,6 +105,27 @@ The ordinary census is **741/2022 (36.65%)**, +2 names and zero removals.
 The stack-check census is **756/2124 (35.59%)**, also +2 and zero removals.
 Both add `tbfinit.check` and `tnarrow.narwchain`; focused full peep/nopeep
 validation passes with zero regressions and two checked improvements.
+
+## Batch 29
+
+1. T209: audit the 260 one-use branch-condition slots. Of 258 adjacent
+   conditions, 256 are narrow; the shared immediate-forwarding whitelist
+   omitted `MIR_BRANCH_FALSE`.
+2. T210: add branch-condition forwarding only when the false edge needs no
+   phi copies. A global prototype changes 130 apps and displaces two existing
+   MIR selections, so production keeps it in the fallback-only fresh retry.
+3. T211: profile four newly admitted candidates. The three two-block helpers
+   improve or preserve both modes; the eleven-block candidate regresses peep
+   execution despite a static instruction win. The mandatory gate also catches
+   a 490-instruction two-block retry that regresses nopeep execution. Structural
+   block-count, handoff-count, and 100-instruction caps retain the measured
+   small-helper class.
+
+The ordinary census is **744/2022 (36.80%)**, +3 names and zero removals.
+The stack-check census is **759/2124 (35.73%)**, also +3 and zero removals.
+Both add `a1.usage`, `adaint.acc_word`, and `bint.die`; focused full
+peep/nopeep validation passes with zero regressions and nine checked
+improvements.
 
 ## Batch 2
 

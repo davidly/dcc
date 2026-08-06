@@ -57,10 +57,12 @@ static int mir_spilled_cfg_used_stable_pointer_local_home;
 static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
+static int mir_spilled_cfg_branch_condition_forwarding_count;
 static int mir_planned_stack_handoffs_enabled;
 static int mir_stable_pointer_local_homes_enabled;
 static int mir_general_rhs_stack_forwarding_enabled;
 static int mir_indirect_store_value_forwarding_enabled;
+static int mir_branch_condition_forwarding_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -280,6 +282,13 @@ static int mir_is_indirect_store_value_stack_forward(int value, int consumer)
            store->memory_size <= 2;
 }
 
+static int mir_is_branch_condition_forward(int value, int consumer)
+{
+    return consumer >= 0 && consumer < mir.count &&
+           mir.insns[consumer].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[consumer].src1 == value;
+}
+
 /* Item T40 (mir-text-size-plan.md): the wide (32-bit, HL:DE) analog of
  * mir_can_forward_hl_to_next below. Items 1-32 built a rich forwarding
  * predicate for 16-bit scalar values (this function plus its
@@ -434,6 +443,23 @@ static int mir_can_forward_hl_to_next(int value)
     switch (next->opcode) {
     case MIR_INDEX_ADDRESS:
     case MIR_MEMBER_ADDRESS: case MIR_LOAD_INDIRECT: case MIR_UNARY:
+        break;
+    case MIR_BRANCH_FALSE:
+        {
+            int target;
+            int first_phi;
+            if (!mir_branch_condition_forwarding_enabled)
+                return 0;
+            if (next->label < 0 || next->label >= mir.next_label)
+                return 0;
+            target = mir_find_label(next->label);
+            if (target < 0)
+                return 0;
+            first_phi = mir_first_phi_or_block_end(target);
+            if (first_phi < mir.count &&
+                mir.insns[first_phi].opcode == MIR_PHI)
+                return 0;
+        }
         break;
     case MIR_BINARY:
         if (type_size(next->secondary_offset) == 4)
@@ -2626,6 +2652,16 @@ void mir_end_indirect_store_value_forwarding(void)
     mir_indirect_store_value_forwarding_enabled = 0;
 }
 
+void mir_begin_branch_condition_forwarding(void)
+{
+    mir_branch_condition_forwarding_enabled = 1;
+}
+
+void mir_end_branch_condition_forwarding(void)
+{
+    mir_branch_condition_forwarding_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -3587,6 +3623,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
         if (mir_can_forward_hl_to_next(value)) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
+            if (mir_is_branch_condition_forward(value, forward_instruction))
+                ++mir_spilled_cfg_branch_condition_forwarding_count;
         } else if (mir_can_forward_hl_to_call_argument(value)) {
             /* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots'
              * reservation pass now also skips allocating a slot for values
@@ -3634,6 +3672,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
     if (!forward_to_store && mir_can_forward_hl_to_next(value)) {
         mir_forwarded_hl_value = value;
         mir_forwarded_hl_instruction = forward_instruction - 1;
+        if (mir_is_branch_condition_forward(value, forward_instruction))
+            ++mir_spilled_cfg_branch_condition_forwarding_count;
         return;
     }
     if (mir_can_forward_hl_to_call_argument(value)) {
@@ -5452,6 +5492,16 @@ int mir_spilled_cfg_indirect_store_value_forwarding_uses(void)
     return mir_spilled_cfg_indirect_store_value_forwarding_count;
 }
 
+int mir_spilled_cfg_depends_on_branch_condition_forwarding(void)
+{
+    return mir_spilled_cfg_branch_condition_forwarding_count != 0;
+}
+
+int mir_spilled_cfg_branch_condition_forwarding_uses(void)
+{
+    return mir_spilled_cfg_branch_condition_forwarding_count;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -5475,6 +5525,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_stable_pointer_local_slot = 0;
     mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
+    mir_spilled_cfg_branch_condition_forwarding_count = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;

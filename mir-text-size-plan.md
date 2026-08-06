@@ -10253,3 +10253,54 @@ and nonadjacent store operands. Any prototype must first prove stack ordering
 against the value-side handoff and planned-stack consumers, then remain
 fallback-only until whole-corpus profiling demonstrates that incumbent output
 is not perturbed.
+
+## Items T209-T211: transactional branch-condition forwarding (2026-08-06)
+
+T209 audits the next adjacent one-use class. There are 260 branch-condition
+slots in current `text-size` fallbacks; 258 feed the immediately following
+`MIR_BRANCH_FALSE`, and 256 are narrow. The common
+`mir_can_forward_hl_to_next` whitelist already handles unary, binary, return,
+load-indirect, index/member-address, and named-store consumers, but omitted
+false branches. This forces the freshly computed condition through a backend
+slot before immediately reloading it into HL for the zero test.
+
+T210 adds the missing consumer only when its false edge has no phi. The branch
+emitter probes and captures phi-copy text before loading the condition, so
+excluding phi edges avoids overlapping the condition handoff with stateful
+edge-copy emission. Phi-produced conditions remain excluded by the existing
+backend-slot rule. All other use-count, adjacency, NOP/label, and narrow-value
+proofs remain centralized in the shared forwarding predicate.
+
+A global prototype is rejected: it changes 130 apps, adds five names, and
+displaces two existing MIR selections. Production enables the branch case only
+inside the existing fresh fallback retry, alongside the adjacent binary-RHS
+and indirect-store-value features. Existing selected hashes remain unchanged.
+
+The fallback-only retry initially admits four functions. `a1.usage`,
+`adaint.acc_word`, and `bint.die` are two-block if/exit helpers and improve or
+preserve both peep and nopeep metrics. `tasm.main` has eleven blocks and regresses peep execution by 1.2 percent
+despite saving eleven static instructions. The first mandatory full gate also
+exposes `tcnstfld.main`: under the suite's production compiler arguments, one
+forwarded condition lets a 490-instruction two-block retry replace its
+incumbent, improving peep but regressing nopeep execution by 0.34 percent.
+This production-only interaction is outside the ordinary/stack census hashes,
+which is why focused validation alone did not schedule it.
+
+A structural `branch-condition-cost` gate therefore requires at most two
+blocks, one condition handoff, and no more than 100 captured instructions. It
+retains the three measured small helpers while excluding both larger
+interaction classes; no function-name exception is used.
+
+An adjacent `MIR_VLA_ALLOC.src1` experiment reused the same HL handoff for 15
+candidate size values. It changed one fallback classification but admitted no
+function, so all VLA-specific enable, dependency, and selector machinery was
+removed before this item landed.
+
+**Census and focused validation**:
+
+- ordinary: **744/2022 (36.80%)**, +3 names and zero removals;
+- stack-check: **759/2124 (35.73%)**, +3 names and zero removals;
+- additions in both configurations: `a1.usage`, `adaint.acc_word`, and
+  `bint.die`;
+- focused full peep/nopeep validation passes with zero regressions and nine
+  checked cycle/size improvements.
