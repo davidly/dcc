@@ -3426,6 +3426,155 @@ void mir_thread_jumps(void)
 }
 #undef MIR_THREAD_JUMPS_MAX_CHAIN
 
+static int mir_boolean_phi_predecessor_is_transparent(int label)
+{
+    int instruction = mir_find_label(label);
+
+    if (instruction < 0)
+        return 0;
+    for (++instruction; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+        if (opcode == MIR_LABEL)
+            return 1;
+        if (opcode == MIR_NOP)
+            continue;
+        if (opcode == MIR_JUMP)
+            return 1;
+        return 0;
+    }
+    return 1;
+}
+
+static int mir_boolean_constant_edge_is_transparent(
+    int definition_index, int predecessor_label)
+{
+    int instruction;
+
+    if (mir_block_label_before(definition_index) != predecessor_label)
+        return 0;
+    for (instruction = definition_index + 1;
+         instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode == MIR_LABEL || opcode == MIR_JUMP)
+            return 1;
+        if (opcode != MIR_NOP)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_collect_boolean_phi_chain(
+    int value, int predecessor_label, unsigned char *actions,
+    int *definition_indices, int depth)
+{
+    const struct MirInsn *definition;
+    int definition_index;
+
+    if (value < 0 || value >= mir.next_value || depth > mir.next_value)
+        return 0;
+    if (actions[value] != 0)
+        return actions[value] != 4;
+    definition = mir_definition(value);
+    if (definition == NULL || mir_value_use_count(value) != 1)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    definition_indices[value] = definition_index;
+    actions[value] = 4;
+    if (definition->opcode == MIR_CONST) {
+        if (type_size(definition->type) > 2 ||
+            (definition->immediate != 0 && definition->immediate != 1) ||
+            !mir_boolean_constant_edge_is_transparent(
+                definition_index, predecessor_label))
+            return 0;
+        actions[value] = definition->immediate != 0 ? 2 : 3;
+        return 1;
+    }
+    if (definition->opcode != MIR_PHI || type_size(definition->type) > 2 ||
+        (predecessor_label >= 0 &&
+         !mir_boolean_phi_predecessor_is_transparent(predecessor_label)) ||
+        !mir_collect_boolean_phi_chain(
+            definition->src1, definition->phi_pred1, actions,
+            definition_indices, depth + 1) ||
+        !mir_collect_boolean_phi_chain(
+            definition->src2, definition->phi_pred2, actions,
+            definition_indices, depth + 1))
+        return 0;
+    actions[value] = 1;
+    return 1;
+}
+
+static void mir_make_nop(struct MirInsn *insn)
+{
+    insn->opcode = MIR_NOP;
+    insn->dst = -1;
+    insn->src1 = -1;
+    insn->src2 = -1;
+    insn->label = -1;
+    insn->successor_count = 0;
+}
+
+static int mir_boolean_phi_branch_simplifications;
+
+int mir_boolean_phi_branch_simplification_count(void)
+{
+    return mir_boolean_phi_branch_simplifications;
+}
+
+void mir_reset_boolean_phi_branch_simplification_count(void)
+{
+    mir_boolean_phi_branch_simplifications = 0;
+}
+
+void mir_simplify_boolean_phi_branches(void)
+{
+    unsigned char *actions;
+    int *definition_indices;
+    int branch_index;
+
+    /* Short-circuit lowering can build a tree of one-use 0/1 constants and
+     * PHIs solely to feed one false branch. Redirect each proven-transparent
+     * false edge to the branch target and let true edges fall through. */
+    mir_boolean_phi_branch_simplifications = 0;
+    if (mir.next_value <= 0)
+        return;
+    actions = (unsigned char *)calloc((size_t)mir.next_value, 1);
+    definition_indices =
+        (int *)malloc((size_t)mir.next_value * sizeof(*definition_indices));
+    if (actions == NULL || definition_indices == NULL)
+        fatal("out of memory simplifying MIR boolean phis");
+    for (branch_index = 0; branch_index < mir.count; ++branch_index) {
+        struct MirInsn *branch = &mir.insns[branch_index];
+        int value;
+
+        if (branch->opcode != MIR_BRANCH_FALSE)
+            continue;
+        memset(actions, 0, (size_t)mir.next_value);
+        if (!mir_collect_boolean_phi_chain(
+                branch->src1, -1, actions, definition_indices, 0) ||
+            actions[branch->src1] != 1)
+            continue;
+        for (value = 0; value < mir.next_value; ++value) {
+            struct MirInsn *definition;
+
+            if (actions[value] == 0 || actions[value] == 4)
+                continue;
+            definition = &mir.insns[definition_indices[value]];
+            if (actions[value] == 3) {
+                mir_make_nop(definition);
+                definition->opcode = MIR_JUMP;
+                definition->label = branch->label;
+            } else {
+                mir_make_nop(definition);
+            }
+        }
+        mir_make_nop(branch);
+        ++mir_boolean_phi_branch_simplifications;
+    }
+    free(definition_indices);
+    free(actions);
+}
+
 static int mir_unary_is_representation_identity(
     const struct MirInsn *insn, const struct MirInsn *source)
 {

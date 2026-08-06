@@ -895,6 +895,7 @@ static void mark_ident_addr_taken(const char *name)
     }
 }
 
+
 static int ident_count_for(const char *name)
 {
     int i;
@@ -2960,11 +2961,13 @@ void scan_local_decl_after_type(int base)
         if (g_func_pass.for_decl_seq >= 0) {
             const char *rn;
             rn = enter_for_decl_rename(name);
-            strncpy(name, rn, sizeof(name) - 1);
+            if (rn != name)
+                strncpy(name, rn, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
         } else {
             const char *rn = enter_block_decl_rename(name);
-            strncpy(name, rn, sizeof(name) - 1);
+            if (rn != name)
+                strncpy(name, rn, sizeof(name) - 1);
             name[sizeof(name) - 1] = 0;
         }
 
@@ -4090,4 +4093,3 @@ void parse_translation_unit(void)
         }
     }
 }
-

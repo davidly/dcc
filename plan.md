@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `232a992` (Items T221-T223)
-- Published ordinary coverage: **756/2022 functions (37.39%)**
-- Published stack-check coverage: **771/2124 functions (36.30%)**
+- Published baseline: `e53ef93` (Items T224-T234)
+- Published ordinary coverage: **764/2023 functions (37.77%)**
+- Published stack-check coverage: **781/2125 functions (36.75%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -46,6 +46,8 @@ history preserves them.
 - Batch 33 candidate stack-check coverage: **771/2124 functions (36.30%)**
 - Batch 34 candidate ordinary coverage: **764/2023 functions (37.77%)**
 - Batch 34 candidate stack-check coverage: **781/2125 functions (36.75%)**
+- Batch 35 candidate ordinary coverage: **776/2023 functions (38.36%)**
+- Batch 35 candidate stack-check coverage: **793/2125 functions (37.32%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -973,6 +975,40 @@ zero regressions. The refreshed ordinary rejection population is led by 653
 `dead-local-suffix-cost`, 24 `dead-store-forwarding-cost`, 11
 `planned-stack-cost`, 8 `lazy-parameter-cost`, and 2
 `stable-pointer-local-cost` functions.
+
+## Batch 35
+
+1. T235-T236: measure and remove expanded narrow-spill and transparent
+   dynamic-index prototypes after each yields zero new selections.
+2. T237-T238: force-profile the smallest unary-not loop population and admit
+   the exact structural near-cost class. This adds `adaint.while_stmt` and
+   `pint.parse_call_name`; broader forms regress peep execution and remain
+   fallback.
+3. T239-T240: measure and remove dormant homed wide-binary admission after
+   zero yield, then generalize the backend-slot diagnostic to report both
+   accessed and unused slots. Boolean constant/PHI/branch chains are the
+   largest repeated remaining class.
+4. T241-T244: collapse one-use short-circuit boolean PHI trees directly into
+   control flow. Constant and nested-PHI predecessors must be transparent,
+   and the pass runs only after every incumbent selector/retry has chosen
+   fallback, preserving all existing MIR output. Exact full-mode profiling
+   retains four reusable structural populations and rejects the remaining
+   mixed-performance candidates with `boolean-phi-cost`.
+5. Sanitizer validation found duplicated self-overlapping declaration-name
+   copies before reaching MIR. Both scanners now skip `strncpy` when the
+   rename helper returns the input buffer itself.
+
+The candidate ordinary census is **776/2023 (38.36%)**, +12 names over Batch
+34 and zero removals. The boolean-PHI retry adds `bint.factor`, `cint.main`,
+`cint.type_esize`, `pint.main`, `tbsearch.t_bsearch_edges`,
+`tchess.note_bk_move`, `tcrcfix.test_stdio_rtl_symbols`, `tdivmod.oks`,
+`tdivmod.oku`, and `tstrconv.oks`.
+
+The candidate stack-check census is **793/2125 (37.32%)**, the same ten
+boolean-PHI additions plus the two unary-not additions and zero removals.
+Focused full peep/nopeep validation for the affected apps passes with zero
+regressions and 21 checked improvements for the PHI subset. ASan/UBSan
+compilation of all eight PHI apps is clean.
 
 ## Required process
 

@@ -10328,6 +10328,66 @@ wide-CFG arithmetic extensions each change no selection and are removed.
   measurable improvements in `t`, `tctxflt`, `tctxops`, `tfloat4`, `tlong`,
   and `tlongopt`.
 
+## Items T235-T244: unary loops and transactional boolean-PHI control flow (2026-08-08)
+
+T235 completes the expanded narrow-spill experiment. After fixing the
+prototype's missing offset declaration, a whole-corpus census finds no newly
+selected function; the complete prototype is removed. T236 similarly tests
+transparent dynamic-index-base forwarding. It changes no census row and is
+removed rather than retaining zero-yield selector machinery.
+
+T237 force-profiles the closest unary-not loop candidates. `adaint.while_stmt`
+and `pint.parse_call_name` improve peep and nopeep execution, while the next
+small-loop candidates regress peep execution. T238 adds one structural
+near-cost predicate: no VLA, at most ten blocks, no more than 25 assembly-text
+bytes or two instructions over legacy. The predicate is allowed through only
+the gates actually reached by the measured unary-not branch-fusion class.
+
+T239 confirms that homed wide-binary emission already exists but broad
+preflight admission changes no selection, so that experiment is removed.
+T240 extends the unused-slot diagnostic with
+`DCC_MIR_SLOT_ACCESS_REPORT`, preserving one implementation while reporting
+every assigned slot and whether it was accessed. The dominant repeated class
+is short-circuit boolean constants and PHIs feeding one false branch.
+
+T241 recognizes a one-use tree containing only narrow zero/one constants and
+PHIs whose sole consumer is `MIR_BRANCH_FALSE`. Every constant must be in its
+recorded predecessor block with only NOPs and the terminating edge after its
+definition; nested-PHI predecessor blocks must likewise be transparent. False
+leaves become direct jumps, while true leaves, PHIs, and the final materialized
+branch become NOPs.
+
+T242 makes the optimization fallback-only. Ordinary selection and all
+established retries run against untouched MIR first; only a final fallback is
+simplified, reverified, and retried. This preserves every incumbent selected
+hash and prevents a statically smaller PHI rewrite from perturbing already
+profitable MIR output.
+
+T243 profiles the complete broad retry: 38 functions cross existing gates,
+but 20 app-level checks regress. Individual forced-fallback A/B isolates four
+reusable non-regressing populations. T244 records those populations in one
+structural profitability predicate: slotless candidates, call-heavy
+candidates with at least 18 calls, compact integer candidates with at least
+nine calls, and the two-call void divmod check shape. All others retain
+fallback with `boolean-phi-cost`; no function-name exception is used.
+
+ASan/UBSan initially stops in both declaration scanners on a pre-existing
+self-overlapping `strncpy` when a rename helper returns its input buffer.
+Skipping the copy in that exact case removes the undefined behavior, after
+which the sanitizer compiles all eight affected PHI apps cleanly.
+
+**Census and focused validation**:
+
+- ordinary: **776/2023 (38.36%)**, +12 names over Batch 34 and zero removals;
+- stack-check: **793/2125 (37.32%)**, +12 names and zero removals;
+- unary additions: `adaint.while_stmt` and `pint.parse_call_name`;
+- boolean-PHI additions: `bint.factor`, `cint.main`, `cint.type_esize`,
+  `pint.main`, `tbsearch.t_bsearch_edges`, `tchess.note_bk_move`,
+  `tcrcfix.test_stdio_rtl_symbols`, `tdivmod.oks`, `tdivmod.oku`, and
+  `tstrconv.oks`;
+- focused full peep/nopeep validation passes with zero regressions and 21
+  checked improvements for the PHI subset.
+
 ## Items T206-T208: transactional indirect-store value forwarding (2026-08-06)
 
 T206 continues the impact-ranked backend-slot audit rather than returning to

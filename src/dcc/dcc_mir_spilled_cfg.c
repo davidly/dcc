@@ -6159,7 +6159,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
              (insn->secondary_offset != 2 && insn->secondary_offset != 4)))
             return mir_scalar_cfg_preflight_reject("va-arg", i);
     }
-    if (getenv("DCC_MIR_UNUSED_SLOT_REPORT") != NULL &&
+    if ((getenv("DCC_MIR_UNUSED_SLOT_REPORT") != NULL ||
+         getenv("DCC_MIR_SLOT_ACCESS_REPORT") != NULL) &&
         mir.next_value > 0) {
         mir_backend_slot_accessed =
             (unsigned char *)calloc((size_t)mir.next_value, 1);
@@ -8110,7 +8111,8 @@ done:
     if (accepted && mir_backend_slot_accessed != NULL)
         for (i = 0; i < mir.next_value; ++i)
             if (mir.backend_slots[i] >= 0 &&
-                !mir_backend_slot_accessed[i]) {
+                (getenv("DCC_MIR_SLOT_ACCESS_REPORT") != NULL ||
+                 !mir_backend_slot_accessed[i])) {
                 const struct MirInsn *definition = mir_definition(i);
                 const struct MirInsn *consumer = NULL;
                 int consumer_index;
@@ -8126,12 +8128,15 @@ done:
                         break;
                     }
                 fprintf(stderr,
-                        "; MIR unused-slot function=%s value=%d slot=%d "
+                        "; MIR %s function=%s value=%d slot=%d accessed=%d "
                         "definition=%s type-size=%d uses=%d "
                         "consumer=%s distance=%d definition-immediate=%ld "
                         "consumer-immediate=%ld definition-type=%d "
                         "consumer-type=%d\n",
+                        getenv("DCC_MIR_SLOT_ACCESS_REPORT") != NULL
+                            ? "slot-access" : "unused-slot",
                         mir.name, i, mir.backend_slots[i],
+                        mir_backend_slot_accessed[i] != 0,
                         definition != NULL
                             ? mir_opcode_name(definition->opcode) : "none",
                         definition != NULL

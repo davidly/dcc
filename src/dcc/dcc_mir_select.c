@@ -1352,6 +1352,47 @@ static int mir_is_profiled_slotless_format_cfg(
            generated_instructions <= captured_instructions;
 }
 
+static int mir_is_profiled_small_unary_not_near_cost(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    /* The complete sub-25-byte unary-not near-cost population contains two
+     * seven-to-nine-block functions. Both improve peep and nopeep execution
+     * despite adding at most two raw instructions. The next candidate is
+     * 32 bytes larger and regresses peep execution. */
+    return !mir.has_vla && mir_cfg_block_count() <= 10 &&
+           ((generated_size >= captured_size &&
+             generated_size <= captured_size + 25 &&
+             generated_instructions <= captured_instructions + 2) ||
+            (mir_boolean_phi_branch_simplification_count() > 0 &&
+             generated_size <= captured_size &&
+             generated_instructions * 10L <=
+                 captured_instructions * 9L));
+}
+
+static int mir_is_profiled_boolean_phi_branch_retry(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    int calls = mir_call_count();
+    int blocks = mir_cfg_block_count();
+    int return_kind = mir.return_type & 15;
+
+    if (mir_boolean_phi_branch_simplification_count() <= 0 ||
+        generated_size > captured_size + 40 ||
+        generated_instructions > captured_instructions)
+        return 0;
+    /* The fallback-only sweep exposed these reusable populations without a
+     * regression in either peep mode. Keep the retry narrow until general
+     * CFG instruction selection can price the remaining candidates. */
+    if (mir.backend_slot_count == 0 || calls >= 18)
+        return 1;
+    if (return_kind == TYPE_INT && blocks <= 8 && calls >= 9)
+        return 1;
+    return return_kind == TYPE_VOID && blocks <= 9 && calls == 2 &&
+           mir.local_bytes == 4 && mir.backend_slot_count == 2;
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -1667,6 +1708,7 @@ void mir_end_function(void)
     }
     mir_thread_jumps();
     mir_resolve_deferred_metadata();
+    mir_reset_boolean_phi_branch_simplification_count();
     verified = mir_verify_and_dump();
     if (verified) {
         mir_compute_dead_local_suffix();
@@ -1763,6 +1805,22 @@ void mir_end_function(void)
             int promoted_local_slot_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
+            int boolean_phi_retry_attempted = 0;
+
+retry_selection:
+            lazy_retry_attempted = 0;
+            lazy_allocation_active = 0;
+            stable_local_retry_attempted = 0;
+            stable_local_homes_active = 0;
+            rhs_forward_retry_attempted = 0;
+            store_address_retry_attempted = 0;
+            wide_binary_retry_attempted = 0;
+            stable_pointer_argument_retry_attempted = 0;
+            global_argument_retry_attempted = 0;
+            wide_argument_stack_retry_attempted = 0;
+            promoted_local_slot_retry_attempted = 0;
+            strict_phi_retry_attempted = 0;
+            strict_phi_fallthrough_active = 0;
             mir_end_general_rhs_stack_forwarding();
             mir_end_indirect_store_value_forwarding();
             mir_end_branch_condition_forwarding();
@@ -1934,6 +1992,13 @@ evaluate_generated:
                 else if (generated_size < 0 || captured_size < 0 ||
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
+                else if (boolean_phi_retry_attempted &&
+                         mir_boolean_phi_branch_simplification_count() > 0 &&
+                         !mir_is_profiled_boolean_phi_branch_retry(
+                             generated_size, captured_size,
+                             generated_instructions,
+                             captured_instructions))
+                    fallback_reason = "boolean-phi-cost";
                 else if (!mir_dead_suffix_layout_is_profitable(
                              selector_name, generated_size, captured_size,
                              generated_instructions, captured_instructions))
@@ -1965,6 +2030,9 @@ evaluate_generated:
                     fallback_reason = "wide-constant-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                         !mir_is_profiled_small_unary_not_near_cost(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
                          (mir_cfg_block_count() > 18 ||
                           generated_size + 10 > captured_size))
                     fallback_reason = "unary-not-cost";
@@ -2029,6 +2097,11 @@ evaluate_generated:
                     fallback_reason = "indirect-store-address-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_planned_stack_handoff() &&
+                         !(mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                           mir_is_profiled_small_unary_not_near_cost(
+                               generated_size, captured_size,
+                               generated_instructions,
+                               captured_instructions)) &&
                          mir_call_count() >= 8 &&
                          generated_instructions >
                              captured_instructions - 8)
@@ -2096,6 +2169,11 @@ evaluate_generated:
                      * instruction win regressed at least one runtime mode. */
                     fallback_reason = "phi-fallthrough-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         !(mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                           mir_is_profiled_small_unary_not_near_cost(
+                               generated_size, captured_size,
+                               generated_instructions,
+                               captured_instructions)) &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
                                                          mir.aggregate_temp_bytes == 0 &&
@@ -2192,6 +2270,12 @@ evaluate_generated:
                             ? (mir_cfg_block_count() <= 2 ? 2 : 1)
                         : (!strcmp(selector_name, "spilled-scalar-cfg") &&
                            generated_size <= captured_size ? 1 : 0)) &&
+                         !(!strcmp(selector_name, "spilled-scalar-cfg") &&
+                           mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                           mir_is_profiled_small_unary_not_near_cost(
+                               generated_size, captured_size,
+                               generated_instructions,
+                               captured_instructions)) &&
                          !mir_is_profiled_near_cost_single_block(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
@@ -2239,6 +2323,11 @@ evaluate_generated:
                     fallback_reason = "direct-byte-param-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_rhs_stack_forwarding() &&
+                         !(mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                           mir_is_profiled_small_unary_not_near_cost(
+                               generated_size, captured_size,
+                               generated_instructions,
+                               captured_instructions)) &&
                          !mir_is_profiled_pointer_member_picker(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
@@ -2318,6 +2407,12 @@ evaluate_generated:
                     fallback_reason = "pointer-array";
                 else if (mir_has_cfg_backedge() &&
                          !mir_has_profiled_positive_loop() &&
+                         !(!strcmp(selector_name, "spilled-scalar-cfg") &&
+                           mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&
+                           mir_is_profiled_small_unary_not_near_cost(
+                               generated_size, captured_size,
+                               generated_instructions,
+                               captured_instructions)) &&
                          !mir_is_profiled_constant_bound_loop_pair(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions))
@@ -2892,6 +2987,25 @@ evaluate_generated:
                 if (strict_phi_fallthrough_active) {
                     mir_end_strict_phi_fallthrough();
                     strict_phi_fallthrough_active = 0;
+                }
+                if (fallback_reason != NULL &&
+                    !boolean_phi_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    /* Preserve every already-selected function byte-for-byte:
+                     * simplify only after the ordinary selector and all of
+                     * its established retries have chosen legacy fallback. */
+                    boolean_phi_retry_attempted = 1;
+                    mir_simplify_boolean_phi_branches();
+                    if (mir_boolean_phi_branch_simplification_count() > 0) {
+                        fclose(generated);
+                        generated = NULL;
+                        verified = mir_verify_and_dump();
+                        if (verified) {
+                            mir_compute_dead_local_suffix();
+                            mir_report_dead_local_suffix();
+                            goto retry_selection;
+                        }
+                    }
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;
