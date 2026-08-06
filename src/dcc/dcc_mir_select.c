@@ -1024,7 +1024,7 @@ static int mir_has_multiple_conditional_tests(void)
     return branch_falses >= 2;
 }
 
-static int mir_has_cfg_backedge(void)
+int mir_has_cfg_backedge(void)
 {
     int i;
     int j;
@@ -1437,6 +1437,15 @@ static int mir_is_profiled_text_proxy_instruction_win(
         captured_instructions * 93L;
 }
 
+static int mir_is_profiled_stable_pointer_local_win(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return mir_spilled_cfg_depends_on_stable_pointer_local_slot() &&
+        generated_size <= captured_size &&
+        generated_instructions <= captured_instructions - 4;
+}
+
 static int mir_is_profiled_compact_homed_cfg(
     long generated_size, long captured_size,
     int generated_instructions, int captured_instructions)
@@ -1673,6 +1682,8 @@ void mir_end_function(void)
             int generated_label_id_after = mir_label_base;
             int lazy_retry_attempted = 0;
             int lazy_allocation_active = 0;
+            int stable_local_retry_attempted = 0;
+            int stable_local_homes_active = 0;
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
@@ -1964,6 +1975,18 @@ evaluate_generated:
                      * the ordinary homed profitability policy. */
                     fallback_reason = "lazy-parameter-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_stable_pointer_local_home() &&
+                         mir_cfg_block_count() == 1 &&
+                         mir_call_count() >= 8)
+                    /* Reloading a stable pointer local directly from its
+                     * named frame slot removes backend slots, but a
+                     * call-heavy straight-line candidate can still disrupt
+                     * stronger dccpeep shapes. Exact full-mode A/B found the
+                     * ten-call case regressed peep cycles despite saving ten
+                     * raw instructions. Multi-block candidates with a
+                     * four-instruction win were non-regressing. */
+                    fallback_reason = "stable-pointer-local-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
                                                          mir.aggregate_temp_bytes == 0 &&
@@ -2032,6 +2055,10 @@ evaluate_generated:
                                                      generated_instructions,
                                                      captured_instructions) &&
                                                  !mir_is_profiled_dead_suffix_instruction_win(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
+                                                 !mir_is_profiled_stable_pointer_local_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
                                                      captured_instructions) &&
@@ -2166,6 +2193,43 @@ evaluate_generated:
                 if (fallback_reason != NULL && lazy_allocation_active) {
                     mir_end_lazy_parameter_allocation();
                     lazy_allocation_active = 0;
+                }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "unary-not-cost") ||
+                     !strcmp(fallback_reason, "planned-stack-cost")) &&
+                    !stable_local_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *local_candidate = tmpfile();
+                    int local_emitted;
+
+                    stable_local_retry_attempted = 1;
+                    if (local_candidate == NULL)
+                        fatal("cannot create MIR stable-local candidate "
+                              "stream");
+                    mir_begin_stable_pointer_local_homes();
+                    stable_local_homes_active = 1;
+                    label_id = mir_label_base;
+                    local_emitted = mir_try_selector(
+                        local_candidate, mir_try_emit_spilled_scalar_cfg);
+                    if (local_emitted) {
+                        fclose(generated);
+                        generated = local_candidate;
+                        local_candidate = NULL;
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    mir_end_stable_pointer_local_homes();
+                    stable_local_homes_active = 0;
+                    fclose(local_candidate);
+                }
+                if (fallback_reason != NULL && stable_local_homes_active) {
+                    mir_end_stable_pointer_local_homes();
+                    stable_local_homes_active = 0;
                 }
                 /* Phase 5 Item 46: homed/spilled-scalar-cfg already passed
                  * every other cost gate above - the *only* reason this
@@ -2317,6 +2381,10 @@ evaluate_generated:
                 if (lazy_allocation_active) {
                     mir_end_lazy_parameter_allocation();
                     lazy_allocation_active = 0;
+                }
+                if (stable_local_homes_active) {
+                    mir_end_stable_pointer_local_homes();
+                    stable_local_homes_active = 0;
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;

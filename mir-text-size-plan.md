@@ -10019,3 +10019,68 @@ The refreshed ordinary rejection population is led by 616 `text-size`, 130
 `instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`, 45
 `absolute-address-cost`, 44 `planned-index-base-cost`, 37
 `dead-local-suffix-cost`, and 8 `lazy-parameter-cost` functions.
+
+## Items T193-T196: transactional stable pointer-local homes (2026-08-06)
+
+T193 audits named local frame slots after the lazy-parameter batch. A pointer
+local that is loaded once and never reassigned already has a stable IX-relative
+source, but the spilled selector copies that value into a second backend slot
+and reloads the duplicate. A broad global prototype adds six ordinary
+functions, but also removes nine existing MIR selections because changing slot
+planning for every candidate perturbs established selector arbitration.
+Production therefore keeps the optimization fallback-only.
+
+T194 generalizes the existing direct-parameter-home predicate rather than
+adding parallel slot or load logic. A stable pointer local must be defined by
+`MIR_LOAD`, have a one-/two-/four-byte scalar pointer type, retain an
+SC_LOCAL named location, have no address-taking, no store to the same object or
+location after the load, no VLA, and no CFG backedge. Earlier initialization
+stores are allowed. Eligible values receive no backend slot; their defining
+load emits nothing and every real use reads the original named frame slot
+through the same IX/IY and out-of-range forms already used for parameter
+homes.
+
+The production trial starts only after an `instruction-count`, `text-size`,
+`unary-not-cost`, or `planned-stack-cost` fallback. It emits a fresh spilled
+candidate, excludes speculative inline-codegen attempts, and restores the
+selector-scoped enable flag before later rescue selectors or the final
+accept/reject decision. Existing accepted candidates are never replaced.
+
+T195 measures the shallow candidates with exact upstream ntvcm. Batch 24's
+text-proxy guard initially leaves `tallocx.t_grow_top` and
+`tallocx.t_shrink_inplace` below the gate despite each saving four
+instructions. Forced full-mode A/B passes both modes, so a stable-home backend
+slot saving may bypass that text proxy with a four-instruction, non-larger
+margin. `tstr2.test_memchr` is the counterexample: its call-heavy
+single-block retry saves ten raw instructions but regresses peep execution by
+50 cycles. A separate `stable-pointer-local-cost` gate rejects call-heavy
+single-block candidates without a function-name exception.
+
+T196 reviews alias, transaction, and attribution safety. Volatile pointer
+locals were initially indistinguishable from ordinary objectless MIR loads;
+named volatile loads now retain their volatile memory flag and direct
+rematerialization rejects them, preserving the required access count.
+Dependency accounting is split: direct-home usage drives the conservative
+call-heavy rejection, while only a value whose named home actually removes a
+backend slot can use the four-instruction text-proxy exception.
+
+**Census and focused validation**:
+
+- ordinary: **734/2022 (36.30%)**, +5 names and zero removals;
+- stack-check: **748/2124 (35.22%)**, +5 names and zero removals;
+- additions in both configurations: `a1.load_input_file`,
+  `tallocx.t_calloc`, `tallocx.t_grow_top`,
+  `tallocx.t_shrink_inplace`, and `tallocx.t_trim`;
+- the final `a1,tallocx,tvolopt` focused full peep/nopeep run passes with zero
+  regressions.
+
+The rejected global rollout, rejected call-heavy `tstr2` candidate, and
+volatile review fix are retained here to prevent future work from repeating
+the same unsafe widenings. The refreshed ordinary rejection population is led
+by 653 `text-size`, 131 `unary-not-cost`, 118
+`dynamic-index-base-cost`, 72 `wide-constant-cost`, 48
+`absolute-index-cost`, 47 `inline-substitution`, 46
+`absolute-address-cost`, 44 `planned-index-base-cost`, 37
+`dead-local-suffix-cost`, 24 `dead-store-forwarding-cost`, 11
+`planned-stack-cost`, 8 `lazy-parameter-cost`, and 2
+`stable-pointer-local-cost` functions.

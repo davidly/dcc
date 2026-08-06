@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `18fa44c` (Items T187-T188)
-- Published ordinary coverage: **723/2022 functions (35.76%)**
-- Published stack-check coverage: **732/2124 functions (34.46%)**
+- Published baseline: `37f4749` (Items T189-T192)
+- Published ordinary coverage: **729/2022 functions (36.05%)**
+- Published stack-check coverage: **743/2124 functions (34.98%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -26,6 +26,8 @@ history preserves them.
 - Batch 23 candidate stack-check coverage: **732/2124 functions (34.46%)**
 - Batch 24 candidate ordinary coverage: **729/2022 functions (36.05%)**
 - Batch 24 candidate stack-check coverage: **743/2124 functions (34.98%)**
+- Batch 25 candidate ordinary coverage: **734/2022 functions (36.30%)**
+- Batch 25 candidate stack-check coverage: **748/2124 functions (35.22%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -709,6 +711,42 @@ The refreshed ordinary rejection population is led by 616 `text-size`, 130
 `absolute-address-cost`, 44 `planned-index-base-cost`, 37
 `dead-local-suffix-cost`, and 8 `lazy-parameter-cost` functions.
 
+## Batch 25
+
+1. T193: audit stable named frame homes after lazy parameter allocation.
+   A global prototype that directly reloaded stable pointer locals added six
+   functions but removed nine existing MIR selections, so production keeps
+   the optimization in a fallback-only fresh-stream retry.
+2. T194: generalize the shared direct-home predicate from parameters to
+   pointer locals only when the value is defined by `MIR_LOAD`, its local is
+   not address-taken or volatile, no later store can change the slot, the
+   function has no VLA, and the CFG has no backedge. The retry is excluded
+   from speculative codegen and restores its selector-scoped state before
+   every subsequent rescue or final decision.
+3. T195: retain the measured four-instruction margin for multi-block
+   candidates and reject call-heavy single-block candidates. Exact-upstream
+   A/B admits `tallocx.t_grow_top` and `tallocx.t_shrink_inplace`; it rejects
+   `tstr2.test_memchr`, whose ten-instruction raw saving still regresses peep
+   execution by 50 cycles.
+4. T196: complete the correctness review. Named volatile loads now retain
+   their volatile memory flag, stable pointer-local rematerialization rejects
+   them, and profitability attribution distinguishes an actually removed
+   backend slot from a direct-home path that was already slotless.
+
+The candidate ordinary census is **734/2022 (36.30%)**, +5 names and zero
+removals. The candidate stack-check census is **748/2124 (35.22%)**, also +5
+names and zero removals. Both add `a1.load_input_file`, `tallocx.t_calloc`,
+`tallocx.t_grow_top`, `tallocx.t_shrink_inplace`, and `tallocx.t_trim`.
+
+The final focused full-mode run for `a1`, `tallocx`, and `tvolopt` passes with
+zero regressions. The refreshed ordinary rejection population is led by 653
+`text-size`, 131 `unary-not-cost`, 118 `dynamic-index-base-cost`, 72
+`wide-constant-cost`, 48 `absolute-index-cost`, 47 `inline-substitution`, 46
+`absolute-address-cost`, 44 `planned-index-base-cost`, 37
+`dead-local-suffix-cost`, 24 `dead-store-forwarding-cost`, 11
+`planned-stack-cost`, 8 `lazy-parameter-cost`, and 2
+`stable-pointer-local-cost` functions.
+
 ## Required process
 
 - Identify the exact affected functions before widening any gate.
@@ -754,12 +792,12 @@ Continue the approved phased roadmap rather than restarting prioritization:
    `cross-call=0`.
 2. **Phase 4 - complete:** the conservative per-reference pointer classifier is
    active with zero removals.
-3. **Next structural priorities by impact:** the post-T188 ordinary census is
-   led by 627 `text-size`, 130 `unary-not-cost`, 117
-   `dynamic-index-base-cost`, 65 `wide-constant-cost`, 61
-   `instruction-count`, 48 `absolute-index-cost`, 47 `inline-substitution`,
-   45 `absolute-address-cost`, 44 `planned-index-base-cost`, and 15
-   `planned-stack-cost` fallbacks. Re-bucket
+3. **Next structural priorities by impact:** the post-T196 ordinary census is
+   led by 653 `text-size`, 131 `unary-not-cost`, 118
+   `dynamic-index-base-cost`, 72 `wide-constant-cost`, 48
+   `absolute-index-cost`, 47 `inline-substitution`, 46
+   `absolute-address-cost`, 44 `planned-index-base-cost`, and 37
+   `dead-local-suffix-cost` fallbacks. Re-bucket
    `text-size` by repeated emitted pattern before choosing the next shared
    improvement. The cost populations are deliberately measured fallback, not
    gate-removal headroom.

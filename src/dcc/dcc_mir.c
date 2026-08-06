@@ -949,7 +949,9 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
         insn->type = type_add_ptr(node->type);
         mir_copy_name(insn->name, name);
         insn->object = mir_get_object(symbol, insn->name);
-        return value;
+    if (symbol != NULL && symbol->is_volatile)
+        insn->memory_flags |= 1;
+    return value;
     }
     if (node->kind == AST_COMPOUND_LITERAL && node->sym != NULL) {
         value = mir_new_value();

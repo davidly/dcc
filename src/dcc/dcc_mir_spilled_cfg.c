@@ -52,7 +52,10 @@ static int mir_spilled_cfg_used_wide_constant_rematerialization;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
+static int mir_spilled_cfg_used_stable_pointer_local_home;
+static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_planned_stack_handoffs_enabled;
+static int mir_stable_pointer_local_homes_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -2367,7 +2370,7 @@ static int mir_capture_stream_uses_frame(void)
      * carried the *first* function's frame/frameless verdict forward and
      * applied it to every later function that happened to reuse that
      * address, regardless of that function's own captured output. This
-     * starved mir_param_value_is_direct of ever firing for any function
+     * starved mir_value_has_direct_named_home of ever firing for any function
      * unlucky enough to share a reused tmpfile() address with an earlier
      * frameless one - a real, cross-function correctness bug in the
      * cache, not a deliberate memoization tradeoff. Recomputing fresh on
@@ -2403,25 +2406,22 @@ static int mir_capture_stream_uses_frame(void)
     return result;
 }
 
-static int mir_direct_parameter_offset(const struct MirInsn *definition,
-                                       int *offset)
+static int mir_direct_named_home_location(const struct MirInsn *definition,
+                                          int *storage, int *offset)
 {
     int memory_type;
-    int memory_storage;
 
     if (definition == NULL)
         return 0;
     if (definition->object >= 0 && definition->object < mir.object_count) {
-        *offset = mir.objects[definition->object].offset;
+        const struct MirObject *object = &mir.objects[definition->object];
+        *storage = object->storage;
+        *offset = object->offset;
         return 1;
     }
-    return (definition->opcode == MIR_PARAM ||
-            definition->opcode == MIR_LOAD) &&
-        type_ptr_depth(definition->type) > 0 &&
-        !local_name_address_taken_in_function(definition->name) &&
-        mir_scalar_memory_location(definition, &memory_type,
-                                   &memory_storage, offset) &&
-        memory_storage == SC_PARAM &&
+    return mir_scalar_memory_location(definition, &memory_type,
+                                      storage, offset) &&
+        (*storage == SC_PARAM || *storage == SC_LOCAL) &&
         type_size(memory_type) == type_size(definition->type);
 }
 
@@ -2441,18 +2441,21 @@ static int mir_pointer_value_is_aggregate_address(int value)
     return 0;
 }
 
-/* A parameter value does not need a backend slot while its incoming ix+N
- * location remains unchanged.  Most parameters prove that location through
- * a promoted MIR object.  Aggregate-address pointer loads are intentionally
- * objectless, so resolve their declared SC_PARAM location and apply the same
- * no-reassignment proof.  Other objectless pointer uses remain slot-based:
- * direct pointer arithmetic measured slower in both output modes. */
-static int mir_param_value_is_direct(int value)
+/* A value does not need a backend slot while its named IX-relative location
+ * remains unchanged. Parameters are stable for the complete function after
+ * the no-reassignment proof. A pointer local is stable after its MIR_LOAD when
+ * no later store, alias, or backedge can change its slot. Scalar locals remain
+ * slot-based: the measured prototype added only one further function and does
+ * not justify widening this first local slice. */
+static int mir_value_has_direct_named_home(int value)
 {
     const struct MirInsn *definition;
     int has_object;
     int object;
-    int parameter_offset;
+    int home_storage;
+    int home_offset;
+    int definition_index;
+    int local_home;
     int i;
 
     if (value < 0 || value >= mir.next_value)
@@ -2468,9 +2471,21 @@ static int mir_param_value_is_direct(int value)
         return 0;
     object = definition->object;
     has_object = object >= 0 && object < mir.object_count;
-    if (!mir_direct_parameter_offset(definition, &parameter_offset))
+    if (!mir_direct_named_home_location(definition, &home_storage,
+                                        &home_offset))
         return 0;
-    if (!has_object && !mir_pointer_value_is_aggregate_address(value))
+    local_home = home_storage == SC_LOCAL;
+    definition_index = (int)(definition - mir.insns);
+    if (local_home &&
+        (!mir_stable_pointer_local_homes_enabled ||
+         definition->opcode != MIR_LOAD ||
+         (definition->memory_flags & 1) != 0 ||
+         type_ptr_depth(definition->type) == 0 ||
+         local_name_address_taken_in_function(definition->name) ||
+         mir_has_cfg_backedge()))
+        return 0;
+    if (!local_home && !has_object &&
+        !mir_pointer_value_is_aggregate_address(value))
         return 0;
     if (mir.has_vla)
         return 0;
@@ -2482,16 +2497,22 @@ static int mir_param_value_is_direct(int value)
 
         if (insn->opcode != MIR_STORE)
             continue;
-        if (has_object && insn->object == object)
+        if (has_object && insn->object == object) {
+            if (local_home && i < definition_index)
+                continue;
             return 0;
+        }
         if (!has_object &&
             mir_scalar_memory_location(insn, &memory_type,
                                        &memory_storage, &memory_offset) &&
-            memory_storage == SC_PARAM &&
-            memory_offset == parameter_offset)
+            memory_storage == home_storage &&
+            memory_offset == home_offset) {
+            if (local_home && i < definition_index)
+                continue;
             return 0;
+        }
     }
-    if (definition->opcode == MIR_LOAD) {
+    if (!local_home && definition->opcode == MIR_LOAD) {
         int has_param = 0;
         for (i = 0; i < mir.count; ++i) {
             const struct MirInsn *insn = &mir.insns[i];
@@ -2507,7 +2528,7 @@ static int mir_param_value_is_direct(int value)
                                             &memory_storage,
                                             &memory_offset) &&
                  memory_storage == SC_PARAM &&
-                 memory_offset == parameter_offset)) {
+                 memory_offset == home_offset)) {
                 has_param = 1;
                 break;
             }
@@ -2542,7 +2563,19 @@ static int mir_param_value_is_direct(int value)
             mir_divmod_partner(i) >= 0)
             return 0;
     }
+    if (local_home)
+        mir_spilled_cfg_used_stable_pointer_local_home = 1;
     return 1;
+}
+
+void mir_begin_stable_pointer_local_homes(void)
+{
+    mir_stable_pointer_local_homes_enabled = 1;
+}
+
+void mir_end_stable_pointer_local_homes(void)
+{
+    mir_stable_pointer_local_homes_enabled = 0;
 }
 
 static int mir_planned_stack_interval_opcode_safe(int opcode)
@@ -2927,9 +2960,19 @@ static int mir_prepare_backend_slots(void)
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
-                                        mir_value_only_used_by_dead_unary(value) ||
-                                        mir_param_value_is_direct(value))
+                                        mir_value_only_used_by_dead_unary(value))
                     continue;
+                if (mir_value_has_direct_named_home(value)) {
+                    int home_storage;
+                    int home_offset;
+                    if (mir_direct_named_home_location(
+                            definition, &home_storage, &home_offset) &&
+                        home_storage == SC_LOCAL) {
+                        mir_spilled_cfg_used_stable_pointer_local_home = 1;
+                        mir_spilled_cfg_used_stable_pointer_local_slot = 1;
+                    }
+                    continue;
+                }
                 stack_consumer = mir_planned_stack_consumer(
                     value, i, stack_interval_occupied);
                 if (stack_consumer >= 0) {
@@ -3096,10 +3139,9 @@ void mir_emit_virtual_load(FILE *out, int value)
         fprintf(out, "\tld hl,S%ld\n", definition->immediate);
         return;
     }
-    if (mir_param_value_is_direct(value)) {
-        /* mir-migration-plan-next10: read straight from the parameter's own
-         * stable incoming ix+N home instead of a duplicated backend slot -
-         * see mir_param_value_is_direct's comment. Mirrors exactly the
+    if (mir_value_has_direct_named_home(value)) {
+        /* Read straight from the value's stable named IX-relative home instead
+         * of a duplicated backend slot. Mirrors exactly the
          * in-range/out-of-range forms the original MIR_PARAM binding site
          * uses for a narrow scalar, including the IY-relative fast path
          * hot loops rely on (skipping it caused a measurable, if tiny,
@@ -3108,9 +3150,11 @@ void mir_emit_virtual_load(FILE *out, int value)
         int value_type = definition->type;
         int value_size = type_size(value_type);
         int object_offset;
+        int object_storage;
         int object_iy_offset;
-        if (!mir_direct_parameter_offset(definition, &object_offset))
-            fatal("missing direct MIR parameter offset");
+        if (!mir_direct_named_home_location(
+                definition, &object_storage, &object_offset))
+            fatal("missing direct MIR named-home offset");
         object_iy_offset = object_offset + mir_effective_local_bytes() +
                            mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && object_iy_offset >= -128 &&
@@ -3403,9 +3447,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int offset;
     int iy_offset;
     int pending_planned_consumer;
-    if (mir_param_value_is_direct(value))
-        /* mir-migration-plan-next10: nothing to store - later uses of this
-         * value re-read it directly from its stable parameter home (see
+    if (mir_value_has_direct_named_home(value))
+        /* Nothing to store: later uses re-read the stable named home (see
          * mir_emit_virtual_load); the loaded HL is simply not persisted. */
         return;
     if (value >= 0 && value < mir.next_value &&
@@ -3674,7 +3717,7 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
                   out);
         return;
     }
-    if (mir_param_value_is_direct(value)) {
+    if (mir_value_has_direct_named_home(value)) {
         /* mir-migration-plan-next10: wide (4-byte) parameter counterpart
          * of mir_emit_virtual_load - object storage for a wide parameter is
          * ascending (offset..offset+3), unlike the descending backend-slot
@@ -3746,7 +3789,7 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
      * predicate on the load side). Without this check a direct-eligible
      * wide parameter would still pay a full spill even though nothing
      * downstream would ever read the slot this store writes. */
-    if (mir_param_value_is_direct(value))
+    if (mir_value_has_direct_named_home(value))
         return;
     if (value >= 0 && value < mir.next_value &&
         mir.backend_slots != NULL &&
@@ -5248,7 +5291,7 @@ int mir_spilled_cfg_depends_on_direct_byte_param(void)
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->dst >= 0 && type_size(insn->type) == 1 &&
             mir_value_has_use(insn->dst) &&
-            mir_param_value_is_direct(insn->dst))
+            mir_value_has_direct_named_home(insn->dst))
             return 1;
     }
     return 0;
@@ -5289,6 +5332,16 @@ int mir_spilled_cfg_depends_on_planned_index_base_handoff(void)
     return mir_spilled_cfg_used_planned_index_base_handoff;
 }
 
+int mir_spilled_cfg_depends_on_stable_pointer_local_home(void)
+{
+    return mir_spilled_cfg_used_stable_pointer_local_home;
+}
+
+int mir_spilled_cfg_depends_on_stable_pointer_local_slot(void)
+{
+    return mir_spilled_cfg_used_stable_pointer_local_slot;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -5308,6 +5361,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     mir_spilled_cfg_used_planned_stack_handoff = 0;
     mir_spilled_cfg_used_planned_index_base_handoff = 0;
+    mir_spilled_cfg_used_stable_pointer_local_home = 0;
+    mir_spilled_cfg_used_stable_pointer_local_slot = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -5518,11 +5573,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             }
             if ((insn->opcode == MIR_PARAM || insn->opcode == MIR_LOAD) &&
-                mir_param_value_is_direct(insn->dst))
+                mir_value_has_direct_named_home(insn->dst))
                 /* mir-migration-plan-next10 (extended by Item T27 to also
                  * cover MIR_LOAD): this value never gets a backend slot
-                 * (see mir_param_value_is_direct) - every real use reloads
-                 * directly from the parameter's own ix+N home
+                 * (see mir_value_has_direct_named_home) - every real use
+                 * reloads directly from the stable named IX-relative home
                  * (mir_emit_virtual_load[_wide]), so the load this
                  * instruction would otherwise perform here is dead work;
                  * skip it entirely rather than load-then-discard. */

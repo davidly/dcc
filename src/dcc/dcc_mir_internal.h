@@ -363,6 +363,7 @@ int mir_fold_constant_compare(int op, long left, long right,
 int mir_float_identity_unary(const struct MirInsn *insn);
 int mir_homed_string_call_argument(int value);
 int mir_has_phi_instruction(void);
+int mir_has_cfg_backedge(void);
 int mir_general_comparison_count(void);
 int mir_home_color_live_across(int instruction, int color);
 int mir_home_uses_iy(void);
@@ -408,6 +409,10 @@ int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void);
 int mir_spilled_cfg_depends_on_unary_not_branch_fusion(void);
 int mir_spilled_cfg_depends_on_planned_stack_handoff(void);
 int mir_spilled_cfg_depends_on_planned_index_base_handoff(void);
+int mir_spilled_cfg_depends_on_stable_pointer_local_home(void);
+int mir_spilled_cfg_depends_on_stable_pointer_local_slot(void);
+void mir_begin_stable_pointer_local_homes(void);
+void mir_end_stable_pointer_local_homes(void);
 int mir_try_emit_spilled_scalar_cfg(FILE *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);
