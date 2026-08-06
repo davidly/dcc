@@ -1171,11 +1171,12 @@ static int mir_is_profiled_indirect_rmw_single_block(
     return binary->src1 == load->dst || binary->src2 == load->dst;
 }
 
-static int mir_is_profiled_pointer_member_picker(
+static int mir_is_profiled_pointer_offset_picker(
     long generated_size, long captured_size, int generated_instructions,
-    int captured_instructions)
+    int captured_instructions, int base_opcode, int size_margin,
+    int instruction_margin)
 {
-    const struct MirInsn *member = NULL;
+    const struct MirInsn *base = NULL;
     const struct MirInsn *scale = NULL;
     const struct MirInsn *add = NULL;
     const struct MirInsn *load = NULL;
@@ -1185,17 +1186,23 @@ static int mir_is_profiled_pointer_member_picker(
     if (mir.has_vla || mir_cfg_block_count() != 1 ||
         mir.allocation_spill_count != 0 ||
         type_ptr_depth(mir.return_type) == 0 ||
-        generated_size > captured_size + 32 ||
-        generated_instructions > captured_instructions + 5)
+        generated_size > captured_size + size_margin ||
+        generated_instructions > captured_instructions +
+                                 instruction_margin)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
-        if (insn->opcode == MIR_MEMBER_ADDRESS) {
-            if (member != NULL)
+        if (insn->opcode == base_opcode) {
+            if (base != NULL)
                 return 0;
-            member = insn;
-        }
-        else if (insn->opcode == MIR_BINARY) {
+            base = insn;
+            if (base_opcode == MIR_LOAD &&
+                type_ptr_depth(insn->type) == 0)
+                return 0;
+        } else if (base_opcode == MIR_LOAD &&
+                   insn->opcode == MIR_MEMBER_ADDRESS) {
+            return 0;
+        } else if (insn->opcode == MIR_BINARY) {
             const struct MirInsn *right = mir_definition(insn->src2);
             if (insn->immediate == '*' && right != NULL &&
                 right->opcode == MIR_CONST && right->immediate == 2) {
@@ -1223,12 +1230,36 @@ static int mir_is_profiled_pointer_member_picker(
                  insn->opcode == MIR_JUMP ||
                  insn->opcode == MIR_PHI)
             return 0;
+        else if (base_opcode == MIR_LOAD &&
+                 insn->opcode != MIR_NOP &&
+                 insn->opcode != MIR_LABEL &&
+                 insn->opcode != MIR_PARAM &&
+                 insn->opcode != MIR_CONST)
+            return 0;
     }
-    if (member == NULL || scale == NULL || add == NULL || load == NULL ||
+    if (base == NULL || scale == NULL || add == NULL || load == NULL ||
         ret == NULL || ret->src1 != load->dst || load->src1 != add->dst)
         return 0;
-    return ((add->src1 == member->dst && add->src2 == scale->dst) ||
-            (add->src2 == member->dst && add->src1 == scale->dst));
+    return ((add->src1 == base->dst && add->src2 == scale->dst) ||
+            (add->src2 == base->dst && add->src1 == scale->dst));
+}
+
+static int mir_is_profiled_pointer_member_picker(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    return mir_is_profiled_pointer_offset_picker(
+        generated_size, captured_size, generated_instructions,
+        captured_instructions, MIR_MEMBER_ADDRESS, 32, 5);
+}
+
+static int mir_is_profiled_pointer_index_picker(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    return mir_is_profiled_pointer_offset_picker(
+        generated_size, captured_size, generated_instructions,
+        captured_instructions, MIR_LOAD, 16, 0);
 }
 
 static int mir_is_profiled_masked_memset_wrapper(
@@ -1723,8 +1754,10 @@ void mir_end_function(void)
             int lazy_allocation_active = 0;
             int stable_local_retry_attempted = 0;
             int stable_local_homes_active = 0;
+            int rhs_forward_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
+            mir_end_general_rhs_stack_forwarding();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
@@ -2179,6 +2212,22 @@ evaluate_generated:
                      * single-block byte forwarding retains the ordinary cost
                      * policy. */
                     fallback_reason = "direct-byte-param-cost";
+                else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
+                         mir_spilled_cfg_depends_on_rhs_stack_forwarding() &&
+                         !mir_is_profiled_pointer_member_picker(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_pointer_index_picker(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions))
+                    /* General adjacent-RHS forwarding removes a real slot
+                     * round trip, but the first fallback-only rollout
+                     * exposed seven candidates and four regressed peep
+                     * execution or linked size. The two pointer-index
+                     * pickers reuse the already-profiled offset shape
+                     * and improve both modes; retain only that structural
+                     * class until instruction selection improves further. */
+                    fallback_reason = "rhs-stack-cost";
                 else if (!strcmp(selector_name, "homed-scalar-cfg") &&
                          mir_homed_cfg_depends_on_dynamic_index() &&
                          generated_instructions >= captured_instructions)
@@ -2435,6 +2484,35 @@ evaluate_generated:
                     }
                     if (branch_candidate != NULL)
                         fclose(branch_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size")) &&
+                    !rhs_forward_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *rhs_candidate = tmpfile();
+                    int rhs_emitted;
+
+                    rhs_forward_retry_attempted = 1;
+                    if (rhs_candidate == NULL)
+                        fatal("cannot create MIR RHS-forward candidate "
+                              "stream");
+                    mir_begin_general_rhs_stack_forwarding();
+                    label_id = mir_label_base;
+                    rhs_emitted = mir_try_selector(
+                        rhs_candidate, mir_try_emit_spilled_scalar_cfg);
+                    mir_end_general_rhs_stack_forwarding();
+                    if (rhs_emitted) {
+                        fclose(generated);
+                        generated = rhs_candidate;
+                        rhs_candidate = NULL;
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    fclose(rhs_candidate);
                 }
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||

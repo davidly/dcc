@@ -10153,3 +10153,57 @@ The refreshed ordinary rejection population is led by 584 `text-size`, 131
 `planned-index-base-cost`, 37 `dead-local-suffix-cost`, 24
 `dead-store-forwarding-cost`, 14 `planned-stack-cost`, and 8
 `lazy-parameter-cost` functions.
+
+## Items T203-T205: transactional adjacent-RHS stack forwarding (2026-08-06)
+
+T203 profiles assigned backend slots in the dominant spilled selector rather
+than performing another low-yield near-cost sweep. The 584 current
+`text-size` fallbacks contain 5,194 assigned virtual slots. The largest
+single-use adjacent consumer class is a narrow value used as the immediately
+following `MIR_BINARY.src2`: 700 slots across 143 `text-size` functions, plus
+the same pattern in several measured fallback-cost classes.
+
+The existing `mir_can_forward_stack_to_binary_rhs` already pushes such a value
+at its definition and pops it into DE at the binary, but only when src1 is a
+compile-time constant. T204 proves the machine contract is more general:
+loading an arbitrary src1 is stack-balanced, so the pending RHS remains valid.
+When src1 is itself a planned stack handoff, the newer RHS is on top and is
+popped into DE first, followed by the planned LHS into HL. Divmod, wide
+operands, nonadjacent values, and multiply-used values remain excluded.
+
+A global rollout is rejected. It changes 119 apps and initially adds 13
+functions, but causes 14 checked regressions. The slot removal is locally
+cheaper, yet changing established MIR output can defeat dccpeep shapes or move
+linked code. This repeats the migration rule that an emitter improvement is
+not permission to replace an already-selected incumbent.
+
+T205 implements a selector-scoped fallback-only retry after incumbent lazy
+parameter, stable-local, loop, and comparison retries. The generalized handoff
+is enabled only while emitting its fresh spilled candidate, is excluded from
+speculative codegen, and records a dependency only when the new RHS path
+actually emits. Baseline selections therefore retain their exact hashes.
+
+Seven candidates initially pass standard cost gates. Full peep/nopeep A/B
+rejects `tabort.chki`, `tclit.pair_sum`, `tclit.sum_pair_val`,
+`texsort.cmp_int`, and `trtl2.test_strncat`: four affected apps regress peep
+execution or linked size. `tptrcnd.pickw` and `tptrrhs.pickw` improve both
+modes. Their exact shape is a single-block, zero-allocation-spill pointer
+picker: one pointer load, one scale-by-two, one pointer add, one indirect load,
+and one pointer return. The recognizer shares the existing pointer-offset
+picker core with the earlier member-address form instead of duplicating the
+opcode walk. A `rhs-stack-cost` gate retains only this measured structural
+class.
+
+**Census and focused validation**:
+
+- ordinary: **739/2022 (36.55%)**, +2 names and zero removals;
+- stack-check: **754/2124 (35.50%)**, +2 names and zero removals;
+- additions in both configurations: `tptrcnd.pickw` and `tptrrhs.pickw`;
+- focused full peep/nopeep validation passes with zero regressions and six
+  checked cycle/size improvements.
+
+The broad active-output experiment and the five rejected candidates are
+recorded to prevent this high-frequency but low-admission mechanism from being
+mistaken for a safe global rollout. The difficult long-tail classes remain in
+scope for the 100% target; the immediate priority remains high-impact emitter
+overhead in the dominant spilled path.

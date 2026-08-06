@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `756df9d` (Items T193-T196)
-- Published ordinary coverage: **734/2022 functions (36.30%)**
-- Published stack-check coverage: **748/2124 functions (35.22%)**
+- Published baseline: `96f3355` (Items T197-T202)
+- Published ordinary coverage: **737/2022 functions (36.45%)**
+- Published stack-check coverage: **752/2124 functions (35.40%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -30,6 +30,8 @@ history preserves them.
 - Batch 25 candidate stack-check coverage: **748/2124 functions (35.22%)**
 - Batch 26 candidate ordinary coverage: **737/2022 functions (36.45%)**
 - Batch 26 candidate stack-check coverage: **752/2124 functions (35.40%)**
+- Batch 27 candidate ordinary coverage: **739/2022 functions (36.55%)**
+- Batch 27 candidate stack-check coverage: **754/2124 functions (35.50%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -59,6 +61,27 @@ The stack-check census is **752/2124 (35.40%)**, +4 names and zero removals.
 Ordinary additions are `tfloat4.check_float`, `trw.must_seek`, and
 `tunaryp.chku`. The five-app stack-check focused full peep/nopeep run passes
 with zero regressions and five checked cycle/size improvements.
+
+## Batch 27
+
+1. T203: audit the dominant spilled selector's assigned backend slots. Of
+   5,194 slots in current `text-size` fallbacks, 700 one-use narrow values
+   feed the immediately following binary's right operand; the pattern occurs
+   in 143 functions.
+2. T204: generalize the existing constant-left RHS physical-stack handoff to
+   any single-use narrow RHS. Preserve planned-LHS nesting by popping the newer
+   RHS first and the planned LHS second. A global rollout is rejected after
+   changing 119 apps and producing 14 checked regressions.
+3. T205: make generalized RHS forwarding a fallback-only fresh-stream retry.
+   Seven functions initially cross the standard selector gates, but four
+   regress peep execution or linked size. Retain only the structurally exact
+   single-block pointer-index picker, sharing its recognizer with the existing
+   pointer-member picker.
+
+The ordinary census is **739/2022 (36.55%)**, +2 names and zero removals.
+The stack-check census is **754/2124 (35.50%)**, also +2 and zero removals.
+Both add `tptrcnd.pickw` and `tptrrhs.pickw`; focused full peep/nopeep
+validation passes with zero regressions and six checked improvements.
 
 ## Batch 2
 

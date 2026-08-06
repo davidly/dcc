@@ -40,6 +40,7 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
+static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
@@ -54,8 +55,10 @@ static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
 static int mir_spilled_cfg_used_stable_pointer_local_home;
 static int mir_spilled_cfg_used_stable_pointer_local_slot;
+static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
 static int mir_planned_stack_handoffs_enabled;
 static int mir_stable_pointer_local_homes_enabled;
+static int mir_general_rhs_stack_forwarding_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -250,6 +253,17 @@ static int mir_forward_note_success(void)
     if (mir_forward_skip_last_skipped_dead_store)
         mir_spilled_cfg_used_dead_store_forwarding = 1;
     return 1;
+}
+
+static int mir_is_general_rhs_stack_forward(int value, int consumer)
+{
+    const struct MirInsn *binary;
+
+    if (consumer < 0 || consumer >= mir.count)
+        return 0;
+    binary = &mir.insns[consumer];
+    return binary->opcode == MIR_BINARY && binary->src2 == value &&
+           !mir_binary_only_constant(binary->src1);
 }
 
 /* Item T40 (mir-text-size-plan.md): the wide (32-bit, HL:DE) analog of
@@ -2578,6 +2592,16 @@ void mir_end_stable_pointer_local_homes(void)
     mir_stable_pointer_local_homes_enabled = 0;
 }
 
+void mir_begin_general_rhs_stack_forwarding(void)
+{
+    mir_general_rhs_stack_forwarding_enabled = 1;
+}
+
+void mir_end_general_rhs_stack_forwarding(void)
+{
+    mir_general_rhs_stack_forwarding_enabled = 0;
+}
+
 static int mir_planned_stack_interval_opcode_safe(int opcode)
 {
     switch (opcode) {
@@ -3292,19 +3316,19 @@ static int mir_can_forward_stack_to_binary_const(int value)
 /* Item T16 (mir-text-size-plan.md): mir_can_forward_hl_to_next's
  * MIR_BINARY case only ever matches `value` against the binary's src1
  * (left operand) - a value that is instead the very next MIR_BINARY's
- * *right*-hand operand (src2) gets no forwarding at all, even when
- * that binary's left operand is a plain constant (mir_binary_only_
- * constant), a shape where the constant is loaded directly into HL
- * clobbering whatever this value's own computation just left there.
- * The fix is symmetric to mir_can_forward_stack_to_index/_binary_const
- * above: push the value immediately after computing it and let the
- * binary's emission pop it back - since the left operand is a
- * constant, the combining sequence collapses to "load the constant
- * into HL, then a single `pop de`", skipping the store/reload/ex-de-hl
- * dance the general push/pop path would otherwise need. Restricted to
- * the immediately-following instruction only (no intervening
- * MIR_CONST skip - that shape is a distinct, not yet needed case) and
- * excludes divmod pairing, which uses a different code path entirely.
+* *right*-hand operand (src2) gets no forwarding at all. Push the value
+* immediately after computing it and let the binary's emission pop it
+* into DE after loading the left operand.
+*
+* T203 generalizes the original constant-left implementation to any
+* single-use narrow right operand. Loading src1 is stack-balanced, so it
+* cannot disturb the pending right value. If src1 is itself a planned
+* stack handoff, the right value is newer and is popped first, followed by
+* the planned left value. The fix is symmetric to
+* mir_can_forward_stack_to_index/_binary_const above. It remains
+* restricted to the immediately-following instruction only (no intervening
+* MIR_CONST skip - that shape is a distinct, not yet needed case) and
+* excludes divmod pairing, which uses a different code path entirely.
  *
  * Item T17 (mir-text-size-plan.md): like
  * mir_can_forward_stack_to_binary_const above, this originally also
@@ -3326,7 +3350,10 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
         return 0;
     if (type_size(binary->secondary_offset) == 4)
         return 0;
-    if (!mir_binary_only_constant(binary->src1))
+    if (mir_value_use_count(value) != 1)
+        return 0;
+    if (!mir_binary_only_constant(binary->src1) &&
+        !mir_general_rhs_stack_forwarding_enabled)
         return 0;
     if (mir_divmod_partner(binary_instruction) >= 0)
         return 0;
@@ -3424,6 +3451,18 @@ static int mir_pending_planned_stack_consumer(void)
         if (mir_planned_stack_is_emitted(value))
             return mir_planned_stack_target(value);
     return -1;
+}
+
+static int mir_rhs_stack_forward_nests_with_planned_left(
+    int value, int consumer)
+{
+    const struct MirInsn *binary;
+
+    if (consumer < 0 || consumer >= mir.count)
+        return 0;
+    binary = &mir.insns[consumer];
+    return mir_is_general_rhs_stack_forward(value, consumer) &&
+           mir_planned_stack_matches_consumer(binary->src1, consumer);
 }
 
 static int mir_consume_planned_stack(FILE *out, int value, int instruction,
@@ -3529,12 +3568,16 @@ static void mir_emit_virtual_store(FILE *out, int value)
             pending_planned_consumer =
                 mir_pending_planned_stack_consumer();
             if (pending_planned_consumer >= 0 &&
-                forward_instruction >= pending_planned_consumer)
+                forward_instruction >= pending_planned_consumer &&
+                !mir_rhs_stack_forward_nests_with_planned_left(
+                    value, forward_instruction))
                 mir_planned_stack_invalid = 1;
             fputs("\tpush hl\n", out);
             mir_forwarded_stack_value = value;
             mir_forwarded_stack_instruction = mir_emit_instruction_index;
             mir_forwarded_stack_target_instruction = forward_instruction;
+            if (mir_is_general_rhs_stack_forward(value, forward_instruction))
+                mir_spilled_cfg_used_general_rhs_stack_forwarding = 1;
             if (dynamic_index_forward)
                 mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         }
@@ -3558,12 +3601,16 @@ static void mir_emit_virtual_store(FILE *out, int value)
              value, &dynamic_index_forward)) >= 0) {
         pending_planned_consumer = mir_pending_planned_stack_consumer();
         if (pending_planned_consumer >= 0 &&
-            forward_instruction >= pending_planned_consumer)
+            forward_instruction >= pending_planned_consumer &&
+            !mir_rhs_stack_forward_nests_with_planned_left(
+                value, forward_instruction))
             mir_planned_stack_invalid = 1;
         fputs("\tpush hl\n", out);
         mir_forwarded_stack_value = value;
         mir_forwarded_stack_instruction = mir_emit_instruction_index;
         mir_forwarded_stack_target_instruction = forward_instruction;
+        if (mir_is_general_rhs_stack_forward(value, forward_instruction))
+            mir_spilled_cfg_used_general_rhs_stack_forwarding = 1;
         if (dynamic_index_forward)
             mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         return;
@@ -5342,6 +5389,11 @@ int mir_spilled_cfg_depends_on_stable_pointer_local_slot(void)
     return mir_spilled_cfg_used_stable_pointer_local_slot;
 }
 
+int mir_spilled_cfg_depends_on_rhs_stack_forwarding(void)
+{
+    return mir_spilled_cfg_used_general_rhs_stack_forwarding;
+}
+
 int mir_try_emit_spilled_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -5363,6 +5415,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_planned_index_base_handoff = 0;
     mir_spilled_cfg_used_stable_pointer_local_home = 0;
     mir_spilled_cfg_used_stable_pointer_local_slot = 0;
+    mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -6557,13 +6610,18 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                  * changed here is unambiguously cheaper in isolation. */
                 if (stack_forwarded_right) {
                     /* Item T16: the right operand is already on the
-                     * stack from its own definition site, and HL was
-                     * just loaded with the (plain-constant) left
-                     * operand above - a single pop retrieves the right
-                     * operand directly into DE, exactly where it needs
-                     * to be for the operation below. No push, reload,
-                     * or ex de,hl required at all. */
+                     * stack from its own definition site. Pop it into DE
+                     * after loading the left operand; if that left operand
+                     * also has a planned stack handoff, it is directly
+                     * beneath the right operand and can now be popped into
+                     * HL. */
                     fputs("\tpop de\n", out);
+                    if (planned_stack_forwarded_left) {
+                        if (!mir_consume_planned_stack(
+                                out, insn->src1, i, "hl"))
+                            mir_planned_stack_invalid = 1;
+                        planned_stack_forwarded_left = 0;
+                    }
                 } else if (mir_binary_is_fusable_comparison(i) > 0 &&
                     mir_fused_compare_is_const_zero_rhs(i)) {
                     /* Item 25: this comparison will be fused directly into
