@@ -10913,3 +10913,53 @@ before Batch 41. Highest-impact slot classes remain one/two-use unary and
 binary values, two-use indirect loads, and stable call results; preserve the
 new multiplication-only and single-block structural gates unless exact
 profiling proves a wider class.
+
+## Items T295-T302: homed byte indirect access (2026-08-10)
+
+T295 refreshes the final-attempt backend-slot census. The 335 remaining
+ordinary `text-size` functions contain 1,731 accessed slots. Index addresses,
+one/two-use binary values, constants, named loads, indirect loads, and unary
+values are the leading classes.
+
+T296 tests binary RHS forwarding across intervening NOPs. It adds no function
+and removes the incumbent `tginitad.main`, so the prototype is fully removed.
+T297 tests adjacent wide indirect-store value forwarding and adds no function.
+T298 allows a planned-stack producer to span two instructions; it also adds no
+function and perturbs many fallback classifications. Both prototypes are
+fully removed.
+
+T299 refreshes homed preflight diagnostics. The dominant rejects are 232
+spill, 181 load/comparison CFG, 173 wide color, 98 indirect-load type, 83
+opcode, 81 wide unary, 79 indirect-store type, and 60 wide binary. Broad
+wide-binary admission is not retried because the earlier T172/T177/T239
+experiments already measured zero yield.
+
+T300 adds width-correct homed one-byte indirect loads. Signed characters are
+sign-extended, unsigned characters are zero-extended, and `_Bool` values are
+normalized to zero or one. T301 adds one-byte indirect stores that write only
+the low byte.
+
+The ungated byte-indirect form adds four functions but regresses `tc89init`
+and `tpeepal` peep execution by nine cycles each. A first selection-level cost
+gate also removes three incumbents because it suppresses the already-profitable
+spilled selector. T302 therefore places the boundary in homed preflight:
+already-supported constant-absolute accesses are excluded, while nonconstant
+byte-indirect candidates must be single-block and contain more than 20 MIR
+instructions. This preserves the spilled fallback whenever homed emission is
+declined.
+
+**Census and focused validation**:
+
+- ordinary: **823/2025 (40.64%)**, +3 names and zero removals;
+- stack-check: **844/2127 (39.68%)**, +3 names and zero removals;
+- both add `tinitreg.tglob`, `treg.test_call_around`, and `tsnprtf.main`;
+- six affected apps pass focused full peep/nopeep validation with zero
+  regressions and 13 checked improvements;
+- focused ASan/UBSan compilation is clean with process-lifetime leak reporting
+  disabled.
+
+The next batch should prioritize the 335 remaining `text-size` functions over
+relaxing measured cost gates. The refreshed homed rejects identify spill,
+wide-color, and unsupported-opcode/type classes as the largest structural
+barriers; new work should start with detailed population diagnostics rather
+than broad admission.

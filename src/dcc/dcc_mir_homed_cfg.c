@@ -13,6 +13,9 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+static int mir_homed_constant_absolute_access_supported(
+    const struct MirInsn *insn);
+
 /* mir-text-size Item T19: this selector's own MIR_INDEX_ADDRESS acceptance
  * (Item 22, below) already restricts to the fixed-stride, constant-index
  * shape only (insn->base_name[0] == 0, index_definition->opcode ==
@@ -172,6 +175,24 @@ static int mir_homed_wide_type_supported(int type)
 {
     return type_size(type) == 4 &&
            (type_is_long(type) || type_is_float(type));
+}
+
+static int mir_homed_byte_indirect_count(void)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (mir_insn_is_reachable(instruction) &&
+            (insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            insn->memory_size == 1 &&
+            !mir_homed_constant_absolute_access_supported(insn))
+            ++count;
+    }
+    return count;
 }
 
 static int mir_homed_float_cast_supported(const struct MirInsn *insn)
@@ -761,6 +782,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir.name, mir.return_type, type_size(mir.return_type));
         return mir_homed_reject("return-type");
     }
+    if (mir_homed_byte_indirect_count() > 0 &&
+        (mir_cfg_block_count() > 1 || mir.count <= 20))
+        return mir_homed_reject("byte-indirect-cost");
     if (mir.allocation_spill_count > 4)
         return mir_homed_reject("spill");
     for (value = 0; value < mir.next_value; ++value)
@@ -941,7 +965,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (!mir_homed_constant_absolute_access_supported(insn) &&
                 (type_is_struct_object(insn->type) ||
                 (insn->bit_width > 0 && insn->memory_size != 2) ||
-                !((type_size(insn->type) == 2 &&
+                !((type_size(insn->type) == 1 &&
+                   insn->memory_size == 1) ||
+                  (type_size(insn->type) == 2 &&
                    (insn->memory_size == 0 || insn->memory_size == 2)) ||
                   (mir_homed_wide_type_supported(insn->type) &&
                    insn->memory_size == 4))))
@@ -952,7 +978,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * wide stores mirror the spilled backend's width rules. */
             if (!mir_homed_constant_absolute_access_supported(insn) &&
                 ((insn->bit_width > 0 && insn->memory_size != 2) ||
-                !((insn->memory_size == 0 || insn->memory_size == 2) ||
+                !((insn->memory_size == 0 || insn->memory_size == 1 ||
+                   insn->memory_size == 2) ||
                   (insn->memory_size == 4 &&
                    mir_definition(insn->src2) != NULL &&
                    mir_homed_wide_type_supported(
@@ -1518,8 +1545,22 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     fputs("\tpush hl\n", out);
                 if (!mir_emit_home_to_hl(out, insn->src1))
                     goto done;
-                fputs("\tld a,(hl)\n\tinc hl\n"
-                      "\tld h,(hl)\n\tld l,a\n", out);
+                if (insn->memory_size == 1) {
+                    fputs("\tld l,(hl)\n", out);
+                    if (type_is_bool(insn->type)) {
+                        int end_label = new_label();
+                        fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                        fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                                end_label, end_label);
+                    } else if ((insn->type & TYPE_UNSIGNED) != 0) {
+                        fputs("\tld h,0\n", out);
+                    } else {
+                        mir_emit_signed_byte_extend(out);
+                    }
+                } else {
+                    fputs("\tld a,(hl)\n\tinc hl\n"
+                          "\tld h,(hl)\n\tld l,a\n", out);
+                }
                 if (insn->bit_width > 0)
                     mir_emit_bitfield_extract(out, insn);
                 if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
@@ -1637,7 +1678,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     fputs("\tex de,hl\n\tpop hl\n", out);
                 }
                 fputs("\tld (hl),e\n", out);
-                fputs("\tinc hl\n\tld (hl),d\n", out);
+                if (insn->memory_size != 1)
+                    fputs("\tinc hl\n\tld (hl),d\n", out);
                 if (preserve_de) fputs("\tpop de\n", out);
                 if (preserve_hl) fputs("\tpop hl\n", out);
                 if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);

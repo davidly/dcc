@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `e4ac9fe` (Items T265-T274)
-- Published ordinary coverage: **797/2023 functions (39.40%)**
-- Published stack-check coverage: **817/2125 functions (38.45%)**
+- Published baseline: `cff0d16` (Items T285-T294)
+- Published ordinary coverage: **820/2025 functions (40.49%)**
+- Published stack-check coverage: **841/2127 functions (39.54%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -56,6 +56,10 @@ history preserves them.
 - Batch 38 candidate stack-check coverage: **817/2125 functions (38.45%)**
 - Batch 39 candidate ordinary coverage: **803/2023 functions (39.69%)**
 - Batch 39 candidate stack-check coverage: **823/2125 functions (38.73%)**
+- Batch 40 ordinary coverage: **820/2025 functions (40.49%)**
+- Batch 40 stack-check coverage: **841/2127 functions (39.54%)**
+- Batch 41 candidate ordinary coverage: **823/2025 functions (40.64%)**
+- Batch 41 candidate stack-check coverage: **844/2127 functions (39.68%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
@@ -1168,6 +1172,35 @@ for the denominator increase from 2023. The stack-check census is
 All fifteen affected apps pass focused full peep/nopeep validation with zero
 regressions and 51 checked improvements. ASan/UBSan compilation is clean with
 the compiler's pre-existing process-lifetime leak reporting disabled.
+
+## Batch 41
+
+1. T295: refresh the final-attempt backend-slot census. The 335 remaining
+   ordinary `text-size` functions contain 1,731 accessed slots, led by index
+   addresses, one/two-use binary values, constants, named loads, indirect
+   loads, and unary values.
+2. T296-T298: measure and fully remove three zero-yield spilled-backend
+   prototypes: NOP-gap binary-RHS forwarding, adjacent wide indirect-store
+   value forwarding, and two-instruction planned-stack spans. The first also
+   removes an incumbent and the third perturbs fallback classifications.
+3. T299: refresh homed preflight diagnostics. The leading rejection classes
+   are spill, load/comparison CFG, wide color, indirect-memory type, opcode,
+   wide unary, and wide binary.
+4. T300-T301: add homed one-byte indirect loads and stores. Loads perform
+   signed extension, unsigned zero extension, or `_Bool` normalization;
+   stores write only the low byte.
+5. T302: keep nonconstant byte-indirect admission in homed preflight so a
+   declined candidate can still use the established spilled selector. Exclude
+   already-supported constant-absolute accesses, and require a single-block
+   MIR body with more than 20 instructions after the ungated form regresses
+   two peep builds.
+
+The candidate ordinary census is **823/2025 (40.64%)**, +3 names and zero
+removals. The stack-check census is **844/2127 (39.68%)**, also +3 and zero
+removals. Both add `tinitreg.tglob`, `treg.test_call_around`, and
+`tsnprtf.main`. Six affected apps pass focused full peep/nopeep validation
+with zero regressions and 13 checked improvements. Focused ASan/UBSan
+compilation is clean with leak reporting disabled.
 
 ## Required process
 
