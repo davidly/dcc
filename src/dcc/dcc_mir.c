@@ -2109,7 +2109,7 @@ static int mir_lower_expr(const struct AstNode *node)
             insn->memory_flags |= MIR_CALL_FLAG_VARIADIC;
         if (function_symbol != NULL) {
             if (mir_inline_substitutable(function_symbol))
-                insn->memory_flags |= 2048;
+                insn->memory_flags |= MIR_CALL_FLAG_INLINE_SUBSTITUTABLE;
             int format_index = asm_printf_family_fmt_arg_index(call_name);
             if (format_index >= 0 && format_index < node->list_len) {
                 int needs_float = 0;

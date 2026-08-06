@@ -10084,3 +10084,72 @@ by 653 `text-size`, 131 `unary-not-cost`, 118
 `dead-local-suffix-cost`, 24 `dead-store-forwarding-cost`, 11
 `planned-stack-cost`, 8 `lazy-parameter-cost`, and 2
 `stable-pointer-local-cost` functions.
+
+## Items T197-T202: measured format near-costs and strict phi retry (2026-08-06)
+
+T197 revisits the 47 `inline-substitution` fallbacks. Materializing every
+inline-only callee as a real out-of-line function is semantically viable, but
+regresses `tinlinfb` linked size by about six percent. Directly substituting
+the captured inline return expression into MIR removes 17 blockers but admits
+no function: the spilled backend rematerializes the substituted expression at
+each use and commonly expands output by two to three times. Both prototypes
+are fully removed. The retained cleanup names the previously duplicated 2048
+call flag `MIR_CALL_FLAG_INLINE_SUBSTITUTABLE`.
+
+T198-T199 force-profile large unary-not CFGs and close text-size misses.
+`wumpus.main` regresses peep execution, while `forint.primary` remains behind
+the inline-substitution and backedge safety gates. Near-cost profiling finds
+three durable format-call candidates. `tfloat4.check_float` and
+`trw.must_seek` improve both modes despite a text-proxy deficit of at most
+nine bytes and two instructions; both are two-block CFGs with wide values.
+`tunaryp.chku` is neutral with no backend slots and no extra instructions.
+The corresponding structural predicates require a `printf`-family call and
+do not use function-name exceptions. `tabort.chki`,
+`tpostinc.test_char_simple`, and `too.bst_height` are rejected after measured
+cycle or linked-size regressions. `attnc11.transposed_multiply_8x16`
+miscompiles under forced MIR and remains fallback.
+
+T200 diagnoses the initial `too.bst_height` wrong result as a real phi-copy
+edge bug. A branch arm can end in a promoted `MIR_NOP`, followed by the
+arm's predecessor label and then the merge label. The existing emitters run
+the selected phi copy on the real branch/jump edge and again on the
+label-to-label pseudo-fallthrough, overwriting the selected ternary result.
+One shared fallthrough predicate now owns the homed and spilled tests and can
+strictly reject label pseudo-edges.
+
+T201 measures global strict behavior and rejects it as an incumbent rewrite.
+Although it exposes `forint.ensure_sym`, `tasm.main`, and `too.bst_height`,
+each regresses at least one runtime mode, and established selections in
+`tvolopt` and `forint` also change. Strict behavior therefore becomes a fresh
+fallback-only selector transaction after all incumbent lazy-parameter,
+stable-local, specialized-loop, and comparison retries. It runs only for
+final `text-size` or `instruction-count` fallbacks, never speculative
+codegen. The strict flag is cleared on every accept/reject path and at the
+start of each function.
+
+T202 profiles the resulting population. Correcting a duplicate pseudo-edge
+copy is required for semantics, but every newly exposed candidate below a
+ten-instruction win regresses at least one mode. The structural
+`phi-fallthrough-cost` gate retains those fallbacks. Moving the strict retry
+after incumbent retries restores `forint.resolve_idx` exactly to its published
+269-byte/26-instruction output and selected hash `7a7eeb1a`.
+
+**Census and focused validation**:
+
+- ordinary: **737/2022 (36.45%)**, +3 names and zero removals;
+- stack-check: **752/2124 (35.40%)**, +4 names and zero removals;
+- ordinary additions: `tfloat4.check_float`, `trw.must_seek`, and
+  `tunaryp.chku`;
+- stack-check additions: `tfloat4.check_float`, `tnegidx.chkl`,
+  `tpreinc.chkl`, and `tunaryp.chki`; `trw` also has an active selected-output
+  change;
+- the five-app stack-check focused full peep/nopeep run passes with zero
+  regressions and five checked cycle/size improvements.
+
+The refreshed ordinary rejection population is led by 584 `text-size`, 131
+`unary-not-cost`, 118 `dynamic-index-base-cost`, 72 `wide-constant-cost`, 63
+`phi-fallthrough-cost`, 48 `absolute-index-cost`, 47
+`inline-substitution`, 46 `absolute-address-cost`, 44
+`planned-index-base-cost`, 37 `dead-local-suffix-cost`, 24
+`dead-store-forwarding-cost`, 14 `planned-stack-cost`, and 8
+`lazy-parameter-cost` functions.

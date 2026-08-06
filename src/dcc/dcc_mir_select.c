@@ -984,7 +984,8 @@ static int mir_has_inline_substitution_call(void)
 
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_CALL &&
-            (mir.insns[i].memory_flags & 2048) != 0)
+            (mir.insns[i].memory_flags &
+             MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0)
             return 1;
     return 0;
 }
@@ -1061,6 +1062,18 @@ static int mir_has_format_runtime_call(void)
         if (mir.insns[instruction].opcode == MIR_CALL &&
             (mir.insns[instruction].memory_flags &
              MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+            return 1;
+    return 0;
+}
+
+static int mir_has_printf_family_call(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL &&
+            asm_printf_family_fmt_arg_index(
+                mir.insns[instruction].name) >= 0)
             return 1;
     return 0;
 }
@@ -1280,6 +1293,32 @@ static int mir_is_profiled_slotless_two_block_win(
            mir.backend_slot_count == 0 &&
            generated_size <= captured_size + 20 &&
            generated_instructions < captured_instructions;
+}
+
+static int mir_is_profiled_two_block_format_near_cost(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    /* check_float and must_seek are the complete measured two-block
+     * format-call population within this nine-byte/two-instruction boundary.
+     * Both MIR forms improve both runtime modes despite the text proxy's
+     * small deficit. */
+    return !mir.has_vla && mir_cfg_block_count() == 2 &&
+           mir_has_wide_values() && mir_has_printf_family_call() &&
+           generated_size <= captured_size + 9 &&
+           generated_instructions <= captured_instructions + 2;
+}
+
+static int mir_is_profiled_slotless_format_cfg(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    /* The measured four-block diagnostic helper is cycle/size neutral after
+     * assembly when MIR needs no frame slots and adds no instructions. */
+    return !mir.has_vla && mir_cfg_block_count() <= 4 &&
+           mir.backend_slot_count == 0 && mir_has_printf_family_call() &&
+           generated_size <= captured_size + 9 &&
+           generated_instructions <= captured_instructions;
 }
 
 static int mir_is_profiled_vla_single_block_instruction_win(
@@ -1684,6 +1723,9 @@ void mir_end_function(void)
             int lazy_allocation_active = 0;
             int stable_local_retry_attempted = 0;
             int stable_local_homes_active = 0;
+            int strict_phi_retry_attempted = 0;
+            int strict_phi_fallthrough_active = 0;
+            mir_end_strict_phi_fallthrough();
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
@@ -1986,6 +2028,15 @@ evaluate_generated:
                      * raw instructions. Multi-block candidates with a
                      * four-instruction win were non-regressing. */
                     fallback_reason = "stable-pointer-local-cost";
+                else if (mir_strict_phi_fallthrough_was_used() &&
+                         generated_instructions >
+                             captured_instructions - 10)
+                    /* Suppressing a duplicate copy on a label-only pseudo
+                     * edge is required for correctness, but the newly exposed
+                     * shallow candidates can still regress after dccpeep.
+                     * The complete measured population below a ten-
+                     * instruction win regressed at least one runtime mode. */
+                    fallback_reason = "phi-fallthrough-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                                                  ((generated_size > captured_size + 1 &&
                                                      !(mir.local_bytes == 0 &&
@@ -2050,6 +2101,14 @@ evaluate_generated:
                                                      generated_size, captured_size,
                                                      generated_instructions,
                                                      captured_instructions) &&
+                                                 !mir_is_profiled_two_block_format_near_cost(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
+                                                 !mir_is_profiled_slotless_format_cfg(
+                                                     generated_size, captured_size,
+                                                     generated_instructions,
+                                                     captured_instructions) &&
                                                  !mir_is_profiled_vla_single_block_instruction_win(
                                                      generated_size, captured_size,
                                                      generated_instructions,
@@ -2082,6 +2141,12 @@ evaluate_generated:
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_indirect_rmw_single_block(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_two_block_format_near_cost(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions) &&
+                         !mir_is_profiled_slotless_format_cfg(
                              generated_size, captured_size,
                              generated_instructions, captured_instructions) &&
                          !mir_is_profiled_vla_single_block_instruction_win(
@@ -2371,6 +2436,45 @@ evaluate_generated:
                     if (branch_candidate != NULL)
                         fclose(branch_candidate);
                 }
+                if (fallback_reason != NULL &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size")) &&
+                    !strict_phi_retry_attempted &&
+                    !g_speculative_codegen_active &&
+                    (!strcmp(selector_name, "spilled-scalar-cfg") ||
+                     !strcmp(selector_name, "homed-scalar-cfg"))) {
+                    FILE *phi_candidate = tmpfile();
+                    int phi_emitted;
+
+                    strict_phi_retry_attempted = 1;
+                    if (phi_candidate == NULL)
+                        fatal("cannot create MIR strict-phi candidate stream");
+                    mir_begin_strict_phi_fallthrough();
+                    strict_phi_fallthrough_active = 1;
+                    label_id = mir_label_base;
+                    phi_emitted = mir_try_selector(
+                        phi_candidate,
+                        !strcmp(selector_name, "homed-scalar-cfg")
+                            ? mir_try_emit_homed_scalar_cfg
+                            : mir_try_emit_spilled_scalar_cfg);
+                    if (phi_emitted) {
+                        fclose(generated);
+                        generated = phi_candidate;
+                        phi_candidate = NULL;
+                        emitted = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    mir_end_strict_phi_fallthrough();
+                    strict_phi_fallthrough_active = 0;
+                    fclose(phi_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    strict_phi_fallthrough_active) {
+                    mir_end_strict_phi_fallthrough();
+                    strict_phi_fallthrough_active = 0;
+                }
                 {
                     const char *forced_accept =
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
@@ -2385,6 +2489,10 @@ evaluate_generated:
                 if (stable_local_homes_active) {
                     mir_end_stable_pointer_local_homes();
                     stable_local_homes_active = 0;
+                }
+                if (strict_phi_fallthrough_active) {
+                    mir_end_strict_phi_fallthrough();
+                    strict_phi_fallthrough_active = 0;
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;

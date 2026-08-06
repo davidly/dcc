@@ -7,9 +7,9 @@ history preserves them.
 ## Current state
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `37f4749` (Items T189-T192)
-- Published ordinary coverage: **729/2022 functions (36.05%)**
-- Published stack-check coverage: **743/2124 functions (34.98%)**
+- Published baseline: `756df9d` (Items T193-T196)
+- Published ordinary coverage: **734/2022 functions (36.30%)**
+- Published stack-check coverage: **748/2124 functions (35.22%)**
 - Batch 9 ordinary coverage: **605/2021 functions (29.94%)**
 - Batch 9 stack-check coverage: **610/2123 functions (28.73%)**
 - Batch 10 ordinary coverage: **608/2021 functions (30.08%)**
@@ -28,9 +28,37 @@ history preserves them.
 - Batch 24 candidate stack-check coverage: **743/2124 functions (34.98%)**
 - Batch 25 candidate ordinary coverage: **734/2022 functions (36.30%)**
 - Batch 25 candidate stack-check coverage: **748/2124 functions (35.22%)**
+- Batch 26 candidate ordinary coverage: **737/2022 functions (36.45%)**
+- Batch 26 candidate stack-check coverage: **752/2124 functions (35.40%)**
 - Dominant fallback: `text-size` through `spilled-scalar-cfg`
 - Goal: 100% MIR emitter coverage without correctness or peep/nopeep
   performance regressions
+
+## Batch 26
+
+1. T197-T198: measure and reject both out-of-line materialization and direct
+   MIR substitution for legacy inline-only calls. The former regresses linked
+   size; the latter duplicates rematerialized expressions and admits no
+   function.
+2. T199: measure and reject broad unary-not/large-CFG exceptions after forced
+   peep/nopeep profiling exposes regressions or later safety gates.
+3. T200: admit three structurally profiled format-call near-cost candidates:
+   two-block wide-value CFGs within nine bytes/two instructions, and slotless
+   at-most-four-block CFGs within nine bytes and no extra instructions.
+4. T201: fix duplicate phi copies across consecutive label pseudo-edges with
+   one shared homed/spilled fallthrough predicate.
+5. T202: keep the phi correction fallback-only and transactional, after a
+   global rollout perturbs incumbent output and exposes regressing candidates.
+   Run it only after incumbent lazy/stable/specialized retries, require a
+   ten-instruction win, and preserve every existing selected hash.
+6. Replace the duplicated inline-substitution call-flag literal with
+   `MIR_CALL_FLAG_INLINE_SUBSTITUTABLE`.
+
+The ordinary census is **737/2022 (36.45%)**, +3 names and zero removals.
+The stack-check census is **752/2124 (35.40%)**, +4 names and zero removals.
+Ordinary additions are `tfloat4.check_float`, `trw.must_seek`, and
+`tunaryp.chku`. The five-app stack-check focused full peep/nopeep run passes
+with zero regressions and five checked cycle/size improvements.
 
 ## Batch 2
 

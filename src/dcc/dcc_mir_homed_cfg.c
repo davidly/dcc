@@ -1890,9 +1890,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         default:
             goto done;
         }
-        if (insn->opcode != MIR_JUMP && insn->opcode != MIR_BRANCH_FALSE &&
-            insn->opcode != MIR_RETURN && i + 1 < mir.count &&
-            mir_edge_phi_names_predecessor(i, i + 1) &&
+        if (mir_instruction_has_phi_fallthrough(i, 0) &&
             !mir_emit_homed_phi_copies(out, i, i + 1))
             goto done;
     }

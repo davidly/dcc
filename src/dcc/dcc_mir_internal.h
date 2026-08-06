@@ -62,6 +62,7 @@ enum MirCallFlag {
     MIR_CALL_FLAG_FORMAT_OCTAL = 64,
     MIR_CALL_FLAG_FORMAT_RUNTIME =
         MIR_CALL_FLAG_FORMAT_HEX | MIR_CALL_FLAG_FORMAT_OCTAL,
+    MIR_CALL_FLAG_INLINE_SUBSTITUTABLE = 2048,
     MIR_CALL_FLAG_VARIADIC = 4096
 };
 
@@ -286,6 +287,11 @@ int mir_declared_location(const char *name, int *type, int *storage,
                                  int *offset);
 int mir_direct_branch_for_comparison(int instruction);
 int mir_edge_phi_names_predecessor(int predecessor, int successor);
+void mir_begin_strict_phi_fallthrough(void);
+void mir_end_strict_phi_fallthrough(void);
+int mir_instruction_has_phi_fallthrough(int instruction,
+                                        int require_next_label);
+int mir_strict_phi_fallthrough_was_used(void);
 int mir_emit_constant_to_home(FILE *out, int value, long immediate);
 int mir_emit_hl_to_home(FILE *out, int value);
 int mir_home_spill_offset(int value, int *offset);

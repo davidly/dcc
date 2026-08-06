@@ -1348,6 +1348,48 @@ int mir_edge_phi_names_predecessor(int predecessor, int successor)
            mir.insns[instruction].phi_pred2 == predecessor_label;
 }
 
+static int mir_strict_phi_fallthrough_enabled;
+static int mir_strict_phi_fallthrough_used;
+
+void mir_begin_strict_phi_fallthrough(void)
+{
+    mir_strict_phi_fallthrough_enabled = 1;
+    mir_strict_phi_fallthrough_used = 0;
+}
+
+void mir_end_strict_phi_fallthrough(void)
+{
+    mir_strict_phi_fallthrough_enabled = 0;
+}
+
+int mir_strict_phi_fallthrough_was_used(void)
+{
+    return mir_strict_phi_fallthrough_enabled &&
+           mir_strict_phi_fallthrough_used;
+}
+
+int mir_instruction_has_phi_fallthrough(int instruction,
+                                        int require_next_label)
+{
+    int opcode;
+
+    if (instruction < 0 || instruction + 1 >= mir.count)
+        return 0;
+    opcode = mir.insns[instruction].opcode;
+    if (opcode == MIR_LABEL && mir_strict_phi_fallthrough_enabled) {
+        if (mir.insns[instruction + 1].opcode == MIR_LABEL &&
+            mir_edge_phi_names_predecessor(instruction, instruction + 1))
+            mir_strict_phi_fallthrough_used = 1;
+        return 0;
+    }
+    if (opcode == MIR_JUMP ||
+        opcode == MIR_BRANCH_FALSE || opcode == MIR_RETURN)
+        return 0;
+    return (!require_next_label ||
+            mir.insns[instruction + 1].opcode == MIR_LABEL) &&
+           mir_edge_phi_names_predecessor(instruction, instruction + 1);
+}
+
 int mir_direct_branch_for_comparison(int instruction)
 {
     const struct MirInsn *compare;

@@ -7294,18 +7294,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         default:
             goto done;
         }
-        if (insn->opcode != MIR_JUMP && insn->opcode != MIR_BRANCH_FALSE &&
-            insn->opcode != MIR_RETURN && i + 1 < mir.count &&
-            mir.insns[i + 1].opcode == MIR_LABEL) {
-            int first = mir_first_phi_or_block_end(i + 1);
-            int predecessor_label = mir_block_label_before(i);
-            if (first >= 0 && first < mir.count &&
-                mir.insns[first].opcode == MIR_PHI &&
-                (mir.insns[first].phi_pred1 == predecessor_label ||
-                 mir.insns[first].phi_pred2 == predecessor_label) &&
-                !mir_emit_spilled_phi_copies(out, i, i + 1))
-                goto done;
-        }
+        if (mir_instruction_has_phi_fallthrough(i, 1) &&
+            !mir_emit_spilled_phi_copies(out, i, i + 1))
+            goto done;
     }
     if (mir_planned_stack_invalid ||
         mir_planned_stack_emit_count != mir_planned_stack_consume_count) {
