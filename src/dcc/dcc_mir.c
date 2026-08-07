@@ -223,18 +223,27 @@ static int mir_object_eligible(const struct Sym *sym)
      * only TYPE_LONG/TYPE_FLOAT scalars newly qualify. */
     if (type_size(sym->type) < 1 || type_size(sym->type) > 4)
         return 0;
-    if (local_name_address_taken_in_function(sym->name))
-        return 0;
-    separator = strchr(sym->name, '#');
-    if (separator != NULL) {
-        char source_name[64];
-        size_t length = (size_t)(separator - sym->name);
-        if (length >= sizeof(source_name))
-            length = sizeof(source_name) - 1;
-        memcpy(source_name, sym->name, length);
-        source_name[length] = 0;
-        if (local_name_address_taken_in_function(source_name))
+    /* MIR can prove scalar local/parameter address escapes precisely from its
+     * own lowered MIR_ADDRESS instructions later, which avoids the legacy
+     * lexer scan's broad false positives on the RHS of bitwise '&'
+     * expressions (`tbits.ti16_bits`: `a & b` had marked `b` address-taken
+     * and blocked object promotion entirely). Keep the lexical gate only for
+     * pointer parameters, whose safety proof still depends on the separate
+     * pointer-reference classifier below. */
+    if (type_ptr_depth(sym->type) > 0) {
+        if (local_name_address_taken_in_function(sym->name))
             return 0;
+        separator = strchr(sym->name, '#');
+        if (separator != NULL) {
+            char source_name[64];
+            size_t length = (size_t)(separator - sym->name);
+            if (length >= sizeof(source_name))
+                length = sizeof(source_name) - 1;
+            memcpy(source_name, sym->name, length);
+            source_name[length] = 0;
+            if (local_name_address_taken_in_function(source_name))
+                return 0;
+        }
     }
     return 1;
 }
@@ -438,6 +447,56 @@ static void mir_filter_pointer_parameter_objects(void)
             if (mir.insns[instruction].object == object) {
                 /* Deferred loop-header merges have already been resolved.
                  * Preserve the named load when this object is filtered. */
+                if (mir.insns[instruction].opcode == MIR_OBJECT_MERGE)
+                    mir.insns[instruction].opcode = MIR_LOAD;
+                mir.insns[instruction].object = -1;
+            } else if (mir.insns[instruction].object > object) {
+                --mir.insns[instruction].object;
+            }
+        }
+        if (object + 1 < mir.object_count)
+            memmove(&mir.objects[object], &mir.objects[object + 1],
+                    (size_t)(mir.object_count - object - 1) *
+                        sizeof(mir.objects[0]));
+        --mir.object_count;
+    }
+}
+
+static int mir_scalar_object_has_address_escape(int object)
+{
+    int instruction;
+
+    if (object < 0 || object >= mir.object_count)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ADDRESS &&
+            mir.insns[instruction].object == object)
+            return 1;
+    return 0;
+}
+
+/* Scalar MIR objects can use a stricter address-taken proof than the legacy
+ * lexer pre-scan: after lowering, only a real MIR_ADDRESS of the object's own
+ * storage can make it aliasable. This keeps true `&name` escapes rejected
+ * while admitting ordinary bitwise uses such as `a & b`, whose token stream
+ * the shared pre-scan intentionally over-approximates. */
+static void mir_filter_address_taken_scalar_objects(void)
+{
+    int object;
+
+    for (object = mir.object_count - 1; object >= 0; --object) {
+        struct MirObject *candidate = &mir.objects[object];
+        int instruction;
+
+        if ((candidate->storage != SC_LOCAL && candidate->storage != SC_PARAM) ||
+            type_ptr_depth(candidate->type) != 0 ||
+            type_is_struct_object(candidate->type) ||
+            type_size(candidate->type) < 1 ||
+            type_size(candidate->type) > 4 ||
+            !mir_scalar_object_has_address_escape(object))
+            continue;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            if (mir.insns[instruction].object == object) {
                 if (mir.insns[instruction].opcode == MIR_OBJECT_MERGE)
                     mir.insns[instruction].opcode = MIR_LOAD;
                 mir.insns[instruction].object = -1;
@@ -5825,6 +5884,7 @@ int mir_verify_and_dump(void)
     memset(opaque_kinds, 0, sizeof(opaque_kinds));
     mir_report_pointer_parameter_eligibility();
     mir_filter_pointer_parameter_objects();
+    mir_filter_address_taken_scalar_objects();
     promoted_objects = 0;
     for (;;) {
         int promoted_pass = mir_promote_objects();

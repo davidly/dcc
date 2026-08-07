@@ -12715,3 +12715,113 @@ design, not a re-run of the already-falsified general CSE pass.
 No code change from this follow-on search (documentation only). Coverage
 unchanged: **902/2026 ordinary (44.52%)**, **924/2128 stack-check
 (43.42%)**.
+
+## T400: MIR-only scalar address-escape filtering fixes the `ti16_bits` repeated-parameter reload lead (+3, 2026-08-07)
+
+Picked up T399's follow-on `ti16_bits` lead by checking the actual
+eligibility gate before changing any "budget" constant. The key bounded
+question was not "why didn't `b` get IY?" but "why did `b` never become an
+object/promoted entry value in the first place, while same-shape `a` did?"
+Used batch GDB on `dcc_mir.c:2521` during `mir_begin_function()` to print
+`mir_object_eligible(&locals[local])` for `tbits`' bitwise helpers. Result:
+for every `a` parameter, `addr_taken=0 eligible=1`; for every matching `b`
+parameter, `addr_taken=1 eligible=0` despite identical storage/type/uses.
+Direct cause found.
+
+**Root cause:** MIR object eligibility for locals/parameters was still
+consulting the shared lexer pre-scan
+`local_name_address_taken_in_function()` (`dcc_mir.c:195-239`), and that scan
+(`dcc_func.c:1052+`) deliberately over-approximates address-taking by arming
+on every `&` token. In an ordinary bitwise expression `a & b`, the RHS
+identifier `b` therefore looks "address-taken" to the shared scan even though
+no `&b` exists semantically. That blocked `b` from entering `mir.objects[]`,
+so object promotion could fold every load of `a` to its entry value but had no
+such handle for `b`; `ti16_bits` then emitted four separate `MIR_LOAD`s of
+the same unmodified parameter exactly as T399 observed.
+
+**One failed attempt first, documented so it is not retried blindly:** a
+shared fix in `dcc_func.c` that tried to distinguish unary `&name` from
+binary `lhs & rhs` at the lexer-scan level *did* fix `ti16_bits`, but it
+falsified itself immediately on casted real address-of forms such as
+`(unsigned char *)&lf` (`tc89fltc.main`) and `((char *)&local)+1`
+(`tpeepal.interior_escape_store`). Those compile as unary `&` after the
+closing `)` of a cast, which the lexical heuristic misread as "expression
+already ended, so this must be binary". That under-classified true address
+escapes, newly admitted wrong MIR output for `tc89fltc.main`, changed the
+already-accepted `tpeepal.interior_escape_store` stream, and regressed several
+legacy fallback apps. Abandoned immediately - the right fix is MIR-local, not
+another shared lexer heuristic.
+
+**Landed fix:** keep the lexical address-taken gate only for pointer
+parameters (their safety proof already depends on the separate pointer-use
+classifier), but let scalar locals/parameters tentatively enter
+`mir.objects[]` even if the shared lexer scan says "address-taken". Then, in
+`mir_verify_and_dump()`, added `mir_filter_address_taken_scalar_objects()`,
+which removes only those scalar objects whose *actual lowered MIR* contains a
+`MIR_ADDRESS` of that object's own storage. This is the materially different
+mechanism T399/T70 required: it does **not** CSE arbitrary reloads or widen
+live ranges; it simply replaces a broad text-level false positive with MIR's
+exact post-lowering address evidence for scalar objects, while leaving all
+legacy/non-MIR heuristics unchanged.
+
+**Direct effect on the lead function:** `ti16_bits` now lowers both parameters
+as objects (`a {o0}`, `b {o1}`), object promotion turns every syntactic read
+of `b` into the entry value `v1`, and the repeated `MIR_LOAD`s disappear.
+Metrics:
+
+- `ti16_bits`: 1158 -> **1002** bytes, 111 -> **99** insns; still fallback,
+  but now only **2 bytes** over legacy (1000) under `dead-local-suffix-cost`.
+- `tui16_bits`: same 1158 -> **1002** byte collapse, also now a 2-byte
+  near-miss.
+- `ti32_bits` / `tui32_bits`: 2092 -> **1774** bytes, 201 -> **177** insns;
+  both now clear the text gate and emit.
+
+The same root cause also unlocked `tlongopt.co_and`, another bitwise-AND
+function whose scalar object eligibility had been needlessly poisoned by the
+shared scan.
+
+**Validation (code change itself):**
+
+- Focused `runall.ps1 -Apps tbits -Mode full`: PASS, zero regressions,
+  measured improvements in both modes.
+- Fresh ordinary census vs the committed T399 baseline:
+  **902 -> 905/2026 (44.52% -> 44.67%)**, zero regressions, newly emitted:
+  `tbits.{ti32_bits,tui32_bits}`, `tlongopt.co_and`.
+- Fresh stack-check census vs baseline:
+  **924 -> 927/2128 (43.42% -> 43.56%)**, zero regressions, same 3 functions.
+- Already-active MIR functions whose selected hashes changed:
+  `tlongopt.{cb_ge,cb_lt,cc_eq,main}`. Their own MIR selector/byte/instruction
+  metrics stayed identical; only selected hashes moved, so this is a
+  body-placement/layout effect. Focused `runall.ps1 -Apps tbits,tlongopt -Mode
+  full` passed with zero regressions and real wins (`tbits` both modes,
+  `tlongopt` both modes).
+- Full non-extended `runall.ps1 -Mode full -RunTimeout 30`: **314/323 passed,
+  9 skipped, 0 regressions**, diagnostics passed, dccpeep fixtures passed,
+  performance passed (~32.3s).
+- Final extended gate
+  (`runall.ps1 -Mode full -Extended -RunTimeout 30`): **314/323 passed,
+  9 skipped, 0 regressions**, extended corpus passed, diagnostics passed,
+  dccpeep fixtures passed, performance passed (~42.8s).
+
+**Campaign 3 item 5 follow-on (re-bucketing residual `text-size` by emitted
+MIR assembly pattern):** ran a forced-accept MIR n-gram mine over the current
+ordinary `text-size` bucket (`build/mir-after.tsv`, 312 candidates; 234
+extractable function bodies, 78 marker misses). After ignoring the universal
+frame/prologue n-grams, the dominant *specific* residual class is now a real
+slot round-trip pattern, not a gate-margin artifact:
+
+- **137 distinct functions** contain the word spill/reload gram
+  `ld (ix-N),l / ld (ix-N),h / ld l,(ix-N) / ld h,(ix-N)`.
+- **108 distinct functions** contain the wide sibling storing HL:DE to one
+  4-byte slot and reloading it back from the same slot.
+- Representative forced-accept examples: `bint.add_string`,
+  `catalan.div_small`, `attnc11.convert_weight_group`, `tarray6.fill_l`.
+
+This specific slot round-trip class is **not** recorded as a dead-end pattern
+in `mir-dead-ends.tsv`. It looks like the next genuine Campaign 3 lead: a
+residual non-dead spill/reload class beyond the already-landed dead-store,
+load-after-store, and immediate-call-argument forwarding items. The generic
+frame-setup n-grams are larger in raw count (226+ functions) but too universal
+to be a new selector-quality discriminator on their own; the same-slot
+spill/reload cluster is the first concrete post-T400 repeated emitted pattern
+meeting the >=10-function threshold.
