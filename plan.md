@@ -594,17 +594,44 @@ a stream reports "blocked", root-causing the actual mechanism (not
 accepting the report at face value) can still produce real, validated
 coverage.
 
-**Current status**: both architecture threads from this wave are now
-closed with evidence, not left as speculative dead ends: (1) the T424/
-T425 pointer-parameter cost-model gap - resolved with a real +1/+1 fix,
-and (2) `next50-slot-intervals` (confirmed not to hold per T399) and
+**T426: fresh gate-margin re-rank after T425 confirmed no further
+threshold-mining opportunities exist, so a new architecture stream
+implemented real kill-aware/allocator-aware block value numbering for
+`block-cse-cost` (94 candidates, the largest unaddressed architectural
+bucket) - a materially different mechanism than T70's already-falsified
+naive same-block CSE.** The new VN pass tracked provable value identity
+plus explicit kills (calls, indirect stores, aliased writes) and checked
+the actual simulated register-allocation effect of each substitution
+before admitting it. Real implementation, real measurement: the only
+clean census admit (`cobint.add_stmt`, +1/+1) was found on closer
+inspection to regress linked peep size (+0.46%) because the spilled CFG
+backend emitted an 8-byte IX frame for the VN-shrunk MIR that `dccpeep`
+could not remove - shrinking raw MIR instruction count does not
+guarantee smaller final Z80 output when it forces a frame allocation the
+peephole optimizer can't see through. A second concrete conflict was
+found in `cobint.compile_stmt`: legacy block CSE (needed to preserve
+existing admits) raises spills from 0 to 8, poisoning later VN
+opportunities in the same function. **+0/+0 net coverage, but a genuine,
+implemented, measured dead end** (not a speculative one) - the real
+blocker for `block-cse-cost` is now understood to be a spilled-CFG-
+backend/peephole limitation, not a missing CSE algorithm.
+
+**Current status**: three architecture threads from this wave are now
+closed with real evidence, not left as speculative dead ends: (1) the
+T424/T425 pointer-parameter cost-model gap - resolved with a real +1/+1
+fix, (2) `next50-slot-intervals` (confirmed not to hold per T399) and
 `campaign2-call-effect-analysis`'s member-qualified case (resolved
-zero-yield by T423, real infrastructure reuse, no further lever visible
-without new architecture). No stream has been allowed to settle on
-"blocked" without either a concrete profitability proof or an active
-follow-up per the user's explicit, repeated directive: the goal is 100%
-MIR coverage, and gate-margin-exhausted buckets get a genuine
-architectural fix attempt, not a declared dead end.
+zero-yield by T423, real infrastructure reuse), and (3) `block-cse-cost`
+(T426 - implemented and measured, found a genuine spilled-CFG-backend/
+peephole frame-elimination gap, not a CSE-algorithm gap). A fourth
+stream is now investigating `phi-fallthrough-cost`'s confirmed-exhausted-
+at-threshold-level bucket via real phi-forwarding-across-labels (never
+previously attempted - only threshold nudges were tried and rejected in
+T202/T386/T387). No stream has been allowed to settle on "blocked"
+without either a concrete profitability proof or an active follow-up per
+the user's explicit, repeated directive: the goal is 100% MIR coverage,
+and gate-margin-exhausted buckets get a genuine architectural fix
+attempt, not a declared dead end.
 
 ## Latest production cohort
 
