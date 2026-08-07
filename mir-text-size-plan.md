@@ -13780,3 +13780,92 @@ Coverage remains unchanged at **908/2026 ordinary (44.82%)** and
 looks like a **selector-quality architecture problem** (materially smaller
 multi-block spilled-CFG output / a broader stable-home budget / another real
 code-quality improvement), not a gate-margin-mining problem.
+
+## Item T413: root-caused and fixed a genuine miscompilation in T410's call-crossing planned-stack store-address path - resolves 7 of ~15 known correctness bugs, including the original T401 `cfg-backedge` bug (2026-08-08)
+
+Multiple streams this wave independently hit confirmed correctness bugs under
+forced MIR acceptance across several nominally-unrelated buckets
+(`cfg-backedge`, `wide-store-cost`, `unary-not-cost`, and 5 functions Stream
+D found while re-checking T410's own infrastructure). A full sweep of
+`mir-dead-ends.tsv`'s "CONFIRMED CORRECTNESS BUG" rows found **15** logged
+instances across the project's history. Stream D's comparative MIR dump
+(`bint.add_string`, `tallocx.fill`, `forint.add_stmt`, `forint.run_prog`)
+found a shared local motif in several of them: `address/indexaddr/memberaddr
+-> call <helper> -> storeind`, i.e. exactly the shape T410
+("planned store-address handoff across calls", `8309f39`) added support for.
+
+**Root cause, confirmed by direct code inspection and reproduction**: T410's
+new code path in `mir_try_emit_spilled_scalar_cfg`'s `MIR_STORE_INDIRECT`
+case (the block guarded by `mir_planned_stack_matches_consumer(insn->src1,
+i)` immediately following the call-result direct-reload check) pushes the
+call result (already held in `hl`) onto the real Z80 stack with `push hl`,
+then immediately calls `mir_consume_planned_stack(out, insn->src1, i, "hl")`
+- but the planned store address was pushed onto that same stack *before*
+the call, so it now sits *underneath* the value we just pushed. Popping
+first therefore returns the just-pushed **value**, not the address; the
+following `pop de` then returns the **address** instead of the value. The
+subsequent `ld (hl),e` / `ld (hl),d` consequently treats the call-result
+value as a destination address and writes address bytes through it,
+corrupting whatever memory the value happened to reference (or crashing).
+This is visible directly in the reported `bint.add_string` corruption
+(`\xC3\x03\xFF` appearing in stdout - the low/high bytes of a code address
+being written into the output buffer).
+
+The already-existing sibling case a few lines below (the
+`mir_forwarded_stack_value` branch) does this correctly for the equivalent
+non-call scenario: it pops the just-pushed value into `de` **first**, then
+calls `mir_consume_planned_stack(..., "hl")` **second** to retrieve the
+address. T410's new call-crossing block had the two pops in the wrong
+order relative to that established pattern.
+
+**Fix**: swap the order in T410's block to match the correct sibling
+pattern - pop the value into `de` immediately after the `push hl`, then
+call `mir_consume_planned_stack(..., "hl")` to retrieve the address, then
+emit the store through `hl`/`e`/`d` as before. Four-line reorder in
+`dcc_mir_spilled_cfg.c`, no new state, no gate/threshold change.
+
+**Validation**:
+- Reproduced the bug directly with `DCC_MIR_FORCE_ACCEPT_FUNCTION=<name>`
+  before the fix for all of: `bint.add_string`, `forint.add_stmt`,
+  `tallocx.fill`, `too.bst_insert`, `attnc11.convert_weight_group`,
+  `forint.run_prog`, `adaint.var_or_const_decl` (the original T401 bug) -
+  confirmed each produced wrong output matching its previously-logged
+  failure mode.
+- After the fix, rebuilt and re-ran all 7 under the same forced-accept
+  mechanism: **all 7 now produce output matching their baseline exactly**
+  (byte-for-byte, modulo `attnc11`'s already-documented non-deterministic
+  `run time` field).
+- Two other logged bugs, `tvapinit.join` and `tap.first_implementation`,
+  were also re-tested and **remain broken** after this fix - confirming
+  they are a **separate, still-unfixed** bug (not the same push/pop
+  ordering defect), despite superficially similar "wide-store-forwarding"
+  descriptions in their T408 entries. `tvapinit.join` now prints
+  `len=0 commas=1 str=, delta` instead of the expected
+  `len=25 commas=3 str=alpha, beta, gamma, delta`; `tap.first_implementation`
+  silently skips its first-implementation loop body entirely. These remain
+  open and are **not** to be assumed fixed by this item.
+- Fresh ordinary + stack-check census: **unchanged, 908/2026 (44.82%) /
+  930/2128 (43.70%)** - expected, since T410 landed with 0 selected-hash
+  changes and no function currently exercises this path in production; this
+  fix only changes behavior that was previously unreachable except under
+  forced acceptance, so no currently-shipped function's output could have
+  been affected by the bug or by this fix.
+- Full extended gate: `pwsh ./scripts/runall.ps1 -Mode full -Extended
+  -RunTimeout 30` -> **314/323 passed, 9 skipped, 0 failed**, diagnostics/
+  dccpeep/extended-c-testsuite/performance all passed, 0 regressions.
+
+**Significance**: this closes the correctness question for the original
+`cfg-backedge` bug (`adaint.var_or_const_decl`) that Campaign 4 was blocked
+on, and for 6 more previously-unexplained bugs across `wide-store-cost`
+(`bint.add_string` was mis-attributed to that bucket's family) and
+`unary-not-cost`/`indirect-store-address-cost`. It does **not** by itself
+unlock any new coverage (all 7 functions still fail one or more *other*
+legitimate cost/profitability gates), but it removes a real latent
+miscompilation risk: had any future profitability-gate change loosened
+enough to admit one of these 7 functions on cost grounds alone, production
+would have silently miscompiled it. `tvapinit.join` and `tap.first_implementation`
+remain confirmed-buggy and unresolved; a future session should treat them as
+a distinct investigation, not assume this fix's mechanism covers them too.
+
+Coverage remains **908/2026 ordinary (44.82%)** and **930/2128 stack-check
+(43.70%)** - a zero-net-coverage, high-value correctness fix.

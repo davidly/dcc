@@ -7698,14 +7698,24 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_forwarded_hl_instruction + 1 == i &&
                 mir_planned_stack_matches_consumer(insn->src1, i) &&
                 mir_planned_stack_is_emitted(insn->src1)) {
+                /* The planned store address was pushed onto the real Z80
+                 * stack before the intervening call; pushing the call
+                 * result (still held in HL) puts it ON TOP of that
+                 * address. Pop the just-pushed value first (into de),
+                 * then consume the planned address (into hl) - popping
+                 * in the opposite order would hand the address to `hl`'s
+                 * sibling and the value to the address role, corrupting
+                 * memory. See the identical, correctly-ordered sibling
+                 * case below (mir_forwarded_stack_value). */
                 fputs("\tpush hl\n", out);
                 mir_forwarded_hl_value = -1;
                 mir_forwarded_hl_instruction = -1;
+                fputs("\tpop de\n", out);
                 if (!mir_consume_planned_stack(
                         out, insn->src1, i, "hl"))
                     mir_planned_stack_invalid = 1;
                 ++mir_spilled_cfg_indirect_store_address_forwarding_count;
-                fputs("\tpop de\n\tld (hl),e\n", out);
+                fputs("\tld (hl),e\n", out);
                 if (insn->memory_size > 1)
                     fputs("\tinc hl\n\tld (hl),d\n", out);
                 break;
