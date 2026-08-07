@@ -1925,6 +1925,43 @@ static int mir_profile_matches_function(const char *variable)
     return 0;
 }
 
+/* Diagnostic only, mirrors DCC_MIR_FORCE_ACCEPT_FUNCTION's comma-separated
+ * matching but against the candidate's final fallback_reason string
+ * instead of its function name. Lets a single measurement sweep force-
+ * accept every candidate whose *only* remaining objection is one of a
+ * given set of cost-gate reasons (e.g. "text-size,boolean-phi-cost"),
+ * turning what used to require N individual per-function forced-accept
+ * investigations into one flag. Never a production default - exactly
+ * like its sibling, this exists to measure a bucket via
+ * scripts/mir-bulk-accept-scan.py and runall.ps1, then get replaced by a
+ * real structural gate change once a bucket is proven safe (2026-08-08
+ * coverage-first pivot, Step 1). */
+static int mir_force_accept_reasons_matches(const char *reason)
+{
+    const char *list = getenv("DCC_MIR_FORCE_ACCEPT_REASONS");
+    const char *name;
+    size_t reason_length;
+
+    if (list == NULL || reason == NULL)
+        return 0;
+    if (!strcmp(list, "*"))
+        return 1;
+    reason_length = strlen(reason);
+    name = list;
+    while (*name != 0) {
+        const char *end = strchr(name, ',');
+        size_t length = end != NULL
+            ? (size_t)(end - name) : strlen(name);
+        if (length == reason_length &&
+            !strncmp(name, reason, length))
+            return 1;
+        if (end == NULL)
+            break;
+        name = end + 1;
+    }
+    return 0;
+}
+
 static int mir_boolean_phi_profile_is_semantically_eligible(void)
 {
     return mir_cfg_block_count() <= 64 &&
@@ -3705,6 +3742,9 @@ evaluate_generated:
                         getenv("DCC_MIR_FORCE_ACCEPT_FUNCTION");
                     if (forced_accept != NULL &&
                         !strcmp(forced_accept, mir.name))
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        mir_force_accept_reasons_matches(fallback_reason))
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         strcmp(fallback_reason, "forced") &&
