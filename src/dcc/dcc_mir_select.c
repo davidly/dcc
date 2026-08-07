@@ -1372,6 +1372,62 @@ int mir_has_cfg_backedge(void)
     return 0;
 }
 
+/* Item T421 (mir-text-size-plan.md) stratified the generic cfg-backedge
+ * fallback residue into a "group A" of 9 functions sharing exactly one
+ * reducible loop header (all backward MIR_JUMP/MIR_BRANCH_FALSE
+ * instructions target the same, single earlier label - a natural loop,
+ * possibly with more than one back-branch into it, e.g. a `continue`-like
+ * path) with no MIR_CALL/MIR_CALL_AGGREGATE anywhere inside that loop
+ * body - the structurally safest possible loop shape, distinct from the
+ * riskier call-in-loop, parser/dispatch, and multiple-distinct-loop-header
+ * shapes that remain in the residue. All 9 were independently
+ * forced-correctness clean (peep and nopeep) and full-mode A/B measured;
+ * the only reason they had not been admitted before the 2026-08-08
+ * coverage-first policy pivot was each measuring a small deliberate
+ * peep-cycle regression (+0.69% to +6.08%). This checks the *structural*
+ * predicate T421 used to select group A, not a function-name list, so it
+ * generalizes to any future candidate with the same shape. */
+static int mir_has_single_reducible_backedge_without_loop_calls(void)
+{
+    int i;
+    int j;
+    int header_target = -1;
+    int header_seen = 0;
+    int loop_start = -1;
+    int loop_end = -1;
+
+    for (i = 0; i < mir.count; ++i) {
+        int target;
+        if (mir.insns[i].opcode != MIR_JUMP &&
+            mir.insns[i].opcode != MIR_BRANCH_FALSE)
+            continue;
+        target = mir.insns[i].label;
+        for (j = 0; j <= i; ++j)
+            if (mir.insns[j].opcode == MIR_LABEL &&
+                mir.insns[j].label == target) {
+                if (!header_seen) {
+                    header_seen = 1;
+                    header_target = target;
+                    loop_start = j;
+                } else if (target != header_target) {
+                    /* A second, distinct loop header - not the simple
+                     * single-natural-loop shape group A requires. */
+                    return 0;
+                }
+                if (i > loop_end)
+                    loop_end = i;
+                break;
+            }
+    }
+    if (!header_seen)
+        return 0;
+    for (i = loop_start; i <= loop_end; ++i)
+        if (mir.insns[i].opcode == MIR_CALL ||
+            mir.insns[i].opcode == MIR_CALL_AGGREGATE)
+            return 0;
+    return 1;
+}
+
 static int mir_has_wide_values(void)
 {
     int instruction;
@@ -3124,7 +3180,8 @@ evaluate_generated:
                          !mir_is_profiled_constant_bound_loop_pair(
                              generated_size, captured_size,
                              generated_instructions,
-                             captured_instructions))
+                             captured_instructions) &&
+                         !mir_has_single_reducible_backedge_without_loop_calls())
                     fallback_reason = "cfg-backedge";
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||

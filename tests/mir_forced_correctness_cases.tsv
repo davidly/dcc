@@ -6,3 +6,4 @@ tallocx	fill
 tenumfsm	scan
 forint	run_prog
 tvapinit	join
+tvla	vla_longjmp

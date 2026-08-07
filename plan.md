@@ -1,24 +1,42 @@
-# dcc MIR migration: accelerated roadmap to 60%
+# dcc MIR migration: coverage-first sprint to 100%
 
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-08 policy pivot (read this first)
+
+8 days moved ordinary coverage only 43.93% -> 45.11%. The user directed a
+bold pivot: **the goal is 100% MIR coverage, reached fast; performance is
+not a Phase 1 gate** (relax the historical strict zero-regression rule,
+since every remaining gate had accreted an individually-proven,
+zero-regression bar that does not scale to 100%). Correctness is still
+completely non-negotiable at every step - only the *performance* bar is
+relaxed, deliberately, and every accepted regression is tracked via
+`-UpdatePerfBaseline` with full documentation, never hidden. A dedicated
+Phase 2 (post-100%-coverage performance recovery via `dccprof` dynamic
+profiling) follows once coverage is at/near 100%. Full plan, evidence, and
+rationale: session workspace `plan.md` (not tracked in git) plus each
+`## Item T43x` entry in `mir-text-size-plan.md` going forward. Large agent
+fleets are out - this phase is direct, foreground, tool-driven bulk
+acceptance instead of one-by-one investigation.
+
 ## Goal and current state
 
-The immediate target is **1,216/2,026 ordinary functions (60.02%)** in
-production MIR emission, without ordinary or stack-check removals and without
-peep/nopeep regressions. Mixed-mode transactional fallback remains in place.
-The long-term goal is 100% MIR-required coverage and removal of legacy
-capture/replay only after the runnable and extended corpora pass.
+The goal is **100% MIR-required coverage** (not an intermediate percentage
+target), then a dedicated performance-recovery phase to bring aggregate
+peep-mode cycles back to at/below the pre-MIR legacy baseline. Mixed-mode
+transactional fallback remains in place throughout Phase 1.
 
 - Branch: `perf/unified-regalloc`
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **914/2026 (45.11%)**
-- Current stack-check coverage: **936/2128 (43.98%)**
-- HEAD: `ccf5d31`, pushed, CI confirmed green (T430/T431 block-cse-cost
-  architecture enabler, +0/+0 coverage; see Stream J below). Tree clean.
+- Current ordinary coverage: **924/2026 (45.61%)**
+- Current stack-check coverage: **948/2128 (44.55%)**
+- HEAD (pending push): T433, Step 0 of the coverage-first pivot - admitted
+  the `cfg-backedge` "group A" structural predicate (+10/+12), 28 tracked
+  deliberate performance regressions accepted via `-UpdatePerfBaseline`.
+  See `## Item T433` in `mir-text-size-plan.md`. Tree otherwise clean.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

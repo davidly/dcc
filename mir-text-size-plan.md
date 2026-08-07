@@ -16297,3 +16297,113 @@ suitable for further foreground iteration this session.
 No code changes; this is a documentation-only re-confirmation to save a
 future session from re-running the same two mining techniques from
 scratch.
+
+## Item T433: coverage-first policy pivot, Step 0 - admitted cfg-backedge group A (structural predicate, not a name list) (+10 ordinary/+12 stack-check, 2026-08-08)
+
+Fresh baseline `ab3d9ae`: **914/2026 ordinary (45.11%)**, **936/2128
+stack-check (43.98%)**. This item executes Step 0 of the 2026-08-08
+bold-pivot plan (session workspace `plan.md`): the user directed getting to
+100% MIR coverage first, relaxing the strict zero-regression rule since it
+was the actual bottleneck, and doing a dedicated performance-recovery phase
+afterward. T421 had already stratified the `cfg-backedge` residue into a
+9-function "group A" (single reducible loop header, no calls in the loop
+body) that was forced-correctness clean in both peep/nopeep and full-mode
+A/B measured, but was left on fallback purely because every member measured
+a small deliberate peep-cycle regression (+0.69% to +6.08%) under the old
+zero-regression rule.
+
+### Structural predicate, not a function list
+
+Added `mir_has_single_reducible_backedge_without_loop_calls()` in
+`dcc_mir_select.c`: finds every backward `MIR_JUMP`/`MIR_BRANCH_FALSE`
+target, requires them all to share one loop header (a natural loop, which
+may have more than one back-branch into it, e.g. a `continue`-shaped
+path), and requires no `MIR_CALL`/`MIR_CALL_AGGREGATE` anywhere between
+that header and the last back-branch to it. Wired into the existing
+`cfg-backedge` gate's `else if` chain as one more `&&`-clause (not a new
+branch), so it only ever clears an already-otherwise-accepted candidate,
+exactly like every existing sibling clause in that chain.
+
+This is deliberately the *structural* T421 predicate, not the 9 function
+names - it generalizes to any future candidate with the same shape.
+Confirmed by census: it admitted the exact same 9 ordinary functions T421
+found **plus** `tvla.vla_longjmp` (ordinary) and, under `-fstack-check`,
+also `tvla.vla_back_exit_inner` and `tvla.vla_fwd_exit_all` - all
+structurally identical single-loop/no-call shapes T421 had not
+individually inventoried (T421 filed `tvla.vla_longjmp` under its "unknown
+oddity" group C only because of the surrounding `setjmp`/`longjmp` mix, not
+because the loop itself was unsafe - the loop body itself has no calls).
+Added `tvla	vla_longjmp` to `tests/mir_forced_correctness_cases.tsv` and
+confirmed it passes the repository's forced-MIR harness (peep and nopeep)
+before relying on it.
+
+### Discovered side effect: MIR candidate-selection order affects already-accepted functions' generated code
+
+Investigated why `tstr`'s peep cycles jumped **+29.5%** (`1,602,691,963` ->
+`2,075,979,683`) even though `tstr.c` contains no cfg-backedge candidate.
+Root cause: `tstr.wcschr` (a loop-shaped function) was already MIR-accepted
+before this change, but via a different internal path - it used to reach
+`cfg-backedge` fallback first and then get rescued by a later specialized
+retry (the loop-family/allocator-backedge rescue blocks further down the
+same `else if` chain). With the new predicate, `wcschr` now clears the
+*first* `cfg-backedge` check directly, so the later rescue attempts (which
+reset `label_id` and re-run alternate selectors) never run. The result is a
+different, equally correct, byte-identical-size MIR candidate with
+different register assignment - a real, legitimate content change, not a
+regression from a bug. Direct captured-vs-generated `.mac` diffing
+confirmed: functions whose own selection reason is unaffected (e.g.
+`tstr.main`, `tstr.test_wide`) only shifted Z80 label *numbers* (global
+per-file label counter, purely cosmetic, zero instruction/register
+change), while `wcschr` itself genuinely picked a different valid
+candidate. This is a new, previously undocumented discovery for the
+project: **admitting one candidate can change which internal retry path
+wins for a different, already-accepted candidate elsewhere in the same
+file**, which in turn perturbs measured cycles for that other function even
+though its own selection *reason* never changes. Correctness remained
+proven clean throughout (full-mode A/B, both peep and nopeep, all affected
+apps pass). Flagged as a standing discovery for future MIR work - static
+census diffs only show reason/byte changes, not "same reason, different
+selected content," so a full-corpus correctness run remains mandatory
+even when only a small, apparently-isolated gate changes.
+
+### Result
+
+- Ordinary coverage: **914/2026 (45.11%) -> 924/2026 (45.61%)**, +10.
+- Stack-check coverage: **936/2128 (43.98%) -> 948/2128 (44.55%)**, +12.
+- 28 tracked, deliberate performance regressions across 13 apps (peep
+  and/or nopeep cycles and/or `.com` bytes), matching T421's previously
+  measured numbers for the 9 named functions plus the `wcschr`
+  candidate-path side effect on `tstr`. Per the amended 2026-08-08 risk
+  policy, these are accepted and recorded via `-UpdatePerfBaseline`, not
+  hidden - Phase 2 (dedicated post-100%-coverage performance recovery)
+  will use this exact list as part of its seeded hit list.
+- No correctness regressions: full-mode A/B and the repository's forced-MIR
+  correctness harness are both clean.
+
+### Validation
+
+- `sh src/dcc/build-dcc.sh` - clean (pre-existing warnings only)
+- `python3 scripts/mir-migration-census.py` (ordinary + `-fstack-check`),
+  compared against a freshly rebuilt true `ab3d9ae` baseline binary (not
+  reused from a stale snapshot) - **+10 ordinary / +12 stack-check**, 0
+  functions lost, exact set matches the intended structural predicate
+- `pwsh ./scripts/mir-forced-correctness.ps1` (8 cases, including the new
+  `tvla:vla_longjmp` row) - **PASS**
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -NoPerfCheck` (full
+  323-app corpus) - **314/323 passed, 0 failed, 9 skipped**, diagnostics/
+  dccpeep/extended all **passed** (correctness-only signal, per the
+  amended Phase 1 validation cadence)
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended` (same corpus, real
+  performance check) - same correctness result, **28 tracked performance
+  regressions** (documented above), captured before landing
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -UpdatePerfBaseline` -
+  **314/323 passed, 0 failed**, `tests/perf_baselines.csv` updated
+  deliberately
+
+### Next
+
+Step 1 of the pivot plan: add `DCC_MIR_FORCE_ACCEPT_REASONS` (comma-
+separated `fallback_reason` token match) alongside the existing
+`DCC_MIR_FORCE_ACCEPT_FUNCTION` diagnostic, then build
+`scripts/mir-bulk-accept-scan.py` to drive the mega-experiment across all
+remaining cost-only reasons.
