@@ -14384,3 +14384,92 @@ split:
   - diagnostics: **passed**
   - dccpeep fixtures: **passed**
   - extended suite: **passed**
+
+## Item T419: fix large-offset selfstore incdec (+0, 2026-08-08)
+
+I root-caused the remaining `adaint.var_or_const_decl` forced-MIR failure to a
+third, distinct backend bug in `mir_emit_selfstore_incdec()`: the local/param
+16-bit selfstore fast path unconditionally emitted `inc (ix+d)` /
+`dec (ix+d)` byte-pair sequences, but Z80 IX-displacement operands are limited
+to signed 8-bit offsets. For `var_or_const_decl`'s large frame, the loop index
+`i` lives at `ix-196`, so the emitted
+
+```text
+inc (ix-196)
+jp nz, ...
+inc (ix-195)
+```
+
+wraps out of range and corrupts the wrong bytes. This is why the smaller
+default scenario happened not to trip the bug while the larger `ttt.ada` /
+`sieve.ada` cases did.
+
+Before changing code I checked whether this was already reachable in shipped
+mixed-mode output. I added a temporary report hook to
+`mir_emit_selfstore_incdec()` and ran fresh ordinary + `-fstack-check`
+censuses across the full corpus. **No function in either census hit the
+out-of-range selfstore path at all**, so this bug is currently **latent**, not
+an active miscompile in today's admitted MIR set:
+
+- ordinary census: **908/2026**
+- stack-check census: **930/2128**
+- temporary out-of-range selfstore hits: **0 ordinary / 0 stack-check**
+
+The landed fix is narrow and uses the same frame-word addressing range already
+used elsewhere in `dcc_mir_spilled_cfg.c`: when the 16-bit slot offset fits the
+short IX form (`offset >= -128 && offset + 1 <= 127`), keep the existing
+carry-checked `inc (ix+d)` / `dec (ix+d)` fast path. When it does **not** fit,
+fall back to the existing generic helpers:
+
+1. `mir_emit_frame_word_load(out, offset)`
+2. `inc hl` / `dec hl`
+3. `mir_emit_frame_word_store(out, offset)`
+
+I also factored the shared IX-range predicate into one helper so the selfstore
+path and the existing frame word load/store helpers all agree on the exact
+legal displacement test.
+
+Forced MIR for `adaint.var_or_const_decl` is now correctness-clean across all
+three scenarios:
+
+- `e.ada` matches `tests/baselines/adaint.txt`
+- `ttt.ada` now prints:
+  - `starting...`
+  - `Moves:      6493`
+  - `Iterations: 1`
+- `sieve.ada` now prints:
+  - `10 Iterations`
+  - `1899 Primes`
+
+`forint.run_prog` was re-checked at the same time and remains broken in the
+same separate way as before (default `e.for` still passes; `ttt.for` and
+`sieve.for` still omit their final summary output entirely), confirming this
+item does **not** address the outstanding OP_DO bookkeeping bug.
+
+Because no admitted function currently reaches the large-offset selfstore path,
+the mixed-mode rollout remains coverage-neutral:
+
+- ordinary census compare: **908/2026 -> 908/2026**
+- stack-check census compare: **930/2128 -> 930/2128**
+- newly MIR-emitted: **0**
+- no longer MIR-emitted: **0**
+
+I also added durable forced-correctness coverage by appending
+`adaint<TAB>var_or_const_decl` to `tests/mir_forced_correctness_cases.tsv`.
+
+### Validation
+
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=var_or_const_decl pwsh ./scripts/runall.ps1 -Apps adaint -Mode full -RunTimeout 20 -KeepBuild`
+  - correctness: **PASS** across `e.ada`, `ttt.ada`, `sieve.ada`
+  - forced performance still regression-gated (expected fallback remains
+    load-bearing):
+    - peep size **31744 -> 31872 (+0.4%)**
+    - peep cycles **466792970 -> 466792153** (tiny win)
+    - nopeep cycles **590027862 -> 590017928** (tiny win)
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=run_prog pwsh ./scripts/runall.ps1 -Apps forint -Mode full -RunTimeout 20 -KeepBuild`
+  - still **FAILS** on `ttt.for` / `sieve.for` with missing final output, as
+    before
+- `python3 scripts/mir-migration-census.py --output build/mir-after.tsv --compare build/mir-before.tsv --fail-on-regression`
+  - **PASS**
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/mir-after-stackcheck.tsv --compare build/mir-before-stackcheck.tsv --fail-on-regression`
+  - **PASS**

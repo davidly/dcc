@@ -5166,9 +5166,14 @@ static void mir_emit_restore_virtual_iy(FILE *out)
                 mir_effective_local_bytes() + mir.aggregate_temp_bytes);
 }
 
+static int mir_frame_word_uses_short_ix(int offset)
+{
+    return offset >= -128 && offset + 1 <= 127;
+}
+
 static void mir_emit_frame_word_store(FILE *out, int offset)
 {
-    if (offset >= -128 && offset + 1 <= 127) {
+    if (mir_frame_word_uses_short_ix(offset)) {
         fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
                 offset, offset + 1);
     } else {
@@ -5181,7 +5186,7 @@ static void mir_emit_frame_word_store(FILE *out, int offset)
 
 static void mir_emit_frame_word_load(FILE *out, int offset)
 {
-    if (offset >= -128 && offset + 1 <= 127) {
+    if (mir_frame_word_uses_short_ix(offset)) {
         fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                 offset, offset + 1);
     } else {
@@ -6725,6 +6730,13 @@ static int mir_value_is_selfstore_incdec_source(int value)
 static void mir_emit_selfstore_incdec(FILE *out, int offset, int is_inc)
 {
     int done = new_label();
+
+    if (!mir_frame_word_uses_short_ix(offset)) {
+        mir_emit_frame_word_load(out, offset);
+        fputs(is_inc ? "\tinc hl\n" : "\tdec hl\n", out);
+        mir_emit_frame_word_store(out, offset);
+        return;
+    }
 
     if (is_inc) {
         fprintf(out, "\tinc (ix%+d)\n", offset);
