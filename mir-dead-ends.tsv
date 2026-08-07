@@ -17,4 +17,35 @@ tfpcall	main	absolute-index-cost	3	full-mode A/B: regresses, peep +1.23% cycles/
 tptrdiff	long_dist	binary-load-pair-cost	0	full-mode A/B: regresses, peep +0.5% cycles, nopeep +1.8% cycles/+4.44% bytes	plan100-batch1
 too	world_visit	binary-load-pair-cost	4	full-mode A/B: mixed, peep regresses +0.01% cycles (negligible but nonzero), nopeep improves -0.03%; not a clean win	plan100-batch1
 tarray6	v6	lazy-parameter-cost	-2	full-mode A/B: mixed, peep regresses +0.6% cycles, nopeep improves -0.39%; not a clean win	plan100-batch1
+cint	while_stmt	block-cse-cost	-22	CONFIRMED CORRECTNESS BUG: forced-accept produces wrong output (cint OUTPUT MISMATCH vs baseline, truncated pi digits). Needs a real emitter fix, not a gate nudge.	plan100-batch1
+tpfauto	main	block-cse-cost	-16	CONFIRMED CORRECTNESS BUG: forced-accept produces wrong output (tpfauto OUTPUT MISMATCH vs baseline, all printf field formatting lines missing/wrong).	plan100-batch1
+adaint	var_or_const_decl	planned-index-base-cost	-57	CONFIRMED CORRECTNESS BUG: forced-accept produces wrong output on both adaint_ttt and adaint_sieve subtests (OUTPUT MISMATCH, garbled/truncated output).	plan100-batch1
+tvla	vla_memset_sizeof	dynamic-index-base-cost	-8	CONFIRMED CORRECTNESS BUG: forced-accept fails its own runtime self-check (got nonzero vla_memset_sizeof result, want 0), 1/75 checks fail.	plan100-batch1
+cobint	compile_stmt	block-cse-cost	-13	full-mode A/B: mixed, peep bytes regress +0.46%, cycles improve; not a clean win (byte regression not amortized)	plan100-batch1
+cobint	emit	planned-index-base-cost	-20	full-mode A/B: mixed, peep bytes regress +0.46%, cycles improve; not a clean win	plan100-batch1
+tvla	vla_1d	dynamic-index-base-cost	-6	full-mode A/B: mixed, peep regresses +0%/+0.01% cycles; not a clean win	plan100-batch1
+tvariad	check_macro_values	dynamic-index-base-cost	-5	full-mode A/B: regresses badly, peep +4.5% cycles, nopeep +5.53% cycles/+1.89% bytes	plan100-batch1
+cobint	add_var	absolute-address-cost	-14	full-mode A/B: mixed, peep bytes regress +0.46%, cycles improve; not a clean win	plan100-batch1
+cint	emit	absolute-address-cost	-13	full-mode A/B: mixed, peep cycles regress +0%, nopeep improves; not a clean win	plan100-batch1
+cobint	add_stmt	absolute-address-cost	-11	full-mode A/B: mixed, peep cycles/bytes regress, nopeep improves; not a clean win	plan100-batch1
+mm	main	wide-store-cost	-70	full-mode A/B: mixed, peep+nopeep both regress marginally (+0%); not a clean win	plan100-batch1
+attnc11	matrix_vector_multiply	wide-store-cost	-42	full-mode A/B: mixed, peep bytes regress +0.59%; not a clean win	plan100-batch1
+tc89c2	test_time	wide-store-cost	-23	full-mode A/B: regresses, peep +1.94% cycles/+2.47% bytes, nopeep +0.88% cycles	plan100-batch1
+tallocx	t_split	planned-stack-cost	-1	full-mode A/B: mixed, peep cycles regress +0%; not a clean win	plan100-batch1
 
+too	run_query	dynamic-index-base-cost	0	full-mode A/B: mixed, peep cycles regress +0%; calls=1; not a clean win	plan100-batch2
+tvla	vla_computed	dynamic-index-base-cost	0	full-mode A/B: mixed, nopeep cycles regress +0%; calls=1; not a clean win	plan100-batch2
+tvlax	rec_probe	dynamic-index-base-cost	0	full-mode A/B: regresses, peep +0.24% cycles, nopeep +0.37% cycles; calls=2	plan100-batch2
+tvapinit	main	dynamic-index-base-cost	11	full-mode A/B: regresses badly, peep +11.28% cycles, nopeep +10.16% cycles; calls=2, locals=72	plan100-batch2
+bint	resolve_patches	dynamic-index-base-cost	16	full-mode A/B: mixed, peep bytes regress +0.62%; calls=2; not a clean win	plan100-batch2
+adaint	emit_load_lvalue	dynamic-index-base-cost	16	full-mode A/B: mixed, peep cycles regress +0.08%; calls=2; not a clean win	plan100-batch2
+adaint	add_string	dynamic-index-base-cost	16	full-mode A/B: mixed, peep cycles regress +0.08%; calls=2; not a clean win	plan100-batch2
+adaint	parse_subprogram	dynamic-index-base-cost	13	full-mode A/B: mixed, peep cycles regress +0.08%; calls=17 (falsifies a naive calls>=N boundary); not a clean win	plan100-batch2
+cobint	add_var	absolute-address-cost	-14	full-mode A/B: mixed, peep bytes regress +0.46%; contains a repeated (uncached) 3-use index*37 shift-add chain, unlike the win-shape single-use candidates; likely needs the block-cse redundant-index-computation fix, not a threshold change	plan100-batch2
+cint	emit	absolute-address-cost	-13	full-mode A/B: mixed, peep cycles regress +0%; same repeated-index-computation shape as cobint.add_var	plan100-batch2
+cobint	add_stmt	absolute-address-cost	-11	full-mode A/B: mixed, peep cycles/bytes regress; same repeated-index-computation shape	plan100-batch2
+tallocx	t_split	planned-stack-cost	-1	full-mode A/B: mixed, peep cycles regress +0%; calls=11 (compare tc89fp.main below at calls=16, the bucket's only confirmed clean win) - no safe calls>=N boundary derivable from n=2	plan100-batch2
+trtl2	test_memmove	planned-stack-cost	6	full-mode A/B: regresses, peep +0.41% cycles; calls=13	plan100-batch2
+taddr	main	planned-stack-cost	15	full-mode A/B: regresses, peep +0.2% cycles/nopeep +0.21%/+2.04% bytes; calls=13	plan100-batch2
+tstfield	main	planned-stack-cost	20	full-mode A/B: regresses, peep +1.05% cycles/+2% bytes; calls=13	plan100-batch2
+fileops	main	planned-stack-cost	21	full-mode A/B: regresses, peep +0.3% cycles/+2.3% bytes; calls=13	plan100-batch2

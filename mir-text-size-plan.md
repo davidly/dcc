@@ -11806,3 +11806,84 @@ cost`, `dynamic-index-base-cost`, `block-cse-cost`) using
 candidates (all originally-planned Batch 1 leads are now exhausted), and
 continue validating every candidate through `mir-forced-accept-batch.py`
 before any gate change, not just the closest raw-delta ranking.
+
+## Item T389: batch re-rank of 4 near-miss buckets - mostly negative, 3 more correctness bugs found (2026-08-14)
+
+Continuing Batch 1/2 after T388, re-ranked `absolute-index-cost`,
+`binary-load-pair-cost`, `dynamic-index-base-cost`, `block-cse-cost`,
+`lazy-parameter-cost`, `planned-index-base-cost`, `wide-store-cost`,
+`absolute-address-cost`, and `planned-stack-cost` fresh via
+`mir-gate-margins.py --exclude-known mir-dead-ends.tsv`, then ran 21+
+fresh candidates through `mir-forced-accept-batch.py`.
+
+**Four more confirmed correctness bugs found** (bringing this plan's
+running total to 6, all previously invisible because the existing cost
+gates happen to reject every function that would trigger them):
+
+- `cint.while_stmt` (block-cse-cost): forced-accept produces wrong output
+  (truncated/garbled digits of pi).
+- `tpfauto.main` (block-cse-cost): forced-accept produces wrong output (all
+  printf field-formatting lines missing/wrong).
+- `adaint.var_or_const_decl` (planned-index-base-cost): forced-accept
+  produces wrong output on both `adaint_ttt` and `adaint_sieve` subtests.
+- `tvla.vla_memset_sizeof` (dynamic-index-base-cost): forced-accept fails
+  its own runtime self-check (nonzero result where zero is expected).
+
+None of these are fixed this item - they are correctness bugs in code paths
+that are today always rejected by cost gates for unrelated reasons, so
+there is no live risk, but they are recorded so a future session does not
+have to rediscover them before ever touching these selectors' underlying
+transforms.
+
+**Six real, clean wins found, but only 4 (T388's) could be landed with a
+safe structural predicate.** The other two clusters were investigated in
+depth and found **not currently actionable**:
+
+- `dynamic-index-base-cost` (winners: `bint.dim_stmt` calls=11,
+  `wumpus.rdchr` calls=3, `trw.main` calls=3): initial hypothesis
+  ("`mir_call_count() >= 3`") was directly falsified by
+  `adaint.parse_subprogram` (calls=17, still regresses) - call count alone
+  is not a valid predictor for this bucket. No other tested feature (locals,
+  frame bytes, block count) separated the 3 winners from the 8 additional
+  regressing/mixed candidates tested. Needs either a larger, more diverse
+  sample or a different feature entirely before any gate change; recorded
+  as an open lead, not a dead end (the 3 functions themselves are real
+  wins, just not yet promotable without risking false positives elsewhere
+  in the bucket).
+- `absolute-address-cost` (winners: `cint.add_string`/`cobint.add_string`
+  [identical shape, two apps], `cobint.tget`): direct assembly inspection
+  of a losing candidate (`cobint.add_var`) versus a winning one
+  (`cint.add_string`) found the actual differentiator is **not** captured
+  by any existing byte/instruction ratio: `add_var` recomputes the same
+  `index * 37` stride three separate times (once per array access) with no
+  common-subexpression sharing, while `add_string`/`tget` only compute
+  their index once. This is a real, identifiable structural cause but fixing
+  it requires redundant-index-computation CSE (the same class of missing
+  optimization `block-cse-cost` already exists to gate), not a gate
+  threshold - the 3 winners remain unpromoted pending that fix.
+- `planned-stack-cost`: only one clean win found across 9 tested candidates
+  (`tc89fp.main`, calls=16); the next-closest candidate by every measured
+  feature (`tallocx.t_split`, calls=11, same -1 instruction delta) is a
+  real regression. A single winning data point is not sufficient evidence
+  for any generalizable call-count boundary (this is exactly the T386
+  single-function-threshold-nudge trap) - left unpromoted.
+
+All confirmed regressions/mixed results (14 additional candidates) are
+recorded in `mir-dead-ends.tsv`. Coverage is unchanged from T388
+(894/2026 ordinary, 916/2128 stack-check) - this item is investigation-only,
+no `src/` changes landed. No commit for this item beyond the ledger update
+(folded into the next item's commit, since a pure ledger-only change has no
+runtime risk to gate separately).
+
+**Conclusion:** the remaining per-bucket "quick win" vein across these 9
+buckets is now mostly mined out at the current investigation depth (mirrors
+T385's finding for `text-size`/`boolean-phi-cost`) - continuing to test
+individual near-misses one bucket at a time has sharply diminishing
+returns and, this round, found more correctness bugs than usable wins.
+Recommend moving to the Campaign 2 architectural items already scoped in
+repo `plan.md` (backend-slot use-position intervals; centralized
+absolute-address/index/CSE resolver) as the next work, since a real
+redundant-index-computation CSE fix would directly unblock the
+`absolute-address-cost` winners found here as a side effect, in addition to
+its originally scoped `block-cse-cost`/`wide-store-cost`/
+`planned-index-base-cost` targets.
