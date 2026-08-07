@@ -12048,3 +12048,61 @@ this.
 
 Updated coverage: **895/2026 ordinary (44.18%), 917/2128 stack-check
 (43.09%)**.
+
+## Item T392: 6 more correctness bugs found; `planned-index-base-cost` has a large real-winner population but no safe generalizable predicate (2026-08-14)
+
+Batch-tested 15 more candidates across `planned-index-base-cost`,
+`wide-store-cost`, and the top-margin end of `unary-not-cost` (the huge
+outlier population previously flagged in `plan.md` as needing re-ranking
+"excluding these outliers"). Found:
+
+**6 more confirmed correctness bugs** (`adaint.run`, `cobint.exec_range`,
+`cint.run`, `pint.run`, `bint.run` - all large interpreter-dispatch
+functions in the `unary-not-cost` bucket's huge-outlier population;
+`tenumfsm.scan` in `planned-index-base-cost`). All fail forced-accept
+output comparison against their reference baselines. All currently
+harmless since existing gates reject them for unrelated (correct) reasons.
+`cint.run` joins the already-documented `cint.while_stmt` bug in the same
+interpreter dispatch family - this family of large "run"/dispatch loops in
+the four/five toy-language interpreters (`adaint`, `bint`, `cint`,
+`cobint`, `pint`) is now a **7th confirmed-buggy function cluster** this
+session; a future session attempting `unary-not-cost` should assume most
+of its huge-negative-delta population is similarly buggy rather than
+re-testing each one individually.
+
+**`planned-index-base-cost` (35-candidate population) has by far the
+largest real-winner cluster found this session (13 clean full-mode
+wins: `bint.pushv/popv`, `cobint.vpush/vpop`, `tinline.nest_give/
+nest_take/vpush2/vpop2`, `tctxops.ca_index`, `forint.do_return`,
+`tinlinfb.guard_push/guard_pop`, `fint.push`) - but it is definitively
+NOT safely generalizable.** Instrumented `mir_call_count()`/
+`mir_cfg_block_count()`/margin for every candidate and found the same
+identical-signature-splits-both-ways failure mode as this session's
+`indirect-store-address-cost`/`indirect-store-stack-cost` findings, but
+at larger scale and with an exact same-named-function collision:
+`fint.push` (calls=0, blocks=1, delta=+16) is a clean win, while
+`tstfield.push` - literally the same interpreter-stack-push idiom,
+same calls/blocks/delta signature - regresses (+0.86% peep cycles).
+Similarly `too.tnode_new`/`too.node_new` (calls=0, blocks=1, delta=+9/+14)
+regress despite sharing calls=0/blocks=1 with 9 of the 13 winners. No
+combination of call count, block count, or instruction margin separates
+the winners from these losers; every boundary tested has a
+counterexample on both sides. Promoting any subset without a real
+structural discriminator would require either a prohibited name-based
+exception or accepting a known regression (`too.tnode_new`/`too.node_new`/
+`tstfield.push`), both against policy. Left entirely unpromoted -
+recorded as the most valuable unactionable-winner-cluster finding this
+session so a future contributor does not have to re-derive the same
+13-winner/6-loser tabulation. **This is the strongest evidence yet that
+per-bucket static-metric near-miss mining has reached its structural
+limit**: real per-function runtime variance (likely dccpeep interaction
+with specific register-pressure/opcode-adjacency patterns invisible to
+generated/captured instruction counts) now dominates over any coarse
+gate formula in this bucket, matching the pattern already seen in
+`dynamic-index-base-cost` (T389) and the two indirect-store buckets
+(T391).
+
+No `src/` change lands from this item (all instrumentation was temporary
+and reverted; `git diff src/dcc/dcc_mir_select.c` confirmed empty).
+Coverage remains 895/2026 ordinary (44.18%), 917/2128 stack-check
+(43.09%) - unchanged from T391.

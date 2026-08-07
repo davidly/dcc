@@ -59,3 +59,15 @@ tptrinit	list_prepend	indirect-store-address-cost	-6	Full-mode A/B: tiny but rea
 tchess	m_to_text	indirect-store-stack-cost	-18	uses=7; part of the non-monotonic uses-count population documented under tc89fnty.main.	T391
 tallocx	t_large	indirect-store-stack-cost	-13	Full-mode A/B: regresses, peep bytes +0.81%. uses=4, higher than the winning tc89fnty.main's uses=3, confirming uses-count is non-monotonic for this bucket (uses=2 loses, uses=3 wins, uses=4 loses) - no safe threshold exists.	T391
 tpostinc	test_char_simple	indirect-store-stack-cost	-9	Full-mode A/B: tiny real regression (+0.04%/+0.05% cycles). uses=2.	T391
+adaint	run	unary-not-cost	-2167	CONFIRMED CORRECTNESS BUG: forced-accept output mismatch across all 3 baselines (adaint.txt, adaint_ttt.txt, adaint_sieve.txt). Existing gate correctly rejects for unrelated reasons.	T392
+cobint	exec_range	unary-not-cost	-1674	CONFIRMED CORRECTNESS BUG: forced-accept output mismatch across all 3 baselines. Existing gate correctly rejects for unrelated reasons.	T392
+cint	run	unary-not-cost	-832	CONFIRMED CORRECTNESS BUG: forced-accept output mismatch (wrong pi-digit output), same interpreter-dispatch family as the already-documented cint.while_stmt bug. Existing gate correctly rejects for unrelated reasons.	T392
+pint	run	unary-not-cost	-490	CONFIRMED CORRECTNESS BUG: forced-accept output mismatch across all 3 baselines. Existing gate correctly rejects for unrelated reasons.	T392
+bint	run	unary-not-cost	-379	CONFIRMED CORRECTNESS BUG: forced-accept output mismatch across all 3 baselines. Existing gate correctly rejects for unrelated reasons.	T392
+tenumfsm	scan	planned-index-base-cost	+0	CONFIRMED CORRECTNESS BUG: forced-accept output mismatch vs tenumfsm.txt. Existing gate correctly rejects for unrelated reasons.	T392
+fint	ctl_pop	planned-index-base-cost	+6	Full-mode A/B: regresses, peep bytes +0.45%. calls=2, blocks=3.	T392
+trowptr	scalar_target	planned-index-base-cost	+7	Full-mode A/B: regresses, nopeep +2.62% cycles. calls=0, blocks=4.	T392
+too	tnode_new	planned-index-base-cost	+9	Full-mode A/B: regresses, peep +0.04%/nopeep +0.03% cycles. calls=0, blocks=1 - IDENTICAL structural signature (calls=0,blocks=1) to 9 confirmed clean winners in this bucket (bint.pushv/popv, cobint.vpush/vpop, tinline.nest_give/nest_take/vpush2/vpop2, tctxops.ca_index, fint.push), so no safe generalizable predicate exists without a name exception (prohibited). See mir-text-size-plan.md T392 for the full winner/loser tabulation.	T392
+too	node_new	planned-index-base-cost	+14	Full-mode A/B: regresses, peep +0.04% cycles. calls=0, blocks=1 - same non-generalizable signature clash as too.tnode_new.	T392
+tstfield	push	planned-index-base-cost	+16	Full-mode A/B: regresses, peep +0.86%/nopeep +1.59% cycles/+1.96% bytes. calls=0, blocks=1, delta=+16 - IDENTICAL signature to the clean winner fint.push (also calls=0,blocks=1,delta=16), confirming the bucket has no safe generalizable predicate.	T392
+adaint	alloc_local	planned-index-base-cost	+16	Full-mode A/B: regresses, peep +0.08% cycles. calls=1, blocks=3.	T392
