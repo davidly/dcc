@@ -2344,6 +2344,7 @@ void mir_end_function(void)
             int phi_slot_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
+            int phi_return_forwarding_retry_attempted = 0;
             int block_cse_retry_attempted = 0;
             int block_cse_captured_spills = 0;
             int block_cse_captured_fixed_moves = 0;
@@ -2383,6 +2384,7 @@ retry_selection:
             phi_slot_retry_attempted = 0;
             strict_phi_retry_attempted = 0;
             strict_phi_fallthrough_active = 0;
+            phi_return_forwarding_retry_attempted = 0;
             mir_end_all_spilled_fallback_optimizations();
             mir_end_strict_phi_fallthrough();
             generated = tmpfile();
@@ -3665,6 +3667,24 @@ evaluate_generated:
                 if (strict_phi_fallthrough_active) {
                     mir_end_strict_phi_fallthrough();
                     strict_phi_fallthrough_active = 0;
+                }
+                if (fallback_reason != NULL &&
+                    !phi_return_forwarding_retry_attempted &&
+                    mir_cfg_block_count() <= 10 &&
+                    !g_speculative_codegen_active) {
+                    phi_return_forwarding_retry_attempted = 1;
+                    mir_reset_phi_return_forwarding_count();
+                    mir_forward_immediate_phi_returns();
+                    if (mir_phi_return_forwarding_count_value() > 0) {
+                        fclose(generated);
+                        generated = NULL;
+                        verified = mir_verify_and_dump();
+                        if (verified) {
+                            mir_compute_dead_local_suffix();
+                            mir_report_dead_local_suffix();
+                            goto retry_selection;
+                        }
+                    }
                 }
                 if (fallback_reason != NULL &&
                     !boolean_phi_retry_attempted &&

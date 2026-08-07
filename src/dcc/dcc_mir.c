@@ -4009,6 +4009,265 @@ void mir_reset_boolean_phi_branch_simplification_count(void)
     mir_boolean_phi_branch_simplifications = 0;
 }
 
+static int mir_collect_phi_forward_predecessors(int successor,
+                                                int *pred0, int *pred1)
+{
+    int instruction;
+    int count = 0;
+
+    *pred0 = -1;
+    *pred1 = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int successor_index;
+
+        for (successor_index = 0;
+             successor_index < insn->successor_count;
+             ++successor_index) {
+            if (insn->successors[successor_index] != successor)
+                continue;
+            if (count == 0)
+                *pred0 = instruction;
+            else if (count == 1)
+                *pred1 = instruction;
+            else
+                return 0;
+            ++count;
+            break;
+        }
+    }
+    return count == 2;
+}
+
+static int mir_find_phi_forward_terminal(int phi_instruction,
+                                         int *consumer_instruction,
+                                         int *terminal_instruction)
+{
+    const struct MirInsn *phi;
+    int instruction;
+
+    if (phi_instruction < 0 || phi_instruction >= mir.count)
+        return 0;
+    phi = &mir.insns[phi_instruction];
+    if (phi->opcode != MIR_PHI || type_size(phi->type) > 2 ||
+        type_is_float(phi->type) || type_is_struct_object(phi->type) ||
+        mir_value_use_count(phi->dst) != 1)
+        return 0;
+    instruction = phi_instruction + 1;
+    while (instruction < mir.count &&
+           mir.insns[instruction].opcode == MIR_NOP)
+        ++instruction;
+    if (instruction >= mir.count)
+        return 0;
+    if (mir.insns[instruction].opcode == MIR_RETURN &&
+        mir.insns[instruction].src1 == phi->dst &&
+        !type_is_struct_object(mir.return_type)) {
+        *consumer_instruction = -1;
+        *terminal_instruction = instruction;
+        return 1;
+    }
+    if ((mir.insns[instruction].opcode == MIR_UNARY ||
+         mir.insns[instruction].opcode == MIR_BINARY) &&
+        type_size(mir.insns[instruction].type) <= 2 &&
+        !type_is_float(mir.insns[instruction].type) &&
+        !type_is_struct_object(mir.insns[instruction].type) &&
+        (mir.insns[instruction].src1 == phi->dst ||
+         mir.insns[instruction].src2 == phi->dst) &&
+        mir.insns[instruction].dst >= 0 &&
+        mir_value_use_count(mir.insns[instruction].dst) == 1) {
+        int terminal = instruction + 1;
+
+        while (terminal < mir.count &&
+               mir.insns[terminal].opcode == MIR_NOP)
+            ++terminal;
+        if (terminal < mir.count &&
+            mir.insns[terminal].opcode == MIR_RETURN &&
+            mir.insns[terminal].src1 == mir.insns[instruction].dst &&
+            !type_is_struct_object(mir.return_type)) {
+            *consumer_instruction = instruction;
+            *terminal_instruction = terminal;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int mir_phi_forward_source_for_predecessor(const struct MirInsn *phi,
+                                                  int predecessor)
+{
+    int predecessor_label = mir_block_label_before(predecessor);
+
+    if (predecessor_label == phi->phi_pred1)
+        return phi->src1;
+    if (predecessor_label == phi->phi_pred2)
+        return phi->src2;
+    return -1;
+}
+
+static void mir_init_phi_forward_return(struct MirInsn *insn,
+                                        int source_value,
+                                        int terminal_type)
+{
+    mir_make_nop(insn);
+    insn->opcode = MIR_RETURN;
+    insn->src1 = source_value;
+    insn->type = terminal_type;
+}
+
+static void mir_init_phi_forward_consumer(struct MirInsn *insn,
+                                          int source_value,
+                                          int phi_value,
+                                          const struct MirInsn *consumer_template)
+{
+    *insn = *consumer_template;
+    insn->dst = mir_new_value();
+    if (insn->src1 == phi_value)
+        insn->src1 = source_value;
+    if (insn->src2 == phi_value)
+        insn->src2 = source_value;
+    insn->successor_count = 0;
+}
+
+static void mir_insert_phi_forward_return_before(int index,
+                                                 int source_value,
+                                                 int phi_value,
+                                                 const struct MirInsn *consumer,
+                                                 int terminal_type)
+{
+    if (consumer != NULL) {
+        struct MirInsn *consumer_insn =
+            mir_insert_instruction_before(
+                index, consumer->opcode);
+        struct MirInsn *ret;
+
+        if (consumer_insn == NULL)
+            fatal("cannot insert MIR phi-forward consumer");
+        mir_init_phi_forward_consumer(consumer_insn, source_value, phi_value,
+                                      consumer);
+        ret = mir_insert_instruction_before(index + 1, MIR_RETURN);
+        if (ret == NULL)
+            fatal("cannot insert MIR phi-forward return");
+        mir_init_phi_forward_return(ret, consumer_insn->dst, terminal_type);
+    } else {
+        struct MirInsn *ret = mir_insert_instruction_before(index, MIR_RETURN);
+
+        if (ret == NULL)
+            fatal("cannot insert MIR phi-forward return");
+        mir_init_phi_forward_return(ret, source_value, terminal_type);
+    }
+}
+
+static int mir_forward_single_phi_return_join(int successor)
+{
+    const struct MirInsn *phi;
+    int phi_instruction;
+    int consumer_instruction;
+    int terminal_instruction;
+    int predecessor0;
+    int predecessor1;
+    int label_predecessor;
+    int explicit_predecessor;
+    int source0;
+    int source1;
+    struct MirInsn consumer_copy;
+    const struct MirInsn *consumer_template = NULL;
+    int terminal_type;
+
+    if (successor < 0 || successor >= mir.count ||
+        mir.insns[successor].opcode != MIR_LABEL ||
+        !mir_collect_phi_forward_predecessors(
+            successor, &predecessor0, &predecessor1))
+        return 0;
+    if (mir.insns[predecessor0].opcode == MIR_LABEL &&
+        predecessor0 + 1 == successor) {
+        label_predecessor = predecessor0;
+        explicit_predecessor = predecessor1;
+    } else if (mir.insns[predecessor1].opcode == MIR_LABEL &&
+               predecessor1 + 1 == successor) {
+        label_predecessor = predecessor1;
+        explicit_predecessor = predecessor0;
+    } else {
+        return 0;
+    }
+    if (mir.insns[explicit_predecessor].opcode != MIR_JUMP &&
+        (mir.insns[explicit_predecessor].opcode != MIR_BRANCH_FALSE ||
+         mir_find_label(mir.insns[explicit_predecessor].label) != successor))
+        return 0;
+    phi_instruction = mir_first_phi_or_block_end(successor);
+    if (phi_instruction < 0 || phi_instruction >= mir.count ||
+        mir.insns[phi_instruction].opcode != MIR_PHI)
+        return 0;
+    if (phi_instruction + 1 < mir.count &&
+        mir.insns[phi_instruction + 1].opcode == MIR_PHI)
+        return 0;
+    if (!mir_find_phi_forward_terminal(phi_instruction, &consumer_instruction,
+                                       &terminal_instruction))
+        return 0;
+    phi = &mir.insns[phi_instruction];
+    source0 = mir_phi_forward_source_for_predecessor(phi, explicit_predecessor);
+    source1 = mir_phi_forward_source_for_predecessor(phi, label_predecessor);
+    if (source0 < 0 || source1 < 0)
+        return 0;
+    terminal_type = mir.insns[terminal_instruction].type;
+    if (consumer_instruction >= 0) {
+        consumer_copy = mir.insns[consumer_instruction];
+        consumer_template = &consumer_copy;
+    }
+    mir_make_nop(&mir.insns[phi_instruction]);
+    if (consumer_instruction >= 0)
+        mir_make_nop(&mir.insns[consumer_instruction]);
+    mir_make_nop(&mir.insns[terminal_instruction]);
+    mir_insert_phi_forward_return_before(successor, source1, phi->dst,
+                                         consumer_template, terminal_type);
+    if (consumer_template != NULL) {
+        struct MirInsn *explicit_consumer = &mir.insns[explicit_predecessor];
+        struct MirInsn *ret;
+
+        mir_init_phi_forward_consumer(explicit_consumer, source0, phi->dst,
+                                      consumer_template);
+        ret = mir_insert_instruction_before(explicit_predecessor + 1,
+                                            MIR_RETURN);
+        if (ret == NULL)
+            fatal("cannot insert MIR phi-forward return");
+        mir_init_phi_forward_return(ret, explicit_consumer->dst,
+                                    terminal_type);
+    } else {
+        mir_init_phi_forward_return(&mir.insns[explicit_predecessor], source0,
+                                    terminal_type);
+    }
+    return 1;
+}
+
+static int mir_phi_return_forwarding_count;
+
+int mir_phi_return_forwarding_count_value(void)
+{
+    return mir_phi_return_forwarding_count;
+}
+
+void mir_reset_phi_return_forwarding_count(void)
+{
+    mir_phi_return_forwarding_count = 0;
+}
+
+void mir_forward_immediate_phi_returns(void)
+{
+    int changed;
+
+    do {
+        int successor;
+
+        changed = 0;
+        for (successor = 0; successor < mir.count; ++successor) {
+            if (!mir_forward_single_phi_return_join(successor))
+                continue;
+            ++mir_phi_return_forwarding_count;
+            changed = 1;
+            break;
+        }
+    } while (changed);
+}
+
 void mir_simplify_boolean_phi_branches(void)
 {
     unsigned char *actions;

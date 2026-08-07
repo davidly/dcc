@@ -15616,3 +15616,137 @@ most a **non-landable** peep-size regression.
 Because the focused runtime/perf gate already failed and no production code was
 kept, I reverted the prototype and am committing only the dead-end
 documentation.
+
+## Item T427: forward immediate phi-return joins on label-only fallthrough edges (+6, 2026-08-08)
+
+Fresh census on top of T425/T426 still showed `phi-fallthrough-cost` as the
+most actionable unclosed architecture bucket: **44 ordinary** candidates, with
+the same "few shallow, many far" shape already called out in `plan.md`. A fresh
+`scripts/mir-gate-margins.py build/mir-before.tsv --reason phi-fallthrough-cost`
+reconfirmed that only the front of the bucket was near the existing gate:
+`forint.ensure_sym` at **43/52 (-9)**, `too.bst_height` at **75/80 (-5)**, then
+only five more candidates inside `+9` instructions before the population jumps
+to double and triple digits. The gate-margin mine was still exhausted; the next
+step really did have to be a different mechanism.
+
+### 1. Actual redundant shape found in current MIR
+
+The common narrow shape was not "some selector-local threshold miss"; it was a
+real join artifact on **label-only pseudo-fallthrough predecessors**:
+
+- predecessor A computes a value and jumps to the join
+- predecessor B ends at a plain label immediately followed by the join label
+- the join block contains exactly one phi
+- that phi's result is consumed immediately by a `return`, or by one
+  side-effect-free `unary`/`binary` followed by `return`
+
+Representative MIR dumps:
+
+- `forint.ensure_sym`
+  - `phi v13 = v2,v12 [L3,L4]`
+  - immediate consumer: `return v13`
+- `tinline.edge_conditional`
+  - `phi v5 = v3,v1 [L3,L4]`
+  - immediate consumer: `return v5`
+- `too.bst_height`
+  - `phi v21 = v8,v13 [L5,L6]`
+  - immediate consumer chain: `v22 = 1 + v21 ; return v22`
+
+Before this item, the backend had only two choices for these shapes:
+
+1. materialize the phi result into a slot/home on each edge, then reload it
+   again for the immediate consumer, or
+2. reject the transformed candidate via `phi-fallthrough-cost`
+
+That was a real codegen gap, not just a gate quirk.
+
+### 2. Implemented mechanism: transactional phi-return forwarding retry
+
+Added `mir_forward_immediate_phi_returns()` in `src/dcc/dcc_mir.c` and wired it
+as a **fallback-only retry** in `src/dcc/dcc_mir_select.c` (never on already-
+accepted functions, to preserve incumbent output).
+
+The retry is intentionally narrow:
+
+- only functions still falling back after the ordinary selector chain
+- only CFGs with **<=10 blocks** (the first broader `<=11` version also
+  admitted `tasm.main`, but focused full-mode validation found a real peep
+  regression `11309 -> 11324 (+0.13%)`, so the guard was tightened before
+  landing)
+- only join blocks whose fallthrough predecessor is a **consecutive label**
+- only a **single phi**
+- only immediate `phi -> return` or `phi -> unary/binary -> return`
+
+For those shapes, the pass:
+
+- rewrites the explicit predecessor's terminal `jump` into the return path for
+  that edge's known source value,
+- splices the fallthrough predecessor's return path directly before the join
+  label, and
+- NOPs the now-dead join phi/consumer.
+
+This is real code reduction, not a threshold change: the phi materialization
+and its immediate re-read disappear from MIR itself before selector retry.
+
+### 3. Targeted effect on the motivating functions
+
+- `forint.ensure_sym`
+  - before: **495 bytes / 43 insns**
+  - after forwarded retry: **403 / 38**
+  - focused runtime: full-mode clean, peep cycles **711741372 -> 711741361**
+- `tinline.edge_conditional`
+  - before fallback: **269 / 25** on the homed path
+  - after forwarded retry: **170 / 16** on spilled-scalar-cfg
+  - focused runtime: full-mode clean
+- `too.bst_height`
+  - still not landable: the narrow return-forwarding retry reaches it, but the
+    transformed shape does not clear the existing selector/verification path, so
+    it remains the closest unresolved bucket member at **75/80 (-5)**
+
+### 4. Coverage result
+
+Compared against the stable T420 snapshots (`build/mir-t420-after.tsv` and
+`build/mir-t420-after-stack.tsv`):
+
+- ordinary: **908/2026 -> 914/2026** (**+6**, no removals)
+- stack-check: **930/2128 -> 936/2128** (**+6**, no removals)
+
+Newly MIR-emitted in both modes:
+
+- `attnc11.load_weights`
+- `attnc11.save_weights`
+- `forint.ensure_sym`
+- `tbool.set_bool`
+- `tctxflt.truth_and`
+- `tinline.edge_conditional`
+
+The targeted bucket itself shrank:
+
+- ordinary `phi-fallthrough-cost`: **44 -> 38**
+- stack-check `phi-fallthrough-cost`: **45 -> 39**
+
+So the requested architecture work produced real production coverage, and the
+remaining bucket is materially smaller.
+
+### 5. Validation
+
+- `sh src/dcc/build-dcc.sh`
+- `pwsh ./scripts/build-dcc.ps1`
+- ordinary census compare with `--fail-on-regression`: **PASS**
+- stack-check census compare with `--fail-on-regression`: **PASS**
+- focused full-mode runtime gate on changed apps:
+  `pwsh ./scripts/runall.ps1 -Apps attnc11,forint,tbool,tctxflt,tinline -Mode full -RunTimeout 20`
+  - **PASS**
+  - no regressions
+  - 14 checked improvements (including `tbool` peep **-0.39% cycles / -1.54%
+    bytes**, `attnc11` nopeep **-128 bytes**, `forint` nopeep **-256 bytes**)
+- full extended milestone gate:
+  `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  - **PASS**: **314/323 passed, 9 skipped, 0 failed**
+  - diagnostics passed
+  - dccpeep fixtures passed
+  - extended c-testsuite passed
+
+This is a real MIR-level forwarding mechanism, not a gate-margin re-try, and it
+leaves a tighter, re-measured `phi-fallthrough-cost` residue behind for any
+future follow-up.
