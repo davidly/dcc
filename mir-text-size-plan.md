@@ -16133,3 +16133,114 @@ but it is not a no-op: the work lands a real retained/rematerialized
 base-address planner slice that future sessions can build on, and it records
 why the first "address-only spilled same-block rollout" attempt still fails the
 zero-regression bar.
+
+## Item T431: pre-legacy named-load VN still hits the same peep wall; slotless-only sequencing yields +0 (2026-08-08)
+
+T426 already proved the deeper point for `block-cse-cost`: allocator-aware
+kill-tracked VN is not blocked on equality or kill reasoning, it is blocked on
+**what representation the spilled backend chooses for the reused value** and on
+the historical retry ordering. This follow-on therefore did **not** re-run the
+full T426 experiment. Instead it tested the two precise next steps T426 left
+open:
+
+1. try a transactional block-local named-load VN **before** the historical
+   same-block retry, so it sees pristine MIR instead of the legacy retry's
+   0->8-spill poisoned form; then
+2. if that provisional admit still regresses, tighten it all the way down to
+   a **slotless-only** slice and see whether any safe admissions remain.
+
+### 1. Transactional pre-legacy retry: sequencing alone is not enough
+
+I built a very narrow retry that runs before the historical same-block CSE
+pass, only on one-block `spilled-scalar-cfg` fallbacks. It value-numbers
+repeated **1-2 byte `MIR_LOAD_INDIRECT` loads from the same resolved named
+address** inside one block, with kills on calls/opaque memory effects and
+exact overlap kills for resolvable named indirect stores. If the transformed
+candidate fails the ordinary selector gates, the selector restores pristine MIR
+and continues to the historical retry chain unchanged.
+
+That retry immediately reproduced T426's exact sequencing target:
+
+- `cobint:compile_stmt`
+  - pristine retry: **eliminated=2**
+  - provisional emitted metrics: **1006/93** vs captured **1047/100**
+  - selector result: would be **accepted**
+
+So the ordering issue was real: a cleaner VN pass **can** clear
+`compile_stmt` before the historical retry poisons it.
+
+But focused validation immediately repeated T426's app-level wall:
+
+```sh
+pwsh ./scripts/runall.ps1 -Apps cobint -Mode full -RunTimeout 20
+```
+
+Result:
+
+- correctness: **PASS**
+- performance: **FAIL**
+  - peep cycles **758415604 -> 758420492** (+0%)
+  - peep linked size **27904 -> 28032** (**+0.46%**)
+  - nopeep cycles/size improved, but the zero-regression policy still rejects it
+
+The `.mac` diff showed why sequencing alone still fails. Even without the old
+retry's 8-spill poisoning, the provisional MIR body still introduced a **4-byte
+IX frame** and cached the reused `Gst.stmt` / derived `bc` address through
+`(ix-2)`..`(ix-4)`, replacing the legacy direct-reload-from-global shape that
+`dccpeep` already folds better. So this is the same architectural wall T426
+identified, just reached by a cleaner route: ordering alone is insufficient if
+the surviving representation still manufactures a frame/cache that the shipped
+peep path loses to.
+
+### 2. Slotless-only follow-on: safe slice collapses back to zero
+
+I then tightened the retry to the user-requested narrower scope: keep the
+transactional named-load VN result **only when both the pristine spilled
+candidate and the transformed spilled candidate stay genuinely slotless and
+frame-free** (`backend_slot_count == 0`, `local_bytes == 0`), otherwise restore
+pristine MIR and continue to the historical retry.
+
+That stricter filter rejects the `compile_stmt` provisional admit outright:
+
+- pristine spilled candidate already needs **2 backend slots / 4 frame bytes**
+- transformed candidate still needs **2 backend slots / 4 frame bytes**
+- therefore it is **not** a slotless live-register-window reuse, so the retry
+  restores pristine MIR and leaves the existing `block-cse-cost` fallback in
+  place
+
+I also checked `cobint:add_stmt` against this narrower direction. It remains a
+**two-block, call-containing** shape, so it never enters this first-phase
+single-block transactional retry at all. In other words, the slotless-only
+follow-on does not reopen T426's `add_stmt` regression; it simply confirms that
+the safe one-block/no-frame slice is too small to produce a rollout on its own.
+
+Fresh censuses with the slotless-only guard restored the coverage back to the
+true baseline:
+
+- ordinary: **914/2026 -> 914/2026**
+- stack-check: **936/2128 -> 936/2128**
+- newly MIR-emitted: **none**
+- no longer MIR-emitted: **none**
+- selected-output delta: **none**
+
+### Conclusion
+
+This is a second, sharper confirmation of T426 rather than a new win:
+
+- **ordering alone helps `compile_stmt` clear the gate, but still regresses the
+  shipped peep artifact**
+- **tightening to slotless-only removes that regression path, but also removes
+  every admission**
+
+So the remaining architectural need is now even clearer. `block-cse-cost`
+still requires either:
+
+1. a genuinely cheaper spilled/backend home strategy for reused named loads and
+   addresses (so the selected artifact stays slotless or otherwise beats the
+   legacy direct-reload pattern after `dccpeep`), or
+2. a fuller selector-local replacement for the historical retry that can choose
+   among multiple transformed variants without leaving the final winner stuck in
+   the same frame-caching representation.
+
+This follow-on therefore lands as an honest **+0 / +0** dead-end confirmation,
+not a forced rollout.
