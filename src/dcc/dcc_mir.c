@@ -3485,6 +3485,19 @@ static int mir_load_object_is_call_safe(int object)
     return 1;
 }
 
+/* Like mir_load_object_is_call_safe() above, but for the exact
+ * `static_global.field` loadind shape already proven by T403's field-level
+ * scan: isolated file-local global-field loads whose field address never
+ * escapes, and whose one textual writer (if any) is not in the function
+ * currently being optimized, can be reused safely across intervening calls. */
+static int mir_load_indirect_is_call_safe(const struct MirInsn *insn)
+{
+    struct MirResolvedNamedAddress resolved;
+
+    return mir_resolve_isolated_global_field_load(insn, &resolved) &&
+           mir_isolated_global_field_call_safe(&resolved);
+}
+
 static int mir_common_expressions_equal(const struct MirInsn *left,
                                         const struct MirInsn *right)
 {
@@ -3505,6 +3518,10 @@ static int mir_common_expressions_equal(const struct MirInsn *left,
         break;
     case MIR_LOAD:
         if (!mir_load_object_is_call_safe(left->object))
+            return 0;
+        break;
+    case MIR_LOAD_INDIRECT:
+        if (!mir_load_indirect_is_call_safe(left))
             return 0;
         break;
     default:

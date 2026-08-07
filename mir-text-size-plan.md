@@ -14922,3 +14922,101 @@ classes (`block-cse-cost`, `inline-substitution`, `phi-fallthrough-cost`,
 **currently unproductive without a larger architecture change**. Coverage is
 unchanged at **908/2026 ordinary (44.82%)** and **930/2128 stack-check
 (43.70%)**.
+
+## Item T423: thread the existing field-level call-safety proof into single-block CSE (+0, 2026-08-08)
+
+This worktree already contained T403's real prerequisite work for the
+member-qualified follow-on to T393:
+
+- `dcc_global_scan.c` already tracks exact `base.field` / `base->field`
+  write/address-taken facts (`global_text_field_{write_count,addr_taken_count,
+  written_in_function}`);
+- `dcc_mir.c` already resolves exact isolated `static_global.field` addresses
+  (`mir_resolve_isolated_global_field_address`) and already has the field-level
+  call-safety predicate used by T403's exact-address VN retry
+  (`mir_isolated_global_field_call_safe`).
+
+What was still missing was the **same consumer T393 used for bare globals**:
+`mir_common_expressions_equal()` still only admitted call-safe `MIR_LOAD`
+objects, not call-safe `MIR_LOAD_INDIRECT` field loads. I threaded the already-
+landed field proof into that existing retry by adding
+`mir_load_indirect_is_call_safe()` and allowing `MIR_LOAD_INDIRECT` through the
+single-block common-expression eliminator only when it is an exact isolated
+`static_global.field` load already proven call-safe by T403's infrastructure.
+
+### Population check before editing
+
+Fresh baseline:
+
+- ordinary: **908/2026 (44.82%)**
+- stack-check: **930/2128 (43.70%)**
+
+Commands:
+
+1. `python3 scripts/mir-migration-census.py --output build/streamE-gstvar/mir-before.tsv`
+2. `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/streamE-gstvar/mir-before-stack.tsv`
+3. `python3 scripts/mir-gate-margins.py build/streamE-gstvar/mir-before.tsv --exclude-known mir-dead-ends.tsv`
+4. targeted MIR dumps with `DCC_MIR_REPORT=1 DCC_MIR_CANDIDATES=1 DCC_MIR_SELECT_REPORT=1`
+
+Real repeated member-qualified loads do exist, but the current residue splits
+into two materially different families:
+
+- **Direct static-global field roots** (`Gst.field`): the clearest call-crossing
+  repro remains `cobint.add_var`, which still reloads `Gst.var` five times
+  across `die`/`memset`/`upcase`/`xcalloc`; however that exact field is both
+  written and address-taken in the TU, so it is *correctly* excluded from any
+  "field is invariant across calls" proof.
+- **Global-pointer roots** (`G->field`): real examples include
+  `tstretst.run_helper` (repeated `G->s_rs` loads across helper/fail calls) and
+  `tstfield.find_word` (repeated `G->words` loads across `strcmp` in the loop),
+  but these are rooted on a mutable global pointer object, not a direct
+  `static_global.field` location. The current field-level lexical scan can prove
+  the field name is untouched; it cannot prove the pointed-to object is unique
+  and alias-free. I deliberately did **not** widen the production predicate to
+  that higher-risk pointer-root class on guesswork.
+
+So the safe, already-implemented field proof in this branch is the direct
+`static_global.field` sub-case. This item makes the existing single-block CSE
+consumer recognize that proof instead of only the bare-global `MIR_LOAD` proof
+from T393.
+
+### Result
+
+Measured yield is **zero** on the current corpus:
+
+- ordinary compare vs baseline: **0 changed rows**, still **908/2026**
+- stack-check compare vs baseline: **0 changed rows**, still **930/2128**
+- newly MIR-emitted: **0**
+- removed MIR functions: **0**
+- runtime-validation cohort from the census compare: **0 apps**
+
+This is the same stop condition T393 hit for bare globals: the current
+single-block CSE retry simply does not have a qualifying corpus function where
+this newly-recognized exact field-load equality changes admission.
+
+### Validation
+
+- `sh src/dcc/build-dcc.sh`
+- `pwsh ./scripts/build-dcc.ps1`
+- `python3 scripts/mir-migration-census.py --output build/streamE-gstvar/mir-after.tsv --compare build/streamE-gstvar/mir-before.tsv --fail-on-regression`
+  - **PASS**, **0 changed rows**, still **908/2026**
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/streamE-gstvar/mir-after-stack.tsv --compare build/streamE-gstvar/mir-before-stack.tsv --fail-on-regression`
+  - **PASS**, **0 changed rows**, still **930/2128**
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  - **314/323 passed, 0 failed, 9 skipped**
+  - diagnostics: **passed**
+  - dccpeep fixtures: **passed**
+  - extended suite: **passed**
+  - performance: **passed**
+
+### Conclusion
+
+This lands as **validated zero-regression infrastructure**, not as a coverage
+win: the repo already had the field-level lexical proof from T403, and this
+item finishes threading that proof through the same `mir_common_expressions_equal`
+path T393 uses for bare globals. The still-unresolved remainder of the user's
+original request is the **global-pointer-root** case (`G->field`): without a
+real proof of the pointee object's identity/aliasing, widening production CSE
+to that class would be guesswork. For now, the sound direct-`static_global.field`
+sub-case is fully wired in both the T403 exact-address VN retry and T393's
+single-block CSE retry, and the current corpus still shows **+0** from it.
