@@ -451,6 +451,27 @@ cause is still open (suspected `OP_DO` loop-bookkeeping issue, separate
 from the displacement bug). See `mir-text-size-plan.md` T416/T418 entries
 for full evidence.
 
+**T419 (this segment, cluster nearly closed): the third mechanism is
+fixed.** `mir_emit_selfstore_incdec()` emitted `inc (ix+d)`/`dec (ix+d)`
+unconditionally, but Z80's IX-relative displacement is a signed 8-bit
+value (-128..127); for out-of-range frame offsets (e.g. `adaint`'s large
+frame, offset -196) the displacement byte wrapped and corrupted an
+unrelated frame location. Fixed (T419, `9fedef5`) by factoring the
+existing range check already used by `mir_emit_frame_word_store`/`load`
+into a shared `mir_frame_word_uses_short_ix()` helper and reusing it in
+`mir_emit_selfstore_incdec()`, falling back to
+`frame_word_load -> inc/dec hl -> frame_word_store` when out of range.
+Confirmed latent (0 hits in a full-corpus census before the fix); fixes
+`adaint.var_or_const_decl` across all 3 scenarios; confirmed **not** to
+touch `forint.run_prog`, which remains the sole unresolved bug from the
+original cluster. Added to the forced-MIR correctness regression harness.
+**Updated tally: 8 of 15 confirmed correctness bugs now fully fixed**
+(5 from T413, 2 from T416, 1 from T419), plus T418's independently-found
+`tenumfsm.scan` - **9 total fixed. `forint.run_prog` is now the only
+open bug from this cluster**, under active investigation (suspected
+`OP_DO` loop-bookkeeping issue). See `mir-text-size-plan.md`'s T419 entry
+for full evidence.
+
 ## Latest production cohort
 
 The current cohort promotes three measured allocator-backed loop strata after
