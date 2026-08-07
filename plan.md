@@ -420,6 +420,37 @@ from Stream C. See `mir-text-size-plan.md`'s T413/T414/T415 entries for
 full evidence; do not assume the second bug is fixed until a session
 reports a concrete root cause and a validated patch.
 
+**T416/T418 (later same segment): the "second bug" split into two more
+separately-fixed mechanisms, plus a third still open.** `tvapinit.join`
+and `tap.first_implementation` (T416, `9a486d9`) turned out to be their
+own pair of narrow bugs, not the same one as `adaint`/`forint`: wide
+direct-next forwarding missed a backedge phi use (`mir_can_forward_hl_de_to_next`
+now rejects any value with a phi use), and `mir_multiply_by_small_constant`
+wrongly applied its 16-bit fast path to 32-bit multiplies (now restricted
+to `<=2`-byte operands). Both confirmed fully fixed by direct repro;
+independently cross-checked that this fix does **not** touch
+`adaint.var_or_const_decl`/`forint.run_prog`'s residual bug. Separately,
+T418 (`d7514b9`) found and fixed a real, different bug: `MIR_PHI`
+destinations could have their slot store skipped by any of several
+HL/DE forwarding fast paths in `mir_emit_virtual_store`/
+`mir_emit_virtual_store_wide`, since none of them checked whether the
+value being stored was itself a phi destination; fixed with a
+`force_slot_store` guard. Fixes `tenumfsm.scan`; added a reusable forced-
+MIR correctness regression harness (`scripts/mir-forced-correctness.ps1` +
+`tests/mir_forced_correctness_cases.tsv`) so this and future fixes get
+durable coverage. All zero-net-coverage. **Updated tally: 7 of 15
+confirmed correctness bugs now fully fixed** (5 from T413, 2 from T416),
+plus T418's `tenumfsm.scan` fix (not one of the original 15, found
+independently) - **8 total now fixed**. `adaint.var_or_const_decl` and
+`forint.run_prog`'s `ttt`/`sieve`-only failures remain a **distinct,
+still-unidentified third mechanism** under active investigation - Stream
+C found its root cause is `mir_emit_selfstore_incdec()` emitting an
+illegal out-of-range IX-relative displacement (`inc (ix-196)`, outside
+the valid signed-byte -128..127 range) for `adaint`; `forint.run_prog`'s
+cause is still open (suspected `OP_DO` loop-bookkeeping issue, separate
+from the displacement bug). See `mir-text-size-plan.md` T416/T418 entries
+for full evidence.
+
 ## Latest production cohort
 
 The current cohort promotes three measured allocator-backed loop strata after
