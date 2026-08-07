@@ -11887,3 +11887,51 @@ redundant-index-computation CSE fix would directly unblock the
 `absolute-address-cost` winners found here as a side effect, in addition to
 its originally scoped `block-cse-cost`/`wide-store-cost`/
 `planned-index-base-cost` targets.
+
+## Item T390: block-cse retry widening experiment - zero gain, root cause pinpointed for Campaign 2 (2026-08-14)
+
+Following T389's finding that `cobint.add_var`/`cint.emit`/`cobint.add_stmt`
+(the `absolute-address-cost` losers) recompute the same `index * stride`
+address three separate times with no reuse, tested the hypothesis that the
+existing `mir_eliminate_common_block_expressions()` CSE pass simply wasn't
+being *attempted* for these functions, since its retry driver in
+`dcc_mir_select.c` was gated on `mir_cfg_block_count() == 1` while all
+three losers have `blocks=2`.
+
+Widened the retry trigger to attempt CSE regardless of block count (this
+is safe: the elimination function is already internally scoped per basic
+block via its own `block_start` tracking that resets at every
+label/jump/return, so running it against a multi-block function is exactly
+as safe as a single-block one; the change touched only the retry trigger,
+not the separate acceptance-gate condition, so a candidate that still
+doesn't clear an existing check falls back with byte-identical legacy
+output as before - zero regression risk by construction).
+
+**Result: zero coverage change.** A fresh whole-corpus census confirmed 0
+newly emitted, 0 regressions, but 116 apps showed fallback-reason-label
+churn (many functions previously classified under a later gate, e.g.
+`absolute-address-cost`, got reclassified as `block-cse-cost` once the
+retry ran and found `eliminated > 0`, but this is purely a diagnostic label
+change since `block-cse-cost`'s own acceptance condition still
+independently requires `blocks == 1`, so nothing new could actually clear
+it). `DCC_MIR_CSE_REPORT=1` confirmed the CSE pass does fire for
+`cobint.add_var` (`eliminated=9`), but a before/after forced-accept
+assembly diff showed **the actual costly repeated shift-add multiply-by-37
+sequence is still emitted three separate times, byte-identical to before**
+- CSE eliminated 9 *other* redundant sub-expressions (the repeated
+`address Gst`/`memberaddr var`/`loadind` prefix chain feeding into the
+index computation) but not the `indexaddr` instruction itself, which is
+re-lowered by the spilled-scalar-cfg backend selector every time its
+result is *used*, rather than being computed once and spilled/reused.
+
+**Root cause pinpointed for Campaign 2:** the gap is not in
+`mir_eliminate_common_block_expressions()`'s block-count restriction (which
+was a safe, low-value dead end to widen) but in the backend selector's
+lowering of `MIR_INDEXADDR`-class values - it has no reuse/rematerialization
+concept of its own, unlike plain loads. This is exactly the class of work
+already scoped as repo `plan.md`'s Campaign 2 "centralized absolute-
+address/index/CSE resolver" item, now with a concrete, reproducible
+example (`cobint.add_var`, 3 redundant `index*37` computations) to validate
+against once that item is implemented. The experimental retry-widening
+change was reverted (verified byte-identical census to pre-experiment
+state); no `src/` change lands from this item, evidence-only.
