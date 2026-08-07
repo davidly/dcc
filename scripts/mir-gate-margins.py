@@ -14,6 +14,7 @@ real gate requires" without needing to know the gate's exact arithmetic.
 Usage:
     python3 scripts/mir-gate-margins.py census.tsv [--top N] [--reason NAME]
     python3 scripts/mir-gate-margins.py census.tsv --min-population 10
+    python3 scripts/mir-gate-margins.py census.tsv --exclude-known mir-dead-ends.tsv
 """
 
 from __future__ import annotations
@@ -43,6 +44,12 @@ def parse_args() -> argparse.Namespace:
         "--accepted-reason", default="accepted",
         help="reason value marking an already-accepted row to exclude (default: accepted)",
     )
+    parser.add_argument(
+        "--exclude-known", metavar="TSV",
+        help="skip app:function candidates already recorded as a confirmed dead end "
+        "in a ledger TSV (see mir-dead-ends.tsv; columns: app, function, reason, "
+        "delta, note, source)",
+    )
     return parser.parse_args()
 
 
@@ -51,13 +58,30 @@ def load_rows(path: str) -> list[dict[str, str]]:
         return list(csv.DictReader(f, delimiter="\t"))
 
 
+def load_known_dead_ends(path: str) -> set[tuple[str, str]]:
+    """Return the set of (app, function) pairs already confirmed as dead ends."""
+    known: set[tuple[str, str]] = set()
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f, delimiter="\t"):
+            app = row.get("app")
+            function = row.get("function")
+            if app and function:
+                known.add((app, function))
+    return known
+
+
 def main() -> int:
     args = parse_args()
     rows = load_rows(args.tsv)
+    known_dead_ends = load_known_dead_ends(args.exclude_known) if args.exclude_known else set()
 
     buckets: dict[str, list[dict[str, str]]] = defaultdict(list)
+    skipped_known = 0
     for row in rows:
         if row.get("result") == "mir" or row.get("reason") == args.accepted_reason:
+            continue
+        if (row.get("app"), row.get("function")) in known_dead_ends:
+            skipped_known += 1
             continue
         try:
             gen = int(row["generated_insns"])
@@ -69,6 +93,9 @@ def main() -> int:
         row["_delta"] = gen - cap
         row["_ratio"] = gen / cap
         buckets[row["reason"]].append(row)
+
+    if args.exclude_known and skipped_known:
+        print(f"(excluded {skipped_known} candidate(s) already in {args.exclude_known})\n")
 
     if args.reason:
         wanted = set(args.reason)

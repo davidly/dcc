@@ -1,0 +1,10 @@
+app	function	reason	delta	note	source
+too	test_dispatch_table	rematerialized-home-cost	-2	full-mode A/B regressed peep execution; matches dcc_mir_select.c's own comment ("candidates saving only two and seven raw instructions both regressed peep")	T385
+tkandr	uchar_mix	lazy-parameter-cost	-2	mixed byte-parameter expression; full-mode A/B regressed peep execution, matches dcc_mir_select.c comment	T385
+tdivmod	main	block-cse-cost	0	prior widening regression; single-block CSE retry >=5-net-instruction threshold is load-bearing, confirmed via forced-accept full-mode A/B	T271/T272
+trtl2	main	block-cse-cost	0	prior widening regression; same >=5-net-instruction threshold, confirmed via forced-accept full-mode A/B	T271/T272
+tsnprtf	main	block-cse-cost	0	prior widening regression; same >=5-net-instruction threshold, confirmed via forced-accept full-mode A/B	T271/T272
+tstr2	main	block-cse-cost	0	prior widening regression; same >=5-net-instruction threshold, confirmed via forced-accept full-mode A/B	T271/T272
+tfldparr	main	dynamic-index-base-cost	10	call-containing candidate; >=15-saved-instruction threshold is load-bearing per T183, margin 10 does not clear it	T183/T383
+tap	rand_ui32	rematerialized-home-cost	9	full-mode A/B (mir-forced-accept-batch.py) regresses both peep (+0.3%) and nopeep (+0.21%) cycles despite a smaller raw generated-instruction count; confirms raw delta alone is not a reliable predictor here	plan100-batch0
+
