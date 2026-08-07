@@ -141,7 +141,20 @@ buckets**: only small wins remain findable one at a time (T388 +4, T391 +1,
 T394 +2), correctness bugs and structurally-inseparable win/loss pairs
 dominate the rest. T396 (this segment) broke that pattern with a real
 architecture fix (+5), confirming targeted codegen-architecture work is
-now the higher-yield path relative to further gate-margin mining.
+now the higher-yield path relative to further gate-margin mining. T397/T398
+(this segment) then confirmed that conclusion holds for every other bucket
+checked too - gate-margin mining alone is exhausted project-wide, not just
+for the buckets T389-T393 already covered.
+
+**For the next session: do not restart per-bucket gate-margin mining.**
+The highest-value next step is one of the two remaining scoped
+architecture items below (`next50-slot-intervals` has the largest
+expected yield but is also the highest-risk, largest-design-effort item;
+the `Gst.var` extension is lower-risk but has weak expected yield given
+T393's zero-net-promotion result on its bare-global sibling). Either
+needs real design time (feature flag, train/holdout validation per
+`next50-slot-intervals`'s own scoped criteria) before the first line of
+code - do not attempt as a same-session gate tweak.
 
 **T394 (this segment)** re-ranked `unary-not-cost`/`wide-constant-cost`
 excluding known outliers per `plan100-reband-unary-wide-constant`.
@@ -229,6 +242,19 @@ regressions, 408 improvements), plus a large focused-cohort win
 for the full writeup. Coverage now: **902/2026 (44.52%) ordinary,
 924/2128 (43.42%) stack-check**.
 
+**T397/T398 (this segment, after T396):** exhaustively re-tested the
+tightest-margin candidates across `wide-constant-cost` (T397, 38
+candidates: 12 real wins, 26 losses/inconclusive) and
+`absolute-index-cost`/`binary-load-pair-cost` (T398, 5 candidates: 3
+wins, 2 losses) - the identical no-generalizable-threshold shape every
+time (e.g. `too.rect_perim` and `tctxops.sh_udiv` sit at the exact same
++6 byte margin; one regresses, one is a clean win). No code change; all
+43 candidates recorded in `mir-dead-ends.tsv`. **Gate-margin mining is
+now considered exhausted across every remaining bucket this session
+checked** - further coverage requires either genuine selector/emitter
+quality work or a cost-model change, not more threshold tuning.
+Coverage unchanged: 902/919 (see above).
+
 **Continued per-bucket near-miss mining is no longer a viable path to 60%
 on its own.** The remaining leads are architecture items, not gate nudges:
 
@@ -248,7 +274,12 @@ on its own.** The remaining leads are architecture items, not gate nudges:
    over-counting direction), then extend `mir_load_object_is_call_safe`'s
    sibling logic to `MIR_LOADIND`. Still gated by the same single-block CSE
    retry restriction, so likely needs the multi-block CSE question resolved
-   too before it can show real yield.
+   too before it can show real yield. **Low expected value on current
+   evidence**: the already-completed bare-global sibling (T393) measured
+   **zero** net corpus promotions for the identical reason (no current
+   candidate has 3+ eliminations within one block), so this extension is
+   unlikely to yield anything until the block-count restriction itself is
+   addressed (see item 4).
 3. **`campaign-phi-fallthrough-architecture`** (was `mir60-boolean-control`'s
    phi-fallthrough lead, T384): of the 44 `phi-fallthrough-cost` functions,
    only ~8 sit within 10 instructions of the gate's margin (the rest are
