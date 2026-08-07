@@ -2708,7 +2708,7 @@ evaluate_generated:
                     fallback_reason = "stable-pointer-local-cost";
                 else if (mir_strict_phi_fallthrough_was_used() &&
                          generated_instructions >
-                             captured_instructions - 9)
+                             captured_instructions - 10)
                     /* Suppressing a duplicate copy on a label-only pseudo
                      * edge is required for correctness, but the newly exposed
                      * shallow candidates can still regress after dccpeep.
