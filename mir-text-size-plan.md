@@ -12405,3 +12405,90 @@ of granularity.
 
 Coverage unchanged this round: **897/2026 ordinary (44.27%)**,
 **919/2128 stack-check (43.19%)**.
+
+## T396: signed wide-constant relational inline compare - architecture fix, T394's deferred item completed (2026-08-05)
+
+Completed the scoped-but-deferred item from T394: implemented MIR's own
+inline signed 32-bit constant-relational-compare codegen, matching
+legacy's `emit_signed_long_const_cmp_ast(int op, long c)`
+(`dcc_ast_gen_expr.c`, ~line 877-908) exactly, replacing the
+always-call-the-runtime-helper path (`__lts`/`__les`/`__gts`/`__ges`) for
+this one specific, common shape: a wide relational compare where the
+RIGHT operand (`insn->src2` only - legacy also only optimizes this
+ordering, via its `n->b`-only constant-fold check, so a left-side
+constant correctly still falls through to the runtime call in both
+backends) is a compile-time constant.
+
+**Algorithm ported directly, byte-for-byte:** `threshold = (unsigned
+long)c`; special-cases `threshold == 0x7fffffff` (INT32_MAX) for `>`/`<=`
+(nothing is `> INT32_MAX`, everything is `<= INT32_MAX`, so these emit an
+unconditional `ld hl,0`/`ld hl,1`); otherwise biases `threshold + 1` (the
+"C+1" trick reducing `>C`/`<=C` to `>=C+1`/`<C+1`), XORs with
+`0x80000000` (sign-flip bias split into lo/hi 16-bit halves), then emits
+the sign-flip of the runtime operand's high byte
+(`ld a,d / xor 80h / ld d,a`) followed by a 32-bit `sbc hl,bc` pair
+against the pre-biased lo/hi constant halves, picking carry-flag polarity
+per operator for the true/false-label materialization. New functions:
+`mir_emit_wide_signed_const_compare()` (the ported algorithm) and
+`mir_wide_operation_is_signed_const_relational()` (the eligibility check),
+both in `dcc_mir_spilled_cfg.c` immediately before `mir_emit_wide_operation`.
+
+**Real pitfall found and fixed before landing, not just a naive port:**
+the first working version left DE:HL loaded with the literal constant
+(via the caller's normal `mir_emit_virtual_load_wide(insn->src2)` call)
+even though the new fast path never reads it, discarding it with a wasted
+`pop hl/pop de` - 6 bytes of dead weight per call site. All 5 known
+candidates (`s_gtm5`, `s_le100`, `s_gt32767`, `s_lt0`, `s_ltm32768`,
+including the 3 that regressed under the old call-based path per T394)
+passed forced-accept cleanly even with this waste, since none individually
+has enough call sites for it to tip the gate - but a full ordinary census
+comparison against the T394 baseline caught `tlongreg.test_compares`
+regressing from accepted to fallback (`generated_bytes` 4461 -> 4949,
+now larger than legacy's 4801), a function with many compare instances
+where the 6-byte overhead compounded. This reconfirms the project's
+"forced-accept passes are necessary but not sufficient - a full census
+diff is required" discipline directly, not just as a repeated warning.
+
+**Fixed by restructuring the caller**, not just the new emitter: the
+wide-operation dispatch in `mir_emit_spilled_scalar_cfg` (~line
+7629-7659) now computes `signed_const_relational_fastpath` (true when
+`mir_wide_operation_is_signed_const_relational(insn)` holds and neither
+operand is stack-forwarded) and, when true, skips BOTH the `push
+de/push hl` of src1 AND the `mir_emit_virtual_load_wide(insn->src2)` call
+entirely, leaving DE:HL holding src1's already-loaded value untouched for
+the new fast path to consume directly - matching legacy's approach of
+never materializing the constant into registers at all. The corresponding
+`pop hl/pop de` was removed from `mir_emit_wide_operation`'s new branch.
+Direct assembly comparison after the fix confirms `tlongopt.s_gtm5`'s
+MIR-generated code is now byte-for-byte identical to legacy's.
+
+**Results, fully validated:**
+- Fresh ordinary census vs T394 baseline: **+5 (897 -> 902/2026, 44.52%)**,
+  zero regressions, zero "no longer MIR-emitted". New:
+  `tlongopt.{s_gt32767,s_gtm5,s_le100,s_lt0,s_ltm32768}` - all 5 scoped
+  candidates, including the 3 that had regressed under the old call-based
+  codegen (now clean because the new inline path is a different, faster
+  code shape entirely, not a marginal tuning of the old one).
+- Fresh stack-check census vs T394 baseline: **+5 (919 -> 924/2128,
+  43.42%)**, zero regressions, same 5 functions.
+- Focused full-mode validation (`tlong,tlongopt,tlongreg`, the 3 apps the
+  census tool flagged as requiring runtime validation): 3/3 passed, 10
+  improvements, 0 regressions - most notably `tlongreg` (peep -19.56%
+  cycles, -8.7% bytes; nopeep -18.79% cycles, -7.53% bytes), confirming
+  the caller-restructuring fix did not just avoid a regression but turned
+  this into a large real win for functions with many compare call sites.
+- Full extended gate (`runall.ps1 -Mode full -Extended -RunTimeout 30`):
+  314/323 passed, **0 regressions, 408 improvements**, ~30.6s.
+
+The apparent `wide-constant-cost` bucket-count arithmetic (46 -> 41, a
+delta of 5) matches the 5 newly-emitted functions exactly once re-checked
+against the correct pre-fix count (46, not an earlier miscount of 48) -
+no unexplained discrepancy; all 5 that left the bucket are accounted for
+as clean promotions with no other bucket seeing a hidden-loss side effect.
+
+**Disposition: landed.** This closes the "signed wide-constant relational
+inline compare" item that was T394's explicitly scoped-but-deferred
+follow-on and `plan.md`'s top-ranked remaining architecture lead.
+
+Coverage after this round: **902/2026 ordinary (44.52%)**,
+**924/2128 stack-check (43.42%)**.

@@ -5675,6 +5675,76 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn)
     return NULL;
 }
 
+/* Item T395/follow-on (mir-text-size-plan.md): direct port of the legacy
+ * AST backend's emit_signed_long_const_cmp_ast (dcc_ast_gen_expr.c) into
+ * the MIR value-materializing wide-comparison path. Legacy never calls
+ * __lts/__les/__gts/__ges when the right operand is a signed compile-time
+ * long constant - it inlines a sign-flip + 32-bit sbc sequence instead,
+ * applying a C+1 bias to reduce '>'/'<=' to '>='/'<' (with a dedicated
+ * INT32_MAX early-out, since C+1 would otherwise overflow the bias
+ * arithmetic). This function reproduces that sequence exactly, byte for
+ * byte, against a literal constant rather than a loaded DE:HL - the
+ * caller is responsible for having DE:HL hold the *variable* operand's
+ * value (not the constant) before calling this. */
+static int mir_emit_wide_signed_const_compare(FILE *out, int op, long c)
+{
+    unsigned long threshold = (unsigned long)c & 0xffffffffUL;
+    unsigned long biased;
+    unsigned int lo;
+    unsigned int hi;
+    int true_label;
+    int end_label;
+    int true_on_carry;
+
+    if (op == '>' || op == TOK_LE) {
+        if (threshold == 0x7fffffffUL) {
+            fputs(op == '>' ? "\tld hl,0\n" : "\tld hl,1\n", out);
+            return 1;
+        }
+        threshold = (threshold + 1UL) & 0xffffffffUL;
+    }
+    biased = (threshold ^ 0x80000000UL) & 0xffffffffUL;
+    lo = (unsigned int)(biased & 0xffffUL);
+    hi = (unsigned int)((biased >> 16) & 0xffffUL);
+    true_on_carry = (op == '<' || op == TOK_LE);
+    true_label = new_label();
+    end_label = new_label();
+
+    fputs("\tld a,d\n\txor 80h\n\tld d,a\n", out);
+    fprintf(out, "\tld bc,%u\n", lo);
+    fputs("\tor a\n\tsbc hl,bc\n\tex de,hl\n", out);
+    fprintf(out, "\tld bc,%u\n", hi);
+    fputs("\tsbc hl,bc\n", out);
+    fprintf(out, true_on_carry ? "\tjp c, L%d\n" : "\tjp nc, L%d\n",
+            true_label);
+    fprintf(out, "\tld hl,0\n\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+            end_label, true_label, end_label);
+    return 1;
+}
+
+/* Item T395/follow-on: identifies whether mir_emit_wide_operation will
+ * take the mir_emit_wide_signed_const_compare fast path for this
+ * instruction, so the caller (mir_emit_spilled_scalar_cfg's MIR_BINARY
+ * dispatch) can skip loading src2 into DE:HL entirely - the fast path
+ * only ever needs src2's compile-time literal value, never its loaded
+ * runtime form, and skipping that dead load avoids paying for it at
+ * every call site (legacy never materializes the constant into
+ * registers for this shape either). */
+int mir_wide_operation_is_signed_const_relational(const struct MirInsn *insn)
+{
+    int operation = (int)insn->immediate;
+    const struct MirInsn *right;
+
+    if (operation != '<' && operation != '>' && operation != TOK_LE &&
+        operation != TOK_GE)
+        return 0;
+    if (type_is_float(insn->secondary_offset) ||
+        (insn->secondary_offset & TYPE_UNSIGNED) != 0)
+        return 0;
+    right = mir_definition(insn->src2);
+    return right != NULL && right->opcode == MIR_CONST;
+}
+
 int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
 {
     const char *helper = NULL;
@@ -5715,6 +5785,21 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
             else
                 mir_spilled_cfg_used_signed_wide_constant_relational = 1;
         }
+        /* Item T395/follow-on: legacy's emit_signed_long_const_cmp_ast
+         * only ever applies when the constant is the *right* operand
+         * (ast_const_scalar_fold(n->b, ...) in dcc_ast_gen_expr.c) - a
+         * constant on the left still falls through to the runtime
+         * helper in legacy too, so leaving that ordering on the
+         * existing call-based path below is exactly call-for-call
+         * equivalent to legacy, not a missed optimization. The caller
+         * (mir_emit_spilled_scalar_cfg) recognizes this same shape via
+         * mir_wide_operation_is_signed_const_relational and skips both
+         * the push of src1 and the load of src2 - DE:HL already holds
+         * src1's value untouched from its own load, exactly what this
+         * path needs. */
+        if (mir_wide_operation_is_signed_const_relational(insn))
+            return mir_emit_wide_signed_const_compare(
+                out, operation, right->immediate);
         helper = mir_wide_runtime_helper(insn);
         fputs("\tpush de\n\tpush hl\n", out);
         mir_emit_runtime_call(out, helper);
@@ -7550,13 +7635,26 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int stack_forwarded_right =
                     mir_forwarded_wide_stack_value == insn->src2 &&
                     mir_forwarded_wide_stack_consumer == i;
+                /* Item T395/follow-on: the signed-constant-relational
+                 * fast path only ever consumes src2's compile-time
+                 * literal value, never a loaded runtime form - skip
+                 * both the defensive push of src1 and the load of src2
+                 * below when it applies (and neither operand is
+                 * already using the unrelated stack-forwarding
+                 * optimization), leaving DE:HL holding src1 untouched,
+                 * exactly what mir_emit_wide_operation's fast path
+                 * needs. */
+                int signed_const_relational_fastpath =
+                    !stack_forwarded_left && !stack_forwarded_right &&
+                    mir_wide_operation_is_signed_const_relational(insn);
                 if (stack_forwarded_right) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                 } else if (!stack_forwarded_left) {
                     mir_emit_virtual_load_wide(out, insn->src1);
-                    fputs("\tpush de\n\tpush hl\n", out);
+                    if (!signed_const_relational_fastpath)
+                        fputs("\tpush de\n\tpush hl\n", out);
                 }
-                if (!stack_forwarded_right)
+                if (!stack_forwarded_right && !signed_const_relational_fastpath)
                     mir_emit_virtual_load_wide(out, insn->src2);
                 if (!mir_emit_wide_operation(out, insn))
                     goto done;

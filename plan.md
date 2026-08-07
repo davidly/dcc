@@ -15,15 +15,29 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **897/2026 (44.27%)**
-- Current stack-check coverage: **919/2128 (43.19%)**
-- Latest finding: T395, exhaustive fresh-bucket re-ranking after T394
+- Current ordinary coverage: **902/2026 (44.52%)**
+- Current stack-check coverage: **924/2128 (43.42%)**
+- Latest production cohort: T396, signed wide-constant relational inline
+  compare - ported legacy's `emit_signed_long_const_cmp_ast` exactly
+  (sign-flip + biased 32-bit `sbc` sequence) as MIR's own inline codegen
+  for a wide relational compare against a compile-time constant on the
+  right operand, replacing the always-call-the-runtime-helper path for
+  this shape. Found and fixed a real redundant-load pitfall in the
+  caller (6 wasted bytes/call site) via a full-census diff before
+  landing - the naive version passed all 5 forced-accept tests but
+  regressed `tlongreg.test_compares` corpus-wide. +5 ordinary/+5
+  stack-check, zero removals; focused full-mode validation on
+  `tlong,tlongopt,tlongreg` clean (10 improvements incl. `tlongreg`
+  peep -19.56% cycles); full extended gate clean (0 regressions, 408
+  improvements). This closes the item T394 had explicitly scoped but
+  deferred, and was `plan.md`'s top-ranked remaining architecture lead.
+- Prior finding: T395, exhaustive fresh-bucket re-ranking after T394
   found 7 real, forced-accept-confirmed clean-win candidates across 3
   buckets (`dynamic-index-base-cost`, `absolute-address-cost`,
   `block-cse-cost`) but **no safe generalizable threshold** for any of
   them (each bucket also produced confirmed regressions at the same or
-  more favorable margins) - no code change, coverage unchanged at
-  897/919. All 18 tested candidates recorded in `mir-dead-ends.tsv`.
+  more favorable margins) - no code change. All 18 tested candidates
+  recorded in `mir-dead-ends.tsv`.
 - Latest production cohort: T394, unsigned wide-constant relational
   compares (`u_gtbig`/`u_lebig`-style) - legacy has no inline shortcut for
   unsigned wide relational compares against a constant either (it also
@@ -114,15 +128,17 @@ mandatory secondary regression guard, not an alternate denominator.
 
 ## Immediate next steps
 
-The branch is CI-green, currently at **897/2026 ordinary (44.27%)**, still
-**+15 short of even the first 45% milestone** and +319 short of the 60%
+The branch is CI-green, currently at **902/2026 ordinary (44.52%)**, still
+**+10 short of the first 45% milestone** and +314 short of the 60%
 target. T389-T393 (prior segments) exhaustively re-ranked and forced-accept
 A/B-tested every remaining fallback bucket's near-miss population (12+
 buckets, 150+ candidates) and found the per-bucket static-metric mining
 technique that produced T383-T388's gains is now **exhausted for most
 buckets**: only small wins remain findable one at a time (T388 +4, T391 +1,
 T394 +2), correctness bugs and structurally-inseparable win/loss pairs
-dominate the rest.
+dominate the rest. T396 (this segment) broke that pattern with a real
+architecture fix (+5), confirming targeted codegen-architecture work is
+now the higher-yield path relative to further gate-margin mining.
 
 **T394 (this segment)** re-ranked `unary-not-cost`/`wide-constant-cost`
 excluding known outliers per `plan100-reband-unary-wide-constant`.
@@ -197,23 +213,31 @@ unrelated buckets in one pass**, on top of `wide-constant-cost`'s identical
 finding in T394 and `planned-stack-cost`'s pre-existing `tc89fp.main`
 entry. No code change; all 18 tested candidates (7 winners, 11 losers/
 inconclusive) recorded in `mir-dead-ends.tsv` with full A/B evidence so
-future sessions do not re-derive the same conclusions. Coverage unchanged:
-897/919.
+future sessions do not re-derive the same conclusions.
 
-**Continued per-bucket near-miss mining is no longer a viable path to 45%,
-let alone 60%.** The remaining leads are all architecture items, not gate
-nudges:
+**T396 (landed after T395):** implemented item 1 below in full - MIR's own
+inline signed wide-constant relational compare, a direct port of legacy's
+`emit_signed_long_const_cmp_ast`. Found and fixed a real 6-byte/call-site
+redundant-load regression (`tlongreg.test_compares`) via full census diff
+before landing, not just forced-accept per-candidate testing. Result:
++5 ordinary/+5 stack-check, zero removals, full extended gate clean (0
+regressions, 408 improvements), plus a large focused-cohort win
+(`tlongreg` peep -19.56% cycles). See `mir-text-size-plan.md`'s T396 entry
+for the full writeup. Coverage now: **902/2026 (44.52%) ordinary,
+924/2128 (43.42%) stack-check**.
 
-1. **Signed wide-constant relational inline compare** (T394's scoped
-   follow-on): extend MIR's value-materializing wide-comparison codegen to
-   reuse the branch-fused path's already-proven sign-flip + `C+1`/`C-1`
-   inline shortcut instead of always calling `__lts`/`__les`/`__gts`/
-   `__ges`. Small measured net yield on the current corpus (~2 functions
-   after excluding 3 confirmed regressors), but touches a widely shared
-   codegen path used by every already-accepted function doing wide
-   relational compares - needs the boundary-value regression (0/32767/
-   -32768) fully characterized before it can be done safely, not just the
-   common-constant case.
+**Continued per-bucket near-miss mining is no longer a viable path to 60%
+on its own.** The remaining leads are architecture items, not gate nudges:
+
+1. ~~**Signed wide-constant relational inline compare**~~ - **done, see
+   T396 above.** (Originally scoped as T394's follow-on: extend MIR's
+   value-materializing wide-comparison codegen to reuse the sign-flip +
+   `C+1`/`C-1` inline shortcut instead of always calling `__lts`/`__les`/
+   `__gts`/`__ges`. Landed exactly as scoped, including the boundary-value
+   cases (0/32767/-32768) that had regressed under the old call-based
+   codegen in T394 - the new inline path is a different, faster code
+   shape entirely, so all 3 are now clean instead of needing separate
+   characterization.)
 2. **The `Gst.var` member-qualified extension** to `campaign2-call-effect-
    analysis` (above): extend `dcc_global_scan.c`'s lexical pre-pass to track
    member-qualified writes/address-taken (keyed conservatively by member
