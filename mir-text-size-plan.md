@@ -13297,3 +13297,50 @@ selected-output change**, not a coverage jump. The remaining outlier family
 (`bint.add_string` and similar same-block base/index preservation) is still
 separate and should be ranked independently rather than folded into this phi
 class.
+
+## Item T407: block-cse-cost same-block VN extension is a confirmed architectural blocker, not a gate-margin gap (+0, 2026-08-07)
+
+**Population:** `block-cse-cost` currently stands at 97 ordinary functions,
+the third-largest bucket (after `text-size` 291 and `boolean-phi-cost` 158),
+and grew from its earlier 89 baseline as other integrations shifted
+functions between buckets.
+
+**Investigation (background Stream C, using its own landed T403 centralized
+named-address resolver + field-aware value-numbering infrastructure):**
+
+- A strict, same-block-scoped extension of the exact-address VN discipline
+  used for T403's isolated-global-field case (live-out tracking, use-count
+  guard, last-use containment) was tried first, applied narrowly to
+  same-block candidates only. It admitted **zero** new functions — the
+  strict discipline that worked for isolated globals does not carry over to
+  same-block local/stack candidates without loosening a guard somewhere.
+- A broader prototype relaxing the address-normalization rule (treating
+  differently-spelled but provably-equal named addresses as one VN class)
+  found two provisional admits (`tbool:check_varargs_and_ternary`,
+  `tstr2:test_memchr`) and one bucket reclassification
+  (`wumpus:stats` moved from `block-cse-cost` to
+  `dynamic-index-base-cost`). But focused full-mode A/B showed `tstr2`
+  regressed in peep mode (242913 -> 243084 cycles, +0.07%). Attempting to
+  gate out just that regression (via a narrower predicate) additionally
+  disturbed three *already-shipping* homed wins
+  (`tesc:test_chained_assign`, `tptrinit:array_pointer_offsets`,
+  `tsnprtf:main`), i.e. the narrower gate was itself unstable across
+  unrelated functions.
+- This was correctly backed out entirely rather than force-landed. No code
+  change; no commit.
+
+**Conclusion:** this is not gate-margin mining exhaustion (T394-T399's
+pattern) — it's a confirmed case where the *class of fix* itself is
+insufficient. The bounded VN mechanism that is real and safe for isolated
+global-field CSE (T403) does not have a same-block-safe generalization
+without either (a) a per-selector MIR rollback capability so a provisional
+admission can be un-admitted when it turns out to disturb sibling
+selections, or (b) a genuine retained/rematerialized base-address planner
+that tracks the *actual* physical home a value would occupy rather than
+inferring safety from address-identity alone. Both are substantial
+multi-session architecture work, not a bounded investigation extension.
+
+**Binding guidance for future sessions:** do not re-attempt `block-cse-cost`
+with another bounded VN tweak. Any future attempt must bring one of the two
+structural capabilities above, or it will re-discover the same instability.
+Recorded in `mir-dead-ends.tsv`.
