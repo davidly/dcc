@@ -75,6 +75,12 @@ speed:
     prefer a full unthrottled run (without -FailFast) for the final
     pre-commit validation so every app's status is known.
 
+.PARAMETER FailuresOnly
+    Reduce log volume by suppressing per-test PASS lines in the main suite
+    (and in -NarrowDiff mode). Failures and their details are still printed,
+    and the end-of-run summary still reports total passed/failed/skipped.
+    This mode is ON by default; pass -FailuresOnly:$false for full output.
+
 .PARAMETER Extended
     Also run the extended c-testsuite single-exec corpus after the main app suite.
 
@@ -264,6 +270,7 @@ param(
     [switch]$KeepBuild,
     [switch]$TimingBreakdown,
     [switch]$FailFast,
+    [switch]$FailuresOnly,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -280,6 +287,11 @@ foreach ($extraArg in $ExtraArgs) {
         Write-Error "Unknown argument: $extraArg"
         exit 1
     }
+}
+
+if (-not $PSBoundParameters.ContainsKey('FailuresOnly')) {
+    # Default to failure-focused output to reduce log volume.
+    $FailuresOnly = $true
 }
 
 if ($Help) {
@@ -1457,6 +1469,9 @@ Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "STARTING BUILD AND RUN SUITE" -ForegroundColor Cyan
 Write-Host "Mode: $optimisationSummary" -ForegroundColor Cyan
+if ($FailuresOnly) {
+    Write-Host "Output: failures only (PASS lines suppressed)" -ForegroundColor DarkGray
+}
 if ($Parallel) {
     Write-Host "(parallel, throttle = $ThrottleLimit)" -ForegroundColor Cyan
     Write-Host "Build root: $BuildDir" -ForegroundColor Cyan
@@ -1714,7 +1729,8 @@ function Invoke-ExtendedSuite {
         [bool]$StackCheck,
         [bool]$Serial,
         [int]$ThrottleLimit,
-        [bool]$UseEmulatedM80
+        [bool]$UseEmulatedM80,
+        [bool]$FailuresOnly
     )
 
     $extendedScript = Join-Path $PSScriptRoot "runall-extended.ps1"
@@ -1738,8 +1754,20 @@ function Invoke-ExtendedSuite {
     Write-Host "STARTING EXTENDED C-TESTSUITE" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
 
-    & pwsh @extendedArgs
-    $script:ExtendedSuiteExitCode = $LASTEXITCODE
+    if ($FailuresOnly) {
+        $extendedOutput = & pwsh @extendedArgs 2>&1
+        $script:ExtendedSuiteExitCode = $LASTEXITCODE
+        if ($script:ExtendedSuiteExitCode -ne 0) {
+            foreach ($line in @($extendedOutput)) { Write-Host $line }
+        }
+        else {
+            Write-Host "  Extended suite passed (output suppressed by -FailuresOnly)" -ForegroundColor DarkGray
+        }
+    }
+    else {
+        & pwsh @extendedArgs
+        $script:ExtendedSuiteExitCode = $LASTEXITCODE
+    }
 }
 
 $results = @()
@@ -1825,15 +1853,20 @@ if ($Parallel) {
         $counter = "[{0,3}/{1}]" -f $done, $totalToRun
         $scTag = if ($StackCheck) { "Stack Check Enabled" } else { "No Stack Check" }
         if ($result.Skipped) {
-            Write-Host ("{0} SKIP  {1,-12} (fail-fast: not started)" -f $counter, $result.App) -ForegroundColor DarkGray
+            if (-not $FailuresOnly) {
+                Write-Host ("{0} SKIP  {1,-12} (fail-fast: not started)" -f $counter, $result.App) -ForegroundColor DarkGray
+            }
             return
         }
         $status = if ($result.Passed) { "PASS" } else { "FAIL" }
         # Columns: counter | status | app | time | run-wide stack-check tag
         $line = "{0} {1}  {2,-12} {3,8} | {4}" -f $counter, $status, $result.App, $elapsedStr, $scTag
         if ($result.Passed) {
-            Write-Host $line -ForegroundColor Green
-        } else {
+            if (-not $FailuresOnly) {
+                Write-Host $line -ForegroundColor Green
+            }
+        }
+        else {
             Write-Host $line -ForegroundColor Red
             # Show the failing detail lines inline so problems are visible live.
             foreach ($detail in $result.Lines) {
@@ -1885,7 +1918,9 @@ else {
             -EmulatorRunArgs $emulatorRunArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
             -ExtraScenarios $item.ExtraScenarios -RunTimeout $RunTimeout
-        Show-AppResult $result
+        if ((-not $FailuresOnly) -or (-not $result.Passed)) {
+            Show-AppResult $result
+        }
         $results += $result
         if ($FailFast) {
             $stop = $false
@@ -1993,8 +2028,20 @@ if (-not $Apps) {
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
-    & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
-    $diagnosticsExitCode = $LASTEXITCODE
+    if ($FailuresOnly) {
+        $diagnosticsOutput = & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc") 2>&1
+        $diagnosticsExitCode = $LASTEXITCODE
+        if ($diagnosticsExitCode -ne 0) {
+            foreach ($line in @($diagnosticsOutput)) { Write-Host $line }
+        }
+        else {
+            Write-Host "  Diagnostics passed (output suppressed by -FailuresOnly)" -ForegroundColor DarkGray
+        }
+    }
+    else {
+        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
+        $diagnosticsExitCode = $LASTEXITCODE
+    }
     $diagnosticsPassed = ($diagnosticsExitCode -eq 0)
 }
 $diagnosticsSw.Stop()
@@ -2009,9 +2056,23 @@ if (-not $Apps) {
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "RUNNING DCCPEEP FIXTURES" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
-    & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
-        -DccPeep (Join-Path $script:RepoRoot "dccpeep")
-    $dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
+    if ($FailuresOnly) {
+        $dccpeepOutput = & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
+            -DccPeep (Join-Path $script:RepoRoot "dccpeep") 2>&1
+        $dccpeepExitCode = $LASTEXITCODE
+        if ($dccpeepExitCode -ne 0) {
+            foreach ($line in @($dccpeepOutput)) { Write-Host $line }
+        }
+        else {
+            Write-Host "  Dccpeep fixtures passed (output suppressed by -FailuresOnly)" -ForegroundColor DarkGray
+        }
+        $dccpeepTestsPassed = ($dccpeepExitCode -eq 0)
+    }
+    else {
+        & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
+            -DccPeep (Join-Path $script:RepoRoot "dccpeep")
+        $dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
+    }
 }
 $dccpeepFixturesSw.Stop()
 if ($null -ne $dccpeepTestsPassed -and -not $dccpeepTestsPassed) {
@@ -2073,7 +2134,9 @@ if ($NarrowDiff) {
             $counter = "[{0,3}/{1}]" -f $narrowDone, $narrowTotal
             $line = "$counter $status  $($result.App)"
             if ($result.Passed) {
-                Write-Host $line -ForegroundColor Green
+                if (-not $FailuresOnly) {
+                    Write-Host $line -ForegroundColor Green
+                }
             } else {
                 Write-Host $line -ForegroundColor Red
                 foreach ($detail in $result.Lines) { Write-Host "        $($detail.Trim())" -ForegroundColor Red }
@@ -2093,7 +2156,9 @@ if ($NarrowDiff) {
             $status = if ($result.Passed) { "PASS" } else { "FAIL" }
             $line = "[{0,3}/{1}] {2}  {3}" -f $narrowDone, $narrowTotal, $status, $result.App
             if ($result.Passed) {
-                Write-Host $line -ForegroundColor Green
+                if (-not $FailuresOnly) {
+                    Write-Host $line -ForegroundColor Green
+                }
             } else {
                 Write-Host $line -ForegroundColor Red
                 foreach ($detail in $result.Lines) { Write-Host "        $($detail.Trim())" -ForegroundColor Red }
@@ -2121,7 +2186,7 @@ $extendedSw = [System.Diagnostics.Stopwatch]::StartNew()
 if ($Extended) {
     Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
         -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit `
-        -UseEmulatedM80 $UseEmulatedM80
+        -UseEmulatedM80 $UseEmulatedM80 -FailuresOnly $FailuresOnly
     $extendedExitCode = $script:ExtendedSuiteExitCode
     $extendedPassed = ($extendedExitCode -eq 0)
     if (-not $extendedPassed) {
