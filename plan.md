@@ -15,9 +15,12 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **909/2026 (44.87%)**
-- Current stack-check coverage: **931/2128 (43.75%)**
-- Latest production cohort: T425, cheap direct-home path for objectless
+- Current ordinary coverage: **914/2026 (45.11%)**
+- Current stack-check coverage: **936/2128 (43.98%)**
+- Latest production cohort: T427, real fallback-only phi-return
+  forwarding for label-only fallthrough joins (+5/+5), closing the
+  `phi-fallthrough-cost` architecture lead. Prior cohort: T425, cheap
+  direct-home path for objectless
   single-use pointer parameters (+1/+1), resolving the T424 cost-model
   gap. Prior cohort: T405, call-result direct-reload narrow
   `storeind` (Stream B) - +2/+2 coverage, landed alongside T400
@@ -632,6 +635,46 @@ without either a concrete profitability proof or an active follow-up per
 the user's explicit, repeated directive: the goal is 100% MIR coverage,
 and gate-margin-exhausted buckets get a genuine architectural fix
 attempt, not a declared dead end.
+
+**T427: Stream H's phi-fallthrough-cost investigation landed a real
+mechanism, not another dead end** - `mir_forward_immediate_phi_returns()`
+detects a narrow, previously-unhandled join shape (a label-only
+fallthrough predecessor joining with an explicit-branch predecessor at a
+single-phi block whose sole consumer is an immediate `return` or one
+side-effect-free `unary`/`binary` then `return`) and rewrites both edges'
+value flow directly into the return path, eliminating the phi
+materialization and its immediate reload from MIR before selector retry.
+Wired as a fallback-only retry in `mir_end_function()`, bounded to `<=10`
+CFG blocks (an initial `<=11` bound admitted `tasm.main` but regressed
+its linked peep size +0.13%, so the guard was tightened before landing).
+
+**Integration-time correction**: the implementing stream's self-report
+(commit `9506f5f`) claimed **+6/+6** (908->914 ordinary, 930->936
+stack-check) by comparing against the stale, pre-T425
+`build/mir-t420-after*.tsv` snapshots rather than the actual integrated
+baseline. Since the worktree was branched after T425 was already
+integrated (true baseline 909/2026 / 931/2128), this double-counted
+`tbool.set_bool` as a new admission when it was already MIR-emitted
+before this stream started. A fresh census run directly against the
+correct T425-integrated baseline at integration time confirms the real,
+verified delta is **+5/+5**: `909/2026 -> 914/2026` ordinary (45.11%),
+`931/2128 -> 936/2128` stack-check (43.98%), zero removals, zero
+regressions. Genuine new admits: `attnc11.load_weights`,
+`attnc11.save_weights`, `forint.ensure_sym`, `tctxflt.truth_and`,
+`tinline.edge_conditional` (`tbool.set_bool`'s selected output is
+byte-identical before/after this item - it is not a new admission here).
+The targeted bucket shrank as reported either way: ordinary
+`phi-fallthrough-cost` 44->38, stack-check 45->39. **Lesson**: always
+independently re-derive a background stream's self-reported delta
+against the actual current integrated HEAD at merge time - a long-lived
+worktree's locally cached comparison snapshot can silently go stale as
+other streams land in parallel.
+
+Full validation cadence at integration: fresh ordinary + stack-check
+census (`--fail-on-regression`, both clean), focused full-mode runall on
+`attnc11,forint,tctxflt,tinline` (4/4 pass, no regressions), forced-
+correctness harness (7/7 pass), full extended gate (314/323 passed, 9
+skipped, 0 failed).
 
 ## Latest production cohort
 
