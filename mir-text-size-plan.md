@@ -15482,3 +15482,137 @@ that an objectless, single-use, classifier-safe pointer parameter can keep its
 incoming named home and be reloaded directly at the one use site. That recovers
 the real win (`tbool.set_bool`) with zero regressions and raises production MIR
 coverage to **909/2026 ordinary** and **931/2128 stack-check**.
+
+## Item T426: allocator-aware block value numbering found only a peep-size-regressing spill-backed admit (+0, 2026-08-08)
+
+Fresh worktree-local baseline on `a6612bd` with T425 already present:
+**909/2026 ordinary (44.87%)**, **931/2128 stack-check (43.75%)**.
+
+A fresh census still showed `block-cse-cost` as the largest unaddressed
+architectural residue: **99 ordinary** functions (**106 stack-check**).
+
+### 1. I did try the materially different implementation, not another T70 rerun
+
+The prototype was a real kill-tracked value-numbering pass in `dcc_mir.c`, not
+the old "same basic block, textual match, keep it if the instruction count
+drops" retry:
+
+- tracked exact identical MIR expressions, including some loads
+- tracked explicit kills from calls, direct stores, and resolvable indirect
+  stores
+- invalidated non-call-safe memory reads across opaque calls/stores using the
+  same isolated-global-field call-safety discipline already landed in T403/T423
+- speculatively kept a substitution only if re-running MIR verification plus
+  allocation simulation did **not** increase spills, fixed moves, operand
+  moves, or phi moves
+
+That prototype was able to create real MIR admissions during census, so this
+is not a "could not get anything to fire" investigation.
+
+### 2. Fresh prototype result: one apparent win, then a focused performance failure
+
+With the historical retry chain otherwise restored so existing admits stayed
+stable, the prototype's best census result was:
+
+- ordinary: **910/2026**
+- stack-check: **932/2128**
+- newly MIR-emitted: **`cobint.add_stmt`**
+- no-longer-emitted: **0**
+
+So the new mechanism did surface a real fresh admit. But the mandatory focused
+validation immediately killed it:
+
+```sh
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+pwsh ./scripts/runall.ps1 -Apps cobint -Mode full -RunTimeout 20
+```
+
+Result:
+
+- correctness: **PASS**
+- performance: **FAIL**
+  - `cobint` peep linked size **27904 -> 28032 (+0.46%)**
+  - cycles improved slightly in both modes, and nopeep size also shrank, but
+    the project rule is still zero regressions in every checked metric
+
+So the only production-coverage win from this pass was **not landable**.
+
+### 3. Root cause of the false positive: raw MIR shrank, shipped peep output grew
+
+`cobint.add_stmt` looked excellent on the raw MIR selector metrics:
+
+- captured: **1815 bytes / 174 insns**
+- emitted: **1593 bytes / 144 insns**
+- block VN report: **eliminated=17 rejected=6**
+
+But comparing the generated assembly against the pre-change baseline showed why
+the app-level peep size still regressed:
+
+- the MIR body now materialized an **8-byte IX frame**
+  (`ld hl,-8 / add hl,sp / ld sp,hl`)
+- it cached repeated computed addresses in stack slots
+  (`(ix-2)` through `(ix-8)`) before later stores
+- the old fallback body instead reloaded the source addresses directly from
+  globals and let `dccpeep`'s existing address-folding/cache patterns fire
+
+The peep-optimized artifact therefore moved the wrong way even though the raw
+MIR body got smaller:
+
+- optimized baseline `.COM`: **27648 bytes**
+- optimized VN `.COM`: **27776 bytes**
+
+This is the same class of profitability blocker T70 exposed from the other
+side: in the current spilled backend, "compute once and keep it live" often
+means "manufacture stack temporaries and frame traffic that the shipping peep
+path does not recover".
+
+### 4. Why the seemingly-better sibling (`compile_stmt`) still did not land
+
+`cobint.compile_stmt` confirmed the second structural problem.
+
+On pristine MIR, the new pass could clear it. But preserving already-shipping
+admissions requires keeping the historical block-local retry in the selector
+chain. When that legacy retry runs first on `compile_stmt`, it eliminates **9**
+same-block expressions but raises allocation pressure from **0 spills to 8**.
+The later allocator-aware VN salvage then removes only **1** more expression
+and the function still falls back at **92/100** instructions with
+`block-cse-cost`.
+
+So the new mechanism and the historical load-bearing retry are currently in
+direct conflict:
+
+- removing the old retry re-opened prior coverage regressions
+- keeping it in place poisons the best pristine-MIR block-VN near-misses before
+  the new pass can exploit them
+
+### Conclusion / stop condition
+
+I reverted the prototype and logged this as a dead end instead of landing a
+regressing code change.
+
+Current evidence says `block-cse-cost` is **not** blocked on missing equality
+or kill reasoning anymore; the missing piece is below that level:
+
+1. either a **transactional replacement** for the historical same-block retry,
+   so failed legacy CSE attempts do not poison later profitable VN attempts, or
+2. a cheaper spilled/backend home strategy that can reuse repeated addresses
+   without introducing the stack-slot frame traffic that currently defeats the
+   peep path
+
+Until one of those exists, the current allocator-aware block-VN pass finds at
+most a **non-landable** peep-size regression.
+
+### Validation
+
+- `sh src/dcc/build-dcc.sh`
+- `python3 scripts/mir-migration-census.py --timeout 60 --output build/streamG-blockcse/mir-after.tsv --compare build/streamG-blockcse/mir-before.tsv --fail-on-regression`
+  - **PASS**, temporary prototype peak **910/2026**, `+1/-0`
+- `python3 scripts/mir-migration-census.py --timeout 60 --extra-args=-fstack-check --output build/streamG-blockcse/mir-after-stack.tsv --compare build/streamG-blockcse/mir-before-stack.tsv --fail-on-regression`
+  - **PASS**, temporary prototype peak **932/2128**, `+1/-0`
+- `pwsh ./scripts/runall.ps1 -Apps cobint -Mode full -RunTimeout 20`
+  - correctness **passed**
+  - performance **failed** on peep size: **27904 -> 28032 (+0.46%)**
+
+Because the focused runtime/perf gate already failed and no production code was
+kept, I reverted the prototype and am committing only the dead-end
+documentation.
