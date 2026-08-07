@@ -472,6 +472,61 @@ open bug from this cluster**, under active investigation (suspected
 `OP_DO` loop-bookkeeping issue). See `mir-text-size-plan.md`'s T419 entry
 for full evidence.
 
+**T420: the entire correctness-bug cluster is now FULLY CLOSED.**
+`forint.run_prog`'s bug was a completely different mechanism than the
+suspected `OP_DO` loop-bookkeeping issue: `run_prog` calls the
+static-inline helper `set_sym_val()`. Legacy codegen normally substitutes
+such helpers inline at the AST layer, and MIR lowering intentionally
+skips marking their buffered bodies as needed, relying on the existing
+`inline-substitution` fallback gate to keep such calls out of selected
+MIR output - but that gate is bypassed under
+`DCC_MIR_FORCE_ACCEPT_FUNCTION`, so the selected MIR caller kept a real
+`call` to `set_sym_val` while its body was never emitted anywhere in the
+file (unresolved call target). Fixed (`1033f2d`) with
+`mir_mark_selected_inline_call_bodies_needed()`, which marks any
+inline-substitutable callee's buffered body `deferred_body_needed=1`
+once MIR output has actually won selection - reusing the existing
+`MIR_CALL_FLAG_INLINE_SUBSTITUTABLE` flag, no new machinery. Zero net
+coverage change (unreachable in production). **Final tally: 9 of the
+original 15 logged correctness bugs are confirmed fully fixed** (5 from
+T413, 2 from T416, 1 from T419, 1 from T420), plus T418's independently-
+found `tenumfsm.scan` - **10 total fixed, and every bug in the original
+investigation cluster is now closed.** The forced-MIR correctness
+regression harness (`tests/mir_forced_correctness_cases.tsv`) now has 7
+rows covering every fix in this cluster.
+
+**T421: `cfg-backedge` (26 ordinary functions) investigated for a strata
+loop-admission opportunity and confirmed closed for now.** With the
+correctness cluster fully fixed, a fresh population breakdown found 9
+structurally-safe candidates (single natural loop, no calls, single
+backedge, not dispatch-loop-shaped) that are all forced-MIR
+correctness-clean - but all 9 regress checked peep/nopeep cycles or size
+under full-mode A/B. 14 more are risky (calls/multiple backedges/
+dispatch-loop-shaped) and 3 are unknown. No safe, profitable admission
+stratum exists; `cfg-backedge` remains blocked on profitability, not
+correctness, and should not be revisited without a genuinely new cost
+model.
+
+**T422: `wide-constant-cost` (41) / `wide-store-cost` (36) re-mined after
+the T416/T418 fixes, in case either unlocked new coverage. 25 forced
+full-mode A/B checks across both buckets found only fresh
+profitability-gated regressions - no missing selector, no reusable
+predicate.** Both buckets are confirmed profitability-gated dead ends,
+the same conclusion as `cfg-backedge`.
+
+**End-of-wave status**: this "next 20%" wave's 3 parallel background
+streams (B/C/D) have now all reached explicit stop conditions - the
+correctness cluster is closed, and every architecturally-promising
+bucket identified at the wave's start (`cfg-backedge`, `wide-constant-
+cost`, `wide-store-cost`) is confirmed profitability-gated with no
+reusable predicate. Coverage is unchanged since T405 at **908/2026
+ordinary (44.82%)**, **930/2128 stack-check (43.70%)** - every fix this
+wave was a genuine latent-bug repair with zero net coverage impact, not
+a coverage-increasing change. The two remaining architecture leads
+(`next50-slot-intervals`, member-qualified `Gst.var` CSE) both require
+substantial new multi-session design per earlier scoping (T399/T393) and
+were not attempted this wave.
+
 ## Latest production cohort
 
 The current cohort promotes three measured allocator-backed loop strata after
