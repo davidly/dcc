@@ -160,6 +160,9 @@ struct MirFunction {
     int *allocation_spills;
     int allocation_capacity;
     int allocation_spill_count;
+    int allocation_fixed_moves;
+    int allocation_operand_moves;
+    int allocation_phi_moves;
     unsigned char *lazy_parameter_values;
     int lazy_parameter_capacity;
     /* Retained past mir_verify_and_dump()'s own scope (Item 20d,
@@ -217,6 +220,16 @@ struct MirFunction {
     struct Sym *vla_target;
     int vla_capture_start;
     char name[64];
+};
+
+struct MirResolvedNamedAddress {
+    const struct MirInsn *root;
+    int storage;
+    long offset;
+    int has_index;
+    int member_depth;
+    char base_name[64];
+    char leaf_member_name[64];
 };
 
 enum MirPhysicalColor {
@@ -381,6 +394,10 @@ int mir_value_is_constant_absolute_address(int value);
 int mir_value_only_used_by_constant_absolute_address(int value);
 int mir_value_only_used_by_absolute_access(
     int value, int (*access_supported)(const struct MirInsn *));
+int mir_resolve_named_address(
+    int value, struct MirResolvedNamedAddress *out);
+int mir_resolve_isolated_global_field_address(
+    int value, struct MirResolvedNamedAddress *out);
 int mir_prepare_constant_absolute_operand(
     FILE *out, int value, char *operand, size_t operand_size);
 int mir_object_is_fully_promoted(int object);
@@ -410,6 +427,9 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
+int mir_value_number_global_field_loads(void);
+int mir_global_field_value_numbering_count(void);
+int mir_repeated_named_pointer_load_count(void);
 int mir_eliminate_common_block_expressions(void);
 int mir_common_block_expression_elimination_count(void);
 void mir_simplify_boolean_phi_branches(void);

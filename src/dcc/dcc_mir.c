@@ -57,9 +57,15 @@ int mir_cached_wide_call_instruction = -1;
 static int *mir_lazy_saved_colors;
 static int *mir_lazy_saved_spills;
 static int mir_lazy_saved_spill_count;
+static int mir_lazy_saved_fixed_moves;
+static int mir_lazy_saved_operand_moves;
+static int mir_lazy_saved_phi_moves;
 static int *mir_rematerialized_saved_colors;
 static int *mir_rematerialized_saved_spills;
 static int mir_rematerialized_saved_spill_count;
+static int mir_rematerialized_saved_fixed_moves;
+static int mir_rematerialized_saved_operand_moves;
+static int mir_rematerialized_saved_phi_moves;
 static int mir_rematerialized_home_allocation_active;
 static int mir_lazy_allocation_active;
 static int mir_extended_integer_constant_conversion_fold_count;
@@ -3190,6 +3196,249 @@ static void mir_replace_value_uses(int old_value, int new_value)
 }
 
 static int mir_block_cse_count;
+static int mir_global_field_vn_count;
+
+int mir_global_field_value_numbering_count(void)
+{
+    return mir_global_field_vn_count;
+}
+
+static int mir_same_isolated_global_field_address(
+    const struct MirResolvedNamedAddress *left,
+    const struct MirResolvedNamedAddress *right)
+{
+    return left->storage == right->storage &&
+           left->offset == right->offset &&
+           !strcmp(left->base_name, right->base_name) &&
+           !strcmp(left->leaf_member_name, right->leaf_member_name);
+}
+
+static int mir_isolated_global_field_call_safe(
+    const struct MirResolvedNamedAddress *resolved)
+{
+    int writes = global_text_field_write_count(
+        resolved->base_name, resolved->leaf_member_name);
+
+    return writes == 0 ||
+           (writes == 1 &&
+            !global_text_field_written_in_function(
+                resolved->base_name, resolved->leaf_member_name,
+                g_current_compiling_func));
+}
+
+static int mir_resolve_isolated_global_field_load(
+    const struct MirInsn *insn, struct MirResolvedNamedAddress *resolved)
+{
+    return insn != NULL && insn->opcode == MIR_LOAD_INDIRECT &&
+           insn->bit_width == 0 &&
+           insn->memory_size > 0 && insn->memory_size <= 2 &&
+           mir_resolve_isolated_global_field_address(insn->src1, resolved);
+}
+
+static int mir_resolve_isolated_global_field_store(
+    const struct MirInsn *insn, struct MirResolvedNamedAddress *resolved)
+{
+    return insn != NULL && insn->opcode == MIR_STORE_INDIRECT &&
+           insn->bit_width == 0 &&
+           insn->memory_size > 0 && insn->memory_size <= 2 &&
+           mir_resolve_isolated_global_field_address(insn->src1, resolved);
+}
+
+static int mir_last_value_use(int value)
+{
+    int instruction;
+    int last = -1;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 == value || insn->src2 == value ||
+            mir_call_uses_value(insn, value))
+            last = instruction;
+    }
+    return last;
+}
+
+static int mir_value_use_count_after(int value, int instruction)
+{
+    int count = 0;
+    int i;
+
+    for (i = instruction + 1; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+
+        if (insn->src1 == value)
+            ++count;
+        if (insn->src2 == value)
+            ++count;
+        if (mir_call_uses_value(insn, value))
+            ++count;
+    }
+    return count;
+}
+
+static int mir_value_live_out_of_instruction(int value, int instruction)
+{
+    if (instruction >= 0 && instruction < mir.count &&
+        value >= 0 && value < mir.next_value &&
+        mir.live_out != NULL)
+        return mir.live_out[(size_t)instruction * mir.next_value + value] != 0;
+    return mir_value_has_use_after(value, instruction);
+}
+
+int mir_value_number_global_field_loads(void)
+{
+    struct MirGlobalFieldValue {
+        struct MirResolvedNamedAddress address;
+        int value;
+        int call_safe;
+    } available[128];
+    int available_count = 0;
+    int replaced = 0;
+    int instruction;
+
+    mir_global_field_vn_count = 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+        struct MirResolvedNamedAddress resolved;
+        int entry;
+
+        if (insn->opcode == MIR_LABEL)
+            available_count = 0;
+        if (mir_resolve_isolated_global_field_load(insn, &resolved)) {
+            for (entry = 0; entry < available_count; ++entry)
+                if (mir_same_isolated_global_field_address(
+                        &available[entry].address, &resolved) &&
+                    mir_value_use_count(insn->dst) > 0 &&
+                    mir_value_use_count_after(
+                        available[entry].value, instruction) > 0 &&
+                    mir_value_live_out_of_instruction(
+                        available[entry].value, instruction) &&
+                    mir_last_value_use(available[entry].value) >=
+                        mir_last_value_use(insn->dst)) {
+                    mir_replace_value_uses(insn->dst, available[entry].value);
+                    insn->opcode = MIR_NOP;
+                    insn->dst = -1;
+                    insn->src1 = -1;
+                    insn->src2 = -1;
+                    ++replaced;
+                    break;
+                }
+            if (entry == available_count) {
+                if (available_count < (int)(sizeof(available) /
+                                            sizeof(available[0]))) {
+                    available[available_count].address = resolved;
+                    available[available_count].value = insn->dst;
+                    available[available_count].call_safe =
+                        mir_isolated_global_field_call_safe(&resolved);
+                    ++available_count;
+                } else {
+                    available_count = 0;
+                }
+            }
+        }
+        if (mir_resolve_isolated_global_field_store(insn, &resolved))
+            for (entry = 0; entry < available_count; ++entry)
+                if (mir_same_isolated_global_field_address(
+                        &available[entry].address, &resolved)) {
+                    available[entry] = available[available_count - 1];
+                    --available_count;
+                    break;
+                }
+        if (insn->opcode == MIR_CALL || insn->opcode == MIR_CALL_AGGREGATE)
+            for (entry = available_count - 1; entry >= 0; --entry)
+                if (!available[entry].call_safe) {
+                    available[entry] = available[available_count - 1];
+                    --available_count;
+                }
+        if (insn->opcode == MIR_OPAQUE ||
+            insn->opcode == MIR_COPY_AGGREGATE ||
+            insn->opcode == MIR_VLA_SAVE ||
+            insn->opcode == MIR_VLA_ALLOC ||
+            insn->opcode == MIR_VLA_RESTORE ||
+            insn->opcode == MIR_VA_START ||
+            insn->opcode == MIR_VA_END ||
+            insn->opcode == MIR_VA_ARG)
+            available_count = 0;
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE ||
+            insn->opcode == MIR_RETURN ||
+            insn->opcode == MIR_VLA_ALLOC ||
+            insn->opcode == MIR_VLA_RESTORE)
+            available_count = 0;
+    }
+    if (replaced != 0 && getenv("DCC_MIR_CSE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR field-vn function=%s eliminated=%d\n",
+                mir.name, replaced);
+    mir_global_field_vn_count = replaced;
+    return replaced;
+}
+
+int mir_repeated_named_pointer_load_count(void)
+{
+    struct MirNamedPointerLoad {
+        int storage;
+        long offset;
+        int is_field;
+        char base_name[64];
+        char member_name[64];
+    } seen[128];
+    int seen_count = 0;
+    int repeats = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        struct MirResolvedNamedAddress resolved;
+        struct MirNamedPointerLoad key;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+        int entry;
+
+        memset(&key, 0, sizeof(key));
+        key.storage = -1;
+        if (type_ptr_depth(insn->type) == 0)
+            continue;
+        if (insn->opcode == MIR_LOAD &&
+            mir_scalar_memory_location(
+                insn, &memory_type, &memory_storage, &memory_offset) &&
+            (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN) &&
+            type_ptr_depth(memory_type) > 0) {
+            key.storage = memory_storage;
+            key.offset = memory_offset;
+            snprintf(key.base_name, sizeof(key.base_name), "%s", insn->name);
+        } else if (mir_resolve_isolated_global_field_load(insn, &resolved)) {
+            key.storage = resolved.storage;
+            key.offset = resolved.offset;
+            key.is_field = 1;
+            snprintf(key.base_name, sizeof(key.base_name), "%s",
+                     resolved.base_name);
+            snprintf(key.member_name, sizeof(key.member_name), "%s",
+                     resolved.leaf_member_name);
+        } else {
+            continue;
+        }
+
+        for (entry = 0; entry < seen_count; ++entry)
+            if (seen[entry].storage == key.storage &&
+                seen[entry].offset == key.offset &&
+                seen[entry].is_field == key.is_field &&
+                !strcmp(seen[entry].base_name, key.base_name) &&
+                !strcmp(seen[entry].member_name, key.member_name)) {
+                ++repeats;
+                break;
+            }
+        if (entry == seen_count) {
+            if (seen_count < (int)(sizeof(seen) / sizeof(seen[0])))
+                seen[seen_count++] = key;
+            else
+                return repeats + 1;
+        }
+    }
+    return repeats;
+}
 
 static int mir_expression_is_address(const struct MirInsn *insn)
 {
@@ -5279,6 +5528,9 @@ static void mir_allocate_registers(const unsigned char *live_in,
     int i;
 
     memset(summary, 0, sizeof(*summary));
+    mir.allocation_fixed_moves = 0;
+    mir.allocation_operand_moves = 0;
+    mir.allocation_phi_moves = 0;
     if (value_count == 0)
         return;
     if (mir.allocation_capacity < value_count) {
@@ -5516,6 +5768,10 @@ static void mir_allocate_registers(const unsigned char *live_in,
             ++summary->operand_moves;
     }
 
+    mir.allocation_fixed_moves = summary->fixed_moves;
+    mir.allocation_operand_moves = summary->operand_moves;
+    mir.allocation_phi_moves = summary->phi_moves;
+
     free(color);
     free(preferences);
     free(fixed_color);
@@ -5668,6 +5924,9 @@ int mir_begin_lazy_parameter_allocation(void)
     memcpy(mir_lazy_saved_spills, mir.allocation_spills,
            (size_t)value_count * sizeof(*mir_lazy_saved_spills));
     mir_lazy_saved_spill_count = mir.allocation_spill_count;
+    mir_lazy_saved_fixed_moves = mir.allocation_fixed_moves;
+    mir_lazy_saved_operand_moves = mir.allocation_operand_moves;
+    mir_lazy_saved_phi_moves = mir.allocation_phi_moves;
     mir_lazy_allocation_active = 1;
     mir_allocate_registers(mir.live_in, mir.live_out, &summary, 0, NULL);
     return 1;
@@ -5684,6 +5943,9 @@ void mir_end_lazy_parameter_allocation(void)
     memcpy(mir.allocation_spills, mir_lazy_saved_spills,
            (size_t)value_count * sizeof(*mir_lazy_saved_spills));
     mir.allocation_spill_count = mir_lazy_saved_spill_count;
+    mir.allocation_fixed_moves = mir_lazy_saved_fixed_moves;
+    mir.allocation_operand_moves = mir_lazy_saved_operand_moves;
+    mir.allocation_phi_moves = mir_lazy_saved_phi_moves;
     memset(mir.lazy_parameter_values, 0, (size_t)value_count);
     mir_lazy_allocation_active = 0;
     free(mir_lazy_saved_colors);
@@ -5710,6 +5972,9 @@ int mir_begin_rematerialized_home_allocation(void)
     memcpy(mir_rematerialized_saved_spills, mir.allocation_spills,
            (size_t)value_count * sizeof(*mir_rematerialized_saved_spills));
     mir_rematerialized_saved_spill_count = mir.allocation_spill_count;
+    mir_rematerialized_saved_fixed_moves = mir.allocation_fixed_moves;
+    mir_rematerialized_saved_operand_moves = mir.allocation_operand_moves;
+    mir_rematerialized_saved_phi_moves = mir.allocation_phi_moves;
     mir_rematerialized_home_allocation_active = 1;
     return 1;
 }
@@ -5725,6 +5990,9 @@ void mir_end_rematerialized_home_allocation(void)
     memcpy(mir.allocation_spills, mir_rematerialized_saved_spills,
            (size_t)value_count * sizeof(*mir_rematerialized_saved_spills));
     mir.allocation_spill_count = mir_rematerialized_saved_spill_count;
+    mir.allocation_fixed_moves = mir_rematerialized_saved_fixed_moves;
+    mir.allocation_operand_moves = mir_rematerialized_saved_operand_moves;
+    mir.allocation_phi_moves = mir_rematerialized_saved_phi_moves;
     mir_rematerialized_home_allocation_active = 0;
     free(mir_rematerialized_saved_colors);
     free(mir_rematerialized_saved_spills);

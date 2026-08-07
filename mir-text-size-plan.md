@@ -12979,3 +12979,85 @@ Validation for the final kept change:
 
 Final full gate: **314/323 passed, 9 skipped, 0 failed**; diagnostics,
 dccpeep fixtures, extended corpus, and checked performance all passed.
+
+## T403: centralize named-address resolution, add field-aware CSE screening, and admit `cobint.tget` (2026-08-07)
+
+Implemented the first real slice of `plan.md` Campaign 2's resolver/CSE
+work instead of another gate-margin pass:
+
+1. **Centralized named-address resolution** in `dcc_mir_emit_common.c` via
+   `mir_resolve_named_address()`, replacing the old one-off constant-
+   absolute walker with one shared `MIR_ADDRESS` + constant
+   `MIR_MEMBER_ADDRESS`/fixed-stride `MIR_INDEX_ADDRESS` resolver that
+   records the root symbol, total byte offset, index presence, and leaf
+   member name. The existing absolute-address helpers now reuse this one
+   resolver instead of each re-deriving the chain shape separately.
+2. **Added field-level global-scan facts** in `dcc_global_scan.c`
+   (`global_text_field_{write_count,addr_taken_count,written_in_function}`)
+   so MIR can reason about exact `static_global.field` locations rather
+   than only whole globals. This was the missing prerequisite T390's
+   addendum identified for any materially different attempt at `Gst.var` /
+   `Gst.code`-style reuse.
+3. **Built a materially different block-local CSE probe** in `dcc_mir.c`:
+   `mir_value_number_global_field_loads()` only considers exact isolated
+   global-field loads, records explicit same-field kills, drops entries on
+   non-proven calls, and - critically - requires real liveness containment
+   (`live_out`, remaining-use count, and last-use dominance) before
+   replacing a reload. This is intentionally NOT T70's "same text/opcode
+   repeats in this block" mechanism.
+
+The exact-liveness guard matters: the first broad field-reuse draft did
+find the expected `cint.emit` / `cobint.add_var` / `emit_load_lvalue` /
+`emit_store_lvalue` repeated-field loads, but the retry immediately
+reproduced T70's failure mode (extra slot pressure, `block-cse-cost`
+fallback). Tightening the pass to require that the earlier value is
+already live beyond the later reload reduced those populations back to
+zero safe reuses. **Conclusion for the CSE sub-effort:** with the current
+backend allocation model, I could not find a materially different,
+coverage-positive production reuse mechanism for the `Gst.*` repeated-load
+cases beyond this exact liveness screen, so Campaign 2's CSE portion stops
+here for now rather than re-landing T70 in disguise.
+
+The centralized resolver did surface a safe production win in-scope for
+`absolute-address-cost`: the two-block, no-worse constant-absolute
+population now splits cleanly on whether MIR still reloads the same named
+pointer base multiple times. Added `mir_repeated_named_pointer_load_count()`
+and used it to relax `mir_is_profiled_constant_absolute_no_worse()` only
+for the subset with **zero** repeated named-pointer reloads. This admits:
+
+- `cobint.tget`
+
+while correctly still rejecting the known regressors:
+`cint.emit`, `cobint.add_stmt`, and `cobint.add_var` (all still reload the
+same named pointer base repeatedly and remained `absolute-address-cost`
+fallbacks after the resolver change).
+
+Two related findings were deliberately **not** landed:
+
+- `cint.add_string` / `cobint.add_string` become clean
+  `dynamic-index-base-cost` near-misses once the absolute-address gate is
+  cleared, and forced full-mode A/B confirms they are real wins - but
+  that bucket is out of this stream's assigned scope, so I left them
+  blocked and documented the shift instead of changing
+  `dynamic-index-base-cost`.
+- Top `absolute-index-cost` near-misses (`tptrlhs.touch_ptr_to_array_deref`,
+  `tc89init.main`, `tsyntax.test_constexpr_static_init_and_bounds`,
+  `tc89fltc.main`) were batch forced-accepted and all proved regressing or
+  inconclusive in at least one shipping mode, so that sub-bucket remains
+  unchanged.
+
+**Validation:**
+- Fresh ordinary census vs T396/T399 baseline: **+1**
+  (**902 -> 903/2026, 44.57%**), zero regressions. Newly emitted:
+  `cobint.tget`.
+- Fresh stack-check census vs baseline: **+1**
+  (**924 -> 925/2128, 43.47%**), zero regressions. Same new function.
+- Focused full-mode validation (`DCC_MIR_EMIT_ALL=1 pwsh ./scripts/runall.ps1
+  -Apps cobint,cint -Mode full -RunTimeout 20`): 2/2 passed, 0 regressions,
+  measured app-level improvements in both `cobint` and `cint`.
+- Full extended gate (`DCC_MIR_EMIT_ALL=1 pwsh ./scripts/runall.ps1 -Mode
+  full -Extended -RunTimeout 30`): **314/323 passed, 0 regressions, 9 skip
+  expected**, diagnostics/dccpeep/extended/performance all passed, ~44.5s.
+
+Coverage after this round: **903/2026 ordinary (44.57%)**,
+**925/2128 stack-check (43.47%)**.

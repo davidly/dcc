@@ -1861,17 +1861,23 @@ static int mir_is_profiled_constant_absolute_no_worse(
 {
     /*
      * Forced full-mode A/B covered every constant-absolute candidate that
-     * is already no worse by both static measures. This gate adds
-     * a1.m_hook (12 blocks) and cint.init_compile_storage (one block);
-     * cint.mul_expr/rel_expr remain behind the independent backedge safety
-     * gate. The only two-block candidate, cobint.emit_tok, regresses both
-     * modes despite better static counts. Keep that legacy two-block
-     * peephole boundary, which is also treated separately by the slotless
-     * profitability rule above.
+     * is already no worse by both static measures. Besides the existing
+     * one-block wins (a1.m_hook, cint.init_compile_storage), the current
+     * two-block no-worse population splits cleanly on the new centralized
+     * resolver's exact isolated-global-field view: cint.emit,
+     * cobint.add_stmt, and cobint.add_var still reload the same pointer-
+     * valued named base multiple times (their unresolved base reuse is
+     * what regressed peep mode), while cint.add_string, cobint.add_string,
+     * cobint.tget, and the already-accepted slotless emit_tok shape do not.
+     * Admit the no-worse two-block subset only when there are no repeated
+     * named-pointer reloads left for Campaign 2's base-retention
+     * work to solve.
      */
-    return !mir.has_vla && mir_cfg_block_count() != 2 &&
+    return !mir.has_vla &&
            generated_size <= captured_size &&
-           generated_instructions <= captured_instructions;
+           generated_instructions <= captured_instructions &&
+           (mir_cfg_block_count() != 2 ||
+            mir_repeated_named_pointer_load_count() == 0);
 }
 
 static int mir_is_profiled_dead_suffix_instruction_win(
@@ -2303,6 +2309,10 @@ void mir_end_function(void)
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
             int block_cse_retry_attempted = 0;
+            int block_cse_captured_spills = 0;
+            int block_cse_captured_fixed_moves = 0;
+            int block_cse_captured_operand_moves = 0;
+            int block_cse_captured_phi_moves = 0;
             int boolean_phi_retry_attempted = 0;
             int measured_boolean_candidate = 0;
             int rematerialized_home_retry_attempted = 0;
@@ -2568,11 +2578,22 @@ evaluate_generated:
                      * least five instructions passes both runtime modes. */
                     fallback_reason = "unary-not-cost";
                 else if (block_cse_retry_attempted &&
-                         mir_common_block_expression_elimination_count() > 0 &&
-                         (mir_cfg_block_count() != 1 ||
-                          strcmp(selector_name, "homed-scalar-cfg") != 0 ||
-                          generated_instructions >
-                              captured_instructions - 5))
+                         ((mir_common_block_expression_elimination_count() > 0 &&
+                           (mir_cfg_block_count() != 1 ||
+                            strcmp(selector_name, "homed-scalar-cfg") != 0 ||
+                            generated_instructions >
+                                captured_instructions - 5)) ||
+                          (mir_global_field_value_numbering_count() > 0 &&
+                           (generated_instructions >
+                                captured_instructions - 3 ||
+                            mir.allocation_spill_count >
+                                block_cse_captured_spills ||
+                            mir.allocation_fixed_moves >
+                                block_cse_captured_fixed_moves ||
+                            mir.allocation_operand_moves >
+                                block_cse_captured_operand_moves ||
+                            mir.allocation_phi_moves >
+                                block_cse_captured_phi_moves))))
                     fallback_reason = "block-cse-cost";
                 else if (boolean_phi_retry_attempted &&
                          mir_boolean_phi_branch_simplification_count() > 0 &&
@@ -3629,12 +3650,25 @@ evaluate_generated:
                 }
                 if (fallback_reason != NULL &&
                     !block_cse_retry_attempted &&
-                    mir_cfg_block_count() == 1 &&
                     !g_speculative_codegen_active) {
-                    /* Keep incumbent MIR byte-identical and avoid repeating
-                     * the selector pipeline for immaterial CSE populations. */
+                    int block_cse_eliminated =
+                        mir_value_number_global_field_loads();
+
+                    /* Keep incumbent MIR byte-identical unless an exact
+                     * block-local reuse pass proves a real opportunity. */
                     block_cse_retry_attempted = 1;
-                    if (mir_eliminate_common_block_expressions() >= 3) {
+                    block_cse_captured_spills = mir.allocation_spill_count;
+                    block_cse_captured_fixed_moves =
+                        mir.allocation_fixed_moves;
+                    block_cse_captured_operand_moves =
+                        mir.allocation_operand_moves;
+                    block_cse_captured_phi_moves = mir.allocation_phi_moves;
+                    if (block_cse_eliminated == 0 &&
+                        mir_cfg_block_count() == 1 &&
+                        mir_eliminate_common_block_expressions() >= 3)
+                        block_cse_eliminated +=
+                            mir_common_block_expression_elimination_count();
+                    if (block_cse_eliminated > 0) {
                         fclose(generated);
                         generated = NULL;
                         verified = mir_verify_and_dump();

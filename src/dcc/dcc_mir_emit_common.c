@@ -54,33 +54,43 @@ void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn)
     }
 }
 
-/* Resolve the narrow absolute-addressing shape already optimized by the
- * legacy AST backend: a global/extern object's address followed by constant
- * member offsets and/or fixed-stride constant indexes. Genuine external
- * references with a nonzero addend are excluded because Link-80 mis-relocates
- * EXTRN+offset. */
-static int mir_resolve_constant_absolute_address(
-    int value, const struct MirInsn **base_out, int *storage_out,
-    long *offset_out)
+/* Centralized resolver for MIR address values rooted in a named scalar
+ * location. Walks one value-definition chain of MEMBER_ADDRESS and fixed-
+ * stride constant INDEX_ADDRESS steps back to its MIR_ADDRESS root, recording
+ * the root symbol, total byte offset, whether any INDEX_ADDRESS occurred, and
+ * the first (outermost) member name. Dynamic/non-constant index expressions
+ * remain unresolved: callers that need an exact byte offset (absolute
+ * addressing, isolated global-field loads) must decline those. */
+int mir_resolve_named_address(
+    int value, struct MirResolvedNamedAddress *out)
 {
     const struct MirInsn *definition;
-    struct Sym *global;
     int memory_type;
     int memory_storage;
     int memory_offset;
     long member_offset = 0;
 
+    memset(out, 0, sizeof(*out));
+    out->storage = -1;
     definition = mir_definition(value);
     while (definition != NULL) {
         if (definition->opcode == MIR_MEMBER_ADDRESS) {
+            if (out->member_depth == 0 && definition->name[0] != 0) {
+                strncpy(out->leaf_member_name, definition->name,
+                        sizeof(out->leaf_member_name) - 1);
+                out->leaf_member_name[
+                    sizeof(out->leaf_member_name) - 1] = 0;
+            }
+            ++out->member_depth;
             member_offset += definition->immediate;
             definition = mir_definition(definition->src1);
             continue;
         }
-        if (definition->opcode == MIR_INDEX_ADDRESS &&
-            definition->base_name[0] == 0) {
+        if (definition->opcode == MIR_INDEX_ADDRESS) {
             const struct MirInsn *index = mir_definition(definition->src2);
-            if (index == NULL || index->opcode != MIR_CONST)
+            out->has_index = 1;
+            if (definition->base_name[0] != 0 || index == NULL ||
+                index->opcode != MIR_CONST)
                 return 0;
             member_offset += index->immediate * definition->immediate;
             definition = mir_definition(definition->src1);
@@ -90,19 +100,68 @@ static int mir_resolve_constant_absolute_address(
     }
     if (definition == NULL || definition->opcode != MIR_ADDRESS ||
         !mir_scalar_memory_location(definition, &memory_type,
-                                    &memory_storage, &memory_offset) ||
-        (memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN))
+                                    &memory_storage, &memory_offset))
         return 0;
 
-    member_offset += memory_offset;
-    global = find_global(definition->name);
-    if (memory_storage == SC_EXTERN && member_offset != 0 &&
+    out->root = definition;
+    out->storage = memory_storage;
+    out->offset = member_offset + memory_offset;
+    strncpy(out->base_name, definition->name, sizeof(out->base_name) - 1);
+    out->base_name[sizeof(out->base_name) - 1] = 0;
+    return 1;
+}
+
+/* Resolve the narrow absolute-addressing shape already optimized by the
+ * legacy AST backend: a global/extern object's address followed by constant
+ * member offsets and/or fixed-stride constant indexes. Genuine external
+ * references with a nonzero addend are excluded because Link-80 mis-relocates
+ * EXTRN+offset. */
+static int mir_resolve_constant_absolute_address(
+    int value, const struct MirInsn **base_out, int *storage_out,
+    long *offset_out)
+{
+    struct MirResolvedNamedAddress resolved;
+    struct Sym *global;
+
+    if (!mir_resolve_named_address(value, &resolved) ||
+        (resolved.storage != SC_GLOBAL && resolved.storage != SC_EXTERN))
+        return 0;
+
+    global = find_global(resolved.base_name);
+    if (resolved.storage == SC_EXTERN && resolved.offset != 0 &&
         (global == NULL || (global->needs_extrn && !global->is_defined)))
         return 0;
 
-    *base_out = definition;
-    *storage_out = memory_storage;
-    *offset_out = member_offset;
+    *base_out = resolved.root;
+    *storage_out = resolved.storage;
+    *offset_out = resolved.offset;
+    return 1;
+}
+
+/* An exact, isolated static-global field address: direct `base.field`
+ * (no index steps) rooted at a file-local static global whose own address and
+ * the field's address are never taken anywhere in the translation unit. That
+ * proof means indirect writes/calls cannot alias the field unless the field
+ * itself is textually assigned, so block-local value numbering may treat the
+ * field as an exact scalar location with explicit kills instead of a generic
+ * opaque pointer dereference. */
+int mir_resolve_isolated_global_field_address(
+    int value, struct MirResolvedNamedAddress *out)
+{
+    struct Sym *base_symbol;
+
+    if (!mir_resolve_named_address(value, out) ||
+        out->storage != SC_GLOBAL || out->member_depth != 1 ||
+        out->has_index || out->leaf_member_name[0] == 0)
+        return 0;
+    base_symbol = find_sym(out->base_name);
+    if (base_symbol == NULL || !base_symbol->is_static)
+        return 0;
+    if (global_text_addr_taken_count(out->base_name) != 0)
+        return 0;
+    if (global_text_field_addr_taken_count(
+            out->base_name, out->leaf_member_name) != 0)
+        return 0;
     return 1;
 }
 
@@ -123,16 +182,9 @@ int mir_constant_absolute_access_supported(const struct MirInsn *insn)
 
 int mir_constant_absolute_address_has_index(int value)
 {
-    const struct MirInsn *definition = mir_definition(value);
+    struct MirResolvedNamedAddress resolved;
 
-    while (definition != NULL) {
-        if (definition->opcode == MIR_INDEX_ADDRESS)
-            return 1;
-        if (definition->opcode != MIR_MEMBER_ADDRESS)
-            return 0;
-        definition = mir_definition(definition->src1);
-    }
-    return 0;
+    return mir_resolve_named_address(value, &resolved) && resolved.has_index;
 }
 
 /* T383 (mir-text-size-plan.md): true only when this value's own chain of
