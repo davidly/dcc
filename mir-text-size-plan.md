@@ -13974,3 +13974,68 @@ addressing support.
   `pwsh ./scripts/build-dcc.ps1`:
   **314/323 passed, 0 failed, 9 skipped; Extended/Diagnostics/Dccpeep/Perf all
   passed** (~33.2s).
+
+## Item T415: correction to T413 - only 5 of 7 functions are fully fixed; `adaint.var_or_const_decl` and `forint.run_prog` have a second, separate residual bug (2026-08-08)
+
+While reconciling Stream B's independent investigation (which found a
+"hidden-phi-edge-use bug in forward-to-next/slot elision" affecting
+`tvapinit.join`) against T413's claim that `adaint.var_or_const_decl` and
+`forint.run_prog` were fully fixed, I re-ran **every app scenario** (not just
+each app's default/`main` scenario) for all 7 functions T413 claimed fixed.
+T413's validation had only exercised each app's default scenario
+(`e.bas`/`e.for`/`e.ada`), not the `ttt`/`sieve` extra scenarios declared in
+`tests/_test_overrides.json` for `bint`, `forint`, and `adaint`. This was an
+incomplete validation and the "all 7 fixed" claim in T413 is **too strong**.
+
+**Corrected, scenario-complete result** (`DCC_MIR_FORCE_ACCEPT_FUNCTION`,
+current HEAD, all declared scenarios per app run to completion):
+
+- **Genuinely fully fixed by T413** (byte-identical to baseline across every
+  scenario the app declares): `bint.add_string` (e.bas/ttt.bas/sieve.bas, all
+  match), `forint.add_stmt` (e.for/ttt.for/sieve.for, all match),
+  `tallocx.fill` (single scenario, matches), `too.bst_insert` (single
+  scenario, matches), `attnc11.convert_weight_group` (single scenario,
+  matches). **5 of 7.**
+- **NOT fully fixed - a second, separate bug remains**: `adaint.var_or_const_decl`
+  matches baseline on its default scenario (`e.ada`) but fails differently on
+  both extra scenarios - `ttt.ada` and `sieve.ada` both abort during
+  compilation of the *generated Ada interpreter program* itself with
+  `adaint:14: sym full near ';'` / `adaint:5: sym full near ';'` (a symbol-
+  table-exhaustion error from the interpreted language, not a Z80 crash),
+  instead of running to completion. `forint.run_prog` matches baseline on
+  its default scenario (`e.for`) but on both `ttt.for` and `sieve.for` it
+  silently omits the final summary line entirely (`6493`/`1899` missing from
+  stdout) instead of producing wrong bytes. Both symptoms are **distinct**
+  from the T413 push/pop corruption signature (no `\xC3\x03\xFF`-style
+  garbage, no illegal instruction) and only manifest on the loop-heavier
+  `ttt`/`sieve` inputs, never on the smaller default-scenario input.
+
+**Read together with Stream B's parallel finding**, this is strong
+convergent evidence for a **second, distinct, still-unfixed correctness
+bug** - separate from T413's push/pop-order defect - that:
+- affects `tvapinit.join` and `tap.first_implementation` unconditionally
+  (their only scenario already exercises it), and
+- *also* affects `adaint.var_or_const_decl` and `forint.run_prog`, but only
+  under the larger/more-iterative `ttt`/`sieve` inputs - the default
+  scenario for both apps is too small to trigger it.
+
+This gives the investigation **4 known repro cases instead of 2**
+(`tvapinit.join`, `tap.first_implementation`, `adaint.var_or_const_decl`
+under `ttt`/`sieve`, `forint.run_prog` under `ttt`/`sieve`), which should
+help triangulate the shared mechanism faster than the original 2-function
+set. Stream B's lead (a hidden phi-edge use in forward-to-next/slot
+elision) is the most concrete hypothesis so far and should be checked
+against all 4 repro cases, not just `tvapinit.join`.
+
+**Status update to T413's function list**: 5/7 confirmed fully fixed by the
+push/pop reorder; 2/7 (`adaint.var_or_const_decl`, `forint.run_prog`) are
+only *partially* fixed - their default-scenario symptom is gone but a
+second, separate bug remains reachable on larger inputs. Of the originally
+reported 15 correctness bugs project-wide, treat the count as **5 fully
+resolved, at least 4 confirmed still open under one shared (not yet
+root-caused) second mechanism**, with the remaining ~6 not yet re-tested at
+all.
+
+No code change in this item (documentation/validation correction only).
+Coverage unchanged: **908/2026 ordinary (44.82%)**, **930/2128 stack-check
+(43.70%)**.
