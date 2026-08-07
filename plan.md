@@ -15,12 +15,18 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **890/2026 (43.93%)**
-- Current stack-check coverage: **912/2128 (42.86%)**
-- Latest production cohort: T384, homed-scalar-cfg dead-store value elision
-  (`mir_value_only_used_by_dead_stores` ported from spilled-scalar-cfg),
-  +2 ordinary/+2 stack-check, zero removals, focused full-mode and full
-  extended gates clean.
+- Current ordinary coverage: **894/2026 (44.13%)**
+- Current stack-check coverage: **916/2128 (43.05%)**
+- Latest production cohort: T388, `rematerialized-home-cost` calls==0
+  measured cohort (`mir_is_profiled_rematerialized_home_measured_cohort`,
+  admits call-free single-block pointer/struct-member compound-assignment
+  forms despite a positive raw instruction delta), +4 ordinary/+4
+  stack-check, zero removals, focused full-mode and full extended gates
+  clean. This is the first item of the "next 100 migrations" plan (see
+  `mir-forced-accept-batch.py`/`mir-dead-ends.tsv` tooling below); all four
+  of that plan's originally-proposed Batch 1 "quick win" candidates turned
+  out to be dead ends (two are confirmed correctness bugs), so the real win
+  came from a fresh re-rank instead.
 - **T386 was reverted (see T387 in `mir-text-size-plan.md`).** A stale local
   `ntvcm` build undercounted `LD SP,HL` by 1 T-state all session, producing
   illusory double-digit "improvements" for MIR-heavy hot loops. CI caught a
@@ -43,6 +49,18 @@ capture/replay only after the runnable and extended corpora pass.
   real `ld hl,N/jp/ld hl,N/or l/jp z` idiom occurs in functions too large
   (33+ blocks) for MIR's own naive rendering to beat yet. Both automation
   tools are ready to re-run after the next architectural change.
+- New tooling: `scripts/mir-forced-accept-batch.py`, a concurrent
+  forced-accept full-mode A/B runner (one `runall.ps1` subprocess per
+  `(app, function)` candidate, unique scratch build dir each, `ntvcm`
+  freshness preflight) that turns what used to be N sequential manual
+  A/B round trips into one batched command. `mir-dead-ends.tsv` is a
+  checked-in ledger of confirmed non-wins (correctness bugs and perf
+  regressions) with `(app, function, reason, delta, note, source)`
+  columns; `mir-gate-margins.py --exclude-known mir-dead-ends.tsv` filters
+  a fresh near-miss ranking against it so already-answered candidates are
+  never re-investigated. T388 used both together to invalidate a
+  pre-planned candidate list in minutes instead of one-at-a-time
+  investigation, and to find its real win via a fast re-rank.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |

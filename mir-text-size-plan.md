@@ -11716,3 +11716,93 @@ this log as measured fact.
 
 Coverage after this correction: ordinary **890/2026 (43.93%)**, stack-check
 **912/2128 (42.86%)**, matching T384's state exactly (T386's fully reverted).
+
+## Item T388: rematerialized-home-cost calls==0 measured cohort (2026-08-14)
+
+First landed item of the "next 100 MIR migrations" plan. Built
+`scripts/mir-forced-accept-batch.py` (concurrent forced-accept full-mode A/B
+runner) and `mir-dead-ends.tsv` (checked-in ledger of confirmed dead ends,
+with `--exclude-known` support added to `scripts/mir-gate-margins.py`) as
+Batch 0 tooling, then used them together on Batch 1's planned quick-win
+candidates.
+
+**All four of Batch 1's originally-planned "known near-miss" candidates
+(`tptrlhs.touch_ptr_to_array_deref`, `tc89init.main`, `tvlax.loop_stable`,
+`tvlax.goto_stable`) turned out to be dead ends or worse**, discovered by
+running them through the new forced-accept batch tool instead of trusting
+their raw instruction-delta ranking:
+
+- `tptrlhs.touch_ptr_to_array_deref`: **CONFIRMED CORRECTNESS BUG.**
+  Forced-accept emits an illegal Z80 instruction (ntvcm: "not-implemented
+  z80 instruction: 0xfd, next byte is 0x2") and fails 6/6 output checks. The
+  existing `absolute-index-cost` 4%-margin gate is correctly protecting
+  against this, not being overly conservative - this needs a real emitter
+  fix, not a threshold nudge.
+- `tvlax.goto_stable`: **CONFIRMED CORRECTNESS BUG.** Forced-accept hangs
+  (infinite loop); the app times out instead of producing its baseline
+  output.
+- `tc89init.main`, `tvlax.loop_stable`, and six further re-ranked candidates
+  across `absolute-index-cost`/`binary-load-pair-cost`/`lazy-parameter-cost`
+  (`tc89fltc.main`, `tvariad.main`, `tfpcall.main`, `tptrdiff.long_dist`,
+  `too.world_visit`, `tarray6.v6`): all show a real peep and/or nopeep cycle
+  regression in forced-accept full-mode A/B, ranging from clearly bad
+  (`tvlax.loop_stable` +9.34%/+7.93%) to marginal-but-real (`too.world_visit`
+  +0.01% peep). None are clean wins. All eleven are now recorded in
+  `mir-dead-ends.tsv` so a future census's near-miss ranking skips them.
+
+This is a strong confirmation of the project's rule #4 ("a smaller assembly-
+text stream or instruction count is not proof of faster or smaller Z80
+code") and of the T386 lesson generally: raw static deltas from
+`mir-gate-margins.py` are a cheap, useful *proxy* for ranking investigation
+order, never a substitute for a real forced-accept full-mode A/B.
+
+**Real find:** re-ranking `rematerialized-home-cost` (excluding the two
+already-known dead ends `too.test_dispatch_table`/`tap.rand_ui32` via
+`--exclude-known`) and testing its remaining four candidates
+(`tlongopt.ret_deref_live_add`, `tlongopt.ret_member_live_shr`,
+`tpostptr.pre_bump_i32`, `tpostptr.pre_drop_i32`) found **all four are real,
+clean wins** - zero regressions, real peep+nopeep cycle improvements in
+every case - despite each having 25-33 *more* raw generated instructions
+than the legacy form (delta +26 to +33), the opposite direction from what
+the existing gate's raw-delta model expects. Direct instrumentation
+(`mir_call_count()`) confirmed the exact structural boundary: all four
+winners have `calls==0` (simple single-block pointer/struct-member compound
+assignment forms - `*p += 7L`, `p->l >>= 2`, `++(*p)`, `--(*p)`), while both
+known dead ends have `calls>=2`. This is the entire current population of
+the bucket (6/6 members tested), so the fix has zero risk of extrapolating
+to an unmeasured candidate.
+
+Implemented as `mir_is_profiled_rematerialized_home_measured_cohort()`
+(`dcc_mir_select.c`), mirroring the existing
+`mir_is_profiled_boolean_phi_measured_cohort` train/holdout pattern rather
+than a name-based exception: `mir_call_count() == 0 && generated_size <=
+captured_size + 300` (the +300 byte ceiling is a defensive bound matching
+the observed max delta of 273 bytes, guarding against future extrapolation
+to a much larger call-free function). The check is placed *before* the
+existing raw-delta rejection in the `else if` chain and, when it matches,
+its body is empty - this deliberately short-circuits the rest of the
+already-tuned cost-gate chain for this specific candidate. This mattered in
+practice: an initial version that only weakened the raw-delta condition
+itself (`&& !cohort_predicate`) still let the *next* independent check in
+the chain (`mir_dead_suffix_layout_is_profitable`'s homed-selector rule,
+which separately requires `generated_instructions <= captured_instructions`)
+reject the same good candidate for an unrelated reason, triggering a worse
+alternate retry that then failed the byte ceiling too. Short-circuiting the
+whole chain avoids coupling this fix to that separately-tuned, differently-
+scoped gate.
+
+Fresh ordinary census: **894/2026 (44.13%, +4)**, zero regressions, zero
+removals. Fresh stack-check census: **916/2128 (43.05%, +4)**. Focused
+full-mode validation (`tlongopt`, `tpostptr`) passes 2/2 with zero
+regressions and six real improvements (`tpostptr` peep -0.33%/nopeep -0.36%
+cycles, -1%/-1.03% bytes; `tlongopt` peep -0.29%/nopeep -0.37% cycles). The
+mandatory full extended gate (`runall.ps1 -Mode full -Extended -RunTimeout
+30`) passes completely: 314/323 apps, extended c-testsuite, diagnostics, and
+dccpeep fixtures all clean, zero regressions.
+
+Next: re-rank remaining buckets (`absolute-index-cost`, `binary-load-pair-
+cost`, `dynamic-index-base-cost`, `block-cse-cost`) using
+`mir-gate-margins.py --exclude-known mir-dead-ends.tsv` for genuinely fresh
+candidates (all originally-planned Batch 1 leads are now exhausted), and
+continue validating every candidate through `mir-forced-accept-batch.py`
+before any gate change, not just the closest raw-delta ranking.

@@ -7,4 +7,14 @@ tsnprtf	main	block-cse-cost	0	prior widening regression; same >=5-net-instructio
 tstr2	main	block-cse-cost	0	prior widening regression; same >=5-net-instruction threshold, confirmed via forced-accept full-mode A/B	T271/T272
 tfldparr	main	dynamic-index-base-cost	10	call-containing candidate; >=15-saved-instruction threshold is load-bearing per T183, margin 10 does not clear it	T183/T383
 tap	rand_ui32	rematerialized-home-cost	9	full-mode A/B (mir-forced-accept-batch.py) regresses both peep (+0.3%) and nopeep (+0.21%) cycles despite a smaller raw generated-instruction count; confirms raw delta alone is not a reliable predictor here	plan100-batch0
+tptrlhs	touch_ptr_to_array_deref	absolute-index-cost	-18	CONFIRMED CORRECTNESS BUG, not just a perf near-miss: forced-accept emits an illegal Z80 instruction (ntvcm: "not-implemented z80 instruction: 0xfd, next byte is 0x2") and fails 6/6 output checks. The existing absolute-index-cost 4%-margin gate is correctly protecting against this, not being overly conservative. Needs a real emitter fix (likely a malformed IX-indexed operand in the absolute-index selector) before any threshold change, not a gate nudge.	plan100-batch1
+tc89init	main	absolute-index-cost	-14	full-mode A/B: peep regresses (+0.55% cycles, +2.04% size), nopeep improves (-0.71%); net not a clean win, do not force-accept	plan100-batch1
+tvlax	loop_stable	binary-load-pair-cost	-12	full-mode A/B: regresses badly, peep +9.34% cycles, nopeep +7.93% cycles	plan100-batch1
+tvlax	goto_stable	binary-load-pair-cost	-11	CONFIRMED CORRECTNESS BUG: forced-accept hangs (infinite loop), times out at 20s instead of producing baseline output ("tvlax start" printed then nothing). Needs a real emitter/selector fix, not a gate nudge.	plan100-batch1
+tc89fltc	main	absolute-index-cost	-1	full-mode A/B: regresses, peep +0.85% cycles/+2.17% bytes, nopeep +1.78% cycles	plan100-batch1
+tvariad	main	absolute-index-cost	2	full-mode A/B: regresses, peep +2.35% cycles/+1.96% bytes, nopeep +1.47% cycles/+1.89% bytes	plan100-batch1
+tfpcall	main	absolute-index-cost	3	full-mode A/B: regresses, peep +1.23% cycles/+4.17% bytes, nopeep +1.26% cycles/+2.04% bytes	plan100-batch1
+tptrdiff	long_dist	binary-load-pair-cost	0	full-mode A/B: regresses, peep +0.5% cycles, nopeep +1.8% cycles/+4.44% bytes	plan100-batch1
+too	world_visit	binary-load-pair-cost	4	full-mode A/B: mixed, peep regresses +0.01% cycles (negligible but nonzero), nopeep improves -0.03%; not a clean win	plan100-batch1
+tarray6	v6	lazy-parameter-cost	-2	full-mode A/B: mixed, peep regresses +0.6% cycles, nopeep improves -0.39%; not a clean win	plan100-batch1
 

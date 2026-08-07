@@ -1782,6 +1782,32 @@ static int mir_is_profiled_boolean_phi_measured_cohort(
            mir.local_bytes == 2 && mir.backend_slot_count == 2;
 }
 
+static int mir_is_profiled_rematerialized_home_measured_cohort(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    (void)generated_instructions;
+    (void)captured_instructions;
+    /*
+     * Train/holdout across the entire current calls==0 rematerialized-
+     * home population (4/4 functions: tlongopt.ret_deref_live_add,
+     * tlongopt.ret_member_live_shr, tpostptr.pre_bump_i32,
+     * tpostptr.pre_drop_i32 -- single-block pointer/struct-member compound
+     * assignment forms) each showed a real forced-accept full-mode A/B win
+     * in both peep and nopeep cycle counts despite 25-33 more raw generated
+     * instructions than the legacy form; static instruction count is not
+     * predictive for this shape (assembly-text size is not proof of speed,
+     * see SKILL.md rule #4). The two calls>=2 candidates sharing the same
+     * raw-delta bucket (too.test_dispatch_table, tap.rand_ui32) both
+     * regress in the same A/B check; mir_call_count()==0 is the exact
+     * boundary observed, not a threshold nudge on the raw delta itself.
+     * The byte ceiling (+300, observed max delta 273 bytes across the four
+     * measured winners) is a defensive bound against extrapolating this
+     * exception to an unmeasured, much larger call-free function.
+     */
+    return mir_call_count() == 0 && generated_size <= captured_size + 300;
+}
+
 static int mir_profile_matches_function(const char *variable)
 {
     const char *profile = getenv(variable);
@@ -2480,13 +2506,29 @@ evaluate_generated:
                     generated_instructions < 0 || captured_instructions < 0)
                     fallback_reason = "measurement";
                 else if (rematerialized_home_allocation_active &&
+                         mir_is_profiled_rematerialized_home_measured_cohort(
+                             generated_size, captured_size,
+                             generated_instructions, captured_instructions))
+                    /* Fully-measured calls==0 cohort (see the predicate's
+                     * own comment): accept immediately and skip the rest of
+                     * this chain, since several later checks (e.g. the
+                     * dead-local-suffix-cost homed-selector rule, which
+                     * independently requires generated_instructions <=
+                     * captured_instructions) are tuned for unrelated
+                     * populations and would otherwise reject this same
+                     * already-proven-safe candidate for a different reason,
+                     * triggering a worse alternate retry. */
+                    { /* accepted; fallback_reason stays NULL */ }
+                else if (rematerialized_home_allocation_active &&
                          generated_instructions >
                              captured_instructions - 8)
                     /* Excluding one-use constants from pair coloring exposes
                      * real homed wins, but the two candidates saving only
                      * two and seven raw instructions both regressed peep
                      * execution. Every measured eight-or-more-instruction
-                     * candidate improved both shipping modes. */
+                     * candidate improved both shipping modes. The
+                     * call-free measured cohort below is a separate,
+                     * fully-tested exception to this raw-delta model. */
                     fallback_reason = "rematerialized-home-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_wide_store_forwarding() &&
