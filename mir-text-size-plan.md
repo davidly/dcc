@@ -12567,3 +12567,113 @@ resolving the multi-block CSE question first.
 
 Coverage unchanged: **902/2026 ordinary (44.52%)**,
 **924/2128 stack-check (43.42%)**.
+
+## T399: `next50-slot-intervals` premise check, and a real fix found instead - dead phi-copy swap machinery (2026-08-07)
+
+Per the user's direction to start the `next50-slot-intervals` architecture
+item ("replace whole-value backend-slot lifetimes with use-position live
+intervals"), began with a bounded feasibility check before committing to
+the full design/implementation effort, per the item's own stated
+completion criteria ("stop/re-rank if a bounded effort does not clear a
+double-digit net gain").
+
+**Premise check, part 1 - is `mir_prepare_backend_slots` really a naive
+whole-value model?** No: direct reading (`dcc_mir_spilled_cfg.c:3569`+)
+confirms it already implements a standard interval-based linear-scan slot
+allocator, tracking `first[value]`/`last[value]` and reusing a slot the
+instant its occupant's `slot_end` passes the current instruction
+(`slot_end[slot] >= i` skip, else reuse). This is not the naive
+"one physical slot per value forever" model the campaign framing implied.
+
+**Premise check, part 2 - do the three buckets plan.md cited as
+`next50-slot-intervals` beneficiaries actually depend on slot-interval
+quality?** Directly inspected the gate code in `dcc_mir_select.c` for all
+three:
+
+- `wide-store-cost` (line ~2534): gated on
+  `mir_spilled_cfg_depends_on_wide_store_forwarding() &&
+  mir_cfg_block_count() != 1` - a specific forwarding-mechanism flag plus
+  a hard block-count check, already proven by full-mode A/B (per the
+  gate's own comment, `mm.main` regresses despite a much smaller static
+  footprint). Unrelated to slot-count/frame-size pressure.
+- `block-cse-cost` (line ~2576): gated on
+  `mir_common_block_expression_elimination_count() > 0` plus a measured
+  instruction margin, tied to a specific CSE retry mechanism, not general
+  slot pressure.
+- `planned-index-base-cost` (line ~2733): gated on
+  `mir_spilled_cfg_depends_on_planned_index_base_handoff()` plus a
+  per-call-count measured margin (`7 * calls`, 2-instruction floor),
+  again a specific handoff mechanism, not slot count.
+
+All three are bespoke, already-tuned, already-A/B-tested measured
+thresholds on specific forwarding/handoff optimizations - the same shape
+as every other bucket exhaustively mined in T394-T398. **The premise that
+a generic slot-interval improvement would simultaneously lift these three
+buckets does not hold under direct code inspection; this framing in
+`plan.md` was speculative, not verified against the actual gate chain,
+and is now corrected.**
+
+**Premise check, part 3 - is there a real win anywhere near this
+investigation?** Rather than stop empty-handed, inspected a genuine
+near-miss `text-size` candidate to see what real quality gap remained:
+`tdmfuse.test_for_plain_int` (`q = x % n; r = x / n;` inside a
+7-iteration `for` loop, 11 blocks) generated 273 instructions/2981 bytes
+vs legacy's 279/2943 - fewer instructions but *more* bytes, an unusual
+divergent signal. Direct assembly inspection of the loop header found the
+real cause: `mir_emit_spilled_phi_copies` (the loop-header phi-value
+handoff emitter) unconditionally uses the general "push all sources, pop
+all destinations in reverse" swap-safe shape for any `copy_count >= 2`,
+even when none of the destinations alias any other copy's source (the
+common case for a loop introducing fresh loop-carried slot homes - here,
+`x` and `n`'s loop-header phi destinations are brand new slots, disjoint
+from their pre-loop source slots). The swap-safe shape exists to protect
+against a true simultaneous-swap hazard (copy A's destination equals copy
+B's still-unread source), which provably cannot happen here.
+
+**Fix**: added `mir_phi_copy_group_is_disjoint()`, comparing each copy's
+destination slot range against every *other* copy's source slot range
+(both must resolve to a real backend slot via `mir.backend_slots[value]
+>= 0`; any rematerializable/named-home value conservatively forgoes the
+fast path). When the whole group is disjoint, emit direct
+load-then-store pairs (identical to the existing `copy_count == 1`
+optimization, generalized to N) instead of the push/pop round-trip -
+mirroring Item T9's exact reasoning, extended from "no other copy exists"
+to "no other copy can alias." `test_for_plain_int`'s loop header shrank
+from 2981 to 2913 bytes (273 to 265 instructions) and its frame from 16
+to 12 bytes with this one change.
+
+**Validation**: full census comparison (ordinary + stack-check) showed
+**zero coverage change** (902/2026, 924/2128 - expected, since this is a
+byte/instruction-quality fix, not a new-acceptance fix) and, critically,
+**zero already-accepted functions changed output** (`apps requiring
+runtime validation: 0`) - meaning this change has no blast radius on any
+currently-shipped binary; it only improves the candidate-stream metrics
+fed into cost gates for still-fallback functions. 80 functions across 54
+apps had metric changes (all still-fallback candidates); 4 functions
+crossed the `text-size` gate's threshold but immediately hit a different,
+later gate (`cfg-backedge`, since they're loop functions) - not yet a net
+new acceptance, but the byte reduction is real and will compound with any
+future `cfg-backedge` work. Ran the full extended gate
+(`-Mode full -Extended -RunTimeout 30`): 314/323 passed, 0 regressions,
+correctness/diagnostics/dccpeep/performance all passed, ~31.8s.
+
+**Conclusion**: `next50-slot-intervals` as scoped in `plan.md` (a full
+use-position interval-splitting rewrite of `mir_prepare_backend_slots`,
+touching all 1660 currently-MIR-accepted functions) is **not clearly
+justified by verified evidence** and carries very high blast-radius risk
+for uncertain, indirect payoff - the buckets it was expected to unlock
+are gated by orthogonal, already-proven measured thresholds, not slot
+count. Downgrading/retiring this framing rather than proceeding with the
+full rewrite. The bounded investigation did surface one concrete, safe,
+zero-risk emitter-quality fix instead (the phi-copy disjointness fast
+path above), consistent with the skill's standing priority order
+("repeated selector overhead" ranks above "near-cost real functions").
+Both remaining scoped architecture leads (`next50-slot-intervals`,
+`Gst.var` member-qualified CSE) now have weak-to-no verified evidence of
+near-term yield; further architecture-level progress requires either a
+fresh structural lead from continued direct code/assembly inspection (as
+this entry demonstrates is still possible) or accepting the current
+44.52%/43.42% coverage as the practical ceiling until one is found.
+
+Coverage unchanged: **902/2026 ordinary (44.52%)**,
+**924/2128 stack-check (43.42%)**.

@@ -146,15 +146,16 @@ now the higher-yield path relative to further gate-margin mining. T397/T398
 checked too - gate-margin mining alone is exhausted project-wide, not just
 for the buckets T389-T393 already covered.
 
-**For the next session: do not restart per-bucket gate-margin mining.**
-The highest-value next step is one of the two remaining scoped
-architecture items below (`next50-slot-intervals` has the largest
-expected yield but is also the highest-risk, largest-design-effort item;
-the `Gst.var` extension is lower-risk but has weak expected yield given
-T393's zero-net-promotion result on its bare-global sibling). Either
-needs real design time (feature flag, train/holdout validation per
-`next50-slot-intervals`'s own scoped criteria) before the first line of
-code - do not attempt as a same-session gate tweak.
+**For the next session: do not restart per-bucket gate-margin mining, and
+do not attempt the full `next50-slot-intervals` rewrite** (T399 found its
+premise doesn't hold against the actual gate code - see the remaining-
+leads list below). Both scoped architecture items now have weak-to-no
+verified yield. The highest-value next step is continued direct
+code/assembly inspection of real near-miss candidates (the technique that
+found T399's phi-copy fix) looking for further concrete, bounded,
+zero/low-risk emitter-quality fixes - prefer this over any large,
+high-blast-radius rewrite until a fresh lead is independently verified
+against the actual gate chain, not just assumed from campaign framing.
 
 **T394 (this segment)** re-ranked `unary-not-cost`/`wide-constant-cost`
 excluding known outliers per `plan100-reband-unary-wide-constant`.
@@ -289,14 +290,26 @@ on its own.** The remaining leads are architecture items, not gate nudges:
    is exhausted, not just under-mined - do not revisit without a
    fundamentally different mechanism (real phi-forwarding that reduces
    instruction count broadly, not a threshold change).
-4. **`next50-slot-intervals`** (Campaign 2 item 3, use-position backend-slot
-   intervals) remains the highest-expected-yield item on paper since it is
-   structurally upstream of `block-cse-cost`, `wide-store-cost`, and
-   `planned-index-base-cost` simultaneously - but it is also the largest,
-   highest-risk undertaking (replaces whole-value backend-slot lifetimes
-   with real interval tracking). Build behind a feature control, validate
-   on a train/holdout app split, and stop/re-rank if a bounded effort does
-   not clear a double-digit net gain, per the item's own scoped criteria.
+4. ~~**`next50-slot-intervals`**~~ - **premise corrected/downgraded, see
+   T399.** `mir_prepare_backend_slots` was already a standard
+   interval-based linear-scan slot allocator with reuse (not the naive
+   whole-value model the campaign framing assumed), and direct inspection
+   of the three cited beneficiary gates (`block-cse-cost`,
+   `wide-store-cost`, `planned-index-base-cost`) confirmed each is gated
+   on its own specific, already-A/B-tested forwarding/handoff mechanism
+   plus a measured margin - not on general slot-count/frame-size
+   pressure. A full use-position interval-splitting rewrite is **not
+   verified to unlock any of these three buckets** and carries very high
+   blast-radius risk (touches all 1660 currently-accepted functions) for
+   uncertain, indirect payoff. Do not attempt the full rewrite without a
+   fresh, directly-verified connection between interval quality and a
+   specific gate. T399 did land one real, zero-risk fix found during this
+   investigation instead: `mir_emit_spilled_phi_copies`'s dead push/pop
+   swap-safety machinery for provably-disjoint multi-copy phi groups
+   (loop-header value handoffs) - see T399 for details. Both scoped
+   architecture leads (this item and `Gst.var`, item 2 above) now have
+   weak-to-no verified near-term yield; further architecture progress
+   needs a fresh lead from continued direct code/assembly inspection.
 
 Any of these is a multi-session engineering project requiring careful
 design before the first line of code, not a same-session gate tweak. Follow

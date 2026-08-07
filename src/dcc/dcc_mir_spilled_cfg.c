@@ -6011,6 +6011,61 @@ static int mir_phi_copies_are_empty(int predecessor, int successor)
                                             destinations) == 0;
 }
 
+/* T399 (mir-text-size-plan.md): a phi copy's source or destination only
+ * has a concrete backend-slot address when it is an ordinary spilled
+ * value (mir.backend_slots[value] >= 0); rematerializable constants,
+ * addresses, and directly-named-home values have no slot to compare and
+ * are conservatively treated as unable to prove disjointness here (the
+ * general swap-safe path below already handles them correctly, it is
+ * just not eligible for the fast-path skip). */
+static int mir_phi_copy_value_slot_range(int value, int *base, int *width)
+{
+    int slot;
+    if (mir.backend_slots == NULL)
+        return 0;
+    slot = mir.backend_slots[value];
+    if (slot < 0)
+        return 0;
+    *base = slot;
+    *width = mir_value_is_wide(value) ? 2 : 1;
+    return 1;
+}
+
+/* T399: true only when no copy's destination slot overlaps any *other*
+ * copy's source slot. The general push-all-sources/pop-all-destinations
+ * shape exists specifically to guard against that hazard (a later
+ * destination store clobbering a still-unread source of an earlier
+ * copy) for a true simultaneous swap; when every destination is
+ * provably a fresh slot disjoint from every other copy's source (the
+ * common case for a loop header phi introducing new loop-carried
+ * homes), a direct load-then-store per copy reaches the identical
+ * result in any order, with no stack round-trip. */
+static int mir_phi_copy_group_is_disjoint(const int *sources,
+                                          const int *destinations,
+                                          int copy_count)
+{
+    int dest_base[MAX_FLOW], dest_width[MAX_FLOW];
+    int src_base[MAX_FLOW], src_width[MAX_FLOW];
+    int i, j;
+
+    for (j = 0; j < copy_count; ++j) {
+        if (!mir_phi_copy_value_slot_range(destinations[j], &dest_base[j],
+                                            &dest_width[j]) ||
+            !mir_phi_copy_value_slot_range(sources[j], &src_base[j],
+                                            &src_width[j]))
+            return 0;
+    }
+    for (j = 0; j < copy_count; ++j)
+        for (i = 0; i < copy_count; ++i) {
+            if (i == j)
+                continue;
+            if (dest_base[j] < src_base[i] + src_width[i] &&
+                src_base[i] < dest_base[j] + dest_width[j])
+                return 0;
+        }
+    return 1;
+}
+
 static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
                                        int successor)
 {
@@ -6036,6 +6091,22 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
         } else {
             mir_emit_virtual_load(out, sources[0]);
             mir_emit_virtual_store(out, destinations[0]);
+        }
+        return 1;
+    }
+    /* T399: extend the same reasoning to two or more copies whose whole
+     * group is provably disjoint (see mir_phi_copy_group_is_disjoint) -
+     * no push/pop swap machinery is needed when nothing can be
+     * clobbered, regardless of copy order. */
+    if (mir_phi_copy_group_is_disjoint(sources, destinations, copy_count)) {
+        for (copy = 0; copy < copy_count; ++copy) {
+            if (mir_value_is_wide(sources[copy])) {
+                mir_emit_virtual_load_wide(out, sources[copy]);
+                mir_emit_virtual_store_wide(out, destinations[copy]);
+            } else {
+                mir_emit_virtual_load(out, sources[copy]);
+                mir_emit_virtual_store(out, destinations[copy]);
+            }
         }
         return 1;
     }
