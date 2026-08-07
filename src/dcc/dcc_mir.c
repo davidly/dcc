@@ -69,6 +69,10 @@ static int mir_rematerialized_saved_phi_moves;
 static int mir_rematerialized_home_allocation_active;
 static int mir_lazy_allocation_active;
 static int mir_extended_integer_constant_conversion_fold_count;
+static unsigned long mir_inline_live_temp_mask;
+static const char *mir_inline_local_src_name;
+static const char *mir_inline_local_temp_name;
+static int mir_inline_expand_depth;
 
 static int mir_inline_substitutable(const struct Sym *symbol)
 {
@@ -206,6 +210,8 @@ static int mir_object_eligible(const struct Sym *sym)
     if (sym->storage != SC_LOCAL && sym->storage != SC_PARAM)
         return 0;
     if (strncmp(sym->name, "#clit", 5) == 0)
+        return 0;
+    if (strncmp(sym->name, "#itmp", 5) == 0)
         return 0;
     if (sym->is_volatile || sym->is_array || sym->is_vla ||
         sym->is_const_value)
@@ -596,6 +602,12 @@ static void mir_emit_object_merges(void)
 static int mir_lower_expr(const struct AstNode *node);
 static void mir_lower_stmt(const struct AstNode *node);
 static int mir_lvalue_type(const struct AstNode *node);
+static int mir_lower_conversion(int value, int target_type);
+static void mir_emit_ident_store(const struct AstNode *ident, int value);
+static int mir_try_lower_inline_call_expr(const struct AstNode *call,
+                                          struct Sym *fn_sym,
+                                          int *out_value);
+static int mir_try_lower_inline_call_stmt(const struct AstNode *call);
 
 
 static const char *mir_ident_name(const struct AstNode *node)
@@ -619,6 +631,456 @@ static struct Sym *mir_ident_symbol(const struct AstNode *node)
     if (node->sym != NULL && strcmp(node->sym->name, name) == 0)
         return node->sym;
     return NULL;
+}
+
+static int mir_inline_arg_reusable(const struct AstNode *node)
+{
+    if (node == NULL)
+        return 0;
+    return node->kind == AST_INT_LIT || node->kind == AST_STR_LIT ||
+           node->kind == AST_SIZEOF_EXPR || node->kind == AST_SIZEOF_TYPE ||
+           node->kind == AST_IDENT;
+}
+
+static int mir_inline_param_index_for_call(const struct Sym *fn,
+                                           const char *name)
+{
+    int i;
+
+    if (fn == NULL || name == NULL)
+        return -1;
+    for (i = 0; i < fn->proto_nargs && i < MAX_PROTO_PARAMS; ++i)
+        if (!strcmp(fn->inline_param_names[i], name))
+            return i;
+    return -1;
+}
+
+static void mir_inline_temp_name_for_call(char *dst, int dstsz, int index)
+{
+    sprintf(dst, "#itmp%d", index);
+    (void)dstsz;
+}
+
+static const struct AstNode *mir_inline_substitution_body(const struct Sym *fn)
+{
+    if (fn == NULL)
+        return NULL;
+    if (fn->inline_return_expr != NULL)
+        return fn->inline_return_expr;
+    if (fn->inline_stmt_expr != NULL)
+        return fn->inline_stmt_expr;
+    return fn->inline_stmt_body;
+}
+
+static int mir_inline_arg_is_body_independent(const struct AstNode *node)
+{
+    struct Sym *symbol;
+    int i;
+
+    if (node == NULL)
+        return 1;
+    switch (node->kind) {
+    case AST_INT_LIT:
+    case AST_FLOAT_LIT:
+    case AST_STR_LIT:
+    case AST_SIZEOF_EXPR:
+    case AST_SIZEOF_TYPE:
+        return 1;
+    case AST_IDENT:
+        if (find_enum_const(node->sval) >= 0)
+            return 1;
+        symbol = find_local(node->sval);
+        return symbol != NULL && !symbol->is_static && !symbol->is_volatile &&
+               (symbol->storage == SC_LOCAL || symbol->storage == SC_PARAM) &&
+               local_name_address_taken_in_function(node->sval) == 0;
+    case AST_UNARY:
+        if (node->op == '*' || node->op == TOK_INC || node->op == TOK_DEC)
+            return 0;
+        break;
+    case AST_BINARY:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_COMMA:
+    case AST_COND:
+    case AST_CAST:
+        break;
+    default:
+        return 0;
+    }
+    if (!mir_inline_arg_is_body_independent(node->a) ||
+        !mir_inline_arg_is_body_independent(node->b) ||
+        !mir_inline_arg_is_body_independent(node->c) ||
+        !mir_inline_arg_is_body_independent(node->d))
+        return 0;
+    for (i = 0; i < node->list_len; ++i)
+        if (!mir_inline_arg_is_body_independent(node->list[i]))
+            return 0;
+    return 1;
+}
+
+static int mir_inline_arg_needs_temp(const struct AstNode *node, int use_count)
+{
+    if (!mir_inline_arg_is_body_independent(node))
+        return 1;
+    return use_count > 1 && !mir_inline_arg_reusable(node);
+}
+
+static int mir_inline_tree_contains_call(const struct AstNode *node)
+{
+    int i;
+
+    if (node == NULL)
+        return 0;
+    if (node->kind == AST_CALL)
+        return 1;
+    if (mir_inline_tree_contains_call(node->a) ||
+        mir_inline_tree_contains_call(node->b) ||
+        mir_inline_tree_contains_call(node->c) ||
+        mir_inline_tree_contains_call(node->d))
+        return 1;
+    for (i = 0; i < node->list_len; ++i)
+        if (mir_inline_tree_contains_call(node->list[i]))
+            return 1;
+    return 0;
+}
+
+static struct AstNode *mir_clone_inline_expr(struct AstArena *arena,
+                                             const struct Sym *fn,
+                                             const struct AstNode *src,
+                                             const struct AstNode *call,
+                                             const char **temp_names)
+{
+    struct AstNode *dst;
+    int i;
+
+    if (src == NULL)
+        return NULL;
+    if (src->kind == AST_IDENT) {
+        if (mir_inline_local_src_name != NULL &&
+            !strcmp(src->sval, mir_inline_local_src_name)) {
+            dst = ast_new(arena, AST_IDENT);
+            dst->type = src->type;
+            dst->sval = ast_arena_strdup(arena, mir_inline_local_temp_name);
+            dst->line = src->line;
+            return dst;
+        }
+        i = mir_inline_param_index_for_call(fn, src->sval);
+        if (i >= 0 && i < call->list_len && temp_names != NULL &&
+            temp_names[i] != NULL) {
+            dst = ast_new(arena, AST_IDENT);
+            dst->type = src->type;
+            dst->sval = ast_arena_strdup(arena, temp_names[i]);
+            dst->line = src->line;
+            return dst;
+        }
+        if (i >= 0 && i < call->list_len)
+            return (struct AstNode *)call->list[i];
+    }
+
+    dst = ast_new(arena, src->kind);
+    dst->type = src->type;
+    dst->op = src->op;
+    dst->ival = src->ival;
+    dst->uval = src->uval;
+    dst->str_index = src->str_index;
+    dst->sym = src->sym;
+    if (src->sval == NULL)
+        dst->sval = NULL;
+    else if (src->kind == AST_STR_LIT)
+        dst->sval = ast_arena_memdup(arena, src->sval, (int)src->uval);
+    else
+        dst->sval = ast_arena_strdup(arena, src->sval);
+    dst->peek_type = src->peek_type;
+    dst->operand_type = src->operand_type;
+    dst->line = src->line;
+    dst->file = src->file;
+    dst->end_file = src->end_file;
+    dst->end_line = src->end_line;
+
+    dst->a = mir_clone_inline_expr(arena, fn, src->a, call, temp_names);
+    dst->b = mir_clone_inline_expr(arena, fn, src->b, call, temp_names);
+    dst->c = mir_clone_inline_expr(arena, fn, src->c, call, temp_names);
+    dst->d = mir_clone_inline_expr(arena, fn, src->d, call, temp_names);
+    for (i = 0; i < src->list_len; ++i)
+        ast_list_push(arena, dst,
+                      mir_clone_inline_expr(arena, fn, src->list[i], call,
+                                            temp_names));
+    return dst;
+}
+
+static void mir_emit_symbol_store(struct Sym *symbol, int value)
+{
+    struct AstNode ident;
+
+    if (symbol == NULL)
+        return;
+    memset(&ident, 0, sizeof(ident));
+    ident.kind = AST_IDENT;
+    ident.type = symbol->type;
+    ident.sym = symbol;
+    ident.sval = symbol->name;
+    mir_emit_ident_store(&ident, value);
+}
+
+static int mir_plan_inline_arg_temps(const struct AstNode *call,
+                                     struct Sym *fn_sym,
+                                     const char **temp_names,
+                                     struct Sym **temp_symbols,
+                                     int *temp_types,
+                                     char temp_name_buf[MAX_PROTO_PARAMS][64],
+                                     unsigned long *temp_mask)
+{
+    unsigned long unavailable;
+    unsigned long current_mask;
+    int i;
+
+    if (call == NULL || fn_sym == NULL || temp_mask == NULL)
+        return 0;
+    unavailable = mir_inline_live_temp_mask;
+    current_mask = 0;
+    for (i = 0; i < call->list_len; ++i) {
+        struct Sym *tmp;
+        int want_type;
+        int slot;
+
+        temp_names[i] = NULL;
+        temp_symbols[i] = NULL;
+        temp_types[i] = 0;
+        if (!mir_inline_arg_needs_temp(call->list[i],
+                                       fn_sym->inline_param_use_count[i]))
+            continue;
+        want_type = fn_sym->proto_types[i] ? fn_sym->proto_types[i] : TYPE_INT;
+        if (type_size(want_type) != 2 || type_is_float(want_type) ||
+            type_is_long(want_type))
+            return 0;
+        slot = i;
+        if ((unavailable & (1UL << slot)) != 0) {
+            for (slot = 0; slot < MAX_PROTO_PARAMS; ++slot)
+                if ((unavailable & (1UL << slot)) == 0)
+                    break;
+            if (slot >= MAX_PROTO_PARAMS)
+                return 0;
+        }
+        unavailable |= 1UL << slot;
+        current_mask |= 1UL << slot;
+        mir_inline_temp_name_for_call(temp_name_buf[i], 64, slot);
+        tmp = find_local(temp_name_buf[i]);
+        if (tmp == NULL)
+            return 0;
+        temp_names[i] = temp_name_buf[i];
+        temp_symbols[i] = tmp;
+        temp_types[i] = want_type;
+    }
+    *temp_mask = current_mask;
+    return 1;
+}
+
+static int mir_plan_inline_local_temp(struct Sym *fn_sym, unsigned long used_mask,
+                                      struct Sym **temp_symbol,
+                                      char temp_name_buf[64],
+                                      unsigned long *temp_bit)
+{
+    int slot;
+    struct Sym *tmp;
+
+    if (temp_symbol == NULL || fn_sym == NULL || !fn_sym->has_inline_local)
+        return 0;
+    slot = fn_sym->proto_nargs;
+    if ((used_mask & (1UL << slot)) != 0) {
+        for (slot = 0; slot < MAX_PROTO_PARAMS; ++slot)
+            if ((used_mask & (1UL << slot)) == 0)
+                break;
+        if (slot >= MAX_PROTO_PARAMS)
+            return 0;
+    }
+    mir_inline_temp_name_for_call(temp_name_buf, 64, slot);
+    tmp = find_local(temp_name_buf);
+    if (tmp == NULL || type_size(fn_sym->inline_local_type) != 2)
+        return 0;
+    *temp_symbol = tmp;
+    if (temp_bit != NULL)
+        *temp_bit = 1UL << slot;
+    return 1;
+}
+
+static void mir_emit_planned_inline_arg_temps(const struct AstNode *call,
+                                              const struct Sym *fn_sym,
+                                              struct Sym **temp_symbols,
+                                              int *temp_types)
+{
+    int i;
+
+    for (i = call->list_len - 1; i >= 0; --i) {
+        int value;
+
+        if (temp_symbols[i] == NULL)
+            continue;
+        temp_symbols[i]->type = temp_types[i];
+        value = mir_lower_expr(call->list[i]);
+        value = mir_lower_conversion(value, temp_types[i]);
+        mir_emit_symbol_store(temp_symbols[i], value);
+    }
+    (void)fn_sym;
+}
+
+static int mir_emit_inline_local_temp(struct Sym *fn_sym,
+                                      const struct AstNode *call,
+                                      const char **temp_names,
+                                      struct Sym *tmp)
+{
+    struct AstNode *init_substituted;
+    const char *saved_src_name;
+    const char *saved_temp_name;
+    int value;
+
+    if (fn_sym == NULL || tmp == NULL || !fn_sym->has_inline_local)
+        return 0;
+    saved_src_name = mir_inline_local_src_name;
+    saved_temp_name = mir_inline_local_temp_name;
+    mir_inline_local_src_name = NULL;
+    mir_inline_local_temp_name = NULL;
+    init_substituted = mir_clone_inline_expr(&g_ast_arena, fn_sym,
+                                             fn_sym->inline_local_init,
+                                             call, temp_names);
+    mir_inline_local_src_name = saved_src_name;
+    mir_inline_local_temp_name = saved_temp_name;
+    tmp->type = fn_sym->inline_local_type;
+    value = mir_lower_expr(init_substituted);
+    value = mir_lower_conversion(value, tmp->type);
+    mir_emit_symbol_store(tmp, value);
+    return 1;
+}
+
+static int mir_try_lower_inline_call_common(const struct AstNode *call,
+                                            struct Sym *fn_sym,
+                                            struct AstNode **out_expr,
+                                            struct AstNode **out_stmt)
+{
+    const struct AstNode *src_expr;
+    const char *temp_names[MAX_PROTO_PARAMS];
+    struct Sym *temp_symbols[MAX_PROTO_PARAMS];
+    int temp_types[MAX_PROTO_PARAMS];
+    char temp_name_buf[MAX_PROTO_PARAMS][64];
+    char local_temp_name[64];
+    struct Sym *local_temp_symbol;
+    unsigned long local_temp_bit;
+    unsigned long saved_live_mask;
+    unsigned long current_mask;
+    const char *saved_local_src_name;
+    const char *saved_local_temp_name;
+
+    if (out_expr != NULL)
+        *out_expr = NULL;
+    if (out_stmt != NULL)
+        *out_stmt = NULL;
+    if (opt_debug || fn_sym == NULL || !fn_sym->is_static || !fn_sym->is_inline ||
+        mir_inline_substitution_body(fn_sym) == NULL)
+        return 0;
+    if (mir_inline_expand_depth >= 8)
+        return 0;
+    if (call->list_len != fn_sym->proto_nargs || call->list_len > MAX_PROTO_PARAMS)
+        return 0;
+    if (!mir_plan_inline_arg_temps(call, fn_sym, temp_names, temp_symbols,
+                                   temp_types, temp_name_buf, &current_mask))
+        return 0;
+    local_temp_symbol = NULL;
+    local_temp_name[0] = 0;
+    local_temp_bit = 0;
+    if (fn_sym->has_inline_local &&
+        !mir_plan_inline_local_temp(fn_sym,
+                                    mir_inline_live_temp_mask | current_mask,
+                                    &local_temp_symbol, local_temp_name,
+                                    &local_temp_bit))
+        return 0;
+
+    saved_live_mask = mir_inline_live_temp_mask;
+    mir_inline_live_temp_mask |= current_mask;
+    if (local_temp_symbol != NULL)
+        mir_inline_live_temp_mask |= local_temp_bit;
+    mir_emit_planned_inline_arg_temps(call, fn_sym, temp_symbols, temp_types);
+    if (local_temp_symbol != NULL && !mir_emit_inline_local_temp(fn_sym, call,
+                                                                 temp_names,
+                                                                 local_temp_symbol)) {
+        mir_inline_live_temp_mask = saved_live_mask;
+        return 0;
+    }
+
+    saved_local_src_name = mir_inline_local_src_name;
+    saved_local_temp_name = mir_inline_local_temp_name;
+    if (local_temp_symbol != NULL) {
+        mir_inline_local_src_name = fn_sym->inline_local_name;
+        mir_inline_local_temp_name = local_temp_name;
+    } else {
+        mir_inline_local_src_name = NULL;
+        mir_inline_local_temp_name = NULL;
+    }
+    mir_inline_expand_depth++;
+    src_expr = mir_inline_substitution_body(fn_sym);
+    if (fn_sym->inline_stmt_body != NULL)
+        *out_stmt = mir_clone_inline_expr(&g_ast_arena, fn_sym, src_expr, call,
+                                          temp_names);
+    else
+        *out_expr = mir_clone_inline_expr(&g_ast_arena, fn_sym, src_expr, call,
+                                          temp_names);
+    mir_inline_expand_depth--;
+    mir_inline_live_temp_mask = saved_live_mask;
+    mir_inline_local_src_name = saved_local_src_name;
+    mir_inline_local_temp_name = saved_local_temp_name;
+    return 1;
+}
+
+static int mir_try_lower_inline_call_expr(const struct AstNode *call,
+                                          struct Sym *fn_sym,
+                                          int *out_value)
+{
+    struct AstNode *expr;
+    struct AstNode *stmt;
+
+    if (out_value == NULL)
+        return 0;
+    if (fn_sym != NULL &&
+        (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL))
+        return 0;
+    expr = NULL;
+    stmt = NULL;
+    if (!mir_try_lower_inline_call_common(call, fn_sym, &expr, &stmt) ||
+        expr == NULL || stmt != NULL)
+        return 0;
+    *out_value = mir_lower_expr(expr);
+    return 1;
+}
+
+static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
+{
+    struct Sym *fn_sym;
+    struct AstNode *expr;
+    struct AstNode *stmt;
+
+    if (call == NULL || call->kind != AST_CALL || call->a == NULL ||
+        call->a->kind != AST_IDENT)
+        return 0;
+    fn_sym = find_global(call->a->sval);
+    if (fn_sym == NULL ||
+        (fn_sym->inline_stmt_expr == NULL && fn_sym->inline_stmt_body == NULL))
+        return 0;
+    /* Keep call-free void store helpers behind the existing fallback gate for
+     * now: tinlnpar.main proved that lowering those directly into MIR can be
+     * text-smaller yet still regress the checked peep path. Call-containing
+     * void helpers such as attnc11's add_clamped remain worth replaying here
+     * because they clear the correctness-critical nested-call class. */
+    if (!mir_inline_tree_contains_call(mir_inline_substitution_body(fn_sym)))
+        return 0;
+    expr = NULL;
+    stmt = NULL;
+    if (!mir_try_lower_inline_call_common(call, fn_sym, &expr, &stmt))
+        return 0;
+    if (stmt != NULL)
+        mir_lower_stmt(stmt);
+    else if (expr != NULL)
+        (void)mir_lower_expr(expr);
+    else
+        return 0;
+    return 1;
 }
 
 static int mir_emit_pointer_word_load(int address, int result_type)
@@ -2105,6 +2567,9 @@ static int mir_lower_expr(const struct AstNode *node)
         } else if (function_symbol != NULL &&
                    function_symbol->storage != SC_FUNC)
             function_symbol = NULL;
+        if (strcmp(call_name, "<indirect>") != 0 &&
+            mir_try_lower_inline_call_expr(node, function_symbol, &value))
+            return value;
         if (function_symbol != NULL &&
             !mir_inline_substitutable(function_symbol))
             function_symbol->deferred_body_needed = 1;
@@ -2266,6 +2731,9 @@ static void mir_lower_stmt(const struct AstNode *node)
     case AST_EMPTY:
         return;
     case AST_EXPR_STMT:
+        if (node->a != NULL && node->a->kind == AST_CALL &&
+            mir_try_lower_inline_call_stmt(node->a))
+            return;
         (void)mir_lower_expr(node->a);
         return;
     case AST_DECL:

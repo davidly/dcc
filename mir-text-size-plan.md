@@ -15808,3 +15808,193 @@ consistent with the standing discipline of documenting rejected experiments
 rather than silently dropping them.
 
 Docs-only commit (no code change survives).
+
+## Item T429: lower static-inline calls by cloning their AST bodies into MIR (+0, 2026-08-08)
+
+Fresh pre-edit census at the assigned base (`2963e78`) confirmed the live
+population was still **47 ordinary / 48 stack-check** `inline-substitution`
+fallbacks, with overall coverage **914/2026 (45.11%)** ordinary and
+**936/2128 (43.98%)** stack-check.
+
+### 1. Root cause on current HEAD
+
+T420 had already fixed the original "selected MIR calls a helper whose body was
+never emitted" correctness hole by marking chosen inline helper bodies
+`deferred_body_needed=1` once MIR output wins. Re-running T409's four
+representatives on current HEAD showed the class had moved on from "broken call
+ target" to the harder architectural issue:
+
+- `tinline:main` — correctness **PASS**, performance **PASS** under forced MIR
+- `cobint:compile_perform` — correctness **PASS**, performance **FAIL**
+  (size regressions only: peep **27904 -> 28800**, nopeep **36608 -> 36736**)
+- `attnc11:transposed_multiply_8x16` — correctness **PASS** only after this
+  item's MIR-side inline lowering; before the change it still miscomputed under
+  forced MIR
+- `tchess:positional_value` — correctness **PASS**, performance **FAIL**
+  (peep **374338284 -> 402466565**, nopeep **466141831 -> 496554808**)
+
+So the remaining blocker was no longer "emit a body somewhere"; it was that MIR
+still lowered static-inline calls as real calls, while legacy codegen had
+already substituted those helper ASTs directly at the call site. That left some
+call-heavy candidates merely slow, and some nested-call shapes (the motivating
+`attnc11.transposed_multiply_8x16`) still semantically different enough to fail.
+
+### 2. Implemented mechanism
+
+I implemented MIR-side static-inline substitution directly in
+`src/dcc/dcc_mir.c` instead of widening the production gate.
+
+New pieces:
+
+- `mir_try_lower_inline_call_expr()`
+- `mir_try_lower_inline_call_stmt()`
+- `mir_clone_inline_expr()` plus the mirrored inline-temp planning helpers
+- `mir_inline_tree_contains_call()` to keep the void-body scope conservative
+- `mir_object_eligible()` now rejects synthetic `#itmpN` inline temp slots so
+  MIR object promotion never aliases one reused temp name across different call
+  sites/types
+
+Mechanically, MIR now mirrors the legacy inline-substitution contract for the
+supported subset:
+
+1. detect a direct named static-inline callee with a captured
+   `inline_return_expr` / `inline_stmt_expr` / `inline_stmt_body`;
+2. plan any needed `#itmpN` argument temps using the existing reserved local
+   slots and the same "body-independent or reusable" rules as the AST backend;
+3. evaluate temp-backed arguments in reverse call order, store them once, then
+   clone the callee AST body into `g_ast_arena` with parameters rewritten to
+   either those temps or the original argument ASTs;
+4. recursively lower the cloned AST through MIR instead of emitting a
+   `MIR_CALL`.
+
+This is real architecture work: the caller's MIR no longer depends on a later
+callee-body materialization decision whenever the inline shape can be replayed
+semantically at MIR-lowering time.
+
+### 3. Narrowing after a real measured regression
+
+The first cut inlined **all** captured void inline bodies as statements too.
+That did unlock a real production admit:
+
+- `tinlnpar.main` became MIR-emitted at **559 bytes / 52 insns** instead of
+  fallback **639 / 61**
+
+But focused validation immediately showed the landing was not legal:
+
+- `pwsh ./scripts/runall.ps1 -Apps tinlnpar -Mode full -RunTimeout 20`
+- correctness **PASS**
+- peep cycles **19128 -> 19147 (+0.10%)**
+
+Inspection showed this came from inlining `mem_store()` — a call-free void store
+helper. The raw MIR body got smaller, but the shipping peep path still lost a
+few cycles. Per the standing rules, that admit had to be backed out.
+
+I therefore kept the real MIR inline mechanism but restricted **void**
+statement-body substitution to inline bodies that themselves contain a call.
+That preserves the correctness-critical `add_clamped()` / nested-helper family
+(`attnc11`) while leaving call-free pure-store helpers such as `mem_store()`
+behind the existing `inline-substitution` fallback gate for now.
+
+### 4. What this changed in the bucket
+
+Final ordinary census against the true pre-edit snapshot:
+
+- coverage: **914/2026 -> 914/2026** (**+0**)
+- `inline-substitution`: **47 -> 5**
+
+The old bucket did not stay put; it split into more accurate downstream causes:
+
+- **22** -> `selector`
+- **12** -> `unary-not-cost`
+- **3** -> `absolute-address-cost`
+- **2** -> `dynamic-index-cost`
+- **1** -> `absolute-index-cost`
+- **1** -> `boolean-phi-cost`
+- **1** -> `phi-fallthrough-cost`
+- **5** remain `inline-substitution`
+
+Remaining ordinary `inline-substitution` functions:
+
+- `cint:for_stmt`
+- `cint:if_stmt`
+- `fint:exec_word`
+- `tinline:inline_order_check`
+- `tinlnpar:main`
+
+Final stack-check census:
+
+- coverage: **936/2128 -> 936/2128** (**+0**)
+- `inline-substitution`: **48 -> 5**
+
+Stack-check transition breakdown:
+
+- **23** -> `selector`
+- **12** -> `unary-not-cost`
+- **3** -> `absolute-address-cost`
+- **2** -> `dynamic-index-cost`
+- **1** -> `absolute-index-cost`
+- **1** -> `boolean-phi-cost`
+- **1** -> `phi-fallthrough-cost`
+- **5** remain `inline-substitution`
+
+So this item did real architectural work and removed the original blocker from
+**42/47 ordinary** and **43/48 stack-check** functions, but those functions now
+stop on other selector/cost gates rather than landing immediately.
+
+### 5. Validation
+
+Baseline snapshots (required before editing):
+
+- `python3 scripts/mir-migration-census.py --output build/streami-before.tsv --jobs 8`
+  - **PASS** — coverage **914/2026**, `inline-substitution` **47**
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/streami-before-stack.tsv --jobs 8`
+  - **PASS** — coverage **936/2128**, `inline-substitution` **48**
+
+Rebuild:
+
+- `sh src/dcc/build-dcc.sh`
+  - **PASS**
+
+Representative forced full-mode checks:
+
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=main pwsh ./scripts/runall.ps1 -Apps tinline -Mode full -RunTimeout 20`
+  - **PASS**
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=compile_perform pwsh ./scripts/runall.ps1 -Apps cobint -Mode full -RunTimeout 20`
+  - correctness **PASS**, performance **FAIL** (size only; no production gate change attempted)
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=transposed_multiply_8x16 pwsh ./scripts/runall.ps1 -Apps attnc11 -Mode full -RunTimeout 20`
+  - **PASS**
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=positional_value pwsh ./scripts/runall.ps1 -Apps tchess -Mode full -RunTimeout 20`
+  - correctness **PASS**, performance **FAIL**
+
+Post-edit census compare (final kept code):
+
+- `python3 scripts/mir-migration-census.py --output build/streami-after.tsv --compare build/streami-before.tsv --fail-on-regression --jobs 8`
+  - **PASS** — coverage unchanged, runtime validation set **0 apps**
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/streami-after-stack.tsv --compare build/streami-before-stack.tsv --fail-on-regression --jobs 8`
+  - **PASS** — coverage unchanged, runtime validation set **0 apps**
+
+Forced-MIR regression harness:
+
+- `pwsh ./scripts/mir-forced-correctness.ps1`
+  - **PASS**
+
+Full milestone gate:
+
+- built local `dccpeep` in the worktree (`gcc -std=c11 -O2 -g -static -I src/dccpeep -o dccpeep src/dccpeep/*.c`) so the fixture phase used this worktree's tool, not the integrator's repo
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  - **PASS** — **314/323 passed, 9 skipped, 0 failed**, diagnostics passed,
+    dccpeep fixtures passed, extended suite passed, performance passed
+
+### 6. Conclusion
+
+This item does **not** justify widening the production `inline-substitution`
+gate outright. After MIR-side inline replay, the surviving population is now
+small and much better classified, but forced full-mode A/B still shows real
+performance losses on representative caller bodies (`cobint`, `tchess`), and
+one initial production admit (`tinlnpar.main`) had to be explicitly re-blocked
+after measurement.
+
+The remaining `inline-substitution` work is now narrower and better defined:
+call-free void helper stores are still gated, while the much larger nested-call
+and expression-inline blocker has been converted into ordinary selector/cost
+work.
