@@ -13061,3 +13061,30 @@ Two related findings were deliberately **not** landed:
 
 Coverage after this round: **903/2026 ordinary (44.57%)**,
 **925/2128 stack-check (43.47%)**.
+
+## Item T404: quick foreground check of top-ranked `text-size` multi-block VLA candidates - dead end, gate-margins.py caveat noted (2026-08-07)
+
+After the "next 20%" wave's Stream A cfg-backedge investigation stopped
+(Item T401) and Streams B/C/D landed their first round of fixes (Items
+T400, T402, T403; integrated coverage 906/2026 ordinary, 928/2128
+stack-check), ran `scripts/mir-gate-margins.py` fresh against the current
+census to look for a new unclaimed lead while the three background streams
+continued their next assignments.
+
+The top-ranked `text-size` candidates were three multi-block VLA functions
+(`tvla.vla_sizeof_loop_changes`, `.vla_goto_out`, `.vla_forinit_dep`) with
+apparently favorable deltas (-6, -5, -2). Direct inspection of the raw
+census bytes shows this ranking is misleading for this specific gate:
+`mir-gate-margins.py` ranks by raw **instruction** delta only, but the
+`text-size` gate's actual controlling multi-block VLA predicate
+(`mir_is_profiled_vla_single_block_instruction_win`) requires both an
+8-instruction win **and** a single CFG block; all three candidates are
+multi-block (4/5/10 blocks) with instruction wins of only 6/5/2, and their
+real **byte** sizes are worse than legacy by 86/131/178 bytes respectively
+despite the favorable-looking instruction count. The existing gate
+correctly declines all three; no code change needed. Recorded in
+`mir-dead-ends.tsv` so this deceptive instruction-only ranking isn't
+re-mined by a future session using the same tool naively.
+
+No code change. Coverage unchanged at the current integration point:
+**906/2026 ordinary (44.72%)**, **928/2128 stack-check (43.61%)**.
