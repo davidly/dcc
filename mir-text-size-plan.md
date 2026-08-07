@@ -11587,3 +11587,70 @@ more homed-scalar-cfg candidates emerge from other architectural work; it
 should not be treated as fully mined; re-check `dead-local-suffix-cost` and
 `unary-not-cost` (which also uses a homed-selector branch) after future
 homed-candidate-population growth.
+
+## Item T385: quick-win mining exhausted; n-gram miner built and run (2026-08-14)
+
+After T384, re-ran `scripts/mir-gate-margins.py` against the fresh census to
+find the next closest near-misses across `lazy-parameter-cost` (7 candidates),
+`rematerialized-home-cost` (6), and `constant-conversion-home-cost` (4). Every
+top candidate in these three buckets is a *documented, already-measured dead
+end*: the closest `rematerialized-home-cost` miss (`too:test_dispatch_table`,
+delta -2) and the closest `lazy-parameter-cost` byte-parameter miss
+(`tkandr:uchar_mix`, delta -2) match the exact instruction-delta values cited
+in `dcc_mir_select.c`'s own comments as prior full-mode A/B losses ("the two
+candidates saving only two and seven raw instructions both regressed peep
+execution"; "a six-parameter arithmetic chain, a mixed byte-parameter
+expression, and a one-instruction phi-CFG win"). No new quick win exists in
+these buckets without first improving the underlying model (same conclusion
+as `dynamic-index-base-cost`/`block-cse-cost` in T383's segment).
+
+Built `scripts/mir-mac-ngram-miner.py` (the planned automation tool): compiles
+every function in a chosen census `reason` bucket, extracts its generated
+assembly body, normalizes operands (numeric literals -> `N`, symbols -> `SYM`,
+registers preserved) so structurally-identical idioms compare equal across
+functions with different constants/call targets, and reports the most
+frequent contiguous instruction n-grams with example call sites.
+
+Ran it against the two largest fallback populations:
+
+- `text-size` (317 candidates, 110 apps): the top n-grams are generic
+  calling-convention/prologue boilerplate (`push ix; ld ix,N; add ix,sp; ld
+  hl,N; add hl,sp; ld sp,hl` frame setup; `pop bc` x3-4 caller-cleanup after
+  multi-argument calls; `ld l,(ix+d); ld h,(ix+d)` word-from-frame loads,
+  already the minimal 2-instruction Z80 sequence since there is no single
+  `ld hl,(ix+d)` opcode). No single dominant fixable idiom - confirms this
+  bucket is genuinely heterogeneous and needs per-function/structural
+  architecture work (e.g. the slot-interval campaign item), not pattern
+  mining.
+- `boolean-phi-cost` (158 candidates, 60 apps): surfaced a real, specific,
+  recognizable idiom - `ld hl,N / jp label / ld hl,N / ld a,h; or l; jp
+  z,label` (materialize a 0/1 boolean across a branch, then immediately
+  re-test it with `or l; jp z`) - appearing 880 times across large functions
+  such as `a1:op_bcd_math`/`a1:op_math`. Investigated whether these specific
+  functions are a new measured-cohort candidate: `op_bcd_math` has
+  `slots=4 calls=0 blocks=33`, `generated-insns=348 > captured-insns=322`, so
+  MIR's own generated form is *larger* than the legacy form even with
+  `mir_simplify_boolean_phi_branches()` applied (both
+  `mir_is_profiled_boolean_phi_measured_cohort` and `..._branch_retry` require
+  `generated_instructions <= captured_instructions` as their first gate and
+  correctly reject it). The idiom mined is real waste in the *legacy* fallback
+  output, but at this function's size (33 blocks) MIR's own naive rendering
+  does not yet beat it either - this is a genuinely harder function, not a
+  quick win, and is consistent with the existing highly-curated
+  `mir_is_profiled_boolean_phi_measured_cohort`/`..._branch_retry` train/holdout
+  gates already present (narrow `backend_slot_count`/`calls`/`blocks`/
+  `local_bytes` combinations, tuned across several prior sessions).
+
+Conclusion: the easy/quick-win vein for this cohort is mined out for now.
+Both automation tools (`mir-gate-margins.py`, `mir-mac-ngram-miner.py`) are
+built, validated, and committed for reuse after the next architectural change
+widens either population. The next real lever is Campaign 2 architecture
+(use-position slot intervals) or the previously-identified
+phi-forwarding-across-labels lead (T384's segment notes) - both higher-risk,
+higher-effort items that need bounded, feature-masked implementation rather
+than further mining.
+
+Full extended gate (`runall.ps1 -Mode full -Extended -RunTimeout 30`) run
+before this commit: 314/323 apps passed, extended/diagnostics/dccpeep/
+performance all clean, zero regressions, ~30s. No src/ changes in this item
+(tooling-only); coverage unchanged at 890/2026 (43.93%) / 912/2128 (42.86%).

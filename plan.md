@@ -25,6 +25,14 @@ capture/replay only after the runnable and extended corpora pass.
   near-miss ranker consuming the existing census TSV (no per-gate formula
   duplication). Used to find the T384 near-misses; re-run after every
   architectural change to re-rank remaining populations.
+- New tooling: `scripts/mir-mac-ngram-miner.py`, a generic n-gram miner for
+  the two largest heterogeneous fallback populations (`text-size`,
+  `boolean-phi-cost`). T385 used it to confirm the quick-win vein is mined
+  out for now: `text-size`'s top idioms are generic calling-convention/
+  prologue boilerplate (no single fixable pattern), and `boolean-phi-cost`'s
+  real `ld hl,N/jp/ld hl,N/or l/jp z` idiom occurs in functions too large
+  (33+ blocks) for MIR's own naive rendering to beat yet. Both automation
+  tools are ready to re-run after the next architectural change.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
