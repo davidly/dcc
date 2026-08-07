@@ -21,21 +21,32 @@ capture/replay only after the runnable and extended corpora pass.
   `storeind` (Stream B) - +2/+2 coverage, landed alongside T400
   (Stream D's MIR-only scalar address-escape filter, +3/+3), T403
   (Stream C's centralized named-address resolver + field-aware CSE,
-  +1/+1), and T402/T406 (two zero-net architectural enablers: direct-
-  reload wide storeind path, and phi-slot spill/reload cleanup for
-  large-gap backedges). This "next 20%" wave's 4-stream parallel
-  execution (foreground correctness stream + 3 background
-  implementation agents, one integrator) found real wins early but has
-  hit multiple confirmed dead ends in its most recent round:
-  `block-cse-cost` needs a selector-local MIR rollback or a real
-  retained/rematerialized base planner (not another bounded VN
-  extension - T407), `inline-substitution` needs TU-wide callee
-  materialization or true MIR-native inlining, `phi-fallthrough-cost`
-  and `wide-store-cost` (T408) show no safe generalizable predicate.
-  Two additional confirmed correctness bugs under forced admission were
-  found and safely excluded by existing gates: `tvapinit.join` and
-  `tap.first_implementation` (same class as T401's
-  `adaint.var_or_const_decl` - loop/backedge-shaped forwarding bugs).
+  +1/+1), and T402/T406/T410/T411 (four zero-net architectural
+  enablers: direct-reload wide storeind path, phi-slot spill/reload
+  cleanup for large-gap backedges, planned store-address handoff
+  extended across one same-block call, and an address-rematerialization
+  retry that shrank `planned-index-base-cost` 38->19 ordinary). This
+  "next 20%" wave's 4-stream parallel execution (foreground correctness
+  stream + 3 background implementation agents, one integrator) found
+  real wins early but has hit a strong, repeated dead-end pattern in
+  its most recent rounds: `block-cse-cost` needs a selector-local MIR
+  rollback or a real retained/rematerialized base planner (not another
+  bounded VN extension - T407), `inline-substitution` needs TU-wide
+  callee materialization or true MIR-native inlining, `phi-fallthrough-
+  cost`, `wide-store-cost` (T408) and a fresh `unary-not-cost` re-rank
+  (T412) all show no safe generalizable predicate, and Stream D's
+  `text-size`/`indirect-store-address-cost`/`rhs-stack-cost` follow-up
+  on its own T410 infrastructure found 0/12 clean in `rhs-stack-cost`.
+  **Three confirmed correctness bugs** under forced admission have now
+  been found and safely excluded by existing gates, across three
+  independent buckets: `adaint.var_or_const_decl` (cfg-backedge, T401),
+  `tvapinit.join`/`tap.first_implementation` (wide-store-cost, T408),
+  and `forint.run_prog` (unary-not-cost, T412) - all loop/backedge-
+  shaped value-forwarding bugs. Given this is now confirmed across 3+
+  nominally-unrelated buckets, a dedicated root-cause investigation
+  (shared mechanism vs. 4 separate bugs) is in progress as this wave's
+  current top priority, alongside continued mining of untried buckets
+  (`absolute-index-cost`, `dead-local-suffix-cost`).
 - Earlier cohort: T396, signed wide-constant relational inline
   compare - ported legacy's `emit_signed_long_const_cmp_ast` exactly
   (sign-flip + biased 32-bit `sbc` sequence) as MIR's own inline codegen
