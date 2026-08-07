@@ -12492,3 +12492,48 @@ follow-on and `plan.md`'s top-ranked remaining architecture lead.
 
 Coverage after this round: **902/2026 ordinary (44.52%)**,
 **924/2128 stack-check (43.42%)**.
+
+## T397: exhaustive `wide-constant-cost` re-testing after T396, same non-generalizable-winner pattern confirmed (2026-08-07)
+
+T396 shrank `wide-constant-cost` from 46 to 41 candidates (the 5 signed-
+relational compares it promoted). Re-ranked and forced-accept tested the
+remaining population in three batches (40 candidates total, excluding the
+already-known `ts.main` dead end): 12 real, individually-verified clean
+wins (`tclit.add_quarter`, `too.value_standard`, `too.value_discount`,
+`attnc11.loss_fraction`, `tctxops.sh_udiv`, `tctxops.sh_umod`,
+`tlongopt.co_mul`, `tpromo.test_integer_promotions` - a large win at
+-3.51%/-8.99% bytes, `attnc11.divide_q8`, `tinlinfb.half_plus_one`,
+`tlong.tshft` - another large win at -0.7%/-10.13% bytes,
+`tlongopt.test_shift_edges`) and 27 confirmed regressions/inconclusive,
+all in the identical `blocks=1`, `spilled-scalar-cfg` shape as the
+winners. Byte margin does not separate them: `too.rect_perim`
+(margin +6, regresses) sits at the exact same margin as
+`tctxops.sh_udiv` (margin +6, clean win); `too.circ_scale` (margin +10,
+regresses) matches `tinlinfb.half_plus_one` (margin +10, clean win)
+exactly. No other static metric (block count - all are 1, selector - all
+`spilled-scalar-cfg`, operation shape - both winners and losers include
+float arithmetic, shift-by-constant, and integer conversion) separates
+the two populations either.
+
+**This is the same result as T395's three-bucket re-ranking**, now
+confirmed independently a fourth time in a different bucket: a real,
+non-trivial fraction of near-miss candidates in `wide-constant-cost` are
+individually genuine wins, but there is no safe, name-independent
+predicate available to admit them as a class without also admitting a
+larger confirmed-regressing population at the identical margin. Per the
+project's non-negotiable rule against app/function-name production
+exceptions, **no code change was made**; all 38 tested candidates (12
+winners, 26 losers) recorded in `mir-dead-ends.tsv` with full A/B
+evidence.
+
+**Conclusion for this bucket:** `wide-constant-cost` is now considered
+exhausted for gate-margin mining, matching `unary-not-cost` (T394) and
+the three T395 buckets. Any further yield here requires either (a) a
+genuine cost-model improvement in how the selector estimates a wide
+constant's real materialization cost (a legitimate architecture item, not
+attempted this round due to scope), or (b) accepting that per-function
+exceptions are structurally prohibited and this residual population is
+simply not currently reachable.
+
+Coverage unchanged this round: **902/2026 ordinary (44.52%)**,
+**924/2128 stack-check (43.42%)**.

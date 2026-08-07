@@ -31,13 +31,16 @@ capture/replay only after the runnable and extended corpora pass.
   peep -19.56% cycles); full extended gate clean (0 regressions, 408
   improvements). This closes the item T394 had explicitly scoped but
   deferred, and was `plan.md`'s top-ranked remaining architecture lead.
-- Prior finding: T395, exhaustive fresh-bucket re-ranking after T394
-  found 7 real, forced-accept-confirmed clean-win candidates across 3
-  buckets (`dynamic-index-base-cost`, `absolute-address-cost`,
-  `block-cse-cost`) but **no safe generalizable threshold** for any of
-  them (each bucket also produced confirmed regressions at the same or
-  more favorable margins) - no code change. All 18 tested candidates
-  recorded in `mir-dead-ends.tsv`.
+- Prior finding: T397, exhaustive `wide-constant-cost` re-testing after
+  T396 shrank the bucket to 41 - found 12 more real clean wins (two
+  large: `tpromo.test_integer_promotions` -8.99% bytes, `tlong.tshft`
+  -10.13% bytes) but again **no safe generalizable threshold** separates
+  them from 26 confirmed regressions at identical byte margins
+  (`too.rect_perim`/`tctxops.sh_udiv` both margin +6, one regresses one
+  wins). No code change; all 38 tested candidates recorded in
+  `mir-dead-ends.tsv`. This bucket is now considered exhausted for
+  gate-margin mining, matching T395's three buckets and T394's
+  `unary-not-cost`.
 - Latest production cohort: T394, unsigned wide-constant relational
   compares (`u_gtbig`/`u_lebig`-style) - legacy has no inline shortcut for
   unsigned wide relational compares against a constant either (it also
