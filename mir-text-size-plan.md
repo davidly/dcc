@@ -15617,7 +15617,7 @@ Because the focused runtime/perf gate already failed and no production code was
 kept, I reverted the prototype and am committing only the dead-end
 documentation.
 
-## Item T427: forward immediate phi-return joins on label-only fallthrough edges (+6, 2026-08-08)
+## Item T427: forward immediate phi-return joins on label-only fallthrough edges (+5, 2026-08-08)
 
 Fresh census on top of T425/T426 still showed `phi-fallthrough-cost` as the
 most actionable unclosed architecture bucket: **44 ordinary** candidates, with
@@ -15705,28 +15705,42 @@ and its immediate re-read disappear from MIR itself before selector retry.
 
 ### 4. Coverage result
 
-Compared against the stable T420 snapshots (`build/mir-t420-after.tsv` and
-`build/mir-t420-after-stack.tsv`):
+**Correction (integration-time verification):** this stream's worktree was
+branched from `3c18014`, which already includes T425's `tbool.set_bool`
+admission (integrated at `318103d`/`a6612bd`, true baseline 909/2026 ordinary,
+931/2128 stack-check). The comparison below was run against the stale
+`build/mir-t420-after*.tsv` snapshots (predating T425), which double-counted
+`tbool.set_bool` as a new admission from this item. A fresh census run
+directly against the T425-integrated baseline at integration time confirms the
+real, verified delta is **+5/+5**, not +6/+6, and `tbool.set_bool` is **not**
+a new admission from this item (it was already MIR-emitted before this stream
+started). The corrected numbers:
 
-- ordinary: **908/2026 -> 914/2026** (**+6**, no removals)
-- stack-check: **930/2128 -> 936/2128** (**+6**, no removals)
+- ordinary: **909/2026 -> 914/2026** (**+5**, no removals)
+- stack-check: **931/2128 -> 936/2128** (**+5**, no removals)
 
-Newly MIR-emitted in both modes:
+Newly MIR-emitted (corrected, verified at integration time):
 
 - `attnc11.load_weights`
 - `attnc11.save_weights`
 - `forint.ensure_sym`
-- `tbool.set_bool`
 - `tctxflt.truth_and`
 - `tinline.edge_conditional`
 
-The targeted bucket itself shrank:
+(`tbool.set_bool` removed from this list — already admitted by T425.)
+
+The targeted bucket itself shrank (this part of the original report was
+verified accurate against the correct baseline too):
 
 - ordinary `phi-fallthrough-cost`: **44 -> 38**
 - stack-check `phi-fallthrough-cost`: **45 -> 39**
 
 So the requested architecture work produced real production coverage, and the
-remaining bucket is materially smaller.
+remaining bucket is materially smaller. **Lesson reinforced:** always diff a
+background stream's self-reported census against the actual integrated HEAD
+state at merge time, not just trust its internally-used comparison file —
+stale local snapshots inside a long-lived worktree silently drift from the
+true baseline as other streams land.
 
 ### 5. Validation
 
@@ -15738,8 +15752,11 @@ remaining bucket is materially smaller.
   `pwsh ./scripts/runall.ps1 -Apps attnc11,forint,tbool,tctxflt,tinline -Mode full -RunTimeout 20`
   - **PASS**
   - no regressions
-  - 14 checked improvements (including `tbool` peep **-0.39% cycles / -1.54%
-    bytes**, `attnc11` nopeep **-128 bytes**, `forint` nopeep **-256 bytes**)
+  - `tbool` was included defensively in this run but its selected output/hash
+    is byte-identical before and after this item (already admitted by T425);
+    it is not a new admission here.
+  - checked improvements on the genuinely new admits (`attnc11` nopeep
+    **-128 bytes**, `forint` nopeep **-256 bytes**, among others)
 - full extended milestone gate:
   `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
   - **PASS**: **314/323 passed, 9 skipped, 0 failed**
