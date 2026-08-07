@@ -129,3 +129,8 @@ tlongopt	test_stale_marker_boundaries	wide-constant-cost	103	Full-mode A/B: regr
 tclit	check_nested_literals	wide-constant-cost	125	Full-mode A/B: regresses, peep +1.11% cycles, nopeep +1.91%/+2.63% bytes. blocks=1, byte-margin=+125, spilled-scalar-cfg.	T397
 tclit	check_value_literals	wide-constant-cost	151	Full-mode A/B: regresses, peep +1.57%/+1.33% bytes, nopeep +1.84%/+2.63% bytes. blocks=1, byte-margin=+151, spilled-scalar-cfg.	T397
 tcaslv	check_global_compound_assign	wide-constant-cost	207	Full-mode A/B: regresses, peep +0.15%/+5.38% bytes, nopeep +0.19%/+6.19% bytes. blocks=1, byte-margin=+207, spilled-scalar-cfg.	T397
+tchess	ch_computer_move	absolute-index-cost	1	Full-mode A/B: CLEAN WIN (peep -0%, nopeep -0.01%/-1% bytes). blocks=3, byte-margin=+1, spilled-scalar-cfg.	T398
+cpmenumd	fcb_initialize	binary-load-pair-cost	11	Full-mode A/B: CLEAN WIN, correctness passed, no measurable perf baseline delta (function runs too rarely to move cycle count). blocks=7, byte-margin=+11, spilled-scalar-cfg.	T398
+mm	ffillc	binary-load-pair-cost	13	Full-mode A/B: CLEAN WIN, correctness passed, no measurable perf baseline delta. blocks=4, byte-margin=+13, spilled-scalar-cfg.	T398
+tlongidx	main	absolute-index-cost	6	Full-mode A/B: regresses, peep +0.14%/nopeep +0.03% cycles. blocks=4, byte-margin=+6, spilled-scalar-cfg - confirms margin does not separate winners (tchess:ch_computer_move, margin+1, wins) from losers in this bucket.	T398
+mm	fsummit	binary-load-pair-cost	14	Full-mode A/B: regresses, peep +0.28%/+1.54% bytes, nopeep +0.35%/+1.52% bytes. blocks=4, byte-margin=+14, spilled-scalar-cfg - mm:ffillc (margin+13, same app) is a clean win at nearly the same margin, no separating predicate.	T398

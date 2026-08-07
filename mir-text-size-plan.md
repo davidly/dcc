@@ -12537,3 +12537,33 @@ simply not currently reachable.
 
 Coverage unchanged this round: **902/2026 ordinary (44.52%)**,
 **924/2128 stack-check (43.42%)**.
+
+## T398: spot-check of tightest-margin candidates in absolute-index-cost, planned-stack-cost, binary-load-pair-cost - same pattern (2026-08-07)
+
+Quick follow-on check of the closest untested candidates in three more
+buckets after T397: `tchess.ch_computer_move` (absolute-index-cost,
+margin +1) and `cpmenumd.fcb_initialize`/`mm.ffillc` (binary-load-pair-
+cost, margins +11/+13) are clean wins; `tlongidx.main` (absolute-index-
+cost, margin +6) and `mm.fsummit` (binary-load-pair-cost, margin +14, same
+app as the `ffillc` win at a nearly identical margin) both regress. Same
+conclusion as T395/T397: isolated real wins exist but no generalizable
+threshold separates them from same-margin regressions. No code change;
+all 5 recorded in `mir-dead-ends.tsv`.
+
+**Segment conclusion:** across T395/T397/T398 this session, gate-margin
+mining has now been exhaustively re-run against essentially every
+remaining bucket's tightest-margin population post-T396 and consistently
+found the identical shape: real individual wins with no safe class-wide
+predicate. Further yield from this technique alone is unlikely without a
+genuine architecture change to either (a) the underlying selector's code
+quality for one of these shapes, or (b) the cost-comparison metric itself.
+The two concretely scoped remaining architecture items - use-position
+backend-slot intervals (`next50-slot-intervals`) and the `Gst.var`
+member-qualified CSE extension - both require substantially more design
+effort than a same-session change, and the latter's already-completed
+bare-global sibling (T393) measured **zero** net corpus yield due to the
+retry's own block-count gate, suggesting low expected value without also
+resolving the multi-block CSE question first.
+
+Coverage unchanged: **902/2026 ordinary (44.52%)**,
+**924/2128 stack-check (43.42%)**.
