@@ -12825,3 +12825,79 @@ frame-setup n-grams are larger in raw count (226+ functions) but too universal
 to be a new selector-quality discriminator on their own; the same-slot
 spill/reload cluster is the first concrete post-T400 repeated emitted pattern
 meeting the >=10-function threshold.
+
+## Item T401: bounded cfg-backedge root-cause investigation for `adaint.var_or_const_decl` (Stream A, next20 wave) - inconclusive, stopped per plan's own stop condition
+
+**Status: investigation only, no code change, no gate change.** Part of the
+"next 20%" migration wave's Stream A (cfg-backedge correctness root-cause).
+Per `nongoal-cfg-backedge-bughunt` and Item T65/T65c, `adaint.var_or_
+const_decl` is the last of 3 originally-confirmed real miscompilations
+(`bint.sum` and `adaint.add_expr` were fixed by T65/T65c) still producing
+wrong output when forced through the general spilled-scalar-cfg selector.
+
+**Investigation performed**:
+- Reconfirmed the failure is still live: `DCC_MIR_FORCE_ACCEPT_FUNCTION=
+  var_or_const_decl` + `runall -Apps adaint -Mode full` still fails both
+  `ttt` and `sieve` scenarios. Direct `ntvcm` execution of the forced-accept
+  `ADAINT.COM` against `TTT.ADA` produces `adaint:14: sym full near ';'`
+  (a real `die()` call from `G->nsym >= MAXSYM` (96) overflowing) instead of
+  the expected `starting...`/`Moves: 6493`/`Iterations: 1` - confirmed via
+  raw stdout hexdump (single clean line, no corruption artifact).
+- Line 14 of `TTT.ADA` is `ScoreLose : Constant := 4;`, the **third**
+  single-name `Constant` declaration (`ScoreWin`, `ScoreTie` precede it) -
+  i.e. `nsym` overflows 96 by roughly the third call, meaning `add_sym` is
+  being invoked far more than the expected 1 time per single-name constant
+  declaration (each of `var_or_const_decl`'s `constant`-branch calls should
+  add exactly `nn` symbols, `nn=1` for every affected declaration here).
+- Read the full MIR dump (`DCC_MIR_REPORT=1 DCC_MIR_FUNCTION=var_or_const_
+  decl`) and the corresponding generated Z80 assembly by hand. Found a real,
+  previously-undocumented **structural asymmetry**: the name-collection
+  loop's induction variable `nn` (incremented via `names[nn++]`) is
+  represented two different ways depending on which later code reads it -
+  the `constant`-branch's own `for (i = 0; i < nn; i++)` loop bound check
+  reads `nn` by directly reusing the last SSA value computed inside the
+  collection loop (`v15`, home `iy-6/iy-5`, never re-loaded from the named
+  local's own memory slot), while the sibling `array`-branch's equivalent
+  loop bound check (`for (i = 0; i < nn; i++)` after `add_var_name`) issues
+  a fresh `MIR_LOAD` of `nn` from its named-local memory slot every
+  iteration instead. Traced the collection loop's break path (`if (!acc(','
+  )) break;`) by hand in the generated assembly and confirmed `iy-6/iy-5`
+  (v15's slot) is written every iteration *before* the break check and is
+  **not** overwritten between the break and the `constant`-branch's read of
+  it - the direct-reuse path is not obviously wrong in isolation.
+- Built three independent, increasingly faithful synthetic repros of this
+  exact shape (`names[nn++] = ...; if (!accept_comma()) break;` collection
+  loop feeding a `for (i = 0; i < nn; i++) add_sym(...)` consumer loop),
+  including one with 3 sequential calls in one program mirroring
+  `ScoreWin`/`ScoreTie`/`ScoreLose` exactly. **All three repros produced
+  correct output** under forced MIR acceptance - the isolated shape does not
+  reproduce the bug.
+- Conclusion: the miscompilation depends on interaction with the real
+  function's much larger live-value/slot layout (`var_or_const_decl` has
+  ~200 locals/values per its own MIR summary, `blocks=18`) in a way a small
+  synthetic reproduction cannot trigger - most likely a backend-slot
+  interval/reuse edge case specific to this function's exact register
+  pressure and call pattern (consistent with, but not proven to be, the
+  same general class of hazard the `next50-slot-intervals` investigation
+  and Item T399 already probed elsewhere in `mir_prepare_backend_slots`).
+  Isolating it further would need either instrumented/binary-level
+  execution tracing of the real 200-local function (single-stepping the
+  actual slot writes/reads around the `iy-6/iy-5` location across the
+  whole call) or a systematic slot-by-slot audit tool, neither of which
+  fits in a bounded investigation.
+
+**Decision**: per this wave's own stated stop condition ("if root-causing
+the miscompilation is not tractable within a bounded investigation... stop,
+document the concrete failure mode found, and leave `cfg-backedge` untouched
+rather than widening it speculatively"), this investigation **stops here**.
+No code change was made; the `cfg-backedge` gate is untouched. The specific,
+narrower asymmetry found (direct SSA-value reuse vs. fresh named-local
+reload for the same loop-invariant bound check, depending on which sibling
+branch reads it) is recorded here as the most concrete lead for whoever
+picks this up next - a worthwhile next step would be a small standalone
+tool that dumps every backend-slot's write/read instruction list for one
+forced-accept function and flags any slot whose reads are not all
+dominated by the same write, rather than further hand-tracing.
+
+No code change. Coverage unchanged: **902/2026 ordinary (44.52%)**,
+**924/2128 stack-check (43.42%)**.
