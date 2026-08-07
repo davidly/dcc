@@ -696,17 +696,52 @@ T421 finding (search `mir-text-size-plan.md`) that the entire
 bucket is genuinely gate-margin-exhausted, not blocked pending a
 correctness fix, so no further cfg-backedge investigation is queued.
 
-**Stream I now dispatched: `inline-substitution` (45 ordinary
-candidates), the next real architecture lead per the standing 100%-
-coverage directive.** T409 already found this bucket needs either
-translation-unit-wide inline-callee materialization (emit a real callable
-body for any function MIR's static-inline substitution declines to
-splice) or true MIR-native inlining (splice the callee's MIR directly at
-the call site) - a substantial, previously-unattempted architecture
-project, not a bounded fix. Stream I is implementing one of these two
-mechanisms in `/dev/shm/dcc-next20/streamI-inline` (branch `next20/
-streamI-inline`, base `2963e78`) with the full validation cadence
-required before any report-back is trusted.
+**Stream I: `inline-substitution` architecture fix, T429 - a real,
+independently-verified zero-net-coverage architectural enabler.** T409
+already found this bucket needs either translation-unit-wide inline-callee
+materialization or true MIR-native inlining - a substantial, previously-
+unattempted architecture project, not a bounded fix. Stream I implemented
+MIR-side static-inline replay: `mir_try_lower_inline_call_expr()`/
+`mir_try_lower_inline_call_stmt()` detect a direct static-inline callee,
+plan `#itmpN` argument temps reusing the existing reserved-local-slot
+machinery (with a live-temp bitmask to avoid cross-call-site collisions
+and an 8-deep recursion guard), then clone the callee's AST body into
+`g_ast_arena` with parameters rewritten to the temps/original argument
+ASTs, and lower the clone directly through MIR instead of emitting a
+`MIR_CALL` to a callee whose body might never be materialized. This
+mirrors the legacy AST backend's own inline-substitution contract inside
+MIR itself, closing the root correctness gap T409 identified (MIR
+emitting calls to inline-only labels with no compiled body). A first,
+broader cut also replayed call-free void store helpers as statements and
+found a real production admit (`tinlnpar.main`), but forced full-mode
+validation caught a genuine peep-cycle regression (`19128 -> 19147`,
++0.10%) from that specific class, so void-body replay was narrowed to
+call-containing helpers only (needed for the motivating
+`attnc11.transposed_multiply_8x16` nested-call correctness fix) - a
+real example of the standing "verify before trusting a report" and
+"performance gates stay separate from correctness fixes" disciplines
+being applied inside a single stream.
+
+**Verified result (independently re-run in the main repo, not just
+trusted from the stream's self-report):** coverage unchanged in both
+modes - **914/2026 ordinary (45.11%)**, **936/2128 stack-check
+(43.98%)**, zero regressions, zero new admits. But the previously
+intractable `inline-substitution` population shrank from **47 -> 5**
+ordinary (**48 -> 5** stack-check) - 42/47 functions now stop on
+*ordinary, already-well-tuned* cost gates (22 `selector`, 12
+`unary-not-cost`, 3 `absolute-address-cost`, 2 `dynamic-index-cost`, 1
+each `absolute-index-cost`/`boolean-phi-cost`/`phi-fallthrough-cost`)
+instead of a hard "MIR cannot ever emit this correctly" wall. This is a
+genuine, real architectural unlock matching the earlier T400/T402/T403/
+T406/T410/T411 "zero-net enabler" pattern - it doesn't move coverage
+today, but it converts 42 previously-uncapturable functions into normal
+future gate-margin/cost-model candidates. Full validation cadence
+confirmed independently at integration: fresh ordinary + stack-check
+census (`--fail-on-regression`, both clean, 0 apps requiring runtime
+validation), forced-correctness harness (7/7 pass), a direct forced-
+accept re-check of `attnc11.transposed_multiply_8x16` (previously
+miscompiled under forced MIR, now correctness-clean), and the full
+extended gate (314/323 passed, 9 skipped, 0 failed).
 
 ## Latest production cohort
 
