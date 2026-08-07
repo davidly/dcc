@@ -89,34 +89,59 @@ capture/replay only after the runnable and extended corpora pass.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
-| 45% | 912 | +22 |
-| 50% | 1,013 | +123 |
-| 55% | 1,115 | +225 |
-| 60% | 1,216 | +326 |
+| 45% | 912 | +17 |
+| 50% | 1,013 | +118 |
+| 55% | 1,115 | +220 |
+| 60% | 1,216 | +321 |
 
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
 
 ## Immediate next steps
 
-The branch is CI-green and honestly measured as of `6fa6013` (T387). Resume
-Campaign 2 (slots, addresses, CSE, and indexes) toward the 45% milestone
-(+22 ordinary functions needed):
+The branch is CI-green, currently at **895/2026 ordinary (44.18%)**, still
+**+17 short of even the first 45% milestone** and +321 short of the 60%
+target. T389-T392 (this segment) exhaustively re-ranked and forced-accept
+A/B-tested every remaining fallback bucket's near-miss population (12+
+buckets, 150+ candidates) and found the per-bucket static-metric mining
+technique that produced T383-T388's gains is now **exhausted**: only two
+small wins remained findable (T388 +4, T391 +1), 16 more confirmed
+correctness bugs were found (harmless, already gated off), and the
+remaining real winners in every other bucket (most notably
+`planned-index-base-cost`'s 13-function cluster) have **no safe
+generalizable predicate** - structurally identical candidates land on both
+sides of win/loss, so promoting any of them would require a prohibited
+name-based exception or accepting a regression.
 
-1. Re-run `mir-gate-margins.py` against a fresh census to re-rank near-misses
-   now that T386 is reverted (the `ensure_sym` admission it added is gone;
-   `too:bst_height` and the `absolute-index-cost` near-misses from T383 -
-   `tptrlhs.touch_ptr_to_array_deref`, `tc89init.main` - are the next leads).
-2. Pick up `next50-absolute-resolver-cse` (extending the absolute-address
-   resolver to CSE/extern emission) and `next50-slot-intervals` (use-position
-   backend-slot intervals) - both are Campaign 2 architecture items already
-   scoped above.
-3. Once ordinary coverage crosses 912/2026 (45%), immediately re-run and
-   re-rank the full ordinary+stack-check census (`next50-milestone-45`)
-   before continuing, since architectural changes shift many margins at once.
-4. Follow the commit cadence below for every change: focused cohort during
-   development, one fresh full-extended gate immediately before commit, push,
-   and wait for CI green before starting the next item.
+**Continued per-bucket near-miss mining is no longer a viable path to 45%,
+let alone 60%.** The two next-most-promising leads are both architecture
+items, not gate nudges:
+
+1. **`campaign2-call-effect-analysis`** (was `absolute-address-cost`'s lead):
+   T390 found the real blocker is a call-side-effect/aliasing gap, not a CSE
+   gap - a global struct member's `loadind` cannot be safely reused across
+   an intervening opaque call without proving the callee doesn't write back
+   to it. Needs either a runtime-function side-effect whitelist (auditable
+   against `DCCRTL.MAC`) or real interprocedural alias analysis.
+2. **`campaign-phi-fallthrough-architecture`** (was `mir60-boolean-control`'s
+   phi-fallthrough lead, T384): the `phi-fallthrough-cost` bucket (44
+   functions) needs real phi-forwarding-across-labels support, confirmed
+   in T391 as the actual blocker for `tinline.edge_and`/`edge_conditional`
+   independent of any other bucket's fix.
+3. **`next50-slot-intervals`** (Campaign 2 item 3, use-position backend-slot
+   intervals) remains the highest-expected-yield item on paper since it is
+   structurally upstream of `block-cse-cost`, `wide-store-cost`, and
+   `planned-index-base-cost` simultaneously - but it is also the largest,
+   highest-risk undertaking (replaces whole-value backend-slot lifetimes
+   with real interval tracking). Build behind a feature control, validate
+   on a train/holdout app split, and stop/re-rank if a bounded effort does
+   not clear a double-digit net gain, per the item's own scoped criteria.
+
+Any of these three is a multi-session engineering project requiring careful
+design before the first line of code, not a same-session gate tweak. Follow
+the commit cadence below for every change: focused cohort during
+development, one fresh full-extended gate immediately before commit, push,
+and wait for CI green before starting the next item.
 
 ## Latest production cohort
 
