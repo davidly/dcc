@@ -17,6 +17,44 @@ capture/replay only after the runnable and extended corpora pass.
 - Published stack-check coverage: **912/2128 (42.86%)**
 - Current ordinary coverage: **914/2026 (45.11%)**
 - Current stack-check coverage: **936/2128 (43.98%)**
+- HEAD: `535f42a` (docs-only dead-end record; see below). CI green. Tree
+  clean.
+- **Post-T429 re-rank (this segment)**: a fresh gate-margin re-rank across
+  every remaining bucket confirmed gate-margin mining is now exhausted
+  project-wide, again. `fint.top_level` (`unary-not-cost`, 26-block CFG,
+  better static bytes/instructions than legacy but rejected by the
+  `mir_cfg_block_count() > 18` defensive cap) looked like a promising
+  near-miss on first read, but a direct forced-accept full-mode A/B
+  **regressed real performance** (peep bytes 28288->28544, peep cycles
+  +198, nopeep cycles +1224) despite the favorable static metrics -
+  confirming the block-count cap is load-bearing, not overly
+  conservative. Also re-confirmed the `mir-gate-margins.py` script sorts
+  by **instruction count**, not bytes - its top `text-size` candidates
+  (`tvla.vla_nested`, `tvla.vla_long_bound`, etc.) look like near-misses
+  on instructions but are actually **worse on bytes** (e.g.
+  `vla_nested`: 264 fewer instructions but 3028 vs 2923 bytes, +105/+3.6%
+  worse) - not real leads. No code change; recorded in
+  `mir-dead-ends.tsv`. Coverage unchanged: 914/2026, 936/2128.
+- **Stream J dispatched (this segment)**: `block-cse-cost` (89-97
+  ordinary candidates, third-largest bucket) is the highest-value
+  remaining architecture target - T407 already confirmed it's a genuine
+  architectural blocker (not gate-margin exhaustion): the bounded
+  same-block VN mechanism safe for isolated-global-field CSE (T403) does
+  not generalize to same-block local/stack candidates without either (a)
+  a per-selector MIR rollback capability, or (b) a genuine
+  retained/rematerialized base-address planner tracking actual physical
+  value homes via real liveness/interference data. Dispatched a
+  background agent in worktree `/dev/shm/dcc-next20/streamJ-blockcse`
+  (branch `next20/streamJ-blockcse`, base `535f42a`) targeting option (b)
+  as the primary approach, with explicit instructions to fall back to
+  option (a) only if (b) proves intractable, and to honestly document a
+  zero-yield result (per T407's own precedent) rather than force a fake
+  win. This may also unlock the still-unexplored `Gst.var`
+  member-qualified CSE extension (blocked on the same multi-block CSE
+  capability). Not yet integrated - awaiting the agent's report and
+  independent re-verification per this session's standing discipline
+  (never trust a background agent's self-reported delta without
+  re-deriving it from scratch against the true current baseline).
 - Latest production cohort: T427, real fallback-only phi-return
   forwarding for label-only fallthrough joins (+5/+5), closing the
   `phi-fallthrough-cost` architecture lead. Prior cohort: T425, cheap
