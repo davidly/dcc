@@ -14473,3 +14473,89 @@ I also added durable forced-correctness coverage by appending
   - **PASS**
 - `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/mir-after-stackcheck.tsv --compare build/mir-before-stackcheck.tsv --fail-on-regression`
   - **PASS**
+## Item T420: emit selected inline-helper bodies for forced MIR callers (+0, 2026-08-08)
+
+This closes the remaining `forint.run_prog` correctness bug from the
+T415/T418 thread. The residual failure was **not** another phi/store-forwarding
+bug in `OP_DO` bookkeeping after all.
+
+### Root cause
+
+`run_prog`'s failing path is the DO-loop initializer:
+
+```c
+set_sym_val(st->sym,0,eval_e(st->ae));
+```
+
+Local source variants narrowed the failure to that one call: removing the
+later `g_ndo++` / `d->...` bookkeeping did **not** help, while removing just
+`set_sym_val(...)` restored the minimal `DO1BODY.FOR` repro immediately.
+
+The MIR dump showed the call as a real `MIR_CALL set_sym_val`, and the forced
+selected `.MAC` confirmed the emitted caller contained:
+
+```text
+call _Z0026
+```
+
+but **no `_Z0026:` body existed anywhere in the file**. `set_sym_val` is a
+captured static-inline helper whose body is buffered in `dcc_func.c` and only
+emitted if `deferred_body_needed` is set. MIR lowering intentionally skips
+that mark for inline-substitutable callees, relying on the normal
+`inline-substitution` gate to keep such calls out of selected MIR output.
+
+That is normally safe because production falls back before any such call can
+ship. But `DCC_MIR_FORCE_ACCEPT_FUNCTION=run_prog` deliberately overrides the
+gate, so the selected MIR caller kept a real call to `set_sym_val` while the
+callee body stayed omitted. The bug was therefore a **missing emitted callee
+body for selected inline-helper MIR calls**, not bad DO bookkeeping itself.
+
+### Fix
+
+Add a narrow selection-time repair in `dcc_mir_select.c`:
+
+- once a MIR stream has actually **won** (`emitted` true), scan its MIR calls;
+- for any `MIR_CALL` / `MIR_CALL_AGGREGATE` still carrying
+  `MIR_CALL_FLAG_INLINE_SUBSTITUTABLE`, mark that callee's buffered body
+  `deferred_body_needed = 1` before copying the selected stream.
+
+This keeps the existing `inline-substitution` fallback gate intact and avoids
+emitting unused inline-helper bodies for ordinary fallback callers. It only
+materializes the helper when MIR output is the selected stream (including
+forced-accept diagnostics).
+
+### Evidence / validation
+
+Direct minimal repro after the fix:
+
+- `DO1.FOR` now prints `2`
+- `DO1BODY.FOR` now prints `111` / `222`
+- `DO1W.FOR` now prints the pre-DO `111` and the post-DO `222`
+
+Focused app validation:
+
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=run_prog pwsh ./scripts/runall.ps1 -Apps forint -Mode full -RunTimeout 30 -NoRamDisk -NoPerfCheck -KeepBuild`
+  - **PASS** (covers `e.for`, `ttt.for`, `sieve.for` in both peep/nopeep)
+
+Forced-correctness harness:
+
+- added `forint<TAB>run_prog` to `tests/mir_forced_correctness_cases.tsv`
+- `pwsh ./scripts/mir-forced-correctness.ps1`
+  - **PASS** for both `tenumfsm:scan` and `forint:run_prog`
+
+Mixed-mode regression checks:
+
+- ordinary census compare:
+  `python3 scripts/mir-migration-census.py --output build/round6/mir-after.tsv --compare build/round6/mir-before.tsv --fail-on-regression`
+  - **PASS**, `908/2026 -> 908/2026`, no app/hash/runtime changes
+- stack-check census compare:
+  `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/round6/mir-after-stack.tsv --compare build/round6/mir-before-stack.tsv --fail-on-regression`
+  - **PASS**, `930/2128 -> 930/2128`, no app/hash/runtime changes
+- full milestone gate:
+  `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  - **314 passed / 9 skipped / 0 failed**
+  - diagnostics/dccpeep/performance/extended all passed
+
+So this is a **pure latent-correctness fix** for force-admitted inline-helper
+callers: it repairs `forint.run_prog` while leaving current shipped mixed-mode
+coverage and selected hashes unchanged.

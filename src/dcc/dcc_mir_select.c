@@ -1293,6 +1293,31 @@ static int mir_has_inline_substitution_call(void)
     return 0;
 }
 
+static void mir_mark_selected_inline_call_bodies_needed(void)
+{
+    int i;
+
+    /* Legacy codegen substitutes static-inline helpers at the AST layer, but
+     * accepted MIR can still carry a real call when a cost gate (or a forced
+     * diagnostic accept) keeps the caller out of that path. Mark those
+     * helpers' buffered bodies needed only once the MIR stream actually wins,
+     * so the selected output never carries an unresolved call target. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        struct Sym *callee;
+
+        if ((insn->opcode != MIR_CALL &&
+             insn->opcode != MIR_CALL_AGGREGATE) ||
+            (insn->memory_flags &
+             MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0 ||
+            insn->name[0] == 0)
+            continue;
+        callee = find_global(insn->name);
+        if (callee != NULL)
+            callee->deferred_body_needed = 1;
+    }
+}
+
 static int mir_has_declared_pointer_array(void)
 {
     int i;
@@ -3794,6 +3819,8 @@ evaluate_generated:
                 label_id = emitted ? generated_label_id_after : mir_label_base;
             }
         }
+        if (emitted)
+            mir_mark_selected_inline_call_bodies_needed();
         selected_hash = mir_copy_selected_stream(
             emitted ? generated : mir.capture_stream, destination);
         if (generated != NULL)

@@ -1,3 +1,4 @@
 # app	function
 adaint	var_or_const_decl
 tenumfsm	scan
+forint	run_prog
