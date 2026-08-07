@@ -15767,3 +15767,44 @@ true baseline as other streams land.
 This is a real MIR-level forwarding mechanism, not a gate-margin re-try, and it
 leaves a tighter, re-measured `phi-fallthrough-cost` residue behind for any
 future follow-up.
+
+## Item T428: multi-block VLA no-worse-metric widening cleared text-size but exposed a second gate, net zero (2026-08-08)
+
+Post-T427 fresh gate-margin re-rank flagged two `text-size` VLA candidates
+(`tvla.vla_long_bound`, `tvla.vla_nested`) with negative instruction deltas,
+plus one exact-fit candidate (`tvla.vla_goto_out`, 5 blocks) that is already
+no-worse on **both** static measures (`generated_bytes=1275 <=
+captured_bytes=1276`, `generated_instructions=108 <= captured_instructions=123`
+in ordinary mode; same relationship in stack-check mode) yet still falls back
+via `text-size`, purely because the only existing VLA win-predicate
+(`mir_is_profiled_vla_single_block_instruction_win`) is scoped to
+`mir_cfg_block_count() == 1`.
+
+Added a second, block-count-unrestricted predicate,
+`mir_is_profiled_vla_multiblock_no_worse_win`, requiring a strict
+no-worse-on-either-metric bar (no tolerance, unlike the one-block predicate's
+`+20` byte / `-8` instruction budget) — unconditionally safe by construction
+since it can never admit a candidate that looks worse by any measure this
+gate already trusts elsewhere. Wired it into the `text-size` gate's exclusion
+chain alongside the existing VLA predicate.
+
+**Result: net zero.** `tvla.vla_goto_out` does clear `text-size` under the new
+predicate, but the selector chain is sequential (if/else), and the function is
+then rejected by the separate `rhs-stack-cost` gate
+(`mir_spilled_cfg_depends_on_rhs_stack_forwarding()`), which its narrower
+"pointer-index/member picker" win-predicates do not cover. The only observable
+effect of the change was relabeling the function's fallback reason from
+`text-size` to `rhs-stack-cost` — zero net coverage in either mode. The two
+negative-instruction-delta near-misses (`vla_long_bound`, `vla_nested`) were
+never in scope for this predicate anyway: both have a real byte cost over
+budget (+73 and +105 respectively), which would need dedicated A/B profiling
+to justify a tolerance, not a strict no-worse bar.
+
+Reverted the code change (`git checkout src/dcc/dcc_mir_select.c`); recorded
+`tvla.vla_goto_out` in `mir-dead-ends.tsv` at `text-size`/delta=0 so any future
+gate-margin re-rank does not re-propose this exact predicate. This is a
+genuine, bounded, evidence-backed negative result, not a speculative one —
+consistent with the standing discipline of documenting rejected experiments
+rather than silently dropping them.
+
+Docs-only commit (no code change survives).
