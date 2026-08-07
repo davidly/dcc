@@ -14197,3 +14197,83 @@ still open under a distinct, unidentified third mechanism**
 (`adaint.var_or_const_decl`, `forint.run_prog`, both only on their
 loop-heavier extra scenarios), **~6 still not re-tested against any of these
 fixes**.
+## Item T417: scenario-complete sweep of the 10 previously-unretested correctness bugs found no new incidental T413/T415 fixes; quick fresh-bucket probe found no validated reusable enabler this round (2026-08-08)
+
+Built from current integrated HEAD `5e17047` (T415 already applied) and
+re-tested the 10 remaining confirmed-correctness entries that had never been
+checked against T413/T415 at all:
+`tptrlhs.touch_ptr_to_array_deref`, `tvlax.goto_stable`, `cint.while_stmt`,
+`tpfauto.main`, `tenumfsm.scan`, `adaint.run`, `cobint.exec_range`,
+`cint.run`, `pint.run`, `bint.run`.
+
+Used
+`DCC_MIR_FORCE_ACCEPT_FUNCTION=<function> pwsh ./scripts/runall.ps1 -Apps <app> -Mode fast -Serial -KeepBuild -NoRamDisk -RunTimeout 20 '-FailuresOnly:$false'`
+from the worktree root as the repository's own
+`dccmake -> stage fixtures -> ntvcm -> compare every declared baseline`
+harness. This matters because `runall.ps1` now re-runs each app's
+`extra_scenarios` from `tests/_test_overrides.json` against the same built
+`.COM`, so the interpreter cases (`adaint`, `bint`, `cobint`, `pint`) were
+checked on **all** of `e.*`, `ttt.*`, and `sieve.*`, not just the default
+scenario. After each failing run I re-ran the retained built binary directly
+from `build/streamD-t416/runs/...` to capture the exact actual stdout/stderr
+shown below.
+
+**Result: 0/10 moved to "fixed".** None of these previously-untested
+correctness bugs was incidentally resolved by T413/T415's push/pop repair.
+
+| Function | Classification | Exact current evidence |
+| --- | --- | --- |
+| `tptrlhs.touch_ptr_to_array_deref` | **(b)** same symptom | Still fails the same 6 pointer-array checks and still ends with `bugbug: not-implemented z80 instruction: 0xfd, next byte is 0x2`. |
+| `tvlax.goto_stable` | **(b)** same symptom | Still hangs: retained direct run output is only `tvlax start`, then `TVLAX.COM` times out at 20s. |
+| `cint.while_stmt` | **(c)** different symptom | Original note said "truncated pi digits". Current forced-accept `eu.cin` run exits 0 with **empty stdout**; the whole expected digits line plus trailing `done` are missing. |
+| `tpfauto.main` | **(b)** same symptom | Still prints only `plain 42 ok` / `plainsp 7`; every float/long/formatting line (`float 1.50`, `long -123456`, `mix ff 1.5 10 -123456`, `tpfauto ok`) is missing. |
+| `tenumfsm.scan` | **(b)** same generic mismatch | Still wrong-output, not fixed by T413: current output is only `tenumfsm machine=0` and exit code 1; baseline is `tenumfsm machine=3`. |
+| `adaint.run` | **(b)** same generic 3-scenario mismatch | `e.ada` and `ttt.ada` now emit nothing at all; `sieve.ada` emits only `10 Iterations` instead of `10 Iterations` / `1899 Primes`. |
+| `cobint.exec_range` | **(b)** same generic 3-scenario mismatch | `e.cob` emits only `COMPUTING E`; `ttt.cob` only `HELLO FROM COBOL`; `sieve.cob` emits nothing. |
+| `cint.run` | **(c)** different symptom | Original note said "wrong pi-digit output". Current forced-accept `eu.cin` run exits 0 with **empty stdout**. |
+| `pint.run` | **(b)** same generic 3-scenario mismatch | All three scenarios (`e.pas`, `ttt.pas`, `sieve.pas`) now emit nothing. |
+| `bint.run` | **(b)** same generic 3-scenario mismatch | All three scenarios (`e.bas`, `ttt.bas`, `sieve.bas`) now emit nothing. |
+
+Two small but useful details from this sweep:
+
+1. The `cint` pair (`while_stmt`, `run`) are the only cases whose exact
+   symptom clearly **changed** after T413/T415: they are now fully silent
+   instead of producing the previously-reported truncated/wrong pi output.
+   I did **not** pursue that root cause here; this is only a data point for
+   future correctness work.
+2. The five-function interpreter-dispatch family remains fully broken after
+   T413/T415: `adaint.run`, `cobint.exec_range`, `cint.run`, `pint.run`,
+   `bint.run` all still fail forced-accept correctness, and the scenario-
+   complete sweep confirms the 3-fixture cases are broken on every declared
+   input, not just one default script.
+
+**Quick Part 2 probe (no code change landed):**
+
+- Re-grepped `src/dcc/dcc_mir.c`, `src/dcc/dcc_mir_select.c`, and
+  `src/dcc/dcc_mir_spilled_cfg.c` for existing `mir_try_emit_*` /
+  `mir_has_*` helpers before proposing any new work. No new "wired only to a
+  diagnostic env var" production selector fell out of that scan; the earlier
+  redundant `home_cfg` wrapper is already gone, and the remaining
+  `mir_try_emit_general_rollout()` wrapper is the already-known
+  `DCC_MIR_EMIT_GENERAL` path, not a forgotten default-path candidate.
+- Fresh ordinary census from this HEAD:
+  **908/2026 (44.82%)**, with fallback buckets led by
+  `text-size` **301** and `dead-local-suffix-cost` **28**.
+- `mir-gate-margins.py build/streamD-t416/mir-current.tsv --reason dead-local-suffix-cost --exclude-known mir-dead-ends.tsv`
+  still shows only the already-understood near-miss residue:
+  `tbits.{ti16_bits,tui16_bits}` at delta **+0**, `tlngcond.main` at **+2**,
+  then a steep drop to `forint.write_pre` at **+6**. No fresh ≥10-function
+  dead-local class surfaced.
+- A capped `mir-mac-ngram-miner.py` sample over the current `text-size`
+  population (38 compiled functions from the top 60 candidates / 19 apps)
+  produced only generic frame/setup/caller-cleanup/address-arithmetic motifs
+  (`push ix; ld ix,N; add ix,sp`, `push hl; call sym; pop bc`,
+  `ld l,(ix±n); ld h,(ix±n)`, repeated absolute-address `ld hl,(sym); ld de,N;
+  add hl,de`), not an obvious missing helper or reusable selector class.
+
+So this round closes the outstanding T413/T415 re-test obligation, but did
+**not** uncover a fresh validated coverage batch or reusable production
+emitter fix worth landing immediately.
+
+No code change in this item (documentation/validation + lead search only).
+Coverage unchanged: **908/2026 ordinary (44.82%)**.
