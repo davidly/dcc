@@ -680,6 +680,31 @@ static int emit_z80_ld(Asm *a,char **av,int n) {
         emitb(a,0xf9);
         return 1;
     }
+    /* I/R special-register transfers. These must be recognized before the
+    generic register forms below: reg8() doesn't know I or R, so without
+    this LD I,A/LD R,A fall through to "unknown opcode" while LD A,I/
+    LD A,R are worse - they're silently misassembled as LD A,n with n
+    evaluated from the undefined symbol I/R, i.e. LD A,0. */
+    if(streqi(av[0],"I") && streqi(av[1],"A")) {
+        emitb(a,0xed);
+        emitb(a,0x47);
+        return 1;
+    }
+    if(streqi(av[0],"R") && streqi(av[1],"A")) {
+        emitb(a,0xed);
+        emitb(a,0x4f);
+        return 1;
+    }
+    if(streqi(av[0],"A") && streqi(av[1],"I")) {
+        emitb(a,0xed);
+        emitb(a,0x57);
+        return 1;
+    }
+    if(streqi(av[0],"A") && streqi(av[1],"R")) {
+        emitb(a,0xed);
+        emitb(a,0x5f);
+        return 1;
+    }
     /* Register forms involving (HL)/M must come before absolute-memory forms. */ r1=reg8(av[0]);
     r2=reg8(av[1]);
     if(r1>=0 && r2>=0) {
@@ -834,6 +859,14 @@ static int assemble_op(Asm *a,char *op,char *args) {
         if(streqi(av[0],"DE")&&streqi(av[1],"HL")) O1(0xeb);
         if(streqi(av[0],"AF")&&streqi(av[1],"AF'")) O1(0x08);
         if(streqi(av[0],"(SP)")&&streqi(av[1],"HL")) O1(0xe3);
+        if(streqi(av[0],"(SP)")&&streqi(av[1],"IX")) {
+            emitb(a,0xdd);
+            O1(0xe3);
+        }
+        if(streqi(av[0],"(SP)")&&streqi(av[1],"IY")) {
+            emitb(a,0xfd);
+            O1(0xe3);
+        }
     }
     if(streqi(op,"EXX")) O1(0xd9);
     if(streqi(op,"NEG")) O2(0xed,0x44);
@@ -847,6 +880,14 @@ static int assemble_op(Asm *a,char *op,char *args) {
     if(streqi(op,"CPIR")) O2(0xed,0xb1);
     if(streqi(op,"CPD")) O2(0xed,0xa9);
     if(streqi(op,"CPDR")) O2(0xed,0xb9);
+    if(streqi(op,"INI")) O2(0xed,0xa2);
+    if(streqi(op,"IND")) O2(0xed,0xaa);
+    if(streqi(op,"OUTI")) O2(0xed,0xa3);
+    if(streqi(op,"OUTD")) O2(0xed,0xab);
+    if(streqi(op,"INIR")) O2(0xed,0xb2);
+    if(streqi(op,"INDR")) O2(0xed,0xba);
+    if(streqi(op,"OTIR")) O2(0xed,0xb3);
+    if(streqi(op,"OTDR")) O2(0xed,0xbb);
     if(streqi(op,"LD")||streqi(op,"MOV")||streqi(op,"MVI")||streqi(op,"LXI")) {
         if(streqi(op,"MOV")&&n==2) {
             r=reg8(av[0]);
@@ -1151,6 +1192,16 @@ static int assemble_op(Asm *a,char *op,char *args) {
         O1(0xc7+((int)e.v&7)*8);
     }
     if(streqi(op,"IN")) {
+        /* IN r,(C) must be recognized before the generic 2-operand forms
+        below: without this, "(C)" is evaluated as an expression (the
+        undefined symbol C, defaulting to 0), so IN A,(C) silently
+        misassembled as IN A,(0) and IN B/D/E/H/L,(C) fell through to
+        "unknown opcode" (reg8() rejected them since the fallback only
+        special-cased "A"). */
+        if(n==2 && streqi(av[1],"(C)")) {
+            r=reg8(av[0]);
+            if(r>=0) O2(0xed,0x40+(r<<3));
+        }
         if(n==1) {
             e=eval(a,av[0]);
             O2(0xdb,(int)e.v);
@@ -1161,6 +1212,15 @@ static int assemble_op(Asm *a,char *op,char *args) {
         }
     }
     if(streqi(op,"OUT")) {
+        /* OUT (C),r must be recognized before the generic 2-operand form
+        below: that form unconditionally evaluates av[0] as the port
+        expression regardless of what av[0] actually is, so every
+        OUT (C),r silently misassembled as OUT (0),A - the r operand
+        was never even inspected. */
+        if(n==2 && streqi(av[0],"(C)")) {
+            r=reg8(av[1]);
+            if(r>=0) O2(0xed,0x41+(r<<3));
+        }
         if(n==1) {
             e=eval(a,av[0]);
             O2(0xd3,(int)e.v);
