@@ -17,9 +17,26 @@ capture/replay only after the runnable and extended corpora pass.
 - Published stack-check coverage: **912/2128 (42.86%)**
 - Current ordinary coverage: **914/2026 (45.11%)**
 - Current stack-check coverage: **936/2128 (43.98%)**
-- HEAD: pending push of T430/T431 (real block-cse-cost architecture
-  enabler, +0/+0 coverage; see Stream J below). Tree clean, full
-  validation cadence passed locally, CI poll pending.
+- HEAD: `ccf5d31`, pushed, CI confirmed green (T430/T431 block-cse-cost
+  architecture enabler, +0/+0 coverage; see Stream J below). Tree clean.
+- **T432 (this segment): n-gram re-mining re-confirms text-size/
+  boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
+  mining tool against the current, much more mature populations
+  (`text-size` 304 candidates, `boolean-phi-cost` 158) to check whether
+  all the architecture work since T385 (T393-T431) had shifted anything
+  into a newly mineable shape. Result: no. `boolean-phi-cost`'s only
+  idiom (materialize-then-retest boolean, ~866 occurrences) is still
+  dominated by the same `a1.op_bcd_math`/`a1.op_math` pair T385 already
+  forced-accept-tested and correctly rejected. `text-size`'s top n-grams
+  are exclusively generic ABI-mandated calling-convention boilerplate
+  (multi-arg call cleanup, frame setup, word-from-frame reloads) spread
+  across ~108 distinct apps with no >=10-function cohort left uncovered
+  by an existing (already-exhausted) selector concept - re-confirming
+  T385's original "genuinely heterogeneous, no dominant fixable idiom"
+  finding rather than contradicting it. Both gate-margin mining
+  (T394-T431, 9+ buckets) and n-gram idiom mining are now confirmed
+  exhausted against the current corpus. Full details: `## Item T432` in
+  `mir-text-size-plan.md`. Coverage unchanged: 914/2026, 936/2128.
 - **Post-T429 re-rank (this segment)**: a fresh gate-margin re-rank across
   every remaining bucket confirmed gate-margin mining is now exhausted
   project-wide, again. `fint.top_level` (`unary-not-cost`, 26-block CFG,

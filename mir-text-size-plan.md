@@ -16244,3 +16244,56 @@ still requires either:
 
 This follow-on therefore lands as an honest **+0 / +0** dead-end confirmation,
 not a forced rollout.
+
+## Item T432: n-gram re-mining re-confirms text-size/boolean-phi-cost exhaustion (2026-08-08)
+
+After T430/T431 closed out the block-cse-cost architecture line (4 converging
+investigations: T407 -> T426 -> T430 -> T431), re-ran the T385 n-gram mining
+tool (`scripts/mir-mac-ngram-miner.py`, unchanged since T385) against the
+CURRENT populations to check whether the much more mature corpus/selector
+state (all of T393-T431 landed since T385's original run at a 890/2026
+checkpoint) had shifted anything into a newly mineable shape.
+
+**boolean-phi-cost** (158 candidates, current census): top n-grams are the
+identical materialize-then-retest idiom T385 already found
+(`ld hl,n / jp sym / ld hl,n / ld a,h; or l` and its `jp z,`/`jp nz,`
+variants, 866/627/504/283/264/245 occurrences at n=3..6). Cross-checked the
+`examples:` column for every top-15 n-gram: all are dominated by the same
+`a1:op_bcd_math`/`a1:op_math` pair T385 already forced-accept-tested and
+correctly rejected (MIR's own naive rendering doesn't beat legacy at that
+size/33-block CFG even with the boolean-phi simplification applied). No new
+function or idiom surfaced. **Re-confirmed dead end, no new lead.**
+
+**text-size** (304 candidates, current census, up slightly from T385's 317
+due to population churn from later architecture work but still the largest
+bucket): top n-grams are exclusively generic calling-convention boilerplate
+— multi-argument call cleanup (`pop bc` x2-4 repeated), frame setup
+(`push ix; ld ix,n; add ix,sp`), word-from-frame reloads
+(`ld l,(ix+n); ld h,(ix+n)` and 4-byte pair variants), and pointer-chase
+patterns (`ld e,(hl); inc hl; ld d,(hl); ex de,hl`). Every one of these is
+either (a) already-minimal ABI-mandated Z80 sequences with no smaller
+equivalent, or (b) already targeted by prior architecture work (T400's
+register-home budget, T422/T426/T430's rematerialization). No single
+n-gram concentrates in a >=10-function cohort outside functions already
+covered by an existing (and already-exhausted) selector concept.
+Cross-referencing the `examples:` columns shows heavy spread across ~108
+distinct apps with no dominant repeat-offender function, confirming T385's
+original "genuinely heterogeneous, no single dominant fixable idiom"
+finding rather than contradicting it.
+
+**Conclusion**: both n-gram mining and gate-margin mining (T394-T431,
+9+ buckets) are now confirmed exhausted against the current corpus. No
+further micro-lead exists that doesn't require one of the two large-scope
+architecture projects already identified and characterized in T430/T431:
+(1) a genuinely cheaper spilled/backend value-reuse representation that can
+compete with `dccpeep`'s own address-folding without new frame/stack
+traffic, or (2) a fuller selector-local mechanism that can choose among
+multiple transformed MIR variants rather than settling on the
+frame-caching representation the first is stuck with. Both are
+next-session/multi-session-scale design efforts (matching the user's own
+prior framing of the two other remaining leads), not bounded fixes
+suitable for further foreground iteration this session.
+
+No code changes; this is a documentation-only re-confirmation to save a
+future session from re-running the same two mining techniques from
+scratch.
