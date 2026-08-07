@@ -3691,9 +3691,14 @@ evaluate_generated:
                         }
                     }
                 }
+                /* Single-use MIR_ADDRESS bases can already rematerialize
+                 * directly at their MIR_INDEX_ADDRESS use site. Retry that
+                 * existing path before keeping a measured planned-index-base
+                 * miss on the books. */
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
-                     !strcmp(fallback_reason, "text-size")) &&
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "planned-index-base-cost")) &&
                     !address_rematerialization_retry_attempted &&
                     mir_address_rematerialization_candidate_count() > 0 &&
                     !g_speculative_codegen_active) {
