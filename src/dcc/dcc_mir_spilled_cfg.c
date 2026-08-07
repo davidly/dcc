@@ -47,6 +47,8 @@ static int mir_stack_backend_slot_forwardable(
 static int mir_value_has_direct_named_home(int value);
 static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
+static int mir_planned_stack_matches_consumer(int value, int instruction);
+static int mir_planned_stack_is_emitted(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
@@ -3469,11 +3471,44 @@ static int mir_planned_stack_interval_opcode_safe(int opcode)
     }
 }
 
+static int mir_planned_stack_store_address_consumer(
+    int value, int producer, int consumer)
+{
+    const struct MirInsn *store;
+    int instruction;
+
+    if (!mir_indirect_store_address_forwarding_enabled ||
+        consumer < 0 || consumer >= mir.count)
+        return 0;
+    store = &mir.insns[consumer];
+    if (store->opcode != MIR_STORE_INDIRECT || store->src1 != value ||
+        store->bit_width != 0 || store->memory_size <= 0 ||
+        store->memory_size > 2 || store->src2 < 0 ||
+        store->src2 >= mir.next_value || mir_value_use_count(store->src2) != 1)
+        return 0;
+    if (consumer - producer == 2)
+        return mir.insns[consumer - 1].dst == store->src2;
+    if (consumer <= producer + 2 || consumer - 1 < 0 ||
+        mir.insns[consumer - 1].opcode != MIR_CALL ||
+        mir.insns[consumer - 1].dst != store->src2)
+        return 0;
+    for (instruction = producer + 1; instruction < consumer - 1;
+         ++instruction) {
+        if (mir.insns[instruction].opcode == MIR_ARG)
+            continue;
+        if (!mir_planned_stack_interval_opcode_safe(
+                mir.insns[instruction].opcode))
+            return 0;
+    }
+    return 1;
+}
+
 static int mir_planned_stack_consumer(int value, int producer,
                                       const unsigned char *occupied)
 {
     const struct MirInsn *definition;
     const struct MirInsn *consumer_insn;
+    int store_address_consumer;
     int consumer;
     int instruction;
 
@@ -3502,6 +3537,8 @@ static int mir_planned_stack_consumer(int value, int producer,
     if (consumer < 0 || consumer - producer < 2)
         return -1;
     consumer_insn = &mir.insns[consumer];
+    store_address_consumer =
+        mir_planned_stack_store_address_consumer(value, producer, consumer);
     if (!((consumer_insn->opcode == MIR_BINARY &&
            consumer_insn->src1 == value &&
            type_size(consumer_insn->secondary_offset) <= 2) ||
@@ -3510,24 +3547,17 @@ static int mir_planned_stack_consumer(int value, int producer,
            consumer_insn->base_name[0] == 0 &&
            !mir_value_only_used_by_constant_absolute_address(
                consumer_insn->dst)) ||
-          (mir_indirect_store_address_forwarding_enabled &&
-           consumer - producer == 2 &&
-           consumer_insn->opcode == MIR_STORE_INDIRECT &&
-           consumer_insn->src1 == value &&
-           consumer_insn->bit_width == 0 &&
-           consumer_insn->memory_size > 0 &&
-           consumer_insn->memory_size <= 2 &&
-           mir.insns[consumer - 1].dst == consumer_insn->src2 &&
-           mir_value_use_count(consumer_insn->src2) == 1)))
+          store_address_consumer))
         return -1;
     if (consumer - producer <= 2 &&
         consumer_insn->opcode != MIR_STORE_INDIRECT)
         return -1;
-    for (instruction = producer + 1;
-         instruction < consumer; ++instruction)
-        if (!mir_planned_stack_interval_opcode_safe(
-                mir.insns[instruction].opcode))
-            return -1;
+    if (!store_address_consumer)
+        for (instruction = producer + 1;
+             instruction < consumer; ++instruction)
+            if (!mir_planned_stack_interval_opcode_safe(
+                    mir.insns[instruction].opcode))
+                return -1;
     for (instruction = producer; instruction <= consumer; ++instruction)
         if (occupied[instruction])
             return -1;
@@ -4807,9 +4837,12 @@ static int mir_call_result_direct_reload_indirect_store_target(int value)
     store = &mir.insns[target];
     if (store->opcode != MIR_STORE_INDIRECT || store->src2 != value ||
         mir_constant_absolute_access_supported(store) ||
-        !mir_indirect_store_address_has_direct_reload(store) ||
-        mir_value_currently_uses_stack_handoff(
-            store->src1, target))
+        (!mir_indirect_store_address_has_direct_reload(store) &&
+         !(mir_planned_stack_matches_consumer(store->src1, target) &&
+           mir_planned_stack_is_emitted(store->src1))) ||
+        (mir_value_currently_uses_stack_handoff(store->src1, target) &&
+         !(mir_planned_stack_matches_consumer(store->src1, target) &&
+           mir_planned_stack_is_emitted(store->src1))))
         return -1;
     for (instruction = target + 1;
          instruction < mir.count; ++instruction) {
@@ -7658,6 +7691,23 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                       "\tld a,h\n\tor d\n\tld h,a\n"
                       "\tex de,hl\n\tld h,b\n\tld l,c\n"
                       "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+                break;
+            }
+            if (!mir_constant_absolute_access_supported(insn) &&
+                mir_forwarded_hl_value == insn->src2 &&
+                mir_forwarded_hl_instruction + 1 == i &&
+                mir_planned_stack_matches_consumer(insn->src1, i) &&
+                mir_planned_stack_is_emitted(insn->src1)) {
+                fputs("\tpush hl\n", out);
+                mir_forwarded_hl_value = -1;
+                mir_forwarded_hl_instruction = -1;
+                if (!mir_consume_planned_stack(
+                        out, insn->src1, i, "hl"))
+                    mir_planned_stack_invalid = 1;
+                ++mir_spilled_cfg_indirect_store_address_forwarding_count;
+                fputs("\tpop de\n\tld (hl),e\n", out);
+                if (insn->memory_size > 1)
+                    fputs("\tinc hl\n\tld (hl),d\n", out);
                 break;
             }
             if (!mir_constant_absolute_access_supported(insn) &&

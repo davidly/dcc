@@ -13488,3 +13488,112 @@ architecture item, not a bounded fix). `phi-fallthrough-cost` has now had
 its only two real near-miss candidates tested and both lose — treat as
 gate-margin-exhausted per the T394-T399 pattern until the population shifts
 significantly from further integrations.
+## Item T410: planned store-address handoff can safely cross one same-block call, but today's wins are still cost-gated (+0, 2026-08-07)
+
+**Status: landed as a production-safe architectural enabler; selected output
+unchanged.** Picked up the post-T406 `bint.add_string` outlier family by
+re-mining the ordinary fallback population. The original index-address scan
+found **23** ordinary fallback rows across **17** functions where a same-block
+address value feeds a later `storeind` after a call; representative inspection
+added the matching member-address recursive-store forms that the index-only
+scan misses.
+
+**Representative inspection (8 functions):**
+`bint.add_string`, `tallocx.fill`, `attnc11.convert_weight_group`,
+`forint.add_stmt`, `tnarrow.narwrec`, `too.bst_insert`, plus the negative
+controls `adaint.add_string` and `fint.add_string`.
+
+**Root cause found:** the spilled selector already had both halves of this
+shape, but not their composition. `mir_planned_stack_consumer()` can keep a
+single-use address value on the stack for a later `storeind`, but only when no
+call lies in the interval. T405 can forward the immediately preceding call
+result straight into that same `storeind`, but only when the store address is
+reloaded from a slot/direct home instead of already being the planned stack
+value. So the exact same-block span
+`address|memberaddr|indexaddr ; ... args ... ; call ; storeind` still got a
+dedicated backend slot for the address and a post-call reload, even though the
+exact address value could just remain below the outgoing arguments on the
+stack. This is the real base/index-preservation gap behind `bint.add_string`
+and friends: not a missed stable home, not same-block CSE, and not a safe
+cross-call memory reload.
+
+**Code change:** extend the existing store-address handoff, not the cost
+thresholds.
+
+- Added one narrow helper in `dcc_mir_spilled_cfg.c` so
+  `mir_planned_stack_consumer()` recognizes the single-call store-address span:
+  the address value must still be single-use, the later consumer must be a
+  1/2-byte `MIR_STORE_INDIRECT`, the stored value must be the immediately
+  preceding scalar `MIR_CALL` result, and the only extra pseudo-ops admitted in
+  the interval are that call's own `MIR_ARG`s.
+- Taught `mir_call_result_direct_reload_indirect_store_target()` to accept a
+  planned-stack store address as the consumer-side partner for T405's existing
+  call-result forwarding.
+- Added the matching `MIR_STORE_INDIRECT` emission path that pushes the
+  forwarded call result once, pops the preserved address from the stack, and
+  stores directly - eliminating the temporary address slot and its reload.
+
+The scope deliberately stays narrow: one same-block scalar call, one same-block
+narrow indirect store, and no broad call-crossing planned-stack widening for
+other consumers.
+
+**Direct evidence on representative functions (ordinary census):**
+
+- `bint.add_string`: **670 -> 635** bytes, **59 -> 57** insns
+  (`text-size` -> `indirect-store-address-cost`)
+- `tallocx.fill`: **575 -> 540** bytes, **52 -> 50** insns
+  (`text-size` -> `indirect-store-address-cost`)
+- `attnc11.convert_weight_group`: **839 -> 800** bytes, **78 -> 76** insns
+  (`text-size` -> `indirect-store-address-cost`)
+- `attnc11.softmax`: **2896 -> 2857** bytes, **253 -> 251** insns
+  (`text-size` -> `indirect-store-address-cost`)
+- `forint.add_stmt`: **3281 -> 2936** bytes, **293 -> 266** insns
+  (`text-size` -> `indirect-store-address-cost`)
+- `tnarrow.narwrec`: **484 -> 449** bytes, **47 -> 45** insns
+  (`indirect-store-address-cost` -> `text-size`)
+- `too.bst_insert`: **1200 -> 982** bytes, **111 -> 95** insns
+  (`text-size` -> `rhs-stack-cost`)
+
+The negative controls `adaint.add_string` and `fint.add_string` also improve in
+isolated candidate-matrix runs (**979 -> 882** bytes each, **91 -> 84** insns),
+but remain blocked by `dynamic-index-base-cost`: their pointer-rooted base
+quality is still the limiting factor, so they stay outside this item's safe
+rollout.
+
+**Measured scope:**
+
+- Ordinary census: **7** fallback functions changed generated metrics/reasons,
+  **0 selected-hash changes**, total generated savings **746 bytes / 53 insns**.
+- Stack-check census: the same **7** fallback functions changed, also with
+  **0 selected-hash changes** and the same total generated savings
+  **746 bytes / 53 insns**.
+- Coverage is unchanged: **908/2026 ordinary (44.82%)** and
+  **930/2128 stack-check (43.70%)**.
+
+**Validation:**
+
+- Rebuilt the compiler with `sh src/dcc/build-dcc.sh` for iteration, then the
+  full host tool set with `pwsh ./scripts/build-dcc.ps1` so the gate's
+  `dccpeep` fixture step could run in this worktree.
+- Focused full-mode validation:
+  `pwsh ./scripts/runall.ps1 -Apps bint,attnc11,tallocx,adaint,fint,tnarrow,pint,tc89fptr,wumpus,forint,cpmenumd -Mode full -RunTimeout 30`
+  -> **11/11 passed**, **0 regressions**.
+- Ordinary census compare vs baseline:
+  **908/2026 -> 908/2026**, zero regressions, zero newly emitted, zero
+  no-longer-emitted, zero runtime-validation apps.
+- Stack-check census compare vs baseline:
+  **930/2128 -> 930/2128**, zero regressions, same zero selected-output changes.
+- Full extended gate
+  (`pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`):
+  **314/323 passed, 9 skipped, 0 failed**, diagnostics passed, `dccpeep`
+  fixtures passed, extended suite passed, performance passed.
+
+**Conclusion / stop-condition result:** the same-block base/index/address
+preservation family is real and the missing mechanism was structural: planned
+store-address handoff simply stopped at the call boundary. That gap is now
+closed safely. However the current corpus still leaves these mostly single-
+handoff functions on measured profitability gates (`indirect-store-address-
+cost`, `text-size`, `rhs-stack-cost`) rather than admitting them. So this round
+lands a reusable store-address enabler with **zero selected-output change**, and
+the remaining coverage work should rank the residual `text-size` population by
+other reusable classes rather than assuming more address-plumbing is missing.
