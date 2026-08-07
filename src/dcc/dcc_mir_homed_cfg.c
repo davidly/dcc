@@ -1822,7 +1822,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * T18). */
             if (mir_index_only_constant(insn->dst) ||
                 mir_homed_binary_only_constant(insn->dst) ||
-                mir_homed_wide_binary_only_constant(insn->dst))
+                mir_homed_wide_binary_only_constant(insn->dst) ||
+                mir_value_only_used_by_dead_stores(insn->dst))
                 break;
             /* Item 20d: dst may be wide (long) only if mir_probe_wide_
              * colors_for_homed accepted this function - dispatch on the
@@ -1846,8 +1847,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_UNARY:
             /* mir-text-size Item T12: same dead-result skip as the
              * spilled-scalar-cfg selector's MIR_UNARY case - see
-             * dcc_mir_spilled_cfg.c for the full rationale. */
-            if (!mir_value_has_use(insn->dst))
+             * dcc_mir_spilled_cfg.c for the full rationale. Also skip a
+             * result whose only use is a store this selector has already
+             * proven dead (mir_value_only_used_by_dead_stores), mirroring
+             * dcc_mir_spilled_cfg.c's MIR_CONST/MIR_BINARY checks below. */
+            if (!mir_value_has_use(insn->dst) ||
+                mir_value_only_used_by_dead_stores(insn->dst))
                 break;
             if (mir_direct_branch_for_unary_not(i) >= 0)
                 break;
@@ -1856,6 +1861,19 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_BINARY:
+            /* Same dead-result skip as MIR_CONST/MIR_UNARY just above:
+             * a binary result whose only use is a store this selector has
+             * already proven dead never needs to be materialised. Without
+             * this, a homed-scalar-cfg candidate whose final update to a
+             * register-homed local/parameter is provably dead (e.g. an
+             * incremented/decremented parameter never read again, such as
+             * tests/tmirfast.c's inc_dead/dec_dead) still paid the full
+             * register-shuffle cost of computing and discarding that
+             * update, exactly the gap dcc_mir_spilled_cfg.c's identical
+             * mir_value_only_used_by_dead_stores check already closes for
+             * the spilled-scalar-cfg selector. */
+            if (mir_value_only_used_by_dead_stores(insn->dst))
+                break;
             {
                 int operation;
                 long count;

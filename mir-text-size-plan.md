@@ -11527,3 +11527,63 @@ regression by future batches. Coverage remains **888/2026 (43.83%) ordinary**;
 stack-check census still needs to be regenerated and compared before the next
 batch's commit, and the near-miss absolute-index-cost pair above is the
 immediate next lead.
+
+## Item T384: homed-scalar-cfg dead-store value elision (2026-08-14)
+
+Refreshed censuses from published commit `b875d0e` plus local T383/FailuresOnly
+commits: **888/2026 ordinary (43.83%)**, **910/2128 stack-check (42.76%)**.
+
+A generic gate-margin ranking tool (`scripts/mir-gate-margins.py`, new this
+item) sorts every fallback `reason` bucket's declined candidates by raw
+`generated_insns - captured_insns` from the existing census TSV, without
+duplicating any of `dcc_mir_select.c`'s ~20 distinct per-gate formulas. Its
+first run surfaced `dead-local-suffix-cost`'s two closest candidates,
+`tmirfast.dec_dead` (homed, delta +1) and `tmirfast.inc_dead` (homed, delta
++2), both failing `mir_dead_suffix_layout_is_profitable`'s homed-selector rule
+(`generated_instructions <= captured_instructions`) by a hair.
+
+Root cause: `dcc_mir_spilled_cfg.c` already has `mir_value_only_used_by_dead_
+stores()` (added for item T82, whose own comment names this exact
+`tmirfast.c` `dec_dead`/`inc_dead` pair as motivation) - it recognizes that a
+value whose only use is a `MIR_STORE` this selector has independently proven
+dead (`mir_object_is_fully_promoted` or `mir_store_is_dead`) never needs to be
+materialised, and skips emitting the value-defining `MIR_CONST`/`MIR_UNARY`/
+other instruction entirely. `dcc_mir_homed_cfg.c` had no equivalent check at
+all: its `MIR_BINARY` case unconditionally emitted the full register-shuffle
+sequence to compute an updated value even when that value's sole consumer was
+a store to a register-homed object that is provably never read again (e.g. a
+parameter incremented/decremented after its last real use). For a call-
+crossing IY-homed parameter this manifests as real waste: `push`/`pop`
+shuffling HL into IY, an `sbc hl,de` for the (unread) decrement, all strictly
+dead.
+
+The fix ports the mechanism, not a new one: `mir_object_address_taken`,
+`mir_store_is_dead`, and `mir_value_only_used_by_dead_stores` (all previously
+`static` in `dcc_mir_spilled_cfg.c`) are exposed via `dcc_mir_internal.h` and
+called from `dcc_mir_homed_cfg.c`'s `MIR_CONST` (added to the existing T19
+skip list), `MIR_UNARY` (added alongside its existing `mir_value_has_use`
+check), and `MIR_BINARY` (a new skip check, mirroring the other two) cases.
+No new semantic gate; the exact same "proven dead" definition both selectors
+already agree on.
+
+`tmirfast.dec_dead` moves from `generated=26/captured=25` (fallback) to
+`generated=19/captured=25` (accepted); `tmirfast.inc_dead` from
+`generated=25/captured=23` to `generated=19/captured=23`. Fresh 24-way ordinary
+census: **890/2026 (43.93%, +2)**, zero regressions, zero removals. Fresh
+stack-check census: **912/2128 (42.86%, +2)**. Seven apps have census-row
+changes (already-`mir` functions whose selected hash shifted from smaller
+sibling functions in the same translation unit reusing freed registers/slots);
+focused full-mode validation (`cint`, `tbug2`, `tdmfuse`, `tgoto`, `tmirfast`,
+`tpostptr`, `tsetjmp`) passes 7/7 with zero regressions and 20 real
+improvements, several large (`cint` peep -27.6%, `tdmfuse` peep -29.7%,
+`tgoto` peep -20.5%, `tpostptr` peep -22.3%). The mandatory full extended gate
+(`runall.ps1 -Mode full -Extended -RunTimeout 30`) passes completely: 314/323
+apps, extended c-testsuite, diagnostics, and dccpeep fixtures all clean, zero
+regressions.
+
+This is a structural gap-closer (an emitter-parity fix, not a gate-threshold
+tweak) and is expected to have residual reach beyond these two functions as
+more homed-scalar-cfg candidates emerge from other architectural work; it
+should not be treated as fully mined; re-check `dead-local-suffix-cost` and
+`unary-not-cost` (which also uses a homed-selector branch) after future
+homed-candidate-population growth.

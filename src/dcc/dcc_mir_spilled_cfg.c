@@ -38,7 +38,7 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
-static int mir_store_is_dead(int instruction);
+int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
@@ -1696,7 +1696,7 @@ int mir_object_is_fully_promoted(int object)
     return 1;
 }
 
-static int mir_object_address_taken(int object)
+int mir_object_address_taken(int object)
 {
     int instruction;
 
@@ -1719,7 +1719,7 @@ static int mir_object_address_taken(int object)
  * before any intervening read. Bails conservatively if the object's
  * address is ever taken, since a store could then be observed through an
  * escaped pointer that a static scan of MIR_LOAD instructions cannot see. */
-static int mir_store_is_dead(int instruction)
+int mir_store_is_dead(int instruction)
 {
     int object;
     unsigned char *live_in;
@@ -1946,7 +1946,7 @@ void mir_report_dead_local_suffix(void)
  * uses to decide it will emit nothing, so a value is only ever treated as
  * "unused" here when every one of its uses is a store this selector has
  * independently already proven dead - never a broader guess. */
-static int mir_value_only_used_by_dead_stores(int value)
+int mir_value_only_used_by_dead_stores(int value)
 {
     int instruction;
     int found_use = 0;

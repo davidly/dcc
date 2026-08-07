@@ -12,24 +12,26 @@ The long-term goal is 100% MIR-required coverage and removal of legacy
 capture/replay only after the runnable and extended corpora pass.
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `b875d0e`
-- Published ordinary coverage: **888/2026 (43.83%)**
-- Published stack-check coverage: **910/2128 (42.76%)**
-- Current ordinary coverage: **888/2026 (43.83%)**
-- Current stack-check coverage: **910/2128 (42.76%)**
-- Latest production cohort: 16 allocator-backed backedge additions, zero
-  removals, focused full-mode, sanitizer, and full extended gates clean.
-- Latest architectural item (T383, not yet published): constant-absolute-
-  address resolution now covers value consumers, not only dereferences.
-  Zero coverage change, zero regressions, full extended gate clean; narrows
-  several fallback populations toward their existing thresholds.
+- Published baseline: `45cf3f0`
+- Published ordinary coverage: **890/2026 (43.93%)**
+- Published stack-check coverage: **912/2128 (42.86%)**
+- Current ordinary coverage: **890/2026 (43.93%)**
+- Current stack-check coverage: **912/2128 (42.86%)**
+- Latest production cohort: T384, homed-scalar-cfg dead-store value elision
+  (`mir_value_only_used_by_dead_stores` ported from spilled-scalar-cfg),
+  +2 ordinary/+2 stack-check, zero removals, focused full-mode and full
+  extended gates clean.
+- New tooling: `scripts/mir-gate-margins.py`, a generic per-reason-bucket
+  near-miss ranker consuming the existing census TSV (no per-gate formula
+  duplication). Used to find the T384 near-misses; re-run after every
+  architectural change to re-rank remaining populations.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
-| 45% | 912 | +24 |
-| 50% | 1,013 | +125 |
-| 55% | 1,115 | +227 |
-| 60% | 1,216 | +328 |
+| 45% | 912 | +22 |
+| 50% | 1,013 | +123 |
+| 55% | 1,115 | +225 |
+| 60% | 1,216 | +326 |
 
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
@@ -86,19 +88,20 @@ The current ordinary fallback population is:
 | 6 | wide-constant-cost | 48 |
 | 7 | inline-substitution | 47 |
 | 8 | phi-fallthrough-cost | 44 |
-| 9 | absolute-index-cost | 30 |
-| 10 | absolute-address-cost | 25 |
-| 11 | cfg-backedge | 17 |
-| 12 | wide-store-cost | 36 |
-| 13 | planned-index-base-cost | 37 |
+| 9 | planned-index-base-cost | 37 |
+| 10 | wide-store-cost | 36 |
+| 11 | absolute-index-cost | 30 |
+| 12 | dead-local-suffix-cost | 29 |
+| 13 | absolute-address-cost | 25 |
+| 14 | cfg-backedge | 17 |
 
-(As of T383/Batch 45's constant-absolute-address-value fast path: 888/2026
-unchanged, zero regressions, but real per-function margin improvement in the
-populations above. `absolute-index-cost` rose from 19 to 30 because several
-functions now use constant-index-absolute addressing for address *values*
-too and are caught by that gate's tighter 4% ratio instead of a larger-margin
-bucket; two of them, `tptrlhs.touch_ptr_to_array_deref` and `tc89init.main`,
-are within four instructions of admission and are the next lead.)
+(As of T384's homed-scalar-cfg dead-store value elision: 890/2026 [+2],
+912/2128 stack-check [+2], zero regressions. `dead-local-suffix-cost` fell
+31->29 from the two admitted `tmirfast` functions; the two `absolute-index-
+cost` near-misses from T383, `tptrlhs.touch_ptr_to_array_deref` and
+`tc89init.main`, remain within four instructions of admission and are still
+the next quick-win lead. `scripts/mir-gate-margins.py` is the tool to re-rank
+this table after any future architectural change.)
 
 Reasons are the last rejected candidate and overlap conceptually. Campaign
 budgets therefore use net census gains, never sums of reason counts.

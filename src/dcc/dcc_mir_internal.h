@@ -384,6 +384,9 @@ int mir_value_only_used_by_absolute_access(
 int mir_prepare_constant_absolute_operand(
     FILE *out, int value, char *operand, size_t operand_size);
 int mir_object_is_fully_promoted(int object);
+int mir_object_address_taken(int object);
+int mir_store_is_dead(int instruction);
+int mir_value_only_used_by_dead_stores(int value);
 const char *mir_opcode_name(int opcode);
 int mir_phi_source_for_edge(const struct MirInsn *phi,
                                    int predecessor_label, int edge_label,
