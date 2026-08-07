@@ -12677,3 +12677,41 @@ this entry demonstrates is still possible) or accepting the current
 
 Coverage unchanged: **902/2026 ordinary (44.52%)**,
 **924/2128 stack-check (43.42%)**.
+
+**Continued this same segment: a follow-on lead search across the
+remaining small buckets** (`dead-local-suffix-cost`, `constant-conversion-
+frame-cost`, `rhs-stack-cost`, `indirect-store-stack-cost`, `lazy-
+parameter-cost`, `branch-condition-cost`, `dead-store-forwarding-cost`,
+`indirect-store-address-cost`, `binary-load-pair-cost`) found their
+tightest-margin candidates all reproduce the identical T394-T398 shape
+(isolated near-misses requiring per-function forced-accept judgment, no
+fresh generalizable predicate visible from static margins alone) -
+consistent with the already-established "gate-margin mining exhausted"
+conclusion; not re-tested individually since T395/T397/T398 already
+exhaustively demonstrated this pattern holds project-wide.
+
+One promising but NOT-yet-implemented structural lead was found via
+direct MIR-dump inspection during this search: `tbits.ti16_bits`
+(`dead-local-suffix-cost`) shows a parameter with a "budget" stable
+register home (`a`, `home=iy`) referenced directly and for free at every
+use, while a same-shape second parameter that missed the stable-home
+budget (`b`, `home=hl`, evicted almost immediately since HL is needed for
+every intervening operation) gets a **fresh `MIR_LOAD` defining a new SSA
+value at every syntactic read** (four separate loads of the same
+unmodified parameter in one straight-line block) instead of being reused
+across reads. This is a real, plausibly broad class - but **not
+implemented this segment**: `future-cse-address-pass` (Item T70) already
+attempted general same-block address/value CSE and found it lengthens
+live ranges, increases fixed moves/backend slots, and causes a **net
+coverage loss** - so any new attempt at this specific lead needs a
+materially different approach (e.g. improving the stable-home register
+budget itself so more parameters qualify, rather than caching repeated
+reloads of an already-HL-displaced value) and the same forced-accept/
+train-holdout validation discipline as every other lead this session,
+not a blind re-attempt of T70's falsified mechanism. Documented in
+`plan.md`'s next-steps for the next session to pick up with a concrete
+design, not a re-run of the already-falsified general CSE pass.
+
+No code change from this follow-on search (documentation only). Coverage
+unchanged: **902/2026 ordinary (44.52%)**, **924/2128 stack-check
+(43.42%)**.

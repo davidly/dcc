@@ -157,6 +157,32 @@ zero/low-risk emitter-quality fixes - prefer this over any large,
 high-blast-radius rewrite until a fresh lead is independently verified
 against the actual gate chain, not just assumed from campaign framing.
 
+**T399 follow-on lead found but NOT yet attempted** (repeated-parameter-
+reload asymmetry): direct MIR-dump inspection of `tbits.ti16_bits`
+(`dead-local-suffix-cost`) found that a parameter assigned a "budget"
+stable register home (e.g. `a` at `home=iy`, safe across the whole
+function) is referenced directly at every use site with zero extra
+instructions, while a second same-shape parameter that missed the
+stable-home budget (`b`, `home=hl` - HL is needed for every intervening
+operation, so its original param value is evicted almost immediately)
+gets a **fresh `MIR_LOAD` instruction defining a brand-new SSA value at
+every syntactic read** (`ti16_bits` re-loads `b` four separate times,
+each a distinct value/slot) instead of being cached/reused across reads.
+This looks like a real, reusable, likely broadly-applicable class - but
+**do not implement generic same-block redundant-load CSE without a
+materially different approach than the last attempt**:
+`future-cse-address-pass`/T70 already tried general same-block
+address/value CSE and it was falsified (lengthened live ranges,
+increased fixed moves/backend slots, net coverage **loss**). Any new
+attempt must explain concretely why it avoids T70's regression mechanism
+(e.g. by restricting to provably call-free, branch-free spans, or by
+improving the stable-home register budget itself - giving more
+parameters a persistent register/IY-style home - rather than caching
+repeated reloads of an HL-displaced value) before writing code, and must
+be validated with the same train/holdout + forced-accept A/B discipline
+as every other lead this session, not assumed correct from static counts
+alone.
+
 **T394 (this segment)** re-ranked `unary-not-cost`/`wide-constant-cost`
 excluding known outliers per `plan100-reband-unary-wide-constant`.
 `unary-not-cost` is confirmed fully mined out (smallest remaining shortfall
