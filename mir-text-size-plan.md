@@ -14559,3 +14559,157 @@ Mixed-mode regression checks:
 So this is a **pure latent-correctness fix** for force-admitted inline-helper
 callers: it repairs `forint.run_prog` while leaving current shipped mixed-mode
 coverage and selected hashes unchanged.
+
+## Item T421: cfg-backedge Campaign 4 inventory found no safe profitable admission; only the missing forced-MIR loop regressions were worth landing (+0, 2026-08-08)
+
+Fresh integrated baseline on `cd23773`:
+**908/2026 ordinary (44.82%)**, **930/2128 stack-check (43.70%)**.
+A fresh ordinary census still shows `cfg-backedge` as the largest untouched
+architectural gate at **26 ordinary** functions (stack-check: **30**).
+
+### 1. Complete forced-MIR loop/backedge regression coverage first
+
+Before touching the gate I re-inventoried the whole historical correctness list
+for **loop/backedge-shaped** functions, not just the two rows already present in
+`tests/mir_forced_correctness_cases.tsv`.
+
+Fixed loop/backedge bugs now verified green under direct forced MIR:
+
+- already covered: `adaint.var_or_const_decl`, `tenumfsm.scan`
+- newly added here: `attnc11.convert_weight_group`,
+  `tap.first_implementation`, `tallocx.fill`, `tvapinit.join`
+
+Open loop/backedge bugs intentionally **not** added (they still fail forced MIR
+today and would make the harness permanently red):
+
+- `tvlax.goto_stable`
+- `tvla.vla_memset_sizeof`
+- `adaint.run`
+- `cobint.exec_range`
+- `cint.run`
+- `pint.run`
+- `bint.run`
+- `forint.run_prog`
+
+With the four new rows added, `pwsh ./scripts/mir-forced-correctness.ps1`
+now runs a **6-case** forced-MIR loop/backedge regression harness and passes
+cleanly.
+
+### 2. Exact current `cfg-backedge` population, stratified
+
+Current **ordinary** `cfg-backedge` fallback set (26 functions), grouped by
+shape:
+
+**A. Structurally safest stratum probed directly (9):**
+
+- `catalan.copy`
+- `catalan.zero`
+- `tc89size.nb_loop_count`
+- `tptrinit.list_reverse`
+- `tcrcfix.non_ix_shift_store_probe`
+- `tfldparr.main`
+- `tsyntax.test_constexpr_static_init_and_bounds`
+- `tvlaparm.main`
+- `tgotocap.goto_runtime`
+
+These are the cleanest current candidates: one reducible backedge each, no
+interpreter-dispatch shape, and **no function calls inside the loop body**
+(calls, where present, are only before/after the loop).
+
+**B. Risky call-in-loop / parser / dispatch / training shapes (14):**
+
+- `adaint.for_stmt`
+- `attnc11.main`
+- `catalan.add_term`
+- `forint.starts`
+- `nqueens.main`
+- `pint.case_stmt`
+- `tallocx.t_grow_next_too_small`
+- `tallocx.t_sizes`
+- `targs.main`
+- `tbdos.putstr`
+- `tcmp.main`
+- `tdmfuse.test_for_plain_int`
+- `tdmfuse.test_reversed_order`
+- `tdmfuse.test_unsigned`
+
+Every member of this group has real loop-body calls, parser/emitter work, or a
+larger multi-call driver shape. This is exactly the class I did **not** try to
+admit speculatively given the history of `forint.run_prog` and the interpreter
+family regressions.
+
+**C. Unknown / non-target oddities (3):**
+
+- `tc89c2.test_getenv_system`
+- `tc89c2.test_signal`
+- `tvla.vla_longjmp`
+
+The two `tc89c2` cases only reach `cfg-backedge` because the `CHECK(...)`
+macro expands to `do { ... } while (0)` pseudo-backedges rather than a real
+natural loop; `tvla.vla_longjmp` mixes a VLA with `setjmp`/`longjmp`. None of
+these looked like a defensible first admission batch.
+
+### 3. The safe-structure probe was correctness-clean but still unprofitable
+
+I forced MIR for **all 9** functions in group A with the repository harness:
+
+```text
+pwsh ./scripts/mir-forced-correctness.ps1 -CasesFile build/streamc-cfg-backedge-safe-probe.tsv
+```
+
+All 9 are **correctness-clean** in both peep and nopeep modes. So this is not a
+T413/T416/T418/T419-style latent correctness cluster: the simplest leaf-loop
+residue does in fact execute correctly under forced MIR today.
+
+But the profitability check killed the admission idea. I then ran a direct
+full-mode forced-accept A/B on each of the 9 safe-structure candidates. **All 9
+regressed at least one checked metric**, so there is no admission-worthy
+subset from the structurally safest cohort:
+
+- `catalan.copy`: peep **+1.35%** cycles, nopeep **+1.36%** cycles,
+  **+1.32%** bytes
+- `catalan.zero`: tiny but real strict-zero-regression misses in both modes
+  (`+0%` flagged by the checked baselines)
+- `tc89size.nb_loop_count`: peep **+0.69%** cycles, **+1.11%** bytes
+- `tptrinit.list_reverse`: peep **+0.80%** cycles
+- `tcrcfix.non_ix_shift_store_probe`: peep **+6.08%** cycles, **+1.22%**
+  bytes
+- `tfldparr.main`: peep/nopeep both about **+2.5%** cycles
+- `tsyntax.test_constexpr_static_init_and_bounds`: peep **+2.92%** cycles,
+  **+1.82%** bytes; nopeep **+2.37%** cycles
+- `tvlaparm.main`: peep **+2.11%** cycles, nopeep **+1.54%** cycles
+- `tgotocap.goto_runtime`: peep **+0.98%** cycles (despite a nopeep win)
+
+So even before reaching the clearly-riskier groups B/C, the current residue's
+best-behaved leaf/backedge functions are still **performance-negative** under
+forced admission. That fails the project's zero-regression rollout rule, so a
+generic gate widening would be indefensible even if Stream B closed
+`forint.run_prog` tomorrow.
+
+### Conclusion
+
+**No production gate change landed.** The only durable codebase change from this
+investigation is the missing loop/backedge forced-MIR regression coverage in
+`tests/mir_forced_correctness_cases.tsv`.
+
+Assessment: the project is already **partially opened** only through the
+existing specialized/profiled loop admissions; the remaining generic
+`cfg-backedge` gate should stay **closed**. Stream B's eventual
+`forint.run_prog` fix is still necessary for the risky loop families, but it is
+**not sufficient** on its own: the cleanest current no-call backedge cohort is
+still unprofitable even though it is correctness-clean.
+
+### Validation
+
+- `pwsh ./scripts/build-dcc.ps1`
+- `pwsh ./scripts/mir-forced-correctness.ps1`
+  - **PASS** (6/6 cases)
+- `python3 scripts/mir-migration-census.py --output build/streamc-census-after.tsv --compare build/streamc-census.tsv --fail-on-regression`
+  - **PASS**, **0 changed rows**, still **908/2026**
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/streamc-census-stack-after.tsv --compare build/streamc-census-stack-before.tsv --fail-on-regression`
+  - **PASS**, **0 changed rows**, still **930/2128**
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  - **314/323 passed, 0 failed, 9 skipped**
+  - diagnostics: **passed**
+  - dccpeep fixtures: **passed**
+  - extended suite: **passed**
