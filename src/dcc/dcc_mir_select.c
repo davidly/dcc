@@ -3694,11 +3694,16 @@ evaluate_generated:
                 /* Single-use MIR_ADDRESS bases can already rematerialize
                  * directly at their MIR_INDEX_ADDRESS use site. Retry that
                  * existing path before keeping a measured planned-index-base
-                 * miss on the books. */
+                 * miss on the books, and for absolute-index-cost only when
+                 * the provisional candidate is not already raw-byte smaller
+                 * than legacy. */
                 if (fallback_reason != NULL &&
                     (!strcmp(fallback_reason, "instruction-count") ||
                      !strcmp(fallback_reason, "text-size") ||
-                     !strcmp(fallback_reason, "planned-index-base-cost")) &&
+                     !strcmp(fallback_reason, "planned-index-base-cost") ||
+                     !strcmp(fallback_reason, "absolute-index-cost")) &&
+                    (strcmp(fallback_reason, "absolute-index-cost") != 0 ||
+                     generated_size >= captured_size) &&
                     !address_rematerialization_retry_attempted &&
                     mir_address_rematerialization_candidate_count() > 0 &&
                     !g_speculative_codegen_active) {
