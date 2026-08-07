@@ -2356,8 +2356,13 @@ void mir_end_function(void)
             int rematerialized_home_allocation_active = 0;
             int address_rematerialization_retry_attempted = 0;
             int address_rematerialization_active = 0;
+            int block_cse_address_rematerialization_active = 0;
 
 retry_selection:
+            if (block_cse_address_rematerialization_active) {
+                mir_end_block_cse_address_rematerialization();
+                block_cse_address_rematerialization_active = 0;
+            }
             if (address_rematerialization_active) {
                 mir_end_address_rematerialization();
                 mir_end_all_spilled_fallback_optimizations();
@@ -2387,6 +2392,17 @@ retry_selection:
             phi_return_forwarding_retry_attempted = 0;
             mir_end_all_spilled_fallback_optimizations();
             mir_end_strict_phi_fallthrough();
+            if (block_cse_retry_attempted) {
+                /* Address-only same-block CSE is profitable only when the
+                 * retained value can stay rematerializable instead of being
+                 * forced into a new call-crossing/register home. Re-enable
+                 * the spilled selector's address planner on the retry so the
+                 * shared MIR_ADDRESS root can keep a "no home needed" plan. */
+                mir_begin_address_rematerialization();
+                mir_begin_block_cse_address_rematerialization();
+                address_rematerialization_active = 1;
+                block_cse_address_rematerialization_active = 1;
+            }
             generated = tmpfile();
             if (generated == NULL)
                 fatal("cannot create MIR generated stream");
@@ -3652,6 +3668,10 @@ evaluate_generated:
                     rematerialized_home_allocation_active = 0;
                 }
                 if (address_rematerialization_active) {
+                    if (block_cse_address_rematerialization_active) {
+                        mir_end_block_cse_address_rematerialization();
+                        block_cse_address_rematerialization_active = 0;
+                    }
                     mir_end_address_rematerialization();
                     mir_end_all_spilled_fallback_optimizations();
                     address_rematerialization_active = 0;

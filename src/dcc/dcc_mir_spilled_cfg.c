@@ -68,6 +68,7 @@ static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
 static int mir_spilled_cfg_used_binary_load_pair_forwarding;
 static int mir_address_rematerialization_enabled;
+static int mir_block_cse_address_rematerialization_enabled;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
 static int mir_spilled_cfg_branch_condition_forwarding_count;
 static int mir_spilled_cfg_indirect_store_address_forwarding_count;
@@ -125,7 +126,8 @@ static int mir_virtual_offset(int value)
            2 * (slot + 1);
 }
 
-static int mir_emit_address_to_hl(FILE *out, const struct MirInsn *insn)
+static int mir_emit_named_address_root_to_hl(FILE *out,
+                                             const struct MirInsn *insn)
 {
     int memory_type;
     int memory_storage;
@@ -155,6 +157,43 @@ static int mir_emit_address_to_hl(FILE *out, const struct MirInsn *insn)
         mir_emit_hl_offset_from_ix(out, memory_offset);
     }
     return 1;
+}
+
+static int mir_emit_address_value_to_hl(FILE *out, int value)
+{
+    const struct MirInsn *insn = mir_definition(value);
+
+    if (insn == NULL)
+        return 0;
+    switch (insn->opcode) {
+    case MIR_ADDRESS:
+        return mir_emit_named_address_root_to_hl(out, insn);
+    case MIR_MEMBER_ADDRESS:
+        if (!mir_emit_address_value_to_hl(out, insn->src1))
+            return 0;
+        if (insn->immediate != 0)
+            fprintf(out, "\tld de,%ld\n\tadd hl,de\n",
+                    insn->immediate & 0xffffL);
+        return 1;
+    case MIR_INDEX_ADDRESS:
+        {
+        const struct MirInsn *index_definition = mir_definition(insn->src2);
+        long byte_offset;
+
+        if (insn->base_name[0] != 0 || index_definition == NULL ||
+            index_definition->opcode != MIR_CONST)
+            return 0;
+        if (!mir_emit_address_value_to_hl(out, insn->src1))
+            return 0;
+        byte_offset = index_definition->immediate * insn->immediate;
+        if (byte_offset != 0)
+            fprintf(out, "\tld de,%ld\n\tadd hl,de\n",
+                    byte_offset & 0xffffL);
+        return 1;
+        }
+    default:
+        return 0;
+    }
 }
 
 static int mir_virtual_iy_offset(int value)
@@ -939,6 +978,16 @@ void mir_end_address_rematerialization(void)
     mir_address_rematerialization_enabled = 0;
 }
 
+void mir_begin_block_cse_address_rematerialization(void)
+{
+    mir_block_cse_address_rematerialization_enabled = 1;
+}
+
+void mir_end_block_cse_address_rematerialization(void)
+{
+    mir_block_cse_address_rematerialization_enabled = 0;
+}
+
 void mir_begin_phi_slot_cleanup(void)
 {
     mir_phi_slot_cleanup_enabled = 1;
@@ -949,6 +998,63 @@ void mir_end_phi_slot_cleanup(void)
     mir_phi_slot_cleanup_enabled = 0;
 }
 
+static int mir_address_value_has_simple_multi_use_shape(int value)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (mir_call_uses_value(insn, value) || insn->src2 == value)
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        switch (insn->opcode) {
+        case MIR_ARG:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_LOAD_INDIRECT:
+        case MIR_STORE_INDIRECT:
+        case MIR_RETURN:
+            break;
+        default:
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int mir_address_is_block_cse_rematerializable(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (!mir_block_cse_address_rematerialization_enabled ||
+        definition == NULL || !mir_address_value_has_simple_multi_use_shape(value))
+        return 0;
+    switch (definition->opcode) {
+    case MIR_ADDRESS:
+        return !mir_declared_is_vla_object(definition->name) &&
+               mir_scalar_memory_location(definition, &memory_type,
+                                          &memory_storage, &memory_offset);
+    case MIR_MEMBER_ADDRESS:
+        return mir_address_is_block_cse_rematerializable(definition->src1);
+    case MIR_INDEX_ADDRESS:
+        {
+        const struct MirInsn *index_definition = mir_definition(definition->src2);
+
+        return definition->base_name[0] == 0 &&
+               index_definition != NULL &&
+               index_definition->opcode == MIR_CONST &&
+               mir_address_is_block_cse_rematerializable(definition->src1);
+        }
+    default:
+        return 0;
+    }
+}
+
 static int mir_address_is_rematerializable_candidate(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -957,13 +1063,19 @@ static int mir_address_is_rematerializable_candidate(int value)
     int memory_offset;
     int uses;
 
-    if (definition == NULL || definition->opcode != MIR_ADDRESS ||
-        mir_declared_is_vla_object(definition->name) ||
-        !mir_scalar_memory_location(definition, &memory_type,
-                                    &memory_storage, &memory_offset))
+    if (definition == NULL)
         return 0;
     uses = mir_value_use_count(value);
-    return uses > 0 && uses <= 2;
+    if (uses <= 0)
+        return 0;
+    if (definition->opcode == MIR_ADDRESS &&
+        !mir_declared_is_vla_object(definition->name) &&
+        mir_scalar_memory_location(definition, &memory_type,
+                                   &memory_storage, &memory_offset) &&
+        uses <= 2)
+        return 1;
+    return mir_cfg_block_count() == 1 &&
+           mir_address_is_block_cse_rematerializable(value);
 }
 
 static int mir_address_is_rematerializable(int value)
@@ -4314,7 +4426,7 @@ void mir_emit_virtual_load(FILE *out, int value)
         return;
     }
     if (mir_address_is_rematerializable(value)) {
-        if (!mir_emit_address_to_hl(out, definition))
+        if (!mir_emit_address_value_to_hl(out, value))
             fatal("cannot rematerialize MIR address");
         return;
     }
@@ -7450,7 +7562,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (mir_address_is_rematerializable(insn->dst))
                 break;
             {
-            if (!mir_emit_address_to_hl(out, insn))
+            if (!mir_emit_address_value_to_hl(out, insn->dst))
                 goto done;
             mir_emit_virtual_store(out, insn->dst);
             break;
@@ -7472,6 +7584,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             if (mir_value_only_used_by_stable_pointer_argument(insn->dst))
                 break;
+            if (mir_address_is_rematerializable(insn->dst))
+                break;
             if (mir_emit_constant_absolute_address_value(out, insn))
                 break;
             mir_emit_virtual_load(out, insn->src1);
@@ -7484,6 +7598,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             const struct MirInsn *index_definition =
                 mir_definition(insn->src2);
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
+                break;
+            if (mir_address_is_rematerializable(insn->dst))
                 break;
             if (mir_emit_constant_absolute_address_value(out, insn))
                 break;

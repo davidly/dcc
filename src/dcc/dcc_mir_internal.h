@@ -476,6 +476,8 @@ void mir_begin_branch_condition_forwarding(void);
 void mir_end_branch_condition_forwarding(void);
 void mir_begin_address_rematerialization(void);
 void mir_end_address_rematerialization(void);
+void mir_begin_block_cse_address_rematerialization(void);
+void mir_end_block_cse_address_rematerialization(void);
 int mir_address_rematerialization_candidate_count(void);
 void mir_begin_phi_slot_cleanup(void);
 void mir_end_phi_slot_cleanup(void);
