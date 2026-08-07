@@ -14039,3 +14039,161 @@ all.
 No code change in this item (documentation/validation correction only).
 Coverage unchanged: **908/2026 ordinary (44.82%)**, **930/2128 stack-check
 (43.70%)**.
+## Item T416: fixed the two remaining post-T413 forced-accept correctness bugs in `wide-store-cost` by closing two distinct "slotless wide reload" holes (+0, 2026-08-08)
+
+Follow-up on T413 started by re-testing the two still-open functions the user
+called out after the push/pop-ordering fix:
+
+- `tvapinit.join` still miscompiled under
+  `DCC_MIR_FORCE_ACCEPT_FUNCTION=join`, printing
+  `tvapinit len=0 commas=1 str=, delta`.
+- `tap.first_implementation` still miscompiled under
+  `DCC_MIR_FORCE_ACCEPT_FUNCTION=first_implementation`, skipping the entire
+  first implementation's progress output and jumping straight to
+  `second implementation...`.
+
+Both were still ordinary fallback rows under `wide-store-cost` and both still
+verified as broken on integrated `7541812`, so this was a fresh, separate bug
+hunt rather than a re-test of the already-fixed T413 mechanism.
+
+### Root cause 1: `tvapinit.join`'s loop-carried wide `pos` update was treated
+### as one-use "forward to the next store" even though a backedge phi still
+### needed it
+
+The wrong value was `v39 = pos + strlen(s)`, a 32-bit loop-carried update.
+Its next textual consumer is the immediate `store v39 pos`, so
+`mir_can_forward_hl_de_to_next()` / `mir_wide_backend_slot_forwardable()`
+treated it as slot-free direct-next forwardable. But `v39` also feeds the
+loop-header phi `v12 = v4,v39 pos {o1}` on the backedge - and that phi appears
+*earlier* in the MIR stream than the definition because it is on the loop
+header.
+
+The old forwardability check only scanned **later textual uses**, so it missed
+that phi edge use entirely. The emitter therefore skipped both the real backend
+slot and the real spill store for `v39`; later, the phi-copy reload tried to
+read the value anyway. With no assigned slot, `mir_emit_virtual_load_wide()`
+fell through to `mir_virtual_offset(value)`'s value-ID fallback and emitted the
+bogus pseudo-slot reload visible in the forced `.MAC`:
+
+`ld l,(ix-90) / ld h,(ix-89) / ld e,(ix-92) / ld d,(ix-91)`
+
+Those bytes are not `pos`; they are just "value 39 treated as if it were a
+real stack slot". That corrupted the loop-carried `pos` state and explains the
+observed `len=0 commas=1 str=, delta` output.
+
+**Fix:** add a narrow `mir_value_has_phi_use()` guard inside
+`mir_can_forward_hl_de_to_next()`. A wide value is no longer considered
+"direct-next forwardable" when any phi still consumes it, because a loop-header
+phi can be an earlier textual instruction while remaining a real live edge use.
+
+### Root cause 2: `tap.first_implementation`'s `prev * 10` compare skipped the
+### RHS constant's slot as though the 16-bit multiply-by-constant fast path
+### applied to 32-bit multiply
+
+The bad value here was the wide constant `v30 = 10` used in
+`v31 = prev * 10`. The reservation-time helper
+`mir_multiply_by_small_constant()` was intended for the **narrow/HL**
+`mir_mul_const_fast_path` family, but it never checked the value/consumer width.
+So a 32-bit `MIR_CONST 10` incorrectly qualified, causing slot reservation to
+skip the RHS constant entirely.
+
+Wide multiply emission has **no corresponding 32-bit constant-fast-path**.
+When the later wide binary emitter tried to reload `v30`, it again had no real
+slot and fell through to `mir_virtual_offset(value)`'s value-ID fallback,
+emitting the bogus pseudo-slot load seen in the forced `.MAC`:
+
+`ld l,(ix-82) / ld h,(ix-81) / ld e,(ix-84) / ld d,(ix-83)`
+
+That is value-ID 30 masquerading as a frame slot, not the literal 10. The
+subsequent `i == prev * 10` progress-print compare therefore used garbage and
+never fired.
+
+**Fix:** restrict `mir_multiply_by_small_constant()` to `<=2`-byte constants and
+`<=2`-byte multiply consumers - exactly the scope the actual `mir_mul_const_`
+fast path already supports.
+
+### Code change
+
+Two surgical correctness fixes in `dcc_mir_spilled_cfg.c`:
+
+1. Add `mir_value_has_phi_use()` and make wide direct-next forwarding decline
+   any value still used by a phi.
+2. Restrict `mir_multiply_by_small_constant()` to narrow multiply shapes only.
+
+No gate/threshold changes; this only fixes bad forced-accept codegen.
+
+### Validation
+
+**Direct reproduction before the fix (same integrated HEAD, before editing):**
+
+- `tvapinit.join` printed:
+  `tvapinit len=0 commas=1 str=, delta`
+- `tap.first_implementation` printed no first-implementation progress lines at
+  all before `second implementation...`
+
+**Direct reproduction after the fix:**
+
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=join ./dccmake tests/tvapinit.c ...`
+  plus direct `ntvcm` run now prints the exact baseline:
+  `tvapinit len=25 commas=3 str=alpha, beta, gamma, delta`
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=first_implementation ./dccmake tests/tap.c ...`
+  plus direct `ntvcm` run now prints the exact baseline first-implementation
+  progress lines at 10 / 100 / 1000 iterations before continuing to the second
+  implementation.
+
+**Focused full-mode correctness/perf confirmation:**
+
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=join pwsh ./scripts/runall.ps1 -Apps tvapinit -Mode full -RunTimeout 20`
+  now passes correctness in both modes, but still regresses performance:
+  peep **+7.26% cycles / +4.44% bytes**, nopeep **+7.67% / +2.17% bytes**.
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=first_implementation pwsh ./scripts/runall.ps1 -Apps tap -Mode full -RunTimeout 20`
+  now passes correctness in both modes, but still regresses performance:
+  peep **+0.66% cycles / +3.51% bytes**, nopeep **+0.73% / +3.45% bytes**.
+
+So the functions are now **correct but still unprofitable**, meaning the
+existing `wide-store-cost` gate remains load-bearing exactly as intended.
+
+**Fresh census compare vs baseline:**
+
+- Ordinary coverage unchanged: **908/2026 (44.82%)**
+- Stack-check coverage unchanged: **930/2128 (43.70%)**
+- Newly MIR-emitted: **0** in both modes
+- No longer MIR-emitted: **0** in both modes
+- `tvapinit.join` stayed fallback `wide-store-cost`
+  (**2922 -> 2983 generated bytes**, selected hash unchanged)
+- `tap.first_implementation` stayed fallback `wide-store-cost`
+  (**3231 -> 3306 generated bytes**, selected hash unchanged)
+
+The unchanged selected hashes confirm that no currently-shipped binary changed:
+this is a pure latent-correctness fix for force-admitted candidates, just like
+T413.
+
+**Milestone validation:**
+
+- `sh src/dcc/build-dcc.sh`
+- Full extended gate after host rebuild with `pwsh ./scripts/build-dcc.ps1`:
+  **314/323 passed, 0 failed, 9 skipped; Extended/Diagnostics/Dccpeep/Perf all
+  passed** (~36.6s).
+
+**Independent cross-check against the T415 residual finding (foreground integrator, before landing this fix)**:
+re-tested `adaint.var_or_const_decl` and `forint.run_prog` under
+`DCC_MIR_FORCE_ACCEPT_FUNCTION` with this exact fix applied, specifically
+their `ttt`/`sieve` extra scenarios (the ones T415 found still broken after
+T413). **Both remain broken, unchanged, after this fix too**:
+`adaint.var_or_const_decl` still aborts with `adaint:14: sym full near ';'`
+on `ttt.ada` / `adaint:5: sym full near ';'` on `sieve.ada`;
+`forint.run_prog` still produces wrong output on `ttt.for`/`sieve.for`. This
+confirms the phi-forwarding fix above (`mir_can_forward_hl_de_to_next`'s new
+`mir_value_has_phi_use` guard) and the wide-multiply fix
+(`mir_multiply_by_small_constant`'s `<=2`-byte restriction) are **specific to
+the `tvapinit.join`/`tap.first_implementation` mechanism** and do **not**
+extend to whatever is still wrong in `adaint.var_or_const_decl`/
+`forint.run_prog`'s `ttt`/`sieve` scenarios. That residual pair is confirmed
+to be a **third, still-separate, still-unfixed** correctness bug - not
+explained by either fix landed so far. Updated project-wide bug tally: **7
+of 15 confirmed correctness bugs now fully fixed** (5 from T413 +
+`tvapinit.join`/`tap.first_implementation` from this item), **2 confirmed
+still open under a distinct, unidentified third mechanism**
+(`adaint.var_or_const_decl`, `forint.run_prog`, both only on their
+loop-heavier extra scenarios), **~6 still not re-tested against any of these
+fixes**.

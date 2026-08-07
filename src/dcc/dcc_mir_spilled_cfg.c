@@ -49,6 +49,7 @@ static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
 static int mir_planned_stack_matches_consumer(int value, int instruction);
 static int mir_planned_stack_is_emitted(int value);
+static int mir_value_has_phi_use(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
@@ -512,6 +513,14 @@ static int mir_can_forward_hl_de_to_next(int value)
     } else {
         return 0;
     }
+    /* A loop-header phi can consume this value on a backedge even when the
+     * phi instruction textually appears earlier in the stream than the
+     * immediate next-use candidate. The linear later-use scan below would miss
+     * that edge use and incorrectly treat the value as single-use forwardable,
+     * leaving later wide reloads to read from a slot that was never assigned
+     * (tvapinit.join's loop-carried `pos` update). */
+    if (mir_value_has_phi_use(value))
+        return 0;
     for (instruction = next_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -867,6 +876,20 @@ static int mir_value_only_used_by_phi_copies_or_dead_stores(int value)
         return 0;
     }
     return found_phi_use;
+}
+
+static int mir_value_has_phi_use(int value)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_PHI &&
+            (insn->src1 == value || insn->src2 == value))
+            return 1;
+    }
+    return 0;
 }
 
 static int mir_scalar_constant_is_rematerializable(int value)
@@ -1245,7 +1268,8 @@ static int mir_multiply_by_small_constant(int value)
     int uses = 0;
     int instruction;
 
-    if (definition == NULL || definition->opcode != MIR_CONST)
+    if (definition == NULL || definition->opcode != MIR_CONST ||
+        type_size(definition->type) > 2)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -1253,7 +1277,8 @@ static int mir_multiply_by_small_constant(int value)
             return 0;
         if (insn->src2 != value)
             continue;
-        if (insn->opcode != MIR_BINARY || insn->immediate != '*')
+        if (insn->opcode != MIR_BINARY || insn->immediate != '*' ||
+            type_size(insn->secondary_offset) > 2)
             return 0;
         ++uses;
     }
