@@ -27,6 +27,7 @@
 #define MIR_SPILLED_FEATURE_PROMOTED_LOCAL_SLOT   (1UL << 10)
 #define MIR_SPILLED_FEATURE_WIDE_BINARY_RHS       (1UL << 11)
 #define MIR_SPILLED_FEATURE_WIDE_STORE            (1UL << 12)
+#define MIR_SPILLED_FEATURE_PHI_SLOT              (1UL << 13)
 
 #define MIR_SPILLED_FEATURES_RHS \
     (MIR_SPILLED_FEATURE_RHS_STACK | MIR_SPILLED_FEATURE_STORE_VALUE | \
@@ -50,6 +51,8 @@
 #define MIR_SPILLED_FEATURES_ALL \
     (MIR_SPILLED_FEATURES_PROMOTED_LOCAL | \
      MIR_SPILLED_FEATURE_WIDE_BINARY_RHS | MIR_SPILLED_FEATURE_WIDE_STORE)
+#define MIR_SPILLED_FEATURES_PHI_SLOT \
+    (MIR_SPILLED_FEATURES_ALL | MIR_SPILLED_FEATURE_PHI_SLOT)
 
 struct MirCandidateDescriptor {
     const char *name;
@@ -150,6 +153,12 @@ static void mir_configure_spilled_fallback_features(
             mir_begin_wide_store_forwarding();
         else
             mir_end_wide_store_forwarding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_PHI_SLOT) != 0) {
+        if (enabled)
+            mir_begin_phi_slot_cleanup();
+        else
+            mir_end_phi_slot_cleanup();
     }
 }
 
@@ -1181,7 +1190,8 @@ static void mir_report_spilled_candidate_matrix(int label_base)
         {"global-argument", MIR_SPILLED_FEATURES_GLOBAL_ARG},
         {"stack-argument", MIR_SPILLED_FEATURES_CALL_STACK},
         {"promoted-local-slot", MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
-        {"all", MIR_SPILLED_FEATURES_ALL}
+        {"all", MIR_SPILLED_FEATURES_ALL},
+        {"phi-slot", MIR_SPILLED_FEATURES_PHI_SLOT}
     };
     int label_id_save = label_id;
     int mir_count_save = mir.count;
@@ -2306,6 +2316,7 @@ void mir_end_function(void)
             int global_argument_retry_attempted = 0;
             int wide_argument_stack_retry_attempted = 0;
             int promoted_local_slot_retry_attempted = 0;
+            int phi_slot_retry_attempted = 0;
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
             int block_cse_retry_attempted = 0;
@@ -2344,6 +2355,7 @@ retry_selection:
             global_argument_retry_attempted = 0;
             wide_argument_stack_retry_attempted = 0;
             promoted_local_slot_retry_attempted = 0;
+            phi_slot_retry_attempted = 0;
             strict_phi_retry_attempted = 0;
             strict_phi_fallthrough_active = 0;
             mir_end_all_spilled_fallback_optimizations();
@@ -3715,6 +3727,50 @@ evaluate_generated:
                     mir_end_address_rematerialization();
                     mir_end_all_spilled_fallback_optimizations();
                     address_rematerialization_active = 0;
+                }
+                /* Item T402 (mir-text-size-plan.md): the same-slot phi
+                 * spill/reload cleanup is a real large-gap backedge
+                 * reducer, but bounded full-mode A/B on near-cost or
+                 * already-byte-profitable functions found regressions.
+                 * Keep it as a final spilled-selector retry only for
+                 * backedge bodies that are still materially over budget
+                 * after every earlier retry, so it improves the targeted
+                 * text-size cluster without perturbing selected output. */
+                if (fallback_reason != NULL &&
+                    !strcmp(selector_name, "spilled-scalar-cfg") &&
+                    mir_has_cfg_backedge() &&
+                    (generated_size > captured_size + 64 ||
+                     generated_instructions > captured_instructions + 4) &&
+                    (!strcmp(fallback_reason, "instruction-count") ||
+                     !strcmp(fallback_reason, "text-size") ||
+                     !strcmp(fallback_reason, "cfg-backedge") ||
+                     !strcmp(fallback_reason, "wide-constant-cost") ||
+                     !strcmp(fallback_reason, "rhs-stack-cost") ||
+                     !strcmp(fallback_reason, "planned-stack-cost") ||
+                     !strcmp(fallback_reason,
+                             "dead-store-forwarding-cost") ||
+                     !strcmp(fallback_reason,
+                             "indirect-store-address-cost")) &&
+                    !phi_slot_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    struct MirCandidateDescriptor candidate;
+                    struct MirCandidateResult result;
+
+                    phi_slot_retry_attempted = 1;
+                    mir_init_spilled_candidate(
+                        &candidate, "phi-slot",
+                        "cannot create MIR phi-slot candidate stream",
+                        MIR_SPILLED_FEATURES_PHI_SLOT);
+                    mir_build_spilled_candidate(
+                        &candidate, &result, mir_label_base);
+                    if (mir_adopt_candidate_result(&generated, &result)) {
+                        selector_name = "spilled-scalar-cfg";
+                        emitted = 1;
+                        generated_label_id_after = result.label_id_after;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    mir_close_candidate_result(&result);
                 }
                 if (fallback_reason != NULL)
                     emitted = 0;

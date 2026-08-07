@@ -13190,3 +13190,110 @@ This is the reusable, validated call-result slice of
 (`adaint`/`fint`) are explicitly **not** safe to admit from this same
 evidence; they need a different address-quality improvement rather than a
 threshold change.
+
+## Item T406: same-slot phi-source spill/reload cleanup is real, but safe rollout is a fallback-metric enabler only (+0, 2026-08-07)
+
+**Status: landed as a production-safe architectural enabler; selected output
+unchanged.** Picked up the post-T400 same-slot spill/reload cluster by
+re-mining the current ordinary `text-size` bucket in the integrated
+`dbfe255` worktree (**905/2026 ordinary**, **927/2128 stack-check** baseline).
+The fresh forced-accept scan still found **116** ordinary functions with the
+narrow contiguous same-slot round-trip, so the lead survived integration and
+was worth a bounded root-cause pass.
+
+**Representative inspection (8 functions):**
+`tarray6.fill_l`, `catalan.div_small`,
+`attnc11.{convert_weight_group,transposed_matrix_vector_multiply,add_outer_product}`,
+`adaint.isword`, `tstfield.add_word`, and `bint.add_string`.
+
+**Root cause found:** the dominant family is **not** same-block reload CSE and
+not a stable-home budget miss. In multi-block spilled CFG functions, entry
+constants that exist only to seed a `MIR_PHI` get their own backend slots,
+then the phi destination gets a second slot, so the entry edge emits an
+immediate store/reload/store round-trip. On some backedges the updating value
+already reuses the phi destination slot, but phi-copy emission still emits a
+dead copy instead of proving it is a slot-identity no-op. This showed up in
+loop induction variables (`i = 0`), wide loop-carried accumulators
+(`long r = 0`), and branch-return phis (`return 1` / `return 0`). `bint.
+add_string` was a real outlier (same-block base/index preservation around
+`strs[nstr] = xstrdup(s)`), so I did **not** generalize from it.
+
+**Code change:** added a spilled-selector-only "phi-slot cleanup" feature.
+
+- Multi-block scalar/wide constants become rematerializable **only** when they
+  are used exclusively by phi copies or dead stores.
+- Phi-copy collection skips copies whose source and destination already occupy
+  the exact same backend-slot range.
+- Both behaviors are behind begin/end hooks and are **not** active in the
+  default selector path.
+
+The first broad production retry proved why that scoping matters: wiring this
+cleanup in early enough to admit new functions did shrink several near-cost
+fallbacks, but focused full-mode A/B immediately found real performance
+regressions in the newly emitted `a1.getc_load_file`, `terrno.expect_errno`,
+`pint.isword`, `tfldparr.main`, and `trowptr.main`. So the mechanism is real,
+but a blind production rollout is unsafe.
+
+**Final safe rollout:** keep the cleanup as a **final spilled-scalar-cfg retry
+only for backedge bodies that are still materially over budget after every
+earlier retry** (`generated_bytes > captured_bytes + 64` or
+`generated_insns > captured_insns + 4`). That keeps already-selected and
+near-cost functions on the incumbent path while still improving the targeted
+large-gap loop cluster's fallback metrics.
+
+**Direct evidence on representative target functions:**
+
+- `attnc11.convert_weight_group`: **1027 -> 839** bytes, **93 -> 78** insns
+  (`text-size` -> `text-size`)
+- `attnc11.add_outer_product`: **1614 -> 1426** bytes, **140 -> 126** insns
+  (`text-size` -> `rhs-stack-cost`)
+- `attnc11.transposed_matrix_vector_multiply`: **1901 -> 1697** bytes,
+  **165 -> 149** insns (`text-size` -> `text-size`)
+- `catalan.div_small`: **2332 -> 1993** bytes, **191 -> 173** insns
+  (`text-size` -> `wide-constant-cost`)
+- `tarray6.fill_l`: **3418 -> 3250** bytes, **301 -> 289** insns
+  (`text-size` -> `text-size`)
+
+That is the real structural payoff of the lead: it removes a repeated slot
+round-trip class across the large-gap fallback population, but the remaining
+gate blockers (`text-size`, `rhs-stack-cost`, `wide-constant-cost`,
+`cfg-backedge`) are still doing real work.
+
+**Measured scope of the enabler:**
+
+- Ordinary census: **87** fallback functions changed generated metrics/reasons
+  with **0 selected-hash changes**; total generated savings
+  **15,848 bytes / 1,083 insns**.
+- Of the original **116** mined narrow same-slot ordinary functions,
+  **53** improved, totalling **8,809 bytes / 588 insns** saved.
+- Stack-check census: **106** fallback functions changed generated
+  metrics/reasons with **0 selected-hash changes**; total generated savings
+  **21,401 bytes / 1,482 insns**.
+
+**Validation:**
+
+- Rebuilt host tools with `pwsh ./scripts/build-dcc.ps1` (needed so the full
+  gate's `dccpeep` fixture step could actually run in this worktree).
+- Ordinary census compare vs integrated baseline:
+  **905/2026 -> 905/2026 (44.67%)**, zero regressions, **0 newly MIR-emitted**,
+  **0 no-longer MIR-emitted**, **0 apps requiring runtime validation**.
+- Stack-check census compare:
+  **927/2128 -> 927/2128 (43.56%)**, zero regressions, same zero selected
+  output changes.
+- Full non-extended gate (`runall.ps1 -Mode full -RunTimeout 30`):
+  **314/323 passed, 9 skipped, 0 failed**, diagnostics passed, dccpeep
+  fixtures passed, performance passed (~28.0s).
+- Full extended gate
+  (`runall.ps1 -Mode full -Extended -RunTimeout 30`):
+  **314/323 passed, 9 skipped, 0 failed**, extended suite passed,
+  diagnostics passed, dccpeep fixtures passed, performance passed (~32.0s).
+
+**Conclusion / stop condition result:** the same-slot spill/reload cluster
+*does* have a real reusable structural predicate (phi-source/backend-slot
+duplication), but bounded production widening showed that directly admitting
+the resulting near-cost candidates regresses real apps. The safe outcome for
+this session is therefore a committed **architectural enabler with zero
+selected-output change**, not a coverage jump. The remaining outlier family
+(`bint.add_string` and similar same-block base/index preservation) is still
+separate and should be ranked independently rather than folded into this phi
+class.

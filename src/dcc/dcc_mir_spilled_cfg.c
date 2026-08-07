@@ -88,6 +88,7 @@ static int mir_prepacked_after_argument = -1;
 static int mir_prepacked_result_value = -1;
 static int mir_constant_argument_prepack_count;
 static int mir_promoted_local_slot_reuse_enabled;
+static int mir_phi_slot_cleanup_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
@@ -835,13 +836,48 @@ static int mir_call_only_constant(int value)
     return argument_count == 1;
 }
 
+/* Multi-block functions normally keep constants in backend slots rather than
+ * rematerializing them repeatedly. Phi-entry seeds are different: the only
+ * surviving use on that edge is the phi copy itself, so a dedicated slot for
+ * the source constant buys nothing beyond a spill/reload round-trip. Allow
+ * dead object stores alongside the phi use because fully-promoted locals still
+ * leave their initializing MIR_STORE in the stream even though emission drops
+ * it. */
+static int mir_value_only_used_by_phi_copies_or_dead_stores(int value)
+{
+    int instruction;
+    int found_phi_use = 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 != value && insn->src2 != value &&
+            !mir_call_uses_value(insn, value))
+            continue;
+        if (insn->opcode == MIR_STORE && insn->src1 == value &&
+            (mir_object_is_fully_promoted(insn->object) ||
+             mir_store_is_dead(instruction)))
+            continue;
+        if (insn->opcode == MIR_PHI &&
+            (insn->src1 == value || insn->src2 == value)) {
+            found_phi_use = 1;
+            continue;
+        }
+        return 0;
+    }
+    return found_phi_use;
+}
+
 static int mir_scalar_constant_is_rematerializable(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
 
-    return definition != NULL && definition->opcode == MIR_CONST &&
-           type_size(definition->type) <= 2 &&
-           (mir_cfg_block_count() == 1 || mir.has_vla);
+    if (definition == NULL || definition->opcode != MIR_CONST ||
+        type_size(definition->type) > 2)
+        return 0;
+    if (mir_cfg_block_count() == 1 || mir.has_vla)
+        return 1;
+    return mir_phi_slot_cleanup_enabled &&
+           mir_value_only_used_by_phi_copies_or_dead_stores(value);
 }
 
 static int mir_string_address_is_rematerializable(int value)
@@ -856,11 +892,15 @@ static int mir_wide_constant_is_rematerializable(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
 
-    return definition != NULL &&
-           (definition->opcode == MIR_CONST ||
-            definition->opcode == MIR_FLOAT_CONST) &&
-           type_size(definition->type) == 4 &&
-           mir_cfg_block_count() == 1;
+    if (definition == NULL ||
+        (definition->opcode != MIR_CONST &&
+         definition->opcode != MIR_FLOAT_CONST) ||
+        type_size(definition->type) != 4)
+        return 0;
+    if (mir_cfg_block_count() == 1)
+        return 1;
+    return mir_phi_slot_cleanup_enabled &&
+           mir_value_only_used_by_phi_copies_or_dead_stores(value);
 }
 
 void mir_begin_address_rematerialization(void)
@@ -871,6 +911,16 @@ void mir_begin_address_rematerialization(void)
 void mir_end_address_rematerialization(void)
 {
     mir_address_rematerialization_enabled = 0;
+}
+
+void mir_begin_phi_slot_cleanup(void)
+{
+    mir_phi_slot_cleanup_enabled = 1;
+}
+
+void mir_end_phi_slot_cleanup(void)
+{
+    mir_phi_slot_cleanup_enabled = 0;
 }
 
 static int mir_address_is_rematerializable_candidate(int value)
@@ -5120,6 +5170,7 @@ static int mir_emit_scalar_operation(FILE *out, const struct MirInsn *insn)
 static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
                                        int successor);
 static int mir_phi_copies_are_empty(int predecessor, int successor);
+static int mir_phi_copy_is_slot_identity(int source, int destination);
 
 static const char *mir_invert_z80_condition(const char *condition)
 {
@@ -6084,6 +6135,11 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
                                          successor, instruction);
         if (source < 0)
             return -1;
+        if (mir_phi_slot_cleanup_enabled &&
+            mir_phi_copy_is_slot_identity(source, phi->dst)) {
+            ++instruction;
+            continue;
+        }
         if (copy_count >= MAX_FLOW)
             return -1;
         sources[copy_count] = source;
@@ -6127,6 +6183,18 @@ static int mir_phi_copy_value_slot_range(int value, int *base, int *width)
     *base = slot;
     *width = mir_value_is_wide(value) ? 2 : 1;
     return 1;
+}
+
+static int mir_phi_copy_is_slot_identity(int source, int destination)
+{
+    int source_base, source_width;
+    int destination_base, destination_width;
+
+    return mir_phi_copy_value_slot_range(source, &source_base, &source_width) &&
+           mir_phi_copy_value_slot_range(destination, &destination_base,
+                                         &destination_width) &&
+           source_base == destination_base &&
+           source_width == destination_width;
 }
 
 /* T399: true only when no copy's destination slot overlaps any *other*
