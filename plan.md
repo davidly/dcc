@@ -15,9 +15,28 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **902/2026 (44.52%)**
-- Current stack-check coverage: **924/2128 (43.42%)**
-- Latest production cohort: T396, signed wide-constant relational inline
+- Current ordinary coverage: **908/2026 (44.82%)**
+- Current stack-check coverage: **930/2128 (43.70%)**
+- Latest production cohort: T405, call-result direct-reload narrow
+  `storeind` (Stream B) - +2/+2 coverage, landed alongside T400
+  (Stream D's MIR-only scalar address-escape filter, +3/+3), T403
+  (Stream C's centralized named-address resolver + field-aware CSE,
+  +1/+1), and T402/T406 (two zero-net architectural enablers: direct-
+  reload wide storeind path, and phi-slot spill/reload cleanup for
+  large-gap backedges). This "next 20%" wave's 4-stream parallel
+  execution (foreground correctness stream + 3 background
+  implementation agents, one integrator) found real wins early but has
+  hit multiple confirmed dead ends in its most recent round:
+  `block-cse-cost` needs a selector-local MIR rollback or a real
+  retained/rematerialized base planner (not another bounded VN
+  extension - T407), `inline-substitution` needs TU-wide callee
+  materialization or true MIR-native inlining, `phi-fallthrough-cost`
+  and `wide-store-cost` (T408) show no safe generalizable predicate.
+  Two additional confirmed correctness bugs under forced admission were
+  found and safely excluded by existing gates: `tvapinit.join` and
+  `tap.first_implementation` (same class as T401's
+  `adaint.var_or_const_decl` - loop/backedge-shaped forwarding bugs).
+- Earlier cohort: T396, signed wide-constant relational inline
   compare - ported legacy's `emit_signed_long_const_cmp_ast` exactly
   (sign-flip + biased 32-bit `sbc` sequence) as MIR's own inline codegen
   for a wide relational compare against a compile-time constant on the

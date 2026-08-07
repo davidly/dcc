@@ -13446,3 +13446,45 @@ Recorded the candidate-level evidence in `mir-dead-ends.tsv` so this bucket
 does not get re-mined later under the same false absolute-store hypothesis.
 Coverage stays unchanged at **908/2026 ordinary (44.82%)** and
 **930/2128 stack-check (43.70%)**.
+
+## Item T409: inline-substitution and phi-fallthrough-cost both dead-end this wave (+0, 2026-08-07)
+
+**inline-substitution (47 ordinary):** forced-accept correctness testing on
+four representative functions (`tinline:main`, `cobint:compile_perform`,
+`attnc11:transposed_multiply_8x16`, `tchess:positional_value`) all failed
+correctness. Direct inspection of `build/TINLMIR.MAC` for `tinline:main`
+showed the emitted MIR calls inline-only helper labels (`_Z0001`/`_Z0002`/
+`_Z0003` for `scale3`/`helper_add`/`helper_sub`) that have **no corresponding
+emitted body** anywhere in the translation unit — MIR assumes these callees
+are always substituted inline and never materializes a real callable
+version. This is a fundamentally different problem than a cost-gate margin:
+the bucket needs either translation-unit-wide inline-callee materialization
+planning (emit a real body for any inline-only function MIR decides not to
+substitute) or true MIR-native inlining (splice the callee's MIR directly at
+the call site). Both are substantially larger scope than a bounded session
+investigation. T197/T67's earlier bounded local fixes (direct
+return-expression substitution; direct-callee `deferred_body_needed` check)
+remain the exhausted state of the art here — do not re-attempt those same
+mechanisms.
+
+**phi-fallthrough-cost (44 ordinary):** the bucket's only two genuine
+shallow near-misses, `forint:ensure_sym` (margin -9) and `too:bst_height`
+(margin -5), still regress under forced accept against the current
+integrated HEAD: `forint:ensure_sym` peep cycles rise 711741372 ->
+711744182, and `too:bst_height` peep cycles rise 1875182 -> 1876117
+(+0.05%). Both are correctness-clean, so this remains a genuine cost gate,
+not a masked bug — but with no separating predicate found across two actual
+near-miss candidates, there is no reusable class to extract at this margin
+band.
+
+**Validation:** focused full-mode `runall.ps1 -Apps ... -Mode full` on all
+six functions across both buckets. No code change; both are confirmed dead
+ends recorded in `mir-dead-ends.tsv`. Coverage unchanged: **908/2026
+ordinary (44.82%)**, **930/2128 stack-check (43.70%)**.
+
+**Binding guidance:** `inline-substitution` should not be revisited without
+a translation-unit-wide materialization/inlining design (a substantial new
+architecture item, not a bounded fix). `phi-fallthrough-cost` has now had
+its only two real near-miss candidates tested and both lose — treat as
+gate-margin-exhausted per the T394-T399 pattern until the population shifts
+significantly from further integrations.
