@@ -45,6 +45,8 @@ static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
 static int mir_value_has_direct_named_home(int value);
+static int mir_call_result_direct_reload_indirect_store_target(int value);
+static int mir_value_currently_uses_stack_handoff(int value, int instruction);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
@@ -353,6 +355,24 @@ static int mir_is_branch_condition_forward(int value, int consumer)
     return consumer >= 0 && consumer < mir.count &&
            mir.insns[consumer].opcode == MIR_BRANCH_FALSE &&
            mir.insns[consumer].src1 == value;
+}
+
+/* Like the wide T402 helper below, but kept narrow for the current
+ * call-result/storeind slice: a 1/2-byte storeind can consume a directly
+ * forwarded value only when its address can be reloaded at the store site
+ * without relying on an in-flight stack handoff. */
+static int mir_indirect_store_address_has_direct_reload(
+    const struct MirInsn *store)
+{
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        store->bit_width > 0 || store->memory_size <= 0 ||
+        store->memory_size > 2 ||
+        store->src1 < 0 || store->src1 >= mir.next_value)
+        return 0;
+    if (mir_constant_absolute_access_supported(store) ||
+        mir_value_has_direct_named_home(store->src1))
+        return 1;
+    return mir.backend_slots != NULL && mir.backend_slots[store->src1] >= 0;
 }
 
 /* A wide storeind can consume a forwarded DE:HL value without first forcing
@@ -4476,6 +4496,7 @@ static int mir_consume_planned_stack(FILE *out, int value, int instruction,
 static void mir_emit_virtual_store(FILE *out, int value)
 {
     int dynamic_index_forward;
+    int direct_reload_storeind_target;
     int forward_to_store;
     int has_slot;
     int forward_instruction;
@@ -4500,6 +4521,13 @@ static void mir_emit_virtual_store(FILE *out, int value)
         fputs("\tld c,l\n\tld b,h\n", out);
         mir_cached_call_value = value;
         mir_cached_call_instruction = call_instruction;
+        return;
+    }
+    direct_reload_storeind_target =
+        mir_call_result_direct_reload_indirect_store_target(value);
+    if (direct_reload_storeind_target >= 0) {
+        mir_forwarded_hl_value = value;
+        mir_forwarded_hl_instruction = direct_reload_storeind_target - 1;
         return;
     }
     forward_instruction = mir_planned_stack_target(value);
@@ -4708,6 +4736,42 @@ static int mir_wide_constant_uses_new_rematerialization(int value)
            !mir_stack_backend_slot_forwardable(value, 2, instruction) &&
            !mir_value_only_used_by_dead_stores(value) &&
            !mir_value_only_used_by_dead_unary(value);
+}
+
+static int mir_call_result_direct_reload_indirect_store_target(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *store;
+    int skipped_label;
+    int target;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_CALL ||
+        mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 1 >= mir.count)
+        return -1;
+    target = mir_forward_skip_target_ex(mir_emit_instruction_index,
+                                        &skipped_label);
+    if (skipped_label || target < 0 || target >= mir.count)
+        return -1;
+    store = &mir.insns[target];
+    if (store->opcode != MIR_STORE_INDIRECT || store->src2 != value ||
+        mir_constant_absolute_access_supported(store) ||
+        !mir_indirect_store_address_has_direct_reload(store) ||
+        mir_value_currently_uses_stack_handoff(
+            store->src1, target))
+        return -1;
+    for (instruction = target + 1;
+         instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value)
+            return -1;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            mir_call_uses_value(insn, value))
+            return -1;
+    }
+    return target;
 }
 
 static int mir_divmod_partner(int instruction)
@@ -7526,6 +7590,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                       "\tld a,h\n\tor d\n\tld h,a\n"
                       "\tex de,hl\n\tld h,b\n\tld l,c\n"
                       "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+                break;
+            }
+            if (!mir_constant_absolute_access_supported(insn) &&
+                mir_forwarded_hl_value == insn->src2 &&
+                mir_forwarded_hl_instruction + 1 == i &&
+                mir_indirect_store_address_has_direct_reload(insn) &&
+                !mir_value_currently_uses_stack_handoff(insn->src1, i)) {
+                fputs("\tpush hl\n", out);
+                mir_forwarded_hl_value = -1;
+                mir_forwarded_hl_instruction = -1;
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tpop de\n\tld (hl),e\n", out);
+                if (insn->memory_size > 1)
+                    fputs("\tinc hl\n\tld (hl),d\n", out);
                 break;
             }
             if (insn->memory_size == 4) {

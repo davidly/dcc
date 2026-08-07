@@ -13088,3 +13088,105 @@ re-mined by a future session using the same tool naively.
 
 No code change. Coverage unchanged at the current integration point:
 **906/2026 ordinary (44.72%)**, **928/2128 stack-check (43.61%)**.
+
+## T405: call-result direct-reload narrow `storeind` path for dynamic-index-base near-misses (2026-08-07)
+
+Fresh integrated baseline in the new worktree first, per the project
+discipline:
+
+- ordinary: **906/2026 (44.72%)**
+- stack-check: **928/2128 (43.61%)**
+- `dynamic-index-base-cost`: **98 ordinary / 99 stack-check**
+
+The first bounded job here was to re-separate the assigned
+call-result/wide-value slice from the rest of that bucket instead of
+re-mining generic index-arithmetic candidates. Re-ran the current
+near-miss ranking and then forced full-mode A/B on the exact family T403
+had deferred as "now in this bucket, but out of scope there":
+
+- `cint.add_string`: **clean win**
+- `cobint.add_string`: **clean win**
+- `adaint.add_string`: **peep +0.08% cycles regression**
+- `fint.add_string`: **peep +0.45% bytes regression**
+
+Direct MIR-dump inspection showed the four functions share the same
+31-instruction, 2-block MIR skeleton:
+
+1. read `nstr`
+2. increment/store it
+3. compute `strs[i]`
+4. call `xstrdup2(s)`
+5. `storeind` the returned pointer into `strs[i]`
+6. return `i`
+
+The real split is not the call/store shape itself but the address root:
+
+- `cint` / `cobint` are the fixed-global form (`address Gst` / bare global
+  arrays), which T403's centralized named-address resolver had already
+  made byte-competitive.
+- `adaint` / `fint` are the pointer-rooted form (`load G`, then
+  `memberaddr`), which still carries extra address-setup traffic and
+  remains a loser even after the call-result round-trip is removed.
+
+That made the current job a bounded emitter-quality fix, not a gate
+relaxation: after `xstrdup2(s)` the scalar spilled backend still wrote the
+call result to a temporary slot and immediately reloaded it just to feed
+the following narrow `storeind`, even when the store address itself could
+already be reloaded directly from a backend slot/named home. This is the
+16-bit analogue of T402's wide direct-reload `storeind` infrastructure.
+
+**Implemented fix in `dcc_mir_spilled_cfg.c`:**
+
+- `mir_indirect_store_address_has_direct_reload()` recognizes 1/2-byte
+  `MIR_STORE_INDIRECT` destinations whose address can be reloaded from a
+  constant absolute address, a stable named home, or an existing backend
+  slot.
+- `mir_call_result_direct_reload_indirect_store_target()` detects the
+  narrow, immediate, no-skipped-label `MIR_CALL` -> `MIR_STORE_INDIRECT`
+  shape and arms a one-shot HL forwarding handoff instead of forcing the
+  call result through its own slot first.
+- `MIR_STORE_INDIRECT` now has the matching emission-time path: save the
+  forwarded call result, reload the address, then write the byte/word
+  directly.
+
+Deliberately **did not** widen this to arbitrary producers or pointer-
+rooted `G->...` families in the same batch. The fresh forced-accept split
+above is the evidence that a broader "all call-result storeind" judgment
+would be unsafe as a profitability rule, even though the emitter change is
+correct.
+
+**Result:**
+
+- `cint.add_string`: `729/63` -> `667/58`, now MIR-accepted
+- `cobint.add_string`: `724/63` -> `662/58`, now MIR-accepted
+
+The pointer-rooted losers improved but correctly stayed on fallback:
+
+- `adaint.add_string`: `1064/96` -> `1002/91`, still
+  `dynamic-index-base-cost`
+- `fint.add_string`: `1064/96` -> `1002/91`, still
+  `dynamic-index-base-cost`
+
+The fix also shrank many still-fallback candidate streams (15 apps changed
+metrics), but produced **no out-of-scope admissions**. Notably
+`bint.add_string` improved from `732/64` to `670/59` yet remained
+`text-size` fallback, so this stream did not trespass into that bucket.
+
+**Validation:**
+
+- ordinary census compare:
+  **906 -> 908/2026 (44.82%)**, zero removals
+- stack-check census compare:
+  **928 -> 930/2128 (43.70%)**, zero removals
+- newly emitted in both modes:
+  `cint.add_string`, `cobint.add_string`
+- focused full-mode validation:
+  `pwsh ./scripts/runall.ps1 -Apps cint,cobint,too -Mode full -RunTimeout 20`
+  -> 3/3 passed, 0 regressions; `cint`, `cobint`, and the already-active
+  `too` improvements all measured cleanly
+
+This is the reusable, validated call-result slice of
+`dynamic-index-base-cost`. The remaining pointer-rooted variants
+(`adaint`/`fint`) are explicitly **not** safe to admit from this same
+evidence; they need a different address-quality improvement rather than a
+threshold change.
