@@ -4600,6 +4600,9 @@ static int mir_consume_planned_stack(FILE *out, int value, int instruction,
 
 static void mir_emit_virtual_store(FILE *out, int value)
 {
+    const struct MirInsn *definition = mir_definition(value);
+    int force_slot_store = definition != NULL &&
+                           definition->opcode == MIR_PHI;
     int dynamic_index_forward;
     int direct_reload_storeind_target;
     int forward_to_store;
@@ -4630,13 +4633,14 @@ static void mir_emit_virtual_store(FILE *out, int value)
     }
     direct_reload_storeind_target =
         mir_call_result_direct_reload_indirect_store_target(value);
-    if (direct_reload_storeind_target >= 0) {
+    if (!force_slot_store &&
+        direct_reload_storeind_target >= 0) {
         mir_forwarded_hl_value = value;
         mir_forwarded_hl_instruction = direct_reload_storeind_target - 1;
         return;
     }
     forward_instruction = mir_planned_stack_target(value);
-    if (forward_instruction >= 0) {
+    if (!force_slot_store && forward_instruction >= 0) {
         if (mir_forwarded_stack_value >= 0 &&
             mir_forwarded_stack_target_instruction <
                 mir_emit_instruction_index) {
@@ -4677,12 +4681,13 @@ static void mir_emit_virtual_store(FILE *out, int value)
          * this same HL-forwarding path (never stored to memory) - still set
          * up the forwarding handoff so the immediately-following use skips
          * its own reload; anything else with no slot is genuinely dead. */
-        if (mir_can_forward_hl_to_next(value)) {
+        if (!force_slot_store && mir_can_forward_hl_to_next(value)) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
             if (mir_is_branch_condition_forward(value, forward_instruction))
                 ++mir_spilled_cfg_branch_condition_forwarding_count;
-        } else if (mir_can_forward_hl_to_call_argument(value)) {
+        } else if (!force_slot_store &&
+                   mir_can_forward_hl_to_call_argument(value)) {
             /* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots'
              * reservation pass now also skips allocating a slot for values
              * mir_can_forward_hl_to_call_argument alone proves (the
@@ -4699,7 +4704,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction =
                 mir_call_argument_after_nops(mir_emit_instruction_index);
-        } else if ((forward_instruction =
+        } else if (!force_slot_store &&
+                   (forward_instruction =
                     mir_stack_forward_target(
                         value, &dynamic_index_forward)) >= 0) {
             pending_planned_consumer =
@@ -4723,23 +4729,27 @@ static void mir_emit_virtual_store(FILE *out, int value)
         }
         return;
     }
-    forward_to_store = mir_can_forward_hl_to_next(value) &&
+    forward_to_store = !force_slot_store &&
+        mir_can_forward_hl_to_next(value) &&
         forward_instruction < mir.count &&
         mir.insns[forward_instruction].opcode == MIR_STORE;
-    if (!forward_to_store && mir_can_forward_hl_to_next(value)) {
+    if (!force_slot_store &&
+        !forward_to_store && mir_can_forward_hl_to_next(value)) {
         mir_forwarded_hl_value = value;
         mir_forwarded_hl_instruction = forward_instruction - 1;
         if (mir_is_branch_condition_forward(value, forward_instruction))
             ++mir_spilled_cfg_branch_condition_forwarding_count;
         return;
     }
-    if (mir_can_forward_hl_to_call_argument(value)) {
+    if (!force_slot_store &&
+        mir_can_forward_hl_to_call_argument(value)) {
         mir_forwarded_hl_value = value;
         mir_forwarded_hl_instruction =
             mir_call_argument_after_nops(mir_emit_instruction_index);
         return;
     }
-    if ((forward_instruction = mir_stack_forward_target(
+    if (!force_slot_store &&
+        (forward_instruction = mir_stack_forward_target(
              value, &dynamic_index_forward)) >= 0) {
         pending_planned_consumer = mir_pending_planned_stack_consumer();
         if (pending_planned_consumer >= 0 &&
@@ -4760,7 +4770,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_spilled_cfg_used_dynamic_index_base_forwarding = 1;
         return;
     }
-    {
+    if (!force_slot_store) {
         int call_instruction = mir_call_argument_cache_target(value);
         if (call_instruction >= 0) {
             fputs("\tld c,l\n\tld b,h\n", out);
@@ -5007,6 +5017,9 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
 
 static void mir_emit_virtual_store_wide(FILE *out, int value)
 {
+    const struct MirInsn *definition = mir_definition(value);
+    int force_slot_store = definition != NULL &&
+                           definition->opcode == MIR_PHI;
     int has_slot;
     int helper_consumer;
     int offset;
@@ -5042,7 +5055,8 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         mir_cached_wide_call_instruction = call_instruction;
         return;
     }
-    if (mir_wide_helper_lhs_consumer(
+    if (!force_slot_store &&
+        mir_wide_helper_lhs_consumer(
             value, mir_emit_instruction_index, &helper_consumer) &&
         mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
         mir_wide_helper_lhs_span_is_safe(
@@ -5055,7 +5069,8 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         mir_forwarded_wide_stack_consumer = helper_consumer;
         return;
     }
-    if (mir_wide_binary_rhs_forwarding_enabled &&
+    if (!force_slot_store &&
+        mir_wide_binary_rhs_forwarding_enabled &&
         mir_emit_instruction_index + 1 < mir.count &&
         mir_wide_binary_rhs_pair_supported(
             value, &mir.insns[mir_emit_instruction_index + 1]) &&
@@ -5082,7 +5097,8 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
      * the same acceptable tradeoff Item 13 documented for the scalar
      * path before mir_prepare_backend_slots grew its own forwarding
      * awareness. */
-    if (mir_can_forward_hl_de_to_next(value)) {
+    if (!force_slot_store &&
+        mir_can_forward_hl_de_to_next(value)) {
         int forward_instruction =
             mir_forward_skip_target(mir_emit_instruction_index);
         mir_forwarded_wide_value = value;
@@ -5094,7 +5110,7 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
     if (!has_slot)
         return;
     int call_instruction = mir_call_argument_cache_target(value);
-    if (call_instruction >= 0) {
+    if (!force_slot_store && call_instruction >= 0) {
         fputs("\texx\n", out);
         mir_cached_wide_call_value = value;
         mir_cached_wide_call_instruction = call_instruction;

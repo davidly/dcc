@@ -14277,3 +14277,110 @@ emitter fix worth landing immediately.
 
 No code change in this item (documentation/validation + lead search only).
 Coverage unchanged: **908/2026 ordinary (44.82%)**.
+## Item T418: materialize phi destinations on copy edges (+0, 2026-08-08)
+
+I continued the expanded correctness-cluster pass by **splitting the two phi
+experiments apart** instead of keeping the earlier stacked prototype:
+
+1. **Hidden phi-edge source-use guard only**
+2. **Phi-destination exact-store guard only**
+
+That split matters because the earlier combined prototype looked promising on
+`tvapinit.join` and `tenumfsm.scan`, but I had not yet measured which part was
+actually safe enough to keep.
+
+### 1. Source-side hidden-phi-use guard is real, but not landable as-is
+
+Re-testing only the source-side guard confirmed the earlier `tvapinit.join`
+finding: it is a real correctness fix for the loop-carried wide `pos` source
+that was being treated as forwardable even though the backedge phi still needed
+the materialized value.
+
+However, a focused 12-app census compare against the baseline
+(`adaint,cint,cobint,fint,forint,pint,tc99scpe,thoistbc,tnestfor,tqsort,tvla,wumpus`)
+showed that **this source-side guard alone regresses existing mixed-mode
+coverage**, removing 9 already-admitted MIR functions:
+
+- `adaint.while_stmt`
+- `cint.main`
+- `cobint.check_idx_get`
+- `cobint.main`
+- `fint.inline_word`
+- `pint.main`
+- `tc99scpe.pointer_for_init_sizeof`
+- `thoistbc.main`
+- `wumpus.safeo`
+
+So the `tvapinit` source-side bug is real, but the current broad "treat every
+hidden phi-edge use as non-forwardable" implementation is **too expensive to
+land unchanged**. That half of the prototype is therefore still a documented
+future subproblem, not a commit from this batch.
+
+### 2. Phi-destination exact-store guard is coverage-neutral and fixes `tenumfsm.scan`
+
+The second half **does** isolate cleanly. The root cause behind
+`tenumfsm.scan` is that the scalar/wide phi-copy fast paths
+(`copy_count == 1` and the disjoint-copy group path in
+`mir_emit_spilled_phi_copies`) reuse the normal `mir_emit_virtual_store*()`
+helpers for the destination value. Those helpers are correct for ordinary SSA
+values, but for a **phi destination** they can arm forwarding/planned-stack/
+call-cache handoffs instead of actually materializing the destination slot.
+
+That is wrong for an edge copy whose whole job is to establish the successor
+phi home before control re-enters the loop header. In the forced-bad
+`tenumfsm.scan` assembly, the new `state` value was computed into the temporary
+slot at `ix-8/ix-7` and the backedge jumped straight to `L30` without ever
+writing the loop-header phi slot at `ix-6/ix-5`; the next iteration therefore
+re-entered with stale state.
+
+The landed code change is narrow: when `mir_emit_virtual_store()` or
+`mir_emit_virtual_store_wide()` is storing a value whose definition is
+`MIR_PHI`, suppress the store-elision fast paths and emit the actual slot store.
+This fixes the phi-destination materialization bug **without** changing
+ordinary mixed-mode coverage:
+
+- ordinary census compare: **908/2026 -> 908/2026**
+- stack-check census compare: **930/2128 -> 930/2128**
+- newly MIR-emitted: **0**
+- no longer MIR-emitted: **0**
+
+Forced MIR for `tenumfsm.scan` is now correctness-clean in both modes, and the
+new focused harness
+
+```text
+pwsh ./scripts/mir-forced-correctness.ps1
+```
+
+passes with `tests/mir_forced_correctness_cases.tsv` containing
+`tenumfsm<TAB>scan`.
+
+This does **not** fix the separate `tvapinit.join` source-side bug: with the
+destination-only fix in place, forced MIR for `tvapinit.join` still reproduces
+the known wrong output. So the expanded correctness cluster now has a firmer
+split:
+
+- **phi-destination materialization bug** — fixed here (`tenumfsm.scan`)
+- **phi-source hidden-edge-use bug** — still real, but current broad fix is too
+  coverage-expensive to land (`tvapinit.join`)
+- plus the previously documented other non-phi or not-yet-shared bug classes
+  (`tpfauto`, `tap`, dispatch-loop family, Group C)
+
+### Validation
+
+- `DCC_MIR_FORCE_ACCEPT_FUNCTION=scan pwsh ./scripts/runall.ps1 -Apps tenumfsm -Mode full -RunTimeout 20`
+  - correctness: **PASS**
+  - performance remains regression-gated (so production still correctly falls
+    back):
+    - peep cycles **18431 -> 19121 (+3.74%)**
+    - nopeep cycles **19355 -> 20131 (+4.01%)**
+- `pwsh ./scripts/mir-forced-correctness.ps1`
+  - **PASS**
+- `python3 scripts/mir-migration-census.py --output build/round5/precommit/mir-after-dest.tsv --compare build/round5/precommit/mir-before.tsv --fail-on-regression`
+  - **PASS**, no admissions lost or gained
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/round5/precommit/mir-after-dest-stack.tsv --compare build/round5/precommit/mir-before-stack.tsv --fail-on-regression`
+  - **PASS**, no admissions lost or gained
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  - **314 passed / 9 skipped / 0 failed**
+  - diagnostics: **passed**
+  - dccpeep fixtures: **passed**
+  - extended suite: **passed**
