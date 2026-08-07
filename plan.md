@@ -12,18 +12,18 @@ The long-term goal is 100% MIR-required coverage and removal of legacy
 capture/replay only after the runnable and extended corpora pass.
 
 - Branch: `perf/unified-regalloc`
-- Published baseline: `45cf3f0`
-- Published ordinary coverage: **890/2026 (43.93%)**
-- Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **890/2026 (43.93%)**
-- Current stack-check coverage: **912/2128 (42.86%)**
-- Latest production cohort: T384, homed-scalar-cfg dead-store value elision
-  (`mir_value_only_used_by_dead_stores` ported from spilled-scalar-cfg),
-  +2 ordinary/+2 stack-check, zero removals, focused full-mode and full
-  extended gates clean.
+- Published baseline: `ea82965`
+- Published ordinary coverage: **891/2026 (43.98%)**
+- Published stack-check coverage: **913/2128 (42.90%)**
+- Current ordinary coverage: **891/2026 (43.98%)**
+- Current stack-check coverage: **913/2128 (42.90%)**
+- Latest production cohort: T386, `phi-fallthrough-cost` threshold narrowed
+  from -10 to -9 instructions (admits exactly `forint:ensure_sym`, the one
+  function in the census that newly qualifies), +1 ordinary/+1 stack-check,
+  zero removals, focused full-mode and full extended gates clean.
 - New tooling: `scripts/mir-gate-margins.py`, a generic per-reason-bucket
   near-miss ranker consuming the existing census TSV (no per-gate formula
-  duplication). Used to find the T384 near-misses; re-run after every
+  duplication). Used to find the T384/T386 near-misses; re-run after every
   architectural change to re-rank remaining populations.
 - New tooling: `scripts/mir-mac-ngram-miner.py`, a generic n-gram miner for
   the two largest heterogeneous fallback populations (`text-size`,
@@ -36,10 +36,10 @@ capture/replay only after the runnable and extended corpora pass.
 
 | milestone | ordinary target | gain from current |
 | --- | ---: | ---: |
-| 45% | 912 | +22 |
-| 50% | 1,013 | +123 |
-| 55% | 1,115 | +225 |
-| 60% | 1,216 | +326 |
+| 45% | 912 | +21 |
+| 50% | 1,013 | +122 |
+| 55% | 1,115 | +224 |
+| 60% | 1,216 | +325 |
 
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
