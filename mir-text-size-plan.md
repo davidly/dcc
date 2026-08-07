@@ -12296,3 +12296,112 @@ once combined with other campaigns. `plan100-reband-unary-wide-constant`
 is complete: `unary-not-cost` confirmed mined out, `wide-constant-cost`
 partially mined with one real fix landed and one real fix scoped for
 later.
+
+## T395: exhaustive fresh-bucket re-ranking after T394 - isolated non-generalizable winners only (2026-08-XX)
+
+Following T394, ran `mir-gate-margins.py --exclude-known mir-dead-ends.tsv
+--min-population 10 --top 5` across all 16 remaining fallback buckets
+(text-size, boolean-phi-cost, block-cse-cost, dynamic-index-base-cost,
+unary-not-cost, inline-substitution, wide-constant-cost,
+phi-fallthrough-cost, wide-store-cost, dead-local-suffix-cost,
+planned-index-base-cost, absolute-index-cost, absolute-address-cost,
+cfg-backedge, constant-conversion-frame-cost, planned-stack-cost) to find
+any further real, generalizable wins beyond T394. Cross-checked every
+top-ranked candidate's actual `generated_bytes`/`captured_bytes` (not just
+the tool's instruction-based ranking) per the session's established
+lesson that instruction-count proximity does not reliably predict
+byte-margin proximity or forced-accept outcome.
+
+**`plan100-dead-local-suffix` (`tlngcond.main`) investigated first and
+closed as NOT a quick win.** `DCC_MIR_DEAD_LOCAL_REPORT=1` confirmed the
+function's 3 dead locals are already fully elided via the pre-existing
+`mir_object_is_fully_promoted` mechanism (`dcc_mir_spilled_cfg.c` ~line
+7112) - the dead-store-elision hypothesis was wrong. Direct assembly
+diffing (MIR vs legacy `.mac`) showed MIR is actually smarter in the
+dead-local dimension but loses the +42-byte gap through deeper
+call-argument stack-spilling/frame-depth differences (frame reaches
+`ix-16` in MIR vs shallower in legacy) - a distinct, larger
+call-argument-evaluation-order/backend-slot-allocation topic, not a
+dead-local-elision defect. Deferred; this bucket's positive-delta
+population (T384's prior finding) needs that larger architecture item,
+not a targeted dead-local fix.
+
+**Three buckets each produced 2-3 real, forced-accept-confirmed clean
+wins with NO safe generalizable threshold**, mirroring exactly the
+pattern already established for `wide-constant-cost`'s 3 boundary-value
+losers in T394 and for `planned-stack-cost`'s `tc89fp.main` (already
+documented in `mir-dead-ends.tsv` from a prior session as a single
+confirmed win with no derivable `calls>=N` boundary):
+
+1. **`dynamic-index-base-cost`** (existing rule: reject when
+   `mir_call_count() > 0 && generated_instructions > captured_instructions
+   - 15`). Tested all 8 candidates with `call_count() > 0` and instruction
+   margin in `[0, 14]` (below the existing 15-instruction threshold, i.e.
+   the population the threshold is specifically excluding). Two passed
+   cleanly: `bint.dim_stmt` (margin 8, peep -0.1%/nopeep -0.53% bytes) and
+   `wumpus.rdchr` (margin 3, nopeep -0.13% cycles/-0.78% bytes). The other
+   six (`too.run_query`, `tvla.vla_computed`, `tvla.vla_1d`,
+   `tvlax.rec_probe`, `tvariad.check_macro_values`,
+   `tvla.vla_memset_sizeof`) all failed or produced no clean measurement,
+   including `tvariad.check_macro_values` regressing badly (peep +4.5%,
+   nopeep +5.53% cycles) and `tvla.vla_memset_sizeof` sharing the exact
+   same margin (8) as the winning `bint.dim_stmt` yet not passing. No
+   monotonic split by margin, blocks, objects, or promoted-loads count was
+   found separating the 2 winners from the 6 losers.
+
+2. **`absolute-address-cost`** (existing rule excludes `blocks == 2`
+   candidates via `mir_is_profiled_constant_absolute_no_worse`, a
+   restriction originally added for `cobint.emit_tok`'s T154-era
+   regression). `cobint.emit_tok` is now already accepted in production
+   through the independent `mir_is_profiled_slotless_two_block_win` path,
+   so that original regression no longer depends on this exclusion.
+   Tested all 6 `blocks == 2` candidates satisfying
+   `generated_size <= captured_size && generated_instructions <=
+   captured_instructions`: `cint.add_string`, `cobint.add_string`, and
+   `cobint.tget` passed cleanly (all real cycle/byte improvements, zero
+   regressions); `cint.emit`, `cobint.add_stmt`, and `cobint.add_var`
+   regressed. A `memberaddr`-instruction-count split looked promising at
+   first (winners: 0/3/3; losers: 11/17/33) but `cobint.emit_tok` (already
+   accepted, `memberaddr=9`) sits squarely between the two populations,
+   ruling it out as a safe discriminator. Struct-`objects` count also
+   failed to discriminate (`cobint.add_stmt`, a loser, has `objects=1`
+   identical to the winning `cint.add_string`).
+
+3. **`block-cse-cost`** (existing accept path requires
+   `selector == "homed-scalar-cfg" && mir_cfg_block_count() == 1 &&
+   generated_instructions <= captured_instructions - 5`; candidates using
+   the `spilled-scalar-cfg` selector are unconditionally rejected
+   regardless of block count or margin). Tested all `spilled-scalar-cfg`,
+   `blocks == 1` candidates with instruction margin `>= 5` (the same
+   margin already proven safe for `homed-scalar-cfg`): `a1.op_pop_pf`
+   (margin 9) passed cleanly (peep -0%, nopeep -0%) despite a slightly
+   unfavorable byte delta (+2); the other three (`cint.while_stmt` margin
+   22, `tpfauto.main` margin 16, `cobint.compile_stmt` margin 13,
+   `tstruct.main` margin 6) all failed, including `tstruct.main` which
+   regressed badly (peep +0.34%/+2% bytes) despite the most favorable byte
+   delta of the four (-584). No safe extension of the proven
+   `homed-scalar-cfg` margin rule to `spilled-scalar-cfg` exists on this
+   evidence.
+
+**Disposition: no code change made this round.** Per the non-negotiable
+rule against app/function-name exceptions and the T386 lesson against
+single-function threshold nudges, none of these 7 confirmed clean wins
+(`bint.dim_stmt`, `wumpus.rdchr`, `cint.add_string`, `cobint.add_string`,
+`cobint.tget`, `a1.op_pop_pf`, plus the already-known `tc89fp.main`) can
+be safely promoted without either a name-based exception or a threshold
+that would simultaneously admit one or more confirmed regressions in the
+same bucket. All 18 tested candidates (7 winners including `tc89fp.main`,
+11 confirmed losers/inconclusive) are now recorded in `mir-dead-ends.tsv`
+with full A/B evidence, so future sessions do not re-derive the same
+non-generalizable conclusions. This consistent pattern, recurring
+independently across three unrelated buckets in one census re-ranking
+pass, reinforces that the remaining ~1,129-function ordinary fallback
+population is now dominated by isolated candidates requiring either (a)
+a real architectural change (call-argument slot allocation, signed
+wide-constant inline compare, phi-forwarding-across-labels - all already
+scoped in `plan.md`) or (b) case-by-case exceptions this project's rules
+correctly prohibit, not further gate-margin mining at the current level
+of granularity.
+
+Coverage unchanged this round: **897/2026 ordinary (44.27%)**,
+**919/2128 stack-check (43.19%)**.

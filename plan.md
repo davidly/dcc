@@ -17,6 +17,13 @@ capture/replay only after the runnable and extended corpora pass.
 - Published stack-check coverage: **912/2128 (42.86%)**
 - Current ordinary coverage: **897/2026 (44.27%)**
 - Current stack-check coverage: **919/2128 (43.19%)**
+- Latest finding: T395, exhaustive fresh-bucket re-ranking after T394
+  found 7 real, forced-accept-confirmed clean-win candidates across 3
+  buckets (`dynamic-index-base-cost`, `absolute-address-cost`,
+  `block-cse-cost`) but **no safe generalizable threshold** for any of
+  them (each bucket also produced confirmed regressions at the same or
+  more favorable margins) - no code change, coverage unchanged at
+  897/919. All 18 tested candidates recorded in `mir-dead-ends.tsv`.
 - Latest production cohort: T394, unsigned wide-constant relational
   compares (`u_gtbig`/`u_lebig`-style) - legacy has no inline shortcut for
   unsigned wide relational compares against a constant either (it also
@@ -161,6 +168,37 @@ lexical-scan extension (tracking `base.field =`/`base->field =`/
 excludes any dotted/arrow-qualified identifier from its write/addr-taken
 tracking) - a real, but separately-scoped, follow-on with materially higher
 soundness risk than the bare-global case just completed.
+
+**T395 (this segment)** ran one more exhaustive fresh census re-ranking
+across all 16 remaining buckets (`mir-gate-margins.py --exclude-known
+mir-dead-ends.tsv`) specifically to check whether any instruction-based
+near-miss also had a genuine byte-margin near-miss underneath it. First
+closed `plan100-dead-local-suffix`: `tlngcond.main`'s dead locals are
+already fully elided by the existing `mir_object_is_fully_promoted`
+mechanism (the dead-store-elision hypothesis was wrong); its +42-byte gap
+traces to deeper call-argument stack-spilling/frame-depth differences, a
+separate and larger architecture topic, not a quick fix. Then forced-accept
+tested every remaining candidate in three buckets whose existing threshold
+excludes a plausible-looking population:
+`dynamic-index-base-cost` (8 candidates below the proven 15-instruction
+margin: 2 clean wins, 6 failures, no monotonic split by margin/blocks/
+objects/promoted-loads), `absolute-address-cost` (6 `blocks==2` candidates
+excluded by a T154-era restriction whose original regressor,
+`cobint.emit_tok`, is now accepted through a different path: 3 clean wins,
+3 failures, `memberaddr`-count looked promising until `emit_tok`'s own
+count fell between the two populations), and `block-cse-cost` (4
+`spilled-scalar-cfg` `blocks==1` candidates at the same margin already
+proven safe for `homed-scalar-cfg`: 1 clean win, 3 failures including one
+that regressed despite the single most favorable byte delta of the four).
+**Conclusion: this pattern - a small number of real, individually-verified
+wins with no generalizable predicate separating them from confirmed
+regressions in the same bucket - now recurs independently across three
+unrelated buckets in one pass**, on top of `wide-constant-cost`'s identical
+finding in T394 and `planned-stack-cost`'s pre-existing `tc89fp.main`
+entry. No code change; all 18 tested candidates (7 winners, 11 losers/
+inconclusive) recorded in `mir-dead-ends.tsv` with full A/B evidence so
+future sessions do not re-derive the same conclusions. Coverage unchanged:
+897/919.
 
 **Continued per-bucket near-miss mining is no longer a viable path to 45%,
 let alone 60%.** The remaining leads are all architecture items, not gate
