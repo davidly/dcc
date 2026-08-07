@@ -50,6 +50,7 @@ static int mir_value_currently_uses_stack_handoff(int value, int instruction);
 static int mir_planned_stack_matches_consumer(int value, int instruction);
 static int mir_planned_stack_is_emitted(int value);
 static int mir_value_has_phi_use(int value);
+static int mir_pointer_value_has_single_safe_named_home_use(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
@@ -3195,12 +3196,101 @@ static int mir_pointer_value_is_aggregate_address(int value)
     return 0;
 }
 
+/* Item T425: the T424/T55 classifier work proved that some single-use pointer
+ * parameters are semantically safe, but forcing them through full object
+ * promotion is still too expensive for trivial `return p;` / `*p` shapes and
+ * wider than needed for `*p = bool_expr`, where the only real win is avoiding
+ * the redundant "load parameter -> spill backend slot -> reload later as the
+ * address operand" round trip. For an objectless pointer parameter whose sole
+ * use is exactly one direct dereference/address formation/return, treat the
+ * incoming named `ix+N` home as stable and let later uses reload from there
+ * on demand instead of manufacturing a backend slot. This recovers
+ * `tbool.set_bool`'s win without re-admitting the broader object-promotion
+ * path that cost T424 its `+1/-3` experiment. */
+static int mir_pointer_value_has_single_safe_named_home_use_recursive(
+    int value, int *use_count, unsigned char *visiting)
+{
+    int instruction;
+
+    if (value < 0 || value >= mir.next_value || visiting[value])
+        return 0;
+    visiting[value] = 1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int uses_src1 = insn->src1 == value;
+        int uses_src2 = insn->src2 == value;
+
+        if (mir_call_uses_value(insn, value)) {
+            visiting[value] = 0;
+            return 0;
+        }
+        if (!uses_src1 && !uses_src2)
+            continue;
+        if (insn->opcode == MIR_ARG && uses_src1) {
+            visiting[value] = 0;
+            return 0;
+        }
+        if (insn->opcode == MIR_UNARY && uses_src1 &&
+            insn->immediate == 0 && insn->dst >= 0 &&
+            type_ptr_depth(insn->type) > 0) {
+            if (!mir_pointer_value_has_single_safe_named_home_use_recursive(
+                    insn->dst, use_count, visiting)) {
+                visiting[value] = 0;
+                return 0;
+            }
+            continue;
+        }
+        ++*use_count;
+        if (*use_count > 1) {
+            visiting[value] = 0;
+            return 0;
+        }
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_INDEX_LOAD ||
+             insn->opcode == MIR_INDEX_ADDRESS ||
+             insn->opcode == MIR_MEMBER_ADDRESS ||
+             insn->opcode == MIR_STORE_INDIRECT ||
+             insn->opcode == MIR_RETURN) &&
+            uses_src1)
+            continue;
+        visiting[value] = 0;
+        return 0;
+    }
+    visiting[value] = 0;
+    return *use_count == 1;
+}
+
+static int mir_pointer_value_has_single_safe_named_home_use(int value)
+{
+    const struct MirInsn *definition;
+    unsigned char *visiting;
+    int use_count = 0;
+    int eligible;
+
+    if (value < 0 || value >= mir.next_value)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL ||
+        (definition->opcode != MIR_PARAM && definition->opcode != MIR_LOAD) ||
+        type_ptr_depth(definition->type) == 0)
+        return 0;
+    visiting = (unsigned char *)calloc((size_t)mir.next_value, 1);
+    if (mir.next_value > 0 && visiting == NULL)
+        fatal("out of memory planning pointer direct homes");
+    eligible = mir_pointer_value_has_single_safe_named_home_use_recursive(
+        value, &use_count, visiting);
+    free(visiting);
+    return eligible;
+}
+
 /* A value does not need a backend slot while its named IX-relative location
  * remains unchanged. Parameters are stable for the complete function after
  * the no-reassignment proof. A pointer local is stable after its MIR_LOAD when
  * no later store, alias, or backedge can change its slot. Scalar locals remain
  * slot-based: the measured prototype added only one further function and does
- * not justify widening this first local slice. */
+ * not justify widening this first local slice. Item T425 extends the same
+ * "stable named home" idea to objectless single-use pointer parameters whose
+ * sole direct use can simply reload the original incoming `ix+N` address. */
 static int mir_value_has_direct_named_home(int value)
 {
     const struct MirInsn *definition;
@@ -3239,7 +3329,8 @@ static int mir_value_has_direct_named_home(int value)
          mir_has_cfg_backedge()))
         return 0;
     if (!local_home && !has_object &&
-        !mir_pointer_value_is_aggregate_address(value))
+        !mir_pointer_value_is_aggregate_address(value) &&
+        !mir_pointer_value_has_single_safe_named_home_use(value))
         return 0;
     if (mir.has_vla)
         return 0;
