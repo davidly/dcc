@@ -44,6 +44,7 @@ static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
+static int mir_value_has_direct_named_home(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
@@ -354,6 +355,24 @@ static int mir_is_branch_condition_forward(int value, int consumer)
            mir.insns[consumer].src1 == value;
 }
 
+/* A wide storeind can consume a forwarded DE:HL value without first forcing
+ * that value through a dedicated slot only when its address can be reloaded
+ * directly at the store site. Constant-absolute addresses, stable named homes,
+ * and already-assigned backend slots all satisfy that property. Address values
+ * that themselves depend on a stack handoff do not. */
+static int mir_wide_indirect_store_address_has_direct_reload(
+    const struct MirInsn *store)
+{
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        store->bit_width > 0 || store->memory_size != 4 ||
+        store->src1 < 0 || store->src1 >= mir.next_value)
+        return 0;
+    if (mir_constant_absolute_access_supported(store) ||
+        mir_value_has_direct_named_home(store->src1))
+        return 1;
+    return mir.backend_slots != NULL && mir.backend_slots[store->src1] >= 0;
+}
+
 /* Item T40 (mir-text-size-plan.md): the wide (32-bit, HL:DE) analog of
  * mir_can_forward_hl_to_next below. Items 1-32 built a rich forwarding
  * predicate for 16-bit scalar values (this function plus its
@@ -456,6 +475,10 @@ static int mir_can_forward_hl_de_to_next(int value)
                next->opcode == MIR_STORE && next->src1 == value &&
                (next->memory_size == 4 || type_size(next->type) == 4)) {
         /* The named store consumes DE:HL before any other value is formed. */
+    } else if (next->opcode == MIR_STORE_INDIRECT && next->src2 == value &&
+               mir_wide_indirect_store_address_has_direct_reload(next)) {
+        /* The widened storeind path saves DE:HL first, reloads the address
+         * afterward, and then writes the full four-byte value directly. */
     } else if (mir_wide_binary_rhs_forwarding_enabled &&
                next_instruction == mir_emit_instruction_index + 1 &&
                mir_wide_binary_rhs_pair_supported(value, next) &&
@@ -2847,6 +2870,8 @@ static int mir_wide_backend_slot_forwardable(int value, int units,
           (mir_wide_store_forwarding_enabled &&
            next->opcode == MIR_STORE && next->src1 == value &&
            (next->memory_size == 4 || type_size(next->type) == 4)) ||
+          (next->opcode == MIR_STORE_INDIRECT && next->src2 == value &&
+           mir_wide_indirect_store_address_has_direct_reload(next)) ||
           (mir_wide_binary_rhs_forwarding_enabled &&
            mir_wide_binary_rhs_pair_supported(value, next) &&
            next->src2 == value))) {
@@ -4425,6 +4450,15 @@ static int mir_stack_forward_nests_with_planned_left(
         return 0;
     return mir_is_general_rhs_stack_forward(value, consumer) ||
            mir_is_indirect_store_value_stack_forward(value, consumer);
+}
+
+static int mir_value_currently_uses_stack_handoff(
+    int value, int instruction)
+{
+    return (mir_planned_stack_matches_consumer(value, instruction) &&
+            mir_planned_stack_is_emitted(value)) ||
+           (mir_forwarded_stack_value == value &&
+            mir_forwarded_stack_target_instruction == instruction);
 }
 
 static int mir_consume_planned_stack(FILE *out, int value, int instruction,
@@ -6248,6 +6282,24 @@ static int mir_emit_constant_absolute_store(
     return 1;
 }
 
+static int mir_emit_wide_indirect_store(FILE *out,
+                                        const struct MirInsn *insn)
+{
+    if (!mir_constant_absolute_access_supported(insn) &&
+        mir_value_currently_uses_stack_handoff(
+            insn->src1, mir_emit_instruction_index))
+        return 0;
+    if (mir_emit_constant_absolute_store(out, insn))
+        return 1;
+    mir_emit_virtual_load_wide(out, insn->src2);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_virtual_load(out, insn->src1);
+    fputs("\tpop bc\n\tpop de\n"
+          "\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+          "\tinc hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    return 1;
+}
+
 static void mir_report_constant_absolute_addresses(void)
 {
     int instruction;
@@ -7455,8 +7507,6 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
             }
         case MIR_STORE_INDIRECT:
-            if (mir_emit_constant_absolute_store(out, insn))
-                break;
             if (insn->bit_width > 0) {
                 int shift;
                 mir_emit_virtual_load(out, insn->src2);
@@ -7479,15 +7529,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             }
             if (insn->memory_size == 4) {
-                mir_emit_virtual_load(out, insn->src1);
-                fputs("\tpush hl\n", out);
-                mir_emit_virtual_load_wide(out, insn->src2);
-                fputs("\tpop bc\n\tpush de\n\tex de,hl\n"
-                      "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n"
-                      "\tld (hl),d\n\tinc hl\n\tpop de\n"
-                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+                if (!mir_emit_wide_indirect_store(out, insn))
+                    goto done;
                 break;
             }
+            if (mir_emit_constant_absolute_store(out, insn))
+                break;
             if (mir_forwarded_stack_value == insn->src2 &&
                 mir_forwarded_stack_target_instruction == i) {
                 fputs("\tpop de\n", out);

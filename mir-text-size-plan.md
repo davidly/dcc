@@ -12901,3 +12901,81 @@ dominated by the same write, rather than further hand-tracing.
 
 No code change. Coverage unchanged: **902/2026 ordinary (44.52%)**,
 **924/2128 stack-check (43.42%)**.
+
+## T402: wide `storeind` direct-reload path - safe candidate-quality enabler, broad retries backed out (2026-08-07)
+
+Per Campaign 3 item 4, investigated whether the remaining wide-value
+near-misses were still paying the fully generic 4-byte indirect-store
+sequence even when the store address was already reloadable at the use
+site. Read the real gate code first, per the current project rule:
+`wide-store-cost` remains the existing measured multi-block
+wide-store-forwarding gate in `dcc_mir_select.c`; this round did **not**
+change that gate. The implemented change is purely in
+`dcc_mir_spilled_cfg.c`:
+
+- `mir_wide_indirect_store_address_has_direct_reload()` recognizes 4-byte
+  `MIR_STORE_INDIRECT` addresses rooted in a constant-absolute address,
+  a stable named home, or an already-assigned backend slot.
+- `mir_can_forward_hl_de_to_next()` and
+  `mir_wide_backend_slot_forwardable()` now treat that wide storeind as a
+  legal DE:HL consumer, so the producer can stay register-resident
+  instead of being forced through a dedicated 4-byte slot first.
+- `mir_emit_wide_indirect_store()` emits the direct register-pair store
+  form (save DE:HL, reload the address, then write all four bytes in
+  order) and refuses the transformation when the address value is
+  currently using a planned/forwarded stack handoff
+  (`mir_value_currently_uses_stack_handoff()`), preserving the existing
+  stack-forwarding invariants.
+
+This is a real backend-quality improvement, but in the final
+regression-free form it is still only a **candidate-stream** improvement,
+not a new-acceptance change. Ordinary and stack-check census comparisons
+both stayed flat at **902/2026 (44.52%)** and **924/2128 (43.42%)** with
+**0 newly MIR-emitted functions**, **0 lost functions**, and
+**0 apps requiring runtime validation**. The target buckets remained at
+their prior counts (`wide-constant-cost` 41 ordinary / 43 stack-check,
+`dynamic-index-base-cost` 96 / 97, `wide-store-cost` 36 / 38), but 15
+still-fallback candidates got materially smaller:
+
+- `tpostptr.bump_i32`, `bump_u32`: 759/70 -> 629/59
+- `tpostptr.drop_i32`, `drop_u32`: 797/75 -> 667/64
+- `tpostptr.bump_i32_expr`: 952/86 -> 819/75
+- `tarray6.mutate_l`: 1623/155 -> 1363/133
+- `tc89flta.core_rebalance`: 1019/94 -> 889/83
+- `trig.main`: 22128/2065 -> 17188/1647
+- `ttrig.main`: 22683/2138 -> 17743/1720
+- `tptrlhs.touch_locals`: 54802/5221 -> 51770/4968
+- `tarray.test_many`, `tctxops.main`, `tpi.main` also shrank modestly
+
+So the direct-reload/storeind path is definitely doing useful work on the
+assigned wide-value shapes; it just does not yet clear the later
+cost/profitability gates by itself.
+
+Two broader variants were tried and **explicitly backed out** before this
+entry was finalized:
+
+1. Extending constant-absolute 4-byte load/store support admitted
+   out-of-scope `block-cse-cost` / `absolute-index-cost` functions
+   (`tcrcfix.init_crc_tbl`, `too.test_world`, `tc89init.main`, etc.) and
+   focused full-mode validation showed real peep regressions
+   (`tc89init`, `tc89flta`, `too`).
+2. An opt-in retry for multi-block one-use wide-constant
+   rematerialization admitted `mm.main` and other out-of-scope functions;
+   focused full-mode validation regressed `mm` in both peep and nopeep.
+
+Those experiments are recorded as dead ends for this stream and were
+backed out completely. The final committed state is therefore just the
+safe register-pair wide-storeind/direct-reload enabler above.
+
+Validation for the final kept change:
+
+- `python3 scripts/mir-migration-census.py --output build/mir-final.tsv \
+  --compare build/mir-before.tsv --fail-on-regression`
+- `python3 scripts/mir-migration-census.py --extra-args=-fstack-check \
+  --output build/mir-final-stack.tsv --compare build/mir-before-stackcheck.tsv \
+  --fail-on-regression`
+- `pwsh ./scripts/build-dcc.ps1`
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+
+Final full gate: **314/323 passed, 9 skipped, 0 failed**; diagnostics,
+dccpeep fixtures, extended corpus, and checked performance all passed.
