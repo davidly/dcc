@@ -13344,3 +13344,105 @@ multi-session architecture work, not a bounded investigation extension.
 with another bounded VN tweak. Any future attempt must bring one of the two
 structural capabilities above, or it will re-discover the same instability.
 Recorded in `mir-dead-ends.tsv`.
+## Item T408: current `wide-store-cost` population is not blocked on absolute 4-byte `storeind` support (2026-08-07)
+
+Fresh round-3 baseline in the `aa5c3be` worktree first, per the same
+discipline as the earlier batches:
+
+- ordinary: **908/2026 (44.82%)**
+- stack-check: **930/2128 (43.70%)**
+- `wide-store-cost`: **35 ordinary / 37 stack-check**
+
+Before spending time on the "direct absolute 4-byte wide store" idea, I
+re-read the actual gate code instead of assuming the bucket still matched
+the earlier broad absolute-address experiment. The current production gate
+is:
+
+- `dcc_mir_select.c`: reject only when selector=`spilled-scalar-cfg`,
+  `mir_spilled_cfg_depends_on_wide_store_forwarding()`, and
+  `mir_cfg_block_count() != 1`
+- `dcc_mir_spilled_cfg.c`: that dependency bit is set by the **wide
+  `MIR_STORE` forwarding** path itself; the generic absolute-address
+  `MIR_STORE_INDIRECT` helper is not what this bucket currently tracks
+
+That prompted a fresh full-bucket shape classification instead of jumping
+back to the previously-rejected `mir_constant_absolute_access_supported()`
+`mem=4` broadening. Re-dumped every ordinary `wide-store-cost` function and
+counted wide store forms:
+
+- **0 / 35 ordinary candidates contain a 4-byte `storeind`**
+- several already use the existing direct global/extern 4-byte `MIR_STORE`
+  form (`mm.main`, `mm.summit`, `tc89fadd.main`, `tc89fini.main`,
+  `tlmul.main`, ...)
+- the rest are local/param wide stores (`diff`, `pos`, `sofar`, `size`,
+  `sum`, ...)
+
+So the narrow hypothesis "add direct absolute 4-byte `storeind` and this
+bucket falls" is simply false for the current integrated population:
+reintroducing that old storeind path would be **zero-yield here**, while the
+named global/extern direct store form is already present.
+
+With the real mechanism established, I did a bounded forced full-mode A/B
+pass across the current near-miss surface:
+
+**clean wins**
+
+- `tpromo.ck_f`
+- `cpmenumd.file_size`
+
+**measured regressions**
+
+- `tmatha.chkt`
+- `tmathf.chkt`
+- `tatof.chkf`
+- `tclit.check_float`
+- `tctxops.chkf`
+- `too.put_fixed`
+- `pihex.fpart`
+- `pint.calc_code_limit`
+- `mm.summit`
+- `too.board_weight`
+- `too.cells_checksum`
+- `primes.ulsqrt`
+
+**correctness failures under forced accept**
+
+- `tvapinit.join`
+- `tap.first_implementation`
+
+The decisive no-predicate clash is the helper family:
+
+- `tpromo.ck_f` is a **clean win**
+- `tctxops.chkf` is a **regression in both modes**
+
+Yet their MIR is the same 37-insn / 3-block / two-wide-local-store
+"absolute-difference helper" shape: subtract the two floats, store the wide
+temp, negate it on one branch, reload after the join, then compare against a
+tolerance and print on failure. That is the exact kind of repeated local
+pattern I was hoping to promote — and it still splits winner/loser with no
+safe structural predicate short of a banned name exception.
+
+The second decisive split is the two-block local-wide-store cohort:
+
+- `cpmenumd.file_size` is a **clean win**
+- `too.put_fixed`, `pihex.fpart`, and `pint.calc_code_limit` all still
+  regress or mix win/loss
+
+So even "acyclic 2-block wide locals" is not a usable rule.
+
+Most importantly, this bucket is not purely a profitability gate today.
+Forced-accept on `tvapinit.join` and `tap.first_implementation` produces
+real output mismatches, so some of the current multi-block wide-store
+forwarding population is still guarded by **semantic** risk, not just cost.
+Those two functions both carry loop/call-bearing wide locals (`pos`,
+`sofar`, `prev`, `i`) through multi-block CFGs, and they falsify any idea of
+"just relax the current wide-store-cost arm once the margins look small."
+
+**Conclusion / stop condition result:** no code change. The bounded
+investigation found only **isolated wins** plus multiple regressions and two
+real correctness failures, and the bucket's current functions are **not**
+blocked on missing absolute 4-byte `storeind` support in the first place.
+Recorded the candidate-level evidence in `mir-dead-ends.tsv` so this bucket
+does not get re-mined later under the same false absolute-store hypothesis.
+Coverage stays unchanged at **908/2026 ordinary (44.82%)** and
+**930/2128 stack-check (43.70%)**.
