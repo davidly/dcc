@@ -37,16 +37,33 @@ capture/replay only after the runnable and extended corpora pass.
   (T412) all show no safe generalizable predicate, and Stream D's
   `text-size`/`indirect-store-address-cost`/`rhs-stack-cost` follow-up
   on its own T410 infrastructure found 0/12 clean in `rhs-stack-cost`.
-  **Three confirmed correctness bugs** under forced admission have now
-  been found and safely excluded by existing gates, across three
-  independent buckets: `adaint.var_or_const_decl` (cfg-backedge, T401),
-  `tvapinit.join`/`tap.first_implementation` (wide-store-cost, T408),
-  and `forint.run_prog` (unary-not-cost, T412) - all loop/backedge-
-  shaped value-forwarding bugs. Given this is now confirmed across 3+
-  nominally-unrelated buckets, a dedicated root-cause investigation
-  (shared mechanism vs. 4 separate bugs) is in progress as this wave's
-  current top priority, alongside continued mining of untried buckets
-  (`absolute-index-cost`, `dead-local-suffix-cost`).
+  A full sweep of `mir-dead-ends.tsv` found **15 confirmed correctness
+  bugs** logged project-wide under forced admission (all safely excluded
+  by existing gates in production - none currently reachable). Root-cause
+  investigation (T413) found and fixed a genuine miscompilation: T410's
+  call-crossing planned-stack store-address path had a push/pop ordering
+  bug in `dcc_mir_spilled_cfg.c` (`MIR_STORE_INDIRECT`'s call-crossing
+  case popped the call-result value where the planned address should have
+  been popped, and vice versa), corrupting memory whenever that exact
+  shape was force-admitted. Fixed with a 4-line reorder; zero net
+  coverage change (the path was unreachable in production - a latent
+  risk, not a shipped bug). **Scenario-complete re-validation (T415)
+  corrected T413's scope**: only **5 of the 7** originally-tested
+  functions are genuinely fully fixed across every scenario each app
+  declares (`bint.add_string`, `forint.add_stmt`, `tallocx.fill`,
+  `too.bst_insert`, `attnc11.convert_weight_group`); the other 2
+  (`adaint.var_or_const_decl`, `forint.run_prog`) only had their
+  default-scenario symptom fixed - both still fail differently on their
+  `ttt`/`sieve` extra scenarios, confirming a **second, separate,
+  still-unfixed bug** shared with `tvapinit.join`/`tap.first_implementation`
+  (a suspected hidden-phi-edge-use defect in forward-to-next/slot
+  elision, per Stream B's independent lead - not yet root-caused).
+  Status: **5/15 confirmed bugs fully resolved, at least 4/15 confirmed
+  still open under one shared (not yet fixed) second mechanism, ~6/15 not
+  yet re-tested against the T413 fix.** Active investigation continues in
+  parallel with T414 (Stream C's `absolute-index-cost` rematerialization
+  retry, 0 net coverage, real enabler) and continued mining of untried
+  buckets (`dead-local-suffix-cost`, text-size re-bucketing).
 - Earlier cohort: T396, signed wide-constant relational inline
   compare - ported legacy's `emit_signed_long_const_cmp_ast` exactly
   (sign-flip + biased 32-bit `sbc` sequence) as MIR's own inline codegen
@@ -372,6 +389,36 @@ design before the first line of code, not a same-session gate tweak. Follow
 the commit cadence below for every change: focused cohort during
 development, one fresh full-extended gate immediately before commit, push,
 and wait for CI green before starting the next item.
+
+**T413-T415 (this segment, current top priority): correctness-bug cluster
+investigation.** A full sweep of `mir-dead-ends.tsv` found 15 confirmed
+correctness bugs logged project-wide (real miscompiles under forced
+admission, all safely excluded by existing gates - none currently
+reachable in production). Cross-stream MIR-shape comparison found 7 of
+them shared a motif (`address/indexaddr/memberaddr -> call <helper> ->
+storeind`) implicating T410's call-crossing planned-stack store-address
+path. Root-caused and fixed (T413, `b23e1cb`): a push/pop ordering bug in
+`dcc_mir_spilled_cfg.c`'s `MIR_STORE_INDIRECT` call-crossing case popped
+the call-result value where the planned store address should have been
+popped and vice versa, corrupting memory whenever the shape was
+force-admitted. Four-line reorder fix, zero net coverage (path was
+unreachable in production). **Scenario-complete re-validation (T415,
+`5e17047`) corrected T413's scope**: only 5 of the 7 originally-tested
+functions are genuinely fully fixed across every scenario their app
+declares; `adaint.var_or_const_decl` and `forint.run_prog` only had their
+default-scenario symptom fixed - both still fail differently on their
+`ttt`/`sieve` extra scenarios. This confirms a **second, separate,
+still-open bug** shared with `tvapinit.join`/`tap.first_implementation`
+(4 known repro cases now). Leading hypothesis (Stream B, not yet
+confirmed/fixed): a hidden phi-edge-use defect in forward-to-next/slot
+elision; a prototype fix regressed perf 7%+ and was not landed. Status:
+5/15 bugs fully resolved, 4/15 confirmed still open under one shared
+unfixed mechanism, ~6/15 not yet re-tested against T413 (in progress via
+a dedicated sweep). Alongside this, T414 (`7541812`) landed a real,
+zero-net-coverage `absolute-index-cost` rematerialization-retry enabler
+from Stream C. See `mir-text-size-plan.md`'s T413/T414/T415 entries for
+full evidence; do not assume the second bug is fixed until a session
+reports a concrete root cause and a validated patch.
 
 ## Latest production cohort
 
