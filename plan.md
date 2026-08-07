@@ -676,6 +676,38 @@ census (`--fail-on-regression`, both clean), focused full-mode runall on
 correctness harness (7/7 pass), full extended gate (314/323 passed, 9
 skipped, 0 failed).
 
+**T428: multi-block VLA no-worse-metric widening (genuine, evidence-backed
+zero-yield result).** Post-T427 gate-margin re-rank flagged `tvla.vla_
+goto_out` as already no-worse on both static measures (bytes and
+instructions) in a multi-block CFG (5 blocks), outside the scope of the
+only existing VLA win-predicate (`mir_is_profiled_vla_single_block_
+instruction_win`, single-block only). Added a second, unconditionally-safe
+predicate requiring strict no-worse-on-either-metric with no block-count
+restriction. Result: the function clears `text-size` under the new rule
+but is then rejected by a separate `rhs-stack-cost` gate further down the
+selector chain - net coverage effect is **zero**, only a fallback-reason
+relabel. Reverted the code; recorded the finding in `mir-dead-ends.tsv`
+so this exact predicate isn't re-proposed. **Corrected stale todo
+context**: also closed out `next20-cfg-backedge-rootcause`/`-strata` and
+`nongoal-cfg-backedge-bughunt` as superseded by the already-integrated
+T421 finding (search `mir-text-size-plan.md`) that the entire
+`cfg-backedge` bucket, including its structurally-safest correctness-clean
+9-function cohort, is unprofitable under direct forced-accept A/B - this
+bucket is genuinely gate-margin-exhausted, not blocked pending a
+correctness fix, so no further cfg-backedge investigation is queued.
+
+**Stream I now dispatched: `inline-substitution` (45 ordinary
+candidates), the next real architecture lead per the standing 100%-
+coverage directive.** T409 already found this bucket needs either
+translation-unit-wide inline-callee materialization (emit a real callable
+body for any function MIR's static-inline substitution declines to
+splice) or true MIR-native inlining (splice the callee's MIR directly at
+the call site) - a substantial, previously-unattempted architecture
+project, not a bounded fix. Stream I is implementing one of these two
+mechanisms in `/dev/shm/dcc-next20/streamI-inline` (branch `next20/
+streamI-inline`, base `2963e78`) with the full validation cadence
+required before any report-back is trusted.
+
 ## Latest production cohort
 
 The current cohort promotes three measured allocator-backed loop strata after
