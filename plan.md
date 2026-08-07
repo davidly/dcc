@@ -54,6 +54,27 @@ capture/replay only after the runnable and extended corpora pass.
 The ordinary whole-corpus census is the primary metric. Stack-check is a
 mandatory secondary regression guard, not an alternate denominator.
 
+## Immediate next steps
+
+The branch is CI-green and honestly measured as of `6fa6013` (T387). Resume
+Campaign 2 (slots, addresses, CSE, and indexes) toward the 45% milestone
+(+22 ordinary functions needed):
+
+1. Re-run `mir-gate-margins.py` against a fresh census to re-rank near-misses
+   now that T386 is reverted (the `ensure_sym` admission it added is gone;
+   `too:bst_height` and the `absolute-index-cost` near-misses from T383 -
+   `tptrlhs.touch_ptr_to_array_deref`, `tc89init.main` - are the next leads).
+2. Pick up `next50-absolute-resolver-cse` (extending the absolute-address
+   resolver to CSE/extern emission) and `next50-slot-intervals` (use-position
+   backend-slot intervals) - both are Campaign 2 architecture items already
+   scoped above.
+3. Once ordinary coverage crosses 912/2026 (45%), immediately re-run and
+   re-rank the full ordinary+stack-check census (`next50-milestone-45`)
+   before continuing, since architectural changes shift many margins at once.
+4. Follow the commit cadence below for every change: focused cohort during
+   development, one fresh full-extended gate immediately before commit, push,
+   and wait for CI green before starting the next item.
+
 ## Latest production cohort
 
 The current cohort promotes three measured allocator-backed loop strata after
@@ -271,16 +292,29 @@ third as a holdout. Split by app, not function.
   indivisible high-risk architecture change.
 - During development use focused full-mode cohorts and censuses; do not spend a
   full extended run on each item.
+- There is exactly one `ntvcm` binary on this system, at
+  `/home/dave/GitHub/ntvcm/ntvcm` (on `PATH`), built from the `main` branch of
+  that repo. Before trusting any cycle-count claim (not pass/fail — see T387
+  in `mir-text-size-plan.md`), confirm it is current:
+  `git -C /home/dave/GitHub/ntvcm fetch && git -C /home/dave/GitHub/ntvcm log HEAD..origin/main --oneline`
+  should print nothing; if it does not, `git -C /home/dave/GitHub/ntvcm pull`
+  and rebuild with `./m.sh` before measuring. Do not create ad-hoc copies of
+  the binary elsewhere (e.g. `/dev/shm/ntvcm-*`) — a stray stale copy is
+  exactly what caused T387's illusory session-long "improvements".
 - Immediately before every commit, run exactly one fresh:
 
-  `PATH="/dev/shm/ntvcm-batch7:$PATH" TMPDIR=/dev/shm pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
+  `TMPDIR=/dev/shm pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30`
 
 - Do not use `-FailFast` for that gate. Failures-only output is already the
   default.
 - Commit only the exact passing revision, include the coverage delta and exact
   promotions in the migration log, and push to
   `origin/perf/unified-regalloc`.
-- Do not wait for GitHub Actions when it runs the same ntvcm revision.
+- Always wait for GitHub Actions (`gh run watch <id> --exit-status`) and
+  confirm green before starting the next item. CI always builds `ntvcm` fresh
+  from `davidly/ntvcm` and is the authoritative source of truth for any
+  performance claim — see T387: it caught a real regression that every local
+  measurement missed due to a stale local emulator.
 
 ## Best-practice constraints
 
