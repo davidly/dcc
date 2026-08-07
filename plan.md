@@ -514,18 +514,73 @@ profitability-gated regressions - no missing selector, no reusable
 predicate.** Both buckets are confirmed profitability-gated dead ends,
 the same conclusion as `cfg-backedge`.
 
-**End-of-wave status**: this "next 20%" wave's 3 parallel background
-streams (B/C/D) have now all reached explicit stop conditions - the
-correctness cluster is closed, and every architecturally-promising
+**End-of-wave status (superseded below)**: this "next 20%" wave's 3
+parallel background streams (B/C/D) reached explicit stop conditions -
+the correctness cluster is closed, and every architecturally-promising
 bucket identified at the wave's start (`cfg-backedge`, `wide-constant-
 cost`, `wide-store-cost`) is confirmed profitability-gated with no
-reusable predicate. Coverage is unchanged since T405 at **908/2026
+reusable predicate. Coverage was unchanged since T405 at **908/2026
 ordinary (44.82%)**, **930/2128 stack-check (43.70%)** - every fix this
 wave was a genuine latent-bug repair with zero net coverage impact, not
-a coverage-increasing change. The two remaining architecture leads
-(`next50-slot-intervals`, member-qualified `Gst.var` CSE) both require
-substantial new multi-session design per earlier scoping (T399/T393) and
-were not attempted this wave.
+a coverage-increasing change.
+
+**T423: extended T393's bare-`static`-global call-safety CSE to the
+member-qualified case (`Gst.var`-style fields), per the standing 100%-
+coverage directive that architectural leads be resolved rather than
+declared dead ends.** Reused T403's existing field-level call-safety
+proof (`mir_resolve_isolated_global_field_load()` /
+`mir_isolated_global_field_call_safe()`) inside a new
+`mir_load_indirect_is_call_safe()` wrapper, threaded into
+`mir_common_expressions_equal()`'s `MIR_LOAD_INDIRECT` case. This is
+real, reusable infrastructure (not a name-based hack) - but the actual
+candidate population (repeated `Gst.var`/`G->s_rs`/`G->words`-style
+loads) is disqualified in every real instance found (the global is
+written/address-taken elsewhere, or the pointer root isn't an isolated
+global field), so this lands as a validated zero-risk generalization,
++0/+0 coverage.
+
+**T424: audited `future-pointer-param-classifier` ("likely the single
+largest remaining lever but highest risk" per the original backlog
+note) and found the semantic problem it called for already solved in
+production.** `mir_pointer_value_uses_are_eligible()` /
+`mir_pointer_parameter_references_eligible()` /
+`mir_filter_pointer_parameter_objects()` already walk every use of a
+candidate pointer parameter and correctly distinguish safe dereference/
+index/member/comparison/return uses from unsafe call-argument-forwarding
+and address-of uses - exactly the distinction the original T55 whole-
+symbol attempt could not make. Landed only exact `reason=call-argument`/
+`reason=address-of` diagnostic tightening. Tested the more aggressive
+reading of the backlog item - admitting every classifier-safe single-use
+pointer parameter, not just the current narrower profitability
+sub-filter (`uses > 1 || eligible_parameter_count > 1 || index/member
+use`) - and this is a **real, measured regression**: ordinary
+`908/2026 -> 906/2023` (+1 `tbool.set_bool`, -3 `tc99apar.
+read_paren_const`/`tc99apar.read_paren_restrict`/`tdecl.pick_same_node`),
+same +1/-3 pattern on stack-check. All three losses are trivial
+single-use safe pointer shapes (bare `*p` / `return p`) that become
+unprofitable once forced through the full object-promotion path. The
+remaining blocker is therefore a **selector-quality/cost-model gap for
+trivial single-use safe pointer shapes**, not classifier ambiguity - a
+narrower, cheaper acceptance path bypassing full object promotion
+(analogous to the earlier frameless-home-emission win) is the candidate
+fix, and is under active follow-up investigation (see below) rather than
+accepted as a final dead end, per the standing directive.
+
+**Current status**: coverage remains **908/2026 ordinary (44.82%)**,
+**930/2128 stack-check (43.70%)**, unchanged since T405 - T413-T424 have
+all been genuine correctness/infrastructure work with zero net coverage
+impact. Two architecture threads remain open and under active
+investigation rather than closed: (1) the T424 pointer-parameter
+object-promotion cost-model gap (root-cause investigation dispatched to
+determine whether a narrow, cheaper acceptance path can recover
+`tbool.set_bool` without the 3-function regression), and (2)
+`next50-slot-intervals` (confirmed not to hold per T399) and
+`campaign2-call-effect-analysis`'s member-qualified case (now resolved
+zero-yield by T423) - both closed. No stream has been allowed to settle
+on "blocked" without either a concrete profitability proof or an active
+follow-up per the user's explicit, repeated directive: the goal is 100%
+MIR coverage, and gate-margin-exhausted buckets get a genuine
+architectural fix attempt, not a declared dead end.
 
 ## Latest production cohort
 
