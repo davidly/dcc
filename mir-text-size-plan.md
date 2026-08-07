@@ -14713,3 +14713,212 @@ still unprofitable even though it is correctness-clean.
   - diagnostics: **passed**
   - dccpeep fixtures: **passed**
   - extended suite: **passed**
+
+## Item T422: wide-constant-cost / wide-store-cost re-mining after T416/T418 found only fresh profitability-gated regressions, no reusable enabler (+0, 2026-08-08)
+
+Fresh baseline from integrated `cd23773`, using the worktree-local host tools
+and `PATH=/dev/shm/dcc-next20/streamD-round6:/home/dave/GitHub/ntvcm:$PATH`:
+
+- ordinary coverage: **908/2026 (44.82%)**
+- stack-check coverage: **930/2128 (43.70%)**
+- `wide-constant-cost`: **49 ordinary / 51 stack-check**
+- `wide-store-cost`: **38 ordinary / 40 stack-check**
+
+I followed the requested "use existing tooling first" discipline and did **not**
+add new scripts:
+
+1. `python3 scripts/mir-migration-census.py --output build/streamD-round6/mir-before.tsv`
+2. `python3 scripts/mir-migration-census.py --extra-args=-fstack-check --output build/streamD-round6/mir-before-stack.tsv`
+3. cross-referenced the ordinary census against `mir-dead-ends.tsv` and wrote
+   the ranked current population to `build/streamD-round6/wide-buckets-current.tsv`
+4. batch-ran scenario-complete forced-accept full-mode A/B on the **top 10
+   currently-unlogged `wide-constant-cost` near-misses** and the **top 15
+   currently-unlogged `wide-store-cost` near-misses** with
+   `scripts/mir-forced-accept-batch.py`, but with its scratch root forced under
+   `build/streamD-round6/forced-batch/` so all artifacts stayed inside the
+   worktree
+
+### 1. Fresh ranking result
+
+Current ordinary residue split as follows:
+
+- `wide-constant-cost`: 49 total, **11 not yet logged** in `mir-dead-ends.tsv`
+- `wide-store-cost`: 38 total, **22 not yet logged** in `mir-dead-ends.tsv`
+
+The top newly-unlogged `wide-constant-cost` near-misses were:
+
+- `ts.main` (**-114 insns / -576 bytes**)
+- `tvariad.sum_l` (**+1 / +128**)
+- `too.list_area_sum` (**+7 / +152**)
+- `tshlmac.fp_pow` (**+10 / +138**)
+- `ttrig.acosf` (**+10 / +143**)
+- `tlog.log10f` (**+10 / +145**)
+- `tlngfptr.hash33` (**+14 / +291**)
+- `catalan.div_small` (**+20 / +282**)
+- `tctxflt.truth_while` (**+34 / +403**)
+- `ln2.mul_div` (**+61 / +830**)
+
+The top newly-unlogged `wide-store-cost` near-misses were:
+
+- `tc89fltc.main` (**-41 insns / -404 bytes**)
+- `too.board_weight` (**+20 / +284**)
+- `tc89fadd.main` (**+29 / +612**)
+- `tmatha.main` (**+33 / +265**)
+- `too.cells_checksum` (**+40 / +465**)
+- `tbig.probe_one` (**+41 / +470**)
+- `primes.ulsqrt` (**+67 / +1149**)
+- `ttrig.powf` (**+73 / +1056**)
+- `tlmul.main` (**+76 / +1067**)
+- `tarray6.sum_l` (**+84 / +925**)
+- `tc89flta.main` (**+92 / +1566**)
+- `primes.main` (**+93 / +1663**)
+- `tforblk.main` (**+120 / +1251**)
+- `tlog.frexpf` (**+138 / +1724**)
+- `tlog.logf` (**+170 / +2309**)
+
+### 2. Forced full-mode A/B result: 0 clean wins in either bucket
+
+**`wide-constant-cost`: 0 / 10 clean wins.**
+
+Every newly-unlogged near-miss still regressed under
+`DCC_MIR_FORCE_ACCEPT_FUNCTION` + `runall.ps1 -Apps <app> -Mode full`:
+
+- the strongest raw-function counterexample remained `ts.main`: despite the
+  huge static win (**-114 insns / -576 bytes**), peep still regressed
+  **889097 -> 889194 (+0.01%)**
+- small single-block helpers also still lost:
+  - `ttrig.acosf` (**+0% / +0% cycles**)
+  - `tlog.log10f` (**+0.03% peep, +0.05% nopeep, +1.52% nopeep bytes**)
+- multi-block loops/helpers were worse:
+  - `too.list_area_sum` (**+0.11% peep, +0.03% nopeep**)
+  - `tshlmac.fp_pow` (**+1.58% / +1.54%**)
+  - `tlngfptr.hash33` (**+1.94% peep, +1.65% nopeep**)
+  - `tvariad.sum_l` (**+4.27% / +4.16%**)
+  - `catalan.div_small` (**+10.37% / +9.18%**)
+  - `ln2.mul_div` (**+11.77% / +11.4%**)
+
+**`wide-store-cost`: 0 / 15 clean wins.**
+
+Again, every newly-unlogged near-miss still regressed:
+
+- even the "almost there" cases were not clean:
+  - `tbig.probe_one` (**+0% / +0% cycles**)
+  - `tmatha.main` (**+0.01% peep, +0% nopeep**)
+  - `too.board_weight` (**+0.18% / +0.15%**)
+- the current negative-margin static winner still lost:
+  - `tc89fltc.main` (**-41 insns / -404 bytes** statically, but
+    **+0.85% peep / +1.78% nopeep** at runtime)
+- the rest ranged from ordinary regressions to severe losses:
+  - `tc89fadd.main` (**+4.13% / +3.68%**)
+  - `tarray6.sum_l` (**+8.17% / +8.53%**)
+  - `primes.main` (**+8.2% / +9.24%**)
+  - `primes.ulsqrt` (**+13.36% / +13.39%**)
+  - `tlmul.main` (**+40.67% / +39.23%**)
+
+All 25 candidate-level results were recorded in `mir-dead-ends.tsv` under
+**T420** so later sessions do not re-run the same forced-accept checks.
+
+### 3. Root cause, by reading the exact gate and the exact emitter
+
+#### `wide-constant-cost`: current residue is **not** missing a new
+#### rematerialization capability
+
+The current gate in `dcc_mir_select.c` is still the existing profitability
+check:
+
+- reject only for `selector == spilled-scalar-cfg`
+- when `mir_spilled_cfg_depends_on_wide_constant_rematerialization()`
+- and either the function still has a format-runtime call or its generated
+  bytes are not actually smaller than legacy (with T394/T396's already-landed
+  unsigned/signed relational special cases layered on top)
+
+The actual spilled-selector emission path already does the structural thing
+Stream B originally wanted:
+
+- `dcc_mir_spilled_cfg.c`'s `mir_emit_virtual_load_wide()` directly
+  rematerializes a 4-byte constant **at its use site** as
+  `ld hl,<lo16> / ld de,<hi16>` instead of forcing a 4-byte slot reload
+- this is exactly what the representative current residue shows:
+  - `tlog.log10f`: 8 MIR instructions, single call `logf(x)` then one
+    float constant multiply (`fconst inv_ln10`)
+  - `tvariad.sum_l`: 4-block loop, loop-carried `long total`, with the wide
+    constant being the `0L` seed and the value still losing under forced A/B
+
+So today's `wide-constant-cost` population is **not** waiting on a missing
+"materialize by halves" or "direct wide constant at use site" capability -
+that capability is already present and measurable. The current residue is just
+more helper/loop code that still loses to legacy's established shapes after
+that rematerialization is applied.
+
+#### `wide-store-cost`: current residue is **not** missing a new direct
+#### absolute/register-pair wide store form
+
+The current gate in `dcc_mir_select.c` is also unchanged in meaning:
+
+- reject only when `selector == spilled-scalar-cfg`
+- `mir_spilled_cfg_depends_on_wide_store_forwarding()`
+- and `mir_cfg_block_count() != 1`
+
+The corresponding spilled-selector emitter already has the direct wide-store
+machinery:
+
+- `mir_emit_virtual_store_wide()` handles the 4-byte value home/forwarding side
+- the `MIR_STORE` path already emits direct 4-byte stores for globals/externs
+  and the in-range/out-of-range local/param store forms
+- representative current residue (`tc89fltc.main`, `tc89fadd.main`,
+  `tarray6.sum_l`) contains only ordinary `store ... mem=4` local/global
+  shapes, not a missing 4-byte `storeind` class
+
+I also checked the existing **candidate-matrix** tooling on representative
+apps (`tc89fltc`, `tc89fadd`, `tarray6`, `primes`, `tmatha`). That matrix
+shows the already-wired wide-store feature absolutely does shrink the raw
+function bodies:
+
+- `tc89fltc.main`: `promoted-local-slot` **2856/266** -> `all` **2436/236**
+- `tc89fadd.main`: `promoted-local-slot` **5525/470** -> `all` **4425/390**
+- `primes.ulsqrt`: `promoted-local-slot` **4450/362** -> `all` **3722/310**
+- `tarray6.sum_l`: `baseline` **3527/299** -> `all` **3243/279** ->
+  `phi-slot` **3125/271**
+
+That is, T416/T418's correctness-adjacent fixes and the existing wide-store
+feature set are **already** improving the raw emitted stream for these
+functions. The remaining problem is that those static wins still do **not**
+survive real full-mode runtime validation. So the current bucket growth is the
+same old "smaller text, slower shipped binary" multi-block wide-store-forwarding
+family, not an unimplemented direct-store capability.
+
+### 4. T416/T418 did **not** produce a hidden free admit
+
+The user explicitly asked whether the recent correctness fixes might already
+unlock a profitable residue. The answer from current HEAD is **no**:
+
+- on the `wide-constant-cost` side, every newly-surfaced top near-miss still
+  regressed under full-mode A/B
+- on the `wide-store-cost` side, the candidate matrix shows `phi-slot`
+  occasionally improves the raw function further (`tarray6.sum_l`), but the
+  full app still regresses badly (**+8.17% / +8.53%**)
+- several representative functions (`tc89fltc.main`, `tc89fadd.main`,
+  `primes.ulsqrt`) already have the "all features on" static shrink one would
+  hope for, yet still lose at runtime
+
+So T416/T418 were valuable correctness infrastructure, but they did **not**
+incidentally create a promotable wide-constant/wide-store cohort this round.
+
+### Conclusion / stop condition
+
+**No code change landed.** After the bounded investigation the user asked for
+(top 10 newly-unlogged `wide-constant-cost` near-misses, top 15 newly-unlogged
+`wide-store-cost` near-misses), I found only more candidate-level regressions
+with **no** reusable structural admit predicate:
+
+- `wide-constant-cost` remains a profitability gate, not a missing emitter
+  capability
+- `wide-store-cost` remains a profitability gate over already-implemented
+  multi-block wide-store-forwarding machinery, not a missing direct store form
+
+This bucket pair therefore joins the other already-exhausted next20 mining
+classes (`block-cse-cost`, `inline-substitution`, `phi-fallthrough-cost`,
+`unary-not-cost`, `indirect-store-address-cost`, `rhs-stack-cost`) as
+**currently unproductive without a larger architecture change**. Coverage is
+unchanged at **908/2026 ordinary (44.82%)** and **930/2128 stack-check
+(43.70%)**.

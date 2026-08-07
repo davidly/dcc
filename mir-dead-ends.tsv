@@ -167,3 +167,28 @@ ttmp	main	unary-not-cost	-88	Forced full-mode A/B: regresses, peep +0.59%/+1.47%
 tc89c2	test_multibyte	unary-not-cost	-198	Forced full-mode A/B: regresses, peep +1.84%/+2.47% bytes and nopeep +1.22% cycles. Large byte margin still does not predict a safe unary-not rollout.	T412
 adaint	if_stmt	unary-not-cost	-386	Forced full-mode A/B: correctness-clean, but peep regresses +0.08% cycles/+0.4% bytes while nopeep improves slightly. Mixed-mode split, not a clean win.	T412
 tchess	main	unary-not-cost	-175	Forced full-mode A/B: regresses, peep +0.01%/+1.29% bytes and nopeep +0.01% cycles. Another byte-smaller large-CFG loser, despite a 175-byte static margin.	T412
+ts	main	wide-constant-cost	-114	Full-mode A/B: peep +0.01% cycles while nopeep improves (-0.19%/-2.7% bytes). blocks=1, byte-margin=-576, format-heavy shift test; reconfirms the current format-runtime-call guard is load-bearing even on a huge raw-function win.	T422
+tvariad	sum_l	wide-constant-cost	1	Full-mode A/B: regresses peep +4.27% and nopeep +4.16%/+1.89% bytes. blocks=4, byte-margin=+128, variadic long-sum loop; direct wide-constant rematerialization already exists and is still not profitable.	T422
+too	list_area_sum	wide-constant-cost	7	Full-mode A/B: regresses peep +0.11%/+0.6% bytes and nopeep +0.03%. blocks=4, byte-margin=+152, linked-list long-accumulator loop.	T422
+tshlmac	fp_pow	wide-constant-cost	10	Full-mode A/B: regresses peep +1.58% and nopeep +1.54%/+2.04% bytes. blocks=4, byte-margin=+138.	T422
+ttrig	acosf	wide-constant-cost	10	Full-mode A/B: regresses both modes slightly (+0% cycles in each). blocks=1, byte-margin=+143, single-block call+float-constant helper; no missing half-rematerialization path surfaced.	T422
+tlog	log10f	wide-constant-cost	10	Full-mode A/B: regresses peep +0.03% and nopeep +0.05%/+1.52% bytes. blocks=1, byte-margin=+145, one-call `return logf(x) * const` helper.	T422
+tlngfptr	hash33	wide-constant-cost	14	Full-mode A/B: regresses peep +1.94%/+2.13% bytes and nopeep +1.65%. blocks=4, byte-margin=+291.	T422
+catalan	div_small	wide-constant-cost	20	Full-mode A/B: regresses badly, peep +10.37%/+1.37% bytes and nopeep +9.18%/+1.32% bytes. blocks=4, byte-margin=+282.	T422
+tctxflt	truth_while	wide-constant-cost	34	Full-mode A/B: regresses peep +0.19%/+0.7% bytes and nopeep +0.22%. blocks=4, byte-margin=+403.	T422
+ln2	mul_div	wide-constant-cost	61	Full-mode A/B: regresses badly, peep +11.77%/+4.92% bytes and nopeep +11.4%/+3.12% bytes. blocks=7, byte-margin=+830.	T422
+tc89fltc	main	wide-store-cost	-41	Full-mode A/B: regresses peep +0.85%/+2.17% bytes and nopeep +1.78%. blocks=4, byte-margin=-404. Local/global float-constant storage already uses direct 4-byte MIR_STORE forms; this is not a missing absolute/storeind selector.	T422
+too	board_weight	wide-store-cost	20	Full-mode A/B: regresses peep +0.18% and nopeep +0.15%. blocks=7, byte-margin=+284.	T422
+tc89fadd	main	wide-store-cost	29	Full-mode A/B: regresses peep +4.13%/+2.04% bytes and nopeep +3.68%/+2% bytes. blocks=2, byte-margin=+612, float add/sub store regression test.	T422
+tmatha	main	wide-store-cost	33	Full-mode A/B: still regresses both modes (peep +0.01%, nopeep +0%). blocks=2, byte-margin=+265; even the best current near-miss is not a clean zero-regression admit.	T422
+too	cells_checksum	wide-store-cost	40	Full-mode A/B: regresses peep +0.59%/+0.6% bytes and nopeep +0.61%/+0.57% bytes. blocks=10, byte-margin=+465.	T422
+tbig	probe_one	wide-store-cost	41	Full-mode A/B: still regresses both modes (+0% cycles in each). blocks=6, byte-margin=+470; another not-quite-clean near-miss under the zero-regression policy.	T422
+primes	ulsqrt	wide-store-cost	67	Full-mode A/B: regresses badly, peep +13.36%/+3.57% bytes and nopeep +13.39%/+3.57% bytes. blocks=8, byte-margin=+1149. Candidate-matrix `all` shrinks the function materially, so the blocker is profitability, not missing wide-store machinery.	T422
+ttrig	powf	wide-store-cost	73	Full-mode A/B: regresses peep +0.29%/+1.54% bytes and nopeep +0.29%/+1.48% bytes. blocks=11, byte-margin=+1056.	T422
+tlmul	main	wide-store-cost	76	Full-mode A/B: regresses very badly, peep +40.67%/+3.39% bytes and nopeep +39.23%/+3.39% bytes. blocks=16, byte-margin=+1067.	T422
+tarray6	sum_l	wide-store-cost	84	Full-mode A/B: regresses peep +8.17%/+1.28% bytes and nopeep +8.53%/+2.47% bytes. blocks=19, byte-margin=+925. Even the current phi-slot candidate-matrix variant (3125 bytes / 271 insns) is still a loser, so T418 is not a hidden free admit here.	T422
+tc89flta	main	wide-store-cost	92	Full-mode A/B: regresses peep +4.73%/+7.81% bytes and nopeep +6.57%/+10.77% bytes. blocks=2, byte-margin=+1566.	T422
+primes	main	wide-store-cost	93	Full-mode A/B: regresses peep +8.2%/+5.36% bytes and nopeep +9.24%/+5.36% bytes. blocks=11, byte-margin=+1663.	T422
+tforblk	main	wide-store-cost	120	Full-mode A/B: regresses peep +8.56%/+3.17% bytes and nopeep +9.06%/+1.54% bytes. blocks=28, byte-margin=+1251.	T422
+tlog	frexpf	wide-store-cost	138	Full-mode A/B: regresses peep +3.14%/+4.55% bytes and nopeep +3.31%/+4.55% bytes. blocks=9, byte-margin=+1724.	T422
+tlog	logf	wide-store-cost	170	Full-mode A/B: regresses peep +1.89%/+6.06% bytes and nopeep +1.83%/+6.06% bytes. blocks=4, byte-margin=+2309.	T422
