@@ -15,18 +15,43 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **894/2026 (44.13%)**
-- Current stack-check coverage: **916/2128 (43.05%)**
-- Latest production cohort: T388, `rematerialized-home-cost` calls==0
-  measured cohort (`mir_is_profiled_rematerialized_home_measured_cohort`,
-  admits call-free single-block pointer/struct-member compound-assignment
-  forms despite a positive raw instruction delta), +4 ordinary/+4
-  stack-check, zero removals, focused full-mode and full extended gates
-  clean. This is the first item of the "next 100 migrations" plan (see
-  `mir-forced-accept-batch.py`/`mir-dead-ends.tsv` tooling below); all four
-  of that plan's originally-proposed Batch 1 "quick win" candidates turned
-  out to be dead ends (two are confirmed correctness bugs), so the real win
-  came from a fresh re-rank instead.
+- Current ordinary coverage: **895/2026 (44.18%)**
+- Current stack-check coverage: **917/2128 (43.09%)**
+- Latest production cohort: T391, `branch-condition-cost`'s block-count arm
+  narrowed from an unconditional `blocks > 2` to `blocks > 2 &&
+  captured_instructions > 50` after full-mode A/B found the rejected
+  multi-block population splits cleanly: `bint.compile_line` (27 legacy
+  instructions) is a clean win, every other measured multi-block candidate
+  (95-421 legacy instructions) regresses. +1 ordinary/+1 stack-check, zero
+  removals, focused full-mode and full extended gates clean.
+- T388 (prior cohort): `rematerialized-home-cost` calls==0 measured cohort
+  (`mir_is_profiled_rematerialized_home_measured_cohort`, admits call-free
+  single-block pointer/struct-member compound-assignment forms despite a
+  positive raw instruction delta), +4 ordinary/+4 stack-check.
+- **T389/T390/T391 exhaustively re-ranked 12 fallback buckets this segment
+  and found the per-bucket near-miss vein is now sharply diminishing-return:**
+  only T388 (+4) and T391 (+1) yielded real, safely-generalizable landable
+  wins; every other bucket investigated (`dynamic-index-base-cost`,
+  `block-cse-cost`, `absolute-address-cost`, `planned-stack-cost`,
+  `lazy-parameter-cost`, `indirect-store-address-cost`,
+  `indirect-store-stack-cost`) either confirmed more correctness bugs (10
+  total found this segment, all currently harmless since gated off for
+  unrelated reasons - see `mir-dead-ends.tsv`) or found real winners with
+  **no safe generalizable predicate** (structurally identical candidates
+  land on both sides of win/loss; call-count or instruction-count
+  thresholds are frequently non-monotonic per-bucket). T390 additionally
+  pinpointed a precise architectural lead: `absolute-address-cost`'s
+  repeated `index*N` computation is not an indexaddr-CSE gap but a
+  call-side-effect/aliasing analysis gap (repeated `loadind` of a global
+  struct member cannot safely be reused across intervening opaque calls
+  without proving the callee doesn't write back to it) - materially
+  higher-risk/higher-effort than originally scoped. **Recommendation:**
+  further material coverage gains now require either (a) the
+  call-effect/aliasing analysis project just described, or (b) the
+  `phi-fallthrough-cost` architecture fix (T384's phi-forwarding-across-
+  labels lead, needed to unlock `tinline.edge_and`/`edge_conditional` and
+  likely others in that 44-function bucket), rather than continued
+  per-bucket near-miss mining.
 - **T386 was reverted (see T387 in `mir-text-size-plan.md`).** A stale local
   `ntvcm` build undercounted `LD SP,HL` by 1 T-state all session, producing
   illusory double-digit "improvements" for MIR-heavy hot loops. CI caught a

@@ -11935,3 +11935,116 @@ example (`cobint.add_var`, 3 redundant `index*37` computations) to validate
 against once that item is implemented. The experimental retry-widening
 change was reverted (verified byte-identical census to pre-experiment
 state); no `src/` change lands from this item, evidence-only.
+
+## Item T390 addendum: precise mechanism refined via full MIR dump (2026-08-14)
+
+Direct full-function MIR dump of `cobint.add_var` (`DCC_MIR_REPORT=1
+DCC_MIR_FUNCTION=add_var`) refines T390's root-cause statement. The
+repeated `index * 37` computation is not caused by the `MIR_INDEXADDR`
+opcode itself being unreusable - its *index* operand (`v12`, the record
+number) is in fact computed once and correctly reused unchanged across
+all 5 occurrences (insns 26/39/49/57/66: `indexaddr vN = vBASE,v12 ...`).
+The actual duplication is in the **base pointer operand**: each
+occurrence reloads `Gst.var` fresh via its own `address Gst` /
+`memberaddr var` / `loadind` triple (v18, v28, v36, v43, v51 - five
+distinct values, all loading the same global struct member). The `address
+Gst`/`memberaddr var` *address computations* do get merged by the
+existing CSE pass (confirmed: 9 eliminations reported), but the
+`loadind` reading through that address does not, and **that is
+deliberately correct, not a gap**: `mir_common_expressions_equal()`
+excludes `MIR_LOAD`/`MIR_LOADIND` from its reusable-opcode whitelist
+because between each occurrence there is an intervening opaque call
+(`die`, `memset`, `upcase`, `xcalloc`) that the compiler cannot prove
+does not write back to the global `Gst.var` pointer - reusing a stale
+loaded value across an unanalyzed call would be a real aliasing
+correctness bug, not a missed optimization.
+
+This means the actual unlock is **not** generic backend value-reuse for
+`indexaddr` results (T390's original framing), but a **call-side-effect
+analysis problem**: proving specific runtime/library calls (e.g.
+`memset`, `upcase`, known non-reentrant COBOL/BASIC runtime helpers)
+never reassign a given global pointer, so the loadind that reads it can
+safely survive across that specific call. This is materially higher risk
+than a local value-numbering fix - it requires either (a) a whitelist of
+runtime functions provably free of global-pointer side effects (auditable
+but must be kept in sync with `DCCRTL.MAC` and any future runtime
+changes), or (b) real interprocedural alias analysis, both of which are
+substantially larger scope than originally estimated for this Campaign 2
+item. Recommend re-scoping the Campaign 2 "resolver" item description to
+reflect this - it is a call-effect/aliasing analysis project, not a
+straightforward address/index CSE extension - before committing
+engineering time to it. No further src/ investigation attempted this
+session given the now-confirmed higher risk/scope; documented so a future
+session does not have to re-derive this from scratch.
+
+## Item T391: `branch-condition-cost` block-count arm refined (+1: `bint.compile_line`), plus 3 confirmed non-generalizable near-misses (2026-08-14)
+
+Batch-tested 39 near-miss candidates across 8 previously-unexplored small
+fallback buckets (`lazy-parameter-cost`, `indirect-store-address-cost`,
+`indirect-store-stack-cost`, `dead-store-forwarding-cost`,
+`constant-conversion-home-cost`, `rhs-stack-cost`, `branch-condition-cost`,
+`pointer-array`; all below the skill's 10-function campaign threshold
+individually, but cheap to batch-test together via
+`mir-forced-accept-batch.py`) via full-mode forced-accept A/B. Found 6
+initially-clean-looking passes; deeper per-candidate investigation showed
+only 1 was a real, safely generalizable, landable win:
+
+**Landed: `branch-condition-cost`'s block-count arm was measurably too
+broad.** `bint.compile_line` (7 blocks, 27 legacy instructions, 1
+forwarding use) is a clean full-mode win (peep -0.1% cycles, nopeep -0%
+cycles/-0.53% bytes, zero regressions), but was rejected purely by the
+`mir_cfg_block_count() > 2` arm. Instrumented every other multi-block
+candidate in the bucket (`bint.statement` 421 instructions/54 blocks,
+`bint.term` 95/19, `tasm.main` 151/11, `ttrig.check_same_f` 107/2) and
+found every one of them measurably regresses (from a real but tiny +0%
+rounding-level cycle increase up to a clear +3.12% byte regression) - and
+critically, the smallest of them (`bint.term`, 95 legacy instructions) is
+still 3.5x bigger than `compile_line` (27 instructions), giving a wide,
+safe gap to draw the boundary in. Changed the block-count arm from
+unconditional (`blocks > 2`) to `blocks > 2 && captured_instructions > 50`
+- this exactly promotes `compile_line` while leaving every measured
+regressing candidate still correctly rejected (all sit at 95+
+instructions, comfortably above the new 50-instruction floor). Confirmed
+via full whole-corpus census (+1 ordinary 894->895/2026 44.18%, +1
+stack-check 916->917/2128 43.09%, zero regressions either mode), focused
+full-mode run for `bint` (clean), and a full extended gate (314/323,
+clean).
+
+**Investigated and reverted (zero net yield, same "reason-label churn"
+anti-pattern as T390):** `lazy-parameter-cost`'s phi-instruction arm
+(`mir_has_phi_instruction() && blocks<=5 && delta > -2`) showed the exact
+same wide-gap pattern (winners `tinline.edge_and`/`edge_conditional` at
+delta +5/+9, losers `tvla.sum_ints`/`wumpus.adjo` at +21/+25) and widening
+it to `delta > 10` looked like a clean second win. However, a full census
+comparison showed **zero net coverage change** - both functions are
+independently, unconditionally rejected by the separate
+`mir_strict_phi_fallthrough_was_used() && delta > -10` `phi-fallthrough-cost`
+gate later in the same selector chain, which correctly identifies both as
+non-viable regardless of the lazy-parameter-cost threshold. Reverted the
+lazy-parameter-cost change entirely (kept only the branch-condition-cost
+fix) since a code change with zero net effect beyond a reason-label swap
+adds complexity without benefit - the real fix for these two functions is
+the already-flagged `phi-fallthrough-cost` architecture item (T384's
+phi-forwarding-across-labels lead), not a lazy-parameter-cost nudge. Added
+both functions (plus the confirmed-regressing `tvla.sum_ints`/
+`wumpus.adjo`/`tchess.value_piece`) to `mir-dead-ends.tsv` so a future
+session attempting the phi-fallthrough-cost architecture work has ready
+validation candidates.
+
+**Confirmed non-generalizable (added to dead-ends, no code change):**
+`indirect-store-address-cost` and `indirect-store-stack-cost` both show
+the same failure mode found repeatedly this session -
+structurally-identical candidates land on both sides of win/loss:
+`too.list_push`/`tptrinit.list_prepend` (both `uses=1, blocks=1-2,
+calls=1`) have the *identical* structural signature to the real winners
+`wumpus.gsame`/`tnarrow.narwrec` yet regress by a tiny-but-real margin
+(+0.01% to +0.33% cycles); `indirect-store-stack-cost`'s forwarding-use
+count is flatly non-monotonic (`uses=2` loses, `uses=3` wins via
+`tc89fnty.main`, `uses=4` loses via `tallocx.t_large`) so no threshold of
+any kind separates the population. No safe structural predicate exists for
+either bucket without a name-based exception, which the skill's rules
+prohibit. Left unpromoted; documented so no future session re-derives
+this.
+
+Updated coverage: **895/2026 ordinary (44.18%), 917/2128 stack-check
+(43.09%)**.

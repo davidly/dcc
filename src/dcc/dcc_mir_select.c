@@ -2973,7 +2973,8 @@ evaluate_generated:
                              captured_instructions) &&
                          !mir_profile_matches_function(
                              "DCC_MIR_PROFILE_BRANCH_CONDITION") &&
-                         (mir_cfg_block_count() > 2 ||
+                         ((mir_cfg_block_count() > 2 &&
+                           captured_instructions > 50) ||
                           captured_instructions > 100 ||
                           mir_spilled_cfg_branch_condition_forwarding_uses()
                               > 1))
@@ -2985,7 +2986,16 @@ evaluate_generated:
                      * a 490-instruction two-block body. Keep the measured
                      * one-handoff helpers at no more than 100 legacy
                      * instructions while this local saving cannot price
-                     * either larger interaction. */
+                     * either larger interaction. Full-mode A/B of the
+                     * multi-block population found the block-count arm was
+                     * too broad: a genuinely tiny seven-block helper
+                     * (bint.compile_line, 27 legacy instructions, one
+                     * forwarding use) is a clean win, while every other
+                     * multi-block candidate measured (95-421 legacy
+                     * instructions) regresses. Require more than fifty
+                     * legacy instructions before the block-count arm
+                     * rejects, since the nearest regressing candidate sits
+                     * at 95. */
                     fallback_reason = "branch-condition-cost";
                 else if (!strcmp(selector_name, "homed-scalar-cfg") &&
                          mir_homed_cfg_depends_on_dynamic_index() &&

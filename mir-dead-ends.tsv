@@ -49,3 +49,13 @@ trtl2	test_memmove	planned-stack-cost	6	full-mode A/B: regresses, peep +0.41% cy
 taddr	main	planned-stack-cost	15	full-mode A/B: regresses, peep +0.2% cycles/nopeep +0.21%/+2.04% bytes; calls=13	plan100-batch2
 tstfield	main	planned-stack-cost	20	full-mode A/B: regresses, peep +1.05% cycles/+2% bytes; calls=13	plan100-batch2
 fileops	main	planned-stack-cost	21	full-mode A/B: regresses, peep +0.3% cycles/+2.3% bytes; calls=13	plan100-batch2
+tinline	edge_and	lazy-parameter-cost	+5	Full-mode A/B win, but phi-fallthrough-cost's own unconditional gate (delta > -10) independently rejects this function regardless of the lazy-parameter-cost threshold - widening lazy-parameter-cost's phi arm alone produces zero net promotion (confirmed via full census: 0 coverage change, only a fallback-reason label change from lazy-parameter-cost to phi-fallthrough-cost/text-size). Needs the phi-fallthrough-cost architecture fix (T384's identified lead), not a lazy-parameter-cost nudge.	T391
+tinline	edge_conditional	lazy-parameter-cost	+9	Same as tinline.edge_and: blocked by phi-fallthrough-cost's own gate independent of lazy-parameter-cost. Zero-yield if lazy-parameter-cost alone is widened.	T391
+tvla	sum_ints	lazy-parameter-cost	+21	Full-mode A/B: regresses (kept for margin comparison only).	T391
+wumpus	adjo	lazy-parameter-cost	+25	Full-mode A/B: regresses (kept for margin comparison only).	T391
+tchess	value_piece	lazy-parameter-cost	+4	Full-mode A/B: regresses, peep +0.59%/+0.33% cycles.	T391
+too	list_push	indirect-store-address-cost	-2	Full-mode A/B: tiny but real peep regression (+0.01% cycles, deterministic not noise); uses=1, blocks=1, calls=1 - structurally identical signature to the clean winner wumpus.gsame (also uses=1,blocks=1,calls=1), so no safe generalizable predicate separates them without a name-based exception (prohibited).	T391
+tptrinit	list_prepend	indirect-store-address-cost	-6	Full-mode A/B: tiny but real peep regression (+0.33% cycles); uses=1, blocks=2, calls=1 - structurally identical signature to the clean winner tnarrow.narwrec (also uses=1,blocks=2,calls=1), same non-generalizable-predicate problem as too.list_push.	T391
+tchess	m_to_text	indirect-store-stack-cost	-18	uses=7; part of the non-monotonic uses-count population documented under tc89fnty.main.	T391
+tallocx	t_large	indirect-store-stack-cost	-13	Full-mode A/B: regresses, peep bytes +0.81%. uses=4, higher than the winning tc89fnty.main's uses=3, confirming uses-count is non-monotonic for this bucket (uses=2 loses, uses=3 wins, uses=4 loses) - no safe threshold exists.	T391
+tpostinc	test_char_simple	indirect-store-stack-cost	-9	Full-mode A/B: tiny real regression (+0.04%/+0.05% cycles). uses=2.	T391
