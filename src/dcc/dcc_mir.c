@@ -286,6 +286,11 @@ static int mir_pointer_value_uses_are_eligible(int value,
         if (!uses_src1 && !uses_src2)
             continue;
         ++*use_count;
+        if (insn->opcode == MIR_ARG && uses_src1) {
+            *reason = "call-argument";
+            visiting[value] = 0;
+            return 0;
+        }
         if (insn->opcode == MIR_UNARY && uses_src1 &&
             insn->immediate == 0 && insn->dst >= 0 &&
             type_ptr_depth(insn->type) > 0) {
@@ -341,6 +346,19 @@ static int mir_pointer_value_uses_are_eligible(int value,
     return 1;
 }
 
+static int mir_pointer_parameter_address_taken(const char *name)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_ADDRESS && strcmp(insn->name, name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 static int mir_pointer_parameter_references_eligible(
     const char *name, int *use_count, unsigned int *use_kinds,
     const char **reason)
@@ -352,6 +370,10 @@ static int mir_pointer_parameter_references_eligible(
     *use_count = 0;
     *use_kinds = 0;
     *reason = "no-use";
+    if (mir_pointer_parameter_address_taken(name)) {
+        *reason = "address-of";
+        return 0;
+    }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->opcode == MIR_STORE && strcmp(insn->name, name) == 0) {
@@ -406,13 +428,13 @@ static void mir_report_pointer_parameter_eligibility(void)
     }
 }
 
-static int mir_eligible_pointer_parameter_count(void)
+static void mir_filter_pointer_parameter_objects(void)
 {
-    int count = 0;
-    int instruction;
+    int eligible_parameter_count = 0;
+    int object;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
-        const struct MirInsn *insn = &mir.insns[instruction];
+    for (object = 0; object < mir.count; ++object) {
+        const struct MirInsn *insn = &mir.insns[object];
         const char *reason;
         int uses;
         unsigned int use_kinds;
@@ -421,15 +443,8 @@ static int mir_eligible_pointer_parameter_count(void)
             type_ptr_depth(insn->type) > 0 &&
             mir_pointer_parameter_references_eligible(
                 insn->name, &uses, &use_kinds, &reason))
-            ++count;
+            ++eligible_parameter_count;
     }
-    return count;
-}
-
-static void mir_filter_pointer_parameter_objects(void)
-{
-    int eligible_parameter_count = mir_eligible_pointer_parameter_count();
-    int object;
 
     for (object = mir.object_count - 1; object >= 0; --object) {
         struct MirObject *candidate = &mir.objects[object];

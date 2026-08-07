@@ -15020,3 +15020,191 @@ real proof of the pointee object's identity/aliasing, widening production CSE
 to that class would be guesswork. For now, the sound direct-`static_global.field`
 sub-case is fully wired in both the T403 exact-address VN retry and T393's
 single-block CSE retry, and the current corpus still shows **+0** from it.
+
+## Item T424: audited the existing per-reference pointer-parameter classifier, proved that widening it to every safe single-use shape still regresses coverage, and landed only exact `call-argument`/`address-of` diagnostics (+0, 2026-08-08)
+
+Starting from `180102a`, the first finding was that the **core T55 follow-up
+mechanism already exists in production code**: `dcc_mir.c` already has a
+per-reference-site pointer-parameter classifier
+(`mir_pointer_value_uses_are_eligible`,
+`mir_pointer_parameter_references_eligible`,
+`mir_filter_pointer_parameter_objects`) rather than the old whole-symbol
+"never written/address never taken" test that regressed at T55. It already
+walks every MIR use of a candidate pointer parameter value and admits only
+safe categories (dereference / index / member / comparison / direct return),
+rejecting opaque forwarding/call shapes.
+
+What was **not** yet explicit enough during investigation:
+
+- `&p`-style address-taking reported only as `reason=no-use`, because taking
+  the address of the parameter variable itself does not consume the current
+  pointer *value* through `src1/src2`;
+- a bare forwarded call argument sometimes reported as raw MIR opcode names
+  (`arg`/`call`) rather than one deliberate "opaque call-argument" bucket.
+
+I also tested the more aggressive interpretation of the backlog item's wording:
+keep **every** pointer parameter that the existing classifier says is safe,
+instead of the current narrower production profitability sub-filter
+(`uses > 1 || eligible_parameter_count > 1 || index/member use`).
+
+### Synthetic correctness / classification probe (required before trusting any census)
+
+Wrote a focused scratch program under `build/t424pc.c` with one function for
+each bucket:
+
+- safe dereference: `deref_only`, `member_only`, `store_through`
+- safe comparison: `compare_only`
+- safe return: `return_only`
+- unsafe opaque forward: `mixed_forward`
+- unsafe address-of: `addr_escape`
+
+Classifier probe:
+
+```sh
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+DCC_MIR_POINTER_PARAM_REPORT=1 \
+./dcc -stack 512 -I . build/t424pc.c -o build/T424PTR.MAC
+```
+
+Observed exact bucketing:
+
+- `deref_only`: `eligible=1 uses=2 kinds=2 reason=eligible`
+- `compare_only`: `eligible=1 uses=1 kinds=8 reason=eligible`
+- `return_only`: `eligible=1 uses=1 kinds=16 reason=eligible`
+- `member_only`: `eligible=1 uses=2 kinds=4 reason=eligible`
+- `store_through`: `eligible=1 uses=3 kinds=2 reason=eligible`
+- `mixed_forward`: `eligible=0 ... reason=call-argument`
+- `addr_escape`: `eligible=0 ... reason=address-of`
+
+That is exactly the high-risk distinction T55 could not make: forwarding a
+pointer as an opaque argument is now explicitly disqualified, while pure
+dereference/compare/return shapes are recognized as safe.
+
+Runtime correctness of the synthetic shapes (both peep and nopeep):
+
+```sh
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+dccmake build/t424pc.c dcc-output=PTRCLAS dcc-peep=true
+timeout 15 ntvcm -p -s:0 build/PTRCLAS.COM
+
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+dccmake build/t424pc.c dcc-output=PTRCLAS dcc-peep=false
+timeout 15 ntvcm -p -s:0 build/PTRCLAS.COM
+```
+
+Both modes printed the expected:
+
+```text
+15 1 7 10 7 14 8
+```
+
+with `Z80 cycles` **34,089** (peep) and **34,687** (nopeep).
+
+### Attempted widening of the existing production filter: real regression, reverted
+
+The only production-code experiment beyond diagnostics was to remove the
+current profitability sub-filter and keep every pointer parameter the existing
+classifier deemed safe. This is the exact "trust every safe bucket" version of
+the T55 follow-up idea.
+
+Built a true before snapshot from the unmodified `180102a` state:
+
+```sh
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+python3 scripts/mir-migration-census.py --output build/t424-before.tsv
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+python3 scripts/mir-migration-census.py \
+  --extra-args=-fstack-check \
+  --output build/t424-before-stack.tsv
+```
+
+Baseline matched the published checkpoint exactly:
+
+- ordinary: **908/2026 (44.82%)**
+- stack-check: **930/2128 (43.70%)**
+
+After widening the filter, the required `--fail-on-regression` census caught a
+real monotonicity failure immediately:
+
+- ordinary: **906/2023 (44.78%)**
+  - **+1** newly MIR-emitted: `tbool.set_bool`
+  - **-3** no longer emitted:
+    `tc99apar.read_paren_const`,
+    `tc99apar.read_paren_restrict`,
+    `tdecl.pick_same_node`
+- stack-check: **928/2125 (43.67%)**
+  - the same **+1/-3** delta
+
+Those three losses are all single-use safe-only pointer shapes
+(`*p` / direct `return p`) that the classifier correctly marks eligible, but
+which still become unprofitable when forced into the full object-promotion
+path. So the blocker is **no longer semantic ambiguity** (the T55 problem is
+solved); it is now a **selector-quality / cost-model issue for trivial
+single-use safe pointer shapes**. Per the project's stop-condition rules, that
+made the broadened production change unlandable, and it was reverted before the
+final validation run.
+
+### Landed code change and final validation
+
+Kept only the zero-risk diagnostic tightening in `src/dcc/dcc_mir.c`:
+
+- explicit `reason=call-argument` when the first unsafe use is `MIR_ARG`
+- explicit `reason=address-of` when the function contains `MIR_ADDRESS` of the
+  parameter variable itself
+
+These changes are behind `DCC_MIR_POINTER_PARAM_REPORT` only and leave normal
+emission untouched.
+
+Final no-regression census:
+
+```sh
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+python3 scripts/mir-migration-census.py \
+  --output build/t424-after.tsv \
+  --compare build/t424-before.tsv \
+  --fail-on-regression
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+python3 scripts/mir-migration-census.py \
+  --extra-args=-fstack-check \
+  --output build/t424-after-stack.tsv \
+  --compare build/t424-before-stack.tsv \
+  --fail-on-regression
+```
+
+Results:
+
+- ordinary: **908/2026**, **0 newly emitted, 0 lost**
+- stack-check: **930/2128**, **0 newly emitted, 0 lost**
+- `apps requiring runtime validation`: **0** in both modes
+
+Rebuilt the full host toolchain (the worktree had `dcc` but was missing
+`dccpeep`/`dccrtlstrip`, so the first full-suite attempt could not run the
+peephole fixtures):
+
+```sh
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH pwsh ./scripts/build-dcc.ps1
+PATH=$PWD:/home/dave/GitHub/ntvcm:$PATH \
+pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30
+```
+
+Final milestone gate:
+
+- **314/323 passed**
+- **0 failed**
+- **9 skipped**
+- diagnostics: **passed**
+- dccpeep fixtures: **passed**
+- extended suite: **passed**
+- performance: **passed**
+
+### Conclusion / stop condition
+
+The requested **per-reference-site classifier is already real and working** in
+the current production codebase; this session verified that directly with both
+synthetic and corpus evidence. The remaining problem is not "distinguish safe
+dereference/compare/return from opaque forwarding" anymore - that distinction
+already holds - but "make the trivial single-use safe cases profitable enough
+to keep admitted." Removing the existing profitability sub-filter is **not**
+safe today (`+1/-3` coverage regression), so this backlog line remains a
+documented dead end until there is a separate emitter-quality fix for those
+single-use shapes.
