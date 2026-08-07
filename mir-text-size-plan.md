@@ -13686,3 +13686,97 @@ materially shrinks 9 ordinary / 11 stack-check still-fallback candidates,
 eliminates the specific planned-index-base handoff from 14 more helpers
 without changing shipped output, and tightens the remaining bucket to the
 harder non-address-rooted residue for any later stream.
+## Item T412: unary-not-cost re-rank after the latest integrations still finds no reusable class (+0, 2026-08-08)
+
+Per the user's request, re-ran the bucket on the integrated `06e7709`
+checkpoint instead of assuming T394 still held. Fresh baseline census:
+**908/2026 ordinary (44.82%)**, **930/2128 stack-check (43.70%)**.
+`unary-not-cost` is still **55 ordinary / 56 stack-check**.
+
+Ranking by the gate's **real byte metric** (not raw instruction count) did
+not materially improve from T394. The closest current positive-byte near miss
+is still `forint.compile_expr_str`, now **+32 bytes** versus legacy and still
+**42 bytes short** of the generic `generated <= captured - 10` unary-not
+floor. The next ordinary candidates are already much further away:
+`cobint.find_var_soft` **+77**, `tdecl.count_open_tasks` **+79**,
+`tpeepi.count_open` **+86**, `cobint.find_para_soft` **+102**, and
+`tfio.main` **+103**. There is no newly formed sub-25-byte or even sub-40-byte
+population for the existing small-near-cost predicate to grow into.
+
+The 14 candidates already byte-small enough for the generic floor split into
+three distinct populations:
+
+1. **Known huge correctness-bug outliers** already documented in T392:
+   `adaint.run`, `cobint.exec_range`, `cint.run`, `bint.run`, `pint.run`.
+2. **Two larger `forint` dispatcher functions**:
+   `forint.primary` and `forint.run_prog`.
+3. **Seven medium/large CFG cases**:
+   `adaint.if_stmt`, `tc89c2.test_multibyte`, `tchess.main`, `ttmp.main`,
+   `forint.rel`, `tfreopen.main`, and `wumpus.main`.
+
+I then force-tested a representative spread across both the positive-shortfall
+and already-byte-small-enough populations.
+
+**Positive-shortfall / smaller-CFG class:**
+
+- `forint.compile_expr_str` (**+32 bytes**, smallest current miss):
+  correctness-clean, but peep cycles still regress
+  **711741372 -> 711744441 (+0%)**.
+- `cobint.find_var_soft` (**+77 bytes**): correctness-clean, but peep linked
+  size regresses **27904 -> 28032 (+0.46%)**.
+- `tfio.main` (**+103 bytes**, even with `generated-insns` -1): regresses in
+  **both** modes, peep **142119 -> 142633 (+0.36%)** and nopeep
+  **142278 -> 142871 (+0.42%)**.
+
+So the smallest current positive-byte cohort is still not a real near-miss
+class waiting for a small threshold/profile adjustment; even the closest
+candidate loses on the shipping path.
+
+**Already-byte-small-enough / larger-CFG class:**
+
+- `forint.primary` (**-2257 bytes**) is a **clean win**.
+- `forint.rel` (**-83 bytes**) is also a **clean win**.
+- `forint.run_prog` (**-941 bytes**) is a **correctness bug** on current
+  integrated HEAD (`forint_ttt` / `forint_sieve` output mismatches).
+- `wumpus.main` (**-55 bytes**) regresses peep
+  **319646 -> 319722 (+0.02%)**.
+- `tfreopen.main` (**-82 bytes**) regresses badly in both modes
+  (peep **+8.81% cycles / +4.55% bytes**, nopeep **+7.37% / +1.45% bytes**).
+- `ttmp.main` (**-88 bytes**) regresses peep **+0.59% / +1.47% bytes** and
+  nopeep **+0.35% cycles**.
+- `tc89c2.test_multibyte` (**-198 bytes**) regresses peep
+  **+1.84% / +2.47% bytes** and nopeep **+1.22% cycles**.
+- `adaint.if_stmt` (**-386 bytes**) is correctness-clean but still regresses
+  peep **+0.08% cycles / +0.4% bytes**.
+- `tchess.main` (**-175 bytes**) regresses peep
+  **+0.01% / +1.29% bytes** and nopeep **+0.01% cycles**.
+
+This is decisive because **the same app/family now splits every possible
+outcome**. Inside `forint` alone, the current unary-not bucket contains:
+
+- `primary` — clean win
+- `rel` — clean win
+- `compile_expr_str` — peep regression
+- `run_prog` — correctness bug
+
+So neither "byte-smaller large CFG unary-not fusion", nor any narrower
+`forint`-local dispatcher/helper shape, nor simply "blocks > 18 but byte-win"
+is monotonic enough to justify a production predicate. That is the same
+winner/loser split already established in T395/T397/T398, now re-confirmed for
+the one remaining bucket the user explicitly asked to re-rank after the latest
+integrations.
+
+**Conclusion / stop condition result:** no code change. The current
+`unary-not-cost` population has not opened a new reusable class; it still
+consists of (a) old correctness-bug outliers, (b) isolated clean winners with
+no safe structural separator, and (c) smaller positive-byte misses whose very
+closest candidate still regresses peep. Recorded the candidate-level evidence
+in `mir-dead-ends.tsv` so this bucket does not get re-mined again under the
+same "maybe the latest integrations shifted it into a near-miss pool"
+hypothesis.
+
+Coverage remains unchanged at **908/2026 ordinary (44.82%)** and
+**930/2128 stack-check (43.70%)**. Any further progress in this area now
+looks like a **selector-quality architecture problem** (materially smaller
+multi-block spilled-CFG output / a broader stable-home budget / another real
+code-quality improvement), not a gate-margin-mining problem.
