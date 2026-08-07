@@ -3139,6 +3139,44 @@ static int mir_expression_is_address(const struct MirInsn *insn)
            insn->opcode == MIR_INDEX_ADDRESS;
 }
 
+/* True if reusing an earlier MIR_LOAD of this object across any
+ * intervening call (however deep or opaque) is safe. MIR_LOAD/MIR_LOADIND
+ * are deliberately excluded from mir_common_expressions_equal's whitelist
+ * in general, since an intervening call could write back to the loaded
+ * location through an escaped alias and a static scan of this function's
+ * own MIR cannot see that (mir-text-size-plan.md Item T390's cobint.
+ * add_var finding). This carves out the one class where that concern
+ * provably cannot apply: a `static` (internal-linkage) file-scope object
+ * whose address is never taken and which is never written anywhere in
+ * the whole translation unit. Both facts come from the same whole-file
+ * lexical pre-scan (dcc_global_scan.c) that
+ * ast_for_hoist_global_member_value_supported already uses for an
+ * equivalent invariance proof, restricted here to `static` storage
+ * specifically because that scan only sees the current file - a plain
+ * `extern` global could still be written from another translation unit
+ * the scan never looks at. A zero write count means the object's value
+ * is exactly its static initializer for the program's entire execution:
+ * with no writer anywhere and no way to alias it, no call can ever change
+ * it, so two loads of it are always equal regardless of what runs
+ * between them. */
+static int mir_load_object_is_call_safe(int object)
+{
+    struct Sym *symbol;
+
+    if (object < 0 || object >= mir.object_count)
+        return 0;
+    if (mir.objects[object].storage != SC_GLOBAL)
+        return 0;
+    symbol = find_sym(mir.objects[object].name);
+    if (symbol == NULL || !symbol->is_static)
+        return 0;
+    if (global_text_addr_taken_count(mir.objects[object].name) != 0)
+        return 0;
+    if (global_text_write_count(mir.objects[object].name) != 0)
+        return 0;
+    return 1;
+}
+
 static int mir_common_expressions_equal(const struct MirInsn *left,
                                         const struct MirInsn *right)
 {
@@ -3155,6 +3193,10 @@ static int mir_common_expressions_equal(const struct MirInsn *left,
         break;
     case MIR_UNARY:
         if (left->memory_flags != 0 || right->memory_flags != 0)
+            return 0;
+        break;
+    case MIR_LOAD:
+        if (!mir_load_object_is_call_safe(left->object))
             return 0;
         break;
     default:

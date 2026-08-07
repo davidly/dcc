@@ -12106,3 +12106,93 @@ No `src/` change lands from this item (all instrumentation was temporary
 and reverted; `git diff src/dcc/dcc_mir_select.c` confirmed empty).
 Coverage remains 895/2026 ordinary (44.18%), 917/2128 stack-check
 (43.09%) - unchanged from T391.
+
+## Item T393: whole-file call-effect analysis for read-only global loads (2026-08-14)
+
+The user asked for the `campaign2-call-effect-analysis` architecture item
+(identified in T390's addendum) to be completed if it is a real blocker, not
+just scoped. This item builds and lands the analysis, then honestly measures
+its yield against the current corpus rather than assuming the evidenced
+repro (`cobint.add_var`) automatically benefits.
+
+**The gap.** `mir_common_expressions_equal` deliberately excludes `MIR_LOAD`/
+`MIR_LOADIND` from its CSE-eligible opcode whitelist, since reusing a load's
+value across an intervening call could observe a stale value if the callee
+(or anything it transitively calls) writes back to the loaded location
+through an escaped alias - exactly what T390 found in `cobint.add_var`
+(`Gst.var` reloaded via `address`/`memberaddr`/`loadind` five times, each
+separated by a call to `die`/`memset`/`upcase`/`xcalloc`).
+
+**The fix.** A `static` (internal-linkage) file-scope object whose address is
+*never* taken anywhere in the translation unit, and which is *never written*
+anywhere in the translation unit, cannot have its value changed by any call,
+however deep or opaque - there is no way for any code, anywhere, to obtain a
+pointer to it, and no direct-by-name write exists to change it either. Added
+`mir_load_object_is_call_safe(object)` (`dcc_mir.c`) checking exactly these
+two whole-file facts, then added `MIR_LOAD` to `mir_common_expressions_equal`'s
+opcode whitelist gated on that predicate. This reuses the *exact* whole-file
+lexical pre-scan primitives (`global_text_addr_taken_count`/
+`global_text_write_count`, `dcc_global_scan.c`) that
+`ast_for_hoist_global_member_value_supported` already relies on for an
+equivalent invariance proof (same file, `dcc_ast_gen_support.c`), restricted
+to `SC_GLOBAL` + `is_static` specifically because that scan only covers the
+current file - a plain `extern` global could still be written from a
+translation unit the scan never looks at, so `SC_EXTERN` is deliberately
+excluded. No new lexical scanning code was needed; this is a pure consumer
+of already-audited infrastructure.
+
+Deliberately did **not** attempt the member-qualified case (`Gst.var`, a
+struct *field*, not a bare global) this item: `dcc_global_scan.c`'s existing
+token-adjacency scan explicitly excludes any identifier preceded by `.`/`->`
+from write/addr-taken tracking (by design, so a local/field sharing a
+global's name is never miscounted as that global) - extending it to prove
+member-level write-safety requires new lexical pattern matching (`base.field
+=`, `base->field =`, `&base.field`, arbitrary chain depth) with a materially
+higher risk of an under-count (the unsafe direction) than the bare-global
+case. This is a real follow-on scope, not done here.
+
+**Measured yield.** Full ordinary and stack-check census, byte-for-byte
+compared against a fresh pre-change baseline: **zero functions changed**
+(`apps with census changes: 0` both modes; coverage unchanged at 895/2026
+ordinary / 917/2128 stack-check). Root cause: the CSE retry that could ever
+reach this new eligibility only fires for single-block functions
+(`mir_cfg_block_count() == 1`, T272's already-measured multi-block
+regression finding) requiring at least 3 eliminations
+(`mir_eliminate_common_block_expressions() >= 3`) - no function in the
+current corpus has 3+ reloads of a provably-never-written `static` global
+within one basic block. `cobint.add_var` itself is 2 blocks, so it is not
+even eligible for the retry that this change extends.
+
+**Follow-on experiment, reverted.** Temporarily widened the retry's block
+count from `== 1` to `<= 3` (diagnostic only) to test whether combining the
+new load-safety predicate with T272's previously-measured-unsafe multi-block
+CSE now behaves differently. Result: 30 apps showed fallback-attempt metric
+changes (the retry now fires and produces smaller generated candidates for
+some rejected functions) but **zero net promotions** - the smaller candidates
+still fail their bucket's own byte/instruction margin (consistent with
+`absolute-address-cost`'s gate requiring a 6% byte reduction while
+`cobint.add_var`'s actual gap is a 95-byte/~4.6% shortfall - removing four
+redundant reload sequences saves real but insufficient bytes). Since no
+accepted function's output changed either way, this required no runtime
+validation; reverted immediately since it adds gate-relaxation risk for
+proven zero yield (confirmed via `git diff` showing empty against the
+committed baseline).
+
+**Disposition.** The `MIR_LOAD` CSE-safety predicate itself is kept: it is
+provably safe (zero regressions, zero census changes, clean full extended
+gate 314/323), reuses only already-audited infrastructure, and is real,
+correct groundwork for whenever the single-block CSE-retry restriction is
+revisited (the `next50-slot-intervals`/multi-block-CSE campaign item) - at
+that point this predicate is what will let a multi-block retry safely reuse
+global loads across calls, rather than needing to invent it then. Its
+current real-corpus yield is honestly zero; this is not a numbers-moving
+change, it is validated infrastructure for a future one. `campaign2-call-
+effect-analysis` is downgraded from "next architecture lever" to "completed,
+zero yield until multi-block CSE is separately proven safe" - the member-
+qualified extension (`Gst.var`-style) remains the only unexplored part of
+this campaign, and is now understood to require new lexical-scan pattern
+matching, not just a consumer-side predicate.
+
+Full extended gate (`runall.ps1 -Mode full -Extended -RunTimeout 30`) run
+before this commit: 314/323 apps passed, zero regressions, ~31s. Coverage
+unchanged at 895/2026 (44.18%) / 917/2128 (43.09%).
