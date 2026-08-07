@@ -15,9 +15,11 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **908/2026 (44.82%)**
-- Current stack-check coverage: **930/2128 (43.70%)**
-- Latest production cohort: T405, call-result direct-reload narrow
+- Current ordinary coverage: **909/2026 (44.87%)**
+- Current stack-check coverage: **931/2128 (43.75%)**
+- Latest production cohort: T425, cheap direct-home path for objectless
+  single-use pointer parameters (+1/+1), resolving the T424 cost-model
+  gap. Prior cohort: T405, call-result direct-reload narrow
   `storeind` (Stream B) - +2/+2 coverage, landed alongside T400
   (Stream D's MIR-only scalar address-escape filter, +3/+3), T403
   (Stream C's centralized named-address resolver + field-aware CSE,
@@ -566,18 +568,40 @@ narrower, cheaper acceptance path bypassing full object promotion
 fix, and is under active follow-up investigation (see below) rather than
 accepted as a final dead end, per the standing directive.
 
-**Current status**: coverage remains **908/2026 ordinary (44.82%)**,
-**930/2128 stack-check (43.70%)**, unchanged since T405 - T413-T424 have
-all been genuine correctness/infrastructure work with zero net coverage
-impact. Two architecture threads remain open and under active
-investigation rather than closed: (1) the T424 pointer-parameter
-object-promotion cost-model gap (root-cause investigation dispatched to
-determine whether a narrow, cheaper acceptance path can recover
-`tbool.set_bool` without the 3-function regression), and (2)
-`next50-slot-intervals` (confirmed not to hold per T399) and
-`campaign2-call-effect-analysis`'s member-qualified case (now resolved
-zero-yield by T423) - both closed. No stream has been allowed to settle
-on "blocked" without either a concrete profitability proof or an active
+**T425: resolved T424's cost-model gap instead of accepting "blocked".**
+Root-caused *why* the full object-promotion path was unprofitable for
+`tc99apar.read_paren_const`/`read_paren_restrict`/`tdecl.pick_same_node`
+but not for `tbool.set_bool`: the three losers were already zero-slot
+direct parameter reloads under the existing narrower path, while
+`tbool.set_bool` alone still spilled its pointer parameter to a backend
+slot and reloaded it as the `storeind` address - full object promotion
+was simply wider machinery than this single-use shape needed. Added a
+narrow direct-home proof (in `dcc_mir_spilled_cfg.c`) for objectless
+single-use pointer parameters whose sole use is one direct dereference/
+address-formation/return, letting the spilled backend reload the
+incoming `ix+N` parameter home at its one use site instead of
+manufacturing a backend slot. This recovers `tbool.set_bool` with **zero
+re-admitted losses** - the same "narrower, cheaper path bypassing
+general-path overhead" pattern that produced the earlier frameless-home-
+emission win.
+
+**Coverage: 908/2026 -> 909/2026 ordinary (44.87%), 930/2128 -> 931/2128
+stack-check (43.75%). This is the first real coverage-increasing change
+in the wave since T405** - T413-T424 were all genuine correctness/
+infrastructure work with zero net coverage impact; T425 demonstrates the
+standing directive in practice: when gate-margin mining is exhausted and
+a stream reports "blocked", root-causing the actual mechanism (not
+accepting the report at face value) can still produce real, validated
+coverage.
+
+**Current status**: both architecture threads from this wave are now
+closed with evidence, not left as speculative dead ends: (1) the T424/
+T425 pointer-parameter cost-model gap - resolved with a real +1/+1 fix,
+and (2) `next50-slot-intervals` (confirmed not to hold per T399) and
+`campaign2-call-effect-analysis`'s member-qualified case (resolved
+zero-yield by T423, real infrastructure reuse, no further lever visible
+without new architecture). No stream has been allowed to settle on
+"blocked" without either a concrete profitability proof or an active
 follow-up per the user's explicit, repeated directive: the goal is 100%
 MIR coverage, and gate-margin-exhausted buckets get a genuine
 architectural fix attempt, not a declared dead end.
