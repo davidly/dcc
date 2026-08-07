@@ -11654,3 +11654,65 @@ Full extended gate (`runall.ps1 -Mode full -Extended -RunTimeout 30`) run
 before this commit: 314/323 apps passed, extended/diagnostics/dccpeep/
 performance all clean, zero regressions, ~30s. No src/ changes in this item
 (tooling-only); coverage unchanged at 890/2026 (43.93%) / 912/2128 (42.86%).
+
+## Item T387: critical measurement bug found and T386 reverted (2026-08-14)
+
+**Methodology correction, not a codegen change.** While validating T386's push,
+CI reported a real (if tiny) regression on `forint (peep)`: `711741372 ->
+711744182` cycles. Every local measurement this session showed the opposite -
+a large `-31.38%` "improvement" for the same benchmark. Root-caused by
+diffing the local `ntvcm` git checkout against its `origin/main`: the local
+build was stale at commit `92ff088`, missing an upstream fix
+("Fix Z80 LD SP,HL cycle count and expand timing coverage", `5a255b2`) that
+corrects opcode `0xF9` (`LD SP,HL`) from 5 to 6 T-states. CI always builds
+`ntvcm` fresh from source on every run and was never affected; only this
+session's local perf measurements were.
+
+Because MIR-emitted spilled/CFG code uses `ld sp,hl` heavily for stack-frame
+restoration (confirmed via `mir-mac-ngram-miner.py`: the `ld hl,n / add hl,sp
+/ ld sp,hl` frame-restore idiom appears 103 times in the `text-size` bucket
+sample alone), the 1-T-state undercount accumulated into large illusory
+"wins" for any MIR-heavy hot loop - worst for tight loops like `forint` that
+execute the epilogue/prologue path millions of times.
+
+Rebuilt `ntvcm` from `origin/main` (`f6ba33f`), replaced the stale local
+binary, and re-ran the full extended gate (`runall.ps1 -Mode full -Extended
+-RunTimeout 30`) against `187c2f9` (T386) with the corrected emulator: it
+reproduces CI's exact regression (`forint (peep): 711741372 -> 711744182`,
++0.0004%, +2810 cycles) - confirming CI was right and every local
+measurement this session undercounted true cycles.
+
+**Action taken: reverted T386** (`git revert 187c2f9` -> `629df33`) per the
+project's Risk Policy ("never allow a newly emitted function to regress in
+either runtime mode"). Rebuilt and re-ran the full extended gate with the
+corrected emulator: 314/323 apps, extended/diagnostics/dccpeep/performance
+all clean, **zero regressions**. Fresh census confirms T386's revert restores
+exactly T384's numbers: ordinary **890/2026 (43.93%)**, stack-check
+**912/2128 (42.86%)** - i.e. T386's lone admission (`forint:ensure_sym`) is
+removed and nothing else changed.
+
+**T384 and T385 remain valid.** T385 was tooling-only (no `src/` changes,
+unaffected by any runtime measurement). T384's admissions are static-census
+based (instruction/byte counts, not cycles) and were separately confirmed
+correctness-clean; the corrected-emulator full extended gate run above
+(current HEAD, post-revert) shows zero regressions anywhere, so T384's two
+admissions are still safe. However, T384's *narrative* cycle-win claims
+reported in its own T-item entry (`cint -27.6%`, `tdmfuse -29.7%`, etc.) were
+measured with the same stale emulator and must be treated as unverified /
+likely overstated until re-measured; they do not affect correctness or the
+admission decision (which the corrected-emulator gate re-confirms is clean),
+only the magnitude of the claimed performance benefit. Do not cite those
+percentages as fact without re-measurement.
+
+**Process change going forward:** before trusting any cycle-count
+improvement claim (not just pass/fail), verify the local `ntvcm` binary is
+current: `git -C <ntvcm-repo-path> fetch && git -C <ntvcm-repo-path> log
+HEAD..origin/main --oneline` should be empty; rebuild if not. Pass/fail
+(correctness) gates were never affected by this bug - only relative cycle
+percentages. CI is unaffected (always builds `ntvcm` fresh) and remains the
+authoritative source of truth for any performance claim going forward;
+prefer confirming a claimed win survives a CI run before writing it into
+this log as measured fact.
+
+Coverage after this correction: ordinary **890/2026 (43.93%)**, stack-check
+**912/2128 (42.86%)**, matching T384's state exactly (T386's fully reverted).

@@ -21,6 +21,16 @@ capture/replay only after the runnable and extended corpora pass.
   (`mir_value_only_used_by_dead_stores` ported from spilled-scalar-cfg),
   +2 ordinary/+2 stack-check, zero removals, focused full-mode and full
   extended gates clean.
+- **T386 was reverted (see T387 in `mir-text-size-plan.md`).** A stale local
+  `ntvcm` build undercounted `LD SP,HL` by 1 T-state all session, producing
+  illusory double-digit "improvements" for MIR-heavy hot loops. CI caught a
+  real (tiny) `forint (peep)` regression from T386 that every local
+  measurement had missed; the local emulator has been rebuilt from
+  `origin/main` and the offending commit reverted (`629df33`). The corrected-
+  emulator full extended gate is clean at the reverted state (T384's
+  numbers). Before trusting any cycle-count claim going forward, confirm the
+  local `ntvcm` binary is current (`git fetch && git log HEAD..origin/main`
+  should be empty) - CI always builds fresh and remains authoritative.
 - New tooling: `scripts/mir-gate-margins.py`, a generic per-reason-bucket
   near-miss ranker consuming the existing census TSV (no per-gate formula
   duplication). Used to find the T384 near-misses; re-run after every
