@@ -2609,7 +2609,23 @@ evaluate_generated:
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_wide_constant_rematerialization() &&
                          (mir_has_format_runtime_call() ||
-                          generated_size >= captured_size))
+                          generated_size >= captured_size) &&
+                         !(mir_spilled_cfg_depends_only_on_unsigned_wide_constant_relational() &&
+                           !mir_has_format_runtime_call() &&
+                           generated_instructions <= captured_instructions))
+                    /* T394 (mir-text-size-plan.md): an unsigned wide
+                     * relational compare against a constant already calls
+                     * the same runtime helper on both sides (legacy has no
+                     * inline shortcut there either, unlike the signed case),
+                     * so a generated stream that is not strictly smaller in
+                     * raw bytes is still behavior- and cost-equivalent, not
+                     * worse. Forced full-mode A/B of every such candidate
+                     * (tlongopt.u_gtbig, tlongopt.u_lebig) passed both
+                     * runtime modes with real cycle improvements and zero
+                     * regressions. Require the instruction count to be no
+                     * worse as the only remaining static guard, since the
+                     * byte-size proxy is known unreliable for this exact
+                     * call-vs-call shape. */
                     fallback_reason = "wide-constant-cost";
                 else if (!strcmp(selector_name, "spilled-scalar-cfg") &&
                          mir_spilled_cfg_depends_on_unary_not_branch_fusion() &&

@@ -51,6 +51,8 @@ static int mir_spilled_cfg_used_constant_absolute;
 static int mir_spilled_cfg_used_constant_index_absolute;
 static int mir_spilled_cfg_used_dynamic_index_base_forwarding;
 static int mir_spilled_cfg_used_wide_constant_rematerialization;
+static int mir_spilled_cfg_used_unsigned_wide_constant_relational;
+static int mir_spilled_cfg_used_signed_wide_constant_relational;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
@@ -5701,6 +5703,18 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
     }
     if (operation == '<' || operation == '>' || operation == TOK_LE ||
         operation == TOK_GE) {
+        const struct MirInsn *left = mir_definition(insn->src1);
+        const struct MirInsn *right = mir_definition(insn->src2);
+        int compares_constant =
+            (left != NULL && left->opcode == MIR_CONST) ||
+            (right != NULL && right->opcode == MIR_CONST);
+
+        if (compares_constant) {
+            if ((operand_type & TYPE_UNSIGNED) != 0)
+                mir_spilled_cfg_used_unsigned_wide_constant_relational = 1;
+            else
+                mir_spilled_cfg_used_signed_wide_constant_relational = 1;
+        }
         helper = mir_wide_runtime_helper(insn);
         fputs("\tpush de\n\tpush hl\n", out);
         mir_emit_runtime_call(out, helper);
@@ -6398,6 +6412,27 @@ int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void)
     return mir_spilled_cfg_used_wide_constant_rematerialization;
 }
 
+/* T394 (mir-text-size-plan.md): unlike signed wide relational compares
+ * against a constant (which legacy inlines via the sign-flip + 32-bit
+ * subtract trick, with the C+1/C-1 adjustment for '>'/'<='), legacy's own
+ * codegen for an UNSIGNED wide relational compare against a constant also
+ * calls the matching __ltu/__leu/__gtu/__geu runtime helper - there is no
+ * inline shortcut on either side for this sub-case, so MIR's identical
+ * call-based codegen cannot be worse on correctness or performance grounds,
+ * only on incidental prologue/stack-cleanup byte accounting. Forced
+ * full-mode A/B (tlongopt.u_gtbig, tlongopt.u_lebig) confirmed this:
+ * both pass with real cycle improvements and zero regressions despite a
+ * generated-size that is not strictly smaller than legacy's. This getter
+ * reports whether every wide-constant relational compare in the function
+ * was this safe unsigned-only shape (no signed wide-constant relational
+ * compare present, since that shape is not yet proven safe to admit on
+ * static size alone). */
+int mir_spilled_cfg_depends_only_on_unsigned_wide_constant_relational(void)
+{
+    return mir_spilled_cfg_used_unsigned_wide_constant_relational &&
+           !mir_spilled_cfg_used_signed_wide_constant_relational;
+}
+
 int mir_spilled_cfg_depends_on_unary_not_branch_fusion(void)
 {
     return mir_spilled_cfg_used_unary_not_branch_fusion;
@@ -6489,6 +6524,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_constant_index_absolute = 0;
     mir_spilled_cfg_used_dynamic_index_base_forwarding = 0;
     mir_spilled_cfg_used_wide_constant_rematerialization = 0;
+    mir_spilled_cfg_used_unsigned_wide_constant_relational = 0;
+    mir_spilled_cfg_used_signed_wide_constant_relational = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     mir_spilled_cfg_used_planned_stack_handoff = 0;
     mir_spilled_cfg_used_planned_index_base_handoff = 0;

@@ -12196,3 +12196,103 @@ matching, not just a consumer-side predicate.
 Full extended gate (`runall.ps1 -Mode full -Extended -RunTimeout 30`) run
 before this commit: 314/323 apps passed, zero regressions, ~31s. Coverage
 unchanged at 895/2026 (44.18%) / 917/2128 (43.09%).
+
+## T394: unsigned wide-constant relational compares - real inline-vs-call parity win (2026-08-05)
+
+Re-ranked `unary-not-cost` (55) and `wide-constant-cost` (48) excluding the
+known correctness-bug/huge-function outliers (T389-T392's dead ends),
+per `plan100-reband-unary-wide-constant`.
+
+**`unary-not-cost`: exhausted, no real near-miss left.** Ranking by the
+gate's actual byte-margin metric (not instruction count - the two do not
+correlate for this bucket, confirmed sharply this round: several
+candidates with instruction deltas of only 2-8 still need 77-157 EXTRA
+bytes to clear the gate) leaves nothing within reach: smallest shortfall
+is `forint.compile_expr_str` at 42 bytes; two more (`cint.local_decl`,
+`forint.rel`) are blocked purely by `blocks > 18` regardless of size. No
+further action possible without an architecture change to the underlying
+selector's byte output, which is out of scope for gate mining. Documented
+here as another mined-out bucket, matching T389-T392's pattern.
+
+**`wide-constant-cost`: found and fixed a real, evidence-backed gap.**
+`ts.main` (606 bytes smaller than legacy, blocked only by
+`mir_has_format_runtime_call()`) was forced-accept tested directly: it
+PASSES correctness but REGRESSES peep (+0.12% cycles, +2.9% bytes) despite
+the huge static size win - confirming the format-runtime-call guard is
+correctly load-bearing here, not overly conservative. No change made;
+this is now a directly-verified (not just inferred) justification for
+that guard.
+
+The tlongopt boundary-value candidates (`s_gt32767`, `s_le100`, `s_lt0`,
+`s_gtm5`, `s_ltm32768`) all showed the identical -2 instruction margin yet
+gave inconsistent byte deltas (0, +1, +1, +4, +5) that did NOT predict
+forced-accept outcome (`s_le100`/`s_gtm5` won; `s_gt32767`/`s_lt0`/
+`s_ltm32768` regressed peep by +0.02% cycles) - another confirmation that
+raw byte/instruction margins are not a reliable proxy for this shape.
+Root-caused by direct assembly comparison: legacy inlines every SIGNED
+wide relational compare against a constant via a sign-flip + 32-bit
+`sbc`/`sbc` sequence (with a `C+1`/`C-1` adjustment for `>`/`<=`), while
+MIR always calls the matching `__lts`/`__les`/`__gts`/`__ges` runtime
+helper regardless of whether one operand is a compile-time constant. The
+three regressing candidates compare against exactly 0, 32767 (INT16_MAX),
+or -32768 (INT16_MIN) - special boundary values where legacy's own
+inlined codegen additionally benefits from peephole interactions the
+other two constants (100, -5) do not get, for reasons not fully
+characterized. Implementing MIR's own inline signed constant-compare to
+match legacy exactly (replicating T50/T27's already-proven biased-DE and
+sign-test fast paths from the *branch-fused* comparison path, extended to
+the *value-materializing* path) would be the complete fix, but is a
+substantial, higher-risk codegen change (a widely shared code path used by
+every already-accepted function doing wide relational compares) for a
+population currently measured at only 3 losers + 2 winners; deferred as a
+scoped future item rather than attempted under time pressure with an
+unproven operand-ordering/sign case matrix.
+
+**The unsigned sub-case, by contrast, was a clean, low-risk, real win.**
+Assembly comparison of `u_gtbig`/`u_lebig` showed legacy has NO inline
+shortcut for unsigned wide relational compares against a constant either -
+it calls the identical `__ltu`/`__leu`/`__gtu`/`__geu` runtime helper MIR
+already calls. This means MIR's codegen for this exact sub-case is already
+call-for-call equivalent to legacy; any static byte delta here is
+incidental (frame/prologue accounting), not a real behavior or cost
+difference, so gating on `generated_size >= captured_size` for this
+specific shape was over-conservative rather than protective. Verified via
+forced full-mode A/B on both `tlongopt.u_gtbig` and `tlongopt.u_lebig`:
+both pass correctness with real cycle improvements (-0.29%/-0.38% peep,
+-0.38%/-0.09% nopeep for a fresh combined run) and zero regressions.
+
+**Fix landed:** added `mir_spilled_cfg_used_unsigned_wide_constant_relational`
+and `mir_spilled_cfg_used_signed_wide_constant_relational` tracking flags
+(set in `mir_emit_wide_operation`'s relational-runtime-call branch in
+`dcc_mir_spilled_cfg.c`, gated on one operand being a `MIR_CONST`), exposed
+via `mir_spilled_cfg_depends_only_on_unsigned_wide_constant_relational()`.
+The `wide-constant-cost` gate in `dcc_mir_select.c` now also admits a
+candidate when every wide-constant relational compare in the function was
+this proven-safe unsigned shape (no signed wide-constant relational compare
+present), no format-runtime call is present, and
+`generated_instructions <= captured_instructions` - the only static guard
+retained, since byte size is known unreliable for this call-vs-call shape
+but instruction count was clean for both measured winners.
+
+**Result:** +2 ordinary (895 -> 897, 44.27%), +2 stack-check (917 -> 919,
+43.19%). Fresh full ordinary + stack-check census: zero regressions, only
+`tlongopt.u_gtbig`/`tlongopt.u_lebig` newly emitted. Focused
+`runall.ps1 -Apps tlongopt -Mode full` confirmed both runtime modes
+improve with zero regressions. Full extended gate
+(`runall.ps1 -Mode full -Extended -RunTimeout 30`): 314/323 passed, zero
+regressions (~31s; the same pre-existing unrelated `a1`/`tptrcnd`/
+`tptrlhs`/`tvla` perf-baseline improvements noted in T393 recur here,
+unrelated to this change).
+
+**Disposition.** The signed wide-constant relational inline-compare
+extension (matching legacy's sign-flip/`C+1`/`C-1` codegen in the
+value-materializing path, not just the already-proven branch-fused path)
+remains a real, scoped, higher-risk architecture item for a future
+session - net measured yield on the current corpus would be small (net
++2 after accounting for the 3 confirmed regressions needing a boundary-
+value exclusion), but the underlying capability (avoiding a runtime call
+for signed wide relational constant compares) could matter more broadly
+once combined with other campaigns. `plan100-reband-unary-wide-constant`
+is complete: `unary-not-cost` confirmed mined out, `wide-constant-cost`
+partially mined with one real fix landed and one real fix scoped for
+later.

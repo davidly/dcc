@@ -15,8 +15,16 @@ capture/replay only after the runnable and extended corpora pass.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **895/2026 (44.18%)**
-- Current stack-check coverage: **917/2128 (43.09%)**
+- Current ordinary coverage: **897/2026 (44.27%)**
+- Current stack-check coverage: **919/2128 (43.19%)**
+- Latest production cohort: T394, unsigned wide-constant relational
+  compares (`u_gtbig`/`u_lebig`-style) - legacy has no inline shortcut for
+  unsigned wide relational compares against a constant either (it also
+  calls `__ltu`/`__leu`/`__gtu`/`__geu`), so MIR's identical call-based
+  codegen is call-for-call equivalent; the `wide-constant-cost` gate now
+  admits this proven-safe shape on an instruction-count guard instead of
+  requiring a strictly smaller byte count. +2 ordinary/+2 stack-check,
+  zero removals, focused full-mode and full extended gates clean.
 - Latest production cohort: T391, `branch-condition-cost`'s block-count arm
   narrowed from an unconditional `blocks > 2` to `blocks > 2 &&
   captured_instructions > 50` after full-mode A/B found the rejected
@@ -99,21 +107,39 @@ mandatory secondary regression guard, not an alternate denominator.
 
 ## Immediate next steps
 
-The branch is CI-green, currently at **895/2026 ordinary (44.18%)**, still
-**+17 short of even the first 45% milestone** and +321 short of the 60%
-target. T389-T392 (this segment) exhaustively re-ranked and forced-accept
+The branch is CI-green, currently at **897/2026 ordinary (44.27%)**, still
+**+15 short of even the first 45% milestone** and +319 short of the 60%
+target. T389-T393 (prior segments) exhaustively re-ranked and forced-accept
 A/B-tested every remaining fallback bucket's near-miss population (12+
 buckets, 150+ candidates) and found the per-bucket static-metric mining
-technique that produced T383-T388's gains is now **exhausted**: only two
-small wins remained findable (T388 +4, T391 +1), 16 more confirmed
-correctness bugs were found (harmless, already gated off), and the
-remaining real winners in every other bucket (most notably
-`planned-index-base-cost`'s 13-function cluster) have **no safe
-generalizable predicate** - structurally identical candidates land on both
-sides of win/loss, so promoting any of them would require a prohibited
-name-based exception or accepting a regression.
+technique that produced T383-T388's gains is now **exhausted for most
+buckets**: only small wins remain findable one at a time (T388 +4, T391 +1,
+T394 +2), correctness bugs and structurally-inseparable win/loss pairs
+dominate the rest.
 
-**`campaign2-call-effect-analysis` is now completed (T393)**: added
+**T394 (this segment)** re-ranked `unary-not-cost`/`wide-constant-cost`
+excluding known outliers per `plan100-reband-unary-wide-constant`.
+`unary-not-cost` is confirmed fully mined out (smallest remaining shortfall
+is 42 bytes once ranked by the gate's real byte-margin metric, not
+instruction count). `wide-constant-cost` yielded one real, evidence-backed
+fix: unsigned wide relational compares against a constant call the same
+runtime helper in both legacy and MIR (legacy has no inline shortcut there,
+unlike its signed sign-flip/subtract inline path), so the byte-size gate
+was over-conservative for that exact shape; forced-accept A/B confirmed two
+real wins (`tlongopt.u_gtbig`/`u_lebig`) with zero regressions. The signed
+sub-case (`s_lt0`/`s_gt32767`/`s_ltm32768` boundary-value regressions vs.
+`s_le100`/`s_gtm5` wins - all with identical instruction margins but
+inconsistent byte margins) needs a real inline-codegen extension (matching
+legacy's proven branch-fused sign-flip/`C+1`/`C-1` trick in the
+value-materializing path too) and was scoped, not attempted, given its
+small net yield (2 wins, 3 confirmed regressions) relative to the risk of
+touching a widely shared codegen path. `ts.main`'s 606-byte-smaller
+`wide-constant-cost` candidate was forced-accept tested directly and
+**confirmed a real regression** (+0.12% peep cycles) - direct evidence the
+existing `mir_has_format_runtime_call()` guard is correctly load-bearing,
+not overly conservative.
+
+**`campaign2-call-effect-analysis` is completed (T393)**: added
 `mir_load_object_is_call_safe()` making `MIR_LOAD` CSE-eligible across
 intervening calls for `static` globals proven (via the same whole-file
 lexical scan `ast_for_hoist_global_member_value_supported` already trusts)
@@ -137,10 +163,20 @@ tracking) - a real, but separately-scoped, follow-on with materially higher
 soundness risk than the bare-global case just completed.
 
 **Continued per-bucket near-miss mining is no longer a viable path to 45%,
-let alone 60%.** The two next-most-promising leads are both architecture
-items, not gate nudges:
+let alone 60%.** The remaining leads are all architecture items, not gate
+nudges:
 
-1. **The `Gst.var` member-qualified extension** to `campaign2-call-effect-
+1. **Signed wide-constant relational inline compare** (T394's scoped
+   follow-on): extend MIR's value-materializing wide-comparison codegen to
+   reuse the branch-fused path's already-proven sign-flip + `C+1`/`C-1`
+   inline shortcut instead of always calling `__lts`/`__les`/`__gts`/
+   `__ges`. Small measured net yield on the current corpus (~2 functions
+   after excluding 3 confirmed regressors), but touches a widely shared
+   codegen path used by every already-accepted function doing wide
+   relational compares - needs the boundary-value regression (0/32767/
+   -32768) fully characterized before it can be done safely, not just the
+   common-constant case.
+2. **The `Gst.var` member-qualified extension** to `campaign2-call-effect-
    analysis` (above): extend `dcc_global_scan.c`'s lexical pre-pass to track
    member-qualified writes/address-taken (keyed conservatively by member
    name alone, ignoring the base expression's shape, to stay in the safe
@@ -148,16 +184,16 @@ items, not gate nudges:
    sibling logic to `MIR_LOADIND`. Still gated by the same single-block CSE
    retry restriction, so likely needs the multi-block CSE question resolved
    too before it can show real yield.
-2. **`campaign-phi-fallthrough-architecture`** (was `mir60-boolean-control`'s
-   phi-fallthrough lead, T384): re-examined this segment - of the 44
-   `phi-fallthrough-cost` functions, only ~8 sit within 10 instructions of
-   the gate's margin (the rest are large CFGs with 100+ instruction gaps,
-   mislabeled by the "last selector tried" reporting quirk, not real near-
-   misses); all ~8 were already forced-accept tested in T202/T386/T387 and
-   found to regress. This lead is exhausted, not just under-mined - do not
-   revisit without a fundamentally different mechanism (real phi-forwarding
-   that reduces instruction count broadly, not a threshold change).
-3. **`next50-slot-intervals`** (Campaign 2 item 3, use-position backend-slot
+3. **`campaign-phi-fallthrough-architecture`** (was `mir60-boolean-control`'s
+   phi-fallthrough lead, T384): of the 44 `phi-fallthrough-cost` functions,
+   only ~8 sit within 10 instructions of the gate's margin (the rest are
+   large CFGs with 100+ instruction gaps, mislabeled by the "last selector
+   tried" reporting quirk, not real near-misses); all ~8 were already
+   forced-accept tested in T202/T386/T387 and found to regress. This lead
+   is exhausted, not just under-mined - do not revisit without a
+   fundamentally different mechanism (real phi-forwarding that reduces
+   instruction count broadly, not a threshold change).
+4. **`next50-slot-intervals`** (Campaign 2 item 3, use-position backend-slot
    intervals) remains the highest-expected-yield item on paper since it is
    structurally upstream of `block-cse-cost`, `wide-store-cost`, and
    `planned-index-base-cost` simultaneously - but it is also the largest,
