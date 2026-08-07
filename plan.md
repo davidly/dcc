@@ -113,21 +113,50 @@ generalizable predicate** - structurally identical candidates land on both
 sides of win/loss, so promoting any of them would require a prohibited
 name-based exception or accepting a regression.
 
+**`campaign2-call-effect-analysis` is now completed (T393)**: added
+`mir_load_object_is_call_safe()` making `MIR_LOAD` CSE-eligible across
+intervening calls for `static` globals proven (via the same whole-file
+lexical scan `ast_for_hoist_global_member_value_supported` already trusts)
+to never have their address taken and never be written anywhere in the
+translation unit. Safe, zero regressions, clean full extended gate - but
+**measured yield on the current corpus is zero**: the CSE retry this feeds
+only fires for single-block functions with 3+ eliminations, and no current
+candidate has 3+ reloads of a provably-safe global within one block
+(`cobint.add_var` itself is 2 blocks). A follow-on experiment temporarily
+widening the retry to <=3 blocks confirmed real candidates get smaller but
+still fall short of their bucket's byte-margin gate (`absolute-address-cost`
+needs a 6% reduction; `cobint.add_var`'s actual gap is ~4.6%) - reverted,
+zero net promotions either way. The predicate is retained as real,
+validated infrastructure for whenever multi-block CSE is revisited. The
+**member-qualified case** (`Gst.var`-style struct-field reloads, the actual
+`cobint.add_var` repro) remains unexplored: it needs a genuinely new
+lexical-scan extension (tracking `base.field =`/`base->field =`/
+`&base.field` patterns in `dcc_global_scan.c`, which today explicitly
+excludes any dotted/arrow-qualified identifier from its write/addr-taken
+tracking) - a real, but separately-scoped, follow-on with materially higher
+soundness risk than the bare-global case just completed.
+
 **Continued per-bucket near-miss mining is no longer a viable path to 45%,
 let alone 60%.** The two next-most-promising leads are both architecture
 items, not gate nudges:
 
-1. **`campaign2-call-effect-analysis`** (was `absolute-address-cost`'s lead):
-   T390 found the real blocker is a call-side-effect/aliasing gap, not a CSE
-   gap - a global struct member's `loadind` cannot be safely reused across
-   an intervening opaque call without proving the callee doesn't write back
-   to it. Needs either a runtime-function side-effect whitelist (auditable
-   against `DCCRTL.MAC`) or real interprocedural alias analysis.
+1. **The `Gst.var` member-qualified extension** to `campaign2-call-effect-
+   analysis` (above): extend `dcc_global_scan.c`'s lexical pre-pass to track
+   member-qualified writes/address-taken (keyed conservatively by member
+   name alone, ignoring the base expression's shape, to stay in the safe
+   over-counting direction), then extend `mir_load_object_is_call_safe`'s
+   sibling logic to `MIR_LOADIND`. Still gated by the same single-block CSE
+   retry restriction, so likely needs the multi-block CSE question resolved
+   too before it can show real yield.
 2. **`campaign-phi-fallthrough-architecture`** (was `mir60-boolean-control`'s
-   phi-fallthrough lead, T384): the `phi-fallthrough-cost` bucket (44
-   functions) needs real phi-forwarding-across-labels support, confirmed
-   in T391 as the actual blocker for `tinline.edge_and`/`edge_conditional`
-   independent of any other bucket's fix.
+   phi-fallthrough lead, T384): re-examined this segment - of the 44
+   `phi-fallthrough-cost` functions, only ~8 sit within 10 instructions of
+   the gate's margin (the rest are large CFGs with 100+ instruction gaps,
+   mislabeled by the "last selector tried" reporting quirk, not real near-
+   misses); all ~8 were already forced-accept tested in T202/T386/T387 and
+   found to regress. This lead is exhausted, not just under-mined - do not
+   revisit without a fundamentally different mechanism (real phi-forwarding
+   that reduces instruction count broadly, not a threshold change).
 3. **`next50-slot-intervals`** (Campaign 2 item 3, use-position backend-slot
    intervals) remains the highest-expected-yield item on paper since it is
    structurally upstream of `block-cse-cost`, `wide-store-cost`, and
@@ -137,7 +166,7 @@ items, not gate nudges:
    on a train/holdout app split, and stop/re-rank if a bounded effort does
    not clear a double-digit net gain, per the item's own scoped criteria.
 
-Any of these three is a multi-session engineering project requiring careful
+Any of these is a multi-session engineering project requiring careful
 design before the first line of code, not a same-session gate tweak. Follow
 the commit cadence below for every change: focused cohort during
 development, one fresh full-extended gate immediately before commit, push,
