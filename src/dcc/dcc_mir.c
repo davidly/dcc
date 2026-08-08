@@ -6375,6 +6375,18 @@ static int mir_instruction_clobbers_caller_registers(
              (insn->immediate == '/' || insn->immediate == '%')));
 }
 
+int mir_iy_home_live_across_caller_clobber(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_instruction_clobbers_caller_registers(
+                &mir.insns[instruction]) &&
+            mir_home_color_live_across(instruction, MIR_COLOR_IY))
+            return 1;
+    return 0;
+}
+
 static void mir_allocate_registers(const unsigned char *live_in,
                                    const unsigned char *live_out,
                                    struct MirAllocationSummary *summary,

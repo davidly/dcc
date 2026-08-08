@@ -1713,8 +1713,17 @@ void mir_emit_home_prologue(FILE *out, int uses_iy)
     int frame_bytes = mir_effective_local_bytes() +
         2 * mir.allocation_spill_count;
 
-    if (uses_iy)
+    if (uses_iy) {
+        if (mir_iy_home_live_across_caller_clobber())
+            /* MIR's IY home is callee-saved, but dccpeep's file-wide IY
+             * borrowing is not. Publish the same ownership protocol as the
+             * legacy allocator so no optimized callee can clobber a value
+             * retained across its call. */
+            fprintf(out,
+                    ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                    mir.name);
         fputs("\tpush iy\n", out);
+    }
     if (frame_bytes == 0) {
         mir_emit_prologue(out);
         return;

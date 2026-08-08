@@ -1110,10 +1110,20 @@ long mir_stream_size(FILE *stream)
 {
     long position = ftell(stream);
     long size;
+    char line[512];
 
     if (position < 0 || fseek(stream, 0, SEEK_END) != 0)
         return -1;
     size = ftell(stream);
+    if (size < 0 || fseek(stream, 0, SEEK_SET) != 0)
+        return -1;
+    while (fgets(line, sizeof(line), stream) != NULL)
+        if (strstr(line, ";@dcc.reg claim=iy ") == line &&
+            strstr(line, " kind=mir val=0") != NULL)
+            /* Register-ownership metadata changes dccpeep policy but emits
+             * no Z80 bytes. Do not let its symbol text choose a different
+             * selector through the assembly-text cost proxy. */
+            size -= (long)strlen(line);
     if (fseek(stream, position, SEEK_SET) != 0)
         return -1;
     return size;
@@ -2395,7 +2405,6 @@ static int mir_inline_substitution_coverage_is_semantically_eligible(
 {
     return mir_cfg_block_count() <= 64 &&
            mir_call_count() <= 32 &&
-           mir.local_bytes >= 32 &&
            !mir.has_vla &&
            !mir_has_cfg_backedge() &&
            !mir_has_declared_pointer_array() &&
@@ -4668,8 +4677,10 @@ evaluate_generated:
                     !strcmp(fallback_reason, "inline-substitution") &&
                     mir_inline_substitution_coverage_is_semantically_eligible(
                         generated_size, captured_size))
-                    /* T446: the complete terminal acyclic inline-temp
-                     * stratum with at least 32 reserved local bytes passed. */
+                    /* T446 follow-up: call-crossing MIR IY homes now publish
+                     * their file-wide ownership to dccpeep, removing the
+                     * former small-frame semantic failure while retaining
+                     * the existing acyclic/resource bounds. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "block-cse-cost") &&

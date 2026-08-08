@@ -432,6 +432,7 @@ int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 int mir_inline_temp_slot(const char *name);
+int mir_iy_home_live_across_caller_clobber(void);
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
 int mir_value_number_global_field_loads(void);

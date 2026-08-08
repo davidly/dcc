@@ -17247,6 +17247,18 @@ one; the 92-block function remains excluded.
 - Coverage: **2019/2060 ordinary (98.01%)**, **2137/2179 stack-check
   (98.07%)**, zero removals.
 - Full extended correctness: **314/314 runnable + 196/196 extended**.
+
+## Item T477: publish call-crossing MIR IY ownership (+1/+1, 2026-08-08)
+
+`tinlnpar.main` retained `a` in callee-saved IY, but MIR emitted no ownership
+directive. dccpeep therefore borrowed IY in `mem_store` and clobbered the
+caller value. MIR now emits the file-wide IY claim protocol whenever an IY
+home crosses a caller-clobbering instruction; metadata is excluded from the
+text-size proxy.
+
+- Coverage: **2026/2060 (98.35%)**, **2145/2179 (98.44%)**, zero removals.
+- Remaining `inline-substitution`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
 - Performance: 4 deliberate Phase-1 regressions; baselines updated.
 
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
