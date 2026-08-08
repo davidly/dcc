@@ -17339,3 +17339,42 @@ the four clean functions.
 - Forced-MIR regression harness: PASS (9/9).
 - Performance gate: 15 deliberate Phase-1 regressions, 5 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T447: eliminated the selector-less bucket by publishing inline-temp memory (+8 ordinary/+8 stack-check, 2026-08-08)
+
+Fresh T446 baseline: **1533/2052 ordinary (74.71%)** and **1607/2165
+stack-check (74.23%)**.
+
+All 36 `selector` fallbacks had the same preflight diagnostic:
+
+```text
+reason=memory-location opcode=store name=#itmpN object=-1
+```
+
+`#itmpN` inline argument temporaries are reserved frame locals. MIR
+intentionally excludes them from SSA objects, but they have no lexical
+declaration replay, so their valid frame locations were never published to
+selectors. `mir_begin_function()` now calls `mir_note_declared_symbol()` for
+reserved local `#itmpN` symbols while preserving their promotion exclusion.
+
+The `selector` bucket drops **36 -> 0**. Nine functions initially emitted;
+the other 27 moved to explicit cost/semantic reasons instead of failing to
+produce a candidate.
+
+One newly selected function, `tinline.inline_temp_collision_check`, exposed
+the exact nested temp reuse its test describes: `#itmp1` was stored, then
+overwritten by a nested inline expansion before its first load (5844 became
+6244). `mir_has_unconsumed_inline_temp_overwrite()` detects that structural
+store-before-first-load collision after every terminal admission and keeps it
+on `inline-temp-overlap` fallback until MIR assigns nesting-specific temp
+identities. The final net gain is eight.
+
+- Ordinary: **1533/2052 -> 1541/2052 (75.10%)**, **+8**, zero removals.
+- Stack-check: **1607/2165 -> 1615/2165 (74.60%)**, **+8**, zero removals.
+- Remaining `selector`: **0**.
+- New semantic reason `inline-temp-overlap`: **1 ordinary / 1 stack-check**.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Final performance gate: 8 deliberate Phase-1 regressions, 3 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.

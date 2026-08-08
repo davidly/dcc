@@ -2151,6 +2151,32 @@ static int mir_inline_substitution_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_has_unconsumed_inline_temp_overwrite(void)
+{
+    int pending[MAX_PROTO_PARAMS] = {0};
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int index;
+        if (strncmp(insn->name, "#itmp", 5) != 0 ||
+            insn->name[5] < '0' || insn->name[5] > '9' ||
+            insn->name[6] != 0)
+            continue;
+        index = insn->name[5] - '0';
+        if (index >= MAX_PROTO_PARAMS)
+            continue;
+        if (insn->opcode == MIR_STORE) {
+            if (pending[index])
+                return 1;
+            pending[index] = 1;
+        } else if (insn->opcode == MIR_LOAD) {
+            pending[index] = 0;
+        }
+    }
+    return 0;
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4214,6 +4240,13 @@ evaluate_generated:
                     /* T446: the complete terminal acyclic inline-temp
                      * stratum with at least 32 reserved local bytes passed. */
                     fallback_reason = NULL;
+                if (fallback_reason == NULL &&
+                    mir_has_unconsumed_inline_temp_overwrite())
+                    /* Nested inline expansion reused one #itmp slot before
+                     * the outer value's first load. Keep this semantic shape
+                     * on fallback until MIR gives nesting levels distinct
+                     * temporary identities. */
+                    fallback_reason = "inline-temp-overlap";
                 if (fallback_reason != NULL)
                     emitted = 0;
                 /* Item T66b: this is the single point where the accept/

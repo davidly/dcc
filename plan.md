@@ -31,15 +31,15 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1533/2052 (74.71%)**
-- Current stack-check coverage: **1607/2165 (74.23%)**
-- HEAD (pending push): T446 fixes pointer-to-array dereference stride
-  repair and eliminates the complete `pointer-array` reason (+7), then
-  admits four of the five remaining `inline-substitution` functions
-  under a measured inline-temp boundary (+4): **+11 ordinary/+11
-  stack-check**, zero removals. `tinlnpar.main` remains excluded because
-  it has only 6 local bytes versus 32–40 for the four clean inline-temp
-  functions and fails forced MIR. See `## Item T446` in
+- Current ordinary coverage: **1541/2052 (75.10%)**
+- Current stack-check coverage: **1615/2165 (74.60%)**
+- HEAD (pending push): T447 fixes all 36 `selector` fallbacks (reserved
+  `#itmpN` locals had no MIR memory location), immediately admitting 8
+  and reclassifying the other 28 to explicit cost/semantic reasons. It
+  adds **+8 ordinary/+8 stack-check**, zero removals, on top of T446.
+  `tinline.inline_temp_collision_check` is now structurally rejected as
+  `inline-temp-overlap` because nested expansion overwrites `#itmp1`
+  before its first load. See `## Item T447` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -123,6 +123,11 @@ transactional fallback remains in place throughout Phase 1.
   deferred metadata repair uses element stride rather than restoring the
   whole-array stride. `(*ip)[i]`, `(*cp)[i]`, `(*pp)[i]`, and
   `(*lp)[i]` now use 2/1/2/35 rather than 8/4/6/105.
+- **T447 eliminates the selector-less bucket.** Every former
+  selector rejection was the same unresolved `#itmpN` store. Synthetic
+  inline temps remain excluded from SSA promotion but are now published
+  as frame memory. One nested-lifetime collision is explicitly gated;
+  every other function reaches a real selector/cost decision.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

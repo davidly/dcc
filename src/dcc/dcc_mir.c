@@ -3059,6 +3059,13 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
             int value;
             struct MirInsn *insn;
 
+            if (locals[local].storage == SC_LOCAL &&
+                strncmp(locals[local].name, "#itmp", 5) == 0)
+                /* Inline argument temporaries are reserved frame locals, not
+                 * lexical declarations, so no later declaration replay can
+                 * publish their otherwise-valid memory locations. Keep them
+                 * out of SSA promotion but make them addressable by selectors. */
+                mir_note_declared_symbol(&locals[local]);
             if (locals[local].storage == SC_PARAM) {
                 int declared;
                 mir_note_declared_symbol(&locals[local]);
