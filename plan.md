@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2026/2060 (98.35%)**
-- Current stack-check coverage: **2145/2179 (98.44%)**
-- HEAD (pending push): T477 publishes call-crossing MIR IY ownership to
-  dccpeep, fixing and admitting `tinlnpar.main`: **+1/+1**, zero removals.
-  See `## Item T477` in
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **2028/2060 (98.45%)**
+- Current stack-check coverage: **2147/2179 (98.53%)**
+- HEAD (pending push): T478 deduplicates direct-call EXTRNs by resolved
+  assembler symbol and admits `tpfauto.main`; T479 admits the final oversized
+  true-FINAL text-size function, `ts32.main`: **+2/+2**, zero removals.
+  See `## Item T478` and `## Item T479` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -213,6 +213,12 @@ transactional fallback remains in place throughout Phase 1.
   distinguished from genuine nested identity overwrite.
 - **T477 eliminates inline-substitution fallback.** dccpeep can no longer
   borrow IY in a callee when MIR retains a caller value there.
+- **T478 fixes formatted-I/O EXTRN ownership.** Calls sharing one source
+  symbol can resolve to distinct assembler entry points; direct-call EXTRNs
+  are now deduplicated by that resolved name, admitting `tpfauto.main`.
+- **T479 eliminates terminal text-size fallback.** The T455 typed-alias fixes
+  already repaired `ts32.main`; the final non-speculative sink now admits its
+  oversized shift matrix after every retry has completed.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

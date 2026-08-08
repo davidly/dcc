@@ -2140,7 +2140,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 }
                 if (argument != -1)
                     goto done;
-                if (callee->needs_extrn && mir_extrn_should_emit(callee))
+                if (callee->needs_extrn &&
+                    mir_extrn_should_emit_name(assembly_name))
                     fprintf(out, "\textrn %s\n", assembly_name);
                 fprintf(out, "\tcall %s\n", assembly_name);
                 for (argument = 0; argument < argument_bytes / 2; ++argument)

@@ -104,8 +104,9 @@ PROVEN_COST_ONLY_REASONS = [
 CONFIRMED_UNSAFE_COST_REASONS = {
     "text-size": "T437-T450 admitted all but ts32.main after mulmod, "
                  "PHI-slot, pointer-array, wide-forward, and high-call "
-                 "oversized validation. ts32 still has real narrow/wide "
-                 "shift failures.",
+                 "oversized validation. T479 admitted the final true-FINAL "
+                 "shift matrix after the T455 typed-alias repairs; terminal "
+                 "text-size is now empty.",
     "boolean-phi-cost": "T436/T448/T452/T456 admitted acyclic, small-loop, "
                  "medium-loop, FINAL-sink, and budgeted residual strata "
                  "through T472. Remaining functions are direct failures or "
@@ -149,9 +150,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "constant-conversion-home-cost": "T445/T464 admitted every current "
                  "terminal candidate except the isolated call-free lmod "
                  "failure.",
-    "block-cse-cost": "T450/T466 admitted post-PHI functions below 25 KiB "
-                 "outside the wide/20-call failure. Only direct tpfauto and "
-                 "oversized tstructv failures remain.",
+    "block-cse-cost": "T450/T466 admitted post-PHI functions below 25 KiB. "
+                 "T478 fixed assembler-name EXTRN deduplication and admitted "
+                 "the former wide/20-call tpfauto failure. Only oversized "
+                 "tstructv remains.",
 }
 
 # Deprecated alias kept for any external caller still importing the old

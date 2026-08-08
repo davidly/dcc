@@ -17261,6 +17261,34 @@ text-size proxy.
 - Full extended correctness: **314/314 runnable + 196/196 extended**.
 - Performance: 4 deliberate Phase-1 regressions; baselines updated.
 
+## Item T478: deduplicate direct-call EXTRNs by resolved name (+1/+1, 2026-08-08)
+
+`tpfauto.main` uses several printf-family assembler entry points that share
+one source `Sym`. MIR's EXTRN suppression was keyed by that source symbol, so
+emitting `_printf` suppressed required declarations such as `_pffio`, `_pflng`,
+and `_spfio`. Both general backends now deduplicate direct-call EXTRNs by the
+resolved assembler name. With that correctness defect removed, the obsolete
+wide/20-call block-CSE exclusion is gone and `tpfauto.main` is admitted.
+
+- Coverage: **2027/2060 (98.40%)**, **2146/2179 (98.49%)**, zero removals.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
+- Performance: `tpfauto` improves in both modes; baselines updated.
+
+## Item T479: eliminate terminal text-size fallback (+1/+1, 2026-08-08)
+
+The T455 typed-alias work already fixed `ts32.main`'s compound-assignment
+narrowing and equal-width signedness before later widening. Forced peep and
+nopeep execution now pass. The terminal text-size policy therefore admits the
+remaining oversized candidate only at its real non-speculative FINAL sink,
+after every selector retry; speculative attempts retain the established size
+and call-count bounds.
+
+- Coverage: **2028/2060 (98.45%)**, **2147/2179 (98.53%)**, zero removals.
+- Remaining terminal `text-size`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
+- Performance: the deliberate `ts32` Phase-1 regression is tracked in the
+  checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

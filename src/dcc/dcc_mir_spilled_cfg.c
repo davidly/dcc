@@ -9049,7 +9049,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_emit_runtime_call(out, "__call_hl");
                 } else {
                     if ((callee == NULL || callee->needs_extrn) &&
-                        mir_extrn_should_emit(callee))
+                        mir_extrn_should_emit_name(assembly_name))
                         fprintf(out, "\textrn %s\n", assembly_name);
                     fprintf(out, "\tcall %s\n", assembly_name);
                 }
@@ -9188,7 +9188,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_emit_hl_offset_from_ix(out, (int)insn->immediate);
                 fputs("\tpush hl\n", out);
                 if ((callee == NULL || callee->needs_extrn) &&
-                    mir_extrn_should_emit(callee))
+                    mir_extrn_should_emit_name(assembly_name))
                     fprintf(out, "\textrn %s\n", assembly_name);
                 fprintf(out, "\tcall %s\n", assembly_name);
                 fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",

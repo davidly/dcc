@@ -2257,7 +2257,9 @@ static int mir_text_size_simple_backedge_is_semantically_eligible(
 static int mir_text_size_post_phi_is_semantically_eligible(
     long generated_size)
 {
-    return generated_size <= 10000 || mir_call_count() >= 80;
+    return generated_size <= 10000 || mir_call_count() >= 80 ||
+           (!g_speculative_codegen_active &&
+            mir.sink_purpose == EMIT_SINK_FINAL);
 }
 
 static int mir_bounded_acyclic_coverage_is_semantically_eligible(
@@ -2416,8 +2418,7 @@ static int mir_inline_substitution_coverage_is_semantically_eligible(
 static int mir_block_cse_post_phi_is_semantically_eligible(
     long generated_size)
 {
-    return generated_size <= 25000 &&
-           !(mir_has_wide_values() && mir_call_count() == 20);
+    return generated_size <= 25000;
 }
 
 static int mir_has_inline_temp_identity_overwrite(void)
@@ -4507,9 +4508,11 @@ evaluate_generated:
                     !strcmp(fallback_reason, "text-size") &&
                     mir_text_size_post_phi_is_semantically_eligible(
                         generated_size))
-                    /* T449: after fixing wide forwarding across emitted
-                     * constants, the complete terminal post-PHI text-size
-                     * cohort below 10,000 bytes passed full extended. */
+                    /* T449 follow-up: typed assignment aliases now preserve
+                     * compound-assignment narrowing and equal-width
+                     * signedness through later widening. The remaining
+                     * oversized true-FINAL shift matrix passes both modes;
+                     * keep speculative retries on the established bounds. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "boolean-phi-cost") &&
