@@ -17096,6 +17096,27 @@ selector changes. Of the two binary-load-pair candidates,
 - Performance gate: 6 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T466: expand validated block-CSE ceiling (+4 ordinary/+4 stack-check, 2026-08-08)
+
+Fresh T465 baseline: **1938/2060 ordinary (94.08%)** and **2053/2179
+stack-check (94.22%)**.
+
+Each of the six remaining block-CSE functions was tested with its actual
+block-CSE retry. Four pass: `tinitreg.tnest`,
+`tpostptr.test_arrays_and_structs`, and both remaining `tptrlhs` functions.
+`tpfauto.main` remains the known wide/20-call direct failure, while
+`tstructv.main` is the only candidate above 25 KiB and also fails directly.
+Raising the existing post-PHI ceiling from 10 to 25 KiB therefore captures
+exactly the four verified functions.
+
+- Ordinary: **1938/2060 -> 1942/2060 (94.27%)**, **+4**, zero removals.
+- Stack-check: **2053/2179 -> 2057/2179 (94.40%)**, **+4**, zero removals.
+- Remaining `block-cse-cost`: **2 ordinary / 2 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 10 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base

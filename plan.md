@@ -31,13 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1938/2060 (94.08%)**
-- Current stack-check coverage: **2053/2179 (94.22%)**
-- HEAD (pending push): T465 admits the safe backedge
-  `binary-load-pair-cost` candidate and both true-final
-  `instruction-count` candidates: **+3 ordinary/+3 stack-check**, zero
-  removals. `pint.emit` remains a direct resource/correctness failure. See
-  `## Item T465` in
+- Current ordinary coverage: **1942/2060 (94.27%)**
+- Current stack-check coverage: **2057/2179 (94.40%)**
+- HEAD (pending push): T466 widens the validated post-PHI block-CSE ceiling
+  from 10 to 25 KiB: **+4 ordinary/+4 stack-check**, zero removals. The
+  wide/20-call `tpfauto` and >25-KiB `tstructv` direct failures remain.
+  See `## Item T466` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -186,6 +185,8 @@ transactional fallback remains in place throughout Phase 1.
   direct call-free failure; dead-store forwarding is fully eliminated.
 - **T465 closes instruction-count and halves binary-load-pair.** True-final
   gating avoids the two selector removals seen under blind forcing.
+- **T466 reduces block-CSE to two direct failures.** Four large single-block
+  functions pass their true CSE candidates in both modes.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

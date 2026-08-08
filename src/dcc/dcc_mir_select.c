@@ -2301,7 +2301,7 @@ static int mir_inline_substitution_coverage_is_semantically_eligible(
 static int mir_block_cse_post_phi_is_semantically_eligible(
     long generated_size)
 {
-    return generated_size <= 10000 &&
+    return generated_size <= 25000 &&
            !(mir_has_wide_values() && mir_call_count() == 20);
 }
 

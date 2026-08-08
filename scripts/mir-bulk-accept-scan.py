@@ -150,10 +150,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "constant-conversion-home-cost": "T445/T464 admitted every current "
                  "terminal candidate except the isolated call-free lmod "
                  "failure.",
-    "block-cse-cost": "T450 admitted 29 post-PHI functions below 10 KiB "
-                 "outside the unique wide/20-call tpfauto failure stratum. "
-                 "tpfauto remains a real semantic failure; the other residue "
-                 "is oversized.",
+    "block-cse-cost": "T450/T466 admitted post-PHI functions below 25 KiB "
+                 "outside the wide/20-call failure. Only direct tpfauto and "
+                 "oversized tstructv failures remain.",
 }
 
 # Deprecated alias kept for any external caller still importing the old
