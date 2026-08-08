@@ -31,10 +31,10 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2041/2060 (99.08%)**
-- Current stack-check coverage: **2160/2179 (99.13%)**
-- HEAD (pending push): T490 admits `ttrig.main` through the same tracked stack
-  reserve established by T488: **+1/+1**, zero removals.
+- Current ordinary coverage: **2042/2060 (99.13%)**
+- Current stack-check coverage: **2161/2179 (99.17%)**
+- HEAD (pending push): T491 fixes aggregate call copying and odd-byte cleanup,
+  admitting `tstructv.main`: **+1/+1**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -246,6 +246,10 @@ transactional fallback remains in place throughout Phase 1.
 - **T490 reduces dynamic-index residue to four.** The deterministic
   13-block/19-call FINAL float driver passes both modes with T488's tracked
   reserve and no longer needs its historical exclusion.
+- **T491 eliminates terminal block-CSE fallback.** Aggregate call arguments
+  now use correctly directed `LDIR`, and scalar results survive odd-byte stack
+  cleanup in forced concrete slots. `tstructv.main` shrinks by about 8 KiB
+  and passes both modes.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

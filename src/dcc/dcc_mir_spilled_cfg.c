@@ -40,6 +40,7 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
+static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
 static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
@@ -1106,6 +1107,16 @@ static int mir_value_requires_divmod_slot(int value)
            definition->opcode == MIR_BINARY &&
            (definition->immediate == '/' || definition->immediate == '%') &&
            mir_divmod_partner((int)(definition - mir.insns)) >= 0;
+}
+
+static int mir_value_requires_odd_call_cleanup_slot(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           (definition->opcode == MIR_CALL ||
+            definition->opcode == MIR_CALL_AGGREGATE) &&
+           mir_call_has_odd_argument_bytes(definition);
 }
 
 int mir_address_rematerialization_candidate_count(void)
@@ -4201,8 +4212,10 @@ static int mir_prepare_backend_slots(void)
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 int reusable_source = -1;
-                int force_slot = mir_value_requires_phi_slot(value) ||
-                                 mir_value_requires_divmod_slot(value);
+                int force_slot =
+                    mir_value_requires_phi_slot(value) ||
+                    mir_value_requires_divmod_slot(value) ||
+                    mir_value_requires_odd_call_cleanup_slot(value);
                 ++mir_slot_report_requested_count;
                 if (!force_slot &&
                     (last[value] <= first[value] ||
@@ -9027,7 +9040,6 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         continue;
                     }
                     if (type_is_struct_object(arg->type)) {
-                        int byte;
                         if (!mir_emit_cached_call_argument(out, arg->src1) &&
                             !mir_emit_rematerialized_argument(
                                 out, arg->src1, 2))
@@ -9036,21 +9048,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         fprintf(out,
                                 "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
                                 size);
-                        /* mir-text-size Item T6: deliberately NOT
-                         * switched to `ldir` here (unlike the
-                         * MIR_RETURN/MIR_STORE/MIR_COPY_AGGREGATE
-                         * sites) - see mir-text-size-plan.md's Item T6
-                         * defer note. Byte-for-byte here still
-                         * unrolls; this call-argument copy site is
-                         * deferred pending a Root-Cause-C fix for a
-                         * pre-existing redundant address-recomputation
-                         * pattern that a real regression exposed when
-                         * this site's byte count was reduced. */
-                        for (byte = 0; byte < size; ++byte) {
-                            fputs("\tld a,(de)\n\tld (hl),a\n", out);
-                            if (byte + 1 < size)
-                                fputs("\tinc de\n\tinc hl\n", out);
-                        }
+                        fprintf(out, "\tex de,hl\n\tld bc,%d\n\tldir\n",
+                                size);
                         argument_bytes += size;
                     } else if (size == 4) {
                         int cached = mir_emit_cached_wide_call_argument(
@@ -9095,10 +9094,18 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if ((argument_bytes & 1) != 0) {
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
+                        int saved_instruction = mir_emit_instruction_index;
+
+                        /* SP cleanup overwrites HL before the following MIR
+                         * argument can consume this result. Force a concrete
+                         * store even when ordinary next-use forwarding would
+                         * otherwise classify the value as slotless. */
+                        mir_emit_instruction_index = -1;
                         if (type_size(insn->type) == 4)
                             mir_emit_virtual_store_wide(out, insn->dst);
                         else
                             mir_emit_virtual_store(out, insn->dst);
+                        mir_emit_instruction_index = saved_instruction;
                     }
                     fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
                             argument_bytes);
@@ -9157,7 +9164,6 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         goto done;
                     size = type_size(arg->type);
                     if (type_is_struct_object(arg->type)) {
-                        int byte;
                         if (size <= 0 || size > 1024)
                             goto done;
                         if (!mir_emit_cached_call_argument(out, arg->src1) &&
@@ -9167,16 +9173,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         fputs("\tex de,hl\n", out);
                         fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
                                 size);
-                        /* mir-text-size Item T6: deliberately NOT
-                         * switched to `ldir` here - see the matching
-                         * defer note in the MIR_CALL struct-argument
-                         * case above and mir-text-size-plan.md's Item
-                         * T6 defer rationale. */
-                        for (byte = 0; byte < size; ++byte) {
-                            fputs("\tld a,(de)\n\tld (hl),a\n", out);
-                            if (byte + 1 < size)
-                                fputs("\tinc de\n\tinc hl\n", out);
-                        }
+                        fprintf(out, "\tex de,hl\n\tld bc,%d\n\tldir\n",
+                                size);
                         argument_bytes += size;
                     } else if (size == 4) {
                         int cached = mir_emit_cached_wide_call_argument(
@@ -9248,7 +9246,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     insn->immediate != MIR_AGGREGATE_VALUE_DEST_OFFSET &&
                     insn->immediate != MIR_AGGREGATE_GLOBAL_DEST_OFFSET)
                     mir_emit_hl_offset_from_ix(out, (int)insn->immediate);
-                mir_emit_virtual_store(out, insn->dst);
+                if (mir_value_has_use(insn->dst))
+                    mir_emit_virtual_store(out, insn->dst);
             }
             break;
         case MIR_VA_START:

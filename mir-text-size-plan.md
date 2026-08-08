@@ -17439,6 +17439,28 @@ bounded FINAL predicate therefore no longer excludes that shape.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T491: aggregate-call LDIR and odd-cleanup result slots (+1/+1, 2026-08-08)
+
+`tstructv.main` had two independent aggregate-call defects:
+
+1. Struct arguments were copied byte-by-byte, accounting for most of the
+   26-KiB MIR body. They now use correctly directed Z80 `LDIR` (HL source,
+   DE destination), matching the other aggregate copy paths.
+2. A scalar result from a call with a 7-byte struct argument was classified
+   as slotless because its next MIR use was an argument. The caller had to
+   adjust SP first, overwriting HL, then reloaded from outside the allocated
+   frame. Odd-argument call results now receive concrete slots and suppress
+   forwarding for the pre-cleanup save.
+
+A minimal two-call struct-return reproducer now prints `1033` twice.
+`tstructv.main` shrinks from about 26 KiB to 18 KiB and passes peep/nopeep.
+
+- Coverage: **2042/2060 (99.13%)**, **2161/2179 (99.17%)**, zero removals.
+- Remaining `block-cse-cost`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

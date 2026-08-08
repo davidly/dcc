@@ -161,8 +161,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "failure.",
     "block-cse-cost": "T450/T466 admitted post-PHI functions below 25 KiB. "
                  "T478 fixed assembler-name EXTRN deduplication and admitted "
-                 "the former wide/20-call tpfauto failure. Only oversized "
-                 "tstructv remains.",
+                 "the former wide/20-call tpfauto failure. T491 replaced "
+                 "aggregate argument unrolling with LDIR and fixed odd-byte "
+                 "cleanup storage, admitting tstructv; the reason is empty.",
 }
 
 # Deprecated alias kept for any external caller still importing the old
