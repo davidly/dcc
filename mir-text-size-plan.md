@@ -18431,3 +18431,50 @@ true-final dead-store candidates pass.
   diagnostics and dccpeep pass.
 - Performance gate: 17 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
+
+This investigation directly motivated T499's call-bounded regional homes:
+it ruled out a simpler dccpeep-side fix before committing to the larger
+regional live-range-splitting architecture.
+
+At 99.66%/99.68% coverage, the seven remaining fallbacks (`a1.emulate`,
+`adaint.next`, `pint.factor_call_or_var`, `pint.scan_number`,
+`pint.for_stmt`, `pint.subprog`, `pint.run`) are all blocked by cost gates
+whose `generated-bytes`/`captured-bytes` come from `mir_stream_size()` -
+literal assembly-text character length compared entirely inside `dcc`,
+before `dccpeep` ever runs. A question arose: could the apparent oversizing
+actually be a `dccpeep` pattern-recognition gap (i.e. would peep shrink the
+MIR candidate down to parity if allowed through), rather than a genuine MIR
+backend defect?
+
+Tested empirically with `DCC_MIR_FORCE_ACCEPT_FUNCTION` plus real linked
+`.COM`/`.PRN` byte spans (not the internal text-length metric) for two
+functions in different apps:
+
+| function | mode | baseline bytes | forced-MIR bytes | delta |
+| --- | --- | ---: | ---: | ---: |
+| `pint.scan_number` | nopeep | 396 | 946 | +550 (+138.9%) |
+| `pint.scan_number` | peep | 342 | 863 | +521 (+152.3%) |
+| `adaint.next` | nopeep | 2682 | 5746 | +3064 (+114.2%) |
+| `adaint.next` | peep | 2017 | 5103 | +3086 (+153.0%) |
+
+Both forced builds are fully correct (all pint/adaint fixture scenarios
+byte-identical to baseline after CRLF normalization). `dccpeep` does still
+shrink the MIR candidate by a nonzero, comparable *absolute* byte count to
+what it saves on the legacy candidate (e.g. `next`: 665 bytes saved on
+legacy vs. 643 on MIR), but because the MIR candidate starts so much larger,
+the *relative* oversizing does not close after peep - it is flat or slightly
+worse (114% to 153%, 139% to 152%). The drift is present in **both** modes
+and is not recovered by peephole optimization.
+
+Conclusion: this rules out "dccpeep fails to recognize MIR's emitted
+shapes" as the dominant cause. The gate's raw text-size metric is a
+directionally faithful proxy for real oversizing (bigger text -> bigger
+real bytes here), even though the constant factor between text characters
+and assembled bytes differs from a raw 1:1 reading. The extra bytes are
+real, semantically-required spill/reload/frame instructions from the
+current whole-lifetime-homing MIR backend on these large interpreter CFGs.
+Regional live-range splitting (or equivalent regional homing) remains the
+correct next architecture step; further dccpeep pattern work on these
+shapes is a secondary lever at best, not a substitute.
