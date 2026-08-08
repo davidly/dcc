@@ -954,7 +954,8 @@ static int mir_emit_inline_local_temp(struct Sym *fn_sym,
 static int mir_try_lower_inline_call_common(const struct AstNode *call,
                                             struct Sym *fn_sym,
                                             struct AstNode **out_expr,
-                                            struct AstNode **out_stmt)
+                                            struct AstNode **out_stmt,
+                                            unsigned long *saved_live_mask_out)
 {
     const struct AstNode *src_expr;
     const char *temp_names[MAX_PROTO_PARAMS];
@@ -969,6 +970,8 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
     const char *saved_local_src_name;
     const char *saved_local_temp_name;
 
+    if (saved_live_mask_out == NULL)
+        return 0;
     if (out_expr != NULL)
         *out_expr = NULL;
     if (out_stmt != NULL)
@@ -1022,11 +1025,16 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
     else
         *out_expr = mir_clone_inline_expr(&g_ast_arena, fn_sym, src_expr, call,
                                           temp_names);
-    mir_inline_expand_depth--;
-    mir_inline_live_temp_mask = saved_live_mask;
     mir_inline_local_src_name = saved_local_src_name;
     mir_inline_local_temp_name = saved_local_temp_name;
+    *saved_live_mask_out = saved_live_mask;
     return 1;
+}
+
+static void mir_end_inline_call_scope(unsigned long saved_live_mask)
+{
+    mir_inline_expand_depth--;
+    mir_inline_live_temp_mask = saved_live_mask;
 }
 
 static int mir_try_lower_inline_call_expr(const struct AstNode *call,
@@ -1035,6 +1043,7 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
 {
     struct AstNode *expr;
     struct AstNode *stmt;
+    unsigned long saved_live_mask;
 
     if (out_value == NULL)
         return 0;
@@ -1043,10 +1052,15 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
         return 0;
     expr = NULL;
     stmt = NULL;
-    if (!mir_try_lower_inline_call_common(call, fn_sym, &expr, &stmt) ||
-        expr == NULL || stmt != NULL)
+    if (!mir_try_lower_inline_call_common(
+            call, fn_sym, &expr, &stmt, &saved_live_mask))
         return 0;
+    if (expr == NULL || stmt != NULL) {
+        mir_end_inline_call_scope(saved_live_mask);
+        return 0;
+    }
     *out_value = mir_lower_expr(expr);
+    mir_end_inline_call_scope(saved_live_mask);
     return 1;
 }
 
@@ -1055,6 +1069,7 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
     struct Sym *fn_sym;
     struct AstNode *expr;
     struct AstNode *stmt;
+    unsigned long saved_live_mask;
 
     if (call == NULL || call->kind != AST_CALL || call->a == NULL ||
         call->a->kind != AST_IDENT)
@@ -1072,14 +1087,18 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
         return 0;
     expr = NULL;
     stmt = NULL;
-    if (!mir_try_lower_inline_call_common(call, fn_sym, &expr, &stmt))
+    if (!mir_try_lower_inline_call_common(
+            call, fn_sym, &expr, &stmt, &saved_live_mask))
         return 0;
     if (stmt != NULL)
         mir_lower_stmt(stmt);
     else if (expr != NULL)
         (void)mir_lower_expr(expr);
-    else
+    else {
+        mir_end_inline_call_scope(saved_live_mask);
         return 0;
+    }
+    mir_end_inline_call_scope(saved_live_mask);
     return 1;
 }
 

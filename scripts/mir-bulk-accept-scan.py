@@ -102,10 +102,10 @@ PROVEN_COST_ONLY_REASONS = [
 # without an explicit override, and expect the same forced-A/B-per-shape
 # rigor as any other semantic gate, not a blanket relaxation.
 CONFIRMED_UNSAFE_COST_REASONS = {
-    "text-size": "T437-T449 admitted nearly the complete population after "
-                 "mulmod, PHI-slot, pointer-array, and wide-forward fixes. "
-                 "Only four oversized terminal candidates remain; ts32.main "
-                 "still has real narrow/wide shift failures.",
+    "text-size": "T437-T450 admitted all but ts32.main after mulmod, "
+                 "PHI-slot, pointer-array, wide-forward, and high-call "
+                 "oversized validation. ts32 still has real narrow/wide "
+                 "shift failures.",
     "boolean-phi-cost": "T436/T448 admitted 76 ordinary functions across "
                  "acyclic and post-PHI-slot small-loop strata. Remaining "
                  "larger backedge, label-only PHI and oversized shapes still "
@@ -145,10 +145,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "acyclic functions; interpreter loop failures remain.",
     "constant-conversion-home-cost": "T445 admitted 1 terminal bounded "
                  "acyclic function; tregnarw/later strata remain.",
-    "block-cse-cost": "tfmaf, tpfauto, tstructv, tvla, wumpus fail. "
-                 "tfmaf specifically: 'zero_times_inf_is_nan' - a real "
-                 "floating-point edge case wrong beyond the previously "
-                 "audited 99-candidate sample.",
+    "block-cse-cost": "T450 admitted 29 post-PHI functions below 10 KiB "
+                 "outside the unique wide/20-call tpfauto failure stratum. "
+                 "tpfauto remains a real semantic failure; the other residue "
+                 "is oversized.",
 }
 
 # Deprecated alias kept for any external caller still importing the old

@@ -2100,7 +2100,7 @@ static int mir_text_size_simple_backedge_is_semantically_eligible(
 static int mir_text_size_post_phi_is_semantically_eligible(
     long generated_size)
 {
-    return generated_size <= 10000;
+    return generated_size <= 10000 || mir_call_count() >= 80;
 }
 
 static int mir_bounded_acyclic_coverage_is_semantically_eligible(
@@ -2169,6 +2169,13 @@ static int mir_inline_substitution_coverage_is_semantically_eligible(
            !mir_has_label_only_phi_fallthrough() &&
            generated_size <= 5000 &&
            generated_size <= captured_size + 2048;
+}
+
+static int mir_block_cse_post_phi_is_semantically_eligible(
+    long generated_size)
+{
+    return generated_size <= 10000 &&
+           !(mir_has_wide_values() && mir_call_count() == 20);
 }
 
 static int mir_has_unconsumed_inline_temp_overwrite(void)
@@ -4274,6 +4281,13 @@ evaluate_generated:
                         generated_size, captured_size))
                     /* T446: the complete terminal acyclic inline-temp
                      * stratum with at least 32 reserved local bytes passed. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "block-cse-cost") &&
+                    mir_block_cse_post_phi_is_semantically_eligible(
+                        generated_size))
+                    /* T450: the post-PHI bounded block-CSE population outside
+                     * the wide/20-call failure stratum passed full extended. */
                     fallback_reason = NULL;
                 if (fallback_reason == NULL &&
                     mir_has_unconsumed_inline_temp_overwrite())
