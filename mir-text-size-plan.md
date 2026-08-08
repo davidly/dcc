@@ -16574,3 +16574,99 @@ exclusion once that's proven safe, or leave it as a permanent structural
 boundary (loops-with-calls needing a different lowering strategy
 entirely, mirroring the still-open `cfg-backedge` risky-stratum
 architecture item).
+
+## Item T435: fixed forwarded fastcall arguments and exhausted the generic cfg-backedge bucket (+16 ordinary/+18 stack-check, 2026-08-08)
+
+Fresh T434 baseline: **1032/2029 ordinary (50.86%)** and **1058/2131
+stack-check (49.65%)**.
+
+### Complete cohort test found one shared emitter defect
+
+The fresh ordinary census contained 16 remaining `cfg-backedge` fallbacks.
+Forcing the complete reason as one cohort through
+`runall.ps1 -Mode full -Extended -NoPerfCheck` produced exactly one failing
+app: `tbdos`. Both peep and nopeep printed repeated byte value 2 instead of
+`"tbdos completed with great success"`.
+
+`tbdos.putstr` is:
+
+```c
+while (*s)
+    bdos(2, *s++);
+```
+
+MIR correctly formed the character as the final BDOS argument and forwarded
+its single-use value directly in HL into the adjacent ARG/CALL. The
+BDOS-fastcall emitter then loaded the earlier function-number argument into
+HL first. That clobbered the character, but left the forwarding marker armed;
+the subsequent load of the character consumed the stale marker and emitted
+no reload. `__bdosf` therefore received 2 in both C and DE.
+
+This was the same architectural class as T65c's DE:HL call fix, not a
+backedge/PHI defect: **directly forwarding the final argument of a
+multi-argument fastcall requires preserving it before earlier arguments
+clobber HL**.
+
+### Reusable fix across all affected fastcall ABIs
+
+Added `mir_take_forwarded_hl_call_argument()` to consume that state exactly
+once. Every multi-argument specialized fastcall path now checks whether its
+final argument is the directly-forwarded HL value and, when so, saves it
+before loading earlier arguments and restores it directly into the ABI's
+required register:
+
+- `memset`/`memchr`: destination/string in HL, byte/fill in DE, count in BC;
+- `strchr`/`strrchr`: string in HL, character in A;
+- `memcmp`/`memcpy`: first pointer in DE, second pointer in HL, count in BC;
+- DE:HL two-argument helpers (the existing T65c case, now using the shared
+  consumer);
+- BDOS-family calls: function number in C, argument in DE.
+
+The change also improved generated candidates in `adaint`, `attnc11`,
+`tbdos`, `tstr`, `tstring`, and `tvla`. One already-selected function,
+`attnc11.zero_gradients`, changed output and passed focused full-mode
+validation.
+
+### Final cfg-backedge admission
+
+After the fix, forcing all 16 remaining `cfg-backedge` candidates together
+passed the complete full extended correctness gate: **314/314 runnable apps,
+0 failures**, with diagnostics, dccpeep fixtures, and the extended corpus all
+passing. Production now clears `cfg-backedge` only at the final acceptance
+point, after every specialized loop retry has had its chance. This ordering is
+deliberate: it exactly matches the tested diagnostic acceptance point and
+avoids T433's candidate-path side effect for existing specialized winners.
+
+Added `tbdos.putstr` to `tests/mir_forced_correctness_cases.tsv`; the complete
+9-case forced-MIR regression harness passes.
+
+### Result and validation
+
+- Ordinary: **1032/2029 -> 1048/2029 (51.65%), +16**, zero removals.
+- Stack-check: **1058/2131 -> 1076/2131 (50.49%), +18**, zero removals.
+- Generic `cfg-backedge` fallback: **16 -> 0 ordinary**, **18 -> 0
+  stack-check**.
+- Focused 14-app full-mode correctness cohort: PASS.
+- `pwsh ./scripts/mir-forced-correctness.ps1`: PASS (9/9).
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended`: correctness clean;
+  diagnostics, dccpeep, and extended all pass. It measured 30 deliberate
+  Phase-1 performance regressions and 9 improvements.
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -UpdatePerfBaseline`:
+  **314/314 passed, 0 failed**; the measured profile was deliberately
+  recorded.
+
+The large `tautolcs` cycle change is a candidate-selection/order side effect
+of the same kind T433 documented: the app has no newly admitted ordinary
+`cfg-backedge` function, but its selected output changes when the fallback
+chain changes. Correctness is clean and the change remains explicitly tracked
+for Phase 2.
+
+### Next
+
+Do not reopen generic `cfg-backedge`: the bucket is exhausted. The previously
+known interpreter/VLA loop failures remain under their actual current
+reasons (`selector`, `boolean-phi-cost`, `unary-not-cost`,
+`dynamic-index-base-cost`, `binary-load-pair-cost`, and
+`dead-store-forwarding-cost`). Continue impact-first with
+`boolean-phi-cost`/`text-size`, using the now-fixed fastcall forwarding path
+as one eliminated shared cause.

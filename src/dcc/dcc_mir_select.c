@@ -3788,6 +3788,14 @@ evaluate_generated:
                         mir_reason_is_proven_cost_only(fallback_reason))
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "cfg-backedge"))
+                        /* T435: the complete remaining 16-function cohort
+                         * passed the full extended correctness gate after
+                         * fixing forwarded final fastcall arguments. Clear
+                         * this only at the final acceptance point so all
+                         * specialized loop retries above retain priority. */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
                         strcmp(fallback_reason, "forced") &&
                         measured_boolean_candidate &&
                         mir_boolean_phi_profile_is_semantically_eligible())

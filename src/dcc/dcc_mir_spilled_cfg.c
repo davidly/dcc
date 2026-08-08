@@ -1699,6 +1699,20 @@ static void mir_emit_spilled_arg_to_hl(FILE *out, int value)
         mir_emit_virtual_load(out, value);
 }
 
+/* A final fastcall argument may be forwarded directly from its definition in
+ * HL. Multi-argument fastcall setup must preserve that value before loading
+ * earlier arguments, or the later virtual load will consume a stale forwarding
+ * marker and incorrectly assume the original value is still in HL. */
+static int mir_take_forwarded_hl_call_argument(int value)
+{
+    if (mir_forwarded_hl_value != value ||
+        mir_forwarded_hl_instruction + 1 != mir_emit_instruction_index)
+        return 0;
+    mir_forwarded_hl_value = -1;
+    mir_forwarded_hl_instruction = -1;
+    return 1;
+}
+
 static int mir_emit_cached_wide_call_argument(FILE *out, int value)
 {
     int stack_cached;
@@ -8598,19 +8612,21 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (!is_indirect &&
                     mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
                                                 &count_value)) {
-                    if (!mir_emit_cached_call_argument(out, dest_value) &&
-                        !mir_emit_rematerialized_argument(out, dest_value, 2))
-                        mir_emit_virtual_load(out, dest_value);
-                    fputs("\tpush hl\n", out);
-                    if (!mir_emit_cached_call_argument(out, fill_value) &&
-                        !mir_emit_rematerialized_argument(out, fill_value, 2))
-                        mir_emit_virtual_load(out, fill_value);
-                    fputs("\tpush hl\n", out);
-                    if (!mir_emit_cached_call_argument(out, count_value) &&
-                        !mir_emit_rematerialized_argument(out, count_value,
-                                                          2))
-                        mir_emit_virtual_load(out, count_value);
-                    fputs("\tld b,h\n\tld c,l\n\tpop de\n\tpop hl\n", out);
+                    if (mir_take_forwarded_hl_call_argument(count_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, dest_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fill_value);
+                        fputs("\tex de,hl\n\tpop hl\n\tpop bc\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, dest_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fill_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, count_value);
+                        fputs("\tld b,h\n\tld c,l\n\tpop de\n\tpop hl\n",
+                              out);
+                    }
                     mir_emit_runtime_call(out, "__msf");
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
@@ -8633,20 +8649,32 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 if (!is_indirect &&
                     mir_call_is_strchr_fastcall(i, &s_value, &c_value)) {
-                    mir_emit_spilled_arg_to_hl(out, s_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, c_value);
-                    fputs("\tld a,l\n\tpop hl\n", out);
+                    if (mir_take_forwarded_hl_call_argument(c_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s_value);
+                        fputs("\tpop de\n\tld a,e\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, s_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, c_value);
+                        fputs("\tld a,l\n\tpop hl\n", out);
+                    }
                     mir_emit_runtime_call(out, "__chf");
                     mir_emit_virtual_store(out, insn->dst);
                     break;
                 }
                 if (!is_indirect &&
                     mir_call_is_strrchr_fastcall(i, &s_value, &c_value)) {
-                    mir_emit_spilled_arg_to_hl(out, s_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, c_value);
-                    fputs("\tld a,l\n\tpop hl\n", out);
+                    if (mir_take_forwarded_hl_call_argument(c_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s_value);
+                        fputs("\tpop de\n\tld a,e\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, s_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, c_value);
+                        fputs("\tld a,l\n\tpop hl\n", out);
+                    }
                     mir_emit_runtime_call(out, "__rcf");
                     mir_emit_virtual_store(out, insn->dst);
                     break;
@@ -8654,12 +8682,21 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (!is_indirect &&
                     mir_call_is_memchr_fastcall(i, &s_value, &c_value,
                                                &n_value)) {
-                    mir_emit_spilled_arg_to_hl(out, s_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, c_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, n_value);
-                    fputs("\tld b,h\n\tld c,l\n\tpop de\n\tpop hl\n", out);
+                    if (mir_take_forwarded_hl_call_argument(n_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, c_value);
+                        fputs("\tex de,hl\n\tpop hl\n\tpop bc\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, s_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, c_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, n_value);
+                        fputs("\tld b,h\n\tld c,l\n\tpop de\n\tpop hl\n",
+                              out);
+                    }
                     mir_emit_runtime_call(out, "__mhf");
                     mir_emit_virtual_store(out, insn->dst);
                     break;
@@ -8667,12 +8704,21 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (!is_indirect &&
                     mir_call_is_memcmp_fastcall(i, &s1_value, &s2_value,
                                                &n_value)) {
-                    mir_emit_spilled_arg_to_hl(out, s1_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, s2_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, n_value);
-                    fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tpop de\n", out);
+                    if (mir_take_forwarded_hl_call_argument(n_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s1_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s2_value);
+                        fputs("\tpop de\n\tpop bc\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, s1_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s2_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, n_value);
+                        fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tpop de\n",
+                              out);
+                    }
                     mir_emit_runtime_call(out, "__cmpf");
                     if (type_size(insn->type) == 4)
                         mir_emit_virtual_store_wide(out, insn->dst);
@@ -8683,12 +8729,21 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (!is_indirect &&
                     mir_call_is_memcpy_fastcall(i, &dest_value, &fill_value,
                                                &n_value)) {
-                    mir_emit_spilled_arg_to_hl(out, dest_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, fill_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, n_value);
-                    fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tpop de\n", out);
+                    if (mir_take_forwarded_hl_call_argument(n_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, dest_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fill_value);
+                        fputs("\tpop de\n\tpop bc\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, dest_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fill_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, n_value);
+                        fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tpop de\n",
+                              out);
+                    }
                     mir_emit_runtime_call(out, "__mcf");
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
@@ -8728,11 +8783,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                      * to a preserve-then-restore shape (push it before
                      * s1 is evaluated, then move s1 into DE and pop s2
                      * back into HL) instead of the naive order. */
-                    if (mir_forwarded_hl_value == s2_value &&
-                        mir_forwarded_hl_instruction + 1 ==
-                            mir_emit_instruction_index) {
-                        mir_forwarded_hl_value = -1;
-                        mir_forwarded_hl_instruction = -1;
+                    if (mir_take_forwarded_hl_call_argument(s2_value)) {
                         fputs("\tpush hl\n", out);
                         mir_emit_spilled_arg_to_hl(out, s1_value);
                         fputs("\tex de,hl\n\tpop hl\n", out);
@@ -8755,10 +8806,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 if (!is_indirect &&
                     mir_call_is_bdos_family_fastcall(i, &rtl_name, &fn_value,
                                                     &dearg_value)) {
-                    mir_emit_spilled_arg_to_hl(out, fn_value);
-                    fputs("\tpush hl\n", out);
-                    mir_emit_spilled_arg_to_hl(out, dearg_value);
-                    fputs("\tex de,hl\n\tpop hl\n\tld c,l\n", out);
+                    if (mir_take_forwarded_hl_call_argument(dearg_value)) {
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fn_value);
+                        fputs("\tld c,l\n\tpop de\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, fn_value);
+                        fputs("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, dearg_value);
+                        fputs("\tex de,hl\n\tpop hl\n\tld c,l\n", out);
+                    }
                     mir_emit_runtime_call(out, rtl_name);
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {

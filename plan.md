@@ -31,25 +31,23 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1032/2029 (50.86%)**
-- Current stack-check coverage: **1058/2131 (49.65%)**
-- HEAD (pending push): T434, Step 2/3 of the coverage-first pivot -
-  bisected the mega-experiment's 25 "cost-only" reasons individually and
-  combined against the full extended correctness gate. **Only 9 of 25
-  proved safe** (79 candidates: `absolute-address-cost`,
-  `constant-conversion-frame-cost`, `rhs-stack-cost`,
-  `branch-condition-cost`, `indirect-store-stack-cost`,
-  `lazy-parameter-cost`, `dynamic-index-cost`, `rematerialized-home-cost`,
-  `stable-pointer-local-cost`) - landed permanently via
-  `mir_reason_is_proven_cost_only()`, +108/+110 coverage, 129 tracked
-  deliberate performance regressions accepted via `-UpdatePerfBaseline`.
-  **The other 16 reasons (704 candidates, including the two single-
-  largest buckets `text-size` and `boolean-phi-cost`) hid real
-  correctness bugs** (wrong output or infinite loops) when their full
-  population was force-accepted - these are now real architecture/
-  correctness investigations, reclassified in `scripts/mir-bulk-accept-
-  scan.py`'s `CONFIRMED_UNSAFE_COST_REASONS`. See `## Item T434` in
-  `mir-text-size-plan.md`. Tree otherwise clean.
+- Current ordinary coverage: **1048/2029 (51.65%)**
+- Current stack-check coverage: **1076/2131 (50.49%)**
+- HEAD (pending push): T435 eliminated the remaining `cfg-backedge`
+  fallback population, **+16 ordinary/+18 stack-check**. A full forced
+  cohort first exposed one real shared emitter bug in `tbdos.putstr`:
+  direct HL forwarding of the final argument to a multi-argument fastcall
+  survived while earlier arguments clobbered HL, so the stale marker
+  suppressed the required reload. The reusable fix preserves the final
+  argument before loading earlier arguments across every affected
+  multi-argument fastcall ABI (`memset`, `strchr`/`strrchr`, `memchr`,
+  `memcmp`, `memcpy`, DE:HL helpers, and BDOS). The complete remaining
+  16-function cohort then passed together. Production clears
+  `cfg-backedge` only at the final acceptance point, after specialized
+  loop retries, preserving their priority. Full extended correctness is
+  clean; 30 deliberate performance regressions across the affected
+  corpus were measured and accepted for Phase 1, alongside 9 measured
+  improvements. See `## Item T435` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -60,6 +58,14 @@ transactional fallback remains in place throughout Phase 1.
   in production. Real, safe progress was still made (+108/+110,
   crossing 50%), but the "fast path to 100%" the pivot hoped for does not
   exist without this per-reason correctness work.
+- **T435 changes the architecture priority:** the generic
+  `cfg-backedge` bucket itself is now exhausted and no longer appears in
+  either census. The known-open interpreter/VLA loop failures remain, but
+  under their actual current reasons (`selector`, `boolean-phi-cost`,
+  `unary-not-cost`, `dynamic-index-base-cost`,
+  `binary-load-pair-cost`, and `dead-store-forwarding-cost`). Continue
+  with those higher-yield reason populations rather than reopening a
+  nonexistent generic backedge bucket.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
