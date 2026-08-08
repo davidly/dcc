@@ -31,10 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2054/2060 (99.71%)**
-- Current stack-check coverage: **2173/2179 (99.72%)**
-- HEAD (local only): T499 adds call-bounded regional homes and admits
-  `pint.subprog`: **+1/+1**, zero removals.
+- Current ordinary coverage: **2055/2060 (99.76%)**
+- Current stack-check coverage: **2174/2179 (99.77%)**
+- HEAD (local only): T501 stabilizes paired regional calls and admits
+  `pint.for_stmt`: **+1/+1**, zero removals. `dynamic-index-base-cost` is
+  now fully cleared.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons

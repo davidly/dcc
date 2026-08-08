@@ -18432,6 +18432,38 @@ true-final dead-store candidates pass.
 - Performance gate: 17 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T501: stabilized paired regional calls, admitting pint.for_stmt (+1/+1, 2026-08-09)
+
+`pint.for_stmt` was individually correct under T499's call-bounded regional
+homes but combined admission with `pint.subprog` perturbed Pint's optimized
+linked layout, so production initially retained only `subprog`.
+
+Root cause: a second regional-homed function in the same translation unit
+exposed an emission-order dependency in shared region/slot bookkeeping.
+`dcc_mir_homed_cfg.c` now stabilizes paired regional calls so slot numbering
+and boundary copy placement no longer depend on which regional function is
+emitted first, and `dcc_mir.c` safely unwinds an empty regional plan (a
+function with call-free regions but no profitable split) back to the
+existing non-regional path instead of emitting a degenerate boundary.
+
+- Coverage: **2055/2060 (99.76%)**, **2174/2179 (99.77%)**, zero removals.
+- New MIR function: `pint.for_stmt`.
+- Remaining `dynamic-index-base-cost`: **0** (bucket now empty).
+- Remaining fallbacks: `boolean-phi-cost` (4: `a1.emulate`, `adaint.next`,
+  `pint.factor_call_or_var`, `pint.scan_number`), `unary-not-cost` (1:
+  `pint.run`).
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Checked performance: zero regressions; `pint` nopeep improves 128 bytes
+  (33,408 -> 33,280, -0.38%).
+- `pint.run` remains far oversized even under the regional mechanism
+  (27,227/2,718 generated vs 23,306/2,047 captured) and needs a larger
+  structural class, the way T498 widened hybrid for large call/PHI CFGs.
+  `pint.factor_call_or_var` (6,053/596 vs 4,934/461) still fails the Pint
+  TPA boundary. `pint.scan_number` needs wide-value regional pairing
+  (currently 8 wide + 1 narrow spills); the region mechanism so far only
+  handles narrow (2-byte) slot reuse.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:
