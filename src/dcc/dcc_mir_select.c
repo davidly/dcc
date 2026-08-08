@@ -2137,6 +2137,20 @@ static int mir_binary_load_pair_coverage_is_semantically_eligible(
                generated_size, captured_size);
 }
 
+static int mir_inline_substitution_coverage_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_cfg_block_count() <= 64 &&
+           mir_call_count() <= 32 &&
+           mir.local_bytes >= 32 &&
+           !mir.has_vla &&
+           !mir_has_cfg_backedge() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 5000 &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4186,6 +4200,19 @@ evaluate_generated:
                         generated_size, captured_size))
                     /* T445: the terminal bounded binary-load-pair cohort
                      * excluding its single-call resource stratum passed. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "pointer-array"))
+                    /* T446: after preserving dereferenced pointer-array
+                     * dimension consumption through metadata repair, the
+                     * complete pointer-array cohort passed full extended. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "inline-substitution") &&
+                    mir_inline_substitution_coverage_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T446: the complete terminal acyclic inline-temp
+                     * stratum with at least 32 reserved local bytes passed. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL)
                     emitted = 0;

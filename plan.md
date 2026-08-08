@@ -31,17 +31,16 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1522/2052 (74.17%)**
-- Current stack-check coverage: **1596/2165 (73.72%)**
-- HEAD (pending push): T445 combines terminal bounded cohorts for
-  `constant-conversion-home-cost` (+1), `dead-store-forwarding-cost`
-  (+2), `indirect-store-address-cost` (+6), and
-  `binary-load-pair-cost` (+6), for **+15 ordinary/+15 stack-check**,
-  zero removals. Binary-load additionally excludes the single-call
-  `pint.emit` resource stratum. Two provisional reasons were rejected:
-  `instruction-count` removed existing `tcodegen.scod/srdy` MIR bodies,
-  and bounded `block-cse-cost` still miscompiled `tpfauto.main`. See
-  `## Item T445` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1533/2052 (74.71%)**
+- Current stack-check coverage: **1607/2165 (74.23%)**
+- HEAD (pending push): T446 fixes pointer-to-array dereference stride
+  repair and eliminates the complete `pointer-array` reason (+7), then
+  admits four of the five remaining `inline-substitution` functions
+  under a measured inline-temp boundary (+4): **+11 ordinary/+11
+  stack-check**, zero removals. `tinlnpar.main` remains excluded because
+  it has only 6 local bytes versus 32–40 for the four clean inline-temp
+  functions and fails forced MIR. See `## Item T446` in
+  `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -119,6 +118,11 @@ transactional fallback remains in place throughout Phase 1.
   The first five-reason experiment gained 22 but lost two existing MIR
   functions; the final four-reason batch gains 15 with zero removals and
   excludes both identified bad strata.
+- **T446 closes a real representation bug, not a gate symptom.** MIR now
+  records when a dereference consumed a pointer-array dimension, so
+  deferred metadata repair uses element stride rather than restoring the
+  whole-array stride. `(*ip)[i]`, `(*cp)[i]`, `(*pp)[i]`, and
+  `(*lp)[i]` now use 2/1/2/35 rather than 8/4/6/105.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

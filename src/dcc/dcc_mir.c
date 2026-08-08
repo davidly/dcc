@@ -1368,11 +1368,14 @@ static int mir_index_stride(const struct AstNode *node)
     else {
         struct Sym *pointer_array = mir_pointer_array_root(
             node != NULL ? node->a : NULL, &dereference_depth);
-        if (pointer_array != NULL)
-            stride = sym_pointer_array_index_elem_size(
-                pointer_array, pointer_array->type, dereference_depth);
-        else
-        stride = type_index_elem_size(ast_expr_type_for_sizeof(node->a));
+        if (pointer_array != NULL) {
+            if (dereference_depth >= pointer_array->dim_count)
+                stride = type_size(type_decay_ptr(pointer_array->type));
+            else
+                stride = sym_pointer_array_index_elem_size(
+                    pointer_array, pointer_array->type, dereference_depth);
+        } else
+            stride = type_index_elem_size(ast_expr_type_for_sizeof(node->a));
     }
     return stride > 0 ? stride : 1;
 }
@@ -1521,6 +1524,7 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
         int index;
         int element_type = node->type;
         int element_type_resolved;
+        int dereferenced_pointer_array = 0;
         if (node->a != NULL && node->a->kind == AST_INT_LIT &&
             node->b != NULL) {
             const struct MirInsn *base_definition;
@@ -1557,6 +1561,7 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
             int dereference_depth = 0;
             struct Sym *pointer_array = mir_pointer_array_root(
                 node->a, &dereference_depth);
+            dereferenced_pointer_array = pointer_array != NULL;
             if ((ast_pointer_expr_type(node->a, &pointer_type, &no_deref) &&
                  no_deref) ||
                 (pointer_array != NULL &&
@@ -1599,6 +1604,9 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
                 type_decay_ptr(array_symbol->type));
         }
         mir_set_node_memory(insn, node);
+        if (dereferenced_pointer_array)
+            insn->memory_flags |=
+                MIR_MEMORY_FLAG_DEREFERENCED_POINTER_ARRAY;
         insn->memory_size = type_size(element_type);
         return value;
     }
@@ -5196,10 +5204,13 @@ void mir_resolve_deferred_metadata(void)
                                  base->name[0] != 0;
                 struct Sym *global = named_base
                     ? find_global(base->name) : NULL;
-                int stride = named_base &&
-                             base->name[0] != 0 &&
-                             !mir_declared_has_dynamic_stride(base->name)
-                    ? mir_declared_elem_size(base->name) : 0;
+                int stride = 0;
+                if ((mir.insns[i].memory_flags &
+                     MIR_MEMORY_FLAG_DEREFERENCED_POINTER_ARRAY) != 0)
+                    stride = type_index_elem_size(base->type);
+                else if (named_base && base->name[0] != 0 &&
+                         !mir_declared_has_dynamic_stride(base->name))
+                    stride = mir_declared_elem_size(base->name);
                 if (stride <= 0 && global != NULL &&
                     global->dim_count > 0 && global->elem_size > 0)
                     stride = mir.insns[i].immediate;

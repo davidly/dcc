@@ -66,6 +66,10 @@ enum MirCallFlag {
     MIR_CALL_FLAG_VARIADIC = 4096
 };
 
+enum MirMemoryFlag {
+    MIR_MEMORY_FLAG_DEREFERENCED_POINTER_ARRAY = 8192
+};
+
 struct MirInsn {
     int opcode;
     int dst;

@@ -17281,3 +17281,61 @@ The final combined batch:
 Rejected outcomes are deliberate: `instruction-count` remains closed to
 preserve existing MIR coverage, and `block-cse-cost` remains closed for
 correctness.
+
+## Item T446: fixed pointer-array dereference strides and closed the inline-temp stratum (+11 ordinary/+11 stack-check, 2026-08-08)
+
+Fresh T445 baseline: **1522/2052 ordinary (74.17%)** and **1596/2165
+stack-check (73.72%)**.
+
+### Pointer-array root cause and fix
+
+Forced `tptrlhs.touch_ptr_to_array_deref` reproduced six wrong stores followed
+by execution falling into invalid bytes. The invalid `FD 02` report was a
+consequence of corrupted control/data, not an assembler encoder defect.
+
+MIR showed every pointer-to-array dereference index using the whole-array
+stride:
+
+```text
+(*ip)[ix]     stride 8   (wanted int stride 2)
+(*cp)[ix+1]  stride 4   (wanted char stride 1)
+(*pp)[1]     stride 6   (wanted pointer stride 2)
+(*lp)[ix]    stride 105 (wanted Leaf stride 35)
+```
+
+`mir_index_stride()` and `mir_pointer_arithmetic_stride()` both understand
+dereference depth, but deferred metadata repair later overwrote the correct
+narrowed stride for a named `MIR_LOAD` using
+`mir_declared_elem_size(name)`, which is the whole pointed-to array.
+
+Added `MIR_MEMORY_FLAG_DEREFERENCED_POINTER_ARRAY`. AST index lowering marks
+the instruction when its base is a dereferenced pointer-array root; deferred
+repair then uses `type_index_elem_size(base->type)` instead of the declared
+whole-array size. The final MIR strides are 2/1/2/35, and forced
+`touch_ptr_to_array_deref` passes peep and nopeep.
+
+Forcing all seven `pointer-array` fallbacks together passes full extended
+correctness. Production now accepts the complete terminal reason, eliminating
+the bucket.
+
+### Remaining inline-substitution cohort
+
+Five terminal functions remained. Individual full-mode forced tests found
+four clean (`cint.for_stmt`, `cint.if_stmt`, `fint.exec_word`,
+`tinline.inline_order_check`) and one failing (`tinlnpar.main`).
+
+The clean functions reserve 32–40 local bytes for inline temporary state; the
+failing parameter-reassignment regression has only 6. A terminal acyclic
+inline-substitution predicate requires at least 32 local bytes, the standard
+64-block/32-call/VLA/backedge/pointer/label-PHI/5-KiB/2-KiB bounds, and admits
+the four clean functions.
+
+- Ordinary: **1522/2052 -> 1533/2052 (74.71%)**, **+11**, zero removals.
+- Stack-check: **1596/2165 -> 1607/2165 (74.23%)**, **+11**, zero removals.
+- Remaining `pointer-array`: **0**.
+- Remaining `inline-substitution`: **1 ordinary / 1 stack-check**.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 15 deliberate Phase-1 regressions, 5 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
