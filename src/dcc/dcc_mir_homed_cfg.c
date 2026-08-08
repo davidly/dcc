@@ -68,7 +68,9 @@ static int mir_homed_constant_binary(const struct MirInsn *insn,
 {
     const struct MirInsn *right;
 
-    if (insn->opcode != MIR_BINARY)
+    if (insn->opcode != MIR_BINARY ||
+        type_size(insn->secondary_offset) > 2 ||
+        type_size(insn->type) > 2)
         return 0;
     right = mir_definition(insn->src2);
     if (right == NULL || right->opcode != MIR_CONST)
@@ -291,10 +293,177 @@ static int mir_homed_wide_binary_supported(const struct MirInsn *insn)
             mir_homed_wide_constant_binary(insn, &constant));
 }
 
+/* Recognize a 32-bit indirect x = x + 1 update. The original load may
+ * remain live for postfix semantics; only the constant and sum are dead. */
+static int mir_homed_wide_indirect_increment(
+    int store_instruction)
+{
+    const struct MirInsn *store;
+    const struct MirInsn *binary;
+    const struct MirInsn *right;
+    const struct MirInsn *load;
+
+    if (store_instruction < 0 ||
+        store_instruction >= mir.count)
+        return 0;
+    store = &mir.insns[store_instruction];
+    if (store->opcode != MIR_STORE_INDIRECT ||
+        store->memory_size != 4 || store->bit_width != 0 ||
+        store->memory_flags != 0)
+        return 0;
+    binary = mir_definition(store->src2);
+    if (binary == NULL || binary->opcode != MIR_BINARY ||
+        binary->immediate != '+' ||
+        !type_is_long(binary->type) ||
+        type_size(binary->type) != 4 ||
+        !type_is_long(binary->secondary_offset) ||
+        type_size(binary->secondary_offset) != 4 ||
+        mir_value_use_count(binary->dst) != 1)
+        return 0;
+    right = mir_definition(binary->src2);
+    if (right == NULL || right->opcode != MIR_CONST ||
+        right->immediate != 1 ||
+        type_size(right->type) != 4 ||
+        mir_value_use_count(right->dst) != 1)
+        return 0;
+    load = mir_definition(binary->src1);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->memory_size != 4 || load->memory_flags != 0 ||
+        load->src1 != store->src1)
+        return 0;
+    return 1;
+}
+
+static int mir_homed_wide_increment_component(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction;
+
+    if (definition == NULL ||
+        type_size(definition->type) != 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_homed_wide_indirect_increment(
+                instruction)) {
+            const struct MirInsn *binary =
+                mir_definition(mir.insns[instruction].src2);
+            const struct MirInsn *right =
+                mir_definition(binary->src2);
+            const struct MirInsn *load =
+                mir_definition(binary->src1);
+
+            if (binary->dst == value || right->dst == value ||
+                (load->dst == value &&
+                 mir_value_use_count(load->dst) == 1))
+                return 1;
+        }
+    return 0;
+}
+
+static int mir_emit_homed_wide_indirect_increment(
+    FILE *out, const struct MirInsn *store)
+{
+    int instruction = (int)(store - mir.insns);
+    int preserve_hl_de =
+        mir_home_color_live_across(
+            instruction, MIR_COLOR_HL_DE);
+    int preserve_hl = !preserve_hl_de &&
+        mir_home_color_live_across(
+            instruction, MIR_COLOR_HL);
+    int done_label = new_label();
+    int byte;
+
+    if (preserve_hl_de)
+        fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_hl)
+        fputs("\tpush hl\n", out);
+    if (!mir_emit_home_to_hl(out, store->src1))
+        return 0;
+    for (byte = 0; byte < 4; ++byte) {
+        fputs("\tinc (hl)\n", out);
+        if (byte != 3) {
+            fprintf(out, "\tjp nz, L%d\n", done_label);
+            fputs("\tinc hl\n", out);
+        }
+    }
+    fprintf(out, "L%d:\n", done_label);
+    if (preserve_hl)
+        fputs("\tpop hl\n", out);
+    if (preserve_hl_de)
+        fputs("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
+static int mir_homed_forwarded_wide_rhs(
+    int value, int consumer)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int definition_index;
+    int next;
+
+    if (definition == NULL ||
+        definition->opcode != MIR_LOAD_INDIRECT ||
+        definition->memory_size != 4 ||
+        mir_value_use_count(value) != 1)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    next = definition_index + 1;
+    while (next < mir.count &&
+           mir.insns[next].opcode == MIR_NOP)
+        ++next;
+    if (next != consumer ||
+        next >= mir.count ||
+        mir.insns[next].opcode != MIR_BINARY ||
+        mir.insns[next].src2 != value ||
+        type_size(mir.insns[next].secondary_offset) != 4)
+        return 0;
+    return !mir_home_color_live_across(
+               definition_index, MIR_COLOR_HL_DE) &&
+           !mir_home_color_live_across(
+               definition_index, MIR_COLOR_HL) &&
+           !mir_home_color_live_across(
+               definition_index, MIR_COLOR_DE);
+}
+
+/* A right-hand wide load can consume the HL:DE preservation push for its
+ * dying left operand as the following binary instruction's stack operand. */
+static int mir_homed_stack_forwarded_wide_rhs(
+    int value, int consumer)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *binary;
+    int definition_index;
+    int next;
+
+    if (definition == NULL ||
+        definition->opcode != MIR_LOAD_INDIRECT ||
+        definition->memory_size != 4 ||
+        mir_value_use_count(value) != 1)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    next = definition_index + 1;
+    while (next < mir.count &&
+           mir.insns[next].opcode == MIR_NOP)
+        ++next;
+    if (next != consumer || next >= mir.count)
+        return 0;
+    binary = &mir.insns[next];
+    return binary->opcode == MIR_BINARY &&
+           binary->src2 == value &&
+           type_size(binary->secondary_offset) == 4 &&
+           mir_value_use_count(binary->src1) == 1 &&
+           mir.allocation_colors[binary->src1] ==
+               MIR_COLOR_HL_DE &&
+           mir_home_color_live_across(
+               definition_index, MIR_COLOR_HL_DE);
+}
+
 static int mir_emit_homed_wide_comparison_instruction(
     FILE *out, const struct MirInsn *insn)
 {
     int instruction = (int)(insn - mir.insns);
+    int stack_rhs = mir_homed_stack_forwarded_wide_rhs(
+        insn->src2, instruction);
     int dst_color = mir.allocation_colors[insn->dst];
     int preserve_hl_de =
         mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
@@ -315,8 +484,12 @@ static int mir_emit_homed_wide_comparison_instruction(
     if (preserve_hl) fputs("\tpush hl\n", out);
     if (preserve_de) fputs("\tpush de\n", out);
     if (preserve_bc) fputs("\tpush bc\n", out);
-    if (!mir_emit_wide_home_to_stack(out, insn->src1) ||
-        !mir_emit_wide_home_to_hl_de(out, insn->src2) ||
+    if ((!stack_rhs &&
+         !mir_emit_wide_home_to_stack(out, insn->src1)) ||
+        (!stack_rhs &&
+         !mir_homed_forwarded_wide_rhs(
+             insn->src2, instruction) &&
+         !mir_emit_wide_home_to_hl_de(out, insn->src2)) ||
         !mir_emit_wide_operation(out, insn) ||
         !mir_emit_hl_to_home(out, insn->dst))
         return 0;
@@ -455,6 +628,8 @@ static int mir_emit_homed_wide_binary_instruction(
     FILE *out, const struct MirInsn *insn)
 {
     int instruction = (int)(insn - mir.insns);
+    int stack_rhs = mir_homed_stack_forwarded_wide_rhs(
+        insn->src2, instruction);
     int dst_color = mir.allocation_colors[insn->dst];
     int preserve_hl_de =
         dst_color != MIR_COLOR_HL_DE &&
@@ -524,8 +699,12 @@ static int mir_emit_homed_wide_binary_instruction(
         if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
             return 0;
     } else {
-        if (!mir_emit_wide_home_to_stack(out, insn->src1) ||
-            !mir_emit_wide_home_to_hl_de(out, insn->src2) ||
+        if ((!stack_rhs &&
+             !mir_emit_wide_home_to_stack(out, insn->src1)) ||
+            (!stack_rhs &&
+             !mir_homed_forwarded_wide_rhs(
+                 insn->src2, instruction) &&
+             !mir_emit_wide_home_to_hl_de(out, insn->src2)) ||
             !mir_emit_wide_operation(out, insn) ||
             !mir_emit_hl_de_to_wide_home(out, insn->dst)) {
             return 0;
@@ -543,6 +722,9 @@ static int mir_emit_homed_wide_indirect_load(FILE *out,
                                              const struct MirInsn *insn)
 {
     int instruction = (int)(insn - mir.insns);
+    int next_instruction = instruction + 1;
+    int forward_rhs;
+    int stack_rhs;
     int dst_color = mir.allocation_colors[insn->dst];
     int preserve_hl_de =
         dst_color != MIR_COLOR_HL_DE &&
@@ -557,6 +739,13 @@ static int mir_emit_homed_wide_indirect_load(FILE *out,
         dst_color != MIR_COLOR_HL_DE &&
         mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
+    while (next_instruction < mir.count &&
+           mir.insns[next_instruction].opcode == MIR_NOP)
+        ++next_instruction;
+    forward_rhs = mir_homed_forwarded_wide_rhs(
+        insn->dst, next_instruction);
+    stack_rhs = mir_homed_stack_forwarded_wide_rhs(
+        insn->dst, next_instruction);
     if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
     if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
     if (preserve_hl) fputs("\tpush hl\n", out);
@@ -576,12 +765,14 @@ static int mir_emit_homed_wide_indirect_load(FILE *out,
               "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
               "\tld d,(hl)\n\tpop hl\n", out);
     }
-    if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
+    if (!forward_rhs && !stack_rhs &&
+        !mir_emit_hl_de_to_wide_home(out, insn->dst))
         return 0;
     if (preserve_de) fputs("\tpop de\n", out);
     if (preserve_hl) fputs("\tpop hl\n", out);
     if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    if (preserve_hl_de && !stack_rhs)
+        fputs("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1473,7 +1664,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                  * part of DCCRTL/BDOS) remains excluded here. */
                 if (is_indirect || callee == NULL)
                     return mir_homed_reject("call-target");
-                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 &&
+                    !mir_regional_home_plan_is_active())
                     return mir_homed_reject("format-runtime");
             }
             break;
@@ -1511,7 +1703,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     /* Item 20d: a wide long return with no wide value at all (e.g. an
      * implicit-int-promoted narrow expression) still needs the probe, so
      * gate on wide_return too, not just has_wide. */
-    if (has_wide || wide_return) {
+    if ((has_wide || wide_return) &&
+        !mir_regional_home_plan_is_active()) {
         unsigned char *rematerializable = NULL;
         int wide_colors_ok;
 
@@ -1904,6 +2097,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     break;
                 }
                 if (insn->memory_size == 4) {
+                    if (mir_homed_wide_increment_component(
+                            insn->dst))
+                        break;
                     if (!mir_emit_homed_wide_indirect_load(out, insn))
                         goto done;
                     break;
@@ -1956,6 +2152,13 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if ((insn->memory_size == 1 || insn->memory_size == 2) &&
                     mir_homed_constant_absolute_access_supported(insn)) {
                     if (!mir_emit_homed_constant_absolute_store(out, insn))
+                        goto done;
+                    break;
+                }
+                if (mir_homed_wide_indirect_increment(
+                        (int)(insn - mir.insns))) {
+                    if (!mir_emit_homed_wide_indirect_increment(
+                            out, insn))
                         goto done;
                     break;
                 }
@@ -2174,6 +2377,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (            mir_index_only_constant(insn->dst) ||
             mir_homed_binary_only_constant(insn->dst) ||
             mir_homed_wide_binary_only_constant(insn->dst) ||
+            mir_homed_wide_increment_component(insn->dst) ||
             mir_value_only_used_by_dead_stores(insn->dst))
                 break;
             /* Item 20d: dst may be wide (long) only if mir_probe_wide_
@@ -2225,7 +2429,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * update, exactly the gap dcc_mir_spilled_cfg.c's identical
              * mir_value_only_used_by_dead_stores check already closes for
              * the spilled-scalar-cfg selector. */
-            if (mir_value_only_used_by_dead_stores(insn->dst))
+            if (mir_homed_wide_increment_component(insn->dst) ||
+                mir_value_only_used_by_dead_stores(insn->dst))
                 break;
             {
                 int operation;

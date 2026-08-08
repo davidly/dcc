@@ -69,6 +69,8 @@ static int mir_rematerialized_saved_phi_moves;
 static int mir_rematerialized_home_allocation_active;
 static int *mir_regional_saved_colors;
 static int *mir_regional_saved_spills;
+static int *mir_regional_base_colors;
+static int *mir_regional_base_spills;
 static int mir_regional_saved_spill_count;
 static int mir_regional_saved_fixed_moves;
 static int mir_regional_saved_operand_moves;
@@ -7306,7 +7308,7 @@ static int mir_regional_available_colors(
                                mir.next_value + other] &&
                  mir.insns[instruction].dst != other))
                 continue;
-            color = mir_regional_saved_colors[other];
+            color = mir_regional_base_colors[other];
             if (color < 0)
                 continue;
             if (mir_color_shares_slot(color, MIR_COLOR_HL))
@@ -7464,7 +7466,7 @@ static void mir_allocate_regional_spill_slots(
         if (mir.regional_rematerializable[value] ==
                 MIR_REGIONAL_REMAT_NONE &&
             (candidate[value] ||
-             mir_regional_saved_spills[value] >= 0))
+             mir_regional_base_spills[value] >= 0))
             mir_regional_mark_value_occupancy(
                 occupancy, value, candidate);
     for (value = 0; value < mir.next_value; ++value) {
@@ -7477,7 +7479,7 @@ static void mir_allocate_regional_spill_slots(
                 MIR_REGIONAL_REMAT_NONE)
             continue;
         if (!candidate[value] &&
-            mir_regional_saved_spills[value] < 0)
+            mir_regional_base_spills[value] < 0)
             continue;
         if (!mir_regional_occupancy_nonempty(value_occupancy))
             continue;
@@ -7612,6 +7614,57 @@ static int mir_regional_address_rematerializable(
             memory_storage == SC_FUNC);
 }
 
+static int mir_regional_has_wide_values(void)
+{
+    int instruction;
+
+    if (type_size(mir.return_type) == 4)
+        return 1;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if ((mir.insns[instruction].dst >= 0 &&
+             type_size(mir.insns[instruction].type) == 4) ||
+            (mir.insns[instruction].opcode == MIR_BINARY &&
+             type_size(mir.insns[instruction].secondary_offset) == 4))
+            return 1;
+    return 0;
+}
+
+static int mir_regional_prepare_wide_base(
+    const unsigned char *excluded)
+{
+    struct MirAllocationSummary summary;
+    int wide_spills = 0;
+    int spill;
+
+    if (!mir_regional_has_wide_values())
+        return 1;
+    mir_allocate_registers(
+        mir.live_in, mir.live_out, &summary, 1, excluded, 1);
+    for (spill = 0; spill < mir.allocation_spill_count; ++spill) {
+        int value;
+        int width = 0;
+
+        for (value = 0; value < mir.next_value; ++value)
+            if (mir.allocation_spills[value] == spill) {
+                const struct MirInsn *definition =
+                    mir_definition(value);
+                int value_width = definition != NULL
+                    ? type_size(definition->type) : 0;
+
+                if (value_width > width)
+                    width = value_width;
+            }
+        if (width > 2)
+            ++wide_spills;
+    }
+    if (getenv("DCC_MIR_REGIONAL_HOME_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR regional-wide-base function=%s spills=%d "
+                "wide-spills=%d\n",
+                mir.name, mir.allocation_spill_count, wide_spills);
+    return wide_spills <= 1;
+}
+
 /*
  * Split narrow values only at existing CFG/call boundaries. The verifier's
  * persisted live_in/live_out matrices define segment entry/exit state; no
@@ -7622,6 +7675,7 @@ static int mir_regional_address_rematerializable(
 int mir_begin_regional_home_plan(void)
 {
     unsigned char *candidate;
+    unsigned char *excluded;
     int value;
     int region;
 
@@ -7633,11 +7687,19 @@ int mir_begin_regional_home_plan(void)
         (size_t)mir.next_value * sizeof(*mir_regional_saved_colors));
     mir_regional_saved_spills = (int *)malloc(
         (size_t)mir.next_value * sizeof(*mir_regional_saved_spills));
+    mir_regional_base_colors = (int *)malloc(
+        (size_t)mir.next_value * sizeof(*mir_regional_base_colors));
+    mir_regional_base_spills = (int *)malloc(
+        (size_t)mir.next_value * sizeof(*mir_regional_base_spills));
     candidate = (unsigned char *)calloc(
+        (size_t)mir.next_value, 1);
+    excluded = (unsigned char *)calloc(
         (size_t)mir.next_value, 1);
     if (mir_regional_saved_colors == NULL ||
         mir_regional_saved_spills == NULL ||
-        candidate == NULL)
+        mir_regional_base_colors == NULL ||
+        mir_regional_base_spills == NULL ||
+        candidate == NULL || excluded == NULL)
         fatal("out of memory saving regional MIR allocation");
     if (mir.regional_rematerializable_capacity < mir.next_value) {
         unsigned char *new_rematerializable =
@@ -7707,6 +7769,23 @@ int mir_begin_regional_home_plan(void)
             continue;
         candidate[value] = 1;
     }
+    for (value = 0; value < mir.next_value; ++value)
+        excluded[value] = (unsigned char)(
+            candidate[value] ||
+            mir.regional_rematerializable[value] !=
+                MIR_REGIONAL_REMAT_NONE);
+    if (!mir_regional_prepare_wide_base(excluded)) {
+        free(excluded);
+        free(candidate);
+        mir_end_regional_home_plan();
+        return 0;
+    }
+    memcpy(mir_regional_base_colors, mir.allocation_colors,
+           (size_t)mir.next_value *
+               sizeof(*mir_regional_base_colors));
+    memcpy(mir_regional_base_spills, mir.allocation_spills,
+           (size_t)mir.next_value *
+               sizeof(*mir_regional_base_spills));
     for (value = 0; value < mir.next_value; ++value) {
         int definition;
 
@@ -7759,6 +7838,7 @@ int mir_begin_regional_home_plan(void)
                 MIR_REGIONAL_REMAT_NONE)
             mir.allocation_colors[value] = -1;
     mir_report_regional_home_plan(candidate);
+    free(excluded);
     free(candidate);
     if (mir.regional_segment_count == 0) {
         mir_end_regional_home_plan();
@@ -7794,8 +7874,12 @@ void mir_end_regional_home_plan(void)
                (size_t)mir.next_value);
     free(mir_regional_saved_colors);
     free(mir_regional_saved_spills);
+    free(mir_regional_base_colors);
+    free(mir_regional_base_spills);
     mir_regional_saved_colors = NULL;
     mir_regional_saved_spills = NULL;
+    mir_regional_base_colors = NULL;
+    mir_regional_base_spills = NULL;
 }
 
 int mir_regional_home_plan_is_active(void)

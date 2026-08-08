@@ -138,7 +138,8 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             i += 7;
             continue;
         }
-        if (i + 6 < count &&
+        if (mir_cfg_block_count() <= 32 &&
+            i + 6 < count &&
             mir_regional_line_is(lines[i], "\tpush de\n") &&
             mir_regional_line_is(lines[i + 1], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 2], "\tpush hl\n") &&
@@ -161,7 +162,8 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             i += 7;
             continue;
         }
-        if (i + 5 < count &&
+        if (mir_cfg_block_count() <= 32 &&
+            i + 5 < count &&
             mir_regional_line_is(lines[i], "\tpush hl\n") &&
             strncmp(lines[i + 1], "\tld hl,", 7) == 0 &&
             mir_regional_line_is(lines[i + 2], "\tex de,hl\n") &&
@@ -174,7 +176,8 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             i += 6;
             continue;
         }
-        if (i + 5 < count &&
+        if (mir_cfg_block_count() <= 32 &&
+            i + 5 < count &&
             mir_regional_line_is(lines[i], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_line_is(lines[i + 2], "\tpush de\n") &&
@@ -185,7 +188,8 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             i += 6;
             continue;
         }
-        if (i + 3 < count &&
+        if (mir_cfg_block_count() <= 32 &&
+            i + 3 < count &&
             mir_regional_line_is(lines[i], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_line_is(lines[i + 2], "\tpush de\n") &&
@@ -194,7 +198,8 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             i += 4;
             continue;
         }
-        if (i + 3 < count &&
+        if (mir_cfg_block_count() <= 32 &&
+            i + 3 < count &&
             mir_regional_line_is(lines[i], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_full_hl_reload(
@@ -2591,6 +2596,29 @@ static int mir_regional_homed_retry_is_eligible(const char *reason)
             !strcmp(reason, "unary-not-cost"));
 }
 
+static int mir_regional_wide_loop_shape_is_semantically_eligible(void)
+{
+    int blocks = mir_cfg_block_count();
+
+    return mir_has_wide_values() &&
+           mir_has_cfg_backedge() &&
+           blocks >= 64 && blocks <= 96 &&
+           mir_call_count() <= 20 &&
+           !mir.has_vla &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array();
+}
+
+static int mir_regional_wide_loop_is_semantically_eligible(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return mir_regional_wide_loop_shape_is_semantically_eligible() &&
+           generated_size * 100L <= captured_size * 120L &&
+           generated_instructions * 100L <=
+               captured_instructions * 121L;
+}
+
 static int mir_wide_store_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4484,6 +4512,23 @@ evaluate_generated:
                          */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason,
+                                "boolean-phi-cost") &&
+                        !strcmp(selector_name,
+                                "regional-homed-scalar-cfg") &&
+                        !g_speculative_codegen_active &&
+                        mir_regional_wide_loop_is_semantically_eligible(
+                            generated_size, captured_size,
+                            generated_instructions,
+                            captured_instructions))
+                        /*
+                         * Wide call-bounded loops retain their pair-colored
+                         * base allocation while regional narrow segments own
+                         * call crossings. The bounded parser/lexer stratum
+                         * passes both modes after wide increment fusion.
+                         */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "boolean-phi-cost") &&
                         !g_speculative_codegen_active &&
                         mir_boolean_phi_repaired_bounded_is_semantically_eligible(
@@ -5104,11 +5149,14 @@ evaluate_generated:
                      * layout when combined, so it remains on fallback.
                      */
                     fallback_reason = NULL;
-                if (fallback_reason != NULL &&
-                    mir_regional_homed_retry_is_eligible(
-                        fallback_reason) &&
+                if (((fallback_reason != NULL &&
+                      mir_regional_homed_retry_is_eligible(
+                          fallback_reason)) ||
+                     (fallback_reason == NULL &&
+                      !strcmp(selector_name,
+                              "spilled-scalar-cfg") &&
+                      mir_regional_wide_loop_shape_is_semantically_eligible())) &&
                     !regional_homed_retry_attempted &&
-                    !mir_has_wide_values() &&
                     !g_speculative_codegen_active) {
                     FILE *regional_candidate = tmpfile();
                     int regional_emitted = 0;
