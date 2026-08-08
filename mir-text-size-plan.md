@@ -17501,6 +17501,23 @@ only if the homed selector completes. It admits:
 - Wider hybrid probes that miscompiled or overflowed remain rejected.
 - Performance changes are tracked in the checked baselines.
 
+## Item T494: zero-spill wide hybrid retry (+1/+1, 2026-08-08)
+
+`pint.calc_code_limit` has a zero-spill, three-block wide division CFG. The
+hybrid emitter already had the generic wide-helper emission path, but its
+shape gate required byte-indirect operations and its supported-operation list
+excluded division outside a single block.
+
+The hybrid retry now also handles <=3-block, zero-spill wide CFGs and can use
+the existing wide `/` and `%` helper emission. It emits `calc_code_limit` at
+1174 bytes versus 1206 legacy bytes and passes both modes.
+
+- Coverage: **2047/2060 (99.37%)**, **2166/2179 (99.40%)**, zero removals.
+- Remaining `wide-store-cost`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

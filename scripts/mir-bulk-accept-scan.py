@@ -139,7 +139,8 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "wide-store-cost": "T443/T453/T460 admitted all but the isolated acyclic/"
                  "call-free and 10-block/3-call/13-slot failures. T488 "
                  "admitted the repaired bounded float loop with a tracked "
-                 "stack reserve; only pint.calc_code_limit remains.",
+                 "stack reserve. T494's zero-spill wide hybrid retry admitted "
+                 "pint.calc_code_limit; the reason is empty.",
     "dead-local-suffix-cost": "T444/T458 admitted all but the unique "
                  ">20-block, <=1-call failure. T480 repaired its duplicate "
                  "empty-arm PHI copy; the terminal reason is now empty.",

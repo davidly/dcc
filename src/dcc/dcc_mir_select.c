@@ -4383,7 +4383,8 @@ evaluate_generated:
                     strict_phi_fallthrough_active = 0;
                 }
                 if (fallback_reason != NULL &&
-                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    (!strcmp(fallback_reason, "boolean-phi-cost") ||
+                     !strcmp(fallback_reason, "wide-store-cost")) &&
                     !hybrid_homed_retry_attempted &&
                     !g_speculative_codegen_active) {
                     FILE *hybrid_candidate = tmpfile();
@@ -4413,7 +4414,8 @@ evaluate_generated:
                 }
                 if (fallback_reason != NULL &&
                     hybrid_homed_candidate &&
-                    !strcmp(fallback_reason, "boolean-phi-cost"))
+                    (!strcmp(fallback_reason, "boolean-phi-cost") ||
+                     !strcmp(fallback_reason, "wide-store-cost")))
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !phi_return_forwarding_retry_attempted &&

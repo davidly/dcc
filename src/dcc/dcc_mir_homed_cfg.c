@@ -209,6 +209,21 @@ static int mir_homed_byte_indirect_count(void)
     return count;
 }
 
+static int mir_homed_has_wide_values(void)
+{
+    int instruction;
+
+    if (type_size(mir.return_type) == 4)
+        return 1;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if ((mir.insns[instruction].dst >= 0 &&
+             type_size(mir.insns[instruction].type) == 4) ||
+            (mir.insns[instruction].opcode == MIR_BINARY &&
+             type_size(mir.insns[instruction].secondary_offset) == 4))
+            return 1;
+    return 0;
+}
+
 void mir_begin_hybrid_homed_selection(void)
 {
     mir_hybrid_homed_selection = 1;
@@ -268,6 +283,8 @@ static int mir_homed_wide_binary_supported(const struct MirInsn *insn)
            (insn->immediate == '+' || insn->immediate == '-' ||
             insn->immediate == '&' || insn->immediate == '|' ||
             insn->immediate == '^' ||
+            (mir_hybrid_homed_selection &&
+             (insn->immediate == '/' || insn->immediate == '%')) ||
             (mir_hybrid_homed_selection &&
              insn->immediate == '*' && right != NULL &&
              right->opcode == MIR_CONST) ||
@@ -898,7 +915,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         return mir_homed_reject("return-type");
     }
     if (mir_hybrid_homed_selection &&
-        mir_homed_byte_indirect_count() == 0)
+        mir_homed_byte_indirect_count() == 0 &&
+        !(mir_homed_has_wide_values() &&
+          mir_cfg_block_count() <= 3 &&
+          mir.allocation_spill_count == 0))
         return mir_homed_reject("hybrid-shape");
     if (!mir_hybrid_homed_selection &&
         mir_homed_byte_indirect_count() > 0 &&
