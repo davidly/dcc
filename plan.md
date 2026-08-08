@@ -31,11 +31,10 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2043/2060 (99.17%)**
-- Current stack-check coverage: **2162/2179 (99.22%)**
-- HEAD (pending push): T491/T492 fix aggregate-call cleanup and the falsified
-  inline division fast path, admitting `tstructv.main` and `tmodp2.main`:
-  **+2/+2**, zero removals.
+- Current ordinary coverage: **2046/2060 (99.32%)**
+- Current stack-check coverage: **2165/2179 (99.36%)**
+- HEAD (pending push): T493 adds a bounded hybrid retained-home fallback,
+  admitting three Pint parser functions: **+3/+3**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -255,6 +254,10 @@ transactional fallback remains in place throughout Phase 1.
   strength reduction corrupted the following runtime quotient in a mixed
   sequence despite passing alone. Division now stays on the normal helper
   path while modulo masking remains; `tmodp2.main` is admitted.
+- **T493 adds bounded hybrid retained-home emission.** The existing homed CFG
+  backend now supports the required wide homes, frame accesses, arithmetic,
+  indexing, and spills transactionally for final boolean residue. It admits
+  `pint.next`, `scan_string`, and `skip_brace_comment`.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

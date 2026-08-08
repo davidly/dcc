@@ -17478,6 +17478,29 @@ so the bounded FINAL gate now includes that edge.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T493: bounded hybrid retained-home fallback (+3/+3, 2026-08-08)
+
+The remaining parser cluster exposed an allocator/emitter mismatch: allocation
+had zero or few real spills, but the spilled backend still materialized every
+virtual value in a larger frame. A new transactional retry routes final
+`boolean-phi-cost` candidates through the retained-home CFG emitter with
+bounded support for wide homes/spills, frame loads/stores, arithmetic, index
+operations, rematerialization, and allocation-state restoration.
+
+The retry is attempted only after the established candidate fails and commits
+only if the homed selector completes. It admits:
+
+- `pint.next`
+- `pint.scan_string`
+- `pint.skip_brace_comment`
+
+- Ordinary: **2043/2060 -> 2046/2060 (99.32%)**, **+3**, zero removals.
+- Stack-check: **2162/2179 -> 2165/2179 (99.36%)**, **+3**, zero removals.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Wider hybrid probes that miscompiled or overflowed remain rejected.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission
