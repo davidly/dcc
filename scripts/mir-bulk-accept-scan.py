@@ -110,8 +110,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "boolean-phi-cost": "T436/T448/T452/T456 admitted acyclic, small-loop, "
                  "medium-loop, FINAL-sink, and budgeted residual strata "
                  "through T472. T480 fixed NOP/label-only PHI ownership and "
-                 "admitted parse_data_line plus decode_stmts. The remaining "
-                 "14 are direct failures or held by CP/M resource budgets.",
+                 "admitted parse_data_line plus decode_stmts. T484-T486 fixed "
+                 "virtual-IY ownership, paired divmod slots, and the MinMax "
+                 "ABI, admitting three more. Eleven direct/allocation or "
+                 "CP/M-resource failures remain.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "

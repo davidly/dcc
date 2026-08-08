@@ -31,11 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2033/2060 (98.69%)**
-- Current stack-check coverage: **2152/2179 (98.76%)**
-- HEAD (pending push): T480 repairs PHI ownership across NOP/label-only alias
-  arms and admits three functions; T481 admits two newly clean dynamic-index
-  strata: **+5/+5**, zero removals. See `## Item T480` and `## Item T481` in
+- Current ordinary coverage: **2036/2060 (98.83%)**
+- Current stack-check coverage: **2155/2179 (98.90%)**
+- HEAD (pending push): T484-T486 fix spilled virtual-IY ownership,
+  fallthrough-edge PHI copies, paired-divmod result storage, and MinMax's
+  packed ABI/word-return contract: **+3/+3**, zero removals. See
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -227,6 +227,15 @@ transactional fallback remains in place throughout Phase 1.
 - **T481 reopens two repaired dynamic-index strata.** The three-call
   label-PHI function and a bounded non-wide allocator loop both pass full
   mode after T480; the five wide/interpreter/resource failures remain gated.
+- **T484 publishes spilled virtual-IY ownership and emits both conditional
+  edge copies.** This admits `cobint.parse_source`; `pint.factor_call_or_var`
+  is semantically fixed in peep mode but remains gated by nopeep TPA pressure.
+- **T485 fixes paired div/mod storage.** Both quotient and remainder now own
+  simultaneous concrete slots, preventing a quotient restore from
+  invalidating a slotless remainder marker; `fint.run_at` is admitted.
+- **T486 makes MinMax transforms transactional and word-correct.** Packed
+  frame/call rewrites commit only when both recursive and external call sites
+  match, and the shared epilogue restores H for the declared byte return.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

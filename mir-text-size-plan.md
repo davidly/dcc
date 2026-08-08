@@ -17333,6 +17333,56 @@ resource cases and the large/wide `tforsco`, `tmodp2`, and `ttrig` functions.
 - Full extended correctness: covered by the combined T480/T481
   **314/314 runnable + 196/196 extended** gate.
 
+## Item T484: publish virtual-IY ownership and both branch-edge PHIs (+1/+1, 2026-08-08)
+
+Two spilled-backend ownership gaps remained:
+
+1. Large frames establish IY as a virtual spill base, but unlike T477's
+   allocated IY homes they emitted no file-wide dccpeep claim. A callee could
+   therefore borrow IY and corrupt its caller's frame base.
+2. Conditional emission handled false-target PHI copies but omitted copies on
+   the real fallthrough successor. Fused and generic branches now share one
+   helper that emits the correct copy set on both edges.
+
+The virtual-IY claim admits `cobint.parse_source`. The branch fix also repairs
+`pint.factor_call_or_var` semantically in peep mode; its nopeep image still
+crosses the interpreter's TPA boundary, so it remains gated.
+
+- Coverage: **2034/2060 (98.74%)**, **2153/2179 (98.81%)**, zero removals.
+- Full extended correctness: covered by the combined T484-T486 gate.
+
+## Item T485: force concrete paired-divmod result slots (+1/+1, 2026-08-08)
+
+The fused `__sdivmod`/`__udivmod` path produces quotient and remainder
+simultaneously. Slot planning could still classify one result as slotless and
+forwarded in HL. Emission then restored the quotient with `pop hl`, leaving a
+stale marker that caused a later remainder load to reuse the quotient.
+
+Both paired results now bypass rematerialization, stack handoff, and argument
+cache shortcuts and receive concrete simultaneous slots. `fint.run_at` passes
+both modes and is admitted.
+
+- Coverage: **2035/2060 (98.79%)**, **2154/2179 (98.85%)**, zero removals.
+- Full extended correctness: covered by the combined T484-T486 gate.
+
+## Item T486: make MinMax packing transactional and preserve full returns (+1/+1, 2026-08-08)
+
+dccpeep's MinMax packing comment required both the recursive and external call
+sites to match, but the implementation committed when either one changed.
+MIR changed the recursive shape, so only `FindSolution` was packed while the
+callee frame offsets were still rewritten, creating an ABI mismatch. The
+call pass now reports success only when both sites transform, allowing the
+existing transaction to roll back partial packing.
+
+The byte-return pass also restores H once at the shared epilogue after its
+low-byte rewrites, preserving the complete declared result for MIR callers.
+`ttt.MinMax` now passes peep and nopeep.
+
+- Coverage: **2036/2060 (98.83%)**, **2155/2179 (98.90%)**, zero removals.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

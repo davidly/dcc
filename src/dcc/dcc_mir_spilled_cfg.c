@@ -1098,6 +1098,16 @@ static int mir_value_requires_phi_slot(int value)
            !mir_address_is_rematerializable(value);
 }
 
+static int mir_value_requires_divmod_slot(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           definition->opcode == MIR_BINARY &&
+           (definition->immediate == '/' || definition->immediate == '%') &&
+           mir_divmod_partner((int)(definition - mir.insns)) >= 0;
+}
+
 int mir_address_rematerialization_candidate_count(void)
 {
     int count = 0;
@@ -4191,9 +4201,10 @@ static int mir_prepare_backend_slots(void)
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 int reusable_source = -1;
-                int force_phi_slot = mir_value_requires_phi_slot(value);
+                int force_slot = mir_value_requires_phi_slot(value) ||
+                                 mir_value_requires_divmod_slot(value);
                 ++mir_slot_report_requested_count;
-                if (!force_phi_slot &&
+                if (!force_slot &&
                     (last[value] <= first[value] ||
                                         (definition != NULL &&
                                          definition->opcode == MIR_NOP) ||
@@ -4236,7 +4247,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_value_only_used_by_dead_stores(value) ||
                                         mir_value_only_used_by_dead_unary(value)))
                     continue;
-                if (!force_phi_slot &&
+                if (!force_slot &&
                     mir_value_has_direct_named_home(value)) {
                     int home_storage;
                     int home_offset;
@@ -4248,7 +4259,7 @@ static int mir_prepare_backend_slots(void)
                     }
                     continue;
                 }
-                stack_consumer = force_phi_slot ? -1 :
+                stack_consumer = force_slot ? -1 :
                     mir_planned_stack_consumer(
                         value, i, stack_interval_occupied);
                 if (stack_consumer >= 0) {
@@ -4270,7 +4281,7 @@ static int mir_prepare_backend_slots(void)
                  * permits no other value-producing instruction, so narrow
                  * and wide cache lifetimes cannot overlap.
                  */
-                cache_target = force_phi_slot ? -1 :
+                cache_target = force_slot ? -1 :
                     mir_call_argument_cache_target_for_state(
                         value, i, planned_narrow_cache_call >= 0,
                         planned_wide_cache_call >= 0);
@@ -5155,6 +5166,16 @@ static int mir_divmod_partner(int instruction)
     return -1;
 }
 
+int mir_spilled_cfg_has_divmod_pair(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_divmod_partner(instruction) > instruction)
+            return 1;
+    return 0;
+}
+
 static void mir_emit_virtual_load_wide(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -5533,12 +5554,22 @@ static int mir_emit_conditional_branch_with_phi_copies(
     int predecessor, int target, int branch_label)
 {
     int fallthrough_label;
+    int fallthrough = predecessor + 1;
+    int false_copies_empty =
+        mir_phi_copies_are_empty(predecessor, target);
+    int true_copies_empty =
+        fallthrough >= mir.count ||
+        mir_phi_copies_are_empty(predecessor, fallthrough);
     const char *inverse;
 
-    if (mir_phi_copies_are_empty(predecessor, target)) {
+    if (false_copies_empty) {
         inverse = mir_invert_z80_condition(true_condition);
         if (inverse != NULL) {
             fprintf(out, "\tjp %s, L%d\n", inverse, labels[branch_label]);
+            if (!true_copies_empty &&
+                !mir_emit_spilled_phi_copies(
+                    out, predecessor, fallthrough))
+                return 0;
             return 1;
         }
     }
@@ -5547,6 +5578,9 @@ static int mir_emit_conditional_branch_with_phi_copies(
     if (!mir_emit_spilled_phi_copies(out, predecessor, target))
         return 0;
     fprintf(out, "\tjp L%d\nL%d:\n", labels[branch_label], fallthrough_label);
+    if (!true_copies_empty &&
+        !mir_emit_spilled_phi_copies(out, predecessor, fallthrough))
+        return 0;
     return 1;
 }
 
@@ -7421,6 +7455,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_virtual_iy_base = frame_bytes > 140;
     mir_virtual_iy_frame_bytes = frame_bytes;
     if (mir_virtual_iy_base) {
+        fprintf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
         fputs("\tpush iy\n", out);
         mir_emit_restore_virtual_iy(out);
     }
@@ -9282,42 +9319,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int target = mir_find_label(insn->label);
                 const struct MirInsn *condition =
                     mir_definition(insn->src1);
-                FILE *phi_probe;
-                int phi_ok;
-                int phi_bytes;
                 if (target < 0)
                     goto done;
-                /* mir-migration-plan-next200 Item 1: the general form below
-                 * always emits a "skip past the direct jump" branch plus a
-                 * separate unconditional jump plus a fallthrough label,
-                 * even when there are no PHI copies to guard between them -
-                 * the overwhelmingly common case for a plain if-statement
-                 * with no live cross-block merge value. That degrades to
-                 * two jump instructions where legacy needs only one
-                 * (inverted-condition jump straight to the target). Probe
-                 * first (mir_emit_spilled_phi_copies is side-effect-free
-                 * beyond writing text, so a dry run into a scratch stream
-                 * costs nothing but a tmpfile) and take the single-jump
-                 * form whenever no copies are needed.
-                 *
-                 * mir_emit_spilled_phi_copies is NOT safe to call twice:
-                 * the virtual load/store helpers it calls update live
-                 * register-cache state as a side effect of emitting text,
-                 * so a second "real" call after a probe call double-applies
-                 * those state transitions and corrupts codegen whenever
-                 * copy_count > 0. Call it exactly once (into the probe
-                 * stream) and, if it wrote any bytes, copy that captured
-                 * text verbatim into the real output instead of invoking
-                 * the function again. */
-                phi_probe = tmpfile();
-                if (phi_probe == NULL)
-                    fatal("cannot create MIR phi-copy probe stream");
-                phi_ok = mir_emit_spilled_phi_copies(phi_probe, i, target);
-                phi_bytes = phi_ok ? (int)ftell(phi_probe) : 0;
-                if (!phi_ok) {
-                    fclose(phi_probe);
-                    goto done;
-                }
                 if (mir_value_is_wide(insn->src1)) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                     if (condition != NULL && type_is_float(condition->type))
@@ -9329,29 +9332,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_emit_virtual_load(out, insn->src1);
                     fputs("\tld a,h\n\tor l\n", out);
                 }
-                if (phi_bytes == 0) {
-                    fclose(phi_probe);
-                    fprintf(out, "\tjp z, L%d\n", labels[insn->label]);
-                } else {
-                    int fallthrough_label = new_label();
-                    char buf[256];
-                    int remaining = phi_bytes;
-                    fprintf(out, "\tjp nz, L%d\n", fallthrough_label);
-                    rewind(phi_probe);
-                    while (remaining > 0) {
-                        int chunk = remaining < (int)sizeof(buf)
-                                        ? remaining
-                                        : (int)sizeof(buf);
-                        if (fread(buf, 1, (size_t)chunk, phi_probe) !=
-                            (size_t)chunk)
-                            fatal("cannot replay MIR phi-copy probe stream");
-                        fwrite(buf, 1, (size_t)chunk, out);
-                        remaining -= chunk;
-                    }
-                    fclose(phi_probe);
-                    fprintf(out, "\tjp L%d\nL%d:\n", labels[insn->label],
-                            fallthrough_label);
-                }
+                if (!mir_emit_conditional_branch_with_phi_copies(
+                        out, labels, "nz", i, target, insn->label))
+                    goto done;
             }
             break;
         case MIR_RETURN:

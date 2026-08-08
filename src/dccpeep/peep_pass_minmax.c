@@ -594,20 +594,9 @@ int pass_minmax_board_ptr_loop(void)
 }
 
 /*
- * pass_minmax_byte_returns:
- *
- * MinMax is declared as returning int, but every value it returns fits in a
- * byte (SCORE_WIN=6, SCORE_LOSE=4, SCORE_TIE=5, value=2..9).  Every caller
- * either discards the result (FindSolution) or reads only the low byte L:
- *
- *   ld e,l  ; peep: minmax_score_e
- *
- * so H is never read.  Within _MinMax, eliminate all "ld h,0" that exist
- * purely to zero-extend the return value, and shrink "ld hl,N; jp Lret" to
- * "ld l,N; jp Lret" for the constant-score returns (saves 3T each).
- *
- * The exit point is the label L immediately before "ld sp,ix; pop ix; ret".
- * All return paths "jp L" or fall through to L.
+ * Collapse MinMax's byte-sized return paths, then restore the declared
+ * 16-bit int contract once at the shared epilogue. MIR callers can consume
+ * the complete HL value even though the recursive hot path only needs L.
  */
 int pass_minmax_byte_returns(void)
 {
@@ -621,18 +610,15 @@ int pass_minmax_byte_returns(void)
     if (peep_range_has_debug_annotations(start, end))
         return 0;
 
-    /* Find the exit label: the last label before "ld sp,ix; pop ix; ret". */
     for (i = end - 1; i >= start; i--) {
         strip_peep_comment_copy(tmp, lines[i]);
         if (strcmp(tmp, "ld sp,ix") == 0 && i > start) {
-            /* Walk back over pop ix (and any other trailing insns) to find label */
             int k = i - 1;
             while (k >= start) {
                 strip_peep_comment_copy(tmp, lines[k]);
                 if (starts_label(lines[k])) {
-                    if (label_name_at(k, exit_label)) {
+                    if (label_name_at(k, exit_label))
                         exit_label_line = k;
-                    }
                     break;
                 }
                 k--;
@@ -643,7 +629,6 @@ int pass_minmax_byte_returns(void)
     if (exit_label_line < 0)
         return 0;
 
-    /* 1. Remove "ld h,0" immediately followed by "jp {exit_label}". */
     for (i = start; i + 1 < end; i++) {
         if (!eq(i, "ld h,0"))
             continue;
@@ -654,15 +639,14 @@ int pass_minmax_byte_returns(void)
                 strcmp(lab, exit_label) == 0) {
                 delete_n(i, 1);
                 end--;
-                replace1_tagged(i, lines[i], "minmax_byte_ret");
+                exit_label_line--;
                 changed = 1;
-                if (i > start) i--;
+                if (i > start)
+                    i--;
             }
         }
     }
 
-    /* 2. Remove "ld h,0" that immediately precedes the exit label itself
-     *    (the fall-through path at end of loop). */
     for (i = start; i + 1 < end; i++) {
         if (!eq(i, "ld h,0"))
             continue;
@@ -671,27 +655,29 @@ int pass_minmax_byte_returns(void)
             end--;
             exit_label_line--;
             changed = 1;
-            if (i > start) i--;
+            if (i > start)
+                i--;
         }
     }
 
-    /* 3. Replace "ld hl,N; jp {exit_label}" with "ld l,N; jp {exit_label}"
-     *    for constant score returns (N fits in a byte). */
     for (i = start; i + 1 < end; i++) {
         int imm;
         char lab[128];
         if (!peep_parse_ld_hl_0_to_255(lines[i], &imm))
             continue;
         strip_peep_comment_copy(tmp, lines[i + 1]);
-        if (!peep_parse_jp_uncond_label(tmp, lab))
-            continue;
-        if (strcmp(lab, exit_label) != 0)
+        if (!peep_parse_jp_uncond_label(tmp, lab) ||
+            strcmp(lab, exit_label) != 0)
             continue;
         sprintf(tmp, "ld l,%d", imm);
         replace1_tagged(i, tmp, "minmax_byte_ret");
         changed = 1;
     }
 
+    if (changed) {
+        insert_line_tagged(
+            exit_label_line + 1, "ld h,0", "minmax_word_return");
+    }
     return changed;
 }
 
@@ -788,6 +774,8 @@ int pass_minmax_pack_frame(void)
 int pass_minmax_pack_call(void)
 {
     int start, end, i, changed = 0;
+    int recursive_changed = 0;
+    int find_solution_changed = 0;
     char newline[MAX_LINE];
 
     if (!peep_in_function_range("_MinMax:", &start, &end))
@@ -875,6 +863,7 @@ int pass_minmax_pack_call(void)
         replace1(i + 11,        "pop af");          /* clear {move,depth+1} */
         delete_n(i + 12, j - (i + 12));            /* remove extra pop bc lines */
         changed = 1;
+        recursive_changed = 1;
     }
 
     /* Same recursive-call packing after the newer byte+constant code path.
@@ -953,6 +942,7 @@ int pass_minmax_pack_call(void)
         replace1(i + 11,        "pop af");
         delete_n(i + 12, j - (i + 12));
         changed = 1;
+        recursive_changed = 1;
         (void)depth_shape;
     }
 
@@ -1020,11 +1010,12 @@ int pass_minmax_pack_call(void)
                 replace1(i + 8,        "pop af");
                 delete_n(i + 9, j - (i + 9));
                 changed = 1;
+                find_solution_changed = 1;
             }
         }
     }
 
-    return changed;
+    return changed && recursive_changed && find_solution_changed;
 }
 
 /*

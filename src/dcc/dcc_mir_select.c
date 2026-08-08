@@ -2114,6 +2114,30 @@ static int mir_boolean_phi_final_sink_is_semantically_eligible(void)
            (mir_has_wide_values() && calls >= 30);
 }
 
+static int mir_boolean_phi_divmod_repaired_is_semantically_eligible(
+    long generated_size)
+{
+    return mir_spilled_cfg_has_divmod_pair() &&
+           mir_cfg_block_count() <= 160 &&
+           mir_call_count() <= 15 &&
+           mir.backend_slot_count <= 7 &&
+           !mir_has_wide_values() &&
+           !mir_has_inline_substitution_call() &&
+           generated_size <= 50000;
+}
+
+static int mir_boolean_phi_byte_return_is_semantically_eligible(
+    long generated_size)
+{
+    return type_size(mir.return_type) == 1 &&
+           mir_has_cfg_backedge() &&
+           mir_cfg_block_count() <= 32 &&
+           mir_call_count() <= 2 &&
+           mir.backend_slot_count <= 5 &&
+           !mir_has_inline_substitution_call() &&
+           generated_size <= 6000;
+}
+
 static long mir_boolean_phi_residual_growth_used;
 static int mir_boolean_phi_residual_count;
 static int mir_boolean_phi_residual_sensitive_module;
@@ -2156,7 +2180,7 @@ static int mir_boolean_phi_residual_is_semantically_eligible(
 
         if (mir_has_inline_substitution_call())
             mir_boolean_phi_residual_sensitive_module = 1;
-        count_limit = mir_boolean_phi_residual_sensitive_module ? 4 : 10;
+        count_limit = mir_boolean_phi_residual_sensitive_module ? 5 : 10;
         growth_limit =
             mir_boolean_phi_residual_sensitive_module ? 8000 : 11000;
         if (mir_boolean_phi_residual_count >= count_limit ||
@@ -4709,6 +4733,24 @@ evaluate_generated:
                     /* T468: the isolated deterministic FINAL-sink cohort
                      * excludes two direct failures and two pairwise
                      * resource/layout interactions. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_boolean_phi_divmod_repaired_is_semantically_eligible(
+                        generated_size))
+                    /* T485: paired div/mod results now always own concrete
+                     * simultaneous slots, so a later quotient restore cannot
+                     * invalidate a slotless remainder forwarding marker. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_boolean_phi_byte_return_is_semantically_eligible(
+                        generated_size))
+                    /* T486: MinMax ABI packing is now transactional across
+                     * both call sites and its shared epilogue restores H=0,
+                     * preserving the complete byte-return value in HL. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "dynamic-index-base-cost") &&
