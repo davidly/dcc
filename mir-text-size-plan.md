@@ -17434,3 +17434,47 @@ small loops. The final boolean cohort adds 24 ordinary functions.
 - Forced-MIR regression harness: PASS (9/9).
 - Performance gate: 48 deliberate Phase-1 regressions, 10 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T449: safe wide handoffs and terminal post-PHI text-size admission (+65 ordinary/+81 stack-check, 2026-08-08)
+
+Fresh T448 baseline: **1569/2052 ordinary (76.46%)** and **1649/2165
+stack-check (76.17%)**.
+
+After T448, all four previously unsafe focused text-size loops
+(`catalan.is_zero`, `ln2.is_zero`, `tbug.swfc`,
+`tsvbuf2.expect_prefix`) passed forced MIR. Full reason forcing failed only
+transient pint selection/resource pressure and `ts32.main`'s known
+narrow/wide shift miscompile.
+
+### Second shared loop fix: skipped constants are not transparent
+
+Accepting terminal `is_zero` candidates still selected a later `phi-slot`
+retry that loaded a wide value from impossible `ix-46`. The wide array load
+was marked forwardable to a later comparison across an intervening
+`MIR_CONST 0`. Emission materialized that wide constant into DE:HL, clobbering
+the supposedly resident lhs before the binary consumed it.
+
+`mir_can_forward_hl_de_to_next()` now verifies every skipped instruction is
+actually emission-transparent: only MIR_NOP or a proven dead store may lie
+between producer and consumer. The repaired candidate has no invalid offset
+and both `is_zero` apps pass.
+
+### Final text-size cohort
+
+At the true final decision point, `mir_text_size_post_phi_is_semantically_
+eligible()` admits terminal `text-size` candidates up to 10,000 generated
+bytes. This avoids transient pint reasons and excludes oversized
+`ts32.main` (17,737 bytes). The complete cohort passes full extended
+correctness.
+
+- Ordinary: **1569/2052 -> 1634/2060 (79.32%)**, **+65**, zero removals.
+- Stack-check: **1649/2165 -> 1730/2179 (79.39%)**, **+81**, zero removals.
+- Remaining `text-size`: **4 ordinary / 4 stack-check**.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 151 deliberate Phase-1 regressions, 3 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+The very large tracked tbig regression is explicitly Phase-2 work under the
+coverage-first policy; correctness remains clean.

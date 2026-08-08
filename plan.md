@@ -31,16 +31,16 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1569/2052 (76.46%)**
-- Current stack-check coverage: **1649/2165 (76.17%)**
-- HEAD (pending push): T448 fixes computed PHI source storage and admits
-  24 bounded boolean-PHI loops plus 4 binary-load-pair loops:
-  **+28 ordinary/+34 stack-check**, zero removals. Backend planning had
-  marked branch-forwarded PHI sources slotless; PHI edge copies later
-  loaded `mir_virtual_offset(value)`, which fell back to the SSA ID
-  (`ix-33` in tbcgcol). Non-rematerializable PHI sources now receive and
-  populate concrete slots. See `## Item T448` in
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **1634/2060 (79.32%)**
+- Current stack-check coverage: **1730/2179 (79.39%)**
+- HEAD (pending push): T449 fixes wide forwarding across emitted
+  constants and admits the terminal post-PHI `text-size` cohort:
+  **+65 ordinary/+81 stack-check**, zero removals. Wide lhs forwarding
+  treated skipped constants as emission-transparent; a wide zero
+  materialization clobbered DE:HL before the binary consumed the
+  forwarded value (`ix-46` in catalan/ln2 `is_zero`). Wide handoffs now
+  cross only NOPs/dead stores. Remaining text-size: **4 ordinary/4
+  stack-check**. See `## Item T449` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -133,6 +133,10 @@ transactional fallback remains in place throughout Phase 1.
   value needed by an edge copy cannot be optimized into a branch-only
   handoff. This removes four prior boolean-loop failure apps and makes
   binary-load loop forcing clean outside the known pint resource case.
+- **T449 nearly eliminates the historical dominant text-size bucket.**
+  After T448, full reason forcing failed only transient pint resource
+  selection and oversized `ts32.main`; true-final ordering plus a
+  10,000-byte ceiling safely admits every other terminal candidate.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

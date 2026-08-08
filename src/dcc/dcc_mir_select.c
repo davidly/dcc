@@ -2097,6 +2097,12 @@ static int mir_text_size_simple_backedge_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_text_size_post_phi_is_semantically_eligible(
+    long generated_size)
+{
+    return generated_size <= 10000;
+}
+
 static int mir_bounded_acyclic_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4216,6 +4222,14 @@ evaluate_generated:
                     /* T439: the terminal scalar tiny-loop cohort passed the
                      * full extended gate. Keep this at the actual final
                      * decision point so all earlier retries retain priority. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "text-size") &&
+                    mir_text_size_post_phi_is_semantically_eligible(
+                        generated_size))
+                    /* T449: after fixing wide forwarding across emitted
+                     * constants, the complete terminal post-PHI text-size
+                     * cohort below 10,000 bytes passed full extended. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "boolean-phi-cost") &&

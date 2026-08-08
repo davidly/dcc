@@ -517,6 +517,11 @@ static int mir_can_forward_hl_de_to_next(int value)
                                                    &skipped_label);
     if (next_instruction >= mir.count)
         return 0;
+    for (instruction = mir_emit_instruction_index + 1;
+         instruction < next_instruction; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP &&
+            !mir_instruction_is_transparent_dead_store(instruction))
+            return 0;
     next = &mir.insns[next_instruction];
     if (skipped_label && next->opcode != MIR_RETURN)
         return 0;
