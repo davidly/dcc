@@ -108,9 +108,11 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "a specialized, edge-case-correct legacy pattern (e.g. "
                  "the __m1mu runtime call) with a generic MIR lowering "
                  "that does not replicate the same edge-case handling.",
-    "boolean-phi-cost": "t and tlngnarw fail with wrong output. Real bug "
-                 "in boolean-phi-branch-simplification code generation "
-                 "outside the already-profiled measured cohort.",
+    "boolean-phi-cost": "T436 admitted 52 ordinary functions under the "
+                 "existing semantic guard plus label-fallthrough and "
+                 "2-KiB-growth exclusions. The remaining backedge, "
+                 "label-only PHI and oversized shapes still produce wrong "
+                 "output or CP/M memory exhaustion when forced.",
     "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
                  "int32_t result mismatches).",
     "dynamic-index-base-cost": "ttt fails with wrong output.",

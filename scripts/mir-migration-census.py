@@ -33,6 +33,11 @@ MATRIX_RE = re.compile(
     r"\tblocks=(?P<blocks>\d+)\tslots=(?P<slots>\d+)"
     r"\tcalls=(?P<calls>\d+)\tlocals=(?P<locals>\d+)"
     r"\treturn-kind=(?P<return_kind>\d+)\tvla=(?P<vla>[01])"
+    r"\tbackedge=(?P<backedge>[01])"
+    r"\tinline-substitution=(?P<inline_substitution>[01])"
+    r"\tpointer-array=(?P<pointer_array>[01])"
+    r"\tboolean-simplifications=(?P<boolean_simplifications>\d+)"
+    r"\tlabel-phi-fallthrough=(?P<label_phi_fallthrough>[01])"
     r"\thash=(?P<hash>[0-9a-fA-F]{8})"
 )
 FIELDS = [
@@ -63,6 +68,11 @@ MATRIX_FIELDS = [
     "locals",
     "return_kind",
     "vla",
+    "backedge",
+    "inline_substitution",
+    "pointer_array",
+    "boolean_simplifications",
+    "label_phi_fallthrough",
     "hash",
 ]
 

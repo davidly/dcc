@@ -16670,3 +16670,113 @@ reasons (`selector`, `boolean-phi-cost`, `unary-not-cost`,
 `dead-store-forwarding-cost`). Continue impact-first with
 `boolean-phi-cost`/`text-size`, using the now-fixed fastcall forwarding path
 as one eliminated shared cause.
+
+## Item T436: admitted the structurally safe boolean-PHI cohort (+52 ordinary/+55 stack-check, 2026-08-08)
+
+Fresh T435 baseline: **1048/2029 ordinary (51.65%)** and **1076/2131
+stack-check (50.49%)**. The ordinary `boolean-phi-cost` residue was 149
+functions.
+
+### Re-bisection after T435
+
+Blindly forcing the complete reason after T435 failed 12 apps (`tarray`,
+`pint`, `tlngnarw`, `cint`, `tchess`, `ttt`, `wumpus`, `fint`, `a1`,
+`tc99varm`, `cobint`, and `forint`). This expanded failure set, versus
+T434's two apps, is another direct example of candidate-selection
+interaction: changing which earlier functions emit MIR changes later retry
+paths and linked layout.
+
+A sequential fast-mode forced-function matrix over every boolean candidate
+in those apps isolated ten individually unsafe functions:
+
+```text
+tarray.ShowBinaryData
+pint.factor_call_or_var
+tlngnarw.main
+cint.print_fmt
+ttt.MinMax
+wumpus.pargs
+fint.run_at
+tc99varm.check_str
+cobint.parse_source
+forint.decode_stmts
+```
+
+Every one has a real CFG backedge. The existing
+`mir_boolean_phi_profile_is_semantically_eligible()` predicate already
+rejects all ten, confirming its `!mir_has_cfg_backedge()` arm remains
+load-bearing.
+
+### Candidate matrix now reports semantic eligibility
+
+Extended `DCC_MIR_CANDIDATE_MATRIX` and
+`scripts/mir-migration-census.py --candidate-matrix-output` with:
+
+- `backedge`
+- `inline_substitution`
+- `pointer_array`
+- `boolean_simplifications`
+- `label_phi_fallthrough`
+
+These are durable structural facts, not app/function exceptions. The matrix
+found 63 of 149 ordinary candidates under the pre-existing semantic guard:
+at most 64 blocks, no CFG backedge, no inline-substitution call, and no
+declared pointer array.
+
+### Two combination-only boundaries
+
+The 63-function combination reduced the failure set to only `pint` and
+`tchess`, even though every candidate in those two apps passed alone.
+
+For `tchess`, only `piece_side + upiece` passed as a pair; combinations
+involving `positional_value` or `value_piece` changed the chess result.
+Assembly inspection found consecutive predecessor/join labels around
+boolean PHIs. The normal emitter replays a fallthrough PHI copy on this
+shape; the existing strict-PHI retry changes that behavior. Broadly extending
+the retry to `boolean-phi-cost` fixed all `tchess` combinations, but then
+miscompiled `tatof.chk_inf` and `tctxflt.truth_or` (and perturbed an active
+`tcrcfix` path). The strict mode is therefore correctly a profiled retry, not
+a universal fix. The broad experiment was reverted; the new coverage cohort
+conservatively excludes `label_phi_fallthrough`.
+
+For `pint`, all seven eligible candidates together failed its `ttt.pas`
+scenario, while every six-of-seven subset passed. The suite intentionally
+forces full float/long I/O, producing a 33,920-byte linked image versus
+31,232 bytes for a minimal direct build. The seven-function MIR growth then
+exhausted CP/M memory (`pint:203: oom` when the retained binary was run
+directly). A 2 KiB per-function generated-vs-captured text-growth ceiling
+excludes the two extreme corpus outliers, including `pint.next` (+2,412
+bytes), without using a name or app exception.
+
+### Production rule and result
+
+`mir_boolean_phi_coverage_is_semantically_eligible()` permanently admits a
+final `boolean-phi-cost` candidate only when:
+
+1. the existing semantic predicate passes (at most 64 blocks, no backedge,
+   inline-substitution call, or pointer array);
+2. no label-only PHI fallthrough is present;
+3. generated assembly text is no more than 2,048 bytes larger than captured
+   legacy text.
+
+The condition runs at the final acceptance point after all existing retries.
+
+- Ordinary: **1048/2029 -> 1100/2029 (54.21%), +52**, zero removals.
+- Stack-check: **1076/2131 -> 1131/2131 (53.07%), +55**, zero removals.
+- Remaining `boolean-phi-cost`: **97 ordinary / 102 stack-check**.
+- Focused 27-app full-mode correctness cohort: PASS.
+- Forced-MIR regression harness: PASS (9/9).
+- Full extended gate: **314/314 runnable apps, 0 correctness failures**;
+  diagnostics, dccpeep fixtures, and extended corpus pass.
+- Performance measurement: 75 deliberate Phase-1 regressions and 10
+  improvements. The largest tracked regression is `ttt` (+78.64% peep
+  cycles), explicitly deferred to Phase 2 under the coverage-first policy.
+- `-UpdatePerfBaseline`: **314/314 passed**, measured profile recorded.
+
+### Next
+
+The generic no-backedge boolean cohort is now exhausted. Remaining
+`boolean-phi-cost` work is genuinely architectural: backedge/loop PHIs,
+label-only edge-copy semantics, inline/pointer shapes, and the two oversized
+CP/M-memory candidates. Re-rank against `text-size` (305) before choosing
+between a dedicated label-edge fix and the larger reason's failure clusters.

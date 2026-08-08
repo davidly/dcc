@@ -31,23 +31,19 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1048/2029 (51.65%)**
-- Current stack-check coverage: **1076/2131 (50.49%)**
-- HEAD (pending push): T435 eliminated the remaining `cfg-backedge`
-  fallback population, **+16 ordinary/+18 stack-check**. A full forced
-  cohort first exposed one real shared emitter bug in `tbdos.putstr`:
-  direct HL forwarding of the final argument to a multi-argument fastcall
-  survived while earlier arguments clobbered HL, so the stale marker
-  suppressed the required reload. The reusable fix preserves the final
-  argument before loading earlier arguments across every affected
-  multi-argument fastcall ABI (`memset`, `strchr`/`strrchr`, `memchr`,
-  `memcmp`, `memcpy`, DE:HL helpers, and BDOS). The complete remaining
-  16-function cohort then passed together. Production clears
-  `cfg-backedge` only at the final acceptance point, after specialized
-  loop retries, preserving their priority. Full extended correctness is
-  clean; 30 deliberate performance regressions across the affected
-  corpus were measured and accepted for Phase 1, alongside 9 measured
-  improvements. See `## Item T435` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1100/2029 (54.21%)**
+- Current stack-check coverage: **1131/2131 (53.07%)**
+- HEAD (pending push): T436 admits a correctness-proven structural
+  `boolean-phi-cost` cohort, **+52 ordinary/+55 stack-check**, zero
+  removals. Candidate-matrix reporting now records backedges, inline
+  substitution, pointer arrays, boolean simplifications, and label-only
+  PHI fallthrough. Production admission requires the existing semantic
+  guard (at most 64 blocks, no backedge/inline-substitution/pointer-array),
+  excludes label-only PHI fallthrough, and caps per-function text growth
+  at 2 KiB for CP/M memory safety. The complete cohort passes the full
+  extended correctness gate. The remaining boolean bucket is **97
+  ordinary/102 stack-check**. See `## Item T436` in
+  `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -66,6 +62,17 @@ transactional fallback remains in place throughout Phase 1.
   `binary-load-pair-cost`, and `dead-store-forwarding-cost`). Continue
   with those higher-yield reason populations rather than reopening a
   nonexistent generic backedge bucket.
+- **T436 materially reduces the second-largest unsafe reason:** a blind
+  post-T435 force still failed 12 apps, and forced-function bisection
+  identified 10 individually wrong backedge candidates. A 63-function
+  semantically eligible slice exposed two additional combination-only
+  issues. Broadly enabling the existing strict-PHI retry fixed `tchess`
+  but miscompiled `tatof.chk_inf` and `tctxflt.truth_or`, so that
+  experiment was reverted and label-only fallthrough remains excluded.
+  `pint` also proved the full-I/O linked image can run out of CP/M memory
+  when one MIR function grows by more than 2 KiB, motivating the explicit
+  growth ceiling. These are correctness/resource boundaries, not
+  performance policy.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
