@@ -16944,3 +16944,79 @@ The bounded scalar and wide acyclic text-size populations are exhausted.
 Re-bucket the remaining 92: the largest prior signatures were backedges,
 pointer arrays, VLA, and their overlaps. Prefer a shared backedge/VLA fix or
 the confirmed pointer-array encoder bug over widening T437/T438 limits.
+
+## Item T439: terminal scalar tiny-loop text-size cohort (+16 ordinary/+25 stack-check, 2026-08-08)
+
+Fresh T438 baseline: **1387/2058 ordinary (67.40%)** and **1439/2164
+stack-check (66.50%)**. The remaining ordinary `text-size` population was 92,
+dominated by 59 backedge-only candidates.
+
+### Reuse T433's proven loop structure, then tighten
+
+The first diagnostic reused
+`mir_has_single_reducible_backedge_without_loop_calls()` under the existing
+64-block/32-call/VLA/pointer/label-PHI/2-KiB bounds. It proposed 32 ordinary
+functions but failed `tbug` and `wumpus`.
+
+`tbug.swfc` is the known switch-inside-for `continue` regression. It has 7
+blocks and passes the one-header/no-call test despite its more complicated
+control edges. `wumpus` exposed a deeper selection-order issue below.
+Tightening to at most 6 blocks removed `swfc` and the 13-block
+`wumpus.rdlin`, but `wumpus` still failed.
+
+### Architectural finding: transient reason is not final reason
+
+`wumpus.cpint` passes forced MIR alone. Wildcard diagnostic acceptance still
+hung the app because it also accepted `fwum`, an unreported/deferred static
+body:
+
+```text
+simple-backedge-accept function=fwum sink=final
+```
+
+Exact forcing confirmed `fwum` is unsafe. A normal selection report explains
+why it was invisible in the proposed `text-size` delta:
+
+```text
+fwum ... result=fallback reason=block-cse-cost
+```
+
+The policy block where T433-T438 admissions run is *not* the actual final
+decision point. Boolean simplification, block CSE, address rematerialization,
+and phi-slot retries run afterward. `fwum` temporarily has reason
+`text-size`; wildcard acceptance intercepted it before block CSE could
+reclassify it to its true final reason.
+
+Moved the T439 diagnostic to immediately before `if (fallback_reason != NULL)
+emitted = 0`, after every retry. The proposed cohort then became 22 functions.
+That exposed two individually wrong wide array-loop functions,
+`catalan.is_zero` and `ln2.is_zero`. Excluding wide values left the final
+16-function scalar cohort, which passed together.
+
+### Production rule and result
+
+At the actual final decision point, a terminal `text-size` candidate is
+admitted when it:
+
+- has at most 6 blocks and 32 calls;
+- has no VLA or wide MIR values;
+- has one reducible backedge header and no MIR calls in the loop;
+- has no inline-substitution call, pointer array, or label-only PHI
+  fallthrough;
+- grows generated text by at most 2,048 bytes.
+
+- Ordinary: **1387/2058 -> 1403/2051 (68.41%)**, **+16**, zero removals.
+- Stack-check: **1439/2164 -> 1464/2164 (67.65%)**, **+25**, zero removals.
+- Remaining `text-size`: **69 ordinary / 83 stack-check**.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 77 deliberate Phase-1 regressions, 2 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+### Next
+
+Keep true-final-reason admission as the rule for new strata. Remaining
+text-size backedges are wide, larger than 6 blocks, call-containing, VLA, or
+pointer-array shapes; the two wide `is_zero` failures prove the next widening
+needs a real loop-value fix, not a threshold increase.

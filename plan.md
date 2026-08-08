@@ -31,18 +31,17 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1387/2058 (67.40%)**
-- Current stack-check coverage: **1439/2164 (66.50%)**
-- HEAD (pending push): T438 adds MIR-native `__m1mu` emission for the
-  exact parameter-only `(u32)a * b % m` shape and admits the bounded
-  acyclic wide `text-size` cohort, **+138 ordinary/+139 stack-check**,
-  zero removals. The first broader mulmod fusion was rejected after
-  `pihex.powermod16` exposed two loop hazards: skipped wide stack
-  handoffs leaked stack space and local inputs were reloaded after their
-  MIR lifetimes. The landed specialization consumes any skipped handoff
-  and requires stable unsigned-word parameter sources. The complete wide
-  cohort then passes full extended correctness. Remaining `text-size`:
-  **92 ordinary/108 stack-check**. See `## Item T438` in
+- Current ordinary coverage: **1403/2051 (68.41%)**
+- Current stack-check coverage: **1464/2164 (67.65%)**
+- HEAD (pending push): T439 admits the terminal scalar tiny-loop
+  `text-size` cohort, **+16 ordinary/+25 stack-check**, zero removals.
+  It reuses T433's one-reducible-header/no-loop-call predicate, tightened
+  to at most 6 blocks and no wide values. Crucially, the gate runs at
+  the actual final decision point after boolean, block-CSE, address, and
+  phi-slot retries. An earlier placement intercepted `wumpus.fwum` while
+  its transient reason was `text-size`; its true final reason is
+  `block-cse-cost`, and forced interception hangs the app. Remaining
+  `text-size`: **69 ordinary/83 stack-check**. See `## Item T439` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -90,6 +89,12 @@ transactional fallback remains in place throughout Phase 1.
   standing rule: fusion may only add uses already represented in MIR
   liveness, and skipping an instruction must consume any planned real-
   stack handoff it would have consumed.
+- **T439 establishes true-final-reason discipline.** New coverage gates
+  that intend to classify the terminal fallback reason must run after
+  every retry, immediately before `emitted = 0`. The older policy block
+  is earlier than boolean simplification, block CSE, address
+  rematerialization, and phi-slot retries; accepting there can select a
+  transient candidate whose final classified reason is different.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

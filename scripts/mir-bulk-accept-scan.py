@@ -102,11 +102,12 @@ PROVEN_COST_ONLY_REASONS = [
 # without an explicit override, and expect the same forced-A/B-per-shape
 # rigor as any other semantic gate, not a blanket relaxation.
 CONFIRMED_UNSAFE_COST_REASONS = {
-    "text-size": "T437/T438 admitted the bounded scalar and wide acyclic "
-                 "cohorts (287 ordinary functions total); tm1mu.mulmod now "
-                 "has specialized __m1mu semantics. Remaining VLA, backedge, "
-                 ">64-block, >32-call, label-PHI, pointer-array or >2-KiB "
-                 "growth shapes still include real failures.",
+    "text-size": "T437-T439 admitted bounded acyclic scalar/wide and "
+                 "terminal scalar tiny-loop cohorts (303 ordinary functions "
+                 "across the batches); tm1mu.mulmod now has specialized "
+                 "__m1mu semantics. Remaining VLA, wide/backedge, larger "
+                 "loop, label-PHI, pointer-array or oversized shapes still "
+                 "include real failures.",
     "boolean-phi-cost": "T436 admitted 52 ordinary functions under the "
                  "existing semantic guard plus label-fallthrough and "
                  "2-KiB-growth exclusions. The remaining backedge, "

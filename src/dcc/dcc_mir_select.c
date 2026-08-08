@@ -2069,6 +2069,20 @@ static int mir_text_size_wide_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_text_size_simple_backedge_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_cfg_block_count() <= 6 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_wide_values() &&
+           mir_has_single_reducible_backedge_without_loop_calls() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4087,6 +4101,14 @@ evaluate_generated:
                     }
                     mir_close_candidate_result(&result);
                 }
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "text-size") &&
+                    mir_text_size_simple_backedge_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T439: the terminal scalar tiny-loop cohort passed the
+                     * full extended gate. Keep this at the actual final
+                     * decision point so all earlier retries retain priority. */
+                    fallback_reason = NULL;
                 if (fallback_reason != NULL)
                     emitted = 0;
                 /* Item T66b: this is the single point where the accept/
