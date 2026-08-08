@@ -38,6 +38,8 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
+static int mir_binary_is_selfstore_small_add(
+    int index, int *store_index, int *amount);
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
@@ -53,6 +55,7 @@ static int mir_planned_stack_is_emitted(int value);
 static int mir_value_has_phi_use(int value);
 static int mir_pointer_value_has_single_safe_named_home_use(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
+static int mir_narrow_store_preserves_hl_value(int instruction);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
@@ -69,6 +72,12 @@ static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
 static int mir_spilled_cfg_used_binary_load_pair_forwarding;
 static int mir_spilled_cfg_used_dense_byte_switch;
+static int mir_spilled_cfg_dense_switch_case_count;
+static int mir_spilled_cfg_dense_switch_minimum;
+static int mir_spilled_cfg_dense_switch_maximum;
+static int mir_spilled_cfg_dense_switch_direct_condition;
+static int mir_spilled_cfg_inline_postincrement_use_count;
+static int mir_spilled_cfg_small_selfstore_add_use_count;
 static int mir_address_rematerialization_enabled;
 static int mir_block_cse_address_rematerialization_enabled;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
@@ -586,6 +595,7 @@ static int mir_can_forward_hl_to_next(int value)
     const struct MirInsn *definition = mir_definition(value);
     const struct MirInsn *next;
     int next_instruction;
+    int chained_use = -1;
     int instruction;
     int skipped_label;
 
@@ -781,9 +791,25 @@ static int mir_can_forward_hl_to_next(int value)
     default:
         return 0;
     }
+    if (next->opcode == MIR_STORE &&
+        mir_narrow_store_preserves_hl_value(next_instruction)) {
+        int after = next_instruction + 1;
+
+        while (after < mir.count &&
+               mir.insns[after].opcode == MIR_NOP)
+            ++after;
+        if (after < mir.count &&
+            mir.insns[after].opcode == MIR_LOAD_INDIRECT &&
+            mir.insns[after].src1 == value &&
+            mir.insns[after].memory_size <= 2 &&
+            mir.insns[after].memory_flags == 0)
+            chained_use = after;
+    }
     for (instruction = next_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        if (instruction == chained_use)
+            continue;
         if (insn->src1 == value || insn->src2 == value)
             return 0;
         if ((insn->opcode == MIR_CALL ||
@@ -792,6 +818,37 @@ static int mir_can_forward_hl_to_next(int value)
             return 0;
     }
     return mir_forward_note_success();
+}
+
+static int mir_narrow_store_preserves_hl_value(int instruction)
+{
+    const struct MirInsn *store;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    store = &mir.insns[instruction];
+    if (store->opcode != MIR_STORE ||
+        mir_object_is_fully_promoted(store->object) ||
+        mir_store_is_dead(instruction) ||
+        !mir_scalar_memory_location(
+            store, &memory_type, &memory_storage, &memory_offset))
+        return 0;
+    if (store->memory_size > 0 &&
+        !type_is_struct_object(store->type))
+        memory_type = store->type;
+    if (type_is_struct_object(memory_type) ||
+        type_size(memory_type) < 1 ||
+        type_size(memory_type) > 2)
+        return 0;
+    return memory_storage == SC_GLOBAL ||
+           memory_storage == SC_EXTERN ||
+           ((memory_storage == SC_LOCAL ||
+             memory_storage == SC_PARAM) &&
+            memory_offset >= -128 &&
+            memory_offset + type_size(memory_type) - 1 <= 127);
 }
 
 static int mir_dynamic_index_base_forward_target(int value)
@@ -6626,8 +6683,269 @@ struct MirDenseByteSwitch {
     int default_label;
     int end_instruction;
     int case_count;
+    int minimum_case;
+    int maximum_case;
     int targets[256];
 };
+
+static int mir_match_dense_byte_switch(
+    int start, struct MirDenseByteSwitch *dispatch);
+
+struct MirInlinePostincrementStore {
+    struct Sym *callee;
+    struct Sym *pointer;
+    int width;
+    int enabled;
+    int call_count;
+    int continuation_label;
+};
+
+static const struct AstNode *mir_inline_single_statement_expr(
+    const struct Sym *callee)
+{
+    const struct AstNode *body;
+
+    if (callee == NULL)
+        return NULL;
+    body = callee->inline_stmt_expr != NULL
+        ? callee->inline_stmt_expr : callee->inline_stmt_body;
+    if (body != NULL && body->kind == AST_EXPR_STMT)
+        body = body->a;
+    if (body != NULL && body->kind == AST_COMPOUND &&
+        body->list_len == 1 &&
+        body->list[0] != NULL &&
+        body->list[0]->kind == AST_EXPR_STMT)
+        body = body->list[0]->a;
+    return body;
+}
+
+static int mir_match_inline_postincrement_store(
+    const struct MirInsn *call,
+    struct MirInlinePostincrementStore *helper)
+{
+    struct Sym *callee;
+    struct Sym *pointer;
+    const struct AstNode *assignment;
+    const struct AstNode *dereference;
+    const struct AstNode *increment;
+    const struct AstNode *pointer_ident;
+    const struct AstNode *value_ident;
+    const char *value_name;
+    int width;
+
+    if (call == NULL || call->opcode != MIR_CALL ||
+        (call->memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0 ||
+        (call->type & 15) != TYPE_VOID)
+        return 0;
+    callee = find_global(call->name);
+    if (callee == NULL || !callee->is_static || !callee->is_inline ||
+        callee->proto_nargs != 1 || callee->has_inline_local)
+        return 0;
+    assignment = mir_inline_single_statement_expr(callee);
+    if (assignment == NULL || assignment->kind != AST_ASSIGN ||
+        assignment->op != '=' ||
+        assignment->a == NULL || assignment->b == NULL)
+        return 0;
+    dereference = assignment->a;
+    increment = dereference->a;
+    pointer_ident = increment != NULL ? increment->a : NULL;
+    value_ident = assignment->b;
+    if (dereference->kind != AST_UNARY ||
+        dereference->op != '*' ||
+        increment == NULL || increment->kind != AST_POSTFIX ||
+        increment->op != TOK_INC ||
+        pointer_ident == NULL || pointer_ident->kind != AST_IDENT ||
+        value_ident->kind != AST_IDENT)
+        return 0;
+    value_name = value_ident->sval != NULL
+        ? value_ident->sval
+        : value_ident->sym != NULL ? value_ident->sym->name : NULL;
+    if (value_name == NULL ||
+        strcmp(value_name, callee->inline_param_names[0]) != 0 ||
+        callee->inline_param_use_count[0] != 1)
+        return 0;
+    pointer = pointer_ident->sym;
+    width = type_size(dereference->type);
+    if (pointer == NULL ||
+        (pointer->storage != SC_GLOBAL &&
+         pointer->storage != SC_EXTERN) ||
+        pointer->is_volatile || pointer->pointee_is_volatile ||
+        type_ptr_depth(pointer->type) == 0 ||
+        (width != 1 && width != 2))
+        return 0;
+    if (helper != NULL) {
+        helper->callee = callee;
+        helper->pointer = pointer;
+        helper->width = width;
+    }
+    return 1;
+}
+
+static int mir_single_call_argument(
+    int call_instruction, int *value)
+{
+    const struct MirInsn *call;
+    int argument = -1;
+    int instruction;
+
+    if (call_instruction < 0 || call_instruction >= mir.count)
+        return 0;
+    call = &mir.insns[call_instruction];
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != MIR_ARG ||
+            insn->secondary_offset != call->secondary_offset)
+            continue;
+        if (insn->immediate != 0 || argument >= 0 ||
+            type_size(insn->type) > 2)
+            return 0;
+        argument = insn->src1;
+    }
+    if (argument < 0)
+        return 0;
+    if (value != NULL)
+        *value = argument;
+    return 1;
+}
+
+static int mir_prepare_inline_postincrement_stores(
+    struct MirInlinePostincrementStore *helper)
+{
+    struct MirInlinePostincrementStore groups[8];
+    struct MirInlinePostincrementStore candidate;
+    struct MirDenseByteSwitch dispatch;
+    int has_dense_switch = 0;
+    int group_count = 0;
+    int best = -1;
+    int instruction;
+
+    memset(helper, 0, sizeof(*helper));
+    helper->enabled = 0;
+    helper->continuation_label = -1;
+    memset(groups, 0, sizeof(groups));
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CONST &&
+            mir_match_dense_byte_switch(instruction, &dispatch)) {
+            has_dense_switch = 1;
+            break;
+        }
+    if (!has_dense_switch)
+        return 0;
+    memset(&candidate, 0, sizeof(candidate));
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *call = &mir.insns[instruction];
+        int continuation = instruction + 1;
+        int continuation_target;
+
+        if (!mir_match_inline_postincrement_store(call, &candidate) ||
+            !mir_single_call_argument(instruction, NULL))
+            continue;
+        while (continuation < mir.count &&
+               mir.insns[continuation].opcode == MIR_NOP)
+            ++continuation;
+        if (continuation >= mir.count ||
+            mir.insns[continuation].opcode != MIR_JUMP)
+            continue;
+        continuation_target =
+            mir_find_label(mir.insns[continuation].label);
+        if (continuation_target < 0 ||
+            !mir_phi_copies_are_empty(
+                continuation, continuation_target))
+            continue;
+        {
+            int group;
+
+            for (group = 0; group < group_count; ++group)
+                if (groups[group].callee == candidate.callee &&
+                    groups[group].pointer == candidate.pointer &&
+                    groups[group].width == candidate.width &&
+                    groups[group].continuation_label ==
+                        mir.insns[continuation].label)
+                    break;
+            if (group == group_count) {
+                if (group_count >=
+                    (int)(sizeof(groups) / sizeof(groups[0])))
+                    continue;
+                groups[group] = candidate;
+                groups[group].continuation_label =
+                    mir.insns[continuation].label;
+                ++group_count;
+            }
+            ++groups[group].call_count;
+        }
+    }
+    for (instruction = 0; instruction < group_count; ++instruction)
+        if (groups[instruction].call_count >= 8 &&
+            (best < 0 ||
+             groups[instruction].call_count >
+                 groups[best].call_count))
+            best = instruction;
+    if (best < 0)
+        return 0;
+    *helper = groups[best];
+    helper->enabled = 1;
+    return 1;
+}
+
+static int mir_call_uses_inline_postincrement_store(
+    const struct MirInlinePostincrementStore *helper,
+    int call_instruction, int *argument,
+    int *continuation_instruction,
+    int *continuation_label)
+{
+    struct MirInlinePostincrementStore candidate;
+    int continuation = call_instruction + 1;
+    int target;
+
+    while (continuation < mir.count &&
+           mir.insns[continuation].opcode == MIR_NOP)
+        ++continuation;
+    target = continuation < mir.count &&
+        mir.insns[continuation].opcode == MIR_JUMP
+        ? mir_find_label(mir.insns[continuation].label) : -1;
+
+    return helper != NULL && helper->enabled &&
+           continuation < mir.count &&
+           mir.insns[continuation].opcode == MIR_JUMP &&
+           target >= 0 &&
+           mir_phi_copies_are_empty(continuation, target) &&
+           mir_match_inline_postincrement_store(
+               &mir.insns[call_instruction], &candidate) &&
+           candidate.callee == helper->callee &&
+           candidate.pointer == helper->pointer &&
+           candidate.width == helper->width &&
+           mir_single_call_argument(call_instruction, argument) &&
+           (continuation_instruction == NULL ||
+            (*continuation_instruction = continuation) >= 0) &&
+           (continuation_label == NULL ||
+            (*continuation_label =
+                 mir.insns[continuation].label) >= 0);
+}
+
+static void mir_emit_inline_postincrement_store(
+    FILE *out, const int *labels,
+    const struct MirInlinePostincrementStore *helper,
+    int continuation_label)
+{
+    const char *assembly_name =
+        asm_name_for(sym_asm_name(helper->pointer));
+
+    if ((helper->pointer->storage == SC_EXTERN ||
+         helper->pointer->needs_extrn) &&
+        mir_extrn_should_emit(helper->pointer))
+        fprintf(out, "\textrn %s\n", assembly_name);
+    fprintf(out, "\tex de,hl\n\tld hl,(%s)\n"
+                 "\tld (hl),e\n",
+            assembly_name);
+    if (helper->width == 2)
+        fputs("\tinc hl\n\tld (hl),d\n", out);
+    fputs("\tinc hl\n", out);
+    fprintf(out, "\tld (%s),hl\n\tjp L%d\n",
+            assembly_name,
+            labels[continuation_label]);
+}
 
 static int mir_narrow_store_preserves_hl(int instruction, int value)
 {
@@ -6687,6 +7005,8 @@ static int mir_match_dense_byte_switch(
     dispatch->condition = -1;
     dispatch->default_label = -1;
     dispatch->end_instruction = -1;
+    dispatch->minimum_case = 256;
+    dispatch->maximum_case = -1;
     for (target = 0; target < 256; ++target)
         dispatch->targets[target] = -1;
     for (;;) {
@@ -6746,6 +7066,10 @@ static int mir_match_dense_byte_switch(
             !mir_phi_copies_are_empty(cursor + 3, case_target))
             return 0;
         dispatch->targets[(int)constant_value] = jump->label;
+        if (constant_value < dispatch->minimum_case)
+            dispatch->minimum_case = (int)constant_value;
+        if (constant_value > dispatch->maximum_case)
+            dispatch->maximum_case = (int)constant_value;
         ++dispatch->case_count;
         next = cursor + 4;
         if (next < mir.count &&
@@ -6785,8 +7109,16 @@ static int mir_match_dense_byte_switch(
             dispatch->end_instruction = next + 1;
         break;
     }
-    if (dispatch->case_count < 128 ||
-        dispatch->default_label < 0)
+    if (dispatch->case_count < 128) {
+        int width = dispatch->maximum_case -
+                    dispatch->minimum_case + 1;
+
+        if (dispatch->case_count < 32 ||
+            width > 64 ||
+            dispatch->case_count * 2 < width)
+            return 0;
+    }
+    if (dispatch->default_label < 0)
         return 0;
     cursor = start - 1;
     while (cursor >= 0 && mir.insns[cursor].opcode == MIR_NOP)
@@ -6802,21 +7134,133 @@ static void mir_emit_dense_byte_switch(
     const struct MirDenseByteSwitch *dispatch)
 {
     int table_label = new_label();
+    int width =
+        dispatch->maximum_case - dispatch->minimum_case + 1;
     int value;
 
     if (!dispatch->condition_in_hl)
         mir_emit_virtual_load(out, dispatch->condition);
+    if (width < 256) {
+        if (dispatch->minimum_case != 0) {
+            fprintf(out, "\tld a,l\n\tsub %d\n"
+                         "\tjp c, L%d\n",
+                    dispatch->minimum_case,
+                    labels[dispatch->default_label]);
+        } else {
+            fputs("\tld a,l\n", out);
+        }
+        fprintf(out, "\tcp %d\n\tjp nc, L%d\n",
+                width, labels[dispatch->default_label]);
+        if (dispatch->minimum_case != 0)
+            fputs("\tld l,a\n\tld h,0\n", out);
+    }
     fputs("\tadd hl,hl\n", out);
     fprintf(out, "\tld de,L%d\n\tadd hl,de\n"
                  "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
                  "\tex de,hl\n\tjp (hl)\nL%d:\n",
             table_label, table_label);
-    for (value = 0; value < 256; ++value) {
+    for (value = dispatch->minimum_case;
+         value <= dispatch->maximum_case; ++value) {
         int target = dispatch->targets[value] >= 0
             ? dispatch->targets[value]
             : dispatch->default_label;
         fprintf(out, "\tdw L%d\n", labels[target]);
     }
+}
+
+static int mir_match_dense_byte_switch_condition_load(
+    int instruction, struct MirDenseByteSwitch *dispatch)
+{
+    const struct MirInsn *base;
+    const struct MirInsn *member;
+    const struct MirInsn *load;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (instruction < 0 || instruction + 3 >= mir.count)
+        return 0;
+    base = &mir.insns[instruction];
+    member = &mir.insns[instruction + 1];
+    load = &mir.insns[instruction + 2];
+    if (base->opcode != MIR_LOAD ||
+        type_size(base->type) != 2 ||
+        base->memory_flags != 0 ||
+        member->opcode != MIR_MEMBER_ADDRESS ||
+        member->src1 != base->dst ||
+        member->immediate != 0 ||
+        member->memory_size != 1 ||
+        member->memory_flags != 0 ||
+        load->opcode != MIR_LOAD_INDIRECT ||
+        load->src1 != member->dst ||
+        load->memory_size != 1 ||
+        load->memory_flags != 0 ||
+        mir_value_use_count(base->dst) != 1 ||
+        mir_value_use_count(member->dst) != 1 ||
+        !mir_scalar_memory_location(
+            base, &memory_type, &memory_storage, &memory_offset) ||
+        (memory_storage != SC_LOCAL &&
+         memory_storage != SC_PARAM &&
+         memory_storage != SC_GLOBAL &&
+         memory_storage != SC_EXTERN) ||
+        !mir_match_dense_byte_switch(
+            instruction + 3, dispatch) ||
+        dispatch->condition != load->dst)
+        return 0;
+    dispatch->condition_in_hl = 1;
+    return 1;
+}
+
+static int mir_emit_named_word_load_to_hl(
+    FILE *out, const struct MirInsn *load)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (!mir_scalar_memory_location(
+            load, &memory_type, &memory_storage, &memory_offset) ||
+        type_size(memory_type) != 2)
+        return 0;
+    if (memory_storage == SC_GLOBAL ||
+        memory_storage == SC_EXTERN) {
+        struct Sym *global = find_global(load->name);
+        const char *assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(load->name));
+
+        if (memory_storage == SC_EXTERN &&
+            mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        fprintf(out, "\tld hl,(%s)\n", assembly_name);
+        return 1;
+    }
+    if (memory_storage != SC_LOCAL &&
+        memory_storage != SC_PARAM)
+        return 0;
+    if (memory_offset >= -128 && memory_offset + 1 <= 127) {
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                memory_offset, memory_offset + 1);
+        return 1;
+    }
+    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_emit_hl_offset_from_ix(out, memory_offset);
+    fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+    return 1;
+}
+
+static int mir_emit_dense_byte_switch_condition_load(
+    FILE *out, const int *labels, int instruction,
+    struct MirDenseByteSwitch *dispatch)
+{
+    if (!mir_match_dense_byte_switch_condition_load(
+            instruction, dispatch) ||
+        !mir_emit_named_word_load_to_hl(
+            out, &mir.insns[instruction]))
+        return 0;
+    fputs("\tld l,(hl)\n\tld h,0\n", out);
+    mir_emit_dense_byte_switch(out, labels, dispatch);
+    return 1;
 }
 
 static int mir_store_feeds_dense_byte_switch(
@@ -7409,6 +7853,62 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
     return 1;
 }
 
+static int mir_binary_is_selfstore_small_add(
+    int index, int *store_index, int *amount)
+{
+    const struct MirInsn *insn = &mir.insns[index];
+    const struct MirInsn *left_definition;
+    const struct MirInsn *right_definition;
+    int memory_type, memory_storage, memory_offset;
+    int uses = 0;
+    int found_store = -1;
+    int scan;
+
+    if (insn->opcode != MIR_BINARY ||
+        insn->immediate != '+' ||
+        type_size(insn->secondary_offset) != 2)
+        return 0;
+    right_definition = mir_definition(insn->src2);
+    if (right_definition == NULL ||
+        right_definition->opcode != MIR_CONST ||
+        right_definition->immediate < 2 ||
+        right_definition->immediate > 255)
+        return 0;
+    left_definition = mir_definition(insn->src1);
+    if (left_definition == NULL ||
+        left_definition->memory_flags != 0 ||
+        !mir_scalar_memory_location(
+            left_definition, &memory_type,
+            &memory_storage, &memory_offset) ||
+        (memory_storage != SC_LOCAL &&
+         memory_storage != SC_PARAM &&
+         memory_storage != SC_GLOBAL &&
+         memory_storage != SC_EXTERN) ||
+        type_size(memory_type) != 2)
+        return 0;
+    for (scan = 0; scan < mir.count; ++scan) {
+        const struct MirInsn *use = &mir.insns[scan];
+
+        if (use->src1 != insn->dst && use->src2 != insn->dst)
+            continue;
+        if (use->opcode != MIR_STORE ||
+            use->src1 != insn->dst ||
+            use->memory_flags != 0 ||
+            !mir_same_scalar_memory_location(
+                left_definition, use))
+            return 0;
+        found_store = scan;
+        ++uses;
+    }
+    if (uses != 1)
+        return 0;
+    if (store_index != NULL)
+        *store_index = found_store;
+    if (amount != NULL)
+        *amount = (int)right_definition->immediate;
+    return 1;
+}
+
 /* Value-indexed wrapper around mir_binary_is_selfstore_incdec for slot-
  * assignment callers that only have a value, not its defining instruction
  * index (mirroring how mir_call_only_constant/mir_binary_only_constant are
@@ -7416,12 +7916,16 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
 int mir_value_is_selfstore_incdec(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int amount;
     int store_index;
 
     if (definition == NULL || definition->opcode != MIR_BINARY)
         return 0;
     return mir_binary_is_selfstore_incdec((int)(definition - mir.insns),
-                                          &store_index);
+                                          &store_index) ||
+           mir_binary_is_selfstore_small_add(
+               (int)(definition - mir.insns),
+               &store_index, &amount);
 }
 
 /* Item T36 (mir-text-size-plan.md): true iff `value`'s sole use anywhere
@@ -7462,8 +7966,12 @@ static int mir_value_is_selfstore_incdec_source(int value)
     if (uses != 1)
         return 0;
     {
+        int amount;
         int store_index;
-        return mir_binary_is_selfstore_incdec(sole_user, &store_index);
+        return mir_binary_is_selfstore_incdec(
+                   sole_user, &store_index) ||
+               mir_binary_is_selfstore_small_add(
+                   sole_user, &store_index, &amount);
     }
 }
 
@@ -7519,6 +8027,41 @@ static void mir_emit_selfstore_incdec_global(FILE *out,
     fprintf(out, "\tld hl,(%s)\n", assembly_name);
     fputs(is_inc ? "\tinc hl\n" : "\tdec hl\n", out);
     fprintf(out, "\tld (%s),hl\n", assembly_name);
+}
+
+static void mir_emit_selfstore_small_add(
+    FILE *out, const struct MirInsn *definition,
+    int storage, int offset, int amount)
+{
+    int done = new_label();
+
+    if (storage == SC_GLOBAL || storage == SC_EXTERN) {
+        struct Sym *global = find_global(definition->name);
+        const char *assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(definition->name));
+
+        if (storage == SC_EXTERN &&
+            mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        fprintf(out,
+                "\tld a,(%s)\n\tadd a,%d\n\tld (%s),a\n"
+                "\tjp nc, L%d\n\tld a,(%s+1)\n\tinc a\n"
+                "\tld (%s+1),a\nL%d:\n",
+                assembly_name, amount, assembly_name,
+                done, assembly_name, assembly_name, done);
+        return;
+    }
+    if (!mir_frame_word_uses_short_ix(offset)) {
+        mir_emit_frame_word_load(out, offset);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", amount);
+        mir_emit_frame_word_store(out, offset);
+        return;
+    }
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tadd a,%d\n\tld (ix%+d),a\n"
+            "\tjp nc, L%d\n\tinc (ix%+d)\nL%d:\n",
+            offset, amount, offset, done, offset + 1, done);
 }
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
@@ -7644,6 +8187,32 @@ int mir_spilled_cfg_depends_on_dense_byte_switch(void)
     return mir_spilled_cfg_used_dense_byte_switch;
 }
 
+int mir_spilled_cfg_dense_byte_switch_case_count(void)
+{
+    return mir_spilled_cfg_dense_switch_case_count;
+}
+
+int mir_spilled_cfg_dense_byte_switch_width(void)
+{
+    return mir_spilled_cfg_dense_switch_maximum -
+           mir_spilled_cfg_dense_switch_minimum + 1;
+}
+
+int mir_spilled_cfg_dense_byte_switch_uses_direct_condition(void)
+{
+    return mir_spilled_cfg_dense_switch_direct_condition;
+}
+
+int mir_spilled_cfg_inline_postincrement_uses(void)
+{
+    return mir_spilled_cfg_inline_postincrement_use_count;
+}
+
+int mir_spilled_cfg_small_selfstore_add_uses(void)
+{
+    return mir_spilled_cfg_small_selfstore_add_use_count;
+}
+
 int mir_spilled_cfg_depends_on_indirect_store_value_forwarding(void)
 {
     return mir_spilled_cfg_indirect_store_value_forwarding_count != 0;
@@ -7693,7 +8262,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     int return_count = 0;
     int last_insn_is_return;
     int shared_epilogue_label = -1;
+    int inline_postincrement_skip_jump = -1;
+    struct MirInlinePostincrementStore inline_postincrement_helper;
 
+    memset(&inline_postincrement_helper, 0,
+           sizeof(inline_postincrement_helper));
     mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
     mir_spilled_cfg_used_dead_store_forwarding = 0;
     mir_spilled_cfg_used_constant_absolute = 0;
@@ -7710,6 +8283,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
     mir_spilled_cfg_used_binary_load_pair_forwarding = 0;
     mir_spilled_cfg_used_dense_byte_switch = 0;
+    mir_spilled_cfg_dense_switch_case_count = 0;
+    mir_spilled_cfg_dense_switch_minimum = 0;
+    mir_spilled_cfg_dense_switch_maximum = -1;
+    mir_spilled_cfg_dense_switch_direct_condition = 0;
+    mir_spilled_cfg_inline_postincrement_use_count = 0;
+    mir_spilled_cfg_small_selfstore_add_use_count = 0;
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
     mir_spilled_cfg_indirect_store_address_forwarding_count = 0;
@@ -7824,6 +8403,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         fatal("out of memory selecting MIR labels");
     for (i = 0; i < mir.next_label; ++i)
         labels[i] = new_label();
+    mir_prepare_inline_postincrement_stores(
+        &inline_postincrement_helper);
 
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
     if (frame_bytes != 0)
@@ -7899,15 +8480,47 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
 
         mir_emit_instruction_index = i;
         mir_emit_prepacked_constant_arguments(out, i);
+        if (insn->opcode == MIR_LOAD &&
+            mir_emit_dense_byte_switch_condition_load(
+                out, labels, i, &dense_switch)) {
+            mir_spilled_cfg_used_dense_byte_switch = 1;
+            mir_spilled_cfg_dense_switch_case_count =
+                dense_switch.case_count;
+            mir_spilled_cfg_dense_switch_minimum =
+                dense_switch.minimum_case;
+            mir_spilled_cfg_dense_switch_maximum =
+                dense_switch.maximum_case;
+            mir_spilled_cfg_dense_switch_direct_condition = 1;
+            if (getenv("DCC_MIR_SWITCH_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR dense-switch function=%s cases=%d "
+                        "minimum=%d maximum=%d start=%d end=%d "
+                        "direct-condition=1\n",
+                        mir.name, dense_switch.case_count,
+                        dense_switch.minimum_case,
+                        dense_switch.maximum_case,
+                        i, dense_switch.end_instruction);
+            i = dense_switch.end_instruction;
+            continue;
+        }
         if (insn->opcode == MIR_CONST &&
             mir_match_dense_byte_switch(i, &dense_switch)) {
             mir_emit_dense_byte_switch(out, labels, &dense_switch);
             mir_spilled_cfg_used_dense_byte_switch = 1;
+            mir_spilled_cfg_dense_switch_case_count =
+                dense_switch.case_count;
+            mir_spilled_cfg_dense_switch_minimum =
+                dense_switch.minimum_case;
+            mir_spilled_cfg_dense_switch_maximum =
+                dense_switch.maximum_case;
+            mir_spilled_cfg_dense_switch_direct_condition = 0;
             if (getenv("DCC_MIR_SWITCH_REPORT") != NULL)
                 fprintf(stderr,
                         "; MIR dense-switch function=%s cases=%d "
-                        "start=%d end=%d\n",
+                        "minimum=%d maximum=%d start=%d end=%d\n",
                         mir.name, dense_switch.case_count,
+                        dense_switch.minimum_case,
+                        dense_switch.maximum_case,
                         i, dense_switch.end_instruction);
             i = dense_switch.end_instruction;
             continue;
@@ -8312,9 +8925,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             const struct MirInsn *producer = mir_definition(insn->src1);
             if (producer != NULL && producer->opcode == MIR_BINARY) {
                 int producer_index = (int)(producer - mir.insns);
+                int small_add_amount;
                 int selfstore_store_index;
-                if (mir_binary_is_selfstore_incdec(producer_index,
-                                                   &selfstore_store_index) &&
+                if ((mir_binary_is_selfstore_incdec(
+                         producer_index, &selfstore_store_index) ||
+                     mir_binary_is_selfstore_small_add(
+                         producer_index, &selfstore_store_index,
+                         &small_add_amount)) &&
                     selfstore_store_index == i)
                     break;
             }
@@ -8731,6 +9348,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
         case MIR_BINARY:
             {
+            int small_add_amount;
             int selfstore_store_index;
             int multiply_index;
             int addend_value;
@@ -8788,6 +9406,24 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 } else
                     mir_emit_selfstore_incdec(out, memory_offset,
                                               insn->immediate == '+');
+                break;
+            }
+            if (mir_binary_is_selfstore_small_add(
+                    i, &selfstore_store_index,
+                    &small_add_amount)) {
+                int memory_type, memory_storage, memory_offset;
+                const struct MirInsn *definition =
+                    mir_definition(insn->src1);
+
+                if (definition == NULL ||
+                    !mir_scalar_memory_location(
+                        definition, &memory_type,
+                        &memory_storage, &memory_offset))
+                    goto done;
+                mir_emit_selfstore_small_add(
+                    out, definition, memory_storage,
+                    memory_offset, small_add_amount);
+                ++mir_spilled_cfg_small_selfstore_add_use_count;
                 break;
             }
             }
@@ -9189,7 +9825,21 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int s_value, c_value;
                 int s1_value, s2_value, n_value;
                 int fn_value, dearg_value;
+                int inline_continuation_label;
                 const char *rtl_name;
+                if (!is_indirect &&
+                    mir_call_uses_inline_postincrement_store(
+                        &inline_postincrement_helper, i, &s_value,
+                        &inline_postincrement_skip_jump,
+                        &inline_continuation_label)) {
+                    mir_emit_spilled_arg_to_hl(out, s_value);
+                    mir_emit_inline_postincrement_store(
+                        out, labels,
+                        &inline_postincrement_helper,
+                        inline_continuation_label);
+                    ++mir_spilled_cfg_inline_postincrement_use_count;
+                    break;
+                }
                 if (!is_indirect &&
                     mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
                                                 &count_value)) {
@@ -9686,6 +10336,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 }
                 break;
         case MIR_JUMP:
+            if (i == inline_postincrement_skip_jump) {
+                inline_postincrement_skip_jump = -1;
+                break;
+            }
             if (insn->label < 0 || insn->label >= mir.next_label)
                 goto done;
             {

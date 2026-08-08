@@ -31,23 +31,28 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2059/2060 (99.95%)**
-- Current stack-check coverage: **2178/2179 (99.95%)**
+- Current ordinary coverage: **2060/2060 (100.00%)**
+- Current stack-check coverage: **2179/2179 (100.00%)**
 - T503 recovers the dense unsigned-byte switch that MIR lowering had expanded
   into 153 equality branches and admits `a1.emulate`: **+1/+1**, zero
   removals.
 - Local T504 extends regional homes to mixed-width/object-backed segments and
   admits `pint.factor_call_or_var` plus `pint.scan_number`: **+2/+2**, zero
-  removals. The sole remaining fallback is `pint.run` (`unary-not-cost`).
+  removals.
 - **T504 closes the two smaller Pint holdouts.** `scan_number` is now smaller
   than captured output; `factor_call_or_var` fits the measured stack-check
   nopeep TPA boundary by one byte under a structural 3-32-block, <=24-call,
   117%/122%, <=6000-byte true-final gate.
-- **Re-evaluate `pint.run` after T503 before extending regional homes.** Its
-  pre-T503 regional experiment found only two useful segments across 147
-  regions and grew to 28828 bytes / 2915 instructions, but the bytecode
-  interpreter loop may contain a recoverable switch identity that block count
-  and call-region statistics alone do not reveal.
+- **T505 completes standard-corpus MIR coverage.** `pint.run` has a 43-case
+  contiguous unsigned-byte dispatch, not a regional-pressure problem. Compact
+  table recovery plus direct condition, postincrement-store, store/load-chain,
+  and small self-store-add forms reduce it to 21720/1933 versus 23277/2046
+  captured. Both censuses are 100% with zero removals; the full extended gate
+  is clean.
+- **Phase 2 is now active.** Recover the tracked peep regressions (notably Pint
+  +2.60% and the earlier `a1` +4.40%) with profile-guided selector/peephole
+  work, then prove MIR-required mode over the extended corpus before removing
+  capture/replay and legacy codegen in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons

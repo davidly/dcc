@@ -2081,32 +2081,57 @@ static int mir_dense_byte_switch_is_semantically_eligible(
     int has_backedge = mir_has_cfg_backedge();
     int has_inline = mir_has_inline_substitution_call();
     int has_pointer_array = mir_has_declared_pointer_array();
-    int eligible =
+    int cases = mir_spilled_cfg_dense_byte_switch_case_count();
+    int width = mir_spilled_cfg_dense_byte_switch_width();
+    int direct_condition =
+        mir_spilled_cfg_dense_byte_switch_uses_direct_condition();
+    int inline_postincrement =
+        mir_spilled_cfg_inline_postincrement_uses();
+    int small_selfstore_add =
+        mir_spilled_cfg_small_selfstore_add_uses();
+    int common =
         !strcmp(selector_name, "spilled-scalar-cfg") &&
         mir_spilled_cfg_depends_on_dense_byte_switch() &&
-        blocks >= 256 && blocks <= 512 &&
         has_backedge &&
-        calls <= 128 &&
         !mir.has_vla &&
         !has_pointer_array &&
+        (mir.return_type & 15) == TYPE_VOID;
+    int giant = common &&
+        blocks >= 256 && blocks <= 512 &&
+        calls <= 128 &&
         mir.sink_purpose == EMIT_SINK_FINAL &&
-        (mir.return_type & 15) == TYPE_VOID &&
         frame_bytes <= 120 &&
         generated_size <= captured_size + 8192 &&
         generated_size * 100L <= captured_size * 121L &&
         generated_instructions * 100L <=
             captured_instructions * 116L;
+    int compact = common &&
+        cases >= 32 && cases <= 64 &&
+        width >= cases && width <= 64 &&
+        direct_condition &&
+        inline_postincrement >= 8 &&
+        small_selfstore_add >= 1 &&
+        blocks >= 96 && blocks <= 128 &&
+        calls <= 40 &&
+        frame_bytes <= 64 &&
+        generated_size <= captured_size &&
+        generated_instructions <= captured_instructions;
+    int eligible = giant || compact;
 
     if (mir_spilled_cfg_depends_on_dense_byte_switch() &&
         getenv("DCC_MIR_SWITCH_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR dense-switch-gate function=%s eligible=%d "
                 "blocks=%d calls=%d backedge=%d vla=%d inline=%d "
-                "pointer-array=%d frame=%d generated-bytes=%ld "
+                "pointer-array=%d frame=%d cases=%d width=%d "
+                "direct-condition=%d inline-postincrement=%d "
+                "small-selfstore-add=%d generated-bytes=%ld "
                 "captured-bytes=%ld generated-insns=%d "
                 "captured-insns=%d\n",
                 mir.name, eligible, blocks, calls, has_backedge,
                 mir.has_vla, has_inline, has_pointer_array, frame_bytes,
+                cases, width, direct_condition, inline_postincrement,
+                small_selfstore_add,
                 generated_size, captured_size, generated_instructions,
                 captured_instructions);
     return eligible;

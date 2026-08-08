@@ -116,8 +116,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "four-call FINAL pair. T489 admitted the large parser with a "
                  "tracked stack reserve. T493's bounded hybrid retained-home "
                  "retry admitted three Pint parser functions. T498 admitted "
-                 "the larger Fortran parser. Four direct/allocation or CP/M-"
-                 "resource failures remain.",
+                 "the larger Fortran parser. T503 recovered a1's dense byte "
+                 "switch; T504's mixed-width regional homes admitted the two "
+                 "remaining Pint candidates. The terminal reason is empty.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "
@@ -129,12 +130,16 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "loop. T490 admitted the repaired deterministic float "
                  "driver. T492 removed a falsified inline division fast path "
                  "and admitted tmodp2. T497 repaired typed shadow merges and "
-                 "admitted tforsco. Two interpreter/resource failures remain.",
+                 "admitted tforsco. T499-T504's regional object-home work "
+                 "admitted the final Pint interpreter/resource shapes. The "
+                 "terminal reason is empty.",
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
                  "small-CFG, FINAL-sink, and 19 isolated DEFERRED-sink "
                  "functions through T470. T495's bounded hybrid retry "
                  "admitted the zero-spill COB add/sub pair. T498 admitted the "
-                 "larger COB performer. Only pint.run remains.",
+                 "larger COB performer. T505 recovered pint.run's compact "
+                 "dense dispatch and common arm-local updates. The terminal "
+                 "reason is empty.",
     "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
                  "Blind reason forcing still intercepts tpfauto.main before "
                  "its true block-cse-cost retry.",
