@@ -4137,6 +4137,13 @@ evaluate_generated:
                     /* T441: the terminal bounded acyclic unary-not cohort
                      * passed the full extended correctness gate. */
                     fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "wide-constant-cost") &&
+                    mir_bounded_acyclic_coverage_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T442: the terminal bounded acyclic wide-constant
+                     * cohort passed the full extended correctness gate. */
+                    fallback_reason = NULL;
                 if (fallback_reason != NULL)
                     emitted = 0;
                 /* Item T66b: this is the single point where the accept/

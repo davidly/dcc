@@ -17120,3 +17120,38 @@ The resulting cohort passed full extended correctness:
 
 The safe final acyclic unary-not stratum is exhausted. Remaining candidates
 are backedge, label-PHI, oversized/resource-sensitive, or later-retry shapes.
+
+## Item T442: terminal bounded acyclic wide-constant cohort (+35 ordinary/+35 stack-check, 2026-08-08)
+
+Fresh T441 baseline: **1431/2052 ordinary (69.74%)** and **1492/2165
+stack-check (68.91%)**. `wide-constant-cost` contained 50 ordinary functions.
+
+Blindly forcing the complete reason failed only `tpfauto` (no output). A
+normal selection report showed why this is not a terminal wide-constant
+failure:
+
+```text
+tpfauto.main ... result=fallback reason=block-cse-cost
+```
+
+The diagnostic reason override intercepted `main` earlier, while its
+transient reason was `wide-constant-cost`, before the block-CSE retry could
+produce and classify the real final candidate.
+
+Applying the shared
+`mir_bounded_acyclic_coverage_is_semantically_eligible()` at the actual final
+decision point yielded 35 functions. The complete cohort passed full
+extended correctness.
+
+- Ordinary: **1431/2052 -> 1466/2052 (71.44%)**, **+35**, zero removals.
+- Stack-check: **1492/2165 -> 1527/2165 (70.53%)**, **+35**, zero removals.
+- Remaining `wide-constant-cost`: **15 ordinary / 17 stack-check**.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 31 deliberate Phase-1 regressions, 5 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+The safe final acyclic wide-constant stratum is exhausted. Remaining
+candidates are loop/oversized/resource-sensitive or are reclassified by later
+retries.

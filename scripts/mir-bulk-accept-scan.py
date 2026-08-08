@@ -122,7 +122,11 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "unary-not-cost": "T441 admitted 15 terminal bounded acyclic functions. "
                  "The remaining backedge, label-PHI, VLA, pointer/inline, "
                  "oversized, or later-retry shapes include real failures.",
-    "wide-constant-cost": "tpfauto fails.",
+    "wide-constant-cost": "T442 admitted 35 terminal bounded acyclic "
+                 "functions. Blind reason forcing still intercepts "
+                 "tpfauto.main before its true block-cse-cost retry; "
+                 "remaining terminal loop/oversized/later-retry shapes need "
+                 "separate work.",
     "wide-store-cost": "ttrig fails.",
     "dead-local-suffix-cost": "tabsidm, tunary32 fail.",
     "absolute-index-cost": "tstructv, tptrlhs fail.",

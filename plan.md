@@ -31,17 +31,16 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1431/2052 (69.74%)**
-- Current stack-check coverage: **1492/2165 (68.91%)**
-- HEAD (pending push): T441 admits the terminal bounded acyclic
-  `unary-not-cost` cohort, **+15 ordinary/+15 stack-check**, zero
-  removals. Full-reason forcing failed eight apps, but per-function
-  bisection found only `tchess.find_legal_text_move` individually unsafe;
-  it is a backedge shape and is excluded by the shared T440 predicate.
-  Renamed the predicate to
-  `mir_bounded_acyclic_coverage_is_semantically_eligible()` and reused it
-  for both reasons. Remaining unary-not: **47 ordinary/48 stack-check**.
-  See `## Item T441` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1466/2052 (71.44%)**
+- Current stack-check coverage: **1527/2165 (70.53%)**
+- HEAD (pending push): T442 admits the terminal bounded acyclic
+  `wide-constant-cost` cohort, **+35 ordinary/+35 stack-check**, zero
+  removals. Blind full-reason forcing failed only `tpfauto`, but its
+  `main` function's true final reason is `block-cse-cost`; early reason
+  forcing intercepted a transient `wide-constant-cost` candidate. At the
+  true final point the shared bounded-acyclic predicate produces a clean
+  35-function cohort. Remaining wide-constant: **15 ordinary/17
+  stack-check**. See `## Item T442` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -103,6 +102,10 @@ transactional fallback remains in place throughout Phase 1.
   same semantic/resource predicate safely admits a second reason without
   duplicating policy formulas; keep using a shared helper when later
   reasons need the identical boundary.
+- **T442 produces the largest shared-predicate reuse so far (+35).** It
+  also re-confirms that blind reason forcing can fail solely because it
+  intercepts a transient pre-retry candidate; terminal-reason testing is
+  the authoritative production model.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
