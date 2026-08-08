@@ -552,17 +552,63 @@ mandatory secondary regression guard, not an alternate denominator.
 
 ## Immediate next steps
 
-**Coverage is now 2056/2060 ordinary (99.81%) / 2175/2179 stack-check
-(99.82%)**, pushed as commit `8a21d59`. Exactly 4 functions remain:
-`a1.emulate` (boolean-phi-cost), `pint.factor_call_or_var`
-(boolean-phi-cost), `pint.scan_number` (boolean-phi-cost), `pint.run`
-(unary-not-cost).
+**Coverage is now 2059/2060 ordinary (99.95%) / 2178/2179 stack-check
+(99.95%)**, pushed as commit `74b5dcd`. **Exactly 1 function remains:
+`pint.run` (unary-not-cost)** - literal 100% coverage is one function away.
 
-**The architectural blocker for all 4 is the same**: whole-function MIR
-value homing forces every live value into one register/slot for the
-function's entire lifetime, which is disproportionately expensive for
-large interpreter/emulator-shaped functions with many calls or one huge
-CFG. T499-T502 built the fix - **call-bounded regional homes**: persistent
+**Landed this segment**, all via the same call-bounded regional-home
+architecture (T499-T502) plus two further extensions:
+- `pint.subprog`, `pint.for_stmt`, `adaint.next` (T499-T502): call-boundary
+  live-range splitting, then a wide-value loop class.
+- `a1.emulate` (T503): a *different* insight - its 354-block CFG has low
+  live pressure and mostly arm-local state, so region splitting alone made
+  it worse. The real fix was recognizing MIR's 153-case unsigned-byte
+  equality-chain lowering as a recoverable 256-entry jump-table identity
+  (matching what the legacy AST backend already emitted) and fusing the
+  dispatch epilogue.
+- `pint.factor_call_or_var`, `pint.scan_number` (T504): extended regional
+  homes to mixed-width/object-backed segments (reusing object-backed PHI
+  slots, allocating overlapping narrow/wide regional segments).
+
+**`pint.run` is being actively worked on** (background agent
+`regional-home-pint-resume` in `regional-home-worktree`, branch
+`copilot/regional-home-af23`) using the T503 insight: does `run`'s
+112-block bytecode-interpreter main loop have a similar dense-switch
+identity MIR lowering obscured? A completed pure-regional attempt grew to
+28,828 bytes / 2,915 instructions and exceeded Pint's measured TPA boundary
+by 606 linked bytes - regional splitting alone is not enough here, same as
+it wasn't enough alone for `a1.emulate`.
+
+**When it lands**: integrate via the same process used for T499-T504 -
+independently rebuild, rerun both censuses with `--compare` against the
+last pushed baseline requiring zero removals, run `pwsh
+./scripts/runall.ps1 -Mode full -Extended` requiring 314/314 + extended +
+diagnostics + dccpeep clean, regenerate `tests/perf_baselines.csv` via
+`-UpdatePerfBaseline` **on a clean rebuild with no other uncommitted
+work-in-progress mixed in** (a real gotcha this segment: an agent's
+uncommitted, diagnostic-toggled experimental code sitting in the same
+worktree during a baseline measurement produced a spurious ~30% "cycle
+improvement" on two unrelated apps that had nothing to do with the actual
+change - always `git stash` any unrelated uncommitted work before running
+`-UpdatePerfBaseline`, then restore it afterward). Document as `## Item
+T505`, commit with the Copilot coauthor trailer, push to
+`origin/perf/unified-regalloc` (do not wait for GitHub Actions).
+
+**The instant `pint.run` lands, ordinary/stack-check coverage reaches
+2060/2060 (100%) and 2179/2179 (100%)** - the literal Phase 1 goal. Pivot
+immediately to the documented Phase 2: bring aggregate peep-mode
+performance back to at/below the pre-MIR legacy baseline (dynamic
+`dccprof` profiling first, per the "Goal and current state" section
+above), since Phase 1 deliberately accepted tracked regressions (e.g.
+`a1`'s +4.40% peep / +2.44% nopeep cycles from T503) in service of reaching
+100% coverage fast.
+
+**Do not repeat these already-falsified approaches**: broad cost-cap
+widening without a measured safe class; whole-function spill coalescing
+alone; broad retained-address CSE; test/stack weakening; name-based
+production exceptions. Historical context for earlier (now superseded)
+coverage milestones and abandoned/falsified approaches from the 44-98%
+climb is preserved below for reference.
 maximal call-free CFG regions, per-region effective homes, explicit
 spill-before-call/reload-after-call boundary state, and segment-level slot
 reuse across non-overlapping regions - and used it to land `pint.subprog`,
