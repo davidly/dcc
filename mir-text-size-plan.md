@@ -17757,3 +17757,23 @@ absolute-index candidates without intercepting those later retries.
   diagnostics and dccpeep pass.
 - Performance gate: 69 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T460: repaired wide-store residue (+18 ordinary/+20 stack-check, 2026-08-08)
+
+Fresh T459 baseline: **1883/2060 ordinary (91.41%)** and **1994/2179
+stack-check (91.51%)**.
+
+Forcing all 20 remaining `wide-store-cost` functions failed `pint` and
+`ttrig`. Direct isolation found two real terminal failures:
+`pint.calc_code_limit` (acyclic/call-free) and `ttrig.xsinf`
+(10 blocks, 3 calls, 13 backend slots). `ttrig.logf` and every other
+terminal candidate pass. The production predicate admits all backedges
+except the high-slot failure and all call-containing acyclic candidates.
+
+- Ordinary: **1883/2060 -> 1901/2060 (92.28%)**, **+18**, zero removals.
+- Stack-check: **1994/2179 -> 2014/2179 (92.43%)**, **+20**, zero removals.
+- Remaining `wide-store-cost`: **2 ordinary / 2 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 66 deliberate Phase-1 regressions, 1 improvement;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.

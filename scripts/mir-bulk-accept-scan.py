@@ -126,10 +126,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
                  "Blind reason forcing still intercepts tpfauto.main before "
                  "its true block-cse-cost retry.",
-    "wide-store-cost": "T443/T453 admitted 18 terminal acyclic "
-                 "call-containing functions. Remaining call-free, backedge, "
-                 "label-PHI, oversized, or later-retry shapes include pint "
-                 "stack pressure and ttrig loop failures.",
+    "wide-store-cost": "T443/T453/T460 admitted every current terminal "
+                 "candidate except the isolated acyclic/call-free and "
+                 "10-block/3-call/13-slot failures.",
     "dead-local-suffix-cost": "T444/T458 admitted every current terminal "
                  "candidate except the unique >20-block, <=1-call failure.",
     "absolute-index-cost": "T444/T459 admitted the complete terminal reason. "
