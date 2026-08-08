@@ -31,12 +31,35 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **924/2026 (45.61%)**
-- Current stack-check coverage: **948/2128 (44.55%)**
-- HEAD (pending push): T433, Step 0 of the coverage-first pivot - admitted
-  the `cfg-backedge` "group A" structural predicate (+10/+12), 28 tracked
+- Current ordinary coverage: **1032/2029 (50.86%)**
+- Current stack-check coverage: **1058/2131 (49.65%)**
+- HEAD (pending push): T434, Step 2/3 of the coverage-first pivot -
+  bisected the mega-experiment's 25 "cost-only" reasons individually and
+  combined against the full extended correctness gate. **Only 9 of 25
+  proved safe** (79 candidates: `absolute-address-cost`,
+  `constant-conversion-frame-cost`, `rhs-stack-cost`,
+  `branch-condition-cost`, `indirect-store-stack-cost`,
+  `lazy-parameter-cost`, `dynamic-index-cost`, `rematerialized-home-cost`,
+  `stable-pointer-local-cost`) - landed permanently via
+  `mir_reason_is_proven_cost_only()`, +108/+110 coverage, 129 tracked
   deliberate performance regressions accepted via `-UpdatePerfBaseline`.
-  See `## Item T433` in `mir-text-size-plan.md`. Tree otherwise clean.
+  **The other 16 reasons (704 candidates, including the two single-
+  largest buckets `text-size` and `boolean-phi-cost`) hid real
+  correctness bugs** (wrong output or infinite loops) when their full
+  population was force-accepted - these are now real architecture/
+  correctness investigations, reclassified in `scripts/mir-bulk-accept-
+  scan.py`'s `CONFIRMED_UNSAFE_COST_REASONS`. See `## Item T434` in
+  `mir-text-size-plan.md`. Tree otherwise clean.
+- **Key finding this segment: the mega-experiment's central premise -
+  that "cost-only" fallback reasons are always pure cost proxies with no
+  remaining semantic risk - was wrong for the majority of reasons
+  tested.** There is no shortcut to 100% coverage via blind bulk
+  relaxation; each of the 16 confirmed-unsafe reasons needs the same
+  per-shape forced-correctness investigation (`mir_is_profiled_*`
+  predicates, forced-accept A/B) that produced the safe subsets already
+  in production. Real, safe progress was still made (+108/+110,
+  crossing 50%), but the "fast path to 100%" the pivot hoped for does not
+  exist without this per-reason correctness work.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

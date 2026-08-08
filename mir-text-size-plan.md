@@ -16407,3 +16407,140 @@ separated `fallback_reason` token match) alongside the existing
 `DCC_MIR_FORCE_ACCEPT_FUNCTION` diagnostic, then build
 `scripts/mir-bulk-accept-scan.py` to drive the mega-experiment across all
 remaining cost-only reasons.
+
+## Item T434: mega-experiment bisection - the "cost-only" premise was wrong for 16/25 reasons
+
+### Context
+
+Step 1 built `DCC_MIR_FORCE_ACCEPT_REASONS` and `scripts/mir-bulk-accept-
+scan.py`. Step 2 launched the "mega-experiment": force-accept all 25
+cost-only reasons plus `block-cse-cost` at once (1,038 candidates) and run
+the full extended correctness gate (`-NoPerfCheck`).
+
+### Result: real correctness failures, not a clean sweep
+
+The mega run failed **49 of 314 apps** (later confirmed as real wrong-
+output or infinite-loop bugs via direct diffing, not measurement noise):
+`tc99ctl`, `t`, `tcrcfix`, `tctxops`, `adaint`+subapps, `tlngcond`,
+`tlngnarw`, `tvla`, `tvlax`, `cint`/`pint`/`bint`/`forint`/`cobint`
+(interpreters - several timed out entirely), `wumpus`, and 30+ more.
+
+Per the plan's own Step 2 contingency, bisected systematically:
+
+1. **Excluding the two "phi" reasons** (`boolean-phi-cost`,
+   `phi-fallthrough-cost`) dropped failures from 49 to 35 - real but
+   insufficient.
+2. **Ran every one of the 25 reasons individually** against the full
+   323-app extended gate (`runall.ps1 -Mode full -Extended -NoPerfCheck`,
+   one reason per run, ~5 min each, never concurrently - see
+   `build/bisect/results.tsv`). Result: **only 9 of 25 reasons passed
+   with zero failures in isolation.** 16 failed:
+
+   | reason | failing apps |
+   | --- | --- |
+   | text-size (304 candidates - the single largest bucket) | tm1mu, cint, ts32, wumpus, tbug, tc99varm, tsvbuf2, tvla, +1 |
+   | boolean-phi-cost (158) | t, tlngnarw |
+   | dynamic-index-base-cost (93) | ttt |
+   | unary-not-cost (61) | adaint |
+   | wide-constant-cost (49) | tpfauto |
+   | phi-fallthrough-cost (39) | t |
+   | wide-store-cost (38) | ttrig |
+   | dead-local-suffix-cost (28) | tabsidm, tunary32 |
+   | absolute-index-cost (22) | tstructv, tptrlhs |
+   | planned-index-base-cost (20) | tarray, tlongidx |
+   | planned-stack-cost (15) | wumpus |
+   | binary-load-pair-cost (12) | tbcgcol, tvlax |
+   | indirect-store-address-cost (10) | tlngnarw |
+   | dead-store-forwarding-cost (5) | cint, forint, cobint |
+   | constant-conversion-home-cost (4) | tregnarw |
+   | block-cse-cost (99) | tfmaf, tpfauto, tstructv, tvla, wumpus |
+
+   `block-cse-cost` is the most important negative result: it had already
+   passed **four rounds** of forced-accept A/B (T407/T426/T430/T431) -
+   but those rounds sampled a hand-picked subset, never forced its
+   *entire* population at once. Forcing all 99 surfaces a real
+   floating-point edge case in `tfmaf` (`zero_times_inf_is_nan`: computed
+   `0` instead of `NaN`) outside the previously-audited sample. Direct
+   diffing of `tm1mu.mulmod` under forced `text-size` shows the same
+   pattern at the selector level: legacy's specialized `__m1mu` runtime
+   call handles edge cases (`a >= m`, `m == 1`) that the generic MIR
+   scalar-cfg lowering (539 vs 228 bytes - not "near cost", 2.4x bigger)
+   does not replicate. `tvla`/`tvlax` under forced `text-size` or
+   `binary-load-pair-cost` hang entirely (VLA-related infinite loop).
+
+3. **Confirmed a cascading-interaction finding beyond T433's**: with only
+   the 9 individually-clean reasons plus the 4 known-bad ones *excluded*
+   but `dynamic-index-base-cost`/`unary-not-cost` still forced, `tlngnarw`
+   failed even though its only own fallback reason is `boolean-phi-cost`
+   (which was *not* forced in that run). Root cause: forcing unrelated
+   reasons changes candidate-selection retry order project-wide, which let
+   `tlngnarw.main` naturally clear an earlier check it previously didn't -
+   landing on a *different*, unguarded, and wrong candidate (hash
+   `db8884e0`, 6364 bytes) instead of the correct one (hash `a2d92f6d`,
+   6260 bytes) that only the profiled `boolean-phi` cohort predicates
+   would have produced. This means single-reason-in-isolation testing is
+   necessary but not sufficient - the 9-reason *combination* was re-run
+   against the full extended gate specifically to check for this effect.
+
+4. **Combined test of the 9 individually-clean reasons**: 100% clean,
+   **314/314 passed, 0 failed** (`build/bisect-combined/combined.log`) -
+   no cascading interaction between this particular set of 9.
+
+### What landed for real (Step 3)
+
+Added `mir_reason_is_proven_cost_only()` to `dcc_mir_select.c` - a
+permanent, hardcoded 9-reason list (not an env var) - called
+unconditionally right after the existing `DCC_MIR_FORCE_ACCEPT_REASONS`
+diagnostic check, in the same place the diagnostic clears
+`fallback_reason` to `NULL`. The nine: `absolute-address-cost`,
+`constant-conversion-frame-cost`, `rhs-stack-cost`,
+`branch-condition-cost`, `indirect-store-stack-cost`,
+`lazy-parameter-cost`, `dynamic-index-cost`, `rematerialized-home-cost`,
+`stable-pointer-local-cost` (79 candidates total).
+
+### Validation
+
+- Real code census exactly matches the env-var-forced measurement:
+  **1032/2029 ordinary (50.86%, +108)**, **1058/2131 stack-check (49.65%,
+  +110)** vs. a freshly rebuilt true baseline (924/2026, 948/2128).
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended -NoPerfCheck` -
+  **314/314 passed, 0 failed**, diagnostics/dccpeep/extended all passed.
+- `pwsh ./scripts/mir-forced-correctness.ps1` - PASS (unchanged, 8 cases).
+- `pwsh ./scripts/runall.ps1 -Mode full -Extended` (real perf) - same
+  correctness result, **129 tracked performance regressions** across the
+  50 affected apps (expected/accepted per the amended Phase 1 policy -
+  these candidates are correct but were rejected for being bigger/slower,
+  same trade as T433).
+- `-UpdatePerfBaseline` run - 314/314 passed, `tests/perf_baselines.csv`
+  updated deliberately.
+
+### Reclassification (see `scripts/mir-bulk-accept-scan.py`)
+
+`COST_ONLY_REASONS` split into `PROVEN_COST_ONLY_REASONS` (the 9 above,
+now landed, no longer appear as fallback) and `CONFIRMED_UNSAFE_COST_
+REASONS` (the 16 above, moved into `ARCHITECTURE_REASONS` - each needs
+the same forced-A/B-per-shape rigor as any other semantic gate, not bulk
+relaxation). `--all-cost-reasons` now defaults to the 9 proven-safe
+reasons only.
+
+### Conclusion for the pivot's premise
+
+**The mega-experiment's central bet - "cost-only fallback reasons are
+already-correct-just-slower, so bulk-accepting them is low risk" - was
+wrong for the majority (16/25) of the reasons tested.** These gates
+encode real, narrow, previously-undiscovered semantic protections, not
+just performance thresholds; the project's own existing profiled
+predicates (`mir_is_profiled_boolean_phi_measured_cohort` etc.) exist
+*because* naive acceptance of the full population is unsafe, and this
+bisection is direct evidence of exactly that for reasons not yet given
+the same profiled treatment. There is no shortcut to 100% coverage via
+blind bulk relaxation - each of the 16 confirmed-unsafe reasons requires
+the same per-shape forced-correctness investigation that produced
+`mir_is_profiled_*` for `boolean-phi-cost` and the 4-round T407-431
+campaign for `block-cse-cost`'s already-proven subset. Real progress this
+item: **+108/+110 functions (45.61% -> 50.86% ordinary, 44.55% -> 49.65%
+stack-check)**, crossing the 50% milestone - genuinely safe, landed, and
+committed. The remaining 16 reasons (704 candidates, including the two
+single-largest buckets `text-size` and `boolean-phi-cost`) are now
+correctly flagged as real architecture/correctness investigations, not
+quick wins.

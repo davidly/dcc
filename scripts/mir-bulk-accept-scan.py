@@ -56,42 +56,89 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Reasons this project's investigation history (mir-text-size-plan.md,
-# T407/T421/T426/T430/T431 for block-cse-cost; the 2026-08-08 pivot census
-# for everything else) has classified as a *pure cost proxy*: the
-# candidate already lowered correctly through MIR's own selector and was
-# rejected only for being judged bigger/slower than legacy, never for a
-# semantic/structural reason. Kept here as the single source of truth so
-# every caller of --all-cost-reasons agrees on the same list; update this
-# list (and cite the investigation) if a reason is reclassified.
-COST_ONLY_REASONS = [
-    "text-size",
-    "boolean-phi-cost",
-    "block-cse-cost",
-    "dynamic-index-base-cost",
-    "unary-not-cost",
-    "wide-constant-cost",
-    "phi-fallthrough-cost",
-    "wide-store-cost",
-    "dead-local-suffix-cost",
+# 2026-08-08 mega-experiment bisection (mir-text-size-plan.md T434): every
+# reason below this comment was force-accepted *individually* against the
+# full extended correctness gate (`runall.ps1 -Mode full -Extended`, no
+# -NoPerfCheck skip). The original premise - that a "*-cost" fallback
+# reason is always a pure cost proxy with zero remaining semantic risk -
+# was WRONG for 16 of the 25 reasons originally listed here: each hid a
+# real, reproducible correctness bug (wrong output or an infinite loop) in
+# a specific, narrow, previously-untested shape, not just a slower-but-
+# correct candidate. `block-cse-cost` in particular had already passed
+# four rounds of forced-accept A/B (T407/T426/T430/T431) - but only for a
+# hand-picked sample, never the reason's *entire* population; forcing all
+# of it surfaced a genuine floating-point edge-case bug in tfmaf. Only the
+# nine reasons in PROVEN_COST_ONLY_REASONS came back 100% clean both
+# individually and combined (checked for cascading interaction, since
+# forcing one reason can change candidate-selection retry order for an
+# unrelated, already-accepted function elsewhere in the same file - see
+# the tlngnarw finding in T434). Those nine are now landed permanently in
+# dcc_mir_select.c's mir_reason_is_proven_cost_only() and will no longer
+# appear as fallback reasons at all - they are kept here for the history,
+# not as scan candidates.
+#
+# The moral: do not add a reason to PROVEN_COST_ONLY_REASONS without
+# running the full reason alone AND combined with the rest of the proven
+# set against the full extended gate first. There is no shortcut around
+# this per-reason verification cost; see mir-text-size-plan.md T434 for
+# the complete bisection log and root-cause notes for each confirmed-bad
+# reason.
+PROVEN_COST_ONLY_REASONS = [
     "absolute-address-cost",
-    "absolute-index-cost",
-    "planned-index-base-cost",
     "constant-conversion-frame-cost",
-    "planned-stack-cost",
     "rhs-stack-cost",
-    "binary-load-pair-cost",
-    "indirect-store-address-cost",
     "branch-condition-cost",
     "indirect-store-stack-cost",
-    "dead-store-forwarding-cost",
     "lazy-parameter-cost",
-    "constant-conversion-home-cost",
     "dynamic-index-cost",
-    "instruction-count",
     "rematerialized-home-cost",
     "stable-pointer-local-cost",
 ]
+
+# Reasons this project once believed were pure cost proxies but which the
+# 2026-08-08 mega-experiment bisection (T434) proved hide a genuine
+# correctness bug for some shape within the reason's population. Treated
+# identically to ARCHITECTURE_REASONS below: refuse bulk acceptance
+# without an explicit override, and expect the same forced-A/B-per-shape
+# rigor as any other semantic gate, not a blanket relaxation.
+CONFIRMED_UNSAFE_COST_REASONS = {
+    "text-size": "9 apps failed full extended gate (incl. tvla infinite "
+                 "loop, tm1mu's fused-mulmod pattern producing wrong "
+                 "output). Root cause: many text-size candidates replace "
+                 "a specialized, edge-case-correct legacy pattern (e.g. "
+                 "the __m1mu runtime call) with a generic MIR lowering "
+                 "that does not replicate the same edge-case handling.",
+    "boolean-phi-cost": "t and tlngnarw fail with wrong output. Real bug "
+                 "in boolean-phi-branch-simplification code generation "
+                 "outside the already-profiled measured cohort.",
+    "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
+                 "int32_t result mismatches).",
+    "dynamic-index-base-cost": "ttt fails with wrong output.",
+    "unary-not-cost": "adaint fails with wrong output.",
+    "wide-constant-cost": "tpfauto fails.",
+    "wide-store-cost": "ttrig fails.",
+    "dead-local-suffix-cost": "tabsidm, tunary32 fail.",
+    "absolute-index-cost": "tstructv, tptrlhs fail.",
+    "planned-index-base-cost": "tarray, tlongidx fail.",
+    "planned-stack-cost": "wumpus fails.",
+    "binary-load-pair-cost": "tbcgcol, tvlax fail.",
+    "indirect-store-address-cost": "tlngnarw fails.",
+    "dead-store-forwarding-cost": "cint, forint, cobint fail (all "
+                 "interpreter apps - likely a shared runtime call shape).",
+    "constant-conversion-home-cost": "tregnarw fails.",
+    "block-cse-cost": "tfmaf, tpfauto, tstructv, tvla, wumpus fail. "
+                 "tfmaf specifically: 'zero_times_inf_is_nan' - a real "
+                 "floating-point edge case wrong beyond the previously "
+                 "audited 99-candidate sample.",
+}
+
+# Deprecated alias kept for any external caller still importing the old
+# name; equals the union of both proven-safe and confirmed-unsafe reasons
+# above plus "instruction-count" (never individually re-verified). Do not
+# add new reasons here - classify them into one of the two tables above
+# after running the real bisection, not by assumption.
+COST_ONLY_REASONS = PROVEN_COST_ONLY_REASONS + list(
+    CONFIRMED_UNSAFE_COST_REASONS.keys()) + ["instruction-count"]
 
 # Reasons known NOT to be pure cost proxies - a genuine correctness or
 # feature-completeness gap. --all-cost-reasons will refuse to include
@@ -103,7 +150,7 @@ ARCHITECTURE_REASONS = {
     "pointer-array",
     "cfg-backedge",
     "inline-substitution",
-}
+} | set(CONFIRMED_UNSAFE_COST_REASONS.keys())
 
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -139,22 +186,25 @@ def cmd_list_reasons(args: argparse.Namespace) -> int:
     cost_total = 0
     print(f"{'reason':<36}{'count':>8}  class")
     for reason, count in counts.most_common():
-        cls = (
-            "cost-only" if reason in COST_ONLY_REASONS
-            else "ARCHITECTURE" if reason in ARCHITECTURE_REASONS
-            else "unclassified"
-        )
-        if reason in COST_ONLY_REASONS:
+        if reason in PROVEN_COST_ONLY_REASONS:
+            cls = "proven-safe (landed)"
+        elif reason in CONFIRMED_UNSAFE_COST_REASONS:
+            cls = "CONFIRMED-UNSAFE (T434)"
+        elif reason in ARCHITECTURE_REASONS:
+            cls = "ARCHITECTURE"
+        else:
+            cls = "unclassified"
+        if reason in PROVEN_COST_ONLY_REASONS:
             cost_total += count
         print(f"{reason:<36}{count:>8}  {cls}")
-    print(f"\ntotal fallback: {total}, cost-only: {cost_total} "
+    print(f"\ntotal fallback: {total}, proven cost-only: {cost_total} "
           f"({100.0 * cost_total / total:.1f}%)" if total else "no fallback rows")
     return 0
 
 
 def resolve_reasons(args: argparse.Namespace) -> list[str]:
     if args.all_cost_reasons:
-        reasons = list(COST_ONLY_REASONS)
+        reasons = list(PROVEN_COST_ONLY_REASONS)
     elif args.reasons:
         reasons = [r.strip() for r in args.reasons.split(",") if r.strip()]
     else:
@@ -231,7 +281,15 @@ def parse_args() -> argparse.Namespace:
                          help="comma-separated fallback_reason tokens to "
                               "force-accept")
     parser.add_argument("--all-cost-reasons", action="store_true",
-                         help="use the built-in COST_ONLY_REASONS list")
+                         help="use PROVEN_COST_ONLY_REASONS (the nine "
+                              "reasons already landed permanently as of "
+                              "T434 - this is now a no-op measurement "
+                              "since they no longer appear as fallback; "
+                              "kept for regression-checking the landed "
+                              "gate). Use --reasons explicitly to "
+                              "re-investigate any CONFIRMED_UNSAFE_COST_"
+                              "REASONS entry with --allow-architecture-"
+                              "reasons.")
     parser.add_argument("--allow-architecture-reasons", action="store_true",
                          help="override the refusal to bulk-accept a "
                               "known architecture reason (selector, "

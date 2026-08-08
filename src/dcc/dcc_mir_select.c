@@ -1962,6 +1962,44 @@ static int mir_force_accept_reasons_matches(const char *reason)
     return 0;
 }
 
+/* 2026-08-08 mega-experiment bisection (Step 2/3): every cost-only reason
+ * was force-accepted in isolation against the full extended correctness
+ * gate. 16 of 25 hid genuine correctness bugs for specific untested shapes
+ * (wrong output or infinite loops, not just slower code) - the "cost-only"
+ * classification in scripts/mir-bulk-accept-scan.py's COST_ONLY_REASONS
+ * table was therefore wrong for most of that list; those reasons still
+ * bundle real semantic risk and need per-shape investigation like the
+ * existing profiled predicates above, not bulk relaxation.
+ *
+ * These nine, by contrast, came back 100% clean individually *and*
+ * combined (no cascading interaction with each other): admit them
+ * permanently. absolute-address-cost, constant-conversion-frame-cost,
+ * rhs-stack-cost, branch-condition-cost, indirect-store-stack-cost,
+ * lazy-parameter-cost, dynamic-index-cost, rematerialized-home-cost,
+ * stable-pointer-local-cost. +108/+110 functions (ordinary/stack-check). */
+static int mir_reason_is_proven_cost_only(const char *reason)
+{
+    static const char *const proven[] = {
+        "absolute-address-cost",
+        "constant-conversion-frame-cost",
+        "rhs-stack-cost",
+        "branch-condition-cost",
+        "indirect-store-stack-cost",
+        "lazy-parameter-cost",
+        "dynamic-index-cost",
+        "rematerialized-home-cost",
+        "stable-pointer-local-cost",
+    };
+    size_t i;
+
+    if (reason == NULL)
+        return 0;
+    for (i = 0; i < sizeof(proven) / sizeof(proven[0]); i++)
+        if (!strcmp(reason, proven[i]))
+            return 1;
+    return 0;
+}
+
 static int mir_boolean_phi_profile_is_semantically_eligible(void)
 {
     return mir_cfg_block_count() <= 64 &&
@@ -3745,6 +3783,9 @@ evaluate_generated:
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         mir_force_accept_reasons_matches(fallback_reason))
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        mir_reason_is_proven_cost_only(fallback_reason))
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         strcmp(fallback_reason, "forced") &&
