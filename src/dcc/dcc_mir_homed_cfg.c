@@ -875,6 +875,148 @@ static int mir_homed_cfg_rematerializes_string_argument(void)
     return 0;
 }
 
+/* Share address formation and one word fetch for adjacent unsigned byte
+ * fields passed to the same ordinary two-argument call. */
+struct MirPairedByteCall {
+    int base;
+    int member_values[2];
+    int load_values[2];
+    int argument_values[2];
+    int offsets[2];
+};
+
+static int mir_homed_paired_byte_call(
+    int call_index, struct MirPairedByteCall *out)
+{
+    const struct MirInsn *arguments[2] = { NULL, NULL };
+    const struct MirInsn *call;
+    const struct Sym *callee;
+    int scan;
+    int argument_count = 0;
+    int index;
+
+    if (!mir_regional_home_plan_is_active() ||
+        call_index < 0 || call_index >= mir.count ||
+        mir.insns[call_index].opcode != MIR_CALL)
+        return 0;
+    call = &mir.insns[call_index];
+    callee = find_global(call->name);
+    if (callee == NULL || !callee->is_defined ||
+        callee->needs_extrn || type_size(call->type) > 2)
+        return 0;
+    for (scan = 0; scan < call_index; ++scan) {
+        const struct MirInsn *argument = &mir.insns[scan];
+        int argument_index;
+
+        if (argument->opcode != MIR_ARG ||
+            argument->secondary_offset != call->secondary_offset)
+            continue;
+        argument_index = (int)argument->immediate;
+        if (argument_index < 0 || argument_index >= 2 ||
+            arguments[argument_index] != NULL)
+            return 0;
+        arguments[argument_index] = argument;
+        ++argument_count;
+    }
+    if (argument_count != 2)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    out->base = -1;
+    for (index = 0; index < 2; ++index) {
+        const struct MirInsn *unary =
+            mir_definition(arguments[index]->src1);
+        const struct MirInsn *load;
+        const struct MirInsn *member;
+
+        if (unary == NULL || unary->opcode != MIR_UNARY ||
+            unary->immediate != 0 ||
+            mir_value_use_count(unary->dst) != 2)
+            return 0;
+        load = mir_definition(unary->src1);
+        if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+            load->memory_size != 1 || load->bit_width != 0 ||
+            load->memory_flags != 0 ||
+            mir_value_use_count(load->dst) != 1 ||
+            (!type_is_bool(load->type) &&
+             (load->type & TYPE_UNSIGNED) == 0))
+            return 0;
+        member = mir_definition(load->src1);
+        if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+            mir_value_use_count(member->dst) != 1)
+            return 0;
+        if (out->base < 0)
+            out->base = member->src1;
+        else if (out->base != member->src1)
+            return 0;
+        out->member_values[index] = member->dst;
+        out->load_values[index] = load->dst;
+        out->argument_values[index] = unary->dst;
+        out->offsets[index] = (int)member->immediate;
+    }
+    if (out->offsets[0] + 1 != out->offsets[1] &&
+        out->offsets[1] + 1 != out->offsets[0])
+        return 0;
+    return mir_value_use_count(out->base) == 2;
+}
+
+static int mir_homed_paired_byte_value(int value)
+{
+    int call_index;
+
+    for (call_index = 0; call_index < mir.count; ++call_index) {
+        struct MirPairedByteCall pair;
+        int index;
+
+        if (!mir_homed_paired_byte_call(call_index, &pair))
+            continue;
+        for (index = 0; index < 2; ++index)
+            if (pair.member_values[index] == value ||
+                pair.load_values[index] == value ||
+                pair.argument_values[index] == value)
+                return 1;
+    }
+    return 0;
+}
+
+static int mir_emit_homed_paired_byte_call(
+    FILE *out, int call_index, const char *assembly_name,
+    const struct Sym *callee)
+{
+    struct MirPairedByteCall pair;
+    int lower_index;
+    int upper_index;
+    int argument;
+
+    if (!mir_homed_paired_byte_call(call_index, &pair))
+        return 0;
+    lower_index = pair.offsets[0] < pair.offsets[1] ? 0 : 1;
+    upper_index = 1 - lower_index;
+    if (!mir_emit_home_to_hl(out, pair.base))
+        return 0;
+    if (pair.offsets[lower_index] != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                pair.offsets[lower_index]);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld h,0\n", out);
+    for (argument = 1; argument >= 0; --argument) {
+        if (argument == lower_index)
+            fputs("\tld l,e\n", out);
+        else if (argument == upper_index)
+            fputs("\tld l,d\n", out);
+        else
+            return 0;
+        fputs("\tpush hl\n", out);
+    }
+    if (callee->needs_extrn &&
+        mir_extrn_should_emit_name(assembly_name))
+        fprintf(out, "\textrn %s\n", assembly_name);
+    fprintf(out, "\tcall %s\n\tpop bc\n\tpop bc\n", assembly_name);
+    if (type_ptr_depth(mir.insns[call_index].type) > 0 ||
+        (mir.insns[call_index].type & 15) != TYPE_VOID)
+        return mir_emit_hl_to_home(
+            out, mir.insns[call_index].dst);
+    return 1;
+}
+
 int mir_try_emit_homed_scalar_cfg(FILE *out)
 {
     int *labels;
@@ -1675,6 +1817,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             break;
         case MIR_MEMBER_ADDRESS:
+            if (mir_homed_paired_byte_value(insn->dst))
+                break;
             if (mir_value_only_used_by_absolute_access(
                     insn->dst,
                     mir_homed_constant_absolute_access_supported))
@@ -1751,6 +1895,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int instruction;
                 int preserve_hl_de;
                 int preserve_hl;
+                if (mir_homed_paired_byte_value(insn->dst))
+                    break;
                 if ((insn->memory_size == 1 || insn->memory_size == 2) &&
                     mir_homed_constant_absolute_access_supported(insn)) {
                     if (!mir_emit_homed_constant_absolute_load(out, insn))
@@ -2059,6 +2205,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (!mir_value_has_use(insn->dst) ||
                 mir_value_only_used_by_dead_stores(insn->dst))
                 break;
+            if (mir_homed_paired_byte_value(insn->dst))
+                break;
             if (mir_direct_branch_for_unary_not(i) >= 0)
                 break;
             if (!mir_emit_homed_unary_instruction(out, insn)) {
@@ -2213,6 +2361,14 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int s1_value, s2_value, n_value;
                 int fn_value, dearg_value;
                 const char *rtl_name;
+                struct MirPairedByteCall paired_byte_call;
+                if (mir_homed_paired_byte_call(
+                        i, &paired_byte_call)) {
+                    if (!mir_emit_homed_paired_byte_call(
+                            out, i, assembly_name, callee))
+                        goto done;
+                    break;
+                }
                 if (mir_call_is_memset_fastcall(i, &dest_value, &fill_value,
                                                 &count_value)) {
                     if (!mir_emit_home_push(out, dest_value) ||

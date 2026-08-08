@@ -5134,8 +5134,24 @@ evaluate_generated:
                             FILE *compacted =
                                 mir_compact_regional_candidate(
                                     first_compacted);
+                            int padding_instructions =
+                                mir_stream_instruction_count(
+                                    mir.capture_stream) -
+                                mir_stream_instruction_count(compacted);
+                            int padding_index;
                             fclose(regional_candidate);
                             fclose(first_compacted);
+                            /*
+                             * Preserve approximate downstream placement
+                             * when regional code removes instructions.
+                             * Padding follows the function epilogue and is
+                             * unreachable; candidates that are not smaller
+                             * receive no padding.
+                             */
+                            for (padding_index = 0;
+                                 padding_index < padding_instructions;
+                                 ++padding_index)
+                                fputs("\tnop\n", compacted);
                             regional_candidate = compacted;
                             fclose(generated);
                             generated = regional_candidate;
