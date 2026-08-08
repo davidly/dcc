@@ -17249,6 +17249,17 @@ one; the 92-block function remains excluded.
 - Full extended correctness: **314/314 runnable + 196/196 extended**.
 - Performance: 4 deliberate Phase-1 regressions; baselines updated.
 
+## Item T474: staged ordinary-module boolean budget (+4 ordinary/+5 stack-check, 2026-08-08)
+
+Fresh T473: **2019/2060 ordinary**, **2137/2179 stack-check**. Inline-sensitive
+modules retain a three-function cap; ordinary modules may select up to ten
+while retaining the universal 8-KiB growth ceiling. This admits four more
+`forint` functions without reopening interpreter failures.
+
+- Coverage: **2023/2060 (98.20%)**, **2142/2179 (98.30%)**, zero removals.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
+- Performance: 4 deliberate Phase-1 regressions; baselines updated.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base

@@ -2106,6 +2106,7 @@ static int mir_boolean_phi_final_sink_is_semantically_eligible(void)
 
 static long mir_boolean_phi_residual_growth_used;
 static int mir_boolean_phi_residual_count;
+static int mir_boolean_phi_residual_sensitive_module;
 
 static int mir_boolean_phi_residual_is_semantically_eligible(
     long generated_size, long captured_size)
@@ -2140,8 +2141,15 @@ static int mir_boolean_phi_residual_is_semantically_eligible(
     {
         long growth = generated_size > captured_size
             ? generated_size - captured_size : 0;
-        if (mir_boolean_phi_residual_count >= 3 ||
-            mir_boolean_phi_residual_growth_used + growth > 8000)
+        int count_limit;
+        long growth_limit;
+
+        if (mir_has_inline_substitution_call())
+            mir_boolean_phi_residual_sensitive_module = 1;
+        count_limit = mir_boolean_phi_residual_sensitive_module ? 3 : 10;
+        growth_limit = 8000;
+        if (mir_boolean_phi_residual_count >= count_limit ||
+            mir_boolean_phi_residual_growth_used + growth > growth_limit)
             return 0;
         ++mir_boolean_phi_residual_count;
         mir_boolean_phi_residual_growth_used += growth;
