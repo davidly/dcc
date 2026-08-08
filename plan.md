@@ -31,12 +31,13 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2056/2060 (99.81%)**
-- Current stack-check coverage: **2175/2179 (99.82%)**
-- HEAD (pushed): T502 extends regional homes to wide call-bounded loops
-  and admits `adaint.next`: **+1/+1**, zero removals. Remaining: 3
-  `boolean-phi-cost` (`a1.emulate`, `pint.factor_call_or_var`,
-  `pint.scan_number`), 1 `unary-not-cost` (`pint.run`).
+- Current ordinary coverage: **2057/2060 (99.85%)**
+- Current stack-check coverage: **2176/2179 (99.86%)**
+- Current worktree: T503 recovers the dense unsigned-byte switch that MIR
+  lowering had expanded into 153 equality branches and admits
+  `a1.emulate`: **+1/+1**, zero removals. Remaining: 2
+  `boolean-phi-cost` (`pint.factor_call_or_var`, `pint.scan_number`), 1
+  `unary-not-cost` (`pint.run`).
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -282,6 +283,12 @@ transactional fallback remains in place throughout Phase 1.
   parameters/addresses rematerialize at use. `pint.subprog` now fits the
   stack-check TPA and passes both modes. Its two-block peer remains fallback
   because selecting both perturbs Pint's optimized linked layout.
+- **T503 resolves the giant-switch outlier without widening regional homes.**
+  `a1.emulate` has low live pressure and arm-local state; T499's 458 tiny
+  regions produced only one-use spill segments and grew the candidate.
+  Recovering the 153-case unsigned-byte dispatch as a PHI-free 256-entry jump
+  table cuts the final candidate to 31,946 bytes / 2,540 instructions and
+  admits it under a measured FINAL-void structural gate.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

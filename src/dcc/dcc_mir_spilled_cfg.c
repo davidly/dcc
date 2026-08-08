@@ -68,6 +68,7 @@ static int mir_spilled_cfg_used_stable_pointer_local_home;
 static int mir_spilled_cfg_used_stable_pointer_local_slot;
 static int mir_spilled_cfg_used_general_rhs_stack_forwarding;
 static int mir_spilled_cfg_used_binary_load_pair_forwarding;
+static int mir_spilled_cfg_used_dense_byte_switch;
 static int mir_address_rematerialization_enabled;
 static int mir_block_cse_address_rematerialization_enabled;
 static int mir_spilled_cfg_indirect_store_value_forwarding_count;
@@ -6617,6 +6618,377 @@ static int mir_phi_copies_are_empty(int predecessor, int successor)
                                             destinations) == 0;
 }
 
+/* Recover the switch identity lost when MIR lowering expands each case into
+ * an equality branch, but only when every edge is phi-copy-free. */
+struct MirDenseByteSwitch {
+    int condition;
+    int condition_in_hl;
+    int default_label;
+    int end_instruction;
+    int case_count;
+    int targets[256];
+};
+
+static int mir_narrow_store_preserves_hl(int instruction, int value)
+{
+    const struct MirInsn *store;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    store = &mir.insns[instruction];
+    if (store->opcode != MIR_STORE || store->src1 != value ||
+        mir_object_is_fully_promoted(store->object) ||
+        mir_store_is_dead(instruction) ||
+        !mir_scalar_memory_location(store, &memory_type,
+                                    &memory_storage, &memory_offset))
+        return 0;
+    if (store->memory_size > 0 &&
+        !type_is_struct_object(store->type))
+        memory_type = store->type;
+    if (type_size(memory_type) != 1)
+        return 0;
+    return memory_storage == SC_GLOBAL ||
+           memory_storage == SC_EXTERN ||
+           ((memory_storage == SC_LOCAL ||
+             memory_storage == SC_PARAM) &&
+            memory_offset >= -128 && memory_offset <= 127);
+}
+
+static int mir_label_has_other_reference(int label, int owner)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (instruction != owner &&
+            (insn->opcode == MIR_JUMP ||
+             insn->opcode == MIR_BRANCH_FALSE) &&
+            insn->label == label)
+            return 1;
+        if (insn->opcode == MIR_PHI &&
+            (insn->phi_pred1 == label ||
+             insn->phi_pred2 == label))
+            return 1;
+    }
+    return 0;
+}
+
+static int mir_match_dense_byte_switch(
+    int start, struct MirDenseByteSwitch *dispatch)
+{
+    int cursor = start;
+    int target;
+
+    memset(dispatch, 0, sizeof(*dispatch));
+    dispatch->condition = -1;
+    dispatch->default_label = -1;
+    dispatch->end_instruction = -1;
+    for (target = 0; target < 256; ++target)
+        dispatch->targets[target] = -1;
+    for (;;) {
+        const struct MirInsn *constant;
+        const struct MirInsn *binary;
+        const struct MirInsn *branch;
+        const struct MirInsn *jump;
+        const struct MirInsn *condition_definition;
+        long constant_value;
+        int condition;
+        int branch_target;
+        int case_target;
+        int next;
+
+        if (cursor < 0 || cursor + 3 >= mir.count)
+            return 0;
+        constant = &mir.insns[cursor];
+        binary = &mir.insns[cursor + 1];
+        branch = &mir.insns[cursor + 2];
+        jump = &mir.insns[cursor + 3];
+        if (constant->opcode != MIR_CONST ||
+            binary->opcode != MIR_BINARY ||
+            binary->immediate != TOK_EQ ||
+            mir_value_use_count(constant->dst) != 1 ||
+            mir_value_use_count(binary->dst) != 1 ||
+            branch->opcode != MIR_BRANCH_FALSE ||
+            branch->src1 != binary->dst ||
+            jump->opcode != MIR_JUMP)
+            return 0;
+        if (binary->src1 == constant->dst)
+            condition = binary->src2;
+        else if (binary->src2 == constant->dst)
+            condition = binary->src1;
+        else
+            return 0;
+        if (dispatch->condition < 0) {
+            condition_definition = mir_definition(condition);
+            if (condition_definition == NULL ||
+                type_size(condition_definition->type) != 1 ||
+                (!type_is_bool(condition_definition->type) &&
+                 (condition_definition->type & TYPE_UNSIGNED) == 0))
+                return 0;
+            dispatch->condition = condition;
+        } else if (condition != dispatch->condition) {
+            return 0;
+        }
+        constant_value = constant->immediate;
+        if (constant_value < 0 || constant_value > 255 ||
+            dispatch->targets[(int)constant_value] >= 0 ||
+            branch->label < 0 || branch->label >= mir.next_label ||
+            jump->label < 0 || jump->label >= mir.next_label)
+            return 0;
+        branch_target = mir_find_label(branch->label);
+        case_target = mir_find_label(jump->label);
+        if (branch_target < 0 || case_target < 0 ||
+            !mir_phi_copies_are_empty(cursor + 2, cursor + 3) ||
+            !mir_phi_copies_are_empty(cursor + 3, case_target))
+            return 0;
+        dispatch->targets[(int)constant_value] = jump->label;
+        ++dispatch->case_count;
+        next = cursor + 4;
+        if (next < mir.count &&
+            mir.insns[next].opcode == MIR_LABEL &&
+            mir.insns[next].label == branch->label) {
+            if (mir_label_has_other_reference(branch->label, cursor + 2) ||
+                !mir_phi_copies_are_empty(cursor + 2, branch_target))
+                return 0;
+            cursor = next + 1;
+            if (cursor < mir.count &&
+                mir.insns[cursor].opcode == MIR_CONST)
+                continue;
+            if (cursor >= mir.count ||
+                mir.insns[cursor].opcode != MIR_JUMP ||
+                mir.insns[cursor].label < 0 ||
+                mir.insns[cursor].label >= mir.next_label)
+                return 0;
+            dispatch->default_label = mir.insns[cursor].label;
+            target = mir_find_label(dispatch->default_label);
+            if (target < 0 ||
+                !mir_phi_copies_are_empty(cursor, target))
+                return 0;
+            dispatch->end_instruction = cursor;
+            break;
+        }
+        if (!mir_phi_copies_are_empty(cursor + 2, branch_target))
+            return 0;
+        dispatch->default_label = branch->label;
+        dispatch->end_instruction = cursor + 3;
+        if (next + 1 < mir.count &&
+            mir.insns[next].opcode == MIR_LABEL &&
+            !mir_label_has_other_reference(
+                mir.insns[next].label, -1) &&
+            mir.insns[next + 1].opcode == MIR_JUMP &&
+            mir.insns[next + 1].label == dispatch->default_label &&
+            mir_phi_copies_are_empty(next + 1, branch_target))
+            dispatch->end_instruction = next + 1;
+        break;
+    }
+    if (dispatch->case_count < 128 ||
+        dispatch->default_label < 0)
+        return 0;
+    cursor = start - 1;
+    while (cursor >= 0 && mir.insns[cursor].opcode == MIR_NOP)
+        --cursor;
+    dispatch->condition_in_hl =
+        mir_narrow_store_preserves_hl(
+            cursor, dispatch->condition);
+    return 1;
+}
+
+static void mir_emit_dense_byte_switch(
+    FILE *out, const int *labels,
+    const struct MirDenseByteSwitch *dispatch)
+{
+    int table_label = new_label();
+    int value;
+
+    if (!dispatch->condition_in_hl)
+        mir_emit_virtual_load(out, dispatch->condition);
+    fputs("\tadd hl,hl\n", out);
+    fprintf(out, "\tld de,L%d\n\tadd hl,de\n"
+                 "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                 "\tex de,hl\n\tjp (hl)\nL%d:\n",
+            table_label, table_label);
+    for (value = 0; value < 256; ++value) {
+        int target = dispatch->targets[value] >= 0
+            ? dispatch->targets[value]
+            : dispatch->default_label;
+        fprintf(out, "\tdw L%d\n", labels[target]);
+    }
+}
+
+static int mir_store_feeds_dense_byte_switch(
+    int instruction, int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    struct MirDenseByteSwitch dispatch;
+    int definition_index;
+    int offset;
+    int iy_offset;
+    int next;
+
+    if (!mir_narrow_store_preserves_hl(instruction, value) ||
+        definition == NULL)
+        return 0;
+    if (mir.backend_slots != NULL &&
+        mir.backend_slots[value] >= 0) {
+        offset = mir_virtual_offset(value);
+        iy_offset = mir_virtual_iy_offset(value);
+        if (!((offset >= -128 && offset + 1 <= 127) ||
+              (mir_virtual_iy_base &&
+               iy_offset >= -128 && iy_offset + 1 <= 127)))
+            return 0;
+    }
+    definition_index = (int)(definition - mir.insns);
+    for (next = definition_index + 1;
+         next < instruction; ++next)
+        if (mir.insns[next].opcode != MIR_NOP)
+            return 0;
+    next = instruction + 1;
+    while (next < mir.count &&
+           mir.insns[next].opcode == MIR_NOP)
+        ++next;
+    return next < mir.count &&
+           mir_match_dense_byte_switch(next, &dispatch) &&
+           dispatch.condition == value &&
+           dispatch.condition_in_hl;
+}
+
+/* Fuse the dispatch loop's common `word += byte_table[index]` epilogue so
+ * the table base and accumulator do not detour through backend slots. */
+static int mir_emit_dense_switch_table_pc_advance(
+    FILE *out, int instruction, int *end_instruction)
+{
+    const struct MirInsn *cpu_address;
+    const struct MirInsn *pc_address;
+    const struct MirInsn *pc_load;
+    const struct MirInsn *table_address;
+    const struct MirInsn *index_load;
+    const struct MirInsn *index_address;
+    const struct MirInsn *length_load;
+    const struct MirInsn *length_widen;
+    const struct MirInsn *addition;
+    const struct MirInsn *pc_store;
+    char pc_operand[192];
+    char table_operand[192];
+    int index_type;
+    int index_storage;
+    int index_offset;
+
+    if (!mir_spilled_cfg_used_dense_byte_switch ||
+        instruction < 0 || instruction + 9 >= mir.count)
+        return 0;
+    cpu_address = &mir.insns[instruction];
+    pc_address = &mir.insns[instruction + 1];
+    pc_load = &mir.insns[instruction + 2];
+    table_address = &mir.insns[instruction + 3];
+    index_load = &mir.insns[instruction + 4];
+    index_address = &mir.insns[instruction + 5];
+    length_load = &mir.insns[instruction + 6];
+    length_widen = &mir.insns[instruction + 7];
+    addition = &mir.insns[instruction + 8];
+    pc_store = &mir.insns[instruction + 9];
+    if (cpu_address->opcode != MIR_ADDRESS ||
+        pc_address->opcode != MIR_MEMBER_ADDRESS ||
+        pc_address->src1 != cpu_address->dst ||
+        pc_load->opcode != MIR_LOAD_INDIRECT ||
+        pc_load->src1 != pc_address->dst ||
+        pc_load->memory_size != 2 ||
+        pc_load->memory_flags != 0 ||
+        table_address->opcode != MIR_ADDRESS ||
+        !strcmp(cpu_address->name, table_address->name) ||
+        index_load->opcode != MIR_LOAD ||
+        index_load->memory_flags != 0 ||
+        type_size(index_load->type) != 1 ||
+        type_is_bool(index_load->type) ||
+        (index_load->type & TYPE_UNSIGNED) == 0 ||
+        index_address->opcode != MIR_INDEX_ADDRESS ||
+        index_address->src1 != table_address->dst ||
+        index_address->src2 != index_load->dst ||
+        index_address->memory_size != 1 ||
+        index_address->memory_flags != 0 ||
+        index_address->immediate != 1 ||
+        length_load->opcode != MIR_LOAD_INDIRECT ||
+        length_load->src1 != index_address->dst ||
+        length_load->memory_size != 1 ||
+        length_load->memory_flags != 0 ||
+        type_is_bool(length_load->type) ||
+        (length_load->type & TYPE_UNSIGNED) == 0 ||
+        length_widen->opcode != MIR_UNARY ||
+        length_widen->src1 != length_load->dst ||
+        length_widen->immediate != 0 ||
+        type_size(length_widen->type) != 2 ||
+        addition->opcode != MIR_BINARY ||
+        addition->immediate != '+' ||
+        addition->src1 != pc_load->dst ||
+        addition->src2 != length_widen->dst ||
+        type_size(addition->type) != 2 ||
+        pc_store->opcode != MIR_STORE_INDIRECT ||
+        pc_store->src1 != pc_address->dst ||
+        pc_store->src2 != addition->dst ||
+        pc_store->memory_size != 2 ||
+        pc_store->memory_flags != 0 ||
+        mir_value_use_count(cpu_address->dst) != 1 ||
+        mir_value_use_count(pc_address->dst) != 2 ||
+        mir_value_use_count(pc_load->dst) != 1 ||
+        mir_value_use_count(table_address->dst) != 1 ||
+        mir_value_use_count(index_load->dst) != 1 ||
+        mir_value_use_count(index_address->dst) != 1 ||
+        mir_value_use_count(length_load->dst) != 1 ||
+        mir_value_use_count(length_widen->dst) != 1 ||
+        mir_value_use_count(addition->dst) != 1 ||
+        !mir_constant_absolute_access_supported(pc_load) ||
+        !mir_constant_absolute_access_supported(pc_store) ||
+        (instruction + 10 < mir.count &&
+         !mir_phi_copies_are_empty(
+             instruction + 9, instruction + 10)))
+        return 0;
+    if (!mir_scalar_memory_location(
+            index_load, &index_type, &index_storage, &index_offset) ||
+        type_size(index_type) != 1 ||
+        type_is_bool(index_type) ||
+        (index_type & TYPE_UNSIGNED) == 0 ||
+        ((index_storage == SC_LOCAL ||
+          index_storage == SC_PARAM) &&
+         (index_offset < -128 || index_offset > 127)) ||
+        (index_storage != SC_LOCAL &&
+         index_storage != SC_PARAM &&
+         index_storage != SC_GLOBAL &&
+         index_storage != SC_EXTERN))
+        return 0;
+    if (!mir_prepare_constant_absolute_operand(
+            out, pc_address->dst,
+            pc_operand, sizeof(pc_operand)) ||
+        !mir_prepare_constant_absolute_operand(
+            out, table_address->dst,
+            table_operand, sizeof(table_operand)))
+        return -1;
+    fprintf(out, "\tld hl,(%s)\n\tpush hl\n", pc_operand);
+    if (index_storage == SC_GLOBAL ||
+        index_storage == SC_EXTERN) {
+        struct Sym *global = find_global(index_load->name);
+        const char *assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(index_load->name));
+
+        if (index_storage == SC_EXTERN &&
+            mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        fprintf(out, "\tld a,(%s)\n\tld l,a\n", assembly_name);
+    } else {
+        fprintf(out, "\tld l,(ix%+d)\n", index_offset);
+    }
+    fputs("\tld h,0\n", out);
+    fprintf(out, "\tld de,%s\n\tadd hl,de\n"
+                 "\tld l,(hl)\n\tld h,0\n"
+                 "\tpop de\n\tadd hl,de\n\tld (%s),hl\n",
+            table_operand, pc_operand);
+    *end_instruction = instruction + 9;
+    return 1;
+}
+
 /* T399 (mir-text-size-plan.md): a phi copy's source or destination only
  * has a concrete backend-slot address when it is an ordinary spilled
  * value (mir.backend_slots[value] >= 0); rematerializable constants,
@@ -7267,6 +7639,11 @@ int mir_spilled_cfg_depends_on_binary_load_pair_forwarding(void)
     return mir_spilled_cfg_used_binary_load_pair_forwarding;
 }
 
+int mir_spilled_cfg_depends_on_dense_byte_switch(void)
+{
+    return mir_spilled_cfg_used_dense_byte_switch;
+}
+
 int mir_spilled_cfg_depends_on_indirect_store_value_forwarding(void)
 {
     return mir_spilled_cfg_indirect_store_value_forwarding_count != 0;
@@ -7332,6 +7709,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_used_stable_pointer_local_slot = 0;
     mir_spilled_cfg_used_general_rhs_stack_forwarding = 0;
     mir_spilled_cfg_used_binary_load_pair_forwarding = 0;
+    mir_spilled_cfg_used_dense_byte_switch = 0;
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
     mir_spilled_cfg_indirect_store_address_forwarding_count = 0;
@@ -7515,9 +7893,33 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         int end_label;
+        int fused_end;
+        int fused_result;
+        struct MirDenseByteSwitch dense_switch;
 
         mir_emit_instruction_index = i;
         mir_emit_prepacked_constant_arguments(out, i);
+        if (insn->opcode == MIR_CONST &&
+            mir_match_dense_byte_switch(i, &dense_switch)) {
+            mir_emit_dense_byte_switch(out, labels, &dense_switch);
+            mir_spilled_cfg_used_dense_byte_switch = 1;
+            if (getenv("DCC_MIR_SWITCH_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR dense-switch function=%s cases=%d "
+                        "start=%d end=%d\n",
+                        mir.name, dense_switch.case_count,
+                        i, dense_switch.end_instruction);
+            i = dense_switch.end_instruction;
+            continue;
+        }
+        fused_result = mir_emit_dense_switch_table_pc_advance(
+            out, i, &fused_end);
+        if (fused_result < 0)
+            goto done;
+        if (fused_result > 0) {
+            i = fused_end;
+            continue;
+        }
 
         switch (insn->opcode) {
         case MIR_NOP:
@@ -7906,6 +8308,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int memory_type;
             int memory_storage;
             int memory_offset;
+            int dense_switch_handoff;
             const struct MirInsn *producer = mir_definition(insn->src1);
             if (producer != NULL && producer->opcode == MIR_BINARY) {
                 int producer_index = (int)(producer - mir.insns);
@@ -7980,7 +8383,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (mir_wide_store_forwarding_enabled &&
                 type_size(memory_type) == 4)
                 mir_spilled_cfg_used_wide_store_forwarding = 1;
-            else
+            dense_switch_handoff =
+                mir_store_feeds_dense_byte_switch(i, insn->src1);
+            if (!dense_switch_handoff &&
+                !(mir_wide_store_forwarding_enabled &&
+                  type_size(memory_type) == 4))
                 mir_emit_virtual_load(out, insn->src1);
             {
             int narrow_hl_preserving_store = 0;

@@ -2057,6 +2057,49 @@ static int mir_is_profiled_boolean_phi_measured_cohort(
            mir.local_bytes == 2 && mir.backend_slot_count == 2;
 }
 
+static int mir_dense_byte_switch_is_semantically_eligible(
+    const char *selector_name,
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    int frame_bytes = mir.local_bytes + mir.aggregate_temp_bytes +
+        2 * mir.backend_slot_count;
+    int blocks = mir_cfg_block_count();
+    int calls = mir_call_count();
+    int has_backedge = mir_has_cfg_backedge();
+    int has_inline = mir_has_inline_substitution_call();
+    int has_pointer_array = mir_has_declared_pointer_array();
+    int eligible =
+        !strcmp(selector_name, "spilled-scalar-cfg") &&
+        mir_spilled_cfg_depends_on_dense_byte_switch() &&
+        blocks >= 256 && blocks <= 512 &&
+        has_backedge &&
+        calls <= 128 &&
+        !mir.has_vla &&
+        !has_pointer_array &&
+        mir.sink_purpose == EMIT_SINK_FINAL &&
+        (mir.return_type & 15) == TYPE_VOID &&
+        frame_bytes <= 120 &&
+        generated_size <= captured_size + 8192 &&
+        generated_size * 100L <= captured_size * 121L &&
+        generated_instructions * 100L <=
+            captured_instructions * 116L;
+
+    if (mir_spilled_cfg_depends_on_dense_byte_switch() &&
+        getenv("DCC_MIR_SWITCH_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR dense-switch-gate function=%s eligible=%d "
+                "blocks=%d calls=%d backedge=%d vla=%d inline=%d "
+                "pointer-array=%d frame=%d generated-bytes=%ld "
+                "captured-bytes=%ld generated-insns=%d "
+                "captured-insns=%d\n",
+                mir.name, eligible, blocks, calls, has_backedge,
+                mir.has_vla, has_inline, has_pointer_array, frame_bytes,
+                generated_size, captured_size, generated_instructions,
+                captured_instructions);
+    return eligible;
+}
+
 static int mir_is_profiled_rematerialized_home_measured_cohort(
     long generated_size, long captured_size,
     int generated_instructions, int captured_instructions)
@@ -5105,6 +5148,21 @@ evaluate_generated:
                     mir.sink_purpose == EMIT_SINK_DEFERRED &&
                     mir_unary_not_deferred_is_semantically_eligible(
                         generated_size))
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !g_speculative_codegen_active &&
+                    mir_dense_byte_switch_is_semantically_eligible(
+                        selector_name,
+                        generated_size, captured_size,
+                        generated_instructions,
+                        captured_instructions))
+                    /*
+                     * A dense unsigned-byte switch is emitted as the same
+                     * bounded 256-entry indirect jump table used by the
+                     * legacy backend, rather than as hundreds of scalar
+                     * equality branches. Admit only the measured giant
+                     * dispatch class after every ordinary retry has run.
+                     */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !regional_cse_retry_attempted &&
