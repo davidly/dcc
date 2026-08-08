@@ -119,10 +119,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "functions across bounded acyclic, scalar-loop, wide, and VLA strata. Remaining "
                  "wide/backedge, label-PHI, VLA, pointer/inline, oversized, "
                  "or later-retry shapes include real failures.",
-    "unary-not-cost": "T441/T452/T457 admitted terminal acyclic, call-free "
-                 "loop, and repaired <=6-block strata. The remaining larger "
-                 "backedge, label-PHI, pointer/inline, oversized, or later-"
-                 "retry interpreter shapes include real failures.",
+    "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
+                 "small-CFG, and all deterministic FINAL-sink strata. "
+                 "Remaining static DEFERRED bodies have sink-specific retry "
+                 "drift and need an architecture fix.",
     "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
                  "Blind reason forcing still intercepts tpfauto.main before "
                  "its true block-cse-cost retry.",

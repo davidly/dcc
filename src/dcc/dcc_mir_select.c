@@ -4577,6 +4577,27 @@ evaluate_generated:
                     /* T450: the post-PHI bounded block-CSE population outside
                      * the wide/20-call failure stratum passed full extended. */
                     fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "unary-not-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir.sink_purpose == EMIT_SINK_FINAL)
+                    /* T467: FINAL-sink unary retries are deterministic.
+                     * Static DEFERRED bodies remain gated until their
+                     * sink-specific reason drift is removed. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL) {
+                    const char *forced_final =
+                        getenv("DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION");
+                    if (!g_speculative_codegen_active &&
+                        forced_final != NULL &&
+                        !strcmp(forced_final, mir.name))
+                        /*
+                         * Diagnostic only: unlike
+                         * DCC_MIR_FORCE_ACCEPT_FUNCTION, this observes every
+                         * retry and accepts exactly the final candidate.
+                         */
+                        fallback_reason = NULL;
+                }
                 if (fallback_reason == NULL &&
                     mir_has_unconsumed_inline_temp_overwrite())
                     /* Nested inline expansion reused one #itmp slot before

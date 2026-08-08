@@ -17117,6 +17117,30 @@ exactly the four verified functions.
 - Performance gate: 10 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T467: deterministic FINAL-sink unary rollout (+8 ordinary/+8 stack-check, 2026-08-08)
+
+Fresh T466 baseline: **1942/2060 ordinary (94.27%)** and **2057/2179
+stack-check (94.40%)**.
+
+The existing exact-force and profile controls act before final retry
+selection, so they can validate a different stream from production. Added
+diagnostic `DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION`, guarded against speculative
+attempts, to accept only at the literal final decision point.
+
+This exposed sink-specific retry drift: static functions generated under
+VERIFY/DEFERRED can finish on different reasons and hashes, while ordinary
+FINAL-sink functions are deterministic. Restricting terminal unary admission
+to `EMIT_SINK_FINAL` captures eight fully verified functions without changing
+static deferred materialization.
+
+- Ordinary: **1942/2060 -> 1950/2060 (94.66%)**, **+8**, zero removals.
+- Stack-check: **2057/2179 -> 2065/2179 (94.77%)**, **+8**, zero removals.
+- Remaining `unary-not-cost`: **24 ordinary / 24 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 22 deliberate Phase-1 regressions, 2 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base

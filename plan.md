@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1942/2060 (94.27%)**
-- Current stack-check coverage: **2057/2179 (94.40%)**
-- HEAD (pending push): T466 widens the validated post-PHI block-CSE ceiling
-  from 10 to 25 KiB: **+4 ordinary/+4 stack-check**, zero removals. The
-  wide/20-call `tpfauto` and >25-KiB `tstructv` direct failures remain.
-  See `## Item T466` in
+- Current ordinary coverage: **1950/2060 (94.66%)**
+- Current stack-check coverage: **2065/2179 (94.77%)**
+- HEAD (pending push): T467 adds a true-final diagnostic and admits every
+  remaining FINAL-sink `unary-not-cost` function: **+8 ordinary/+8
+  stack-check**, zero removals. Static DEFERRED bodies remain gated because
+  their retry reasons drift by sink. See `## Item T467` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -187,6 +187,9 @@ transactional fallback remains in place throughout Phase 1.
   gating avoids the two selector removals seen under blind forcing.
 - **T466 reduces block-CSE to two direct failures.** Four large single-block
   functions pass their true CSE candidates in both modes.
+- **T467 separates deterministic and drifting sinks.** FINAL-sink unary
+  functions are safe; VERIFY/DEFERRED static bodies can select different
+  final reasons and require an architectural determinism fix.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
