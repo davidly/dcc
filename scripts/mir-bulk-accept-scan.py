@@ -116,9 +116,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "aliases, and fused wide-constant operands; the complete "
                  "terminal reason is now admitted.",
     "dynamic-index-base-cost": "T440/T451/T453/T454/T469 admitted bounded "
-                 "acyclic, scalar-loop, wide, VLA, and isolated FINAL-sink "
-                 "strata. Remaining static or large/high-slot FINAL shapes "
-                 "include real standard and extended failures.",
+                 "acyclic, scalar-loop, wide, VLA, FINAL-sink, and seven "
+                 "residual shapes through T471. The remaining seven are "
+                 "direct standard/extended interpreter or resource failures.",
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
                  "small-CFG, FINAL-sink, and 19 isolated DEFERRED-sink "
                  "functions through T470. Remaining residue is one direct "

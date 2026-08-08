@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1985/2060 (96.36%)**
-- Current stack-check coverage: **2100/2179 (96.37%)**
-- HEAD (pending push): T470 admits 19 full-mode-clean DEFERRED-sink
-  `unary-not-cost` functions: **+19 ordinary/+19 stack-check**, zero
-  removals. It excludes the direct `pint.run` nopeep failure and four large
-  low-call COBOL combination risks. See `## Item T470` in
+- Current ordinary coverage: **1992/2060 (96.70%)**
+- Current stack-check coverage: **2108/2179 (96.74%)**
+- HEAD (pending push): T471 admits seven full-mode-clean residual
+  `dynamic-index-base-cost` functions: **+7 ordinary/+8 stack-check**, zero
+  removals. Seven direct interpreter/resource shapes remain. See
+  `## Item T471` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -198,6 +198,8 @@ transactional fallback remains in place throughout Phase 1.
 - **T470 resolves most static unary residue.** Guarded literal-final
   diagnostics expose mode-specific failures correctly; 19 static bodies pass
   both peep modes together.
+- **T471 halves the dynamic-index residue.** Seven static/FINAL candidates
+  pass both modes; seven individually confirmed failures remain.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

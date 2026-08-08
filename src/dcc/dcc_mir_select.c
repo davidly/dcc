@@ -2255,6 +2255,19 @@ static int mir_dynamic_index_base_final_sink_is_semantically_eligible(void)
              mir_has_label_only_phi_fallthrough());
 }
 
+static int mir_dynamic_index_base_residual_is_semantically_eligible(void)
+{
+    int calls = mir_call_count();
+    int label_phi = mir_has_label_only_phi_fallthrough();
+
+    if (mir_has_wide_values())
+        return !label_phi && mir.backend_slot_count <= 8;
+    if (label_phi)
+        return mir_cfg_block_count() <= 13 &&
+               calls <= 6 && calls != 3;
+    return calls <= 1;
+}
+
 static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
 {
     static const char *const proven[] = {
@@ -4633,6 +4646,14 @@ evaluate_generated:
                     mir_dynamic_index_base_final_sink_is_semantically_eligible())
                     /* T469: isolate deterministic FINAL candidates from
                      * direct large/high-slot and extended label-PHI
+                     * failures. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "dynamic-index-base-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_dynamic_index_base_residual_is_semantically_eligible())
+                    /* T471: seven individually full-mode-clean residual
+                     * shapes, excluding direct interpreter/resource
                      * failures. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL) {

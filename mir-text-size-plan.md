@@ -17198,6 +17198,25 @@ admits DEFERRED unary functions at <=30 blocks or >=16 calls, except the unique
 - Performance gate: 24 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T471: full-mode-clean dynamic-index residue (+7 ordinary/+8 stack-check, 2026-08-08)
+
+Fresh T470 baseline: **1985/2060 ordinary (96.36%)** and **2100/2179
+stack-check (96.37%)**.
+
+Every one of the 14 remaining dynamic-index functions was tested through the
+guarded true-final diagnostic in full mode. Seven pass. Their semantic facts
+form three reusable strata: wide/no-label with <=8 slots; non-wide label-PHI
+with <=13 blocks/<=6 calls excluding three calls; and non-wide/no-label with
+at most one call. The other seven fail directly.
+
+- Ordinary: **1985/2060 -> 1992/2060 (96.70%)**, **+7**, zero removals.
+- Stack-check: **2100/2179 -> 2108/2179 (96.74%)**, **+8**, zero removals.
+- Remaining `dynamic-index-base-cost`: **7 ordinary / 7 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 20 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base
