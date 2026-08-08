@@ -130,8 +130,8 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "call-containing functions. Remaining call-free, backedge, "
                  "label-PHI, oversized, or later-retry shapes include pint "
                  "stack pressure and ttrig loop failures.",
-    "dead-local-suffix-cost": "T444 admitted 5 terminal bounded acyclic "
-                 "functions; oversized tabsidm/tunary32 shapes remain.",
+    "dead-local-suffix-cost": "T444/T458 admitted every current terminal "
+                 "candidate except the unique >20-block, <=1-call failure.",
     "absolute-index-cost": "T444 admitted 4 terminal bounded acyclic "
                  "functions; pointer/loop/oversized shapes remain.",
     "planned-index-base-cost": "T444 admitted 10 terminal bounded acyclic "

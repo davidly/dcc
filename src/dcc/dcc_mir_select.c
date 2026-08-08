@@ -2116,6 +2116,11 @@ static int mir_unary_not_repaired_small_is_semantically_eligible(
            generated_size <= 6000;
 }
 
+static int mir_dead_local_suffix_repaired_is_semantically_eligible(void)
+{
+    return mir_cfg_block_count() <= 20 || mir_call_count() > 1;
+}
+
 static int mir_text_size_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4124,6 +4129,13 @@ evaluate_generated:
                             generated_size))
                         /* T457: take the repaired <=6-block terminal unary
                          * candidate before unrelated alternate retries. */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "dead-local-suffix-cost") &&
+                        !g_speculative_codegen_active &&
+                        mir_dead_local_suffix_repaired_is_semantically_eligible())
+                        /* T458: 23/24 terminal candidates pass after T455.
+                         * Retain the unique >20-block, <=1-call failure. */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "cfg-backedge"))

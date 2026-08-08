@@ -31,13 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1838/2060 (89.22%)**
-- Current stack-check coverage: **1948/2179 (89.40%)**
-- HEAD (pending push): T457 admits every terminal <=6-block
-  `unary-not-cost` candidate: **+15 ordinary/+15 stack-check**, zero
-  removals. The broad reason reached 92% but cascaded into unsafe
-  interpreter candidates; the small-CFG terminal stratum is independently
-  full-extended clean. See `## Item T457` in
+- Current ordinary coverage: **1861/2060 (90.34%)**
+- Current stack-check coverage: **1971/2179 (90.45%)**
+- HEAD (pending push): T458 admits 23/24 terminal
+  `dead-local-suffix-cost` candidates: **+23 ordinary/+23 stack-check**,
+  zero removals. Only the unique >20-block, <=1-call wide/label CFG remains
+  excluded after direct full-reason validation. See `## Item T458` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -167,6 +166,9 @@ transactional fallback remains in place throughout Phase 1.
 - **T457 opens the repaired small unary-not stratum.** All remaining terminal
   unary candidates at <=6 blocks/6 KiB pass together, including parser lookup,
   I/O, chess, and type-test functions.
+- **T458 nearly eliminates dead-local suffix fallback.** Twenty-three wide,
+  label-PHI, loop, float, and pointer candidates pass together; only one
+  45-block/one-call shape remains.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

@@ -17718,3 +17718,23 @@ interactions and includes all 15 remaining small-CFG candidates.
   diagnostics and dccpeep pass.
 - Performance gate: 35 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T458: repaired dead-local suffix residue (+23 ordinary/+23 stack-check, 2026-08-08)
+
+Fresh T457 baseline: **1838/2060 ordinary (89.22%)** and **1948/2179
+stack-check (89.40%)**.
+
+Forcing all 24 remaining `dead-local-suffix-cost` candidates after the T455
+PHI/type repairs produced one failing app and one failing function:
+`tabsidm.main`, the cohort's unique 45-block, one-call wide/label CFG. Every
+other terminal candidate passed together. The production predicate therefore
+admits all shapes at <=20 blocks or with more than one call, retaining only
+that structural outlier.
+
+- Ordinary: **1838/2060 -> 1861/2060 (90.34%)**, **+23**, zero removals.
+- Stack-check: **1948/2179 -> 1971/2179 (90.45%)**, **+23**, zero removals.
+- Remaining `dead-local-suffix-cost`: **1 ordinary / 1 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 91 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
