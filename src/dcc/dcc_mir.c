@@ -7760,7 +7760,11 @@ int mir_begin_regional_home_plan(void)
             mir.allocation_colors[value] = -1;
     mir_report_regional_home_plan(candidate);
     free(candidate);
-    return mir.regional_segment_count != 0;
+    if (mir.regional_segment_count == 0) {
+        mir_end_regional_home_plan();
+        return 0;
+    }
+    return 1;
 }
 
 void mir_end_regional_home_plan(void)
