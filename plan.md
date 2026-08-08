@@ -31,10 +31,10 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2049/2060 (99.47%)**
-- Current stack-check coverage: **2168/2179 (99.50%)**
-- HEAD (pending push): T495 extends hybrid emission to the bounded zero-spill
-  COB arithmetic pair: **+2/+2**, zero removals.
+- Current ordinary coverage: **2050/2060 (99.51%)**
+- Current stack-check coverage: **2169/2179 (99.54%)**
+- HEAD (pending push): T496 adds isolated two-block address CSE and admits
+  `pint.emit`: **+1/+1**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -265,6 +265,10 @@ transactional fallback remains in place throughout Phase 1.
   non-inline, <=40-block/7-call unary candidates, selecting
   `cobint.compile_add` and `compile_subtract` while preserving
   `fint.top_level`.
+- **T496 eliminates terminal binary-load-pair fallback.** Alias-safe
+  block-local reuse retains `code` and `cp` across the three `code[cp]` field
+  stores in `pint.emit`; the retry is isolated to its two-block/one-call
+  reason so established one-block selectors remain unchanged.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

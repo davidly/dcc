@@ -17536,6 +17536,27 @@ MIR path. The two COB functions emit smaller than legacy and pass together.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T496: alias-safe two-block address CSE (+1/+1, 2026-08-08)
+
+`pint.emit` recomputed `code + cp*5` for each of three adjacent field stores.
+The existing block CSE could not equate repeated loads of mutable static
+globals, and its retry was limited to one-block functions.
+
+For a static global whose address is never taken, repeated loads are now
+reusable within one block until a direct store, call, aggregate call, or opaque
+barrier. The lifetime extension is enabled only for two-block candidates, and
+the expanded CSE retry is restricted to two-block/one-call
+`binary-load-pair-cost`; all established one-block behavior remains unchanged.
+
+This removes seven expressions from `emit`, reducing it to 1157 generated
+bytes and making the complete Pint image pass both modes.
+
+- Coverage: **2050/2060 (99.51%)**, **2169/2179 (99.54%)**, zero removals.
+- Remaining `binary-load-pair-cost`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

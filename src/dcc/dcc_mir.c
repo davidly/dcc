@@ -4046,6 +4046,37 @@ static int mir_load_object_is_call_safe(int object)
     return 1;
 }
 
+static int mir_block_local_load_reusable_between(
+    const struct MirInsn *load, int previous, int current)
+{
+    struct Sym *symbol;
+    const char *name;
+    int instruction;
+
+    if (load->memory_flags != 0)
+        return 0;
+    name = load->object >= 0 && load->object < mir.object_count
+        ? mir.objects[load->object].name : load->name;
+    symbol = name[0] != 0 ? find_sym(name) : NULL;
+    if (symbol == NULL || symbol->storage != SC_GLOBAL ||
+        !symbol->is_static || global_text_addr_taken_count(name) != 0)
+        return 0;
+
+    for (instruction = previous + 1; instruction < current; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_CALL ||
+            insn->opcode == MIR_CALL_AGGREGATE ||
+            insn->opcode == MIR_OPAQUE)
+            return 0;
+        if (insn->opcode == MIR_STORE &&
+            ((load->object >= 0 && insn->object == load->object) ||
+             (insn->name[0] != 0 && !strcmp(insn->name, name))))
+            return 0;
+    }
+    return 1;
+}
+
 /* Like mir_load_object_is_call_safe() above, but for the exact
  * `static_global.field` loadind shape already proven by T403's field-level
  * scan: isolated file-local global-field loads whose field address never
@@ -4078,7 +4109,9 @@ static int mir_common_expressions_equal(const struct MirInsn *left,
             return 0;
         break;
     case MIR_LOAD:
-        if (!mir_load_object_is_call_safe(left->object))
+        if (left->memory_flags != 0 ||
+            (!mir_load_object_is_call_safe(left->object) &&
+             mir_cfg_block_count() != 2))
             return 0;
         break;
     case MIR_LOAD_INDIRECT:
@@ -4123,8 +4156,14 @@ int mir_eliminate_common_block_expressions(void)
              previous >= block_start; --previous) {
             struct MirInsn *candidate = &mir.insns[previous];
             if (!mir_common_expressions_equal(candidate, insn) ||
+                (insn->opcode == MIR_LOAD &&
+                 !mir_load_object_is_call_safe(insn->object) &&
+                 !mir_block_local_load_reusable_between(
+                     insn, previous, instruction)) ||
                 (!mir_expression_is_address(insn) &&
-                 !mir_value_has_use_after(candidate->dst, instruction)))
+                  (insn->opcode != MIR_LOAD ||
+                   mir_cfg_block_count() != 2) &&
+                  !mir_value_has_use_after(candidate->dst, instruction)))
                 continue;
             mir_replace_value_uses(insn->dst, candidate->dst);
             insn->opcode = MIR_NOP;

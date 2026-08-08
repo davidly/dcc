@@ -2409,6 +2409,8 @@ static int mir_hybrid_homed_retry_is_eligible(const char *reason)
     if (!strcmp(reason, "boolean-phi-cost") ||
         !strcmp(reason, "wide-store-cost"))
         return 1;
+    if (!strcmp(reason, "binary-load-pair-cost"))
+        return mir_cfg_block_count() <= 2 && mir_call_count() <= 1;
     return !strcmp(reason, "unary-not-cost") &&
            !mir_has_cfg_backedge() &&
            !mir_has_inline_substitution_call() &&
@@ -4480,7 +4482,11 @@ evaluate_generated:
                         mir.allocation_operand_moves;
                     block_cse_captured_phi_moves = mir.allocation_phi_moves;
                     if (block_cse_eliminated == 0 &&
-                        mir_cfg_block_count() == 1 &&
+                        (mir_cfg_block_count() == 1 ||
+                         (mir_cfg_block_count() <= 2 &&
+                          mir_call_count() <= 1 &&
+                          !strcmp(fallback_reason,
+                                  "binary-load-pair-cost"))) &&
                         mir_eliminate_common_block_expressions() >= 3)
                         block_cse_eliminated +=
                             mir_common_block_expression_elimination_count();

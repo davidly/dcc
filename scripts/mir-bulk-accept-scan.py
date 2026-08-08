@@ -154,8 +154,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "planned-stack-cost": "T444/T463 admitted the complete true-final "
                  "reason; blind forcing also exposes a transient tlimits "
                  "boolean-PHI retry.",
-    "binary-load-pair-cost": "T445/T448/T465 admitted every current terminal "
-                 "candidate except the direct pint.emit failure.",
+    "binary-load-pair-cost": "T445/T448/T465 admitted all but pint.emit. "
+                 "T496 added alias-safe two-block address CSE and admitted "
+                 "emit; the reason is empty.",
     "indirect-store-address-cost": "T445/T461 admitted the complete true-"
                  "final reason; blind forcing still intercepts a transient "
                  "tlngnarw retry.",
