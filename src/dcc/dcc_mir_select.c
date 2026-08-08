@@ -2070,6 +2070,22 @@ static int mir_boolean_phi_medium_scalar_loop_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_boolean_phi_repaired_label_loop_is_semantically_eligible(
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    return mir_has_cfg_backedge() &&
+           mir_cfg_block_count() <= 20 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_wide_values() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           mir_has_label_only_phi_fallthrough() &&
+           generated_size <= captured_size + 2048 &&
+           generated_instructions <= captured_instructions;
+}
+
 static int mir_unary_not_call_free_loop_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4066,6 +4082,16 @@ evaluate_generated:
                         mir_reason_is_proven_cost_only(fallback_reason))
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "phi-fallthrough-cost"))
+                        /*
+                         * T455: accept the repaired strict-PHI candidate at
+                         * the same decision point used by the validated
+                         * reason-forcing experiment. Letting it enter later
+                         * alternate retries changes the candidate and can
+                         * reintroduce synthetic-edge copies.
+                         */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "cfg-backedge"))
                         /* T435: the complete remaining 16-function cohort
                          * passed the full extended correctness gate after
@@ -4333,6 +4359,15 @@ evaluate_generated:
                         generated_size, captured_size))
                     /* T452: the medium boolean-loop stratum below every known
                      * unsafe block/size boundary passed full extended. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    mir_boolean_phi_repaired_label_loop_is_semantically_eligible(
+                        generated_size, captured_size,
+                        generated_instructions, captured_instructions))
+                    /* T455: preserve the formerly-emitted small label-PHI
+                     * loop after typed conversion aliases made its cost
+                     * accounting exact. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "dynamic-index-base-cost") &&

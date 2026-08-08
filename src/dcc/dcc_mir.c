@@ -2563,6 +2563,7 @@ static int mir_lower_expr(const struct AstNode *node)
             value = mir_lower_compound_value(left, right, binary_operator,
                                              target_type);
             }
+            value = mir_lower_ident_assignment_conversion(value, node->a);
         }
         mir_emit_ident_store(node->a, value);
         return value;
@@ -4822,6 +4823,7 @@ void mir_simplify_boolean_phi_branches(void)
 static int mir_unary_is_representation_identity(
     const struct MirInsn *insn, const struct MirInsn *source)
 {
+    int instruction;
     int source_size;
     int target_size;
 
@@ -4834,9 +4836,23 @@ static int mir_unary_is_representation_identity(
     target_size = type_size(insn->type);
     if (source->type == insn->type)
         return source_size == 1 || source_size == 2 || source_size == 4;
-    return source_size == target_size &&
-           (source_size == 2 || source_size == 4) &&
-           !type_is_float(source->type) && !type_is_float(insn->type);
+    if (source_size != target_size ||
+        (source_size != 2 && source_size != 4) ||
+        type_is_float(source->type) || type_is_float(insn->type))
+        return 0;
+    /*
+     * Equal-width signed/unsigned casts preserve bits, but a later widening
+     * must still see the cast's type to choose sign versus zero extension.
+     * Other consumers already carry their effective computation/memory type
+     * and can safely use the original representation directly.
+     */
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_UNARY &&
+            mir.insns[instruction].immediate == 0 &&
+            mir.insns[instruction].src1 == insn->dst &&
+            type_size(mir.insns[instruction].type) > target_size)
+            return 0;
+    return 1;
 }
 
 void mir_resolve_deferred_metadata(void)

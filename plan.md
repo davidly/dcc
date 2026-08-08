@@ -31,14 +31,13 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1751/2060 (85.00%)**
-- Current stack-check coverage: **1855/2179 (85.13%)**
-- HEAD (pending push): T454 admits bounded VLA
-  `dynamic-index-base-cost` (+5) and every remaining terminal
-  `wide-constant-cost` (+15): **+20 ordinary/+22 stack-check**, zero
-  removals. Wide-constant blind forcing's historical `tpfauto` failure
-  was transient; its true final reason remains block-CSE. See
-  `## Item T454` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1810/2060 (87.86%)**
+- Current stack-check coverage: **1920/2179 (88.11%)**
+- HEAD (pending push): T455 repairs PHI fallthrough edge ownership, typed
+  signedness/narrowing aliases, and fused-wide-constant rematerialization,
+  then eliminates terminal `phi-fallthrough-cost`: **+59 ordinary/+65
+  stack-check**, zero removals. See `## Item T455` in
+  `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -153,6 +152,11 @@ transactional fallback remains in place throughout Phase 1.
 - **T454 eliminates terminal wide-constant fallback.** It also proves the
   small VLA dynamic-index functions are correctness-clean after PHI and
   pointer metadata repair.
+- **T455 eliminates terminal PHI-fallthrough fallback.** Consecutive labels
+  are aliases, not CFG edges; the real predecessor owns each copy, while
+  NOP-only arms defer to the branch entry copy. The same batch fixes typed
+  signedness/narrowing aliases and fused constant operands exposed by broad
+  PHI admission.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

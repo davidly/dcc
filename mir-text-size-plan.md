@@ -17637,3 +17637,41 @@ Validated two cohorts together:
 - Forced-MIR regression harness: PASS (9/9).
 - Performance gate: 58 deliberate Phase-1 regressions, 2 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T455: repair PHI edge ownership and eliminate terminal phi-fallthrough (+59 ordinary/+65 stack-check, 2026-08-08)
+
+Fresh T454 baseline: **1751/2060 ordinary (85.00%)** and **1855/2179
+stack-check (85.13%)**.
+
+The previously rejected PHI-fallthrough loop stratum exposed four shared
+correctness defects:
+
+1. Copies were attached to synthetic label-to-label edges. Consecutive labels
+   now resolve as aliases and the real predecessor instruction owns the copy.
+2. A NOP-only conditional arm was copied both by its incoming branch and its
+   empty exit, overwriting the other arm. Explicit entry-edge ownership now
+   wins for empty arms; substantive arms retain exit-edge copies.
+3. Same-width signed/unsigned casts were erased before later widening, losing
+   sign-versus-zero extension, and compound assignments could publish their
+   pre-truncation SSA value. Typed aliases and deferred named assignment
+   conversions now preserve both semantics.
+4. Float multiply-add fusion could consume a preclassified binary-only
+   constant with no slot and derive an IX offset from its SSA number. Missing
+   fused constant operands are rematerialized directly.
+
+The original extended `00183` ternary-loop failure now prints
+`0,1,4,9,16,15,18,21,24,27`. The complete terminal
+`phi-fallthrough-cost` bucket and the cascaded candidates it exposes pass
+together.
+
+- Ordinary: **1751/2060 -> 1810/2060 (87.86%)**, **+59**, zero removals.
+- Stack-check: **1855/2179 -> 1920/2179 (88.11%)**, **+65**, zero removals.
+- Remaining terminal `phi-fallthrough-cost`: **0**.
+- Remaining ordinary leaders: `boolean-phi-cost` 66,
+  `unary-not-cost` 47, `dead-local-suffix-cost` 24, and
+  `dynamic-index-base-cost` 23.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 161 deliberate Phase-1 regressions, 3 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.

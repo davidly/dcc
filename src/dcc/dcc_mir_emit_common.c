@@ -1462,11 +1462,23 @@ int mir_edge_phi_names_predecessor(int predecessor, int successor)
 {
     int instruction = mir_first_phi_or_block_end(successor);
     int predecessor_label = mir_block_label_before(predecessor);
+    int source;
+
     if (instruction < 0 || instruction >= mir.count ||
         mir.insns[instruction].opcode != MIR_PHI)
         return 0;
-    return mir.insns[instruction].phi_pred1 == predecessor_label ||
-           mir.insns[instruction].phi_pred2 == predecessor_label;
+    /*
+     * Consecutive labels before a phi are aliases for one entry position.
+     * The phi can name a later alias (for example AST_COND's else-exit
+     * immediately followed by its merge label), while the real fallthrough
+     * edge arrives before the first label. Resolve the whole alias chain so
+     * strict emission places the copy on that real edge instead of dropping
+     * it together with the synthetic label-to-label edge.
+     */
+    source = mir_phi_source_for_edge(
+        &mir.insns[instruction], predecessor_label, -1,
+        successor, instruction);
+    return source >= 0;
 }
 
 static int mir_strict_phi_fallthrough_enabled;
@@ -1489,6 +1501,40 @@ int mir_strict_phi_fallthrough_was_used(void)
            mir_strict_phi_fallthrough_used;
 }
 
+static int mir_phi_fallthrough_owned_by_entry_edge(int instruction,
+                                                   int successor)
+{
+    int block_label = mir_block_label_before(instruction);
+    int block_start;
+    int phi_instruction;
+    int predecessor;
+
+    if (block_label < 0)
+        return 0;
+    block_start = mir_find_label(block_label);
+    if (block_start < 0)
+        return 0;
+    phi_instruction = mir_first_phi_or_block_end(successor);
+    if (phi_instruction < 0 || phi_instruction >= mir.count ||
+        mir.insns[phi_instruction].opcode != MIR_PHI ||
+        mir_first_phi_or_block_end(block_start) != phi_instruction)
+        return 0;
+
+    /*
+     * A branch into a NOP/label-only arm already emits this downstream phi
+     * copy on its explicit target edge. Emitting it again when that empty
+     * arm falls into the merge overwrites the value chosen by the other arm.
+     * A substantive arm does not satisfy the shared-phi test above, so its
+     * real exit instruction remains responsible for the copy.
+     */
+    for (predecessor = 0; predecessor < mir.count; ++predecessor)
+        if ((mir.insns[predecessor].opcode == MIR_JUMP ||
+             mir.insns[predecessor].opcode == MIR_BRANCH_FALSE) &&
+            mir.insns[predecessor].label == block_label)
+            return 1;
+    return 0;
+}
+
 int mir_instruction_has_phi_fallthrough(int instruction,
                                         int require_next_label)
 {
@@ -1506,8 +1552,11 @@ int mir_instruction_has_phi_fallthrough(int instruction,
     if (opcode == MIR_JUMP ||
         opcode == MIR_BRANCH_FALSE || opcode == MIR_RETURN)
         return 0;
-    return (!require_next_label ||
-            mir.insns[instruction + 1].opcode == MIR_LABEL) &&
+    if (require_next_label &&
+        mir.insns[instruction + 1].opcode != MIR_LABEL)
+        return 0;
+    return !mir_phi_fallthrough_owned_by_entry_edge(
+               instruction, instruction + 1) &&
            mir_edge_phi_names_predecessor(instruction, instruction + 1);
 }
 

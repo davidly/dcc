@@ -110,8 +110,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "across acyclic, small-loop, and medium-loop strata. Remaining "
                  "larger backedge, label-only PHI and oversized shapes still "
                  "produce wrong output or CP/M memory exhaustion when forced.",
-    "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
-                 "int32_t result mismatches).",
+    "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
+                 "NOP-only arm duplication, typed signedness/narrowing "
+                 "aliases, and fused wide-constant operands; the complete "
+                 "terminal reason is now admitted.",
     "dynamic-index-base-cost": "T440/T451/T453/T454 admitted 69 terminal "
                  "functions across bounded acyclic, scalar-loop, wide, and VLA strata. Remaining "
                  "wide/backedge, label-PHI, VLA, pointer/inline, oversized, "

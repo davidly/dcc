@@ -5175,7 +5175,19 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
         mir_forwarded_wide_instruction = -1;
         return;
     }
-    if (mir_wide_constant_is_rematerializable(value)) {
+    if (mir_wide_constant_is_rematerializable(value) ||
+        (definition != NULL &&
+         (definition->opcode == MIR_CONST ||
+          definition->opcode == MIR_FLOAT_CONST) &&
+         type_size(definition->type) == 4 &&
+         mir.backend_slots != NULL &&
+         mir.backend_slots[value] < 0)) {
+        /*
+         * Slot planning can classify a constant as binary-only before
+         * multiply-add fusion turns it into a direct helper operand. Such a
+         * value intentionally has no slot; materialize it here rather than
+         * deriving an IX offset from its SSA number.
+         */
         if (mir_wide_constant_uses_new_rematerialization(value)) {
             mir_spilled_cfg_used_wide_constant_rematerialization = 1;
         }
