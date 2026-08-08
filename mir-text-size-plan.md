@@ -17461,6 +17461,23 @@ A minimal two-call struct-return reproducer now prints `1033` twice.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T492: remove falsified inline division strength reduction (+1/+1, 2026-08-08)
+
+`tmodp2.main` isolated a sequence-dependent scalar bug: MIR's inline unsigned
+`u / 8` shift followed by `u / 3` produced `u / 24`. Each operation passed in
+isolation, and routing `/8` through the ordinary division helper restored the
+complete mixed sequence. The spilled backend therefore keeps unsigned
+power-of-two modulo as a mask but no longer inlines division as a shift.
+
+The repaired 19-block/7-call FINAL driver uses 18 slots and passes both modes,
+so the bounded FINAL gate now includes that edge.
+
+- Coverage: **2043/2060 (99.17%)**, **2162/2179 (99.22%)**, zero removals.
+- Remaining `dynamic-index-base-cost`: **3**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

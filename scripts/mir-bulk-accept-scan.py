@@ -125,7 +125,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "residual shapes through T471. T481 admitted a repaired "
                  "three-call label-PHI shape and bounded non-wide allocator "
                  "loop. T490 admitted the repaired deterministic float "
-                 "driver. Four direct interpreter/resource failures remain.",
+                 "driver. T492 removed a falsified inline division fast path "
+                 "and admitted tmodp2. Three interpreter/resource failures "
+                 "remain.",
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
                  "small-CFG, FINAL-sink, and 19 isolated DEFERRED-sink "
                  "functions through T470. Remaining residue is one direct "

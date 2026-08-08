@@ -8590,24 +8590,14 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     mir_emit_virtual_store(out, insn->dst);
                     break;
                 }
-                /* Item T49 (mir-text-size-plan.md): unsigned `int_expr /
-                 * <compile-time power-of-2 constant>` -> a logical right
-                 * shift, and unsigned `int_expr % <compile-time
-                 * power-of-2 constant>` -> a mask of (divisor - 1),
-                 * mirroring legacy's fast path in ast_gen_binary_ast
-                 * (dcc_ast_gen_expr.c ~1551) instead of a __divu/__modu
-                 * runtime call. Only applies when there is no fused
-                 * divmod partner above (that existing optimization
-                 * already takes priority when both a div and a mod of
-                 * the same operands appear together) and only for
-                 * unsigned types, matching legacy's exact scope: signed
-                 * division's round-toward-zero semantics for negative
-                 * dividends are not equivalent to a plain arithmetic
-                 * shift, so legacy itself never special-cases the signed
-                 * case either. HL already holds src1's real value here,
-                 * same as the '&' fast path above, with the same
-                 * !stack_forwarded_left guard. */
-                if ((insn->immediate == '/' || insn->immediate == '%') &&
+                /* Item T49: unsigned modulo by a power-of-two constant is a
+                 * mask. The corresponding division-to-shift form is
+                 * deliberately excluded: mixed `/8, /3, ...` MIR sequences
+                 * in tmodp2 produced a stale following helper quotient even
+                 * though each operation passed alone. Keep division on the
+                 * ordinary helper path until that sequence interaction can
+                 * be represented safely. */
+                if (insn->immediate == '%' &&
                     !stack_forwarded_left &&
                     !planned_stack_forwarded_left &&
                     (insn->type & TYPE_UNSIGNED) != 0 &&
