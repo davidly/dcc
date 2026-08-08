@@ -1529,9 +1529,19 @@ static int mir_phi_fallthrough_owned_by_entry_edge(int instruction,
      */
     for (predecessor = 0; predecessor < mir.count; ++predecessor)
         if ((mir.insns[predecessor].opcode == MIR_JUMP ||
-             mir.insns[predecessor].opcode == MIR_BRANCH_FALSE) &&
-            mir.insns[predecessor].label == block_label)
-            return 1;
+             mir.insns[predecessor].opcode == MIR_BRANCH_FALSE)) {
+            int target = mir_find_label(mir.insns[predecessor].label);
+            int cursor;
+
+            if (target < 0 || target > block_start)
+                continue;
+            for (cursor = target; cursor <= block_start; ++cursor)
+                if (mir.insns[cursor].opcode != MIR_LABEL &&
+                    mir.insns[cursor].opcode != MIR_NOP)
+                    break;
+            if (cursor > block_start)
+                return 1;
+        }
     return 0;
 }
 

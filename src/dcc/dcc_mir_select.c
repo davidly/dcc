@@ -2156,8 +2156,9 @@ static int mir_boolean_phi_residual_is_semantically_eligible(
 
         if (mir_has_inline_substitution_call())
             mir_boolean_phi_residual_sensitive_module = 1;
-        count_limit = mir_boolean_phi_residual_sensitive_module ? 3 : 10;
-        growth_limit = 8000;
+        count_limit = mir_boolean_phi_residual_sensitive_module ? 4 : 10;
+        growth_limit =
+            mir_boolean_phi_residual_sensitive_module ? 8000 : 11000;
         if (mir_boolean_phi_residual_count >= count_limit ||
             mir_boolean_phi_residual_growth_used + growth > growth_limit)
             return 0;
@@ -2205,11 +2206,6 @@ static int mir_unary_not_deferred_is_semantically_eligible(
         return 1;
     }
     return 0;
-}
-
-static int mir_dead_local_suffix_repaired_is_semantically_eligible(void)
-{
-    return mir_cfg_block_count() <= 20 || mir_call_count() > 1;
 }
 
 static int mir_text_size_coverage_is_semantically_eligible(
@@ -2328,7 +2324,8 @@ static int mir_dynamic_index_base_final_sink_is_semantically_eligible(void)
              mir_has_label_only_phi_fallthrough());
 }
 
-static int mir_dynamic_index_base_residual_is_semantically_eligible(void)
+static int mir_dynamic_index_base_residual_is_semantically_eligible(
+    long generated_size)
 {
     int calls = mir_call_count();
     int label_phi = mir_has_label_only_phi_fallthrough();
@@ -2337,8 +2334,12 @@ static int mir_dynamic_index_base_residual_is_semantically_eligible(void)
         return !label_phi && mir.backend_slot_count <= 8;
     if (label_phi)
         return mir_cfg_block_count() <= 13 &&
-               calls <= 6 && calls != 3;
-    return calls <= 1;
+               calls <= 6;
+    return calls <= 1 ||
+           (mir_has_cfg_backedge() &&
+            mir_cfg_block_count() <= 32 &&
+            calls <= 26 &&
+            generated_size <= 10000);
 }
 
 static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
@@ -4252,10 +4253,10 @@ evaluate_generated:
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "dead-local-suffix-cost") &&
-                        !g_speculative_codegen_active &&
-                        mir_dead_local_suffix_repaired_is_semantically_eligible())
-                        /* T458: 23/24 terminal candidates pass after T455.
-                         * Retain the unique >20-block, <=1-call failure. */
+                        !g_speculative_codegen_active)
+                        /* T480: label aliases no longer emit a second PHI
+                         * copy after the real predecessor edge. The former
+                         * 45-block outlier now passes both backend modes. */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "cfg-backedge"))
@@ -4730,10 +4731,12 @@ evaluate_generated:
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "dynamic-index-base-cost") &&
                     !g_speculative_codegen_active &&
-                    mir_dynamic_index_base_residual_is_semantically_eligible())
-                    /* T471: seven individually full-mode-clean residual
-                     * shapes, excluding direct interpreter/resource
-                     * failures. */
+                    mir_dynamic_index_base_residual_is_semantically_eligible(
+                        generated_size))
+                    /* T481: after the empty-arm PHI repair, the small
+                     * three-call label-PHI shape and a bounded non-wide
+                     * allocator loop pass both modes. Retain the larger
+                     * interpreter/resource and wide failures. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL) {
                     const char *forced_final =

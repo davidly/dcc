@@ -109,16 +109,18 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "text-size is now empty.",
     "boolean-phi-cost": "T436/T448/T452/T456 admitted acyclic, small-loop, "
                  "medium-loop, FINAL-sink, and budgeted residual strata "
-                 "through T472. Remaining functions are direct failures or "
-                 "deferred by per-module CP/M resource budgets.",
+                 "through T472. T480 fixed NOP/label-only PHI ownership and "
+                 "admitted parse_data_line plus decode_stmts. The remaining "
+                 "14 are direct failures or held by CP/M resource budgets.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "
                  "terminal reason is now admitted.",
     "dynamic-index-base-cost": "T440/T451/T453/T454/T469 admitted bounded "
                  "acyclic, scalar-loop, wide, VLA, FINAL-sink, and seven "
-                 "residual shapes through T471. The remaining seven are "
-                 "direct standard/extended interpreter or resource failures.",
+                 "residual shapes through T471. T481 admitted a repaired "
+                 "three-call label-PHI shape and bounded non-wide allocator "
+                 "loop. Five direct interpreter/resource failures remain.",
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
                  "small-CFG, FINAL-sink, and 19 isolated DEFERRED-sink "
                  "functions through T470. Remaining residue is one direct "
@@ -129,8 +131,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "wide-store-cost": "T443/T453/T460 admitted every current terminal "
                  "candidate except the isolated acyclic/call-free and "
                  "10-block/3-call/13-slot failures.",
-    "dead-local-suffix-cost": "T444/T458 admitted every current terminal "
-                 "candidate except the unique >20-block, <=1-call failure.",
+    "dead-local-suffix-cost": "T444/T458 admitted all but the unique "
+                 ">20-block, <=1-call failure. T480 repaired its duplicate "
+                 "empty-arm PHI copy; the terminal reason is now empty.",
     "absolute-index-cost": "T444/T459 admitted the complete terminal reason. "
                  "Blind forcing still intercepts unsafe transient pint "
                  "boolean-PHI and tstructv block-CSE retries.",

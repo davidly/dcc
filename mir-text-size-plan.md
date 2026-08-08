@@ -17289,6 +17289,50 @@ and call-count bounds.
 - Performance: the deliberate `ts32` Phase-1 regression is tracked in the
   checked baselines.
 
+## Item T480: complete empty-arm PHI edge ownership (+3/+3, 2026-08-08)
+
+T455 recognized that consecutive labels are aliases, but its empty-arm
+ownership proof matched only the final alias label. In `tabsidm.main`, the
+conditional branch targeted an earlier label followed by a NOP and two more
+labels. The branch emitted the false-edge PHI copy correctly, then the final
+label emitted it again and overwrote the true-edge value.
+
+The ownership proof now follows the complete NOP/label-only span from an
+explicit branch target to the final alias. It suppresses only that duplicate
+copy; a rejected global "suppress every label edge" experiment broke a real
+`ttrig` edge and was removed. This repairs `tabsidm.main` and makes two
+previous residual candidates correctness-clean. The per-module boolean budget
+was remeasured: inline-sensitive modules can take four functions, while
+ordinary modules retain ten functions with an 11-KiB positive-growth ceiling.
+That admits `cobint.parse_data_line` and `forint.decode_stmts` without removing
+the existing `forint` selections.
+
+- Ordinary: **2028/2060 -> 2031/2060 (98.59%)**, **+3**, zero removals.
+- Stack-check: **2147/2179 -> 2150/2179 (98.67%)**, **+3**, zero removals.
+- Remaining terminal `dead-local-suffix-cost`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance changes are tracked in the checked baselines.
+
+## Item T481: repaired dynamic-index residual strata (+2/+2, 2026-08-08)
+
+After T480, forced full-mode validation reclassified two of the seven
+dynamic-index residuals:
+
+1. `adaint.add_var_name`, the bounded three-call label-PHI shape.
+2. `tallocx.t_stress`, a <=32-block/26-call, non-wide allocator loop below
+   10 KiB.
+
+Both pass peep and nopeep. The structural predicate admits exactly those
+classes. The remaining five candidates still fail directly: two `pint`
+resource cases and the large/wide `tforsco`, `tmodp2`, and `ttrig` functions.
+
+- Ordinary: **2031/2060 -> 2033/2060 (98.69%)**, **+2**, zero removals.
+- Stack-check: **2150/2179 -> 2152/2179 (98.76%)**, **+2**, zero removals.
+- Remaining `dynamic-index-base-cost`: **5** in each configuration.
+- Full extended correctness: covered by the combined T480/T481
+  **314/314 runnable + 196/196 extended** gate.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2028/2060 (98.45%)**
-- Current stack-check coverage: **2147/2179 (98.53%)**
-- HEAD (pending push): T478 deduplicates direct-call EXTRNs by resolved
-  assembler symbol and admits `tpfauto.main`; T479 admits the final oversized
-  true-FINAL text-size function, `ts32.main`: **+2/+2**, zero removals.
-  See `## Item T478` and `## Item T479` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **2033/2060 (98.69%)**
+- Current stack-check coverage: **2152/2179 (98.76%)**
+- HEAD (pending push): T480 repairs PHI ownership across NOP/label-only alias
+  arms and admits three functions; T481 admits two newly clean dynamic-index
+  strata: **+5/+5**, zero removals. See `## Item T480` and `## Item T481` in
+  `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -219,6 +219,14 @@ transactional fallback remains in place throughout Phase 1.
 - **T479 eliminates terminal text-size fallback.** The T455 typed-alias fixes
   already repaired `ts32.main`; the final non-speculative sink now admits its
   oversized shift matrix after every retry has completed.
+- **T480 completes empty-arm PHI ownership.** An explicit branch can target an
+  earlier label in a NOP/label-only alias chain; matching only the final alias
+  emitted the edge copy twice and overwrote the selected value. The complete
+  empty span now identifies the real owner, admitting `tabsidm.main`,
+  `cobint.parse_data_line`, and `forint.decode_stmts`.
+- **T481 reopens two repaired dynamic-index strata.** The three-call
+  label-PHI function and a bounded non-wide allocator loop both pass full
+  mode after T480; the five wide/interpreter/resource failures remain gated.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
