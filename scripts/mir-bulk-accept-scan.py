@@ -115,10 +115,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "
                  "terminal reason is now admitted.",
-    "dynamic-index-base-cost": "T440/T451/T453/T454 admitted 69 terminal "
-                 "functions across bounded acyclic, scalar-loop, wide, and VLA strata. Remaining "
-                 "wide/backedge, label-PHI, VLA, pointer/inline, oversized, "
-                 "or later-retry shapes include real failures.",
+    "dynamic-index-base-cost": "T440/T451/T453/T454/T469 admitted bounded "
+                 "acyclic, scalar-loop, wide, VLA, and isolated FINAL-sink "
+                 "strata. Remaining static or large/high-slot FINAL shapes "
+                 "include real standard and extended failures.",
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
                  "small-CFG, and all deterministic FINAL-sink strata. "
                  "Remaining static DEFERRED bodies have sink-specific retry "

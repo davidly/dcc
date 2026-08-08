@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1957/2060 (95.00%)**
-- Current stack-check coverage: **2072/2179 (95.09%)**
-- HEAD (pending push): T468 admits seven isolated deterministic FINAL-sink
-  `boolean-phi-cost` functions: **+7 ordinary/+7 stack-check**, zero
-  removals. Direct low-call failures and pairwise `a1`/`tarray` interactions
-  remain excluded structurally. See `## Item T468` in
+- Current ordinary coverage: **1966/2060 (95.44%)**
+- Current stack-check coverage: **2081/2179 (95.50%)**
+- HEAD (pending push): T469 admits nine isolated deterministic FINAL-sink
+  `dynamic-index-base-cost` functions: **+9 ordinary/+9 stack-check**, zero
+  removals. Large/high-slot and low-call wide label-PHI failures remain
+  excluded structurally. See `## Item T469` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -193,6 +193,8 @@ transactional fallback remains in place throughout Phase 1.
 - **T468 crosses 95% ordinary.** Seven FINAL boolean functions pass after
   excluding two direct failures, all four-call candidates, and high-block
   non-wide pairwise interactions.
+- **T469 isolates deterministic FINAL dynamic indexes.** Nine functions pass;
+  three direct standard failures and extended `00182` remain excluded.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

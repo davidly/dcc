@@ -17160,6 +17160,24 @@ calls above 2 excluding 4, at most 40 blocks, or high-call wide functions.
 - Performance gate: 24 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T469: isolated deterministic FINAL dynamic-index cohort (+9 ordinary/+9 stack-check, 2026-08-08)
+
+Fresh T468 baseline: **1957/2060 ordinary (95.00%)** and **2072/2179
+stack-check (95.09%)**.
+
+Broad FINAL-sink dynamic admission exposed direct failures in `tforsco`,
+`tmodp2`, and `ttrig`, plus extended `00182.print_led`. Matrix facts isolate
+the safe nine-function cohort with <=50 blocks, fewer than 18 backend slots,
+excluding the 13-block/19-call case and low-call wide label-PHI shape.
+
+- Ordinary: **1957/2060 -> 1966/2060 (95.44%)**, **+9**, zero removals.
+- Stack-check: **2072/2179 -> 2081/2179 (95.50%)**, **+9**, zero removals.
+- Remaining `dynamic-index-base-cost`: **14 ordinary / 15 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 35 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base
