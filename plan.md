@@ -31,12 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2018/2060 (97.96%)**
-- Current stack-check coverage: **2136/2179 (98.03%)**
-- HEAD (pending push): T472 admits 26 full-mode-clean residual
-  `boolean-phi-cost` functions under per-translation-unit count/growth
-  budgets: **+26 ordinary/+28 stack-check**, zero removals. See
-  `## Item T472` in
+- Current ordinary coverage: **2019/2060 (98.01%)**
+- Current stack-check coverage: **2137/2179 (98.07%)**
+- HEAD (pending push): T473 admits one additional large deferred unary
+  function under a one-per-module 31-40-block cap: **+1 ordinary/+1
+  stack-check**, zero removals. See `## Item T473` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -203,6 +202,8 @@ transactional fallback remains in place throughout Phase 1.
 - **T472 crosses 98% stack-check coverage.** Individual full-mode
   classification plus a three-function/8-KiB module budget admits 26 boolean
   functions without interpreter layout exhaustion.
+- **T473 crosses 98% ordinary coverage.** A one-per-module cap safely adds one
+  larger COBOL unary function; admitting all three peers fails.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

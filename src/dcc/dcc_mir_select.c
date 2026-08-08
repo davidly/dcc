@@ -2171,6 +2171,8 @@ static int mir_unary_not_repaired_small_is_semantically_eligible(
            generated_size <= 6000;
 }
 
+static int mir_unary_not_large_deferred_count;
+
 static int mir_unary_not_deferred_is_semantically_eligible(
     long generated_size)
 {
@@ -2178,7 +2180,13 @@ static int mir_unary_not_deferred_is_semantically_eligible(
 
     if (blocks > 100 && generated_size < 30000)
         return 0;
-    return blocks <= 30 || mir_call_count() >= 16;
+    if (blocks <= 30 || mir_call_count() >= 16)
+        return 1;
+    if (blocks <= 40 && mir_unary_not_large_deferred_count == 0) {
+        ++mir_unary_not_large_deferred_count;
+        return 1;
+    }
+    return 0;
 }
 
 static int mir_dead_local_suffix_repaired_is_semantically_eligible(void)

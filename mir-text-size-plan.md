@@ -17237,6 +17237,18 @@ cohort additionally uses a per-translation-unit cap of three functions and
 - Performance gate: 59 deliberate Phase-1 regressions, 2 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T473: one budgeted large DEFERRED unary function (+1/+1, 2026-08-08)
+
+Fresh T472 baseline: **2018/2060 ordinary (97.96%)** and **2136/2179
+stack-check (98.03%)**. Three remaining 39-40-block COBOL unary functions
+pass individually but fail together. A one-per-translation-unit cap admits
+one; the 92-block function remains excluded.
+
+- Coverage: **2019/2060 ordinary (98.01%)**, **2137/2179 stack-check
+  (98.07%)**, zero removals.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
+- Performance: 4 deliberate Phase-1 regressions; baselines updated.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base
