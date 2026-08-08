@@ -535,565 +535,74 @@ mandatory secondary regression guard, not an alternate denominator.
 
 ## Immediate next steps
 
-The branch is CI-green, currently at **902/2026 ordinary (44.52%)**, still
-**+10 short of the first 45% milestone** and +314 short of the 60%
-target. T389-T393 (prior segments) exhaustively re-ranked and forced-accept
-A/B-tested every remaining fallback bucket's near-miss population (12+
-buckets, 150+ candidates) and found the per-bucket static-metric mining
-technique that produced T383-T388's gains is now **exhausted for most
-buckets**: only small wins remain findable one at a time (T388 +4, T391 +1,
-T394 +2), correctness bugs and structurally-inseparable win/loss pairs
-dominate the rest. T396 (this segment) broke that pattern with a real
-architecture fix (+5), confirming targeted codegen-architecture work is
-now the higher-yield path relative to further gate-margin mining. T397/T398
-(this segment) then confirmed that conclusion holds for every other bucket
-checked too - gate-margin mining alone is exhausted project-wide, not just
-for the buckets T389-T393 already covered.
+**Coverage is now 2056/2060 ordinary (99.81%) / 2175/2179 stack-check
+(99.82%)**, pushed as commit `8a21d59`. Exactly 4 functions remain:
+`a1.emulate` (boolean-phi-cost), `pint.factor_call_or_var`
+(boolean-phi-cost), `pint.scan_number` (boolean-phi-cost), `pint.run`
+(unary-not-cost).
 
-**For the next session: do not restart per-bucket gate-margin mining, and
-do not attempt the full `next50-slot-intervals` rewrite** (T399 found its
-premise doesn't hold against the actual gate code - see the remaining-
-leads list below). Both scoped architecture items now have weak-to-no
-verified yield. The highest-value next step is continued direct
-code/assembly inspection of real near-miss candidates (the technique that
-found T399's phi-copy fix) looking for further concrete, bounded,
-zero/low-risk emitter-quality fixes - prefer this over any large,
-high-blast-radius rewrite until a fresh lead is independently verified
-against the actual gate chain, not just assumed from campaign framing.
+**The architectural blocker for all 4 is the same**: whole-function MIR
+value homing forces every live value into one register/slot for the
+function's entire lifetime, which is disproportionately expensive for
+large interpreter/emulator-shaped functions with many calls or one huge
+CFG. T499-T502 built the fix - **call-bounded regional homes**: persistent
+maximal call-free CFG regions, per-region effective homes, explicit
+spill-before-call/reload-after-call boundary state, and segment-level slot
+reuse across non-overlapping regions - and used it to land `pint.subprog`,
+`pint.for_stmt`, and `adaint.next` (see `mir-text-size-plan.md` items T499,
+T501, T502; T500 is a supporting investigation that ruled out a dccpeep-side
+explanation first). This is real, general, structural architecture, not a
+one-off - reuse it for the remaining 4 rather than inventing something new
+per function.
 
-**T399 follow-on lead found but NOT yet attempted** (repeated-parameter-
-reload asymmetry): direct MIR-dump inspection of `tbits.ti16_bits`
-(`dead-local-suffix-cost`) found that a parameter assigned a "budget"
-stable register home (e.g. `a` at `home=iy`, safe across the whole
-function) is referenced directly at every use site with zero extra
-instructions, while a second same-shape parameter that missed the
-stable-home budget (`b`, `home=hl` - HL is needed for every intervening
-operation, so its original param value is evicted almost immediately)
-gets a **fresh `MIR_LOAD` instruction defining a brand-new SSA value at
-every syntactic read** (`ti16_bits` re-loads `b` four separate times,
-each a distinct value/slot) instead of being cached/reused across reads.
-This looks like a real, reusable, likely broadly-applicable class - but
-**do not implement generic same-block redundant-load CSE without a
-materially different approach than the last attempt**:
-`future-cse-address-pass`/T70 already tried general same-block
-address/value CSE and it was falsified (lengthened live ranges,
-increased fixed moves/backend slots, net coverage **loss**). Any new
-attempt must explain concretely why it avoids T70's regression mechanism
-(e.g. by restricting to provably call-free, branch-free spans, or by
-improving the stable-home register budget itself - giving more
-parameters a persistent register/IY-style home - rather than caching
-repeated reloads of an HL-displaced value) before writing code, and must
-be validated with the same train/holdout + forced-accept A/B discipline
-as every other lead this session, not assumed correct from static counts
-alone.
+**Two background efforts are in progress as of this handoff** (both in
+isolated worktrees under this session's `files/` directory, sharing this
+repo's git object store and a single shared `git stash` list - always
+check stash labels before applying by index, since indices shift across
+worktrees):
+- `regional-home-worktree` (branch `copilot/regional-home-af23`): the
+  three Pint functions (`run`, `factor_call_or_var`, `scan_number`).
+  `scan_number` and `factor_call_or_var` had already shrunk somewhat before
+  a merge conflict with the landed wide-loop class; `run` needs "major size
+  recovery" per its own diagnosis (112 blocks, 27,227 vs 23,306
+  generated-vs-captured bytes at last measurement).
+- `regional-home-worktree2` (branch `copilot/regional-home2-af23`):
+  `a1.emulate` alone - 354 blocks, an order of magnitude larger than
+  anything the mechanism has handled so far. Naively applying whole-function
+  region splitting made it *worse* (52,435 vs 26,573 bytes) because a flat
+  opcode-dispatch switch has a fundamentally different liveness shape than a
+  loop or call/PHI CFG: most values are arm-local, only a small "CPU state"
+  set (registers/flags/PC) crosses every arm. The likely right architecture
+  is switch-arm-bounded regions (region edges at arm entry/exit, not just at
+  calls) rather than widening existing call-bounded/wide-loop classes -
+  study the actual liveness shape before choosing an approach.
 
-**T394 (this segment)** re-ranked `unary-not-cost`/`wide-constant-cost`
-excluding known outliers per `plan100-reband-unary-wide-constant`.
-`unary-not-cost` is confirmed fully mined out (smallest remaining shortfall
-is 42 bytes once ranked by the gate's real byte-margin metric, not
-instruction count). `wide-constant-cost` yielded one real, evidence-backed
-fix: unsigned wide relational compares against a constant call the same
-runtime helper in both legacy and MIR (legacy has no inline shortcut there,
-unlike its signed sign-flip/subtract inline path), so the byte-size gate
-was over-conservative for that exact shape; forced-accept A/B confirmed two
-real wins (`tlongopt.u_gtbig`/`u_lebig`) with zero regressions. The signed
-sub-case (`s_lt0`/`s_gt32767`/`s_ltm32768` boundary-value regressions vs.
-`s_le100`/`s_gtm5` wins - all with identical instruction margins but
-inconsistent byte margins) needs a real inline-codegen extension (matching
-legacy's proven branch-fused sign-flip/`C+1`/`C-1` trick in the
-value-materializing path too) and was scoped, not attempted, given its
-small net yield (2 wins, 3 confirmed regressions) relative to the risk of
-touching a widely shared codegen path. `ts.main`'s 606-byte-smaller
-`wide-constant-cost` candidate was forced-accept tested directly and
-**confirmed a real regression** (+0.12% peep cycles) - direct evidence the
-existing `mir_has_format_runtime_call()` guard is correctly load-bearing,
-not overly conservative.
+**When both land (or report back with architectural findings)**: integrate
+each via the same process used for T499-T502 - independently rebuild,
+rerun both censuses with `--compare` against the last pushed baseline
+requiring zero removals, run `pwsh ./scripts/runall.ps1 -Mode full
+-Extended` requiring 314/314 + extended + diagnostics + dccpeep clean,
+accept any small deliberate performance deltas via `-UpdatePerfBaseline`
+(correctness is non-negotiable, performance is tracked not gated per the
+2026-08-08 policy pivot above), document as the next `## Item T50x` entry,
+commit with the Copilot coauthor trailer, and push to
+`origin/perf/unified-regalloc` (do not wait for GitHub Actions to complete).
 
-**`campaign2-call-effect-analysis` is completed (T393)**: added
-`mir_load_object_is_call_safe()` making `MIR_LOAD` CSE-eligible across
-intervening calls for `static` globals proven (via the same whole-file
-lexical scan `ast_for_hoist_global_member_value_supported` already trusts)
-to never have their address taken and never be written anywhere in the
-translation unit. Safe, zero regressions, clean full extended gate - but
-**measured yield on the current corpus is zero**: the CSE retry this feeds
-only fires for single-block functions with 3+ eliminations, and no current
-candidate has 3+ reloads of a provably-safe global within one block
-(`cobint.add_var` itself is 2 blocks). A follow-on experiment temporarily
-widening the retry to <=3 blocks confirmed real candidates get smaller but
-still fall short of their bucket's byte-margin gate (`absolute-address-cost`
-needs a 6% reduction; `cobint.add_var`'s actual gap is ~4.6%) - reverted,
-zero net promotions either way. The predicate is retained as real,
-validated infrastructure for whenever multi-block CSE is revisited. The
-**member-qualified case** (`Gst.var`-style struct-field reloads, the actual
-`cobint.add_var` repro) remains unexplored: it needs a genuinely new
-lexical-scan extension (tracking `base.field =`/`base->field =`/
-`&base.field` patterns in `dcc_global_scan.c`, which today explicitly
-excludes any dotted/arrow-qualified identifier from its write/addr-taken
-tracking) - a real, but separately-scoped, follow-on with materially higher
-soundness risk than the bare-global case just completed.
+If both remaining agents land their functions, **ordinary/stack-check
+coverage reaches 2060/2060 (100%) and 2179/2179 (100%)** - the literal
+Phase 1 goal. At that point pivot immediately to the documented Phase 2:
+bring aggregate peep-mode performance back to at/below the pre-MIR legacy
+baseline (dynamic `dccprof` profiling first, per the "Goal and current
+state" section above), since Phase 1 accepted tracked regressions in
+service of reaching 100% coverage fast.
 
-**T395 (this segment)** ran one more exhaustive fresh census re-ranking
-across all 16 remaining buckets (`mir-gate-margins.py --exclude-known
-mir-dead-ends.tsv`) specifically to check whether any instruction-based
-near-miss also had a genuine byte-margin near-miss underneath it. First
-closed `plan100-dead-local-suffix`: `tlngcond.main`'s dead locals are
-already fully elided by the existing `mir_object_is_fully_promoted`
-mechanism (the dead-store-elision hypothesis was wrong); its +42-byte gap
-traces to deeper call-argument stack-spilling/frame-depth differences, a
-separate and larger architecture topic, not a quick fix. Then forced-accept
-tested every remaining candidate in three buckets whose existing threshold
-excludes a plausible-looking population:
-`dynamic-index-base-cost` (8 candidates below the proven 15-instruction
-margin: 2 clean wins, 6 failures, no monotonic split by margin/blocks/
-objects/promoted-loads), `absolute-address-cost` (6 `blocks==2` candidates
-excluded by a T154-era restriction whose original regressor,
-`cobint.emit_tok`, is now accepted through a different path: 3 clean wins,
-3 failures, `memberaddr`-count looked promising until `emit_tok`'s own
-count fell between the two populations), and `block-cse-cost` (4
-`spilled-scalar-cfg` `blocks==1` candidates at the same margin already
-proven safe for `homed-scalar-cfg`: 1 clean win, 3 failures including one
-that regressed despite the single most favorable byte delta of the four).
-**Conclusion: this pattern - a small number of real, individually-verified
-wins with no generalizable predicate separating them from confirmed
-regressions in the same bucket - now recurs independently across three
-unrelated buckets in one pass**, on top of `wide-constant-cost`'s identical
-finding in T394 and `planned-stack-cost`'s pre-existing `tc89fp.main`
-entry. No code change; all 18 tested candidates (7 winners, 11 losers/
-inconclusive) recorded in `mir-dead-ends.tsv` with full A/B evidence so
-future sessions do not re-derive the same conclusions.
-
-**T396 (landed after T395):** implemented item 1 below in full - MIR's own
-inline signed wide-constant relational compare, a direct port of legacy's
-`emit_signed_long_const_cmp_ast`. Found and fixed a real 6-byte/call-site
-redundant-load regression (`tlongreg.test_compares`) via full census diff
-before landing, not just forced-accept per-candidate testing. Result:
-+5 ordinary/+5 stack-check, zero removals, full extended gate clean (0
-regressions, 408 improvements), plus a large focused-cohort win
-(`tlongreg` peep -19.56% cycles). See `mir-text-size-plan.md`'s T396 entry
-for the full writeup. Coverage now: **902/2026 (44.52%) ordinary,
-924/2128 (43.42%) stack-check**.
-
-**T397/T398 (this segment, after T396):** exhaustively re-tested the
-tightest-margin candidates across `wide-constant-cost` (T397, 38
-candidates: 12 real wins, 26 losses/inconclusive) and
-`absolute-index-cost`/`binary-load-pair-cost` (T398, 5 candidates: 3
-wins, 2 losses) - the identical no-generalizable-threshold shape every
-time (e.g. `too.rect_perim` and `tctxops.sh_udiv` sit at the exact same
-+6 byte margin; one regresses, one is a clean win). No code change; all
-43 candidates recorded in `mir-dead-ends.tsv`. **Gate-margin mining is
-now considered exhausted across every remaining bucket this session
-checked** - further coverage requires either genuine selector/emitter
-quality work or a cost-model change, not more threshold tuning.
-Coverage unchanged: 902/919 (see above).
-
-**Continued per-bucket near-miss mining is no longer a viable path to 60%
-on its own.** The remaining leads are architecture items, not gate nudges:
-
-1. ~~**Signed wide-constant relational inline compare**~~ - **done, see
-   T396 above.** (Originally scoped as T394's follow-on: extend MIR's
-   value-materializing wide-comparison codegen to reuse the sign-flip +
-   `C+1`/`C-1` inline shortcut instead of always calling `__lts`/`__les`/
-   `__gts`/`__ges`. Landed exactly as scoped, including the boundary-value
-   cases (0/32767/-32768) that had regressed under the old call-based
-   codegen in T394 - the new inline path is a different, faster code
-   shape entirely, so all 3 are now clean instead of needing separate
-   characterization.)
-2. **The `Gst.var` member-qualified extension** to `campaign2-call-effect-
-   analysis` (above): extend `dcc_global_scan.c`'s lexical pre-pass to track
-   member-qualified writes/address-taken (keyed conservatively by member
-   name alone, ignoring the base expression's shape, to stay in the safe
-   over-counting direction), then extend `mir_load_object_is_call_safe`'s
-   sibling logic to `MIR_LOADIND`. Still gated by the same single-block CSE
-   retry restriction, so likely needs the multi-block CSE question resolved
-   too before it can show real yield. **Low expected value on current
-   evidence**: the already-completed bare-global sibling (T393) measured
-   **zero** net corpus promotions for the identical reason (no current
-   candidate has 3+ eliminations within one block), so this extension is
-   unlikely to yield anything until the block-count restriction itself is
-   addressed (see item 4).
-3. **`campaign-phi-fallthrough-architecture`** (was `mir60-boolean-control`'s
-   phi-fallthrough lead, T384): of the 44 `phi-fallthrough-cost` functions,
-   only ~8 sit within 10 instructions of the gate's margin (the rest are
-   large CFGs with 100+ instruction gaps, mislabeled by the "last selector
-   tried" reporting quirk, not real near-misses); all ~8 were already
-   forced-accept tested in T202/T386/T387 and found to regress. This lead
-   is exhausted, not just under-mined - do not revisit without a
-   fundamentally different mechanism (real phi-forwarding that reduces
-   instruction count broadly, not a threshold change).
-4. ~~**`next50-slot-intervals`**~~ - **premise corrected/downgraded, see
-   T399.** `mir_prepare_backend_slots` was already a standard
-   interval-based linear-scan slot allocator with reuse (not the naive
-   whole-value model the campaign framing assumed), and direct inspection
-   of the three cited beneficiary gates (`block-cse-cost`,
-   `wide-store-cost`, `planned-index-base-cost`) confirmed each is gated
-   on its own specific, already-A/B-tested forwarding/handoff mechanism
-   plus a measured margin - not on general slot-count/frame-size
-   pressure. A full use-position interval-splitting rewrite is **not
-   verified to unlock any of these three buckets** and carries very high
-   blast-radius risk (touches all 1660 currently-accepted functions) for
-   uncertain, indirect payoff. Do not attempt the full rewrite without a
-   fresh, directly-verified connection between interval quality and a
-   specific gate. T399 did land one real, zero-risk fix found during this
-   investigation instead: `mir_emit_spilled_phi_copies`'s dead push/pop
-   swap-safety machinery for provably-disjoint multi-copy phi groups
-   (loop-header value handoffs) - see T399 for details. Both scoped
-   architecture leads (this item and `Gst.var`, item 2 above) now have
-   weak-to-no verified near-term yield; further architecture progress
-   needs a fresh lead from continued direct code/assembly inspection.
-
-Any of these is a multi-session engineering project requiring careful
-design before the first line of code, not a same-session gate tweak. Follow
-the commit cadence below for every change: focused cohort during
-development, one fresh full-extended gate immediately before commit, push,
-and wait for CI green before starting the next item.
-
-**T413-T415 (this segment, current top priority): correctness-bug cluster
-investigation.** A full sweep of `mir-dead-ends.tsv` found 15 confirmed
-correctness bugs logged project-wide (real miscompiles under forced
-admission, all safely excluded by existing gates - none currently
-reachable in production). Cross-stream MIR-shape comparison found 7 of
-them shared a motif (`address/indexaddr/memberaddr -> call <helper> ->
-storeind`) implicating T410's call-crossing planned-stack store-address
-path. Root-caused and fixed (T413, `b23e1cb`): a push/pop ordering bug in
-`dcc_mir_spilled_cfg.c`'s `MIR_STORE_INDIRECT` call-crossing case popped
-the call-result value where the planned store address should have been
-popped and vice versa, corrupting memory whenever the shape was
-force-admitted. Four-line reorder fix, zero net coverage (path was
-unreachable in production). **Scenario-complete re-validation (T415,
-`5e17047`) corrected T413's scope**: only 5 of the 7 originally-tested
-functions are genuinely fully fixed across every scenario their app
-declares; `adaint.var_or_const_decl` and `forint.run_prog` only had their
-default-scenario symptom fixed - both still fail differently on their
-`ttt`/`sieve` extra scenarios. This confirms a **second, separate,
-still-open bug** shared with `tvapinit.join`/`tap.first_implementation`
-(4 known repro cases now). Leading hypothesis (Stream B, not yet
-confirmed/fixed): a hidden phi-edge-use defect in forward-to-next/slot
-elision; a prototype fix regressed perf 7%+ and was not landed. Status:
-5/15 bugs fully resolved, 4/15 confirmed still open under one shared
-unfixed mechanism, ~6/15 not yet re-tested against T413 (in progress via
-a dedicated sweep). Alongside this, T414 (`7541812`) landed a real,
-zero-net-coverage `absolute-index-cost` rematerialization-retry enabler
-from Stream C. See `mir-text-size-plan.md`'s T413/T414/T415 entries for
-full evidence; do not assume the second bug is fixed until a session
-reports a concrete root cause and a validated patch.
-
-**T416/T418 (later same segment): the "second bug" split into two more
-separately-fixed mechanisms, plus a third still open.** `tvapinit.join`
-and `tap.first_implementation` (T416, `9a486d9`) turned out to be their
-own pair of narrow bugs, not the same one as `adaint`/`forint`: wide
-direct-next forwarding missed a backedge phi use (`mir_can_forward_hl_de_to_next`
-now rejects any value with a phi use), and `mir_multiply_by_small_constant`
-wrongly applied its 16-bit fast path to 32-bit multiplies (now restricted
-to `<=2`-byte operands). Both confirmed fully fixed by direct repro;
-independently cross-checked that this fix does **not** touch
-`adaint.var_or_const_decl`/`forint.run_prog`'s residual bug. Separately,
-T418 (`d7514b9`) found and fixed a real, different bug: `MIR_PHI`
-destinations could have their slot store skipped by any of several
-HL/DE forwarding fast paths in `mir_emit_virtual_store`/
-`mir_emit_virtual_store_wide`, since none of them checked whether the
-value being stored was itself a phi destination; fixed with a
-`force_slot_store` guard. Fixes `tenumfsm.scan`; added a reusable forced-
-MIR correctness regression harness (`scripts/mir-forced-correctness.ps1` +
-`tests/mir_forced_correctness_cases.tsv`) so this and future fixes get
-durable coverage. All zero-net-coverage. **Updated tally: 7 of 15
-confirmed correctness bugs now fully fixed** (5 from T413, 2 from T416),
-plus T418's `tenumfsm.scan` fix (not one of the original 15, found
-independently) - **8 total now fixed**. `adaint.var_or_const_decl` and
-`forint.run_prog`'s `ttt`/`sieve`-only failures remain a **distinct,
-still-unidentified third mechanism** under active investigation - Stream
-C found its root cause is `mir_emit_selfstore_incdec()` emitting an
-illegal out-of-range IX-relative displacement (`inc (ix-196)`, outside
-the valid signed-byte -128..127 range) for `adaint`; `forint.run_prog`'s
-cause is still open (suspected `OP_DO` loop-bookkeeping issue, separate
-from the displacement bug). See `mir-text-size-plan.md` T416/T418 entries
-for full evidence.
-
-**T419 (this segment, cluster nearly closed): the third mechanism is
-fixed.** `mir_emit_selfstore_incdec()` emitted `inc (ix+d)`/`dec (ix+d)`
-unconditionally, but Z80's IX-relative displacement is a signed 8-bit
-value (-128..127); for out-of-range frame offsets (e.g. `adaint`'s large
-frame, offset -196) the displacement byte wrapped and corrupted an
-unrelated frame location. Fixed (T419, `9fedef5`) by factoring the
-existing range check already used by `mir_emit_frame_word_store`/`load`
-into a shared `mir_frame_word_uses_short_ix()` helper and reusing it in
-`mir_emit_selfstore_incdec()`, falling back to
-`frame_word_load -> inc/dec hl -> frame_word_store` when out of range.
-Confirmed latent (0 hits in a full-corpus census before the fix); fixes
-`adaint.var_or_const_decl` across all 3 scenarios; confirmed **not** to
-touch `forint.run_prog`, which remains the sole unresolved bug from the
-original cluster. Added to the forced-MIR correctness regression harness.
-**Updated tally: 8 of 15 confirmed correctness bugs now fully fixed**
-(5 from T413, 2 from T416, 1 from T419), plus T418's independently-found
-`tenumfsm.scan` - **9 total fixed. `forint.run_prog` is now the only
-open bug from this cluster**, under active investigation (suspected
-`OP_DO` loop-bookkeeping issue). See `mir-text-size-plan.md`'s T419 entry
-for full evidence.
-
-**T420: the entire correctness-bug cluster is now FULLY CLOSED.**
-`forint.run_prog`'s bug was a completely different mechanism than the
-suspected `OP_DO` loop-bookkeeping issue: `run_prog` calls the
-static-inline helper `set_sym_val()`. Legacy codegen normally substitutes
-such helpers inline at the AST layer, and MIR lowering intentionally
-skips marking their buffered bodies as needed, relying on the existing
-`inline-substitution` fallback gate to keep such calls out of selected
-MIR output - but that gate is bypassed under
-`DCC_MIR_FORCE_ACCEPT_FUNCTION`, so the selected MIR caller kept a real
-`call` to `set_sym_val` while its body was never emitted anywhere in the
-file (unresolved call target). Fixed (`1033f2d`) with
-`mir_mark_selected_inline_call_bodies_needed()`, which marks any
-inline-substitutable callee's buffered body `deferred_body_needed=1`
-once MIR output has actually won selection - reusing the existing
-`MIR_CALL_FLAG_INLINE_SUBSTITUTABLE` flag, no new machinery. Zero net
-coverage change (unreachable in production). **Final tally: 9 of the
-original 15 logged correctness bugs are confirmed fully fixed** (5 from
-T413, 2 from T416, 1 from T419, 1 from T420), plus T418's independently-
-found `tenumfsm.scan` - **10 total fixed, and every bug in the original
-investigation cluster is now closed.** The forced-MIR correctness
-regression harness (`tests/mir_forced_correctness_cases.tsv`) now has 7
-rows covering every fix in this cluster.
-
-**T421: `cfg-backedge` (26 ordinary functions) investigated for a strata
-loop-admission opportunity and confirmed closed for now.** With the
-correctness cluster fully fixed, a fresh population breakdown found 9
-structurally-safe candidates (single natural loop, no calls, single
-backedge, not dispatch-loop-shaped) that are all forced-MIR
-correctness-clean - but all 9 regress checked peep/nopeep cycles or size
-under full-mode A/B. 14 more are risky (calls/multiple backedges/
-dispatch-loop-shaped) and 3 are unknown. No safe, profitable admission
-stratum exists; `cfg-backedge` remains blocked on profitability, not
-correctness, and should not be revisited without a genuinely new cost
-model.
-
-**T422: `wide-constant-cost` (41) / `wide-store-cost` (36) re-mined after
-the T416/T418 fixes, in case either unlocked new coverage. 25 forced
-full-mode A/B checks across both buckets found only fresh
-profitability-gated regressions - no missing selector, no reusable
-predicate.** Both buckets are confirmed profitability-gated dead ends,
-the same conclusion as `cfg-backedge`.
-
-**End-of-wave status (superseded below)**: this "next 20%" wave's 3
-parallel background streams (B/C/D) reached explicit stop conditions -
-the correctness cluster is closed, and every architecturally-promising
-bucket identified at the wave's start (`cfg-backedge`, `wide-constant-
-cost`, `wide-store-cost`) is confirmed profitability-gated with no
-reusable predicate. Coverage was unchanged since T405 at **908/2026
-ordinary (44.82%)**, **930/2128 stack-check (43.70%)** - every fix this
-wave was a genuine latent-bug repair with zero net coverage impact, not
-a coverage-increasing change.
-
-**T423: extended T393's bare-`static`-global call-safety CSE to the
-member-qualified case (`Gst.var`-style fields), per the standing 100%-
-coverage directive that architectural leads be resolved rather than
-declared dead ends.** Reused T403's existing field-level call-safety
-proof (`mir_resolve_isolated_global_field_load()` /
-`mir_isolated_global_field_call_safe()`) inside a new
-`mir_load_indirect_is_call_safe()` wrapper, threaded into
-`mir_common_expressions_equal()`'s `MIR_LOAD_INDIRECT` case. This is
-real, reusable infrastructure (not a name-based hack) - but the actual
-candidate population (repeated `Gst.var`/`G->s_rs`/`G->words`-style
-loads) is disqualified in every real instance found (the global is
-written/address-taken elsewhere, or the pointer root isn't an isolated
-global field), so this lands as a validated zero-risk generalization,
-+0/+0 coverage.
-
-**T424: audited `future-pointer-param-classifier` ("likely the single
-largest remaining lever but highest risk" per the original backlog
-note) and found the semantic problem it called for already solved in
-production.** `mir_pointer_value_uses_are_eligible()` /
-`mir_pointer_parameter_references_eligible()` /
-`mir_filter_pointer_parameter_objects()` already walk every use of a
-candidate pointer parameter and correctly distinguish safe dereference/
-index/member/comparison/return uses from unsafe call-argument-forwarding
-and address-of uses - exactly the distinction the original T55 whole-
-symbol attempt could not make. Landed only exact `reason=call-argument`/
-`reason=address-of` diagnostic tightening. Tested the more aggressive
-reading of the backlog item - admitting every classifier-safe single-use
-pointer parameter, not just the current narrower profitability
-sub-filter (`uses > 1 || eligible_parameter_count > 1 || index/member
-use`) - and this is a **real, measured regression**: ordinary
-`908/2026 -> 906/2023` (+1 `tbool.set_bool`, -3 `tc99apar.
-read_paren_const`/`tc99apar.read_paren_restrict`/`tdecl.pick_same_node`),
-same +1/-3 pattern on stack-check. All three losses are trivial
-single-use safe pointer shapes (bare `*p` / `return p`) that become
-unprofitable once forced through the full object-promotion path. The
-remaining blocker is therefore a **selector-quality/cost-model gap for
-trivial single-use safe pointer shapes**, not classifier ambiguity - a
-narrower, cheaper acceptance path bypassing full object promotion
-(analogous to the earlier frameless-home-emission win) is the candidate
-fix, and is under active follow-up investigation (see below) rather than
-accepted as a final dead end, per the standing directive.
-
-**T425: resolved T424's cost-model gap instead of accepting "blocked".**
-Root-caused *why* the full object-promotion path was unprofitable for
-`tc99apar.read_paren_const`/`read_paren_restrict`/`tdecl.pick_same_node`
-but not for `tbool.set_bool`: the three losers were already zero-slot
-direct parameter reloads under the existing narrower path, while
-`tbool.set_bool` alone still spilled its pointer parameter to a backend
-slot and reloaded it as the `storeind` address - full object promotion
-was simply wider machinery than this single-use shape needed. Added a
-narrow direct-home proof (in `dcc_mir_spilled_cfg.c`) for objectless
-single-use pointer parameters whose sole use is one direct dereference/
-address-formation/return, letting the spilled backend reload the
-incoming `ix+N` parameter home at its one use site instead of
-manufacturing a backend slot. This recovers `tbool.set_bool` with **zero
-re-admitted losses** - the same "narrower, cheaper path bypassing
-general-path overhead" pattern that produced the earlier frameless-home-
-emission win.
-
-**Coverage: 908/2026 -> 909/2026 ordinary (44.87%), 930/2128 -> 931/2128
-stack-check (43.75%). This is the first real coverage-increasing change
-in the wave since T405** - T413-T424 were all genuine correctness/
-infrastructure work with zero net coverage impact; T425 demonstrates the
-standing directive in practice: when gate-margin mining is exhausted and
-a stream reports "blocked", root-causing the actual mechanism (not
-accepting the report at face value) can still produce real, validated
-coverage.
-
-**T426: fresh gate-margin re-rank after T425 confirmed no further
-threshold-mining opportunities exist, so a new architecture stream
-implemented real kill-aware/allocator-aware block value numbering for
-`block-cse-cost` (94 candidates, the largest unaddressed architectural
-bucket) - a materially different mechanism than T70's already-falsified
-naive same-block CSE.** The new VN pass tracked provable value identity
-plus explicit kills (calls, indirect stores, aliased writes) and checked
-the actual simulated register-allocation effect of each substitution
-before admitting it. Real implementation, real measurement: the only
-clean census admit (`cobint.add_stmt`, +1/+1) was found on closer
-inspection to regress linked peep size (+0.46%) because the spilled CFG
-backend emitted an 8-byte IX frame for the VN-shrunk MIR that `dccpeep`
-could not remove - shrinking raw MIR instruction count does not
-guarantee smaller final Z80 output when it forces a frame allocation the
-peephole optimizer can't see through. A second concrete conflict was
-found in `cobint.compile_stmt`: legacy block CSE (needed to preserve
-existing admits) raises spills from 0 to 8, poisoning later VN
-opportunities in the same function. **+0/+0 net coverage, but a genuine,
-implemented, measured dead end** (not a speculative one) - the real
-blocker for `block-cse-cost` is now understood to be a spilled-CFG-
-backend/peephole limitation, not a missing CSE algorithm.
-
-**Current status**: three architecture threads from this wave are now
-closed with real evidence, not left as speculative dead ends: (1) the
-T424/T425 pointer-parameter cost-model gap - resolved with a real +1/+1
-fix, (2) `next50-slot-intervals` (confirmed not to hold per T399) and
-`campaign2-call-effect-analysis`'s member-qualified case (resolved
-zero-yield by T423, real infrastructure reuse), and (3) `block-cse-cost`
-(T426 - implemented and measured, found a genuine spilled-CFG-backend/
-peephole frame-elimination gap, not a CSE-algorithm gap). A fourth
-stream is now investigating `phi-fallthrough-cost`'s confirmed-exhausted-
-at-threshold-level bucket via real phi-forwarding-across-labels (never
-previously attempted - only threshold nudges were tried and rejected in
-T202/T386/T387). No stream has been allowed to settle on "blocked"
-without either a concrete profitability proof or an active follow-up per
-the user's explicit, repeated directive: the goal is 100% MIR coverage,
-and gate-margin-exhausted buckets get a genuine architectural fix
-attempt, not a declared dead end.
-
-**T427: Stream H's phi-fallthrough-cost investigation landed a real
-mechanism, not another dead end** - `mir_forward_immediate_phi_returns()`
-detects a narrow, previously-unhandled join shape (a label-only
-fallthrough predecessor joining with an explicit-branch predecessor at a
-single-phi block whose sole consumer is an immediate `return` or one
-side-effect-free `unary`/`binary` then `return`) and rewrites both edges'
-value flow directly into the return path, eliminating the phi
-materialization and its immediate reload from MIR before selector retry.
-Wired as a fallback-only retry in `mir_end_function()`, bounded to `<=10`
-CFG blocks (an initial `<=11` bound admitted `tasm.main` but regressed
-its linked peep size +0.13%, so the guard was tightened before landing).
-
-**Integration-time correction**: the implementing stream's self-report
-(commit `9506f5f`) claimed **+6/+6** (908->914 ordinary, 930->936
-stack-check) by comparing against the stale, pre-T425
-`build/mir-t420-after*.tsv` snapshots rather than the actual integrated
-baseline. Since the worktree was branched after T425 was already
-integrated (true baseline 909/2026 / 931/2128), this double-counted
-`tbool.set_bool` as a new admission when it was already MIR-emitted
-before this stream started. A fresh census run directly against the
-correct T425-integrated baseline at integration time confirms the real,
-verified delta is **+5/+5**: `909/2026 -> 914/2026` ordinary (45.11%),
-`931/2128 -> 936/2128` stack-check (43.98%), zero removals, zero
-regressions. Genuine new admits: `attnc11.load_weights`,
-`attnc11.save_weights`, `forint.ensure_sym`, `tctxflt.truth_and`,
-`tinline.edge_conditional` (`tbool.set_bool`'s selected output is
-byte-identical before/after this item - it is not a new admission here).
-The targeted bucket shrank as reported either way: ordinary
-`phi-fallthrough-cost` 44->38, stack-check 45->39. **Lesson**: always
-independently re-derive a background stream's self-reported delta
-against the actual current integrated HEAD at merge time - a long-lived
-worktree's locally cached comparison snapshot can silently go stale as
-other streams land in parallel.
-
-Full validation cadence at integration: fresh ordinary + stack-check
-census (`--fail-on-regression`, both clean), focused full-mode runall on
-`attnc11,forint,tctxflt,tinline` (4/4 pass, no regressions), forced-
-correctness harness (7/7 pass), full extended gate (314/323 passed, 9
-skipped, 0 failed).
-
-**T428: multi-block VLA no-worse-metric widening (genuine, evidence-backed
-zero-yield result).** Post-T427 gate-margin re-rank flagged `tvla.vla_
-goto_out` as already no-worse on both static measures (bytes and
-instructions) in a multi-block CFG (5 blocks), outside the scope of the
-only existing VLA win-predicate (`mir_is_profiled_vla_single_block_
-instruction_win`, single-block only). Added a second, unconditionally-safe
-predicate requiring strict no-worse-on-either-metric with no block-count
-restriction. Result: the function clears `text-size` under the new rule
-but is then rejected by a separate `rhs-stack-cost` gate further down the
-selector chain - net coverage effect is **zero**, only a fallback-reason
-relabel. Reverted the code; recorded the finding in `mir-dead-ends.tsv`
-so this exact predicate isn't re-proposed. **Corrected stale todo
-context**: also closed out `next20-cfg-backedge-rootcause`/`-strata` and
-`nongoal-cfg-backedge-bughunt` as superseded by the already-integrated
-T421 finding (search `mir-text-size-plan.md`) that the entire
-`cfg-backedge` bucket, including its structurally-safest correctness-clean
-9-function cohort, is unprofitable under direct forced-accept A/B - this
-bucket is genuinely gate-margin-exhausted, not blocked pending a
-correctness fix, so no further cfg-backedge investigation is queued.
-
-**Stream I: `inline-substitution` architecture fix, T429 - a real,
-independently-verified zero-net-coverage architectural enabler.** T409
-already found this bucket needs either translation-unit-wide inline-callee
-materialization or true MIR-native inlining - a substantial, previously-
-unattempted architecture project, not a bounded fix. Stream I implemented
-MIR-side static-inline replay: `mir_try_lower_inline_call_expr()`/
-`mir_try_lower_inline_call_stmt()` detect a direct static-inline callee,
-plan `#itmpN` argument temps reusing the existing reserved-local-slot
-machinery (with a live-temp bitmask to avoid cross-call-site collisions
-and an 8-deep recursion guard), then clone the callee's AST body into
-`g_ast_arena` with parameters rewritten to the temps/original argument
-ASTs, and lower the clone directly through MIR instead of emitting a
-`MIR_CALL` to a callee whose body might never be materialized. This
-mirrors the legacy AST backend's own inline-substitution contract inside
-MIR itself, closing the root correctness gap T409 identified (MIR
-emitting calls to inline-only labels with no compiled body). A first,
-broader cut also replayed call-free void store helpers as statements and
-found a real production admit (`tinlnpar.main`), but forced full-mode
-validation caught a genuine peep-cycle regression (`19128 -> 19147`,
-+0.10%) from that specific class, so void-body replay was narrowed to
-call-containing helpers only (needed for the motivating
-`attnc11.transposed_multiply_8x16` nested-call correctness fix) - a
-real example of the standing "verify before trusting a report" and
-"performance gates stay separate from correctness fixes" disciplines
-being applied inside a single stream.
-
-**Verified result (independently re-run in the main repo, not just
-trusted from the stream's self-report):** coverage unchanged in both
-modes - **914/2026 ordinary (45.11%)**, **936/2128 stack-check
-(43.98%)**, zero regressions, zero new admits. But the previously
-intractable `inline-substitution` population shrank from **47 -> 5**
-ordinary (**48 -> 5** stack-check) - 42/47 functions now stop on
-*ordinary, already-well-tuned* cost gates (22 `selector`, 12
-`unary-not-cost`, 3 `absolute-address-cost`, 2 `dynamic-index-cost`, 1
-each `absolute-index-cost`/`boolean-phi-cost`/`phi-fallthrough-cost`)
-instead of a hard "MIR cannot ever emit this correctly" wall. This is a
-genuine, real architectural unlock matching the earlier T400/T402/T403/
-T406/T410/T411 "zero-net enabler" pattern - it doesn't move coverage
-today, but it converts 42 previously-uncapturable functions into normal
-future gate-margin/cost-model candidates. Full validation cadence
-confirmed independently at integration: fresh ordinary + stack-check
-census (`--fail-on-regression`, both clean, 0 apps requiring runtime
-validation), forced-correctness harness (7/7 pass), a direct forced-
-accept re-check of `attnc11.transposed_multiply_8x16` (previously
-miscompiled under forced MIR, now correctness-clean), and the full
-extended gate (314/323 passed, 9 skipped, 0 failed).
+**Do not repeat these already-falsified approaches** for any of the
+remaining 4: broad cost-cap widening without a measured safe class; whole-
+function spill coalescing alone (tried and insufficient before T499);
+broad retained-address CSE (miscompiled Pint TTT once); test/stack
+weakening; name-based production exceptions. Historical context for
+earlier (now superseded) coverage milestones and abandoned/falsified
+approaches from the 44-98% climb is preserved below for reference.
 
 ## Latest production cohort
 
