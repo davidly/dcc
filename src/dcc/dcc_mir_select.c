@@ -2162,6 +2162,19 @@ static int mir_dynamic_index_base_loop_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_dynamic_index_base_wide_is_semantically_eligible(
+    long generated_size)
+{
+    return mir_cfg_block_count() <= 64 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           mir_has_wide_values() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 10000;
+}
+
 static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
 {
     static const char *const proven[] = {
@@ -2192,6 +2205,18 @@ static int mir_wide_store_coverage_is_semantically_eligible(
     return mir_call_count() > 0 &&
            mir_bounded_acyclic_coverage_is_semantically_eligible(
                generated_size, captured_size);
+}
+
+static int mir_wide_store_large_acyclic_is_semantically_eligible(
+    long generated_size)
+{
+    return !mir_has_cfg_backedge() &&
+           mir_call_count() > 0 &&
+           !mir.has_vla &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 10000;
 }
 
 static int mir_binary_load_pair_coverage_is_semantically_eligible(
@@ -4315,6 +4340,14 @@ evaluate_generated:
                      * stratum passed the full extended gate. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "dynamic-index-base-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_dynamic_index_base_wide_is_semantically_eligible(
+                        generated_size))
+                    /* T453: the bounded wide dynamic-index stratum outside
+                     * every known unsafe shape passed full extended. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(
@@ -4337,6 +4370,13 @@ evaluate_generated:
                         generated_size, captured_size))
                     /* T445: the terminal bounded binary-load-pair cohort
                      * excluding its single-call resource stratum passed. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "wide-store-cost") &&
+                    mir_wide_store_large_acyclic_is_semantically_eligible(
+                        generated_size))
+                    /* T453: the larger acyclic wide-store stratum outside all
+                     * known failures passed full extended. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "pointer-array"))

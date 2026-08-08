@@ -31,14 +31,13 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1720/2060 (83.50%)**
-- Current stack-check coverage: **1822/2179 (83.62%)**
-- HEAD (pending push): T452 admits medium boolean-PHI loops (+7) and
-  non-speculative call-free scalar unary-not loops (+2):
-  **+9 ordinary/+11 stack-check**, zero removals. A proposed small-loop
-  phi-fallthrough cohort was rejected because extended test `00183`
-  miscomputed ternary loop values. See `## Item T452` in
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **1731/2060 (84.03%)**
+- Current stack-check coverage: **1833/2179 (84.12%)**
+- HEAD (pending push): T453 admits bounded wide
+  `dynamic-index-base-cost` (+7) and larger acyclic call-containing
+  `wide-store-cost` (+4) cohorts: **+11 ordinary/+11 stack-check**, zero
+  removals. Both exclude the known wide loop/oversized failures. See
+  `## Item T453` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -146,6 +145,10 @@ transactional fallback remains in place throughout Phase 1.
   standard 314 apps passed the proposed phi-fallthrough loop stratum, but
   extended `00183` failed. Only the independently clean boolean/unary
   strata landed.
+- **T453 closes the safe wide index/store strata.** Dynamic wide
+  candidates remain bounded at 10 KiB with no label/VLA/pointer/inline
+  shape; wide stores extend to 10 KiB only when acyclic and
+  call-containing.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
