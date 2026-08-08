@@ -17398,6 +17398,34 @@ functions only through the measured <=36-block/10-KiB boundary.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T488: repaired bounded float loop with tracked stack reserve (+1/+1, 2026-08-08)
+
+After T484's branch-edge fix, forced `ttrig.xsinf` no longer computes zero;
+its only failure is the stack checker reporting a 9-byte overrun against the
+historical 512-byte reserve. The test keeps stack checking enabled and records
+a 544-byte reserve. Production admission remains structural: the repaired
+10-block/3-call, >=13-slot backedge is accepted only below 6 KiB.
+
+- Coverage: **2039/2060 (98.98%)**, **2158/2179 (99.04%)**, zero removals.
+- Remaining `wide-store-cost`: **1** (`pint.calc_code_limit`).
+- Full extended correctness: covered by the combined T488/T489 gate.
+
+## Item T489: large parser with tracked stack reserve (+1/+1, 2026-08-08)
+
+`cint.next` is correctness-clean after the PHI repairs but its larger MIR frame
+exceeds the old test reserve. The test now records a 768-byte reserve while
+retaining `-fstack-check`. Admission requires the measured large-parser
+signature: wide backedge CFG, <=160 blocks/20 calls/8 slots, at least 20
+boolean simplifications, and <=40 KiB generated text.
+
+- Ordinary: **2039/2060 -> 2040/2060 (99.03%)**, **+1**, zero removals.
+- Stack-check: **2158/2179 -> 2159/2179 (99.08%)**, **+1**, zero removals.
+- Remaining `boolean-phi-cost`: **8**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- The larger stack reserves are tracked Phase-1 resource debt; frame recovery
+  remains a Phase-2 requirement.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

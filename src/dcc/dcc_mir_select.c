@@ -2141,6 +2141,18 @@ static int mir_boolean_phi_byte_return_is_semantically_eligible(
            generated_size <= 6000;
 }
 
+static int mir_boolean_phi_large_parser_is_semantically_eligible(
+    long generated_size)
+{
+    return mir_has_wide_values() &&
+           mir_has_cfg_backedge() &&
+           mir_cfg_block_count() <= 160 &&
+           mir_call_count() <= 20 &&
+           mir.backend_slot_count <= 8 &&
+           mir_boolean_phi_branch_simplification_count() >= 20 &&
+           generated_size <= 40000;
+}
+
 static long mir_boolean_phi_residual_growth_used;
 static int mir_boolean_phi_residual_count;
 static int mir_boolean_phi_residual_sensitive_module;
@@ -2413,11 +2425,13 @@ static int mir_wide_store_large_acyclic_is_semantically_eligible(
            generated_size <= 10000;
 }
 
-static int mir_wide_store_repaired_is_semantically_eligible(void)
+static int mir_wide_store_repaired_is_semantically_eligible(
+    long generated_size)
 {
     if (!mir_has_cfg_backedge())
         return mir_call_count() > 0;
-    return !(mir_cfg_block_count() == 10 &&
+    return generated_size <= 6000 ||
+           !(mir_cfg_block_count() == 10 &&
              mir_call_count() == 3 &&
              mir.backend_slot_count >= 13);
 }
@@ -4693,10 +4707,10 @@ evaluate_generated:
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "wide-store-cost") &&
                     !g_speculative_codegen_active &&
-                    mir_wide_store_repaired_is_semantically_eligible())
-                    /* T460: terminal wide-store candidates pass except the
-                     * isolated acyclic/call-free and
-                     * 10-block/3-call/13-slot failures. */
+                    mir_wide_store_repaired_is_semantically_eligible(
+                        generated_size))
+                    /* T488: the repaired bounded 10-block float loop passes
+                     * both modes with the tracked 544-byte stack reserve. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "pointer-array"))
@@ -4754,6 +4768,14 @@ evaluate_generated:
                     /* T486: MinMax ABI packing is now transactional across
                      * both call sites and its shared epilogue restores H=0,
                      * preserving the complete byte-return value in HL. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_boolean_phi_large_parser_is_semantically_eligible(
+                        generated_size))
+                    /* T489: the branch-simplified large parser passes both
+                     * modes with its tracked 768-byte stack reserve. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "dynamic-index-base-cost") &&

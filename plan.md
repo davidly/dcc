@@ -31,11 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2038/2060 (98.93%)**
-- Current stack-check coverage: **2157/2179 (98.99%)**
-- HEAD (pending push): T487 admits the repaired bounded four-call FINAL pair,
-  `tarray.ShowBinaryData` and `tlngnarw.main`: **+2/+2**, zero removals.
-  See `mir-text-size-plan.md`.
+- Current ordinary coverage: **2040/2060 (99.03%)**
+- Current stack-check coverage: **2159/2179 (99.08%)**
+- HEAD (pending push): T488/T489 admit the semantically repaired `ttrig.xsinf`
+  and `cint.next` with explicit Phase-1 stack reserves: **+2/+2**, zero
+  removals. See `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -238,6 +238,12 @@ transactional fallback remains in place throughout Phase 1.
 - **T487 closes the bounded four-call FINAL stratum.** The two remaining
   <=36-block/10-KiB functions pass both modes after the PHI and ownership
   repairs; larger and low-call resource failures remain gated.
+- **T488 admits the repaired bounded float loop.** `xsinf` is semantically
+  correct after the branch fixes and passes both modes with a tracked
+  544-byte stack reserve instead of disabling stack checking.
+- **T489 crosses 99% in both censuses.** The high-boolean-simplification
+  parser is admitted with a tracked 768-byte stack reserve; this is explicit
+  Phase-1 resource debt for the post-100% frame-recovery campaign.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

@@ -113,7 +113,8 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "admitted parse_data_line plus decode_stmts. T484-T486 fixed "
                  "virtual-IY ownership, paired divmod slots, and the MinMax "
                  "ABI, admitting three more. T487 admitted the bounded "
-                 "four-call FINAL pair. Nine direct/allocation or CP/M-"
+                 "four-call FINAL pair. T489 admitted the large parser with a "
+                 "tracked stack reserve. Eight direct/allocation or CP/M-"
                  "resource failures remain.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
@@ -131,9 +132,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
                  "Blind reason forcing still intercepts tpfauto.main before "
                  "its true block-cse-cost retry.",
-    "wide-store-cost": "T443/T453/T460 admitted every current terminal "
-                 "candidate except the isolated acyclic/call-free and "
-                 "10-block/3-call/13-slot failures.",
+    "wide-store-cost": "T443/T453/T460 admitted all but the isolated acyclic/"
+                 "call-free and 10-block/3-call/13-slot failures. T488 "
+                 "admitted the repaired bounded float loop with a tracked "
+                 "stack reserve; only pint.calc_code_limit remains.",
     "dead-local-suffix-cost": "T444/T458 admitted all but the unique "
                  ">20-block, <=1-call failure. T480 repaired its duplicate "
                  "empty-arm PHI copy; the terminal reason is now empty.",
