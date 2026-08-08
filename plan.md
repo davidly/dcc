@@ -31,13 +31,14 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1731/2060 (84.03%)**
-- Current stack-check coverage: **1833/2179 (84.12%)**
-- HEAD (pending push): T453 admits bounded wide
-  `dynamic-index-base-cost` (+7) and larger acyclic call-containing
-  `wide-store-cost` (+4) cohorts: **+11 ordinary/+11 stack-check**, zero
-  removals. Both exclude the known wide loop/oversized failures. See
-  `## Item T453` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1751/2060 (85.00%)**
+- Current stack-check coverage: **1855/2179 (85.13%)**
+- HEAD (pending push): T454 admits bounded VLA
+  `dynamic-index-base-cost` (+5) and every remaining terminal
+  `wide-constant-cost` (+15): **+20 ordinary/+22 stack-check**, zero
+  removals. Wide-constant blind forcing's historical `tpfauto` failure
+  was transient; its true final reason remains block-CSE. See
+  `## Item T454` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -149,6 +150,9 @@ transactional fallback remains in place throughout Phase 1.
   candidates remain bounded at 10 KiB with no label/VLA/pointer/inline
   shape; wide stores extend to 10 KiB only when acyclic and
   call-containing.
+- **T454 eliminates terminal wide-constant fallback.** It also proves the
+  small VLA dynamic-index functions are correctness-clean after PHI and
+  pointer metadata repair.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

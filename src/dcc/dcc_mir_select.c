@@ -2175,6 +2175,18 @@ static int mir_dynamic_index_base_wide_is_semantically_eligible(
            generated_size <= 10000;
 }
 
+static int mir_dynamic_index_base_vla_is_semantically_eligible(
+    long generated_size)
+{
+    return mir.has_vla &&
+           mir_cfg_block_count() <= 16 &&
+           mir_call_count() <= 5 &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 5000;
+}
+
 static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
 {
     static const char *const proven[] = {
@@ -4346,6 +4358,20 @@ evaluate_generated:
                         generated_size))
                     /* T453: the bounded wide dynamic-index stratum outside
                      * every known unsafe shape passed full extended. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "dynamic-index-base-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_dynamic_index_base_vla_is_semantically_eligible(
+                        generated_size))
+                    /* T454: the bounded VLA dynamic-index stratum passed the
+                     * full extended gate after PHI repair. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "wide-constant-cost") &&
+                    !g_speculative_codegen_active)
+                    /* T454: every remaining terminal wide-constant candidate
+                     * passed together; transient tpfauto remains block-CSE. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(

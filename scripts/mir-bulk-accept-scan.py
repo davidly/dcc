@@ -112,18 +112,16 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "produce wrong output or CP/M memory exhaustion when forced.",
     "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
                  "int32_t result mismatches).",
-    "dynamic-index-base-cost": "T440/T451/T453 admitted 64 terminal functions "
-                 "across bounded acyclic, scalar-loop, and wide strata. Remaining "
+    "dynamic-index-base-cost": "T440/T451/T453/T454 admitted 69 terminal "
+                 "functions across bounded acyclic, scalar-loop, wide, and VLA strata. Remaining "
                  "wide/backedge, label-PHI, VLA, pointer/inline, oversized, "
                  "or later-retry shapes include real failures.",
     "unary-not-cost": "T441/T452 admitted 17 terminal acyclic/call-free-loop "
                  "functions. The remaining backedge, label-PHI, VLA, pointer/inline, "
                  "oversized, or later-retry shapes include real failures.",
-    "wide-constant-cost": "T442 admitted 35 terminal bounded acyclic "
-                 "functions. Blind reason forcing still intercepts "
-                 "tpfauto.main before its true block-cse-cost retry; "
-                 "remaining terminal loop/oversized/later-retry shapes need "
-                 "separate work.",
+    "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
+                 "Blind reason forcing still intercepts tpfauto.main before "
+                 "its true block-cse-cost retry.",
     "wide-store-cost": "T443/T453 admitted 18 terminal acyclic "
                  "call-containing functions. Remaining call-free, backedge, "
                  "label-PHI, oversized, or later-retry shapes include pint "
