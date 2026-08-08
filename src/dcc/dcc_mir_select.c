@@ -2126,6 +2126,16 @@ static int mir_unary_not_repaired_small_is_semantically_eligible(
            generated_size <= 6000;
 }
 
+static int mir_unary_not_deferred_is_semantically_eligible(
+    long generated_size)
+{
+    int blocks = mir_cfg_block_count();
+
+    if (blocks > 100 && generated_size < 30000)
+        return 0;
+    return blocks <= 30 || mir_call_count() >= 16;
+}
+
 static int mir_dead_local_suffix_repaired_is_semantically_eligible(void)
 {
     return mir_cfg_block_count() <= 20 || mir_call_count() > 1;
@@ -4629,8 +4639,12 @@ evaluate_generated:
                     const char *forced_final =
                         getenv("DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION");
                     if (!g_speculative_codegen_active &&
-                        forced_final != NULL &&
-                        !strcmp(forced_final, mir.name))
+                        ((forced_final != NULL &&
+                          !strcmp(forced_final, mir.name)) ||
+                         (!strcmp(fallback_reason, "unary-not-cost") &&
+                          mir.sink_purpose == EMIT_SINK_DEFERRED &&
+                          mir_unary_not_deferred_is_semantically_eligible(
+                              generated_size))))
                         /*
                          * Diagnostic only: unlike
                          * DCC_MIR_FORCE_ACCEPT_FUNCTION, this observes every
@@ -4675,12 +4689,12 @@ evaluate_generated:
                     "; MIR selection function=%s selector=%s result=%s "
                     "reason=%s generated-bytes=%ld captured-bytes=%ld "
                     "generated-insns=%d captured-insns=%d blocks=%d "
-                    "selected-hash=%08lx\n",
+                    "selected-hash=%08lx sink=%s\n",
                     mir.name, selector_name, emitted ? "mir" : "fallback",
                     fallback_reason != NULL ? fallback_reason : "accepted",
                     generated_size, captured_size, generated_instructions,
                     captured_instructions, mir_cfg_block_count(),
-                    selected_hash);
+                    selected_hash, mir_sink_name(mir.sink_purpose));
         if (verified && !g_speculative_codegen_active &&
             getenv("DCC_MIR_CANDIDATE_MATRIX") != NULL)
             mir_report_spilled_candidate_matrix(candidate_matrix_label_base);

@@ -17178,6 +17178,26 @@ excluding the 13-block/19-call case and low-call wide label-PHI shape.
 - Performance gate: 35 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T470: full-mode-clean DEFERRED unary cohort (+19 ordinary/+19 stack-check, 2026-08-08)
+
+Fresh T469 baseline: **1966/2060 ordinary (95.44%)** and **2081/2179
+stack-check (95.50%)**.
+
+The guarded literal-final diagnostic showed the earlier fast-only unary
+classification missed nopeep failures. Re-running all 24 static candidates in
+full mode isolated `pint.run` as a direct nopeep failure. The largest low-call
+COBOL functions are also combination-sensitive. A semantic/resource predicate
+admits DEFERRED unary functions at <=30 blocks or >=16 calls, except the unique
+>100-block/<30-KiB pint shape.
+
+- Ordinary: **1966/2060 -> 1985/2060 (96.36%)**, **+19**, zero removals.
+- Stack-check: **2081/2179 -> 2100/2179 (96.37%)**, **+19**, zero removals.
+- Remaining `unary-not-cost`: **5 ordinary / 5 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 24 deliberate Phase-1 regressions, 1 improvement;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base

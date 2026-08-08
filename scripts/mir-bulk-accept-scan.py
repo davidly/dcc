@@ -120,9 +120,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "strata. Remaining static or large/high-slot FINAL shapes "
                  "include real standard and extended failures.",
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
-                 "small-CFG, and all deterministic FINAL-sink strata. "
-                 "Remaining static DEFERRED bodies have sink-specific retry "
-                 "drift and need an architecture fix.",
+                 "small-CFG, FINAL-sink, and 19 isolated DEFERRED-sink "
+                 "functions through T470. Remaining residue is one direct "
+                 "nopeep failure plus large low-call COBOL interactions.",
     "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
                  "Blind reason forcing still intercepts tpfauto.main before "
                  "its true block-cse-cost retry.",
