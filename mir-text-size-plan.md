@@ -17557,6 +17557,23 @@ bytes and making the complete Pint image pass both modes.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T497: preserve shadowed object-merge types (+1/+1, 2026-08-08)
+
+Deferred alias repair updates loads and parameters after C99 for-init names
+are resolved, but not `MIR_OBJECT_MERGE`. In `tforsco.main`, a merge first
+captured against an outer `int` was retargeted to the shadowing `long k`
+without updating its type. The resulting PHI kept only the low word and the
+loop never terminated.
+
+Alias repair now updates object-merge types too. The FINAL dynamic-index gate
+admits bounded wide integer object-PHI loops after that repair.
+
+- Coverage: **2051/2060 (99.56%)**, **2170/2179 (99.59%)**, zero removals.
+- Remaining `dynamic-index-base-cost`: **2**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission
