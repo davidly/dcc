@@ -31,18 +31,17 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1100/2029 (54.21%)**
-- Current stack-check coverage: **1131/2131 (53.07%)**
-- HEAD (pending push): T436 admits a correctness-proven structural
-  `boolean-phi-cost` cohort, **+52 ordinary/+55 stack-check**, zero
-  removals. Candidate-matrix reporting now records backedges, inline
-  substitution, pointer arrays, boolean simplifications, and label-only
-  PHI fallthrough. Production admission requires the existing semantic
-  guard (at most 64 blocks, no backedge/inline-substitution/pointer-array),
-  excludes label-only PHI fallthrough, and caps per-function text growth
-  at 2 KiB for CP/M memory safety. The complete cohort passes the full
-  extended correctness gate. The remaining boolean bucket is **97
-  ordinary/102 stack-check**. See `## Item T436` in
+- Current ordinary coverage: **1249/2050 (60.93%)**
+- Current stack-check coverage: **1300/2156 (60.30%)**
+- HEAD (pending push): T437 admits the bounded scalar/acyclic
+  `text-size` cohort, **+149 ordinary/+169 stack-check**, zero removals.
+  The rule requires at most 64 blocks/32 calls, no VLA, wide values,
+  backedge, inline-substitution call, pointer array, or label-only PHI
+  fallthrough, and at most 2 KiB text growth. The complete cohort passes
+  full extended correctness. Accepting callers that need deferred static
+  bodies grows the census denominator by 21 ordinary/25 stack-check rows;
+  these are real newly materialized functions, not losses. Remaining
+  `text-size`: **196 ordinary/213 stack-check**. See `## Item T437` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -73,6 +72,16 @@ transactional fallback remains in place throughout Phase 1.
   when one MIR function grows by more than 2 KiB, motivating the explicit
   growth ceiling. These are correctness/resource boundaries, not
   performance policy.
+- **T437 crosses 60% in one architecture batch.** Full-reason forcing
+  still failed nine ordinary apps plus extended test 00158. Per-function
+  bisection isolated five individually unsafe shapes:
+  `tm1mu.mulmod` (wide specialized arithmetic semantics), `ts32.main`
+  (oversized/call-heavy), `tbug.swfc` and `tsvbuf2.expect_prefix`
+  (backedges), and `tvla.vla_goto_out` (VLA+backedge). Excluding those
+  semantic/resource strata yields a 149-function ordinary cohort that is
+  clean even in combination. Continue by attacking the remaining
+  backedge/VLA/wide/large text-size strata separately, not by widening
+  this proven boundary.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

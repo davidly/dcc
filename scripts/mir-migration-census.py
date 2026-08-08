@@ -38,6 +38,7 @@ MATRIX_RE = re.compile(
     r"\tpointer-array=(?P<pointer_array>[01])"
     r"\tboolean-simplifications=(?P<boolean_simplifications>\d+)"
     r"\tlabel-phi-fallthrough=(?P<label_phi_fallthrough>[01])"
+    r"\twide-values=(?P<wide_values>[01])"
     r"\thash=(?P<hash>[0-9a-fA-F]{8})"
 )
 FIELDS = [
@@ -73,6 +74,7 @@ MATRIX_FIELDS = [
     "pointer_array",
     "boolean_simplifications",
     "label_phi_fallthrough",
+    "wide_values",
     "hash",
 ]
 

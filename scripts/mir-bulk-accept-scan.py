@@ -102,12 +102,11 @@ PROVEN_COST_ONLY_REASONS = [
 # without an explicit override, and expect the same forced-A/B-per-shape
 # rigor as any other semantic gate, not a blanket relaxation.
 CONFIRMED_UNSAFE_COST_REASONS = {
-    "text-size": "9 apps failed full extended gate (incl. tvla infinite "
-                 "loop, tm1mu's fused-mulmod pattern producing wrong "
-                 "output). Root cause: many text-size candidates replace "
-                 "a specialized, edge-case-correct legacy pattern (e.g. "
-                 "the __m1mu runtime call) with a generic MIR lowering "
-                 "that does not replicate the same edge-case handling.",
+    "text-size": "T437 admitted 149 ordinary bounded scalar/acyclic "
+                 "functions. Remaining wide, VLA, backedge, >64-block, "
+                 ">32-call, label-PHI or >2-KiB-growth shapes still include "
+                 "real wrong-output/timeout/resource failures; tm1mu.mulmod "
+                 "also needs its specialized __m1mu semantics.",
     "boolean-phi-cost": "T436 admitted 52 ordinary functions under the "
                  "existing semantic guard plus label-fallthrough and "
                  "2-KiB-growth exclusions. The remaining backedge, "

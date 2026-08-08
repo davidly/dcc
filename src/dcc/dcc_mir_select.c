@@ -75,6 +75,7 @@ static int mir_call_count(void);
 static int mir_has_inline_substitution_call(void);
 static int mir_has_declared_pointer_array(void);
 static int mir_has_label_only_phi_fallthrough(void);
+static int mir_has_wide_values(void);
 
 static void mir_configure_spilled_fallback_features(
     unsigned long features, int enabled)
@@ -1231,7 +1232,8 @@ static void mir_report_spilled_candidate_matrix(int label_base)
                 "\tlocals=%d\treturn-kind=%d\tvla=%d\tbackedge=%d"
                 "\tinline-substitution=%d\tpointer-array=%d"
                 "\tboolean-simplifications=%d"
-                "\tlabel-phi-fallthrough=%d\thash=%08lx\n",
+                "\tlabel-phi-fallthrough=%d\twide-values=%d"
+                "\thash=%08lx\n",
                 mir.name, result.descriptor->name,
                 result.descriptor->spilled_features, result.emitted,
                 result.reason, result.generated_size,
@@ -1241,7 +1243,8 @@ static void mir_report_spilled_candidate_matrix(int label_base)
                 mir_has_inline_substitution_call(),
                 mir_has_declared_pointer_array(),
                 mir_boolean_phi_branch_simplification_count(),
-                mir_has_label_only_phi_fallthrough(), hash);
+                mir_has_label_only_phi_fallthrough(), mir_has_wide_values(),
+                hash);
         mir_close_candidate_result(&result);
     }
     if (mir.count != mir_count_save)
@@ -2034,6 +2037,20 @@ static int mir_boolean_phi_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
     return mir_boolean_phi_profile_is_semantically_eligible() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= captured_size + 2048;
+}
+
+static int mir_text_size_coverage_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_cfg_block_count() <= 64 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_wide_values() &&
+           !mir_has_cfg_backedge() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
            !mir_has_label_only_phi_fallthrough() &&
            generated_size <= captured_size + 2048;
 }
@@ -3838,6 +3855,14 @@ evaluate_generated:
                          * no-pointer-array, no-label-fallthrough population
                          * under the 2 KiB growth ceiling passed the full
                          * extended correctness gate as one cohort. */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "text-size") &&
+                        mir_text_size_coverage_is_semantically_eligible(
+                            generated_size, captured_size))
+                        /* T437: the complete bounded scalar/acyclic
+                         * text-size population passed the full extended
+                         * correctness gate as one cohort. */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "boolean-phi-cost") &&
