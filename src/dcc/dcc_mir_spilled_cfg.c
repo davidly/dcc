@@ -1084,6 +1084,15 @@ static int mir_address_is_rematerializable(int value)
            mir_address_is_rematerializable_candidate(value);
 }
 
+static int mir_value_requires_phi_slot(int value)
+{
+    return mir_value_has_phi_use(value) &&
+           !mir_scalar_constant_is_rematerializable(value) &&
+           !mir_string_address_is_rematerializable(value) &&
+           !mir_wide_constant_is_rematerializable(value) &&
+           !mir_address_is_rematerializable(value);
+}
+
 int mir_address_rematerialization_candidate_count(void)
 {
     int count = 0;
@@ -4177,8 +4186,10 @@ static int mir_prepare_backend_slots(void)
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 int reusable_source = -1;
+                int force_phi_slot = mir_value_requires_phi_slot(value);
                 ++mir_slot_report_requested_count;
-                if (last[value] <= first[value] ||
+                if (!force_phi_slot &&
+                    (last[value] <= first[value] ||
                                         (definition != NULL &&
                                          definition->opcode == MIR_NOP) ||
                                         mir_scalar_constant_is_rematerializable(
@@ -4218,9 +4229,10 @@ static int mir_prepare_backend_slots(void)
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
-                                        mir_value_only_used_by_dead_unary(value))
+                                        mir_value_only_used_by_dead_unary(value)))
                     continue;
-                if (mir_value_has_direct_named_home(value)) {
+                if (!force_phi_slot &&
+                    mir_value_has_direct_named_home(value)) {
                     int home_storage;
                     int home_offset;
                     if (mir_direct_named_home_location(
@@ -4231,8 +4243,9 @@ static int mir_prepare_backend_slots(void)
                     }
                     continue;
                 }
-                stack_consumer = mir_planned_stack_consumer(
-                    value, i, stack_interval_occupied);
+                stack_consumer = force_phi_slot ? -1 :
+                    mir_planned_stack_consumer(
+                        value, i, stack_interval_occupied);
                 if (stack_consumer >= 0) {
                     int instruction;
 
@@ -4252,9 +4265,10 @@ static int mir_prepare_backend_slots(void)
                  * permits no other value-producing instruction, so narrow
                  * and wide cache lifetimes cannot overlap.
                  */
-                cache_target = mir_call_argument_cache_target_for_state(
-                    value, i, planned_narrow_cache_call >= 0,
-                    planned_wide_cache_call >= 0);
+                cache_target = force_phi_slot ? -1 :
+                    mir_call_argument_cache_target_for_state(
+                        value, i, planned_narrow_cache_call >= 0,
+                        planned_wide_cache_call >= 0);
                 if (cache_target >= 0) {
                     if (units == 2 &&
                         mir_wide_call_argument_is_first_pushed(
@@ -4828,6 +4842,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int offset;
     int iy_offset;
     int pending_planned_consumer;
+    if (mir_value_requires_phi_slot(value))
+        force_slot_store = 1;
     if (mir_value_has_direct_named_home(value))
         /* Nothing to store: later uses re-read the stable named home (see
          * mir_emit_virtual_load); the loaded HL is simply not persisted. */

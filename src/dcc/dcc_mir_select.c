@@ -2041,6 +2041,20 @@ static int mir_boolean_phi_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_boolean_phi_small_loop_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_has_cfg_backedge() &&
+           mir_cfg_block_count() <= 20 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 2500 &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_text_size_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -2132,9 +2146,9 @@ static int mir_wide_store_coverage_is_semantically_eligible(
 static int mir_binary_load_pair_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
-    return mir_call_count() != 1 &&
-           mir_bounded_acyclic_coverage_is_semantically_eligible(
-               generated_size, captured_size);
+    (void)generated_size;
+    (void)captured_size;
+    return mir_call_count() != 1;
 }
 
 static int mir_inline_substitution_coverage_is_semantically_eligible(
@@ -4202,6 +4216,13 @@ evaluate_generated:
                     /* T439: the terminal scalar tiny-loop cohort passed the
                      * full extended gate. Keep this at the actual final
                      * decision point so all earlier retries retain priority. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    mir_boolean_phi_small_loop_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T448: after forcing concrete storage for computed PHI
+                     * sources, the bounded small-loop boolean cohort passed. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(

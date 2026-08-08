@@ -31,15 +31,15 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1541/2052 (75.10%)**
-- Current stack-check coverage: **1615/2165 (74.60%)**
-- HEAD (pending push): T447 fixes all 36 `selector` fallbacks (reserved
-  `#itmpN` locals had no MIR memory location), immediately admitting 8
-  and reclassifying the other 28 to explicit cost/semantic reasons. It
-  adds **+8 ordinary/+8 stack-check**, zero removals, on top of T446.
-  `tinline.inline_temp_collision_check` is now structurally rejected as
-  `inline-temp-overlap` because nested expansion overwrites `#itmp1`
-  before its first load. See `## Item T447` in
+- Current ordinary coverage: **1569/2052 (76.46%)**
+- Current stack-check coverage: **1649/2165 (76.17%)**
+- HEAD (pending push): T448 fixes computed PHI source storage and admits
+  24 bounded boolean-PHI loops plus 4 binary-load-pair loops:
+  **+28 ordinary/+34 stack-check**, zero removals. Backend planning had
+  marked branch-forwarded PHI sources slotless; PHI edge copies later
+  loaded `mir_virtual_offset(value)`, which fell back to the SSA ID
+  (`ix-33` in tbcgcol). Non-rematerializable PHI sources now receive and
+  populate concrete slots. See `## Item T448` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -128,6 +128,11 @@ transactional fallback remains in place throughout Phase 1.
   inline temps remain excluded from SSA promotion but are now published
   as frame memory. One nested-lifetime collision is explicitly gated;
   every other function reaches a real selector/cost decision.
+- **T448 fixes the first shared loop-state root cause.** Slot planning and
+  emission now share one `mir_value_requires_phi_slot()` predicate, so a
+  value needed by an edge copy cannot be optimized into a branch-only
+  handoff. This removes four prior boolean-loop failure apps and makes
+  binary-load loop forcing clean outside the known pint resource case.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

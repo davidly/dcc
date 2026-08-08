@@ -108,11 +108,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "__m1mu semantics. Remaining VLA, wide/backedge, larger "
                  "loop, label-PHI, pointer-array or oversized shapes still "
                  "include real failures.",
-    "boolean-phi-cost": "T436 admitted 52 ordinary functions under the "
-                 "existing semantic guard plus label-fallthrough and "
-                 "2-KiB-growth exclusions. The remaining backedge, "
-                 "label-only PHI and oversized shapes still produce wrong "
-                 "output or CP/M memory exhaustion when forced.",
+    "boolean-phi-cost": "T436/T448 admitted 76 ordinary functions across "
+                 "acyclic and post-PHI-slot small-loop strata. Remaining "
+                 "larger backedge, label-only PHI and oversized shapes still "
+                 "produce wrong output or CP/M memory exhaustion when forced.",
     "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
                  "int32_t result mismatches).",
     "dynamic-index-base-cost": "T440 admitted 13 terminal bounded acyclic "
@@ -139,8 +138,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "functions; unsafe loop/resource shapes remain.",
     "planned-stack-cost": "T444 admitted 8 terminal bounded acyclic "
                  "functions; wumpus/later-retry shapes remain.",
-    "binary-load-pair-cost": "T445 admitted 6 terminal bounded functions "
-                 "outside the single-call pint.emit resource stratum.",
+    "binary-load-pair-cost": "T445/T448 admitted 10 functions after fixing "
+                 "computed PHI source slots. The single-call pint.emit "
+                 "resource stratum remains.",
     "indirect-store-address-cost": "T445 admitted 6 terminal bounded "
                  "acyclic functions; tlngnarw/loop shapes remain.",
     "dead-store-forwarding-cost": "T445 admitted 2 terminal bounded "
