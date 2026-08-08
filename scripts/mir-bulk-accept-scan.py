@@ -134,8 +134,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "absolute-index-cost": "T444/T459 admitted the complete terminal reason. "
                  "Blind forcing still intercepts unsafe transient pint "
                  "boolean-PHI and tstructv block-CSE retries.",
-    "planned-index-base-cost": "T444 admitted 10 terminal bounded acyclic "
-                 "functions; unsafe loop/resource shapes remain.",
+    "planned-index-base-cost": "T444/T462 admitted the complete true-final "
+                 "reason. Blind forcing still perturbs transient/deferred "
+                 "tarray, pint, and tlongidx candidates.",
     "planned-stack-cost": "T444 admitted 8 terminal bounded acyclic "
                  "functions; wumpus/later-retry shapes remain.",
     "binary-load-pair-cost": "T445/T448 admitted 10 functions after fixing "

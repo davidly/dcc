@@ -17795,3 +17795,23 @@ complete reason without intercepting that later retry.
   diagnostics and dccpeep pass.
 - Performance gate: 10 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T462: complete terminal planned-index-base cohort (+11 ordinary/+13 stack-check, 2026-08-08)
+
+Fresh T461 baseline: **1912/2060 ordinary (92.82%)** and **2025/2179
+stack-check (92.93%)**.
+
+Blind forcing exposed 13 functions and failed `tarray`, `pint`, and
+`tlongidx`. The first two failures were transient boolean-PHI retries;
+`tlongidx.main` retained identical metrics but a different selected hash,
+confirming another nonlocal label/layout perturbation. None belongs to the
+11-function true-final planned-index-base cohort. A true-final gate admits
+that complete set without changing the transient/deferred candidates.
+
+- Ordinary: **1912/2060 -> 1923/2060 (93.35%)**, **+11**, zero removals.
+- Stack-check: **2025/2179 -> 2038/2179 (93.53%)**, **+13**, zero removals.
+- Remaining terminal `planned-index-base-cost`: **0**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 24 deliberate Phase-1 regressions, 5 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.

@@ -4478,6 +4478,13 @@ evaluate_generated:
                      * tlngnarw keeps its later true reason. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "planned-index-base-cost") &&
+                    !g_speculative_codegen_active)
+                    /* T462: admit only the true-final cohort; blind forcing
+                     * perturbs transient/deferred tarray, pint, and tlongidx
+                     * candidates. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(
