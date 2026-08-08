@@ -31,16 +31,14 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1711/2060 (83.06%)**
-- Current stack-check coverage: **1811/2179 (83.11%)**
-- HEAD (pending push): T451 admits the scalar bounded
-  `dynamic-index-base-cost` loop cohort: **+44 ordinary/+44
-  stack-check**, zero removals. It requires a backedge, <=64 blocks/32
-  calls, no VLA/wide/inline/pointer/label-PHI shape, <=5 KiB generated,
-  and <=2 KiB growth. Admission is non-speculative: wildcard testing
-  showed speculative `pint.find_scope/call_proc` attempts perturb the
-  final program even though final `find_proc/vars` are clean. See
-  `## Item T451` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1720/2060 (83.50%)**
+- Current stack-check coverage: **1822/2179 (83.62%)**
+- HEAD (pending push): T452 admits medium boolean-PHI loops (+7) and
+  non-speculative call-free scalar unary-not loops (+2):
+  **+9 ordinary/+11 stack-check**, zero removals. A proposed small-loop
+  phi-fallthrough cohort was rejected because extended test `00183`
+  miscomputed ternary loop values. See `## Item T452` in
+  `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -144,6 +142,10 @@ transactional fallback remains in place throughout Phase 1.
 - **T451 crosses 83% with reason-specific loop admission.** The earlier
   acyclic dynamic cohort and this scalar loop cohort together remove 57
   functions while preserving wide/backedge and label-PHI failure strata.
+- **T452 demonstrates why extended coverage remains mandatory.** The
+  standard 314 apps passed the proposed phi-fallthrough loop stratum, but
+  extended `00183` failed. Only the independently clean boolean/unary
+  strata landed.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

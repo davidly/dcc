@@ -17558,3 +17558,32 @@ retains 44 final functions; the complete cohort then passes.
 - Forced-MIR regression harness: PASS (9/9).
 - Performance gate: 88 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T452: medium boolean and call-free unary loops (+9 ordinary/+11 stack-check, 2026-08-08)
+
+Fresh T451 baseline: **1711/2060 ordinary (83.06%)** and **1811/2179
+stack-check (83.11%)**.
+
+Added two measured terminal loop strata:
+
+1. `boolean-phi-cost`: 21–35 blocks, <=32 calls, no
+   VLA/inline/pointer/label-PHI, <=5,000 bytes and <=2,048 growth. This adds
+   seven functions (including the one clean wide member).
+2. `unary-not-cost`: non-speculative, call-free scalar backedges, <=64
+   blocks, no VLA/inline/pointer/label-PHI, and the standard 5-KiB/2-KiB
+   ceilings. This adds two.
+
+A third proposed phi-fallthrough loop stratum (backedge, <=16 blocks/5 calls)
+passed all 314 standard apps but failed extended test `00183`: its ternary
+loop printed 16 repeatedly instead of 15/18/21/24/27. The complete
+phi-fallthrough stratum was removed; no partial app/name exception landed.
+
+- Ordinary: **1711/2060 -> 1720/2060 (83.50%)**, **+9**, zero removals.
+- Stack-check: **1811/2179 -> 1822/2179 (83.62%)**, **+11**, zero removals.
+- Remaining `boolean-phi-cost`: **74 ordinary / 78 stack-check**.
+- Remaining `unary-not-cost`: **48 ordinary / 48 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 24 deliberate Phase-1 regressions, 7 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.

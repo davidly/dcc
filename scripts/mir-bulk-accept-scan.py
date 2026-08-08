@@ -106,8 +106,8 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "PHI-slot, pointer-array, wide-forward, and high-call "
                  "oversized validation. ts32 still has real narrow/wide "
                  "shift failures.",
-    "boolean-phi-cost": "T436/T448 admitted 76 ordinary functions across "
-                 "acyclic and post-PHI-slot small-loop strata. Remaining "
+    "boolean-phi-cost": "T436/T448/T452 admitted 83 ordinary functions "
+                 "across acyclic, small-loop, and medium-loop strata. Remaining "
                  "larger backedge, label-only PHI and oversized shapes still "
                  "produce wrong output or CP/M memory exhaustion when forced.",
     "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
@@ -116,8 +116,8 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "across bounded acyclic and scalar-loop strata. Remaining "
                  "wide/backedge, label-PHI, VLA, pointer/inline, oversized, "
                  "or later-retry shapes include real failures.",
-    "unary-not-cost": "T441 admitted 15 terminal bounded acyclic functions. "
-                 "The remaining backedge, label-PHI, VLA, pointer/inline, "
+    "unary-not-cost": "T441/T452 admitted 17 terminal acyclic/call-free-loop "
+                 "functions. The remaining backedge, label-PHI, VLA, pointer/inline, "
                  "oversized, or later-retry shapes include real failures.",
     "wide-constant-cost": "T442 admitted 35 terminal bounded acyclic "
                  "functions. Blind reason forcing still intercepts "

@@ -2055,6 +2055,36 @@ static int mir_boolean_phi_small_loop_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_boolean_phi_medium_scalar_loop_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    int blocks = mir_cfg_block_count();
+    return mir_has_cfg_backedge() &&
+           blocks >= 21 && blocks <= 35 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 5000 &&
+           generated_size <= captured_size + 2048;
+}
+
+static int mir_unary_not_call_free_loop_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_has_cfg_backedge() &&
+           mir_cfg_block_count() <= 64 &&
+           mir_call_count() == 0 &&
+           !mir.has_vla &&
+           !mir_has_wide_values() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 5000 &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_text_size_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4261,6 +4291,13 @@ evaluate_generated:
                      * sources, the bounded small-loop boolean cohort passed. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    mir_boolean_phi_medium_scalar_loop_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T452: the medium boolean-loop stratum below every known
+                     * unsafe block/size boundary passed full extended. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "dynamic-index-base-cost") &&
                     !g_speculative_codegen_active &&
                     mir_dynamic_index_base_loop_is_semantically_eligible(
@@ -4269,6 +4306,14 @@ evaluate_generated:
                      * loop cohort passed the full extended gate. */
                     fallback_reason = NULL;
                 }
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "unary-not-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_unary_not_call_free_loop_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T452: the non-speculative call-free scalar unary-loop
+                     * stratum passed the full extended gate. */
+                    fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
