@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1901/2060 (92.28%)**
-- Current stack-check coverage: **2014/2179 (92.43%)**
-- HEAD (pending push): T460 admits 18/20 terminal `wide-store-cost`
-  candidates: **+18 ordinary/+20 stack-check**, zero removals. It retains
-  the isolated acyclic/call-free failure and the 10-block/3-call/13-slot
-  stack failure. See `## Item T460` in
+- Current ordinary coverage: **1912/2060 (92.82%)**
+- Current stack-check coverage: **2025/2179 (92.93%)**
+- HEAD (pending push): T461 eliminates terminal
+  `indirect-store-address-cost`: **+11 ordinary/+11 stack-check**, zero
+  removals. Blind forcing's only failure was a transient `tlngnarw`
+  retry with a different true final reason. See `## Item T461` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -174,6 +174,8 @@ transactional fallback remains in place throughout Phase 1.
   reasons, confirming final-reason ordering is again load-bearing.
 - **T460 nearly eliminates wide-store fallback.** Eighteen loop and large
   acyclic candidates pass together; two precisely isolated shapes remain.
+- **T461 eliminates terminal indirect-store-address fallback.** Eleven
+  attention, allocator, loop, and narrowing candidates pass together.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

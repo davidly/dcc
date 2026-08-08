@@ -4471,6 +4471,13 @@ evaluate_generated:
                      * boolean-PHI/block-CSE reasons. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason,
+                            "indirect-store-address-cost") &&
+                    !g_speculative_codegen_active)
+                    /* T461: every terminal candidate passed; transient
+                     * tlngnarw keeps its later true reason. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(

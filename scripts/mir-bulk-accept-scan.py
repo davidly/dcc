@@ -141,8 +141,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "binary-load-pair-cost": "T445/T448 admitted 10 functions after fixing "
                  "computed PHI source slots. The single-call pint.emit "
                  "resource stratum remains.",
-    "indirect-store-address-cost": "T445 admitted 6 terminal bounded "
-                 "acyclic functions; tlngnarw/loop shapes remain.",
+    "indirect-store-address-cost": "T445/T461 admitted the complete true-"
+                 "final reason; blind forcing still intercepts a transient "
+                 "tlngnarw retry.",
     "dead-store-forwarding-cost": "T445 admitted 2 terminal bounded "
                  "acyclic functions; interpreter loop failures remain.",
     "constant-conversion-home-cost": "T445 admitted 1 terminal bounded "

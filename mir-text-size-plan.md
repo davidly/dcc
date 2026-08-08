@@ -17777,3 +17777,21 @@ except the high-slot failure and all call-containing acyclic candidates.
   diagnostics and dccpeep pass.
 - Performance gate: 66 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T461: complete terminal indirect-store-address cohort (+11 ordinary/+11 stack-check, 2026-08-08)
+
+Fresh T460 baseline: **1901/2060 ordinary (92.28%)** and **2014/2179
+stack-check (92.43%)**.
+
+Blind forcing exposed 12 functions and failed only `tlngnarw.main`, which
+does not have `indirect-store-address-cost` as its true final reason. The 11
+terminal candidates all pass together, so a true-final gate admits the
+complete reason without intercepting that later retry.
+
+- Ordinary: **1901/2060 -> 1912/2060 (92.82%)**, **+11**, zero removals.
+- Stack-check: **2014/2179 -> 2025/2179 (92.93%)**, **+11**, zero removals.
+- Remaining terminal `indirect-store-address-cost`: **0**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 10 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
