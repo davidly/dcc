@@ -16544,3 +16544,33 @@ committed. The remaining 16 reasons (704 candidates, including the two
 single-largest buckets `text-size` and `boolean-phi-cost`) are now
 correctly flagged as real architecture/correctness investigations, not
 quick wins.
+
+### Concrete lead for the next boolean-phi-cost investigation
+
+Root-caused `tlngnarw.main`'s specific failure (the smallest, most isolated
+of the 16 confirmed-unsafe reasons' failures): its MIR IR
+(`DCC_MIR_REPORT=1 DCC_MIR_FUNCTION=main`) shows two genuine loop
+backedges (`phi v11=[v8,v24] [L0,L3]` and `phi v37=[v34,v53] prev
+v39=[v30,v57] [L2,L6]`, both with a `call` inside the loop body -
+`heap_push`/`heap_pop`). The existing `mir_boolean_phi_profile_is_
+semantically_eligible()` guard - which every legitimate boolean-phi-cost
+acceptance path in the code already checks - explicitly requires
+`!mir_has_cfg_backedge()`. `main` fails this guard already (has
+backedges), so it can *never* take the existing, careful, profiled
+boolean-phi acceptance path in production. The mega-experiment's blind
+`fallback_reason == "boolean-phi-cost" -> accept` bypassed this guard
+entirely (it operates on the final reason string, not the structural
+eligibility check), which is exactly why it broke: some value's home
+register (a strong suspect: `v2`/`n`, home `iy`, read directly at both the
+loop-condition check and the final `printf` without an intervening reload
+from its stack slot, spanning two calls inside the loop body) is not
+being safely preserved/reloaded across a call the way the accepted
+production path already guarantees. **Next investigation for this reason
+should start here**: confirm whether call-crossing boundary conditions
+correctly reload/rematerialize `iy`-homed (or any register-homed) SSA
+values in the CFG-backedge stratum specifically, then decide whether to
+extend `mir_boolean_phi_profile_is_semantically_eligible()`'s narrow
+exclusion once that's proven safe, or leave it as a permanent structural
+boundary (loops-with-calls needing a different lowering strategy
+entirely, mirroring the still-open `cfg-backedge` risky-stratum
+architecture item).
