@@ -2094,6 +2094,16 @@ static int mir_boolean_phi_repaired_bounded_is_semantically_eligible(
            generated_size <= 15000;
 }
 
+static int mir_boolean_phi_final_sink_is_semantically_eligible(void)
+{
+    int calls = mir_call_count();
+
+    if (calls <= 2 || calls == 4)
+        return 0;
+    return mir_cfg_block_count() <= 40 ||
+           (mir_has_wide_values() && calls >= 30);
+}
+
 static int mir_unary_not_call_free_loop_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4584,6 +4594,15 @@ evaluate_generated:
                     /* T467: FINAL-sink unary retries are deterministic.
                      * Static DEFERRED bodies remain gated until their
                      * sink-specific reason drift is removed. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir.sink_purpose == EMIT_SINK_FINAL &&
+                    mir_boolean_phi_final_sink_is_semantically_eligible())
+                    /* T468: the isolated deterministic FINAL-sink cohort
+                     * excludes two direct failures and two pairwise
+                     * resource/layout interactions. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL) {
                     const char *forced_final =

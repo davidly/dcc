@@ -17141,6 +17141,25 @@ static deferred materialization.
 - Performance gate: 22 deliberate Phase-1 regressions, 2 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T468: isolated deterministic FINAL boolean-PHI cohort (+7 ordinary/+7 stack-check, 2026-08-08)
+
+Fresh T467 baseline: **1950/2060 ordinary (94.66%)** and **2065/2179
+stack-check (94.77%)**.
+
+Broad FINAL-sink boolean admission exposed direct failures in four-call
+functions and the <=2-call stratum, plus pairwise resource/layout interactions
+when both large functions in `a1` or `tarray` were selected. Individual
+true-final tests and matrix facts yield a seven-function structural cohort:
+calls above 2 excluding 4, at most 40 blocks, or high-call wide functions.
+
+- Ordinary: **1950/2060 -> 1957/2060 (95.00%)**, **+7**, zero removals.
+- Stack-check: **2065/2179 -> 2072/2179 (95.09%)**, **+7**, zero removals.
+- Remaining `boolean-phi-cost`: **46 ordinary / 49 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 24 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base

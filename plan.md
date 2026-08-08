@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1950/2060 (94.66%)**
-- Current stack-check coverage: **2065/2179 (94.77%)**
-- HEAD (pending push): T467 adds a true-final diagnostic and admits every
-  remaining FINAL-sink `unary-not-cost` function: **+8 ordinary/+8
-  stack-check**, zero removals. Static DEFERRED bodies remain gated because
-  their retry reasons drift by sink. See `## Item T467` in
+- Current ordinary coverage: **1957/2060 (95.00%)**
+- Current stack-check coverage: **2072/2179 (95.09%)**
+- HEAD (pending push): T468 admits seven isolated deterministic FINAL-sink
+  `boolean-phi-cost` functions: **+7 ordinary/+7 stack-check**, zero
+  removals. Direct low-call failures and pairwise `a1`/`tarray` interactions
+  remain excluded structurally. See `## Item T468` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -190,6 +190,9 @@ transactional fallback remains in place throughout Phase 1.
 - **T467 separates deterministic and drifting sinks.** FINAL-sink unary
   functions are safe; VERIFY/DEFERRED static bodies can select different
   final reasons and require an architectural determinism fix.
+- **T468 crosses 95% ordinary.** Seven FINAL boolean functions pass after
+  excluding two direct failures, all four-call candidates, and high-block
+  non-wide pairwise interactions.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

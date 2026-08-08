@@ -107,10 +107,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "oversized validation. ts32 still has real narrow/wide "
                  "shift failures.",
     "boolean-phi-cost": "T436/T448/T452/T456 admitted acyclic, small-loop, "
-                 "medium-loop, and repaired call-containing <=20-block "
-                 "strata. Remaining larger/direct-failure and combination-"
-                 "sensitive interpreter shapes still produce wrong output "
-                 "or CP/M resource exhaustion when forced.",
+                 "medium-loop, repaired <=20-block, and isolated FINAL-sink "
+                 "strata through T468. Remaining larger/direct-failure and "
+                 "combination-sensitive static/interpreter shapes still "
+                 "produce wrong output or CP/M resource exhaustion.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "
