@@ -2086,6 +2086,14 @@ static int mir_boolean_phi_repaired_label_loop_is_semantically_eligible(
            generated_instructions <= captured_instructions;
 }
 
+static int mir_boolean_phi_repaired_bounded_is_semantically_eligible(
+    long generated_size)
+{
+    return mir_cfg_block_count() <= 20 &&
+           mir_call_count() >= 4 &&
+           generated_size <= 15000;
+}
+
 static int mir_unary_not_call_free_loop_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4089,6 +4097,17 @@ evaluate_generated:
                          * reason-forcing experiment. Letting it enter later
                          * alternate retries changes the candidate and can
                          * reintroduce synthetic-edge copies.
+                         */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "boolean-phi-cost") &&
+                        !g_speculative_codegen_active &&
+                        mir_boolean_phi_repaired_bounded_is_semantically_eligible(
+                            generated_size))
+                        /*
+                         * T456: keep the validated boolean candidate instead
+                         * of entering alternate retries that can select a
+                         * different, unsafe pint layout.
                          */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&

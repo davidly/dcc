@@ -31,12 +31,14 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1810/2060 (87.86%)**
-- Current stack-check coverage: **1920/2179 (88.11%)**
-- HEAD (pending push): T455 repairs PHI fallthrough edge ownership, typed
-  signedness/narrowing aliases, and fused-wide-constant rematerialization,
-  then eliminates terminal `phi-fallthrough-cost`: **+59 ordinary/+65
-  stack-check**, zero removals. See `## Item T455` in
+- Current ordinary coverage: **1823/2060 (88.50%)**
+- Current stack-check coverage: **1933/2179 (88.71%)**
+- HEAD (pending push): T456 admits the call-containing <=20-block
+  post-PHI `boolean-phi-cost` cohort: **+13 ordinary/+13 stack-check**,
+  zero removals. The broader reason reached 91% but exposed five direct
+  bad functions and combination-sensitive interpreter/resource layouts;
+  this batch keeps only the independently clean structural stratum. See
+  `## Item T456` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -157,6 +159,12 @@ transactional fallback remains in place throughout Phase 1.
   NOP-only arms defer to the branch entry copy. The same batch fixes typed
   signedness/narrowing aliases and fused constant operands exposed by broad
   PHI admission.
+- **T456 opens the repaired bounded boolean-PHI stratum.** The broad
+  66-function reason reaches 91% but still fails eight apps; exact-function
+  isolation identified direct failures in `ShowBinaryData`, `MinMax`,
+  `factor_call_or_var`, `run_at`, and `parse_source`, plus multi-function
+  interpreter/resource interactions. The call-containing <=20-block cohort
+  is independently full-extended clean.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

@@ -17675,3 +17675,28 @@ together.
 - Forced-MIR regression harness: PASS (9/9).
 - Performance gate: 161 deliberate Phase-1 regressions, 3 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T456: repaired bounded boolean-PHI stratum (+13 ordinary/+13 stack-check, 2026-08-08)
+
+Fresh T455 baseline: **1810/2060 ordinary (87.86%)** and **1920/2179
+stack-check (88.11%)**.
+
+Re-forcing all 66 remaining `boolean-phi-cost` functions after T455 reached
+91% coverage, but eight apps failed. Focused one-function isolation found
+five direct failures: `tarray.ShowBinaryData`, `pint.factor_call_or_var`,
+`fint.run_at`, `cobint.parse_source`, and `ttt.MinMax`. The remaining
+interpreter failures were multi-function/resource interactions. A first
+<=20-block cohort also exposed a combination-only `pint` boundary; retaining
+the call-containing, at-least-four-call stratum excludes it structurally.
+
+The resulting 13-function cohort spans wide values, label PHIs, inline
+substitution, and ordinary loops, but stays at <=20 blocks/15 KiB and has
+enough call traffic to distinguish it from the unsafe call-free pint slice.
+
+- Ordinary: **1810/2060 -> 1823/2060 (88.50%)**, **+13**, zero removals.
+- Stack-check: **1920/2179 -> 1933/2179 (88.71%)**, **+13**, zero removals.
+- Remaining `boolean-phi-cost`: **53 ordinary / 56 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 44 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
