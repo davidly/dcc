@@ -2404,6 +2404,18 @@ static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
     return 0;
 }
 
+static int mir_hybrid_homed_retry_is_eligible(const char *reason)
+{
+    if (!strcmp(reason, "boolean-phi-cost") ||
+        !strcmp(reason, "wide-store-cost"))
+        return 1;
+    return !strcmp(reason, "unary-not-cost") &&
+           !mir_has_cfg_backedge() &&
+           !mir_has_inline_substitution_call() &&
+           mir_cfg_block_count() <= 40 &&
+           mir_call_count() <= 7;
+}
+
 static int mir_wide_store_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4383,8 +4395,7 @@ evaluate_generated:
                     strict_phi_fallthrough_active = 0;
                 }
                 if (fallback_reason != NULL &&
-                    (!strcmp(fallback_reason, "boolean-phi-cost") ||
-                     !strcmp(fallback_reason, "wide-store-cost")) &&
+                    mir_hybrid_homed_retry_is_eligible(fallback_reason) &&
                     !hybrid_homed_retry_attempted &&
                     !g_speculative_codegen_active) {
                     FILE *hybrid_candidate = tmpfile();
@@ -4414,8 +4425,7 @@ evaluate_generated:
                 }
                 if (fallback_reason != NULL &&
                     hybrid_homed_candidate &&
-                    (!strcmp(fallback_reason, "boolean-phi-cost") ||
-                     !strcmp(fallback_reason, "wide-store-cost")))
+                    mir_hybrid_homed_retry_is_eligible(fallback_reason))
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !phi_return_forwarding_retry_attempted &&

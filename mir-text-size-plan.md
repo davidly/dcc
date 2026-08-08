@@ -17518,6 +17518,24 @@ the existing wide `/` and `%` helper emission. It emits `calc_code_limit` at
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T495: bounded zero-spill COB unary pair (+2/+2, 2026-08-08)
+
+`cobint.compile_add` and `compile_subtract` are 39-block, seven-call,
+zero-spill call/PHI CFGs. Ordinary homed emission rejected them through the
+historical large-call profitability gate, while hybrid emission rejected them
+for having no byte-indirect operations.
+
+The hybrid shape gate now permits zero-spill large call/PHI CFGs through
+40 blocks. Unary retry is separately restricted to acyclic, non-inline,
+<=40-block/7-call candidates so `fint.top_level` remains on its established
+MIR path. The two COB functions emit smaller than legacy and pass together.
+
+- Coverage: **2049/2060 (99.47%)**, **2168/2179 (99.50%)**, zero removals.
+- Remaining `unary-not-cost`: **2**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

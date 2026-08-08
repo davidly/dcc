@@ -31,11 +31,10 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2047/2060 (99.37%)**
-- Current stack-check coverage: **2166/2179 (99.40%)**
-- HEAD (pending push): T494 extends the bounded hybrid fallback to the final
-  zero-spill wide-store function, `pint.calc_code_limit`: **+1/+1**, zero
-  removals.
+- Current ordinary coverage: **2049/2060 (99.47%)**
+- Current stack-check coverage: **2168/2179 (99.50%)**
+- HEAD (pending push): T495 extends hybrid emission to the bounded zero-spill
+  COB arithmetic pair: **+2/+2**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -262,6 +261,10 @@ transactional fallback remains in place throughout Phase 1.
 - **T494 eliminates terminal wide-store fallback.** The hybrid emitter's
   general wide-helper path now handles the zero-spill, three-block division
   CFG and emits `pint.calc_code_limit` smaller than legacy.
+- **T495 halves unary-not residue.** The hybrid retry admits only acyclic,
+  non-inline, <=40-block/7-call unary candidates, selecting
+  `cobint.compile_add` and `compile_subtract` while preserving
+  `fint.top_level`.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

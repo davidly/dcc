@@ -918,6 +918,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         mir_homed_byte_indirect_count() == 0 &&
         !(mir_homed_has_wide_values() &&
           mir_cfg_block_count() <= 3 &&
+          mir.allocation_spill_count == 0) &&
+        !(mir_homed_is_large_call_phi_cfg() &&
+          mir_cfg_block_count() <= 40 &&
           mir.allocation_spill_count == 0))
         return mir_homed_reject("hybrid-shape");
     if (!mir_hybrid_homed_selection &&
