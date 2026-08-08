@@ -2097,6 +2097,14 @@ static int mir_bounded_acyclic_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_wide_store_coverage_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_call_count() > 0 &&
+           mir_bounded_acyclic_coverage_is_semantically_eligible(
+               generated_size, captured_size);
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4143,6 +4151,13 @@ evaluate_generated:
                         generated_size, captured_size))
                     /* T442: the terminal bounded acyclic wide-constant
                      * cohort passed the full extended correctness gate. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "wide-store-cost") &&
+                    mir_wide_store_coverage_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T443: the terminal bounded acyclic call-containing
+                     * wide-store cohort passed the full extended gate. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL)
                     emitted = 0;

@@ -127,7 +127,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "tpfauto.main before its true block-cse-cost retry; "
                  "remaining terminal loop/oversized/later-retry shapes need "
                  "separate work.",
-    "wide-store-cost": "ttrig fails.",
+    "wide-store-cost": "T443 admitted 14 terminal bounded acyclic "
+                 "call-containing functions. Remaining call-free, backedge, "
+                 "label-PHI, oversized, or later-retry shapes include pint "
+                 "stack pressure and ttrig loop failures.",
     "dead-local-suffix-cost": "tabsidm, tunary32 fail.",
     "absolute-index-cost": "tstructv, tptrlhs fail.",
     "planned-index-base-cost": "tarray, tlongidx fail.",

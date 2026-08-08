@@ -31,16 +31,19 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1466/2052 (71.44%)**
-- Current stack-check coverage: **1527/2165 (70.53%)**
-- HEAD (pending push): T442 admits the terminal bounded acyclic
-  `wide-constant-cost` cohort, **+35 ordinary/+35 stack-check**, zero
-  removals. Blind full-reason forcing failed only `tpfauto`, but its
-  `main` function's true final reason is `block-cse-cost`; early reason
-  forcing intercepted a transient `wide-constant-cost` candidate. At the
-  true final point the shared bounded-acyclic predicate produces a clean
-  35-function cohort. Remaining wide-constant: **15 ordinary/17
-  stack-check**. See `## Item T442` in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1480/2052 (72.12%)**
+- Current stack-check coverage: **1541/2165 (71.18%)**
+- HEAD (pending push): T443 admits the terminal bounded acyclic
+  call-containing `wide-store-cost` cohort, **+14 ordinary/+14
+  stack-check**, zero removals. Full-reason forcing failed `pint` and
+  `ttrig`; individual bisection found `pint.calc_code_limit`,
+  `ttrig.logf`, and `ttrig.xsinf` unsafe. The trig failures are
+  backedge/oversized and already excluded. `calc_code_limit` passes
+  without stack checking but crosses pint's stack/resource limit with
+  MIR's larger local frame; it is the proposed cohort's only call-free
+  function. Requiring at least one call retains the other 14. Remaining
+  wide-store: **24 ordinary/26 stack-check**. See `## Item T443` in
+  `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -106,6 +109,10 @@ transactional fallback remains in place throughout Phase 1.
   also re-confirms that blind reason forcing can fail solely because it
   intercepts a transient pre-retry candidate; terminal-reason testing is
   the authoritative production model.
+- **T443 adds a reason-specific frame-pressure stratum.** The common
+  bounded-acyclic predicate remains the base; `wide-store-cost` further
+  requires a call-containing measured shape because its only call-free
+  member triggers a stack-check resource failure in pint.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
